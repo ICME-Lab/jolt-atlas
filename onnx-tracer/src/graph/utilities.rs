@@ -13,21 +13,19 @@ use crate::{
 };
 use log::debug;
 use std::{error::Error, sync::Arc};
-use tract_onnx::tract_core::ops::{
-    array::{Gather, GatherElements, MultiBroadcastTo, OneHot, ScatterElements, Slice, Topk},
-    change_axes::AxisOp,
-    einsum::EinSum,
-    element_wise::ElementWiseOp,
-    nn::{LeakyRelu, Reduce, Softmax},
-    Downsample,
-};
 use tract_onnx::{
     prelude::{
         tract_itertools::Itertools, DatumType, Node as OnnxNode, SymbolValues, TypedFact, TypedOp,
     },
     tract_core::ops::{
+        array::{Gather, GatherElements, MultiBroadcastTo, OneHot, ScatterElements, Slice, Topk},
         cast::Cast,
+        change_axes::AxisOp,
         cnn::{MaxPool, SumPool},
+        einsum::EinSum,
+        element_wise::ElementWiseOp,
+        nn::{LeakyRelu, Reduce, Softmax},
+        Downsample,
     },
     tract_hir::{
         internal::DimLike,

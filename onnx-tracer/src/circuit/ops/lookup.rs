@@ -1,5 +1,4 @@
-use super::Op;
-use super::*;
+use super::{Op, *};
 use crate::{
     circuit::utils,
     graph::utilities::{multiplier_to_scale, scale_to_multiplier},

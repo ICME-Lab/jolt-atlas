@@ -1,5 +1,4 @@
 #![allow(clippy::too_many_arguments)]
-use jolt_core::subprotocols::sumcheck::SumcheckInstanceProof;
 use jolt_core::{
     field::{JoltField, OptimizedMul},
     poly::{
@@ -9,6 +8,7 @@ use jolt_core::{
         },
         unipoly::{CompressedUniPoly, UniPoly},
     },
+    subprotocols::sumcheck::SumcheckInstanceProof,
     utils::{
         errors::ProofVerifyError,
         math::Math,

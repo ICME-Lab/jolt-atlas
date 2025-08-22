@@ -1,5 +1,7 @@
-use jolt_core::jolt::instruction::{InstructionLookup, LookupQuery};
-use jolt_core::jolt::lookup_table::{LookupTables, range_check::RangeCheckTable};
+use jolt_core::jolt::{
+    instruction::{InstructionLookup, LookupQuery},
+    lookup_table::{LookupTables, range_check::RangeCheckTable},
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]

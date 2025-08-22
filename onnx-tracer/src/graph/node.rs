@@ -36,23 +36,25 @@
 //!
 //! By abstracting the details of node construction, scale management, and operation decoding, this module enables robust and efficient handling of ONNX models in privacy-preserving and quantized computation settings.
 
-use crate::constants::MAX_TENSOR_SIZE;
-use crate::graph::{model::NodeType, vars::VarScales};
-use crate::trace_types::{ONNXInstr, ONNXOpcode};
 use crate::{
     circuit::ops::{
         hybrid::HybridOp, lookup::LookupOp, poly::PolyOp, Constant, ForwardResult, Input, Op,
         Unknown,
     },
-    graph::utilities::{
-        multiplier_to_scale, new_op_from_onnx, node_output_shapes, quantize_tensor,
-        scale_to_multiplier,
+    constants::MAX_TENSOR_SIZE,
+    graph::{
+        model::NodeType,
+        utilities::{
+            multiplier_to_scale, new_op_from_onnx, node_output_shapes, quantize_tensor,
+            scale_to_multiplier,
+        },
+        vars::VarScales,
     },
     tensor::{Tensor, TensorError},
+    trace_types::{ONNXInstr, ONNXOpcode},
 };
 use log::{trace, warn};
-use std::fmt::Debug;
-use std::{collections::BTreeMap, error::Error, fmt};
+use std::{collections::BTreeMap, error::Error, fmt, fmt::Debug};
 use tabled::Tabled;
 use tract_onnx::{
     self,

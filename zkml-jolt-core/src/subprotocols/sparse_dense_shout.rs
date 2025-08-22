@@ -1,8 +1,5 @@
 #![allow(clippy::too_many_arguments)]
-use crate::jolt::execution_trace::WORD_SIZE;
-use crate::jolt::execution_trace::{JoltONNXCycle, ONNXLookupQuery};
-use jolt_core::subprotocols::sparse_dense_shout::{ExpandingTable, LookupBits};
-use jolt_core::subprotocols::sumcheck::SumcheckInstanceProof;
+use crate::jolt::execution_trace::{JoltONNXCycle, ONNXLookupQuery, WORD_SIZE};
 use jolt_core::{
     field::JoltField,
     jolt::{
@@ -22,6 +19,10 @@ use jolt_core::{
         prefix_suffix::{Prefix, PrefixRegistry, PrefixSuffixDecomposition},
         unipoly::{CompressedUniPoly, UniPoly},
     },
+    subprotocols::{
+        sparse_dense_shout::{ExpandingTable, LookupBits},
+        sumcheck::SumcheckInstanceProof,
+    },
     utils::{
         errors::ProofVerifyError,
         math::Math,
@@ -29,8 +30,7 @@ use jolt_core::{
         transcript::{AppendToTranscript, Transcript},
     },
 };
-use onnx_tracer::constants::MAX_TENSOR_SIZE;
-use onnx_tracer::trace_types::InterleavedBitsMarker;
+use onnx_tracer::{constants::MAX_TENSOR_SIZE, trace_types::InterleavedBitsMarker};
 use rayon::prelude::*;
 use strum::{EnumCount, IntoEnumIterator};
 

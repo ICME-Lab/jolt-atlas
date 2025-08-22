@@ -1,8 +1,11 @@
-use jolt_core::poly::dense_mlpoly::DensePolynomial;
-use jolt_core::poly::{
-    multilinear_polynomial::MultilinearPolynomial, sparse_interleaved_poly::SparseCoefficient,
+use jolt_core::{
+    field::JoltField,
+    poly::{
+        dense_mlpoly::DensePolynomial, multilinear_polynomial::MultilinearPolynomial,
+        sparse_interleaved_poly::SparseCoefficient,
+    },
+    r1cs::builder::Constraint,
 };
-use jolt_core::{field::JoltField, r1cs::builder::Constraint};
 
 #[derive(Default, Debug, Clone)]
 pub struct SpartanInterleavedPolynomial<F: JoltField> {

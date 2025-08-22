@@ -1,7 +1,6 @@
-use crate::jolt::execution_trace::WORD_SIZE;
 use crate::{
     jolt::{
-        execution_trace::{JoltONNXCycle, ONNXLookupQuery},
+        execution_trace::{JoltONNXCycle, ONNXLookupQuery, WORD_SIZE},
         instruction::VirtualInstructionSequence,
     },
     utils::u64_vec_to_i32_iter,

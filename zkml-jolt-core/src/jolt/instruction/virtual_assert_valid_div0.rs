@@ -1,6 +1,7 @@
-use jolt_core::jolt::instruction::{InstructionLookup, LookupQuery};
-use jolt_core::jolt::lookup_table::LookupTables;
-use jolt_core::jolt::lookup_table::valid_div0::ValidDiv0Table;
+use jolt_core::jolt::{
+    instruction::{InstructionLookup, LookupQuery},
+    lookup_table::{LookupTables, valid_div0::ValidDiv0Table},
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]

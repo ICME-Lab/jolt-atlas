@@ -1,8 +1,9 @@
-use jolt_core::jolt::instruction::{
-    CircuitFlags, InstructionFlags, InstructionLookup, LookupQuery, NUM_CIRCUIT_FLAGS,
+use jolt_core::jolt::{
+    instruction::{
+        CircuitFlags, InstructionFlags, InstructionLookup, LookupQuery, NUM_CIRCUIT_FLAGS,
+    },
+    lookup_table::{LookupTables, valid_signed_remainder::ValidSignedRemainderTable},
 };
-use jolt_core::jolt::lookup_table::LookupTables;
-use jolt_core::jolt::lookup_table::valid_signed_remainder::ValidSignedRemainderTable;
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]

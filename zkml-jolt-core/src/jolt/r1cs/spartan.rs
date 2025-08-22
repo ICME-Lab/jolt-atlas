@@ -1,17 +1,15 @@
-use jolt_core::field::JoltField;
-use jolt_core::poly::commitment::commitment_scheme::CommitmentScheme;
-use jolt_core::poly::eq_poly::EqPolynomial;
-use jolt_core::poly::multilinear_polynomial::PolynomialEvaluation;
-use jolt_core::poly::multilinear_polynomial::{
-    BindingOrder, MultilinearPolynomial, PolynomialBinding,
-};
-use jolt_core::subprotocols::sumcheck::SumcheckInstanceProof;
-use jolt_core::utils::math::Math;
-use jolt_core::utils::small_value::NUM_SVO_ROUNDS;
-use jolt_core::utils::transcript::Transcript;
 use jolt_core::{
-    poly::{dense_mlpoly::DensePolynomial, eq_poly::EqPlusOnePolynomial},
-    subprotocols::sumcheck::BatchableSumcheckInstance,
+    field::JoltField,
+    poly::{
+        commitment::commitment_scheme::CommitmentScheme,
+        dense_mlpoly::DensePolynomial,
+        eq_poly::{EqPlusOnePolynomial, EqPolynomial},
+        multilinear_polynomial::{
+            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+        },
+    },
+    subprotocols::sumcheck::{BatchableSumcheckInstance, SumcheckInstanceProof},
+    utils::{math::Math, small_value::NUM_SVO_ROUNDS, transcript::Transcript},
 };
 
 use rayon::prelude::*;
@@ -19,14 +17,13 @@ use std::marker::PhantomData;
 use thiserror::Error;
 use tracing::{Level, span};
 
-use crate::jolt::JoltProverPreprocessing;
-use crate::jolt::execution_trace::{
-    ALL_R1CS_INPUTS, JoltONNXCycle, JoltONNXR1CSInputs, WitnessGenerator,
-};
-use crate::jolt::r1cs::builder::CombinedUniformBuilder;
-use crate::jolt::r1cs::key::UniformSpartanKey;
 #[cfg(test)]
 use crate::jolt::r1cs::spartan_interleaved_poly::SpartanInterleavedPolynomial;
+use crate::jolt::{
+    JoltProverPreprocessing,
+    execution_trace::{ALL_R1CS_INPUTS, JoltONNXCycle, JoltONNXR1CSInputs, WitnessGenerator},
+    r1cs::{builder::CombinedUniformBuilder, key::UniformSpartanKey},
+};
 
 #[derive(Clone, Debug)]
 pub struct OuterSumcheckClaims<F: JoltField> {

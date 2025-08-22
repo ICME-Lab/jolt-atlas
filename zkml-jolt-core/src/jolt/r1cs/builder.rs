@@ -1,11 +1,17 @@
-use crate::jolt::execution_trace::{JoltONNXR1CSInputs, WitnessGenerator};
-use crate::jolt::r1cs::key::UniformR1CS;
-use jolt_core::poly::multilinear_polynomial::MultilinearPolynomial;
-use jolt_core::r1cs::builder::Constraint;
-use jolt_core::r1cs::ops::{LC, Term, Variable};
-use jolt_core::{field::JoltField, r1cs::key::SparseConstraints};
-use std::fmt::Write as _;
-use std::marker::PhantomData;
+use crate::jolt::{
+    execution_trace::{JoltONNXR1CSInputs, WitnessGenerator},
+    r1cs::key::UniformR1CS,
+};
+use jolt_core::{
+    field::JoltField,
+    poly::multilinear_polynomial::MultilinearPolynomial,
+    r1cs::{
+        builder::Constraint,
+        key::SparseConstraints,
+        ops::{LC, Term, Variable},
+    },
+};
+use std::{fmt::Write as _, marker::PhantomData};
 
 pub trait R1CSConstraintFormatter {
     fn format_constraint<F: JoltField>(

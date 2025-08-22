@@ -1,8 +1,9 @@
-use jolt_core::jolt::instruction::{
-    CircuitFlags, InstructionFlags, InstructionLookup, LookupQuery, NUM_CIRCUIT_FLAGS,
+use jolt_core::jolt::{
+    instruction::{
+        CircuitFlags, InstructionFlags, InstructionLookup, LookupQuery, NUM_CIRCUIT_FLAGS,
+    },
+    lookup_table::{LookupTables, equal::EqualTable},
 };
-use jolt_core::jolt::lookup_table::LookupTables;
-use jolt_core::jolt::lookup_table::equal::EqualTable;
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]

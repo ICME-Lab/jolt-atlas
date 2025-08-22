@@ -1,6 +1,6 @@
-use jolt_core::jolt::instruction::{InstructionLookup, LookupQuery};
-use jolt_core::jolt::lookup_table::{
-    LookupTables, signed_greater_than_equal::SignedGreaterThanEqualTable,
+use jolt_core::jolt::{
+    instruction::{InstructionLookup, LookupQuery},
+    lookup_table::{LookupTables, signed_greater_than_equal::SignedGreaterThanEqualTable},
 };
 use serde::{Deserialize, Serialize};
 

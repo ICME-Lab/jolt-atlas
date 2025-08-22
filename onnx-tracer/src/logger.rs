@@ -1,9 +1,7 @@
 use colored::*;
 use env_logger::Builder;
 use log::{Level, LevelFilter, Record};
-use std::env;
-use std::fmt::Formatter;
-use std::io::Write;
+use std::{env, fmt::Formatter, io::Write};
 
 /// sets the log level color
 #[allow(dead_code)]

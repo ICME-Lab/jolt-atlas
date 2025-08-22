@@ -1,33 +1,33 @@
 // for the assign_singles! macro
 #![allow(unused_assignments)]
 
-use crate::jolt::JoltProverPreprocessing;
-use crate::jolt::instruction::VirtualInstructionSequence;
-use crate::jolt::instruction::argmax::ArgMaxInstruction;
-use crate::jolt::instruction::div::DIVInstruction;
-use crate::jolt::instruction::precompile::reduce_sum::ReduceSumInstruction;
-use crate::jolt::instruction::virtual_advice::ADVICEInstruction;
-use crate::jolt::instruction::virtual_const::ConstInstruction;
-use crate::utils::u64_vec_to_i32_iter;
+use crate::{
+    jolt::{
+        JoltProverPreprocessing,
+        instruction::{
+            VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction,
+            precompile::reduce_sum::ReduceSumInstruction, virtual_advice::ADVICEInstruction,
+            virtual_const::ConstInstruction,
+        },
+    },
+    utils::u64_vec_to_i32_iter,
+};
 use itertools::Itertools;
-use jolt_core::jolt::instruction::LookupQuery;
-use jolt_core::poly::one_hot_polynomial::OneHotPolynomial;
 use jolt_core::{
     field::JoltField,
+    jolt::instruction::LookupQuery,
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
-        multilinear_polynomial::MultilinearPolynomial,
+        multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial,
     },
     utils::transcript::Transcript,
 };
 
-use onnx_tracer::constants::{
-    MAX_TENSOR_SIZE, TEST_TENSOR_REGISTER_COUNT, VIRTUAL_TENSOR_REGISTER_COUNT,
+use onnx_tracer::{
+    constants::{MAX_TENSOR_SIZE, TEST_TENSOR_REGISTER_COUNT, VIRTUAL_TENSOR_REGISTER_COUNT},
+    tensor::Tensor,
+    trace_types::{CircuitFlags, NUM_CIRCUIT_FLAGS, ONNXCycle, ONNXInstr, ONNXOpcode},
 };
-use onnx_tracer::tensor::Tensor;
-use onnx_tracer::trace_types::ONNXOpcode;
-use onnx_tracer::trace_types::{CircuitFlags, ONNXCycle};
-use onnx_tracer::trace_types::{NUM_CIRCUIT_FLAGS, ONNXInstr};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 

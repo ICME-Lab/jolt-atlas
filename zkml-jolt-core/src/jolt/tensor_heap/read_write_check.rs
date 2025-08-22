@@ -1,25 +1,22 @@
 use crate::jolt::execution_trace::JoltONNXCycle;
-use jolt_core::field::OptimizedMul;
-use jolt_core::poly::multilinear_polynomial::PolynomialBinding;
-use jolt_core::poly::multilinear_polynomial::PolynomialEvaluation;
-use jolt_core::utils::math::Math;
-use jolt_core::utils::transcript::AppendToTranscript;
 use jolt_core::{
-    field::JoltField,
+    field::{JoltField, OptimizedMul},
     poly::{
         eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial},
+        multilinear_polynomial::{
+            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+        },
         unipoly::{CompressedUniPoly, UniPoly},
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
     utils::{
+        math::Math,
         thread::{drop_in_background_thread, unsafe_allocate_zero_vec},
-        transcript::Transcript,
+        transcript::{AppendToTranscript, Transcript},
     },
 };
 use onnx_tracer::constants::MAX_TENSOR_SIZE;
-use rayon::iter::IntoParallelIterator;
-use rayon::prelude::*;
+use rayon::{iter::IntoParallelIterator, prelude::*};
 
 #[derive(Debug, Clone)]
 pub struct ReadWriteCheckingProof<F: JoltField, ProofTranscript: Transcript> {

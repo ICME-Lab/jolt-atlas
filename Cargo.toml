@@ -1,0 +1,60 @@
+[package]
+name = "jolt-atlas"
+version = "0.1.0"
+authors = [
+    "Wyatt Benno <wyatt@icme.io>",
+    "Khalil Gibran Hassam <khalilhassam4@gmail.com>",
+    "Alberto Centelles Hidalgo <zk_albi@proton.me>",
+    "Antoine Douchet <antoinedcht@hotmail.com>"
+]
+edition = "2021"
+description = "Fast and fully open source from a16z crypto modified by NovaNet for zkML precompiles."
+documentation = "https://github.com/a16z/jolt/README.md"
+repository = "https://github.com/a16z/jolt"
+license-file = "LICENSE"
+keywords = ["SNARK", "cryptography", "proofs"]
+
+[workspace]
+members = [
+    "onnx-tracer", 
+    "zkml-jolt-core",
+]
+
+[lib]
+path = "./src/lib.rs"
+
+[dependencies]
+clap = { version = "4.5.4", features = ["derive"] }
+eyre = "0.6.12"
+rand = "0.8.5"
+sysinfo = "0.30.8"
+syn = { version = "1.0.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+rmp-serde = "1.3.0"
+toml_edit = "0.22.14"
+
+zkml-jolt-core = { path = "./zkml-jolt-core" }
+onnx-tracer = { path = "./onnx-tracer" }
+
+[profile.test]
+opt-level = 3
+lto = "off"
+
+[profile.release]
+debug = 1
+lto = "fat"
+
+[profile.build-fast]
+inherits = "release"
+incremental = true
+lto = "off"
+
+[profile.guest]
+inherits = "release"
+debug = false
+
+[patch.crates-io]
+ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }

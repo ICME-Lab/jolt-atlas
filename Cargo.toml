@@ -9,10 +9,10 @@ authors = [
 ]
 edition = "2021"
 description = "Fast and fully open source from a16z crypto modified by NovaNet for zkML precompiles."
-documentation = "https://github.com/a16z/jolt/README.md"
-repository = "https://github.com/a16z/jolt"
+documentation = "https://github.com/ICME-Lab/jolt-atlas/README.md"
+repository = "https://github.com/ICME-Lab/jolt-atlas"
 license-file = "LICENSE"
-keywords = ["SNARK", "cryptography", "proofs"]
+keywords = ["SNARK", "cryptography", "proofs", "zkML"]
 
 [workspace]
 members = [

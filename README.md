@@ -44,11 +44,6 @@ Alternatively, use `--format default` to view performance times directly in the 
 
 Both models (preprocessing, proving, and verifying) take `~600ms–800ms`.
 
-<!-- ## Supported Ops
-
-This is a work-in-progress, and we are actively adding ML operators to this list:
-
-- [ ]  -->
 
 ## Acknowledgments
 

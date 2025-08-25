@@ -11,7 +11,7 @@ In JOLT Atlas, we eliminate the complexity that plagues other approaches: ‘no 
 
 ## Benchmarks
 
-We benchmarked a multi-classification model across different zkML project:
+We benchmarked a multi-classification model across different zkML projects:
 
 | Project    | Latency | Notes                        |
 | ---------- | ------- | ---------------------------- |

@@ -403,7 +403,7 @@ pub enum CommittedPolynomials {
     /// Product of `LeftInstructionInput` and `RightInstructionInput`
     Product(usize),
     /// Td * IsActive
-    ActiveRd(usize),
+    ActiveTd(usize),
     /// Whether the current instruction should write the lookup output to
     /// the destination register
     WriteLookupOutputToTD(usize),
@@ -431,7 +431,7 @@ pub const ALL_COMMITTED_POLYNOMIALS: [CommittedPolynomials; 5 * MAX_TENSOR_SIZE 
     fill_array_committed!(arr, idx, LeftInstructionInput);
     fill_array_committed!(arr, idx, RightInstructionInput);
     fill_array_committed!(arr, idx, Product);
-    fill_array_committed!(arr, idx, ActiveRd);
+    fill_array_committed!(arr, idx, ActiveTd);
     fill_array_committed!(arr, idx, WriteLookupOutputToTD);
     arr[idx] = CommittedPolynomials::InstructionRa(0);
     arr[idx + 1] = CommittedPolynomials::InstructionRa(1);
@@ -489,7 +489,7 @@ impl WitnessGenerator for CommittedPolynomials {
                     .collect();
                 coeffs.into()
             }
-            CommittedPolynomials::ActiveRd(i) => {
+            CommittedPolynomials::ActiveTd(i) => {
                 let coeffs: Vec<u32> = trace
                     .par_iter()
                     .map(|cycle| {
@@ -576,7 +576,7 @@ pub enum JoltONNXR1CSInputs {
     NextUnexpandedPC, // Virtual (spartan shift sumcheck)
     NextPC,           // Virtual (spartan shift sumcheck)
     ActiveOutput(usize),
-    ActiveRd(usize), // Td * CircuitFlag::WriteLookupOutputToTD
+    ActiveTd(usize), // Td * CircuitFlag::WriteLookupOutputToTD
     Ts1Value(usize), // Virtual (tensor registers rv)
     Ts2Value(usize), // Virtual (tensor registers rv)
     Ts3Value(usize), // Virtual (tensor registers rv)
@@ -639,7 +639,7 @@ pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs;
     fill_array_r1cs_inputs!(arr, idx, LookupOutput);
     fill_array_r1cs_inputs!(arr, idx, WriteLookupOutputToTD);
     fill_array_r1cs_inputs!(arr, idx, ActiveOutput);
-    fill_array_r1cs_inputs!(arr, idx, ActiveRd);
+    fill_array_r1cs_inputs!(arr, idx, ActiveTd);
     fill_array_r1cs_inputs!(arr, idx, Ts1Value);
     fill_array_r1cs_inputs!(arr, idx, Ts2Value);
     fill_array_r1cs_inputs!(arr, idx, Ts3Value);
@@ -918,8 +918,8 @@ impl WitnessGenerator for JoltONNXR1CSInputs {
                 CommittedPolynomials::WriteLookupOutputToTD(*i)
                     .generate_witness(trace, preprocessing)
             }
-            JoltONNXR1CSInputs::ActiveRd(i) => {
-                CommittedPolynomials::ActiveRd(*i).generate_witness(trace, preprocessing)
+            JoltONNXR1CSInputs::ActiveTd(i) => {
+                CommittedPolynomials::ActiveTd(*i).generate_witness(trace, preprocessing)
             }
             JoltONNXR1CSInputs::ActiveOutput(i) => {
                 let coeffs: Vec<u8> = trace

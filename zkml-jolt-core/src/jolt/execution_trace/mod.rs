@@ -586,6 +586,7 @@ pub enum JoltONNXR1CSInputs {
     ShouldGather(usize),
     SelectCondition(usize),
     SelectResult(usize),
+    ShouldBroadCast(usize),
 }
 
 macro_rules! fill_array_r1cs_inputs {
@@ -617,7 +618,7 @@ macro_rules! assign_singles {
     };
 }
 
-const NUM_TENSOR_INPUTS: usize = 22;
+const NUM_TENSOR_INPUTS: usize = 23;
 const NUM_SINGLE_INPUTS: usize = NUM_CIRCUIT_FLAGS + 4; // 4 for PC, UnexpandedPC, NextUnexpandedPC, NextPC
 /// This const serves to define a canonical ordering over inputs (and thus indices
 /// for each input). This is needed for sumcheck.
@@ -646,6 +647,7 @@ pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs;
     fill_array_r1cs_inputs!(arr, idx, GatherAddr);
     fill_array_r1cs_inputs!(arr, idx, GatherReadValue);
     fill_array_r1cs_inputs!(arr, idx, ShouldGather);
+    fill_array_r1cs_inputs!(arr, idx, ShouldBroadCast);
     fill_array_r1cs_inputs!(arr, idx, SelectCondition);
     fill_array_r1cs_inputs!(arr, idx, SelectResult);
     // Assign all OpFlags variants in one macro call
@@ -666,8 +668,14 @@ pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs;
         Const,
         Advice,
         Gather,
-        Select
+        Select,
+        BroadCast
     );
+    // Compile-time check that we've handled all flags.
+    // Will error if you add a new flag and forget to update this.
+    const _: () = {
+        let _ = [(); (NUM_CIRCUIT_FLAGS == 16) as usize - 1];
+    };
 
     assign_singles!(arr, idx, PC, UnexpandedPC, NextUnexpandedPC, NextPC);
 
@@ -823,6 +831,17 @@ impl WitnessGenerator for JoltONNXR1CSInputs {
                     .map(|cycle| {
                         let is_gather =
                             cycle.instr().to_circuit_flags()[CircuitFlags::Gather as usize];
+                        (*i < cycle.instr.active_output_elements) as u8 * (is_gather as u8)
+                    })
+                    .collect();
+                coeffs.into()
+            }
+            JoltONNXR1CSInputs::ShouldBroadCast(i) => {
+                let coeffs: Vec<u8> = trace
+                    .par_iter()
+                    .map(|cycle| {
+                        let is_gather =
+                            cycle.instr().to_circuit_flags()[CircuitFlags::BroadCast as usize];
                         (*i < cycle.instr.active_output_elements) as u8 * (is_gather as u8)
                     })
                     .collect();
@@ -1158,11 +1177,14 @@ impl JoltONNXCycle {
         if self.circuit_flags[CircuitFlags::Select as usize] {
             active.push("Select".to_string());
         }
+        if self.circuit_flags[CircuitFlags::BroadCast as usize] {
+            active.push("BroadCast".to_string());
+        }
 
         // Compile-time check that we've handled all flags.
         // Will error if you add a new flag and forget to update this.
         const _: () = {
-            let _ = [(); (NUM_CIRCUIT_FLAGS == 15) as usize - 1];
+            let _ = [(); (NUM_CIRCUIT_FLAGS == 16) as usize - 1];
         };
 
         if active.is_empty() {

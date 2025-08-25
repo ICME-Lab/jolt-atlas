@@ -144,6 +144,20 @@ impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
                 JoltONNXR1CSInputs::Ts1(0) + JoltONNXR1CSInputs::Ts2Value(i),
             );
 
+            // if ShouldBroadCast {
+            //    assert!(Ts1Val(0) == TdWrite)
+            // }
+            cs.constrain_prod(
+                JoltONNXR1CSInputs::OpFlags(CircuitFlags::BroadCast),
+                JoltONNXR1CSInputs::ActiveOutput(i),
+                JoltONNXR1CSInputs::ShouldBroadCast(i),
+            );
+            cs.constrain_eq_conditional(
+                JoltONNXR1CSInputs::ShouldBroadCast(i),
+                JoltONNXR1CSInputs::Ts1Value(0),
+                JoltONNXR1CSInputs::TdWriteValue(i),
+            );
+
             // if Gather && ActiveOutput {
             //    assert!(GatherReadValue == TdWriteValue)
             // }

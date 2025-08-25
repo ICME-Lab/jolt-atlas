@@ -386,6 +386,8 @@ pub enum CircuitFlags {
     Gather,
     /// 1 if this is a select operation; 0 otherwise.
     Select,
+    /// 1 if this is broadcase op; 0 otherwise
+    BroadCast,
 }
 
 pub const NUM_CIRCUIT_FLAGS: usize = CircuitFlags::COUNT;
@@ -475,18 +477,13 @@ impl ONNXInstr {
         flags[CircuitFlags::DoNotUpdateUnexpandedPC as usize] =
             self.virtual_sequence_remaining.unwrap_or(0) != 0;
 
-        flags[CircuitFlags::SumOperands as usize] = matches!(
-            self.opcode,
-            ONNXOpcode::Sum
-        );
-        flags[CircuitFlags::Gather as usize] = matches!(
-            self.opcode,
-            ONNXOpcode::Gather
-        );
-        flags[CircuitFlags::Select as usize] = matches!(
-            self.opcode,
-            ONNXOpcode::Select
-        );
+        // TODO(Forpee): These single-opcode flags could be simplified to direct equality checks
+        // unlike the multi-opcode matches above. We could Consider refactoring to use a more
+        // systematic approach like opcode-to-flag mapping or trait-based dispatch.
+        flags[CircuitFlags::SumOperands as usize] = self.opcode == ONNXOpcode::Sum;
+        flags[CircuitFlags::Gather as usize] = self.opcode == ONNXOpcode::Gather;
+        flags[CircuitFlags::Select as usize] = self.opcode == ONNXOpcode::Select;
+        flags[CircuitFlags::BroadCast as usize] = self.opcode == ONNXOpcode::Broadcast;
 
         flags
     }

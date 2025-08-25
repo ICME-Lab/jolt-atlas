@@ -8,8 +8,6 @@ Traditional circuit-based approaches are prohibitively expensive when representi
 
 In JOLT Atlas, we eliminate the complexity that plagues other approaches: ‘no quotient polynomials, no byte decomposition, no grand products, no permutation checks’, and most importantly — no complicated circuits.
 
-> Saying this, this code has not been audited yet. Please do not use in production.
-
 
 ## Benchmarks
 

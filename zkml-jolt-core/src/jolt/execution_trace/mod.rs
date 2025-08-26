@@ -35,7 +35,7 @@ use crate::jolt::instruction::{
     add::ADD, beq::BEQInstruction, ge::GEInstruction, mul::MUL, sub::SUB,
     virtual_assert_valid_div0::AssertValidDiv0Instruction,
     virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction,
-    virtual_move::MOVEInstruction,
+    virtual_move::MOVEInstruction, sigmoid::SigmoidInstruction
 };
 use jolt_core::jolt::{instruction::InstructionLookup, lookup_table::LookupTables};
 
@@ -1007,6 +1007,7 @@ define_lookup_enum!(
     VirtualMove: MOVEInstruction<WORD_SIZE>,
     VirtualConst: ConstInstruction<WORD_SIZE>,
     Const: ConstInstruction<WORD_SIZE>,
+    Sigmoid: SigmoidInstruction<WORD_SIZE>
 );
 
 impl JoltONNXCycle {
@@ -1078,6 +1079,11 @@ impl JoltONNXCycle {
             ONNXOpcode::Gte => Some(
                 (0..MAX_TENSOR_SIZE)
                     .map(|i| ElementWiseLookup::Ge(GEInstruction(ts1[i], ts2[i])))
+                    .collect(),
+            ),
+            ONNXOpcode::Sigmoid => Some(
+                (0..MAX_TENSOR_SIZE)
+                    .map(|i| ElementWiseLookup::Sigmoid(SigmoidInstruction(ts1[i])))
                     .collect(),
             ),
             _ => None,
@@ -1158,11 +1164,14 @@ impl JoltONNXCycle {
         if self.circuit_flags[CircuitFlags::Select as usize] {
             active.push("Select".to_string());
         }
+        if self.circuit_flags[CircuitFlags::Sigmoid as usize] {
+            active.push("Sigmoid".to_string());
+        }
 
         // Compile-time check that we've handled all flags.
         // Will error if you add a new flag and forget to update this.
         const _: () = {
-            let _ = [(); (NUM_CIRCUIT_FLAGS == 15) as usize - 1];
+            let _ = [(); (NUM_CIRCUIT_FLAGS == 16) as usize - 1];
         };
 
         if active.is_empty() {
@@ -1191,6 +1200,7 @@ impl JoltONNXCycle {
                 ElementWiseLookup::VirtualMove(_) => "VirtualMove",
                 ElementWiseLookup::VirtualConst(_) => "VirtualConst",
                 ElementWiseLookup::Const(_) => "Const",
+                ElementWiseLookup::Sigmoid(_) => "Sigmoid",
             })
     }
 }

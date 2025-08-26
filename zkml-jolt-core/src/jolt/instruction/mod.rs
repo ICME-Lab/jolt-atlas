@@ -7,6 +7,7 @@ pub mod div;
 pub mod ge;
 pub mod mul;
 pub mod reduce_max;
+pub mod sigmoid;
 pub mod sub;
 pub mod virtual_advice;
 pub mod virtual_assert_valid_div0;

@@ -386,6 +386,8 @@ pub enum CircuitFlags {
     Gather,
     /// 1 if this is a select operation; 0 otherwise.
     Select,
+    /// 1 if this is a sigmoid operation; 0 otherwise.
+    Sigmoid
 }
 
 pub const NUM_CIRCUIT_FLAGS: usize = CircuitFlags::COUNT;
@@ -487,7 +489,10 @@ impl ONNXInstr {
             self.opcode,
             ONNXOpcode::Select
         );
-
+        flags[CircuitFlags::Sigmoid as usize] = matches!(
+            self.opcode,
+            ONNXOpcode::Sigmoid
+        );
         flags
     }
 }

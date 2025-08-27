@@ -304,7 +304,6 @@ mod e2e_tests {
         {
             let model = model_fn();
             let program_bytecode = onnx_tracer::decode_model(model.clone());
-            println!("program_bytecode: {program_bytecode:#?}");
             let pp: JoltProverPreprocessing<Fr, PCS, KeccakTranscript> =
                 JoltSNARK::prover_preprocess(program_bytecode);
 

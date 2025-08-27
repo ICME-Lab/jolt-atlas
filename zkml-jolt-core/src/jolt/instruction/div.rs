@@ -323,7 +323,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DIVInstruction<WORD_
         virtual_trace
     }
 
-    fn sequence_output(x: Vec<u64>, y: Vec<u64>) -> Vec<u64> {
+    fn sequence_output(x: Vec<u64>, y: Vec<u64>, _: Option<ONNXOpcode>) -> Vec<u64> {
         let mut output = vec![0; MAX_TENSOR_SIZE];
         for i in 0..MAX_TENSOR_SIZE {
             let x = x[i];

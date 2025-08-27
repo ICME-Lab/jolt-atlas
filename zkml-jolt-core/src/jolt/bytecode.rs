@@ -209,7 +209,7 @@ where
         for i in 1..DEGREE {
             gamma_pows[i] *= *gamma * gamma_pows[i - 1];
         }
-        // TODO: Add circuit flags and expanded ts1,ts2, ts3 addresses
+        // TODO: Add circuit flags and expanded ts1,ts2, ts3 addresses (we should use dims instead of active output elements; see issue #3)
         program_bytecode
             .iter()
             .map(|instr| {

@@ -29,6 +29,16 @@ pub enum PrecompileOp {
     MatMult(MatMultPrecompile),
 }
 
+impl PrecompileOp {
+    /// Get the output of the precompile operation.
+    /// If no precompile operation, return a zeroed vector of size `MAX_TENSOR_SIZE`.
+    pub fn output(&self, pp: &PrecompilePreprocessing, i: usize) -> Vec<u64> {
+        match self {
+            PrecompileOp::MatMult(mat_mult) => mat_mult.output(pp.mat_mult_precompile_dims[i]),
+        }
+    }
+}
+
 /// Preprocessing of the models matrices for the precompile proof.
 /// Store the dimensions of the matrix multiplication precompile.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -45,7 +55,35 @@ impl PrecompilePreprocessing {
         // We pad the dimensions to the next power of two.
         let mat_mult_precompile_dims = instrs
             .iter()
-            .filter_map(|instr| instr.matmult_dims())
+            .filter_map(|instr| {
+                if instr.opcode == onnx_tracer::trace_types::ONNXOpcode::MatMult {
+                    // For matrix multiplication A × B = C:
+                    // - A is the first input (ts1) with dimensions [m, k]
+                    // - B is the second input (ts2) with dimensions [k, n]
+                    // - C is the output with dimensions [m, n]
+
+                    // Get m, n from the output dimensions
+                    let m = instr.output_dims[0].next_power_of_two();
+                    let n = instr.output_dims[1].next_power_of_two();
+
+                    // Get k by finding the instruction that produces ts1 (first input)
+                    // k is the second dimension of the first matrix
+                    let k = if let Some(ts1_addr) = instr.ts1 {
+                        // Find the instruction with td == ts1_addr to get the first input's dimensions
+                        instrs
+                            .iter()
+                            .find(|&other_instr| other_instr.td == Some(ts1_addr))
+                            .map(|ts1_instr| ts1_instr.output_dims[1].next_power_of_two())
+                            .unwrap_or(1) // Default to 1 if not found
+                    } else {
+                        1 // Default to 1 if ts1 is None
+                    };
+
+                    Some((m, n, k))
+                } else {
+                    None
+                }
+            })
             .collect_vec();
         Self {
             mat_mult_precompile_dims,
@@ -94,6 +132,7 @@ where
         //
         // Filter the operations to only include those that are proven with precompiles.
         // For each precompile operator, initialize the prover state and create a new `MatMultSumcheck`.
+        let mut i = 0;
         let mut witness = execution_trace
             .iter()
             .filter_map(|op| match &op.precompile {
@@ -101,10 +140,14 @@ where
                     // Initialize the prover state for the matrix multiplication precompile.
                     // `MatMultProverState::initialize` constructs the witness polynomials `a` & `b` for the matrix multiplication precompile.
                     // It takes the `transcript` as an argument to generate the challenges, rx & ry to compute the evaluation for Sum_k A(rx, k) & B(ry, k)
-                    let prover_state: MatMultProverState<F> =
-                        MatMultProverState::initialize(mat_mult, transcript);
+                    let prover_state: MatMultProverState<F> = MatMultProverState::initialize(
+                        pp.mat_mult_precompile_dims[i],
+                        mat_mult,
+                        transcript,
+                    );
 
                     // Create a new `MatMultSumcheck` instance with the prover state.
+                    i += 1;
                     Some(MatMultSumcheck::new(Some(prover_state), None, None))
                 }
                 _ => None,

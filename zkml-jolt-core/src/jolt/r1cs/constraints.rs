@@ -236,6 +236,19 @@ impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
                 JoltONNXR1CSInputs::TdWriteValue(i),
                 JoltONNXR1CSInputs::LookupOutput(i),
             );
+
+            // if Precompile {
+            //     assert!(TdWriteValue == PrecompileOutput)
+            // }
+            // else
+            // {
+            //     assert!(PrecompileOutput == 0)
+            // }
+            cs.constrain_eq_conditional(
+                JoltONNXR1CSInputs::OpFlags(CircuitFlags::Precompile),
+                JoltONNXR1CSInputs::TdWriteValue(i),
+                JoltONNXR1CSInputs::PrecompileOutput(i),
+            );
         }
 
         // If SumOperands {

@@ -389,6 +389,8 @@ pub enum CircuitFlags {
     Select,
     /// 1 if this is broadcase op; 0 otherwise
     BroadCast,
+    /// 1 if this op uses a sum-check precompile
+    Precompile,
 }
 
 pub const NUM_CIRCUIT_FLAGS: usize = CircuitFlags::COUNT;
@@ -466,6 +468,17 @@ impl ONNXInstr {
             | ONNXOpcode::Constant
         );
 
+        flags[CircuitFlags::Assert as usize] = matches!(
+            self.opcode,
+            ONNXOpcode::VirtualAssertValidSignedRemainder
+            | ONNXOpcode::VirtualAssertValidDiv0
+            | ONNXOpcode::VirtualAssertEq
+        );
+
+        flags[CircuitFlags::Precompile as usize] = matches!(
+            self.opcode,
+            ONNXOpcode::MatMult
+        );
         flags[CircuitFlags::Assert as usize] = matches!(
             self.opcode,
             ONNXOpcode::VirtualAssertValidSignedRemainder
@@ -561,24 +574,6 @@ impl ONNXInstr {
                 vals
             }
             None => vec![0u64; MAX_TENSOR_SIZE],
-        }
-    }
-
-    /// Returns the (m,n,k) values used in a matrix multiplication
-    pub fn matmult_dims(&self) -> Option<(usize, usize, usize)> {
-        match self.opcode {
-            ONNXOpcode::MatMult => {
-                let m = self.output_dims[0].next_power_of_two();
-                let n = self.output_dims[1].next_power_of_two();
-                let k = self
-                    .imm
-                    .as_ref()
-                    .map(|imm| imm.dims()[1])
-                    .unwrap_or(1)
-                    .next_power_of_two();
-                Some((m, n, k))
-            }
-            _ => None,
         }
     }
 }

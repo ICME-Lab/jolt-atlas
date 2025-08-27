@@ -9,7 +9,7 @@ use crate::{
             reduce_sum::ReduceSumInstruction, virtual_advice::ADVICEInstruction,
             virtual_const::ConstInstruction,
         },
-        precompiles::{PrecompileOp, matmult::MatMultPrecompile},
+        precompiles::{PrecompileOp, PrecompilePreprocessing, matmult::MatMultPrecompile},
     },
     utils::u64_vec_to_i32_iter,
 };
@@ -179,6 +179,14 @@ impl JoltONNXCycle {
             .zip(pre_vals.iter())
             .map(|(post, pre)| *post as i64 - *pre as i64)
             .collect()
+    }
+
+    fn precompile_output(&self, pp: &PrecompilePreprocessing, i: usize) -> Vec<u64> {
+        self.precompile
+            .as_ref()
+            .map_or(vec![0; MAX_TENSOR_SIZE], |precompile| {
+                precompile.output(pp, i)
+            })
     }
 }
 
@@ -529,7 +537,19 @@ impl WitnessGenerator for CommittedPolynomials {
                     .collect();
                 coeffs.into()
             }
-
+            // CommittedPolynomials::WritePrecompileOutputToTD(i) => {
+            //     let coeffs: Vec<u32> = trace
+            //         .par_iter()
+            //         .map(|cycle| {
+            //             let flag =
+            //                 cycle.instr.to_circuit_flags()[CircuitFlags::Precompile as usize];
+            //             (cycle.td_write().0[*i] as u32)
+            //                 * (flag as u8 as u32)
+            //                 * ((*i < cycle.instr.active_output_elements) as u8 as u32)
+            //         })
+            //         .collect();
+            //     coeffs.into()
+            // }
             CommittedPolynomials::TdInc => {
                 let coeffs: Vec<i64> = trace.par_iter().flat_map(|cycle| cycle.td_inc()).collect();
                 coeffs.into()
@@ -586,6 +606,8 @@ pub enum JoltONNXR1CSInputs {
     RightLookupOperand(usize),   // Virtual (instruction raf)
     Product(usize),              // LeftInstructionOperand * RightInstructionOperand
     LookupOutput(usize),         // Virtual (instruction rv)
+    PrecompileOutput(usize),
+    // WritePrecompileOutputToTD(usize),
     WriteLookupOutputToTD(usize),
     OpFlags(CircuitFlags),
     PC,               // Virtual (bytecode raf)
@@ -635,7 +657,7 @@ macro_rules! assign_singles {
     };
 }
 
-const NUM_TENSOR_INPUTS: usize = 23;
+const NUM_TENSOR_INPUTS: usize = 24;
 const NUM_SINGLE_INPUTS: usize = NUM_CIRCUIT_FLAGS + 4; // 4 for PC, UnexpandedPC, NextUnexpandedPC, NextPC
 /// This const serves to define a canonical ordering over inputs (and thus indices
 /// for each input). This is needed for sumcheck.
@@ -653,6 +675,8 @@ pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs;
     fill_array_r1cs_inputs!(arr, idx, Product);
     fill_array_r1cs_inputs!(arr, idx, LeftLookupOperand);
     fill_array_r1cs_inputs!(arr, idx, RightLookupOperand);
+    fill_array_r1cs_inputs!(arr, idx, PrecompileOutput);
+    // fill_array_r1cs_inputs!(arr, idx, WritePrecompileOutputToTD);
     fill_array_r1cs_inputs!(arr, idx, LookupOutput);
     fill_array_r1cs_inputs!(arr, idx, WriteLookupOutputToTD);
     fill_array_r1cs_inputs!(arr, idx, ActiveOutput);
@@ -686,12 +710,13 @@ pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs;
         Advice,
         Gather,
         Select,
-        BroadCast
+        BroadCast,
+        Precompile
     );
     // Compile-time check that we've handled all flags.
     // Will error if you add a new flag and forget to update this.
     const _: () = {
-        let _ = [(); (NUM_CIRCUIT_FLAGS == 16) as usize - 1];
+        let _ = [(); (NUM_CIRCUIT_FLAGS == 17) as usize - 1];
     };
 
     assign_singles!(arr, idx, PC, UnexpandedPC, NextUnexpandedPC, NextPC);
@@ -935,6 +960,10 @@ impl WitnessGenerator for JoltONNXR1CSInputs {
                 CommittedPolynomials::WriteLookupOutputToTD(*i)
                     .generate_witness(trace, preprocessing)
             }
+            // JoltONNXR1CSInputs::WritePrecompileOutputToTD(i) => {
+            //     CommittedPolynomials::WritePrecompileOutputToTD(*i)
+            //         .generate_witness(trace, preprocessing)
+            // }
             JoltONNXR1CSInputs::ActiveTd(i) => {
                 CommittedPolynomials::ActiveTd(*i).generate_witness(trace, preprocessing)
             }
@@ -953,6 +982,20 @@ impl WitnessGenerator for JoltONNXR1CSInputs {
                             .get(*i)
                             .cloned()
                             .unwrap()
+                    })
+                    .collect();
+                coeffs.into()
+            }
+            JoltONNXR1CSInputs::PrecompileOutput(i) => {
+                let coeffs: Vec<u64> = trace
+                    .par_iter()
+                    .enumerate()
+                    .map(|(cycle_idx, cycle)| {
+                        let j = trace[..cycle_idx]
+                            .iter()
+                            .filter(|c| c.precompile.is_some())
+                            .count();
+                        cycle.precompile_output(&preprocessing.shared.precompiles, j)[*i]
                     })
                     .collect();
                 coeffs.into()
@@ -1197,11 +1240,14 @@ impl JoltONNXCycle {
         if self.circuit_flags[CircuitFlags::BroadCast as usize] {
             active.push("BroadCast".to_string());
         }
+        if self.circuit_flags[CircuitFlags::Precompile as usize] {
+            active.push("Precompile".to_string());
+        }
 
         // Compile-time check that we've handled all flags.
         // Will error if you add a new flag and forget to update this.
         const _: () = {
-            let _ = [(); (NUM_CIRCUIT_FLAGS == 16) as usize - 1];
+            let _ = [(); (NUM_CIRCUIT_FLAGS == 17) as usize - 1];
         };
 
         if active.is_empty() {

@@ -26,6 +26,7 @@ use jolt_core::{
     subprotocols::sumcheck::BatchableSumcheckInstance,
     utils::{math::Math, transcript::Transcript},
 };
+use onnx_tracer::constants::MAX_TENSOR_SIZE;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -52,13 +53,12 @@ pub type MatMultPrecompileDims = (usize, usize, usize);
 pub struct MatMultPrecompile {
     a: Vec<u64>,
     b: Vec<u64>,
-    dims: MatMultPrecompileDims,
 }
 
 impl MatMultPrecompile {
     /// Create a new instance of [`MatMultPrecompile`]
-    pub fn new(a: Vec<u64>, b: Vec<u64>, dims: MatMultPrecompileDims) -> Self {
-        Self { a, b, dims }
+    pub fn new(a: Vec<u64>, b: Vec<u64>) -> Self {
+        Self { a, b }
     }
 
     /// Return the lhs matrix of the multiplication
@@ -71,11 +71,6 @@ impl MatMultPrecompile {
         &self.b
     }
 
-    /// Return the dims used in the multiplication
-    pub fn dims(&self) -> MatMultPrecompileDims {
-        self.dims
-    }
-
     /// Matrix multiplication of two quantized tensors.
     ///
     /// # Note:
@@ -86,8 +81,8 @@ impl MatMultPrecompile {
     /// # Panics:
     ///
     /// - Panics if the inner dimensions of the matrices do not match.
-    pub fn matmult_rhs_transposed(&self) -> (Vec<i32>, Vec<usize>) {
-        let (m, n, k) = self.dims();
+    pub fn matmult_rhs_transposed(&self, dims: MatMultPrecompileDims) -> (Vec<i32>, Vec<usize>) {
+        let (m, n, k) = dims;
 
         // Output shape is [M, N]
         let mut result = vec![0i32; m * n];
@@ -105,24 +100,24 @@ impl MatMultPrecompile {
         (result, vec![m, n])
     }
 
+    pub fn output(&self, dims: MatMultPrecompileDims) -> Vec<u64> {
+        let (c, _c_shape) = self.matmult_rhs_transposed(dims);
+        let mut c = c.iter().map(|&x| x as u32 as u64).collect_vec();
+        c.resize(MAX_TENSOR_SIZE, 0);
+        c
+    }
+
     #[cfg(test)]
     /// Return an randomly initialized quantized tensor with the given shape.
-    pub fn random(mut rng: impl rand_core::RngCore) -> Self {
-        let m = (rng.next_u32() as usize % 10 + 1).next_power_of_two();
-        let n = (rng.next_u32() as usize % 10 + 1).next_power_of_two();
-        let k = (rng.next_u32() as usize % 10 + 1).next_power_of_two();
-        // Generate random f32 data for the tensor.
+    pub fn random(mut rng: impl rand_core::RngCore, dims: MatMultPrecompileDims) -> Self {
+        let (m, n, k) = dims;
         let a: Vec<u64> = (0..m * k)
             .map(|_| rng.next_u32() as u8 as u32 as u64)
             .collect();
         let b: Vec<u64> = (0..n * k)
             .map(|_| rng.next_u32() as u8 as u32 as u64)
             .collect();
-        Self {
-            dims: (m, n, k),
-            a,
-            b,
-        }
+        Self { a, b }
     }
 }
 
@@ -130,10 +125,9 @@ impl MatMultPrecompile {
 /// Panics if the JoltONNXCycle is not determined by a matmult operation.
 impl From<&JoltONNXCycle> for MatMultPrecompile {
     fn from(cycle: &JoltONNXCycle) -> Self {
-        let (m, n, k) = cycle.instr.matmult_dims().unwrap();
         let a = cycle.ts1_read().1;
-        let b = cycle.instr.imm();
-        Self::new(a, b, (m, n, k))
+        let b = cycle.ts2_read().1;
+        Self::new(a, b)
     }
 }
 
@@ -169,13 +163,14 @@ where
     /// # Note: we implicitly transpose the rhs matrix B in the multiplication.
     ///  This is because the ONNX genneral matmul operator (GEMM) transposes the second matrix.
     pub fn initialize<ProofTranscript>(
+        dims: MatMultPrecompileDims,
         input: &MatMultPrecompile,
         transcript: &mut ProofTranscript,
     ) -> Self
     where
         ProofTranscript: Transcript,
     {
-        let (m, n, k) = input.dims();
+        let (m, n, k) = dims;
         let a = input.a();
         let b = input.b();
         let log_m = m.log_2();
@@ -197,7 +192,7 @@ where
                 B_ry[j] += F::from_i64(b[i * k + j] as u32 as i32 as i64) * eq_ry[i]
             }
         }
-        let (c, _c_shape) = input.matmult_rhs_transposed();
+        let (c, _c_shape) = input.matmult_rhs_transposed(dims);
         let c_poly =
             MultilinearPolynomial::from(c.iter().map(|&x| F::from_i64(x as i64)).collect_vec());
         let input_claim = c_poly.evaluate(&[rx.clone(), ry.clone()].concat());
@@ -385,6 +380,7 @@ mod tests {
         subprotocols::sumcheck::{BatchableSumcheckInstance, BatchedSumcheck},
         utils::transcript::{KeccakTranscript, Transcript},
     };
+    use rand::RngCore;
 
     use crate::jolt::precompiles::matmult::{
         MatMultPrecompile, MatMultPrecompileDims, MatMultProverState, MatMultSumcheck,
@@ -399,10 +395,14 @@ mod tests {
         let mut prover_transcript = KeccakTranscript::new(b"test");
         let mut sumcheck_instances = Vec::with_capacity(trace_length);
         for _ in 0..trace_length {
-            let precompile = MatMultPrecompile::random(&mut rng);
-            pp.push(precompile.dims());
+            let m = (rng.next_u32() as usize % 10 + 1).next_power_of_two();
+            let n = (rng.next_u32() as usize % 10 + 1).next_power_of_two();
+            let k = (rng.next_u32() as usize % 10 + 1).next_power_of_two();
+            let dims = (m, n, k);
+            pp.push(dims);
+            let precompile = MatMultPrecompile::random(&mut rng, dims);
             let prover_state =
-                MatMultProverState::<Fr>::initialize(&precompile, &mut prover_transcript);
+                MatMultProverState::<Fr>::initialize(dims, &precompile, &mut prover_transcript);
             let sumcheck_instance = MatMultSumcheck::new(Some(prover_state), None, None);
             sumcheck_instances.push(sumcheck_instance);
         }

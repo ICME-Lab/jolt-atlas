@@ -152,8 +152,9 @@ where
     ///
     /// These A(rx, k) and B(ry, k) evaluations serve as the witness for the matrix multiplication precompile.
     ///
+    ///
     /// # Note: we implicitly transpose the rhs matrix B in the multiplication.
-    ///         This is because the ONNX genneral matmul operator (GEMM) transposes the second matrix.
+    ///  This is because the ONNX genneral matmul operator (GEMM) transposes the second matrix.
     pub fn initialize<ProofTranscript>(
         input: &MatMultPrecompile,
         transcript: &mut ProofTranscript,
@@ -220,7 +221,7 @@ where
     #[tracing::instrument(skip_all)]
     /// Create a new instance of [`MatMultVerifierState`].
     /// # Note: we mainly update the state by computing the necessary challenges used in the sum-check matmult protocol.
-    ///         We also append the input claim to the transcript.
+    ///  We also append the input claim to the transcript.
     pub fn initialize<ProofTranscript>(
         m: usize,
         n: usize,

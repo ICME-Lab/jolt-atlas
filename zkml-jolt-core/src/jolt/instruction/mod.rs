@@ -7,6 +7,7 @@ pub mod div;
 pub mod ge;
 pub mod mul;
 pub mod reduce_max;
+pub mod reduce_sum;
 pub mod sub;
 pub mod virtual_advice;
 pub mod virtual_assert_valid_div0;
@@ -17,8 +18,6 @@ pub mod virtual_move;
 // TODO(WIP: Forpee) Rebase Scale Virtual Instr ICME-Lab/zkml-jolt#60
 //
 // pub mod rebase_scale;
-
-pub mod precompile;
 
 #[cfg(test)]
 pub mod test;

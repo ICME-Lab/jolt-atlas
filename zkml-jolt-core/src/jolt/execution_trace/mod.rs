@@ -6,9 +6,10 @@ use crate::{
         JoltProverPreprocessing,
         instruction::{
             VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction,
-            precompile::reduce_sum::ReduceSumInstruction, virtual_advice::ADVICEInstruction,
+            reduce_sum::ReduceSumInstruction, virtual_advice::ADVICEInstruction,
             virtual_const::ConstInstruction,
         },
+        precompiles::PrecompileOp,
     },
     utils::u64_vec_to_i32_iter,
 };
@@ -52,6 +53,7 @@ pub struct JoltONNXCycle {
     pub instr: ONNXInstr,
     pub advice_value: Option<Vec<u64>>,
     pub reduction_op: Option<ReductionOp>,
+    pub precompile: Option<PrecompileOp>,
 }
 
 // TODO(Forpee): Refactor these clones in JoltONNXCycle::ts1_read, ts2_read, td_write
@@ -108,6 +110,7 @@ impl JoltONNXCycle {
             instr: ONNXInstr::no_op(),
             advice_value: None,
             reduction_op: None,
+            precompile: None,
         }
     }
 }

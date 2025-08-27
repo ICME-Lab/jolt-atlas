@@ -84,6 +84,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for ReduceMaxInstruction
                 imm: Some(indices[0].clone()),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: 1,
+                output_dims: [1, 1],
             },
             memory_state: MemoryState {
                 ts1_val: None,
@@ -107,6 +108,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for ReduceMaxInstruction
                 td: vmax_val,
                 imm: None,
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                output_dims: [1, 1],
                 active_output_elements: 1,
             },
             memory_state: MemoryState {
@@ -133,6 +135,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for ReduceMaxInstruction
                     virtual_sequence_remaining: Some(
                         Self::SEQUENCE_LENGTH - virtual_trace.len() - 1,
                     ),
+                    output_dims: [1, 1],
                     active_output_elements: 1,
                 },
                 memory_state: MemoryState {
@@ -159,6 +162,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for ReduceMaxInstruction
                     virtual_sequence_remaining: Some(
                         Self::SEQUENCE_LENGTH - virtual_trace.len() - 1,
                     ),
+                    output_dims: [1, 1],
                     active_output_elements: 1,
                 },
                 memory_state: MemoryState {
@@ -184,6 +188,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for ReduceMaxInstruction
                     virtual_sequence_remaining: Some(
                         Self::SEQUENCE_LENGTH - virtual_trace.len() - 1,
                     ),
+                    output_dims: [1, 1],
                     active_output_elements: 1,
                 },
                 memory_state: MemoryState {
@@ -210,6 +215,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for ReduceMaxInstruction
                     virtual_sequence_remaining: Some(
                         Self::SEQUENCE_LENGTH - virtual_trace.len() - 1,
                     ),
+                    output_dims: [1, 1],
                     active_output_elements: 1,
                 },
                 memory_state: MemoryState {
@@ -236,6 +242,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for ReduceMaxInstruction
                     virtual_sequence_remaining: Some(
                         Self::SEQUENCE_LENGTH - virtual_trace.len() - 1,
                     ),
+                    output_dims: [1, 1],
                     active_output_elements: 1,
                 },
                 memory_state: MemoryState {
@@ -261,6 +268,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for ReduceMaxInstruction
                     virtual_sequence_remaining: Some(
                         Self::SEQUENCE_LENGTH - virtual_trace.len() - 1,
                     ),
+                    output_dims: [1, 1],
                     active_output_elements: 1,
                 },
                 memory_state: MemoryState {
@@ -286,6 +294,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for ReduceMaxInstruction
                 td: cycle.instr.td,
                 imm: None,
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                output_dims: [1, 1],
                 active_output_elements: 1,
             },
             memory_state: MemoryState {
@@ -378,6 +387,7 @@ mod test {
                     imm: None,
                     virtual_sequence_remaining: None,
                     active_output_elements: 1,
+                    output_dims: [1, 1],
                 },
                 memory_state: MemoryState {
                     ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&input))),

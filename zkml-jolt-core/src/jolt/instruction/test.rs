@@ -78,6 +78,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(opcode: ONNXOpc
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&y))),
                 virtual_sequence_remaining: None,
                 active_output_elements: MAX_TENSOR_SIZE,
+                output_dims: [1, MAX_TENSOR_SIZE],
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&x))),

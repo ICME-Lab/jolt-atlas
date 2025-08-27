@@ -9,7 +9,7 @@ use jolt_core::{
     subprotocols::sumcheck::{BatchableSumcheckInstance, BatchedSumcheck, SumcheckInstanceProof},
     utils::{errors::ProofVerifyError, transcript::Transcript},
 };
-use onnx_tracer::trace_types::{ONNXInstr, ONNXOpcode};
+use onnx_tracer::trace_types::ONNXInstr;
 use serde::{Deserialize, Serialize};
 
 use crate::jolt::{
@@ -31,7 +31,7 @@ pub enum PrecompileOp {
 
 /// Preprocessing of the models matrices for the precompile proof.
 /// Store the dimensions of the matrix multiplication precompile.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PrecompilePreprocessing {
     /// The dimensions used in the matrix multiplication precompile's.
     pub mat_mult_precompile_dims: Vec<MatMultPrecompileDims>,
@@ -45,24 +45,16 @@ impl PrecompilePreprocessing {
         // We pad the dimensions to the next power of two.
         let mat_mult_precompile_dims = instrs
             .iter()
-            .filter_map(|instr| match instr.opcode {
-                ONNXOpcode::MatMult => {
-                    let m = instr.output_dims[0].next_power_of_two();
-                    let n = instr.output_dims[1].next_power_of_two();
-                    let k = instr
-                        .imm
-                        .as_ref()
-                        .map(|imm| imm.dims()[1])
-                        .unwrap_or(1)
-                        .next_power_of_two();
-                    Some((m, n, k))
-                }
-                _ => None,
-            })
+            .filter_map(|instr| instr.matmult_dims())
             .collect_vec();
         Self {
             mat_mult_precompile_dims,
         }
+    }
+
+    /// Check if no precompiles
+    pub fn is_empty(&self) -> bool {
+        self.mat_mult_precompile_dims.is_empty()
     }
 }
 
@@ -84,18 +76,26 @@ where
     F: JoltField,
     ProofTranscript: Transcript,
 {
-    /// Given the execution trace, construct the polynomials used in the batched sum-check proof.
-    /// The witness polynomials are abstracted as `MatMultSumcheck` instances, which hold a MatMultProverState which contains the witness polynomials `a` & `b` for the matrix multiplication precompile.
-    ///
-    /// # Note
-    /// - We require the `transcript` to generate the challenges for the matrix multiplication precompile.
-    pub fn generate_witness<InstructionSet>(
-        ops: &[JoltONNXCycle],
+    /// Run the precompile sum-check instances through [`BatchedSumcheck::prove`] protcol.
+    #[tracing::instrument(skip_all, name = "PrecompileProof::prove")]
+    pub fn prove(
+        pp: &PrecompilePreprocessing,
+        execution_trace: &[JoltONNXCycle],
         transcript: &mut ProofTranscript,
-    ) -> Vec<MatMultSumcheck<F>> {
+    ) -> Option<Self> {
+        if pp.is_empty() {
+            return None;
+        }
+        // Given the execution trace, construct the polynomials used in the batched sum-check proof.
+        // The witness polynomials are abstracted as `MatMultSumcheck` instances, which hold a MatMultProverState which contains the witness polynomials `a` & `b` for the matrix multiplication precompile.
+        //
+        // # Note
+        // - We require the `transcript` to generate the challenges for the matrix multiplication precompile.
+        //
         // Filter the operations to only include those that are proven with precompiles.
         // For each precompile operator, initialize the prover state and create a new `MatMultSumcheck`.
-        ops.iter()
+        let mut witness = execution_trace
+            .iter()
             .filter_map(|op| match &op.precompile {
                 Some(PrecompileOp::MatMult(mat_mult)) => {
                     // Initialize the prover state for the matrix multiplication precompile.
@@ -109,16 +109,7 @@ where
                 }
                 _ => None,
             })
-            .collect_vec()
-    }
-
-    /// Run the precompile sum-check instances through [`BatchedSumcheck::prove`] protcol.
-    #[tracing::instrument(skip_all, name = "PrecompileProof::prove")]
-    pub fn prove(
-        _pp: &PrecompilePreprocessing,
-        witness: &mut [MatMultSumcheck<F>],
-        transcript: &mut ProofTranscript,
-    ) -> Self {
+            .collect_vec();
         let init_claims = witness
             .iter()
             .map(|p| p.prover_state.as_ref().unwrap().input_claim)
@@ -132,28 +123,28 @@ where
             .iter()
             .map(|p| p.claims.as_ref().unwrap().clone())
             .collect_vec(); // TODO: Append these claims to opening accumulator
-        Self {
+        Some(Self {
             sumcheck_proof,
             init_claims,
             final_claims,
-        }
+        })
     }
 
     /// Verify the sum-check precompile instances via [`BatchedSumcheck::verify`].
     #[tracing::instrument(skip_all, name = "PrecompileProof::verify")]
     pub fn verify(
+        &self,
         pp: &PrecompilePreprocessing,
-        proof: &Self,
         transcript: &mut ProofTranscript,
     ) -> Result<(), ProofVerifyError> {
         let vsumcheck_instances =
-            Self::initialize_verifier(pp, &proof.init_claims, &proof.final_claims, transcript);
+            Self::initialize_verifier(pp, &self.init_claims, &self.final_claims, transcript);
         let trait_objects: Vec<&dyn BatchableSumcheckInstance<F, ProofTranscript>> =
             vsumcheck_instances
                 .iter()
                 .map(|p| p as &dyn BatchableSumcheckInstance<F, ProofTranscript>)
                 .collect();
-        let _ = BatchedSumcheck::verify(&proof.sumcheck_proof, trait_objects, transcript)?;
+        let _ = BatchedSumcheck::verify(&self.sumcheck_proof, trait_objects, transcript)?;
         Ok(())
     }
 
@@ -187,62 +178,33 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::jolt::precompiles::matmult::{
-        MatMultPrecompile, MatMultPrecompileDims, MatMultProverState, MatMultSumcheck,
-    };
+    use crate::jolt::execution_trace::jolt_execution_trace;
 
     use super::{PrecompilePreprocessing, PrecompileProof};
     use ark_bn254::Fr;
-    use ark_std::test_rng;
     use jolt_core::utils::transcript::{KeccakTranscript, Transcript};
-    use rand_core::RngCore;
-
-    // #[test]
-    // fn test_precompile_proof() {
-    //     let mut rng = test_rng();
-    //     let mut program = ONNXProgram::new("onnx/mlp/perceptron_2.onnx", None);
-    //     let pp = PrecompilePreprocessing::preprocess(&program.decode());
-    //     let input = random_floatvec(&mut rng, 4);
-    //     program.set_input(input);
-
-    //     // Prover
-    //     let (_io, trace) = program.trace();
-    //     let mut ptranscript = KeccakTranscript::new(b"test");
-    //     let mut witness = PrecompileProof::<Fr, _>::generate_witness(&trace, &mut ptranscript);
-    //     assert!(!witness.is_empty());
-    //     let proof = PrecompileProof::<Fr, _>::prove(&pp, &mut witness, &mut ptranscript);
-
-    //     // Verifier
-    //     let mut vtranscript = KeccakTranscript::new(b"test");
-    //     PrecompileProof::<Fr, _>::verify(&pp, &proof, &mut vtranscript).unwrap();
-    // }
+    use onnx_tracer::{builder, decode_model, tensor::Tensor};
 
     #[test]
-    fn test_random_execution_trace() {
-        let mut rng = test_rng();
-        let trace_length = 100;
-        let mut pp: Vec<MatMultPrecompileDims> = Vec::with_capacity(trace_length);
-        let mut ptranscript = KeccakTranscript::new(b"test");
-        let mut sumcheck_instances = Vec::with_capacity(trace_length);
-        for _ in 0..trace_length {
-            let precompile = MatMultPrecompile::random(&mut rng);
-            pp.push(precompile.dims());
-            let prover_state = MatMultProverState::<Fr>::initialize(&precompile, &mut ptranscript);
-            let sumcheck_instance = MatMultSumcheck::new(Some(prover_state), None, None);
-            sumcheck_instances.push(sumcheck_instance);
-        }
-
-        // Preprocessing
-        let pp = PrecompilePreprocessing {
-            mat_mult_precompile_dims: pp,
-        };
+    fn test_precompile_proof() {
+        let matmult_model = builder::simple_matmult_model();
+        let program = decode_model(matmult_model.clone());
+        let pp = PrecompilePreprocessing::preprocess(&program);
+        let input = vec![1, 2, 3, 4];
 
         // Prover
-        let proof = PrecompileProof::<Fr, _>::prove(&pp, &mut sumcheck_instances, &mut ptranscript);
+        let (raw_trace, _) = onnx_tracer::execution_trace(
+            matmult_model,
+            &Tensor::new(Some(&input), &[1, 4]).unwrap(),
+        );
+        let execution_trace = jolt_execution_trace(raw_trace.clone());
+
+        let mut prover_transcript = KeccakTranscript::new(b"test");
+        let proof =
+            PrecompileProof::<Fr, _>::prove(&pp, &execution_trace, &mut prover_transcript).unwrap();
 
         // Verifier
-        let mut vtranscript = KeccakTranscript::new(b"test");
-        PrecompileProof::<Fr, _>::verify(&pp, &proof, &mut vtranscript)
-            .expect("Verification failed");
+        let mut verifier_transcript = KeccakTranscript::new(b"test");
+        proof.verify(&pp, &mut verifier_transcript).unwrap();
     }
 }

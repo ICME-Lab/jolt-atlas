@@ -9,7 +9,7 @@ use crate::{
             reduce_sum::ReduceSumInstruction, virtual_advice::ADVICEInstruction,
             virtual_const::ConstInstruction,
         },
-        precompiles::PrecompileOp,
+        precompiles::{PrecompileOp, matmult::MatMultPrecompile},
     },
     utils::u64_vec_to_i32_iter,
 };
@@ -136,6 +136,7 @@ impl JoltONNXCycle {
 
         // now safely populate lookups
         cycle.populate_instruction_lookups_internal();
+        cycle.populate_reduction();
         cycle.populate_precompile();
         cycle
     }
@@ -144,7 +145,7 @@ impl JoltONNXCycle {
         self.instruction_lookups = self.to_instruction_lookups();
     }
 
-    fn populate_precompile(&mut self) {
+    fn populate_reduction(&mut self) {
         let (_, ts1) = self.ts1_read();
         match self.instr().opcode {
             ONNXOpcode::Sum => {
@@ -154,6 +155,19 @@ impl JoltONNXCycle {
             _ => {
                 // No precompile for other opcodes
                 self.reduction_op = None;
+            }
+        }
+    }
+
+    fn populate_precompile(&mut self) {
+        match self.instr().opcode {
+            ONNXOpcode::MatMult => {
+                let precompile = MatMultPrecompile::from(&*self);
+                self.precompile = Some(PrecompileOp::MatMult(precompile));
+            }
+            _ => {
+                // No precompile for other opcodes
+                self.precompile = None;
             }
         }
     }

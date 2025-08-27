@@ -563,6 +563,24 @@ impl ONNXInstr {
             None => vec![0u64; MAX_TENSOR_SIZE],
         }
     }
+
+    /// Returns the (m,n,k) values used in a matrix multiplication
+    pub fn matmult_dims(&self) -> Option<(usize, usize, usize)> {
+        match self.opcode {
+            ONNXOpcode::MatMult => {
+                let m = self.output_dims[0].next_power_of_two();
+                let n = self.output_dims[1].next_power_of_two();
+                let k = self
+                    .imm
+                    .as_ref()
+                    .map(|imm| imm.dims()[1])
+                    .unwrap_or(1)
+                    .next_power_of_two();
+                Some((m, n, k))
+            }
+            _ => None,
+        }
+    }
 }
 
 // TODO: Expand the instruction set architecture (ISA):

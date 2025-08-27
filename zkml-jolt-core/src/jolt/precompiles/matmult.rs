@@ -29,6 +29,8 @@ use jolt_core::{
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::jolt::execution_trace::JoltONNXCycle;
+
 /// The dimensions used in the matrix multiplication precompile protocol.
 ///
 /// mat_mult_precompile_dims = (m, n, k) where
@@ -121,6 +123,17 @@ impl MatMultPrecompile {
             a,
             b,
         }
+    }
+}
+
+/// # Panics
+/// Panics if the JoltONNXCycle is not determined by a matmult operation.
+impl From<&JoltONNXCycle> for MatMultPrecompile {
+    fn from(cycle: &JoltONNXCycle) -> Self {
+        let (m, n, k) = cycle.instr.matmult_dims().unwrap();
+        let a = cycle.ts1_read().1;
+        let b = cycle.instr.imm();
+        Self::new(a, b, (m, n, k))
     }
 }
 

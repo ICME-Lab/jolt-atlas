@@ -2,6 +2,7 @@ pub mod bytecode;
 pub mod execution_trace;
 pub mod instruction;
 pub mod instruction_lookups;
+pub mod precompiles;
 pub mod r1cs;
 pub mod tensor_heap;
 
@@ -10,6 +11,7 @@ use crate::jolt::{
     execution_trace::JoltONNXCycle,
     instruction::{VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction},
     instruction_lookups::LookupsProof,
+    precompiles::{PrecompilePreprocessing, PrecompileProof},
     r1cs::{
         constraints::{JoltONNXConstraints, R1CSConstraints},
         spartan::UniformSpartanProof,
@@ -48,6 +50,7 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JoltSharedPreprocessing {
     pub bytecode: BytecodePreprocessing,
+    pub precompiles: PrecompilePreprocessing,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +90,7 @@ where
     instruction_lookups: LookupsProof<WORD_SIZE, F, PCS, ProofTranscript>,
     tensor_heap: TensorHeapTwistProof<F, ProofTranscript>,
     r1cs: UniformSpartanProof<F, ProofTranscript>,
+    precompile: Option<PrecompileProof<F, ProofTranscript>>,
     _p: PhantomData<PCS>,
 }
 
@@ -98,7 +102,7 @@ where
 {
     #[tracing::instrument(skip_all, name = "Jolt::preprocess")]
     pub fn shared_preprocess(bytecode: Vec<ONNXInstr>) -> JoltSharedPreprocessing {
-        let bytecode = bytecode
+        let bytecode: Vec<ONNXInstr> = bytecode
             .into_iter()
             .flat_map(|instr| match instr.opcode {
                 ONNXOpcode::Div => DIVInstruction::<32>::virtual_sequence(instr),
@@ -106,9 +110,11 @@ where
                 _ => vec![instr],
             })
             .collect();
-        let bytecode_preprocessing = BytecodePreprocessing::preprocess(bytecode);
+        let bytecode_preprocessing = BytecodePreprocessing::preprocess(bytecode.clone());
+        let precompile_preprocessing = PrecompilePreprocessing::preprocess(&bytecode);
         JoltSharedPreprocessing {
             bytecode: bytecode_preprocessing,
+            precompiles: precompile_preprocessing,
         }
     }
 
@@ -209,12 +215,15 @@ where
             &mut transcript,
             program_output,
         );
+        let precompiles_proof =
+            PrecompileProof::prove(&preprocessing.shared.precompiles, &trace, &mut transcript);
         JoltSNARK {
             trace_length,
             r1cs: r1cs_snark,
             tensor_heap: tensor_heap_snark,
             instruction_lookups: instruction_lookups_snark,
             bytecode: bytecode_snark,
+            precompile: precompiles_proof,
             _p: PhantomData,
         }
     }
@@ -250,6 +259,16 @@ where
             &mut transcript,
             program_output,
         )?;
+
+        // Check if we have precompiles to verify
+        if !preprocessing.shared.precompiles.is_empty() {
+            if let Some(precompile_proof) = &self.precompile {
+                precompile_proof.verify(&preprocessing.shared.precompiles, &mut transcript)?;
+            } else {
+                return Err(ProofVerifyError::InternalError);
+            }
+        }
+
         Ok(())
     }
 }
@@ -456,6 +475,21 @@ mod e2e_tests {
             builder::scalar_addsubmul_model,
             &config.to_tensor(),
         );
+    }
+
+    #[serial]
+    #[test]
+    fn test_simple_matmult() {
+        // Test matrix multiplication: [1, 4] × [3, 4] → [1, 3] (ONNX implicitly transposes B to [4, 3])
+        // Input: [1, 2, 3, 4]
+        // Weight matrix stored as [3, 4]: [[1, 4, 7, 10], [2, 5, 8, 11], [3, 6, 9, 12]]
+        // But ONNX uses it as transposed [4, 3]: [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]]
+        // Expected output: [1*1 + 2*4 + 3*7 + 4*10, 1*2 + 2*5 + 3*8 + 4*11, 1*3 + 2*6 + 3*9 + 4*12]
+        //                = [1 + 8 + 21 + 40, 2 + 10 + 24 + 44, 3 + 12 + 27 + 48]
+        //                = [70, 80, 90]
+        let config = ModelTestConfig::new("simple_matmult", vec![1, 2, 3, 4], vec![1, 4]);
+
+        ZKMLTestHelper::prove_and_verify_simple(builder::simple_matmult_model, &config.to_tensor());
     }
 
     #[test]

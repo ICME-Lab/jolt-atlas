@@ -139,6 +139,7 @@ pub struct ONNXInstr {
     /// `virtual_sequence_remaining` will be Some(0); if this is the penultimate instruction
     /// in the sequence, `virtual_sequence_remaining` will be Some(1); etc.
     pub virtual_sequence_remaining: Option<usize>,
+    pub output_dims: [usize; 2], // TODO: Scale system for higher rank tensors
     /// Number of active elements in the output (useful since we pad the output to `MAX_TENSOR_SIZE`).
     pub active_output_elements: usize,
 }
@@ -386,6 +387,10 @@ pub enum CircuitFlags {
     Gather,
     /// 1 if this is a select operation; 0 otherwise.
     Select,
+    /// 1 if this is broadcase op; 0 otherwise
+    BroadCast,
+    /// 1 if this op uses a sum-check precompile
+    Precompile,
 }
 
 pub const NUM_CIRCUIT_FLAGS: usize = CircuitFlags::COUNT;
@@ -470,23 +475,29 @@ impl ONNXInstr {
             | ONNXOpcode::VirtualAssertEq
         );
 
+        flags[CircuitFlags::Precompile as usize] = matches!(
+            self.opcode,
+            ONNXOpcode::MatMult
+        );
+        flags[CircuitFlags::Assert as usize] = matches!(
+            self.opcode,
+            ONNXOpcode::VirtualAssertValidSignedRemainder
+            | ONNXOpcode::VirtualAssertValidDiv0
+            | ONNXOpcode::VirtualAssertEq
+        );
+
         flags[CircuitFlags::InlineSequenceInstruction as usize] =
             self.virtual_sequence_remaining.is_some();
         flags[CircuitFlags::DoNotUpdateUnexpandedPC as usize] =
             self.virtual_sequence_remaining.unwrap_or(0) != 0;
 
-        flags[CircuitFlags::SumOperands as usize] = matches!(
-            self.opcode,
-            ONNXOpcode::Sum
-        );
-        flags[CircuitFlags::Gather as usize] = matches!(
-            self.opcode,
-            ONNXOpcode::Gather
-        );
-        flags[CircuitFlags::Select as usize] = matches!(
-            self.opcode,
-            ONNXOpcode::Select
-        );
+        // TODO(Forpee): These single-opcode flags could be simplified to direct equality checks
+        // unlike the multi-opcode matches above. We could Consider refactoring to use a more
+        // systematic approach like opcode-to-flag mapping or trait-based dispatch.
+        flags[CircuitFlags::SumOperands as usize] = self.opcode == ONNXOpcode::Sum;
+        flags[CircuitFlags::Gather as usize] = self.opcode == ONNXOpcode::Gather;
+        flags[CircuitFlags::Select as usize] = self.opcode == ONNXOpcode::Select;
+        flags[CircuitFlags::BroadCast as usize] = self.opcode == ONNXOpcode::Broadcast;
 
         flags
     }
@@ -532,6 +543,7 @@ impl ONNXInstr {
             imm: None,
             virtual_sequence_remaining: None,
             active_output_elements: 0,
+            output_dims: [0, 0],
         }
     }
 
@@ -546,6 +558,7 @@ impl ONNXInstr {
             imm: None,
             virtual_sequence_remaining: None,
             active_output_elements: 0,
+            output_dims: [0, 0],
         }
     }
 

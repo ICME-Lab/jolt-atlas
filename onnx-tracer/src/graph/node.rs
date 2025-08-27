@@ -465,6 +465,10 @@ impl Node {
             imm: self.imm(),
             virtual_sequence_remaining: None,
             active_output_elements: self.out_dims.iter().product(),
+            output_dims: [
+                self.out_dims.first().copied().unwrap_or(1),
+                self.out_dims.get(1).copied().unwrap_or(1),
+            ],
         }
     }
 

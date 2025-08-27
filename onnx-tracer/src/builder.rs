@@ -1,11 +1,45 @@
+//! Model builder utilities for creating ONNX computation graphs.
+//!
+//! This module provides a `ModelBuilder` struct that simplifies the creation of
+//! neural network models for testing and development. It offers high-level methods
+//! for common operations like matrix multiplication, element-wise operations, and more.
+//!
+//! # Example: Simple Matrix Multiplication
+//!
+//! ```rust,ignore
+//! use onnx_tracer::builder::simple_matmult_model;
+//! use onnx_tracer::tensor::Tensor;
+//!
+//! // Create a simple matrix multiplication model
+//! let model = simple_matmult_model();
+//!
+//! // Test with input [1, 2, 3, 4]
+//! let /// Simple matrix multiplication model for testing ONNX MatMul semantics.
+///
+/// This model demonstrates ONNX matrix multiplication functionality:
+/// 1. Takes an input tensor of shape [1, 4]
+/// 2. Multiplies it with a constant weight matrix of shape [3, 4] (gets implicitly transposed)
+/// 3. Outputs the result of shape [1, 3]
+///
+/// **ONNX MatMul Behavior**: The second matrix is implicitly transposed, so:
+/// - Input: [1, 4]
+/// - Weights: [3, 4] (stored as [3, 4], but acts like [4, 3] due to implicit transpose)
+/// - Result: [1, 3]
+///
+/// The weight matrix contains simple values for easy verification:
+/// ```
+/// weights = [[1, 4, 7, 10],    // First output neuron weights
+///            [2, 5, 8, 11],    // Second output neuron weights  
+///            [3, 6, 9, 12]]    // Third output neuron weights
+/// ```
 use crate::{
     circuit::ops::{hybrid::HybridOp, poly::PolyOp},
     graph::{
         model::Model,
         node::SupportedOp,
         utilities::{
-            create_const_node, create_div_node, create_iff_node, create_input_node, create_node,
-            create_polyop_node,
+            create_const_node, create_div_node, create_iff_node, create_input_node,
+            create_matmul_node, create_node, create_polyop_node,
         },
     },
     tensor::Tensor,
@@ -244,6 +278,36 @@ impl ModelBuilder {
             fanout_hint,
         );
         self.model.insert_node(broadcast_node);
+        (id, O)
+    }
+
+    /// Performs matrix multiplication between two input tensors.
+    ///
+    /// Matrix multiplication is implemented using the Einsum operation with the equation "ij,jk->ik".
+    /// This computes the standard matrix product where the inner dimensions must match.
+    ///
+    /// # Arguments
+    /// * `a` - First input tensor (left operand)
+    /// * `b` - Second input tensor (right operand)
+    /// * `out_dims` - Expected output dimensions
+    /// * `fanout_hint` - Hint for optimization purposes
+    ///
+    /// # Returns
+    /// A `Wire` representing the matrix multiplication result
+    ///
+    /// # Example
+    /// For input tensors of shapes [m, n] and [n, p], the output will have shape [m, p].
+    fn matmult(&mut self, a: Wire, b: Wire, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
+        let id = self.alloc();
+        let matmul_node = create_matmul_node(
+            "mk,nk->mn".to_string(), // ONNX MatMul equation (implicitly transposes second matrix)
+            self.scale,
+            vec![a, b],
+            out_dims,
+            id,
+            fanout_hint,
+        );
+        self.model.insert_node(matmul_node);
         (id, O)
     }
 }
@@ -571,4 +635,54 @@ pub fn multiclass0() -> Model {
     let final_result = b.reshape(argmax_result, vec![1], vec![1], 1);
 
     b.take(vec![input_indices.0], vec![final_result])
+}
+
+/// Simple matrix multiplication model for testing ONNX MatMul semantics.
+///
+/// This model demonstrates ONNX matrix multiplication functionality:
+/// 1. Takes an input tensor of shape [1, 4]
+/// 2. Multiplies it with a constant weight matrix of shape [3, 4] (gets implicitly transposed)
+/// 3. Outputs the result of shape [1, 3]
+///
+/// **ONNX MatMul Behavior**: The second matrix is implicitly transposed, so:
+/// - Input: [1, 4]
+/// - Weights: [3, 4] (stored as [3, 4], but acts like [4, 3] due to implicit transpose)
+/// - Result: [1, 3]
+///
+/// The weight matrix contains simple values for easy verification:
+/// ```
+/// weights = [[1, 4, 7, 10],    // First output neuron weights
+///            [2, 5, 8, 11],    // Second output neuron weights  
+///            [3, 6, 9, 12]]    // Third output neuron weights
+/// ```
+///
+/// For input [a, b, c, d], the output will be:
+/// [a*1 + b*4 + c*7 + d*10, a*2 + b*5 + c*8 + d*11, a*3 + b*6 + c*9 + d*12]
+///
+/// # Returns
+/// A `Model` representing the matrix multiplication computation graph
+pub fn simple_matmult_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 4])
+    let input = b.input(vec![1, 4], 1);
+
+    // Node 1: Weight matrix constant (shape [3, 4] - ONNX format with implicit transpose)
+    let mut weights: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 4, 7, 10, // First output neuron weights
+            2, 5, 8, 11, // Second output neuron weights
+            3, 6, 9, 12, // Third output neuron weights
+        ]),
+        &[3, 4],
+    )
+    .unwrap();
+    weights.set_scale(SCALE);
+    let weight_matrix = b.const_tensor(weights, vec![3, 4], 1);
+
+    // Node 2: Matrix multiplication: [1, 4] × [3, 4] → [1, 3] (using ONNX semantics)
+    let result = b.matmult(input, weight_matrix, vec![1, 3], 1);
+
+    b.take(vec![input.0], vec![result])
 }

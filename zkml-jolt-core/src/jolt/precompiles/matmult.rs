@@ -100,11 +100,28 @@ impl MatMultPrecompile {
         (result, vec![m, n])
     }
 
+    /// # Note: Resizes the output to the maximum tensor size
     pub fn output(&self, dims: MatMultPrecompileDims) -> Vec<u64> {
         let (c, _c_shape) = self.matmult_rhs_transposed(dims);
         let mut c = c.iter().map(|&x| x as u32 as u64).collect_vec();
         c.resize(MAX_TENSOR_SIZE, 0);
         c
+    }
+
+    /// Return the left operand of the precompile
+    /// # Note: Resizes the output to the maximum tensor size
+    pub fn left_operand(&self) -> Vec<u64> {
+        let mut a = self.a.clone();
+        a.resize(MAX_TENSOR_SIZE, 0);
+        a
+    }
+
+    /// Return the right operand of the precompile
+    /// # Note: Resizes the output to the maximum tensor size
+    pub fn right_operand(&self) -> Vec<u64> {
+        let mut b = self.b.clone();
+        b.resize(MAX_TENSOR_SIZE, 0);
+        b
     }
 
     #[cfg(test)]

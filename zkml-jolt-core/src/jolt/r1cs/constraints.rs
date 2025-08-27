@@ -22,6 +22,38 @@ pub struct JoltONNXConstraints;
 impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
     fn uniform_constraints(cs: &mut R1CSBuilder) {
         for i in 0..MAX_TENSOR_SIZE {
+            // if Precompile {
+            //      assert!(Ts1Value == LeftPrecompileOperand)
+            // } else {
+            //      assert!(LeftPrecompileOperand == 0)
+            // }
+            cs.constrain_eq_conditional(
+                JoltONNXR1CSInputs::OpFlags(CircuitFlags::Precompile),
+                JoltONNXR1CSInputs::Ts1Value(i),
+                JoltONNXR1CSInputs::LeftPrecompileOperand(i),
+            );
+            cs.constrain_eq_conditional(
+                1 - JoltONNXR1CSInputs::OpFlags(CircuitFlags::Precompile),
+                JoltONNXR1CSInputs::LeftPrecompileOperand(i),
+                0,
+            );
+
+            // if Precompile {
+            //      assert!(Ts2Value == RightPrecompileOperand)
+            // } else {
+            //      assert!(RightPrecompileOperand == 0)
+            // }
+            cs.constrain_eq_conditional(
+                JoltONNXR1CSInputs::OpFlags(CircuitFlags::Precompile),
+                JoltONNXR1CSInputs::Ts2Value(i),
+                JoltONNXR1CSInputs::RightPrecompileOperand(i),
+            );
+            cs.constrain_eq_conditional(
+                1 - JoltONNXR1CSInputs::OpFlags(CircuitFlags::Precompile),
+                JoltONNXR1CSInputs::RightPrecompileOperand(i),
+                0,
+            );
+
             // if LeftOperandIsTs1Value { assert!(LeftInstructionInput == Rs1Value) }
             cs.constrain_eq_conditional(
                 JoltONNXR1CSInputs::OpFlags(CircuitFlags::LeftOperandIsTs1Value),
@@ -239,15 +271,18 @@ impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
 
             // if Precompile {
             //     assert!(TdWriteValue == PrecompileOutput)
-            // }
-            // else
-            // {
+            // } else {
             //     assert!(PrecompileOutput == 0)
             // }
             cs.constrain_eq_conditional(
                 JoltONNXR1CSInputs::OpFlags(CircuitFlags::Precompile),
                 JoltONNXR1CSInputs::TdWriteValue(i),
                 JoltONNXR1CSInputs::PrecompileOutput(i),
+            );
+            cs.constrain_eq_conditional(
+                1 - JoltONNXR1CSInputs::OpFlags(CircuitFlags::Precompile),
+                JoltONNXR1CSInputs::PrecompileOutput(i),
+                0,
             );
         }
 

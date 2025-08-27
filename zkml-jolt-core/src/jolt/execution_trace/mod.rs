@@ -188,6 +188,22 @@ impl JoltONNXCycle {
                 precompile.output(pp, i)
             })
     }
+
+    fn left_precompile_operand(&self) -> Vec<u64> {
+        self.precompile
+            .as_ref()
+            .map_or(vec![0; MAX_TENSOR_SIZE], |precompile| {
+                precompile.left_operand()
+            })
+    }
+
+    fn right_precompile_operand(&self) -> Vec<u64> {
+        self.precompile
+            .as_ref()
+            .map_or(vec![0; MAX_TENSOR_SIZE], |precompile| {
+                precompile.right_operand()
+            })
+    }
 }
 
 impl From<&ONNXCycle> for JoltONNXCycle {
@@ -437,6 +453,8 @@ pub enum CommittedPolynomials {
     /// One-hot ra polynomial for the instruction lookups instance of Shout.
     /// There are four (d=4) of these polynomials, `InstructionRa(0) .. InstructionRa(3)`
     InstructionRa(usize),
+    LeftPrecompileOperand(usize),
+    RightPrecompileOperand(usize),
 }
 
 macro_rules! fill_array_committed {
@@ -503,6 +521,20 @@ impl WitnessGenerator for CommittedPolynomials {
                     .collect();
                 coeffs.into()
             }
+            CommittedPolynomials::LeftPrecompileOperand(i) => {
+                let coeffs: Vec<u64> = trace
+                    .par_iter()
+                    .map(|cycle| cycle.left_precompile_operand()[*i])
+                    .collect();
+                coeffs.into()
+            }
+            CommittedPolynomials::RightPrecompileOperand(i) => {
+                let coeffs: Vec<u64> = trace
+                    .par_iter()
+                    .map(|cycle| cycle.right_precompile_operand()[*i])
+                    .collect();
+                coeffs.into()
+            }
             CommittedPolynomials::Product(i) => {
                 let coeffs: Vec<u64> = trace
                     .par_iter()
@@ -537,19 +569,6 @@ impl WitnessGenerator for CommittedPolynomials {
                     .collect();
                 coeffs.into()
             }
-            // CommittedPolynomials::WritePrecompileOutputToTD(i) => {
-            //     let coeffs: Vec<u32> = trace
-            //         .par_iter()
-            //         .map(|cycle| {
-            //             let flag =
-            //                 cycle.instr.to_circuit_flags()[CircuitFlags::Precompile as usize];
-            //             (cycle.td_write().0[*i] as u32)
-            //                 * (flag as u8 as u32)
-            //                 * ((*i < cycle.instr.active_output_elements) as u8 as u32)
-            //         })
-            //         .collect();
-            //     coeffs.into()
-            // }
             CommittedPolynomials::TdInc => {
                 let coeffs: Vec<i64> = trace.par_iter().flat_map(|cycle| cycle.td_inc()).collect();
                 coeffs.into()
@@ -607,7 +626,8 @@ pub enum JoltONNXR1CSInputs {
     Product(usize),              // LeftInstructionOperand * RightInstructionOperand
     LookupOutput(usize),         // Virtual (instruction rv)
     PrecompileOutput(usize),
-    // WritePrecompileOutputToTD(usize),
+    LeftPrecompileOperand(usize),
+    RightPrecompileOperand(usize),
     WriteLookupOutputToTD(usize),
     OpFlags(CircuitFlags),
     PC,               // Virtual (bytecode raf)
@@ -657,7 +677,7 @@ macro_rules! assign_singles {
     };
 }
 
-const NUM_TENSOR_INPUTS: usize = 24;
+const NUM_TENSOR_INPUTS: usize = 26;
 const NUM_SINGLE_INPUTS: usize = NUM_CIRCUIT_FLAGS + 4; // 4 for PC, UnexpandedPC, NextUnexpandedPC, NextPC
 /// This const serves to define a canonical ordering over inputs (and thus indices
 /// for each input). This is needed for sumcheck.
@@ -676,7 +696,8 @@ pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs;
     fill_array_r1cs_inputs!(arr, idx, LeftLookupOperand);
     fill_array_r1cs_inputs!(arr, idx, RightLookupOperand);
     fill_array_r1cs_inputs!(arr, idx, PrecompileOutput);
-    // fill_array_r1cs_inputs!(arr, idx, WritePrecompileOutputToTD);
+    fill_array_r1cs_inputs!(arr, idx, LeftPrecompileOperand);
+    fill_array_r1cs_inputs!(arr, idx, RightPrecompileOperand);
     fill_array_r1cs_inputs!(arr, idx, LookupOutput);
     fill_array_r1cs_inputs!(arr, idx, WriteLookupOutputToTD);
     fill_array_r1cs_inputs!(arr, idx, ActiveOutput);
@@ -925,6 +946,14 @@ impl WitnessGenerator for JoltONNXR1CSInputs {
             }
             JoltONNXR1CSInputs::RightInstructionInput(i) => {
                 CommittedPolynomials::RightInstructionInput(*i)
+                    .generate_witness(trace, preprocessing)
+            }
+            JoltONNXR1CSInputs::LeftPrecompileOperand(i) => {
+                CommittedPolynomials::LeftPrecompileOperand(*i)
+                    .generate_witness(trace, preprocessing)
+            }
+            JoltONNXR1CSInputs::RightPrecompileOperand(i) => {
+                CommittedPolynomials::RightPrecompileOperand(*i)
                     .generate_witness(trace, preprocessing)
             }
             JoltONNXR1CSInputs::LeftLookupOperand(i) => {

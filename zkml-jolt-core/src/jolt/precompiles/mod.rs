@@ -37,6 +37,20 @@ impl PrecompileOp {
             PrecompileOp::MatMult(mat_mult) => mat_mult.output(pp.mat_mult_precompile_dims[i]),
         }
     }
+
+    /// Return the left operand of the precompile
+    pub fn left_operand(&self) -> Vec<u64> {
+        match self {
+            PrecompileOp::MatMult(mat_mult) => mat_mult.left_operand(),
+        }
+    }
+
+    /// Return the right operand of the precompile
+    pub fn right_operand(&self) -> Vec<u64> {
+        match self {
+            PrecompileOp::MatMult(mat_mult) => mat_mult.right_operand(),
+        }
+    }
 }
 
 /// Preprocessing of the models matrices for the precompile proof.

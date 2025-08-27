@@ -2,6 +2,7 @@ pub mod bytecode;
 pub mod execution_trace;
 pub mod instruction;
 pub mod instruction_lookups;
+pub mod precompiles;
 pub mod r1cs;
 pub mod tensor_heap;
 

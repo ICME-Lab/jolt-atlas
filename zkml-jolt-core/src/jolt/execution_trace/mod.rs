@@ -51,7 +51,7 @@ pub struct JoltONNXCycle {
     pub memory_ops: MemoryOps,
     pub instr: ONNXInstr,
     pub advice_value: Option<Vec<u64>>,
-    pub precompile: Option<Precompile>,
+    pub reduction_op: Option<ReductionOp>,
 }
 
 // TODO(Forpee): Refactor these clones in JoltONNXCycle::ts1_read, ts2_read, td_write
@@ -107,7 +107,7 @@ impl JoltONNXCycle {
             memory_ops: MemoryOps::no_op(),
             instr: ONNXInstr::no_op(),
             advice_value: None,
-            precompile: None,
+            reduction_op: None,
         }
     }
 }
@@ -146,11 +146,11 @@ impl JoltONNXCycle {
         match self.instr().opcode {
             ONNXOpcode::Sum => {
                 let precompile = ReduceSumInstruction::<WORD_SIZE>(ts1);
-                self.precompile = Some(Precompile::ReduceSum(precompile));
+                self.reduction_op = Some(ReductionOp::ReduceSum(precompile));
             }
             _ => {
                 // No precompile for other opcodes
-                self.precompile = None;
+                self.reduction_op = None;
             }
         }
     }
@@ -246,32 +246,32 @@ impl MemoryOps {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub enum Precompile {
+pub enum ReductionOp {
     ReduceSum(ReduceSumInstruction<WORD_SIZE>),
 }
 
-impl ONNXLookupQuery<WORD_SIZE> for Precompile {
+impl ONNXLookupQuery<WORD_SIZE> for ReductionOp {
     fn to_instruction_inputs(&self) -> (Vec<u64>, Vec<i64>) {
         match self {
-            Precompile::ReduceSum(instr) => instr.to_instruction_inputs(),
+            ReductionOp::ReduceSum(instr) => instr.to_instruction_inputs(),
         }
     }
 
     fn to_lookup_operands(&self) -> (Vec<u64>, Vec<u64>) {
         match self {
-            Precompile::ReduceSum(instr) => instr.to_lookup_operands(),
+            ReductionOp::ReduceSum(instr) => instr.to_lookup_operands(),
         }
     }
 
     fn to_lookup_index(&self) -> Vec<u64> {
         match self {
-            Precompile::ReduceSum(instr) => instr.to_lookup_index(),
+            ReductionOp::ReduceSum(instr) => instr.to_lookup_index(),
         }
     }
 
     fn to_lookup_output(&self) -> Vec<u64> {
         match self {
-            Precompile::ReduceSum(instr) => instr.to_lookup_output(),
+            ReductionOp::ReduceSum(instr) => instr.to_lookup_output(),
         }
     }
 }
@@ -306,8 +306,8 @@ impl<const WORD_SIZE: usize> ONNXLookupQuery<WORD_SIZE> for JoltONNXCycle {
     /// Returns a tuple of the instruction's inputs. If the instruction has only one input,
     /// one of the tuple values will be 0.
     fn to_instruction_inputs(&self) -> (Vec<u64>, Vec<i64>) {
-        if let Some(precompile) = &self.precompile {
-            return precompile.to_instruction_inputs();
+        if let Some(reduction_op) = &self.reduction_op {
+            return reduction_op.to_instruction_inputs();
         }
 
         self.instruction_lookups.as_ref().map_or(
@@ -325,8 +325,8 @@ impl<const WORD_SIZE: usize> ONNXLookupQuery<WORD_SIZE> for JoltONNXCycle {
     /// same as the instruction inputs returned by `to_instruction_inputs`, but in some cases
     /// (e.g. ADD, MUL) the instruction inputs are combined to form a single lookup operand.
     fn to_lookup_operands(&self) -> (Vec<u64>, Vec<u64>) {
-        if let Some(precompile) = &self.precompile {
-            return precompile.to_lookup_operands();
+        if let Some(reduction_op) = &self.reduction_op {
+            return reduction_op.to_lookup_operands();
         }
         self.instruction_lookups.as_ref().map_or(
             (vec![0; MAX_TENSOR_SIZE], vec![0; MAX_TENSOR_SIZE]),
@@ -342,8 +342,8 @@ impl<const WORD_SIZE: usize> ONNXLookupQuery<WORD_SIZE> for JoltONNXCycle {
     /// Converts this instruction's operands into a lookup index (as used in sparse-dense Shout).
     /// By default, interleaves the two bits of the two operands together.
     fn to_lookup_index(&self) -> Vec<u64> {
-        if let Some(precompile) = &self.precompile {
-            return precompile.to_lookup_index();
+        if let Some(reduction_op) = &self.reduction_op {
+            return reduction_op.to_lookup_index();
         }
         self.instruction_lookups
             .as_ref()
@@ -357,8 +357,8 @@ impl<const WORD_SIZE: usize> ONNXLookupQuery<WORD_SIZE> for JoltONNXCycle {
 
     /// Computes the output lookup entry for this instruction as a u64.
     fn to_lookup_output(&self) -> Vec<u64> {
-        if let Some(precompile) = &self.precompile {
-            return precompile.to_lookup_output();
+        if let Some(reduction_op) = &self.reduction_op {
+            return reduction_op.to_lookup_output();
         }
         self.instruction_lookups
             .as_ref()

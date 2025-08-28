@@ -11,7 +11,6 @@ use jolt_core::field::JoltField;
 use crate::jolt::instruction::sigmoid::SCALE;
 
 const LUT_SIZE: usize = 112;
-const EXPECTED_WORD_SIZE: usize = 8;
 pub const SIGMOID_SCALED_TABLE: [u8; LUT_SIZE] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -22,21 +21,22 @@ pub const SIGMOID_SCALED_TABLE: [u8; LUT_SIZE] = [
     7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
 ];
 
-fn build_sigmoid_table() -> Vec<u8> {
-    let size = 1 << EXPECTED_WORD_SIZE;
-    let mut lut_l = vec![7u8; size / 2];
-    let lut_r = vec![0u8; size / 2];
-    lut_l.extend_from_slice(&lut_r);
-    for i in 0..LUT_SIZE / 2 {
-        lut_l[i] = SIGMOID_SCALED_TABLE[i + LUT_SIZE / 2];
-        lut_l[size - i - 1] = SIGMOID_SCALED_TABLE[LUT_SIZE / 2 - i - 1];
-    }
-    println!("lut: {:?}", &lut_l);
-    lut_l
-}
 
-pub static SIGMOID_EXPANDED_SCALED_TABLE: once_cell::sync::Lazy<Vec<u8>> =
-    once_cell::sync::Lazy::new(build_sigmoid_table);
+// const EXPECTED_WORD_SIZE: usize = 32;
+// fn build_sigmoid_table() -> Vec<u8> {
+//     let size = 1 << EXPECTED_WORD_SIZE;
+//     let mut lut_l = vec![7u8; size / 2];
+//     let lut_r = vec![0u8; size / 2];
+//     lut_l.extend_from_slice(&lut_r);
+//     for i in 0..LUT_SIZE / 2 {
+//         lut_l[i] = SIGMOID_SCALED_TABLE[i + LUT_SIZE / 2];
+//         lut_l[size - i - 1] = SIGMOID_SCALED_TABLE[LUT_SIZE / 2 - i - 1];
+//     }
+//     lut_l
+// }
+
+// pub static SIGMOID_EXPANDED_SCALED_TABLE: once_cell::sync::Lazy<Vec<u8>> =
+//     once_cell::sync::Lazy::new(build_sigmoid_table);
 
 
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
@@ -44,12 +44,10 @@ pub struct SigmoidTable<const WORD_SIZE: usize>;
 
 impl<const WORD_SIZE: usize> JoltLookupTable for SigmoidTable<WORD_SIZE> {
     fn materialize_entry(&self, index: u64) -> u64 {
-        // let i = index % (1 << WORD_SIZE);
-        // SIGMOID_EXPANDED_SCALED_TABLE[i as usize] as u64
         if index < (LUT_SIZE / 2) as u64 {
-            SIGMOID_EXPANDED_SCALED_TABLE[index as usize] as u64
+            SIGMOID_SCALED_TABLE[index as usize + LUT_SIZE / 2] as u64
         } else if index > u64::MAX - (LUT_SIZE / 2) as u64 {
-            SIGMOID_EXPANDED_SCALED_TABLE[LUT_SIZE / 2 - index as usize] as u64
+            SIGMOID_SCALED_TABLE[LUT_SIZE / 2 - (index as u8 as usize) - 1] as u64
         } else if index < u64::MAX / 2 {
             SCALE as u64
         } else {
@@ -59,19 +57,22 @@ impl<const WORD_SIZE: usize> JoltLookupTable for SigmoidTable<WORD_SIZE> {
 
     fn evaluate_mle<F: JoltField>(&self, r: &[F]) -> F {
         debug_assert_eq!(r.len(), 2 * WORD_SIZE);
-        let len = 1 << r.len();
+        // TODO: We only need the first half (only one input to sigmoid)
+        // let r_prime = &r[..r.len() / 2];
+        let r_prime = r;
+        let len = 1 << r_prime.len();
         let max = F::from_u8(SCALE as u8);
         let zero = F::zero();
-        let mut f_eval = vec![max; len / 2];
-        let f_eval_r = vec![zero; len / 2];
+        let mut f_eval = vec![max; len as usize / 2];
+        let f_eval_r = vec![zero; len as usize / 2];
         f_eval.extend_from_slice(&f_eval_r);
         for i in 0..LUT_SIZE / 2 {
-            f_eval[i] = F::from_u8(SIGMOID_EXPANDED_SCALED_TABLE[i]);
-            f_eval[len - i - 1] = F::from_u8(SIGMOID_EXPANDED_SCALED_TABLE[LUT_SIZE - i - 1]);
+            f_eval[i] = F::from_u8(SIGMOID_SCALED_TABLE[i + LUT_SIZE / 2]);
+            f_eval[len as usize - i - 1] = F::from_u8(SIGMOID_SCALED_TABLE[LUT_SIZE / 2 - i - 1]);
         }
 
-        // TODO: EqPolynomial::evals(r) is quite slow
-        let eq_evals = EqPolynomial::evals(r);
+        // TODO: EqPolynomial::evals(r) is too slow
+        let eq_evals = EqPolynomial::evals(r_prime);
         f_eval
             .iter()
             .zip_eq(eq_evals.iter())

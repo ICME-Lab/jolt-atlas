@@ -34,7 +34,7 @@ macro_rules! expect_rebase_scale {
 pub struct REBASEInstruction<const WORD_SIZE: usize>;
 
 impl<const WORD_SIZE: usize> VirtualInstructionSequence for REBASEInstruction<WORD_SIZE> {
-    const SEQUENCE_LENGTH: usize = 2;
+    const SEQUENCE_LENGTH: usize = 1 + DIVInstruction::<WORD_SIZE>::SEQUENCE_LENGTH;
 
     fn virtual_trace(cycle: ONNXCycle) -> Vec<ONNXCycle> {
         expect_rebase_scale!(cycle);
@@ -56,37 +56,26 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for REBASEInstruction<WO
         instr.opcode = inner_opcode;
         let inner_res_0: Vec<u64> = match instr.opcode {
             ONNXOpcode::Mul => {
-                todo!()
-                // let x = cycle
-                //     .memory_state
-                //     .ts1_val
-                //     .as_ref()
-                //     .expect("Expected ts1_val for Mul")
-                //     .to_u64_vec();
-                // let y = cycle
-                //     .memory_state
-                //     .ts2_val
-                //     .as_ref()
-                //     .expect("Expected ts2_val for Mul")
-                //     .to_u64_vec();
-                // match WORD_SIZE {
-                //     8 => x
-                //         .iter()
-                //         .zip(y.iter())
-                //         .map(|(&a, &b)| (a as u8).wrapping_mul(b as u8) as u64)
-                //         .collect::<Vec<u64>>(),
-                //     32 => x
-                //         .iter()
-                //         .zip(y.iter())
-                //         .map(|(&a, &b)| (a as u32).wrapping_mul(b as u32) as u64)
-                //         .collect::<Vec<u64>>(),
-                //     64 => x
-                //         .iter()
-                //         .zip(y.iter())
-                //         .map(|(&a, &b)| a.wrapping_mul(b))
-                //         .collect::<Vec<u64>>(),
-                //     _ => panic!("Unsupported WORD_SIZE: {WORD_SIZE}"),
-                // }
+                let x = cycle.ts1_vals();
+                let y = cycle.ts2_vals();
+                match WORD_SIZE {
+                    8 => x
+                        .iter()
+                        .zip(y.iter())
+                        .map(|(&a, &b)| (a as u8).wrapping_mul(b as u8) as u64)
+                        .collect::<Vec<u64>>(),
+                    32 => x
+                        .iter()
+                        .zip(y.iter())
+                        .map(|(&a, &b)| (a as u32).wrapping_mul(b as u32) as u64)
+                        .collect::<Vec<u64>>(),
+                    64 => x
+                        .iter()
+                        .zip(y.iter())
+                        .map(|(&a, &b)| a.wrapping_mul(b))
+                        .collect::<Vec<u64>>(),
+                    _ => panic!("Unsupported WORD_SIZE: {WORD_SIZE}"),
+                }
             }
             _ => panic!("Unimplemented inner opcode: {:?}", instr.opcode),
         };
@@ -102,6 +91,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for REBASEInstruction<WO
                 imm: cycle.instr.imm.clone(),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
+                output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
                 ts1_val: cycle.memory_state.ts1_val.clone(),
@@ -119,7 +109,8 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for REBASEInstruction<WO
             vec![128; MAX_TENSOR_SIZE], // TODO(AntoineF4C5): Check if 0 for anything out of active_output_elements
             None,
         );
-        virtual_trace.push(ONNXCycle {
+
+        let div_cycle = ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
                 opcode: ONNXOpcode::Div,
@@ -127,14 +118,13 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for REBASEInstruction<WO
                 ts2: None,
                 ts3: None,
                 td: cycle.instr.td,
-                // TODO(AntoineF4C5): Check if 0 for anything out of active_output_elements
-                // Do we need to enforce 128 denominator
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![
                     128;
                     MAX_TENSOR_SIZE
                 ]))),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
+                output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&inner_res_0))),
@@ -144,7 +134,10 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for REBASEInstruction<WO
                 td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&res))),
             },
             advice_value: None,
-        });
+        };
+
+        let div_virtual_trace = DIVInstruction::<WORD_SIZE>::virtual_trace(div_cycle);
+        virtual_trace.extend(div_virtual_trace);
 
         virtual_trace
     }

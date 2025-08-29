@@ -712,6 +712,7 @@ mod e2e_tests {
         info!("Program IO: {program_io:#?}");
     }
 
+    #[serial]
     #[test]
     fn test_addsubmuladd() {
         let addsubmul = ONNXProgram {

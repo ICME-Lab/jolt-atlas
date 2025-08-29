@@ -183,14 +183,11 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for REBASEInstruction<WO
 
 #[cfg(test)]
 mod test {
-    use onnx_tracer::logger::init_logger;
-
     use super::*;
     use crate::jolt::instruction::test::jolt_virtual_sequence_test;
 
     #[test]
     fn rebasescale_virtual_sequence_32() {
-        init_logger();
         jolt_virtual_sequence_test::<REBASEInstruction<32>>(ONNXOpcode::RebaseScale(Box::new(
             ONNXOpcode::Mul,
         )));

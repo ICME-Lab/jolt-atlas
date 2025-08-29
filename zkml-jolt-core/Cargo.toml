@@ -6,7 +6,8 @@ edition = "2024"
 [dependencies]
 ark-bn254 = "0.5.0"
 itertools = "0.10.0"
-jolt-core = { git = "https://github.com/ICME-Lab/zkml-jolt", package = "jolt-core", branch = "zkml-jolt" }
+jolt-core = { git = "https://github.com/ICME-Lab/zkml-jolt", package = "jolt-core", branch = "feat/sigmoid" }
+# jolt-core = { path = "../../zkml-jolt/jolt-core" }
 onnx-tracer = { path = "../onnx-tracer" }
 rayon = { version = "^1.8.0" }
 serde = { version = "1.0.193", features = ["derive"] }

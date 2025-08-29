@@ -375,6 +375,8 @@ pub enum CircuitFlags {
     Gather,
     /// 1 if this is a select operation; 0 otherwise.
     Select,
+    /// 1 if this is a sigmoid operation; 0 otherwise.
+    Sigmoid,
     /// 1 if this is broadcase op; 0 otherwise
     BroadCast,
     /// 1 if this op uses a sum-check precompile
@@ -486,6 +488,7 @@ impl ONNXInstr {
         flags[CircuitFlags::Gather as usize] = self.opcode == ONNXOpcode::Gather;
         flags[CircuitFlags::Select as usize] = self.opcode == ONNXOpcode::Select;
         flags[CircuitFlags::BroadCast as usize] = self.opcode == ONNXOpcode::Broadcast;
+        flags[CircuitFlags::Sigmoid as usize] = self.opcode == ONNXOpcode::Sigmoid;
 
         flags
     }

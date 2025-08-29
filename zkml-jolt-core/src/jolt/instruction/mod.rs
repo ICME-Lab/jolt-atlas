@@ -8,6 +8,7 @@ pub mod ge;
 pub mod mul;
 pub mod rebase_scale;
 pub mod reduce_max;
+pub mod sigmoid;
 pub mod reduce_sum;
 pub mod sub;
 pub mod virtual_advice;

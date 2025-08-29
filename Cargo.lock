@@ -774,7 +774,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.2.0"
-source = "git+https://github.com/ICME-Lab/zkml-jolt?branch=zkml-jolt#5830b32c8afddf242d0e543f185ff3e3d9a60e8f"
+source = "git+https://github.com/ICME-Lab/zkml-jolt?branch=feat%2Fsigmoid#bbe7bc3a0d9cd23a43a10d1a5c03f6a398eaf362"
 dependencies = [
  "ark-serialize 0.5.0",
  "derive_more 2.0.1",
@@ -2072,7 +2072,7 @@ dependencies = [
 [[package]]
 name = "jolt-core"
 version = "0.1.0"
-source = "git+https://github.com/ICME-Lab/zkml-jolt?branch=zkml-jolt#5830b32c8afddf242d0e543f185ff3e3d9a60e8f"
+source = "git+https://github.com/ICME-Lab/zkml-jolt?branch=feat%2Fsigmoid#bbe7bc3a0d9cd23a43a10d1a5c03f6a398eaf362"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -4208,7 +4208,7 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 [[package]]
 name = "tracer"
 version = "0.2.0"
-source = "git+https://github.com/ICME-Lab/zkml-jolt?branch=zkml-jolt#5830b32c8afddf242d0e543f185ff3e3d9a60e8f"
+source = "git+https://github.com/ICME-Lab/zkml-jolt?branch=feat%2Fsigmoid#bbe7bc3a0d9cd23a43a10d1a5c03f6a398eaf362"
 dependencies = [
  "ark-serialize 0.5.0",
  "clap",

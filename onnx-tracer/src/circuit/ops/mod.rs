@@ -22,10 +22,8 @@ pub mod poly;
 /// A struct representing the result of a forward pass.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 
-// TODO(AntoineF4C5): generic quantization
 pub struct ForwardResult<F: TensorType + PartialOrd> {
     pub(crate) output: Tensor<F>,
-    // TODO(AntoineF4C5): Check why intermediate_lookups doesn't use same generic `F` as output
     pub(crate) intermediate_lookups: Vec<Tensor<i32>>,
 }
 

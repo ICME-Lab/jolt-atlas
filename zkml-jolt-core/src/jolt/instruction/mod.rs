@@ -1,4 +1,4 @@
-use onnx_tracer::trace_types::{MemoryState, ONNXCycle, ONNXInstr};
+use onnx_tracer::trace_types::{MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode};
 
 pub mod add;
 pub mod argmax;
@@ -6,6 +6,7 @@ pub mod beq;
 pub mod div;
 pub mod ge;
 pub mod mul;
+pub mod rebase_scale;
 pub mod reduce_max;
 pub mod reduce_sum;
 pub mod sub;
@@ -36,5 +37,5 @@ pub trait VirtualInstructionSequence {
             .collect()
     }
     fn virtual_trace(cycle: ONNXCycle) -> Vec<ONNXCycle>;
-    fn sequence_output(x: Vec<u64>, y: Vec<u64>) -> Vec<u64>;
+    fn sequence_output(x: Vec<u64>, y: Vec<u64>, inner: Option<ONNXOpcode>) -> Vec<u64>;
 }

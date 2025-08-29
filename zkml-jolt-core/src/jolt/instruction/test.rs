@@ -60,7 +60,12 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(opcode: ONNXOpc
                 .map(|_| rng.next_u32() as u64)
                 .collect::<Vec<u64>>()
         };
-        let result = I::sequence_output(x.clone(), y.clone());
+
+        let inner: Option<ONNXOpcode> = match opcode {
+            ONNXOpcode::RebaseScale(ref inner) => Some(*inner.clone()),
+            _ => None,
+        };
+        let result = I::sequence_output(x.clone(), y.clone(), inner);
 
         let mut tensor_registers =
             vec![vec![0u64; MAX_TENSOR_SIZE]; TENSOR_REGISTER_COUNT as usize];

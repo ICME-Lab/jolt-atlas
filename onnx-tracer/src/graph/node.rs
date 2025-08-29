@@ -377,6 +377,7 @@ impl Node {
         // How: We call `RebaseScale::rebase`, which checks if rebasing is needed and, if so, wraps the
         //      operation accordingly. We then update `out_scale` to reflect the new (rebased) scale.
         let global_scale = scales.get_max();
+        // TODO(AntoineF4C5): Might have to handle out_scale < global_scale if `Div` nodes are used (for now seem to be replaced by mul with divisor's inverse)
         opkind = RebaseScale::rebase(opkind, global_scale, out_scale, scales.rebase_multiplier);
         out_scale = opkind.out_scale(in_scales).unwrap();
 
@@ -485,7 +486,6 @@ impl Node {
 
 /// A single operation in a [crate::graph::Model].
 
-// TODO(AntoineF4C5): generic quantization
 #[derive(Clone, Debug, PartialEq)]
 pub enum SupportedOp {
     /// A linear operation.
@@ -521,7 +521,6 @@ impl From<&SupportedOp> for ONNXOpcode {
     }
 }
 
-// TODO(AntoineF4C5): generic quantization
 impl SupportedOp {
     ///
     pub fn is_lookup(&self) -> bool {
@@ -669,7 +668,6 @@ impl SupportedOp {
     }
 }
 
-// TODO(AntoineF4C5): generic quantization
 impl From<Box<dyn Op<i32>>> for SupportedOp {
     fn from(value: Box<dyn Op<i32>>) -> Self {
         if let Some(op) = value.as_any().downcast_ref::<PolyOp<i32>>() {
@@ -708,7 +706,6 @@ impl From<Box<dyn Op<i32>>> for SupportedOp {
     }
 }
 
-// TODO(AntoineF4C5): generic quantization
 impl Op<i32> for SupportedOp {
     fn f(&self, inputs: &[Tensor<i32>]) -> Result<ForwardResult<i32>, crate::tensor::TensorError> {
         self.as_op().f(inputs)
@@ -756,7 +753,6 @@ pub struct Rescaled {
     pub scale: Vec<(usize, u128)>,
 }
 
-// TODO(AntoineF4C5): generic quantization
 impl Op<i32> for Rescaled {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -870,7 +866,6 @@ impl RebaseScale {
     }
 }
 
-// TODO(AntoineF4C5): generic quantization
 impl Op<i32> for RebaseScale {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -995,7 +990,6 @@ impl PartialEq for Node {
 /// rescale_const_with_single_use(constant, input_scales, constant_node.num_uses())?;
 /// ```
 fn rescale_const_with_single_use(
-    // TODO(AntoineF4C5): generic quantization
     constant: &mut Constant<i32>,
     in_scales: Vec<crate::Scale>,
     num_uses: usize,

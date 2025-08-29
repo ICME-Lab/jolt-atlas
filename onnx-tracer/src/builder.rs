@@ -36,7 +36,7 @@ use crate::{
     circuit::ops::{hybrid::HybridOp, poly::PolyOp},
     graph::{
         model::Model,
-        node::SupportedOp,
+        node::{RebaseScale, SupportedOp},
         utilities::{
             create_const_node, create_div_node, create_iff_node, create_input_node,
             create_matmul_node, create_node, create_polyop_node,
@@ -83,7 +83,6 @@ impl ModelBuilder {
         (id, O)
     }
 
-    // TODO(AntoineF4C5): generic quantization
     fn const_tensor(
         &mut self,
         tensor: Tensor<i32>,
@@ -97,7 +96,6 @@ impl ModelBuilder {
         (id, O)
     }
 
-    // TODO(AntoineF4C5): generic quantization
     fn poly(
         &mut self,
         op: PolyOp<i32>,
@@ -224,7 +222,6 @@ impl ModelBuilder {
         (id, O)
     }
 
-    // TODO(AntoineF4C5): generic quantization
     fn const_tensor_with_scale(
         &mut self,
         tensor: Tensor<i32>,
@@ -256,6 +253,25 @@ impl ModelBuilder {
             fanout_hint,
         );
         self.model.insert_node(argmax_node);
+        (id, O)
+    }
+
+    fn rebase_scale_mul(
+        &mut self,
+        a: Wire,
+        b: Wire,
+        out_dims: Vec<usize>,
+        fanout_hint: usize,
+    ) -> Wire {
+        let id = self.alloc();
+        let opkind = SupportedOp::RebaseScale(RebaseScale {
+            inner: Box::new(SupportedOp::Linear(PolyOp::Mult)),
+            multiplier: 2f64.powi(self.scale),
+            target_scale: self.scale,
+            original_scale: self.scale * 2,
+        });
+        let rebase_node = create_node(opkind, self.scale, vec![a, b], out_dims, id, fanout_hint);
+        self.model.insert_node(rebase_node);
         (id, O)
     }
 
@@ -551,6 +567,23 @@ pub fn argmax_model() -> Model {
     let argmax_result = b.argmax(input, 0, vec![1], 1); // Returns a scalar index
 
     b.take(vec![input.0], vec![argmax_result])
+}
+
+/// Simple RebaseScale model:
+/// 1. Takes a 1D vector input
+/// 2. Applies a multiplication of input to itself
+/// 3. Rescale the output
+pub fn rebase_scale_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: First input vector (1D)
+    let input = b.input(vec![5], 1); // Example: vector of length 5
+
+    // Node 2: RebaseScale multiplication of both inputs
+    let rebase_result = b.rebase_scale_mul(input, input, vec![5], 1);
+
+    b.take(vec![input.0], vec![rebase_result])
 }
 
 /// Analog to onnx-tracer/models/multiclass0/network.onnx

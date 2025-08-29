@@ -9,7 +9,10 @@ pub mod tensor_heap;
 use crate::jolt::{
     bytecode::{BytecodePreprocessing, BytecodeProof},
     execution_trace::JoltONNXCycle,
-    instruction::{VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction},
+    instruction::{
+        VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction,
+        rebase_scale::REBASEInstruction,
+    },
     instruction_lookups::LookupsProof,
     precompiles::{PrecompilePreprocessing, PrecompileProof},
     r1cs::{
@@ -107,6 +110,7 @@ where
             .flat_map(|instr| match instr.opcode {
                 ONNXOpcode::Div => DIVInstruction::<32>::virtual_sequence(instr),
                 ONNXOpcode::ArgMax => ArgMaxInstruction::<32>::virtual_sequence(instr),
+                ONNXOpcode::RebaseScale(_) => REBASEInstruction::<32>::virtual_sequence(instr),
                 _ => vec![instr],
             })
             .collect();
@@ -429,6 +433,14 @@ mod e2e_tests {
         ZKMLTestHelper::prove_and_verify_simple(builder::argmax_model, &config.to_tensor());
     }
 
+    #[serial]
+    #[test]
+    fn test_rebase_scale_e2e() {
+        let config = ModelTestConfig::new("rebase_scale", vec![10, 20, 30, 40, 50], vec![5]);
+
+        ZKMLTestHelper::prove_and_verify_simple(builder::rebase_scale_model, &config.to_tensor());
+    }
+
     fn test_arithmetic_model<F>(model_fn: F, test_name: &str)
     where
         F: Fn() -> Model,
@@ -698,6 +710,31 @@ mod e2e_tests {
         let (raw_trace, program_io) = sentiment_select.trace();
         info!("Raw trace: {raw_trace:#?}");
         info!("Program IO: {program_io:#?}");
+    }
+
+    #[serial]
+    #[test]
+    fn test_addsubmuladd() {
+        let addsubmul = ONNXProgram {
+            model_path: "../onnx-tracer/models/addsubmuladd/network.onnx".into(),
+            inputs: Tensor::new(Some(&[10, 20, 30, 40, 50, 60, 70, 80, 90, 100]), &[1, 10])
+                .unwrap(), // Example input
+        };
+
+        let program_bytecode = addsubmul.decode();
+        info!("Program code: {program_bytecode:#?}");
+
+        let (raw_trace, program_io) = addsubmul.trace();
+        info!("Raw trace: {raw_trace:#?}");
+        info!("Program IO: {program_io:#?}");
+
+        let pp: JoltProverPreprocessing<Fr, PCS, KeccakTranscript> =
+            JoltSNARK::prover_preprocess(program_bytecode);
+
+        let execution_trace = jolt_execution_trace(raw_trace.clone());
+        let snark = JoltSNARK::prove(pp.clone(), execution_trace, &program_io);
+
+        snark.verify((&pp).into(), program_io).unwrap();
     }
 
     #[ignore]

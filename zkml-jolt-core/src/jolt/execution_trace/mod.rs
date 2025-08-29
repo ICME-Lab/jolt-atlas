@@ -245,7 +245,7 @@ impl MemoryOps {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum Precompile {
     ReduceSum(ReduceSumInstruction<WORD_SIZE>),
 }

@@ -8,9 +8,8 @@ use jolt_core::jolt::lookup_table::JoltLookupTable;
 use jolt_core::jolt::lookup_table::PrefixSuffixDecomposition;
 use jolt_core::field::JoltField;
 
-use crate::jolt::instruction::sigmoid::SCALE;
-
 const LUT_SIZE: usize = 112;
+pub const SCALE: f32 = 7.;
 pub const SIGMOID_SCALED_TABLE: [u8; LUT_SIZE] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -20,24 +19,6 @@ pub const SIGMOID_SCALED_TABLE: [u8; LUT_SIZE] = [
     7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
     7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
 ];
-
-
-// const EXPECTED_WORD_SIZE: usize = 32;
-// fn build_sigmoid_table() -> Vec<u8> {
-//     let size = 1 << EXPECTED_WORD_SIZE;
-//     let mut lut_l = vec![7u8; size / 2];
-//     let lut_r = vec![0u8; size / 2];
-//     lut_l.extend_from_slice(&lut_r);
-//     for i in 0..LUT_SIZE / 2 {
-//         lut_l[i] = SIGMOID_SCALED_TABLE[i + LUT_SIZE / 2];
-//         lut_l[size - i - 1] = SIGMOID_SCALED_TABLE[LUT_SIZE / 2 - i - 1];
-//     }
-//     lut_l
-// }
-
-// pub static SIGMOID_EXPANDED_SCALED_TABLE: once_cell::sync::Lazy<Vec<u8>> =
-//     once_cell::sync::Lazy::new(build_sigmoid_table);
-
 
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SigmoidTable<const WORD_SIZE: usize>;

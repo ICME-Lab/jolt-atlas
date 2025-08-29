@@ -99,7 +99,6 @@ impl Model {
     /// - This function does not perform any hardware-accelerated inference; it executes the model using the internal Rust implementation.
     /// - Handles both standard nodes and subgraphs (e.g., for ONNX Scan/Loop constructs).
     pub fn forward(&self, model_inputs: &[Tensor<i32>]) -> Result<ForwardResult, Box<dyn Error>> {
-        // TODO(AntoineF4C5): generic quantization
         // A map that stores the output tensors of each node in the computation graph.
         //
         // # Purpose
@@ -413,7 +412,6 @@ impl Model {
     /// After this block, `inputs` contains the tensors that should be passed to the current node's operation,
     /// in the order expected by the node. This enables the subsequent execution of the node's computation.
     fn node_inputs(
-        // TODO(AntoineF4C5): generic quantization
         idx: &usize,
         n: &NodeType,
         results: &BTreeMap<&usize, Vec<Tensor<i32>>>,
@@ -439,7 +437,6 @@ impl Model {
         Ok(inputs)
     }
 
-    // TODO(AntoineF4C5): generic quantization
     fn lookup_check(
         inputs: &[Tensor<i32>],
         max_lookup_inputs: &mut i32,
@@ -1126,7 +1123,6 @@ impl NodeType {
 /// The result of a forward pass.
 #[derive(Clone, Debug)]
 
-// TODO(AntoineF4C5): generic quantization
 pub struct ForwardResult {
     /// The outputs of the forward pass.
     pub outputs: Vec<Tensor<i32>>,

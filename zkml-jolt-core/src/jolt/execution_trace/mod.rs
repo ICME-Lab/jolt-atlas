@@ -6,9 +6,10 @@ use crate::{
         JoltProverPreprocessing,
         instruction::{
             VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction,
-            precompile::reduce_sum::ReduceSumInstruction, virtual_advice::ADVICEInstruction,
-            virtual_const::ConstInstruction,
+            rebase_scale::REBASEInstruction, reduce_sum::ReduceSumInstruction,
+            virtual_advice::ADVICEInstruction, virtual_const::ConstInstruction,
         },
+        precompiles::{PrecompileOp, PrecompilePreprocessing, matmult::MatMultPrecompile},
     },
     utils::u64_vec_to_i32_iter,
 };
@@ -51,7 +52,8 @@ pub struct JoltONNXCycle {
     pub memory_ops: MemoryOps,
     pub instr: ONNXInstr,
     pub advice_value: Option<Vec<u64>>,
-    pub precompile: Option<Precompile>,
+    pub reduction_op: Option<ReductionOp>,
+    pub precompile: Option<PrecompileOp>,
 }
 
 // TODO(Forpee): Refactor these clones in JoltONNXCycle::ts1_read, ts2_read, td_write
@@ -107,6 +109,7 @@ impl JoltONNXCycle {
             memory_ops: MemoryOps::no_op(),
             instr: ONNXInstr::no_op(),
             advice_value: None,
+            reduction_op: None,
             precompile: None,
         }
     }
@@ -133,6 +136,7 @@ impl JoltONNXCycle {
 
         // now safely populate lookups
         cycle.populate_instruction_lookups_internal();
+        cycle.populate_reduction();
         cycle.populate_precompile();
         cycle
     }
@@ -141,12 +145,25 @@ impl JoltONNXCycle {
         self.instruction_lookups = self.to_instruction_lookups();
     }
 
-    fn populate_precompile(&mut self) {
+    fn populate_reduction(&mut self) {
         let (_, ts1) = self.ts1_read();
         match self.instr().opcode {
             ONNXOpcode::Sum => {
                 let precompile = ReduceSumInstruction::<WORD_SIZE>(ts1);
-                self.precompile = Some(Precompile::ReduceSum(precompile));
+                self.reduction_op = Some(ReductionOp::ReduceSum(precompile));
+            }
+            _ => {
+                // No precompile for other opcodes
+                self.reduction_op = None;
+            }
+        }
+    }
+
+    fn populate_precompile(&mut self) {
+        match self.instr().opcode {
+            ONNXOpcode::MatMult => {
+                let precompile = MatMultPrecompile::from(&*self);
+                self.precompile = Some(PrecompileOp::MatMult(precompile));
             }
             _ => {
                 // No precompile for other opcodes
@@ -162,6 +179,30 @@ impl JoltONNXCycle {
             .zip(pre_vals.iter())
             .map(|(post, pre)| *post as i64 - *pre as i64)
             .collect()
+    }
+
+    fn precompile_output(&self, pp: &PrecompilePreprocessing, i: usize) -> Vec<u64> {
+        self.precompile
+            .as_ref()
+            .map_or(vec![0; MAX_TENSOR_SIZE], |precompile| {
+                precompile.output(pp, i)
+            })
+    }
+
+    fn left_precompile_operand(&self) -> Vec<u64> {
+        self.precompile
+            .as_ref()
+            .map_or(vec![0; MAX_TENSOR_SIZE], |precompile| {
+                precompile.left_operand()
+            })
+    }
+
+    fn right_precompile_operand(&self) -> Vec<u64> {
+        self.precompile
+            .as_ref()
+            .map_or(vec![0; MAX_TENSOR_SIZE], |precompile| {
+                precompile.right_operand()
+            })
     }
 }
 
@@ -191,6 +232,7 @@ pub fn jolt_execution_trace(raw_trace: Vec<ONNXCycle>) -> ExecutionTrace {
         let expanded: Vec<ONNXCycle> = match raw.instr.opcode {
             ONNXOpcode::Div => DIVInstruction::<32>::virtual_trace(raw),
             ONNXOpcode::ArgMax => ArgMaxInstruction::<32>::virtual_trace(raw),
+            ONNXOpcode::RebaseScale(_) => REBASEInstruction::<32>::virtual_trace(raw),
             _ => vec![raw],
         };
 
@@ -245,33 +287,33 @@ impl MemoryOps {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub enum Precompile {
+#[derive(Clone, Serialize, Deserialize)]
+pub enum ReductionOp {
     ReduceSum(ReduceSumInstruction<WORD_SIZE>),
 }
 
-impl ONNXLookupQuery<WORD_SIZE> for Precompile {
+impl ONNXLookupQuery<WORD_SIZE> for ReductionOp {
     fn to_instruction_inputs(&self) -> (Vec<u64>, Vec<i64>) {
         match self {
-            Precompile::ReduceSum(instr) => instr.to_instruction_inputs(),
+            ReductionOp::ReduceSum(instr) => instr.to_instruction_inputs(),
         }
     }
 
     fn to_lookup_operands(&self) -> (Vec<u64>, Vec<u64>) {
         match self {
-            Precompile::ReduceSum(instr) => instr.to_lookup_operands(),
+            ReductionOp::ReduceSum(instr) => instr.to_lookup_operands(),
         }
     }
 
     fn to_lookup_index(&self) -> Vec<u64> {
         match self {
-            Precompile::ReduceSum(instr) => instr.to_lookup_index(),
+            ReductionOp::ReduceSum(instr) => instr.to_lookup_index(),
         }
     }
 
     fn to_lookup_output(&self) -> Vec<u64> {
         match self {
-            Precompile::ReduceSum(instr) => instr.to_lookup_output(),
+            ReductionOp::ReduceSum(instr) => instr.to_lookup_output(),
         }
     }
 }
@@ -306,8 +348,8 @@ impl<const WORD_SIZE: usize> ONNXLookupQuery<WORD_SIZE> for JoltONNXCycle {
     /// Returns a tuple of the instruction's inputs. If the instruction has only one input,
     /// one of the tuple values will be 0.
     fn to_instruction_inputs(&self) -> (Vec<u64>, Vec<i64>) {
-        if let Some(precompile) = &self.precompile {
-            return precompile.to_instruction_inputs();
+        if let Some(reduction_op) = &self.reduction_op {
+            return reduction_op.to_instruction_inputs();
         }
 
         self.instruction_lookups.as_ref().map_or(
@@ -325,8 +367,8 @@ impl<const WORD_SIZE: usize> ONNXLookupQuery<WORD_SIZE> for JoltONNXCycle {
     /// same as the instruction inputs returned by `to_instruction_inputs`, but in some cases
     /// (e.g. ADD, MUL) the instruction inputs are combined to form a single lookup operand.
     fn to_lookup_operands(&self) -> (Vec<u64>, Vec<u64>) {
-        if let Some(precompile) = &self.precompile {
-            return precompile.to_lookup_operands();
+        if let Some(reduction_op) = &self.reduction_op {
+            return reduction_op.to_lookup_operands();
         }
         self.instruction_lookups.as_ref().map_or(
             (vec![0; MAX_TENSOR_SIZE], vec![0; MAX_TENSOR_SIZE]),
@@ -342,8 +384,8 @@ impl<const WORD_SIZE: usize> ONNXLookupQuery<WORD_SIZE> for JoltONNXCycle {
     /// Converts this instruction's operands into a lookup index (as used in sparse-dense Shout).
     /// By default, interleaves the two bits of the two operands together.
     fn to_lookup_index(&self) -> Vec<u64> {
-        if let Some(precompile) = &self.precompile {
-            return precompile.to_lookup_index();
+        if let Some(reduction_op) = &self.reduction_op {
+            return reduction_op.to_lookup_index();
         }
         self.instruction_lookups
             .as_ref()
@@ -357,8 +399,8 @@ impl<const WORD_SIZE: usize> ONNXLookupQuery<WORD_SIZE> for JoltONNXCycle {
 
     /// Computes the output lookup entry for this instruction as a u64.
     fn to_lookup_output(&self) -> Vec<u64> {
-        if let Some(precompile) = &self.precompile {
-            return precompile.to_lookup_output();
+        if let Some(reduction_op) = &self.reduction_op {
+            return reduction_op.to_lookup_output();
         }
         self.instruction_lookups
             .as_ref()
@@ -403,7 +445,7 @@ pub enum CommittedPolynomials {
     /// Product of `LeftInstructionInput` and `RightInstructionInput`
     Product(usize),
     /// Td * IsActive
-    ActiveRd(usize),
+    ActiveTd(usize),
     /// Whether the current instruction should write the lookup output to
     /// the destination register
     WriteLookupOutputToTD(usize),
@@ -412,6 +454,8 @@ pub enum CommittedPolynomials {
     /// One-hot ra polynomial for the instruction lookups instance of Shout.
     /// There are four (d=4) of these polynomials, `InstructionRa(0) .. InstructionRa(3)`
     InstructionRa(usize),
+    LeftPrecompileOperand(usize),
+    RightPrecompileOperand(usize),
 }
 
 macro_rules! fill_array_committed {
@@ -431,7 +475,7 @@ pub const ALL_COMMITTED_POLYNOMIALS: [CommittedPolynomials; 5 * MAX_TENSOR_SIZE 
     fill_array_committed!(arr, idx, LeftInstructionInput);
     fill_array_committed!(arr, idx, RightInstructionInput);
     fill_array_committed!(arr, idx, Product);
-    fill_array_committed!(arr, idx, ActiveRd);
+    fill_array_committed!(arr, idx, ActiveTd);
     fill_array_committed!(arr, idx, WriteLookupOutputToTD);
     arr[idx] = CommittedPolynomials::InstructionRa(0);
     arr[idx + 1] = CommittedPolynomials::InstructionRa(1);
@@ -478,6 +522,20 @@ impl WitnessGenerator for CommittedPolynomials {
                     .collect();
                 coeffs.into()
             }
+            CommittedPolynomials::LeftPrecompileOperand(i) => {
+                let coeffs: Vec<u64> = trace
+                    .par_iter()
+                    .map(|cycle| cycle.left_precompile_operand()[*i])
+                    .collect();
+                coeffs.into()
+            }
+            CommittedPolynomials::RightPrecompileOperand(i) => {
+                let coeffs: Vec<u64> = trace
+                    .par_iter()
+                    .map(|cycle| cycle.right_precompile_operand()[*i])
+                    .collect();
+                coeffs.into()
+            }
             CommittedPolynomials::Product(i) => {
                 let coeffs: Vec<u64> = trace
                     .par_iter()
@@ -489,7 +547,7 @@ impl WitnessGenerator for CommittedPolynomials {
                     .collect();
                 coeffs.into()
             }
-            CommittedPolynomials::ActiveRd(i) => {
+            CommittedPolynomials::ActiveTd(i) => {
                 let coeffs: Vec<u32> = trace
                     .par_iter()
                     .map(|cycle| {
@@ -512,7 +570,6 @@ impl WitnessGenerator for CommittedPolynomials {
                     .collect();
                 coeffs.into()
             }
-
             CommittedPolynomials::TdInc => {
                 let coeffs: Vec<i64> = trace.par_iter().flat_map(|cycle| cycle.td_inc()).collect();
                 coeffs.into()
@@ -569,6 +626,9 @@ pub enum JoltONNXR1CSInputs {
     RightLookupOperand(usize),   // Virtual (instruction raf)
     Product(usize),              // LeftInstructionOperand * RightInstructionOperand
     LookupOutput(usize),         // Virtual (instruction rv)
+    PrecompileOutput(usize),
+    LeftPrecompileOperand(usize),
+    RightPrecompileOperand(usize),
     WriteLookupOutputToTD(usize),
     OpFlags(CircuitFlags),
     PC,               // Virtual (bytecode raf)
@@ -576,7 +636,7 @@ pub enum JoltONNXR1CSInputs {
     NextUnexpandedPC, // Virtual (spartan shift sumcheck)
     NextPC,           // Virtual (spartan shift sumcheck)
     ActiveOutput(usize),
-    ActiveRd(usize), // Td * CircuitFlag::WriteLookupOutputToTD
+    ActiveTd(usize), // Td * CircuitFlag::WriteLookupOutputToTD
     Ts1Value(usize), // Virtual (tensor registers rv)
     Ts2Value(usize), // Virtual (tensor registers rv)
     Ts3Value(usize), // Virtual (tensor registers rv)
@@ -586,6 +646,7 @@ pub enum JoltONNXR1CSInputs {
     ShouldGather(usize),
     SelectCondition(usize),
     SelectResult(usize),
+    ShouldBroadCast(usize),
 }
 
 macro_rules! fill_array_r1cs_inputs {
@@ -617,7 +678,7 @@ macro_rules! assign_singles {
     };
 }
 
-const NUM_TENSOR_INPUTS: usize = 22;
+const NUM_TENSOR_INPUTS: usize = 26;
 const NUM_SINGLE_INPUTS: usize = NUM_CIRCUIT_FLAGS + 4; // 4 for PC, UnexpandedPC, NextUnexpandedPC, NextPC
 /// This const serves to define a canonical ordering over inputs (and thus indices
 /// for each input). This is needed for sumcheck.
@@ -635,10 +696,13 @@ pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs;
     fill_array_r1cs_inputs!(arr, idx, Product);
     fill_array_r1cs_inputs!(arr, idx, LeftLookupOperand);
     fill_array_r1cs_inputs!(arr, idx, RightLookupOperand);
+    fill_array_r1cs_inputs!(arr, idx, PrecompileOutput);
+    fill_array_r1cs_inputs!(arr, idx, LeftPrecompileOperand);
+    fill_array_r1cs_inputs!(arr, idx, RightPrecompileOperand);
     fill_array_r1cs_inputs!(arr, idx, LookupOutput);
     fill_array_r1cs_inputs!(arr, idx, WriteLookupOutputToTD);
     fill_array_r1cs_inputs!(arr, idx, ActiveOutput);
-    fill_array_r1cs_inputs!(arr, idx, ActiveRd);
+    fill_array_r1cs_inputs!(arr, idx, ActiveTd);
     fill_array_r1cs_inputs!(arr, idx, Ts1Value);
     fill_array_r1cs_inputs!(arr, idx, Ts2Value);
     fill_array_r1cs_inputs!(arr, idx, Ts3Value);
@@ -646,6 +710,7 @@ pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs;
     fill_array_r1cs_inputs!(arr, idx, GatherAddr);
     fill_array_r1cs_inputs!(arr, idx, GatherReadValue);
     fill_array_r1cs_inputs!(arr, idx, ShouldGather);
+    fill_array_r1cs_inputs!(arr, idx, ShouldBroadCast);
     fill_array_r1cs_inputs!(arr, idx, SelectCondition);
     fill_array_r1cs_inputs!(arr, idx, SelectResult);
     // Assign all OpFlags variants in one macro call
@@ -666,8 +731,15 @@ pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs;
         Const,
         Advice,
         Gather,
-        Select
+        Select,
+        BroadCast,
+        Precompile
     );
+    // Compile-time check that we've handled all flags.
+    // Will error if you add a new flag and forget to update this.
+    const _: () = {
+        let _ = [(); (NUM_CIRCUIT_FLAGS == 18) as usize - 1];
+    };
 
     assign_singles!(arr, idx, PC, UnexpandedPC, NextUnexpandedPC, NextPC);
 
@@ -828,6 +900,17 @@ impl WitnessGenerator for JoltONNXR1CSInputs {
                     .collect();
                 coeffs.into()
             }
+            JoltONNXR1CSInputs::ShouldBroadCast(i) => {
+                let coeffs: Vec<u8> = trace
+                    .par_iter()
+                    .map(|cycle| {
+                        let is_gather =
+                            cycle.instr().to_circuit_flags()[CircuitFlags::BroadCast as usize];
+                        (*i < cycle.instr.active_output_elements) as u8 * (is_gather as u8)
+                    })
+                    .collect();
+                coeffs.into()
+            }
             // TODO: Move witness gen to committed polynomials
             JoltONNXR1CSInputs::SelectCondition(i) => {
                 let coeffs: Vec<u8> = trace
@@ -866,6 +949,14 @@ impl WitnessGenerator for JoltONNXR1CSInputs {
                 CommittedPolynomials::RightInstructionInput(*i)
                     .generate_witness(trace, preprocessing)
             }
+            JoltONNXR1CSInputs::LeftPrecompileOperand(i) => {
+                CommittedPolynomials::LeftPrecompileOperand(*i)
+                    .generate_witness(trace, preprocessing)
+            }
+            JoltONNXR1CSInputs::RightPrecompileOperand(i) => {
+                CommittedPolynomials::RightPrecompileOperand(*i)
+                    .generate_witness(trace, preprocessing)
+            }
             JoltONNXR1CSInputs::LeftLookupOperand(i) => {
                 let coeffs: Vec<u64> = trace
                     .par_iter()
@@ -899,8 +990,12 @@ impl WitnessGenerator for JoltONNXR1CSInputs {
                 CommittedPolynomials::WriteLookupOutputToTD(*i)
                     .generate_witness(trace, preprocessing)
             }
-            JoltONNXR1CSInputs::ActiveRd(i) => {
-                CommittedPolynomials::ActiveRd(*i).generate_witness(trace, preprocessing)
+            // JoltONNXR1CSInputs::WritePrecompileOutputToTD(i) => {
+            //     CommittedPolynomials::WritePrecompileOutputToTD(*i)
+            //         .generate_witness(trace, preprocessing)
+            // }
+            JoltONNXR1CSInputs::ActiveTd(i) => {
+                CommittedPolynomials::ActiveTd(*i).generate_witness(trace, preprocessing)
             }
             JoltONNXR1CSInputs::ActiveOutput(i) => {
                 let coeffs: Vec<u8> = trace
@@ -917,6 +1012,20 @@ impl WitnessGenerator for JoltONNXR1CSInputs {
                             .get(*i)
                             .cloned()
                             .unwrap()
+                    })
+                    .collect();
+                coeffs.into()
+            }
+            JoltONNXR1CSInputs::PrecompileOutput(i) => {
+                let coeffs: Vec<u64> = trace
+                    .par_iter()
+                    .enumerate()
+                    .map(|(cycle_idx, cycle)| {
+                        let j = trace[..cycle_idx]
+                            .iter()
+                            .filter(|c| c.precompile.is_some())
+                            .count();
+                        cycle.precompile_output(&preprocessing.shared.precompiles, j)[*i]
                     })
                     .collect();
                 coeffs.into()
@@ -1167,11 +1276,17 @@ impl JoltONNXCycle {
         if self.circuit_flags[CircuitFlags::Sigmoid as usize] {
             active.push("Sigmoid".to_string());
         }
+        if self.circuit_flags[CircuitFlags::BroadCast as usize] {
+            active.push("BroadCast".to_string());
+        }
+        if self.circuit_flags[CircuitFlags::Precompile as usize] {
+            active.push("Precompile".to_string());
+        }
 
         // Compile-time check that we've handled all flags.
         // Will error if you add a new flag and forget to update this.
         const _: () = {
-            let _ = [(); (NUM_CIRCUIT_FLAGS == 16) as usize - 1];
+            let _ = [(); (NUM_CIRCUIT_FLAGS == 18) as usize - 1];
         };
 
         if active.is_empty() {

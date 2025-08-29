@@ -102,8 +102,6 @@ impl<F: TensorType + PartialOrd> From<&PolyOp<F>> for ONNXOpcode {
     }
 }
 
-// TODO(AntoineF4C5): generic quantization
-// Need to consider casting between i32 and u32
 impl<
         F: TensorType
             + PartialOrd

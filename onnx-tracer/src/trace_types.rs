@@ -17,7 +17,6 @@ use strum_macros::EnumCount as EnumCountMacro;
 /// Records what the VM did at a cycle of execution.
 /// Constructed at each step in the VM execution cycle, documenting instr, reads & state changes (writes).
 
-// TODO(AntoineF4C5): generic quantization
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ONNXCycle {
     pub instr: ONNXInstr,
@@ -25,7 +24,6 @@ pub struct ONNXCycle {
     pub advice_value: Option<Tensor<i32>>,
 }
 
-// TODO(AntoineF4C5): generic quantization
 impl ONNXCycle {
     pub fn no_op() -> Self {
         ONNXCycle {
@@ -66,7 +64,6 @@ impl ONNXCycle {
     }
 }
 
-// TODO(AntoineF4C5): generic quantization
 #[derive(Clone, Debug, Eq, PartialEq, Default, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct MemoryState {
     pub ts1_val: Option<Tensor<i32>>,
@@ -76,7 +73,6 @@ pub struct MemoryState {
     pub td_post_val: Option<Tensor<i32>>,
 }
 
-// TODO(AntoineF4C5): generic quantization
 impl MemoryState {
     pub fn random(rng: &mut StdRng) -> Self {
         MemoryState {
@@ -107,7 +103,6 @@ impl MemoryState {
 /// The ONNX model is converted into a sequence of [`ONNXInstr`]s, forming the program code.
 /// During runtime, the program counter (PC) is used to fetch the next instruction from this read-only memory storing the program bytecode.
 pub struct ONNXInstr {
-    // TODO(AntoineF4C5): generic quantization
     /// The program counter (PC) address of this instruction in the bytecode.
     pub address: usize,
     /// The operation code (opcode) that defines the instruction's function.
@@ -139,6 +134,7 @@ pub struct ONNXInstr {
     /// `virtual_sequence_remaining` will be Some(0); if this is the penultimate instruction
     /// in the sequence, `virtual_sequence_remaining` will be Some(1); etc.
     pub virtual_sequence_remaining: Option<usize>,
+    pub output_dims: [usize; 2], // TODO: Scale system for higher rank tensors
     /// Number of active elements in the output (useful since we pad the output to `MAX_TENSOR_SIZE`).
     pub active_output_elements: usize,
 }
@@ -174,7 +170,6 @@ type ONNXCycleMemoryOps = (
     Vec<usize>,                       // gather addresses
 );
 
-// TODO(AntoineF4C5): generic quantization
 impl ONNXCycle {
     #[allow(clippy::type_complexity)]
     /// Converts the cycle's tensor state into memory operation tuples for ts1, ts2, and td.
@@ -269,7 +264,6 @@ impl ONNXCycle {
     /// ---
     /// Returns a Vec<u64> of normalized values, padded with zeros to `MAX_TENSOR_SIZE`.
     fn build_vals(&self, tensor_opt: Option<&Tensor<i32>>, name: &str) -> Vec<u64> {
-        // TODO(AntoineF4C5): generic quantization
         match tensor_opt {
             Some(t) => {
                 assert!(
@@ -289,25 +283,21 @@ impl ONNXCycle {
 
     /// Returns the optional tensor for ts1 (unmodified).
     pub fn ts1_val_raw(&self) -> Option<&Tensor<i32>> {
-        // TODO(AntoineF4C5): generic quantization
         self.memory_state.ts1_val.as_ref()
     }
 
     /// Returns the optional tensor for ts2 (unmodified).
     pub fn ts2_val_raw(&self) -> Option<&Tensor<i32>> {
-        // TODO(AntoineF4C5): generic quantization
         self.memory_state.ts2_val.as_ref()
     }
 
     /// Returns the optional tensor for ts3 (unmodified).
     pub fn ts3_val_raw(&self) -> Option<&Tensor<i32>> {
-        // TODO(AntoineF4C5): generic quantization
         self.memory_state.ts3_val.as_ref()
     }
 
     /// Returns the optional tensor for td_post (unmodified).
     pub fn td_post_val_raw(&self) -> Option<&Tensor<i32>> {
-        // TODO(AntoineF4C5): generic quantization
         self.memory_state.td_post_val.as_ref()
     }
 
@@ -347,7 +337,6 @@ pub fn get_tensor_addresses(t: usize) -> Vec<usize> {
 /// Panics if the value's absolute value exceeds `i128::from(u32::MAX)`.
 /// This is to ensure that the immediate value can be safely normalized to u32 and then store in 64 bits.
 pub fn normalize(value: &i32) -> u64 {
-    // TODO(AntoineF4C5): generic quantization
     *value as u32 as u64
 }
 
@@ -387,7 +376,11 @@ pub enum CircuitFlags {
     /// 1 if this is a select operation; 0 otherwise.
     Select,
     /// 1 if this is a sigmoid operation; 0 otherwise.
-    Sigmoid
+    Sigmoid,
+    /// 1 if this is broadcase op; 0 otherwise
+    BroadCast,
+    /// 1 if this op uses a sum-check precompile
+    Precompile,
 }
 
 pub const NUM_CIRCUIT_FLAGS: usize = CircuitFlags::COUNT;
@@ -472,27 +465,31 @@ impl ONNXInstr {
             | ONNXOpcode::VirtualAssertEq
         );
 
+        flags[CircuitFlags::Precompile as usize] = matches!(
+            self.opcode,
+            ONNXOpcode::MatMult
+        );
+        flags[CircuitFlags::Assert as usize] = matches!(
+            self.opcode,
+            ONNXOpcode::VirtualAssertValidSignedRemainder
+            | ONNXOpcode::VirtualAssertValidDiv0
+            | ONNXOpcode::VirtualAssertEq
+        );
+
         flags[CircuitFlags::InlineSequenceInstruction as usize] =
             self.virtual_sequence_remaining.is_some();
         flags[CircuitFlags::DoNotUpdateUnexpandedPC as usize] =
             self.virtual_sequence_remaining.unwrap_or(0) != 0;
 
-        flags[CircuitFlags::SumOperands as usize] = matches!(
-            self.opcode,
-            ONNXOpcode::Sum
-        );
-        flags[CircuitFlags::Gather as usize] = matches!(
-            self.opcode,
-            ONNXOpcode::Gather
-        );
-        flags[CircuitFlags::Select as usize] = matches!(
-            self.opcode,
-            ONNXOpcode::Select
-        );
-        flags[CircuitFlags::Sigmoid as usize] = matches!(
-            self.opcode,
-            ONNXOpcode::Sigmoid
-        );
+        // TODO(Forpee): These single-opcode flags could be simplified to direct equality checks
+        // unlike the multi-opcode matches above. We could Consider refactoring to use a more
+        // systematic approach like opcode-to-flag mapping or trait-based dispatch.
+        flags[CircuitFlags::SumOperands as usize] = self.opcode == ONNXOpcode::Sum;
+        flags[CircuitFlags::Gather as usize] = self.opcode == ONNXOpcode::Gather;
+        flags[CircuitFlags::Select as usize] = self.opcode == ONNXOpcode::Select;
+        flags[CircuitFlags::BroadCast as usize] = self.opcode == ONNXOpcode::Broadcast;
+        flags[CircuitFlags::Sigmoid as usize] = self.opcode == ONNXOpcode::Sigmoid;
+
         flags
     }
 }
@@ -537,6 +534,7 @@ impl ONNXInstr {
             imm: None,
             virtual_sequence_remaining: None,
             active_output_elements: 0,
+            output_dims: [0, 0],
         }
     }
 
@@ -551,6 +549,7 @@ impl ONNXInstr {
             imm: None,
             virtual_sequence_remaining: None,
             active_output_elements: 0,
+            output_dims: [0, 0],
         }
     }
 

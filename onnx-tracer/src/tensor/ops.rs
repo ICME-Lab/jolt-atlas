@@ -1706,7 +1706,6 @@ pub fn argmax_axes<T: TensorType + Add<Output = T> + std::cmp::Ord + From<i32> +
 /// assert_eq!(result, expected);
 /// ```
 pub fn argmin_axes<T: TensorType + Add<Output = T> + std::cmp::Ord + From<i32> + Send + Sync>(
-    // TODO(AntoineF4C5): generic quantization
     a: &Tensor<T>,
     dim: usize,
 ) -> Result<Tensor<T>, TensorError> {
@@ -2008,7 +2007,6 @@ pub fn intercalate_values<T: TensorType>(
 /// assert_eq!(result, expected);
 /// ```
 pub fn one_hot(
-    // TODO(AntoineF4C5): generic quantization
     tensor: &Tensor<i32>,
     num_classes: usize,
     axis: usize,
@@ -2306,7 +2304,6 @@ pub fn deconv<
 /// assert_eq!(pooled, expected);
 /// ```
 pub fn sumpool(
-    // TODO(AntoineF4C5): generic quantization
     image: &Tensor<i32>,
     padding: [(usize, usize); 2],
     stride: (usize, usize),
@@ -2735,7 +2732,6 @@ pub fn slice<T: TensorType + Send + Sync>(
 
 /// Activation functions
 pub mod nonlinearities {
-    // TODO(AntoineF4C5): generic quantization
     use super::*;
 
     /// Ceiling operator.
@@ -3743,7 +3739,6 @@ pub mod nonlinearities {
     /// assert_eq!(result, expected);
     /// ```
     pub fn const_div(a: &Tensor<i32>, denom: f64) -> Tensor<i32> {
-        // TODO(AntoineF4C5): generic quantization
         a.par_enum_map(|_, a_i| {
             let mut d_inv_x = a_i / (denom as i32);
             let remainder = a_i % denom as i32;
@@ -3910,7 +3905,6 @@ pub mod nonlinearities {
     /// assert_eq!(result, expected);
     /// ```
     pub fn mean(a: &Tensor<i32>, scale: usize) -> Tensor<i32> {
-        // TODO(AntoineF4C5): generic quantization
         let sum = sum(a).unwrap();
         const_div(&sum, (scale * a.len()) as f64)
     }
@@ -3935,7 +3929,6 @@ pub mod nonlinearities {
     /// assert_eq!(result, expected);
     /// ```
     pub fn mean_of_squares_axes(a: &Tensor<i32>, axes: &[usize]) -> Tensor<i32> {
-        // TODO(AntoineF4C5): generic quantization
         let square = a.map(|a_i| a_i * a_i);
         let sum = sum_axes(&square, axes).unwrap();
         let denominator = a.len() / sum.len();

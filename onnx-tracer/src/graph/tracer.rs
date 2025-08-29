@@ -48,7 +48,6 @@ impl Tracer {
     /// Panics if `execution_trace` is already mutably borrowed elsewhere,
     /// which would indicate a bug in concurrent trace recording.
     pub fn capture_pre_state(&self, instr: ONNXInstr, inputs: Vec<Tensor<i32>>) {
-        // TODO(AntoineF4C5): generic quantization
         let mut cycle = ONNXCycle {
             instr: instr.clone(),
             memory_state: MemoryState::default(),
@@ -94,7 +93,6 @@ impl Tracer {
     /// This is to ensure that the trace only records outputs for instructions
     /// that produce a result that is stored in the computation graph.
     pub fn capture_post_state(&self, output: Tensor<i32>) {
-        // TODO(AntoineF4C5): generic quantization
         let mut execution_trace = self.execution_trace.borrow_mut();
         let row = execution_trace.last_mut().unwrap();
         if row.instr.td.is_some() {

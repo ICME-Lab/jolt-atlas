@@ -45,7 +45,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for REBASEInstruction<WO
         };
 
         // Virtual registers used in sequence
-        // TODO(AntoineF4C5): Check if conflict between this and inner DIV's virtual register also indexed to 0
         let v_0 = Some(virtual_tensor_index(0)); // Inner operator output to be rebased 
 
         let mut virtual_trace = vec![];
@@ -82,8 +81,8 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for REBASEInstruction<WO
 
         virtual_trace.push(ONNXCycle {
             instr: ONNXInstr {
-                address: cycle.instr.address, // TODO(AntoineF4C5): Might be more readable to have separate behavior for each possible inner opcode
-                opcode: instr.opcode,         // and only set required fields
+                address: cycle.instr.address,
+                opcode: instr.opcode,
                 ts1: cycle.instr.ts1,
                 ts2: cycle.instr.ts2,
                 ts3: cycle.instr.ts3,
@@ -106,7 +105,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for REBASEInstruction<WO
         // Apply div operator by 2^scale
         let res = DIVInstruction::<WORD_SIZE>::sequence_output(
             inner_res_0.clone(),
-            vec![128; MAX_TENSOR_SIZE], // TODO(AntoineF4C5): Check if 0 for anything out of active_output_elements
+            vec![128; MAX_TENSOR_SIZE],
             None,
         );
 
@@ -172,7 +171,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for REBASEInstruction<WO
                 };
                 DIVInstruction::<WORD_SIZE>::sequence_output(
                     mul_res,
-                    vec![128; MAX_TENSOR_SIZE], // TODO(AntoineF4C5): Check if 0 for anything out of active_output_elements
+                    vec![128; MAX_TENSOR_SIZE],
                     None,
                 )
             }

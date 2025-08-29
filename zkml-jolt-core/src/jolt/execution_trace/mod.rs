@@ -6,8 +6,8 @@ use crate::{
         JoltProverPreprocessing,
         instruction::{
             VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction,
-            reduce_sum::ReduceSumInstruction, virtual_advice::ADVICEInstruction,
-            virtual_const::ConstInstruction,
+            rebase_scale::REBASEInstruction, reduce_sum::ReduceSumInstruction,
+            virtual_advice::ADVICEInstruction, virtual_const::ConstInstruction,
         },
         precompiles::{PrecompileOp, PrecompilePreprocessing, matmult::MatMultPrecompile},
     },
@@ -232,6 +232,7 @@ pub fn jolt_execution_trace(raw_trace: Vec<ONNXCycle>) -> ExecutionTrace {
         let expanded: Vec<ONNXCycle> = match raw.instr.opcode {
             ONNXOpcode::Div => DIVInstruction::<32>::virtual_trace(raw),
             ONNXOpcode::ArgMax => ArgMaxInstruction::<32>::virtual_trace(raw),
+            ONNXOpcode::RebaseScale(_) => REBASEInstruction::<32>::virtual_trace(raw),
             _ => vec![raw],
         };
 

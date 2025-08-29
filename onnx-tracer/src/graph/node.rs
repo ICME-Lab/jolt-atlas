@@ -377,6 +377,7 @@ impl Node {
         // How: We call `RebaseScale::rebase`, which checks if rebasing is needed and, if so, wraps the
         //      operation accordingly. We then update `out_scale` to reflect the new (rebased) scale.
         let global_scale = scales.get_max();
+        // TODO(AntoineF4C5): Might have to handle out_scale < global_scale
         opkind = RebaseScale::rebase(opkind, global_scale, out_scale, scales.rebase_multiplier);
         out_scale = opkind.out_scale(in_scales).unwrap();
 

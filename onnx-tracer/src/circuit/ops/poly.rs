@@ -182,7 +182,14 @@ where
             } => tensor::ops::downsample(&inputs[0], *axis, *stride, *modulo),
             PolyOp::Resize { scale_factor } => tensor::ops::resize(&inputs[0], scale_factor),
             PolyOp::Iff => tensor::ops::iff(&inputs[0], &inputs[1], &inputs[2]),
-            PolyOp::Einsum { equation } => tensor::ops::einsum(equation, &inputs),
+            PolyOp::Einsum { equation } => {
+                // Check if this is the MatMul pattern "mk,nk->mn" and apply power-of-two padding
+                if equation == "mk,nk->mn" && cfg!(feature = "matmul_power_of_two_padding") {
+                    einsum_matmul_mk_nk_mn_padded(equation, &inputs)
+                } else {
+                    tensor::ops::einsum(equation, &inputs)
+                }
+            }
             PolyOp::Identity => Ok(inputs[0].clone()),
             PolyOp::Reshape(new_dims) => {
                 let mut t = inputs[0].clone();
@@ -367,5 +374,153 @@ where
 
     fn clone_dyn(&self) -> Box<dyn Op<F>> {
         Box::new(self.clone()) // Forward to the derive(Clone) impl
+    }
+}
+
+/// MatMul-specific power-of-two padding for the "mk,nk->mn" einsum pattern.
+///
+/// This function implements power-of-two padding specifically for matrix multiplication
+/// operations of the form "mk,nk->mn", where:
+/// - Input A: [m, k]
+/// - Input B: [n, k]
+/// - Output: [m, n]
+///
+/// The function pads M, N, K dimensions to the next power of two, performs the einsum
+/// operation on the padded tensors, and then crops the result back to the original
+/// expected output dimensions.
+///
+/// # Arguments
+/// * `equation` - The einsum equation (should be "mk,nk->mn")
+/// * `inputs` - Input tensors [A, B] where A is [m,k] and B is [n,k]
+///
+/// # Returns
+/// * `Ok(Tensor<T>)` - Result tensor with dimensions [m, n]
+/// * `Err(TensorError)` - If padding, computation, or cropping fails
+fn einsum_matmul_mk_nk_mn_padded<T>(
+    equation: &str,
+    inputs: &[Tensor<T>],
+) -> Result<Tensor<T>, TensorError>
+where
+    T: TensorType + Mul<Output = T> + Add<Output = T> + Send + Sync,
+{
+    if inputs.len() != 2 {
+        return Err(TensorError::DimMismatch(
+            "mk,nk->mn requires exactly 2 input tensors".to_string(),
+        ));
+    }
+
+    let a = &inputs[0]; // [m, k]
+    let b = &inputs[1]; // [n, k]
+
+    if a.dims().len() != 2 || b.dims().len() != 2 {
+        return Err(TensorError::DimMismatch(
+            "mk,nk->mn requires 2D input tensors".to_string(),
+        ));
+    }
+
+    let m = a.dims()[0];
+    let k_a = a.dims()[1];
+    let n = b.dims()[0];
+    let k_b = b.dims()[1];
+
+    if k_a != k_b {
+        return Err(TensorError::DimMismatch(
+            "k dimensions must match for mk,nk->mn".to_string(),
+        ));
+    }
+
+    let k = k_a;
+
+    // Calculate power-of-two dimensions
+    let m_pow2 = if m.is_power_of_two() {
+        m
+    } else {
+        m.next_power_of_two()
+    };
+    let n_pow2 = if n.is_power_of_two() {
+        n
+    } else {
+        n.next_power_of_two()
+    };
+    let k_pow2 = if k.is_power_of_two() {
+        k
+    } else {
+        k.next_power_of_two()
+    };
+
+    // Clone and pad input tensors
+    let mut a_padded = a.clone();
+    let mut b_padded = b.clone();
+
+    a_padded.pad_to_dims(&[m_pow2, k_pow2])?;
+    b_padded.pad_to_dims(&[n_pow2, k_pow2])?;
+
+    // Perform einsum on padded tensors
+    let padded_result = tensor::ops::einsum(equation, &[a_padded, b_padded])?;
+    // Crop result back to original expected dimensions [m, n]
+    padded_result.crop_to_dims(&[m, n])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tensor::Tensor;
+
+    #[test]
+    fn test_einsum_matmul_mk_nk_mn_padded() {
+        // Test the power-of-two padding function for MatMul
+        // Input A: [3, 2] (m=3, k=2)
+        // Input B: [2, 2] (n=2, k=2)
+        // Expected output: [3, 2] (m=3, n=2)
+
+        let a = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[3, 2]).unwrap();
+        let b = Tensor::<i32>::new(Some(&[7, 8, 9, 10]), &[2, 2]).unwrap();
+
+        let result = einsum_matmul_mk_nk_mn_padded("mk,nk->mn", &[a.clone(), b.clone()]).unwrap();
+
+        // Verify output dimensions
+        assert_eq!(result.dims(), &[3, 2]);
+
+        // Compare with regular einsum result (should be identical)
+        let regular_result = tensor::ops::einsum("mk,nk->mn", &[a, b]).unwrap();
+        assert_eq!(result, regular_result);
+    }
+
+    #[test]
+    fn test_einsum_matmul_different_sizes() {
+        // Test with different matrix sizes to verify power-of-two padding works
+
+        // Case 1: Already power-of-two (should be no-op)
+        let a1 = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[2, 2]).unwrap();
+        let b1 = Tensor::<i32>::new(Some(&[5, 6, 7, 8]), &[2, 2]).unwrap();
+        let result1 =
+            einsum_matmul_mk_nk_mn_padded("mk,nk->mn", &[a1.clone(), b1.clone()]).unwrap();
+        let regular1 = tensor::ops::einsum("mk,nk->mn", &[a1, b1]).unwrap();
+        assert_eq!(result1, regular1);
+
+        // Case 2: Non-power-of-two dimensions
+        let a2 =
+            Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]), &[3, 4]).unwrap(); // 3x4
+        let b2 =
+            Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]), &[3, 4]).unwrap(); // 3x4
+        let result2 =
+            einsum_matmul_mk_nk_mn_padded("mk,nk->mn", &[a2.clone(), b2.clone()]).unwrap();
+        let regular2 = tensor::ops::einsum("mk,nk->mn", &[a2, b2]).unwrap();
+        assert_eq!(result2, regular2);
+        assert_eq!(result2.dims(), &[3, 3]); // m=3, n=3
+    }
+
+    #[test]
+    fn test_einsum_matmul_error_cases() {
+        // Test error handling
+
+        // Wrong number of inputs
+        let a = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[2, 2]).unwrap();
+        assert!(einsum_matmul_mk_nk_mn_padded("mk,nk->mn", &[a.clone()]).is_err());
+
+        // Mismatched k dimensions
+        let a = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[2, 2]).unwrap(); // k=2
+        let b = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[2, 3]).unwrap(); // k=3
+        assert!(einsum_matmul_mk_nk_mn_padded("mk,nk->mn", &[a, b]).is_err());
     }
 }

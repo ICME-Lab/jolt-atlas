@@ -6,7 +6,7 @@ use crate::{
         JoltProverPreprocessing,
         instruction::{
             VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction,
-            rebase_scale::REBASEInstruction, reduce_sum::ReduceSumInstruction,
+            rebase_scale::REBASEInstruction, reduce_sum::ReduceSumInstruction, relu::RELU,
             virtual_advice::ADVICEInstruction, virtual_const::ConstInstruction,
         },
         precompiles::{PrecompileOp, PrecompilePreprocessing, matmult::MatMultPrecompile},
@@ -469,7 +469,7 @@ macro_rules! fill_array_committed {
     }};
 }
 
-pub const ALL_COMMITTED_POLYNOMIALS: [CommittedPolynomials; 5 * MAX_TENSOR_SIZE + 4] = {
+pub static ALL_COMMITTED_POLYNOMIALS: [CommittedPolynomials; 5 * MAX_TENSOR_SIZE + 4] = {
     let mut arr = [CommittedPolynomials::LeftInstructionInput(0); 5 * MAX_TENSOR_SIZE + 4];
     let mut idx = 0;
     fill_array_committed!(arr, idx, LeftInstructionInput);
@@ -682,7 +682,7 @@ const NUM_TENSOR_INPUTS: usize = 26;
 const NUM_SINGLE_INPUTS: usize = NUM_CIRCUIT_FLAGS + 4; // 4 for PC, UnexpandedPC, NextUnexpandedPC, NextPC
 /// This const serves to define a canonical ordering over inputs (and thus indices
 /// for each input). This is needed for sumcheck.
-pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs;
+pub static ALL_R1CS_INPUTS: [JoltONNXR1CSInputs;
     NUM_TENSOR_INPUTS * MAX_TENSOR_SIZE + NUM_SINGLE_INPUTS] = {
     let mut arr =
         [JoltONNXR1CSInputs::Td(0); NUM_TENSOR_INPUTS * MAX_TENSOR_SIZE + NUM_SINGLE_INPUTS];
@@ -1116,6 +1116,7 @@ define_lookup_enum!(
     VirtualMove: MOVEInstruction<WORD_SIZE>,
     VirtualConst: ConstInstruction<WORD_SIZE>,
     Const: ConstInstruction<WORD_SIZE>,
+    Relu: RELU<WORD_SIZE>,
 );
 
 impl JoltONNXCycle {
@@ -1187,6 +1188,11 @@ impl JoltONNXCycle {
             ONNXOpcode::Gte => Some(
                 (0..MAX_TENSOR_SIZE)
                     .map(|i| ElementWiseLookup::Ge(GEInstruction(ts1[i], ts2[i])))
+                    .collect(),
+            ),
+            ONNXOpcode::Relu => Some(
+                (0..MAX_TENSOR_SIZE)
+                    .map(|i| ElementWiseLookup::Relu(RELU(ts1[i])))
                     .collect(),
             ),
             _ => None,
@@ -1306,6 +1312,7 @@ impl JoltONNXCycle {
                 ElementWiseLookup::VirtualMove(_) => "VirtualMove",
                 ElementWiseLookup::VirtualConst(_) => "VirtualConst",
                 ElementWiseLookup::Const(_) => "Const",
+                ElementWiseLookup::Relu(_) => "Relu",
             })
     }
 }

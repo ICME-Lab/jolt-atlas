@@ -1,15 +1,3 @@
-// TODO
-
-// use common::constants::virtual_register_index;
-// use tracer::{ELFInstruction, RVTraceRow, RegisterState, RV32IM};
-
-// use super::VirtualInstructionSequence;
-// use crate::jolt::instruction::{
-//     add::ADDInstruction, beq::BEQInstruction, mul::MULInstruction,
-//     virtual_advice::ADVICEInstruction, virtual_assert_valid_div0::AssertValidDiv0Instruction,
-//     virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction, JoltInstruction,
-// };
-
 use onnx_tracer::{
     constants::{MAX_TENSOR_SIZE, virtual_tensor_index},
     tensor::Tensor,
@@ -17,7 +5,10 @@ use onnx_tracer::{
 };
 
 use crate::{
-    jolt::instruction::{VirtualInstructionSequence, div::DIVInstruction},
+    jolt::{
+        instruction::{VirtualInstructionSequence, div::DIVInstruction},
+        precompiles::matmult::{MatMultPrecompile, MatMultPrecompileDims},
+    },
     utils::u64_vec_to_i32_iter,
 };
 
@@ -53,11 +44,30 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for REBASEInstruction<WO
         let inner_opcode = (**inner_opcode).clone();
         let mut instr = cycle.instr.clone();
         instr.opcode = inner_opcode;
-        let inner_res_0: Vec<u64> = match instr.opcode {
-            ONNXOpcode::Mul => {
-                let x = cycle.ts1_vals();
-                let y = cycle.ts2_vals();
-                match WORD_SIZE {
+        let inner_res_0: Vec<u64> = {
+            let x = cycle.ts1_vals();
+            let y = cycle.ts2_vals();
+            match instr.opcode {
+                ONNXOpcode::MatMult => {
+                    let k = cycle
+                        .memory_state
+                        .ts1_val
+                        .as_ref()
+                        .map(|tensor| tensor.dims()[1])
+                        .unwrap_or(1);
+                    let m = instr.output_dims[0];
+                    let n = instr.output_dims[1];
+                    let dims: MatMultPrecompileDims = (m, n, k);
+                    let (result, _shape) =
+                        MatMultPrecompile::new(x, y).matmult_rhs_transposed(dims);
+                    let mut output = result
+                        .iter()
+                        .map(|&x| x as u32 as u64)
+                        .collect::<Vec<u64>>();
+                    output.resize(MAX_TENSOR_SIZE, 0);
+                    output
+                }
+                ONNXOpcode::Mul => match WORD_SIZE {
                     8 => x
                         .iter()
                         .zip(y.iter())
@@ -74,9 +84,9 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for REBASEInstruction<WO
                         .map(|(&a, &b)| a.wrapping_mul(b))
                         .collect::<Vec<u64>>(),
                     _ => panic!("Unsupported WORD_SIZE: {WORD_SIZE}"),
-                }
+                },
+                _ => panic!("Unimplemented inner opcode: {:?}", instr.opcode),
             }
-            _ => panic!("Unimplemented inner opcode: {:?}", instr.opcode),
         };
 
         virtual_trace.push(ONNXCycle {
@@ -101,13 +111,13 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for REBASEInstruction<WO
             },
             advice_value: None,
         });
-
         // Apply div operator by 2^scale
         let res = DIVInstruction::<WORD_SIZE>::sequence_output(
             inner_res_0.clone(),
             vec![128; MAX_TENSOR_SIZE],
             None,
         );
+        assert_eq!(res, cycle.td_post_vals());
 
         let div_cycle = ONNXCycle {
             instr: ONNXInstr {

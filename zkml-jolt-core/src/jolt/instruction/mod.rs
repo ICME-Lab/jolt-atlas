@@ -9,16 +9,13 @@ pub mod mul;
 pub mod rebase_scale;
 pub mod reduce_max;
 pub mod reduce_sum;
+pub mod relu;
 pub mod sub;
 pub mod virtual_advice;
 pub mod virtual_assert_valid_div0;
 pub mod virtual_assert_valid_signed_remainder;
 pub mod virtual_const;
 pub mod virtual_move;
-
-// TODO(WIP: Forpee) Rebase Scale Virtual Instr ICME-Lab/zkml-jolt#60
-//
-// pub mod rebase_scale;
 
 #[cfg(test)]
 pub mod test;

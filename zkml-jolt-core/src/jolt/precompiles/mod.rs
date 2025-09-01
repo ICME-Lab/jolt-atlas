@@ -77,8 +77,8 @@ impl PrecompilePreprocessing {
                     // - C is the output with dimensions [m, n]
 
                     // Get m, n from the output dimensions
-                    let m = instr.output_dims[0].next_power_of_two();
-                    let n = instr.output_dims[1].next_power_of_two();
+                    let m = instr.output_dims[0];
+                    let n = instr.output_dims[1];
 
                     // Get k by finding the instruction that produces ts1 (first input)
                     // k is the second dimension of the first matrix
@@ -87,7 +87,7 @@ impl PrecompilePreprocessing {
                         instrs
                             .iter()
                             .find(|&other_instr| other_instr.td == Some(ts1_addr))
-                            .map(|ts1_instr| ts1_instr.output_dims[1].next_power_of_two())
+                            .map(|ts1_instr| ts1_instr.output_dims[1])
                             .unwrap_or(1) // Default to 1 if not found
                     } else {
                         1 // Default to 1 if ts1 is None
@@ -235,24 +235,61 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::jolt::execution_trace::jolt_execution_trace;
+    use crate::jolt::{JoltProverPreprocessing, JoltSNARK, execution_trace::jolt_execution_trace};
 
     use super::{PrecompilePreprocessing, PrecompileProof};
     use ark_bn254::Fr;
-    use jolt_core::utils::transcript::{KeccakTranscript, Transcript};
+    use jolt_core::{
+        poly::commitment::dory::DoryCommitmentScheme,
+        utils::transcript::{KeccakTranscript, Transcript},
+    };
     use onnx_tracer::{builder, decode_model, tensor::Tensor};
+    type PCS = DoryCommitmentScheme<KeccakTranscript>;
 
     #[test]
     fn test_precompile_proof() {
-        let matmult_model = builder::simple_matmult_model();
+        let matmult_model = builder::non_power_of_two_matmult_model();
         let program = decode_model(matmult_model.clone());
         let pp = PrecompilePreprocessing::preprocess(&program);
-        let input = vec![1, 2, 3, 4];
+        let input = vec![
+            1, 2, 3, 4, 5, // Row 0
+            6, 7, 8, 9, 10, // Row 1
+            11, 12, 13, 14, 15, // Row 2
+        ];
 
         // Prover
         let (raw_trace, _) = onnx_tracer::execution_trace(
             matmult_model,
-            &Tensor::new(Some(&input), &[1, 4]).unwrap(),
+            &Tensor::new(Some(&input), &[3, 5]).unwrap(),
+        );
+        let execution_trace = jolt_execution_trace(raw_trace.clone());
+
+        let mut prover_transcript = KeccakTranscript::new(b"test");
+        let proof =
+            PrecompileProof::<Fr, _>::prove(&pp, &execution_trace, &mut prover_transcript).unwrap();
+
+        // Verifier
+        let mut verifier_transcript = KeccakTranscript::new(b"test");
+        proof.verify(&pp, &mut verifier_transcript).unwrap();
+    }
+
+    #[test]
+    fn test_precompile_proof_rebase() {
+        let matmult_model = builder::non_power_of_two_matmult_rebase_model();
+        let program = decode_model(matmult_model.clone());
+        let pp: JoltProverPreprocessing<Fr, PCS, KeccakTranscript> =
+            JoltSNARK::prover_preprocess(program);
+        let pp = pp.shared.precompiles.clone();
+        let input = vec![
+            1, 2, 3, 4, 5, // Row 0
+            6, 7, 8, 9, 10, // Row 1
+            11, 12, 13, 14, 15, // Row 2
+        ];
+
+        // Prover
+        let (raw_trace, _) = onnx_tracer::execution_trace(
+            matmult_model,
+            &Tensor::new(Some(&input), &[3, 5]).unwrap(),
         );
         let execution_trace = jolt_execution_trace(raw_trace.clone());
 

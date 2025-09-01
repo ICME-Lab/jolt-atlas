@@ -26,7 +26,7 @@ use jolt_core::{
     subprotocols::sumcheck::BatchableSumcheckInstance,
     utils::{math::Math, transcript::Transcript},
 };
-use onnx_tracer::constants::MAX_TENSOR_SIZE;
+use onnx_tracer::{constants::MAX_TENSOR_SIZE, trace_types::ONNXOpcode};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +44,21 @@ use crate::jolt::execution_trace::JoltONNXCycle;
 ///
 /// # Note: We pad the dimensions to the next power of two.
 pub type MatMultPrecompileDims = (usize, usize, usize);
+
+pub trait Pad {
+    fn pad(&self) -> Self;
+}
+
+impl Pad for MatMultPrecompileDims {
+    fn pad(&self) -> Self {
+        let (m, n, k) = *self;
+        (
+            m.next_power_of_two(),
+            n.next_power_of_two(),
+            k.next_power_of_two(),
+        )
+    }
+}
 
 /// This struct represents a precompile for matrix multiplication (where we implicitly transpose B).
 /// Used to generate the witness for matrix multiplication in Jolt's ONNX execution.
@@ -90,8 +105,8 @@ impl MatMultPrecompile {
             for j in 0..n {
                 let mut acc = 0i32;
                 for t in 0..k {
-                    let a_val = self.a[i * k + t] as u32 as i32;
-                    let b_val = self.b[j * k + t] as u32 as i32;
+                    let a_val = self.a.get(i * k + t).copied().unwrap_or(0) as u32 as i32;
+                    let b_val = self.b.get(j * k + t).copied().unwrap_or(0) as u32 as i32;
                     acc += a_val * b_val;
                 }
                 result[i * n + j] = acc;
@@ -100,7 +115,9 @@ impl MatMultPrecompile {
         (result, vec![m, n])
     }
 
-    /// # Note: Resizes the output to the maximum tensor size
+    /// # Note:
+    /// * Pads dims
+    /// * Resizes the output to the maximum tensor size
     pub fn output(&self, dims: MatMultPrecompileDims) -> Vec<u64> {
         let (c, _c_shape) = self.matmult_rhs_transposed(dims);
         let mut c = c.iter().map(|&x| x as u32 as u64).collect_vec();
@@ -142,6 +159,7 @@ impl MatMultPrecompile {
 /// Panics if the JoltONNXCycle is not determined by a matmult operation.
 impl From<&JoltONNXCycle> for MatMultPrecompile {
     fn from(cycle: &JoltONNXCycle) -> Self {
+        assert!(matches!(cycle.instr.opcode, ONNXOpcode::MatMult));
         let a = cycle.ts1_read().1;
         let b = cycle.ts2_read().1;
         Self::new(a, b)
@@ -187,13 +205,16 @@ where
     where
         ProofTranscript: Transcript,
     {
+        let dims = dims.pad();
         let (m, n, k) = dims;
-        let a = input.a();
-        let b = input.b();
+        let mut a = input.a().clone();
+        let mut b = input.b().clone();
+        a.resize(m * k, 0);
+        b.resize(n * k, 0);
         let log_m = m.log_2();
         let log_n = n.log_2();
-        let rx: Vec<F> = transcript.challenge_scalar_powers(log_m);
-        let ry: Vec<F> = transcript.challenge_scalar_powers(log_n);
+        let rx: Vec<F> = transcript.challenge_vector(log_m);
+        let ry: Vec<F> = transcript.challenge_vector(log_n);
         let eq_rx = EqPolynomial::evals(&rx);
         let eq_ry = EqPolynomial::evals(&ry);
         let mut A_rx = vec![F::zero(); k];
@@ -209,9 +230,8 @@ where
                 B_ry[j] += F::from_i64(b[i * k + j] as u32 as i32 as i64) * eq_ry[i]
             }
         }
-        let (c, _c_shape) = input.matmult_rhs_transposed(dims);
-        let c_poly =
-            MultilinearPolynomial::from(c.iter().map(|&x| F::from_i64(x as i64)).collect_vec());
+        let (c, _) = input.matmult_rhs_transposed(dims);
+        let c_poly = MultilinearPolynomial::from(c.iter().map(|&x| x as i64).collect_vec());
         let input_claim = c_poly.evaluate(&[rx.clone(), ry.clone()].concat());
         transcript.append_scalar(&input_claim);
         #[cfg(test)]
@@ -257,11 +277,11 @@ where
     where
         ProofTranscript: Transcript,
     {
-        let num_rounds = k.log_2();
-        let log_m = m.log_2();
-        let log_n = n.log_2();
-        let _rx: Vec<F> = transcript.challenge_scalar_powers(log_m);
-        let _ry: Vec<F> = transcript.challenge_scalar_powers(log_n);
+        let num_rounds = k.next_power_of_two().log_2();
+        let log_m = m.next_power_of_two().log_2();
+        let log_n = n.next_power_of_two().log_2();
+        let _rx: Vec<F> = transcript.challenge_vector(log_m);
+        let _ry: Vec<F> = transcript.challenge_vector(log_n);
         transcript.append_scalar(&input_claim);
         Self {
             num_rounds,
@@ -412,9 +432,9 @@ mod tests {
         let mut prover_transcript = KeccakTranscript::new(b"test");
         let mut sumcheck_instances = Vec::with_capacity(trace_length);
         for _ in 0..trace_length {
-            let m = (rng.next_u32() as usize % 10 + 1).next_power_of_two();
-            let n = (rng.next_u32() as usize % 10 + 1).next_power_of_two();
-            let k = (rng.next_u32() as usize % 10 + 1).next_power_of_two();
+            let m = rng.next_u32() as usize % 10 + 1;
+            let n = rng.next_u32() as usize % 10 + 1;
+            let k = rng.next_u32() as usize % 10 + 1;
             let dims = (m, n, k);
             pp.push(dims);
             let precompile = MatMultPrecompile::random(&mut rng, dims);

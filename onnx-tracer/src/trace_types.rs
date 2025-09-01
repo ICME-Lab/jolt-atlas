@@ -399,6 +399,7 @@ impl ONNXInstr {
             | ONNXOpcode::VirtualAssertEq
             | ONNXOpcode::Gte
             | ONNXOpcode::Sum
+            | ONNXOpcode::Relu,
         );
 
         flags[CircuitFlags::RightOperandIsTs2Value as usize] = matches!(
@@ -421,6 +422,7 @@ impl ONNXInstr {
             self.opcode,
             ONNXOpcode::Add
             | ONNXOpcode::VirtualMove
+            | ONNXOpcode::Relu,
         );
 
         flags[CircuitFlags::SubtractOperands as usize] = matches!(
@@ -442,7 +444,8 @@ impl ONNXInstr {
             | ONNXOpcode::VirtualMove
             | ONNXOpcode::VirtualConst
             | ONNXOpcode::Gte
-            | ONNXOpcode::Sum,
+            | ONNXOpcode::Sum
+            | ONNXOpcode::Relu
         );
 
         flags[CircuitFlags::Advice as usize] = matches!(

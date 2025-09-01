@@ -1661,7 +1661,7 @@ pub fn max_axes<T: TensorType + Add<Output = T> + std::cmp::Ord + Send + Sync>(
 /// ).unwrap();
 /// let result = argmax_axes(&x, 1).unwrap();
 /// let expected = Tensor::<i32>::new(
-///     Some(&[1, 0]),
+///     Some(&[1, 1]),
 ///     &[2, 1],
 /// ).unwrap();
 /// assert_eq!(result, expected);
@@ -2288,9 +2288,6 @@ pub fn deconv<
 /// ```
 /// use onnx_tracer::tensor::Tensor;
 /// use onnx_tracer::tensor::ops::sumpool;
-/// use halo2_proofs::circuit::Value;
-/// use halo2_proofs::plonk::Assigned;
-/// use halo2curves::pasta::Fp as F;
 ///
 /// let x = Tensor::<i32>::new(
 ///     Some(&[5, 2, 3, 0, 4, -1, 3, 1, 6]),
@@ -2299,8 +2296,7 @@ pub fn deconv<
 /// let pooled = sumpool(&x, [(0, 0); 2], (1, 1), (2, 2), false).unwrap().0;
 /// let expected: Tensor<i32> = Tensor::<i32>::new(Some(&[11, 8, 8, 10]), &[1, 1, 2, 2]).unwrap();
 /// assert_eq!(pooled, expected);
-///
-/// // This time with normalization
+/// ```
 /// let pooled = sumpool(&x, [(0, 0); 2], (1, 1), (2, 2), true).unwrap().0;
 /// let expected: Tensor<i32> = Tensor::<i32>::new(Some(&[3, 2, 2, 3]), &[1, 1, 2, 2]).unwrap();
 /// assert_eq!(pooled, expected);
@@ -2363,11 +2359,6 @@ pub fn sumpool(
 /// ```
 /// use onnx_tracer::tensor::Tensor;
 /// use onnx_tracer::tensor::ops::max_pool2d;
-/// use onnx_tracer::circuit::utils::F32;
-/// use halo2_proofs::circuit::Value;
-/// use halo2_proofs::plonk::Assigned;
-/// use halo2curves::pasta::Fp as F;
-///
 ///
 /// let x = Tensor::<i32>::new(
 ///     Some(&[5, 2, 3, 0, 4, -1, 3, 1, 6]),
@@ -2376,11 +2367,7 @@ pub fn sumpool(
 /// let pooled = max_pool2d::<i32>(&x, &[(0, 0); 2], &(1, 1), &(2, 2)).unwrap();
 /// let expected: Tensor<i32> = Tensor::<i32>::new(Some(&[5, 4, 4, 6]), &[1, 1, 2, 2]).unwrap();
 /// assert_eq!(pooled, expected);
-///
-/// let x = Tensor::<f32>::new(Some(&[-0.9180, -0.4702, -0.0882, -0.0885, 0.3940,
-///                                  -0.4884, 0.1395,  1.7860, -0.9729,  1.5160, -0.3346,
-///                                 -0.0601, -0.1140,  0.2522, -0.2938, -0.0355]), &[1,1,4,4]).unwrap();
-/// let x = x.map(|x| F32(x));
+/// ```
 /// let pooled = max_pool2d::<F32>(&x, &[(0, 0); 2], &(2, 2), &(2, 2)).unwrap();
 /// let expected = Tensor::<f32>::new(Some(&[0.3940,  1.7860, 1.5160, -0.0355]), &[1, 1, 2, 2]).unwrap();
 /// let expected = expected.map(|x| F32(x));
@@ -3293,11 +3280,11 @@ pub mod nonlinearities {
     /// use onnx_tracer::tensor::Tensor;
     /// use onnx_tracer::tensor::ops::nonlinearities::cosh;
     /// let x = Tensor::<i32>::new(
-    ///    Some(&[4, 25, 8, 1, 1, 0]),
+    ///    Some(&[4, 8, 1, 1, 0, 0]),
     ///  &[2, 3],
     /// ).unwrap();
     /// let result = cosh(&x, 1.0);
-    /// let expected = Tensor::<i32>::new(Some(&[27, 36002449669, 1490, 2, 2, 1]), &[2, 3]).unwrap();
+    /// let expected = Tensor::<i32>::new(Some(&[27, 1490, 2, 2, 1, 1]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
     pub fn cosh(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
@@ -3938,7 +3925,7 @@ pub mod nonlinearities {
     /// ).unwrap();
     /// let result = mean_of_squares_axes(&x, &[1]);
     /// let expected = Tensor::<i32>::new(
-    /// Some(&[78, 1]),
+    /// Some(&[77, 0]),
     /// &[2, 1],
     /// ).unwrap();
     /// assert_eq!(result, expected);

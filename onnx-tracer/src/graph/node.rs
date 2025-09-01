@@ -30,17 +30,13 @@
 //!
 //! This module is a foundational part of the `onnx-tracer` crate within the zkML-Jolt project. It interacts closely with:
 //! - The `model` and `vars` modules for graph-wide metadata and variable scale management.
-//! - The `circuit::ops` module for operation implementations.
+//! - The `ops` module for operation implementations.
 //! - The `tensor` module for tensor arithmetic and quantization utilities.
 //! - The `trace_types` module for ONNX instruction and opcode representations.
 //!
 //! By abstracting the details of node construction, scale management, and operation decoding, this module enables robust and efficient handling of ONNX models in privacy-preserving and quantized computation settings.
 
 use crate::{
-    circuit::ops::{
-        hybrid::HybridOp, lookup::LookupOp, poly::PolyOp, Constant, ForwardResult, Input, Op,
-        Unknown,
-    },
     constants::MAX_TENSOR_SIZE,
     graph::{
         model::NodeType,
@@ -49,6 +45,10 @@ use crate::{
             scale_to_multiplier,
         },
         vars::VarScales,
+    },
+    ops::{
+        hybrid::HybridOp, lookup::LookupOp, poly::PolyOp, Constant, ForwardResult, Input, Op,
+        Unknown,
     },
     tensor::{Tensor, TensorError},
     trace_types::{ONNXInstr, ONNXOpcode},
@@ -896,7 +896,7 @@ impl Op<i32> for RebaseScale {
     fn required_lookups(&self) -> Vec<LookupOp> {
         let mut lookups = self.inner.required_lookups();
         lookups.push(LookupOp::Div {
-            denom: crate::circuit::utils::F32(self.multiplier as f32),
+            denom: crate::ops::utils::F32(self.multiplier as f32),
         });
         lookups
     }

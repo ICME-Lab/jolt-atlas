@@ -1,4 +1,4 @@
-use crate::circuit::utils;
+use crate::ops::utils;
 use maybe_rayon::{
     prelude::{
         IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator,
@@ -150,35 +150,6 @@ impl<T: TensorType> TensorType for Tensor<T> {
     }
     fn one() -> Option<Self> {
         Some(Tensor::new(Some(&[T::one().unwrap()]), &[1]).unwrap())
-    }
-}
-
-// specific types
-impl TensorType for halo2curves::pasta::Fp {
-    fn zero() -> Option<Self> {
-        Some(halo2curves::pasta::Fp::zero())
-    }
-
-    fn one() -> Option<Self> {
-        Some(halo2curves::pasta::Fp::one())
-    }
-
-    fn tmax(&self, other: &Self) -> Option<Self> {
-        Some((*self).max(*other))
-    }
-}
-
-impl TensorType for halo2curves::bn256::Fr {
-    fn zero() -> Option<Self> {
-        Some(halo2curves::bn256::Fr::zero())
-    }
-
-    fn one() -> Option<Self> {
-        Some(halo2curves::bn256::Fr::one())
-    }
-
-    fn tmax(&self, other: &Self) -> Option<Self> {
-        Some((*self).max(*other))
     }
 }
 

@@ -49,16 +49,11 @@ use clap::Args;
 use serde::{Deserialize, Serialize};
 use std::{fs::File, path::PathBuf};
 pub mod builder;
-/// Methods for configuring tensor operations and assigning values to them in a Halo2
-/// circuit.
-pub mod circuit;
 pub mod constants;
-/// Utilities for converting from Halo2 Field types to integers (and vice-versa).
-pub mod fieldutils;
-/// Methods for loading onnx format models and automatically laying them out in
-/// a Halo2 circuit.
+/// Methods for loading onnx format models
 pub mod graph;
 pub mod logger;
+pub mod ops;
 /// An implementation of multi-dimensional tensors.
 pub mod tensor;
 pub mod trace_types;
@@ -168,18 +163,6 @@ pub struct RunArgs {
     /// parameters
     #[arg(long, default_value = "7", allow_hyphen_values = true)]
     pub param_scale: Scale,
-    //     // /// The tolerance for error on model outputs
-    //     // #[arg(short = 'T', long, default_value = "0")]
-    //     // pub tolerance: Tolerance,
-    //     /// The min and max elements in the lookup table input column
-    //     #[arg(short = 'B', long, value_parser = parse_tuple::<i128>, default_value =
-    // "(-32768,32768)")]     pub lookup_range: (i128, i128),
-    //     /// The log_2 number of rows
-    //     #[arg(short = 'K', long, default_value = "17")]
-    //     pub logrows: u32,
-    //     /// The log_2 number of rows
-    //     #[arg(short = 'N', long, default_value = "2")]
-    //     pub num_inner_cols: usize,
 }
 
 impl Default for RunArgs {
@@ -189,10 +172,6 @@ impl Default for RunArgs {
             param_scale: 7,
             scale_rebase_multiplier: 1,
             variables: vec![("batch_size".to_string(), 1)],
-            // tolerance: Tolerance::default(),
-            // lookup_range: (-32768, 32768),
-            // logrows: 17,
-            // num_inner_cols: 2,
         }
     }
 }
@@ -212,58 +191,3 @@ where
         .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
     Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
 }
-
-// impl RunArgs {
-//     ///
-//     pub fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
-//         if self.scale_rebase_multiplier < 1 {
-//             return Err("scale_rebase_multiplier must be >= 1".into());
-//         }
-//         if self.lookup_range.0 > self.lookup_range.1 {
-//             return Err("lookup_range min is greater than max".into());
-//         }
-//         if self.logrows < 1 {
-//             return Err("logrows must be >= 1".into());
-//         }
-//         if self.num_inner_cols < 1 {
-//             return Err("num_inner_cols must be >= 1".into());
-//         }
-//         Ok(())
-//     }
-
-//     /// Export the ezkl configuration as json
-//     pub fn as_json(&self) -> Result<String, Box<dyn std::error::Error>> {
-//         let serialized = match serde_json::to_string(&self) {
-//             Ok(s) => s,
-//             Err(e) => {
-//                 return Err(Box::new(e));
-//             }
-//         };
-//         Ok(serialized)
-//     }
-//     /// Parse an ezkl configuration from a json
-//     pub fn from_json(arg_json: &str) -> Result<Self, serde_json::Error> {
-//         serde_json::from_str(arg_json)
-//     }
-// }
-
-// /// Parse a tuple
-// fn parse_tuple<T>(s: &str) -> Result<(T, T), Box<dyn std::error::Error + Send +
-// Sync + 'static>> where
-//     T: std::str::FromStr + Clone,
-//     T::Err: std::error::Error + Send + Sync + 'static,
-// {
-//     let res = s.trim_matches(|p| p == '(' || p == ')').split(',');
-
-//     let res = res
-//         .map(|x| {
-//             // remove blank space
-//             let x = x.trim();
-//             x.parse::<T>()
-//         })
-//         .collect::<Result<Vec<_>, _>>()?;
-//     if res.len() != 2 {
-//         return Err("invalid tuple".into());
-//     }
-//     Ok((res[0].clone(), res[1].clone()))
-// }

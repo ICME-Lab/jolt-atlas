@@ -2,7 +2,7 @@ use std::ops::{Add, Mul, Neg, Sub};
 
 use super::*;
 use crate::{
-    circuit::{self, ops::chip::Tolerance, utils},
+    ops::{self, tolerance::Tolerance, utils},
     tensor::{self, Tensor, TensorError, TensorType},
     trace_types::ONNXOpcode,
 };
@@ -382,7 +382,7 @@ where
                             scale: scale_squared.into(),
                         },
                         LookupOp::GreaterThan {
-                            a: circuit::utils::F32((tol.val * scale_squared) / 100.0),
+                            a: ops::utils::F32((tol.val * scale_squared) / 100.0),
                         },
                     ]);
                 }
@@ -390,18 +390,18 @@ where
             }
             HybridOp::Greater | HybridOp::Less => {
                 vec![LookupOp::GreaterThan {
-                    a: circuit::utils::F32(0.),
+                    a: ops::utils::F32(0.),
                 }]
             }
             HybridOp::GreaterEqual | HybridOp::LessEqual => {
                 vec![LookupOp::GreaterThanEqual {
-                    a: circuit::utils::F32(0.),
+                    a: ops::utils::F32(0.),
                 }]
             }
             HybridOp::TopK { .. } => {
                 vec![
                     LookupOp::GreaterThan {
-                        a: circuit::utils::F32(0.),
+                        a: ops::utils::F32(0.),
                     },
                     LookupOp::KroneckerDelta,
                 ]

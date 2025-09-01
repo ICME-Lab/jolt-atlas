@@ -1,6 +1,6 @@
 use super::node::*;
 use crate::{
-    circuit::ops::{Input, Op, Unknown},
+    ops::{Input, Op, Unknown},
     decode_node,
     graph::{
         input::GraphData, tracer::Tracer, utilities::node_output_shapes, vars::VarScales,
@@ -1253,7 +1253,7 @@ fn output_state_idx(output_mappings: &[Vec<OutputMapping>]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        circuit::ops::poly::PolyOp,
+        ops::poly::PolyOp,
         graph::utilities::{
             create_input_node, create_matmul_node, create_polyop_node, create_relu_node,
             create_sigmoid_node,

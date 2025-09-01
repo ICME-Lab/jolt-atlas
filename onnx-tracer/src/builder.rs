@@ -33,7 +33,6 @@
 ///            [3, 6, 9, 12]]    // Third output neuron weights
 /// ```
 use crate::{
-    circuit::ops::{hybrid::HybridOp, poly::PolyOp},
     graph::{
         model::Model,
         node::{RebaseScale, SupportedOp},
@@ -42,6 +41,7 @@ use crate::{
             create_matmul_node, create_node, create_polyop_node, create_relu_node,
         },
     },
+    ops::{hybrid::HybridOp, poly::PolyOp},
     tensor::Tensor,
 };
 

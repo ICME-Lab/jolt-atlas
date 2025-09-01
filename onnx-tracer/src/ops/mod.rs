@@ -1,6 +1,6 @@
 use crate::{
-    circuit::ops::lookup::LookupOp,
     graph::utilities::quantize_tensor,
+    ops::lookup::LookupOp,
     tensor::{Tensor, TensorError, TensorType},
     trace_types::ONNXOpcode,
 };
@@ -11,13 +11,15 @@ use std::{any::Any, error::Error};
 ///
 pub mod base;
 ///
-pub mod chip;
-///
 pub mod hybrid;
 ///
 pub mod lookup;
 ///
 pub mod poly;
+///
+pub mod tolerance;
+///
+pub mod utils;
 
 /// A struct representing the result of a forward pass.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -63,33 +65,6 @@ pub trait Op<F: TensorType + PartialOrd>: std::fmt::Debug + Send + Sync + Any {
 
     /// Returns a reference to the Any trait.
     fn as_any(&self) -> &dyn Any;
-
-    //   /// Safe mode output checl
-    //   fn safe_mode_check(
-    //     &self,
-    //     claimed_output: &ValTensor<F>,
-    //     original_values: &[ValTensor<F>],
-    //   ) -> Result<(), TensorError> {
-    //     let felt_evals = original_values
-    //       .iter()
-    //       .map(|v| {
-    //         let mut evals = v.get_felt_evals().map_err(|_| TensorError::FeltError)?;
-    //         evals.reshape(v.dims())?;
-    //         Ok(evals)
-    //       })
-    //       .collect::<Result<Vec<_>, _>>()?;
-
-    //     let ref_op: Tensor<F> = self.f(&felt_evals)?.output;
-
-    //     let mut output = claimed_output
-    //       .get_felt_evals()
-    //       .map_err(|_| TensorError::FeltError)?;
-    //     output.reshape(claimed_output.dims())?;
-
-    //     assert_eq!(output, ref_op);
-
-    //     Ok(())
-    //   }
 }
 
 impl<F: TensorType + PartialOrd> Clone for Box<dyn Op<F>> {

@@ -927,7 +927,7 @@ pub struct ParsedNodes {
     /// the `outputs` field would be: `vec![(2, 0)]` (the output of node 2, outlet 0, is the model's output).
     ///
     /// # Usage Example
-    /// ```rust
+    /// ```ignore
     /// // Suppose we have a graph:
     /// // Node 0: Input
     /// // Node 1: Constant

@@ -6,7 +6,7 @@
 //!
 //! # Example: Simple Matrix Multiplication
 //!
-//! ```rust,ignore
+//! ```ignore
 //! use onnx_tracer::builder::simple_matmult_model;
 //! use onnx_tracer::tensor::Tensor;
 //!
@@ -27,7 +27,7 @@
 /// - Result: [1, 3]
 ///
 /// The weight matrix contains simple values for easy verification:
-/// ```
+/// ```ignore
 /// weights = [[1, 4, 7, 10],    // First output neuron weights
 ///            [2, 5, 8, 11],    // Second output neuron weights  
 ///            [3, 6, 9, 12]]    // Third output neuron weights
@@ -737,7 +737,7 @@ pub fn multiclass0() -> Model {
 /// - Result: [1, 3]
 ///
 /// The weight matrix contains simple values for easy verification:
-/// ```
+/// ```ignore
 /// weights = [[1, 4, 7, 10],    // First output neuron weights
 ///            [2, 5, 8, 11],    // Second output neuron weights  
 ///            [3, 6, 9, 12]]    // Third output neuron weights
@@ -783,7 +783,7 @@ pub fn simple_matmult_model() -> Model {
 /// 4. Outputs the final result of shape [1, 2]
 ///
 /// Architecture:
-/// ```
+/// ```ignore
 /// Input [1, 4] → Linear → ReLU → Linear → ReLU → Output [1, 2]
 ///                [1, 8]         [1, 2]
 /// ```
@@ -865,7 +865,7 @@ pub fn tiny_mlp_head_model() -> Model {
 /// - Result: [3, 7] (m=3, n=7)
 ///
 /// The weight matrix contains simple incremental values for easy verification:
-/// ```
+/// ```ignore
 /// weights = [[1, 2, 3, 4, 5],      // First output neuron weights (row 0)
 ///            [6, 7, 8, 9, 10],     // Second output neuron weights (row 1)
 ///            [11, 12, 13, 14, 15], // Third output neuron weights (row 2)
@@ -939,7 +939,7 @@ pub fn non_power_of_two_matmult_model() -> Model {
 /// - RebaseScale Applied: [3, 7] (scaled values)
 ///
 /// The weight matrix contains simple incremental values for easy verification:
-/// ```
+/// ```ignore
 /// weights = [[1, 2, 3, 4, 5],      // First output neuron weights (row 0)
 ///            [6, 7, 8, 9, 10],     // Second output neuron weights (row 1)
 ///            [11, 12, 13, 14, 15], // Third output neuron weights (row 2)

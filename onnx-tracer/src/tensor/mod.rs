@@ -302,7 +302,7 @@ impl<T: Clone + TensorType> Tensor<T> {
     /// Set one single value on the tensor.
     ///
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let mut a = Tensor::<i32>::new(None, &[3, 3, 3]).unwrap();
     ///
     /// a.set(&[0, 0, 1], 10);
@@ -319,7 +319,7 @@ impl<T: Clone + TensorType> Tensor<T> {
     /// Get a single value from the Tensor.
     ///
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let mut a = Tensor::<i32>::new(None, &[2, 3, 5]).unwrap();
     ///
     /// a[1*15 + 1*5 + 1] = 5;
@@ -333,7 +333,7 @@ impl<T: Clone + TensorType> Tensor<T> {
     /// Get a mutable array index from rows / columns indices.
     ///
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let mut a = Tensor::<i32>::new(None, &[2, 3, 5]).unwrap();
     ///
     /// a[1*15 + 1*5 + 1] = 5;
@@ -353,7 +353,7 @@ impl<T: Clone + TensorType> Tensor<T> {
 
     /// Pad to a length that is divisible by n
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let mut a = Tensor::<i32>::new(Some(&[1,2,3,4,5,6]), &[2, 3]).unwrap();
     /// let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6, 0, 0]), &[8]).unwrap();     /// assert_eq!(a.pad_to_zero_rem(4).unwrap(), expected);
     ///
@@ -545,7 +545,7 @@ impl<T: Clone + TensorType> Tensor<T> {
     /// Get a single value from the Tensor.
     ///
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let mut a = Tensor::<i32>::new(None, &[2, 3, 5]).unwrap();
     ///
     /// let flat_index = 1*15 + 1*5 + 1;
@@ -572,7 +572,7 @@ impl<T: Clone + TensorType> Tensor<T> {
 
     /// Get a slice from the Tensor.
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let mut a = Tensor::<i32>::new(Some(&[1, 2, 3]), &[3]).unwrap();
     /// let mut b = Tensor::<i32>::new(Some(&[1, 2]), &[2]).unwrap();
     ///
@@ -625,7 +625,7 @@ impl<T: Clone + TensorType> Tensor<T> {
     /// Get the array index from rows / columns indices.
     ///
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let a = Tensor::<f32>::new(None, &[3, 3, 3]).unwrap();
     ///
     /// assert_eq!(a.get_index(&[2, 2, 2]), 26);
@@ -648,7 +648,7 @@ impl<T: Clone + TensorType> Tensor<T> {
     /// Duplicates every nth element
     ///
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let a = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[6]).unwrap();
     /// let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 3, 4, 5, 5, 6]), &[8]).unwrap();     /// assert_eq!(a.duplicate_every_n(3, 1, 0).unwrap(), expected);     /// assert_eq!(a.duplicate_every_n(7, 1, 0).unwrap(), a);
     ///
@@ -676,7 +676,7 @@ impl<T: Clone + TensorType> Tensor<T> {
     /// Removes every nth element
     ///
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let a = Tensor::<i32>::new(Some(&[1, 2, 3, 3, 4, 5, 6, 6]), &[8]).unwrap();     /// let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 3, 5, 6, 6]), &[7]).unwrap();     /// assert_eq!(a.remove_every_n(4, 1, 0).unwrap(), expected);     ///
     pub fn remove_every_n(
         &self,
@@ -707,7 +707,7 @@ impl<T: Clone + TensorType> Tensor<T> {
     /// Remove indices
     /// WARN: assumes indices are in ascending order for speed
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let a = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[6]).unwrap();
     /// let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 6]), &[4]).unwrap();
     /// let mut indices = vec![3, 4];
@@ -753,7 +753,7 @@ impl<T: Clone + TensorType> Tensor<T> {
 
     ///Reshape the tensor
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let mut a = Tensor::<f32>::new(None, &[3, 3, 3]).unwrap();
     /// a.reshape(&[9, 3]);
     /// assert_eq!(a.dims(), &[9, 3]);
@@ -787,7 +787,7 @@ impl<T: Clone + TensorType> Tensor<T> {
 
     /// Move axis of the tensor
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let mut a = Tensor::<f32>::new(None, &[3, 3, 3]).unwrap();
     /// let b = a.move_axis(0, 2).unwrap();
     /// assert_eq!(b.dims(), &[3, 3, 3]);
@@ -862,7 +862,7 @@ impl<T: Clone + TensorType> Tensor<T> {
 
     /// Swap axes of the tensor
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let mut a = Tensor::<f32>::new(None, &[3, 3, 3]).unwrap();
     /// let b = a.swap_axes(0, 2).unwrap();
     /// assert_eq!(b.dims(), &[3, 3, 3]);
@@ -929,7 +929,7 @@ impl<T: Clone + TensorType> Tensor<T> {
 
     /// Broadcasts the tensor to a given shape
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let mut a = Tensor::<i32>::new(Some(&[1, 2, 3]), &[3, 1]).unwrap();
     ///
     /// let mut expected = Tensor::<i32>::new(Some(&[1, 1, 1, 2, 2, 2, 3, 3, 3]), &[3, 3]).unwrap();     /// assert_eq!(a.expand(&[3, 3]).unwrap(), expected);
@@ -983,7 +983,7 @@ impl<T: Clone + TensorType> Tensor<T> {
 
     ///Flatten the tensor shape
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let mut a = Tensor::<f32>::new(None, &[3, 3, 3]).unwrap();
     /// a.flatten();
     /// assert_eq!(a.dims(), &[27]);
@@ -996,7 +996,7 @@ impl<T: Clone + TensorType> Tensor<T> {
 
     /// Maps a function to tensors
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let mut a = Tensor::<i32>::new(Some(&[1, 4]), &[2]).unwrap();
     /// let mut c = a.map(|x| i32::pow(x,2));
     /// assert_eq!(c, Tensor::from([1, 16].into_iter()))
@@ -1010,7 +1010,7 @@ impl<T: Clone + TensorType> Tensor<T> {
 
     /// Maps a function to tensors and enumerates
     /// ```
-    /// use ezkl::tensor::{Tensor, TensorError};
+    /// use onnx_tracer::tensor::{Tensor, TensorError};
     /// let mut a = Tensor::<i32>::new(Some(&[1, 4]), &[2]).unwrap();
     /// let mut c = a.enum_map::<_,_,TensorError>(|i, x| Ok(i32::pow(x + i as i32, 2))).unwrap();     /// assert_eq!(c, Tensor::from([1, 25].into_iter()));
     /// ```
@@ -1032,7 +1032,7 @@ impl<T: Clone + TensorType> Tensor<T> {
 
     /// Maps a function to tensors and enumerates in parallel
     /// ```
-    /// use ezkl::tensor::{Tensor, TensorError};
+    /// use onnx_tracer::tensor::{Tensor, TensorError};
     /// let mut a = Tensor::<i32>::new(Some(&[1, 4]), &[2]).unwrap();
     /// let mut c = a.par_enum_map::<_,_,TensorError>(|i, x| Ok(i32::pow(x + i as i32, 2))).unwrap();     /// assert_eq!(c, Tensor::from([1, 25].into_iter()));
     /// ```
@@ -1061,7 +1061,7 @@ impl<T: Clone + TensorType> Tensor<T> {
 
     /// Maps a function to tensors and enumerates in parallel
     /// ```
-    /// use ezkl::tensor::{Tensor, TensorError};
+    /// use onnx_tracer::tensor::{Tensor, TensorError};
     /// let mut a = Tensor::<i32>::new(Some(&[1, 4]), &[2]).unwrap();
     /// let mut c = a.par_enum_map::<_,_,TensorError>(|i, x| Ok(i32::pow(x + i as i32, 2))).unwrap();     /// assert_eq!(c, Tensor::from([1, 25].into_iter()));
     /// ```
@@ -1088,7 +1088,7 @@ impl<T: Clone + TensorType> Tensor<T> {
 impl<T: Clone + TensorType> Tensor<Tensor<T>> {
     /// Flattens a tensor of tensors
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// let mut a = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[2, 3]).unwrap();     
     /// let mut b = Tensor::<i32>::new(Some(&[1, 4]), &[2, 1]).unwrap();     
     /// let mut c = Tensor::new(Some(&[a,b]), &[2]).unwrap();
@@ -1115,7 +1115,7 @@ impl<T: TensorType + Add<Output = T> + std::marker::Send + std::marker::Sync> Ad
     /// * `rhs` - Tensor
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// use std::ops::Add;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 1, 2, 1, 1, 1]),
@@ -1171,7 +1171,7 @@ impl<T: TensorType + Neg<Output = T> + std::marker::Send + std::marker::Sync> Ne
     /// * `self` - Tensor
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// use std::ops::Neg;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[2, 1, 2, 1, 1, 1]),
@@ -1198,7 +1198,7 @@ impl<T: TensorType + Sub<Output = T> + std::marker::Send + std::marker::Sync> Su
     /// * `rhs` - Tensor
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// use std::ops::Sub;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 1, 2, 1, 1, 1]),
@@ -1257,7 +1257,7 @@ impl<T: TensorType + Mul<Output = T> + std::marker::Send + std::marker::Sync> Mu
     /// * `rhs` - Tensor
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// use std::ops::Mul;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 1, 2, 1, 1, 1]),
@@ -1313,7 +1313,7 @@ impl<T: TensorType + Mul<Output = T> + std::marker::Send + std::marker::Sync> Te
     /// * `b` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// use std::ops::Mul;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 15, 2, 1, 1, 0]),
@@ -1352,7 +1352,7 @@ impl<T: TensorType + Div<Output = T> + std::marker::Send + std::marker::Sync> Di
     /// * `rhs` - Tensor
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     /// use std::ops::Div;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[4, 1, 4, 1, 1, 4]),
@@ -1393,7 +1393,7 @@ impl<T: TensorType + Div<Output = T> + std::marker::Send + std::marker::Sync> Di
 
 /// Returns the broadcasted shape of two tensors
 /// ```
-/// use ezkl::tensor::get_broadcasted_shape;
+/// use onnx_tracer::tensor::get_broadcasted_shape;
 /// let a = vec![2, 3];
 /// let b = vec![2, 3];
 /// let c = get_broadcasted_shape(&a, &b).unwrap();

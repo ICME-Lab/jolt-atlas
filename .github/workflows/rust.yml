@@ -47,6 +47,16 @@ jobs:
       - name: Run zkml-jolt-core tests
         run: cargo nextest run --release -p zkml-jolt-core
 
+  test-onnx-tracer:
+    name: Test onnx-tracer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Run onnx-tracer tests
+        working-directory: ./onnx-tracer
+        run: cargo test
+
   build-wasm:
     name: Build Wasm
     runs-on: ubuntu-latest

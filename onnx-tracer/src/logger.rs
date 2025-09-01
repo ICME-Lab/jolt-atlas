@@ -1,4 +1,6 @@
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use colored::*;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use env_logger::Builder;
 use log::{Level, LevelFilter, Record};
 use std::{env, fmt::Formatter, io::Write};
@@ -6,28 +8,42 @@ use std::{env, fmt::Formatter, io::Write};
 /// sets the log level color
 #[allow(dead_code)]
 pub fn level_color(level: &log::Level, msg: &str) -> String {
-    match level {
-        Level::Error => msg.red(),
-        Level::Warn => msg.yellow(),
-        Level::Info => msg.blue(),
-        Level::Debug => msg.green(),
-        Level::Trace => msg.magenta(),
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    {
+        match level {
+            Level::Error => msg.red(),
+            Level::Warn => msg.yellow(),
+            Level::Info => msg.blue(),
+            Level::Debug => msg.green(),
+            Level::Trace => msg.magenta(),
+        }
+        .bold()
+        .to_string()
     }
-    .bold()
-    .to_string()
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    {
+        msg.to_string()
+    }
 }
 
 /// sets the log level text color
 pub fn level_text_color(level: &log::Level, msg: &str) -> String {
-    match level {
-        Level::Error => msg.red(),
-        Level::Warn => msg.yellow(),
-        Level::Info => msg.white(),
-        Level::Debug => msg.white(),
-        Level::Trace => msg.white(),
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    {
+        match level {
+            Level::Error => msg.red(),
+            Level::Warn => msg.yellow(),
+            Level::Info => msg.white(),
+            Level::Debug => msg.white(),
+            Level::Trace => msg.white(),
+        }
+        .bold()
+        .to_string()
     }
-    .bold()
-    .to_string()
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    {
+        msg.to_string()
+    }
 }
 
 /// sets the log level token
@@ -43,17 +59,28 @@ fn level_token(level: &Level) -> &str {
 
 /// sets the log level prefix token
 fn prefix_token(level: &Level) -> String {
-    format!(
-        "{}{}{}",
-        "[".blue().bold(),
-        level_color(level, level_token(level)),
-        "]".blue().bold()
-    )
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    {
+        format!(
+            "{}{}{}",
+            "[".blue().bold(),
+            level_color(level, level_token(level)),
+            "]".blue().bold()
+        )
+    }
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    {
+        format!("[{}]", level_token(level))
+    }
 }
 
 /// formats the log
 pub fn format(buf: &mut Formatter, record: &Record<'_>) -> Result<(), std::fmt::Error> {
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     let sep = format!("\n{} ", " | ".white().bold());
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    let sep = format!("\n{} ", " | ");
+
     let level = record.level();
     writeln!(
         buf,
@@ -64,6 +91,7 @@ pub fn format(buf: &mut Formatter, record: &Record<'_>) -> Result<(), std::fmt::
 }
 
 /// initializes the logger
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub fn init_logger() {
     let mut builder = Builder::new();
 
@@ -88,4 +116,10 @@ pub fn init_logger() {
         builder.parse_filters(&env::var("RUST_LOG").unwrap());
     }
     builder.init();
+}
+
+/// initializes the logger for WASM (no-op)
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub fn init_logger() {
+    // No-op for WASM
 }

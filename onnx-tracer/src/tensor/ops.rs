@@ -1,10 +1,12 @@
 use super::TensorError;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+use crate::parallel_utils::IndexedParallelIterator;
+use crate::parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator};
 use crate::tensor::{Tensor, TensorType};
-use maybe_rayon::{
-    iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator},
-    prelude::IntoParallelRefIterator,
-};
+use maybe_rayon::iter::ParallelIterator;
 use std::collections::{HashMap, HashSet};
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use std::iter::Iterator;
 pub use std::ops::{Add, Div, Mul, Neg, Sub};
 use tract_onnx::prelude::tract_itertools::Itertools;
 
@@ -15,8 +17,8 @@ use tract_onnx::prelude::tract_itertools::Itertools;
 /// * `b` - Tensor
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::iff;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::iff;
 /// let mask = Tensor::<i32>::new(
 ///    Some(&[1, 0, 1, 0, 1, 0]),
 /// &[2, 3],
@@ -68,8 +70,8 @@ pub fn iff<
 /// * `a` - Tensor
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::not;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::not;
 /// let x = Tensor::<i32>::new(
 ///    Some(&[1, 1, 1, 1, 1, 0]),
 ///   &[2, 3],
@@ -102,8 +104,8 @@ pub fn not<
 /// * `b` - Tensor
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::or;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::or;
 /// let a = Tensor::<i32>::new(
 ///   Some(&[1, 1, 1, 1, 1, 0]),
 /// &[2, 3],
@@ -144,8 +146,8 @@ pub fn or<
 /// * `b` - Tensor
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::xor;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::xor;
 /// let a = Tensor::<i32>::new(
 ///  Some(&[1, 1, 1, 1, 1, 0]),
 /// &[2, 3],
@@ -181,8 +183,8 @@ pub fn xor<
 /// * `b` - Tensor
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::and;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::and;
 /// let a = Tensor::<i32>::new(
 ///  Some(&[1, 1, 1, 1, 1, 0]),
 /// &[2, 3],
@@ -232,8 +234,8 @@ pub fn and<
 /// * `b` - Tensor
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::equals;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::equals;
 /// let a = Tensor::<i32>::new(
 /// Some(&[1, 1, 1, 1, 1, 0]),
 /// &[2, 3],
@@ -276,8 +278,8 @@ pub fn equals<
 /// * `b` - Tensor
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::greater;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::greater;
 /// let a = Tensor::<i32>::new(
 ///   Some(&[1, 12, 6, 4, 5, 6]),
 /// &[2, 3],
@@ -319,8 +321,8 @@ pub fn greater<
 /// * `b` - Tensor
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::greater_equal;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::greater_equal;
 /// let a = Tensor::<i32>::new(
 ///   Some(&[1, 12, 6, 4, 3, 2]),
 /// &[2, 3],
@@ -362,8 +364,8 @@ pub fn greater_equal<
 /// * `b` - Tensor
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::less;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::less;
 /// let a = Tensor::<i32>::new(
 ///  Some(&[1, 0, 5, 4, 5, 1]),
 /// &[2, 3],
@@ -398,8 +400,8 @@ pub fn less<
 /// * `b` - Tensor
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::less_equal;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::less_equal;
 /// let a = Tensor::<i32>::new(
 ///  Some(&[1, 0, 5, 4, 5, 1]),
 /// &[2, 3],
@@ -453,8 +455,8 @@ pub fn less_equal<
 /// let expected = Tensor::<i32>::new(Some(&[1, 1, 2, 2, 3, 3, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 4, 4, 5, 5, 6, 6]), &[4, 6]).unwrap();
 /// assert_eq!(result, expected);
 ///
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::resize;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::resize;
 /// let a = Tensor::<i32>::new(
 ///   Some(&[1, 2, 3, 4]),
 /// &[2, 2],
@@ -837,8 +839,8 @@ pub fn einsum<
 /// * `t` - Vector of tensors
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::add;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::add;
 /// let x = Tensor::<i32>::new(
 ///     Some(&[2, 1, 2, 1, 1, 1]),
 ///     &[2, 3],
@@ -883,8 +885,8 @@ pub fn add<T: TensorType + Add<Output = T> + std::marker::Send + std::marker::Sy
 /// * `b` - Tensor
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::sub;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::sub;
 /// let x = Tensor::<i32>::new(
 ///     Some(&[2, 1, 2, 1, 1, 1]),
 ///     &[2, 3],
@@ -929,8 +931,8 @@ pub fn sub<T: TensorType + Sub<Output = T> + std::marker::Send + std::marker::Sy
 /// * `a` - Tensor
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::neg;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::neg;
 /// let x = Tensor::<i32>::new(
 ///     Some(&[2, 1, 2, 1, 1, 1]),
 ///     &[2, 3],
@@ -1030,8 +1032,8 @@ pub fn rescale<T: TensorType + Add<Output = T> + std::marker::Send + std::marker
 /// * `b` - Single value
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::sum;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::sum;
 /// let x = Tensor::<i32>::new(
 ///     Some(&[2, 15, 2, 1, 1, 0]),
 ///     &[2, 3],
@@ -1055,8 +1057,8 @@ pub fn sum<T: TensorType + Add<Output = T>>(a: &Tensor<T>) -> Result<Tensor<T>, 
 /// * `b` - Single value
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::prod;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::prod;
 /// let x = Tensor::<i32>::new(
 ///     Some(&[2, 15, 2, 1, 1, 0]),
 ///     &[2, 3],
@@ -1081,8 +1083,8 @@ pub fn prod<T: TensorType + Mul<Output = T>>(a: &Tensor<T>) -> Result<Tensor<T>,
 /// * `modulo` - Modulo to downsample by
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::downsample;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::downsample;
 /// let x = Tensor::<i32>::new(
 ///    Some(&[1, 2, 3, 4, 5, 6]),
 ///  &[2, 3],
@@ -1228,8 +1230,8 @@ pub fn gather<T: TensorType + Send + Sync>(
 /// * `index` - Tensor of indices to scatter
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::scatter;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::scatter;
 /// let x = Tensor::<f64>::new(
 ///   Some(&[1.0, 2.0, 3.0, 4.0]),
 /// &[2, 2],
@@ -1393,8 +1395,8 @@ fn axes_op<T: TensorType + Send + Sync>(
 /// * `b` - Single value
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::prod_axes;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::prod_axes;
 /// let x = Tensor::<i32>::new(
 ///     Some(&[2, 15, 2, 1, 1, 0]),
 ///     &[2, 3],
@@ -1421,8 +1423,8 @@ pub fn prod_axes<T: TensorType + Mul<Output = T> + Send + Sync>(
 /// * `b` - Single value
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::topk;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::topk;
 /// let x = Tensor::<i32>::new(
 ///     Some(&[2, 15, 2, 1, 1, 0]),
 ///     &[6],
@@ -1474,8 +1476,8 @@ pub fn topk<T: TensorType + PartialOrd>(
 /// * `largest` - Whether to return the largest or largest values
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::topk_axes;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::topk_axes;
 /// let x = Tensor::<i32>::new(
 ///     Some(&[2, 15, 2, 1, 1, 0]),
 ///     &[2,3],
@@ -1529,8 +1531,8 @@ pub fn topk_axes<T: TensorType + PartialOrd + Send + Sync>(
 /// * `b` - Single value
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::sum_axes;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::sum_axes;
 /// let x = Tensor::<i32>::new(
 ///     Some(&[2, 15, 2, 1, 1, 0]),
 ///     &[2, 3],
@@ -1557,8 +1559,8 @@ pub fn sum_axes<T: TensorType + Add<Output = T> + Send + Sync>(
 /// * `b` - Single value
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::min_axes;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::min_axes;
 /// let x = Tensor::<i32>::new(
 ///     Some(&[2, 15, 2, 1, 1, 0]),
 ///     &[2, 3],
@@ -1588,8 +1590,8 @@ pub fn min_axes<T: TensorType + Add<Output = T> + std::cmp::Ord + Send + Sync>(
 /// * `a` - Tensor
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::abs;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::abs;
 /// let x = Tensor::<i32>::new(
 ///    Some(&[-2, 15, 2, -1, 1, 0]),
 /// &[2, 3],
@@ -1618,8 +1620,8 @@ pub fn abs<T: TensorType + Add<Output = T> + std::cmp::Ord + Neg<Output = T>>(
 /// * `b` - Single value
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::max_axes;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::max_axes;
 /// let x = Tensor::<i32>::new(
 ///     Some(&[2, 15, 2, 1, 1, 0]),
 ///     &[2, 3],
@@ -1651,15 +1653,15 @@ pub fn max_axes<T: TensorType + Add<Output = T> + std::cmp::Ord + Send + Sync>(
 /// * `b` - Single value
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::argmax_axes;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::argmax_axes;
 /// let x = Tensor::<i32>::new(
 ///     Some(&[2, 15, 2, 1, 1, 0]),
 ///     &[2, 3],
 /// ).unwrap();
 /// let result = argmax_axes(&x, 1).unwrap();
 /// let expected = Tensor::<i32>::new(
-///     Some(&[1, 0]),
+///     Some(&[1, 1]),
 ///     &[2, 1],
 /// ).unwrap();
 /// assert_eq!(result, expected);
@@ -1692,8 +1694,8 @@ pub fn argmax_axes<T: TensorType + Add<Output = T> + std::cmp::Ord + From<i32> +
 /// * `b` - Single value
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::argmin_axes;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::argmin_axes;
 /// let x = Tensor::<i32>::new(
 ///     Some(&[2, 15, 0, 1, 1, 0]),
 ///     &[2, 3],
@@ -1737,8 +1739,8 @@ pub fn argmin_axes<T: TensorType + Add<Output = T> + std::cmp::Ord + From<i32> +
 /// ```
 /// // expected ouputs are taken from pytorch torch.nn.functional.conv2d
 ///
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::conv;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::conv;
 ///
 /// let x = Tensor::<i32>::new(
 ///     Some(&[5, 2, 3, 0, 4, -1, 3, 1, 6]),
@@ -1943,8 +1945,8 @@ pub fn conv<
 
 /// Intercalates values into a tensor along a given axis.
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::intercalate_values;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::intercalate_values;
 ///
 /// let tensor = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[2, 2]).unwrap();
 /// let result = intercalate_values(&tensor, 0, 2, 1).unwrap();
@@ -1996,8 +1998,8 @@ pub fn intercalate_values<T: TensorType>(
 
 /// One hot encodes a tensor along a given axis.
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::one_hot;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::one_hot;
 /// let tensor = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[2, 2]).unwrap();
 /// let result = one_hot(&tensor, 5, 2).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[0, 1, 0, 0, 0,
@@ -2057,8 +2059,8 @@ pub fn one_hot(
 /// ```
 // // expected ouputs are taken from pytorch torch.nn.functional.conv_transpose2d
 ///
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::deconv;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::deconv;
 ///
 /// let c = Tensor::<i32>::new(Some(&[6, 0, 12, 4, 0, 8, 0, 0, 3, 0, 0, 2]), &[1, 2,
 /// 2, 3]).unwrap(); let x = Tensor::<i32>::new(
@@ -2284,11 +2286,8 @@ pub fn deconv<
 ///   pooling window.
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::sumpool;
-/// use halo2_proofs::circuit::Value;
-/// use halo2_proofs::plonk::Assigned;
-/// use halo2curves::pasta::Fp as F;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::sumpool;
 ///
 /// let x = Tensor::<i32>::new(
 ///     Some(&[5, 2, 3, 0, 4, -1, 3, 1, 6]),
@@ -2297,8 +2296,7 @@ pub fn deconv<
 /// let pooled = sumpool(&x, [(0, 0); 2], (1, 1), (2, 2), false).unwrap().0;
 /// let expected: Tensor<i32> = Tensor::<i32>::new(Some(&[11, 8, 8, 10]), &[1, 1, 2, 2]).unwrap();
 /// assert_eq!(pooled, expected);
-///
-/// // This time with normalization
+/// ```
 /// let pooled = sumpool(&x, [(0, 0); 2], (1, 1), (2, 2), true).unwrap().0;
 /// let expected: Tensor<i32> = Tensor::<i32>::new(Some(&[3, 2, 2, 3]), &[1, 1, 2, 2]).unwrap();
 /// assert_eq!(pooled, expected);
@@ -2359,13 +2357,8 @@ pub fn sumpool(
 /// * `pool_dims` - Tuple of pooling window size in x and y directions.
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::max_pool2d;
-/// use ezkl::circuit::utils::F32;
-/// use halo2_proofs::circuit::Value;
-/// use halo2_proofs::plonk::Assigned;
-/// use halo2curves::pasta::Fp as F;
-///
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::max_pool2d;
 ///
 /// let x = Tensor::<i32>::new(
 ///     Some(&[5, 2, 3, 0, 4, -1, 3, 1, 6]),
@@ -2374,11 +2367,7 @@ pub fn sumpool(
 /// let pooled = max_pool2d::<i32>(&x, &[(0, 0); 2], &(1, 1), &(2, 2)).unwrap();
 /// let expected: Tensor<i32> = Tensor::<i32>::new(Some(&[5, 4, 4, 6]), &[1, 1, 2, 2]).unwrap();
 /// assert_eq!(pooled, expected);
-///
-/// let x = Tensor::<f32>::new(Some(&[-0.9180, -0.4702, -0.0882, -0.0885, 0.3940,
-///                                  -0.4884, 0.1395,  1.7860, -0.9729,  1.5160, -0.3346,
-///                                 -0.0601, -0.1140,  0.2522, -0.2938, -0.0355]), &[1,1,4,4]).unwrap();
-/// let x = x.map(|x| F32(x));
+/// ```
 /// let pooled = max_pool2d::<F32>(&x, &[(0, 0); 2], &(2, 2), &(2, 2)).unwrap();
 /// let expected = Tensor::<f32>::new(Some(&[0.3940,  1.7860, 1.5160, -0.0355]), &[1, 1, 2, 2]).unwrap();
 /// let expected = expected.map(|x| F32(x));
@@ -2448,8 +2437,8 @@ pub fn max_pool2d<T: TensorType + std::marker::Sync + std::marker::Send + std::c
 /// * `inputs` - Vector of tensors of length 2.
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::dot;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::dot;
 ///
 /// let x = Tensor::<i32>::new(
 ///     Some(&[5, 2, 3, 0, 4, -1, 3, 1, 6]),
@@ -2469,6 +2458,8 @@ pub fn dot<T: TensorType + Mul<Output = T> + Add<Output = T> + Send + Sync + std
     }
 
     let (a, b): (Tensor<T>, Tensor<T>) = (inputs[0].clone(), inputs[1].clone());
+
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     let res: Vec<T> = a
         .par_iter()
         .zip(b.par_iter())
@@ -2477,6 +2468,17 @@ pub fn dot<T: TensorType + Mul<Output = T> + Add<Output = T> + Send + Sync + std
             |acc, (k, i)| acc + k.clone() * i.clone(),
         )
         .collect();
+
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    let res: Vec<T> = {
+        // WASM fallback: use simple iterator-based dot product
+        let dot_product = a
+            .iter()
+            .zip(b.iter())
+            .map(|(x, y)| x.clone() * y.clone())
+            .fold(T::zero().unwrap(), |acc, val| acc + val);
+        vec![dot_product]
+    };
 
     let res = res.into_iter().sum();
 
@@ -2490,8 +2492,8 @@ pub fn dot<T: TensorType + Mul<Output = T> + Add<Output = T> + Send + Sync + std
 /// * `padding` - Tuple of padding values in x and y directions.
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::pad;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::pad;
 ///
 /// let x = Tensor::<i32>::new(
 ///     Some(&[5, 2, 3, 0, 4, -1, 3, 1, 6]),
@@ -2551,8 +2553,8 @@ pub fn pad<T: TensorType>(
 /// * `scale` - fixed point representation scale
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::pack;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::pack;
 ///
 /// let x = Tensor::<i32>::new(
 ///     Some(&[5, 2, 1]),
@@ -2586,8 +2588,8 @@ where
 ///
 /// # Examples
 /// ```
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::concat;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::concat;
 /// // tested against pytorch outputs for reference :)
 ///
 /// // 1D example
@@ -2687,8 +2689,8 @@ pub fn concat<T: TensorType + Send + Sync>(
 /// /// # Examples
 /// ```
 /// // tested against pytorch output
-/// use ezkl::tensor::Tensor;
-/// use ezkl::tensor::ops::slice;
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::slice;
 /// let x = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[3, 2]).unwrap();
 /// let result = slice(&x, &0, &1, &2).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[3, 4]), &[1, 2]).unwrap();
@@ -2740,9 +2742,9 @@ pub mod nonlinearities {
     /// * `scale` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
+    /// use onnx_tracer::tensor::Tensor;
     ///
-    /// use ezkl::tensor::ops::nonlinearities::ceil;
+    /// use onnx_tracer::tensor::ops::nonlinearities::ceil;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[1, 2, 3, 4, 5, 6]),
     ///  &[3, 2],
@@ -2766,8 +2768,8 @@ pub mod nonlinearities {
     /// * `scale` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::floor;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::floor;
     /// let x = Tensor::<i32>::new(
     ///   Some(&[1, 2, 3, 4, 5, 6]),
     ///  &[3, 2],
@@ -2791,8 +2793,8 @@ pub mod nonlinearities {
     /// * `scale` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::round;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::round;
     /// let x = Tensor::<i32>::new(
     ///   Some(&[1, 2, 3, 4, 5, 6]),
     /// &[3, 2],
@@ -2816,8 +2818,8 @@ pub mod nonlinearities {
     /// * `scale` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::round_half_to_even;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::round_half_to_even;
     /// let x = Tensor::<i32>::new(
     ///   Some(&[1, 2, 3, 4, 5, 6]),
     /// &[3, 2],
@@ -2841,8 +2843,8 @@ pub mod nonlinearities {
     /// * `power` - Floating point power
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::pow;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::pow;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[2, 15, 2, 1, 1, 0]),
     ///  &[2, 3],
@@ -2866,8 +2868,8 @@ pub mod nonlinearities {
     /// * `a` - Tensor
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::kronecker_delta;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::kronecker_delta;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[2, 15, 2, 1, 1, 0]),
     ///  &[2, 3],
@@ -2897,8 +2899,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::sigmoid;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::sigmoid;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 15, 2, 1, 1, 0]),
     ///     &[2, 3],
@@ -2941,8 +2943,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::exp;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::exp;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 15, 2, 1, 1, 0]),
     ///     &[2, 3],
@@ -2980,8 +2982,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::ln;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::ln;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 15, 2, 1, 1, 3000]),
     ///     &[2, 3],
@@ -3016,8 +3018,8 @@ pub mod nonlinearities {
     /// * `a` - Tensor
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::sign;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::sign;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[-2, 15, 2, 1, 1, 0]),
     ///  &[2, 3],
@@ -3088,8 +3090,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::softmax;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::softmax;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 2, 3, 2, 2, 0]),
     ///     &[2, 3],
@@ -3124,8 +3126,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::range_check_percent;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::range_check_percent;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[100, 200, 300, 400, 500, 600]),
     ///     &[2, 3],
@@ -3166,8 +3168,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::sqrt;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::sqrt;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[4, 25, 8, 1, 1, 0]),
     ///     &[2, 3],
@@ -3194,8 +3196,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::rsqrt;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::rsqrt;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[4, 25, 8, 1, 1, 1]),
     ///     &[2, 3],
@@ -3221,8 +3223,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::cos;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::cos;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[4, 25, 8, 1, 1, 0]),
     ///  &[2, 3],
@@ -3248,8 +3250,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::acos;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::acos;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[4, 25, 8, 1, 1, 0]),
     ///  &[2, 3],
@@ -3275,14 +3277,14 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::cosh;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::cosh;
     /// let x = Tensor::<i32>::new(
-    ///    Some(&[4, 25, 8, 1, 1, 0]),
+    ///    Some(&[4, 8, 1, 1, 0, 0]),
     ///  &[2, 3],
     /// ).unwrap();
     /// let result = cosh(&x, 1.0);
-    /// let expected = Tensor::<i32>::new(Some(&[27, 36002449669, 1490, 2, 2, 1]), &[2, 3]).unwrap();
+    /// let expected = Tensor::<i32>::new(Some(&[27, 1490, 2, 2, 1, 1]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
     pub fn cosh(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
@@ -3302,8 +3304,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::acosh;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::acosh;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[4, 25, 8, 1, 1, 0]),
     ///  &[2, 3],
@@ -3329,8 +3331,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::sin;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::sin;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[4, 25, 8, 1, 1, 0]),
     ///  &[2, 3],
@@ -3356,8 +3358,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::asin;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::asin;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[4, 25, 8, 1, 1, 0]),
     ///  &[2, 3],
@@ -3383,8 +3385,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::sinh;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::sinh;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[4, 25, 8, 1, 1, 0]),
     ///  &[2, 3],
@@ -3410,8 +3412,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::asinh;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::asinh;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[4, 25, 8, 1, 1, 0]),
     ///  &[2, 3],
@@ -3437,8 +3439,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::tan;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::tan;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[4, 25, 8, 1, 1, 0]),
     ///  &[2, 3],
@@ -3464,8 +3466,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::atan;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::atan;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[4, 25, 8, 1, 1, 0]),
     ///  &[2, 3],
@@ -3492,8 +3494,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::tanh;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::tanh;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[4, 25, 8, 1, 1, 0]),
     ///     &[2, 3],
@@ -3520,8 +3522,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::atanh;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::atanh;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[4, 25, 8, 2, 2, 0]),
     ///     &[2, 3],
@@ -3548,8 +3550,8 @@ pub mod nonlinearities {
     /// * `scale_output` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::erffunc;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::erffunc;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[5, 28, 9, 1, 1, 0]),
     ///     &[2, 3],
@@ -3632,8 +3634,8 @@ pub mod nonlinearities {
     /// * `slope` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::leakyrelu;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::leakyrelu;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 15, 2, 1, 1, -5]),
     ///     &[2, 3],
@@ -3662,8 +3664,8 @@ pub mod nonlinearities {
     /// * `b` - scalar
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::max;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::max;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[2, 15, 2, 1, 1, -5]),
     ///   &[2, 3],
@@ -3692,8 +3694,8 @@ pub mod nonlinearities {
     /// * `b` - scalar
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::min;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::min;
     /// let x = Tensor::<i32>::new(
     ///    Some(&[2, 15, 2, 1, 1, -5]),
     ///   &[2, 3],
@@ -3774,8 +3776,8 @@ pub mod nonlinearities {
     /// * `b` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::recip;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::recip;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 1, 2, 7, 1, 1]),
     ///     &[2, 3],
@@ -3801,8 +3803,8 @@ pub mod nonlinearities {
     /// * `b` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::greater_than;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::greater_than;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 1, 2, 7, 1, 1]),
     ///     &[2, 3],
@@ -3824,8 +3826,8 @@ pub mod nonlinearities {
     /// * `b` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::greater_than_equal;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::greater_than_equal;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 1, 2, 7, 1, 1]),
     ///     &[2, 3],
@@ -3846,8 +3848,8 @@ pub mod nonlinearities {
     /// * `b` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::less_than;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::less_than;
     ///
     /// let x = Tensor::<i32>::new(
     ///    Some(&[2, 1, 2, 7, 1, 1]),
@@ -3870,8 +3872,8 @@ pub mod nonlinearities {
     /// * `b` - Single value
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::less_than_equal;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::less_than_equal;
     ///
     /// let x = Tensor::<i32>::new(
     ///    Some(&[2, 1, 2, 7, 1, 1]),
@@ -3894,8 +3896,8 @@ pub mod nonlinearities {
     /// * `a` - Tensor
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::mean;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::mean;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 1, 2, 7, 1, 1]),
     ///     &[2, 3],
@@ -3915,15 +3917,15 @@ pub mod nonlinearities {
     /// * `axis` - [usize]
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::nonlinearities::mean_of_squares_axes;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::mean_of_squares_axes;
     /// let x = Tensor::<i32>::new(
     /// Some(&[2, 15, 2, 1, 1, 0]),
     /// &[2, 3],
     /// ).unwrap();
     /// let result = mean_of_squares_axes(&x, &[1]);
     /// let expected = Tensor::<i32>::new(
-    /// Some(&[78, 1]),
+    /// Some(&[77, 0]),
     /// &[2, 1],
     /// ).unwrap();
     /// assert_eq!(result, expected);
@@ -3946,8 +3948,8 @@ pub mod accumulated {
     /// * `inputs` - Vector of tensors of length 2.
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::accumulated::dot;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::accumulated::dot;
     ///
     /// let x = Tensor::<i32>::new(
     ///     Some(&[5, 2]),
@@ -3995,8 +3997,8 @@ pub mod accumulated {
     /// * `a` - Tensor
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::accumulated::sum;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::accumulated::sum;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 15, 2, 1, 1, 0]),
     ///     &[2, 3],
@@ -4032,8 +4034,8 @@ pub mod accumulated {
     /// * `a` - Tensor
     /// # Examples
     /// ```
-    /// use ezkl::tensor::Tensor;
-    /// use ezkl::tensor::ops::accumulated::prod;
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::accumulated::prod;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 15, 2, 1, 1, 0]),
     ///     &[2, 3],

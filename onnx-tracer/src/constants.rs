@@ -12,8 +12,8 @@ pub const MAX_TENSOR_SIZE: usize = 64;
 /// For example the ONNX memory model can be viewed as registers that store tensors instead of scalars.
 ///
 /// # NOTE: This value is purely used for testing purposes, for production the ONNX memory model requires dynamic amount of tensor slots.
-///         However for now we simplify the zkVM to use a fixed number of tensor slots.
-///         i.e. : This is a simplification and may not capture all aspects of the ONNX memory model.
+/// However for now we simplify the zkVM to use a fixed number of tensor slots.
+/// i.e. : This is a simplification and may not capture all aspects of the ONNX memory model.
 pub const TEST_TENSOR_REGISTER_COUNT: u64 = 32;
 pub const VIRTUAL_TENSOR_REGISTER_COUNT: u64 = 32; //  see Section 6.1 of Jolt paper
 pub const TENSOR_REGISTER_COUNT: u64 = TEST_TENSOR_REGISTER_COUNT + VIRTUAL_TENSOR_REGISTER_COUNT;

@@ -1,14 +1,11 @@
 use crate::{
-    circuit::{
-        ops::{hybrid::HybridOp, lookup::LookupOp, poly::PolyOp, Input, InputType, Op},
-        utils::F32,
-    },
     graph::{
         model::NodeType,
         node::{Node, Rescaled, SupportedOp},
         vars::VarScales,
         GraphError,
     },
+    ops::{hybrid::HybridOp, lookup::LookupOp, poly::PolyOp, utils::F32, Input, InputType, Op},
     tensor::{Tensor, TensorError},
 };
 use log::debug;
@@ -106,7 +103,7 @@ pub fn node_output_shapes(
 pub fn extract_tensor_value(
     input: Arc<tract_onnx::prelude::Tensor>,
 ) -> Result<Tensor<f32>, Box<dyn std::error::Error>> {
-    use maybe_rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
+    use crate::parallel_utils::{IntoParallelRefIterator, ParallelIterator};
 
     let dt = input.datum_type();
     let dims = input.shape().to_vec();
@@ -277,7 +274,7 @@ pub fn new_op_from_onnx(
             let raw_value = range.iter().map(|x| *x as f32).collect::<Tensor<_>>();
             // Quantize the raw value (integers)
             let quantized_value = quantize_tensor(raw_value.clone(), 0)?;
-            let c = crate::circuit::ops::Constant::new(quantized_value, raw_value);
+            let c = crate::ops::Constant::new(quantized_value, raw_value);
             // Create a constant op
             SupportedOp::Constant(c)
         }
@@ -288,7 +285,7 @@ pub fn new_op_from_onnx(
             };
             let op = load_op::<Gather>(node.op(), idx, node.op().name().to_string())?;
             let axis = op.axis;
-            let mut op = SupportedOp::Hybrid(crate::circuit::ops::hybrid::HybridOp::Gather {
+            let mut op = SupportedOp::Hybrid(crate::ops::hybrid::HybridOp::Gather {
                 dim: axis,
                 constant_idx: None,
             });
@@ -297,7 +294,7 @@ pub fn new_op_from_onnx(
             if let Some(c) = inputs[1].opkind().get_mutable_constant() {
                 inputs[1].decrement_use();
                 deleted_indices.push(inputs.len() - 1);
-                op = SupportedOp::Hybrid(crate::circuit::ops::hybrid::HybridOp::Gather {
+                op = SupportedOp::Hybrid(crate::ops::hybrid::HybridOp::Gather {
                     dim: axis,
                     constant_idx: Some(c.raw_values.map(|x| {
                         if x == -1.0 {
@@ -309,7 +306,7 @@ pub fn new_op_from_onnx(
                 });
             }
             if inputs[1].opkind().is_input() {
-                inputs[1].replace_opkind(SupportedOp::Input(crate::circuit::ops::Input {
+                inputs[1].replace_opkind(SupportedOp::Input(crate::ops::Input {
                     scale: 0,
                     datum_type: InputType::TDim,
                 }));
@@ -330,7 +327,7 @@ pub fn new_op_from_onnx(
             } else {
                 op.fallback_k.to_i64()? as usize
             };
-            SupportedOp::Hybrid(crate::circuit::ops::hybrid::HybridOp::TopK {
+            SupportedOp::Hybrid(crate::ops::hybrid::HybridOp::TopK {
                 dim: axis,
                 k,
                 largest: op.largest,
@@ -340,7 +337,7 @@ pub fn new_op_from_onnx(
             let op = load_op::<OneHot>(node.op(), idx, node.op().name().to_string())?;
             let axis = op.axis;
             let num_classes = op.dim;
-            SupportedOp::Hybrid(crate::circuit::ops::hybrid::HybridOp::OneHot {
+            SupportedOp::Hybrid(crate::ops::hybrid::HybridOp::OneHot {
                 dim: axis,
                 num_classes,
             })
@@ -354,23 +351,22 @@ pub fn new_op_from_onnx(
             };
             let op = load_op::<ScatterElements>(node.op(), idx, node.op().name().to_string())?;
             let axis = op.axis;
-            let mut op =
-                SupportedOp::Hybrid(crate::circuit::ops::hybrid::HybridOp::ScatterElements {
-                    dim: axis,
-                    constant_idx: None,
-                });
+            let mut op = SupportedOp::Hybrid(crate::ops::hybrid::HybridOp::ScatterElements {
+                dim: axis,
+                constant_idx: None,
+            });
             //   if param_visibility.is_public() {
             if let Some(c) = inputs[1].opkind().get_mutable_constant() {
                 inputs[1].decrement_use();
                 deleted_indices.push(1);
-                op = SupportedOp::Hybrid(crate::circuit::ops::hybrid::HybridOp::ScatterElements {
+                op = SupportedOp::Hybrid(crate::ops::hybrid::HybridOp::ScatterElements {
                     dim: axis,
                     constant_idx: Some(c.raw_values.map(|x| x as usize)),
                 })
             }
             //   }
             if inputs[1].opkind().is_input() {
-                inputs[1].replace_opkind(SupportedOp::Input(crate::circuit::ops::Input {
+                inputs[1].replace_opkind(SupportedOp::Input(crate::ops::Input {
                     scale: 0,
                     datum_type: InputType::TDim,
                 }));
@@ -389,23 +385,22 @@ pub fn new_op_from_onnx(
             let op = load_op::<GatherElements>(node.op(), idx, node.op().name().to_string())?;
             let axis = op.axis;
 
-            let mut op =
-                SupportedOp::Hybrid(crate::circuit::ops::hybrid::HybridOp::GatherElements {
-                    dim: axis,
-                    constant_idx: None,
-                });
+            let mut op = SupportedOp::Hybrid(crate::ops::hybrid::HybridOp::GatherElements {
+                dim: axis,
+                constant_idx: None,
+            });
             // if param_visibility.is_public() {
             if let Some(c) = inputs[1].opkind().get_mutable_constant() {
                 inputs[1].decrement_use();
                 deleted_indices.push(inputs.len() - 1);
-                op = SupportedOp::Hybrid(crate::circuit::ops::hybrid::HybridOp::GatherElements {
+                op = SupportedOp::Hybrid(crate::ops::hybrid::HybridOp::GatherElements {
                     dim: axis,
                     constant_idx: Some(c.raw_values.map(|x| x as usize)),
                 })
             }
             // }
             if inputs[1].opkind().is_input() {
-                inputs[1].replace_opkind(SupportedOp::Input(crate::circuit::ops::Input {
+                inputs[1].replace_opkind(SupportedOp::Input(crate::ops::Input {
                     scale: 0,
                     datum_type: InputType::TDim,
                 }));
@@ -420,7 +415,7 @@ pub fn new_op_from_onnx(
                 AxisOp::Move(from, to) => {
                     let source = from.to_usize()?;
                     let destination = to.to_usize()?;
-                    SupportedOp::Linear(crate::circuit::ops::poly::PolyOp::MoveAxis {
+                    SupportedOp::Linear(crate::ops::poly::PolyOp::MoveAxis {
                         source,
                         destination,
                     })
@@ -436,7 +431,7 @@ pub fn new_op_from_onnx(
         "Concat" | "InferenceConcat" => {
             let op = load_op::<TypedConcat>(node.op(), idx, node.op().name().to_string())?;
             let axis = op.axis;
-            SupportedOp::Linear(crate::circuit::ops::poly::PolyOp::Concat { axis })
+            SupportedOp::Linear(crate::ops::poly::PolyOp::Concat { axis })
         }
         "Slice" => {
             let slice = load_op::<Slice>(node.op(), idx, node.op().name().to_string())?;
@@ -470,7 +465,7 @@ pub fn new_op_from_onnx(
 
             // Quantize the raw value
             let quantized_value = quantize_tensor(raw_value.clone(), constant_scale)?;
-            let c = crate::circuit::ops::Constant::new(quantized_value, raw_value); // Create a constant op
+            let c = crate::ops::Constant::new(quantized_value, raw_value); // Create a constant op
             SupportedOp::Constant(c)
         }
         "Reduce<ArgMax(false)>" => {
@@ -584,7 +579,7 @@ pub fn new_op_from_onnx(
                 } else {
                     SupportedOp::Nonlinear(LookupOp::Max {
                         scale: scale_to_multiplier(inputs[0].out_scales()[0]).into(),
-                        a: crate::circuit::utils::F32(unit),
+                        a: crate::ops::utils::F32(unit),
                     })
                 }
             } else {
@@ -626,7 +621,7 @@ pub fn new_op_from_onnx(
 
                 SupportedOp::Nonlinear(LookupOp::Min {
                     scale: scale_to_multiplier(inputs[0].out_scales()[0]).into(),
-                    a: crate::circuit::utils::F32(unit),
+                    a: crate::ops::utils::F32(unit),
                 })
             } else {
                 return Err(Box::new(GraphError::InvalidDims(idx, "min".to_string())));
@@ -661,7 +656,7 @@ pub fn new_op_from_onnx(
             };
 
             SupportedOp::Nonlinear(LookupOp::LeakyReLU {
-                slope: crate::circuit::utils::F32(leaky_op.alpha),
+                slope: crate::ops::utils::F32(leaky_op.alpha),
             })
         }
         "Scan" => {
@@ -741,7 +736,7 @@ pub fn new_op_from_onnx(
                 DatumType::F64 => (scales.input, InputType::F64),
                 _ => return Err(Box::new(GraphError::UnsupportedDataType)),
             };
-            SupportedOp::Input(crate::circuit::ops::Input { scale, datum_type })
+            SupportedOp::Input(crate::ops::Input { scale, datum_type })
         }
         "Cast" => {
             let op = load_op::<Cast>(node.op(), idx, node.op().name().to_string())?;
@@ -783,10 +778,9 @@ pub fn new_op_from_onnx(
                         replace_const(
                             0,
                             SupportedOp::Nonlinear(LookupOp::Cast {
-                                scale: crate::circuit::utils::F32(scale_to_multiplier(
-                                    input_scales[0],
-                                )
-                                    as f32),
+                                scale: crate::ops::utils::F32(
+                                    scale_to_multiplier(input_scales[0]) as f32
+                                ),
                             }),
                         )?
                     } else {
@@ -823,7 +817,7 @@ pub fn new_op_from_onnx(
                         deleted_indices.push(const_idx);
                         op = SupportedOp::Nonlinear(LookupOp::Div {
                             // we invert the constant for division
-                            denom: crate::circuit::utils::F32(1. / c.raw_values[0]),
+                            denom: crate::ops::utils::F32(1. / c.raw_values[0]),
                         })
                     }
                 }
@@ -987,7 +981,7 @@ pub fn new_op_from_onnx(
                 }
                 SupportedOp::Nonlinear(LookupOp::Pow {
                     scale: scale_to_multiplier(inputs[0].out_scales()[0]).into(),
-                    a: crate::circuit::utils::F32(c.raw_values[0]),
+                    a: crate::ops::utils::F32(c.raw_values[0]),
                 })
             } else {
                 unimplemented!("only support constant pow for now")
@@ -1376,18 +1370,18 @@ dimensions"
     Ok((node, deleted_indices))
 }
 
-/// Extracts the raw values from a [crate::circuit::ops::Constant] op.
+/// Extracts the raw values from a [crate::ops::Constant] op.
 pub fn extract_const_raw_values(op: SupportedOp) -> Option<Tensor<f32>> {
     match op {
-        SupportedOp::Constant(crate::circuit::ops::Constant { raw_values, .. }) => Some(raw_values),
+        SupportedOp::Constant(crate::ops::Constant { raw_values, .. }) => Some(raw_values),
         _ => None,
     }
 }
 
-/// Extracts the quantized values from a [crate::circuit::ops::Constant] op.
+/// Extracts the quantized values from a [crate::ops::Constant] op.
 pub fn extract_const_quantized_values(op: SupportedOp) -> Option<Tensor<i32>> {
     match op {
-        SupportedOp::Constant(crate::circuit::ops::Constant {
+        SupportedOp::Constant(crate::ops::Constant {
             quantized_values, ..
         }) => Some(quantized_values),
         _ => None,
@@ -1398,7 +1392,7 @@ pub fn extract_const_quantized_values(op: SupportedOp) -> Option<Tensor<i32>> {
 pub fn extract_conv_values(boxed_op: Box<dyn Op<i128>>) -> [Option<Tensor<i128>>; 2] {
     let op = boxed_op
         .as_any()
-        .downcast_ref::<crate::circuit::ops::poly::PolyOp<i128>>();
+        .downcast_ref::<crate::ops::poly::PolyOp<i128>>();
 
     if let Some(PolyOp::Conv { kernel, bias, .. }) = op {
         return [Some(kernel.clone()), bias.clone()];
@@ -1492,7 +1486,7 @@ pub fn create_const_node(
     num_uses: usize,
 ) -> Node {
     create_node(
-        SupportedOp::Constant(crate::circuit::ops::Constant::new(quantized, raw)),
+        SupportedOp::Constant(crate::ops::Constant::new(quantized, raw)),
         out_scale,
         vec![],
         out_dims,

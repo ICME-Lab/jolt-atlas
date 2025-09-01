@@ -1,4 +1,6 @@
 name: Build and Test Jolt-Atlas
+permissions:
+  contents: read
 
 on:
   push:
@@ -44,3 +46,27 @@ jobs:
         uses: taiki-e/install-action@nextest
       - name: Run zkml-jolt-core tests
         run: cargo nextest run --release -p zkml-jolt-core
+
+  test-onnx-tracer:
+    name: Test onnx-tracer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Run onnx-tracer tests
+        working-directory: ./onnx-tracer
+        run: cargo test
+
+  build-wasm:
+    name: Build Wasm
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "" # Override global RUSTFLAGS to allow warnings for WASM build
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Build Wasm
+        working-directory: ./onnx-tracer
+        run: cargo build --release --target wasm32-unknown-unknown

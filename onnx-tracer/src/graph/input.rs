@@ -1,5 +1,4 @@
-use crate::{circuit::ops::InputType, fieldutils::i32_to_felt, graph::utilities::quantize_float};
-use halo2curves::bn256::Fr as Fp;
+use crate::ops::InputType;
 use serde::{ser::SerializeStruct, Deserialize, Deserializer, Serialize, Serializer};
 use std::{io::Read, panic::UnwindSafe};
 use tract_onnx::tract_core::{
@@ -14,8 +13,6 @@ pub enum FileSourceInner {
     Float(f64),
     /// Inner elements of bool inputs coming from a file
     Bool(bool),
-    /// Inner elements of inputs coming from a witness
-    Field(Fp),
 }
 
 impl FileSourceInner {
@@ -27,10 +24,6 @@ impl FileSourceInner {
     pub fn is_bool(&self) -> bool {
         matches!(self, FileSourceInner::Bool(_))
     }
-    ///
-    pub fn is_field(&self) -> bool {
-        matches!(self, FileSourceInner::Field(_))
-    }
 }
 
 impl Serialize for FileSourceInner {
@@ -39,7 +32,6 @@ impl Serialize for FileSourceInner {
         S: Serializer,
     {
         match self {
-            FileSourceInner::Field(data) => data.serialize(serializer),
             FileSourceInner::Bool(data) => data.serialize(serializer),
             FileSourceInner::Float(data) => data.serialize(serializer),
         }
@@ -63,10 +55,6 @@ impl<'de> Deserialize<'de> for FileSourceInner {
         if let Ok(t) = float_try {
             return Ok(FileSourceInner::Float(t));
         }
-        let field_try: Result<Fp, _> = serde_json::from_str(this_json.get());
-        if let Ok(t) = field_try {
-            return Ok(FileSourceInner::Field(t));
-        }
 
         Err(serde::de::Error::custom(
             "failed to deserialize FileSourceInner",
@@ -82,10 +70,7 @@ impl FileSourceInner {
     pub fn new_float(f: f64) -> Self {
         FileSourceInner::Float(f)
     }
-    /// Create a new FileSourceInner
-    pub fn new_field(f: Fp) -> Self {
-        FileSourceInner::Field(f)
-    }
+
     /// Create a new FileSourceInner
     pub fn new_bool(f: bool) -> Self {
         FileSourceInner::Bool(f)
@@ -96,24 +81,9 @@ impl FileSourceInner {
         match self {
             FileSourceInner::Float(f) => input_type.roundtrip(f),
             FileSourceInner::Bool(_) => assert!(matches!(input_type, InputType::Bool)),
-            FileSourceInner::Field(_) => {}
         }
     }
 
-    /// Convert to a field element
-    pub fn to_field(&self, scale: crate::Scale) -> Fp {
-        match self {
-            FileSourceInner::Float(f) => i32_to_felt(quantize_float(f, 0.0, scale).unwrap()),
-            FileSourceInner::Bool(f) => {
-                if *f {
-                    Fp::one()
-                } else {
-                    Fp::zero()
-                }
-            }
-            FileSourceInner::Field(f) => *f,
-        }
-    }
     /// Convert to a float
     pub fn to_float(&self) -> f64 {
         match self {
@@ -125,7 +95,6 @@ impl FileSourceInner {
                     0.0
                 }
             }
-            FileSourceInner::Field(f) => crate::fieldutils::felt_to_i128(*f) as f64,
         }
     }
 }
@@ -147,16 +116,6 @@ impl Default for DataSource {
 impl From<FileSource> for DataSource {
     fn from(data: FileSource) -> Self {
         DataSource::File(data)
-    }
-}
-
-impl From<Vec<Vec<Fp>>> for DataSource {
-    fn from(data: Vec<Vec<Fp>>) -> Self {
-        DataSource::File(
-            data.iter()
-                .map(|e| e.iter().map(|e| FileSourceInner::Field(*e)).collect())
-                .collect(),
-        )
     }
 }
 

@@ -2456,6 +2456,7 @@ dependencies = [
  "clap",
  "colored",
  "env_logger",
+ "getrandom 0.2.16",
  "instant",
  "itertools 0.10.5",
  "log",

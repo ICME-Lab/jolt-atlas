@@ -1,11 +1,10 @@
 use crate::ops::utils;
-use maybe_rayon::{
-    prelude::{
-        IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator,
-        ParallelIterator,
-    },
-    slice::ParallelSliceMut,
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+use crate::parallel_utils::IndexedParallelIterator;
+use crate::parallel_utils::{
+    IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelSliceMut,
 };
+use maybe_rayon::iter::ParallelIterator;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::max,
@@ -207,9 +206,9 @@ where
 }
 
 impl<T: Clone + TensorType + std::marker::Send + std::marker::Sync>
-    maybe_rayon::iter::IntoParallelIterator for Tensor<T>
+    crate::parallel_utils::IntoParallelIterator for Tensor<T>
 {
-    type Iter = maybe_rayon::vec::IntoIter<T>;
+    type Iter = crate::parallel_utils::vec::IntoIter<T>;
     type Item = T;
     fn into_par_iter(self) -> Self::Iter {
         self.inner.into_par_iter()
@@ -217,9 +216,9 @@ impl<T: Clone + TensorType + std::marker::Send + std::marker::Sync>
 }
 
 impl<'data, T: Clone + TensorType + std::marker::Send + std::marker::Sync>
-    maybe_rayon::iter::IntoParallelRefMutIterator<'data> for Tensor<T>
+    crate::parallel_utils::IntoParallelRefMutIterator<'data> for Tensor<T>
 {
-    type Iter = maybe_rayon::slice::IterMut<'data, T>;
+    type Iter = crate::parallel_utils::slice::IterMut<'data, T>;
     type Item = &'data mut T;
     fn par_iter_mut(&'data mut self) -> Self::Iter {
         self.inner.par_iter_mut()

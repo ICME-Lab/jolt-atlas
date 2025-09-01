@@ -1,10 +1,12 @@
 use super::TensorError;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+use crate::parallel_utils::IndexedParallelIterator;
+use crate::parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator};
 use crate::tensor::{Tensor, TensorType};
-use maybe_rayon::{
-    iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator},
-    prelude::IntoParallelRefIterator,
-};
+use maybe_rayon::iter::ParallelIterator;
 use std::collections::{HashMap, HashSet};
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use std::iter::Iterator;
 pub use std::ops::{Add, Div, Mul, Neg, Sub};
 use tract_onnx::prelude::tract_itertools::Itertools;
 
@@ -2469,6 +2471,8 @@ pub fn dot<T: TensorType + Mul<Output = T> + Add<Output = T> + Send + Sync + std
     }
 
     let (a, b): (Tensor<T>, Tensor<T>) = (inputs[0].clone(), inputs[1].clone());
+
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     let res: Vec<T> = a
         .par_iter()
         .zip(b.par_iter())
@@ -2477,6 +2481,17 @@ pub fn dot<T: TensorType + Mul<Output = T> + Add<Output = T> + Send + Sync + std
             |acc, (k, i)| acc + k.clone() * i.clone(),
         )
         .collect();
+
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    let res: Vec<T> = {
+        // WASM fallback: use simple iterator-based dot product
+        let dot_product = a
+            .iter()
+            .zip(b.iter())
+            .map(|(x, y)| x.clone() * y.clone())
+            .fold(T::zero().unwrap(), |acc, val| acc + val);
+        vec![dot_product]
+    };
 
     let res = res.into_iter().sum();
 

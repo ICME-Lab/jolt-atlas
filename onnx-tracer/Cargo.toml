@@ -8,7 +8,7 @@ default = []
 matmul_power_of_two_padding = []
 
 [dependencies]
-rand = { version = "0.8", default-features = false }
+rand = { version = "0.8", default-features = false, features = ["getrandom"] }
 itertools = { version = "0.10.3", default-features = false }
 clap = { version = "4.3.3", features = ["derive"] }
 serde = { version = "1.0.126", features = ["derive"] }
@@ -19,7 +19,6 @@ serde_json = { version = "1.0.97", default-features = false, features = [
 ] }
 log = { version = "0.4.17", default-features = false }
 thiserror = { version = "1.0.38", default-features = false }
-maybe-rayon = { version = "0.1.1", features = ["threads"] }
 bincode = { version = "1.3.3", default-features = false }
 num = "0.4.1"
 strum = "0.26.3"
@@ -28,7 +27,12 @@ instant = { version = "0.1" }
 tract-onnx = { git = "https://github.com/sonos/tract/", rev = "37132e0397d0a73e5bd3a8615d932dabe44f6736", default-features = false }
 tabled = { version = "0.12.0" }
 
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+maybe-rayon = { version = "0.1.1" }
+
 [target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
 colored = { version = "2.0.0", default-features = false }
 env_logger = { version = "0.10.0", default-features = false }
 chrono = "0.4.31"
+maybe-rayon = { version = "0.1.1", features = ["threads"] }

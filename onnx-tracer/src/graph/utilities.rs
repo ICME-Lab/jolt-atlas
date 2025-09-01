@@ -103,7 +103,7 @@ pub fn node_output_shapes(
 pub fn extract_tensor_value(
     input: Arc<tract_onnx::prelude::Tensor>,
 ) -> Result<Tensor<f32>, Box<dyn std::error::Error>> {
-    use maybe_rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
+    use crate::parallel_utils::{IntoParallelRefIterator, ParallelIterator};
 
     let dt = input.datum_type();
     let dims = input.shape().to_vec();

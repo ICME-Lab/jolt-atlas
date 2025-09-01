@@ -54,6 +54,7 @@ pub mod constants;
 pub mod graph;
 pub mod logger;
 pub mod ops;
+pub mod parallel_utils;
 /// An implementation of multi-dimensional tensors.
 pub mod tensor;
 pub mod trace_types;

@@ -1,11 +1,11 @@
 use super::node::*;
 use crate::{
-    ops::{Input, Op, Unknown},
     decode_node,
     graph::{
         input::GraphData, tracer::Tracer, utilities::node_output_shapes, vars::VarScales,
         GraphError,
     },
+    ops::{Input, Op, Unknown},
     tensor::Tensor,
     RunArgs,
 };
@@ -737,7 +737,14 @@ impl Model {
         let runnable_model = model.into_runnable()?;
         let mut outputs = vec![];
         for chunk in data_chunks {
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
             let result = runnable_model.run(chunk.to_tract_data(&input_shapes, &datum_types)?)?;
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            {
+                // WASM fallback: to_tract_data method not available
+                return Err(Box::new(GraphError::UnsupportedOp));
+            }
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
             outputs.push(
                 result
                     .into_iter()
@@ -1253,11 +1260,11 @@ fn output_state_idx(output_mappings: &[Vec<OutputMapping>]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        ops::poly::PolyOp,
         graph::utilities::{
             create_input_node, create_matmul_node, create_polyop_node, create_relu_node,
             create_sigmoid_node,
         },
+        ops::poly::PolyOp,
     };
 
     use super::*;

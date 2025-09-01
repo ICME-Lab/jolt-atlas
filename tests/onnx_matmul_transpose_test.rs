@@ -12,7 +12,7 @@
 //! This means that for matrices A[m,k] and B[n,k], ONNX MatMul computes A × B^T,
 //! where B^T is the transpose of B.
 
-use onnx_tracer::{ops::poly::PolyOp, decode_model, graph::node::SupportedOp, model};
+use onnx_tracer::{decode_model, graph::node::SupportedOp, model, ops::poly::PolyOp};
 use std::path::PathBuf;
 
 /// Test framework for verifying ONNX MatMul transpose semantics

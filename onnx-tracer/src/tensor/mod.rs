@@ -288,6 +288,21 @@ impl<T: Clone + TensorType> Tensor<T> {
         }
     }
 
+    /// Creates a new tensor with power-of-two padding applied if enabled.
+    /// This is useful for operations that benefit from power-of-two sizes in cryptographic circuits.
+    pub fn new_with_power_of_two_padding(
+        values: Option<&[T]>,
+        dims: &[usize],
+        enable_padding: bool,
+    ) -> Result<Self, TensorError> {
+        let tensor = Self::new(values, dims)?;
+        if enable_padding {
+            tensor.pad_to_power_of_two()
+        } else {
+            Ok(tensor)
+        }
+    }
+
     /// set the tensor's (optional) scale parameter
     pub fn set_scale(&mut self, scale: crate::Scale) {
         self.scale = Some(scale)
@@ -381,6 +396,180 @@ impl<T: Clone + TensorType> Tensor<T> {
             inner.resize(self.len() + n - remainder, T::zero().unwrap());
         }
         Tensor::new(Some(&inner), &[inner.len()])
+    }
+
+    /// Pad to the next power of two length
+    /// ```
+    /// use onnx_tracer::tensor::Tensor;
+    /// let a = Tensor::<i32>::new(Some(&[1,2,3,4,5,6]), &[2, 3]).unwrap();
+    /// let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6, 0, 0]), &[8]).unwrap();
+    /// assert_eq!(a.pad_to_power_of_two().unwrap(), expected);
+    ///
+    /// let b = Tensor::<i32>::new(Some(&[1,2,3]), &[3]).unwrap();
+    /// let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 0]), &[4]).unwrap();
+    /// assert_eq!(b.pad_to_power_of_two().unwrap(), expected);
+    ///
+    /// let c = Tensor::<i32>::new(Some(&[1,2,3,4]), &[4]).unwrap();
+    /// let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[4]).unwrap();
+    /// assert_eq!(c.pad_to_power_of_two().unwrap(), expected);
+    /// ```
+    pub fn pad_to_power_of_two(&self) -> Result<Tensor<T>, TensorError> {
+        let current_len = self.len();
+        if current_len == 0 {
+            return Ok(self.clone());
+        }
+
+        // Find the next power of two
+        let next_power_of_two = if current_len.is_power_of_two() {
+            current_len
+        } else {
+            1 << (64 - (current_len - 1).leading_zeros())
+        };
+
+        let mut inner = self.inner.clone();
+        inner.resize(next_power_of_two, T::zero().unwrap());
+        Tensor::new(Some(&inner), &[inner.len()])
+    }
+
+    /// Pads the tensor to specific target dimensions with zeros.
+    /// Only supports growing dimensions (target must be >= current for each dimension).
+    ///
+    /// # Arguments
+    /// * `target_dims` - The target dimensions to pad to
+    ///
+    /// # Returns
+    /// * `Ok(())` if successful
+    /// * `Err(TensorError)` if target dimensions are smaller than current dimensions
+    ///
+    /// # Examples
+    /// ```
+    /// use onnx_tracer::tensor::Tensor;
+    /// let mut tensor = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[2, 2]).unwrap();
+    /// tensor.pad_to_dims(&[4, 4]).unwrap();
+    /// assert_eq!(tensor.dims(), &[4, 4]);
+    /// assert_eq!(tensor.len(), 16);
+    /// ```
+    pub fn pad_to_dims(&mut self, target_dims: &[usize]) -> Result<(), TensorError>
+    where
+        T: Send + Sync,
+    {
+        if target_dims.len() != self.dims.len() {
+            return Err(TensorError::DimMismatch(
+                "Target dimensions must have same rank as current tensor".to_string(),
+            ));
+        }
+
+        // Check that all target dimensions are >= current dimensions
+        for (i, (&current, &target)) in self.dims.iter().zip(target_dims.iter()).enumerate() {
+            if target < current {
+                return Err(TensorError::DimError(format!(
+                    "Target dimension {i} ({target}) is smaller than current dimension {i} ({current})"
+                )));
+            }
+        }
+
+        // If already the right size, nothing to do
+        if self.dims == target_dims {
+            return Ok(());
+        }
+
+        // Create a new tensor with the target dimensions
+        let mut new_tensor = Tensor::new(None, target_dims)?;
+
+        // Copy existing data to the new tensor preserving the multi-dimensional layout
+        let old_dims = self.dims.clone();
+
+        // Generate all valid coordinates in the old tensor
+        fn generate_coords(dims: &[usize]) -> Vec<Vec<usize>> {
+            if dims.is_empty() {
+                return vec![vec![]];
+            }
+            let mut result = vec![];
+            let first_dim = dims[0];
+            let rest_coords = generate_coords(&dims[1..]);
+
+            for i in 0..first_dim {
+                for rest in &rest_coords {
+                    let mut coord = vec![i];
+                    coord.extend(rest);
+                    result.push(coord);
+                }
+            }
+            result
+        }
+
+        let all_coords = generate_coords(&old_dims);
+
+        for coord in all_coords {
+            let old_idx = self.coord_to_index(&coord);
+            let new_idx = new_tensor.coord_to_index(&coord);
+            new_tensor.inner[new_idx] = self.inner[old_idx].clone();
+        }
+
+        // Replace our data with the padded tensor
+        self.inner = new_tensor.inner;
+        self.dims = target_dims.to_vec();
+
+        Ok(())
+    }
+
+    /// Crops the tensor to specific target dimensions.
+    /// Only supports shrinking dimensions (target must be <= current for each dimension).
+    ///
+    /// # Arguments
+    /// * `target_dims` - The target dimensions to crop to
+    ///
+    /// # Returns
+    /// * `Ok(Tensor<T>)` - A new tensor with the cropped dimensions
+    /// * `Err(TensorError)` if target dimensions are larger than current dimensions
+    ///
+    /// # Examples
+    /// ```
+    /// use onnx_tracer::tensor::Tensor;
+    /// let tensor = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]), &[4, 4]).unwrap();
+    /// let cropped = tensor.crop_to_dims(&[2, 3]).unwrap();
+    /// assert_eq!(cropped.dims(), &[2, 3]);
+    /// assert_eq!(cropped.len(), 6);
+    /// ```
+    pub fn crop_to_dims(&self, target_dims: &[usize]) -> Result<Tensor<T>, TensorError>
+    where
+        T: Send + Sync,
+    {
+        if target_dims.len() != self.dims.len() {
+            return Err(TensorError::DimMismatch(
+                "Target dimensions must have same rank as current tensor".to_string(),
+            ));
+        }
+
+        // Check that all target dimensions are <= current dimensions
+        for (i, (&current, &target)) in self.dims.iter().zip(target_dims.iter()).enumerate() {
+            if target > current {
+                return Err(TensorError::DimError(format!(
+                    "Target dimension {i} ({target}) is larger than current dimension {i} ({current})"
+                )));
+            }
+        }
+
+        // If already the right size, just clone
+        if self.dims == target_dims {
+            return Ok(self.clone());
+        }
+
+        // Create slices for cropping - take [0..target] for each dimension
+        let slices: Vec<std::ops::Range<usize>> = target_dims.iter().map(|&dim| 0..dim).collect();
+
+        self.get_slice(&slices)
+    }
+
+    /// Helper method to convert coordinates to flat index
+    fn coord_to_index(&self, coord: &[usize]) -> usize {
+        let mut index = 0;
+        let mut stride = 1;
+        for i in (0..self.dims.len()).rev() {
+            index += coord[i] * stride;
+            stride *= self.dims[i];
+        }
+        index
     }
 
     /// Get a single value from the Tensor.
@@ -1316,5 +1505,150 @@ mod tests {
         let a = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[2, 3]).unwrap();
         let b = Tensor::<i32>::new(Some(&[1, 4]), &[2, 1]).unwrap();
         assert_eq!(a.get_slice(&[0..2, 0..1]).unwrap(), b);
+    }
+
+    #[test]
+    fn test_pad_to_power_of_two() {
+        // Test power-of-two padding
+        let a = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[6]).unwrap();
+        let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6, 0, 0]), &[8]).unwrap();
+        assert_eq!(a.pad_to_power_of_two().unwrap(), expected);
+
+        let b = Tensor::<i32>::new(Some(&[1, 2, 3]), &[3]).unwrap();
+        let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 0]), &[4]).unwrap();
+        assert_eq!(b.pad_to_power_of_two().unwrap(), expected);
+
+        let c = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[4]).unwrap();
+        let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[4]).unwrap();
+        assert_eq!(c.pad_to_power_of_two().unwrap(), expected);
+
+        // Test edge cases
+        let empty = Tensor::<i32>::new(Some(&[]), &[0]).unwrap();
+        let empty_padded = empty.pad_to_power_of_two().unwrap();
+        assert_eq!(empty_padded.len(), 0);
+
+        let single = Tensor::<i32>::new(Some(&[42]), &[1]).unwrap();
+        let single_padded = single.pad_to_power_of_two().unwrap();
+        assert_eq!(
+            single_padded,
+            Tensor::<i32>::new(Some(&[42]), &[1]).unwrap()
+        );
+
+        // Test large size
+        let large_input: Vec<i32> = (0..50).collect();
+        let large = Tensor::<i32>::new(Some(&large_input), &[50]).unwrap();
+        let large_padded = large.pad_to_power_of_two().unwrap();
+        assert_eq!(large_padded.len(), 64); // Next power of two after 50 is 64
+        assert_eq!(&large_padded[..50], &large_input[..]);
+        assert_eq!(&large_padded[50..], &vec![0; 14][..]);
+    }
+
+    #[test]
+    fn test_new_with_power_of_two_padding() {
+        let data = &[1, 2, 3, 4, 5, 6];
+
+        // Test with padding disabled
+        let tensor_no_padding =
+            Tensor::<i32>::new_with_power_of_two_padding(Some(data), &[6], false).unwrap();
+        assert_eq!(tensor_no_padding.len(), 6);
+        assert_eq!(&tensor_no_padding[..], data);
+
+        // Test with padding enabled
+        let tensor_with_padding =
+            Tensor::<i32>::new_with_power_of_two_padding(Some(data), &[6], true).unwrap();
+        assert_eq!(tensor_with_padding.len(), 8); // Next power of two
+        assert_eq!(&tensor_with_padding[..6], data);
+        assert_eq!(&tensor_with_padding[6..], &[0, 0]);
+    }
+
+    #[test]
+    fn test_pad_to_dims() {
+        // Test 2D tensor padding
+        let mut tensor = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[2, 2]).unwrap();
+        tensor.pad_to_dims(&[4, 4]).unwrap();
+        assert_eq!(tensor.dims(), &[4, 4]);
+        assert_eq!(tensor.len(), 16);
+
+        // Check that original data is preserved at the top-left
+        assert_eq!(tensor.get(&[0, 0]), 1);
+        assert_eq!(tensor.get(&[0, 1]), 2);
+        assert_eq!(tensor.get(&[1, 0]), 3);
+        assert_eq!(tensor.get(&[1, 1]), 4);
+
+        // Check that padding is zeros
+        assert_eq!(tensor.get(&[2, 0]), 0);
+        assert_eq!(tensor.get(&[0, 2]), 0);
+        assert_eq!(tensor.get(&[3, 3]), 0);
+
+        // Test error case - target smaller than current
+        let mut small_tensor = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[2, 2]).unwrap();
+        assert!(small_tensor.pad_to_dims(&[1, 1]).is_err());
+
+        // Test no-op case
+        let mut same_tensor = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[2, 2]).unwrap();
+        same_tensor.pad_to_dims(&[2, 2]).unwrap();
+        assert_eq!(same_tensor.dims(), &[2, 2]);
+        assert_eq!(same_tensor.get(&[0, 0]), 1);
+    }
+
+    #[test]
+    fn test_crop_to_dims() {
+        // Test 2D tensor cropping
+        let tensor = Tensor::<i32>::new(
+            Some(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+            &[4, 4],
+        )
+        .unwrap();
+
+        let cropped = tensor.crop_to_dims(&[2, 3]).unwrap();
+        assert_eq!(cropped.dims(), &[2, 3]);
+        assert_eq!(cropped.len(), 6);
+
+        // Check that the top-left portion is preserved
+        assert_eq!(cropped.get(&[0, 0]), 1);
+        assert_eq!(cropped.get(&[0, 1]), 2);
+        assert_eq!(cropped.get(&[0, 2]), 3);
+        assert_eq!(cropped.get(&[1, 0]), 5);
+        assert_eq!(cropped.get(&[1, 1]), 6);
+        assert_eq!(cropped.get(&[1, 2]), 7);
+
+        // Test error case - target larger than current
+        assert!(tensor.crop_to_dims(&[5, 5]).is_err());
+
+        // Test no-op case
+        let same_cropped = tensor.crop_to_dims(&[4, 4]).unwrap();
+        assert_eq!(same_cropped.dims(), &[4, 4]);
+        assert_eq!(same_cropped.len(), 16);
+    }
+
+    #[test]
+    fn test_matmul_padding_workflow() {
+        // Test the complete workflow for MatMul padding: pad -> compute -> crop
+
+        // Create input tensors for "mk,nk->mn" pattern
+        let mut a = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[3, 2]).unwrap(); // [m=3, k=2]
+        let mut b = Tensor::<i32>::new(Some(&[7, 8, 9, 10]), &[2, 2]).unwrap(); // [n=2, k=2]
+
+        // Pad to power-of-two: m=3->4, n=2->2, k=2->2
+        a.pad_to_dims(&[4, 2]).unwrap();
+        b.pad_to_dims(&[2, 2]).unwrap();
+
+        assert_eq!(a.dims(), &[4, 2]);
+        assert_eq!(b.dims(), &[2, 2]);
+
+        // Verify original data is preserved
+        assert_eq!(a.get(&[0, 0]), 1);
+        assert_eq!(a.get(&[2, 1]), 6);
+        assert_eq!(a.get(&[3, 0]), 0); // padding
+
+        // After computation, we would crop the result from [4, 2] back to [3, 2]
+        let result_padded =
+            Tensor::<i32>::new(Some(&[100, 200, 300, 400, 500, 600, 0, 0]), &[4, 2]).unwrap();
+        let result_cropped = result_padded.crop_to_dims(&[3, 2]).unwrap();
+
+        assert_eq!(result_cropped.dims(), &[3, 2]);
+        assert_eq!(result_cropped.len(), 6);
+        assert_eq!(result_cropped.get(&[0, 0]), 100);
+        assert_eq!(result_cropped.get(&[2, 1]), 600);
     }
 }

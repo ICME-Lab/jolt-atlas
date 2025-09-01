@@ -343,6 +343,15 @@ mod e2e_tests {
         ) where
             F: Fn() -> Model,
         {
+            Self::test_inference_with(model_fn, test_cases);
+        }
+
+        fn test_inference_with<F>(
+            model_fn: F,
+            test_cases: &[(Vec<i32>, Vec<usize>, i32)], // (input, shape, expected)
+        ) where
+            F: Fn() -> Model,
+        {
             let mut model = model_fn();
             for (input_data, shape, expected) in test_cases {
                 let input = Tensor::new(Some(input_data), shape).unwrap();
@@ -383,10 +392,38 @@ mod e2e_tests {
         }
     }
 
+    // TODO: MLP model requires larger tensor size
+    // To run this test, increase `onnx_tracer::constants::MAX_TENSOR_SIZE` to 1024
+    // This temporary workaround maintains performance for smaller models
+    // Issue tracked at: https://github.com/ICME-Lab/jolt-atlas/issues/21
+    #[ignore]
+    #[serial]
+    #[test]
+    fn test_perceptron_2() {
+        let config = ModelTestConfig::new("perceptron_2", vec![1, 2, 3, 4], vec![1, 4]);
+
+        let model_fn = || model(&"../tests/perceptron_2.onnx".into());
+
+        ZKMLTestHelper::prove_and_verify_simple(model_fn, &config.to_tensor());
+    }
+
+    #[serial]
+    #[test]
+    fn test_perceptron() {
+        let config = ModelTestConfig::new(
+            "perceptron",
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            vec![1, 10],
+        );
+
+        let model_fn = || model(&"../tests/perceptron.onnx".into());
+
+        ZKMLTestHelper::prove_and_verify_simple(model_fn, &config.to_tensor());
+    }
+
     #[serial]
     #[test]
     fn test_custom_multiclass0() {
-        init_logger();
         let config = ModelTestConfig::new(
             "multiclass0",
             vec![8, 14, 30, 29, 0, 0, 0, 0], // "this university grants scholarships"
@@ -502,6 +539,14 @@ mod e2e_tests {
         let config = ModelTestConfig::new("simple_matmult", vec![1, 2, 3, 4], vec![1, 4]);
 
         ZKMLTestHelper::prove_and_verify_simple(builder::simple_matmult_model, &config.to_tensor());
+    }
+
+    #[serial]
+    #[test]
+    fn test_tiny_mlp_head_model() {
+        let config = ModelTestConfig::new("tiny_mlp_head_model", vec![1, 2, 3, 4], vec![1, 4]);
+
+        ZKMLTestHelper::prove_and_verify_simple(builder::tiny_mlp_head_model, &config.to_tensor());
     }
 
     #[test]
@@ -715,26 +760,15 @@ mod e2e_tests {
     #[serial]
     #[test]
     fn test_addsubmuladd() {
-        let addsubmul = ONNXProgram {
-            model_path: "../onnx-tracer/models/addsubmuladd/network.onnx".into(),
-            inputs: Tensor::new(Some(&[10, 20, 30, 40, 50, 60, 70, 80, 90, 100]), &[1, 10])
-                .unwrap(), // Example input
-        };
+        let config = ModelTestConfig::new(
+            "addsubmuladd",
+            vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+            vec![1, 10],
+        );
 
-        let program_bytecode = addsubmul.decode();
-        info!("Program code: {program_bytecode:#?}");
+        let model_fn = || model(&"../onnx-tracer/models/addsubmuladd/network.onnx".into());
 
-        let (raw_trace, program_io) = addsubmul.trace();
-        info!("Raw trace: {raw_trace:#?}");
-        info!("Program IO: {program_io:#?}");
-
-        let pp: JoltProverPreprocessing<Fr, PCS, KeccakTranscript> =
-            JoltSNARK::prover_preprocess(program_bytecode);
-
-        let execution_trace = jolt_execution_trace(raw_trace.clone());
-        let snark = JoltSNARK::prove(pp.clone(), execution_trace, &program_io);
-
-        snark.verify((&pp).into(), program_io).unwrap();
+        ZKMLTestHelper::prove_and_verify_simple(model_fn, &config.to_tensor());
     }
 
     #[ignore]

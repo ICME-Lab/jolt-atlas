@@ -39,7 +39,7 @@ use crate::{
         node::{RebaseScale, SupportedOp},
         utilities::{
             create_const_node, create_div_node, create_iff_node, create_input_node,
-            create_matmul_node, create_node, create_polyop_node,
+            create_matmul_node, create_node, create_polyop_node, create_relu_node,
         },
     },
     tensor::Tensor,
@@ -275,6 +275,41 @@ impl ModelBuilder {
         (id, O)
     }
 
+    /// Performs matrix multiplication wrapped in RebaseScale for ONNX binary compilation scenarios.
+    ///
+    /// This function wraps the MatMul operation in RebaseScale, which is commonly used
+    /// when compiling ONNX models to binary format for handling quantization scaling.
+    ///
+    /// # Arguments
+    /// * `a` - First input tensor (left operand)
+    /// * `b` - Second input tensor (right operand)
+    /// * `out_dims` - Expected output dimensions
+    /// * `fanout_hint` - Hint for optimization purposes
+    ///
+    /// # Returns
+    /// A `Wire` representing the RebaseScale-wrapped matrix multiplication result
+    fn rebase_scale_matmult(
+        &mut self,
+        a: Wire,
+        b: Wire,
+        out_dims: Vec<usize>,
+        fanout_hint: usize,
+    ) -> Wire {
+        let id = self.alloc();
+        let matmul_op = SupportedOp::Linear(PolyOp::Einsum {
+            equation: "mk,nk->mn".to_string(),
+        });
+        let opkind = SupportedOp::RebaseScale(RebaseScale {
+            inner: Box::new(matmul_op),
+            multiplier: 2f64.powi(self.scale),
+            target_scale: self.scale,
+            original_scale: self.scale, // Keep same scale to avoid division
+        });
+        let rebase_node = create_node(opkind, self.scale, vec![a, b], out_dims, id, fanout_hint);
+        self.model.insert_node(rebase_node);
+        (id, O)
+    }
+
     fn broadcast(
         &mut self,
         input: Wire,
@@ -324,6 +359,25 @@ impl ModelBuilder {
             fanout_hint,
         );
         self.model.insert_node(matmul_node);
+        (id, O)
+    }
+
+    /// Applies ReLU (Rectified Linear Unit) activation function.
+    ///
+    /// ReLU is defined as f(x) = max(0, x), which zeros out negative values
+    /// while keeping positive values unchanged.
+    ///
+    /// # Arguments
+    /// * `input` - Input tensor to apply ReLU to
+    /// * `out_dims` - Expected output dimensions (same as input dimensions)
+    /// * `fanout_hint` - Hint for optimization purposes
+    ///
+    /// # Returns
+    /// A `Wire` representing the ReLU result
+    fn relu(&mut self, input: Wire, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
+        let id = self.alloc();
+        let relu_node = create_relu_node(self.scale, vec![input], out_dims, id, fanout_hint);
+        self.model.insert_node(relu_node);
         (id, O)
     }
 }
@@ -716,6 +770,214 @@ pub fn simple_matmult_model() -> Model {
 
     // Node 2: Matrix multiplication: [1, 4] × [3, 4] → [1, 3] (using ONNX semantics)
     let result = b.matmult(input, weight_matrix, vec![1, 3], 1);
+
+    b.take(vec![input.0], vec![result])
+}
+
+/// Tiny MLP (Multi-Layer Perceptron) head for testing feed-forward neural networks.
+///
+/// This model demonstrates a simple 2-layer feed-forward neural network:
+/// 1. Takes an input tensor of shape [1, 4]
+/// 2. First linear layer: [1, 4] → [1, 8] with ReLU activation
+/// 3. Second linear layer: [1, 8] → [1, 2] with ReLU activation
+/// 4. Outputs the final result of shape [1, 2]
+///
+/// Architecture:
+/// ```
+/// Input [1, 4] → Linear → ReLU → Linear → ReLU → Output [1, 2]
+///                [1, 8]         [1, 2]
+/// ```
+///
+/// The weight matrices contain simple incremental values for easy verification:
+/// - First layer weights: 8x4 matrix with values 1-32
+/// - Second layer weights: 2x8 matrix with values 1-16
+///
+/// # Returns
+/// A `Model` representing the tiny MLP computation graph
+pub fn tiny_mlp_head_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 4])
+    let input = b.input(vec![1, 4], 1);
+
+    // Node 1: First layer weight matrix (shape [8, 4] - will be transposed in matmult)
+    let mut weights1: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, // First hidden neuron weights
+            5, 6, 7, 8, // Second hidden neuron weights
+            9, 10, 11, 12, // Third hidden neuron weights
+            13, 14, 15, 16, // Fourth hidden neuron weights
+            17, 18, 19, 20, // Fifth hidden neuron weights
+            21, 22, 23, 24, // Sixth hidden neuron weights
+            25, 26, 27, 28, // Seventh hidden neuron weights
+            29, 30, 31, 32, // Eighth hidden neuron weights
+        ]),
+        &[8, 4],
+    )
+    .unwrap();
+    weights1.set_scale(SCALE);
+    let weight_matrix1 = b.const_tensor(weights1, vec![8, 4], 1);
+
+    // Node 2: First matrix multiplication: [1, 4] × [8, 4] → [1, 8]
+    let hidden1 = b.matmult(input, weight_matrix1, vec![1, 8], 1);
+
+    // Node 3: First ReLU activation: [1, 8] → [1, 8]
+    let relu1 = b.relu(hidden1, vec![1, 8], 1);
+
+    // Node 4: Second layer weight matrix (shape [2, 8] - will be transposed in matmult)
+    let mut weights2: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, 5, 6, 7, 8, // First output neuron weights
+            9, 10, 11, 12, 13, 14, 15, 16, // Second output neuron weights
+        ]),
+        &[2, 8],
+    )
+    .unwrap();
+    weights2.set_scale(SCALE);
+    let weight_matrix2 = b.const_tensor(weights2, vec![2, 8], 1);
+
+    // Node 5: Second matrix multiplication: [1, 8] × [2, 8] → [1, 2]
+    let hidden2 = b.matmult(relu1, weight_matrix2, vec![1, 2], 1);
+
+    // Node 6: Second ReLU activation: [1, 2] → [1, 2]
+    let output = b.relu(hidden2, vec![1, 2], 1);
+
+    b.take(vec![input.0], vec![output])
+}
+
+/// Matrix multiplication model with non-power-of-two dimensions for testing padding.
+///
+/// This model demonstrates matrix multiplication with dimensions that are NOT powers of two:
+/// 1. Takes an input tensor of shape [3, 5] (neither 3 nor 5 are powers of two)
+/// 2. Multiplies it with a constant weight matrix of shape [7, 5] (7 is not a power of two)
+/// 3. Outputs the result of shape [3, 7]
+///
+/// **Power-of-Two Padding Behavior** (when feature enabled):
+/// - Input [3, 5] gets padded to [4, 8] (next powers of two)
+/// - Weights [7, 5] get padded to [8, 8] (next powers of two)
+/// - Computation is performed as [4, 8] × [8, 8] → [4, 8]
+/// - Result is cropped back to [3, 7]
+///
+/// **ONNX MatMul Semantics**: Uses "mk,nk->mn" einsum pattern:
+/// - Input: [3, 5] (m=3, k=5)
+/// - Weights: [7, 5] (n=7, k=5)
+/// - Result: [3, 7] (m=3, n=7)
+///
+/// The weight matrix contains simple incremental values for easy verification:
+/// ```
+/// weights = [[1, 2, 3, 4, 5],      // First output neuron weights (row 0)
+///            [6, 7, 8, 9, 10],     // Second output neuron weights (row 1)
+///            [11, 12, 13, 14, 15], // Third output neuron weights (row 2)
+///            [...],                // Rows 3-6 continue the pattern
+///            [31, 32, 33, 34, 35]] // Seventh output neuron weights (row 6)
+/// ```
+///
+/// # Returns
+/// A `Model` representing the non-power-of-two matrix multiplication computation graph
+pub fn non_power_of_two_matmult_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [3, 5] - non-power-of-two dimensions)
+    let input = b.input(vec![3, 5], 1);
+
+    // Node 1: Weight matrix constant (shape [7, 5] - non-power-of-two dimensions)
+    // Using "mk,nk->mn" semantics where input is [m=3, k=5] and weights are [n=7, k=5]
+    let mut weights: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, 5, // Row 0 (output neuron 0 weights)
+            6, 7, 8, 9, 10, // Row 1 (output neuron 1 weights)
+            11, 12, 13, 14, 15, // Row 2 (output neuron 2 weights)
+            16, 17, 18, 19, 20, // Row 3 (output neuron 3 weights)
+            21, 22, 23, 24, 25, // Row 4 (output neuron 4 weights)
+            26, 27, 28, 29, 30, // Row 5 (output neuron 5 weights)
+            31, 32, 33, 34, 35, // Row 6 (output neuron 6 weights)
+        ]),
+        &[7, 5],
+    )
+    .unwrap();
+    weights.set_scale(SCALE);
+    let weight_matrix = b.const_tensor(weights, vec![7, 5], 1);
+
+    // Node 2: Matrix multiplication: [3, 5] × [7, 5] → [3, 7] (using mk,nk->mn pattern)
+    // This will trigger power-of-two padding when the feature is enabled:
+    // - [3, 5] → [4, 8] (padded)
+    // - [7, 5] → [8, 8] (padded)
+    // - Compute [4, 8] × [8, 8] → [4, 8]
+    // - Crop to [3, 7] (final result)
+    let result = b.matmult(input, weight_matrix, vec![3, 7], 1);
+
+    b.take(vec![input.0], vec![result])
+}
+
+/// Matrix multiplication model with RebaseScale wrapper for testing ONNX binary compilation scenarios.
+///
+/// This model demonstrates matrix multiplication wrapped in RebaseScale, which is common
+/// when compiling ONNX models to binary format. The RebaseScale handles quantization scaling:
+/// 1. Takes an input tensor of shape [3, 5] (non-power-of-two dimensions)
+/// 2. Multiplies it with a constant weight matrix of shape [7, 5] (non-power-of-two dimensions)
+/// 3. Wraps the MatMul directly in RebaseScale for quantization handling
+/// 4. Outputs the result of shape [3, 7]
+///
+/// **RebaseScale Behavior**:
+/// - Performs MatMul operation with RebaseScale wrapper
+/// - Applies scaling: result = (matmul_result * multiplier) / divisor automatically
+/// - Handles quantization effects from ONNX binary compilation
+/// - No additional division step needed (handled internally by RebaseScale)
+///
+/// **Power-of-Two Padding Behavior** (when feature enabled):
+/// - Input [3, 5] gets padded to [4, 8] (next powers of two)
+/// - Weights [7, 5] get padded to [8, 8] (next powers of two)
+/// - Computation is performed as [4, 8] × [8, 8] → [4, 8]
+/// - Result is cropped back to [3, 7], then RebaseScale is applied
+///
+/// **ONNX MatMul Semantics**: Uses "mk,nk->mn" einsum pattern:
+/// - Input: [3, 5] (m=3, k=5)
+/// - Weights: [7, 5] (n=7, k=5)
+/// - MatMul Result: [3, 7] (m=3, n=7)
+/// - RebaseScale Applied: [3, 7] (scaled values)
+///
+/// The weight matrix contains simple incremental values for easy verification:
+/// ```
+/// weights = [[1, 2, 3, 4, 5],      // First output neuron weights (row 0)
+///            [6, 7, 8, 9, 10],     // Second output neuron weights (row 1)
+///            [11, 12, 13, 14, 15], // Third output neuron weights (row 2)
+///            [...],                // Rows 3-6 continue the pattern
+///            [31, 32, 33, 34, 35]] // Seventh output neuron weights (row 6)
+/// ```
+///
+/// # Returns
+/// A `Model` representing the RebaseScale-wrapped matrix multiplication computation graph
+pub fn non_power_of_two_matmult_rebase_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [3, 5] - non-power-of-two dimensions)
+    let input = b.input(vec![3, 5], 1);
+
+    // Node 1: Weight matrix constant (shape [7, 5] - non-power-of-two dimensions)
+    // Using "mk,nk->mn" semantics where input is [m=3, k=5] and weights are [n=7, k=5]
+    let mut weights: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, 5, // Row 0 (output neuron 0 weights)
+            6, 7, 8, 9, 10, // Row 1 (output neuron 1 weights)
+            11, 12, 13, 14, 15, // Row 2 (output neuron 2 weights)
+            16, 17, 18, 19, 20, // Row 3 (output neuron 3 weights)
+            21, 22, 23, 24, 25, // Row 4 (output neuron 4 weights)
+            26, 27, 28, 29, 30, // Row 5 (output neuron 5 weights)
+            31, 32, 33, 34, 35, // Row 6 (output neuron 6 weights)
+        ]),
+        &[7, 5],
+    )
+    .unwrap();
+    weights.set_scale(SCALE);
+    let weight_matrix = b.const_tensor(weights, vec![7, 5], 1);
+
+    // Node 2: RebaseScale-wrapped matrix multiplication: [3, 5] × [7, 5] → [3, 7]
+    // This wraps the MatMul directly in RebaseScale as commonly done in ONNX compilation
+    // The RebaseScale handles both the matrix multiplication and quantization scaling internally
+    let result = b.rebase_scale_matmult(input, weight_matrix, vec![3, 7], 1);
 
     b.take(vec![input.0], vec![result])
 }

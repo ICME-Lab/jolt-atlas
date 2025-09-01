@@ -3,6 +3,10 @@ name = "onnx-tracer"
 version = "0.0.0"
 edition = "2021"
 
+[features]
+default = []
+matmul_power_of_two_padding = []
+
 [dependencies]
 halo2_gadgets = { git = "https://github.com/zkonduit/halo2", branch = "ac/lookup-modularity" }
 halo2_proofs = { git = "https://github.com/zkonduit/halo2", branch = "ac/lookup-modularity" }

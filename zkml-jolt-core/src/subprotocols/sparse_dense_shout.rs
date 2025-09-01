@@ -724,6 +724,11 @@ mod tests {
     }
 
     #[test]
+    fn test_relu() {
+        test_sparse_dense_shout(ONNXOpcode::Relu);
+    }
+
+    #[test]
     fn test_add() {
         test_sparse_dense_shout(ONNXOpcode::Add);
     }

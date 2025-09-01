@@ -6,12 +6,13 @@ use crate::{
     utils::u64_vec_to_i32_iter,
 };
 use ark_std::test_rng;
+use jolt_core::jolt::instruction::InstructionLookup;
 use onnx_tracer::{
     constants::{MAX_TENSOR_SIZE, TENSOR_REGISTER_COUNT},
     tensor::Tensor,
     trace_types::{MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode},
 };
-use rand::RngCore;
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 
 /// Tests the consistency and correctness of a virtual instruction sequence.
 /// In detail:
@@ -203,4 +204,22 @@ fn select_output(cycle: &ONNXCycle) -> Vec<u64> {
     }
 
     output
+}
+
+pub fn materialize_entry_test(opcode: ONNXOpcode) {
+    let mut default_cycle = ONNXCycle::no_op();
+    default_cycle.instr.opcode = opcode.clone();
+    let default_cycle = JoltONNXCycle::from(&default_cycle);
+    let table = default_cycle.lookup_table().unwrap();
+    let mut rng = StdRng::seed_from_u64(12345);
+    for _ in 0..10000 {
+        let random_cycle = JoltONNXCycle::from(&ONNXCycle::random(opcode.clone(), &mut rng));
+        for i in 0..MAX_TENSOR_SIZE {
+            assert_eq!(
+                ONNXLookupQuery::<32>::to_lookup_output(&random_cycle)[i],
+                table.materialize_entry(ONNXLookupQuery::<32>::to_lookup_index(&random_cycle)[i]),
+                "{random_cycle:?}",
+            );
+        }
+    }
 }

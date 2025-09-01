@@ -3,7 +3,7 @@ use ark_bn254::Fr;
 use jolt_core::{
     poly::commitment::dory::DoryCommitmentScheme, utils::transcript::KeccakTranscript,
 };
-use onnx_tracer::{builder, graph::model::Model, tensor::Tensor};
+use onnx_tracer::{builder, graph::model::Model, model, tensor::Tensor};
 
 type PCS = DoryCommitmentScheme<KeccakTranscript>;
 
@@ -11,12 +11,14 @@ type PCS = DoryCommitmentScheme<KeccakTranscript>;
 pub enum BenchType {
     MultiClass,
     Sentiment,
+    MLP,
 }
 
 pub fn benchmarks(bench_type: BenchType) -> Vec<(tracing::Span, Box<dyn FnOnce()>)> {
     match bench_type {
         BenchType::MultiClass => multiclass(),
         BenchType::Sentiment => sentiment(),
+        BenchType::MLP => mlp(),
     }
 }
 
@@ -58,4 +60,16 @@ fn multiclass() -> Vec<(tracing::Span, Box<dyn FnOnce()>)> {
 
 fn sentiment() -> Vec<(tracing::Span, Box<dyn FnOnce()>)> {
     prove_and_verify(builder::sentiment0, vec![3, 4, 5, 0, 0], vec![1, 5])
+}
+
+// TODO: MLP model requires larger tensor size
+// To run this benchmark, increase `onnx_tracer::constants::MAX_TENSOR_SIZE` to 1024
+// This temporary workaround maintains performance for smaller models
+// Issue tracked at: https://github.com/ICME-Lab/jolt-atlas/issues/21
+fn mlp() -> Vec<(tracing::Span, Box<dyn FnOnce()>)> {
+    prove_and_verify(
+        || model(&"../tests/perceptron_2.onnx".into()),
+        vec![1, 2, 3, 4],
+        vec![1, 4],
+    )
 }

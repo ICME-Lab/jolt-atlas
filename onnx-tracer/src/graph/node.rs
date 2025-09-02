@@ -53,7 +53,7 @@ use crate::{
     tensor::{Tensor, TensorError},
     trace_types::{ONNXInstr, ONNXOpcode},
 };
-use log::{trace, warn};
+use log::{debug, trace, warn};
 use std::{collections::BTreeMap, error::Error, fmt, fmt::Debug};
 use tabled::Tabled;
 use tract_onnx::{
@@ -409,7 +409,42 @@ impl Node {
         }
 
         // ──────────────────────────────────────────────────────────────────────────────
-        // ★ Step 10: Construct and return the new Node instance ★
+        // ★ Step 10: Homogenize input shapes for operations that require it ★
+        // ──────────────────────────────────────────────────────────────────────────────
+        /* let homogeneous_shapes = opkind.requires_homogenous_input_shapes(); */
+
+        // TODO(AntoineF4C5): Implement shape homogenization logic
+        // We could first homogenize const if has a unique use.
+        // Then for each input that is not a const, or a const that has more than 1 use,
+        // If the input's shape does not match the node's output shape,
+        // We prepend a "Broadcast" Node between the input's output node and this node's input.
+
+        let node_in_shape = |(idx, _outlet): &(usize, usize)| {
+            // Find the position of the input node in the `inputs` vector.
+            let idx = inputs.iter().position(|x| *idx == x.idx()).unwrap();
+            // Get the output shape for the specific outlet of this input node.
+            let input_node = inputs[idx].clone();
+            if let NodeType::Node(input_node) = input_node {
+                input_node.out_dims.clone()
+            } else {
+                panic!("Unsupported node type for shape extraction");
+            }
+        };
+
+        // TODO(AntoineF4C5): sort nodes that need a broadcasting
+        // For example "Gather" and "ReduceSum" are wrongly flagged as needing a broadcast.
+        // Could add a `require_input_shapes` method to `Op` trait.
+        for input_id in &input_ids {
+            let in_shape = node_in_shape(input_id);
+            if in_shape != out_dims {
+                debug!(
+                    "Input shape {in_shape:?} does not match node output shape {out_dims:?} for node {idx}, consider adding a Broadcast node",
+                );
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────────────────────
+        // ★ Step 11: Construct and return the new Node instance ★
         // ──────────────────────────────────────────────────────────────────────────────
         // Why: All fields are now fully determined—operation, input connections, output shape,
         //      output scale, and usage count—so we can safely construct the Node.
@@ -475,10 +510,11 @@ impl Node {
             imm: self.imm(),
             virtual_sequence_remaining: None,
             active_output_elements: self.out_dims.iter().product(),
-            output_dims: [
-                self.out_dims.first().copied().unwrap_or(1),
-                self.out_dims.get(1).copied().unwrap_or(1),
-            ],
+            output_dims: if self.out_dims.len() == 1 {
+                [1, self.out_dims[0]]
+            } else {
+                [self.out_dims[0], self.out_dims[1]]
+            },
         }
     }
 

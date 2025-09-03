@@ -58,7 +58,9 @@ use std::{collections::BTreeMap, error::Error, fmt, fmt::Debug};
 use tabled::Tabled;
 use tract_onnx::{
     self,
-    prelude::{tract_itertools::Itertools, Node as OnnxNode, SymbolValues, TypedFact, TypedOp},
+    prelude::{
+        tract_itertools::Itertools, Node as OnnxNode, OutletId, SymbolValues, TypedFact, TypedOp,
+    },
 };
 
 /// Represents a node output connection as (node_index, output_slot).
@@ -176,6 +178,7 @@ impl Node {
         scales: &VarScales,
         idx: usize,
         symbol_values: &SymbolValues,
+        remappings: &[usize],
     ) -> Self {
         trace!("Create {node:?}",);
         trace!("Create op {:?}", node.op);
@@ -235,11 +238,7 @@ impl Node {
         //   scale handling, and graph mutation.
         let mut inputs = vec![];
         // Collect (node index, slot index) pairs for each input of the current node.
-        let mut input_ids = node
-            .inputs
-            .iter()
-            .map(|i| (i.node, i.slot))
-            .collect::<Vec<_>>();
+        let mut input_ids = map_outlet_indices(&node.inputs, remappings);
         // For each input node index, fetch the corresponding Node from `other_nodes` and push it to `inputs`.
         input_ids.iter().for_each(|(i, _)| {
             inputs.push(other_nodes.get(i).unwrap().clone());
@@ -460,6 +459,23 @@ impl Node {
             num_uses,
         }
     }
+}
+
+/// Maps outlets of the [`tract_onnx::prelude::Graph`] to nodes of the [`BTreeMap`] using the remappings.
+///
+/// # Arguments
+///
+/// * `outlets` - A slice of outlet IDs to map.
+/// * `remappings` - A slice of remapping indices to apply. This vector is incremented by the node's `Graph` index each time a non-graph node is added.
+pub fn map_outlet_indices(outlets: &[OutletId], remappings: &[usize]) -> Vec<(usize, usize)> {
+    outlets
+        .iter()
+        .map(|i| {
+            // We count the number of nodes added before the current outlet.
+            let offset = remappings.iter().filter(|&&r| r <= i.node).count();
+            (i.node + offset, i.slot)
+        })
+        .collect::<Vec<_>>()
 }
 
 impl Node {
@@ -766,6 +782,10 @@ impl Op<i32> for SupportedOp {
 
     fn requires_homogenous_input_scales(&self) -> Vec<usize> {
         self.as_op().requires_homogenous_input_scales()
+    }
+
+    fn requires_matching_shapes(&self) -> bool {
+        self.as_op().requires_matching_shapes()
     }
 
     fn clone_dyn(&self) -> Box<dyn Op<i32>> {

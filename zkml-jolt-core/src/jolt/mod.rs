@@ -738,23 +738,15 @@ mod e2e_tests {
         subgraph_program.trace();
     }
 
-    #[ignore]
+    #[serial]
     #[test]
     fn test_sentiment_select() {
-        // TODO: Rebase scale
         // const: [This, is, great, 0, 0]
         let input_vector: [i32; 5] = [3, 4, 5, 0, 0];
 
-        let sentiment_select = ONNXProgram {
-            model_path: "../onnx-tracer/models/sentiment_select/network.onnx".into(),
-            inputs: Tensor::new(Some(&input_vector), &[1, 5]).unwrap(), // Example input
-        };
-        let program_bytecode = sentiment_select.decode();
-        info!("Program code: {program_bytecode:#?}");
-
-        let (raw_trace, program_io) = sentiment_select.trace();
-        info!("Raw trace: {raw_trace:#?}");
-        info!("Program IO: {program_io:#?}");
+        let model_fn = || model(&"../onnx-tracer/models/sentiment_select/network.onnx".into());
+        let input_tensor = Tensor::new(Some(&input_vector), &[1, 5]).unwrap();
+        ZKMLTestHelper::prove_and_verify_simple(model_fn, &input_tensor);
     }
 
     #[serial]

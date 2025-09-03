@@ -112,6 +112,10 @@ where
         }
     }
 
+    fn requires_matching_shapes(&self) -> bool {
+        matches!(self, HybridOp::GreaterEqual)
+    }
+
     /// Returns a reference to the Any trait.
     fn as_any(&self) -> &dyn Any {
         self

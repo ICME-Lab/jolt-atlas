@@ -45,6 +45,12 @@ pub trait Op<F: TensorType + PartialOrd>: std::fmt::Debug + Send + Sync + Any {
         vec![]
     }
 
+    // TODO(AntoineF4C5): Implement for each Op variant
+    /// Does this op's inputs need to be equal to out_dims?
+    fn requires_matching_shapes(&self) -> bool {
+        false
+    }
+
     /// Returns the lookups required by the operation.
     fn required_lookups(&self) -> Vec<LookupOp> {
         vec![]

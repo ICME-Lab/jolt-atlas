@@ -422,8 +422,10 @@ pub fn custom_addsubmuldiv_model() -> Model {
     let mut b = ModelBuilder::new(SCALE);
     let out_dims = vec![1, 4];
 
-    let x = b.input(out_dims.clone(), 2);
-    let a = b.poly(PolyOp::Add, x, x, out_dims.clone(), 2);
+    let x = b.input(out_dims.clone(), 4);
+    let a = b.poly(PolyOp::Add, x, x, out_dims.clone(), 1);
+    let a = b.poly(PolyOp::Add, a, x, out_dims.clone(), 1);
+    let a = b.poly(PolyOp::Add, a, x, out_dims.clone(), 2); // Extra add to get to pow2 total nodes
     let s = b.poly(PolyOp::Sub, a, x, out_dims.clone(), 1);
     let m = b.poly(PolyOp::Mult, a, s, out_dims.clone(), 1);
     let t = b.poly(PolyOp::Add, s, m, out_dims.clone(), 1);

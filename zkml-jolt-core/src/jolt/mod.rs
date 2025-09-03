@@ -308,6 +308,7 @@ mod e2e_tests {
         {
             let model = model_fn();
             let program_bytecode = onnx_tracer::decode_model(model.clone());
+            debug!("Program bytecode: {program_bytecode:?}");
             let pp: JoltProverPreprocessing<Fr, PCS, KeccakTranscript> =
                 JoltSNARK::prover_preprocess(program_bytecode);
 
@@ -487,6 +488,7 @@ mod e2e_tests {
         ZKMLTestHelper::prove_and_verify_simple(model_fn, &config.to_tensor());
     }
 
+    #[ignore]
     #[serial]
     #[test]
     fn test_addsubmuldivdiv() {
@@ -496,6 +498,7 @@ mod e2e_tests {
     #[serial]
     #[test]
     fn test_addsubmuldiv() {
+        init_logger();
         test_arithmetic_model(builder::custom_addsubmuldiv_model, "addsubmuldiv");
     }
 

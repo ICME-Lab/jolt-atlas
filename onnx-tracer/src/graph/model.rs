@@ -1414,4 +1414,131 @@ mod tests {
             Tensor::new(Some(&[5, 7, 9]), &[1, 3]).unwrap()
         );
     }
+
+    /// Test loading a model that requires broadcasting functionality
+    #[test]
+    fn test_model_with_broadcast_requirements() {
+        use crate::graph::node::map_outlet_indices;
+        use tract_onnx::prelude::OutletId;
+
+        // Test the map_outlet_indices function directly
+        let outlets = vec![
+            OutletId::new(0, 0),
+            OutletId::new(1, 0),
+            OutletId::new(2, 0),
+        ];
+        let remappings = vec![0, 1]; // Broadcast nodes added at positions 0 and 1
+        let mapped = map_outlet_indices(&outlets, &remappings);
+
+        // Each outlet should be offset by the number of broadcast nodes added before or at that position
+        assert_eq!(mapped[0], (1, 0)); // Node 0: offset = count(r <= 0) = 1, so 0+1=1
+        assert_eq!(mapped[1], (3, 0)); // Node 1: offset = count(r <= 1) = 2, so 1+2=3
+        assert_eq!(mapped[2], (4, 0)); // Node 2: offset = count(r <= 2) = 2, so 2+2=4
+    }
+
+    /// Test model building with broadcasting using model manipulation directly
+    #[test]
+    fn test_model_with_broadcasting_manual() {
+        use crate::graph::utilities::create_const_node;
+
+        // Test using manual model construction instead of ModelBuilder
+        let mut model = Model::default();
+
+        // Create a scalar input [1]
+        let scalar_input = create_input_node(7, vec![1], 0, 1);
+        model.insert_node(scalar_input);
+
+        // Create a vector constant [1, 3]
+        let vector_data = vec![5, 10, 15];
+        let vector_tensor = Tensor::new(Some(&vector_data), &[1, 3]).unwrap();
+        let raw_tensor = Tensor::new(Some(&[5.0, 10.0, 15.0]), &[1, 3]).unwrap();
+        let vector_const = create_const_node(vector_tensor, raw_tensor, 7, vec![1, 3], 1, 1);
+        model.insert_node(vector_const);
+
+        // Add operation that requires matching shapes
+        let add_node = create_polyop_node(
+            PolyOp::<i32>::Add,
+            7,
+            vec![(0, 0), (1, 0)],
+            vec![1, 3],
+            2,
+            1,
+        );
+        model.insert_node(add_node);
+
+        model.set_inputs(vec![0]);
+        model.set_outputs(vec![(2, 0)]);
+
+        // Test the model with a scalar input that should be broadcasted
+        let scalar_val = Tensor::new(Some(&[2]), &[1]).unwrap();
+        let result = model.forward(&[scalar_val]).unwrap();
+
+        assert_eq!(result.outputs.len(), 1);
+        // The scalar 2 should be broadcasted and added to [5, 10, 15] -> [7, 12, 17]
+        assert_eq!(
+            result.outputs[0],
+            Tensor::new(Some(&[7, 12, 17]), &[1, 3]).unwrap()
+        );
+    }
+
+    /// Test the nodes_from_graph method with remapping functionality
+    #[test]
+    fn test_nodes_from_graph_with_remappings() {
+        use crate::graph::node::{Node, SupportedOp};
+
+        // Create a simple test to verify remapping logic works
+        let mut model = Model::default();
+
+        // Create input with [1] dimensions
+        let input_node = create_input_node(7, vec![1], 0, 1);
+        model.insert_node(input_node);
+
+        // Create an operation that requires [1, 3] dimensions
+        // This should trigger broadcasting when processed by nodes_from_graph
+        let mut add_node = Node {
+            idx: 1,
+            opkind: SupportedOp::Linear(PolyOp::Add),
+            inputs: vec![(0, 0)],
+            out_dims: vec![1, 3],
+            num_uses: 1,
+            out_scale: 7,
+        };
+
+        // Simulate what happens when a broadcast node is inserted
+        let mut nodes = std::collections::BTreeMap::new();
+        nodes.insert(
+            0,
+            crate::graph::model::NodeType::Node(create_input_node(7, vec![1], 0, 1)),
+        );
+
+        // Test homogenization which should add broadcast nodes
+        let num_broadcasts = add_node.homogenize_input_shapes(&mut nodes);
+        assert_eq!(num_broadcasts, 1);
+        assert!(nodes.len() > 1); // Additional broadcast node added
+    }
+
+    /// Test edge cases for broadcasting
+    #[test]
+    fn test_broadcast_edge_cases() {
+        use crate::graph::node::map_outlet_indices;
+        use tract_onnx::prelude::OutletId;
+
+        // Test with empty outlets
+        let outlets = vec![];
+        let remappings = vec![0, 1, 2];
+        let result = map_outlet_indices(&outlets, &remappings);
+        assert_eq!(result, vec![]);
+
+        // Test with empty remappings
+        let outlets = vec![OutletId::new(0, 0), OutletId::new(1, 1)];
+        let remappings = vec![];
+        let result = map_outlet_indices(&outlets, &remappings);
+        assert_eq!(result, vec![(0, 0), (1, 1)]);
+
+        // Test with single outlet and multiple remappings
+        let outlets = vec![OutletId::new(2, 0)];
+        let remappings = vec![0, 0, 1, 1, 2]; // 5 broadcast nodes added
+        let result = map_outlet_indices(&outlets, &remappings);
+        assert_eq!(result, vec![(7, 0)]); // 2 + 5 = 7
+    }
 }

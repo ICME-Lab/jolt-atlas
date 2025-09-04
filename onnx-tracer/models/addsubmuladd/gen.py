@@ -4,7 +4,7 @@ import torch.nn as nn
 class SimpleModelConst(nn.Module):
     def __init__(self):
         super().__init__()
-        self.register_buffer("w", torch.randn(1, 10))  # constant tensor
+        self.register_buffer("w", torch.randn(1))  # 1D constant tensor to test broadcasting
         self.register_buffer("b", torch.randn(1, 10))  # constant tensor
 
     def forward(self, x):

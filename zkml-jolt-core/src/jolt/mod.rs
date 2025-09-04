@@ -741,12 +741,15 @@ mod e2e_tests {
     #[serial]
     #[test]
     fn test_sentiment_select() {
-        // const: [This, is, great, 0, 0]
-        let input_vector: [i32; 5] = [3, 4, 5, 0, 0];
+        let config = ModelTestConfig::new(
+            "sentiment_select",
+            vec![3, 4, 5, 0, 0], // [This, is, great, 0, 0]
+            vec![1, 5],
+        );
 
         let model_fn = || model(&"../onnx-tracer/models/sentiment_select/network.onnx".into());
-        let input_tensor = Tensor::new(Some(&input_vector), &[1, 5]).unwrap();
-        ZKMLTestHelper::prove_and_verify_simple(model_fn, &input_tensor);
+
+        ZKMLTestHelper::prove_and_verify_simple(model_fn, &config.to_tensor());
     }
 
     #[serial]

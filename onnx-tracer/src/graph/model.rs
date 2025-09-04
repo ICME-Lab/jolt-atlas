@@ -5,7 +5,7 @@ use crate::{
         input::GraphData, tracer::Tracer, utilities::node_output_shapes, vars::VarScales,
         GraphError,
     },
-    ops::{poly::PolyOp, Input, Op, Unknown},
+    ops::{Input, Op, Unknown},
     tensor::Tensor,
     RunArgs,
 };
@@ -581,8 +581,7 @@ impl Model {
         let mut input_idx = 0;
         // We create broadcasting nodes each time input's expected dim doesn't match the fed input's dim.
         // This creates a mismatch between the node's indexes in the `graph` and in the `nodes` BTreeMap
-        // This counter allows us to keep track of the link between `graph` and `nodes`
-        let mut offset = 0;
+        // This counter allows us to keep track of the offset between `graph` and `nodes`
         let mut remappings = Vec::new();
         for (i, n) in graph.nodes.iter().enumerate() {
             // Extract the slope layer hyperparams
@@ -691,6 +690,7 @@ impl Model {
                     );
                 }
                 None => {
+                    let offset = remappings.len();
                     let mut n = Node::new(
                         n.clone(),
                         &mut nodes,
@@ -700,36 +700,11 @@ impl Model {
                         &remappings,
                     );
 
-                    let inputs_outlets = &mut n.inputs;
-                    // Check if inputs.out_dims == n.out_dims
-                    for (j, input_outlet) in inputs_outlets.clone().iter().enumerate() {
-                        let input = if let NodeType::Node(n) = nodes.get(&input_outlet.0).unwrap() {
-                            n.clone()
-                        } else {
-                            panic!("Expected Node")
-                        };
-                        if input.out_dims != n.out_dims && n.opkind.requires_matching_shapes() {
-                            debug!(
-                                    "Inserting broadcast node before node {} to match dims {:?} -> {:?}",
-                                    i, input.out_dims, n.out_dims
-                                );
-                            let current_idx = nodes.len();
-                            let b_node = Node {
-                                idx: current_idx,
-                                opkind: SupportedOp::Linear(PolyOp::MultiBroadcastTo {
-                                    shape: n.out_dims.clone(),
-                                }),
-                                inputs: vec![*input_outlet],
-                                out_dims: n.out_dims.clone(),
-                                num_uses: 1,
-                                out_scale: input.out_scale,
-                            };
+                    if n.opkind.requires_shape_equality() {
+                        let num_added_nodes = n.homogenize_input_shapes(&mut nodes);
 
-                            nodes.insert(current_idx, NodeType::Node(b_node));
-                            inputs_outlets[j] = (current_idx, 0);
-                            n.idx += 1;
-                            offset += 1;
-                            remappings.push(i);
+                        for _ in 0..num_added_nodes {
+                            remappings.push(i); // We add current index i to keep track of how much nodes have been added at each step
                         }
                     }
 
@@ -755,9 +730,7 @@ impl Model {
                             n.out_scale = scales[&i];
                         }
                     }
-                    debug!("New node created: {n:?}");
-                    let current_idx = nodes.len();
-                    nodes.insert(current_idx, NodeType::Node(n));
+                    nodes.insert(n.idx, NodeType::Node(n));
                 }
             }
         }

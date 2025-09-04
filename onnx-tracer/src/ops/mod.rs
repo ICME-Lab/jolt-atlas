@@ -45,9 +45,8 @@ pub trait Op<F: TensorType + PartialOrd>: std::fmt::Debug + Send + Sync + Any {
         vec![]
     }
 
-    // TODO(AntoineF4C5): Implement for each Op variant
     /// Does this op's inputs need to be equal to out_dims?
-    fn requires_matching_shapes(&self) -> bool {
+    fn requires_shape_equality(&self) -> bool {
         false
     }
 

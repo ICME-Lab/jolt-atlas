@@ -53,7 +53,7 @@ use crate::{
     tensor::{Tensor, TensorError},
     trace_types::{ONNXInstr, ONNXOpcode},
 };
-use log::{debug, trace, warn};
+use log::{trace, warn};
 use std::{collections::BTreeMap, error::Error, fmt, fmt::Debug};
 use tabled::Tabled;
 use tract_onnx::{
@@ -408,42 +408,7 @@ impl Node {
         }
 
         // ──────────────────────────────────────────────────────────────────────────────
-        // ★ Step 10: Homogenize input shapes for operations that require it ★
-        // ──────────────────────────────────────────────────────────────────────────────
-        /* let homogeneous_shapes = opkind.requires_homogenous_input_shapes(); */
-
-        // TODO(AntoineF4C5): Implement shape homogenization logic
-        // We could first homogenize const if has a unique use.
-        // Then for each input that is not a const, or a const that has more than 1 use,
-        // If the input's shape does not match the node's output shape,
-        // We prepend a "Broadcast" Node between the input's output node and this node's input.
-
-        let node_in_shape = |(idx, _outlet): &(usize, usize)| {
-            // Find the position of the input node in the `inputs` vector.
-            let idx = inputs.iter().position(|x| *idx == x.idx()).unwrap();
-            // Get the output shape for the specific outlet of this input node.
-            let input_node = inputs[idx].clone();
-            if let NodeType::Node(input_node) = input_node {
-                input_node.out_dims.clone()
-            } else {
-                panic!("Unsupported node type for shape extraction");
-            }
-        };
-
-        // TODO(AntoineF4C5): sort nodes that need a broadcasting
-        // For example "Gather" and "ReduceSum" are wrongly flagged as needing a broadcast.
-        // Could add a `require_input_shapes` method to `Op` trait.
-        for input_id in &input_ids {
-            let in_shape = node_in_shape(input_id);
-            if in_shape != out_dims {
-                debug!(
-                    "Input shape {in_shape:?} does not match node output shape {out_dims:?} for node {idx}, consider adding a Broadcast node",
-                );
-            }
-        }
-
-        // ──────────────────────────────────────────────────────────────────────────────
-        // ★ Step 11: Construct and return the new Node instance ★
+        // ★ Step 10: Construct and return the new Node instance ★
         // ──────────────────────────────────────────────────────────────────────────────
         // Why: All fields are now fully determined—operation, input connections, output shape,
         //      output scale, and usage count—so we can safely construct the Node.
@@ -458,6 +423,55 @@ impl Node {
             out_scale,
             num_uses,
         }
+    }
+
+    /// Compares a Node to a `BTreeMap` of nodes to determine, for each of the node inputs,
+    /// if its shape matches the corresponding input node's output shape.
+    /// If the shapes do not match, it updates the BTreeMap to insert a "Broadcast" node
+    /// mapping the input node's output to the required shape. It also updates the current node's input indexing.
+    ///
+    /// # Arguments
+    ///
+    /// * `other_nodes` - A mutable reference to a BTreeMap containing the nodes in the graph.
+    ///
+    /// # Returns
+    /// The number of broadcast nodes added to the graph.
+    pub fn homogenize_input_shapes(
+        &mut self,
+        other_nodes: &mut BTreeMap<usize, NodeType>,
+    ) -> usize {
+        let mut num_broadcasts = 0;
+        for (j, input_outlet) in self.inputs.clone().iter().enumerate() {
+            let input = if let NodeType::Node(n) = other_nodes.get(&input_outlet.0).unwrap() {
+                n
+            } else {
+                panic!("Unsupported node type");
+            };
+
+            // For all node inputs, if the input's out_dims doesn't match the current node's output dims,
+            // we insert a broadcast node in between.
+            if input.out_dims != self.out_dims {
+                let new_node_index = self.idx;
+                let opkind = SupportedOp::Linear(PolyOp::MultiBroadcastTo {
+                    shape: self.out_dims.clone(),
+                });
+
+                let b_node = Node {
+                    idx: new_node_index,
+                    opkind,
+                    inputs: vec![*input_outlet],
+                    out_dims: self.out_dims.clone(),
+                    num_uses: 1,
+                    out_scale: input.out_scale,
+                };
+
+                other_nodes.insert(new_node_index, NodeType::Node(b_node));
+                self.inputs[j] = (new_node_index, 0);
+                self.idx += 1;
+                num_broadcasts += 1;
+            }
+        }
+        num_broadcasts
     }
 }
 
@@ -784,8 +798,8 @@ impl Op<i32> for SupportedOp {
         self.as_op().requires_homogenous_input_scales()
     }
 
-    fn requires_matching_shapes(&self) -> bool {
-        self.as_op().requires_matching_shapes()
+    fn requires_shape_equality(&self) -> bool {
+        self.as_op().requires_shape_equality()
     }
 
     fn clone_dyn(&self) -> Box<dyn Op<i32>> {
@@ -852,6 +866,10 @@ impl Op<i32> for Rescaled {
 
     fn clone_dyn(&self) -> Box<dyn Op<i32>> {
         Box::new(self.clone()) // Forward to the derive(Clone) impl
+    }
+
+    fn requires_shape_equality(&self) -> bool {
+        self.inner.requires_shape_equality()
     }
 }
 
@@ -968,6 +986,10 @@ impl Op<i32> for RebaseScale {
 
     fn clone_dyn(&self) -> Box<dyn Op<i32>> {
         Box::new(self.clone()) // Forward to the derive(Clone) impl
+    }
+
+    fn requires_shape_equality(&self) -> bool {
+        self.inner.requires_shape_equality()
     }
 }
 

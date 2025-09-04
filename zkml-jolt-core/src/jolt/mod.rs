@@ -146,24 +146,22 @@ where
         println!("Trace length: {trace_length}");
         F::initialize_lookup_tables(std::mem::take(&mut preprocessing.field));
         // pad trace to the next power of two
-        let padded_trace_length = trace_length.next_power_of_two();
+        let padded_trace_length = (trace_length + 1).next_power_of_two();
         let padding = padded_trace_length - trace_length;
         let last_address = trace.last().unwrap().instr().address;
-        if padding != 0 {
-            // Pad with NoOps (with sequential addresses)
-            trace.extend((0..padding - 1).map(|i| {
-                let mut no_op = JoltONNXCycle::no_op();
-                no_op.instr.address = last_address + i + 1;
-                no_op
-            }));
+        // Pad with NoOps (with sequential addresses)
+        trace.extend((0..padding - 1).map(|i| {
+            let mut no_op = JoltONNXCycle::no_op();
+            no_op.instr.address = last_address + i + 1;
+            no_op
+        }));
 
-            // HACK(Forpee): Not sure if this is correct. RV pushes a jump instr:
-            // ```
-            // // Final JALR sets NextUnexpandedPC = 0
-            // trace.push(RV32IMCycle::last_jalr(last_address + 4 * (padding - 1)));
-            // ```
-            trace.push(JoltONNXCycle::no_op());
-        };
+        // HACK(Forpee): Not sure if this is correct. RV pushes a jump instr:
+        // ```
+        // // Final JALR sets NextUnexpandedPC = 0
+        // trace.push(RV32IMCycle::last_jalr(last_address + 4 * (padding - 1)));
+        // ```
+        trace.push(JoltONNXCycle::no_op());
 
         let tensor_heap_addresses: Vec<usize> = trace
             .iter()
@@ -222,7 +220,7 @@ where
         let precompiles_proof =
             PrecompileProof::prove(&preprocessing.shared.precompiles, &trace, &mut transcript);
         JoltSNARK {
-            trace_length,
+            trace_length: trace_length + 1,
             r1cs: r1cs_snark,
             tensor_heap: tensor_heap_snark,
             instruction_lookups: instruction_lookups_snark,
@@ -308,7 +306,6 @@ mod e2e_tests {
         {
             let model = model_fn();
             let program_bytecode = onnx_tracer::decode_model(model.clone());
-            debug!("Program bytecode: {program_bytecode:?}");
             let pp: JoltProverPreprocessing<Fr, PCS, KeccakTranscript> =
                 JoltSNARK::prover_preprocess(program_bytecode);
 
@@ -498,7 +495,6 @@ mod e2e_tests {
     #[serial]
     #[test]
     fn test_addsubmuldiv() {
-        init_logger();
         test_arithmetic_model(builder::custom_addsubmuldiv_model, "addsubmuldiv");
     }
 

@@ -63,18 +63,22 @@ impl BytecodePreprocessing {
 
         // Bytecode: Pad to nearest power of 2
         let code_size = bytecode.len();
-        let padded_code_size = bytecode.len().next_power_of_two();
+        // Pad to next power of two, adding one for the extra NoOp we add below
+        let padded_code_size = (bytecode.len() + 1).next_power_of_two();
         let last_address = bytecode.last().unwrap().address;
-        let padding = padded_code_size - bytecode.len();
-        bytecode.extend((0..padding).map(|i| {
+        // Add one NoOp with sequential address, required because virtual instructions require the
+        // next instruction's address to equal the previous + 1 (and the trace might finish with a
+        // virtual instruction)
+        bytecode.push({
             let mut no_op = ONNXInstr::no_op();
-            no_op.address = last_address + i + 1;
+            no_op.address = last_address + 1;
             assert_eq!(
-                virtual_address_map.insert((no_op.address, 0), code_size + i),
+                virtual_address_map.insert((no_op.address, 0), code_size),
                 None
             );
             no_op
-        }));
+        });
+        bytecode.resize(padded_code_size, ONNXInstr::no_op());
 
         Self {
             code_size: padded_code_size,

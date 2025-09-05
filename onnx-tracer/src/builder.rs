@@ -384,6 +384,35 @@ impl ModelBuilder {
 
 /* ********************** Testing Model's ********************** */
 
+/// Creates a model with 3 nodes
+/// Has a trace lenght of 2^s - 1
+pub fn custom_add_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+    let mut const_tensor: Tensor<i32> = Tensor::new(Some(&[50, 60, 70, 80]), &[1, 4]).unwrap();
+    const_tensor.set_scale(SCALE);
+
+    let x = b.input(vec![1, 4], 1);
+    let a = b.const_tensor(const_tensor, vec![1, 4], 1);
+    let y = b.poly(PolyOp::Add, x, a, vec![1, 4], 1);
+    b.take(vec![x.0], vec![y])
+}
+
+/// Creates a model with 4 nodes
+/// Has a trace lenght of 2^s
+pub fn custom_addmul_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+    let mut const_tensor: Tensor<i32> = Tensor::new(Some(&[50, 60, 70, 80]), &[1, 4]).unwrap();
+    const_tensor.set_scale(SCALE);
+
+    let x = b.input(vec![1, 4], 2);
+    let a = b.const_tensor(const_tensor, vec![1, 4], 1);
+    let s = b.poly(PolyOp::Add, x, a, vec![1, 4], 1);
+    let y = b.poly(PolyOp::Mult, x, s, vec![1, 4], 1);
+    b.take(vec![x.0], vec![y])
+}
+
 /// [(0, input, []), (1, add, [0, 0]), (2, sub, [1, 0]), (3, mul, [1, 2]), (4, add, [2, 3]), (5, output, [4])]
 pub fn custom_addsubmul_model() -> Model {
     const SCALE: i32 = 7;
@@ -416,7 +445,26 @@ pub fn custom_addsubmulconst_model() -> Model {
     b.take(vec![x.0], vec![y])
 }
 
-/// [(0, input, []), (1, add, [0, 0]), (2, sub, [1, 0]), (3, mul, [1, 2]), (4, add, [2, 3]), (5, div, [4]), (6, output, [5])]
+/// Creates a model with 15 nodes (a div op creates 9 nodes)
+/// Has a trace lenght of 2^s - 1, finishing with a virtual instruction
+pub fn custom_addsubmuldiv15_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+    let out_dims = vec![1, 4];
+
+    let x = b.input(out_dims.clone(), 4);
+    let a = b.poly(PolyOp::Add, x, x, out_dims.clone(), 1);
+    let a = b.poly(PolyOp::Add, a, x, out_dims.clone(), 2);
+    let s = b.poly(PolyOp::Sub, a, x, out_dims.clone(), 1);
+    let m = b.poly(PolyOp::Mult, a, s, out_dims.clone(), 1);
+    let t = b.poly(PolyOp::Add, s, m, out_dims.clone(), 1);
+    let y = b.div(2, t, out_dims.clone(), 1);
+
+    b.take(vec![x.0], vec![y])
+}
+
+/// Creates a model with 16 nodes (a div op creates 9 nodes)
+/// Has a trace lenght of 2^s, finishing with a virtual instruction
 pub fn custom_addsubmuldiv_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
@@ -425,7 +473,7 @@ pub fn custom_addsubmuldiv_model() -> Model {
     let x = b.input(out_dims.clone(), 4);
     let a = b.poly(PolyOp::Add, x, x, out_dims.clone(), 1);
     let a = b.poly(PolyOp::Add, a, x, out_dims.clone(), 1);
-    let a = b.poly(PolyOp::Add, a, x, out_dims.clone(), 2); // Extra add to get to pow2 total nodes
+    let a = b.poly(PolyOp::Add, a, x, out_dims.clone(), 2);
     let s = b.poly(PolyOp::Sub, a, x, out_dims.clone(), 1);
     let m = b.poly(PolyOp::Mult, a, s, out_dims.clone(), 1);
     let t = b.poly(PolyOp::Add, s, m, out_dims.clone(), 1);

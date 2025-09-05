@@ -17,8 +17,6 @@ pub mod lookup;
 ///
 pub mod poly;
 ///
-pub mod tolerance;
-///
 pub mod utils;
 
 /// A struct representing the result of a forward pass.

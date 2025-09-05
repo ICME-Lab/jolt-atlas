@@ -372,6 +372,23 @@ where
         }
     }
 
+    fn requires_shape_equality(&self) -> bool {
+        matches!(
+            self,
+            PolyOp::Identity
+                | PolyOp::Add
+                | PolyOp::Neg
+                | PolyOp::Sub
+                | PolyOp::Mult
+                | PolyOp::And
+                | PolyOp::Or
+                | PolyOp::Xor
+                | PolyOp::Not
+                | PolyOp::Iff
+                | PolyOp::Pow(_)
+        )
+    }
+
     fn clone_dyn(&self) -> Box<dyn Op<F>> {
         Box::new(self.clone()) // Forward to the derive(Clone) impl
     }

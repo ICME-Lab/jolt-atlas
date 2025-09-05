@@ -264,4 +264,8 @@ where
     fn clone_dyn(&self) -> Box<dyn Op<F>> {
         Box::new(*self) // Forward to the derive(Clone) impl
     }
+
+    fn requires_shape_equality(&self) -> bool {
+        true
+    }
 }

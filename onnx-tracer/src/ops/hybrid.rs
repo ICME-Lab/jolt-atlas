@@ -112,6 +112,18 @@ where
         }
     }
 
+    fn requires_shape_equality(&self) -> bool {
+        matches!(
+            self,
+            HybridOp::Greater
+                | HybridOp::GreaterEqual
+                | HybridOp::Less
+                | HybridOp::LessEqual
+                | HybridOp::Equals
+                | HybridOp::RangeCheck(_)
+        )
+    }
+
     /// Returns a reference to the Any trait.
     fn as_any(&self) -> &dyn Any {
         self

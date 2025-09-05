@@ -58,7 +58,9 @@ use std::{collections::BTreeMap, error::Error, fmt, fmt::Debug};
 use tabled::Tabled;
 use tract_onnx::{
     self,
-    prelude::{tract_itertools::Itertools, Node as OnnxNode, SymbolValues, TypedFact, TypedOp},
+    prelude::{
+        tract_itertools::Itertools, Node as OnnxNode, OutletId, SymbolValues, TypedFact, TypedOp,
+    },
 };
 
 /// Represents a node output connection as (node_index, output_slot).
@@ -176,6 +178,7 @@ impl Node {
         scales: &VarScales,
         idx: usize,
         symbol_values: &SymbolValues,
+        remappings: &[usize],
     ) -> Self {
         trace!("Create {node:?}",);
         trace!("Create op {:?}", node.op);
@@ -235,11 +238,7 @@ impl Node {
         //   scale handling, and graph mutation.
         let mut inputs = vec![];
         // Collect (node index, slot index) pairs for each input of the current node.
-        let mut input_ids = node
-            .inputs
-            .iter()
-            .map(|i| (i.node, i.slot))
-            .collect::<Vec<_>>();
+        let mut input_ids = map_outlet_indices(&node.inputs, remappings);
         // For each input node index, fetch the corresponding Node from `other_nodes` and push it to `inputs`.
         input_ids.iter().for_each(|(i, _)| {
             inputs.push(other_nodes.get(i).unwrap().clone());
@@ -425,6 +424,72 @@ impl Node {
             num_uses,
         }
     }
+
+    /// Compares a Node to a `BTreeMap` of nodes to determine, for each of the node inputs,
+    /// if its shape matches the corresponding input node's output shape.
+    /// If the shapes do not match, it updates the BTreeMap to insert a "Broadcast" node
+    /// mapping the input node's output to the required shape. It also updates the current node's input indexing.
+    ///
+    /// # Arguments
+    ///
+    /// * `other_nodes` - A mutable reference to a BTreeMap containing the nodes in the graph.
+    ///
+    /// # Returns
+    /// The number of broadcast nodes added to the graph.
+    pub fn homogenize_input_shapes(
+        &mut self,
+        other_nodes: &mut BTreeMap<usize, NodeType>,
+    ) -> usize {
+        let mut num_broadcasts = 0;
+        for (j, input_outlet) in self.inputs.clone().iter().enumerate() {
+            let input = if let NodeType::Node(n) = other_nodes.get(&input_outlet.0).unwrap() {
+                n
+            } else {
+                panic!("Unsupported node type");
+            };
+
+            // For all node inputs, if the input's out_dims doesn't match the current node's output dims,
+            // we insert a broadcast node in between.
+            if input.out_dims != self.out_dims {
+                let new_node_index = self.idx;
+                let opkind = SupportedOp::Linear(PolyOp::MultiBroadcastTo {
+                    shape: self.out_dims.clone(),
+                });
+
+                let b_node = Node {
+                    idx: new_node_index,
+                    opkind,
+                    inputs: vec![*input_outlet],
+                    out_dims: self.out_dims.clone(),
+                    num_uses: 1,
+                    out_scale: input.out_scale,
+                };
+
+                other_nodes.insert(new_node_index, NodeType::Node(b_node));
+                self.inputs[j] = (new_node_index, 0);
+                self.idx += 1;
+                num_broadcasts += 1;
+            }
+        }
+        num_broadcasts
+    }
+}
+
+/// Maps outlets of the [`tract_onnx::prelude::Graph`] to nodes of the [`BTreeMap`] using the remappings.
+///
+/// # Arguments
+///
+/// * `outlets` - A slice of outlet IDs to map.
+/// * `remappings` - A slice of remapping indices to apply. This vector is incremented by the node's `Graph` index each time a non-graph node is added.
+pub fn map_outlet_indices(outlets: &[OutletId], remappings: &[usize]) -> Vec<(usize, usize)> {
+    outlets
+        .iter()
+        .map(|i| {
+            // We count the number of nodes added before the current outlet.
+            let offset = remappings.iter().filter(|&&r| r <= i.node).count();
+            (i.node + offset, i.slot)
+        })
+        .collect::<Vec<_>>()
 }
 
 impl Node {
@@ -475,10 +540,11 @@ impl Node {
             imm: self.imm(),
             virtual_sequence_remaining: None,
             active_output_elements: self.out_dims.iter().product(),
-            output_dims: [
-                self.out_dims.first().copied().unwrap_or(1),
-                self.out_dims.get(1).copied().unwrap_or(1),
-            ],
+            output_dims: if self.out_dims.len() == 1 {
+                [1, self.out_dims[0]]
+            } else {
+                [self.out_dims[0], self.out_dims[1]]
+            },
         }
     }
 
@@ -732,6 +798,10 @@ impl Op<i32> for SupportedOp {
         self.as_op().requires_homogenous_input_scales()
     }
 
+    fn requires_shape_equality(&self) -> bool {
+        self.as_op().requires_shape_equality()
+    }
+
     fn clone_dyn(&self) -> Box<dyn Op<i32>> {
         self.as_op().clone_dyn()
     }
@@ -796,6 +866,10 @@ impl Op<i32> for Rescaled {
 
     fn clone_dyn(&self) -> Box<dyn Op<i32>> {
         Box::new(self.clone()) // Forward to the derive(Clone) impl
+    }
+
+    fn requires_shape_equality(&self) -> bool {
+        self.inner.requires_shape_equality()
     }
 }
 
@@ -913,6 +987,10 @@ impl Op<i32> for RebaseScale {
     fn clone_dyn(&self) -> Box<dyn Op<i32>> {
         Box::new(self.clone()) // Forward to the derive(Clone) impl
     }
+
+    fn requires_shape_equality(&self) -> bool {
+        self.inner.requires_shape_equality()
+    }
 }
 
 impl From<&RebaseScale> for ONNXOpcode {
@@ -1024,4 +1102,230 @@ fn display_vector<T: fmt::Debug>(v: &Vec<T>) -> String {
 
 fn display_opkind(v: &SupportedOp) -> String {
     v.as_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        graph::{model::NodeType, utilities::create_input_node},
+        ops::poly::PolyOp,
+    };
+    use std::collections::BTreeMap;
+    use tract_onnx::prelude::OutletId;
+
+    /// Test the `map_outlet_indices` function with various remapping scenarios
+    #[test]
+    fn test_map_outlet_indices() {
+        // Test case 1: No remappings
+        let outlets = vec![
+            OutletId::new(0, 0),
+            OutletId::new(1, 0),
+            OutletId::new(2, 1),
+        ];
+        let remappings = vec![];
+        let result = map_outlet_indices(&outlets, &remappings);
+        assert_eq!(result, vec![(0, 0), (1, 0), (2, 1)]);
+
+        // Test case 2: Simple remappings
+        let outlets = vec![
+            OutletId::new(0, 0),
+            OutletId::new(1, 0),
+            OutletId::new(2, 0),
+        ];
+        let remappings = vec![0, 1]; // Two broadcast nodes added before node 0 and 1
+        let result = map_outlet_indices(&outlets, &remappings);
+        assert_eq!(result, vec![(1, 0), (3, 0), (4, 0)]); // Corrected expectations
+
+        // Test case 3: Multiple remappings at same position
+        let outlets = vec![
+            OutletId::new(0, 0),
+            OutletId::new(1, 0),
+            OutletId::new(2, 0),
+        ];
+        let remappings = vec![0, 0, 1]; // Two broadcasts at node 0, one at node 1
+        let result = map_outlet_indices(&outlets, &remappings);
+        assert_eq!(result, vec![(2, 0), (4, 0), (5, 0)]);
+
+        // Test case 4: Remappings beyond outlet indices
+        let outlets = vec![OutletId::new(0, 0), OutletId::new(1, 1)];
+        let remappings = vec![0, 1, 2, 3]; // Remappings beyond our outlets
+        let result = map_outlet_indices(&outlets, &remappings);
+        assert_eq!(result, vec![(1, 0), (3, 1)]);
+    }
+
+    /// Test the `homogenize_input_shapes` method for dimension matching
+    #[test]
+    fn test_homogenize_input_shapes_no_broadcast_needed() {
+        let mut nodes = BTreeMap::new();
+
+        // Create input node with dimensions [1, 3]
+        let input_node = create_input_node(7, vec![1, 3], 0, 1);
+        nodes.insert(0, NodeType::Node(input_node));
+
+        // Create a node that expects [1, 3] input - no broadcasting needed
+        let mut add_node = Node {
+            idx: 1,
+            opkind: SupportedOp::Linear(PolyOp::Add),
+            inputs: vec![(0, 0)],
+            out_dims: vec![1, 3],
+            num_uses: 1,
+            out_scale: 7,
+        };
+
+        // No broadcast should be needed since dimensions match
+        let num_broadcasts = add_node.homogenize_input_shapes(&mut nodes);
+        assert_eq!(num_broadcasts, 0);
+        assert_eq!(add_node.inputs, vec![(0, 0)]); // Inputs unchanged
+        assert_eq!(nodes.len(), 1); // No new nodes added
+    }
+
+    /// Test the `homogenize_input_shapes` method when broadcasting is needed
+    #[test]
+    fn test_homogenize_input_shapes_broadcast_needed() {
+        let mut nodes = BTreeMap::new();
+
+        // Create input node with dimensions [1] (scalar)
+        let input_node = create_input_node(7, vec![1], 0, 1);
+        nodes.insert(0, NodeType::Node(input_node));
+
+        // Create a node that expects [1, 3] input - broadcasting needed
+        let mut add_node = Node {
+            idx: 1,
+            opkind: SupportedOp::Linear(PolyOp::Add),
+            inputs: vec![(0, 0)],
+            out_dims: vec![1, 3],
+            num_uses: 1,
+            out_scale: 7,
+        };
+
+        // Broadcast should be needed since [1] needs to become [1, 3]
+        let num_broadcasts = add_node.homogenize_input_shapes(&mut nodes);
+        assert_eq!(num_broadcasts, 1);
+        assert_eq!(add_node.inputs, vec![(1, 0)]); // Input now points to broadcast node
+        assert_eq!(add_node.idx, 2); // Node index incremented
+        assert_eq!(nodes.len(), 2); // New broadcast node added
+
+        // Check the broadcast node was created correctly
+        if let Some(NodeType::Node(broadcast_node)) = nodes.get(&1) {
+            assert_eq!(broadcast_node.idx, 1);
+            assert_eq!(broadcast_node.inputs, vec![(0, 0)]); // Points to original input
+            assert_eq!(broadcast_node.out_dims, vec![1, 3]); // Broadcasted dimensions
+            assert_eq!(broadcast_node.out_scale, 7); // Same scale as input
+            assert_eq!(broadcast_node.num_uses, 1);
+            match &broadcast_node.opkind {
+                SupportedOp::Linear(PolyOp::MultiBroadcastTo { shape }) => {
+                    assert_eq!(shape, &vec![1, 3]);
+                }
+                _ => panic!("Expected MultiBroadcastTo operation"),
+            }
+        } else {
+            panic!("Broadcast node not found");
+        }
+    }
+
+    /// Test multiple inputs with mixed broadcasting requirements
+    #[test]
+    fn test_homogenize_input_shapes_multiple_inputs() {
+        let mut nodes = BTreeMap::new();
+
+        // Create two input nodes with different dimensions
+        let input_node1 = create_input_node(7, vec![1], 0, 1); // Scalar [1]
+        let input_node2 = create_input_node(7, vec![1, 3], 1, 1); // Vector [1, 3]
+        nodes.insert(0, NodeType::Node(input_node1));
+        nodes.insert(1, NodeType::Node(input_node2));
+
+        // Create a node that expects [1, 3] for both inputs
+        let mut add_node = Node {
+            idx: 2,
+            opkind: SupportedOp::Linear(PolyOp::Add),
+            inputs: vec![(0, 0), (1, 0)],
+            out_dims: vec![1, 3],
+            num_uses: 1,
+            out_scale: 7,
+        };
+
+        // Only first input should need broadcasting
+        let num_broadcasts = add_node.homogenize_input_shapes(&mut nodes);
+        assert_eq!(num_broadcasts, 1);
+        assert_eq!(add_node.inputs, vec![(2, 0), (1, 0)]); // First input redirected to broadcast
+        assert_eq!(add_node.idx, 3); // Node index incremented
+        assert_eq!(nodes.len(), 3); // One broadcast node added
+
+        // Check the broadcast node was created for first input only
+        if let Some(NodeType::Node(broadcast_node)) = nodes.get(&2) {
+            assert_eq!(broadcast_node.inputs, vec![(0, 0)]); // Points to first input
+            assert_eq!(broadcast_node.out_dims, vec![1, 3]);
+        } else {
+            panic!("Broadcast node not found");
+        }
+    }
+
+    /// Test with complex dimension mismatches
+    #[test]
+    fn test_homogenize_input_shapes_complex_dimensions() {
+        let mut nodes = BTreeMap::new();
+
+        // Create input node with dimensions [2]
+        let input_node = create_input_node(7, vec![2], 0, 1);
+        nodes.insert(0, NodeType::Node(input_node));
+
+        // Create a node that expects [2, 4] input
+        let mut mul_node = Node {
+            idx: 1,
+            opkind: SupportedOp::Linear(PolyOp::Mult),
+            inputs: vec![(0, 0)],
+            out_dims: vec![2, 4],
+            num_uses: 1,
+            out_scale: 7,
+        };
+
+        // Broadcast should be needed to go from [2] to [2, 4]
+        let num_broadcasts = mul_node.homogenize_input_shapes(&mut nodes);
+        assert_eq!(num_broadcasts, 1);
+        assert_eq!(mul_node.inputs, vec![(1, 0)]);
+        assert_eq!(mul_node.idx, 2);
+
+        // Check broadcast node dimensions
+        if let Some(NodeType::Node(broadcast_node)) = nodes.get(&1) {
+            assert_eq!(broadcast_node.out_dims, vec![2, 4]);
+            match &broadcast_node.opkind {
+                SupportedOp::Linear(PolyOp::MultiBroadcastTo { shape }) => {
+                    assert_eq!(shape, &vec![2, 4]);
+                }
+                _ => panic!("Expected MultiBroadcastTo operation"),
+            }
+        } else {
+            panic!("Broadcast node not found");
+        }
+    }
+
+    /// Test that no broadcasting occurs when dimensions already match exactly
+    #[test]
+    fn test_homogenize_input_shapes_exact_match() {
+        let mut nodes = BTreeMap::new();
+
+        // Create input nodes with matching dimensions
+        let input_node1 = create_input_node(7, vec![2, 3], 0, 1);
+        let input_node2 = create_input_node(7, vec![2, 3], 1, 1);
+        nodes.insert(0, NodeType::Node(input_node1));
+        nodes.insert(1, NodeType::Node(input_node2));
+
+        // Create a node that expects [2, 3] - exact match
+        let mut sub_node = Node {
+            idx: 2,
+            opkind: SupportedOp::Linear(PolyOp::Sub),
+            inputs: vec![(0, 0), (1, 0)],
+            out_dims: vec![2, 3],
+            num_uses: 1,
+            out_scale: 7,
+        };
+
+        // No broadcasting should be needed
+        let num_broadcasts = sub_node.homogenize_input_shapes(&mut nodes);
+        assert_eq!(num_broadcasts, 0);
+        assert_eq!(sub_node.inputs, vec![(0, 0), (1, 0)]); // Inputs unchanged
+        assert_eq!(sub_node.idx, 2); // Index unchanged
+        assert_eq!(nodes.len(), 2); // No new nodes
+    }
 }

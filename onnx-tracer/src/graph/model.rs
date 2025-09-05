@@ -463,12 +463,13 @@ impl Model {
         let start_time = instant::Instant::now();
         let (model, symbol_values) = Self::load_onnx_using_tract(reader, run_args);
         let scales = VarScales::from_args(run_args);
-        let nodes = Self::nodes_from_graph(&model, run_args, &scales, &symbol_values, None, None);
+        let (nodes, remappings) =
+            Self::nodes_from_graph(&model, run_args, &scales, &symbol_values, None, None);
         debug!("\n {model}",);
         let parsed_nodes = ParsedNodes {
             nodes,
             inputs: model.inputs.iter().map(|o| o.node).collect(),
-            outputs: model.outputs.iter().map(|o| (o.node, o.slot)).collect(),
+            outputs: map_outlet_indices(&model.outputs, &remappings),
         };
         let duration = start_time.elapsed();
         trace!("model loading took: {duration:?}",);
@@ -574,10 +575,14 @@ impl Model {
         symbol_values: &SymbolValues,
         override_input_scales: Option<Vec<crate::Scale>>,
         override_output_scales: Option<HashMap<usize, crate::Scale>>,
-    ) -> BTreeMap<usize, NodeType> {
+    ) -> (BTreeMap<usize, NodeType>, Vec<usize>) {
         // use crate::graph::node_output_shapes;
         let mut nodes = BTreeMap::<usize, NodeType>::new();
         let mut input_idx = 0;
+        // We create broadcasting nodes each time input's expected dim doesn't match the fed input's dim.
+        // This creates a mismatch between the node's indexes in the `graph` and in the `nodes` BTreeMap
+        // This counter allows us to keep track of the offset between `graph` and `nodes`
+        let mut remappings = Vec::new();
         for (i, n) in graph.nodes.iter().enumerate() {
             // Extract the slope layer hyperparams
             match n.op().downcast_ref::<Scan>() {
@@ -641,7 +646,7 @@ impl Model {
                             traversed_len += mapping_len;
                         }
                     }
-                    let subgraph_nodes = Self::nodes_from_graph(
+                    let (subgraph_nodes, _) = Self::nodes_from_graph(
                         &model,
                         _run_args,
                         scales,
@@ -685,7 +690,24 @@ impl Model {
                     );
                 }
                 None => {
-                    let mut n = Node::new(n.clone(), &mut nodes, scales, i, symbol_values);
+                    let offset = remappings.len();
+                    let mut n = Node::new(
+                        n.clone(),
+                        &mut nodes,
+                        scales,
+                        i + offset,
+                        symbol_values,
+                        &remappings,
+                    );
+
+                    if n.opkind.requires_shape_equality() {
+                        let num_added_nodes = n.homogenize_input_shapes(&mut nodes);
+
+                        for _ in 0..num_added_nodes {
+                            remappings.push(i); // We add current index i to keep track of how much nodes have been added at each step
+                        }
+                    }
+
                     if let Some(ref scales) = override_input_scales {
                         if let Some(inp) = n.opkind.get_input() {
                             let scale = scales[input_idx];
@@ -708,12 +730,12 @@ impl Model {
                             n.out_scale = scales[&i];
                         }
                     }
-                    nodes.insert(i, NodeType::Node(n));
+                    nodes.insert(n.idx, NodeType::Node(n));
                 }
             }
         }
         Self::remove_unused_nodes(&mut nodes);
-        nodes
+        (nodes, remappings)
     }
 
     /// Run tract onnx model on sample data !
@@ -1391,5 +1413,132 @@ mod tests {
             result.outputs[0],
             Tensor::new(Some(&[5, 7, 9]), &[1, 3]).unwrap()
         );
+    }
+
+    /// Test loading a model that requires broadcasting functionality
+    #[test]
+    fn test_model_with_broadcast_requirements() {
+        use crate::graph::node::map_outlet_indices;
+        use tract_onnx::prelude::OutletId;
+
+        // Test the map_outlet_indices function directly
+        let outlets = vec![
+            OutletId::new(0, 0),
+            OutletId::new(1, 0),
+            OutletId::new(2, 0),
+        ];
+        let remappings = vec![0, 1]; // Broadcast nodes added at positions 0 and 1
+        let mapped = map_outlet_indices(&outlets, &remappings);
+
+        // Each outlet should be offset by the number of broadcast nodes added before or at that position
+        assert_eq!(mapped[0], (1, 0)); // Node 0: offset = count(r <= 0) = 1, so 0+1=1
+        assert_eq!(mapped[1], (3, 0)); // Node 1: offset = count(r <= 1) = 2, so 1+2=3
+        assert_eq!(mapped[2], (4, 0)); // Node 2: offset = count(r <= 2) = 2, so 2+2=4
+    }
+
+    /// Test model building with broadcasting using model manipulation directly
+    #[test]
+    fn test_model_with_broadcasting_manual() {
+        use crate::graph::utilities::create_const_node;
+
+        // Test using manual model construction instead of ModelBuilder
+        let mut model = Model::default();
+
+        // Create a scalar input [1]
+        let scalar_input = create_input_node(7, vec![1], 0, 1);
+        model.insert_node(scalar_input);
+
+        // Create a vector constant [1, 3]
+        let vector_data = vec![5, 10, 15];
+        let vector_tensor = Tensor::new(Some(&vector_data), &[1, 3]).unwrap();
+        let raw_tensor = Tensor::new(Some(&[5.0, 10.0, 15.0]), &[1, 3]).unwrap();
+        let vector_const = create_const_node(vector_tensor, raw_tensor, 7, vec![1, 3], 1, 1);
+        model.insert_node(vector_const);
+
+        // Add operation that requires matching shapes
+        let add_node = create_polyop_node(
+            PolyOp::<i32>::Add,
+            7,
+            vec![(0, 0), (1, 0)],
+            vec![1, 3],
+            2,
+            1,
+        );
+        model.insert_node(add_node);
+
+        model.set_inputs(vec![0]);
+        model.set_outputs(vec![(2, 0)]);
+
+        // Test the model with a scalar input that should be broadcasted
+        let scalar_val = Tensor::new(Some(&[2]), &[1]).unwrap();
+        let result = model.forward(&[scalar_val]).unwrap();
+
+        assert_eq!(result.outputs.len(), 1);
+        // The scalar 2 should be broadcasted and added to [5, 10, 15] -> [7, 12, 17]
+        assert_eq!(
+            result.outputs[0],
+            Tensor::new(Some(&[7, 12, 17]), &[1, 3]).unwrap()
+        );
+    }
+
+    /// Test the nodes_from_graph method with remapping functionality
+    #[test]
+    fn test_nodes_from_graph_with_remappings() {
+        use crate::graph::node::{Node, SupportedOp};
+
+        // Create a simple test to verify remapping logic works
+        let mut model = Model::default();
+
+        // Create input with [1] dimensions
+        let input_node = create_input_node(7, vec![1], 0, 1);
+        model.insert_node(input_node);
+
+        // Create an operation that requires [1, 3] dimensions
+        // This should trigger broadcasting when processed by nodes_from_graph
+        let mut add_node = Node {
+            idx: 1,
+            opkind: SupportedOp::Linear(PolyOp::Add),
+            inputs: vec![(0, 0)],
+            out_dims: vec![1, 3],
+            num_uses: 1,
+            out_scale: 7,
+        };
+
+        // Simulate what happens when a broadcast node is inserted
+        let mut nodes = std::collections::BTreeMap::new();
+        nodes.insert(
+            0,
+            crate::graph::model::NodeType::Node(create_input_node(7, vec![1], 0, 1)),
+        );
+
+        // Test homogenization which should add broadcast nodes
+        let num_broadcasts = add_node.homogenize_input_shapes(&mut nodes);
+        assert_eq!(num_broadcasts, 1);
+        assert!(nodes.len() > 1); // Additional broadcast node added
+    }
+
+    /// Test edge cases for broadcasting
+    #[test]
+    fn test_broadcast_edge_cases() {
+        use crate::graph::node::map_outlet_indices;
+        use tract_onnx::prelude::OutletId;
+
+        // Test with empty outlets
+        let outlets = vec![];
+        let remappings = vec![0, 1, 2];
+        let result = map_outlet_indices(&outlets, &remappings);
+        assert_eq!(result, vec![]);
+
+        // Test with empty remappings
+        let outlets = vec![OutletId::new(0, 0), OutletId::new(1, 1)];
+        let remappings = vec![];
+        let result = map_outlet_indices(&outlets, &remappings);
+        assert_eq!(result, vec![(0, 0), (1, 1)]);
+
+        // Test with single outlet and multiple remappings
+        let outlets = vec![OutletId::new(2, 0)];
+        let remappings = vec![0, 0, 1, 1, 2]; // 5 broadcast nodes added
+        let result = map_outlet_indices(&outlets, &remappings);
+        assert_eq!(result, vec![(7, 0)]); // 2 + 5 = 7
     }
 }

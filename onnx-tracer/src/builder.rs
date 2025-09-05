@@ -640,6 +640,24 @@ pub fn rebase_scale_model() -> Model {
     b.take(vec![input.0], vec![rebase_result])
 }
 
+pub fn greater_equal_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: First input vector (1D)
+    let input_a = b.input(vec![1, 5], 1); // Example: vector of length 5
+
+    // Node 1: Const tensor (1D)
+    let mut const_tensor: Tensor<i32> = Tensor::new(Some(&[64, 0, 0, 0, 0]), &[1, 5]).unwrap();
+    const_tensor.set_scale(SCALE);
+    let input_b_const = b.const_tensor_with_scale(const_tensor, SCALE, vec![1, 5], 1);
+
+    // Node 2: Greater than or equal comparison
+    let gte_result = b.greater_equal(input_a, input_b_const, vec![1, 5], 1);
+
+    b.take(vec![input_a.0], vec![gte_result])
+}
+
 /// Analog to onnx-tracer/models/multiclass0/network.onnx
 ///
 /// Multiclass classification model that:

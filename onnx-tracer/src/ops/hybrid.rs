@@ -2,7 +2,7 @@ use std::ops::{Add, Mul, Neg, Sub};
 
 use super::*;
 use crate::{
-    ops::{self, tolerance::Tolerance, utils},
+    ops::{self, utils, utils::Tolerance},
     tensor::{self, Tensor, TensorError, TensorType},
     trace_types::ONNXOpcode,
 };

@@ -145,25 +145,25 @@ where
         let trace_length = trace.len();
         println!("Trace length: {trace_length}");
         F::initialize_lookup_tables(std::mem::take(&mut preprocessing.field));
-        // pad trace to the next power of two
-        let padded_trace_length = trace_length.next_power_of_two();
-        let padding = padded_trace_length - trace_length;
+        // Pad to next power of two, adding one for the extra NoOp we add below
+        let padded_trace_length = (trace_length + 1).next_power_of_two();
         let last_address = trace.last().unwrap().instr().address;
-        if padding != 0 {
-            // Pad with NoOps (with sequential addresses)
-            trace.extend((0..padding - 1).map(|i| {
-                let mut no_op = JoltONNXCycle::no_op();
-                no_op.instr.address = last_address + i + 1;
-                no_op
-            }));
+        // Add one NoOp with sequential address, required because virtual instructions require the
+        // next instruction's address to equal the previous + 1 (and the trace might finish with a
+        // virtual instruction)
+        trace.push({
+            let mut no_op = JoltONNXCycle::no_op();
+            no_op.instr.address = last_address + 1;
+            no_op
+        });
 
-            // HACK(Forpee): Not sure if this is correct. RV pushes a jump instr:
-            // ```
-            // // Final JALR sets NextUnexpandedPC = 0
-            // trace.push(RV32IMCycle::last_jalr(last_address + 4 * (padding - 1)));
-            // ```
-            trace.push(JoltONNXCycle::no_op());
-        };
+        // HACK(Forpee): Not sure if this is correct. RV pushes a jump instr:
+        // ```
+        // // Final JALR sets NextUnexpandedPC = 0
+        // trace.push(RV32IMCycle::last_jalr(last_address + 4 * (padding - 1)));
+        // ```
+        // Pad with noOps
+        trace.resize(padded_trace_length, JoltONNXCycle::no_op());
 
         let tensor_heap_addresses: Vec<usize> = trace
             .iter()
@@ -222,7 +222,7 @@ where
         let precompiles_proof =
             PrecompileProof::prove(&preprocessing.shared.precompiles, &trace, &mut transcript);
         JoltSNARK {
-            trace_length,
+            trace_length: trace_length + 1,
             r1cs: r1cs_snark,
             tensor_heap: tensor_heap_snark,
             instruction_lookups: instruction_lookups_snark,
@@ -489,13 +489,35 @@ mod e2e_tests {
 
     #[serial]
     #[test]
+    fn test_add() {
+        // tests a model with 3 (2^s - 1) nodes
+        test_arithmetic_model(builder::custom_add_model, "add");
+    }
+
+    #[serial]
+    #[test]
+    fn test_addmul() {
+        // tests a model with 4 (2^s) nodes
+        test_arithmetic_model(builder::custom_addmul_model, "addmul");
+    }
+
+    #[serial]
+    #[test]
     fn test_addsubmuldivdiv() {
         test_arithmetic_model(builder::custom_addsubmuldivdiv_model, "addsubmuldivdiv");
     }
 
     #[serial]
     #[test]
+    fn test_custom_addsubmuldiv15() {
+        // tests a model with 15 (2^s - 1) nodes finishing with a virtual instruction
+        test_arithmetic_model(builder::custom_addsubmuldiv15_model, "addsubmuldiv15");
+    }
+
+    #[serial]
+    #[test]
     fn test_addsubmuldiv() {
+        // tests a model with 16 (2^s) nodes finishing with a virtual instruction
         test_arithmetic_model(builder::custom_addsubmuldiv_model, "addsubmuldiv");
     }
 

@@ -18,7 +18,7 @@ use jolt_core::{
         transcript::Transcript,
     },
 };
-use onnx_tracer::{ProgramOutput, constants::MAX_TENSOR_SIZE, trace_types::get_tensor_addresses};
+use onnx_tracer::{ProgramIO, constants::MAX_TENSOR_SIZE, trace_types::get_tensor_addresses};
 use rayon::prelude::*;
 
 use crate::jolt::{
@@ -48,11 +48,7 @@ struct OutputSumcheckProverState<F: JoltField> {
 }
 
 impl<F: JoltField> OutputSumcheckProverState<F> {
-    fn initialize(
-        final_heap_state: Vec<u32>,
-        r_address: &[F],
-        program_output: &ProgramOutput,
-    ) -> Self {
+    fn initialize(final_heap_state: Vec<u32>, r_address: &[F], program_output: &ProgramIO) -> Self {
         let K = final_heap_state.len();
 
         debug_assert!(K.is_power_of_two());
@@ -91,11 +87,11 @@ impl<F: JoltField> OutputSumcheckProverState<F> {
 #[derive(Debug, Clone)]
 struct OutputSumcheckVerifierState<F: JoltField> {
     r_address: Vec<F>,
-    program_output: ProgramOutput,
+    program_output: ProgramIO,
 }
 
 impl<F: JoltField> OutputSumcheckVerifierState<F> {
-    fn initialize(r_address: &[F], program_output: &ProgramOutput) -> Self {
+    fn initialize(r_address: &[F], program_output: &ProgramIO) -> Self {
         Self {
             r_address: r_address.to_vec(),
             program_output: program_output.clone(),
@@ -138,7 +134,7 @@ impl<F: JoltField> OutputSumcheck<F> {
         trace: &[JoltONNXCycle],
         r_address: &[F],
         transcript: &mut ProofTranscript,
-        program_output: &ProgramOutput,
+        program_output: &ProgramIO,
         final_heap_state: Vec<u32>,
     ) -> OutputProof<F, ProofTranscript> {
         let K = final_heap_state.len();
@@ -187,7 +183,7 @@ impl<F: JoltField> OutputSumcheck<F> {
         T: usize,
         proof: &OutputProof<F, ProofTranscript>,
         transcript: &mut ProofTranscript,
-        program_output: ProgramOutput,
+        program_output: ProgramIO,
     ) -> Result<(), ProofVerifyError> {
         let K = r_address.len().pow2();
         let output_sumcheck_verifier_state =

@@ -31,7 +31,7 @@ use jolt_core::{
     utils::{errors::ProofVerifyError, transcript::Transcript},
 };
 use onnx_tracer::{
-    ProgramOutput,
+    ProgramIO,
     constants::MAX_TENSOR_SIZE,
     trace_types::{ONNXInstr, ONNXOpcode},
 };
@@ -140,7 +140,7 @@ where
     pub fn prove(
         mut preprocessing: JoltProverPreprocessing<F, PCS, ProofTranscript>,
         mut trace: Vec<JoltONNXCycle>,
-        program_output: &ProgramOutput,
+        program_output: &ProgramIO,
     ) -> Self {
         let trace_length = trace.len();
         println!("Trace length: {trace_length}");
@@ -236,7 +236,7 @@ where
     pub fn verify(
         &self,
         preprocessing: JoltVerifierPreprocessing<F, PCS, ProofTranscript>,
-        program_output: ProgramOutput,
+        program_output: ProgramIO,
     ) -> Result<(), ProofVerifyError> {
         let mut transcript = ProofTranscript::new(b"Jolt transcript");
         let mut opening_accumulator: VerifierOpeningAccumulator<F, PCS, ProofTranscript> =

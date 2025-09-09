@@ -53,7 +53,7 @@ impl<F: JoltField> OutputSumcheckProverState<F> {
 
         debug_assert!(K.is_power_of_two());
 
-        let tensor_addresses = get_tensor_addresses(program_output.output_address);
+        let tensor_addresses = get_tensor_addresses(Some(program_output.output_address));
 
         let output_start = tensor_addresses[0];
         let output_end = *tensor_addresses.last().unwrap();
@@ -299,7 +299,7 @@ impl<F: JoltField, ProofTranscript: Transcript> BatchableSumcheckInstance<F, Pro
             program_output,
         } = self.verifier_state.as_ref().unwrap();
 
-        let tensor_addresses = get_tensor_addresses(program_output.output_address);
+        let tensor_addresses = get_tensor_addresses(Some(program_output.output_address));
 
         let output_start = tensor_addresses[0];
         let output_end = *tensor_addresses.last().unwrap();

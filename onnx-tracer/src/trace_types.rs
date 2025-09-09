@@ -3,7 +3,7 @@
 //! Used by the runtime to generate an execution trace for ONNX runtime execution.
 
 use crate::{
-    constants::{MAX_TENSOR_SIZE, ZERO_ADDR_PREPEND},
+    constants::{MAX_TENSOR_SIZE, RESERVED_ADDR_PREPEND},
     tensor::Tensor,
 };
 use core::panic;
@@ -43,24 +43,20 @@ impl ONNXCycle {
         }
     }
 
-    // # NOTE: Adds [ZERO_ADDR_PREPEND] to the orignal traced value
-    pub fn td(&self) -> usize {
-        self.instr.td.map_or(0, |td| td + ZERO_ADDR_PREPEND)
+    pub fn td(&self) -> Option<usize> {
+        self.instr.td
     }
 
-    // # NOTE: Adds [ZERO_ADDR_PREPEND] to the orignal traced value
-    pub fn ts1(&self) -> usize {
-        self.instr.ts1.map_or(0, |ts1| ts1 + ZERO_ADDR_PREPEND)
+    pub fn ts1(&self) -> Option<usize> {
+        self.instr.ts1
     }
 
-    // # NOTE: Adds [ZERO_ADDR_PREPEND] to the orignal traced value
-    pub fn ts2(&self) -> usize {
-        self.instr.ts2.map_or(0, |ts2| ts2 + ZERO_ADDR_PREPEND)
+    pub fn ts2(&self) -> Option<usize> {
+        self.instr.ts2
     }
 
-    // # NOTE: Adds [ZERO_ADDR_PREPEND] to the orignal traced value
-    pub fn ts3(&self) -> usize {
-        self.instr.ts3.map_or(0, |ts3| ts3 + ZERO_ADDR_PREPEND)
+    pub fn ts3(&self) -> Option<usize> {
+        self.instr.ts3
     }
 }
 
@@ -323,10 +319,13 @@ impl ONNXCycle {
 
 /// Converts a tensor index to a vector of addresses.
 /// Used in the zkVM to track all the onnx runtime machine tensor read and write addresses.
-pub fn get_tensor_addresses(t: usize) -> Vec<usize> {
+/// # NOTE: Adds [RESERVED_ADDR_PREPEND] to the orignal traced value
+pub fn get_tensor_addresses(t: Option<usize>) -> Vec<usize> {
+    let slot = t.map_or(0, |v| v + RESERVED_ADDR_PREPEND);
+
     let mut addresses = Vec::new();
     for i in 0..MAX_TENSOR_SIZE {
-        addresses.push(t * MAX_TENSOR_SIZE + i);
+        addresses.push(slot * MAX_TENSOR_SIZE + i);
     }
     addresses
 }
@@ -580,6 +579,7 @@ pub enum ONNXOpcode {
     Noop,
     Constant,
     Input,
+    Output,
     Add,
     Sub,
     Mul,

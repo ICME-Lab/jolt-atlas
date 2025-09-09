@@ -43,7 +43,7 @@ use crate::{
     constants::BYTECODE_PREPEND_NOOP,
     graph::model::{ForwardResult, Model, NodeType},
     tensor::Tensor,
-    trace_types::{normalize, ONNXCycle, ONNXInstr},
+    trace_types::{ONNXCycle, ONNXInstr},
 };
 use clap::Args;
 use serde::{Deserialize, Serialize};
@@ -61,28 +61,26 @@ pub mod trace_types;
 
 #[derive(Debug, Clone)]
 pub struct ProgramIO {
-    pub inputs: Vec<u64>,
-    pub input_address: usize, // Might always be 0
-    pub outputs: Vec<u64>,
+    pub input: Tensor<i32>,
+    pub input_address: usize,
+    pub output: Tensor<i32>,
     pub output_address: usize,
 }
 
 impl ProgramIO {
     pub fn new(
-        input: &Tensor<i32>,
+        input: Tensor<i32>,
         input_address: usize,
         res: ForwardResult,
         output_address: usize,
     ) -> Self {
-        let input_vals: Vec<u64> = input.inner.iter().map(normalize).collect();
         let outputs = res.outputs;
         assert!(outputs.len() == 1);
         let output = outputs[0].clone();
-        let output_vals: Vec<u64> = output.inner.iter().map(normalize).collect();
         ProgramIO {
-            inputs: input_vals,
+            input,
             input_address,
-            outputs: output_vals,
+            output,
             output_address,
         }
     }
@@ -125,10 +123,10 @@ pub fn execution_trace(model: Model, input: &Tensor<i32>) -> (Vec<ONNXCycle>, Pr
         .expect("Failed to run model");
     let execution_trace = model.tracer.execution_trace.borrow().clone();
     let input_address = model.graph.inputs[0];
-    let output_address = execution_trace.last().unwrap().td().unwrap();
+    let output_address = 1;
     (
         execution_trace,
-        ProgramIO::new(input, input_address, forward_result, output_address),
+        ProgramIO::new(input.clone(), input_address, forward_result, output_address),
     )
 }
 

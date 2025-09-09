@@ -147,15 +147,12 @@ where
         F::initialize_lookup_tables(std::mem::take(&mut preprocessing.field));
         // Pad to next power of two, adding one for the extra NoOp we add below
         let padded_trace_length = (trace_length + 1).next_power_of_two();
-        let last_address = trace.last().unwrap().instr().address;
-        // Add one NoOp with sequential address, required because virtual instructions require the
-        // next instruction's address to equal the previous + 1 (and the trace might finish with a
-        // virtual instruction)
-        trace.push({
-            let mut no_op = JoltONNXCycle::no_op();
-            no_op.instr.address = last_address + 1;
-            no_op
-        });
+        let last_node = trace.last().unwrap();
+        // Add Output node, which maps the final tensor output to the reserved output address
+        trace.push(JoltONNXCycle::output_node(
+            last_node,
+            program_output.output.clone(),
+        ));
 
         // HACK(Forpee): Not sure if this is correct. RV pushes a jump instr:
         // ```

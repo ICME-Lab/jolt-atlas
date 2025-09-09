@@ -18,7 +18,7 @@ use jolt_core::{
         transcript::Transcript,
     },
 };
-use onnx_tracer::{ProgramIO, constants::MAX_TENSOR_SIZE, trace_types::get_tensor_addresses};
+use onnx_tracer::{ProgramIO, constants::MAX_TENSOR_SIZE, trace_types::normalize};
 use rayon::prelude::*;
 
 use crate::jolt::{
@@ -48,15 +48,15 @@ struct OutputSumcheckProverState<F: JoltField> {
 }
 
 impl<F: JoltField> OutputSumcheckProverState<F> {
+    // TODO(AntoineF4C5): Add Inputs to checks
     fn initialize(final_heap_state: Vec<u32>, r_address: &[F], program_output: &ProgramIO) -> Self {
         let K = final_heap_state.len();
 
         debug_assert!(K.is_power_of_two());
 
-        let tensor_addresses = get_tensor_addresses(Some(program_output.output_address));
-
-        let output_start = tensor_addresses[0];
-        let output_end = *tensor_addresses.last().unwrap();
+        let output_start = program_output.output_address * MAX_TENSOR_SIZE;
+        // output spans MAX_TENSOR_SIZE words
+        let output_end = (program_output.output_address + 1) * MAX_TENSOR_SIZE - 1;
 
         let mut val_output = vec![0; K];
         val_output[output_start..output_end]
@@ -293,16 +293,16 @@ impl<F: JoltField, ProofTranscript: Transcript> BatchableSumcheckInstance<F, Pro
         self.val_final_claim = Some(val_final.final_sumcheck_claim());
     }
 
+    // TODO(AntoineF4C5): Add Inputs to checks
     fn expected_output_claim(&self, r: &[F]) -> F {
         let OutputSumcheckVerifierState {
             r_address,
             program_output,
         } = self.verifier_state.as_ref().unwrap();
 
-        let tensor_addresses = get_tensor_addresses(Some(program_output.output_address));
-
-        let output_start = tensor_addresses[0];
-        let output_end = *tensor_addresses.last().unwrap();
+        let output_start = program_output.output_address * MAX_TENSOR_SIZE;
+        // output spans MAX_TENSOR_SIZE words
+        let output_end = (program_output.output_address + 1) * MAX_TENSOR_SIZE - 1;
 
         let val_final_claim = self.val_final_claim.as_ref().unwrap();
 
@@ -313,8 +313,8 @@ impl<F: JoltField, ProofTranscript: Transcript> BatchableSumcheckInstance<F, Pro
         let mut val_output = vec![F::zero(); self.K];
         val_output[output_start..output_end]
             .par_iter_mut()
-            .zip(program_output.outputs.par_iter())
-            .for_each(|(dest, src)| *dest = F::from_u64(*src));
+            .zip(program_output.output.par_iter().map(normalize))
+            .for_each(|(dest, src)| *dest = F::from_u64(src));
 
         let val_output = MultilinearPolynomial::from(val_output);
 

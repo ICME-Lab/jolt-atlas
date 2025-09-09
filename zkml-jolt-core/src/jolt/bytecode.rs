@@ -65,18 +65,15 @@ impl BytecodePreprocessing {
         let code_size = bytecode.len();
         // Pad to next power of two, adding one for the extra NoOp we add below
         let padded_code_size = (bytecode.len() + 1).next_power_of_two();
-        let last_address = bytecode.last().unwrap().address;
-        // Add one NoOp with sequential address, required because virtual instructions require the
-        // next instruction's address to equal the previous + 1 (and the trace might finish with a
-        // virtual instruction)
+        let last_node = bytecode.last().unwrap();
+        // Add Output node, which maps the final tensor output to the reserved output address
         bytecode.push({
-            let mut no_op = ONNXInstr::no_op();
-            no_op.address = last_address + 1;
+            let output_node = ONNXInstr::output_node(last_node);
             assert_eq!(
-                virtual_address_map.insert((no_op.address, 0), code_size),
+                virtual_address_map.insert((output_node.address, 0), code_size),
                 None
             );
-            no_op
+            output_node
         });
         bytecode.resize(padded_code_size, ONNXInstr::no_op());
 

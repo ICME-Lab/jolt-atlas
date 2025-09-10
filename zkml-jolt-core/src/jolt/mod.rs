@@ -547,6 +547,36 @@ mod e2e_tests {
 
     #[serial]
     #[test]
+    fn test_altered_input_and_output() {
+        let model = builder::custom_add_model();
+        let program_bytecode = onnx_tracer::decode_model(model.clone());
+        let pp: JoltProverPreprocessing<Fr, PCS, KeccakTranscript> =
+            JoltSNARK::prover_preprocess(program_bytecode);
+
+        let input = Tensor::new(Some(&[10, 20, 30, 40]), &[1, 4]).unwrap();
+
+        let (raw_trace, program_output) = onnx_tracer::execution_trace(model, &input);
+
+        let execution_trace = jolt_execution_trace(raw_trace.clone());
+        let snark: JoltSNARK<Fr, PCS, KeccakTranscript> =
+            JoltSNARK::prove(pp.clone(), execution_trace, &program_output);
+
+        // Verify with correct input and output
+        snark.verify((&pp).into(), program_output.clone()).unwrap();
+
+        // Alter input and assert verification error
+        let mut altered_input = program_output.clone();
+        altered_input.input[0] += 1; // alter input
+        assert!(snark.verify((&pp).into(), altered_input).is_err());
+
+        // Alter output and assert verification error
+        let mut altered_output = program_output.clone();
+        altered_output.output[0] += 1; // alter output
+        assert!(snark.verify((&pp).into(), altered_output).is_err());
+    }
+
+    #[serial]
+    #[test]
     fn test_simple_matmult() {
         // Test matrix multiplication: [1, 4] × [3, 4] → [1, 3] (ONNX implicitly transposes B to [4, 3])
         // Input: [1, 2, 3, 4]

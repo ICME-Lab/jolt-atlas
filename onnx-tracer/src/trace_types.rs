@@ -177,15 +177,15 @@ impl ONNXCycle {
     ///
     /// Panics if any underlying tensor's length exceeds `MAX_TENSOR_SIZE`.
     pub fn to_memory_ops(&self) -> ONNXCycleMemoryOps {
-        let ts1 = (get_tensor_addresses(self.ts1()), self.ts1_vals());
-        let ts2 = (get_tensor_addresses(self.ts2()), self.ts2_vals());
-        let ts3 = (get_tensor_addresses(self.ts3()), self.ts3_vals());
+        let ts1 = (get_tensor_zkvm_addresses(self.ts1()), self.ts1_vals());
+        let ts2 = (get_tensor_zkvm_addresses(self.ts2()), self.ts2_vals());
+        let ts3 = (get_tensor_zkvm_addresses(self.ts3()), self.ts3_vals());
 
         // If the instruction is Output, we write to reserved addresses for output tensor
         let td_addresses = if self.instr.opcode == ONNXOpcode::Output {
-            (MAX_TENSOR_SIZE..2 * MAX_TENSOR_SIZE).collect()
+            index_to_addresses(1) // reserved address for output tensor
         } else {
-            get_tensor_addresses(self.td())
+            get_tensor_zkvm_addresses(self.td())
         };
         let td = (td_addresses, self.td_pre_vals(), self.td_post_vals());
 
@@ -321,15 +321,23 @@ impl ONNXCycle {
     }
 }
 
-/// Converts a tensor index to a vector of addresses.
+/// Maps a tensor index to its corresponding output addresses in the zkVM memory.
 /// Used in the zkVM to track all the onnx runtime machine tensor read and write addresses.
-/// # NOTE: Adds [RESERVED_ADDR_PREPEND] to the orignal traced value
-pub fn get_tensor_addresses(t: Option<usize>) -> Vec<usize> {
+///
+/// It prepends the [RESERVED_ADDR_PREPEND] offset to the tensor index before calculating addresses.
+/// If the tensor index is `None`, it defaults to 0 (zero register).
+pub fn get_tensor_zkvm_addresses(t: Option<usize>) -> Vec<usize> {
     let slot = t.map_or(0, |t| t + RESERVED_ADDR_PREPEND);
 
+    index_to_addresses(slot)
+}
+
+/// Converts a slot index to a vector of addresses.
+/// Used in the zkVM to get all the memory addresses a slot occupies.
+pub fn index_to_addresses(i: usize) -> Vec<usize> {
     let mut addresses = Vec::new();
-    for i in 0..MAX_TENSOR_SIZE {
-        addresses.push(slot * MAX_TENSOR_SIZE + i);
+    for j in 0..MAX_TENSOR_SIZE {
+        addresses.push(i * MAX_TENSOR_SIZE + j);
     }
     addresses
 }

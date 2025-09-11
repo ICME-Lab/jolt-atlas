@@ -2,10 +2,7 @@ use super::node::*;
 use crate::{
     decode_node,
     graph::{
-        input::GraphData,
-        tracer::Tracer,
-        utilities::{node_output_shapes, remap_inputs},
-        vars::VarScales,
+        input::GraphData, tracer::Tracer, utilities::node_output_shapes, vars::VarScales,
         GraphError,
     },
     ops::{Input, Op, Unknown},
@@ -466,13 +463,13 @@ impl Model {
         let start_time = instant::Instant::now();
         let (model, symbol_values) = Self::load_onnx_using_tract(reader, run_args);
         let scales = VarScales::from_args(run_args);
-        let (nodes, remappings) =
-            Self::nodes_from_graph(&model, run_args, &scales, &symbol_values, None, None);
+        let nodes = Self::nodes_from_graph(&model, run_args, &scales, &symbol_values, None, None);
         debug!("\n {model}",);
+        let output_node = (*nodes.iter().last().unwrap().0, 0);
         let parsed_nodes = ParsedNodes {
             nodes,
             inputs: vec![0],
-            outputs: map_outlet_indices(&model.outputs, &remappings),
+            outputs: vec![output_node],
         };
         let duration = start_time.elapsed();
         trace!("model loading took: {duration:?}",);
@@ -578,17 +575,17 @@ impl Model {
         symbol_values: &SymbolValues,
         override_input_scales: Option<Vec<crate::Scale>>,
         override_output_scales: Option<HashMap<usize, crate::Scale>>,
-    ) -> (BTreeMap<usize, NodeType>, Vec<usize>) {
+    ) -> BTreeMap<usize, NodeType> {
         // use crate::graph::node_output_shapes;
         let mut nodes = BTreeMap::<usize, NodeType>::new();
+        // Insert dummy node at idx 0, which will be replaced with the actual Input node later.
+        nodes.insert(0, NodeType::Node(Node::default()));
+
         let mut input_idx = 0;
         // We create broadcasting nodes each time input's expected dim doesn't match the fed input's dim.
         // This creates a mismatch between the node's indexes in the `graph` and in the `nodes` BTreeMap
-        // This counter allows us to keep track of the offset between `graph` and `nodes`
-        // #NOTE: This is initialized with a value of 0 so that nodes start at idx 1, since idx 0 is reserved for the input node.
-        // This first value is removed from the remappings once the input node is found.
-        let mut remappings = vec![0];
-        let mut input_node_idx = 0;
+        // This counter allows us to keep track of the mapping between a node position in `graph` and its position in `nodes`.
+        let mut remappings = BTreeMap::<usize, usize>::new();
         for (i, n) in graph.nodes.iter().enumerate() {
             // Extract the slope layer hyperparams
             match n.op().downcast_ref::<Scan>() {
@@ -652,7 +649,7 @@ impl Model {
                             traversed_len += mapping_len;
                         }
                     }
-                    let (subgraph_nodes, _) = Self::nodes_from_graph(
+                    let subgraph_nodes = Self::nodes_from_graph(
                         &model,
                         _run_args,
                         scales,
@@ -696,33 +693,11 @@ impl Model {
                     );
                 }
                 None => {
-                    let mut node = n.clone();
-                    // Remap the inputs of the node taking into account we moved the `Input` node to idx 0
-                    remap_inputs(&mut node.inputs, input_node_idx);
-
-                    let offset = remappings.len();
-                    let mut n = Node::new(
-                        node,
-                        &mut nodes,
-                        scales,
-                        i + offset,
-                        symbol_values,
-                        &remappings,
-                    );
-
-                    // Check for input node, which we will set to idx 0.
-                    if n.opkind.is_input() {
-                        input_node_idx = i; // store the original index of the input node
-                        n.idx = 0;
-                        remappings.remove(0); // remove the first element which was added so that previous nodes start at idx 1
-                    }
+                    let mut n =
+                        Node::new(n.clone(), &mut nodes, scales, symbol_values, &remappings);
 
                     if n.opkind.requires_shape_equality() {
-                        let num_added_nodes = n.homogenize_input_shapes(&mut nodes);
-
-                        for _ in 0..num_added_nodes {
-                            remappings.push(i); // We add current index i to keep track of how much nodes have been added at each step
-                        }
+                        n.homogenize_input_shapes(&mut nodes);
                     }
 
                     if let Some(ref scales) = override_input_scales {
@@ -747,12 +722,13 @@ impl Model {
                             n.out_scale = scales[&i];
                         }
                     }
+                    remappings.insert(i, n.idx);
                     nodes.insert(n.idx, NodeType::Node(n));
                 }
             }
         }
         Self::remove_unused_nodes(&mut nodes);
-        (nodes, remappings)
+        nodes
     }
 
     /// Run tract onnx model on sample data !
@@ -1444,13 +1420,20 @@ mod tests {
             OutletId::new(1, 0),
             OutletId::new(2, 0),
         ];
-        let remappings = vec![0, 1]; // Broadcast nodes added at positions 0 and 1
+
+        // Graph:       [Node0, Node1, Node2]
+        // Node list:   [Broadcast, Node0, Broadcast, Node1, Node2]
+
+        let mut remappings = BTreeMap::new();
+        remappings.insert(0, 1); // Node at idx 0 of Graph maps to index 1 in nodes list
+        remappings.insert(1, 3); // Node at idx 1 of Graph maps to index 3 in nodes list
+        remappings.insert(2, 4); // Node at idx 2 of Graph maps to index 4 in nodes list
         let mapped = map_outlet_indices(&outlets, &remappings);
 
-        // Each outlet should be offset by the number of broadcast nodes added before or at that position
-        assert_eq!(mapped[0], (1, 0)); // Node 0: offset = count(r <= 0) = 1, so 0+1=1
-        assert_eq!(mapped[1], (3, 0)); // Node 1: offset = count(r <= 1) = 2, so 1+2=3
-        assert_eq!(mapped[2], (4, 0)); // Node 2: offset = count(r <= 2) = 2, so 2+2=4
+        // Each outlet should be mapped to the node's index in the nodes list
+        assert_eq!(mapped[0], (1, 0));
+        assert_eq!(mapped[1], (3, 0));
+        assert_eq!(mapped[2], (4, 0));
     }
 
     /// Test model building with broadcasting using model manipulation directly
@@ -1504,11 +1487,9 @@ mod tests {
         use crate::graph::node::{Node, SupportedOp};
 
         // Create a simple test to verify remapping logic works
-        let mut model = Model::default();
 
         // Create input with [1] dimensions
         let input_node = create_input_node(7, vec![1], 0, 1);
-        model.insert_node(input_node);
 
         // Create an operation that requires [1, 3] dimensions
         // This should trigger broadcasting when processed by nodes_from_graph
@@ -1523,14 +1504,10 @@ mod tests {
 
         // Simulate what happens when a broadcast node is inserted
         let mut nodes = std::collections::BTreeMap::new();
-        nodes.insert(
-            0,
-            crate::graph::model::NodeType::Node(create_input_node(7, vec![1], 0, 1)),
-        );
+        nodes.insert(0, crate::graph::model::NodeType::Node(input_node));
 
         // Test homogenization which should add broadcast nodes
-        let num_broadcasts = add_node.homogenize_input_shapes(&mut nodes);
-        assert_eq!(num_broadcasts, 1);
+        add_node.homogenize_input_shapes(&mut nodes);
         assert!(nodes.len() > 1); // Additional broadcast node added
     }
 
@@ -1542,19 +1519,41 @@ mod tests {
 
         // Test with empty outlets
         let outlets = vec![];
-        let remappings = vec![0, 1, 2];
+
+        // Graph:       [Node0, Node1]
+        // Node list:   [Broadcast, Node0, Node1]
+
+        let mut remappings = BTreeMap::new();
+        remappings.insert(0, 1); // Node at idx 0 of Graph maps to index 1 in nodes list
+        remappings.insert(1, 2); // Node at idx 1 of Graph maps to index 2 in nodes list
+
         let result = map_outlet_indices(&outlets, &remappings);
         assert_eq!(result, vec![]);
 
         // Test with empty remappings
         let outlets = vec![OutletId::new(0, 0), OutletId::new(1, 1)];
-        let remappings = vec![];
+
+        // Graph:       [Node0, Node1]
+        // Node list:   [Node0, Node1]
+
+        let mut remappings = BTreeMap::new();
+        remappings.insert(0, 0); // No broadcasts, direct mapping
+        remappings.insert(1, 1); // No broadcasts, direct mapping
+
         let result = map_outlet_indices(&outlets, &remappings);
         assert_eq!(result, vec![(0, 0), (1, 1)]);
 
         // Test with single outlet and multiple remappings
         let outlets = vec![OutletId::new(2, 0)];
-        let remappings = vec![0, 0, 1, 1, 2]; // 5 broadcast nodes added
+
+        // Graph:       [Node0, Node1, Node2]
+        // Node list:   [Broadcast, Broadcast, Node0, Broadcast, Broadcast, Node1, Broadcast, Node2]
+
+        let mut remappings = BTreeMap::new();
+        remappings.insert(0, 2); // Node at idx 0 of Graph maps to index 2 in nodes list
+        remappings.insert(1, 5); // Node at idx 1 of Graph maps to index 5 in nodes list
+        remappings.insert(2, 7); // Node at idx 2 of Graph maps to index 7 in nodes list
+
         let result = map_outlet_indices(&outlets, &remappings);
         assert_eq!(result, vec![(7, 0)]); // 2 + 5 = 7
     }

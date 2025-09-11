@@ -12,8 +12,7 @@ use log::debug;
 use std::{error::Error, sync::Arc};
 use tract_onnx::{
     prelude::{
-        tract_itertools::Itertools, DatumType, Node as OnnxNode, OutletId, SymbolValues, TypedFact,
-        TypedOp,
+        tract_itertools::Itertools, DatumType, Node as OnnxNode, SymbolValues, TypedFact, TypedOp,
     },
     tract_core::ops::{
         array::{Gather, GatherElements, MultiBroadcastTo, OneHot, ScatterElements, Slice, Topk},
@@ -1457,16 +1456,6 @@ pub fn homogenize_input_scales(
         }))
     } else {
         Ok(op)
-    }
-}
-
-pub fn remap_inputs(inputs: &mut [OutletId], input_node_idx: usize) {
-    for input in inputs.iter_mut() {
-        if input.node == input_node_idx {
-            input.node = 0;
-        } else if input.node < input_node_idx {
-            input.node += 1;
-        }
     }
 }
 

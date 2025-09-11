@@ -52,7 +52,6 @@ struct OutputSumcheckProverState<F: JoltField> {
 }
 
 impl<F: JoltField> OutputSumcheckProverState<F> {
-    // TODO(AntoineF4C5): Add Inputs to checks
     fn initialize(final_heap_state: Vec<u32>, r_address: &[F], program_output: &ProgramIO) -> Self {
         let K = final_heap_state.len();
 
@@ -71,9 +70,6 @@ impl<F: JoltField> OutputSumcheckProverState<F> {
             .par_iter_mut()
             .zip(final_heap_state[output_start..input_end].par_iter())
             .for_each(|(dest, src)| *dest = *src);
-
-        #[cfg(test)]
-        log::debug!("val_output: {val_output:?}");
 
         // Compute io_mask by setting the relevant coefficients to 1
         let mut output_mask = vec![0u8; K];
@@ -304,7 +300,6 @@ impl<F: JoltField, ProofTranscript: Transcript> BatchableSumcheckInstance<F, Pro
         self.val_final_claim = Some(val_final.final_sumcheck_claim());
     }
 
-    // TODO(AntoineF4C5): Add Inputs to checks
     fn expected_output_claim(&self, r: &[F]) -> F {
         let OutputSumcheckVerifierState {
             r_address,

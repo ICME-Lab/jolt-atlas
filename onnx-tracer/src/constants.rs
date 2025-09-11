@@ -34,3 +34,9 @@ pub const MEMORY_OPS_PER_INSTRUCTION: usize = 3;
 /// Since the 0 address is reserved for the zero register and the 1 address is reserved for the output,
 /// we prepend a 2 to the address's in the execution trace.
 pub const RESERVED_ADDR_PREPEND: usize = 2;
+
+/// Allocated address for the output register in the zkVM execution trace.
+pub const OUTPUT_ADDR: usize = 1;
+
+/// Allocated address for the input register in the zkVM execution trace.
+pub const INPUT_ADDR: usize = 2;

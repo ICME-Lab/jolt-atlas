@@ -20,7 +20,7 @@ use jolt_core::{
 };
 use onnx_tracer::{
     ProgramIO,
-    constants::MAX_TENSOR_SIZE,
+    constants::{INPUT_ADDR, MAX_TENSOR_SIZE, OUTPUT_ADDR},
     trace_types::{index_to_addresses, normalize},
 };
 use rayon::prelude::*;
@@ -52,7 +52,11 @@ struct OutputSumcheckProverState<F: JoltField> {
 }
 
 impl<F: JoltField> OutputSumcheckProverState<F> {
-    fn initialize(final_heap_state: Vec<u32>, r_address: &[F], program_output: &ProgramIO) -> Self {
+    fn initialize(
+        final_heap_state: Vec<u32>,
+        r_address: &[F],
+        _program_output: &ProgramIO,
+    ) -> Self {
         let K = final_heap_state.len();
 
         debug_assert!(K.is_power_of_two());
@@ -60,9 +64,9 @@ impl<F: JoltField> OutputSumcheckProverState<F> {
         // The heap layout is as follows:
         // - [zero_register, output, input, ..memory]
         // Hence the input-output verification range is [output_start, input_end]
-        let output_addresses = index_to_addresses(program_output.output_address);
+        let output_addresses = index_to_addresses(OUTPUT_ADDR);
         let output_start = output_addresses[0];
-        let input_addresses = index_to_addresses(2);
+        let input_addresses = index_to_addresses(INPUT_ADDR);
         let input_end = *input_addresses.last().unwrap();
 
         let mut val_output = vec![0; K];
@@ -308,11 +312,11 @@ impl<F: JoltField, ProofTranscript: Transcript> BatchableSumcheckInstance<F, Pro
         // The heap layout is as follows:
         // - [zero_register, output, input, ..memory]
         // Hence the input-output verification range is [output_start, input_end]
-        let output_addresses = index_to_addresses(program_output.output_address);
+        let output_addresses = index_to_addresses(OUTPUT_ADDR);
         let output_start = output_addresses[0];
         let output_end = *output_addresses.last().unwrap();
 
-        let input_addresses = index_to_addresses(2);
+        let input_addresses = index_to_addresses(INPUT_ADDR);
         let input_start = *input_addresses.first().unwrap();
         let input_end = *input_addresses.last().unwrap();
 

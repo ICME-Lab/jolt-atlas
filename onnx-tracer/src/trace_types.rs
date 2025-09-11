@@ -3,7 +3,7 @@
 //! Used by the runtime to generate an execution trace for ONNX runtime execution.
 
 use crate::{
-    constants::{MAX_TENSOR_SIZE, RESERVED_ADDR_PREPEND},
+    constants::{MAX_TENSOR_SIZE, OUTPUT_ADDR, RESERVED_ADDR_PREPEND},
     tensor::Tensor,
 };
 use core::panic;
@@ -183,7 +183,7 @@ impl ONNXCycle {
 
         // If the instruction is Output, we write to reserved addresses for output tensor
         let td_addresses = if self.instr.opcode == ONNXOpcode::Output {
-            index_to_addresses(1) // reserved address for output tensor
+            index_to_addresses(OUTPUT_ADDR) // reserved address for output tensor
         } else {
             get_tensor_zkvm_addresses(self.td())
         };

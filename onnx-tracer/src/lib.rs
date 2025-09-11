@@ -62,27 +62,15 @@ pub mod trace_types;
 #[derive(Debug, Clone)]
 pub struct ProgramIO {
     pub input: Tensor<i32>,
-    pub input_address: usize,
     pub output: Tensor<i32>,
-    pub output_address: usize,
 }
 
 impl ProgramIO {
-    pub fn new(
-        input: Tensor<i32>,
-        input_address: usize,
-        res: ForwardResult,
-        output_address: usize,
-    ) -> Self {
+    pub fn new(input: Tensor<i32>, res: ForwardResult) -> Self {
         let outputs = res.outputs;
         assert!(outputs.len() == 1);
         let output = outputs[0].clone();
-        ProgramIO {
-            input,
-            input_address,
-            output,
-            output_address,
-        }
+        ProgramIO { input, output }
     }
 }
 
@@ -122,11 +110,9 @@ pub fn execution_trace(model: Model, input: &Tensor<i32>) -> (Vec<ONNXCycle>, Pr
         .forward(&[input.clone()])
         .expect("Failed to run model");
     let execution_trace = model.tracer.execution_trace.borrow().clone();
-    let input_address = model.graph.inputs[0];
-    let output_address = 1;
     (
         execution_trace,
-        ProgramIO::new(input.clone(), input_address, forward_result, output_address),
+        ProgramIO::new(input.clone(), forward_result),
     )
 }
 

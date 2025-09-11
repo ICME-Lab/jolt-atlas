@@ -4,6 +4,9 @@
 //! neural network models for testing and development. It offers high-level methods
 //! for common operations like matrix multiplication, element-wise operations, and more.
 //!
+//! It supposes that the model's input node is always the first node (idx 0),
+//! and that the nodes are correctly broadcasted with broadcast nodes where necessary.
+//!
 //! # Example: Simple Matrix Multiplication
 //!
 //! ```ignore
@@ -525,7 +528,10 @@ pub fn sentiment0() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
 
-    // Node 0: Create the embedding tensor (shape [14, 1]) (embeddings taken from /models/sentiment_sum)
+    // Node 0: Input node for word indices (shape [1, 5])
+    let input_indices = b.input(vec![1, 5], 1);
+
+    // Node 1: Create the embedding tensor (shape [14, 1]) (embeddings taken from /models/sentiment_sum)
     let mut embedding: Tensor<i32> = Tensor::new(
         Some(&[
             139, -200, -331, -42, -260, -290, -166, -171, -481, -294, 210, 291, 2, 328,
@@ -535,9 +541,6 @@ pub fn sentiment0() -> Model {
     .unwrap();
     embedding.set_scale(SCALE);
     let embedding_const = b.const_tensor(embedding, vec![14, 1], 1);
-
-    // Node 1: Input node for word indices (shape [1, 5])
-    let input_indices = b.input(vec![1, 5], 1);
 
     // Node 2: Gather (lookup embeddings based on indices)
     let gathered = b.gather(embedding_const, input_indices, 0, vec![1, 5, 1], 1);
@@ -588,7 +591,10 @@ pub fn sentiment_select() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
 
-    // Node 0: Embedding tensor (shape [14, 1])
+    // Node 0: Input indices (shape [1, 5])
+    let input_indices = b.input(vec![1, 5], 1);
+
+    // Node 1: Embedding tensor (shape [14, 1])
     let mut embedding: Tensor<i32> = Tensor::new(
         Some(&[
             0, 45, -137, -14, -6, 454, -81, -92, -32, 421, -106, -16, -146, 18,
@@ -598,9 +604,6 @@ pub fn sentiment_select() -> Model {
     .unwrap();
     embedding.set_scale(SCALE);
     let embedding_const = b.const_tensor_with_scale(embedding, SCALE, vec![14, 1], 1);
-
-    // Node 1: Input indices (shape [1, 5])
-    let input_indices = b.input(vec![1, 5], 1);
 
     // Node 2: Gather embeddings
     let gathered = b.gather(embedding_const, input_indices, 0, vec![1, 5, 1], 1);
@@ -723,7 +726,10 @@ pub fn multiclass0() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
 
-    // Node 0: Embedding matrix (shape [31, 1]) - Updated size and values
+    // Node 0: Input indices (shape [1, 8])
+    let input_indices = b.input(vec![1, 8], 1);
+
+    // Node 1: Embedding matrix (shape [31, 1]) - Updated size and values
     let mut embedding: Tensor<i32> = Tensor::new(
         Some(&[
             -61, -287, -437, -294, -318, 345, 331, 330, -28, 337, 113, 111, 91, 103, -58, 85, 72,
@@ -734,9 +740,6 @@ pub fn multiclass0() -> Model {
     .unwrap();
     embedding.set_scale(SCALE);
     let embedding_const = b.const_tensor_with_scale(embedding, SCALE, vec![31, 1], 1);
-
-    // Node 1: Input indices (shape [1, 8])
-    let input_indices = b.input(vec![1, 8], 1);
 
     // Node 2: Gather embeddings
     let gathered = b.gather(embedding_const, input_indices, 0, vec![1, 8, 1], 1);

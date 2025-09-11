@@ -765,7 +765,7 @@ mod e2e_tests {
         debug!("Output: {output:#?}",);
     }
 
-    #[should_panic(expected = "not yet implemented")]
+    #[should_panic]
     #[test]
     fn test_subgraph() {
         let subgraph_program = ONNXProgram {

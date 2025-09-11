@@ -2,7 +2,10 @@ use super::node::*;
 use crate::{
     decode_node,
     graph::{
-        input::GraphData, tracer::Tracer, utilities::node_output_shapes, vars::VarScales,
+        input::GraphData,
+        tracer::Tracer,
+        utilities::{node_output_shapes, remap_inputs},
+        vars::VarScales,
         GraphError,
     },
     ops::{Input, Op, Unknown},
@@ -468,7 +471,7 @@ impl Model {
         debug!("\n {model}",);
         let parsed_nodes = ParsedNodes {
             nodes,
-            inputs: model.inputs.iter().map(|o| o.node).collect(),
+            inputs: vec![0],
             outputs: map_outlet_indices(&model.outputs, &remappings),
         };
         let duration = start_time.elapsed();
@@ -582,7 +585,10 @@ impl Model {
         // We create broadcasting nodes each time input's expected dim doesn't match the fed input's dim.
         // This creates a mismatch between the node's indexes in the `graph` and in the `nodes` BTreeMap
         // This counter allows us to keep track of the offset between `graph` and `nodes`
-        let mut remappings = Vec::new();
+        // #NOTE: This is initialized with a value of 0 so that nodes start at idx 1, since idx 0 is reserved for the input node.
+        // This first value is removed from the remappings once the input node is found.
+        let mut remappings = vec![0];
+        let mut input_node_idx = 0;
         for (i, n) in graph.nodes.iter().enumerate() {
             // Extract the slope layer hyperparams
             match n.op().downcast_ref::<Scan>() {
@@ -690,15 +696,26 @@ impl Model {
                     );
                 }
                 None => {
+                    let mut node = n.clone();
+                    // Remap the inputs of the node taking into account we moved the `Input` node to idx 0
+                    remap_inputs(&mut node.inputs, input_node_idx);
+
                     let offset = remappings.len();
                     let mut n = Node::new(
-                        n.clone(),
+                        node,
                         &mut nodes,
                         scales,
                         i + offset,
                         symbol_values,
                         &remappings,
                     );
+
+                    // Check for input node, which we will set to idx 0.
+                    if n.opkind.is_input() {
+                        input_node_idx = i; // store the original index of the input node
+                        n.idx = 0;
+                        remappings.remove(0); // remove the first element which was added so that previous nodes start at idx 1
+                    }
 
                     if n.opkind.requires_shape_equality() {
                         let num_added_nodes = n.homogenize_input_shapes(&mut nodes);

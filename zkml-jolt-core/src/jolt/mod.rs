@@ -31,7 +31,7 @@ use jolt_core::{
     utils::{errors::ProofVerifyError, transcript::Transcript},
 };
 use onnx_tracer::{
-    ProgramOutput,
+    ProgramIO,
     constants::MAX_TENSOR_SIZE,
     trace_types::{ONNXInstr, ONNXOpcode},
 };
@@ -140,22 +140,19 @@ where
     pub fn prove(
         mut preprocessing: JoltProverPreprocessing<F, PCS, ProofTranscript>,
         mut trace: Vec<JoltONNXCycle>,
-        program_output: &ProgramOutput,
+        program_output: &ProgramIO,
     ) -> Self {
         let trace_length = trace.len();
         println!("Trace length: {trace_length}");
         F::initialize_lookup_tables(std::mem::take(&mut preprocessing.field));
         // Pad to next power of two, adding one for the extra NoOp we add below
         let padded_trace_length = (trace_length + 1).next_power_of_two();
-        let last_address = trace.last().unwrap().instr().address;
-        // Add one NoOp with sequential address, required because virtual instructions require the
-        // next instruction's address to equal the previous + 1 (and the trace might finish with a
-        // virtual instruction)
-        trace.push({
-            let mut no_op = JoltONNXCycle::no_op();
-            no_op.instr.address = last_address + 1;
-            no_op
-        });
+        let last_node = trace.last().unwrap();
+        // Add Output node, which maps the final tensor output to the reserved output address
+        trace.push(JoltONNXCycle::output_node(
+            last_node,
+            program_output.output.clone(),
+        ));
 
         // HACK(Forpee): Not sure if this is correct. RV pushes a jump instr:
         // ```
@@ -236,7 +233,7 @@ where
     pub fn verify(
         &self,
         preprocessing: JoltVerifierPreprocessing<F, PCS, ProofTranscript>,
-        program_output: ProgramOutput,
+        program_output: ProgramIO,
     ) -> Result<(), ProofVerifyError> {
         let mut transcript = ProofTranscript::new(b"Jolt transcript");
         let mut opening_accumulator: VerifierOpeningAccumulator<F, PCS, ProofTranscript> =
@@ -550,6 +547,36 @@ mod e2e_tests {
 
     #[serial]
     #[test]
+    fn test_altered_input_and_output() {
+        let model = builder::custom_add_model();
+        let program_bytecode = onnx_tracer::decode_model(model.clone());
+        let pp: JoltProverPreprocessing<Fr, PCS, KeccakTranscript> =
+            JoltSNARK::prover_preprocess(program_bytecode);
+
+        let input = Tensor::new(Some(&[10, 20, 30, 40]), &[1, 4]).unwrap();
+
+        let (raw_trace, program_output) = onnx_tracer::execution_trace(model, &input);
+
+        let execution_trace = jolt_execution_trace(raw_trace.clone());
+        let snark: JoltSNARK<Fr, PCS, KeccakTranscript> =
+            JoltSNARK::prove(pp.clone(), execution_trace, &program_output);
+
+        // Verify with correct input and output
+        snark.verify((&pp).into(), program_output.clone()).unwrap();
+
+        // Alter input and assert verification error
+        let mut altered_input = program_output.clone();
+        altered_input.input[0] += 1; // alter input
+        assert!(snark.verify((&pp).into(), altered_input).is_err());
+
+        // Alter output and assert verification error
+        let mut altered_output = program_output.clone();
+        altered_output.output[0] += 1; // alter output
+        assert!(snark.verify((&pp).into(), altered_output).is_err());
+    }
+
+    #[serial]
+    #[test]
     fn test_simple_matmult() {
         // Test matrix multiplication: [1, 4] × [3, 4] → [1, 3] (ONNX implicitly transposes B to [4, 3])
         // Input: [1, 2, 3, 4]
@@ -738,7 +765,7 @@ mod e2e_tests {
         debug!("Output: {output:#?}",);
     }
 
-    #[should_panic(expected = "not yet implemented")]
+    #[should_panic]
     #[test]
     fn test_subgraph() {
         let subgraph_program = ONNXProgram {

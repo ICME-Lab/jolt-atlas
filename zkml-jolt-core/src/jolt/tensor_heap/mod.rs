@@ -35,7 +35,7 @@ use jolt_core::{
         transcript::{AppendToTranscript, Transcript},
     },
 };
-use onnx_tracer::{ProgramOutput, constants::MAX_TENSOR_SIZE};
+use onnx_tracer::{ProgramIO, constants::MAX_TENSOR_SIZE};
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -58,7 +58,7 @@ impl<F: JoltField, ProofTranscript: Transcript> TensorHeapTwistProof<F, ProofTra
         K: usize,
         _opening_accumulator: &mut ProverOpeningAccumulator<F, PCS, ProofTranscript>,
         transcript: &mut ProofTranscript,
-        program_output: &ProgramOutput,
+        program_output: &ProgramIO,
     ) -> TensorHeapTwistProof<F, ProofTranscript> {
         #[cfg(test)]
         sanity_check_mcc(trace);
@@ -117,7 +117,7 @@ impl<F: JoltField, ProofTranscript: Transcript> TensorHeapTwistProof<F, ProofTra
         T: usize,
         _opening_accumulator: &mut VerifierOpeningAccumulator<F, PCS, ProofTranscript>,
         transcript: &mut ProofTranscript,
-        program_output: ProgramOutput,
+        program_output: ProgramIO,
     ) -> Result<(), ProofVerifyError> {
         let log_K = self.K.log_2();
         let log_T = T.log_2();

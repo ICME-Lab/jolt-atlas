@@ -3,7 +3,7 @@
 //! Used by the runtime to generate an execution trace for ONNX runtime execution.
 
 use crate::{
-    constants::{MAX_TENSOR_SIZE, ZERO_ADDR_PREPEND},
+    constants::{MAX_TENSOR_SIZE, OUTPUT_ADDR, RESERVED_ADDR_PREPEND},
     tensor::Tensor,
 };
 use core::panic;
@@ -43,24 +43,20 @@ impl ONNXCycle {
         }
     }
 
-    // # NOTE: Adds [ZERO_ADDR_PREPEND] to the orignal traced value
-    pub fn td(&self) -> usize {
-        self.instr.td.map_or(0, |td| td + ZERO_ADDR_PREPEND)
+    pub fn td(&self) -> Option<usize> {
+        self.instr.td
     }
 
-    // # NOTE: Adds [ZERO_ADDR_PREPEND] to the orignal traced value
-    pub fn ts1(&self) -> usize {
-        self.instr.ts1.map_or(0, |ts1| ts1 + ZERO_ADDR_PREPEND)
+    pub fn ts1(&self) -> Option<usize> {
+        self.instr.ts1
     }
 
-    // # NOTE: Adds [ZERO_ADDR_PREPEND] to the orignal traced value
-    pub fn ts2(&self) -> usize {
-        self.instr.ts2.map_or(0, |ts2| ts2 + ZERO_ADDR_PREPEND)
+    pub fn ts2(&self) -> Option<usize> {
+        self.instr.ts2
     }
 
-    // # NOTE: Adds [ZERO_ADDR_PREPEND] to the orignal traced value
-    pub fn ts3(&self) -> usize {
-        self.instr.ts3.map_or(0, |ts3| ts3 + ZERO_ADDR_PREPEND)
+    pub fn ts3(&self) -> Option<usize> {
+        self.instr.ts3
     }
 }
 
@@ -181,14 +177,18 @@ impl ONNXCycle {
     ///
     /// Panics if any underlying tensor's length exceeds `MAX_TENSOR_SIZE`.
     pub fn to_memory_ops(&self) -> ONNXCycleMemoryOps {
-        let ts1 = (get_tensor_addresses(self.ts1()), self.ts1_vals());
-        let ts2 = (get_tensor_addresses(self.ts2()), self.ts2_vals());
-        let ts3 = (get_tensor_addresses(self.ts3()), self.ts3_vals());
-        let td = (
-            get_tensor_addresses(self.td()),
-            self.td_pre_vals(),
-            self.td_post_vals(),
-        );
+        let ts1 = (get_tensor_zkvm_addresses(self.ts1()), self.ts1_vals());
+        let ts2 = (get_tensor_zkvm_addresses(self.ts2()), self.ts2_vals());
+        let ts3 = (get_tensor_zkvm_addresses(self.ts3()), self.ts3_vals());
+
+        // If the instruction is Output, we write to reserved addresses for output tensor
+        let td_addresses = if self.instr.opcode == ONNXOpcode::Output {
+            index_to_addresses(OUTPUT_ADDR) // reserved address for output tensor
+        } else {
+            get_tensor_zkvm_addresses(self.td())
+        };
+        let td = (td_addresses, self.td_pre_vals(), self.td_post_vals());
+
         let gather_addresses = {
             if let ONNXOpcode::Gather = self.instr.opcode {
                 let mut address = vec![0usize; MAX_TENSOR_SIZE];
@@ -321,12 +321,23 @@ impl ONNXCycle {
     }
 }
 
-/// Converts a tensor index to a vector of addresses.
+/// Maps a tensor index to its corresponding output addresses in the zkVM memory.
 /// Used in the zkVM to track all the onnx runtime machine tensor read and write addresses.
-pub fn get_tensor_addresses(t: usize) -> Vec<usize> {
+///
+/// It prepends the [RESERVED_ADDR_PREPEND] offset to the tensor index before calculating addresses.
+/// If the tensor index is `None`, it defaults to 0 (zero register).
+pub fn get_tensor_zkvm_addresses(t: Option<usize>) -> Vec<usize> {
+    let slot = t.map_or(0, |t| t + RESERVED_ADDR_PREPEND);
+
+    index_to_addresses(slot)
+}
+
+/// Converts a slot index to a vector of addresses.
+/// Used in the zkVM to get all the memory addresses a slot occupies.
+pub fn index_to_addresses(i: usize) -> Vec<usize> {
     let mut addresses = Vec::new();
-    for i in 0..MAX_TENSOR_SIZE {
-        addresses.push(t * MAX_TENSOR_SIZE + i);
+    for j in 0..MAX_TENSOR_SIZE {
+        addresses.push(i * MAX_TENSOR_SIZE + j);
     }
     addresses
 }
@@ -399,7 +410,8 @@ impl ONNXInstr {
             | ONNXOpcode::VirtualAssertEq
             | ONNXOpcode::Gte
             | ONNXOpcode::Sum
-            | ONNXOpcode::Relu,
+            | ONNXOpcode::Relu
+            | ONNXOpcode::Output
         );
 
         flags[CircuitFlags::RightOperandIsTs2Value as usize] = matches!(
@@ -422,7 +434,8 @@ impl ONNXInstr {
             self.opcode,
             ONNXOpcode::Add
             | ONNXOpcode::VirtualMove
-            | ONNXOpcode::Relu,
+            | ONNXOpcode::Relu
+            | ONNXOpcode::Output
         );
 
         flags[CircuitFlags::SubtractOperands as usize] = matches!(
@@ -446,6 +459,7 @@ impl ONNXInstr {
             | ONNXOpcode::Gte
             | ONNXOpcode::Sum
             | ONNXOpcode::Relu
+            | ONNXOpcode::Output
         );
 
         flags[CircuitFlags::Advice as usize] = matches!(
@@ -538,6 +552,15 @@ impl ONNXInstr {
         }
     }
 
+    pub fn output_node(last_node: &ONNXInstr) -> Self {
+        ONNXInstr {
+            address: last_node.address + 1,
+            opcode: ONNXOpcode::Output,
+            ts1: last_node.td,
+            ..ONNXInstr::no_op()
+        }
+    }
+
     pub fn dummy(opcode: ONNXOpcode) -> Self {
         ONNXInstr {
             address: 0,
@@ -580,6 +603,7 @@ pub enum ONNXOpcode {
     Noop,
     Constant,
     Input,
+    Output,
     Add,
     Sub,
     Mul,
@@ -622,35 +646,36 @@ impl ONNXOpcode {
             ONNXOpcode::Noop => 1u64 << 0,
             ONNXOpcode::Constant => 1u64 << 1,
             ONNXOpcode::Input => 1u64 << 2,
-            ONNXOpcode::Add => 1u64 << 3,
-            ONNXOpcode::Sub => 1u64 << 4,
-            ONNXOpcode::Mul => 1u64 << 5,
-            ONNXOpcode::Div => 1u64 << 6,
-            ONNXOpcode::Pow => 1u64 << 7,
-            ONNXOpcode::Relu => 1u64 << 8,
-            ONNXOpcode::MatMult => 1u64 << 9,
-            ONNXOpcode::Gather => 1u64 << 10,
-            ONNXOpcode::Transpose => 1u64 << 11,
-            ONNXOpcode::Sqrt => 1u64 << 12,
-            ONNXOpcode::Sum => 1u64 << 13,
-            ONNXOpcode::MeanOfSquares => 1u64 << 14,
-            ONNXOpcode::Sigmoid => 1u64 << 15,
-            ONNXOpcode::Softmax => 1u64 << 16,
+            ONNXOpcode::Output => 1u64 << 3,
+            ONNXOpcode::Add => 1u64 << 4,
+            ONNXOpcode::Sub => 1u64 << 5,
+            ONNXOpcode::Mul => 1u64 << 6,
+            ONNXOpcode::Div => 1u64 << 7,
+            ONNXOpcode::Pow => 1u64 << 8,
+            ONNXOpcode::Relu => 1u64 << 9,
+            ONNXOpcode::MatMult => 1u64 << 10,
+            ONNXOpcode::Gather => 1u64 << 11,
+            ONNXOpcode::Transpose => 1u64 << 12,
+            ONNXOpcode::Sqrt => 1u64 << 13,
+            ONNXOpcode::Sum => 1u64 << 14,
+            ONNXOpcode::MeanOfSquares => 1u64 << 15,
+            ONNXOpcode::Sigmoid => 1u64 << 16,
+            ONNXOpcode::Softmax => 1u64 << 17,
 
             // Virtual instructions
-            ONNXOpcode::VirtualAdvice => 1u64 << 17,
-            ONNXOpcode::VirtualAssertValidSignedRemainder => 1u64 << 18,
-            ONNXOpcode::VirtualAssertValidDiv0 => 1u64 << 19,
-            ONNXOpcode::VirtualMove => 1u64 << 20,
-            ONNXOpcode::VirtualAssertEq => 1u64 << 21,
-            ONNXOpcode::VirtualConst => 1u64 << 22,
+            ONNXOpcode::VirtualAdvice => 1u64 << 18,
+            ONNXOpcode::VirtualAssertValidSignedRemainder => 1u64 << 19,
+            ONNXOpcode::VirtualAssertValidDiv0 => 1u64 << 20,
+            ONNXOpcode::VirtualMove => 1u64 << 21,
+            ONNXOpcode::VirtualAssertEq => 1u64 << 22,
+            ONNXOpcode::VirtualConst => 1u64 << 23,
 
-            ONNXOpcode::Gte => 1u64 << 23,
-            ONNXOpcode::Reshape => 1u64 << 24,
-            ONNXOpcode::ArgMax => 1u64 << 25,
-            ONNXOpcode::Select => 1u64 << 26,
-            ONNXOpcode::ReduceMax => 1u64 << 27,
-            ONNXOpcode::Broadcast => 1u64 << 28,
+            ONNXOpcode::Gte => 1u64 << 24,
+            ONNXOpcode::Reshape => 1u64 << 25,
+            ONNXOpcode::ArgMax => 1u64 << 26,
+            ONNXOpcode::Select => 1u64 << 27,
+            ONNXOpcode::ReduceMax => 1u64 << 28,
+            ONNXOpcode::Broadcast => 1u64 << 29,
             _ => panic!("ONNXOpcode {self:#?} not implemented in into_bitflag"),
         }
     }

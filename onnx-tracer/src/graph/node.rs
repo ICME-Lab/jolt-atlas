@@ -67,7 +67,7 @@ use tract_onnx::{
 /// A node's input is a tensor from another node's output.
 pub type Outlet = (usize, usize);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 /// A single operation in a [crate::graph::Model].
 /// Represents a node in the computation graph, encapsulating an operation and its associated metadata.
 ///
@@ -176,12 +176,12 @@ impl Node {
         node: OnnxNode<TypedFact, Box<dyn TypedOp>>,
         other_nodes: &mut BTreeMap<usize, NodeType>,
         scales: &VarScales,
-        idx: usize,
         symbol_values: &SymbolValues,
-        remappings: &[usize],
+        remappings: &BTreeMap<usize, usize>,
     ) -> Self {
         trace!("Create {node:?}",);
         trace!("Create op {:?}", node.op);
+        let idx = other_nodes.len();
         // Determine how many times this node's output is used in the graph.
         // This is important for optimizations such as rescaling constants:
         // if a constant is only used once, we can safely rescale it in-place
@@ -415,6 +415,12 @@ impl Node {
         //
         // What: The returned Node is ready for insertion into the computation graph, with all
         //       metadata and invariants satisfied.
+        // #Note: If node has `Input` opkind, we set its idx to 0.
+        let idx = if matches!(opkind, SupportedOp::Input(_)) {
+            0
+        } else {
+            other_nodes.len()
+        };
         Node {
             idx,
             opkind,
@@ -436,11 +442,7 @@ impl Node {
     ///
     /// # Returns
     /// The number of broadcast nodes added to the graph.
-    pub fn homogenize_input_shapes(
-        &mut self,
-        other_nodes: &mut BTreeMap<usize, NodeType>,
-    ) -> usize {
-        let mut num_broadcasts = 0;
+    pub fn homogenize_input_shapes(&mut self, other_nodes: &mut BTreeMap<usize, NodeType>) {
         for (j, input_outlet) in self.inputs.clone().iter().enumerate() {
             let input = if let NodeType::Node(n) = other_nodes.get(&input_outlet.0).unwrap() {
                 n
@@ -468,10 +470,8 @@ impl Node {
                 other_nodes.insert(new_node_index, NodeType::Node(b_node));
                 self.inputs[j] = (new_node_index, 0);
                 self.idx += 1;
-                num_broadcasts += 1;
             }
         }
-        num_broadcasts
     }
 }
 
@@ -480,14 +480,20 @@ impl Node {
 /// # Arguments
 ///
 /// * `outlets` - A slice of outlet IDs to map.
-/// * `remappings` - A slice of remapping indices to apply. This vector is incremented by the node's `Graph` index each time a non-graph node is added.
-pub fn map_outlet_indices(outlets: &[OutletId], remappings: &[usize]) -> Vec<(usize, usize)> {
+/// * `remappings` - A `BTreeMap` of remapping indices to apply. The keys are the `Graph` node indices,
+///   and the values are the node indices in the `nodes` collection.
+///   It is populated each time a new node from the `Graph` is added to the `nodes` collection.
+pub fn map_outlet_indices(
+    outlets: &[OutletId],
+    remappings: &BTreeMap<usize, usize>,
+) -> Vec<(usize, usize)> {
     outlets
         .iter()
         .map(|i| {
-            // We count the number of nodes added before the current outlet.
-            let offset = remappings.iter().filter(|&&r| r <= i.node).count();
-            (i.node + offset, i.slot)
+            let mapped_input = remappings.get(&i.node).unwrap_or_else(|| {
+                panic!("Remapping for node {} not found", i.node);
+            });
+            (*mapped_input, i.slot)
         })
         .collect::<Vec<_>>()
 }
@@ -579,6 +585,12 @@ pub enum SupportedOp {
     Rescaled(Rescaled),
     /// An operation whose output scale has been rebased to match the global scale.
     RebaseScale(RebaseScale),
+}
+
+impl Default for SupportedOp {
+    fn default() -> Self {
+        SupportedOp::Unknown(Unknown)
+    }
 }
 
 impl From<&SupportedOp> for ONNXOpcode {
@@ -1123,7 +1135,16 @@ mod tests {
             OutletId::new(1, 0),
             OutletId::new(2, 1),
         ];
-        let remappings = vec![];
+
+        // Graph:       [Node0, Node1, Node2]
+        // No broadcasts added
+        // node list:   [Node0, Node1, Node2]
+
+        let mut remappings = BTreeMap::new(); // No remappings
+        remappings.insert(0, 0);
+        remappings.insert(1, 1);
+        remappings.insert(2, 2); // Indexes are unchanged from Graph to nodes list
+
         let result = map_outlet_indices(&outlets, &remappings);
         assert_eq!(result, vec![(0, 0), (1, 0), (2, 1)]);
 
@@ -1133,7 +1154,16 @@ mod tests {
             OutletId::new(1, 0),
             OutletId::new(2, 0),
         ];
-        let remappings = vec![0, 1]; // Two broadcast nodes added before node 0 and 1
+
+        // Graph:       [Node0, Node1, Node2]
+        // Add broadcast before nodes [0, 1]
+        // node list:   [Broadcast, Node0, Broadcast, Node1, Node2]
+
+        let mut remappings = BTreeMap::new();
+        remappings.insert(0, 1); // Node at index 0 in Graph is now at index 1 in nodes list
+        remappings.insert(1, 3); // Node at index 1 in Graph is now at index 3 in nodes list
+        remappings.insert(2, 4); // Node at index 2 in Graph is now at index 4 in nodes list
+
         let result = map_outlet_indices(&outlets, &remappings);
         assert_eq!(result, vec![(1, 0), (3, 0), (4, 0)]); // Corrected expectations
 
@@ -1143,13 +1173,32 @@ mod tests {
             OutletId::new(1, 0),
             OutletId::new(2, 0),
         ];
-        let remappings = vec![0, 0, 1]; // Two broadcasts at node 0, one at node 1
+
+        // Graph:       [Node0, Node1, Node2]
+        // Add broadcast before nodes [0, 0, 1]
+        // node list:   [Broadcast, Broadcast, Node0, Broadcast, Node1, Node2]
+
+        let mut remappings = BTreeMap::new();
+        remappings.insert(0, 2); // Node at index 0 in Graph is now at index 2 in nodes list
+        remappings.insert(1, 4); // Node at index 1 in Graph is now at index 4 in nodes list
+        remappings.insert(2, 5); // Node at index 2 in Graph is now at index 5 in nodes list
+
         let result = map_outlet_indices(&outlets, &remappings);
         assert_eq!(result, vec![(2, 0), (4, 0), (5, 0)]);
 
         // Test case 4: Remappings beyond outlet indices
         let outlets = vec![OutletId::new(0, 0), OutletId::new(1, 1)];
-        let remappings = vec![0, 1, 2, 3]; // Remappings beyond our outlets
+
+        // Graph:       [Node0, Node1, Node2, Node3]
+        // Add broadcast before nodes [0, 1, 2, 3]
+        // node list:   [Broadcast, Node0, Broadcast, Node1, Broadcast, Node2, Broadcast, Node3]
+
+        let mut remappings = BTreeMap::new();
+        remappings.insert(0, 1); // Node at index 0 in Graph is now at index 1 in nodes list
+        remappings.insert(1, 3); // Node at index 1 in Graph is now at index 3 in nodes list
+        remappings.insert(2, 5); // Node at index 2 in Graph is now at index 5 in nodes list
+        remappings.insert(3, 7); // Node at index 3 in Graph is now at index 7 in nodes list
+
         let result = map_outlet_indices(&outlets, &remappings);
         assert_eq!(result, vec![(1, 0), (3, 1)]);
     }
@@ -1174,8 +1223,7 @@ mod tests {
         };
 
         // No broadcast should be needed since dimensions match
-        let num_broadcasts = add_node.homogenize_input_shapes(&mut nodes);
-        assert_eq!(num_broadcasts, 0);
+        add_node.homogenize_input_shapes(&mut nodes);
         assert_eq!(add_node.inputs, vec![(0, 0)]); // Inputs unchanged
         assert_eq!(nodes.len(), 1); // No new nodes added
     }
@@ -1200,8 +1248,7 @@ mod tests {
         };
 
         // Broadcast should be needed since [1] needs to become [1, 3]
-        let num_broadcasts = add_node.homogenize_input_shapes(&mut nodes);
-        assert_eq!(num_broadcasts, 1);
+        add_node.homogenize_input_shapes(&mut nodes);
         assert_eq!(add_node.inputs, vec![(1, 0)]); // Input now points to broadcast node
         assert_eq!(add_node.idx, 2); // Node index incremented
         assert_eq!(nodes.len(), 2); // New broadcast node added
@@ -1246,8 +1293,7 @@ mod tests {
         };
 
         // Only first input should need broadcasting
-        let num_broadcasts = add_node.homogenize_input_shapes(&mut nodes);
-        assert_eq!(num_broadcasts, 1);
+        add_node.homogenize_input_shapes(&mut nodes);
         assert_eq!(add_node.inputs, vec![(2, 0), (1, 0)]); // First input redirected to broadcast
         assert_eq!(add_node.idx, 3); // Node index incremented
         assert_eq!(nodes.len(), 3); // One broadcast node added
@@ -1281,10 +1327,9 @@ mod tests {
         };
 
         // Broadcast should be needed to go from [2] to [2, 4]
-        let num_broadcasts = mul_node.homogenize_input_shapes(&mut nodes);
-        assert_eq!(num_broadcasts, 1);
-        assert_eq!(mul_node.inputs, vec![(1, 0)]);
-        assert_eq!(mul_node.idx, 2);
+        mul_node.homogenize_input_shapes(&mut nodes);
+        assert_eq!(mul_node.inputs, vec![(1, 0)]); // Input now points to broadcast node
+        assert_eq!(mul_node.idx, 2); // Node index incremented
 
         // Check broadcast node dimensions
         if let Some(NodeType::Node(broadcast_node)) = nodes.get(&1) {
@@ -1322,8 +1367,7 @@ mod tests {
         };
 
         // No broadcasting should be needed
-        let num_broadcasts = sub_node.homogenize_input_shapes(&mut nodes);
-        assert_eq!(num_broadcasts, 0);
+        sub_node.homogenize_input_shapes(&mut nodes);
         assert_eq!(sub_node.inputs, vec![(0, 0), (1, 0)]); // Inputs unchanged
         assert_eq!(sub_node.idx, 2); // Index unchanged
         assert_eq!(nodes.len(), 2); // No new nodes

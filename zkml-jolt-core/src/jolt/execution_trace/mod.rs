@@ -27,13 +27,13 @@ use jolt_core::{
 use onnx_tracer::{
     constants::{MAX_TENSOR_SIZE, TEST_TENSOR_REGISTER_COUNT, VIRTUAL_TENSOR_REGISTER_COUNT},
     tensor::Tensor,
-    trace_types::{CircuitFlags, NUM_CIRCUIT_FLAGS, ONNXCycle, ONNXInstr, ONNXOpcode},
+    trace_types::{CircuitFlags, MemoryState, NUM_CIRCUIT_FLAGS, ONNXCycle, ONNXInstr, ONNXOpcode},
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::jolt::instruction::{
-    add::ADD, beq::BEQInstruction, ge::GEInstruction, mul::MUL, sub::SUB,
+    add::ADD, beq::BEQInstruction, ge::GEInstruction, mul::MUL, output::OUTPUT, sub::SUB,
     virtual_assert_valid_div0::AssertValidDiv0Instruction,
     virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction,
     virtual_move::MOVEInstruction,
@@ -139,6 +139,25 @@ impl JoltONNXCycle {
         cycle.populate_reduction();
         cycle.populate_precompile();
         cycle
+    }
+
+    pub fn output_node(last_node: &JoltONNXCycle, output_tensor: Tensor<i32>) -> JoltONNXCycle {
+        let instr = ONNXInstr::output_node(last_node.instr());
+        let raw = {
+            let memory_state = MemoryState {
+                ts1_val: Some(output_tensor.clone()),
+                td_post_val: Some(output_tensor.clone()),
+                ..MemoryState::default()
+            };
+
+            ONNXCycle {
+                instr,
+                memory_state,
+                advice_value: None,
+            }
+        };
+
+        JoltONNXCycle::from_raw(&raw)
     }
 
     fn populate_instruction_lookups_internal(&mut self) {
@@ -1117,6 +1136,7 @@ define_lookup_enum!(
     VirtualConst: ConstInstruction<WORD_SIZE>,
     Const: ConstInstruction<WORD_SIZE>,
     Relu: RELU<WORD_SIZE>,
+    Output: OUTPUT<WORD_SIZE>,
 );
 
 impl JoltONNXCycle {
@@ -1193,6 +1213,11 @@ impl JoltONNXCycle {
             ONNXOpcode::Relu => Some(
                 (0..MAX_TENSOR_SIZE)
                     .map(|i| ElementWiseLookup::Relu(RELU(ts1[i])))
+                    .collect(),
+            ),
+            ONNXOpcode::Output => Some(
+                (0..MAX_TENSOR_SIZE)
+                    .map(|i| ElementWiseLookup::Output(OUTPUT(ts1[i])))
                     .collect(),
             ),
             _ => None,
@@ -1313,6 +1338,7 @@ impl JoltONNXCycle {
                 ElementWiseLookup::VirtualConst(_) => "VirtualConst",
                 ElementWiseLookup::Const(_) => "Const",
                 ElementWiseLookup::Relu(_) => "Relu",
+                ElementWiseLookup::Output(_) => "Output",
             })
     }
 }

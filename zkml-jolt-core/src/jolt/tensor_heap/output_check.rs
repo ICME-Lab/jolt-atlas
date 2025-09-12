@@ -18,7 +18,11 @@ use jolt_core::{
         transcript::Transcript,
     },
 };
-use onnx_tracer::{ProgramOutput, constants::MAX_TENSOR_SIZE, trace_types::get_tensor_addresses};
+use onnx_tracer::{
+    ProgramIO,
+    constants::{INPUT_ADDR, MAX_TENSOR_SIZE, OUTPUT_ADDR},
+    trace_types::{index_to_addresses, normalize},
+};
 use rayon::prelude::*;
 
 use crate::jolt::{
@@ -51,26 +55,29 @@ impl<F: JoltField> OutputSumcheckProverState<F> {
     fn initialize(
         final_heap_state: Vec<u32>,
         r_address: &[F],
-        program_output: &ProgramOutput,
+        _program_output: &ProgramIO,
     ) -> Self {
         let K = final_heap_state.len();
 
         debug_assert!(K.is_power_of_two());
 
-        let tensor_addresses = get_tensor_addresses(program_output.output_address);
-
-        let output_start = tensor_addresses[0];
-        let output_end = *tensor_addresses.last().unwrap();
+        // The heap layout is as follows:
+        // - [zero_register, output, input, ..memory]
+        // Hence the input-output verification range is [output_start, input_end]
+        let output_addresses = index_to_addresses(OUTPUT_ADDR);
+        let output_start = output_addresses[0];
+        let input_addresses = index_to_addresses(INPUT_ADDR);
+        let input_end = *input_addresses.last().unwrap();
 
         let mut val_output = vec![0; K];
-        val_output[output_start..output_end]
+        val_output[output_start..input_end]
             .par_iter_mut()
-            .zip(final_heap_state[output_start..output_end].par_iter())
+            .zip(final_heap_state[output_start..input_end].par_iter())
             .for_each(|(dest, src)| *dest = *src);
 
         // Compute io_mask by setting the relevant coefficients to 1
         let mut output_mask = vec![0u8; K];
-        output_mask[output_start..output_end]
+        output_mask[output_start..input_end]
             .par_iter_mut()
             .for_each(|k| *k = 1);
 
@@ -91,11 +98,11 @@ impl<F: JoltField> OutputSumcheckProverState<F> {
 #[derive(Debug, Clone)]
 struct OutputSumcheckVerifierState<F: JoltField> {
     r_address: Vec<F>,
-    program_output: ProgramOutput,
+    program_output: ProgramIO,
 }
 
 impl<F: JoltField> OutputSumcheckVerifierState<F> {
-    fn initialize(r_address: &[F], program_output: &ProgramOutput) -> Self {
+    fn initialize(r_address: &[F], program_output: &ProgramIO) -> Self {
         Self {
             r_address: r_address.to_vec(),
             program_output: program_output.clone(),
@@ -138,7 +145,7 @@ impl<F: JoltField> OutputSumcheck<F> {
         trace: &[JoltONNXCycle],
         r_address: &[F],
         transcript: &mut ProofTranscript,
-        program_output: &ProgramOutput,
+        program_output: &ProgramIO,
         final_heap_state: Vec<u32>,
     ) -> OutputProof<F, ProofTranscript> {
         let K = final_heap_state.len();
@@ -187,7 +194,7 @@ impl<F: JoltField> OutputSumcheck<F> {
         T: usize,
         proof: &OutputProof<F, ProofTranscript>,
         transcript: &mut ProofTranscript,
-        program_output: ProgramOutput,
+        program_output: ProgramIO,
     ) -> Result<(), ProofVerifyError> {
         let K = r_address.len().pow2();
         let output_sumcheck_verifier_state =
@@ -302,23 +309,33 @@ impl<F: JoltField, ProofTranscript: Transcript> BatchableSumcheckInstance<F, Pro
             r_address,
             program_output,
         } = self.verifier_state.as_ref().unwrap();
+        // The heap layout is as follows:
+        // - [zero_register, output, input, ..memory]
+        // Hence the input-output verification range is [output_start, input_end]
+        let output_addresses = index_to_addresses(OUTPUT_ADDR);
+        let output_start = output_addresses[0];
+        let output_end = *output_addresses.last().unwrap();
 
-        let tensor_addresses = get_tensor_addresses(program_output.output_address);
-
-        let output_start = tensor_addresses[0];
-        let output_end = *tensor_addresses.last().unwrap();
+        let input_addresses = index_to_addresses(INPUT_ADDR);
+        let input_start = *input_addresses.first().unwrap();
+        let input_end = *input_addresses.last().unwrap();
 
         let val_final_claim = self.val_final_claim.as_ref().unwrap();
 
         let r_address_prime = &r[..r_address.len()];
 
-        let output_range = RangeMaskPolynomial::new(output_start as u64, output_end as u64);
+        let output_range = RangeMaskPolynomial::new(output_start as u64, input_end as u64);
 
         let mut val_output = vec![F::zero(); self.K];
         val_output[output_start..output_end]
             .par_iter_mut()
-            .zip(program_output.outputs.par_iter())
-            .for_each(|(dest, src)| *dest = F::from_u64(*src));
+            .zip(program_output.output.par_iter().map(normalize))
+            .for_each(|(dest, src)| *dest = F::from_u64(src));
+
+        val_output[input_start..input_end]
+            .par_iter_mut()
+            .zip(program_output.input.par_iter().map(normalize))
+            .for_each(|(dest, src)| *dest = F::from_u64(src));
 
         let val_output = MultilinearPolynomial::from(val_output);
 

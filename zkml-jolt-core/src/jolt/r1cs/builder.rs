@@ -1,131 +1,20 @@
-use crate::jolt::{
-    execution_trace::{JoltONNXR1CSInputs, WitnessGenerator},
-    r1cs::key::UniformR1CS,
+use crate::jolt::r1cs::{
+    inputs::JoltONNXR1CSInputs,
+    key::{SparseConstraints, UniformR1CS},
 };
 use jolt_core::{
     field::JoltField,
     poly::multilinear_polynomial::MultilinearPolynomial,
-    r1cs::{
+    zkvm::r1cs::{
         builder::Constraint,
-        key::SparseConstraints,
         ops::{LC, Term, Variable},
     },
 };
 use std::{fmt::Write as _, marker::PhantomData};
 
-pub trait R1CSConstraintFormatter {
-    fn format_constraint<F: JoltField>(
-        &self,
-        f: &mut String,
-        flattened_polynomials: &[MultilinearPolynomial<F>],
-        step_index: usize,
-    ) -> std::fmt::Result;
-}
-
-impl R1CSConstraintFormatter for Constraint {
-    fn format_constraint<F: JoltField>(
-        &self,
-        f: &mut String,
-        flattened_polynomials: &[MultilinearPolynomial<F>],
-        step_index: usize,
-    ) -> std::fmt::Result {
-        use std::fmt::Write as _;
-
-        self.a.format_lc(f)?;
-        write!(f, " ⋅ ")?;
-        self.b.format_lc(f)?;
-        write!(f, " == ")?;
-        self.c.format_lc(f)?;
-        writeln!(f)?;
-
-        let mut terms = Vec::new();
-        for term in self
-            .a
-            .terms()
-            .iter()
-            .chain(self.b.terms().iter())
-            .chain(self.c.terms().iter())
-        {
-            if !terms.contains(term) {
-                terms.push(*term);
-            }
-        }
-
-        for term in terms {
-            match term.0 {
-                Variable::Input(var_index) => {
-                    writeln!(
-                        f,
-                        "    {:?} = {}",
-                        JoltONNXR1CSInputs::from_index(var_index),
-                        flattened_polynomials[var_index].get_coeff(step_index)
-                    )?;
-                }
-                Variable::Constant => {}
-            }
-        }
-
-        Ok(())
-    }
-}
-
-pub trait FormatLC {
-    fn format_lc(&self, f: &mut String) -> std::fmt::Result;
-}
-
-impl FormatLC for LC {
-    fn format_lc(&self, f: &mut String) -> std::fmt::Result {
-        if self.0.is_empty() {
-            write!(f, "0")
-        } else {
-            if self.0.len() > 1 {
-                write!(f, "(")?;
-            }
-            for (index, term) in self.0.iter().enumerate() {
-                if term.1 == 0 {
-                    continue;
-                }
-                if index > 0 {
-                    if term.1 < 0 {
-                        write!(f, " - ")?;
-                    } else {
-                        write!(f, " + ")?;
-                    }
-                }
-                term.format_term(f)?;
-            }
-            if self.0.len() > 1 {
-                write!(f, ")")?;
-            }
-            Ok(())
-        }
-    }
-}
-
-pub trait FormatTerm {
-    fn format_term(&self, f: &mut String) -> std::fmt::Result;
-}
-
-impl FormatTerm for Term {
-    fn format_term(&self, f: &mut String) -> std::fmt::Result {
-        match self.0 {
-            Variable::Input(var_index) => match self.1.abs() {
-                1 => write!(f, "{:?}", JoltONNXR1CSInputs::from_index(var_index)),
-                _ => write!(
-                    f,
-                    "{}⋅{:?}",
-                    self.1,
-                    JoltONNXR1CSInputs::from_index(var_index)
-                ),
-            },
-            Variable::Constant => write!(f, "{}", self.1),
-        }
-    }
-}
-
 #[derive(Default)]
 pub struct R1CSBuilder {
-    pub constraints: Vec<Constraint>,
+    pub(crate) constraints: Vec<Constraint>,
 }
 
 impl R1CSBuilder {
@@ -191,7 +80,7 @@ impl R1CSBuilder {
         let result_false: LC = result_false.into();
         let alleged_result: LC = alleged_result.into();
 
-        // result == condition * true_outcome + (1 - condition) * false_outcome
+        // result == condition * true_coutcome + (1 - condition) * false_outcome
         // simplify to single mul, single constraint => condition * (true_outcome - false_outcome) == (result - false_outcome)
 
         let constraint = Constraint {
@@ -301,7 +190,7 @@ impl R1CSBuilder {
             a: a_sparse,
             b: b_sparse,
             c: c_sparse,
-            num_vars: JoltONNXR1CSInputs::len(),
+            num_vars: JoltONNXR1CSInputs::num_inputs(),
             num_rows: self.constraints.len(),
         }
     }
@@ -314,10 +203,10 @@ impl R1CSBuilder {
 // TODO(sragss): Detailed documentation with wiki.
 pub struct CombinedUniformBuilder<F: JoltField> {
     _field: PhantomData<F>,
-    pub uniform_builder: R1CSBuilder,
+    pub(crate) uniform_builder: R1CSBuilder,
 
     /// Padded to the nearest power of 2
-    pub uniform_repeat: usize, // TODO(JP): Remove padding of steps
+    pub(crate) uniform_repeat: usize, // TODO(JP): Remove padding of steps
 }
 
 impl<F: JoltField> CombinedUniformBuilder<F> {
@@ -331,21 +220,131 @@ impl<F: JoltField> CombinedUniformBuilder<F> {
     }
 
     /// Number of constraint rows per step, padded to the next power of two.
-    pub fn padded_rows_per_step(&self) -> usize {
+    pub(super) fn padded_rows_per_step(&self) -> usize {
         self.uniform_builder.constraints.len().next_power_of_two()
     }
 
     /// Total number of rows used across all repeated constraints. Not padded to nearest power of two.
-    pub fn constraint_rows(&self) -> usize {
+    pub(super) fn constraint_rows(&self) -> usize {
         self.uniform_repeat * self.padded_rows_per_step()
     }
 
-    pub fn uniform_repeat(&self) -> usize {
+    pub(super) fn uniform_repeat(&self) -> usize {
         self.uniform_repeat
     }
 
     /// Materializes the uniform constraints into sparse (value != 0) A, B, C matrices represented in (row, col, value) format.
     pub fn materialize_uniform(&self) -> UniformR1CS<F> {
         self.uniform_builder.materialize()
+    }
+}
+
+pub trait R1CSConstraintFormatter {
+    fn format_constraint<F: JoltField>(
+        &self,
+        f: &mut String,
+        flattened_polynomials: &[MultilinearPolynomial<F>],
+        step_index: usize,
+    ) -> std::fmt::Result;
+}
+
+impl R1CSConstraintFormatter for Constraint {
+    fn format_constraint<F: JoltField>(
+        &self,
+        f: &mut String,
+        flattened_polynomials: &[MultilinearPolynomial<F>],
+        step_index: usize,
+    ) -> std::fmt::Result {
+        use std::fmt::Write as _;
+
+        self.a.format_lc(f)?;
+        write!(f, " ⋅ ")?;
+        self.b.format_lc(f)?;
+        write!(f, " == ")?;
+        self.c.format_lc(f)?;
+        writeln!(f)?;
+
+        let mut terms = Vec::new();
+        for term in self
+            .a
+            .terms()
+            .iter()
+            .chain(self.b.terms().iter())
+            .chain(self.c.terms().iter())
+        {
+            if !terms.contains(term) {
+                terms.push(*term);
+            }
+        }
+
+        for term in terms {
+            match term.0 {
+                Variable::Input(var_index) => {
+                    writeln!(
+                        f,
+                        "    {:?} = {}",
+                        JoltONNXR1CSInputs::from_index(var_index),
+                        flattened_polynomials[var_index].get_coeff(step_index)
+                    )?;
+                }
+                Variable::Constant => {}
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub trait FormatLC {
+    fn format_lc(&self, f: &mut String) -> std::fmt::Result;
+}
+
+impl FormatLC for LC {
+    fn format_lc(&self, f: &mut String) -> std::fmt::Result {
+        if self.0.is_empty() {
+            write!(f, "0")
+        } else {
+            if self.0.len() > 1 {
+                write!(f, "(")?;
+            }
+            for (index, term) in self.0.iter().enumerate() {
+                if term.1 == 0 {
+                    continue;
+                }
+                if index > 0 {
+                    if term.1 < 0 {
+                        write!(f, " - ")?;
+                    } else {
+                        write!(f, " + ")?;
+                    }
+                }
+                term.format_term(f)?;
+            }
+            if self.0.len() > 1 {
+                write!(f, ")")?;
+            }
+            Ok(())
+        }
+    }
+}
+
+pub trait FormatTerm {
+    fn format_term(&self, f: &mut String) -> std::fmt::Result;
+}
+
+impl FormatTerm for Term {
+    fn format_term(&self, f: &mut String) -> std::fmt::Result {
+        match self.0 {
+            Variable::Input(var_index) => match self.1.abs() {
+                1 => write!(f, "{:?}", JoltONNXR1CSInputs::from_index(var_index)),
+                _ => write!(
+                    f,
+                    "{}⋅{:?}",
+                    self.1,
+                    JoltONNXR1CSInputs::from_index(var_index)
+                ),
+            },
+            Variable::Constant => write!(f, "{}", self.1),
+        }
     }
 }

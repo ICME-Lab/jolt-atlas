@@ -387,9 +387,85 @@ impl ModelBuilder {
 
 /* ********************** Testing Model's ********************** */
 
+/// Simplified multiclass classification model using only basic operations:
+/// input, const, gather, matmult, add, sub, mul, div, reshape
+///
+/// This model:
+/// 1. Takes embedding tensor and input indices
+/// 2. Gathers embeddings based on input indices  
+/// 3. Sums the gathered embeddings via matrix multiplication
+/// 4. Performs linear transformation (matmult + add bias)
+/// 5. Returns logits (no ArgMax - let caller handle classification)
+pub fn multiclass1() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input indices (shape [1, 8])
+    let input_indices = b.input(vec![1, 8], 1);
+
+    // Node 1: Embedding matrix (shape [31, 1]) - same values as before
+    let mut embedding: Tensor<i32> = Tensor::new(
+        Some(&[
+            -61, -287, -437, -294, -318, 345, 331, 330, -28, 337, 113, 111, 91, 103, -58, 85, 72,
+            -463, -342, -345, -318, 355, 385, 376, 180, 125, 10, 143, 137, -45, 128,
+        ]),
+        &[31, 1],
+    )
+    .unwrap();
+    embedding.set_scale(SCALE);
+    let embedding_const = b.const_tensor_with_scale(embedding, SCALE, vec![31, 1], 1);
+
+    // Node 2: Gather embeddings - results in [1, 8, 1]
+    let gathered = b.gather(embedding_const, input_indices, 0, vec![1, 8, 1], 1);
+
+    // Node 3: Reshape gathered embeddings to [1, 8] for matrix operations
+    let reshaped_gathered = b.reshape(gathered, vec![1, 8], vec![1, 8], 1);
+
+    // Node 4: Sum weights (all ones) to sum embeddings via matrix multiplication
+    // Shape [8, 1] - each row is 1, so matmult will sum the 8 embeddings
+    let mut sum_weights: Tensor<i32> = Tensor::new(Some(&[1; 8]), &[8, 1]).unwrap();
+    sum_weights.set_scale(SCALE);
+    let sum_weights_const = b.const_tensor_with_scale(sum_weights, SCALE, vec![8, 1], 1);
+
+    // Node 5: Sum embeddings via matrix multiplication [1, 8] × [8, 1] → [1, 1]
+    let summed = b.matmult(reshaped_gathered, sum_weights_const, vec![1, 1], 1);
+
+    // Node 6: Weight matrix for classification (shape [1, 10])
+    let mut weights: Tensor<i32> = Tensor::new(
+        Some(&[388, 16, -93, 517, 208, 208, 208, 208, 208, 208]),
+        &[1, 10],
+    )
+    .unwrap();
+    weights.set_scale(SCALE);
+    let weights_const = b.const_tensor_with_scale(weights, SCALE, vec![1, 10], 1);
+
+    // Node 7: Linear transformation [1, 1] × [1, 10] → [1, 10]
+    // This broadcasts the scalar across all 10 classes and applies weights
+    let weighted = b.matmult(summed, weights_const, vec![1, 10], 1);
+
+    // Node 8: Scale down by dividing by 128 (replacing the RebaseScale division)
+    let scaled = b.div(128, weighted, vec![1, 10], 1);
+
+    // Node 9: Bias vector (shape [1, 10])
+    let mut bias: Tensor<i32> = Tensor::new(
+        Some(&[449, 421, -137, -95, -155, -155, -155, -155, -155, -155]),
+        &[1, 10],
+    )
+    .unwrap();
+    bias.set_scale(SCALE);
+    let bias_const = b.const_tensor_with_scale(bias, SCALE, vec![1, 10], 1);
+
+    // Node 10: Add bias to get final logits
+    let logits = b.poly(PolyOp::Add, scaled, bias_const, vec![1, 10], 1);
+
+    // Return logits instead of argmax - let the caller handle classification
+    // This is more flexible and potentially faster for training scenarios
+    b.take(vec![input_indices.0], vec![logits])
+}
+
 /// Creates a model with 3 nodes
 /// Has a trace lenght of 2^s - 1
-pub fn custom_add_model() -> Model {
+pub fn add_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
     let mut const_tensor: Tensor<i32> = Tensor::new(Some(&[50, 60, 70, 80]), &[1, 4]).unwrap();
@@ -403,7 +479,7 @@ pub fn custom_add_model() -> Model {
 
 /// Creates a model with 4 nodes
 /// Has a trace lenght of 2^s
-pub fn custom_addmul_model() -> Model {
+pub fn addmul_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
     let mut const_tensor: Tensor<i32> = Tensor::new(Some(&[50, 60, 70, 80]), &[1, 4]).unwrap();
@@ -417,7 +493,7 @@ pub fn custom_addmul_model() -> Model {
 }
 
 /// [(0, input, []), (1, add, [0, 0]), (2, sub, [1, 0]), (3, mul, [1, 2]), (4, add, [2, 3]), (5, output, [4])]
-pub fn custom_addsubmul_model() -> Model {
+pub fn addsubmul_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
     let out_dims = vec![1, 4];
@@ -432,7 +508,7 @@ pub fn custom_addsubmul_model() -> Model {
 }
 
 /// [(0, input, []), (1, const, []), (2, add, [0, 1]), (3, sub, [0, 1]), (4, mul, [2, 3]), (5, output, [4])]
-pub fn custom_addsubmulconst_model() -> Model {
+pub fn addsubmulconst_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
 
@@ -450,7 +526,7 @@ pub fn custom_addsubmulconst_model() -> Model {
 
 /// Creates a model with 15 nodes (a div op creates 9 nodes)
 /// Has a trace lenght of 2^s - 1, finishing with a virtual instruction
-pub fn custom_addsubmuldiv15_model() -> Model {
+pub fn addsubmuldiv15_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
     let out_dims = vec![1, 4];
@@ -468,7 +544,7 @@ pub fn custom_addsubmuldiv15_model() -> Model {
 
 /// Creates a model with 16 nodes (a div op creates 9 nodes)
 /// Has a trace lenght of 2^s, finishing with a virtual instruction
-pub fn custom_addsubmuldiv_model() -> Model {
+pub fn addsubmuldiv_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
     let out_dims = vec![1, 4];
@@ -486,7 +562,7 @@ pub fn custom_addsubmuldiv_model() -> Model {
 }
 
 /// [(0, input, []), (1, add, [0, 0]), (2, sub, [1, 0]), (3, mul, [1, 2]), (4, add, [2, 3]), (5, div, [4]), (6, div, [5]), (7, output, [6])]
-pub fn custom_addsubmuldivdiv_model() -> Model {
+pub fn addsubmuldivdiv_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
     let out_dims = vec![1, 4];

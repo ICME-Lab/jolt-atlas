@@ -7,7 +7,7 @@ edition = "2024"
 ark-bn254 = "0.5.0"
 itertools = "0.10.0"
 onnx-tracer = { path = "../onnx-tracer" }
-jolt-core = { git = "https://github.com/ICME-Lab/zkml-jolt", package = "jolt-core", branch = "zkml-jolt" }
+jolt-core = { path = "../../zkml-jolt/jolt-core", package = "jolt-core", default-features = true }
 rayon = { version = "^1.8.0" }
 serde = { version = "1.0.193", features = ["derive"] }
 serde_json = "1.0.108"
@@ -21,14 +21,17 @@ strum_macros = "0.26.4"
 rand = "0.8"
 thiserror = "1.0.58"
 sha3 = "0.10.8"
-ark-serialize = { version = "0.5.0", default-features = false, features = [
-  "derive",
-] }
+ark-serialize = { workspace = true }
 ark-serialize-derive = { version = "0.5.0", default-features = false }
 rand_core = { version = "0.6.4", default-features = false }
 ark-std = { version = "0.5.0" }
 serial_test = "3.2.0"
 clap = { version = "4.3.10", features = ["derive"] }
+anyhow = "1.0.97"
+num-derive = "0.4.2"
+num-traits = "0.2.19"
+derive_more = { version = "2.0.1", features = ["from"] }
+fixedbitset = "0.5.0"
 
 [dev-dependencies]
 log = "0.4"

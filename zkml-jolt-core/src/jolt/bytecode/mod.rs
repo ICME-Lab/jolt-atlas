@@ -469,7 +469,7 @@ pub fn raw_to_joule(
             td: vtd[i] as u64,
             ts1: vts1[i] as u64,
             ts2: vts2[i] as u64,
-            imm: imm[i] as u64,
+            imm: imm[i],
             tensor_sequence_remaining: Some(tensor_sequence_remaining(active_output_elements, i)),
         });
     }

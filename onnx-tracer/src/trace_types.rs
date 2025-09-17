@@ -6,7 +6,6 @@ use crate::{
     constants::{MAX_TENSOR_SIZE, RESERVED_ADDR_PREPEND},
     tensor::Tensor,
 };
-use core::panic;
 use rand::{rngs::StdRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut};
@@ -159,42 +158,18 @@ impl MemoryOp {
 }
 
 impl ONNXCycle {
-    /// Returns normalized and padded values for ts1.
-    ///
-    /// - Normalizes each element of `ts1_val` via `normalize`.
-    /// - Pads the resulting Vec<u64> with zeros up to `MAX_TENSOR_SIZE`.
-    ///
-    /// If no `ts1_val` is present, returns a zero-filled Vec<u64> of length `MAX_TENSOR_SIZE`.
-    ///
-    /// # Panics
-    /// Panics if the tensor's length exceeds `MAX_TENSOR_SIZE`.
     pub fn ts1_vals(&self) -> Option<Vec<u64>> {
         self.build_vals(self.memory_state.ts1_val.as_ref())
     }
 
-    /// Returns normalized and padded values for ts2.
-    ///
-    /// Behaves like `ts1_vals`, but for `ts2_val`.
     pub fn ts2_vals(&self) -> Option<Vec<u64>> {
         self.build_vals(self.memory_state.ts2_val.as_ref())
     }
 
-    /// Returns normalized and padded values for ts3.
-    ///
-    /// Behaves like `ts1_vals`, but for `ts3_val`.
     pub fn ts3_vals(&self) -> Option<Vec<u64>> {
         self.build_vals(self.memory_state.ts3_val.as_ref())
     }
 
-    /// Returns normalized and padded post-execution values for td.
-    ///
-    /// - Normalizes each element of `td_post_val` via `normalize`.
-    /// - Pads the Vec<u64> with zeros up to `MAX_TENSOR_SIZE`.
-    ///
-    /// If no `td_post_val` is present, returns a zero-filled Vec<u64> of length `MAX_TENSOR_SIZE`.
-    ///
-    /// # Panics
-    /// Panics if `td_post_val`'s length exceeds `MAX_TENSOR_SIZE`.
     pub fn td_post_vals(&self) -> Option<Vec<u64>> {
         self.build_vals(self.memory_state.td_post_val.as_ref())
     }
@@ -206,15 +181,6 @@ impl ONNXCycle {
         self.build_vals(self.memory_state.td_pre_val.as_ref())
     }
 
-    /// Helper to build normalized and padded u64 values from an optional TensorValue.
-    ///
-    /// - `tensor_opt`: Optional reference to the raw tensor values.
-    /// - `name`: Used in panic message if length exceeds limit.
-    ///
-    /// # Panics
-    /// - Panics if the tensor's length exceeds `MAX_TENSOR_SIZE`.
-    /// ---
-    /// Returns a Vec<u64> of normalized values, padded with zeros to `MAX_TENSOR_SIZE`.
     fn build_vals(&self, tensor_opt: Option<&Tensor<i32>>) -> Option<Vec<u64>> {
         tensor_opt.map(|tensor| tensor.inner.iter().map(normalize).collect())
     }
@@ -314,135 +280,11 @@ pub enum CircuitFlags {
     Advice,
     /// 1 if this is constant instruction; 0 otherwise.
     Const,
-    // /// 1 if this is a sum operator; 0 otherwise.
-    // SumOperands,
-    // /// 1 if this is a gather operation; 0 otherwise.
-    // Gather,
-    // /// 1 if this is a select operation; 0 otherwise.
-    // Select,
-    // /// 1 if this is broadcase op; 0 otherwise
-    // BroadCast,
-    // /// 1 if this op uses a sum-check precompile
-    // Precompile,
-    // /// 1 if this is a no-op
-    // IsNoop,
+    /// Is noop instruction
+    IsNoop,
 }
 
 pub const NUM_CIRCUIT_FLAGS: usize = CircuitFlags::COUNT;
-
-// impl ONNXInstr {
-//     #[rustfmt::skip]
-//     pub fn to_circuit_flags(&self) -> [bool; NUM_CIRCUIT_FLAGS] {
-//         let mut flags = [false; NUM_CIRCUIT_FLAGS];
-
-//         flags[CircuitFlags::LeftOperandIsTs1Value as usize] = matches!(
-//             self.opcode,
-//             ONNXOpcode::Add
-//             | ONNXOpcode::Sub
-//             | ONNXOpcode::Mul
-//             | ONNXOpcode::VirtualMove
-//             | ONNXOpcode::VirtualAssertValidSignedRemainder
-//             | ONNXOpcode::VirtualAssertValidDiv0
-//             | ONNXOpcode::VirtualAssertEq
-//             | ONNXOpcode::Gte
-//             | ONNXOpcode::Sum
-//             | ONNXOpcode::Relu
-//             | ONNXOpcode::Output
-//         );
-
-//         flags[CircuitFlags::RightOperandIsTs2Value as usize] = matches!(
-//             self.opcode,
-//             ONNXOpcode::Add
-//             | ONNXOpcode::Sub
-//             | ONNXOpcode::Mul
-//             | ONNXOpcode::VirtualAssertValidSignedRemainder
-//             | ONNXOpcode::VirtualAssertValidDiv0
-//             | ONNXOpcode::VirtualAssertEq
-//             | ONNXOpcode::Gte
-//         );
-
-//         flags[CircuitFlags::RightOperandIsImm as usize] = matches!(
-//             self.opcode,
-//             | ONNXOpcode::VirtualMove
-//         );
-
-//         flags[CircuitFlags::AddOperands as usize] = matches!(
-//             self.opcode,
-//             ONNXOpcode::Add
-//             | ONNXOpcode::VirtualMove
-//             | ONNXOpcode::Relu
-//             | ONNXOpcode::Output
-//         );
-
-//         flags[CircuitFlags::SubtractOperands as usize] = matches!(
-//             self.opcode,
-//             ONNXOpcode::Sub,
-//         );
-
-//         flags[CircuitFlags::MultiplyOperands as usize] = matches!(
-//             self.opcode,
-//             ONNXOpcode::Mul,
-//         );
-
-//         flags[CircuitFlags::WriteLookupOutputToTD as usize] = matches!(
-//             self.opcode,
-//             ONNXOpcode::Add
-//             | ONNXOpcode::Sub
-//             | ONNXOpcode::Mul
-//             | ONNXOpcode::VirtualAdvice
-//             | ONNXOpcode::VirtualMove
-//             | ONNXOpcode::VirtualConst
-//             | ONNXOpcode::Gte
-//             | ONNXOpcode::Sum
-//             | ONNXOpcode::Relu
-//             | ONNXOpcode::Output
-//         );
-
-//         flags[CircuitFlags::Advice as usize] = matches!(
-//             self.opcode,
-//             ONNXOpcode::VirtualAdvice
-//         );
-
-//         flags[CircuitFlags::Const as usize] = matches!(
-//             self.opcode,
-//             ONNXOpcode::VirtualConst
-//             | ONNXOpcode::Constant
-//         );
-
-//         flags[CircuitFlags::Assert as usize] = matches!(
-//             self.opcode,
-//             ONNXOpcode::VirtualAssertValidSignedRemainder
-//             | ONNXOpcode::VirtualAssertValidDiv0
-//             | ONNXOpcode::VirtualAssertEq
-//         );
-
-//         flags[CircuitFlags::Precompile as usize] = matches!(
-//             self.opcode,
-//             ONNXOpcode::MatMult
-//         );
-//         flags[CircuitFlags::Assert as usize] = matches!(
-//             self.opcode,
-//             ONNXOpcode::VirtualAssertValidSignedRemainder
-//             | ONNXOpcode::VirtualAssertValidDiv0
-//             | ONNXOpcode::VirtualAssertEq
-//         );
-
-//         flags[CircuitFlags::InlineSequenceInstruction as usize] =
-//             self.virtual_sequence_remaining.is_some();
-//         flags[CircuitFlags::DoNotUpdateUnexpandedPC as usize] =
-//             self.virtual_sequence_remaining.unwrap_or(0) != 0;
-
-//         // TODO(Forpee): These single-opcode flags could be simplified to direct equality checks
-//         // unlike the multi-opcode matches above. We could Consider refactoring to use a more
-//         // systematic approach like opcode-to-flag mapping or trait-based dispatch.
-//         flags[CircuitFlags::SumOperands as usize] = self.opcode == ONNXOpcode::Sum;
-//         flags[CircuitFlags::Gather as usize] = self.opcode == ONNXOpcode::Gather;
-//         flags[CircuitFlags::Select as usize] = self.opcode == ONNXOpcode::Select;
-//         flags[CircuitFlags::BroadCast as usize] = self.opcode == ONNXOpcode::Broadcast;
-
-//         flags
-//     }
-// }
 
 pub trait InterleavedBitsMarker {
     fn is_interleaved_operands(&self) -> bool;
@@ -455,7 +297,6 @@ impl InterleavedBitsMarker for [bool; NUM_CIRCUIT_FLAGS] {
             && !self[CircuitFlags::MultiplyOperands]
             && !self[CircuitFlags::Advice]
             && !self[CircuitFlags::Const]
-        // && !self[CircuitFlags::SumOperands]
     }
 }
 
@@ -554,6 +395,7 @@ pub enum ONNXOpcode {
     ReduceMax,
     Select,
     Broadcast,
+    AddressedNoop,
 
     // Virtual instructions
     VirtualAdvice,
@@ -562,48 +404,4 @@ pub enum ONNXOpcode {
     VirtualMove,
     VirtualAssertEq,
     VirtualConst,
-}
-
-impl ONNXOpcode {
-    // TODO: Refactor bitflag generation to be more extensible.
-    // Currently uses manual bit shifting due to RebaseScale variant containing
-    // a Box<ONNXOpcode>, which prevents simple discriminant-based conversion.
-    pub fn into_bitflag(self) -> u64 {
-        match self {
-            ONNXOpcode::Noop => 1u64 << 0,
-            ONNXOpcode::Constant => 1u64 << 1,
-            ONNXOpcode::Input => 1u64 << 2,
-            ONNXOpcode::Output => 1u64 << 3,
-            ONNXOpcode::Add => 1u64 << 4,
-            ONNXOpcode::Sub => 1u64 << 5,
-            ONNXOpcode::Mul => 1u64 << 6,
-            ONNXOpcode::Div => 1u64 << 7,
-            ONNXOpcode::Pow => 1u64 << 8,
-            ONNXOpcode::Relu => 1u64 << 9,
-            ONNXOpcode::MatMult => 1u64 << 10,
-            ONNXOpcode::Gather => 1u64 << 11,
-            ONNXOpcode::Transpose => 1u64 << 12,
-            ONNXOpcode::Sqrt => 1u64 << 13,
-            ONNXOpcode::Sum => 1u64 << 14,
-            ONNXOpcode::MeanOfSquares => 1u64 << 15,
-            ONNXOpcode::Sigmoid => 1u64 << 16,
-            ONNXOpcode::Softmax => 1u64 << 17,
-
-            // Virtual instructions
-            ONNXOpcode::VirtualAdvice => 1u64 << 18,
-            ONNXOpcode::VirtualAssertValidSignedRemainder => 1u64 << 19,
-            ONNXOpcode::VirtualAssertValidDiv0 => 1u64 << 20,
-            ONNXOpcode::VirtualMove => 1u64 << 21,
-            ONNXOpcode::VirtualAssertEq => 1u64 << 22,
-            ONNXOpcode::VirtualConst => 1u64 << 23,
-
-            ONNXOpcode::Gte => 1u64 << 24,
-            ONNXOpcode::Reshape => 1u64 << 25,
-            ONNXOpcode::ArgMax => 1u64 << 26,
-            ONNXOpcode::Select => 1u64 << 27,
-            ONNXOpcode::ReduceMax => 1u64 << 28,
-            ONNXOpcode::Broadcast => 1u64 << 29,
-            _ => panic!("ONNXOpcode {self:#?} not implemented in into_bitflag"),
-        }
-    }
 }

@@ -3,7 +3,7 @@ use jolt_core::{
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
         dense_mlpoly::DensePolynomial,
-        eq_poly::EqPolynomial,
+        eq_poly::{EqPlusOnePolynomial, EqPolynomial},
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
@@ -14,6 +14,7 @@ use jolt_core::{
     utils::{math::Math, small_value::NUM_SVO_ROUNDS},
     zkvm::r1cs::builder::Constraint,
 };
+use onnx_tracer::trace_types::CircuitFlags;
 
 use std::{cell::RefCell, marker::PhantomData, rc::Rc, sync::Arc};
 use thiserror::Error;
@@ -27,7 +28,7 @@ use crate::jolt::{
     pcs::{ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
     r1cs::{
         constraints::{JoltONNXConstraints, R1CSConstraints},
-        inputs::{ALL_R1CS_INPUTS, COMMITTED_R1CS_INPUTS},
+        inputs::{ALL_R1CS_INPUTS, COMMITTED_R1CS_INPUTS, JoltONNXR1CSInputs},
         key::UniformSpartanKey,
     },
     sumcheck::SumcheckInstance,
@@ -351,261 +352,261 @@ impl<F: JoltField> SumcheckInstance<F> for InnerSumcheck<F> {
     }
 }
 
-// struct PCSumcheckProverState<F: JoltField> {
-//     unexpanded_pc_poly: MultilinearPolynomial<F>,
-//     pc_poly: MultilinearPolynomial<F>,
-//     is_noop_poly: MultilinearPolynomial<F>,
-//     eq_plus_one_poly: MultilinearPolynomial<F>,
-// }
+struct PCSumcheckProverState<F: JoltField> {
+    unexpanded_pc_poly: MultilinearPolynomial<F>,
+    pc_poly: MultilinearPolynomial<F>,
+    is_noop_poly: MultilinearPolynomial<F>,
+    eq_plus_one_poly: MultilinearPolynomial<F>,
+}
 
-// struct PCSumcheckVerifierState<F: JoltField> {
-//     r_cycle: Vec<F>,
-//     unexpanded_pc_eval_at_shift_r: F,
-//     pc_eval_at_shift_r: F,
-//     is_noop_eval_at_shift_r: F,
-// }
+struct PCSumcheckVerifierState<F: JoltField> {
+    r_cycle: Vec<F>,
+    unexpanded_pc_eval_at_shift_r: F,
+    pc_eval_at_shift_r: F,
+    is_noop_eval_at_shift_r: F,
+}
 
-// pub struct PCSumcheck<F: JoltField> {
-//     input_claim: F,
-//     gamma: F,
-//     gamma_squared: F,
-//     log_T: usize,
-//     prover_state: Option<PCSumcheckProverState<F>>,
-//     verifier_state: Option<PCSumcheckVerifierState<F>>,
-// }
+pub struct PCSumcheck<F: JoltField> {
+    input_claim: F,
+    gamma: F,
+    gamma_squared: F,
+    log_T: usize,
+    prover_state: Option<PCSumcheckProverState<F>>,
+    verifier_state: Option<PCSumcheckVerifierState<F>>,
+}
 
-// impl<F: JoltField> PCSumcheck<F> {
-//     pub fn new_prover(
-//         input_polys: &[MultilinearPolynomial<F>],
-//         claimed_witness_evals: &[F],
-//         eq_plus_one_r_cycle: Vec<F>,
-//         gamma: F,
-//         r_cycle: Vec<F>,
-//     ) -> Self {
-//         let gamma_squared = gamma.square();
-//         let unexpanded_pc_index = JoltONNXR1CSInputs::UnexpandedPC.to_index();
-//         let pc_index = JoltONNXR1CSInputs::PC.to_index();
-//         let next_unexpanded_pc_index = JoltONNXR1CSInputs::NextUnexpandedPC.to_index();
-//         let next_pc_index = JoltONNXR1CSInputs::NextPC.to_index();
-//         let noop_index = JoltONNXR1CSInputs::OpFlags(CircuitFlags::IsNoop).to_index();
-//         let next_is_noop_index = JoltONNXR1CSInputs::NextIsNoop.to_index();
+impl<F: JoltField> PCSumcheck<F> {
+    pub fn new_prover(
+        input_polys: &[MultilinearPolynomial<F>],
+        claimed_witness_evals: &[F],
+        eq_plus_one_r_cycle: Vec<F>,
+        gamma: F,
+        r_cycle: Vec<F>,
+    ) -> Self {
+        let gamma_squared = gamma.square();
+        let unexpanded_pc_index = JoltONNXR1CSInputs::UnexpandedPC.to_index();
+        let pc_index = JoltONNXR1CSInputs::PC.to_index();
+        let next_unexpanded_pc_index = JoltONNXR1CSInputs::NextUnexpandedPC.to_index();
+        let next_pc_index = JoltONNXR1CSInputs::NextPC.to_index();
+        let noop_index = JoltONNXR1CSInputs::OpFlags(CircuitFlags::IsNoop).to_index();
+        let next_is_noop_index = JoltONNXR1CSInputs::NextIsNoop.to_index();
 
-//         let input_claim = claimed_witness_evals[next_unexpanded_pc_index]
-//             + gamma * claimed_witness_evals[next_pc_index]
-//             + gamma_squared * claimed_witness_evals[next_is_noop_index];
+        let input_claim = claimed_witness_evals[next_unexpanded_pc_index]
+            + gamma * claimed_witness_evals[next_pc_index]
+            + gamma_squared * claimed_witness_evals[next_is_noop_index];
 
-//         Self {
-//             input_claim,
-//             log_T: r_cycle.len(),
-//             prover_state: Some(PCSumcheckProverState {
-//                 unexpanded_pc_poly: input_polys[unexpanded_pc_index].clone(),
-//                 pc_poly: input_polys[pc_index].clone(),
-//                 is_noop_poly: input_polys[noop_index].clone(),
-//                 eq_plus_one_poly: MultilinearPolynomial::from(eq_plus_one_r_cycle),
-//             }),
-//             gamma,
-//             gamma_squared,
-//             verifier_state: None,
-//         }
-//     }
+        Self {
+            input_claim,
+            log_T: r_cycle.len(),
+            prover_state: Some(PCSumcheckProverState {
+                unexpanded_pc_poly: input_polys[unexpanded_pc_index].clone(),
+                pc_poly: input_polys[pc_index].clone(),
+                is_noop_poly: input_polys[noop_index].clone(),
+                eq_plus_one_poly: MultilinearPolynomial::from(eq_plus_one_r_cycle),
+            }),
+            gamma,
+            gamma_squared,
+            verifier_state: None,
+        }
+    }
 
-//     pub fn new_verifier(
-//         input_claim: F,
-//         r_cycle: Vec<F>,
-//         gamma: F,
-//         unexpanded_pc_eval_at_shift_r: F,
-//         pc_eval_at_shift_r: F,
-//         is_noop_eval_at_shift_r: F,
-//     ) -> Self {
-//         let gamma_squared = gamma.square();
-//         Self {
-//             input_claim,
-//             prover_state: None,
-//             log_T: r_cycle.len(),
-//             verifier_state: Some(PCSumcheckVerifierState {
-//                 r_cycle,
-//                 unexpanded_pc_eval_at_shift_r,
-//                 pc_eval_at_shift_r,
-//                 is_noop_eval_at_shift_r,
-//             }),
-//             gamma,
-//             gamma_squared,
-//         }
-//     }
-// }
+    pub fn new_verifier(
+        input_claim: F,
+        r_cycle: Vec<F>,
+        gamma: F,
+        unexpanded_pc_eval_at_shift_r: F,
+        pc_eval_at_shift_r: F,
+        is_noop_eval_at_shift_r: F,
+    ) -> Self {
+        let gamma_squared = gamma.square();
+        Self {
+            input_claim,
+            prover_state: None,
+            log_T: r_cycle.len(),
+            verifier_state: Some(PCSumcheckVerifierState {
+                r_cycle,
+                unexpanded_pc_eval_at_shift_r,
+                pc_eval_at_shift_r,
+                is_noop_eval_at_shift_r,
+            }),
+            gamma,
+            gamma_squared,
+        }
+    }
+}
 
-// impl<F: JoltField> SumcheckInstance<F> for PCSumcheck<F> {
-//     fn degree(&self) -> usize {
-//         2
-//     }
+impl<F: JoltField> SumcheckInstance<F> for PCSumcheck<F> {
+    fn degree(&self) -> usize {
+        2
+    }
 
-//     fn num_rounds(&self) -> usize {
-//         self.log_T
-//     }
+    fn num_rounds(&self) -> usize {
+        self.log_T
+    }
 
-//     fn input_claim(&self) -> F {
-//         self.input_claim
-//     }
+    fn input_claim(&self) -> F {
+        self.input_claim
+    }
 
-//     #[tracing::instrument(skip_all, name = "PCSumcheck::compute_prover_message")]
-//     fn compute_prover_message(&mut self, _round: usize, _previous_claim: F) -> Vec<F> {
-//         let prover_state = self
-//             .prover_state
-//             .as_ref()
-//             .expect("Prover state not initialized");
-//         const DEGREE: usize = 2;
+    #[tracing::instrument(skip_all, name = "PCSumcheck::compute_prover_message")]
+    fn compute_prover_message(&mut self, _round: usize, _previous_claim: F) -> Vec<F> {
+        let prover_state = self
+            .prover_state
+            .as_ref()
+            .expect("Prover state not initialized");
+        const DEGREE: usize = 2;
 
-//         let univariate_poly_evals: [F; DEGREE] = (0..prover_state.unexpanded_pc_poly.len() / 2)
-//             .into_par_iter()
-//             .map(|i| {
-//                 let unexpanded_pc_evals = prover_state
-//                     .unexpanded_pc_poly
-//                     .sumcheck_evals_array::<DEGREE>(i, BindingOrder::HighToLow);
-//                 let pc_evals = prover_state
-//                     .pc_poly
-//                     .sumcheck_evals_array::<DEGREE>(i, BindingOrder::HighToLow);
-//                 let eq_evals = prover_state
-//                     .eq_plus_one_poly
-//                     .sumcheck_evals_array::<DEGREE>(i, BindingOrder::HighToLow);
-//                 let is_noop_evals = prover_state
-//                     .is_noop_poly
-//                     .sumcheck_evals_array::<DEGREE>(i, BindingOrder::HighToLow);
+        let univariate_poly_evals: [F; DEGREE] = (0..prover_state.unexpanded_pc_poly.len() / 2)
+            .into_par_iter()
+            .map(|i| {
+                let unexpanded_pc_evals = prover_state
+                    .unexpanded_pc_poly
+                    .sumcheck_evals_array::<DEGREE>(i, BindingOrder::HighToLow);
+                let pc_evals = prover_state
+                    .pc_poly
+                    .sumcheck_evals_array::<DEGREE>(i, BindingOrder::HighToLow);
+                let eq_evals = prover_state
+                    .eq_plus_one_poly
+                    .sumcheck_evals_array::<DEGREE>(i, BindingOrder::HighToLow);
+                let is_noop_evals = prover_state
+                    .is_noop_poly
+                    .sumcheck_evals_array::<DEGREE>(i, BindingOrder::HighToLow);
 
-//                 [
-//                     (unexpanded_pc_evals[0]
-//                         + self.gamma * pc_evals[0]
-//                         + self.gamma_squared * is_noop_evals[0])
-//                         * eq_evals[0], // eval at 0
-//                     (unexpanded_pc_evals[1]
-//                         + self.gamma * pc_evals[1]
-//                         + self.gamma_squared * is_noop_evals[1])
-//                         * eq_evals[1], // eval at 2
-//                 ]
-//             })
-//             .reduce(
-//                 || [F::zero(); DEGREE],
-//                 |mut running, new| {
-//                     for i in 0..DEGREE {
-//                         running[i] += new[i];
-//                     }
-//                     running
-//                 },
-//             );
+                [
+                    (unexpanded_pc_evals[0]
+                        + self.gamma * pc_evals[0]
+                        + self.gamma_squared * is_noop_evals[0])
+                        * eq_evals[0], // eval at 0
+                    (unexpanded_pc_evals[1]
+                        + self.gamma * pc_evals[1]
+                        + self.gamma_squared * is_noop_evals[1])
+                        * eq_evals[1], // eval at 2
+                ]
+            })
+            .reduce(
+                || [F::zero(); DEGREE],
+                |mut running, new| {
+                    for i in 0..DEGREE {
+                        running[i] += new[i];
+                    }
+                    running
+                },
+            );
 
-//         univariate_poly_evals.into()
-//     }
+        univariate_poly_evals.into()
+    }
 
-//     #[tracing::instrument(skip_all, name = "PCSumcheck::bind")]
-//     fn bind(&mut self, r_j: F, _round: usize) {
-//         let prover_state = self
-//             .prover_state
-//             .as_mut()
-//             .expect("Prover state not initialized");
+    #[tracing::instrument(skip_all, name = "PCSumcheck::bind")]
+    fn bind(&mut self, r_j: F, _round: usize) {
+        let prover_state = self
+            .prover_state
+            .as_mut()
+            .expect("Prover state not initialized");
 
-//         rayon::scope(|s| {
-//             s.spawn(|_| {
-//                 prover_state
-//                     .unexpanded_pc_poly
-//                     .bind_parallel(r_j, BindingOrder::HighToLow)
-//             });
-//             s.spawn(|_| {
-//                 prover_state
-//                     .pc_poly
-//                     .bind_parallel(r_j, BindingOrder::HighToLow)
-//             });
-//             s.spawn(|_| {
-//                 prover_state
-//                     .is_noop_poly
-//                     .bind_parallel(r_j, BindingOrder::HighToLow)
-//             });
-//             s.spawn(|_| {
-//                 prover_state
-//                     .eq_plus_one_poly
-//                     .bind_parallel(r_j, BindingOrder::HighToLow)
-//             });
-//         });
-//     }
+        rayon::scope(|s| {
+            s.spawn(|_| {
+                prover_state
+                    .unexpanded_pc_poly
+                    .bind_parallel(r_j, BindingOrder::HighToLow)
+            });
+            s.spawn(|_| {
+                prover_state
+                    .pc_poly
+                    .bind_parallel(r_j, BindingOrder::HighToLow)
+            });
+            s.spawn(|_| {
+                prover_state
+                    .is_noop_poly
+                    .bind_parallel(r_j, BindingOrder::HighToLow)
+            });
+            s.spawn(|_| {
+                prover_state
+                    .eq_plus_one_poly
+                    .bind_parallel(r_j, BindingOrder::HighToLow)
+            });
+        });
+    }
 
-//     fn expected_output_claim(
-//         &self,
-//         _accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-//         r: &[F],
-//     ) -> F {
-//         let verifier_state = self
-//             .verifier_state
-//             .as_ref()
-//             .expect("Verifier state not initialized");
+    fn expected_output_claim(
+        &self,
+        _accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
+        r: &[F],
+    ) -> F {
+        let verifier_state = self
+            .verifier_state
+            .as_ref()
+            .expect("Verifier state not initialized");
 
-//         let batched_eval_at_shift_r = verifier_state.unexpanded_pc_eval_at_shift_r
-//             + self.gamma * verifier_state.pc_eval_at_shift_r
-//             + self.gamma_squared * verifier_state.is_noop_eval_at_shift_r;
+        let batched_eval_at_shift_r = verifier_state.unexpanded_pc_eval_at_shift_r
+            + self.gamma * verifier_state.pc_eval_at_shift_r
+            + self.gamma_squared * verifier_state.is_noop_eval_at_shift_r;
 
-//         let eq_plus_one_shift_sumcheck =
-//             EqPlusOnePolynomial::new(verifier_state.r_cycle.clone()).evaluate(r);
+        let eq_plus_one_shift_sumcheck =
+            EqPlusOnePolynomial::new(verifier_state.r_cycle.clone()).evaluate(r);
 
-//         batched_eval_at_shift_r * eq_plus_one_shift_sumcheck
-//     }
+        batched_eval_at_shift_r * eq_plus_one_shift_sumcheck
+    }
 
-//     fn cache_openings_prover(
-//         &self,
-//         accumulator: Rc<RefCell<ProverOpeningAccumulator<F>>>,
-//         opening_point: OpeningPoint<BIG_ENDIAN, F>,
-//     ) {
-//         let prover_state = self
-//             .prover_state
-//             .as_ref()
-//             .expect("Prover state not initialized");
+    fn cache_openings_prover(
+        &self,
+        accumulator: Rc<RefCell<ProverOpeningAccumulator<F>>>,
+        opening_point: OpeningPoint<BIG_ENDIAN, F>,
+    ) {
+        let prover_state = self
+            .prover_state
+            .as_ref()
+            .expect("Prover state not initialized");
 
-//         let unexpanded_pc_eval = prover_state.unexpanded_pc_poly.final_sumcheck_claim();
-//         let pc_eval = prover_state.pc_poly.final_sumcheck_claim();
-//         let is_noop_eval = prover_state.is_noop_poly.final_sumcheck_claim();
+        let unexpanded_pc_eval = prover_state.unexpanded_pc_poly.final_sumcheck_claim();
+        let pc_eval = prover_state.pc_poly.final_sumcheck_claim();
+        let is_noop_eval = prover_state.is_noop_poly.final_sumcheck_claim();
 
-//         accumulator.borrow_mut().append_virtual(
-//             VirtualPolynomial::UnexpandedPC,
-//             SumcheckId::SpartanShift,
-//             opening_point.clone(),
-//             unexpanded_pc_eval,
-//         );
-//         accumulator.borrow_mut().append_virtual(
-//             VirtualPolynomial::PC,
-//             SumcheckId::SpartanShift,
-//             opening_point.clone(),
-//             pc_eval,
-//         );
-//         accumulator.borrow_mut().append_virtual(
-//             VirtualPolynomial::OpFlags(CircuitFlags::IsNoop),
-//             SumcheckId::SpartanShift,
-//             opening_point,
-//             is_noop_eval,
-//         );
-//     }
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::UnexpandedPC,
+            SumcheckId::SpartanShift,
+            opening_point.clone(),
+            unexpanded_pc_eval,
+        );
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::PC,
+            SumcheckId::SpartanShift,
+            opening_point.clone(),
+            pc_eval,
+        );
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::OpFlags(CircuitFlags::IsNoop),
+            SumcheckId::SpartanShift,
+            opening_point,
+            is_noop_eval,
+        );
+    }
 
-//     fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-//         OpeningPoint::new(opening_point.to_vec())
-//     }
+    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+        OpeningPoint::new(opening_point.to_vec())
+    }
 
-//     fn cache_openings_verifier(
-//         &self,
-//         accumulator: Rc<RefCell<VerifierOpeningAccumulator<F>>>,
-//         opening_point: OpeningPoint<BIG_ENDIAN, F>,
-//     ) {
-//         accumulator.borrow_mut().append_virtual(
-//             VirtualPolynomial::UnexpandedPC,
-//             SumcheckId::SpartanShift,
-//             opening_point.clone(),
-//         );
-//         accumulator.borrow_mut().append_virtual(
-//             VirtualPolynomial::PC,
-//             SumcheckId::SpartanShift,
-//             opening_point.clone(),
-//         );
-//         accumulator.borrow_mut().append_virtual(
-//             VirtualPolynomial::OpFlags(CircuitFlags::IsNoop),
-//             SumcheckId::SpartanShift,
-//             opening_point,
-//         );
-//     }
-// }
+    fn cache_openings_verifier(
+        &self,
+        accumulator: Rc<RefCell<VerifierOpeningAccumulator<F>>>,
+        opening_point: OpeningPoint<BIG_ENDIAN, F>,
+    ) {
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::UnexpandedPC,
+            SumcheckId::SpartanShift,
+            opening_point.clone(),
+        );
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::PC,
+            SumcheckId::SpartanShift,
+            opening_point.clone(),
+        );
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::OpFlags(CircuitFlags::IsNoop),
+            SumcheckId::SpartanShift,
+            opening_point,
+        );
+    }
+}
 
 pub struct SpartanDag<F: JoltField> {
     /// Cached key to avoid recomputation across stages
@@ -983,131 +984,128 @@ where
         vec![Box::new(inner_sumcheck)]
     }
 
-    // fn stage3_prover_instances(
-    //     &mut self,
-    //     state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
-    // ) -> Vec<Box<dyn SumcheckInstance<F>>> {
-    //     /*  Sumcheck 3: Batched sumcheck for NextUnexpandedPC and NextPC verification
-    //         Proves: NextUnexpandedPC(r_cycle) + r * NextPC(r_cycle) =
-    //                 \sum_t (UnexpandedPC(t) + r * PC(t)) * eq_plus_one(r_cycle, t)
+    fn stage3_prover_instances(
+        &mut self,
+        state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Vec<Box<dyn SumcheckInstance<F>>> {
+        /*  Sumcheck 3: Batched sumcheck for NextUnexpandedPC and NextPC verification
+            Proves: NextUnexpandedPC(r_cycle) + r * NextPC(r_cycle) =
+                    \sum_t (UnexpandedPC(t) + r * PC(t)) * eq_plus_one(r_cycle, t)
 
-    //         This batched sumcheck simultaneously proves:
-    //         1. NextUnexpandedPC(r_cycle) = \sum_t UnexpandedPC(t) * eq_plus_one(r_cycle, t)
-    //         2. NextPC(r_cycle) = \sum_t PC(t) * eq_plus_one(r_cycle, t)
-    //     */
-    //     let (preprocessing, trace, _program_io) = state_manager.get_prover_data();
+            This batched sumcheck simultaneously proves:
+            1. NextUnexpandedPC(r_cycle) = \sum_t UnexpandedPC(t) * eq_plus_one(r_cycle, t)
+            2. NextPC(r_cycle) = \sum_t PC(t) * eq_plus_one(r_cycle, t)
+        */
+        let (preprocessing, trace, _program_io) = state_manager.get_prover_data();
 
-    //     let key = self.key.clone();
+        let key = self.key.clone();
 
-    //     // We need only pc and unexpanded pc for the next sumcheck
-    //     let pc_poly = JoltONNXR1CSInputs::PC.generate_witness(trace, preprocessing);
-    //     let unexpanded_pc_poly =
-    //         JoltONNXR1CSInputs::UnexpandedPC.generate_witness(trace, preprocessing);
-    //     let is_noop_poly = JoltONNXR1CSInputs::OpFlags(CircuitFlags::IsNoop)
-    //         .generate_witness(trace, preprocessing);
+        // We need only pc and unexpanded pc for the next sumcheck
+        let pc_poly = JoltONNXR1CSInputs::PC.generate_witness(trace, preprocessing);
+        let unexpanded_pc_poly =
+            JoltONNXR1CSInputs::UnexpandedPC.generate_witness(trace, preprocessing);
+        let is_noop_poly = JoltONNXR1CSInputs::OpFlags(CircuitFlags::IsNoop)
+            .generate_witness(trace, preprocessing);
 
-    //     let num_cycles = key.num_steps;
-    //     let num_cycles_bits = num_cycles.ilog2() as usize;
+        let num_cycles = key.num_steps;
+        let num_cycles_bits = num_cycles.ilog2() as usize;
 
-    //     // Get opening_point and claims from accumulator
-    //     let accumulator = state_manager.get_prover_accumulator();
-    //     let (outer_sumcheck_r, next_pc_eval) = accumulator
-    //         .borrow()
-    //         .get_virtual_polynomial_opening(VirtualPolynomial::NextPC, SumcheckId::SpartanOuter);
-    //     let (_, next_unexpanded_pc_eval) = accumulator.borrow().get_virtual_polynomial_opening(
-    //         VirtualPolynomial::NextUnexpandedPC,
-    //         SumcheckId::SpartanOuter,
-    //     );
-    //     let (_, next_is_noop_eval) = accumulator.borrow().get_virtual_polynomial_opening(
-    //         VirtualPolynomial::NextIsNoop,
-    //         SumcheckId::SpartanOuter,
-    //     );
+        // Get opening_point and claims from accumulator
+        let accumulator = state_manager.get_prover_accumulator();
+        let (outer_sumcheck_r, next_pc_eval) = accumulator
+            .borrow()
+            .get_virtual_polynomial_opening(VirtualPolynomial::NextPC, SumcheckId::SpartanOuter);
+        let (_, next_unexpanded_pc_eval) = accumulator.borrow().get_virtual_polynomial_opening(
+            VirtualPolynomial::NextUnexpandedPC,
+            SumcheckId::SpartanOuter,
+        );
+        let (_, next_is_noop_eval) = accumulator.borrow().get_virtual_polynomial_opening(
+            VirtualPolynomial::NextIsNoop,
+            SumcheckId::SpartanOuter,
+        );
 
-    //     let (r_cycle, _rx_var) = outer_sumcheck_r.split_at(num_cycles_bits);
+        let (r_cycle, _rx_var) = outer_sumcheck_r.split_at(num_cycles_bits);
 
-    //     let (_, eq_plus_one_r_cycle) = EqPlusOnePolynomial::evals(&r_cycle.r, None);
+        let (_, eq_plus_one_r_cycle) = EqPlusOnePolynomial::evals(&r_cycle.r, None);
 
-    //     let gamma: F = state_manager.transcript.borrow_mut().challenge_scalar();
-    //     let gamma_squared = gamma.square();
+        let gamma: F = state_manager.transcript.borrow_mut().challenge_scalar();
+        let gamma_squared = gamma.square();
 
-    //     let pc_sumcheck = PCSumcheck {
-    //         input_claim: next_unexpanded_pc_eval
-    //             + gamma * next_pc_eval
-    //             + gamma_squared * next_is_noop_eval,
-    //         log_T: r_cycle.len(),
-    //         prover_state: Some(PCSumcheckProverState {
-    //             unexpanded_pc_poly,
-    //             pc_poly,
-    //             is_noop_poly,
-    //             eq_plus_one_poly: MultilinearPolynomial::from(eq_plus_one_r_cycle),
-    //         }),
-    //         gamma,
-    //         gamma_squared,
-    //         verifier_state: None,
-    //     };
+        let pc_sumcheck = PCSumcheck {
+            input_claim: next_unexpanded_pc_eval
+                + gamma * next_pc_eval
+                + gamma_squared * next_is_noop_eval,
+            log_T: r_cycle.len(),
+            prover_state: Some(PCSumcheckProverState {
+                unexpanded_pc_poly,
+                pc_poly,
+                is_noop_poly,
+                eq_plus_one_poly: MultilinearPolynomial::from(eq_plus_one_r_cycle),
+            }),
+            gamma,
+            gamma_squared,
+            verifier_state: None,
+        };
 
-    //     #[cfg(feature = "allocative")]
-    //     print_data_structure_heap_usage("Spartan PCSumcheck", &pc_sumcheck);
+        vec![Box::new(pc_sumcheck)]
+    }
 
-    //     vec![Box::new(pc_sumcheck)]
-    // }
+    fn stage3_verifier_instances(
+        &mut self,
+        state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Vec<Box<dyn SumcheckInstance<F>>> {
+        /* Sumcheck 3: Batched sumcheck for NextUnexpandedPC and NextPC verification
+           Verifies the batched constraint for both NextUnexpandedPC and NextPC
+        */
+        let key = self.key.clone();
 
-    // fn stage3_verifier_instances(
-    //     &mut self,
-    //     state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
-    // ) -> Vec<Box<dyn SumcheckInstance<F>>> {
-    //     /* Sumcheck 3: Batched sumcheck for NextUnexpandedPC and NextPC verification
-    //        Verifies the batched constraint for both NextUnexpandedPC and NextPC
-    //     */
-    //     let key = self.key.clone();
+        // Get batching challenge for combining NextUnexpandedPC and NextPC
+        let gamma: F = state_manager.transcript.borrow_mut().challenge_scalar();
 
-    //     // Get batching challenge for combining NextUnexpandedPC and NextPC
-    //     let gamma: F = state_manager.transcript.borrow_mut().challenge_scalar();
+        // Get r_cycle from outer sumcheck opening point
+        let accumulator = state_manager.get_verifier_accumulator();
+        let (outer_sumcheck_r, next_pc_eval) = accumulator
+            .borrow()
+            .get_virtual_polynomial_opening(VirtualPolynomial::NextPC, SumcheckId::SpartanOuter);
+        let (_, next_unexpanded_pc_eval) = accumulator.borrow().get_virtual_polynomial_opening(
+            VirtualPolynomial::NextUnexpandedPC,
+            SumcheckId::SpartanOuter,
+        );
+        let (_, next_is_noop_eval) = accumulator.borrow().get_virtual_polynomial_opening(
+            VirtualPolynomial::NextIsNoop,
+            SumcheckId::SpartanOuter,
+        );
 
-    //     // Get r_cycle from outer sumcheck opening point
-    //     let accumulator = state_manager.get_verifier_accumulator();
-    //     let (outer_sumcheck_r, next_pc_eval) = accumulator
-    //         .borrow()
-    //         .get_virtual_polynomial_opening(VirtualPolynomial::NextPC, SumcheckId::SpartanOuter);
-    //     let (_, next_unexpanded_pc_eval) = accumulator.borrow().get_virtual_polynomial_opening(
-    //         VirtualPolynomial::NextUnexpandedPC,
-    //         SumcheckId::SpartanOuter,
-    //     );
-    //     let (_, next_is_noop_eval) = accumulator.borrow().get_virtual_polynomial_opening(
-    //         VirtualPolynomial::NextIsNoop,
-    //         SumcheckId::SpartanOuter,
-    //     );
+        let num_cycles_bits = key.num_steps.log_2();
 
-    //     let num_cycles_bits = key.num_steps.log_2();
+        let (r_cycle, _rx_var) = outer_sumcheck_r.split_at(num_cycles_bits);
 
-    //     let (r_cycle, _rx_var) = outer_sumcheck_r.split_at(num_cycles_bits);
+        let shift_sumcheck_claim =
+            next_unexpanded_pc_eval + gamma * next_pc_eval + gamma.square() * next_is_noop_eval;
 
-    //     let shift_sumcheck_claim =
-    //         next_unexpanded_pc_eval + gamma * next_pc_eval + gamma.square() * next_is_noop_eval;
+        // Get shift sumcheck witness evaluations from openings (UnexpandedPC and PC at shift_r)
+        let (_, pc_eval_at_shift_r) = accumulator
+            .borrow()
+            .get_virtual_polynomial_opening(VirtualPolynomial::PC, SumcheckId::SpartanShift);
+        let (_, unexpanded_pc_eval_at_shift_r) =
+            accumulator.borrow().get_virtual_polynomial_opening(
+                VirtualPolynomial::UnexpandedPC,
+                SumcheckId::SpartanShift,
+            );
+        let (_, is_noop_eval_at_shift_r) = accumulator.borrow().get_virtual_polynomial_opening(
+            VirtualPolynomial::OpFlags(CircuitFlags::IsNoop),
+            SumcheckId::SpartanShift,
+        );
 
-    //     // Get shift sumcheck witness evaluations from openings (UnexpandedPC and PC at shift_r)
-    //     let (_, pc_eval_at_shift_r) = accumulator
-    //         .borrow()
-    //         .get_virtual_polynomial_opening(VirtualPolynomial::PC, SumcheckId::SpartanShift);
-    //     let (_, unexpanded_pc_eval_at_shift_r) =
-    //         accumulator.borrow().get_virtual_polynomial_opening(
-    //             VirtualPolynomial::UnexpandedPC,
-    //             SumcheckId::SpartanShift,
-    //         );
-    //     let (_, is_noop_eval_at_shift_r) = accumulator.borrow().get_virtual_polynomial_opening(
-    //         VirtualPolynomial::OpFlags(CircuitFlags::IsNoop),
-    //         SumcheckId::SpartanShift,
-    //     );
+        let pc_sumcheck = PCSumcheck::<F>::new_verifier(
+            shift_sumcheck_claim,
+            r_cycle.into(),
+            gamma,
+            unexpanded_pc_eval_at_shift_r,
+            pc_eval_at_shift_r,
+            is_noop_eval_at_shift_r,
+        );
 
-    //     let pc_sumcheck = PCSumcheck::<F>::new_verifier(
-    //         shift_sumcheck_claim,
-    //         r_cycle.into(),
-    //         gamma,
-    //         unexpanded_pc_eval_at_shift_r,
-    //         pc_eval_at_shift_r,
-    //         is_noop_eval_at_shift_r,
-    //     );
-
-    //     vec![Box::new(pc_sumcheck)]
-    // }
+        vec![Box::new(pc_sumcheck)]
+    }
 }

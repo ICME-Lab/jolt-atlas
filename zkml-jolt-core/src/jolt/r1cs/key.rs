@@ -136,7 +136,9 @@ impl<F: JoltField> UniformSpartanKey<F> {
     pub fn evaluate_small_matrix_rlc(&self, r_constr: &[F], r_rlc: F) -> Vec<F> {
         assert_eq!(
             r_constr.len(),
-            (self.uniform_r1cs.num_rows + 1).next_power_of_two().log_2()
+            (self.uniform_r1cs.num_rows + 1).next_power_of_two().log_2(),
+            "uniform_r1cs.num_rows = {}",
+            self.uniform_r1cs.num_rows,
         );
 
         let eq_rx_constr = EqPolynomial::evals(r_constr);

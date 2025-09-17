@@ -58,33 +58,42 @@ pub fn inline_tensor_cycle(
     instrs: &[JoltONNXBytecode],
 ) -> Vec<JoltONNXCycle> {
     let active_output_elements = raw_cycle.instr.active_output_elements;
-    let ts1_vals = raw_cycle
-        .ts1_vals()
-        .unwrap_or(vec![0; active_output_elements]);
-    let ts2_vals = raw_cycle
-        .ts2_vals()
-        .unwrap_or(vec![0; active_output_elements]);
-    let td_pre_vals = raw_cycle
-        .td_pre_vals()
-        .unwrap_or(vec![0; active_output_elements]);
-    let td_post_vals = raw_cycle
-        .td_post_vals()
-        .unwrap_or(vec![0; active_output_elements]);
+    let tensor_values = TensorValues::from_cycle(raw_cycle, active_output_elements);
+
     (0..active_output_elements)
         .map(|i| {
+            let memory_ops = MemoryOps {
+                ts1_val: tensor_values.ts1_vals[i],
+                ts2_val: tensor_values.ts2_vals[i],
+                td_pre_val: tensor_values.td_pre_vals[i],
+                td_post_val: tensor_values.td_post_vals[i],
+            };
             let mut cycle = JoltONNXCycle {
                 lookup: None,
-                memory_ops: MemoryOps {
-                    ts1_val: ts1_vals[i],
-                    ts2_val: ts2_vals[i],
-                    td_pre_val: td_pre_vals[i],
-                    td_post_val: td_post_vals[i],
-                },
+                memory_ops,
             };
             cycle.construct_lookup_query(&instrs[i]);
             cycle
         })
         .collect()
+}
+
+struct TensorValues {
+    ts1_vals: Vec<u64>,
+    ts2_vals: Vec<u64>,
+    td_pre_vals: Vec<u64>,
+    td_post_vals: Vec<u64>,
+}
+
+impl TensorValues {
+    fn from_cycle(raw_cycle: &ONNXCycle, size: usize) -> Self {
+        Self {
+            ts1_vals: raw_cycle.ts1_vals().unwrap_or_else(|| vec![0; size]),
+            ts2_vals: raw_cycle.ts2_vals().unwrap_or_else(|| vec![0; size]),
+            td_pre_vals: raw_cycle.td_pre_vals().unwrap_or_else(|| vec![0; size]),
+            td_post_vals: raw_cycle.td_post_vals().unwrap_or_else(|| vec![0; size]),
+        }
+    }
 }
 
 /// JoltONNXCycle's are paired with the preprocessed bytecode trace cycles
@@ -168,6 +177,7 @@ impl LookupQuery<WORD_SIZE> for JoltONNXCycle {
     }
 }
 
+// TODO: it seems we can refactor to get rid of this impl since JoltONNXBytecode implements this.
 impl InstructionLookup<WORD_SIZE> for JoltONNXCycle {
     fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
         self.lookup

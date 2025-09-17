@@ -185,6 +185,19 @@ impl JoltONNXBytecode {
         }
     }
 
+    /// Effectively a no-op but is not placed at address 0
+    pub fn addressed_no_op(address: usize) -> Self {
+        Self {
+            address,
+            opcode: ONNXOpcode::AddressedNoop,
+            td: 0,
+            ts1: 0,
+            ts2: 0,
+            imm: 0,
+            tensor_sequence_remaining: None,
+        }
+    }
+
     #[rustfmt::skip]
     pub fn circuit_flags(&self) -> [bool; NUM_CIRCUIT_FLAGS] {
         let mut flags = [false; NUM_CIRCUIT_FLAGS];
@@ -270,10 +283,6 @@ impl JoltONNXBytecode {
             | ONNXOpcode::VirtualAssertEq
         );
 
-        // flags[CircuitFlags::Precompile as usize] = matches!(
-        //     self.opcode,
-        //     ONNXOpcode::MatMult
-        // );
         flags[CircuitFlags::Assert as usize] = matches!(
             self.opcode,
             ONNXOpcode::VirtualAssertValidSignedRemainder
@@ -281,18 +290,15 @@ impl JoltONNXBytecode {
             | ONNXOpcode::VirtualAssertEq
         );
 
+        flags[CircuitFlags::IsNoop as usize] = matches!(
+            self.opcode,
+            ONNXOpcode::Noop
+        );
+
         flags[CircuitFlags::InlineSequenceInstruction as usize] =
             self.tensor_sequence_remaining.is_some();
         flags[CircuitFlags::DoNotUpdateUnexpandedPC as usize] =
             self.tensor_sequence_remaining.unwrap_or(0) != 0;
-
-        // // TODO(Forpee): These single-opcode flags could be simplified to direct equality checks
-        // // unlike the multi-opcode matches above. We could Consider refactoring to use a more
-        // // systematic approach like opcode-to-flag mapping or trait-based dispatch.
-        // flags[CircuitFlags::SumOperands as usize] = self.opcode == ONNXOpcode::Sum;
-        // flags[CircuitFlags::Gather as usize] = self.opcode == ONNXOpcode::Gather;
-        // flags[CircuitFlags::Select as usize] = self.opcode == ONNXOpcode::Select;
-        // flags[CircuitFlags::BroadCast as usize] = self.opcode == ONNXOpcode::Broadcast;
 
         flags
     }
@@ -317,6 +323,10 @@ impl BytecodePreprocessing {
         ModelFunc: Fn() -> Model,
     {
         let (mut bytecode, memory_K) = Self::inline_tensor_instrs(model);
+        // Append an addressed no-op instruction at the end to simplify the PC logic in the VM
+        bytecode.push(JoltONNXBytecode::addressed_no_op(
+            bytecode.last().unwrap().address + 1,
+        ));
         let mut tensor_virtual_pc_map = BTreeMap::new();
         let mut virtual_address = 1; // Account for no-op instruction prepended to bytecode
         for instruction in bytecode.iter() {
@@ -385,9 +395,9 @@ impl BytecodePreprocessing {
         // e.g., ONNX tensor address 1 maps to virtual addresses max_active_output_elements..(max_active_output_elements + its size)
         // etc.
         for instruction in bytecode.into_iter() {
-            let joule_instructions =
-                raw_to_joule(instruction, &mut vt_address, &mut vt_address_map);
-            preprocessed_bytecode.extend(joule_instructions);
+            let jolt_instructions =
+                raw_to_jolt_bytecode(instruction, &mut vt_address, &mut vt_address_map);
+            preprocessed_bytecode.extend(jolt_instructions);
         }
         println!("preprocessed bytecode: {preprocessed_bytecode:#?}");
         (preprocessed_bytecode, vt_address.next_power_of_two())
@@ -404,7 +414,7 @@ impl BytecodePreprocessing {
     }
 }
 
-pub fn raw_to_joule(
+pub fn raw_to_jolt_bytecode(
     raw: ONNXInstr,
     vt_address: &mut usize,
     vt_address_map: &mut BTreeMap<(usize, usize), usize>,
@@ -417,7 +427,7 @@ pub fn raw_to_joule(
     //    - td: Allocate new virtual memory address for this instruction's result
     // 3. Map ONNX tensor addresses to virtual memory addresses for Jolt VM execution
 
-    // TODO(Forpee): Does not work with non elementwise ops (will need to come-back to this for matmult)
+    // TODO(Forpee): Below code does not work with non elementwise ops (will need to come-back to this for matmult)
     let active_output_elements = raw.active_output_elements;
 
     // get ts1 and ts2 addresses

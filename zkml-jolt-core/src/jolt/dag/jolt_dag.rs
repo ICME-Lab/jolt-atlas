@@ -130,7 +130,7 @@ impl JoltDAG {
         let _guard = span.enter();
 
         let mut stage3_instances: Vec<_> = std::iter::empty()
-            // .chain(spartan_dag.stage3_prover_instances(&mut state_manager))
+            .chain(spartan_dag.stage3_prover_instances(&mut state_manager))
             .chain(memory_dag.stage3_prover_instances(&mut state_manager))
             .chain(lookups_dag.stage3_prover_instances(&mut state_manager))
             .collect();
@@ -208,21 +208,21 @@ impl JoltDAG {
             ProofData::ReducedOpeningProof(opening_proof),
         );
 
-        // #[cfg(test)]
-        // assert!(
-        //     state_manager
-        //         .get_prover_accumulator()
-        //         .borrow()
-        //         .appended_virtual_openings
-        //         .borrow()
-        //         .is_empty(),
-        //     "Not all virtual openings have been proven, missing: {:?}",
-        //     state_manager
-        //         .get_prover_accumulator()
-        //         .borrow()
-        //         .appended_virtual_openings
-        //         .borrow()
-        // );
+        #[cfg(test)]
+        assert!(
+            state_manager
+                .get_prover_accumulator()
+                .borrow()
+                .appended_virtual_openings
+                .borrow()
+                .is_empty(),
+            "Not all virtual openings have been proven, missing: {:?}",
+            state_manager
+                .get_prover_accumulator()
+                .borrow()
+                .appended_virtual_openings
+                .borrow()
+        );
 
         #[cfg(test)]
         let debug_info = {
@@ -307,7 +307,7 @@ impl JoltDAG {
 
         // Stage 3:
         let stage3_instances: Vec<_> = std::iter::empty()
-            // .chain(spartan_dag.stage3_verifier_instances(&mut state_manager))
+            .chain(spartan_dag.stage3_verifier_instances(&mut state_manager))
             .chain(memory_dag.stage3_verifier_instances(&mut state_manager))
             .chain(lookups_dag.stage3_verifier_instances(&mut state_manager))
             .collect();

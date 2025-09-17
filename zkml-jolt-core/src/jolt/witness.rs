@@ -246,7 +246,6 @@ impl CommittedPolynomial {
                 let (left, right) = LookupQuery::<32>::to_instruction_inputs(cycle);
                 let circuit_flags = bytecode_line.circuit_flags();
                 let (rd_write_flag, (pre_rd, post_rd)) = (bytecode_line.td, cycle.td_write());
-                let _lookup_output = LookupQuery::<32>::to_lookup_output(cycle);
 
                 batch_ref.left_instruction_input[i] = left;
                 batch_ref.right_instruction_input[i] = right;

@@ -151,6 +151,15 @@ impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
             JoltONNXR1CSInputs::LookupOutput,
         );
 
+        // if CircuitFlag::Const {
+        //     assert!(TdWriteValue == Const)
+        // }
+        cs.constrain_eq_conditional(
+            JoltONNXR1CSInputs::OpFlags(CircuitFlags::Const),
+            JoltONNXR1CSInputs::Imm,
+            JoltONNXR1CSInputs::TdWriteValue,
+        );
+
         // if NextIsNoop {
         //     assert!(NextUnexpandedPC == 0)
         // }
@@ -183,7 +192,5 @@ impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
             JoltONNXR1CSInputs::NextPC,
             JoltONNXR1CSInputs::PC + 1,
         );
-
-        cs.constrain_eq(0, 0);
     }
 }

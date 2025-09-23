@@ -5,9 +5,7 @@ use crate::jolt::{
         virtual_const::ConstInstruction,
     },
 };
-use crate::jolt::{
-    executor::instructions::AtlasInstructionLookup, lookup_table::AtlasLookupTables,
-};
+use crate::jolt::{executor::instructions::InstructionLookup, lookup_table::LookupTables};
 use jolt_core::zkvm::instruction::LookupQuery;
 use onnx_tracer::{
     ProgramIO,
@@ -200,8 +198,8 @@ impl LookupQuery<WORD_SIZE> for JoltONNXCycle {
 }
 
 // TODO: it seems we can refactor to get rid of this impl since JoltONNXBytecode implements this.
-impl AtlasInstructionLookup<WORD_SIZE> for JoltONNXCycle {
-    fn lookup_table(&self) -> Option<AtlasLookupTables<WORD_SIZE>> {
+impl InstructionLookup<WORD_SIZE> for JoltONNXCycle {
+    fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
         self.lookup
             .as_ref()
             .and_then(|lookup_function| lookup_function.lookup_table())
@@ -263,8 +261,8 @@ macro_rules! define_lookup_enum {
             }
         }
 
-        impl AtlasInstructionLookup<$word_size> for $enum_name {
-            fn lookup_table(&self) -> Option<AtlasLookupTables<$word_size>> {
+        impl InstructionLookup<$word_size> for $enum_name {
+            fn lookup_table(&self) -> Option<LookupTables<$word_size>> {
                 match self {
                     $(
                         $enum_name::$variant(inner) => inner.lookup_table(),

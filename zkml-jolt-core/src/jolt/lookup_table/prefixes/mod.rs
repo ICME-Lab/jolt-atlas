@@ -1,6 +1,13 @@
 use jolt_core::{field::JoltField, utils::lookup_bits::LookupBits};
 
-use jolt_prefixes::*;
+use jolt_prefixes::{
+    AndPrefix, DivByZeroPrefix, EqPrefix, LeftMsbPrefix, LeftOperandIsZeroPrefix,
+    LeftShiftHelperPrefix, LeftShiftPrefix, LessThanPrefix, LowerWordPrefix, LsbPrefix,
+    NegativeDivisorEqualsRemainderPrefix, NegativeDivisorGreaterThanRemainderPrefix,
+    NegativeDivisorZeroRemainderPrefix, OrPrefix, PositiveRemainderEqualsDivisorPrefix,
+    PositiveRemainderLessThanDivisorPrefix, Pow2Prefix, RightMsbPrefix, RightOperandIsZeroPrefix,
+    RightShiftPrefix, SignExtensionPrefix, UpperWordPrefix, XorPrefix,
+};
 use lower_word_no_msb::LowerWordNoMsbPrefix;
 use not_unary_msb::NotUnaryMsbPrefix;
 use relu::ReluPrefix;
@@ -15,11 +22,7 @@ use std::{
 use strum::EnumCount;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
-pub mod jolt_prefixes;
-pub mod lower_word_no_msb;
-pub mod not_unary_msb;
-pub mod relu;
-pub trait AtlasSparseDensePrefix<F: JoltField>: 'static + Sync {
+pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
     /// Evalautes the MLE for this prefix:
     /// - prefix(r, r_x, c, b)   if j is odd
     /// - prefix(r, c, b)        if j is even
@@ -35,7 +38,7 @@ pub trait AtlasSparseDensePrefix<F: JoltField>: 'static + Sync {
     /// over these variables as they range over the Boolean hypercube, so
     /// they can be represented by a single bitvector.
     fn prefix_mle(
-        checkpoints: &[AtlasPrefixCheckpoint<F>],
+        checkpoints: &[PrefixCheckpoint<F>],
         r_x: Option<F>,
         c: u32,
         b: LookupBits,
@@ -49,11 +52,11 @@ pub trait AtlasSparseDensePrefix<F: JoltField>: 'static + Sync {
     /// A checkpoint update may depend on the values of the other prefix checkpoints,
     /// so we pass in all such `checkpoints` to this function.
     fn update_prefix_checkpoint(
-        checkpoints: &[AtlasPrefixCheckpoint<F>],
+        checkpoints: &[PrefixCheckpoint<F>],
         r_x: F,
         r_y: F,
         j: usize,
-    ) -> AtlasPrefixCheckpoint<F>;
+    ) -> PrefixCheckpoint<F>;
 }
 
 /// An enum containing all prefixes used by Jolt's instruction lookup tables.
@@ -89,22 +92,22 @@ pub enum Prefixes {
 }
 
 #[derive(Clone, Copy)]
-pub struct AtlasPrefixEval<F>(F);
-pub type AtlasPrefixCheckpoint<F: JoltField> = AtlasPrefixEval<Option<F>>;
+pub struct PrefixEval<F>(F);
+pub type PrefixCheckpoint<F /* : JoltField */> = PrefixEval<Option<F>>;
 
-impl<F: Display> Display for AtlasPrefixEval<F> {
+impl<F: Display> Display for PrefixEval<F> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl<F> From<F> for AtlasPrefixEval<F> {
+impl<F> From<F> for PrefixEval<F> {
     fn from(value: F) -> Self {
         Self(value)
     }
 }
 
-impl<F> Deref for AtlasPrefixEval<F> {
+impl<F> Deref for PrefixEval<F> {
     type Target = F;
 
     fn deref(&self) -> &Self::Target {
@@ -112,13 +115,13 @@ impl<F> Deref for AtlasPrefixEval<F> {
     }
 }
 
-impl<F> AtlasPrefixCheckpoint<F> {
-    pub fn unwrap(self) -> AtlasPrefixEval<F> {
+impl<F> PrefixCheckpoint<F> {
+    pub fn unwrap(self) -> PrefixEval<F> {
         self.0.unwrap().into()
     }
 }
 
-impl<F> Index<Prefixes> for &[AtlasPrefixEval<F>] {
+impl<F> Index<Prefixes> for &[PrefixEval<F>] {
     type Output = F;
 
     fn index(&self, prefix: Prefixes) -> &Self::Output {
@@ -134,7 +137,7 @@ impl Prefixes {
     /// This function updates all the prefix checkpoints.
     #[tracing::instrument(skip_all)]
     pub fn update_checkpoints<const WORD_SIZE: usize, F: JoltField>(
-        checkpoints: &mut [AtlasPrefixCheckpoint<F>],
+        checkpoints: &mut [PrefixCheckpoint<F>],
         r_x: F,
         r_y: F,
         j: usize,
@@ -177,18 +180,18 @@ macro_rules! impl_prefixes {
             /// they can be represented by a single bitvector.
             pub fn prefix_mle<const WORD_SIZE: usize, F: JoltField>(
                 &self,
-                checkpoints: &[AtlasPrefixCheckpoint<F>],
+                checkpoints: &[PrefixCheckpoint<F>],
                 r_x: Option<F>,
                 c: u32,
                 b: LookupBits,
                 j: usize,
-            ) -> AtlasPrefixEval<F> {
+            ) -> PrefixEval<F> {
                 let eval = match self {
                     $(
                         Prefixes::$prefix => $type$(::<$word_size>)?::prefix_mle(checkpoints, r_x, c, b, j),
                     )*
                 };
-                AtlasPrefixEval(eval)
+                PrefixEval(eval)
 
             }
 
@@ -200,11 +203,11 @@ macro_rules! impl_prefixes {
             /// so we pass in all such `checkpoints` to this function.
             fn update_prefix_checkpoint<const WORD_SIZE: usize, F: JoltField>(
                 &self,
-                checkpoints: &[AtlasPrefixCheckpoint<F>],
+                checkpoints: &[PrefixCheckpoint<F>],
                 r_x: F,
                 r_y: F,
                 j: usize,
-            ) -> AtlasPrefixCheckpoint<F> {
+            ) -> PrefixCheckpoint<F> {
                 match self {
                     $(
                         Prefixes::$prefix => {$type$(::<$word_size>)?::update_prefix_checkpoint(checkpoints, r_x, r_y, j)}
@@ -243,3 +246,8 @@ impl_prefixes!(
     UpperWord: UpperWordPrefix<WORD_SIZE>,
     Xor: XorPrefix<WORD_SIZE>,
 );
+
+mod jolt_prefixes;
+mod lower_word_no_msb;
+mod not_unary_msb;
+mod relu;

@@ -3,15 +3,15 @@ use jolt_core::utils::lookup_bits::LookupBits;
 
 use crate::jolt::executor::read_raf_checking::current_suffix_len;
 
-use super::{AtlasPrefixCheckpoint, AtlasSparseDensePrefix, Prefixes};
+use super::{PrefixCheckpoint, Prefixes, SparseDensePrefix};
 
 pub enum LowerWordNoMsbPrefix<const WORD_SIZE: usize> {}
 
-impl<const WORD_SIZE: usize, F: JoltField> AtlasSparseDensePrefix<F>
+impl<const WORD_SIZE: usize, F: JoltField> SparseDensePrefix<F>
     for LowerWordNoMsbPrefix<WORD_SIZE>
 {
     fn prefix_mle(
-        checkpoints: &[AtlasPrefixCheckpoint<F>],
+        checkpoints: &[PrefixCheckpoint<F>],
         r_x: Option<F>,
         c: u32,
         mut b: LookupBits,
@@ -63,11 +63,11 @@ impl<const WORD_SIZE: usize, F: JoltField> AtlasSparseDensePrefix<F>
     }
 
     fn update_prefix_checkpoint(
-        checkpoints: &[AtlasPrefixCheckpoint<F>],
+        checkpoints: &[PrefixCheckpoint<F>],
         r_x: F,
         r_y: F,
         j: usize,
-    ) -> AtlasPrefixCheckpoint<F> {
+    ) -> PrefixCheckpoint<F> {
         let two = 2 * WORD_SIZE;
         match j {
             j if j < WORD_SIZE => None.into(),

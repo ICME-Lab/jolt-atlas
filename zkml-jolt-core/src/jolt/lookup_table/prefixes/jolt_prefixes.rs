@@ -1,8 +1,13 @@
 use jolt_core::{field::JoltField, utils::lookup_bits::LookupBits};
 
-use jolt_core::zkvm::lookup_table::prefixes::{
-    PrefixCheckpoint as JoltPrefixCheckpoint, Prefixes, SparseDensePrefix,
+use crate::jolt::lookup_table::prefixes::{
+    PrefixCheckpoint as AtlasPrefixCheckpoint, SparseDensePrefix as AtlasSparseDensePrefix,
 };
+use jolt_core::zkvm::lookup_table::prefixes::{
+    PrefixCheckpoint as JoltPrefixCheckpoint, Prefixes as JoltPrefixes,
+    SparseDensePrefix as JoltSparseDensePrefix,
+};
+
 pub use jolt_core::zkvm::lookup_table::prefixes::{
     and::AndPrefix, div_by_zero::DivByZeroPrefix, eq::EqPrefix,
     left_is_zero::LeftOperandIsZeroPrefix, left_msb::LeftMsbPrefix, left_shift::LeftShiftPrefix,
@@ -16,8 +21,6 @@ pub use jolt_core::zkvm::lookup_table::prefixes::{
     right_shift::RightShiftPrefix, sign_extension::SignExtensionPrefix,
     upper_word::UpperWordPrefix, xor::XorPrefix,
 };
-
-use crate::jolt::lookup_table::prefixes::{AtlasPrefixCheckpoint, AtlasSparseDensePrefix};
 
 impl<F> From<AtlasPrefixCheckpoint<F>> for JoltPrefixCheckpoint<F>
 where
@@ -39,40 +42,42 @@ where
 
 use super::Prefixes as AtlasPrefixes;
 
-impl From<Prefixes> for AtlasPrefixes {
-    fn from(prefix: Prefixes) -> Self {
+impl From<JoltPrefixes> for AtlasPrefixes {
+    fn from(prefix: JoltPrefixes) -> Self {
         match prefix {
-            Prefixes::And => AtlasPrefixes::And,
-            Prefixes::DivByZero => AtlasPrefixes::DivByZero,
-            Prefixes::Eq => AtlasPrefixes::Eq,
-            Prefixes::LeftOperandIsZero => AtlasPrefixes::LeftOperandIsZero,
-            Prefixes::LeftOperandMsb => AtlasPrefixes::LeftOperandMsb,
-            Prefixes::LeftShift => AtlasPrefixes::LeftShift,
-            Prefixes::LeftShiftHelper => AtlasPrefixes::LeftShiftHelper,
-            Prefixes::LessThan => AtlasPrefixes::LessThan,
-            Prefixes::LowerWord => AtlasPrefixes::LowerWord,
-            Prefixes::Lsb => AtlasPrefixes::Lsb,
-            Prefixes::NegativeDivisorEqualsRemainder => {
+            JoltPrefixes::And => AtlasPrefixes::And,
+            JoltPrefixes::DivByZero => AtlasPrefixes::DivByZero,
+            JoltPrefixes::Eq => AtlasPrefixes::Eq,
+            JoltPrefixes::LeftOperandIsZero => AtlasPrefixes::LeftOperandIsZero,
+            JoltPrefixes::LeftOperandMsb => AtlasPrefixes::LeftOperandMsb,
+            JoltPrefixes::LeftShift => AtlasPrefixes::LeftShift,
+            JoltPrefixes::LeftShiftHelper => AtlasPrefixes::LeftShiftHelper,
+            JoltPrefixes::LessThan => AtlasPrefixes::LessThan,
+            JoltPrefixes::LowerWord => AtlasPrefixes::LowerWord,
+            JoltPrefixes::Lsb => AtlasPrefixes::Lsb,
+            JoltPrefixes::NegativeDivisorEqualsRemainder => {
                 AtlasPrefixes::NegativeDivisorEqualsRemainder
             }
-            Prefixes::NegativeDivisorGreaterThanRemainder => {
+            JoltPrefixes::NegativeDivisorGreaterThanRemainder => {
                 AtlasPrefixes::NegativeDivisorGreaterThanRemainder
             }
-            Prefixes::NegativeDivisorZeroRemainder => AtlasPrefixes::NegativeDivisorZeroRemainder,
-            Prefixes::Or => AtlasPrefixes::Or,
-            Prefixes::PositiveRemainderEqualsDivisor => {
+            JoltPrefixes::NegativeDivisorZeroRemainder => {
+                AtlasPrefixes::NegativeDivisorZeroRemainder
+            }
+            JoltPrefixes::Or => AtlasPrefixes::Or,
+            JoltPrefixes::PositiveRemainderEqualsDivisor => {
                 AtlasPrefixes::PositiveRemainderEqualsDivisor
             }
-            Prefixes::PositiveRemainderLessThanDivisor => {
+            JoltPrefixes::PositiveRemainderLessThanDivisor => {
                 AtlasPrefixes::PositiveRemainderLessThanDivisor
             }
-            Prefixes::Pow2 => AtlasPrefixes::Pow2,
-            Prefixes::RightOperandIsZero => AtlasPrefixes::RightOperandIsZero,
-            Prefixes::RightOperandMsb => AtlasPrefixes::RightOperandMsb,
-            Prefixes::RightShift => AtlasPrefixes::RightShift,
-            Prefixes::SignExtension => AtlasPrefixes::SignExtension,
-            Prefixes::UpperWord => AtlasPrefixes::UpperWord,
-            Prefixes::Xor => AtlasPrefixes::Xor,
+            JoltPrefixes::Pow2 => AtlasPrefixes::Pow2,
+            JoltPrefixes::RightOperandIsZero => AtlasPrefixes::RightOperandIsZero,
+            JoltPrefixes::RightOperandMsb => AtlasPrefixes::RightOperandMsb,
+            JoltPrefixes::RightShift => AtlasPrefixes::RightShift,
+            JoltPrefixes::SignExtension => AtlasPrefixes::SignExtension,
+            JoltPrefixes::UpperWord => AtlasPrefixes::UpperWord,
+            JoltPrefixes::Xor => AtlasPrefixes::Xor,
         }
     }
 }
@@ -93,7 +98,7 @@ macro_rules! impl_sparse_dense_atlas {
                     let checkpoints: Vec<JoltPrefixCheckpoint<F>> =
                         checkpoints.iter().map(|&cp| cp.into()).collect();
                     let mle =
-                        <$prefix_type$(<$generic_const>)? as SparseDensePrefix<F>>::prefix_mle(&checkpoints, r_x, c, b, j);
+                        <$prefix_type$(<$generic_const>)? as JoltSparseDensePrefix<F>>::prefix_mle(&checkpoints, r_x, c, b, j);
                     mle
                 }
 
@@ -105,7 +110,7 @@ macro_rules! impl_sparse_dense_atlas {
                 ) -> AtlasPrefixCheckpoint<F> {
                     let checkpoints: Vec<JoltPrefixCheckpoint<F>> =
                         checkpoints.iter().map(|&cp| cp.into()).collect();
-                    let cp = <$prefix_type$(<$generic_const>)? as SparseDensePrefix<F>>::update_prefix_checkpoint(
+                    let cp = <$prefix_type$(<$generic_const>)? as JoltSparseDensePrefix<F>>::update_prefix_checkpoint(
                         &checkpoints,
                         r_x,
                         r_y,

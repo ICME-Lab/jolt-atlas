@@ -1,6 +1,6 @@
 use crate::jolt::{
-    executor::instructions::AtlasInstructionLookup,
-    lookup_table::{AtlasLookupTables, jolt_tables::RangeCheckTable},
+    executor::instructions::InstructionLookup,
+    lookup_table::{LookupTables, RangeCheckTable},
 };
 use jolt_core::zkvm::instruction::LookupQuery;
 use serde::{Deserialize, Serialize};
@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SubInstruction<const WORD_SIZE: usize>(pub u64, pub u64);
 
-impl<const WORD_SIZE: usize> AtlasInstructionLookup<WORD_SIZE> for SubInstruction<WORD_SIZE> {
-    fn lookup_table(&self) -> Option<AtlasLookupTables<WORD_SIZE>> {
+impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for SubInstruction<WORD_SIZE> {
+    fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
         Some(RangeCheckTable.into())
     }
 }

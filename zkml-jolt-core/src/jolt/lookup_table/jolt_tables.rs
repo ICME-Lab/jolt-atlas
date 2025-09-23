@@ -1,7 +1,4 @@
-use jolt_core::{
-    field::JoltField,
-    zkvm::lookup_table::{JoltLookupTable, PrefixSuffixDecomposition, suffixes::SuffixEval},
-};
+use jolt_core::field::JoltField;
 
 // Export from jolt and implement Atlas traits
 pub use jolt_core::zkvm::lookup_table::{
@@ -18,11 +15,14 @@ pub use jolt_core::zkvm::lookup_table::{
 };
 
 use crate::jolt::lookup_table::{
-    AtlasLookupTable, AtlasPrefixEval, AtlasPrefixSuffixDecomposition,
+    AtlasLookupTable, PrefixEval as AtlasPrefixEval,
+    PrefixSuffixDecomposition as AtlasPrefixSuffixDecomposition, SuffixEval as AtlasSuffixEval,
     suffixes::Suffixes as AtlasSuffixes,
 };
-
-use jolt_core::zkvm::lookup_table::prefixes::PrefixEval as JoltPrefixEval;
+use jolt_core::zkvm::lookup_table::{
+    JoltLookupTable, PrefixSuffixDecomposition as JoltPrefixSuffixDecomposition,
+    prefixes::PrefixEval as JoltPrefixEval,
+};
 
 macro_rules! impl_atlas_traits {
     (
@@ -41,12 +41,12 @@ macro_rules! impl_atlas_traits {
 
             impl<const $generic_const: usize> AtlasPrefixSuffixDecomposition<$generic_const> for $table_type<$generic_const> {
                 fn suffixes(&self) -> Vec<AtlasSuffixes> {
-                    <Self as PrefixSuffixDecomposition<$generic_const>>::suffixes(self).into_iter().map(AtlasSuffixes::from).collect()
+                    <Self as JoltPrefixSuffixDecomposition<$generic_const>>::suffixes(self).into_iter().map(AtlasSuffixes::from).collect()
                 }
 
-                fn combine<F: JoltField>(&self, prefixes: &[AtlasPrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F {
+                fn combine<F: JoltField>(&self, prefixes: &[AtlasPrefixEval<F>], suffixes: &[AtlasSuffixEval<F>]) -> F {
                     let prefixes: Vec<JoltPrefixEval<F>> = prefixes.iter().map(|p| JoltPrefixEval::from(**p)).collect();
-                   <Self as PrefixSuffixDecomposition<$generic_const>>::combine(self, &prefixes, suffixes)
+                   <Self as JoltPrefixSuffixDecomposition<$generic_const>>::combine(self, &prefixes, suffixes)
                 }
             }
         )*

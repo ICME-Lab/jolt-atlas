@@ -1,3 +1,4 @@
+use crate::jolt::lookup_table::LookupTables;
 use onnx_tracer::trace_types::{MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode};
 
 pub mod add;
@@ -9,10 +10,8 @@ pub mod virtual_const;
 #[cfg(test)]
 pub mod test;
 
-use crate::jolt::lookup_table::AtlasLookupTables;
-
-pub trait AtlasInstructionLookup<const WORD_SIZE: usize> {
-    fn lookup_table(&self) -> Option<AtlasLookupTables<WORD_SIZE>>;
+pub trait InstructionLookup<const WORD_SIZE: usize> {
+    fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>>;
 }
 
 pub trait VirtualInstructionSequence {

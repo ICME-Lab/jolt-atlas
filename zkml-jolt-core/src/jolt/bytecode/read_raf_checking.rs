@@ -6,8 +6,8 @@ use crate::jolt::{
     witness::{CommittedPolynomial, VirtualPolynomial},
 };
 use crate::jolt::{
-    executor::instructions::AtlasInstructionLookup,
-    lookup_table::{AtlasLookupTables, NUM_LOOKUP_TABLES},
+    executor::instructions::InstructionLookup,
+    lookup_table::{LookupTables, NUM_LOOKUP_TABLES},
 };
 use jolt_core::{
     field::JoltField,
@@ -451,7 +451,7 @@ impl<F: JoltField> ReadRafSumcheck<F> {
                 }
 
                 if let Some(table) = instruction.lookup_table() {
-                    let table_index = AtlasLookupTables::enum_index(&table);
+                    let table_index = LookupTables::enum_index(&table);
                     linear_combination += gamma_powers[4 + table_index];
                 }
 
@@ -485,7 +485,7 @@ impl<F: JoltField> ReadRafSumcheck<F> {
             .chain(once(unexpanded_pc_claim))
             .chain(once(is_noop_claim))
             .chain(once(raf_flag_claim))
-            .chain((0..AtlasLookupTables::<WORD_SIZE>::COUNT).map(|i| {
+            .chain((0..LookupTables::<WORD_SIZE>::COUNT).map(|i| {
                 sm.get_virtual_polynomial_opening(
                     VirtualPolynomial::LookupTableFlag(i),
                     SumcheckId::InstructionReadRaf,

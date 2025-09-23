@@ -1,13 +1,13 @@
 use jolt_core::field::JoltField;
 use jolt_core::utils::lookup_bits::LookupBits;
 
-use super::{AtlasPrefixCheckpoint, AtlasSparseDensePrefix, Prefixes};
+use super::{PrefixCheckpoint, SparseDensePrefix, Prefixes};
 
 pub enum ReluPrefix<const WORD_SIZE: usize> {}
 
-impl<const WORD_SIZE: usize, F: JoltField> AtlasSparseDensePrefix<F> for ReluPrefix<WORD_SIZE> {
+impl<const WORD_SIZE: usize, F: JoltField> SparseDensePrefix<F> for ReluPrefix<WORD_SIZE> {
     fn prefix_mle(
-        checkpoints: &[AtlasPrefixCheckpoint<F>],
+        checkpoints: &[PrefixCheckpoint<F>],
         r_x: Option<F>,
         c: u32,
         b: LookupBits,
@@ -24,11 +24,11 @@ impl<const WORD_SIZE: usize, F: JoltField> AtlasSparseDensePrefix<F> for ReluPre
     }
 
     fn update_prefix_checkpoint(
-        checkpoints: &[AtlasPrefixCheckpoint<F>],
+        checkpoints: &[PrefixCheckpoint<F>],
         r_x: F,
         r_y: F,
         j: usize,
-    ) -> AtlasPrefixCheckpoint<F> {
+    ) -> PrefixCheckpoint<F> {
         let two = 2 * WORD_SIZE;
         match j {
             // suffix handles relu

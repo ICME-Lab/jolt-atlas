@@ -4,15 +4,13 @@ use crate::jolt::{
         read_raf_checking::ReadRafSumcheck,
     },
     dag::{stage::SumcheckStages, state_manager::StateManager},
-    lookup_table::{jolt_tables::RangeCheckTable, relu::ReLUTable},
+    lookup_table::{RangeCheckTable, ReLUTable},
     pcs::SumcheckId,
     sumcheck::SumcheckInstance,
     trace::{JoltONNXCycle, WORD_SIZE},
     witness::VirtualPolynomial,
 };
-use crate::jolt::{
-    executor::instructions::AtlasInstructionLookup, lookup_table::AtlasLookupTables,
-};
+use crate::jolt::{executor::instructions::InstructionLookup, lookup_table::LookupTables};
 use jolt_core::{
     field::JoltField,
     poly::{commitment::commitment_scheme::CommitmentScheme, eq_poly::EqPolynomial},
@@ -304,8 +302,8 @@ impl JoltONNXBytecode {
     }
 }
 
-impl AtlasInstructionLookup<WORD_SIZE> for JoltONNXBytecode {
-    fn lookup_table(&self) -> Option<AtlasLookupTables<WORD_SIZE>> {
+impl InstructionLookup<WORD_SIZE> for JoltONNXBytecode {
+    fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
         match self.opcode {
             ONNXOpcode::Add => Some(RangeCheckTable.into()),
             ONNXOpcode::Sub => Some(RangeCheckTable.into()),

@@ -2,7 +2,7 @@ use jolt_core::zkvm::instruction::LookupQuery;
 use onnx_tracer::trace_types::ONNXOpcode;
 use rand::prelude::*;
 
-use crate::jolt::{executor::instructions::AtlasInstructionLookup, trace::JoltONNXCycle};
+use crate::jolt::{executor::instructions::InstructionLookup, trace::JoltONNXCycle};
 
 pub fn materialize_entry_test(opcode: ONNXOpcode) {
     let mut rng = StdRng::seed_from_u64(12345);

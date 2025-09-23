@@ -1,6 +1,4 @@
-use jolt_core::utils::lookup_bits::LookupBits;
-
-use super::SparseDenseSuffix;
+use super::{LookupBits, SparseDenseSuffix};
 
 /// Returns the lower WORD_SIZE - 1 bits. Used to range-check values to be in
 /// the range [0, 2^WORD_SIZE).

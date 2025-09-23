@@ -1,5 +1,5 @@
 #![allow(clippy::extra_unused_lifetimes)]
-use crate::jolt::lookup_table::prefixes::{PrefixCheckpoint, PrefixEval, Prefixes};
+use crate::jolt::lookup_table::prefixes::{AtlasPrefixCheckpoint, AtlasPrefixEval, Prefixes};
 use crate::jolt::{
     dag::state_manager::StateManager,
     pcs::{ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
@@ -64,7 +64,7 @@ struct ReadRafProverState<F: JoltField> {
     is_interleaved_operands: Vec<bool>,
     lookup_tables: Vec<Option<AtlasLookupTables<WORD_SIZE>>>,
 
-    prefix_checkpoints: Vec<PrefixCheckpoint<F>>,
+    prefix_checkpoints: Vec<AtlasPrefixCheckpoint<F>>,
     suffix_polys: Vec<Vec<DensePolynomial<F>>>,
     v: ExpandingTable<F>,
     u_evals: Vec<F>,
@@ -618,7 +618,7 @@ impl<F: JoltField> ReadRafProverState<F> {
 
     /// To be called before the last log(T) rounds
     fn init_log_t_rounds(&mut self, gamma: F, gamma_squared: F) {
-        let prefixes: Vec<PrefixEval<F>> = std::mem::take(&mut self.prefix_checkpoints)
+        let prefixes: Vec<AtlasPrefixEval<F>> = std::mem::take(&mut self.prefix_checkpoints)
             .into_iter()
             .map(|checkpoint| checkpoint.unwrap())
             .collect();

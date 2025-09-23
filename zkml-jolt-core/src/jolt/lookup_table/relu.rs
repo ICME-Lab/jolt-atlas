@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::AtlasLookupTable;
 use super::AtlasPrefixSuffixDecomposition;
-use super::prefixes::{PrefixEval, Prefixes};
+use super::prefixes::{AtlasPrefixEval, Prefixes};
 use super::suffixes::{SuffixEval, Suffixes};
 use jolt_core::field::JoltField;
 
@@ -35,7 +35,7 @@ impl<const WORD_SIZE: usize> AtlasPrefixSuffixDecomposition<WORD_SIZE> for ReLUT
         vec![Suffixes::One, Suffixes::Relu]
     }
 
-    fn combine<F: JoltField>(&self, prefixes: &[PrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F {
+    fn combine<F: JoltField>(&self, prefixes: &[AtlasPrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F {
         debug_assert_eq!(self.suffixes().len(), suffixes.len());
         let [one, relu] = suffixes.try_into().unwrap();
         prefixes[Prefixes::Relu] * one + prefixes[Prefixes::NotUnaryMsb] * relu

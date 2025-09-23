@@ -3,13 +3,15 @@ use crate::jolt::lookup_table::prefixes::Prefixes;
 use jolt_core::field::JoltField;
 use jolt_core::utils::lookup_bits::LookupBits;
 
-use super::{PrefixCheckpoint, SparseDensePrefix};
+use super::{AtlasPrefixCheckpoint, AtlasSparseDensePrefix};
 
 pub enum NotUnaryMsbPrefix<const WORD_SIZE: usize> {}
 
-impl<const WORD_SIZE: usize, F: JoltField> SparseDensePrefix<F> for NotUnaryMsbPrefix<WORD_SIZE> {
+impl<const WORD_SIZE: usize, F: JoltField> AtlasSparseDensePrefix<F>
+    for NotUnaryMsbPrefix<WORD_SIZE>
+{
     fn prefix_mle(
-        checkpoints: &[PrefixCheckpoint<F>],
+        checkpoints: &[AtlasPrefixCheckpoint<F>],
         r_x: Option<F>,
         c: u32,
         _b: LookupBits,
@@ -26,11 +28,11 @@ impl<const WORD_SIZE: usize, F: JoltField> SparseDensePrefix<F> for NotUnaryMsbP
     }
 
     fn update_prefix_checkpoint(
-        checkpoints: &[PrefixCheckpoint<F>],
+        checkpoints: &[AtlasPrefixCheckpoint<F>],
         r_x: F,
         _r_y: F,
         j: usize,
-    ) -> PrefixCheckpoint<F> {
+    ) -> AtlasPrefixCheckpoint<F> {
         match j {
             j if j == WORD_SIZE + 1 => Some(F::one() - r_x).into(),
             _ => checkpoints[Prefixes::NotUnaryMsb].into(),

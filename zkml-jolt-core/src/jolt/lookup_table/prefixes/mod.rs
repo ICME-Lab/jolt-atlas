@@ -1,31 +1,9 @@
 use jolt_core::{field::JoltField, utils::lookup_bits::LookupBits};
 
-use and::AndPrefix;
-use div_by_zero::DivByZeroPrefix;
-use eq::EqPrefix;
-use left_is_zero::LeftOperandIsZeroPrefix;
-use left_msb::LeftMsbPrefix;
-use left_shift::LeftShiftPrefix;
-use left_shift_helper::LeftShiftHelperPrefix;
-use lower_word::LowerWordPrefix;
+use jolt_prefixes::*;
 use lower_word_no_msb::LowerWordNoMsbPrefix;
-use lsb::LsbPrefix;
-use lt::LessThanPrefix;
-use negative_divisor_equals_remainder::NegativeDivisorEqualsRemainderPrefix;
-use negative_divisor_greater_than_remainder::NegativeDivisorGreaterThanRemainderPrefix;
-use negative_divisor_zero_remainder::NegativeDivisorZeroRemainderPrefix;
 use not_unary_msb::NotUnaryMsbPrefix;
-use or::OrPrefix;
-use positive_remainder_equals_divisor::PositiveRemainderEqualsDivisorPrefix;
-use positive_remainder_less_than_divisor::PositiveRemainderLessThanDivisorPrefix;
-use pow2::Pow2Prefix;
 use relu::ReluPrefix;
-use right_is_zero::RightOperandIsZeroPrefix;
-use right_msb::RightMsbPrefix;
-use right_shift::RightShiftPrefix;
-use sign_extension::SignExtensionPrefix;
-use upper_word::UpperWordPrefix;
-use xor::XorPrefix;
 
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
@@ -37,34 +15,11 @@ use std::{
 use strum::EnumCount;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
-pub mod and;
-pub mod div_by_zero;
-pub mod eq;
-pub mod left_is_zero;
-pub mod left_msb;
-pub mod left_shift;
-pub mod left_shift_helper;
-pub mod lower_word;
+pub mod jolt_prefixes;
 pub mod lower_word_no_msb;
-pub mod lsb;
-pub mod lt;
-pub mod negative_divisor_equals_remainder;
-pub mod negative_divisor_greater_than_remainder;
-pub mod negative_divisor_zero_remainder;
 pub mod not_unary_msb;
-pub mod or;
-pub mod positive_remainder_equals_divisor;
-pub mod positive_remainder_less_than_divisor;
-pub mod pow2;
 pub mod relu;
-pub mod right_is_zero;
-pub mod right_msb;
-pub mod right_shift;
-pub mod sign_extension;
-pub mod upper_word;
-pub mod xor;
-
-pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
+pub trait AtlasSparseDensePrefix<F: JoltField>: 'static + Sync {
     /// Evalautes the MLE for this prefix:
     /// - prefix(r, r_x, c, b)   if j is odd
     /// - prefix(r, c, b)        if j is even
@@ -80,7 +35,7 @@ pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
     /// over these variables as they range over the Boolean hypercube, so
     /// they can be represented by a single bitvector.
     fn prefix_mle(
-        checkpoints: &[PrefixCheckpoint<F>],
+        checkpoints: &[AtlasPrefixCheckpoint<F>],
         r_x: Option<F>,
         c: u32,
         b: LookupBits,
@@ -94,62 +49,62 @@ pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
     /// A checkpoint update may depend on the values of the other prefix checkpoints,
     /// so we pass in all such `checkpoints` to this function.
     fn update_prefix_checkpoint(
-        checkpoints: &[PrefixCheckpoint<F>],
+        checkpoints: &[AtlasPrefixCheckpoint<F>],
         r_x: F,
         r_y: F,
         j: usize,
-    ) -> PrefixCheckpoint<F>;
+    ) -> AtlasPrefixCheckpoint<F>;
 }
 
 /// An enum containing all prefixes used by Jolt's instruction lookup tables.
 #[repr(u8)]
 #[derive(EnumCountMacro, EnumIter, FromPrimitive)]
 pub enum Prefixes {
-    LowerWord,
-    UpperWord,
-    Eq,
     And,
+    DivByZero,
+    Eq,
     Or,
     Xor,
-    LessThan,
     LeftOperandIsZero,
-    RightOperandIsZero,
     LeftOperandMsb,
-    RightOperandMsb,
-    DivByZero,
-    PositiveRemainderEqualsDivisor,
-    PositiveRemainderLessThanDivisor,
-    NegativeDivisorZeroRemainder,
-    NegativeDivisorEqualsRemainder,
-    NegativeDivisorGreaterThanRemainder,
-    Lsb,
-    Pow2,
-    RightShift,
-    SignExtension,
     LeftShift,
     LeftShiftHelper,
-    NotUnaryMsb,
+    LessThan,
+    LowerWord,
     LowerWordNoMsb,
+    Lsb,
+    NegativeDivisorEqualsRemainder,
+    NegativeDivisorGreaterThanRemainder,
+    NegativeDivisorZeroRemainder,
+    NotUnaryMsb,
+    PositiveRemainderEqualsDivisor,
+    PositiveRemainderLessThanDivisor,
+    Pow2,
+    RightOperandIsZero,
+    RightOperandMsb,
+    RightShift,
+    SignExtension,
+    UpperWord,
     Relu,
 }
 
 #[derive(Clone, Copy)]
-pub struct PrefixEval<F>(F);
-pub type PrefixCheckpoint<F: JoltField> = PrefixEval<Option<F>>;
+pub struct AtlasPrefixEval<F>(F);
+pub type AtlasPrefixCheckpoint<F: JoltField> = AtlasPrefixEval<Option<F>>;
 
-impl<F: Display> Display for PrefixEval<F> {
+impl<F: Display> Display for AtlasPrefixEval<F> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl<F> From<F> for PrefixEval<F> {
+impl<F> From<F> for AtlasPrefixEval<F> {
     fn from(value: F) -> Self {
         Self(value)
     }
 }
 
-impl<F> Deref for PrefixEval<F> {
+impl<F> Deref for AtlasPrefixEval<F> {
     type Target = F;
 
     fn deref(&self) -> &Self::Target {
@@ -157,13 +112,13 @@ impl<F> Deref for PrefixEval<F> {
     }
 }
 
-impl<F> PrefixCheckpoint<F> {
-    pub fn unwrap(self) -> PrefixEval<F> {
+impl<F> AtlasPrefixCheckpoint<F> {
+    pub fn unwrap(self) -> AtlasPrefixEval<F> {
         self.0.unwrap().into()
     }
 }
 
-impl<F> Index<Prefixes> for &[PrefixEval<F>] {
+impl<F> Index<Prefixes> for &[AtlasPrefixEval<F>] {
     type Output = F;
 
     fn index(&self, prefix: Prefixes) -> &Self::Output {
@@ -173,94 +128,13 @@ impl<F> Index<Prefixes> for &[PrefixEval<F>] {
 }
 
 impl Prefixes {
-    /// Evalautes the MLE for this prefix:
-    /// - prefix(r, r_x, c, b)   if j is odd
-    /// - prefix(r, c, b)        if j is even
-    ///
-    /// where the prefix checkpoint captures the "contribution" of
-    /// `r` to this evaluation.
-    ///
-    /// `r` (and potentially `r_x`) capture the variables of the prefix
-    /// that have been bound in the previous rounds of sumcheck.
-    /// To compute the current round's prover message, we're fixing the
-    /// current variable to `c`.
-    /// The remaining variables of the prefix are captured by `b`. We sum
-    /// over these variables as they range over the Boolean hypercube, so
-    /// they can be represented by a single bitvector.
-    pub fn prefix_mle<const WORD_SIZE: usize, F: JoltField>(
-        &self,
-        checkpoints: &[PrefixCheckpoint<F>],
-        r_x: Option<F>,
-        c: u32,
-        b: LookupBits,
-        j: usize,
-    ) -> PrefixEval<F> {
-        let eval = match self {
-            Prefixes::LowerWord => {
-                LowerWordPrefix::<WORD_SIZE>::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::UpperWord => {
-                UpperWordPrefix::<WORD_SIZE>::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::And => AndPrefix::<WORD_SIZE>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::Or => OrPrefix::<WORD_SIZE>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::Xor => XorPrefix::<WORD_SIZE>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::Eq => EqPrefix::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::LessThan => LessThanPrefix::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::LeftOperandIsZero => {
-                LeftOperandIsZeroPrefix::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::RightOperandIsZero => {
-                RightOperandIsZeroPrefix::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::LeftOperandMsb => LeftMsbPrefix::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::RightOperandMsb => RightMsbPrefix::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::DivByZero => DivByZeroPrefix::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::PositiveRemainderEqualsDivisor => {
-                PositiveRemainderEqualsDivisorPrefix::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::PositiveRemainderLessThanDivisor => {
-                PositiveRemainderLessThanDivisorPrefix::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::NegativeDivisorZeroRemainder => {
-                NegativeDivisorZeroRemainderPrefix::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::NegativeDivisorEqualsRemainder => {
-                NegativeDivisorEqualsRemainderPrefix::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::NegativeDivisorGreaterThanRemainder => {
-                NegativeDivisorGreaterThanRemainderPrefix::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::Lsb => LsbPrefix::<WORD_SIZE>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::Pow2 => Pow2Prefix::<WORD_SIZE>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::RightShift => RightShiftPrefix::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::SignExtension => {
-                SignExtensionPrefix::<WORD_SIZE>::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::LeftShift => {
-                LeftShiftPrefix::<WORD_SIZE>::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::LeftShiftHelper => {
-                LeftShiftHelperPrefix::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::NotUnaryMsb => {
-                NotUnaryMsbPrefix::<WORD_SIZE>::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::LowerWordNoMsb => {
-                LowerWordNoMsbPrefix::<WORD_SIZE>::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::Relu => ReluPrefix::<WORD_SIZE>::prefix_mle(checkpoints, r_x, c, b, j),
-        };
-        PrefixEval(eval)
-    }
-
     /// Every two rounds of sumcheck, we update the "checkpoint" value for each
     /// prefix, incorporating the two random challenges `r_x` and `r_y` received
     /// since the last update.
     /// This function updates all the prefix checkpoints.
     #[tracing::instrument(skip_all)]
     pub fn update_checkpoints<const WORD_SIZE: usize, F: JoltField>(
-        checkpoints: &mut [PrefixCheckpoint<F>],
+        checkpoints: &mut [AtlasPrefixCheckpoint<F>],
         r_x: F,
         r_y: F,
         j: usize,
@@ -280,127 +154,92 @@ impl Prefixes {
                 );
             });
     }
+}
 
-    /// Every two rounds of sumcheck, we update the "checkpoint" value for each
-    /// prefix, incorporating the two random challenges `r_x` and `r_y` received
-    /// since the last update.
-    /// `j` is the sumcheck round index.
-    /// A checkpoint update may depend on the values of the other prefix checkpoints,
-    /// so we pass in all such `checkpoints` to this function.
-    fn update_prefix_checkpoint<const WORD_SIZE: usize, F: JoltField>(
-        &self,
-        checkpoints: &[PrefixCheckpoint<F>],
-        r_x: F,
-        r_y: F,
-        j: usize,
-    ) -> PrefixCheckpoint<F> {
-        match self {
-            Prefixes::LowerWord => {
-                LowerWordPrefix::<WORD_SIZE>::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
+macro_rules! impl_prefixes {
+    (
+        $($prefix:ident: $type:ident$(<$word_size:ident>)?),* $(,)?
+    ) => {
+        impl Prefixes {
+            /// Evalautes the MLE for this prefix:
+            /// - prefix(r, r_x, c, b)   if j is odd
+            /// - prefix(r, c, b)        if j is even
+            ///
+            /// where the prefix checkpoint captures the "contribution" of
+            /// `r` to this evaluation.
+            ///
+            /// `r` (and potentially `r_x`) capture the variables of the prefix
+            /// that have been bound in the previous rounds of sumcheck.
+            /// To compute the current round's prover message, we're fixing the
+            /// current variable to `c`.
+            /// The remaining variables of the prefix are captured by `b`. We sum
+            /// over these variables as they range over the Boolean hypercube, so
+            /// they can be represented by a single bitvector.
+            pub fn prefix_mle<const WORD_SIZE: usize, F: JoltField>(
+                &self,
+                checkpoints: &[AtlasPrefixCheckpoint<F>],
+                r_x: Option<F>,
+                c: u32,
+                b: LookupBits,
+                j: usize,
+            ) -> AtlasPrefixEval<F> {
+                let eval = match self {
+                    $(
+                        Prefixes::$prefix => $type$(::<$word_size>)?::prefix_mle(checkpoints, r_x, c, b, j),
+                    )*
+                };
+                AtlasPrefixEval(eval)
+
             }
-            Prefixes::UpperWord => {
-                UpperWordPrefix::<WORD_SIZE>::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::And => {
-                AndPrefix::<WORD_SIZE>::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::Or => {
-                OrPrefix::<WORD_SIZE>::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::Xor => {
-                XorPrefix::<WORD_SIZE>::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::Eq => EqPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j),
-            Prefixes::LessThan => {
-                LessThanPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::LeftOperandIsZero => {
-                LeftOperandIsZeroPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::RightOperandIsZero => {
-                RightOperandIsZeroPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::LeftOperandMsb => {
-                LeftMsbPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::RightOperandMsb => {
-                RightMsbPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::DivByZero => {
-                DivByZeroPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::PositiveRemainderEqualsDivisor => {
-                PositiveRemainderEqualsDivisorPrefix::update_prefix_checkpoint(
-                    checkpoints,
-                    r_x,
-                    r_y,
-                    j,
-                )
-            }
-            Prefixes::PositiveRemainderLessThanDivisor => {
-                PositiveRemainderLessThanDivisorPrefix::update_prefix_checkpoint(
-                    checkpoints,
-                    r_x,
-                    r_y,
-                    j,
-                )
-            }
-            Prefixes::NegativeDivisorZeroRemainder => {
-                NegativeDivisorZeroRemainderPrefix::update_prefix_checkpoint(
-                    checkpoints,
-                    r_x,
-                    r_y,
-                    j,
-                )
-            }
-            Prefixes::NegativeDivisorEqualsRemainder => {
-                NegativeDivisorEqualsRemainderPrefix::update_prefix_checkpoint(
-                    checkpoints,
-                    r_x,
-                    r_y,
-                    j,
-                )
-            }
-            Prefixes::NegativeDivisorGreaterThanRemainder => {
-                NegativeDivisorGreaterThanRemainderPrefix::update_prefix_checkpoint(
-                    checkpoints,
-                    r_x,
-                    r_y,
-                    j,
-                )
-            }
-            Prefixes::Lsb => {
-                LsbPrefix::<WORD_SIZE>::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::Pow2 => {
-                Pow2Prefix::<WORD_SIZE>::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::RightShift => {
-                RightShiftPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::SignExtension => {
-                SignExtensionPrefix::<WORD_SIZE>::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::LeftShift => {
-                LeftShiftPrefix::<WORD_SIZE>::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::LeftShiftHelper => {
-                LeftShiftHelperPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::NotUnaryMsb => {
-                NotUnaryMsbPrefix::<WORD_SIZE>::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
-            }
-            Prefixes::LowerWordNoMsb => {
-                LowerWordNoMsbPrefix::<WORD_SIZE>::update_prefix_checkpoint(
-                    checkpoints,
-                    r_x,
-                    r_y,
-                    j,
-                )
-            }
-            Prefixes::Relu => {
-                ReluPrefix::<WORD_SIZE>::update_prefix_checkpoint(checkpoints, r_x, r_y, j)
+
+            /// Every two rounds of sumcheck, we update the "checkpoint" value for each
+            /// prefix, incorporating the two random challenges `r_x` and `r_y` received
+            /// since the last update.
+            /// `j` is the sumcheck round index.
+            /// A checkpoint update may depend on the values of the other prefix checkpoints,
+            /// so we pass in all such `checkpoints` to this function.
+            fn update_prefix_checkpoint<const WORD_SIZE: usize, F: JoltField>(
+                &self,
+                checkpoints: &[AtlasPrefixCheckpoint<F>],
+                r_x: F,
+                r_y: F,
+                j: usize,
+            ) -> AtlasPrefixCheckpoint<F> {
+                match self {
+                    $(
+                        Prefixes::$prefix => {$type$(::<$word_size>)?::update_prefix_checkpoint(checkpoints, r_x, r_y, j)}
+                    )*
+                }
             }
         }
     }
 }
+
+impl_prefixes!(
+    And: AndPrefix<WORD_SIZE>,
+    DivByZero: DivByZeroPrefix,
+    Eq: EqPrefix,
+    LeftOperandIsZero: LeftOperandIsZeroPrefix,
+    LeftOperandMsb: LeftMsbPrefix,
+    LeftShift: LeftShiftPrefix<WORD_SIZE>,
+    LeftShiftHelper: LeftShiftHelperPrefix,
+    LessThan: LessThanPrefix,
+    LowerWord: LowerWordPrefix<WORD_SIZE>,
+    LowerWordNoMsb: LowerWordNoMsbPrefix<WORD_SIZE>,
+    Lsb: LsbPrefix<WORD_SIZE>,
+    NegativeDivisorEqualsRemainder: NegativeDivisorEqualsRemainderPrefix,
+    NegativeDivisorGreaterThanRemainder: NegativeDivisorGreaterThanRemainderPrefix,
+    NegativeDivisorZeroRemainder: NegativeDivisorZeroRemainderPrefix,
+    NotUnaryMsb: NotUnaryMsbPrefix<WORD_SIZE>,
+    Or: OrPrefix<WORD_SIZE>,
+    PositiveRemainderEqualsDivisor: PositiveRemainderEqualsDivisorPrefix,
+    PositiveRemainderLessThanDivisor: PositiveRemainderLessThanDivisorPrefix,
+    Pow2: Pow2Prefix<WORD_SIZE>,
+    Relu: ReluPrefix<WORD_SIZE>,
+    RightOperandIsZero: RightOperandIsZeroPrefix,
+    RightOperandMsb: RightMsbPrefix,
+    RightShift: RightShiftPrefix,
+    SignExtension: SignExtensionPrefix<WORD_SIZE>,
+    UpperWord: UpperWordPrefix<WORD_SIZE>,
+    Xor: XorPrefix<WORD_SIZE>,
+);

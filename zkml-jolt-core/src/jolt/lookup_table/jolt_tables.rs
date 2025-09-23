@@ -18,7 +18,7 @@ pub use jolt_core::zkvm::lookup_table::{
 };
 
 use crate::jolt::lookup_table::{
-    AtlasLookupTable, AtlasPrefixSuffixDecomposition, PrefixEval,
+    AtlasLookupTable, AtlasPrefixEval, AtlasPrefixSuffixDecomposition,
     suffixes::Suffixes as AtlasSuffixes,
 };
 
@@ -26,10 +26,10 @@ use jolt_core::zkvm::lookup_table::prefixes::PrefixEval as JoltPrefixEval;
 
 macro_rules! impl_atlas_traits {
     (
-        $generic_const:ident, $($table_type:ty), + $(,)?
+        $($table_type:ident<$generic_const:ident>), + $(,)?
     ) => {
         $(
-            impl<const $generic_const: usize> AtlasLookupTable for $table_type {
+            impl<const $generic_const: usize> AtlasLookupTable for $table_type<$generic_const> {
                 fn materialize_entry(&self, index: u64) -> u64 {
                     JoltLookupTable::materialize_entry(self, index)
                 }
@@ -39,12 +39,12 @@ macro_rules! impl_atlas_traits {
                 }
             }
 
-            impl<const $generic_const: usize> AtlasPrefixSuffixDecomposition<$generic_const> for $table_type {
+            impl<const $generic_const: usize> AtlasPrefixSuffixDecomposition<$generic_const> for $table_type<$generic_const> {
                 fn suffixes(&self) -> Vec<AtlasSuffixes> {
                     <Self as PrefixSuffixDecomposition<$generic_const>>::suffixes(self).into_iter().map(AtlasSuffixes::from).collect()
                 }
 
-                fn combine<F: JoltField>(&self, prefixes: &[PrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F {
+                fn combine<F: JoltField>(&self, prefixes: &[AtlasPrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F {
                     let prefixes: Vec<JoltPrefixEval<F>> = prefixes.iter().map(|p| JoltPrefixEval::from(**p)).collect();
                    <Self as PrefixSuffixDecomposition<$generic_const>>::combine(self, &prefixes, suffixes)
                 }
@@ -54,27 +54,26 @@ macro_rules! impl_atlas_traits {
 }
 
 impl_atlas_traits!(
-    WORD_SIZE,
-    RangeCheckTable<WORD_SIZE>,
     AndTable<WORD_SIZE>,
     OrTable<WORD_SIZE>,
-    XorTable<WORD_SIZE>,
-    UpperWordTable<WORD_SIZE>,
     EqualTable<WORD_SIZE>,
+    HalfwordAlignmentTable<WORD_SIZE>,
+    MovsignTable<WORD_SIZE>,
     NotEqualTable<WORD_SIZE>,
     Pow2Table<WORD_SIZE>,
+    RangeCheckTable<WORD_SIZE>,
+    ShiftRightBitmaskTable<WORD_SIZE>,
+    SignedGreaterThanEqualTable<WORD_SIZE>,
+    SignedLessThanTable<WORD_SIZE>,
+    UnsignedGreaterThanEqualTable<WORD_SIZE>,
+    UnsignedLessThanEqualTable<WORD_SIZE>,
+    UnsignedLessThanTable<WORD_SIZE>,
     ValidDiv0Table<WORD_SIZE>,
     ValidUnsignedRemainderTable<WORD_SIZE>,
     ValidSignedRemainderTable<WORD_SIZE>,
-    UnsignedLessThanTable<WORD_SIZE>,
-    UnsignedLessThanEqualTable<WORD_SIZE>,
-    UnsignedGreaterThanEqualTable<WORD_SIZE>,
-    SignedLessThanTable<WORD_SIZE>,
-    SignedGreaterThanEqualTable<WORD_SIZE>,
-    MovsignTable<WORD_SIZE>,
-    HalfwordAlignmentTable<WORD_SIZE>,
-    ShiftRightBitmaskTable<WORD_SIZE>,
-    VirtualSRLTable<WORD_SIZE>,
-    VirtualSRATable<WORD_SIZE>,
     VirtualRotrTable<WORD_SIZE>,
+    VirtualSRATable<WORD_SIZE>,
+    VirtualSRLTable<WORD_SIZE>,
+    UpperWordTable<WORD_SIZE>,
+    XorTable<WORD_SIZE>,
 );

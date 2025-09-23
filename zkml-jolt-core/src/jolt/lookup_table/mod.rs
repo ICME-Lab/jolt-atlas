@@ -1,7 +1,7 @@
 pub mod jolt_tables;
 
 use crate::jolt::lookup_table::{
-    prefixes::PrefixEval,
+    prefixes::AtlasPrefixEval,
     suffixes::{SuffixEval, Suffixes},
 };
 
@@ -41,7 +41,7 @@ pub trait AtlasPrefixSuffixDecomposition<const WORD_SIZE: usize>:
     AtlasLookupTable + Default
 {
     fn suffixes(&self) -> Vec<Suffixes>;
-    fn combine<F: JoltField>(&self, prefixes: &[PrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F;
+    fn combine<F: JoltField>(&self, prefixes: &[AtlasPrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F;
     #[cfg(test)]
     fn random_lookup_index(rng: &mut rand::rngs::StdRng) -> u64 {
         rand::RngCore::next_u64(rng)
@@ -202,7 +202,7 @@ impl<const WORD_SIZE: usize> AtlasLookupTables<WORD_SIZE> {
 
     pub fn combine<F: JoltField>(
         &self,
-        prefixes: &[PrefixEval<F>],
+        prefixes: &[AtlasPrefixEval<F>],
         suffixes: &[SuffixEval<F>],
     ) -> F {
         match self {

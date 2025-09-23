@@ -1,6 +1,6 @@
 use crate::jolt::lookup_table::{
     AtlasPrefixSuffixDecomposition,
-    prefixes::{PrefixCheckpoint, Prefixes},
+    prefixes::{AtlasPrefixCheckpoint, Prefixes},
     suffixes::SuffixEval,
 };
 use jolt_core::utils::lookup_bits::LookupBits;
@@ -51,7 +51,7 @@ pub fn prefix_suffix_test<F: JoltField, T: AtlasPrefixSuffixDecomposition<32>>()
     let mut rng = StdRng::seed_from_u64(12345);
 
     for _ in 0..300 {
-        let mut prefix_checkpoints: Vec<PrefixCheckpoint<F>> = vec![None.into(); Prefixes::COUNT];
+        let mut prefix_checkpoints: Vec<AtlasPrefixCheckpoint<F>> = vec![None.into(); Prefixes::COUNT];
         let lookup_index = T::random_lookup_index(&mut rng);
         let mut j = 0;
         let mut r: Vec<F> = vec![];

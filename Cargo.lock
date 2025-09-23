@@ -4131,6 +4131,7 @@ dependencies = [
  "itertools 0.10.5",
  "jolt-core",
  "log",
+ "num",
  "num-derive",
  "num-traits",
  "onnx-tracer",

@@ -4,21 +4,21 @@ use crate::jolt::{
         read_raf_checking::ReadRafSumcheck,
     },
     dag::{stage::SumcheckStages, state_manager::StateManager},
+    lookup_table::{jolt_tables::RangeCheckTable, relu::ReLUTable},
     pcs::SumcheckId,
     sumcheck::SumcheckInstance,
     trace::{JoltONNXCycle, WORD_SIZE},
     witness::VirtualPolynomial,
+};
+use crate::jolt::{
+    executor::instructions::AtlasInstructionLookup, lookup_table::AtlasLookupTables,
 };
 use jolt_core::{
     field::JoltField,
     poly::{commitment::commitment_scheme::CommitmentScheme, eq_poly::EqPolynomial},
     transcripts::Transcript,
     utils::{math::Math, thread::unsafe_allocate_zero_vec},
-    zkvm::{
-        instruction::InstructionLookup,
-        lookup_table::{LookupTables, range_check::RangeCheckTable},
-        witness::{DTH_ROOT_OF_K, compute_d_parameter},
-    },
+    zkvm::witness::{DTH_ROOT_OF_K, compute_d_parameter},
 };
 use onnx_tracer::{
     graph::model::Model,
@@ -304,13 +304,14 @@ impl JoltONNXBytecode {
     }
 }
 
-impl InstructionLookup<WORD_SIZE> for JoltONNXBytecode {
-    fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
+impl AtlasInstructionLookup<WORD_SIZE> for JoltONNXBytecode {
+    fn lookup_table(&self) -> Option<AtlasLookupTables<WORD_SIZE>> {
         match self.opcode {
             ONNXOpcode::Add => Some(RangeCheckTable.into()),
             ONNXOpcode::Sub => Some(RangeCheckTable.into()),
             ONNXOpcode::Mul => Some(RangeCheckTable.into()),
             ONNXOpcode::Constant => Some(RangeCheckTable.into()),
+            ONNXOpcode::Relu => Some(ReLUTable.into()),
             _ => None,
         }
     }

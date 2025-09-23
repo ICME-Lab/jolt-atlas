@@ -1,14 +1,15 @@
-use jolt_core::zkvm::{
-    instruction::{InstructionLookup, LookupQuery},
-    lookup_table::{LookupTables, range_check::RangeCheckTable},
+use crate::jolt::{
+    executor::instructions::AtlasInstructionLookup,
+    lookup_table::{AtlasLookupTables, jolt_tables::RangeCheckTable},
 };
+use jolt_core::zkvm::instruction::LookupQuery;
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MulInstruction<const WORD_SIZE: usize>(pub u64, pub u64);
 
-impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for MulInstruction<WORD_SIZE> {
-    fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
+impl<const WORD_SIZE: usize> AtlasInstructionLookup<WORD_SIZE> for MulInstruction<WORD_SIZE> {
+    fn lookup_table(&self) -> Option<AtlasLookupTables<WORD_SIZE>> {
         Some(RangeCheckTable.into())
     }
 }
@@ -42,5 +43,15 @@ impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for MulInstruction<WORD_SIZE
             64 => (x as i64).wrapping_mul(y) as u64,
             _ => panic!("{WORD_SIZE}-bit word size is unsupported"),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::jolt::executor::instructions::test::materialize_entry_test;
+    use onnx_tracer::trace_types::ONNXOpcode;
+    #[test]
+    fn materialize_entry() {
+        materialize_entry_test(ONNXOpcode::Mul);
     }
 }

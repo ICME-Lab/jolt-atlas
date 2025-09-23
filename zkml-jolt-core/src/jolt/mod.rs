@@ -25,6 +25,7 @@ use std::{cell::RefCell, rc::Rc};
 pub mod bytecode;
 pub mod dag;
 pub mod executor;
+pub mod lookup_table;
 pub mod memory;
 pub mod pcs;
 pub mod r1cs;
@@ -341,6 +342,20 @@ mod e2e_tests {
     fn test_scalar_input_and_inference() {
         let model = builder::scalar_addsubmul_model;
         let input = Tensor::new(Some(&[10]), &[1, 1]).unwrap();
+        let preprocessing =
+            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prover_preprocess(model, 1 << 10);
+        let (snark, program_io, _debug_info) =
+            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prove(&preprocessing, model, &input);
+        snark
+            .verify(&(&preprocessing).into(), program_io, None)
+            .unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn test_relu() {
+        let model = builder::relu_model;
+        let input = Tensor::new(Some(&[-3, -2, 0, 1]), &[1, 4]).unwrap();
         let preprocessing =
             JoltSNARK::<Fr, PCS0, KeccakTranscript>::prover_preprocess(model, 1 << 10);
         let (snark, program_io, _debug_info) =

@@ -1,14 +1,14 @@
 use crate::jolt::{
     bytecode::{BytecodePreprocessing, JoltONNXBytecode},
     executor::instructions::{
-        add::AddInstruction, mul::MulInstruction, sub::SubInstruction,
+        add::AddInstruction, mul::MulInstruction, relu::ReluInstruction, sub::SubInstruction,
         virtual_const::ConstInstruction,
     },
 };
-use jolt_core::zkvm::{
-    instruction::{InstructionLookup, LookupQuery},
-    lookup_table::LookupTables,
+use crate::jolt::{
+    executor::instructions::AtlasInstructionLookup, lookup_table::AtlasLookupTables,
 };
+use jolt_core::zkvm::instruction::LookupQuery;
 use onnx_tracer::{
     ProgramIO,
     graph::model::Model,
@@ -134,8 +134,30 @@ impl JoltONNXCycle {
             ONNXOpcode::Constant => Some(LookupFunction::Const(ConstInstruction::<WORD_SIZE>(
                 instr.imm,
             ))),
+            ONNXOpcode::Relu => Some(LookupFunction::Relu(ReluInstruction::<WORD_SIZE>(
+                self.memory_ops.ts1_val,
+            ))),
             _ => None,
         }
+    }
+
+    pub fn random(opcode: ONNXOpcode, rng: &mut rand::rngs::StdRng) -> Self {
+        use rand::RngCore;
+        let memory_ops = MemoryOps {
+            ts1_val: rng.next_u64(),
+            ts2_val: rng.next_u64(),
+            td_pre_val: rng.next_u64(),
+            td_post_val: rng.next_u64(),
+        };
+
+        let jolt_onnx_bytecode = JoltONNXBytecode {
+            opcode,
+            imm: rng.next_u64(),
+            ..JoltONNXBytecode::no_op()
+        };
+        let mut cycle = JoltONNXCycle::new(None, memory_ops);
+        cycle.construct_lookup_query(&jolt_onnx_bytecode);
+        cycle
     }
 
     pub fn ts1_read(&self) -> u64 {
@@ -178,8 +200,8 @@ impl LookupQuery<WORD_SIZE> for JoltONNXCycle {
 }
 
 // TODO: it seems we can refactor to get rid of this impl since JoltONNXBytecode implements this.
-impl InstructionLookup<WORD_SIZE> for JoltONNXCycle {
-    fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
+impl AtlasInstructionLookup<WORD_SIZE> for JoltONNXCycle {
+    fn lookup_table(&self) -> Option<AtlasLookupTables<WORD_SIZE>> {
         self.lookup
             .as_ref()
             .and_then(|lookup_function| lookup_function.lookup_table())
@@ -198,7 +220,6 @@ macro_rules! define_lookup_enum {
     (
         enum $enum_name:ident,
         const $word_size:ident,
-        trait $trait_name:ident,
         $($variant:ident : $inner:ty),+ $(,)?
     ) => {
         #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -208,7 +229,7 @@ macro_rules! define_lookup_enum {
             )+
         }
 
-        impl $trait_name<$word_size> for $enum_name {
+        impl LookupQuery<$word_size> for $enum_name {
             fn to_instruction_inputs(&self) -> (u64, i64) {
                 match self {
                     $(
@@ -242,8 +263,8 @@ macro_rules! define_lookup_enum {
             }
         }
 
-        impl InstructionLookup<$word_size> for $enum_name {
-            fn lookup_table(&self) -> Option<LookupTables<$word_size>> {
+        impl AtlasInstructionLookup<$word_size> for $enum_name {
+            fn lookup_table(&self) -> Option<AtlasLookupTables<$word_size>> {
                 match self {
                     $(
                         $enum_name::$variant(inner) => inner.lookup_table(),
@@ -257,9 +278,9 @@ macro_rules! define_lookup_enum {
 define_lookup_enum!(
     enum LookupFunction,
     const WORD_SIZE,
-    trait LookupQuery,
     Add: AddInstruction<WORD_SIZE>,
     Sub: SubInstruction<WORD_SIZE>,
     Mul: MulInstruction<WORD_SIZE>,
     Const: ConstInstruction<WORD_SIZE>,
+    Relu: ReluInstruction<WORD_SIZE>,
 );

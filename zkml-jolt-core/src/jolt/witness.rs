@@ -10,6 +10,7 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
+use crate::jolt::lookup_table::AtlasLookupTables;
 use jolt_core::{
     field::JoltField,
     poly::{
@@ -17,7 +18,7 @@ use jolt_core::{
         multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial,
     },
     utils::math::Math,
-    zkvm::{instruction::LookupQuery, lookup_table::LookupTables},
+    zkvm::instruction::LookupQuery,
 };
 use onnx_tracer::trace_types::CircuitFlags;
 use rayon::iter::ParallelIterator;
@@ -496,9 +497,9 @@ pub static ALL_VIRTUAL_POLYNOMIALS: LazyLock<Vec<VirtualPolynomial>> = LazyLock:
     for flag in CircuitFlags::iter() {
         polynomials.push(VirtualPolynomial::OpFlags(flag));
     }
-    for table in LookupTables::iter() {
+    for table in AtlasLookupTables::iter() {
         polynomials.push(VirtualPolynomial::LookupTableFlag(
-            LookupTables::<32>::enum_index(&table),
+            AtlasLookupTables::<32>::enum_index(&table),
         ));
     }
 

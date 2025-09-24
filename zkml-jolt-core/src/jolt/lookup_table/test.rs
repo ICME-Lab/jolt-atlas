@@ -51,8 +51,7 @@ pub fn prefix_suffix_test<F: JoltField, T: PrefixSuffixDecomposition<32>>() {
     let mut rng = StdRng::seed_from_u64(12345);
 
     for _ in 0..300 {
-        let mut prefix_checkpoints: Vec<PrefixCheckpoint<F>> =
-            vec![None.into(); Prefixes::COUNT];
+        let mut prefix_checkpoints: Vec<PrefixCheckpoint<F>> = vec![None.into(); Prefixes::COUNT];
         let lookup_index = T::random_lookup_index(&mut rng);
         let mut j = 0;
         let mut r: Vec<F> = vec![];

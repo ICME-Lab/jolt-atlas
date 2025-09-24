@@ -7,9 +7,7 @@ use super::{PrefixCheckpoint, SparseDensePrefix};
 
 pub enum NotUnaryMsbPrefix<const WORD_SIZE: usize> {}
 
-impl<const WORD_SIZE: usize, F: JoltField> SparseDensePrefix<F>
-    for NotUnaryMsbPrefix<WORD_SIZE>
-{
+impl<const WORD_SIZE: usize, F: JoltField> SparseDensePrefix<F> for NotUnaryMsbPrefix<WORD_SIZE> {
     fn prefix_mle(
         checkpoints: &[PrefixCheckpoint<F>],
         r_x: Option<F>,

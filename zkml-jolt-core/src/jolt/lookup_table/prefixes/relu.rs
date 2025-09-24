@@ -1,7 +1,7 @@
 use jolt_core::field::JoltField;
 use jolt_core::utils::lookup_bits::LookupBits;
 
-use super::{PrefixCheckpoint, SparseDensePrefix, Prefixes};
+use super::{PrefixCheckpoint, Prefixes, SparseDensePrefix};
 
 pub enum ReluPrefix<const WORD_SIZE: usize> {}
 

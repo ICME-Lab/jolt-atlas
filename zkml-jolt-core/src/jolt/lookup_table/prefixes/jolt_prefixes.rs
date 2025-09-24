@@ -1,4 +1,5 @@
 use jolt_core::{field::JoltField, utils::lookup_bits::LookupBits};
+use strum::{EnumCount, IntoEnumIterator};
 
 use crate::jolt::lookup_table::prefixes::{
     PrefixCheckpoint as AtlasPrefixCheckpoint, SparseDensePrefix as AtlasSparseDensePrefix,
@@ -42,9 +43,13 @@ where
 
 use super::Prefixes as AtlasPrefixes;
 
-impl From<JoltPrefixes> for AtlasPrefixes {
-    fn from(prefix: JoltPrefixes) -> Self {
-        match prefix {
+/// Implements a mapping from Atlas prefixes to Jolt prefixes.
+/// If a Jolt prefix is not used in Atlas, the conversion returns an error.
+impl TryFrom<&JoltPrefixes> for AtlasPrefixes {
+    type Error = &'static str;
+
+    fn try_from(prefix: &JoltPrefixes) -> Result<Self, Self::Error> {
+        let result = match prefix {
             JoltPrefixes::And => AtlasPrefixes::And,
             JoltPrefixes::DivByZero => AtlasPrefixes::DivByZero,
             JoltPrefixes::Eq => AtlasPrefixes::Eq,
@@ -71,14 +76,16 @@ impl From<JoltPrefixes> for AtlasPrefixes {
             JoltPrefixes::PositiveRemainderLessThanDivisor => {
                 AtlasPrefixes::PositiveRemainderLessThanDivisor
             }
-            JoltPrefixes::Pow2 => AtlasPrefixes::Pow2,
+            // JoltPrefixes::Pow2 => AtlasPrefixes::Pow2,
             JoltPrefixes::RightOperandIsZero => AtlasPrefixes::RightOperandIsZero,
             JoltPrefixes::RightOperandMsb => AtlasPrefixes::RightOperandMsb,
             JoltPrefixes::RightShift => AtlasPrefixes::RightShift,
             JoltPrefixes::SignExtension => AtlasPrefixes::SignExtension,
             JoltPrefixes::UpperWord => AtlasPrefixes::UpperWord,
             JoltPrefixes::Xor => AtlasPrefixes::Xor,
-        }
+            _ => return Err("Jolt prefix not used in Atlas"),
+        };
+        Ok(result)
     }
 }
 
@@ -95,8 +102,7 @@ macro_rules! impl_sparse_dense_atlas {
                     b: LookupBits,
                     j: usize,
                 ) -> F {
-                    let checkpoints: Vec<JoltPrefixCheckpoint<F>> =
-                        checkpoints.iter().map(|&cp| cp.into()).collect();
+                    let checkpoints: Vec<JoltPrefixCheckpoint<F>> = map_atlas_checkpoints_to_jolt(checkpoints);
                     let mle =
                         <$prefix_type$(<$generic_const>)? as JoltSparseDensePrefix<F>>::prefix_mle(&checkpoints, r_x, c, b, j);
                     mle
@@ -108,8 +114,7 @@ macro_rules! impl_sparse_dense_atlas {
                     r_y: F,
                     j: usize,
                 ) -> AtlasPrefixCheckpoint<F> {
-                    let checkpoints: Vec<JoltPrefixCheckpoint<F>> =
-                        checkpoints.iter().map(|&cp| cp.into()).collect();
+                    let checkpoints: Vec<JoltPrefixCheckpoint<F>> = map_atlas_checkpoints_to_jolt(checkpoints);
                     let cp = <$prefix_type$(<$generic_const>)? as JoltSparseDensePrefix<F>>::update_prefix_checkpoint(
                         &checkpoints,
                         r_x,
@@ -148,3 +153,42 @@ impl_sparse_dense_atlas!(
     UpperWordPrefix<WORD_SIZE>,
     XorPrefix<WORD_SIZE>,
 );
+
+fn map_atlas_checkpoints_to_jolt<F: JoltField>(
+    atlas_checkpoints: &[AtlasPrefixCheckpoint<F>],
+) -> Vec<JoltPrefixCheckpoint<F>> {
+    let mut jolt_prefixes: Vec<JoltPrefixCheckpoint<F>> = vec![None.into(); JoltPrefixes::COUNT];
+    for cp in JoltPrefixes::iter() {
+        if let Ok(atlas_cp) = AtlasPrefixes::try_from(&cp) {
+            jolt_prefixes[cp as usize] = atlas_checkpoints[atlas_cp].into();
+        }
+    }
+    jolt_prefixes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_bn254::Fr;
+
+    #[test]
+    fn test_checkpoint_mapping() {
+        let mut atlas_checkpoints: Vec<AtlasPrefixCheckpoint<Fr>> =
+            vec![None.into(); AtlasPrefixes::COUNT];
+        let jolt_checkpoints = map_atlas_checkpoints_to_jolt(&atlas_checkpoints);
+        assert_eq!(jolt_checkpoints.len(), JoltPrefixes::COUNT);
+
+        for (i, cp) in AtlasPrefixes::iter().enumerate() {
+            atlas_checkpoints[cp as usize] = Some(Fr::from(i as u64)).into();
+        }
+        let jolt_checkpoints = map_atlas_checkpoints_to_jolt(&atlas_checkpoints);
+        for cp in JoltPrefixes::iter() {
+            if let Ok(atlas_cp) = AtlasPrefixes::try_from(&cp) {
+                assert_eq!(
+                    jolt_checkpoints[cp as usize].unwrap().0,
+                    Fr::from(atlas_cp as u64)
+                );
+            }
+        }
+    }
+}

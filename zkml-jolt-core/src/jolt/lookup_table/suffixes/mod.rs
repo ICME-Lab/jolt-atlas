@@ -3,7 +3,7 @@ use jolt_core::zkvm::lookup_table::suffixes::SparseDenseSuffix;
 
 use jolt_suffixes::{
     AndSuffix, DivByZeroSuffix, EqSuffix, GreaterThanSuffix, LeftOperandIsZeroSuffix,
-    LeftShiftSuffix, LessThanSuffix, LowerWordSuffix, LsbSuffix, OneSuffix, OrSuffix, Pow2Suffix,
+    LeftShiftSuffix, LessThanSuffix, LowerWordSuffix, LsbSuffix, OneSuffix, OrSuffix,
     RightOperandIsZeroSuffix, RightShiftHelperSuffix, RightShiftPaddingSuffix, RightShiftSuffix,
     SignExtensionSuffix, UpperWordSuffix, XorSuffix,
 };
@@ -27,7 +27,7 @@ pub enum Suffixes {
     Lsb,
     One,
     Or,
-    Pow2,
+    // Pow2,
     Relu,
     RightOperandIsZero,
     RightShift,
@@ -56,7 +56,7 @@ impl Suffixes {
             Suffixes::Lsb => LsbSuffix::suffix_mle(b),
             Suffixes::One => OneSuffix::suffix_mle(b),
             Suffixes::Or => OrSuffix::suffix_mle(b),
-            Suffixes::Pow2 => Pow2Suffix::<WORD_SIZE>::suffix_mle(b),
+            // Suffixes::Pow2 => Pow2Suffix::<WORD_SIZE>::suffix_mle(b),
             Suffixes::Relu => ReluSuffix::<WORD_SIZE>::suffix_mle(b),
             Suffixes::RightOperandIsZero => RightOperandIsZeroSuffix::suffix_mle(b),
             Suffixes::RightShift => RightShiftSuffix::suffix_mle(b),

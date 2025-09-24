@@ -1,4 +1,5 @@
 use jolt_core::field::JoltField;
+use strum::{EnumCount, IntoEnumIterator};
 
 // Export from jolt and implement Atlas traits
 pub use jolt_core::zkvm::lookup_table::{
@@ -17,11 +18,11 @@ pub use jolt_core::zkvm::lookup_table::{
 use crate::jolt::lookup_table::{
     AtlasLookupTable, PrefixEval as AtlasPrefixEval,
     PrefixSuffixDecomposition as AtlasPrefixSuffixDecomposition, SuffixEval as AtlasSuffixEval,
-    suffixes::Suffixes as AtlasSuffixes,
+    prefixes::Prefixes as AtlasPrefixes, suffixes::Suffixes as AtlasSuffixes,
 };
 use jolt_core::zkvm::lookup_table::{
     JoltLookupTable, PrefixSuffixDecomposition as JoltPrefixSuffixDecomposition,
-    prefixes::PrefixEval as JoltPrefixEval,
+    prefixes::PrefixEval as JoltPrefixEval, prefixes::Prefixes as JoltPrefixes,
 };
 
 macro_rules! impl_atlas_traits {
@@ -41,11 +42,11 @@ macro_rules! impl_atlas_traits {
 
             impl<const $generic_const: usize> AtlasPrefixSuffixDecomposition<$generic_const> for $table_type<$generic_const> {
                 fn suffixes(&self) -> Vec<AtlasSuffixes> {
-                    <Self as JoltPrefixSuffixDecomposition<$generic_const>>::suffixes(self).into_iter().map(AtlasSuffixes::from).collect()
+                    <Self as JoltPrefixSuffixDecomposition<$generic_const>>::suffixes(self).into_iter().map(|s| AtlasSuffixes::try_from(s).unwrap()).collect()
                 }
 
                 fn combine<F: JoltField>(&self, prefixes: &[AtlasPrefixEval<F>], suffixes: &[AtlasSuffixEval<F>]) -> F {
-                    let prefixes: Vec<JoltPrefixEval<F>> = prefixes.iter().map(|p| JoltPrefixEval::from(**p)).collect();
+                    let prefixes = map_atlas_prefixes_to_jolt(prefixes);
                    <Self as JoltPrefixSuffixDecomposition<$generic_const>>::combine(self, &prefixes, suffixes)
                 }
             }
@@ -55,14 +56,14 @@ macro_rules! impl_atlas_traits {
 
 impl_atlas_traits!(
     AndTable<WORD_SIZE>,
-    OrTable<WORD_SIZE>,
     EqualTable<WORD_SIZE>,
     HalfwordAlignmentTable<WORD_SIZE>,
     MovsignTable<WORD_SIZE>,
     NotEqualTable<WORD_SIZE>,
-    Pow2Table<WORD_SIZE>,
+    OrTable<WORD_SIZE>,
+    // Pow2Table<WORD_SIZE>,
     RangeCheckTable<WORD_SIZE>,
-    ShiftRightBitmaskTable<WORD_SIZE>,
+    // ShiftRightBitmaskTable<WORD_SIZE>,
     SignedGreaterThanEqualTable<WORD_SIZE>,
     SignedLessThanTable<WORD_SIZE>,
     UnsignedGreaterThanEqualTable<WORD_SIZE>,
@@ -77,3 +78,40 @@ impl_atlas_traits!(
     UpperWordTable<WORD_SIZE>,
     XorTable<WORD_SIZE>,
 );
+
+/// Remap PrefixEval array to Jolt's ordering
+fn map_atlas_prefixes_to_jolt<F: JoltField>(
+    atlas_prefixes: &[AtlasPrefixEval<F>],
+) -> Vec<JoltPrefixEval<F>> {
+    let mut jolt_prefixes: Vec<JoltPrefixEval<F>> = vec![F::zero().into(); JoltPrefixes::COUNT];
+    for cp in JoltPrefixes::iter() {
+        if let Ok(atlas_cp) = AtlasPrefixes::try_from(&cp) {
+            jolt_prefixes[cp as usize] = atlas_prefixes[atlas_cp].into();
+        }
+    }
+    jolt_prefixes
+}
+
+#[cfg(test)]
+mod tests {
+    use ark_bn254::Fr;
+
+    use super::*;
+
+    #[test]
+    fn test_prefix_mapping() {
+        let mut atlas_prefix: Vec<AtlasPrefixEval<Fr>> =
+            vec![Fr::from_u64(0).into(); AtlasPrefixes::COUNT];
+
+        for (i, cp) in AtlasPrefixes::iter().enumerate() {
+            atlas_prefix[cp as usize] = Fr::from(i as u64).into();
+        }
+        let jolt_prefix = map_atlas_prefixes_to_jolt(&atlas_prefix);
+
+        for cp in JoltPrefixes::iter() {
+            if let Ok(atlas_cp) = AtlasPrefixes::try_from(&cp) {
+                assert_eq!(jolt_prefix[cp as usize].0, Fr::from(atlas_cp as u64));
+            }
+        }
+    }
+}

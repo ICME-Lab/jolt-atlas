@@ -5,7 +5,7 @@ use jolt_prefixes::{
     LeftShiftHelperPrefix, LeftShiftPrefix, LessThanPrefix, LowerWordPrefix, LsbPrefix,
     NegativeDivisorEqualsRemainderPrefix, NegativeDivisorGreaterThanRemainderPrefix,
     NegativeDivisorZeroRemainderPrefix, OrPrefix, PositiveRemainderEqualsDivisorPrefix,
-    PositiveRemainderLessThanDivisorPrefix, Pow2Prefix, RightMsbPrefix, RightOperandIsZeroPrefix,
+    PositiveRemainderLessThanDivisorPrefix, RightMsbPrefix, RightOperandIsZeroPrefix,
     RightShiftPrefix, SignExtensionPrefix, UpperWordPrefix, XorPrefix,
 };
 use lower_word_no_msb::LowerWordNoMsbPrefix;
@@ -66,8 +66,6 @@ pub enum Prefixes {
     And,
     DivByZero,
     Eq,
-    Or,
-    Xor,
     LeftOperandIsZero,
     LeftOperandMsb,
     LeftShift,
@@ -80,15 +78,17 @@ pub enum Prefixes {
     NegativeDivisorGreaterThanRemainder,
     NegativeDivisorZeroRemainder,
     NotUnaryMsb,
+    Or,
     PositiveRemainderEqualsDivisor,
     PositiveRemainderLessThanDivisor,
-    Pow2,
+    // Pow2,
+    Relu,
     RightOperandIsZero,
     RightOperandMsb,
     RightShift,
     SignExtension,
     UpperWord,
-    Relu,
+    Xor,
 }
 
 #[derive(Clone, Copy)]
@@ -237,7 +237,7 @@ impl_prefixes!(
     Or: OrPrefix<WORD_SIZE>,
     PositiveRemainderEqualsDivisor: PositiveRemainderEqualsDivisorPrefix,
     PositiveRemainderLessThanDivisor: PositiveRemainderLessThanDivisorPrefix,
-    Pow2: Pow2Prefix<WORD_SIZE>,
+    // Pow2: Pow2Prefix<WORD_SIZE>,
     Relu: ReluPrefix<WORD_SIZE>,
     RightOperandIsZero: RightOperandIsZeroPrefix,
     RightOperandMsb: RightMsbPrefix,

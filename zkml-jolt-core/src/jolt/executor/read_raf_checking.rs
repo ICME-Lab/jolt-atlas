@@ -752,227 +752,175 @@ impl<F: JoltField> ReadRafSumcheck<F> {
 
 #[cfg(test)]
 mod tests {
-    // use super::*;
-    // use crate::subprotocols::sumcheck::BatchedSumcheck;
-    // use crate::transcripts::Blake2bTranscript;
-    // use crate::{
-    //     poly::commitment::mock::MockCommitScheme,
-    //     zkvm::{
-    //         bytecode::BytecodePreprocessing, ram::RAMPreprocessing, JoltProverPreprocessing,
-    //         JoltSharedPreprocessing, JoltVerifierPreprocessing,
-    //     },
-    // };
-    // use ark_bn254::Fr;
-    // use ark_std::Zero;
-    // use common::jolt_device::MemoryLayout;
-    // use rand::{rngs::StdRng, RngCore, SeedableRng};
-    // use strum::IntoEnumIterator;
-    // use tracer::emulator::memory::Memory;
-    // use tracer::instruction::{RV32IMCycle, RV32IMInstruction};
-    // use tracer::JoltDevice;
+    use crate::jolt::trace::JoltONNXCycle;
 
-    // const LOG_T: usize = 8;
-    // const T: usize = 1 << LOG_T;
+    use super::*;
+    use crate::jolt::sumcheck::BatchedSumcheck;
+    use crate::jolt::{
+        JoltProverPreprocessing, JoltSharedPreprocessing, JoltVerifierPreprocessing,
+        bytecode::BytecodePreprocessing,
+    };
+    use ark_bn254::Fr;
+    use ark_std::Zero;
+    use jolt_core::poly::commitment::mock::MockCommitScheme;
+    use jolt_core::transcripts::Blake2bTranscript;
+    use onnx_tracer::{ProgramIO, graph::model::Model, tensor::Tensor, trace_types::ONNXOpcode};
+    use rand::{SeedableRng, rngs::StdRng};
 
-    // fn random_instruction(rng: &mut StdRng, instruction: &Option<RV32IMCycle>) -> RV32IMCycle {
-    //     let instruction = instruction.unwrap_or_else(|| {
-    //         let index = rng.next_u64() as usize % RV32IMCycle::COUNT;
-    //         RV32IMCycle::iter()
-    //             .enumerate()
-    //             .filter(|(i, _)| *i == index)
-    //             .map(|(_, x)| x)
-    //             .next()
-    //             .unwrap()
-    //     });
+    const LOG_T: usize = 8;
+    const T: usize = 1 << LOG_T;
 
-    //     match instruction {
-    //         RV32IMCycle::ADD(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::ADDI(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::AND(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::ANDI(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::AUIPC(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::BEQ(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::BGE(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::BGEU(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::BLT(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::BLTU(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::BNE(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::FENCE(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::JAL(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::JALR(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::LUI(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::LW(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::MUL(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::MULHU(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::OR(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::ORI(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::SLT(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::SLTI(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::SLTIU(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::SLTU(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::SUB(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::SW(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::XOR(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::XORI(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualAdvice(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualAssertEQ(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualAssertHalfwordAlignment(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualAssertLTE(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualAssertValidDiv0(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualAssertValidSignedRemainder(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualAssertValidUnsignedRemainder(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualMove(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualMovsign(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualMULI(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualPow2(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualPow2I(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualShiftRightBitmask(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualShiftRightBitmaskI(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualSRA(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualSRAI(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualSRL(cycle) => cycle.random(rng).into(),
-    //         RV32IMCycle::VirtualSRLI(cycle) => cycle.random(rng).into(),
-    //         _ => RV32IMCycle::NoOp,
-    //     }
-    // }
+    fn random_instruction(rng: &mut StdRng, instruction: &Option<ONNXOpcode>) -> JoltONNXCycle {
+        let instruction = instruction.clone().unwrap_or_else(|| {
+            unimplemented!("Random instruction generation not implemented");
+            /*             let index = rng.next_u64() as usize % ONNXOpcode::COUNT;
+            ONNXOpcode::iter()
+                .enumerate()
+                .filter(|(i, _)| *i == index)
+                .map(|(_, x)| x)
+                .next()
+                .unwrap() */
+        });
 
-    // fn test_read_raf_sumcheck(instruction: Option<RV32IMCycle>) {
-    //     let mut rng = StdRng::seed_from_u64(12345);
+        JoltONNXCycle::random(instruction, rng)
+    }
 
-    //     let trace: Vec<_> = (0..T)
-    //         .map(|_| random_instruction(&mut rng, &instruction))
-    //         .collect();
-    //     let bytecode = vec![RV32IMInstruction::NoOp];
-    //     let bytecode_preprocessing = BytecodePreprocessing::preprocess(bytecode);
-    //     let memory_layout = MemoryLayout::default();
-    //     let shared_preprocessing = JoltSharedPreprocessing {
-    //         bytecode: bytecode_preprocessing,
-    //         ram: RAMPreprocessing::preprocess(vec![]),
-    //         memory_layout: memory_layout.clone(),
-    //     };
-    //     let prover_preprocessing: JoltProverPreprocessing<Fr, MockCommitScheme<Fr>> =
-    //         JoltProverPreprocessing {
-    //             generators: (),
-    //             shared: shared_preprocessing.clone(),
-    //         };
+    fn test_read_raf_sumcheck(instruction: Option<ONNXOpcode>) {
+        let mut rng = StdRng::seed_from_u64(12345);
 
-    //     let verifier_preprocessing: JoltVerifierPreprocessing<Fr, MockCommitScheme<Fr>> =
-    //         JoltVerifierPreprocessing {
-    //             generators: (),
-    //             shared: shared_preprocessing,
-    //         };
-    //     let program_io = JoltDevice {
-    //         memory_layout,
-    //         inputs: vec![],
-    //         outputs: vec![],
-    //         panic: false,
-    //     };
-    //     let final_memory_state = Memory::default();
+        let trace: Vec<_> = (0..T)
+            .map(|_| random_instruction(&mut rng, &instruction))
+            .collect();
+        let model_fn = || Model::default();
+        let bytecode_preprocessing = BytecodePreprocessing::preprocess(model_fn);
+        let shared_preprocessing = JoltSharedPreprocessing {
+            bytecode: bytecode_preprocessing,
+        };
+        let prover_preprocessing: JoltProverPreprocessing<Fr, MockCommitScheme<Fr>> =
+            JoltProverPreprocessing {
+                generators: (),
+                shared: shared_preprocessing.clone(),
+            };
 
-    //     let mut prover_sm = StateManager::<'_, Fr, Blake2bTranscript, _>::new_prover(
-    //         &prover_preprocessing,
-    //         trace.clone(),
-    //         program_io.clone(),
-    //         final_memory_state,
-    //     );
-    //     let mut verifier_sm = StateManager::<'_, Fr, Blake2bTranscript, _>::new_verifier(
-    //         &verifier_preprocessing,
-    //         program_io,
-    //         trace.len(),
-    //         1 << 8,
-    //         prover_sm.twist_sumcheck_switch_index,
-    //     );
+        let verifier_preprocessing: JoltVerifierPreprocessing<Fr, MockCommitScheme<Fr>> =
+            JoltVerifierPreprocessing {
+                generators: (),
+                shared: shared_preprocessing,
+            };
+        let program_io = ProgramIO {
+            input: Tensor::new(None, &[]).unwrap(),
+            output: Tensor::new(None, &[]).unwrap(),
+        };
 
-    //     let r_cycle: Vec<Fr> = prover_sm.transcript.borrow_mut().challenge_vector(LOG_T);
-    //     let _r_cycle: Vec<Fr> = verifier_sm.transcript.borrow_mut().challenge_vector(LOG_T);
-    //     let eq_r_cycle = EqPolynomial::evals(&r_cycle);
+        let mut prover_sm = StateManager::<'_, Fr, Blake2bTranscript, _>::new_prover(
+            &prover_preprocessing,
+            trace.clone(),
+            program_io.clone(),
+        );
+        let mut verifier_sm = StateManager::<'_, Fr, Blake2bTranscript, _>::new_verifier(
+            &verifier_preprocessing,
+            program_io,
+            trace.len(),
+            1 << 8,
+            prover_sm.twist_sumcheck_switch_index,
+        );
 
-    //     let mut rv_claim = Fr::zero();
-    //     let mut left_operand_claim = Fr::zero();
-    //     let mut right_operand_claim = Fr::zero();
+        let r_cycle: Vec<Fr> = prover_sm.transcript.borrow_mut().challenge_vector(LOG_T);
+        let _r_cycle: Vec<Fr> = verifier_sm.transcript.borrow_mut().challenge_vector(LOG_T);
+        let eq_r_cycle = EqPolynomial::evals(&r_cycle);
 
-    //     for (i, cycle) in trace.iter().enumerate() {
-    //         let lookup_index = LookupQuery::<WORD_SIZE>::to_lookup_index(cycle);
-    //         let table: Option<LookupTables<WORD_SIZE>> = cycle.lookup_table();
-    //         if let Some(table) = table {
-    //             rv_claim += eq_r_cycle[i].mul_u64(table.materialize_entry(lookup_index));
-    //         }
-    //         let (lo, ro) = LookupQuery::<WORD_SIZE>::to_lookup_operands(cycle);
-    //         left_operand_claim += eq_r_cycle[i].mul_u64(lo);
-    //         right_operand_claim += eq_r_cycle[i].mul_u64(ro);
-    //     }
+        let mut rv_claim = Fr::zero();
+        let mut left_operand_claim = Fr::zero();
+        let mut right_operand_claim = Fr::zero();
 
-    //     let prover_accumulator = prover_sm.get_prover_accumulator();
-    //     prover_accumulator.borrow_mut().append_virtual(
-    //         VirtualPolynomial::LookupOutput,
-    //         SumcheckId::SpartanOuter,
-    //         OpeningPoint::new(r_cycle.clone()),
-    //         rv_claim,
-    //     );
-    //     prover_accumulator.borrow_mut().append_virtual(
-    //         VirtualPolynomial::LeftLookupOperand,
-    //         SumcheckId::SpartanOuter,
-    //         OpeningPoint::new(r_cycle.clone()),
-    //         left_operand_claim,
-    //     );
-    //     prover_accumulator.borrow_mut().append_virtual(
-    //         VirtualPolynomial::RightLookupOperand,
-    //         SumcheckId::SpartanOuter,
-    //         OpeningPoint::new(r_cycle.clone()),
-    //         right_operand_claim,
-    //     );
+        for (i, cycle) in trace.iter().enumerate() {
+            let lookup_index = LookupQuery::<WORD_SIZE>::to_lookup_index(cycle);
+            let table: Option<LookupTables<WORD_SIZE>> = cycle.lookup_table();
+            if let Some(table) = table {
+                rv_claim += eq_r_cycle[i].mul_u64(table.materialize_entry(lookup_index));
+            }
+            let (lo, ro) = LookupQuery::<WORD_SIZE>::to_lookup_operands(cycle);
+            left_operand_claim += eq_r_cycle[i].mul_u64(lo);
+            right_operand_claim += eq_r_cycle[i].mul_u64(ro);
+        }
 
-    //     let mut prover_sumcheck = ReadRafSumcheck::new_prover(&mut prover_sm, eq_r_cycle);
+        let prover_accumulator = prover_sm.get_prover_accumulator();
+        prover_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::LookupOutput,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_cycle.clone()),
+            rv_claim,
+        );
+        prover_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::LeftLookupOperand,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_cycle.clone()),
+            left_operand_claim,
+        );
+        prover_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::RightLookupOperand,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_cycle.clone()),
+            right_operand_claim,
+        );
 
-    //     let mut prover_transcript_ref = prover_sm.transcript.borrow_mut();
+        let mut prover_sumcheck = ReadRafSumcheck::new_prover(&mut prover_sm, eq_r_cycle);
 
-    //     let (proof, r_sumcheck) = BatchedSumcheck::prove(
-    //         vec![&mut prover_sumcheck],
-    //         Some(prover_accumulator.clone()),
-    //         &mut *prover_transcript_ref,
-    //     );
-    //     drop(prover_transcript_ref);
+        let mut prover_transcript_ref = prover_sm.transcript.borrow_mut();
 
-    //     // Take claims
-    //     let prover_acc_borrow = prover_accumulator.borrow();
-    //     let verifier_accumulator = verifier_sm.get_verifier_accumulator();
-    //     let mut verifier_acc_borrow = verifier_accumulator.borrow_mut();
+        let (proof, r_sumcheck) = BatchedSumcheck::prove(
+            vec![&mut prover_sumcheck],
+            Some(prover_accumulator.clone()),
+            &mut *prover_transcript_ref,
+        );
+        drop(prover_transcript_ref);
 
-    //     for (key, (_, value)) in prover_acc_borrow.evaluation_openings().iter() {
-    //         let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
-    //         verifier_acc_borrow
-    //             .openings_mut()
-    //             .insert(*key, (empty_point, *value));
-    //     }
-    //     drop(prover_acc_borrow);
-    //     drop(verifier_acc_borrow);
+        // Take claims
+        let prover_acc_borrow = prover_accumulator.borrow();
+        let verifier_accumulator = verifier_sm.get_verifier_accumulator();
+        let mut verifier_acc_borrow = verifier_accumulator.borrow_mut();
 
-    //     verifier_accumulator.borrow_mut().append_virtual(
-    //         VirtualPolynomial::LookupOutput,
-    //         SumcheckId::SpartanOuter,
-    //         OpeningPoint::new(r_cycle.clone()),
-    //     );
-    //     verifier_accumulator.borrow_mut().append_virtual(
-    //         VirtualPolynomial::LeftLookupOperand,
-    //         SumcheckId::SpartanOuter,
-    //         OpeningPoint::new(r_cycle.clone()),
-    //     );
-    //     verifier_accumulator.borrow_mut().append_virtual(
-    //         VirtualPolynomial::RightLookupOperand,
-    //         SumcheckId::SpartanOuter,
-    //         OpeningPoint::new(r_cycle.clone()),
-    //     );
+        for (key, (_, value)) in prover_acc_borrow.evaluation_openings().iter() {
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
+            verifier_acc_borrow
+                .openings_mut()
+                .insert(*key, (empty_point, *value));
+        }
+        drop(prover_acc_borrow);
+        drop(verifier_acc_borrow);
 
-    //     let mut verifier_sumcheck = ReadRafSumcheck::new_verifier(&mut verifier_sm);
+        verifier_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::LookupOutput,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_cycle.clone()),
+        );
+        verifier_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::LeftLookupOperand,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_cycle.clone()),
+        );
+        verifier_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::RightLookupOperand,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_cycle.clone()),
+        );
 
-    //     let r_sumcheck_verif = BatchedSumcheck::verify(
-    //         &proof,
-    //         vec![&mut verifier_sumcheck],
-    //         Some(verifier_accumulator.clone()),
-    //         &mut *verifier_sm.transcript.borrow_mut(),
-    //     )
-    //     .unwrap();
+        let mut verifier_sumcheck = ReadRafSumcheck::new_verifier(&mut verifier_sm);
 
-    //     assert_eq!(r_sumcheck, r_sumcheck_verif);
-    // }
+        let r_sumcheck_verif = BatchedSumcheck::verify(
+            &proof,
+            vec![&mut verifier_sumcheck],
+            Some(verifier_accumulator.clone()),
+            &mut *verifier_sm.transcript.borrow_mut(),
+        )
+        .unwrap();
+
+        assert_eq!(r_sumcheck, r_sumcheck_verif);
+    }
+
+    #[ignore]
+    #[test]
+    fn test_add() {
+        test_read_raf_sumcheck(Some(ONNXOpcode::Add));
+    }
 }

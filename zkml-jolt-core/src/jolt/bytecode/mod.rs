@@ -324,7 +324,7 @@ impl BytecodePreprocessing {
         let (mut bytecode, memory_K) = Self::inline_tensor_instrs(model);
         // Append an addressed no-op instruction at the end to simplify the PC logic in the VM
         bytecode.push(JoltONNXBytecode::addressed_no_op(
-            bytecode.last().unwrap().address + 1,
+            bytecode.last().map_or(0, |cycle| cycle.address) + 1,
         ));
         let mut tensor_virtual_pc_map = BTreeMap::new();
         let mut virtual_address = 1; // Account for no-op instruction prepended to bytecode

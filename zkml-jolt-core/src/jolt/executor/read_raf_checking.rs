@@ -752,19 +752,28 @@ impl<F: JoltField> ReadRafSumcheck<F> {
 
 #[cfg(test)]
 mod tests {
-    use crate::jolt::trace::JoltONNXCycle;
+    use std::collections::BTreeMap;
 
     use super::*;
     use crate::jolt::sumcheck::BatchedSumcheck;
     use crate::jolt::{
         JoltProverPreprocessing, JoltSharedPreprocessing, JoltVerifierPreprocessing,
-        bytecode::BytecodePreprocessing,
+        bytecode::BytecodePreprocessing, trace::JoltONNXCycle,
     };
     use ark_bn254::Fr;
     use ark_std::Zero;
     use jolt_core::poly::commitment::mock::MockCommitScheme;
     use jolt_core::transcripts::Blake2bTranscript;
-    use onnx_tracer::{ProgramIO, graph::model::Model, tensor::Tensor, trace_types::ONNXOpcode};
+    use onnx_tracer::{
+        ProgramIO,
+        graph::model::{Model, NodeType},
+        tensor::Tensor,
+        trace_types::ONNXOpcode,
+        {
+            graph::node::{Node, SupportedOp},
+            ops::{Constant, lookup::LookupOp, poly::PolyOp},
+        },
+    };
     use rand::{SeedableRng, rngs::StdRng};
 
     const LOG_T: usize = 8;
@@ -785,13 +794,47 @@ mod tests {
         JoltONNXCycle::random(instruction, rng)
     }
 
+    fn opkind_from_instruction(instruction: &ONNXOpcode) -> SupportedOp {
+        match instruction {
+            ONNXOpcode::Add => SupportedOp::Linear(PolyOp::Add),
+            ONNXOpcode::Sub => SupportedOp::Linear(PolyOp::Sub),
+            ONNXOpcode::Mul => SupportedOp::Linear(PolyOp::Mult),
+            ONNXOpcode::Constant => SupportedOp::Constant(Constant::new(
+                Tensor::new(Some(&[1]), &[]).unwrap(),
+                Tensor::new(Some(&[1.0]), &[]).unwrap(),
+            )),
+            ONNXOpcode::Relu => SupportedOp::Nonlinear(LookupOp::ReLU),
+            _ => unimplemented!("Unsupported instruction"),
+        }
+    }
+
+    fn model_function(instruction: &Option<ONNXOpcode>) -> impl Fn() -> Model {
+        let opkind = opkind_from_instruction(instruction.as_ref().unwrap());
+        move || {
+            let mut model = Model::default();
+            let mut nodes = BTreeMap::new();
+            for i in 0..T {
+                let node = Node {
+                    opkind: opkind.clone(),
+                    out_dims: vec![1],
+                    idx: i,
+                    ..Default::default()
+                };
+                nodes.insert(i, NodeType::Node(node));
+            }
+            model.graph.nodes = nodes;
+            model
+        }
+    }
+
     fn test_read_raf_sumcheck(instruction: Option<ONNXOpcode>) {
         let mut rng = StdRng::seed_from_u64(12345);
 
-        let trace: Vec<_> = (0..T)
+        let mut trace: Vec<_> = (0..T)
             .map(|_| random_instruction(&mut rng, &instruction))
             .collect();
-        let model_fn = || Model::default();
+        trace[0] = JoltONNXCycle::no_op(); // First instruction is always NoOp
+        let model_fn = model_function(&instruction);
         let bytecode_preprocessing = BytecodePreprocessing::preprocess(model_fn);
         let shared_preprocessing = JoltSharedPreprocessing {
             bytecode: bytecode_preprocessing,
@@ -918,9 +961,28 @@ mod tests {
         assert_eq!(r_sumcheck, r_sumcheck_verif);
     }
 
-    #[ignore]
     #[test]
     fn test_add() {
         test_read_raf_sumcheck(Some(ONNXOpcode::Add));
+    }
+
+    #[test]
+    fn test_sub() {
+        test_read_raf_sumcheck(Some(ONNXOpcode::Sub));
+    }
+
+    #[test]
+    fn test_mul() {
+        test_read_raf_sumcheck(Some(ONNXOpcode::Mul));
+    }
+
+    #[test]
+    fn test_constant() {
+        test_read_raf_sumcheck(Some(ONNXOpcode::Constant));
+    }
+
+    #[test]
+    fn test_relu() {
+        test_read_raf_sumcheck(Some(ONNXOpcode::Relu));
     }
 }

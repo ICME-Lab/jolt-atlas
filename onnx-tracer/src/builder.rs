@@ -593,6 +593,17 @@ pub fn scalar_addsubmul_model() -> Model {
     b.take(vec![x.0], vec![y])
 }
 
+pub fn relu_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+    let dims = vec![1, 4];
+
+    let x = b.input(dims.clone(), 2);
+    let r = b.relu(x, dims.clone(), 1);
+
+    b.take(vec![x.0], vec![r])
+}
+
 /// Implements a simple embedding-based sentiment analysis model:
 /// 1. Looks up embeddings for input word indices
 /// 2. Sums the embeddings and normalizes (divides by -0.46149117, which we round up to -0.5, which is multiplying by -2)

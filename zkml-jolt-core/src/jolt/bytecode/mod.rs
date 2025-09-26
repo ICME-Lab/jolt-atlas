@@ -4,21 +4,19 @@ use crate::jolt::{
         read_raf_checking::ReadRafSumcheck,
     },
     dag::{stage::SumcheckStages, state_manager::StateManager},
+    lookup_table::{RangeCheckTable, ReLUTable},
     pcs::SumcheckId,
     sumcheck::SumcheckInstance,
     trace::{JoltONNXCycle, WORD_SIZE},
     witness::VirtualPolynomial,
 };
+use crate::jolt::{executor::instructions::InstructionLookup, lookup_table::LookupTables};
 use jolt_core::{
     field::JoltField,
     poly::{commitment::commitment_scheme::CommitmentScheme, eq_poly::EqPolynomial},
     transcripts::Transcript,
     utils::{math::Math, thread::unsafe_allocate_zero_vec},
-    zkvm::{
-        instruction::InstructionLookup,
-        lookup_table::{LookupTables, range_check::RangeCheckTable},
-        witness::{DTH_ROOT_OF_K, compute_d_parameter},
-    },
+    zkvm::witness::{DTH_ROOT_OF_K, compute_d_parameter},
 };
 use onnx_tracer::{
     graph::model::Model,
@@ -311,6 +309,7 @@ impl InstructionLookup<WORD_SIZE> for JoltONNXBytecode {
             ONNXOpcode::Sub => Some(RangeCheckTable.into()),
             ONNXOpcode::Mul => Some(RangeCheckTable.into()),
             ONNXOpcode::Constant => Some(RangeCheckTable.into()),
+            ONNXOpcode::Relu => Some(ReLUTable.into()),
             _ => None,
         }
     }
@@ -325,7 +324,7 @@ impl BytecodePreprocessing {
         let (mut bytecode, memory_K) = Self::inline_tensor_instrs(model);
         // Append an addressed no-op instruction at the end to simplify the PC logic in the VM
         bytecode.push(JoltONNXBytecode::addressed_no_op(
-            bytecode.last().unwrap().address + 1,
+            bytecode.last().map_or(0, |cycle| cycle.address) + 1,
         ));
         let mut tensor_virtual_pc_map = BTreeMap::new();
         let mut virtual_address = 1; // Account for no-op instruction prepended to bytecode

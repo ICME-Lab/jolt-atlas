@@ -5,6 +5,10 @@ use crate::jolt::{
     trace::WORD_SIZE,
     witness::{CommittedPolynomial, VirtualPolynomial},
 };
+use crate::jolt::{
+    executor::instructions::InstructionLookup,
+    lookup_table::{LookupTables, NUM_LOOKUP_TABLES},
+};
 use jolt_core::{
     field::JoltField,
     poly::{
@@ -19,10 +23,6 @@ use jolt_core::{
     },
     transcripts::Transcript,
     utils::{expanding_table::ExpandingTable, math::Math, thread::unsafe_allocate_zero_vec},
-    zkvm::{
-        instruction::InstructionLookup,
-        lookup_table::{LookupTables, NUM_LOOKUP_TABLES},
-    },
 };
 use onnx_tracer::trace_types::{CircuitFlags, InterleavedBitsMarker, NUM_CIRCUIT_FLAGS};
 use rayon::prelude::*;

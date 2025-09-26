@@ -1,7 +1,8 @@
-use jolt_core::zkvm::{
-    instruction::{InstructionLookup, LookupQuery},
-    lookup_table::{LookupTables, range_check::RangeCheckTable},
+use crate::jolt::{
+    executor::instructions::InstructionLookup,
+    lookup_table::{LookupTables, RangeCheckTable},
 };
+use jolt_core::zkvm::instruction::LookupQuery;
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
@@ -44,5 +45,16 @@ impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for SubInstruction<WORD_SIZE
             64 => x.overflowing_sub(y as u64).0,
             _ => panic!("{WORD_SIZE}-bit word size is unsupported"),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::jolt::executor::instructions::test::materialize_entry_test;
+    use onnx_tracer::trace_types::ONNXOpcode;
+
+    #[test]
+    fn materialize_entry() {
+        materialize_entry_test(ONNXOpcode::Sub);
     }
 }

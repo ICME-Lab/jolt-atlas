@@ -10,6 +10,7 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
+use crate::jolt::lookup_table::LookupTables;
 use jolt_core::{
     field::JoltField,
     poly::{
@@ -17,7 +18,7 @@ use jolt_core::{
         multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial,
     },
     utils::math::Math,
-    zkvm::{instruction::LookupQuery, lookup_table::LookupTables},
+    zkvm::instruction::LookupQuery,
 };
 use onnx_tracer::trace_types::CircuitFlags;
 use rayon::iter::ParallelIterator;

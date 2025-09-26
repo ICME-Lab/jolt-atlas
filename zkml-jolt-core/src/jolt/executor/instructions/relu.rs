@@ -1,32 +1,33 @@
 use crate::jolt::{
     executor::instructions::InstructionLookup,
-    lookup_table::{LookupTables, RangeCheckTable},
+    lookup_table::{LookupTables, ReLUTable},
 };
 use jolt_core::zkvm::instruction::LookupQuery;
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ConstInstruction<const WORD_SIZE: usize>(pub u64);
+pub struct ReluInstruction<const WORD_SIZE: usize>(pub u64);
 
-impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for ConstInstruction<WORD_SIZE> {
+impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for ReluInstruction<WORD_SIZE> {
     fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
-        Some(RangeCheckTable.into())
+        Some(ReLUTable.into())
     }
 }
 
-impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for ConstInstruction<WORD_SIZE> {
+impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for ReluInstruction<WORD_SIZE> {
     fn to_instruction_inputs(&self) -> (u64, i64) {
-        (0, 0)
+        match WORD_SIZE {
+            #[cfg(test)]
+            8 => (self.0 as u8 as u64, 0),
+            32 => (self.0 as u32 as u64, 0),
+            64 => (self.0, 0),
+            _ => panic!("{WORD_SIZE}-bit word size is unsupported"),
+        }
     }
 
     fn to_lookup_operands(&self) -> (u64, u64) {
-        match WORD_SIZE {
-            #[cfg(test)]
-            8 => (0, self.0 as u8 as u64),
-            32 => (0, self.0 as u32 as u64),
-            64 => (0, self.0),
-            _ => panic!("{WORD_SIZE}-bit word size is unsupported"),
-        }
+        let (x, y) = LookupQuery::<WORD_SIZE>::to_instruction_inputs(self);
+        (0, x + y as u64)
     }
 
     fn to_lookup_index(&self) -> u64 {
@@ -34,11 +35,12 @@ impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for ConstInstruction<WORD_SI
     }
 
     fn to_lookup_output(&self) -> u64 {
+        let (x, _) = LookupQuery::<WORD_SIZE>::to_instruction_inputs(self);
         match WORD_SIZE {
-            #[cfg(test)]
-            8 => (self.0 as u8).into(),
-            32 => (self.0 as u32).into(),
-            64 => self.0,
+            32 => {
+                let x = x as u32 as i32;
+                if x < 0 { 0 } else { x as u32 as u64 }
+            }
             _ => panic!("{WORD_SIZE}-bit word size is unsupported"),
         }
     }
@@ -51,6 +53,6 @@ mod test {
 
     #[test]
     fn materialize_entry() {
-        materialize_entry_test(ONNXOpcode::Constant);
+        materialize_entry_test(ONNXOpcode::Relu);
     }
 }

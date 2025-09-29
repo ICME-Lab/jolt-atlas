@@ -1137,6 +1137,7 @@ define_lookup_enum!(
     Const: ConstInstruction<WORD_SIZE>,
     Relu: RELU<WORD_SIZE>,
     Output: OUTPUT<WORD_SIZE>,
+    Div: DIVInstruction<WORD_SIZE>,
 );
 
 impl JoltONNXCycle {
@@ -1218,6 +1219,12 @@ impl JoltONNXCycle {
             ONNXOpcode::Output => Some(
                 (0..MAX_TENSOR_SIZE)
                     .map(|i| ElementWiseLookup::Output(OUTPUT(ts1[i])))
+                    .collect(),
+            ),
+            ONNXOpcode::Div => Some(
+                (0..MAX_TENSOR_SIZE)
+                // TODO: Do I need to create a different DIV?
+                    .map(|i| ElementWiseLookup::Div(DIVInstruction(ts1[i], ts2[i])))
                     .collect(),
             ),
             _ => None,

@@ -635,6 +635,7 @@ pub enum ONNXOpcode {
     VirtualMove,
     VirtualAssertEq,
     VirtualConst,
+    VirtualPow2,
 }
 
 impl ONNXOpcode {
@@ -669,13 +670,13 @@ impl ONNXOpcode {
             ONNXOpcode::VirtualMove => 1u64 << 21,
             ONNXOpcode::VirtualAssertEq => 1u64 << 22,
             ONNXOpcode::VirtualConst => 1u64 << 23,
-
-            ONNXOpcode::Gte => 1u64 << 24,
-            ONNXOpcode::Reshape => 1u64 << 25,
-            ONNXOpcode::ArgMax => 1u64 << 26,
-            ONNXOpcode::Select => 1u64 << 27,
-            ONNXOpcode::ReduceMax => 1u64 << 28,
-            ONNXOpcode::Broadcast => 1u64 << 29,
+            ONNXOpcode::VirtualPow2 => 1u64 << 24,
+            ONNXOpcode::Gte => 1u64 << 25,
+            ONNXOpcode::Reshape => 1u64 << 26,
+            ONNXOpcode::ArgMax => 1u64 << 27,
+            ONNXOpcode::Select => 1u64 << 28,
+            ONNXOpcode::ReduceMax => 1u64 << 29,
+            ONNXOpcode::Broadcast => 1u64 << 30,
             _ => panic!("ONNXOpcode {self:#?} not implemented in into_bitflag"),
         }
     }

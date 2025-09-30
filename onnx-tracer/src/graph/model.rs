@@ -1128,14 +1128,6 @@ impl NodeType {
             NodeType::SubGraph { .. } => SupportedOp::Unknown(Unknown),
         }
     }
-
-    //   /// Returns the lookups required by a graph
-    //   pub fn required_lookups(&self) -> Vec<LookupOp> {
-    //     match self {
-    //       NodeType::Node(n) => n.opkind.required_lookups(),
-    //       NodeType::SubGraph { model, .. } => model.required_lookups(),
-    //     }
-    //   }
 }
 
 /// The result of a forward pass.

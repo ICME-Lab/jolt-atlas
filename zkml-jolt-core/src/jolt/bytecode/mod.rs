@@ -4,13 +4,13 @@ use crate::jolt::{
         read_raf_checking::ReadRafSumcheck,
     },
     dag::{stage::SumcheckStages, state_manager::StateManager},
-    lookup_table::{RangeCheckTable, ReLUTable},
+    executor::instructions::InstructionLookup,
+    lookup_table::{LookupTables, RangeCheckTable, ReLUTable},
     pcs::SumcheckId,
     sumcheck::SumcheckInstance,
     trace::{JoltONNXCycle, WORD_SIZE},
     witness::VirtualPolynomial,
 };
-use crate::jolt::{executor::instructions::InstructionLookup, lookup_table::LookupTables};
 use jolt_core::{
     field::JoltField,
     poly::{commitment::commitment_scheme::CommitmentScheme, eq_poly::EqPolynomial},
@@ -148,6 +148,9 @@ pub struct BytecodePreprocessing {
     /// is the one used to keep track of the next (potentially virtual) instruction to execute.
     /// Key: (ELF address, virtual sequence index or 0)
     pub tensor_virtual_pc_map: BTreeMap<(usize, usize), usize>,
+    /// Virtual tensor address map
+    /// Maps (raw tensor address, tensor sequence index or 0) to virtual memory address
+    pub vt_address_map: BTreeMap<(usize, usize), usize>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -321,7 +324,7 @@ impl BytecodePreprocessing {
     where
         ModelFunc: Fn() -> Model,
     {
-        let (mut bytecode, memory_K) = Self::inline_tensor_instrs(model);
+        let (mut bytecode, memory_K, vt_address_map) = Self::inline_tensor_instrs(model);
         // Append an addressed no-op instruction at the end to simplify the PC logic in the VM
         bytecode.push(JoltONNXBytecode::addressed_no_op(
             bytecode.last().map_or(0, |cycle| cycle.address) + 1,
@@ -358,10 +361,17 @@ impl BytecodePreprocessing {
             d,
             memory_K,
             tensor_virtual_pc_map,
+            vt_address_map,
         }
     }
 
-    pub fn inline_tensor_instrs<ModelFunc>(model: ModelFunc) -> (Vec<JoltONNXBytecode>, usize)
+    pub fn inline_tensor_instrs<ModelFunc>(
+        model: ModelFunc,
+    ) -> (
+        Vec<JoltONNXBytecode>,
+        usize,
+        BTreeMap<(usize, usize), usize>,
+    )
     where
         ModelFunc: Fn() -> Model,
     {
@@ -386,7 +396,7 @@ impl BytecodePreprocessing {
             vt_address += 1;
         }
 
-        // convert each ONNX instruction to one or more Joule bytecode lines
+        // convert each ONNX instruction to one or more jolt bytecode lines
         // and allocate virtual memory addresses for their operands and results
         // also update the virtual tensor address map
         // to map ONNX tensor addresses to Jolt VM virtual addresses
@@ -399,7 +409,11 @@ impl BytecodePreprocessing {
             preprocessed_bytecode.extend(jolt_instructions);
         }
         println!("preprocessed bytecode: {preprocessed_bytecode:#?}");
-        (preprocessed_bytecode, vt_address.next_power_of_two())
+        (
+            preprocessed_bytecode,
+            vt_address.next_power_of_two(),
+            vt_address_map,
+        )
     }
 
     pub fn get_pc(&self, i: usize) -> usize {
@@ -418,7 +432,7 @@ pub fn raw_to_jolt_bytecode(
     vt_address: &mut usize,
     vt_address_map: &mut BTreeMap<(usize, usize), usize>,
 ) -> Vec<JoltONNXBytecode> {
-    let mut joule_instructions: Vec<JoltONNXBytecode> = vec![];
+    let mut jolt_instructions: Vec<JoltONNXBytecode> = vec![];
     // Address allocation strategy:
     // 1. Reserve memory slots for zero registers (max active output elements across all instructions)
     // 2. For each scalar operation derived from tensor decomposition:
@@ -426,26 +440,34 @@ pub fn raw_to_jolt_bytecode(
     //    - td: Allocate new virtual memory address for this instruction's result
     // 3. Map ONNX tensor addresses to virtual memory addresses for Jolt VM execution
 
-    // TODO(Forpee): Below code does not work with non elementwise ops (will need to come-back to this for matmult)
     let active_output_elements = raw.active_output_elements;
 
     // get ts1 and ts2 addresses
-    let vts1 = (0..active_output_elements)
-        .map(|i| {
-            vt_address_map[&(
-                zkvm_address(raw.ts1),
-                tensor_sequence_remaining(active_output_elements, i),
-            )]
-        })
-        .collect::<Vec<usize>>();
-    let vts2 = (0..active_output_elements)
-        .map(|i| {
-            vt_address_map[&(
-                zkvm_address(raw.ts2),
-                tensor_sequence_remaining(active_output_elements, i),
-            )]
-        })
-        .collect::<Vec<usize>>();
+    let (vts1, vts2) = if raw.opcode == ONNXOpcode::MatMult {
+        // TODO: this is hacky
+        (
+            vec![0; active_output_elements],
+            vec![0; active_output_elements],
+        )
+    } else {
+        let vts1 = (0..active_output_elements)
+            .map(|i| {
+                vt_address_map[&(
+                    zkvm_address(raw.ts1),
+                    tensor_sequence_remaining(active_output_elements, i),
+                )]
+            })
+            .collect::<Vec<usize>>();
+        let vts2 = (0..active_output_elements)
+            .map(|i| {
+                vt_address_map[&(
+                    zkvm_address(raw.ts2),
+                    tensor_sequence_remaining(active_output_elements, i),
+                )]
+            })
+            .collect::<Vec<usize>>();
+        (vts1, vts2)
+    };
 
     // calculate td address
     let vtd = (0..active_output_elements)
@@ -472,7 +494,7 @@ pub fn raw_to_jolt_bytecode(
 
     let imm = raw.imm().unwrap_or(vec![0; active_output_elements]);
     for i in 0..active_output_elements {
-        joule_instructions.push(JoltONNXBytecode {
+        jolt_instructions.push(JoltONNXBytecode {
             address: raw.address,
             opcode: raw.opcode.clone(),
             td: vtd[i] as u64,
@@ -482,7 +504,7 @@ pub fn raw_to_jolt_bytecode(
             tensor_sequence_remaining: Some(tensor_sequence_remaining(active_output_elements, i)),
         });
     }
-    joule_instructions
+    jolt_instructions
 }
 
 pub fn max_output_elements(bytecode: &[ONNXInstr]) -> usize {

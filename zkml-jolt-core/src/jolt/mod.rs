@@ -7,6 +7,7 @@ use crate::jolt::{
         state_manager::{Proofs, StateManager, VerifierState},
     },
     pcs::{Openings, ProverOpeningAccumulator, VerifierOpeningAccumulator},
+    precompiles::PrecompilePreprocessing,
     trace::trace,
 };
 #[cfg(test)]
@@ -28,6 +29,7 @@ pub mod executor;
 pub mod lookup_table;
 pub mod memory;
 pub mod pcs;
+pub mod precompiles;
 pub mod r1cs;
 pub mod sumcheck;
 pub mod trace;
@@ -176,7 +178,8 @@ where
 pub struct JoltSharedPreprocessing {
     /// The preprocessed bytecode
     pub bytecode: BytecodePreprocessing,
-    // pub precompiles: PrecompilePreprocessing,
+    /// The preprocessed data for all precompiles
+    pub precompiles: PrecompilePreprocessing,
 }
 
 /// Preprocessing data needed only for the prover
@@ -206,6 +209,10 @@ where
     pub fn bytecode(&self) -> &[JoltONNXBytecode] {
         &self.shared.bytecode.bytecode
     }
+
+    pub fn is_precompiles_enabled(&self) -> bool {
+        !self.shared.precompiles.matvec_instances.is_empty()
+    }
 }
 
 /// Preprocessing data needed only for the verifier
@@ -227,6 +234,10 @@ where
     fn memory_K(&self) -> usize {
         self.shared.bytecode.memory_K
     }
+
+    pub fn is_precompiles_enabled(&self) -> bool {
+        !self.shared.precompiles.matvec_instances.is_empty()
+    }
 }
 
 impl<F, PCS, FS> JoltSNARK<F, PCS, FS>
@@ -239,13 +250,15 @@ where
     #[tracing::instrument(skip_all, name = "Jolt::preprocess")]
     pub fn shared_preprocess<ModelFunc>(model: ModelFunc) -> JoltSharedPreprocessing
     where
-        ModelFunc: Fn() -> Model,
+        ModelFunc: Fn() -> Model + Copy,
     {
         let bytecode_preprocessing = BytecodePreprocessing::preprocess(model);
-        // let precompile_preprocessing = PrecompilePreprocessing::preprocess(&bytecode);
+        let precompile_preprocessing =
+            PrecompilePreprocessing::preprocess(model, &bytecode_preprocessing);
+        println!("precompile_preprocessing: {precompile_preprocessing:#?}");
         JoltSharedPreprocessing {
             bytecode: bytecode_preprocessing,
-            // precompiles: precompile_preprocessing,
+            precompiles: precompile_preprocessing,
         }
     }
 
@@ -258,7 +271,7 @@ where
         max_trace_length: usize,
     ) -> JoltProverPreprocessing<F, PCS>
     where
-        ModelFunc: Fn() -> Model,
+        ModelFunc: Fn() -> Model + Copy,
     {
         let shared = Self::shared_preprocess(model);
         let max_T: usize = max_trace_length.next_power_of_two();
@@ -289,17 +302,20 @@ mod e2e_tests {
         poly::commitment::{dory::DoryCommitmentScheme, mock::MockCommitScheme},
         transcripts::KeccakTranscript,
     };
-    use onnx_tracer::{builder, tensor::Tensor};
+    use onnx_tracer::{builder, graph::model::Model, tensor::Tensor};
     use serial_test::serial;
 
     type PCS0 = DoryCommitmentScheme;
     type _PCS1 = MockCommitScheme<Fr>;
 
-    #[test]
-    #[serial]
-    fn test_addsubmulconst() {
-        let model = builder::addsubmulconst_model;
-        let input = Tensor::new(Some(&[1, 2, 3, 4]), &[1, 4]).unwrap();
+    fn run_snark_test<ModelFunc, const N: usize>(
+        model: ModelFunc,
+        input_data: &[i32; N],
+        shape: &[usize],
+    ) where
+        ModelFunc: Fn() -> Model + Copy,
+    {
+        let input = Tensor::new(Some(input_data), shape).unwrap();
         let preprocessing =
             JoltSNARK::<Fr, PCS0, KeccakTranscript>::prover_preprocess(model, 1 << 10);
         let (snark, program_io, _debug_info) =
@@ -307,61 +323,57 @@ mod e2e_tests {
         snark
             .verify(&(&preprocessing).into(), program_io, None)
             .unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn test_triple_matmult_model() {
+        run_snark_test(
+            builder::triple_matmult_model,
+            &[1, 2, 3, 4, 1, 2, 3, 4],
+            &[1, 8],
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_dual_matmult_model() {
+        run_snark_test(builder::dual_matmult_model, &[1, 2, 3, 4], &[1, 4]);
+    }
+
+    #[test]
+    #[serial]
+    fn test_neg_dual_matmult_model() {
+        run_snark_test(builder::dual_matmult_model, &[-1, -2, -3, -4], &[1, 4]);
+    }
+
+    #[test]
+    #[serial]
+    fn test_addsubmulconst() {
+        run_snark_test(builder::addsubmulconst_model, &[1, 2, 3, 4], &[1, 4]);
     }
 
     #[test]
     #[serial]
     fn test_addsubmul() {
-        let model = builder::addsubmul_model;
-        let input = Tensor::new(Some(&[1, 2, 3, 4]), &[1, 4]).unwrap();
-        let preprocessing =
-            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prover_preprocess(model, 1 << 10);
-        let (snark, program_io, _debug_info) =
-            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prove(&preprocessing, model, &input);
-        snark
-            .verify(&(&preprocessing).into(), program_io, None)
-            .unwrap();
+        run_snark_test(builder::addsubmul_model, &[1, 2, 3, 4], &[1, 4]);
     }
 
     #[test]
     #[serial]
     fn test_add() {
-        let model = builder::add_model;
-        let input = Tensor::new(Some(&[3, 4, 5, 0]), &[1, 4]).unwrap();
-        let preprocessing =
-            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prover_preprocess(model, 1 << 10);
-        let (snark, program_io, _debug_info) =
-            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prove(&preprocessing, model, &input);
-        snark
-            .verify(&(&preprocessing).into(), program_io, None)
-            .unwrap();
+        run_snark_test(builder::add_model, &[3, 4, 5, 0], &[1, 4]);
     }
 
     #[test]
     #[serial]
     fn test_scalar_input_and_inference() {
-        let model = builder::scalar_addsubmul_model;
-        let input = Tensor::new(Some(&[10]), &[1, 1]).unwrap();
-        let preprocessing =
-            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prover_preprocess(model, 1 << 10);
-        let (snark, program_io, _debug_info) =
-            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prove(&preprocessing, model, &input);
-        snark
-            .verify(&(&preprocessing).into(), program_io, None)
-            .unwrap();
+        run_snark_test(builder::scalar_addsubmul_model, &[10], &[1, 1]);
     }
 
     #[test]
     #[serial]
     fn test_relu() {
-        let model = builder::relu_model;
-        let input = Tensor::new(Some(&[-3, -2, 0, 1]), &[1, 4]).unwrap();
-        let preprocessing =
-            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prover_preprocess(model, 1 << 10);
-        let (snark, program_io, _debug_info) =
-            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prove(&preprocessing, model, &input);
-        snark
-            .verify(&(&preprocessing).into(), program_io, None)
-            .unwrap();
+        run_snark_test(builder::relu_model, &[-3, -2, 0, 1], &[1, 4]);
     }
 }

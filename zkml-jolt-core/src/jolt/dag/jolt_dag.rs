@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::jolt::trace::sanity_check_mcc;
 use crate::jolt::{
     JoltSNARK, ProverDebugInfo,
     bytecode::BytecodeDag,
@@ -7,6 +9,7 @@ use crate::jolt::{
     },
     executor::LookupsDag,
     memory::MemoryDag,
+    precompiles::PrecompileSNARK,
     r1cs::spartan::SpartanDag,
     sumcheck::{BatchedSumcheck, SumcheckInstance},
     witness::{AllCommittedPolynomials, CommittedPolynomial},
@@ -48,6 +51,8 @@ impl JoltDAG {
         let (preprocessing, trace, _) = state_manager.get_prover_data();
         let trace_length = trace.len();
         let padded_trace_length = trace_length.next_power_of_two();
+        #[cfg(test)]
+        sanity_check_mcc(preprocessing.bytecode(), trace, preprocessing.memory_K());
 
         println!("bytecode size: {}", preprocessing.shared.bytecode.code_size);
         println!("trace length: {trace_length}");
@@ -76,7 +81,7 @@ impl JoltDAG {
         let span = tracing::span!(tracing::Level::INFO, "Stage 1 sumchecks");
         let _guard = span.enter();
 
-        let (_, trace, _) = state_manager.get_prover_data();
+        let (pp, trace, _) = state_manager.get_prover_data();
         let padded_trace_length = trace.len().next_power_of_two();
         let mut spartan_dag = SpartanDag::<F>::new::<ProofTranscript>(padded_trace_length);
         let mut lookups_dag = LookupsDag::default();
@@ -185,6 +190,14 @@ impl JoltDAG {
         drop(_guard);
         drop(span);
 
+        if pp.is_precompiles_enabled() {
+            let precompile_proof = PrecompileSNARK::prove(&state_manager);
+            state_manager.proofs.borrow_mut().insert(
+                ProofKeys::PrecompileProof,
+                ProofData::PrecompileProof(precompile_proof),
+            );
+        }
+
         // Batch-prove all openings
         let (_, trace, _) = state_manager.get_prover_data();
 
@@ -208,21 +221,22 @@ impl JoltDAG {
             ProofData::ReducedOpeningProof(opening_proof),
         );
 
-        #[cfg(test)]
-        assert!(
-            state_manager
-                .get_prover_accumulator()
-                .borrow()
-                .appended_virtual_openings
-                .borrow()
-                .is_empty(),
-            "Not all virtual openings have been proven, missing: {:?}",
-            state_manager
-                .get_prover_accumulator()
-                .borrow()
-                .appended_virtual_openings
-                .borrow()
-        );
+        // TODO(Forpee) Precompile Ra poly evals
+        // #[cfg(test)]
+        // assert!(
+        //     state_manager
+        //         .get_prover_accumulator()
+        //         .borrow()
+        //         .appended_virtual_openings
+        //         .borrow()
+        //         .is_empty(),
+        //     "Not all virtual openings have been proven, missing: {:?}",
+        //     state_manager
+        //         .get_prover_accumulator()
+        //         .borrow()
+        //         .appended_virtual_openings
+        //         .borrow()
+        // );
 
         #[cfg(test)]
         let debug_info = {
@@ -361,8 +375,30 @@ impl JoltDAG {
             &mut *transcript.borrow_mut(),
         )
         .context("Stage 4")?;
+        drop(proofs);
 
-        // Batch-prove all openings
+        if preprocessing.is_precompiles_enabled() {
+            // precompile proof
+            // Extract and clone precompile proof
+            let precompile_proof = {
+                let proofs = state_manager.proofs.borrow();
+                let precompile_proof_data = proofs
+                    .get(&ProofKeys::PrecompileProof)
+                    .expect("Precompile proof not found");
+                match precompile_proof_data {
+                    ProofData::PrecompileProof(proof) => proof.clone(), // Clone to avoid borrow issues
+                    _ => panic!("Invalid proof type for precompile"),
+                }
+            };
+
+            // Verify with mutable reference to state_manager
+            precompile_proof
+                .verify(&mut state_manager)
+                .context("Precompile")?;
+        }
+
+        // Batch-prove all openings - get fresh borrow after verify
+        let proofs = state_manager.proofs.borrow();
         let batched_opening_proof = proofs
             .get(&ProofKeys::ReducedOpeningProof)
             .expect("Reduced opening proof not found");

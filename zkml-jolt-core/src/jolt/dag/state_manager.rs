@@ -17,6 +17,7 @@ use crate::jolt::{
     JoltProverPreprocessing, JoltVerifierPreprocessing,
     bytecode::JoltONNXBytecode,
     pcs::{ProverOpeningAccumulator, ReducedOpeningProof, SumcheckId, VerifierOpeningAccumulator},
+    precompiles::PrecompileSNARK,
     trace::JoltONNXCycle,
     witness::{CommittedPolynomial, VirtualPolynomial},
 };
@@ -28,6 +29,7 @@ pub enum ProofKeys {
     Stage2Sumcheck,
     Stage3Sumcheck,
     Stage4Sumcheck,
+    PrecompileProof,
     ReducedOpeningProof,
 }
 
@@ -35,6 +37,7 @@ pub enum ProofKeys {
 pub enum ProofData<F: JoltField, PCS: CommitmentScheme<Field = F>, ProofTranscript: Transcript> {
     SumcheckProof(SumcheckInstanceProof<F, ProofTranscript>),
     ReducedOpeningProof(ReducedOpeningProof<F, PCS, ProofTranscript>),
+    PrecompileProof(PrecompileSNARK<F, ProofTranscript>),
 }
 
 pub type Proofs<F, PCS, ProofTranscript> = BTreeMap<ProofKeys, ProofData<F, PCS, ProofTranscript>>;
@@ -46,6 +49,7 @@ where
     pub preprocessing: &'a JoltProverPreprocessing<F, PCS>,
     pub trace: Vec<JoltONNXCycle>,
     pub accumulator: Rc<RefCell<ProverOpeningAccumulator<F>>>,
+    pub val_final: Vec<i64>,
 }
 
 pub struct VerifierState<'a, F: JoltField, PCS>
@@ -97,6 +101,13 @@ where
         let num_chunks = rayon::current_num_threads().next_power_of_two().min(T);
         let chunk_size = T / num_chunks;
         let twist_sumcheck_switch_index = chunk_size.log_2();
+        let mut val_final = vec![0i64; memory_K];
+        trace
+            .iter()
+            .zip(preprocessing.bytecode())
+            .for_each(|(cycle, instr)| {
+                val_final[instr.td as usize] = cycle.td_write().1 as u32 as i32 as i64
+            });
         Self {
             transcript,
             proofs,
@@ -108,6 +119,7 @@ where
                 preprocessing,
                 trace,
                 accumulator: opening_accumulator,
+                val_final,
             }),
             verifier_state: None,
         }
@@ -128,7 +140,6 @@ where
         let transcript = Rc::new(RefCell::new(ProofTranscript::new(b"Jolt")));
         let proofs = Rc::new(RefCell::new(BTreeMap::new()));
         let commitments = Rc::new(RefCell::new(vec![]));
-
         StateManager {
             transcript,
             proofs,
@@ -211,6 +222,14 @@ where
 
     pub fn set_commitments(&self, commitments: Vec<PCS::Commitment>) {
         *self.commitments.borrow_mut() = commitments;
+    }
+
+    pub fn get_val_final(&self) -> &[i64] {
+        if let Some(ref prover_state) = self.prover_state {
+            &prover_state.val_final
+        } else {
+            panic!("Prover state not initialized");
+        }
     }
 
     /// Gets the opening for a given virtual polynomial from whichever accumulator is available.

@@ -36,6 +36,8 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DIVInstruction<WORD_
         // DIV operands
         let x = cycle.ts1_vals();
         let y = cycle.imm();
+        println!("x: {:?}", x);
+        println!("y: {:?}", y);
         let mut virtual_trace = vec![];
 
         let (quotient, remainder) = {
@@ -328,8 +330,12 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DIVInstruction<WORD_
         for i in 0..MAX_TENSOR_SIZE {
             let x = x[i];
             let y = y[i];
+            println!("x_u64: {:?}", x);
+            println!("y_u64: {:?}", y);
             let x = x as i32;
             let y = y as i32;
+            println!("x_i32: {:?}", x);
+            println!("y_i32: {:?}", y);
             if y == 0 {
                 output[i] = (1 << WORD_SIZE) - 1;
                 continue;

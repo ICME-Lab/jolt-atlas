@@ -36,8 +36,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DIVInstruction<WORD_
         // DIV operands
         let x = cycle.ts1_vals();
         let y = cycle.imm();
-        println!("x: {:?}", x);
-        println!("y: {:?}", y);
         let mut virtual_trace = vec![];
 
         let (quotient, remainder) = {

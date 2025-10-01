@@ -1,4 +1,3 @@
-use itertools::Itertools;
 use jolt_core::jolt::instruction::LookupQuery;
 use onnx_tracer::{
     constants::{MAX_TENSOR_SIZE, virtual_tensor_index},
@@ -8,17 +7,15 @@ use onnx_tracer::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    jolt::instruction::{
-        add::ADD, beq::BEQInstruction, mul::MUL, virtual_advice::ADVICEInstruction, virtual_assert_valid_div0::AssertValidDiv0Instruction, virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction, virtual_pow2::VirtualPow2, VirtualInstructionSequence
-    },
+    jolt::instruction::{VirtualInstructionSequence, virtual_pow2::VirtualPow2},
     utils::u64_vec_to_i32_iter,
 };
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SigmoidInstruction<const WORD_SIZE: usize>;
 
 impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<WORD_SIZE> {
-    // Pow2 + Const(Q) + Mul(a,Q) + Const(1) + Add(a,1) + Div(num,den via imm) + Move
-    const SEQUENCE_LENGTH: usize = 7;
+    // Clamp + Pow2 + Const(Q) + Mul(a,Q) + Const(1) + Add(a,1) + Div(num,den via imm) + Move
+    const SEQUENCE_LENGTH: usize = 8;
 
     fn virtual_trace(cycle: ONNXCycle) -> Vec<ONNXCycle> {
         assert_eq!(cycle.instr.opcode, ONNXOpcode::Sigmoid);
@@ -27,26 +24,61 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
         let mut virtual_trace = vec![];
 
         // Virtual registers
-        let v_pow2      = Some(virtual_tensor_index(0)); // a = 2^z
-        let v_q_const   = Some(virtual_tensor_index(1)); // broadcast Q
-        let v_num       = Some(virtual_tensor_index(2)); // num = a * Q
-        let v_one_const = Some(virtual_tensor_index(3)); // broadcast 1
-        let v_den       = Some(virtual_tensor_index(4)); // den = a + 1
-        let v_probs     = Some(virtual_tensor_index(5)); // result σ_Q(z)
+        let v_clamped = Some(virtual_tensor_index(0)); // clamped z
+        let v_pow2 = Some(virtual_tensor_index(1)); // a = 2^z
+        let v_q_const = Some(virtual_tensor_index(2)); // broadcast Q
+        let v_num = Some(virtual_tensor_index(3)); // num = a * Q
+        let v_one_const = Some(virtual_tensor_index(4)); // broadcast 1
+        let v_den = Some(virtual_tensor_index(5)); // den = a + 1
+        let v_probs = Some(virtual_tensor_index(6)); // result σ_Q(z)
+
+        // Clamp values host-side
+        let z_vals: Vec<i64> = z.iter().map(|&v| v as u32 as i32 as i64).collect();
+        let z_clamped: Vec<i64> = z_vals.iter()
+            .map(|&v| v.max(-8).min(8))   // clamp into [-8,8]
+            .collect();
+
+        // Emit a VirtualAdvice cycle with clamped tensor
+        // TODO: Use CLAMP as an instruction instead of VirtualAdvice
+        virtual_trace.push(ONNXCycle {
+            instr: ONNXInstr {
+                address: cycle.instr.address,
+                opcode: ONNXOpcode::VirtualAdvice,
+                ts1: None,
+                ts2: None,
+                ts3: None,
+                td: v_clamped,
+                imm: None,
+                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                active_output_elements: MAX_TENSOR_SIZE,
+                output_dims: [1, MAX_TENSOR_SIZE],
+            },
+            memory_state: MemoryState {
+                ts1_val: None,
+                ts2_val: None,
+                ts3_val: None,
+                td_pre_val: None,
+                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(
+                    &z_clamped.iter().map(|&x| x as u64).collect::<Vec<_>>(),
+                ))),
+            },
+            advice_value: Some(Tensor::from(u64_vec_to_i32_iter(
+                &z_clamped.iter().map(|&x| x as u64).collect::<Vec<_>>(),
+            ))),
+        });
 
         // ----------------------------
         // 1) a = 2^z  (vectorized)
         // ----------------------------
-        let a_vals: Vec<u64> = z.iter()
-            .map(|&zi| {
-                VirtualPow2::<WORD_SIZE>(zi).to_lookup_output()
-            })
+        let a_vals: Vec<u64> = z_clamped
+            .iter()
+            .map(|&zi| VirtualPow2::<WORD_SIZE>(zi as u64).to_lookup_output())
             .collect();
         virtual_trace.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
                 opcode: ONNXOpcode::VirtualPow2,
-                ts1: cycle.instr.ts1,
+                ts1: v_clamped,
                 ts2: None,
                 ts3: None,
                 td: v_pow2,
@@ -56,7 +88,9 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&z))),
+                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(
+                    &z_clamped.iter().map(|&x| x as u64).collect::<Vec<_>>(),
+                ))),
                 ts2_val: None,
                 ts3_val: None,
                 td_pre_val: None,
@@ -186,7 +220,9 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
         let den_seen: Vec<u64> = den_td.iter().map(|&d| d as u64).collect();
 
         // 3) Compute probs from *these* (the machine-view values):
-        let probs_vals: Vec<u64> = num_seen.iter().zip(&den_seen)
+        let probs_vals: Vec<u64> = num_seen
+            .iter()
+            .zip(&den_seen)
             .map(|(&n, &d)| if d == 0 { 0 } else { n / d })
             .collect();
         // let probs_vals: Vec<u64> = num_vals
@@ -200,11 +236,11 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             instr: ONNXInstr {
                 address: cycle.instr.address,
                 opcode: ONNXOpcode::Div,
-                ts1: v_num,                            
-                ts2: None,                              
+                ts1: v_num,
+                ts2: None,
                 ts3: None,
                 td: v_probs,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&den_vals))), 
+                imm: Some(Tensor::from(u64_vec_to_i32_iter(&den_vals))),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - 6),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims,
@@ -251,14 +287,33 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
     }
 
     fn sequence_output(x: Vec<u64>, _: Vec<u64>, _: Option<ONNXOpcode>) -> Vec<u64> {
-        const Q: u64 = 1 << 8;
         let mut out = vec![0u64; MAX_TENSOR_SIZE];
+
         for i in 0..MAX_TENSOR_SIZE {
-            let a = VirtualPow2::<WORD_SIZE>(x[i]).to_lookup_output(); // 2^z
-            let den = a.saturating_add(1);
-            let num = a.saturating_mul(Q);
-            out[i] = if den == 0 { 0 } else { num / den };
+            let xi = x[i] as i32;
+
+            // 1. Clamp exponent
+            let e = xi.clamp(-8, 8);
+
+            // 2. Compute sigmoid base-2 probability 
+            let (num, den): (u128, u128) = if e >= 0 {
+                let a = 1u128 << (e as u32); // 2^e
+                (a, 1 + a)
+            } else {
+                let b = 1u128 << ((-e) as u32); // 2^{|e|}
+                (1, 1 + b)
+            };
+
+            // 3. Scale by 256 (quantization step)
+            let scaled = 256u128 * num;
+
+            // 4. Divide 
+            let q = (scaled / den) as u64;
+
+            // 5. Clamp explicitly
+            out[i] = q.min(255);
         }
+
         out
     }
 }

@@ -211,25 +211,16 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
         // ------------------------------------------------------------
         // 6) probs = num / den  (Div reads denominator from imm !)
         // ------------------------------------------------------------
-        // 1) Materialize exactly what will go into the registers:
+        // Materialize exactly what will go into the registers:
         let num_td: Vec<i32> = u64_vec_to_i32_iter(&num_vals).collect();
         let den_td: Vec<i32> = u64_vec_to_i32_iter(&den_vals).collect();
 
-        // 2) Read them back as u64s the same way the harness does:
-        let num_seen: Vec<u64> = num_td.iter().map(|&n| n as u64).collect();
-        let den_seen: Vec<u64> = den_td.iter().map(|&d| d as u64).collect();
-
-        // 3) Compute probs from *these* (the machine-view values):
-        let probs_vals: Vec<u64> = num_seen
+        // Compute probs from *these* (the machine-view values):
+        let probs_vals: Vec<u64> = num_td
             .iter()
-            .zip(&den_seen)
-            .map(|(&n, &d)| if d == 0 { 0 } else { n / d })
+            .zip(&den_td)
+            .map(|(&n, &d)| if d == 0 { 0 } else { n as u64 / d as u64 })
             .collect();
-        // let probs_vals: Vec<u64> = num_vals
-        //     .iter()
-        //     .zip(&den_vals)
-        //     .map(|(&n, &d)| if d == 0 { 0 } else { n / d })
-        //     .collect();
 
         // assert_eq!(probs_vals, probs_vals_1);
         virtual_trace.push(ONNXCycle {
@@ -280,8 +271,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             },
             advice_value: None,
         });
-
-        // println!("virtual_trace: {:#?}", virtual_trace);
 
         virtual_trace
     }

@@ -1,7 +1,7 @@
 use crate::{
     jolt::{
         execution_trace::{JoltONNXCycle, ONNXLookupQuery, WORD_SIZE},
-        instruction::{div::DIVInstruction, VirtualInstructionSequence},
+        instruction::{VirtualInstructionSequence, div::DIVInstruction},
     },
     utils::u64_vec_to_i32_iter,
 };
@@ -209,7 +209,11 @@ fn select_output(cycle: &ONNXCycle) -> Vec<u64> {
 
 fn div_output(cycle: &ONNXCycle) -> Vec<u64> {
     assert_eq!(cycle.instr.opcode, ONNXOpcode::Div);
-    DIVInstruction::<WORD_SIZE>::virtual_trace(cycle.clone()).last().unwrap().td_post_vals().clone()
+    DIVInstruction::<WORD_SIZE>::virtual_trace(cycle.clone())
+        .last()
+        .unwrap()
+        .td_post_vals()
+        .clone()
 }
 
 pub fn materialize_entry_test(opcode: ONNXOpcode) {

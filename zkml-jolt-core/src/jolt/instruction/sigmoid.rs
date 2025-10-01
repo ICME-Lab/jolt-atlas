@@ -284,7 +284,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             // 1. Clamp exponent
             let e = xi.clamp(-8, 8);
 
-            // 2. Compute sigmoid base-2 probability 
+            // 2. Compute sigmoid base-2 probability
             let (num, den): (u128, u128) = if e >= 0 {
                 let a = 1u128 << (e as u32); // 2^e
                 (a, 1 + a)
@@ -296,7 +296,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             // 3. Scale by 256 (quantization step)
             let scaled = 256u128 * num;
 
-            // 4. Divide 
+            // 4. Divide
             let q = (scaled / den) as u64;
 
             // 5. Clamp explicitly

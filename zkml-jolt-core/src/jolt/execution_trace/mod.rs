@@ -7,7 +7,8 @@ use crate::{
         instruction::{
             VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction,
             rebase_scale::REBASEInstruction, reduce_sum::ReduceSumInstruction, relu::RELU,
-            virtual_advice::ADVICEInstruction, virtual_const::ConstInstruction, virtual_pow2::VirtualPow2,
+            virtual_advice::ADVICEInstruction, virtual_const::ConstInstruction,
+            virtual_pow2::VirtualPow2,
         },
         precompiles::{PrecompileOp, PrecompilePreprocessing, matmult::MatMultPrecompile},
     },

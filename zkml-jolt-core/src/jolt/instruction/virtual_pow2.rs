@@ -1,4 +1,4 @@
-use jolt_core::jolt::lookup_table::{pow2::Pow2Table, LookupTables};
+use jolt_core::jolt::lookup_table::{LookupTables, pow2::Pow2Table};
 
 use jolt_core::jolt::instruction::{InstructionLookup, LookupQuery};
 use serde::{Deserialize, Serialize};
@@ -43,5 +43,3 @@ impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for VirtualPow2<WORD_SIZE> {
         }
     }
 }
-
-

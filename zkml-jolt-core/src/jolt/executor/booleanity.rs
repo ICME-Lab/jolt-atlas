@@ -41,7 +41,7 @@ struct BooleanityProverState<F: JoltField> {
 }
 
 pub struct BooleanitySumcheck<F: JoltField> {
-    /// Precomputed powers of gamma - batching chgallenge
+    /// Precomputed powers of gamma - batching challenge
     gamma: [F; D],
     prover_state: Option<BooleanityProverState<F>>,
     r_address: Vec<F>,

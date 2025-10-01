@@ -1,11 +1,11 @@
 use crate::jolt::{
     bytecode::{BytecodePreprocessing, JoltONNXBytecode},
     executor::instructions::{
-        add::AddInstruction, mul::MulInstruction, relu::ReluInstruction, sub::SubInstruction,
-        virtual_const::ConstInstruction,
+        InstructionLookup, add::AddInstruction, mul::MulInstruction, relu::ReluInstruction,
+        sub::SubInstruction, virtual_const::ConstInstruction,
     },
+    lookup_table::LookupTables,
 };
-use crate::jolt::{executor::instructions::InstructionLookup, lookup_table::LookupTables};
 use jolt_core::zkvm::instruction::LookupQuery;
 use onnx_tracer::{
     ProgramIO,
@@ -37,8 +37,9 @@ pub fn inline_tensor_trace(
 ) -> Vec<JoltONNXCycle> {
     let mut trace = vec![JoltONNXCycle::no_op()];
     let mut current_pc = 1;
-    let current_active_output_els = raw_trace[0].instr.active_output_elements;
+
     for raw_cycle in raw_trace.iter() {
+        let current_active_output_els = raw_cycle.instr.active_output_elements;
         let sequence = inline_tensor_cycle(
             raw_cycle,
             &preprocessing.bytecode[current_pc..current_pc + current_active_output_els],
@@ -85,9 +86,19 @@ struct TensorValues {
 
 impl TensorValues {
     fn from_cycle(raw_cycle: &ONNXCycle, size: usize) -> Self {
+        let mut ts1_vals = raw_cycle.ts1_vals().unwrap_or_else(|| vec![0; size]);
+        let mut ts2_vals = raw_cycle.ts2_vals().unwrap_or_else(|| vec![0; size]);
+
+        // We need this because MatMults MCC do not follow the same pattern as other ops (it is handled separately) and we can safely store ts1 and ts2 as zero registers
+        // TODO: Extend this match statement to all non-elementwise ops
+        if raw_cycle.instr.opcode == ONNXOpcode::MatMult {
+            ts1_vals = vec![0; size];
+            ts2_vals = vec![0; size];
+        }
+
         Self {
-            ts1_vals: raw_cycle.ts1_vals().unwrap_or_else(|| vec![0; size]),
-            ts2_vals: raw_cycle.ts2_vals().unwrap_or_else(|| vec![0; size]),
+            ts1_vals,
+            ts2_vals,
             td_pre_vals: raw_cycle.td_pre_vals().unwrap_or_else(|| vec![0; size]),
             td_post_vals: raw_cycle.td_post_vals().unwrap_or_else(|| vec![0; size]),
         }
@@ -166,6 +177,8 @@ impl JoltONNXCycle {
         self.memory_ops.ts2_val
     }
 
+    /// # Returns
+    /// (pre_val, post_val)
     pub fn td_write(&self) -> (u64, u64) {
         (self.memory_ops.td_pre_val, self.memory_ops.td_post_val)
     }
@@ -282,3 +295,43 @@ define_lookup_enum!(
     Const: ConstInstruction<WORD_SIZE>,
     Relu: ReluInstruction<WORD_SIZE>,
 );
+
+/// This is only needed because runtime sometimes converts operands to
+/// floating point for intermediate calculations, which can cause mismatches between
+/// expected outputs and actual trace values.
+#[cfg(test)]
+pub fn sanity_check_mcc(
+    bytecode: &[JoltONNXBytecode],
+    execution_trace: &[JoltONNXCycle],
+    K: usize,
+) {
+    let mut memory = vec![0u64; K];
+    for (i, (cycle, instr)) in execution_trace.iter().zip(bytecode.iter()).enumerate() {
+        // check reads
+        let (ts1_addr, ts2_addr, td_addr) =
+            (instr.ts1 as usize, instr.ts2 as usize, instr.td as usize);
+        assert_eq!(
+            memory[ts1_addr],
+            cycle.ts1_read(),
+            "TS1 READ error at cycle_{i}: {instr:#?} {cycle:#?}; Expected: {}, got: {} at address {ts1_addr} ",
+            memory[ts1_addr] as u32 as i32,
+            cycle.ts1_read() as u32 as i32
+        );
+        assert_eq!(
+            memory[ts2_addr],
+            cycle.ts2_read(),
+            "TS2 READ error at cycle_{i}:{instr:#?} {cycle:#?}; Expected: {}, got: {} at address {ts2_addr} ",
+            memory[ts2_addr] as u32 as i32,
+            cycle.ts2_read() as u32 as i32
+        );
+        assert_eq!(
+            memory[td_addr],
+            cycle.td_write().0,
+            "TD WRITE pre-state error at cycle_{i}: {instr:#?}{cycle:#?}; Expected: {}, got: {} at address {td_addr} ",
+            memory[td_addr] as u32 as i32,
+            cycle.td_write().0 as u32 as i32
+        );
+        // update memory
+        memory[td_addr] = cycle.td_write().1;
+    }
+}

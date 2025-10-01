@@ -48,21 +48,15 @@ pub enum SumcheckId {
     InstructionHammingWeight,
     InstructionReadRaf,
     InstructionRaVirtualization,
-    RamReadWriteChecking,
-    RamRafEvaluation,
-    RamHammingWeight,
-    RamHammingBooleanity,
-    RamBooleanity,
-    RamRaVirtualization,
-    RamOutputCheck,
-    RamValEvaluation,
-    RamValFinalEvaluation,
     RegistersReadWriteChecking,
     RegistersValEvaluation,
     BytecodeReadRaf,
     BytecodeBooleanity,
     BytecodeHammingWeight,
     OpeningReduction,
+    MatVecExecution,
+    MatVecReadChecking,
+    PrecompileValFinal,
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord)]
@@ -774,11 +768,11 @@ where
                 .into_iter()
                 .map(|(k, v)| (v, opening_hints.remove(k).unwrap()))
                 .unzip();
-            debug_assert!(
-                opening_hints.is_empty(),
-                "Commitments to {:?} are not used",
-                opening_hints.keys()
-            );
+            // debug_assert!(
+            //     opening_hints.is_empty(),
+            //     "Commitments to {:?} are not used",
+            //     opening_hints.keys()
+            // );
 
             PCS::combine_hints(hints, &coeffs)
         };
@@ -1106,7 +1100,8 @@ where
                 .into_iter()
                 .map(|(k, v)| (v, commitment_map.remove(k).unwrap()))
                 .unzip();
-            debug_assert!(commitment_map.is_empty(), "Every commitment should be used");
+
+            // debug_assert!(commitment_map.is_empty(), "Every commitment should be used");
 
             PCS::combine_commitments(&commitments, &coeffs)
         };

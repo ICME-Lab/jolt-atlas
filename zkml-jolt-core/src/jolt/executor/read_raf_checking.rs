@@ -755,24 +755,23 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::jolt::sumcheck::BatchedSumcheck;
     use crate::jolt::{
         JoltProverPreprocessing, JoltSharedPreprocessing, JoltVerifierPreprocessing,
-        bytecode::BytecodePreprocessing, trace::JoltONNXCycle,
+        bytecode::BytecodePreprocessing, precompiles::PrecompilePreprocessing,
+        sumcheck::BatchedSumcheck, trace::JoltONNXCycle,
     };
     use ark_bn254::Fr;
     use ark_std::Zero;
-    use jolt_core::poly::commitment::mock::MockCommitScheme;
-    use jolt_core::transcripts::Blake2bTranscript;
+    use jolt_core::{poly::commitment::mock::MockCommitScheme, transcripts::Blake2bTranscript};
     use onnx_tracer::{
         ProgramIO,
-        graph::model::{Model, NodeType},
+        graph::{
+            model::{Model, NodeType},
+            node::{Node, SupportedOp},
+        },
+        ops::{Constant, lookup::LookupOp, poly::PolyOp},
         tensor::Tensor,
         trace_types::ONNXOpcode,
-        {
-            graph::node::{Node, SupportedOp},
-            ops::{Constant, lookup::LookupOp, poly::PolyOp},
-        },
     };
     use rand::{SeedableRng, rngs::StdRng};
 
@@ -838,6 +837,9 @@ mod tests {
         let bytecode_preprocessing = BytecodePreprocessing::preprocess(model_fn);
         let shared_preprocessing = JoltSharedPreprocessing {
             bytecode: bytecode_preprocessing,
+            precompiles: PrecompilePreprocessing {
+                matvec_instances: vec![],
+            },
         };
         let prover_preprocessing: JoltProverPreprocessing<Fr, MockCommitScheme<Fr>> =
             JoltProverPreprocessing {

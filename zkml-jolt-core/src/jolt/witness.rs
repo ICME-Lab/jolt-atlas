@@ -2,15 +2,13 @@
 
 use itertools::Itertools;
 use rayon::prelude::*;
-use strum::IntoEnumIterator;
 
 use std::{
     cell::{OnceCell, UnsafeCell},
     collections::HashMap,
-    sync::{Arc, LazyLock},
+    sync::Arc,
 };
 
-use crate::jolt::lookup_table::LookupTables;
 use jolt_core::{
     field::JoltField,
     poly::{
@@ -58,6 +56,7 @@ pub enum CommittedPolynomial {
     /*  Twist/Shout witnesses */
     /// Inc polynomial for the registers instance of Twist
     TdInc,
+    TdIncS, // HACK(Forpee): I am sure there is a better way to do this (compared to TdInc when we compute it we convert to i32 and back to i64)
     /// One-hot ra polynomial for the instruction lookups instance of Shout.
     /// There are d=8 of these polynomials, `InstructionRa(0) .. InstructionRa(7)`
     InstructionRa(usize),
@@ -74,6 +73,7 @@ struct WitnessData {
     product: Vec<u64>,
     write_lookup_output_to_td: Vec<u64>,
     td_inc: Vec<i64>,
+    td_inc_s: Vec<i64>,
 
     // One-hot polynomial indices
     instruction_ra: [Vec<Option<usize>>; 8],
@@ -91,6 +91,7 @@ impl WitnessData {
             product: vec![0; trace_len],
             write_lookup_output_to_td: vec![0; trace_len],
             td_inc: vec![0; trace_len],
+            td_inc_s: vec![0; trace_len],
 
             instruction_ra: [
                 vec![None; trace_len],
@@ -116,6 +117,7 @@ impl AllCommittedPolynomials {
             CommittedPolynomial::Product,
             CommittedPolynomial::WriteLookupOutputToTD,
             CommittedPolynomial::TdInc,
+            CommittedPolynomial::TdIncS,
             CommittedPolynomial::InstructionRa(0),
             CommittedPolynomial::InstructionRa(1),
             CommittedPolynomial::InstructionRa(2),
@@ -246,23 +248,17 @@ impl CommittedPolynomial {
                 let batch_ref = unsafe { &mut *batch_cell.0.get() };
                 let (left, right) = LookupQuery::<32>::to_instruction_inputs(cycle);
                 let circuit_flags = bytecode_line.circuit_flags();
-                let (rd_write_flag, (pre_rd, post_rd)) = (bytecode_line.td, cycle.td_write());
+                let (td_write_flag, (pre_td, post_td)) = (bytecode_line.td, cycle.td_write());
 
                 batch_ref.left_instruction_input[i] = left;
                 batch_ref.right_instruction_input[i] = right;
                 batch_ref.product[i] = left * right as u64;
 
-                batch_ref.write_lookup_output_to_td[i] = rd_write_flag
+                batch_ref.write_lookup_output_to_td[i] = td_write_flag
                     * (circuit_flags[CircuitFlags::WriteLookupOutputToTD as usize] as u8 as u64);
 
-                // // Handle should_jump
-                // let is_next_noop = if i + 1 < trace.len() {
-                //     preprocessing.bytecode()[i + 1].circuit_flags()[CircuitFlags::IsNoop] as u8
-                // } else {
-                //     1 // Last cycle, treat as if next is NoOp
-                // };
-
-                batch_ref.td_inc[i] = post_rd as i64 - pre_rd as i64;
+                batch_ref.td_inc[i] = post_td as i64 - pre_td as i64;
+                batch_ref.td_inc_s[i] = post_td as i32 as i64 - pre_td as i32 as i64;
 
                 // InstructionRa indices
                 let lookup_index = LookupQuery::<32>::to_lookup_index(cycle);
@@ -312,6 +308,10 @@ impl CommittedPolynomial {
                 }
                 CommittedPolynomial::TdInc => {
                     let coeffs = std::mem::take(&mut batch.td_inc);
+                    results.insert(*poly, MultilinearPolynomial::<F>::from(coeffs));
+                }
+                CommittedPolynomial::TdIncS => {
+                    let coeffs = std::mem::take(&mut batch.td_inc_s);
                     results.insert(*poly, MultilinearPolynomial::<F>::from(coeffs));
                 }
                 CommittedPolynomial::InstructionRa(i) => {
@@ -415,6 +415,16 @@ impl CommittedPolynomial {
                     .collect();
                 coeffs.into()
             }
+            CommittedPolynomial::TdIncS => {
+                let coeffs: Vec<i64> = trace
+                    .par_iter()
+                    .map(|cycle| {
+                        let (pre_value, post_value) = cycle.td_write();
+                        post_value as i32 as i64 - pre_value as i32 as i64
+                    })
+                    .collect();
+                coeffs.into()
+            }
             CommittedPolynomial::InstructionRa(i) => {
                 if *i > jolt_core::zkvm::instruction_lookups::D {
                     panic!("Unexpected i: {i}");
@@ -466,56 +476,63 @@ pub enum VirtualPolynomial {
     RegistersVal,
     OpFlags(CircuitFlags),
     LookupTableFlag(usize),
+    AVec(usize),
+    BMat(usize),
+    CRes(usize),
+    RaA(usize),
+    RaB(usize),
+    RaC(usize),
+    ValFinal,
 }
 
-pub static ALL_VIRTUAL_POLYNOMIALS: LazyLock<Vec<VirtualPolynomial>> = LazyLock::new(|| {
-    let mut polynomials = vec![
-        VirtualPolynomial::SpartanAz,
-        VirtualPolynomial::SpartanBz,
-        VirtualPolynomial::SpartanCz,
-        VirtualPolynomial::PC,
-        VirtualPolynomial::UnexpandedPC,
-        VirtualPolynomial::NextPC,
-        VirtualPolynomial::NextUnexpandedPC,
-        VirtualPolynomial::NextIsNoop,
-        VirtualPolynomial::LeftLookupOperand,
-        VirtualPolynomial::RightLookupOperand,
-        VirtualPolynomial::Td,
-        VirtualPolynomial::Imm,
-        VirtualPolynomial::Ts1Value,
-        VirtualPolynomial::Ts2Value,
-        VirtualPolynomial::TdWriteValue,
-        VirtualPolynomial::Ts1Ra,
-        VirtualPolynomial::Ts2Ra,
-        VirtualPolynomial::TdWa,
-        VirtualPolynomial::LookupOutput,
-        VirtualPolynomial::InstructionRaf,
-        VirtualPolynomial::InstructionRafFlag,
-        VirtualPolynomial::InstructionRa,
-        VirtualPolynomial::RegistersVal,
-    ];
-    for flag in CircuitFlags::iter() {
-        polynomials.push(VirtualPolynomial::OpFlags(flag));
-    }
-    for table in LookupTables::iter() {
-        polynomials.push(VirtualPolynomial::LookupTableFlag(
-            LookupTables::<32>::enum_index(&table),
-        ));
-    }
+// pub static ALL_VIRTUAL_POLYNOMIALS: LazyLock<Vec<VirtualPolynomial>> = LazyLock::new(|| {
+//     let mut polynomials = vec![
+//         VirtualPolynomial::SpartanAz,
+//         VirtualPolynomial::SpartanBz,
+//         VirtualPolynomial::SpartanCz,
+//         VirtualPolynomial::PC,
+//         VirtualPolynomial::UnexpandedPC,
+//         VirtualPolynomial::NextPC,
+//         VirtualPolynomial::NextUnexpandedPC,
+//         VirtualPolynomial::NextIsNoop,
+//         VirtualPolynomial::LeftLookupOperand,
+//         VirtualPolynomial::RightLookupOperand,
+//         VirtualPolynomial::Td,
+//         VirtualPolynomial::Imm,
+//         VirtualPolynomial::Ts1Value,
+//         VirtualPolynomial::Ts2Value,
+//         VirtualPolynomial::TdWriteValue,
+//         VirtualPolynomial::Ts1Ra,
+//         VirtualPolynomial::Ts2Ra,
+//         VirtualPolynomial::TdWa,
+//         VirtualPolynomial::LookupOutput,
+//         VirtualPolynomial::InstructionRaf,
+//         VirtualPolynomial::InstructionRafFlag,
+//         VirtualPolynomial::InstructionRa,
+//         VirtualPolynomial::RegistersVal,
+//     ];
+//     for flag in CircuitFlags::iter() {
+//         polynomials.push(VirtualPolynomial::OpFlags(flag));
+//     }
+//     for table in LookupTables::iter() {
+//         polynomials.push(VirtualPolynomial::LookupTableFlag(
+//             LookupTables::<32>::enum_index(&table),
+//         ));
+//     }
 
-    polynomials
-});
+//     polynomials
+// });
 
-impl VirtualPolynomial {
-    pub fn from_index(index: usize) -> Self {
-        ALL_VIRTUAL_POLYNOMIALS[index]
-    }
+// impl VirtualPolynomial {
+//     pub fn from_index(index: usize) -> Self {
+//         ALL_VIRTUAL_POLYNOMIALS[index]
+//     }
 
-    pub fn to_index(&self) -> usize {
-        ALL_VIRTUAL_POLYNOMIALS
-            .iter()
-            .find_position(|poly| *poly == self)
-            .unwrap()
-            .0
-    }
-}
+//     pub fn to_index(&self) -> usize {
+//         ALL_VIRTUAL_POLYNOMIALS
+//             .iter()
+//             .find_position(|poly| *poly == self)
+//             .unwrap()
+//             .0
+//     }
+// }

@@ -6,7 +6,9 @@ edition = "2024"
 [dependencies]
 ark-bn254 = "0.5.0"
 itertools = "0.10.0"
-onnx-tracer = { path = "../onnx-tracer" }
+onnx-tracer = { path = "../onnx-tracer", features = [
+  "matmul_power_of_two_padding",
+] }
 jolt-core = { git = "https://github.com/ICME-Lab/zkml-jolt", branch = "dev", package = "jolt-core", default-features = true }
 rayon = { version = "^1.8.0" }
 serde = { version = "1.0.193", features = ["derive"] }

@@ -1069,6 +1069,403 @@ pub fn non_power_of_two_matmult_model() -> Model {
     b.take(vec![input.0], vec![result])
 }
 
+/// Simple linear head model using only basic operations: input, matmult, add, mul, const.
+///
+/// This model demonstrates a minimal linear transformation:
+/// 1. Takes an input tensor of shape [1, 4]
+/// 2. Multiplies it with a weight matrix [2, 4] → [1, 2]
+/// 3. Adds a bias vector [1, 2]
+/// 4. Multiplies by a scale factor [1, 2]
+/// 5. Outputs the final result of shape [1, 2]
+///
+/// Operations used: Input → MatMult → Add → Mult → Output
+/// Total nodes: 5 (input, 3 constants, matmult, add, mult)
+///
+/// # Returns
+/// A `Model` representing the simple linear head computation graph
+pub fn simple_linear_head_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 4])
+    let input = b.input(vec![1, 4], 1);
+
+    // Node 1: Weight matrix constant (shape [2, 4])
+    let mut weights: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, // First output neuron weights
+            5, 6, 7, 8, // Second output neuron weights
+        ]),
+        &[2, 4],
+    )
+    .unwrap();
+    weights.set_scale(SCALE);
+    let weight_matrix = b.const_tensor(weights, vec![2, 4], 1);
+
+    // Node 2: Matrix multiplication: [1, 4] × [2, 4] → [1, 2]
+    let linear_out = b.matmult(input, weight_matrix, vec![1, 2], 1);
+
+    // Node 3: Bias vector constant (shape [1, 2])
+    let mut bias: Tensor<i32> = Tensor::new(Some(&[10, 20]), &[1, 2]).unwrap();
+    bias.set_scale(SCALE);
+    let bias_vector = b.const_tensor(bias, vec![1, 2], 1);
+
+    // Node 4: Add bias: [1, 2] + [1, 2] → [1, 2]
+    let biased_out = b.poly(PolyOp::Add, linear_out, bias_vector, vec![1, 2], 1);
+
+    // Node 5: Scale factor constant (shape [1, 2])
+    let mut scale: Tensor<i32> = Tensor::new(Some(&[2, 3]), &[1, 2]).unwrap();
+    scale.set_scale(SCALE);
+    let scale_vector = b.const_tensor(scale, vec![1, 2], 1);
+
+    // Node 6: Multiply by scale: [1, 2] * [1, 2] → [1, 2]
+    let final_out = b.poly(PolyOp::Mult, biased_out, scale_vector, vec![1, 2], 1);
+
+    b.take(vec![input.0], vec![final_out])
+}
+
+/// Simple linear head model with 4x4 matrix multiplication using only basic operations.
+///
+/// This model demonstrates a minimal linear transformation with square matrices:
+/// 1. Takes an input tensor of shape [1, 4]
+/// 2. Multiplies it with a 4x4 weight matrix → [1, 4]
+/// 3. Adds a bias vector [1, 4]
+/// 4. Multiplies by a scale factor [1, 4]
+/// 5. Outputs the final result of shape [1, 4]
+///
+/// Operations used: Input → MatMult(4x4) → Add → Mult → Output
+/// Total nodes: 7 (input, 3 constants, matmult, add, mult)
+///
+/// # Returns
+/// A `Model` representing the 4x4 matrix linear head computation graph
+pub fn simple_linear_head_4x4_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 4])
+    let input = b.input(vec![1, 4], 1);
+
+    // Node 1: 4x4 Weight matrix constant (shape [4, 4])
+    let mut weights: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, // First output neuron weights
+            5, 6, 7, 8, // Second output neuron weights
+            9, 10, 11, 12, // Third output neuron weights
+            13, 14, 15, 16, // Fourth output neuron weights
+        ]),
+        &[4, 4],
+    )
+    .unwrap();
+    weights.set_scale(SCALE);
+    let weight_matrix = b.const_tensor(weights, vec![4, 4], 1);
+
+    // Node 2: Matrix multiplication: [1, 4] × [4, 4] → [1, 4]
+    let linear_out = b.matmult(input, weight_matrix, vec![1, 4], 1);
+
+    // Node 3: Bias vector constant (shape [1, 4])
+    let mut bias: Tensor<i32> = Tensor::new(Some(&[10, 20, 30, 40]), &[1, 4]).unwrap();
+    bias.set_scale(SCALE);
+    let bias_vector = b.const_tensor(bias, vec![1, 4], 1);
+
+    // Node 4: Add bias: [1, 4] + [1, 4] → [1, 4]
+    let biased_out = b.poly(PolyOp::Add, linear_out, bias_vector, vec![1, 4], 1);
+
+    // Node 5: Scale factor constant (shape [1, 4])
+    let mut scale: Tensor<i32> = Tensor::new(Some(&[2, 3, 4, 5]), &[1, 4]).unwrap();
+    scale.set_scale(SCALE);
+    let scale_vector = b.const_tensor(scale, vec![1, 4], 1);
+
+    // Node 6: Multiply by scale: [1, 4] * [1, 4] → [1, 4]
+    let final_out = b.poly(PolyOp::Mult, biased_out, scale_vector, vec![1, 4], 1);
+
+    b.take(vec![input.0], vec![final_out])
+}
+
+/// Minimal matrix multiplication model: input, const, matmult only.
+///
+/// This model demonstrates the simplest possible linear transformation:
+/// 1. Takes an input tensor of shape [1, 4]
+/// 2. Multiplies it with a weight matrix [2, 4] → [1, 2]
+/// 3. Outputs the final result of shape [1, 2]
+///
+/// Operations used: Input → MatMult → Output
+/// Total nodes: 3 (input, const, matmult)
+///
+/// # Returns
+/// A `Model` representing the minimal matrix multiplication computation graph
+pub fn minimal_matmult_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 4])
+    let input = b.input(vec![1, 4], 1);
+
+    // Node 1: Weight matrix constant (shape [2, 4])
+    let mut weights: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, // First output neuron weights
+            5, 6, 7, 8, // Second output neuron weights
+        ]),
+        &[2, 4],
+    )
+    .unwrap();
+    weights.set_scale(SCALE);
+    let weight_matrix = b.const_tensor(weights, vec![2, 4], 1);
+
+    // Node 2: Matrix multiplication: [1, 4] × [2, 4] → [1, 2]
+    let result = b.matmult(input, weight_matrix, vec![1, 2], 1);
+
+    b.take(vec![input.0], vec![result])
+}
+
+/// Minimal matrix multiplication model with non-power-of-two dimensions: input, const, matmult only.
+///
+/// This model demonstrates the simplest possible linear transformation with non-power-of-two dimensions:
+/// 1. Takes an input tensor of shape [1, 5] (5 is not a power of two)
+/// 2. Multiplies it with a weight matrix [3, 5] → [1, 3] (3 is not a power of two)
+/// 3. Outputs the final result of shape [1, 3]
+///
+/// **Power-of-Two Padding Behavior** (when feature enabled):
+/// - Input [1, 5] gets padded to [1, 8] (next power of two for second dimension)
+/// - Weights [3, 5] get padded to [4, 8] (next powers of two)
+/// - Computation is performed as [1, 8] × [4, 8] → [1, 4]
+/// - Result is cropped back to [1, 3]
+///
+/// Neither input dimension (5) nor output dimension (3) are powers of two
+/// Operations used: Input → MatMult → Output
+/// Total nodes: 3 (input, const, matmult)
+///
+/// # Returns
+/// A `Model` representing the minimal matrix multiplication computation graph with non-power-of-two dimensions
+pub fn minimal_matmult_non_power_of_two_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 5] - non-power-of-two)
+    let input = b.input(vec![1, 5], 1);
+
+    // Node 1: Weight matrix constant (shape [3, 5] - non-power-of-two dimensions)
+    let mut weights: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, 5, // First output neuron weights
+            6, 7, 8, 9, 10, // Second output neuron weights
+            11, 12, 13, 14, 15, // Third output neuron weights
+        ]),
+        &[3, 5],
+    )
+    .unwrap();
+    weights.set_scale(SCALE);
+    let weight_matrix = b.const_tensor(weights, vec![3, 5], 1);
+
+    // Node 2: Matrix multiplication: [1, 5] × [3, 5] → [1, 3]
+    let result = b.matmult(input, weight_matrix, vec![1, 3], 1);
+
+    b.take(vec![input.0], vec![result])
+}
+
+/// Dual matrix multiplication model with power-of-two dimensions and non-overflowing weights.
+///
+/// This model demonstrates a 2-layer neural network with power-of-two dimensions:
+/// 1. Takes an input tensor of shape [1, 4] (4 = 2^2)
+/// 2. First matmult: [1, 4] × [4, 4] → [1, 4] with weights (1-16)
+/// 3. Second matmult: [1, 4] × [2, 4] → [1, 2] with weights (1-8)
+/// 4. Outputs the final result of shape [1, 2] (2 = 2^1)
+///
+/// All dimensions are powers of two: 4=2^2, 2=2^1, 1=2^0
+/// Weight values are chosen to avoid overflow while being reasonably sized
+/// Operations used: Input → MatMult → MatMult → Output
+/// Total nodes: 4 (input, 2 consts, 2 matmults)
+///
+/// # Returns
+/// A `Model` representing the dual matrix multiplication computation graph
+pub fn dual_matmult_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 4])
+    let input = b.input(vec![1, 4], 1);
+
+    // Node 1: First weight matrix constant (shape [4, 4] - square matrix)
+    let mut weights1: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, // First output neuron weights
+            5, 6, 7, 8, // Second output neuron weights
+            9, 10, 11, 12, // Third output neuron weights
+            13, 14, 15, 16, // Fourth output neuron weights
+        ]),
+        &[4, 4],
+    )
+    .unwrap();
+    weights1.set_scale(SCALE);
+    let weight_matrix1 = b.const_tensor(weights1, vec![4, 4], 1);
+
+    // Node 2: First matrix multiplication: [1, 4] × [4, 4] → [1, 4]
+    let first_result = b.matmult(input, weight_matrix1, vec![1, 4], 1);
+
+    // Node 3: Second weight matrix constant (shape [2, 4])
+    let mut weights2: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, // First output neuron weights
+            5, 6, 7, 8, // Second output neuron weights
+        ]),
+        &[2, 4],
+    )
+    .unwrap();
+    weights2.set_scale(SCALE);
+    let weight_matrix2 = b.const_tensor(weights2, vec![2, 4], 1);
+
+    // Node 4: Second matrix multiplication: [1, 4] × [2, 4] → [1, 2]
+    let final_result = b.matmult(first_result, weight_matrix2, vec![1, 2], 1);
+
+    b.take(vec![input.0], vec![final_result])
+}
+
+/// Dual matrix multiplication model with non-power-of-two dimensions for testing padding.
+///
+/// This model demonstrates a 2-layer neural network with non-power-of-two dimensions:
+/// 1. Takes an input tensor of shape [1, 5] (5 is not a power of two)
+/// 2. First matmult: [1, 5] × [6, 5] → [1, 6] with weights (1-30)
+/// 3. Second matmult: [1, 6] × [3, 6] → [1, 3] with weights (1-18)
+/// 4. Outputs the final result of shape [1, 3] (3 is not a power of two)
+///
+/// **Power-of-Two Padding Behavior** (when feature enabled):
+/// - Input [1, 5] gets padded to [1, 8] (next power of two for second dimension)
+/// - First weights [6, 5] get padded to [8, 8] (next powers of two)
+/// - First result [1, 6] gets padded to [1, 8] (next power of two)
+/// - Second weights [3, 6] get padded to [4, 8] (next powers of two)
+/// - Final result is cropped back to [1, 3]
+///
+/// None of the dimensions are powers of two: 5, 6, 3
+/// Weight values are chosen to avoid overflow while being reasonably sized
+/// Operations used: Input → MatMult → MatMult → Output
+/// Total nodes: 4 (input, 2 consts, 2 matmults)
+///
+/// # Returns
+/// A `Model` representing the dual matrix multiplication computation graph with non-power-of-two dimensions
+pub fn dual_matmult_non_power_of_two_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 5] - non-power-of-two)
+    let input = b.input(vec![1, 5], 1);
+
+    // Node 1: First weight matrix constant (shape [6, 5] - non-power-of-two dimensions)
+    let mut weights1: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, 5, // First output neuron weights
+            6, 7, 8, 9, 10, // Second output neuron weights
+            11, 12, 13, 14, 15, // Third output neuron weights
+            16, 17, 18, 19, 20, // Fourth output neuron weights
+            21, 22, 23, 24, 25, // Fifth output neuron weights
+            26, 27, 28, 29, 30, // Sixth output neuron weights
+        ]),
+        &[6, 5],
+    )
+    .unwrap();
+    weights1.set_scale(SCALE);
+    let weight_matrix1 = b.const_tensor(weights1, vec![6, 5], 1);
+
+    // Node 2: First matrix multiplication: [1, 5] × [6, 5] → [1, 6]
+    let first_result = b.matmult(input, weight_matrix1, vec![1, 6], 1);
+
+    // Node 3: Second weight matrix constant (shape [3, 6] - non-power-of-two dimensions)
+    let mut weights2: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, 5, 6, // First output neuron weights
+            7, 8, 9, 10, 11, 12, // Second output neuron weights
+            13, 14, 15, 16, 17, 18, // Third output neuron weights
+        ]),
+        &[3, 6],
+    )
+    .unwrap();
+    weights2.set_scale(SCALE);
+    let weight_matrix2 = b.const_tensor(weights2, vec![3, 6], 1);
+
+    // Node 4: Second matrix multiplication: [1, 6] × [3, 6] → [1, 3]
+    let final_result = b.matmult(first_result, weight_matrix2, vec![1, 3], 1);
+
+    b.take(vec![input.0], vec![final_result])
+}
+
+/// Triple matrix multiplication model with power-of-two dimensions and non-overflowing weights.
+///
+/// This model demonstrates a 3-layer neural network with power-of-two dimensions:
+/// 1. Takes an input tensor of shape [1, 8] (8 = 2^3)
+/// 2. First matmult: [1, 8] × [8, 8] → [1, 8] with weights (1-64)
+/// 3. Second matmult: [1, 8] × [4, 8] → [1, 4] with weights (1-32)
+/// 4. Third matmult: [1, 4] × [2, 4] → [1, 2] with weights (1-8)
+/// 5. Outputs the final result of shape [1, 2] (2 = 2^1)
+///
+/// All dimensions are powers of two: 8=2^3, 4=2^2, 2=2^1, 1=2^0
+/// Weight values are chosen to avoid overflow while being reasonably sized
+/// Operations used: Input → MatMult → MatMult → MatMult → Output
+/// Total nodes: 6 (input, 3 consts, 3 matmults)
+///
+/// # Returns
+/// A `Model` representing the triple matrix multiplication computation graph
+pub fn triple_matmult_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 8])
+    let input = b.input(vec![1, 8], 1);
+
+    // Node 1: First weight matrix constant (shape [8, 8] - square matrix)
+    let mut weights1: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, 5, 6, 7, 8, // First output neuron weights
+            9, 10, 11, 12, 13, 14, 15, 16, // Second output neuron weights
+            17, 18, 19, 20, 21, 22, 23, 24, // Third output neuron weights
+            25, 26, 27, 28, 29, 30, 31, 32, // Fourth output neuron weights
+            33, 34, 35, 36, 37, 38, 39, 40, // Fifth output neuron weights
+            41, 42, 43, 44, 45, 46, 47, 48, // Sixth output neuron weights
+            49, 50, 51, 52, 53, 54, 55, 56, // Seventh output neuron weights
+            57, 58, 59, 60, 61, 62, 63, 64, // Eighth output neuron weights
+        ]),
+        &[8, 8],
+    )
+    .unwrap();
+    weights1.set_scale(SCALE);
+    let weight_matrix1 = b.const_tensor(weights1, vec![8, 8], 1);
+
+    // Node 2: First matrix multiplication: [1, 8] × [8, 8] → [1, 8]
+    let first_result = b.matmult(input, weight_matrix1, vec![1, 8], 1);
+
+    // Node 3: Second weight matrix constant (shape [4, 8])
+    let mut weights2: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, 5, 6, 7, 8, // First output neuron weights
+            9, 10, 11, 12, 13, 14, 15, 16, // Second output neuron weights
+            17, 18, 19, 20, 21, 22, 23, 24, // Third output neuron weights
+            25, 26, 27, 28, 29, 30, 31, 32, // Fourth output neuron weights
+        ]),
+        &[4, 8],
+    )
+    .unwrap();
+    weights2.set_scale(SCALE);
+    let weight_matrix2 = b.const_tensor(weights2, vec![4, 8], 1);
+
+    // Node 4: Second matrix multiplication: [1, 8] × [4, 8] → [1, 4]
+    let second_result = b.matmult(first_result, weight_matrix2, vec![1, 4], 1);
+
+    // Node 5: Third weight matrix constant (shape [2, 4])
+    let mut weights3: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, // First output neuron weights
+            5, 6, 7, 8, // Second output neuron weights
+        ]),
+        &[2, 4],
+    )
+    .unwrap();
+    weights3.set_scale(SCALE);
+    let weight_matrix3 = b.const_tensor(weights3, vec![2, 4], 1);
+
+    // Node 6: Third matrix multiplication: [1, 4] × [2, 4] → [1, 2]
+    let final_result = b.matmult(second_result, weight_matrix3, vec![1, 2], 1);
+
+    b.take(vec![input.0], vec![final_result])
+}
+
 /// Matrix multiplication model with RebaseScale wrapper for testing ONNX binary compilation scenarios.
 ///
 /// This model demonstrates matrix multiplication wrapped in RebaseScale, which is common

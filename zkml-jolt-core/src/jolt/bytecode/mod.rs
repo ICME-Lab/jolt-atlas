@@ -444,7 +444,8 @@ pub fn raw_to_jolt_bytecode(
 
     // get ts1 and ts2 addresses
     let (vts1, vts2) = if raw.opcode == ONNXOpcode::MatMult {
-        // TODO: this is hacky
+        // We need this because MatMults MCC do not follow the same pattern as other ops (it is handled separately) and we can safely store ts1 and ts2 as zero registers
+        // TODO: Extend this match statement to all non-elementwise ops
         (
             vec![0; active_output_elements],
             vec![0; active_output_elements],

@@ -89,7 +89,8 @@ impl TensorValues {
         let mut ts1_vals = raw_cycle.ts1_vals().unwrap_or_else(|| vec![0; size]);
         let mut ts2_vals = raw_cycle.ts2_vals().unwrap_or_else(|| vec![0; size]);
 
-        // TODO: this feels hacky
+        // We need this because MatMults MCC do not follow the same pattern as other ops (it is handled separately) and we can safely store ts1 and ts2 as zero registers
+        // TODO: Extend this match statement to all non-elementwise ops
         if raw_cycle.instr.opcode == ONNXOpcode::MatMult {
             ts1_vals = vec![0; size];
             ts2_vals = vec![0; size];

@@ -35,7 +35,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
         // Clamp values host-side
         let z_vals: Vec<i64> = z.iter().map(|&v| v as u32 as i32 as i64).collect();
         let z_clamped: Vec<i64> = z_vals.iter()
-            .map(|&v| v.max(-8).min(8))   // clamp into [-8,8]
+            .map(|&v| v.clamp(-8, 8))   // clamp into [-8,8]
             .collect();
 
         // Emit a VirtualAdvice cycle with clamped tensor

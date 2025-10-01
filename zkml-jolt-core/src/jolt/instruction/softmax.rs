@@ -8,20 +8,16 @@ use onnx_tracer::{
 
 use crate::{
     jolt::instruction::{
-        VirtualInstructionSequence, add::ADD, argmax::ArgMaxInstruction, beq::BEQInstruction,
-        mul::MUL, virtual_advice::ADVICEInstruction,
-        virtual_assert_valid_div0::AssertValidDiv0Instruction,
-        virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction,
-        virtual_pow2::VirtualPow2,
+        add::ADD, argmax::ArgMaxInstruction, beq::BEQInstruction, mul::MUL, virtual_advice::ADVICEInstruction, virtual_assert_valid_div0::AssertValidDiv0Instruction, virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction, virtual_pow2::VirtualPow2, VirtualInstructionSequence
     },
-    utils::u64_vec_to_i32_iter,
+    utils::{u64_vec_to_i32_iter, u64_vec_to_i32_saturating},
 };
 
 /// Perform softmax and return the result
 pub struct SoftmaxInstruction<const WORD_SIZE: usize>;
 
 impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<WORD_SIZE> {
-    const SEQUENCE_LENGTH: usize = ArgMaxInstruction::<WORD_SIZE>::SEQUENCE_LENGTH + MAX_TENSOR_SIZE + 8;
+    const SEQUENCE_LENGTH: usize = ArgMaxInstruction::<WORD_SIZE>::SEQUENCE_LENGTH + MAX_TENSOR_SIZE + 7;
         // ArgMaxInstruction::<WORD_SIZE>::SEQUENCE_LENGTH + (5 * MAX_TENSOR_SIZE) + 3;
 
     fn virtual_trace(cycle: ONNXCycle) -> Vec<ONNXCycle> {
@@ -80,6 +76,15 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
                 z_max_idx = i;
             }
         }
+        // let x = u64_vec_to_i32_saturating(&z);
+        // let mut z_max_idx = 0;
+        // let mut z_max_val = x[0];
+        // for (i, &xi) in x.iter().enumerate().skip(1) {
+        //     if xi >= z_max_val {
+        //         z_max_val = xi;
+        //         z_max_idx = i;
+        //     }
+        // }
         let mut zmax_tensor = vec![0; MAX_TENSOR_SIZE];
         zmax_tensor[0] = z[z_max_idx];
 
@@ -106,30 +111,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
             advice_value: None,
         });
 
-        // TODO: Use VirtualAdvice instead of VirtualConst
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
-                address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualConst,
-                ts1: None,
-                ts2: None,
-                ts3: None,
-                td: v_const_63,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&[63]))),
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
-                active_output_elements: 1,
-                output_dims: [1, 1],
-            },
-            memory_state: MemoryState {
-                ts1_val: None,
-                ts2_val: None,
-                ts3_val: None,
-                td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&[63]))),
-            },
-            advice_value: None,
-        });
-
         let const_63_tensor = vec![63u64; MAX_TENSOR_SIZE];
         virtual_trace.push(ONNXCycle {
             instr: ONNXInstr {
@@ -145,11 +126,11 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
                 output_dims: [1, MAX_TENSOR_SIZE],
             },
             memory_state: MemoryState {
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&const_63_tensor))),
                 ts1_val: None,
                 ts2_val: None,
                 ts3_val: None,
                 td_pre_val: None,
+                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&const_63_tensor))),
             },
             advice_value: None,
         });
@@ -181,24 +162,30 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
         println!("virtual_trace: {:#?}", virtual_trace);
 
         let z_max = z[z_max_idx];
+        println!("z_max: {}", z_max);
         let zmax_tensor = vec![z_max; MAX_TENSOR_SIZE];
-        let scaled: Vec<u64> = z_times_63.iter().map(|&ni| ni / z_max).collect();
+        let scaled: Vec<u64> = z_times_63.iter().map(|&ni| {
+            println!("ni: {}, z_max: {}", ni, z_max);
+            println!("ni as u32 as i32 as u64: {}, z_max: {}", ni as u32 as i32 as i64, z_max);
+            (ni as i64 / z_max as i64) as u64
+        }).collect();
+        println!("scaled: {:?}", scaled);
         virtual_trace.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
                 opcode: ONNXOpcode::Div,
-                ts1: v_num,
-                ts2: v_zmax, // broadcast z_max
+                ts1: v_num, 
+                ts2: None, // broadcast z_max
                 ts3: None,
                 td: v_scaled,
-                imm: None,
+                imm: Some(Tensor::from(u64_vec_to_i32_iter(&zmax_tensor))),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: MAX_TENSOR_SIZE,
                 output_dims: [1, MAX_TENSOR_SIZE],
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&z_times_63))),
-                ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&zmax_tensor))),
+                ts2_val: None,
                 ts3_val: None,
                 td_pre_val: None,
                 td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&scaled))),
@@ -302,10 +289,10 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
                 address: cycle.instr.address,
                 opcode: ONNXOpcode::Div,
                 ts1: v_a, // the tensor [a_1, ..., a_n]
-                ts2: v_broadcast_sum, // the broadcasted N
+                ts2: None, // the broadcasted N
                 ts3: None,
                 td: v_probs,
-                imm: None,
+                imm: Some(Tensor::from(u64_vec_to_i32_iter(&n_tensor))),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: MAX_TENSOR_SIZE,
                 output_dims: [1, MAX_TENSOR_SIZE],

@@ -343,6 +343,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DIVInstruction<WORD_
             }
             output[i] = quotient as u32 as u64
         }
+        println!("output: {:?}", output);
         output
     }
 }

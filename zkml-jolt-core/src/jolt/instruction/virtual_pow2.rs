@@ -1,7 +1,6 @@
 use jolt_core::jolt::lookup_table::{pow2::Pow2Table, LookupTables};
 
-use jolt_core::jolt::instruction::{CircuitFlags, InstructionFlags, InstructionLookup, LookupQuery, NUM_CIRCUIT_FLAGS};
-use onnx_tracer::trace_types::ONNXCycle;
+use jolt_core::jolt::instruction::{InstructionLookup, LookupQuery};
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]

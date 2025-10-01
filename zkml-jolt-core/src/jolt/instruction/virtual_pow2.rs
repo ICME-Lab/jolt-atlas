@@ -1,7 +1,6 @@
-use jolt_core::jolt::lookup_table::{pow2::Pow2Table, LookupTables};
+use jolt_core::jolt::lookup_table::{LookupTables, pow2::Pow2Table};
 
-use jolt_core::jolt::instruction::{CircuitFlags, InstructionFlags, InstructionLookup, LookupQuery, NUM_CIRCUIT_FLAGS};
-use onnx_tracer::trace_types::ONNXCycle;
+use jolt_core::jolt::instruction::{InstructionLookup, LookupQuery};
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
@@ -44,5 +43,3 @@ impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for VirtualPow2<WORD_SIZE> {
         }
     }
 }
-
-

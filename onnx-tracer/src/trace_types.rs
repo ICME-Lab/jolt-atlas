@@ -671,6 +671,7 @@ impl ONNXOpcode {
             ONNXOpcode::VirtualAssertEq => 1u64 << 22,
             ONNXOpcode::VirtualConst => 1u64 << 23,
             ONNXOpcode::VirtualPow2 => 1u64 << 24,
+
             ONNXOpcode::Gte => 1u64 << 25,
             ONNXOpcode::Reshape => 1u64 << 26,
             ONNXOpcode::ArgMax => 1u64 << 27,

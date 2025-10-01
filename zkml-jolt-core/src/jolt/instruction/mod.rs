@@ -12,6 +12,7 @@ pub mod reduce_max;
 pub mod reduce_sum;
 pub mod relu;
 pub mod softmax;
+pub mod sigmoid;
 pub mod sub;
 pub mod virtual_advice;
 pub mod virtual_assert_valid_div0;

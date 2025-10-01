@@ -1,17 +1,18 @@
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use sha3::Sha3_256;
 
-use super::builder::CombinedUniformBuilder;
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jolt_core::{
     field::JoltField,
     poly::eq_poly::EqPolynomial,
-    r1cs::key::SparseConstraints,
     utils::{index_to_field_bitvector, mul_0_1_optimized, thread::unsafe_allocate_zero_vec},
 };
+
+use super::builder::CombinedUniformBuilder;
 use sha3::Digest;
 
 use jolt_core::utils::math::Math;
 
+#[derive(CanonicalSerialize, CanonicalDeserialize)]
 pub struct UniformSpartanKey<F: JoltField> {
     pub uniform_r1cs: UniformR1CS<F>,
 
@@ -22,7 +23,29 @@ pub struct UniformSpartanKey<F: JoltField> {
     pub num_steps: usize,
 
     /// Digest of verifier key
-    pub vk_digest: F,
+    pub(crate) vk_digest: F,
+}
+
+/// (row, col, value)
+pub type Coeff<F> = (usize, usize, F);
+
+/// Sparse representation of a single R1CS matrix.
+#[derive(CanonicalSerialize, CanonicalDeserialize)]
+pub struct SparseConstraints<F: JoltField> {
+    /// Non-zero, non-constant coefficients
+    pub vars: Vec<Coeff<F>>,
+
+    /// Non-zero constant coefficients stored as (uniform_row_index, coeff)
+    pub consts: Vec<(usize, F)>,
+}
+
+impl<F: JoltField> SparseConstraints<F> {
+    pub fn empty_with_capacity(vars: usize, consts: usize) -> Self {
+        Self {
+            vars: Vec::with_capacity(vars),
+            consts: Vec::with_capacity(consts),
+        }
+    }
 }
 
 /// Sparse representation of all 3 uniform R1CS matrices. Uniform matrices can be repeated over a number of steps
@@ -113,7 +136,9 @@ impl<F: JoltField> UniformSpartanKey<F> {
     pub fn evaluate_small_matrix_rlc(&self, r_constr: &[F], r_rlc: F) -> Vec<F> {
         assert_eq!(
             r_constr.len(),
-            (self.uniform_r1cs.num_rows + 1).next_power_of_two().log_2()
+            (self.uniform_r1cs.num_rows + 1).next_power_of_two().log_2(),
+            "uniform_r1cs.num_rows = {}",
+            self.uniform_r1cs.num_rows,
         );
 
         let eq_rx_constr = EqPolynomial::evals(r_constr);

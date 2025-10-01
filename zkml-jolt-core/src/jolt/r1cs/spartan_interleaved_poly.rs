@@ -2,9 +2,9 @@ use jolt_core::{
     field::JoltField,
     poly::{
         dense_mlpoly::DensePolynomial, multilinear_polynomial::MultilinearPolynomial,
-        sparse_interleaved_poly::SparseCoefficient,
+        spartan_interleaved_poly::SparseCoefficient,
     },
-    r1cs::builder::Constraint,
+    zkvm::r1cs::builder::Constraint,
 };
 
 #[derive(Default, Debug, Clone)]

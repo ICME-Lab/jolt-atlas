@@ -183,12 +183,21 @@ where
             PolyOp::Resize { scale_factor } => tensor::ops::resize(&inputs[0], scale_factor),
             PolyOp::Iff => tensor::ops::iff(&inputs[0], &inputs[1], &inputs[2]),
             PolyOp::Einsum { equation } => {
-                // Check if this is the MatMul pattern "mk,nk->mn" and apply power-of-two padding
-                if equation == "mk,nk->mn" && cfg!(feature = "matmul_power_of_two_padding") {
-                    einsum_matmul_mk_nk_mn_padded(equation, &inputs)
-                } else {
-                    tensor::ops::einsum(equation, &inputs)
+                // Check if this is the MatMul pattern (potentially with different spacing/format)
+                #[cfg(feature = "matmul_power_of_two_padding")]
+                {
+                    // Handle matmul pattern regardless of spacing
+                    if equation.contains("mk,nk->mn") || equation.contains("mk, nk -> mn") {
+                        eprintln!("USING POWER OF TWO PADDING FOR MATMUL");
+                        let padded_result = einsum_matmul_mk_nk_mn_padded(equation, &inputs)?;
+                        return Ok(ForwardResult {
+                            output: padded_result,
+                            intermediate_lookups: vec![],
+                        });
+                    }
                 }
+
+                tensor::ops::einsum(equation, &inputs)
             }
             PolyOp::Identity => Ok(inputs[0].clone()),
             PolyOp::Reshape(new_dims) => {
@@ -413,7 +422,7 @@ where
 /// # Returns
 /// * `Ok(Tensor<T>)` - Result tensor with dimensions [m, n]
 /// * `Err(TensorError)` - If padding, computation, or cropping fails
-fn einsum_matmul_mk_nk_mn_padded<T>(
+pub fn einsum_matmul_mk_nk_mn_padded<T>(
     equation: &str,
     inputs: &[Tensor<T>],
 ) -> Result<Tensor<T>, TensorError>
@@ -465,17 +474,55 @@ where
         k.next_power_of_two()
     };
 
-    // Clone and pad input tensors
+    // Pad tensor a to [m_pow2, k_pow2]
     let mut a_padded = a.clone();
-    let mut b_padded = b.clone();
-
     a_padded.pad_to_dims(&[m_pow2, k_pow2])?;
-    b_padded.pad_to_dims(&[n_pow2, k_pow2])?;
+
+    // For tensor b: match zkml-jolt-core's padding strategy
+    // zkml-jolt-core stores the original data sequentially then pads to n_pow2 * k_pow2 elements
+    let original_b_data = b.inner.clone();
+    let n_k = n * k;
+    let target_size = n_pow2 * k_pow2;
+
+    // Create new data array with the sequential layout that zkml-jolt-core expects
+    let mut b_padded_data = Vec::with_capacity(target_size);
+
+    // Copy original data sequentially
+    for value in original_b_data.iter().take(n_k) {
+        b_padded_data.push(value.clone());
+    }
+
+    // Pad with zeros to reach target size
+    while b_padded_data.len() < target_size {
+        b_padded_data.push(T::zero().unwrap_or_else(|| original_b_data[0].clone()));
+    }
+
+    // Create the padded b tensor with the sequential layout, then reshape to [n_pow2, k_pow2]
+    let b_padded = Tensor::new(Some(&b_padded_data), &[n_pow2, k_pow2])?;
 
     // Perform einsum on padded tensors
     let padded_result = tensor::ops::einsum(equation, &[a_padded, b_padded])?;
-    // Crop result back to original expected dimensions [m, n]
-    padded_result.crop_to_dims(&[m, n])
+
+    // Crop the padded result back to the original expected dimensions [m, n]
+    let mut cropped_values = Vec::with_capacity(m * n);
+
+    // Copy values from the padded result, row by row
+    for i in 0..m {
+        for j in 0..n {
+            let padded_idx = i * padded_result.dims()[1] + j;
+            if padded_idx < padded_result.inner.len() {
+                cropped_values.push(padded_result.inner[padded_idx].clone());
+            } else {
+                // This shouldn't happen if padding worked correctly
+                cropped_values.push(T::zero().unwrap_or_else(|| padded_result.inner[0].clone()));
+            }
+        }
+    }
+
+    // Create a tensor with the original expected dimensions but with values from padded calculation
+    let result = Tensor::new(Some(&cropped_values), &[m, n])?;
+
+    Ok(result)
 }
 
 #[cfg(test)]

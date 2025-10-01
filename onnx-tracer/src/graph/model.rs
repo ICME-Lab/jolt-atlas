@@ -854,10 +854,6 @@ impl Model {
     pub fn set_outputs(&mut self, outputs: Vec<Outlet>) {
         self.graph.outputs = outputs;
     }
-
-    pub fn clear_execution_trace(&mut self) {
-        self.tracer.clear();
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1132,14 +1128,6 @@ impl NodeType {
             NodeType::SubGraph { .. } => SupportedOp::Unknown(Unknown),
         }
     }
-
-    //   /// Returns the lookups required by a graph
-    //   pub fn required_lookups(&self) -> Vec<LookupOp> {
-    //     match self {
-    //       NodeType::Node(n) => n.opkind.required_lookups(),
-    //       NodeType::SubGraph { model, .. } => model.required_lookups(),
-    //     }
-    //   }
 }
 
 /// The result of a forward pass.

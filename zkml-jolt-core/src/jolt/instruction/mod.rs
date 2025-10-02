@@ -1,6 +1,5 @@
 use onnx_tracer::trace_types::{MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode};
 
-pub mod abs;
 pub mod add;
 pub mod argmax;
 pub mod beq;

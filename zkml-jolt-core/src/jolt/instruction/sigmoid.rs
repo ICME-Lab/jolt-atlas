@@ -38,7 +38,10 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
         let v_b = Some(virtual_tensor_index(11));
         let v_c = Some(virtual_tensor_index(12));
 
-        // ---- Clamp host-side into [-8, 8] and materialize ----
+        
+        // ------------------------------------------------------------------
+        // Step 1. Clamp input into [-8, 8] to avoid overflow in pow2
+        // ------------------------------------------------------------------
         let z_u64 = cycle.ts1_vals();
         let z_i64: Vec<i64> = z_u64.iter().map(|&v| v as u32 as i32 as i64).collect();
         let z_clamped: Vec<i64> = z_i64.iter().map(|&v| v.clamp(-8, 8)).collect();
@@ -67,7 +70,9 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             advice_value: Some(Tensor::from(u64_vec_to_i32_iter(&z_clamped_u64))),
         });
 
-        // zero const for compare
+        // ------------------------------------------------------------------
+        // Step 2. Materialize constant zero for comparisons
+        // ------------------------------------------------------------------
         let zero_tensor = vec![0u64; MAX_TENSOR_SIZE];
         vt.push(ONNXCycle {
             instr: ONNXInstr {
@@ -92,7 +97,9 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             advice_value: None,
         });
 
-        // ge0 = (z_clamped >= 0)
+        // ------------------------------------------------------------------
+        // Step 3. Compute ge0 = (z >= 0), needed for select later
+        // ------------------------------------------------------------------
         let ge0_vals: Vec<u64> = z_clamped
             .iter()
             .map(|&v| if v >= 0 { 1 } else { 0 })
@@ -120,7 +127,9 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             advice_value: None,
         });
 
-        // 2. Negation: -x
+        // ------------------------------------------------------------------
+        // Step 4. Compute -z (for abs)
+        // ------------------------------------------------------------------
         let neg_vals: Vec<u64> = z_clamped
             .iter()
             .map(|&x| {
@@ -152,7 +161,9 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             advice_value: None,
         });
 
-        // 3. Select(cond, x, -x)
+        // ------------------------------------------------------------------
+        // Step 5. abs(z) = select(ge0, z, -z)
+        // ------------------------------------------------------------------
         let abs_vals: Vec<u64> = z_clamped_u64
             .iter()
             .zip(&ge0_vals)
@@ -183,15 +194,14 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             advice_value: None,
         });
 
-        // Precompute abs and pow2 on host for post-values
-        let abs_vals: Vec<u64> = z_clamped.iter().map(|&zi| zi.unsigned_abs()).collect();
-
+        // ------------------------------------------------------------------
+        // Step 6. Compute 2^{|z|}
+        // ------------------------------------------------------------------
         let pow2_vals: Vec<u64> = abs_vals
             .iter()
             .map(|&ai| VirtualPow2::<WORD_SIZE>(ai).to_lookup_output())
             .collect();
 
-        // a = 2^{|z|}
         vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
@@ -215,7 +225,9 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             advice_value: None,
         });
 
-        // Q and Q^2
+        // ------------------------------------------------------------------
+        // Step 7. Load Q and compute Q^2
+        // ------------------------------------------------------------------
         const Q: u64 = 1 << 8;
         let q_tensor = vec![Q; MAX_TENSOR_SIZE];
 
@@ -242,6 +254,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             advice_value: None,
         });
 
+
         let q2_vals: Vec<u64> = q_tensor.iter().map(|&t| t * t).collect();
         vt.push(ONNXCycle {
             instr: ONNXInstr {
@@ -265,6 +278,10 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             },
             advice_value: None,
         });
+
+        // ------------------------------------------------------------------
+        // Step 8. Compute Q/2^{|z|} and Q*2^{|z|}
+        // ------------------------------------------------------------------
 
         // div_Q_pow = Q / 2^{|z|}
         let div_Q_pow_vals: Vec<u64> = pow2_vals.iter().map(|&p| Q / p).collect();
@@ -316,7 +333,11 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             advice_value: None,
         });
 
-        // a = select(ge0, Q/2^{|z|}, Q*2^{|z|})
+        // ------------------------------------------------------------------
+        // Step 9. Select the branch:
+        // if z >= 0 then a = Q/2^{|z|}
+        // else          a = Q*2^{|z|}
+        // ------------------------------------------------------------------
         let a_vals: Vec<u64> = (0..MAX_TENSOR_SIZE)
             .map(|i| {
                 if ge0_vals[i] != 0 {
@@ -349,7 +370,10 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             advice_value: None,
         });
 
-        // b = Q + a
+
+        // ------------------------------------------------------------------
+        // Step 10. b = Q + a
+        // ------------------------------------------------------------------
         let b_vals: Vec<u64> = a_vals.iter().map(|&a| a + Q).collect();
         vt.push(ONNXCycle {
             instr: ONNXInstr {
@@ -374,7 +398,9 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             advice_value: None,
         });
 
-        // c = Q^2 / b   (via DIV subtrace)  <-- don't forget to extend!
+        // ------------------------------------------------------------------
+        // Step 11. c = Q^2 / b   => final σ_Q(z)
+        // ------------------------------------------------------------------
         let c_vals: Vec<u64> = b_vals.iter().map(|&b| (Q * Q) / b).collect();
         vt.push(ONNXCycle {
             instr: ONNXInstr {
@@ -399,7 +425,9 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             advice_value: None,
         });
 
-        // Move to td
+        // ------------------------------------------------------------------
+        // Step 12. Move result to final td
+        // ------------------------------------------------------------------
         vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,

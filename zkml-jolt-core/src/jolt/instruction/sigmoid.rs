@@ -38,7 +38,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
         let v_b = Some(virtual_tensor_index(11));
         let v_c = Some(virtual_tensor_index(12));
 
-        
         // ------------------------------------------------------------------
         // Step 1. Clamp input into [-8, 8] to avoid overflow in pow2
         // ------------------------------------------------------------------
@@ -254,7 +253,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             advice_value: None,
         });
 
-
         let q2_vals: Vec<u64> = q_tensor.iter().map(|&t| t * t).collect();
         vt.push(ONNXCycle {
             instr: ONNXInstr {
@@ -369,7 +367,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             },
             advice_value: None,
         });
-
 
         // ------------------------------------------------------------------
         // Step 10. b = Q + a

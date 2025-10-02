@@ -231,7 +231,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 ts2: None,
                 ts3: None,
                 td: v_probs,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&den_vals))),
+                imm: Some(Tensor::from(den_td.into_iter())),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - 6),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims,

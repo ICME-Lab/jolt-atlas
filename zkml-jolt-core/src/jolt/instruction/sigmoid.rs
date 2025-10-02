@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     jolt::instruction::{
-        VirtualInstructionSequence, abs::AbsInstruction, div::DIVInstruction,
+        VirtualInstructionSequence, 
         virtual_pow2::VirtualPow2,
     },
     utils::u64_vec_to_i32_iter,

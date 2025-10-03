@@ -10,8 +10,7 @@ use crate::jolt::{
     bytecode::{BytecodePreprocessing, BytecodeProof},
     execution_trace::JoltONNXCycle,
     instruction::{
-        VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction,
-        rebase_scale::REBASEInstruction,
+        argmax::ArgMaxInstruction, div::DIVInstruction, rebase_scale::REBASEInstruction, sigmoid::SigmoidInstruction, VirtualInstructionSequence
     },
     instruction_lookups::LookupsProof,
     precompiles::{PrecompilePreprocessing, PrecompileProof},
@@ -105,12 +104,14 @@ where
 {
     #[tracing::instrument(skip_all, name = "Jolt::preprocess")]
     pub fn shared_preprocess(bytecode: Vec<ONNXInstr>) -> JoltSharedPreprocessing {
+        println!("bytecode: {:#?}", bytecode);
         let bytecode: Vec<ONNXInstr> = bytecode
             .into_iter()
             .flat_map(|instr| match instr.opcode {
                 ONNXOpcode::Div => DIVInstruction::<32>::virtual_sequence(instr),
                 ONNXOpcode::ArgMax => ArgMaxInstruction::<32>::virtual_sequence(instr),
                 ONNXOpcode::RebaseScale(_) => REBASEInstruction::<32>::virtual_sequence(instr),
+                ONNXOpcode::Sigmoid => SigmoidInstruction::<32>::virtual_sequence(instr),
                 _ => vec![instr],
             })
             .collect();

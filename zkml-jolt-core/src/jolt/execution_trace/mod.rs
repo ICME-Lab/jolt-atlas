@@ -8,6 +8,7 @@ use crate::{
             VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction,
             rebase_scale::REBASEInstruction, reduce_sum::ReduceSumInstruction, relu::RELU,
             virtual_advice::ADVICEInstruction, virtual_const::ConstInstruction,
+            virtual_pow2::VirtualPow2,
         },
         precompiles::{PrecompileOp, PrecompilePreprocessing, matmult::MatMultPrecompile},
     },
@@ -1137,6 +1138,7 @@ define_lookup_enum!(
     Const: ConstInstruction<WORD_SIZE>,
     Relu: RELU<WORD_SIZE>,
     Output: OUTPUT<WORD_SIZE>,
+    VirtualPow2: VirtualPow2<WORD_SIZE>,
 );
 
 impl JoltONNXCycle {
@@ -1218,6 +1220,11 @@ impl JoltONNXCycle {
             ONNXOpcode::Output => Some(
                 (0..MAX_TENSOR_SIZE)
                     .map(|i| ElementWiseLookup::Output(OUTPUT(ts1[i])))
+                    .collect(),
+            ),
+            ONNXOpcode::VirtualPow2 => Some(
+                (0..MAX_TENSOR_SIZE)
+                    .map(|i| ElementWiseLookup::VirtualPow2(VirtualPow2(ts1[i])))
                     .collect(),
             ),
             _ => None,
@@ -1336,6 +1343,7 @@ impl JoltONNXCycle {
                 ElementWiseLookup::VirtualAssertEq(_) => "VirtualAssertEq",
                 ElementWiseLookup::VirtualMove(_) => "VirtualMove",
                 ElementWiseLookup::VirtualConst(_) => "VirtualConst",
+                ElementWiseLookup::VirtualPow2(_) => "VirtualPow2",
                 ElementWiseLookup::Const(_) => "Const",
                 ElementWiseLookup::Relu(_) => "Relu",
                 ElementWiseLookup::Output(_) => "Output",

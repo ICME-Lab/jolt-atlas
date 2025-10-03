@@ -1,7 +1,7 @@
 use crate::{
     jolt::{
         execution_trace::{JoltONNXCycle, ONNXLookupQuery, WORD_SIZE},
-        instruction::VirtualInstructionSequence,
+        instruction::{VirtualInstructionSequence, div::DIVInstruction},
     },
     utils::u64_vec_to_i32_iter,
 };
@@ -111,6 +111,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(opcode: ONNXOpc
             let output = match cycle.instr.opcode {
                 ONNXOpcode::Gather => gather_output(&cycle),
                 ONNXOpcode::Select => select_output(&cycle),
+                ONNXOpcode::Div => div_output(&cycle),
                 _ => ONNXLookupQuery::<WORD_SIZE>::to_lookup_output(&JoltONNXCycle::from(&cycle)),
             };
 
@@ -204,6 +205,15 @@ fn select_output(cycle: &ONNXCycle) -> Vec<u64> {
     }
 
     output
+}
+
+fn div_output(cycle: &ONNXCycle) -> Vec<u64> {
+    assert_eq!(cycle.instr.opcode, ONNXOpcode::Div);
+    DIVInstruction::<WORD_SIZE>::virtual_trace(cycle.clone())
+        .last()
+        .unwrap()
+        .td_post_vals()
+        .clone()
 }
 
 pub fn materialize_entry_test(opcode: ONNXOpcode) {

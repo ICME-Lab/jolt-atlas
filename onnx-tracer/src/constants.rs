@@ -3,11 +3,6 @@
 /// so all instruction addresses must account for this offset.
 pub const BYTECODE_PREPEND_NOOP: usize = 1;
 
-/// The maximum number of elements allowed in a tensor within the constraint system.
-/// This constant is used to determine the upper bound on tensor reads and writes
-/// performed by the constraint system.
-pub const MAX_TENSOR_SIZE: usize = 64;
-
 /// Similar to register count, but for tensors.
 /// For example the ONNX memory model can be viewed as registers that store tensors instead of scalars.
 ///
@@ -23,8 +18,8 @@ pub const TENSOR_REGISTER_COUNT: u64 = TEST_TENSOR_REGISTER_COUNT + VIRTUAL_TENS
 /// The virtual tensor registers are indexed starting from `TEST_TENSOR_REGISTER_COUNT`.
 /// This is used to ensure that virtual tensor registers do not conflict with the actual tensor registers.
 /// The virtual tensor registers are used to store intermediate results of virtual instructions.
-pub const fn virtual_tensor_index(index: usize) -> usize {
-    index + TEST_TENSOR_REGISTER_COUNT as usize
+pub const fn virtual_tensor_index(index: usize, k: usize, td: usize) -> usize {
+    index + k * td
 }
 
 /// 3 registers (td, ts1, ts2)

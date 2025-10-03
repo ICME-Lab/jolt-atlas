@@ -389,7 +389,7 @@ pub fn new_op_from_onnx(
                 dim: axis,
                 constant_idx: None,
             });
-            // if param_visibility.is_public() {
+
             if let Some(c) = inputs[1].opkind().get_mutable_constant() {
                 inputs[1].decrement_use();
                 deleted_indices.push(inputs.len() - 1);
@@ -398,7 +398,7 @@ pub fn new_op_from_onnx(
                     constant_idx: Some(c.raw_values.map(|x| x as usize)),
                 })
             }
-            // }
+
             if inputs[1].opkind().is_input() {
                 inputs[1].replace_opkind(SupportedOp::Input(crate::ops::Input {
                     scale: 0,

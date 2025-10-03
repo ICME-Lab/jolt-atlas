@@ -61,7 +61,7 @@ jobs:
     name: Build Wasm
     runs-on: ubuntu-latest
     env:
-      RUSTFLAGS: "" # Override global RUSTFLAGS to allow warnings for WASM build
+      RUSTFLAGS: "-Adead_code -Aunused_imports -Aunused_variables -Aunused_mut" # Override global RUSTFLAGS to suppress WASM-specific warnings
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rust-lang/setup-rust-toolchain@v1

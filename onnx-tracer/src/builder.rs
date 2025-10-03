@@ -561,6 +561,25 @@ pub fn addsubmuldiv_model() -> Model {
     b.take(vec![x.0], vec![y])
 }
 
+/// Creates a model with add, sub, mul, div, add operations
+/// Has a trace length of 2^s, finishing with a virtual instruction  
+pub fn addsubmuldivadd_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+    let out_dims = vec![1, 4];
+
+    let x = b.input(out_dims.clone(), 4);
+    let a = b.poly(PolyOp::Add, x, x, out_dims.clone(), 1);
+    let a = b.poly(PolyOp::Add, a, x, out_dims.clone(), 1);
+    let a = b.poly(PolyOp::Add, a, x, out_dims.clone(), 2);
+    let s = b.poly(PolyOp::Sub, a, x, out_dims.clone(), 1);
+    let m = b.poly(PolyOp::Mult, a, s, out_dims.clone(), 1);
+    let d = b.div(2, m, out_dims.clone(), 1);
+    let y = b.poly(PolyOp::Add, d, s, out_dims.clone(), 1);
+
+    b.take(vec![x.0], vec![y])
+}
+
 /// [(0, input, []), (1, add, [0, 0]), (2, sub, [1, 0]), (3, mul, [1, 2]), (4, add, [2, 3]), (5, div, [4]), (6, div, [5]), (7, output, [6])]
 pub fn addsubmuldivdiv_model() -> Model {
     const SCALE: i32 = 7;
@@ -1464,6 +1483,68 @@ pub fn triple_matmult_model() -> Model {
     let final_result = b.matmult(second_result, weight_matrix3, vec![1, 2], 1);
 
     b.take(vec![input.0], vec![final_result])
+}
+
+/// Simple MLP Small model that recreates the exact bytecode structure.
+///
+/// This model matches the bytecode from the test case:
+/// 1. Takes an input tensor of shape [1, 4] with scale 7
+/// 2. Matrix multiplies with a 4x4 weight matrix (Einsum "mk,nk->mn", scale 14)
+/// 3. Divides by 128 to rescale back to scale 7
+/// 4. Adds a bias vector [1, 4] with scale 7
+/// 5. Applies ReLU activation with scale 7
+/// 6. Outputs the result of shape [1, 4]
+///
+/// The exact values match those seen in the bytecode:
+/// - Weight matrix: [16, -11, 8, 29, -14, 53, 3, -3, 8, -26, 100, 15, -15, 1, -17, 47]
+/// - Bias vector: [82, 71, 30, 76]
+///
+/// Operations sequence: Input → MatMult → Div → Add → ReLU → Output
+///
+/// # Returns
+/// A `Model` representing the simple MLP small computation graph
+pub fn simple_mlp_small_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 4], scale 7)
+    let input = b.input(vec![1, 4], 1);
+
+    // Node 1: Weight matrix constant (shape [4, 4], scale 7)
+    // Exact values from the bytecode
+    let mut weights: Tensor<i32> = Tensor::new(
+        Some(&[
+            16, -11, 8, 29, // First row
+            -14, 53, 3, -3, // Second row
+            8, -26, 100, 15, // Third row
+            -15, 1, -17, 47, // Fourth row
+        ]),
+        &[4, 4],
+    )
+    .unwrap();
+    weights.set_scale(SCALE);
+    let weight_matrix = b.const_tensor(weights, vec![4, 4], 1);
+
+    // Node 2: Matrix multiplication (Einsum "mk,nk->mn"): [1, 4] × [4, 4] → [1, 4]
+    // This creates scale 14 (7 + 7)
+    let matmul_result = b.matmult(input, weight_matrix, vec![1, 4], 1);
+
+    // Node 3: Division by 128 to rescale from 14 back to 7
+    let rescaled = b.div(128, matmul_result, vec![1, 4], 1);
+
+    // Node 4: Bias vector constant (shape [1, 4], scale 7)
+    // Exact values from the bytecode
+    let mut bias: Tensor<i32> = Tensor::new(Some(&[82, 71, 30, 76]), &[1, 4]).unwrap();
+    bias.set_scale(SCALE);
+    let bias_vector = b.const_tensor(bias, vec![1, 4], 1);
+
+    // Node 5: Add bias: [1, 4] + [1, 4] → [1, 4] (scale 7)
+    let biased = b.poly(PolyOp::Add, rescaled, bias_vector, vec![1, 4], 1);
+
+    // Node 7: ReLU activation: [1, 4] → [1, 4] (scale 7)
+    let output = b.relu(biased, vec![1, 4], 1);
+
+    b.take(vec![input.0], vec![output])
 }
 
 /// Matrix multiplication model with RebaseScale wrapper for testing ONNX binary compilation scenarios.

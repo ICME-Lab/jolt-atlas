@@ -4,7 +4,7 @@ use crate::jolt::{
         read_raf_checking::ReadRafSumcheck,
     },
     dag::{stage::SumcheckStages, state_manager::StateManager},
-    executor::instructions::InstructionLookup,
+    executor::instructions::{InstructionLookup, VirtualInstructionSequence, div::DivInstruction},
     lookup_table::{LookupTables, RangeCheckTable, ReLUTable},
     pcs::SumcheckId,
     sumcheck::SumcheckInstance,
@@ -16,7 +16,13 @@ use jolt_core::{
     poly::{commitment::commitment_scheme::CommitmentScheme, eq_poly::EqPolynomial},
     transcripts::Transcript,
     utils::{math::Math, thread::unsafe_allocate_zero_vec},
-    zkvm::witness::{DTH_ROOT_OF_K, compute_d_parameter},
+    zkvm::{
+        lookup_table::{
+            equal::EqualTable, valid_div0::ValidDiv0Table,
+            valid_signed_remainder::ValidSignedRemainderTable,
+        },
+        witness::{DTH_ROOT_OF_K, compute_d_parameter},
+    },
 };
 use onnx_tracer::{
     graph::model::Model,
@@ -146,11 +152,13 @@ pub struct BytecodePreprocessing {
     /// Maps the memory address of each instruction in the bytecode to its "virtual" address.
     /// See Section 6.1 of the Jolt paper, "Reflecting the program counter". The virtual address
     /// is the one used to keep track of the next (potentially virtual) instruction to execute.
-    /// Key: (ELF address, virtual sequence index or 0)
-    pub tensor_virtual_pc_map: BTreeMap<(usize, usize), usize>,
+    /// Key: (opcode address, tensor sequence index, virtual sequence index or 0)
+    pub tensor_virtual_pc_map: BTreeMap<(usize, usize, usize), usize>,
     /// Virtual tensor address map
     /// Maps (raw tensor address, tensor sequence index or 0) to virtual memory address
     pub vt_address_map: BTreeMap<(usize, usize), usize>,
+    /// Used to expand the virtual trace
+    pub max_td: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -171,6 +179,7 @@ pub struct JoltONNXBytecode {
     /// Element-wise operations are decomposed into sequences of scalar instructions during preprocessing.
     /// This field tracks the remaining operations in such sequences for proper execution order.
     pub tensor_sequence_remaining: Option<usize>,
+    pub virtual_sequence_remaining: Option<usize>,
 }
 
 impl JoltONNXBytecode {
@@ -183,6 +192,7 @@ impl JoltONNXBytecode {
             ts2: 0,
             imm: 0,
             tensor_sequence_remaining: None,
+            virtual_sequence_remaining: None,
         }
     }
 
@@ -196,6 +206,7 @@ impl JoltONNXBytecode {
             ts2: 0,
             imm: 0,
             tensor_sequence_remaining: None,
+            virtual_sequence_remaining: None,
         }
     }
 
@@ -296,10 +307,11 @@ impl JoltONNXBytecode {
             ONNXOpcode::Noop
         );
 
-        flags[CircuitFlags::InlineSequenceInstruction as usize] =
-            self.tensor_sequence_remaining.is_some();
         flags[CircuitFlags::DoNotUpdateUnexpandedPC as usize] =
-            self.tensor_sequence_remaining.unwrap_or(0) != 0;
+            !(self.tensor_sequence_remaining.unwrap_or(0) == 0 && self.virtual_sequence_remaining.unwrap_or(0) == 0);
+
+        flags[CircuitFlags::InlineSequenceInstruction as usize] =
+            self.tensor_sequence_remaining.is_some() || self.virtual_sequence_remaining.is_some();
 
         flags
     }
@@ -313,6 +325,12 @@ impl InstructionLookup<WORD_SIZE> for JoltONNXBytecode {
             ONNXOpcode::Mul => Some(RangeCheckTable.into()),
             ONNXOpcode::Constant => Some(RangeCheckTable.into()),
             ONNXOpcode::Relu => Some(ReLUTable.into()),
+            ONNXOpcode::VirtualConst => Some(RangeCheckTable.into()),
+            ONNXOpcode::VirtualAdvice => Some(RangeCheckTable.into()),
+            ONNXOpcode::VirtualMove => Some(RangeCheckTable.into()),
+            ONNXOpcode::VirtualAssertValidSignedRemainder => Some(ValidSignedRemainderTable.into()),
+            ONNXOpcode::VirtualAssertValidDiv0 => Some(ValidDiv0Table.into()),
+            ONNXOpcode::VirtualAssertEq => Some(EqualTable.into()),
             _ => None,
         }
     }
@@ -324,7 +342,7 @@ impl BytecodePreprocessing {
     where
         ModelFunc: Fn() -> Model,
     {
-        let (mut bytecode, memory_K, vt_address_map) = Self::inline_tensor_instrs(model);
+        let (mut bytecode, memory_K, vt_address_map, max_td) = Self::inline_tensor_instrs(model);
         // Append an addressed no-op instruction at the end to simplify the PC logic in the VM
         bytecode.push(JoltONNXBytecode::addressed_no_op(
             bytecode.last().map_or(0, |cycle| cycle.address) + 1,
@@ -336,7 +354,8 @@ impl BytecodePreprocessing {
                 tensor_virtual_pc_map.insert(
                     (
                         instruction.address,
-                        instruction.tensor_sequence_remaining.unwrap_or(0)
+                        instruction.tensor_sequence_remaining.unwrap_or(0),
+                        instruction.virtual_sequence_remaining.unwrap_or(0),
                     ),
                     virtual_address
                 ),
@@ -346,7 +365,7 @@ impl BytecodePreprocessing {
         }
         // Bytecode: Prepend a single no-op instruction
         bytecode.insert(0, JoltONNXBytecode::no_op());
-        assert_eq!(tensor_virtual_pc_map.insert((0, 0), 0), None);
+        assert_eq!(tensor_virtual_pc_map.insert((0, 0, 0), 0), None);
         let d = compute_d_parameter(bytecode.len().next_power_of_two());
         // Make log(code_size) a multiple of d
         let code_size = (bytecode.len().next_power_of_two().log_2().div_ceil(d) * d)
@@ -362,21 +381,24 @@ impl BytecodePreprocessing {
             memory_K,
             tensor_virtual_pc_map,
             vt_address_map,
+            max_td,
         }
     }
 
-    pub fn inline_tensor_instrs<ModelFunc>(
-        model: ModelFunc,
-    ) -> (
-        Vec<JoltONNXBytecode>,
-        usize,
-        BTreeMap<(usize, usize), usize>,
-    )
+    pub fn inline_tensor_instrs<ModelFunc>(model: ModelFunc) -> RawToJoltResult
     where
         ModelFunc: Fn() -> Model,
     {
         let bytecode = onnx_tracer::decode_model(model());
-        println!("program bytecode: {bytecode:#?}");
+        println!("Original bytecode: {bytecode:#?}");
+        // Get largest td value
+        let max_td = bytecode
+            .iter()
+            .filter_map(|instr| instr.td)
+            .max()
+            .unwrap_or(0);
+        let bytecode = Self::expand_raw_bytecode(bytecode, max_td);
+
         let mut preprocessed_bytecode: Vec<JoltONNXBytecode> = Vec::new();
 
         // Memory management and instruction preprocessing:
@@ -408,11 +430,11 @@ impl BytecodePreprocessing {
                 raw_to_jolt_bytecode(instruction, &mut vt_address, &mut vt_address_map);
             preprocessed_bytecode.extend(jolt_instructions);
         }
-        println!("preprocessed bytecode: {preprocessed_bytecode:#?}");
         (
             preprocessed_bytecode,
             vt_address.next_power_of_two(),
             vt_address_map,
+            max_td,
         )
     }
 
@@ -422,10 +444,28 @@ impl BytecodePreprocessing {
             .get(&(
                 self.bytecode[i].address,
                 self.bytecode[i].tensor_sequence_remaining.unwrap_or(0),
+                self.bytecode[i].virtual_sequence_remaining.unwrap_or(0),
             ))
             .unwrap()
     }
+
+    fn expand_raw_bytecode(bytecode: Vec<ONNXInstr>, max_td: usize) -> Vec<ONNXInstr> {
+        bytecode
+            .into_iter()
+            .flat_map(|instr| match instr.opcode {
+                ONNXOpcode::Div => DivInstruction::<32>::virtual_sequence(instr, max_td),
+                _ => vec![instr],
+            })
+            .collect()
+    }
 }
+
+pub type RawToJoltResult = (
+    Vec<JoltONNXBytecode>,
+    usize,
+    BTreeMap<(usize, usize), usize>,
+    usize,
+);
 
 pub fn raw_to_jolt_bytecode(
     raw: ONNXInstr,
@@ -479,11 +519,11 @@ pub fn raw_to_jolt_bytecode(
                     vt_address_map.insert(
                         (
                             zkvm_address(raw.td),
-                            tensor_sequence_remaining(active_output_elements, i),
+                            tensor_sequence_remaining(active_output_elements, i)
                         ),
-                        addr,
+                        addr
                     ),
-                    None
+                    None,
                 );
                 *vt_address += 1;
                 addr
@@ -503,6 +543,7 @@ pub fn raw_to_jolt_bytecode(
             ts2: vts2[i] as u64,
             imm: imm[i],
             tensor_sequence_remaining: Some(tensor_sequence_remaining(active_output_elements, i)),
+            virtual_sequence_remaining: raw.virtual_sequence_remaining,
         });
     }
     jolt_instructions

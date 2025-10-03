@@ -19,8 +19,7 @@ use tabled::Table;
 use tract_onnx::{
     prelude::{
         tract_itertools::Itertools, Framework, Graph, InferenceFact, InferenceModelExt,
-        SymbolValues, TypedFact, TypedOp, TDim, 
-        Node as OnnxNode,
+        Node as OnnxNode, SymbolValues, TDim, TypedFact, TypedOp,
     },
     tract_core::internal::DatumType,
     tract_hir::ops::scan::Scan,
@@ -583,31 +582,42 @@ impl Model {
 
         let mut input_idx = 0;
         let mut remappings = BTreeMap::<usize, usize>::new();
-        
+
         for (i, n) in graph.nodes.iter().enumerate() {
             match n.op().downcast_ref::<Scan>() {
                 Some(b) => {
                     let subgraph_node = Self::process_subgraph_node(
-                        i, n, b, &nodes, _run_args, scales, symbol_values,
+                        i,
+                        n,
+                        b,
+                        &nodes,
+                        _run_args,
+                        scales,
+                        symbol_values,
                     );
                     nodes.insert(i, subgraph_node);
                 }
                 None => {
-                    let mut node = Node::new(n.clone(), &mut nodes, scales, symbol_values, &remappings)
-                        .expect("Failed to create node");
+                    let mut node =
+                        Node::new(n.clone(), &mut nodes, scales, symbol_values, &remappings)
+                            .expect("Failed to create node");
 
                     if node.opkind.requires_shape_equality() {
                         node.homogenize_input_shapes(&mut nodes);
                     }
 
-                    Self::apply_input_scale_override(&mut node, &override_input_scales, &mut input_idx);
+                    Self::apply_input_scale_override(
+                        &mut node,
+                        &override_input_scales,
+                        &mut input_idx,
+                    );
                     Self::apply_output_scale_override(&mut node, i, &override_output_scales);
 
                     Self::handle_node_insertion(&mut nodes, &mut remappings, i, node);
                 }
             }
         }
-        
+
         Self::remove_unused_nodes(&mut nodes);
         Self::ensure_consecutive_indices(&mut nodes);
 
@@ -630,13 +640,13 @@ impl Model {
             .iter()
             .map(|i| nodes.get(&i.node).unwrap().out_scales()[0])
             .collect::<Vec<_>>();
-            
+
         let input_mappings = Self::build_input_mappings(&scan_op.input_mapping);
         let output_mappings = Self::build_output_mappings(&scan_op.output_mapping);
-        
+
         let input_state_idx = input_state_idx(&input_mappings);
         let output_state_idx = output_state_idx(&output_mappings);
-        
+
         let output_scale_override = Self::build_output_scale_override(
             &input_state_idx,
             output_state_idx,
@@ -653,18 +663,18 @@ impl Model {
             Some(input_scales.clone()),
             Some(output_scale_override),
         );
-        
+
         let subgraph = ParsedNodes {
             nodes: subgraph_nodes,
             inputs: model.inputs.iter().map(|o| o.node).collect(),
             outputs: model.outputs.iter().map(|o| (o.node, o.slot)).collect(),
         };
-        
+
         let subgraph_model = Model {
             graph: subgraph,
             tracer: Tracer::default(),
         };
-        
+
         let out_dims = node_output_shapes(node, symbol_values).unwrap();
         let out_scales = Self::extract_output_scales(&scan_op.output_mapping, &subgraph_model);
 
@@ -737,7 +747,7 @@ impl Model {
         body: &Graph<TypedFact, Box<dyn TypedOp>>,
     ) -> HashMap<usize, crate::Scale> {
         let mut output_scale_override = HashMap::new();
-        
+
         for (input_idx, output_idx) in input_state_idx.iter().zip(output_state_idx) {
             let input_scale = input_scales[*input_idx];
             let mut traversed_len = 0;
@@ -750,7 +760,7 @@ impl Model {
                 traversed_len += mapping_len;
             }
         }
-        
+
         output_scale_override
     }
 
@@ -820,8 +830,9 @@ impl Model {
     ) {
         // Check if this node is a RebaseScale and expand it into two separate nodes
         if let SupportedOp::RebaseScale(rebase_scale) = &node.opkind {
-            let (inner_node, div_node) = Self::expand_rebase_scale_node(&node, rebase_scale, nodes.len());
-            
+            let (inner_node, div_node) =
+                Self::expand_rebase_scale_node(&node, rebase_scale, nodes.len());
+
             // Insert the inner node first
             let inner_node_idx = inner_node.idx;
             nodes.insert(inner_node_idx, NodeType::Node(inner_node));

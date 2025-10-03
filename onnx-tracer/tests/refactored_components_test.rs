@@ -7,7 +7,7 @@ mod refactored_components_tests {
     use onnx_tracer::{
         graph::{
             node::Node,
-            utilities::{create_input_node, create_const_node, create_polyop_node},
+            utilities::{create_const_node, create_input_node, create_polyop_node},
         },
         ops::poly::PolyOp,
         tensor::Tensor,
@@ -71,7 +71,7 @@ mod refactored_components_tests {
         let const_data = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[2, 2]).unwrap();
         let raw_data = Tensor::<f32>::new(Some(&[1.0, 2.0, 3.0, 4.0]), &[2, 2]).unwrap();
         let const_node = create_const_node(const_data.clone(), raw_data, 7, vec![2, 2], 1, 1);
-        
+
         let immediate = const_node.extract_immediate_value();
         assert!(immediate.is_some());
         let imm_tensor = immediate.unwrap();
@@ -88,7 +88,7 @@ mod refactored_components_tests {
     fn test_create_scalar_immediate_tensor() {
         let result = Node::create_scalar_immediate_tensor(42, 6);
         assert!(result.is_some());
-        
+
         let tensor = result.unwrap();
         assert_eq!(tensor.inner.len(), 6);
         assert!(tensor.inner.iter().all(|&x| x == 42));
@@ -97,17 +97,10 @@ mod refactored_components_tests {
     /// Test that the decode method still works correctly after refactoring
     #[test]
     fn test_decode_method_after_refactoring() {
-        let node = create_polyop_node(
-            PolyOp::Add,
-            7,
-            vec![(0, 0), (1, 0)],
-            vec![2, 2],
-            2,
-            1,
-        );
+        let node = create_polyop_node(PolyOp::Add, 7, vec![(0, 0), (1, 0)], vec![2, 2], 2, 1);
 
         let instr = node.decode(5);
-        
+
         // Verify the decoded instruction has correct structure
         assert_eq!(instr.address, 5);
         assert_eq!(instr.ts1, Some(0));
@@ -125,9 +118,9 @@ mod model_refactor_tests {
     use onnx_tracer::{
         graph::{
             model::Model,
-            node::{Node, SupportedOp, RebaseScale},
+            node::{Node, RebaseScale, SupportedOp},
         },
-        ops::{poly::PolyOp, lookup::LookupOp, Input, InputType},
+        ops::{lookup::LookupOp, poly::PolyOp, Input, InputType},
     };
     use std::collections::{BTreeMap, HashMap};
 
@@ -201,11 +194,15 @@ mod model_refactor_tests {
             num_uses: 2,
         };
 
-        let (inner_node, div_node) = Model::expand_rebase_scale_node(&original_node, &rebase_scale, 10);
+        let (inner_node, div_node) =
+            Model::expand_rebase_scale_node(&original_node, &rebase_scale, 10);
 
         // Verify inner node
         assert_eq!(inner_node.idx, 10);
-        assert!(matches!(inner_node.opkind, SupportedOp::Linear(PolyOp::Add)));
+        assert!(matches!(
+            inner_node.opkind,
+            SupportedOp::Linear(PolyOp::Add)
+        ));
         assert_eq!(inner_node.out_scale, 7); // original_scale
         assert_eq!(inner_node.num_uses, 1);
         assert_eq!(inner_node.inputs, vec![(0, 0)]);

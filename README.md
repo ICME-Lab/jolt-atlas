@@ -1,6 +1,21 @@
-# JOLT Atlas
+# JOLT Atla## Benchmarks
 
-JOLT Atlas is a zero-knowledge machine learning (zkML) framework that extends the [JOLT](https://github.com/a16z/jolt) proving system to support ML inference verification from ONNX models.
+We benchmarked a multi-classification model across different zkML projects:
+
+| Project    | Latency | Notes                        |
+| ---------- | ------- | ---------------------------- |
+| zkml-jolt  | \~0.7s  |                              |
+| mina-zkml  | \~2.0s  |                              |
+| ezkl       | 4–5s    |                              |
+| deep-prove | N/A     | doesn't support gather op    |
+| zk-torch   | N/A     | doesn't support reduceSum op |
+
+We also benchmarked an MLP model:
+
+| Project    | Latency | Notes                |
+| ---------- | ------- | -------------------- |
+| zkml-jolt  | \~800ms |                      |
+| deep-prove | \~200ms | lacks MCC            |
 
 ## Background
 
@@ -32,6 +47,9 @@ cargo run -r -- profile --name multi-class --format chrome
 
 # sentiment benchmark
 cargo run -r -- profile --name sentiment --format chrome
+
+# mlp benchmark
+cargo run -r -- profile --name mlp --format chrome
 ```
 
 When using `--format chrome`, the benchmark generates trace files (trace-<timestamp>.json) viewable in Chrome’s tracing tool:

@@ -43,7 +43,10 @@ impl BytecodePreprocessing {
     pub fn preprocess(mut bytecode: Vec<ONNXInstr>) -> Self {
         let mut virtual_address_map = BTreeMap::new();
         let mut virtual_address = 1; // Account for no-op instruction prepended to bytecode
+        // println!("bytecode: {:#?}", bytecode);
         for instruction in bytecode.iter_mut() {
+            println!("virtual_address_map: {:#?}", virtual_address_map);
+            println!("instruction: {:#?}", instruction);
             assert_eq!(
                 virtual_address_map.insert(
                     (
@@ -52,7 +55,12 @@ impl BytecodePreprocessing {
                     ),
                     virtual_address
                 ),
-                None
+                None,
+                "virtual_address_map already contains this key: {:?}",
+                (
+                    instruction.address,
+                    instruction.virtual_sequence_remaining.unwrap_or(0)
+                )
             );
             virtual_address += 1;
         }

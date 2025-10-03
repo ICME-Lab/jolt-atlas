@@ -627,6 +627,7 @@ pub enum ONNXOpcode {
     ReduceMax,
     Select,
     Broadcast,
+    Abs,
 
     // Virtual instructions
     VirtualAdvice,
@@ -678,6 +679,7 @@ impl ONNXOpcode {
             ONNXOpcode::Select => 1u64 << 28,
             ONNXOpcode::ReduceMax => 1u64 << 29,
             ONNXOpcode::Broadcast => 1u64 << 30,
+            ONNXOpcode::Abs => 1u64 << 31,
             _ => panic!("ONNXOpcode {self:#?} not implemented in into_bitflag"),
         }
     }

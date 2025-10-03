@@ -19,7 +19,7 @@ use tabled::Table;
 use tract_onnx::{
     prelude::{
         tract_itertools::Itertools, Framework, Graph, InferenceFact, InferenceModelExt,
-        SymbolValues, TypedFact, TypedOp,
+        Node as OnnxNode, SymbolValues, TDim, TypedFact, TypedOp,
     },
     tract_core::internal::DatumType,
     tract_hir::ops::scan::Scan,
@@ -576,198 +576,308 @@ impl Model {
         override_input_scales: Option<Vec<crate::Scale>>,
         override_output_scales: Option<HashMap<usize, crate::Scale>>,
     ) -> BTreeMap<usize, NodeType> {
-        // use crate::graph::node_output_shapes;
         let mut nodes = BTreeMap::<usize, NodeType>::new();
         // Insert dummy node at idx 0, which will be replaced with the actual Input node later.
         nodes.insert(0, NodeType::Node(Node::default()));
 
         let mut input_idx = 0;
-        // We create broadcasting nodes each time input's expected dim doesn't match the fed input's dim.
-        // This creates a mismatch between the node's indexes in the `graph` and in the `nodes` BTreeMap
-        // This counter allows us to keep track of the mapping between a node position in `graph` and its position in `nodes`.
         let mut remappings = BTreeMap::<usize, usize>::new();
+
         for (i, n) in graph.nodes.iter().enumerate() {
-            // Extract the slope layer hyperparams
             match n.op().downcast_ref::<Scan>() {
                 Some(b) => {
-                    let model = b.body.clone();
-                    let input_scales = n
-                        .inputs
-                        .iter()
-                        .map(|i| nodes.get(&i.node).unwrap().out_scales()[0])
-                        .collect::<Vec<_>>();
-                    let mut input_mappings = vec![];
-                    for mapping in &b.input_mapping {
-                        match mapping {
-                            tract_onnx::tract_hir::ops::scan::InputMapping::Scan(info) => {
-                                input_mappings.push(InputMapping::Stacked {
-                                    axis: info.axis,
-                                    chunk: info.chunk as usize,
-                                });
-                            }
-                            tract_onnx::tract_hir::ops::scan::InputMapping::State => {
-                                input_mappings.push(InputMapping::State);
-                            }
-                            tract_onnx::tract_hir::ops::scan::InputMapping::Full => {
-                                input_mappings.push(InputMapping::Full);
-                            }
-                        }
-                    }
-                    let input_state_idx = input_state_idx(&input_mappings);
-                    let mut output_mappings = vec![];
-                    for mapping in b.output_mapping.iter() {
-                        let mut mappings = vec![];
-                        if let Some(outlet) = mapping.last_value_slot {
-                            mappings.push(OutputMapping::Single {
-                                outlet,
-                                is_state: mapping.state,
-                            });
-                        }
-                        if let Some(last) = mapping.scan {
-                            mappings.push(OutputMapping::Stacked {
-                                outlet: last.0,
-                                axis: last.1.axis,
-                                is_state: false,
-                            });
-                        }
-                        output_mappings.push(mappings);
-                    }
-                    let output_state_idx = output_state_idx(&output_mappings);
-                    let mut output_scale_override = HashMap::new();
-                    // if input_state_idx and output_state_idx have mismatched
-                    // scales we need to rebase the scale of the output node
-                    for (input_idx, output_idx) in input_state_idx.iter().zip(output_state_idx) {
-                        let input_scale = input_scales[*input_idx]; // output mappings is a vec of vec. we need to find
-                                                                    // the outer index of the output node  we want to rebase.
-                        let mut traversed_len = 0;
-                        for (outer_idx, mappings) in output_mappings.iter().enumerate() {
-                            let mapping_len = mappings.len();
-                            if traversed_len + mapping_len > output_idx {
-                                let output_node_idx = b.body.outputs[outer_idx].node;
-                                output_scale_override.insert(output_node_idx, input_scale);
-                            }
-                            traversed_len += mapping_len;
-                        }
-                    }
-                    let subgraph_nodes = Self::nodes_from_graph(
-                        &model,
+                    let subgraph_node = Self::process_subgraph_node(
+                        i,
+                        n,
+                        b,
+                        &nodes,
                         _run_args,
                         scales,
                         symbol_values,
-                        Some(input_scales.clone()),
-                        Some(output_scale_override),
                     );
-                    let subgraph = ParsedNodes {
-                        nodes: subgraph_nodes,
-                        inputs: model.inputs.iter().map(|o| o.node).collect(),
-                        outputs: model.outputs.iter().map(|o| (o.node, o.slot)).collect(),
-                    };
-                    let om = Model {
-                        graph: subgraph,
-                        tracer: Tracer::default(),
-                    }; // TODO: Figure out tracing for subgraphs
-                    let out_dims = node_output_shapes(n, symbol_values).unwrap();
-                    let mut output_scales = BTreeMap::new();
-                    for (i, _mapping) in b.output_mapping.iter().enumerate() {
-                        for mapping in b.output_mapping.iter() {
-                            if let Some(outlet) = mapping.last_value_slot {
-                                output_scales.insert(outlet, om.graph.get_output_scales()[i]);
-                            }
-                            if let Some(last) = mapping.scan {
-                                output_scales.insert(last.0, om.graph.get_output_scales()[i]);
-                            }
-                        }
-                    }
-                    let out_scales = output_scales.into_values().collect_vec();
-                    nodes.insert(
-                        i,
-                        NodeType::SubGraph {
-                            model: om,
-                            inputs: n.inputs.iter().map(|i| (i.node, i.slot)).collect_vec(),
-                            idx: i,
-                            output_mappings,
-                            input_mappings,
-                            out_dims,
-                            out_scales,
-                        },
-                    );
+                    nodes.insert(i, subgraph_node);
                 }
                 None => {
-                    let mut n =
-                        Node::new(n.clone(), &mut nodes, scales, symbol_values, &remappings);
+                    let mut node =
+                        Node::new(n.clone(), &mut nodes, scales, symbol_values, &remappings)
+                            .expect("Failed to create node");
 
-                    if n.opkind.requires_shape_equality() {
-                        n.homogenize_input_shapes(&mut nodes);
+                    if node.opkind.requires_shape_equality() {
+                        node.homogenize_input_shapes(&mut nodes);
                     }
 
-                    if let Some(ref scales) = override_input_scales {
-                        if let Some(inp) = n.opkind.get_input() {
-                            let scale = scales[input_idx];
-                            n.opkind = SupportedOp::Input(Input {
-                                scale,
-                                datum_type: inp.datum_type,
-                            });
-                            input_idx += 1;
-                            n.out_scale = scale;
-                        }
-                    }
-                    if let Some(ref scales) = override_output_scales {
-                        if scales.contains_key(&i) {
-                            let scale_diff = n.out_scale - scales[&i];
-                            n.opkind = if scale_diff > 0 {
-                                RebaseScale::rebase(n.opkind, scales[&i], n.out_scale, 1)
-                            } else {
-                                RebaseScale::rebase_up(n.opkind, scales[&i], n.out_scale)
-                            };
-                            n.out_scale = scales[&i];
-                        }
-                    }
+                    Self::apply_input_scale_override(
+                        &mut node,
+                        &override_input_scales,
+                        &mut input_idx,
+                    );
+                    Self::apply_output_scale_override(&mut node, i, &override_output_scales);
 
-                    // Check if this node is a RebaseScale and expand it into two separate nodes
-                    if let SupportedOp::RebaseScale(rebase_scale) = &n.opkind {
-                        // Create first node: the inner operation
-                        let inner_node_idx = nodes.len();
-                        let inner_node = Node {
-                            idx: inner_node_idx,
-                            opkind: (*rebase_scale.inner).clone(),
-                            inputs: n.inputs.clone(),
-                            out_dims: n.out_dims.clone(),
-                            out_scale: rebase_scale.original_scale,
-                            num_uses: 1, // Will be used by the div node
-                        };
-
-                        // Insert the inner node first
-                        nodes.insert(inner_node_idx, NodeType::Node(inner_node));
-
-                        // Create second node: the division operation
-                        let div_node_idx = nodes.len();
-                        let div_node = Node {
-                            idx: div_node_idx,
-                            opkind: SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div {
-                                denom: crate::ops::utils::F32(rebase_scale.multiplier as f32),
-                            }),
-                            inputs: vec![(inner_node_idx, 0)], // Takes output from inner node
-                            out_dims: n.out_dims.clone(),
-                            out_scale: rebase_scale.target_scale,
-                            num_uses: n.num_uses, // Inherits the usage count from original node
-                        };
-
-                        // Insert the div node and set up remapping to point to the final div node
-                        remappings.insert(i, div_node_idx);
-                        nodes.insert(div_node_idx, NodeType::Node(div_node));
-                    } else {
-                        remappings.insert(i, n.idx);
-                        nodes.insert(n.idx, NodeType::Node(n));
-                    }
+                    Self::handle_node_insertion(&mut nodes, &mut remappings, i, node);
                 }
             }
         }
-        Self::remove_unused_nodes(&mut nodes);
 
-        // Post-process to ensure consecutive node indices
+        Self::remove_unused_nodes(&mut nodes);
         Self::ensure_consecutive_indices(&mut nodes);
 
         nodes
+    }
+
+    /// Processes a subgraph node (Scan operation) and returns the corresponding NodeType
+    fn process_subgraph_node(
+        idx: usize,
+        node: &OnnxNode<TypedFact, Box<dyn TypedOp>>,
+        scan_op: &Scan,
+        nodes: &BTreeMap<usize, NodeType>,
+        run_args: &RunArgs,
+        scales: &VarScales,
+        symbol_values: &SymbolValues,
+    ) -> NodeType {
+        let model = scan_op.body.clone();
+        let input_scales = node
+            .inputs
+            .iter()
+            .map(|i| nodes.get(&i.node).unwrap().out_scales()[0])
+            .collect::<Vec<_>>();
+
+        let input_mappings = Self::build_input_mappings(&scan_op.input_mapping);
+        let output_mappings = Self::build_output_mappings(&scan_op.output_mapping);
+
+        let input_state_idx = input_state_idx(&input_mappings);
+        let output_state_idx = output_state_idx(&output_mappings);
+
+        let output_scale_override = Self::build_output_scale_override(
+            &input_state_idx,
+            output_state_idx,
+            &input_scales,
+            &output_mappings,
+            &scan_op.body,
+        );
+
+        let subgraph_nodes = Self::nodes_from_graph(
+            &model,
+            run_args,
+            scales,
+            symbol_values,
+            Some(input_scales.clone()),
+            Some(output_scale_override),
+        );
+
+        let subgraph = ParsedNodes {
+            nodes: subgraph_nodes,
+            inputs: model.inputs.iter().map(|o| o.node).collect(),
+            outputs: model.outputs.iter().map(|o| (o.node, o.slot)).collect(),
+        };
+
+        let subgraph_model = Model {
+            graph: subgraph,
+            tracer: Tracer::default(),
+        };
+
+        let out_dims = node_output_shapes(node, symbol_values).unwrap();
+        let out_scales = Self::extract_output_scales(&scan_op.output_mapping, &subgraph_model);
+
+        NodeType::SubGraph {
+            model: subgraph_model,
+            inputs: node.inputs.iter().map(|i| (i.node, i.slot)).collect_vec(),
+            idx,
+            output_mappings,
+            input_mappings,
+            out_dims,
+            out_scales,
+        }
+    }
+
+    /// Builds input mappings from ONNX scan input mapping
+    fn build_input_mappings(
+        input_mapping: &[tract_onnx::tract_hir::ops::scan::InputMapping],
+    ) -> Vec<InputMapping> {
+        let mut input_mappings = vec![];
+        for mapping in input_mapping {
+            match mapping {
+                tract_onnx::tract_hir::ops::scan::InputMapping::Scan(info) => {
+                    input_mappings.push(InputMapping::Stacked {
+                        axis: info.axis,
+                        chunk: info.chunk as usize,
+                    });
+                }
+                tract_onnx::tract_hir::ops::scan::InputMapping::State => {
+                    input_mappings.push(InputMapping::State);
+                }
+                tract_onnx::tract_hir::ops::scan::InputMapping::Full => {
+                    input_mappings.push(InputMapping::Full);
+                }
+            }
+        }
+        input_mappings
+    }
+
+    /// Builds output mappings from ONNX scan output mapping
+    fn build_output_mappings(
+        output_mapping: &[tract_onnx::tract_hir::ops::scan::OutputMapping<TDim>],
+    ) -> Vec<Vec<OutputMapping>> {
+        let mut output_mappings = vec![];
+        for mapping in output_mapping.iter() {
+            let mut mappings = vec![];
+            if let Some(outlet) = mapping.last_value_slot {
+                mappings.push(OutputMapping::Single {
+                    outlet,
+                    is_state: mapping.state,
+                });
+            }
+            if let Some(last) = mapping.scan {
+                mappings.push(OutputMapping::Stacked {
+                    outlet: last.0,
+                    axis: last.1.axis,
+                    is_state: false,
+                });
+            }
+            output_mappings.push(mappings);
+        }
+        output_mappings
+    }
+
+    /// Builds output scale override map for subgraph nodes
+    fn build_output_scale_override(
+        input_state_idx: &[usize],
+        output_state_idx: Vec<usize>,
+        input_scales: &[crate::Scale],
+        output_mappings: &[Vec<OutputMapping>],
+        body: &Graph<TypedFact, Box<dyn TypedOp>>,
+    ) -> HashMap<usize, crate::Scale> {
+        let mut output_scale_override = HashMap::new();
+
+        for (input_idx, output_idx) in input_state_idx.iter().zip(output_state_idx) {
+            let input_scale = input_scales[*input_idx];
+            let mut traversed_len = 0;
+            for (outer_idx, mappings) in output_mappings.iter().enumerate() {
+                let mapping_len = mappings.len();
+                if traversed_len + mapping_len > output_idx {
+                    let output_node_idx = body.outputs[outer_idx].node;
+                    output_scale_override.insert(output_node_idx, input_scale);
+                }
+                traversed_len += mapping_len;
+            }
+        }
+
+        output_scale_override
+    }
+
+    /// Extracts output scales from the subgraph model
+    fn extract_output_scales(
+        output_mapping: &[tract_onnx::tract_hir::ops::scan::OutputMapping<TDim>],
+        subgraph_model: &Model,
+    ) -> Vec<crate::Scale> {
+        let mut output_scales = BTreeMap::new();
+        for (i, _mapping) in output_mapping.iter().enumerate() {
+            for mapping in output_mapping.iter() {
+                if let Some(outlet) = mapping.last_value_slot {
+                    output_scales.insert(outlet, subgraph_model.graph.get_output_scales()[i]);
+                }
+                if let Some(last) = mapping.scan {
+                    output_scales.insert(last.0, subgraph_model.graph.get_output_scales()[i]);
+                }
+            }
+        }
+        output_scales.into_values().collect_vec()
+    }
+
+    /// Applies input scale override to a node if applicable
+    pub fn apply_input_scale_override(
+        node: &mut Node,
+        override_input_scales: &Option<Vec<crate::Scale>>,
+        input_idx: &mut usize,
+    ) {
+        if let Some(ref scales) = override_input_scales {
+            if let Some(inp) = node.opkind.get_input() {
+                let scale = scales[*input_idx];
+                node.opkind = SupportedOp::Input(Input {
+                    scale,
+                    datum_type: inp.datum_type,
+                });
+                *input_idx += 1;
+                node.out_scale = scale;
+            }
+        }
+    }
+
+    /// Applies output scale override to a node if applicable
+    pub fn apply_output_scale_override(
+        node: &mut Node,
+        node_index: usize,
+        override_output_scales: &Option<HashMap<usize, crate::Scale>>,
+    ) {
+        if let Some(ref scales) = override_output_scales {
+            if scales.contains_key(&node_index) {
+                let scale_diff = node.out_scale - scales[&node_index];
+                node.opkind = if scale_diff > 0 {
+                    RebaseScale::rebase(node.opkind.clone(), scales[&node_index], node.out_scale, 1)
+                } else {
+                    RebaseScale::rebase_up(node.opkind.clone(), scales[&node_index], node.out_scale)
+                };
+                node.out_scale = scales[&node_index];
+            }
+        }
+    }
+
+    /// Handles the insertion of a node, expanding RebaseScale nodes if necessary
+    pub fn handle_node_insertion(
+        nodes: &mut BTreeMap<usize, NodeType>,
+        remappings: &mut BTreeMap<usize, usize>,
+        original_index: usize,
+        node: Node,
+    ) {
+        // Check if this node is a RebaseScale and expand it into two separate nodes
+        if let SupportedOp::RebaseScale(rebase_scale) = &node.opkind {
+            let (inner_node, div_node) =
+                Self::expand_rebase_scale_node(&node, rebase_scale, nodes.len());
+
+            // Insert the inner node first
+            let inner_node_idx = inner_node.idx;
+            nodes.insert(inner_node_idx, NodeType::Node(inner_node));
+
+            // Insert the div node and set up remapping to point to the final div node
+            let div_node_idx = div_node.idx;
+            remappings.insert(original_index, div_node_idx);
+            nodes.insert(div_node_idx, NodeType::Node(div_node));
+        } else {
+            remappings.insert(original_index, node.idx);
+            nodes.insert(node.idx, NodeType::Node(node));
+        }
+    }
+
+    /// Expands a RebaseScale node into an inner operation node and a division node
+    pub fn expand_rebase_scale_node(
+        original_node: &Node,
+        rebase_scale: &RebaseScale,
+        next_available_index: usize,
+    ) -> (Node, Node) {
+        // Create first node: the inner operation
+        let inner_node_idx = next_available_index;
+        let inner_node = Node {
+            idx: inner_node_idx,
+            opkind: (*rebase_scale.inner).clone(),
+            inputs: original_node.inputs.clone(),
+            out_dims: original_node.out_dims.clone(),
+            out_scale: rebase_scale.original_scale,
+            num_uses: 1, // Will be used by the div node
+        };
+
+        // Create second node: the division operation
+        let div_node_idx = next_available_index + 1;
+        let div_node = Node {
+            idx: div_node_idx,
+            opkind: SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div {
+                denom: crate::ops::utils::F32(rebase_scale.multiplier as f32),
+            }),
+            inputs: vec![(inner_node_idx, 0)], // Takes output from inner node
+            out_dims: original_node.out_dims.clone(),
+            out_scale: rebase_scale.target_scale,
+            num_uses: original_node.num_uses, // Inherits the usage count from original node
+        };
+
+        (inner_node, div_node)
     }
 
     /// Run tract onnx model on sample data !

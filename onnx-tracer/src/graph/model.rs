@@ -722,12 +722,51 @@ impl Model {
                             n.out_scale = scales[&i];
                         }
                     }
-                    remappings.insert(i, n.idx);
-                    nodes.insert(n.idx, NodeType::Node(n));
+
+                    // Check if this node is a RebaseScale and expand it into two separate nodes
+                    if let SupportedOp::RebaseScale(rebase_scale) = &n.opkind {
+                        // Create first node: the inner operation
+                        let inner_node_idx = nodes.len();
+                        let inner_node = Node {
+                            idx: inner_node_idx,
+                            opkind: (*rebase_scale.inner).clone(),
+                            inputs: n.inputs.clone(),
+                            out_dims: n.out_dims.clone(),
+                            out_scale: rebase_scale.original_scale,
+                            num_uses: 1, // Will be used by the div node
+                        };
+
+                        // Insert the inner node first
+                        nodes.insert(inner_node_idx, NodeType::Node(inner_node));
+
+                        // Create second node: the division operation
+                        let div_node_idx = nodes.len();
+                        let div_node = Node {
+                            idx: div_node_idx,
+                            opkind: SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div {
+                                denom: crate::ops::utils::F32(rebase_scale.multiplier as f32),
+                            }),
+                            inputs: vec![(inner_node_idx, 0)], // Takes output from inner node
+                            out_dims: n.out_dims.clone(),
+                            out_scale: rebase_scale.target_scale,
+                            num_uses: n.num_uses, // Inherits the usage count from original node
+                        };
+
+                        // Insert the div node and set up remapping to point to the final div node
+                        remappings.insert(i, div_node_idx);
+                        nodes.insert(div_node_idx, NodeType::Node(div_node));
+                    } else {
+                        remappings.insert(i, n.idx);
+                        nodes.insert(n.idx, NodeType::Node(n));
+                    }
                 }
             }
         }
         Self::remove_unused_nodes(&mut nodes);
+
+        // Post-process to ensure consecutive node indices
+        Self::ensure_consecutive_indices(&mut nodes);
+
         nodes
     }
 
@@ -788,6 +827,48 @@ impl Model {
                 true
             }
         });
+    }
+
+    /// Ensures that node indices are consecutive starting from 0.
+    /// This is needed after RebaseScale expansion which can create gaps in indexing.
+    fn ensure_consecutive_indices(nodes: &mut BTreeMap<usize, NodeType>) {
+        // Create a mapping from old indices to new indices
+        let old_indices: Vec<usize> = nodes.keys().cloned().collect();
+        let mut index_mapping: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
+
+        for (new_idx, &old_idx) in old_indices.iter().enumerate() {
+            index_mapping.insert(old_idx, new_idx);
+        }
+
+        // Collect all nodes and update their indices
+        let mut updated_nodes = BTreeMap::new();
+
+        for (new_idx, (_old_idx, node)) in nodes.iter().enumerate() {
+            let mut updated_node = node.clone();
+
+            match &mut updated_node {
+                NodeType::Node(n) => {
+                    // Update the node's internal index
+                    n.idx = new_idx;
+
+                    // Update input references to use new indices
+                    for (input_idx, _outlet) in &mut n.inputs {
+                        if let Some(&new_input_idx) = index_mapping.get(input_idx) {
+                            *input_idx = new_input_idx;
+                        }
+                    }
+                }
+                NodeType::SubGraph { .. } => {
+                    // Handle subgraphs if needed - for now we don't modify them
+                }
+            }
+
+            updated_nodes.insert(new_idx, updated_node);
+        }
+
+        // Replace the original nodes map
+        *nodes = updated_nodes;
     }
 
     pub fn table_nodes(&self) -> String {
@@ -1544,5 +1625,92 @@ mod tests {
 
         let result = map_outlet_indices(&outlets, &remappings);
         assert_eq!(result, vec![(7, 0)]); // 2 + 5 = 7
+    }
+
+    /// Test that RebaseScale expansion maintains consecutive addressing
+    #[test]
+    fn test_rebase_scale_consecutive_addressing() {
+        use std::path::Path;
+
+        // Test with simple_mlp_small model which has RebaseScale nodes
+        let model_path = Path::new("models/simple_mlp_small/network.onnx");
+
+        // Skip test if model file doesn't exist (e.g., in CI environments)
+        if !model_path.exists() {
+            return;
+        }
+
+        let model = crate::model(&model_path.into());
+        let bytecode = crate::decode_model(model);
+
+        // Check that addresses are consecutive starting from 1
+        let mut expected_address = 1;
+        for instr in &bytecode {
+            assert_eq!(
+                instr.address,
+                expected_address,
+                "Address gap detected: expected {}, got {}. Previous instruction: {:?}",
+                expected_address,
+                instr.address,
+                if expected_address > 1 {
+                    Some(&bytecode[expected_address - 2])
+                } else {
+                    None
+                }
+            );
+            expected_address += 1;
+        }
+
+        // Also check that td (target destination) values are consecutive starting from 0
+        for (i, instr) in bytecode.iter().enumerate() {
+            if let Some(td) = instr.td {
+                assert_eq!(
+                    td, i,
+                    "Target destination gap detected: expected {i}, got {td} at instruction {i}"
+                );
+            }
+        }
+    }
+
+    /// Test with addsubmul1 model for RebaseScale expansion
+    #[test]
+    fn test_rebase_scale_expansion_addsubmul1() {
+        use std::path::Path;
+
+        let model_path = Path::new("models/addsubmul1/network.onnx");
+
+        // Skip test if model file doesn't exist
+        if !model_path.exists() {
+            return;
+        }
+
+        let model = crate::model(&model_path.into());
+        let bytecode = crate::decode_model(model);
+
+        // Should have Input, Constant, Add, Sub, Mul (inner), Div operations
+        assert_eq!(
+            bytecode.len(),
+            6,
+            "Expected 6 instructions after RebaseScale expansion"
+        );
+
+        // Check specific sequence: last operation should be Mul followed by Div
+        let mul_found = bytecode
+            .iter()
+            .any(|instr| matches!(instr.opcode, crate::trace_types::ONNXOpcode::Mul));
+        let div_found = bytecode
+            .iter()
+            .any(|instr| matches!(instr.opcode, crate::trace_types::ONNXOpcode::Div));
+
+        assert!(mul_found, "Mul operation should be present");
+        assert!(
+            div_found,
+            "Div operation should be present after RebaseScale expansion"
+        );
+
+        // Check addresses are consecutive
+        for (i, instr) in bytecode.iter().enumerate() {
+            assert_eq!(instr.address, i + 1, "Address should be consecutive");
+        }
     }
 }

@@ -1,7 +1,7 @@
 use super::{LookupBits, SparseDenseSuffix};
 
-/// Returns the lower WORD_SIZE - 1 bits. Used to range-check values to be in
-/// the range [0, 2^WORD_SIZE).
+/// Returns the lower WORD_SIZE - 1 bits. If the sign bit (the MSB) is 0, returns the lower bits;
+/// otherwise, returns 0.
 pub enum ReluSuffix<const WORD_SIZE: usize> {}
 
 impl<const WORD_SIZE: usize> SparseDenseSuffix for ReluSuffix<WORD_SIZE> {

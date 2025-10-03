@@ -1,12 +1,10 @@
+use crate::{
+    tensor::{self, Tensor, TensorError},
+    trace_types::ONNXOpcode,
+};
 use std::{
     any::Any,
     ops::{Add, Mul, Neg, Sub},
-};
-
-use crate::{
-    //   circuit::layouts,
-    tensor::{self, Tensor, TensorError},
-    trace_types::ONNXOpcode,
 };
 
 use super::*;

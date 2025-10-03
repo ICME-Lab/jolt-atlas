@@ -2,10 +2,7 @@
 //! Used to format the bytecode and define each instr flags and memory access patterns.
 //! Used by the runtime to generate an execution trace for ONNX runtime execution.
 
-use crate::{
-    constants::{MAX_TENSOR_SIZE, RESERVED_ADDR_PREPEND},
-    tensor::Tensor,
-};
+use crate::tensor::Tensor;
 use rand::{rngs::StdRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut};
@@ -36,9 +33,7 @@ impl ONNXCycle {
         ONNXCycle {
             instr: ONNXInstr::dummy(opcode),
             memory_state: MemoryState::random(rng),
-            advice_value: Some(Tensor::from(
-                (0..MAX_TENSOR_SIZE).map(|_| rng.next_u64() as u32 as i32),
-            )),
+            advice_value: Some(Tensor::from((0..1).map(|_| rng.next_u64() as u32 as i32))),
         }
     }
 
@@ -209,40 +204,14 @@ impl ONNXCycle {
     /// # Note normalizes the advice value to u64 and pads it to `MAX_TENSOR_SIZE`.
     /// # Panics if the advice value's length exceeds `MAX_TENSOR_SIZE`.
     pub fn advice_value(&self) -> Option<Vec<u64>> {
-        self.advice_value.as_ref().map(|adv| {
-            assert!(
-                adv.inner.len() <= MAX_TENSOR_SIZE,
-                "advice_value length exceeds MAX_TENSOR_SIZE"
-            );
-            let mut vals: Vec<u64> = adv.inner.iter().map(normalize).collect();
-            vals.resize(MAX_TENSOR_SIZE, 0);
-            vals
-        })
+        self.advice_value
+            .as_ref()
+            .map(|tensor| tensor.inner.iter().map(normalize).collect())
     }
 
     pub fn imm(&self) -> Option<Vec<u64>> {
         self.instr.imm()
     }
-}
-
-/// Maps a tensor index to its corresponding output addresses in the zkVM memory.
-/// Used in the zkVM to track all the onnx runtime machine tensor read and write addresses.
-///
-/// It prepends the [RESERVED_ADDR_PREPEND] offset to the tensor index before calculating addresses.
-/// If the tensor index is `None`, it defaults to 0 (zero register).
-pub fn get_tensor_zkvm_addresses(t: Option<usize>) -> Vec<usize> {
-    let slot = t.map_or(0, |t| t + RESERVED_ADDR_PREPEND);
-    index_to_addresses(slot)
-}
-
-/// Converts a slot index to a vector of addresses.
-/// Used in the zkVM to get all the memory addresses a slot occupies.
-pub fn index_to_addresses(i: usize) -> Vec<usize> {
-    let mut addresses = Vec::new();
-    for j in 0..MAX_TENSOR_SIZE {
-        addresses.push(i * MAX_TENSOR_SIZE + j);
-    }
-    addresses
 }
 
 // converts a i32 to a u64 preserving sign-bit

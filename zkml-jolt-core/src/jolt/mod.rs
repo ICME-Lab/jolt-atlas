@@ -255,7 +255,6 @@ where
         let bytecode_preprocessing = BytecodePreprocessing::preprocess(model);
         let precompile_preprocessing =
             PrecompilePreprocessing::preprocess(model, &bytecode_preprocessing);
-        println!("precompile_preprocessing: {precompile_preprocessing:#?}");
         JoltSharedPreprocessing {
             bytecode: bytecode_preprocessing,
             precompiles: precompile_preprocessing,
@@ -296,13 +295,15 @@ where
 
 #[cfg(test)]
 mod e2e_tests {
+    use std::path::PathBuf;
+
     use crate::jolt::JoltSNARK;
     use ark_bn254::Fr;
     use jolt_core::{
         poly::commitment::{dory::DoryCommitmentScheme, mock::MockCommitScheme},
         transcripts::KeccakTranscript,
     };
-    use onnx_tracer::{builder, graph::model::Model, tensor::Tensor};
+    use onnx_tracer::{builder, graph::model::Model, logger::init_logger, model, tensor::Tensor};
     use serial_test::serial;
 
     type PCS0 = DoryCommitmentScheme;
@@ -317,7 +318,7 @@ mod e2e_tests {
     {
         let input = Tensor::new(Some(input_data), shape).unwrap();
         let preprocessing =
-            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prover_preprocess(model, 1 << 10);
+            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prover_preprocess(model, 1 << 14);
         let (snark, program_io, _debug_info) =
             JoltSNARK::<Fr, PCS0, KeccakTranscript>::prove(&preprocessing, model, &input);
         snark
@@ -333,6 +334,98 @@ mod e2e_tests {
             &[1, 2, 3, 4, 1, 2, 3, 4],
             &[1, 8],
         );
+    }
+
+    #[test]
+    #[serial]
+    fn test_addsubmuldivdiv() {
+        run_snark_test(builder::addsubmuldivdiv_model, &[1, 2, 3, 4], &[1, 4]);
+    }
+
+    #[test]
+    #[serial]
+    fn test_addsubmul_binary() {
+        run_snark_test(
+            || {
+                model(&PathBuf::from(
+                    "../onnx-tracer/models/addsubmul1/network.onnx",
+                ))
+            },
+            &[1, 2, 3, 4, 1, 2, 3, 4, 1, 2],
+            &[1, 10],
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_simple_mlp_binary() {
+        run_snark_test(
+            || {
+                model(&PathBuf::from(
+                    "../onnx-tracer/models/simple_mlp/network.onnx",
+                ))
+            },
+            &[1, 2, 3, 4, 1, 2, 3, 4],
+            &[1, 8],
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_simple_mlp_small_binary() {
+        run_snark_test(
+            || {
+                model(&PathBuf::from(
+                    "../onnx-tracer/models/simple_mlp_small/network.onnx",
+                ))
+            },
+            &[1, 2, 3, 4],
+            &[1, 4],
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_simple_mlp_small() {
+        run_snark_test(builder::simple_mlp_small_model, &[1, 2, 3, 4], &[1, 4]);
+    }
+
+    #[test]
+    #[serial]
+    fn test_perceptron_binary() {
+        run_snark_test(
+            || model(&PathBuf::from("../tests/perceptron.onnx")),
+            &[1, 2, 3, 4, 1, 2, 3, 4, 1, 2],
+            &[1, 10],
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_perceptron_2_binary() {
+        run_snark_test(
+            || model(&PathBuf::from("../tests/perceptron_2.onnx")),
+            &[1, 2, 3, 4],
+            &[1, 4],
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_addsubmuldiv() {
+        run_snark_test(builder::addsubmuldiv_model, &[1, 2, 3, 4], &[1, 4]);
+    }
+
+    #[test]
+    #[serial]
+    fn test_addsubmuldivadd() {
+        run_snark_test(builder::addsubmuldivadd_model, &[1, 2, 3, 4], &[1, 4]);
+    }
+
+    #[test]
+    #[serial]
+    fn test_tiny_mlp_head() {
+        run_snark_test(builder::tiny_mlp_head_model, &[1, 2, 3, 4], &[1, 4]);
     }
 
     #[test]
@@ -367,7 +460,7 @@ mod e2e_tests {
 
     #[test]
     #[serial]
-    fn test_scalar_input_and_inference() {
+    fn test_scalar() {
         run_snark_test(builder::scalar_addsubmul_model, &[10], &[1, 1]);
     }
 

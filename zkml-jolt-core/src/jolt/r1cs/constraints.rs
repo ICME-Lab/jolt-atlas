@@ -6,8 +6,6 @@ use crate::jolt::r1cs::{
     inputs::JoltONNXR1CSInputs,
 };
 
-pub const PC_START_ADDRESS: i64 = 0x80000000;
-
 pub trait R1CSConstraints<F: JoltField> {
     fn construct_constraints(padded_trace_length: usize) -> CombinedUniformBuilder<F> {
         let mut uniform_builder = R1CSBuilder::new();

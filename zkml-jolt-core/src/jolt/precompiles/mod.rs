@@ -136,7 +136,6 @@ impl PrecompilePreprocessing {
         // Extract MatMult instructions from the model and collect their memory addresses
         // for operands (a, b) and results (c) to enable prover/verifier to efficiently prove/verify the PrecompileProofs
         let bytecode = onnx_tracer::decode_model(model());
-
         // Build a lookup map for O(1) instruction lookups by td value
         let td_lookup: HashMap<usize, &ONNXInstr> = bytecode
             .iter()
@@ -535,6 +534,7 @@ pub struct PrecompileSNARK<F: JoltField, FS: Transcript> {
 }
 
 impl<F: JoltField, FS: Transcript> PrecompileSNARK<F, FS> {
+    #[tracing::instrument(name = "PrecompileSNARK::prove", skip(sm))]
     pub fn prove<'a, PCS: CommitmentScheme<Field = F>>(sm: &StateManager<'a, F, FS, PCS>) -> Self {
         let mut precompile_dag = PrecompileDag::new_prover(sm);
 

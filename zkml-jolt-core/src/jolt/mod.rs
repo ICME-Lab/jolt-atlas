@@ -831,7 +831,8 @@ mod e2e_tests {
     #[test]
     fn test_sigmoid_e2e() {
         // Simple case: input tensor with both positive and negative values
-        let config = ModelTestConfig::new("sigmoid", vec![3, 4, 5, 0, 0, 0, 0, 0, 0, 0], vec![1, 10]);
+        let config =
+            ModelTestConfig::new("sigmoid", vec![3, 4, 5, 0, 0, 0, 0, 0, 0, 0], vec![1, 10]);
 
         let model_fn = || model(&"../onnx-tracer/models/sigmoid/network.onnx".into());
 

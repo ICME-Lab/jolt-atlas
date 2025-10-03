@@ -303,7 +303,7 @@ mod e2e_tests {
         poly::commitment::{dory::DoryCommitmentScheme, mock::MockCommitScheme},
         transcripts::KeccakTranscript,
     };
-    use onnx_tracer::{builder, graph::model::Model, logger::init_logger, model, tensor::Tensor};
+    use onnx_tracer::{builder, graph::model::Model, model, tensor::Tensor};
     use serial_test::serial;
 
     type PCS0 = DoryCommitmentScheme;

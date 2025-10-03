@@ -442,7 +442,7 @@ where
                 vec![LookupOp::Div {
                     denom: utils::F32((kernel_shape.0 * kernel_shape.1) as f32),
                 }]
-            }
+            },
             _ => vec![],
         }
     }

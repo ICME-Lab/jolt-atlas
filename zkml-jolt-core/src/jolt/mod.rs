@@ -307,9 +307,7 @@ mod e2e_tests {
             let program_bytecode = onnx_tracer::decode_model(model.clone());
             let pp: JoltProverPreprocessing<Fr, PCS, KeccakTranscript> =
                 JoltSNARK::prover_preprocess(program_bytecode);
-
             let (raw_trace, program_output) = onnx_tracer::execution_trace(model, input);
-
             // Verify expected output if provided
             if let Some(expected) = expected_output {
                 assert_eq!(
@@ -827,5 +825,16 @@ mod e2e_tests {
         };
         let program_bytecode = multiclass0.decode();
         info!("Program code: {program_bytecode:#?}");
+    }
+
+    #[serial]
+    #[test]
+    fn test_sigmoid_e2e() {
+        // Simple case: input tensor with both positive and negative values
+        let config = ModelTestConfig::new("sigmoid", vec![3, 4, 5, 0, 0, 0, 0, 0, 0, 0], vec![1, 10]);
+
+        let model_fn = || model(&"../onnx-tracer/models/sigmoid/network.onnx".into());
+
+        ZKMLTestHelper::prove_and_verify_simple(model_fn, &config.to_tensor());
     }
 }

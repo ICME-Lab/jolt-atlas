@@ -21,6 +21,7 @@ use crate::jolt::{
     },
     tensor_heap::TensorHeapTwistProof,
 };
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use execution_trace::WORD_SIZE;
 use jolt_core::{
     field::JoltField,
@@ -82,6 +83,7 @@ where
     }
 }
 
+#[derive(Debug, Clone, CanonicalSerialize, CanonicalDeserialize)]
 pub struct JoltSNARK<F, PCS, ProofTranscript>
 where
     ProofTranscript: Transcript,

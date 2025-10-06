@@ -11,6 +11,7 @@ use jolt_core::{
     subprotocols::sumcheck::{BatchableSumcheckInstance, SumcheckInstanceProof},
     utils::{math::Math, small_value::NUM_SVO_ROUNDS, transcript::Transcript},
 };
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 use rayon::prelude::*;
 use std::marker::PhantomData;
@@ -84,7 +85,7 @@ pub enum SpartanError {
 /// A succinct proof of knowledge of a witness to a relaxed R1CS instance
 /// The proof is produced using Spartan's combination of the sum-check and
 /// the commitment to a vector viewed as a polynomial commitment
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, CanonicalSerialize, CanonicalDeserialize)]
 pub struct UniformSpartanProof<F: JoltField, ProofTranscript: Transcript> {
     pub(crate) outer_sumcheck_proof: SumcheckInstanceProof<F, ProofTranscript>,
     pub(crate) outer_sumcheck_claims: (F, F, F),

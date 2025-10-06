@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use itertools::Itertools;
 use jolt_core::{
     field::JoltField,
@@ -110,6 +111,7 @@ impl BytecodePreprocessing {
     }
 }
 
+#[derive(Debug, Clone, CanonicalSerialize, CanonicalDeserialize)]
 pub struct BytecodeProof<F, ProofTranscript>
 where
     ProofTranscript: Transcript,

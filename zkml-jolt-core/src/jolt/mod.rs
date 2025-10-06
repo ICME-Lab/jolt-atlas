@@ -20,6 +20,7 @@ use crate::jolt::{
     },
     tensor_heap::TensorHeapTwistProof,
 };
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use execution_trace::WORD_SIZE;
 use jolt_core::{
     field::JoltField,
@@ -81,6 +82,7 @@ where
     }
 }
 
+#[derive(Debug, Clone, CanonicalSerialize, CanonicalDeserialize)]
 pub struct JoltSNARK<F, PCS, ProofTranscript>
 where
     ProofTranscript: Transcript,
@@ -838,5 +840,52 @@ mod e2e_tests {
         let model_fn = || model(&"../onnx-tracer/models/sigmoid/network.onnx".into());
 
         ZKMLTestHelper::prove_and_verify_simple(model_fn, &config.to_tensor());
+    }
+
+    #[serial]
+    #[test]
+    fn test_proof_serialize_deserialize_roundtrip() {
+        use crate::jolt::JoltProverPreprocessing;
+        use crate::jolt::JoltSNARK;
+        use ark_bn254::Fr;
+        use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+        use jolt_core::poly::commitment::dory::DoryCommitmentScheme;
+        use jolt_core::utils::transcript::KeccakTranscript;
+        use onnx_tracer::builder;
+        use onnx_tracer::tensor::Tensor;
+
+        type PCS = DoryCommitmentScheme<KeccakTranscript>;
+
+        // Simple test model and input
+        let model_fn = builder::custom_add_model;
+        let input = Tensor::new(Some(&[1, 2, 3, 4]), &[1, 4]).unwrap();
+
+        // Build program
+        let model = model_fn();
+        let program_bytecode = onnx_tracer::decode_model(model.clone());
+        let pp: JoltProverPreprocessing<Fr, PCS, KeccakTranscript> =
+            JoltSNARK::prover_preprocess(program_bytecode);
+
+        // Generate execution trace
+        let (raw_trace, program_output) = onnx_tracer::execution_trace(model, &input);
+        let execution_trace = crate::jolt::execution_trace::jolt_execution_trace(raw_trace.clone());
+
+        // Create SNARK proof
+        let snark: JoltSNARK<Fr, PCS, KeccakTranscript> =
+            JoltSNARK::prove(pp.clone(), execution_trace, &program_output);
+
+        // Serialize proof
+        let mut serialized_proof = Vec::new();
+        snark.serialize_compressed(&mut serialized_proof).unwrap();
+
+        // Deserialize proof
+        let deserialized_snark =
+            JoltSNARK::<Fr, PCS, KeccakTranscript>::deserialize_compressed(&*serialized_proof)
+                .unwrap();
+
+        // Verify the deserialized proof
+        deserialized_snark
+            .verify((&pp).into(), program_output)
+            .expect("Deserialized proof verification failed");
     }
 }

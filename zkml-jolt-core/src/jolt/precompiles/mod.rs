@@ -19,6 +19,7 @@ use crate::jolt::{
         MatMultSumcheck, MatMultVerifierState,
     },
 };
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 pub mod matmult;
 
 /// Specifies the ONNX precompile operators used in the Jolt ONNX VM.
@@ -113,6 +114,7 @@ impl PrecompilePreprocessing {
 /// A special-purpose SNARK designed for specific functionality, such as ONNX operators that are more efficient to prove using a sum-check precompile than an [`InstructionLookupProof`].
 /// This is a sum-check-based precompile proof tailored for ONNX runtime.
 /// It is used to prove the correctness of certain ONNX operators via a custom sum-check precompile instead of a lookup-based approach.
+#[derive(Debug, Clone, CanonicalSerialize, CanonicalDeserialize)]
 pub struct PrecompileProof<F, ProofTranscript>
 where
     F: JoltField,

@@ -1,4 +1,5 @@
 use crate::jolt::execution_trace::JoltONNXCycle;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jolt_core::{
     field::{JoltField, OptimizedMul},
     poly::{
@@ -18,7 +19,7 @@ use jolt_core::{
 use onnx_tracer::constants::MAX_TENSOR_SIZE;
 use rayon::{iter::IntoParallelIterator, prelude::*};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, CanonicalSerialize, CanonicalDeserialize)]
 pub struct ReadWriteCheckingProof<F: JoltField, ProofTranscript: Transcript> {
     /// Joint sumcheck proof for the read-checking and write-checking sumchecks
     /// (steps 3 and 4 of Figure 9).

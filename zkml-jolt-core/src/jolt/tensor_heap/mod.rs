@@ -16,6 +16,7 @@ use crate::jolt::{
         read_write_check::ReadWriteCheckingProof,
     },
 };
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jolt_core::{
     field::JoltField,
     poly::{
@@ -38,7 +39,7 @@ use jolt_core::{
 use onnx_tracer::{ProgramIO, constants::MAX_TENSOR_SIZE};
 use rayon::prelude::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, CanonicalSerialize, CanonicalDeserialize)]
 pub struct TensorHeapTwistProof<F: JoltField, ProofTranscript: Transcript> {
     pub(crate) K: usize,
     /// Proof for the read-checking and write-checking sumchecks
@@ -170,7 +171,7 @@ impl<F: JoltField, ProofTranscript: Transcript> TensorHeapTwistProof<F, ProofTra
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, CanonicalSerialize, CanonicalDeserialize)]
 pub struct ValEvaluationProof<F: JoltField, ProofTranscript: Transcript> {
     /// Sumcheck proof for the Val-evaluation sumcheck (steps 6 of Figure 9).
     sumcheck_proof: SumcheckInstanceProof<F, ProofTranscript>,

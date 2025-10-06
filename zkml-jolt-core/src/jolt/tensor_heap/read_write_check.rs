@@ -1,4 +1,5 @@
 use crate::jolt::execution_trace::JoltONNXCycle;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jolt_core::{
     field::{JoltField, OptimizedMul},
     poly::{
@@ -15,7 +16,6 @@ use jolt_core::{
         transcript::{AppendToTranscript, Transcript},
     },
 };
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use onnx_tracer::constants::MAX_TENSOR_SIZE;
 use rayon::{iter::IntoParallelIterator, prelude::*};
 

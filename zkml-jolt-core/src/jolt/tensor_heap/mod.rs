@@ -16,6 +16,7 @@ use crate::jolt::{
         read_write_check::ReadWriteCheckingProof,
     },
 };
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jolt_core::{
     field::JoltField,
     poly::{
@@ -35,7 +36,6 @@ use jolt_core::{
         transcript::{AppendToTranscript, Transcript},
     },
 };
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use onnx_tracer::{ProgramIO, constants::MAX_TENSOR_SIZE};
 use rayon::prelude::*;
 

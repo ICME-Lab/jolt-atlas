@@ -1,3 +1,4 @@
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jolt_core::{
     field::JoltField,
     poly::{
@@ -11,7 +12,6 @@ use jolt_core::{
     subprotocols::sumcheck::{BatchableSumcheckInstance, SumcheckInstanceProof},
     utils::{math::Math, small_value::NUM_SVO_ROUNDS, transcript::Transcript},
 };
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 use rayon::prelude::*;
 use std::marker::PhantomData;

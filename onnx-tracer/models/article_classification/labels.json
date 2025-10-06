@@ -1,1 +1,10 @@
-{"0": "business", "1": "entertainment", "2": "politics", "3": "sport", "4": "tech"}
+{
+  "0": "business",
+  "1": "entertainment",
+  "2": "politics",
+  "3": "sport",
+  "4": "tech",
+  "5": "dummy_class_5",
+  "6": "dummy_class_6",
+  "7": "dummy_class_7"
+}

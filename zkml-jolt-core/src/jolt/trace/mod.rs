@@ -101,7 +101,6 @@ where
 {
     // Execute the ONNX model to get the raw execution trace
     let (raw_trace, program_io) = onnx_tracer::execution_trace(model(), input);
-    // println!("raw_trace {:#?}", raw_trace);
 
     let raw_trace = expand_raw_trace(raw_trace, preprocessing.max_td);
     // Convert the raw ONNX trace to Jolt-compatible format

@@ -803,6 +803,7 @@ mod tests {
                 Tensor::new(Some(&[1.0]), &[]).unwrap(),
             )),
             ONNXOpcode::Relu => SupportedOp::Nonlinear(LookupOp::ReLU),
+            ONNXOpcode::Abs => SupportedOp::Nonlinear(LookupOp::Abs),
             _ => unimplemented!("Unsupported instruction"),
         }
     }
@@ -986,5 +987,10 @@ mod tests {
     #[test]
     fn test_relu() {
         test_read_raf_sumcheck(Some(ONNXOpcode::Relu));
+    }
+
+    #[test]
+    fn test_abs() {
+        test_read_raf_sumcheck(Some(ONNXOpcode::Abs));
     }
 }

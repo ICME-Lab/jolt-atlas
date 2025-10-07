@@ -59,6 +59,7 @@ impl From<&LookupOp> for ONNXOpcode {
             LookupOp::Sigmoid { .. } => ONNXOpcode::Sigmoid,
             LookupOp::Rsqrt { .. } => ONNXOpcode::Sqrt,
             LookupOp::Div { .. } => ONNXOpcode::Div,
+            LookupOp::Abs => ONNXOpcode::Abs,
             _ => {
                 panic!("LookupOp {value:?} cannot be converted to ONNXOpcode",);
             }

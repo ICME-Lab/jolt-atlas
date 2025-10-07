@@ -42,9 +42,10 @@
 use crate::jolt::{
     bytecode::{BytecodePreprocessing, JoltONNXBytecode},
     executor::instructions::{
-        InstructionLookup, VirtualInstructionSequence, add::AddInstruction, beq::BeqInstruction,
-        div::DivInstruction, mul::MulInstruction, relu::ReluInstruction, sub::SubInstruction,
-        virtual_advice::AdviceInstruction, virtual_assert_valid_div0::AssertValidDiv0Instruction,
+        InstructionLookup, VirtualInstructionSequence, abs::AbsInstruction, add::AddInstruction,
+        beq::BeqInstruction, div::DivInstruction, mul::MulInstruction, relu::ReluInstruction,
+        sub::SubInstruction, virtual_advice::AdviceInstruction,
+        virtual_assert_valid_div0::AssertValidDiv0Instruction,
         virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction,
         virtual_const::ConstInstruction, virtual_move::MoveInstruction,
     },
@@ -423,6 +424,9 @@ impl JoltONNXCycle {
                 ))
             }
             // Other opcodes (like MatMult) don't have lookup functions
+            ONNXOpcode::Abs => Some(LookupFunction::Abs(AbsInstruction::<WORD_SIZE>(
+                memory_ops.ts1_val,
+            ))),
             _ => None,
         }
     }
@@ -705,6 +709,7 @@ define_lookup_enum!(
     Mul: MulInstruction<WORD_SIZE>,
     Const: ConstInstruction<WORD_SIZE>,
     Relu: ReluInstruction<WORD_SIZE>,
+    Abs: AbsInstruction<WORD_SIZE>,
     Advice: AdviceInstruction<WORD_SIZE>,
     VirtualAssertValidSignedRemainder: AssertValidSignedRemainderInstruction<WORD_SIZE>,
     VirtualAssertValidDiv0: AssertValidDiv0Instruction<WORD_SIZE>,

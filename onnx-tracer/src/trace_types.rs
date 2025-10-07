@@ -341,6 +341,7 @@ pub enum ONNXOpcode {
     Constant,
     Input,
     Output,
+    Abs,
     Add,
     Sub,
     Mul,

@@ -1,8 +1,8 @@
 use crate::jolt::{
     bytecode::{BytecodePreprocessing, JoltONNXBytecode},
     executor::instructions::{
-        add::AddInstruction, mul::MulInstruction, relu::ReluInstruction, sub::SubInstruction,
-        virtual_const::ConstInstruction,
+        abs::AbsInstruction, add::AddInstruction, mul::MulInstruction, relu::ReluInstruction,
+        sub::SubInstruction, virtual_const::ConstInstruction,
     },
 };
 use crate::jolt::{executor::instructions::InstructionLookup, lookup_table::LookupTables};
@@ -133,6 +133,9 @@ impl JoltONNXCycle {
                 instr.imm,
             ))),
             ONNXOpcode::Relu => Some(LookupFunction::Relu(ReluInstruction::<WORD_SIZE>(
+                self.memory_ops.ts1_val,
+            ))),
+            ONNXOpcode::Abs => Some(LookupFunction::Abs(AbsInstruction::<WORD_SIZE>(
                 self.memory_ops.ts1_val,
             ))),
             _ => None,
@@ -281,4 +284,5 @@ define_lookup_enum!(
     Mul: MulInstruction<WORD_SIZE>,
     Const: ConstInstruction<WORD_SIZE>,
     Relu: ReluInstruction<WORD_SIZE>,
+    Abs: AbsInstruction<WORD_SIZE>,
 );

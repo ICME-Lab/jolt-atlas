@@ -390,7 +390,6 @@ impl BytecodePreprocessing {
         ModelFunc: Fn() -> Model,
     {
         let bytecode = onnx_tracer::decode_model(model());
-        println!("Original bytecode: {bytecode:#?}");
         // Get largest td value
         let max_td = bytecode
             .iter()

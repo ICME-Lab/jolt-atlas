@@ -1444,12 +1444,16 @@ checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
 name = "jolt-atlas"
 version = "0.1.0"
 dependencies = [
+ "ark-bn254",
  "clap",
  "eyre",
+ "jolt-core",
  "onnx-tracer",
  "rand",
+ "regex",
  "rmp-serde",
  "serde",
+ "serde_json",
  "syn 1.0.109",
  "sysinfo",
  "toml_edit",

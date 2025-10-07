@@ -295,7 +295,7 @@ where
 
 #[cfg(test)]
 mod e2e_tests {
-    use std::path::PathBuf;
+    use std::{collections::HashMap, fs::File, io::Read, path::PathBuf};
 
     use crate::jolt::JoltSNARK;
     use ark_bn254::Fr;
@@ -304,26 +304,365 @@ mod e2e_tests {
         transcripts::KeccakTranscript,
     };
     use onnx_tracer::{builder, graph::model::Model, model, tensor::Tensor};
+    use serde_json::Value;
     use serial_test::serial;
 
     type PCS0 = DoryCommitmentScheme;
     type _PCS1 = MockCommitScheme<Fr>;
 
-    fn run_snark_test<ModelFunc, const N: usize>(
-        model: ModelFunc,
-        input_data: &[i32; N],
-        shape: &[usize],
-    ) where
+    fn run_snark_test<ModelFunc>(model: ModelFunc, input_data: &[i32], shape: &[usize])
+    where
         ModelFunc: Fn() -> Model + Copy,
     {
         let input = Tensor::new(Some(input_data), shape).unwrap();
         let preprocessing =
-            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prover_preprocess(model, 1 << 14);
+            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prover_preprocess(model, 1 << 20);
         let (snark, program_io, _debug_info) =
             JoltSNARK::<Fr, PCS0, KeccakTranscript>::prove(&preprocessing, model, &input);
         snark
             .verify(&(&preprocessing).into(), program_io, None)
             .unwrap();
+    }
+
+    /// Load vocab.json into HashMap<String, (usize, i32)>
+    pub fn load_vocab(
+        path: &str,
+    ) -> Result<HashMap<String, (usize, i32)>, Box<dyn std::error::Error>> {
+        let mut file = File::open(path)?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+
+        let json_value: Value = serde_json::from_str(&contents)?;
+        let mut vocab = HashMap::new();
+
+        if let Value::Object(map) = json_value {
+            for (word, data) in map {
+                if let (Some(index), Some(idf)) = (
+                    data.get("index").and_then(|v| v.as_u64()),
+                    data.get("idf").and_then(|v| v.as_f64()),
+                ) {
+                    vocab.insert(word, (index as usize, (idf * 1000.0) as i32)); // Scale IDF and convert to i32
+                }
+            }
+        }
+
+        Ok(vocab)
+    }
+
+    pub fn build_input_vector(text: &str, vocab: &HashMap<String, (usize, i32)>) -> Vec<i32> {
+        let mut vec = vec![0; 512];
+
+        // Split text into tokens (preserve punctuation as tokens)
+        let re = regex::Regex::new(r"\w+|[^\w\s]").unwrap();
+        for cap in re.captures_iter(text) {
+            let token = cap.get(0).unwrap().as_str().to_lowercase();
+            if let Some(&(index, idf)) = vocab.get(&token) {
+                if index < 512 {
+                    vec[index] += idf; // accumulate idf value
+                }
+            }
+        }
+
+        vec
+    }
+
+    #[test]
+    pub fn test_article_classification_output() {
+        let working_dir: &str = "../onnx-tracer/models/article_classification/";
+
+        // Load the vocab mapping from JSON
+        let vocab_path = format!("{working_dir}/vocab.json",);
+        let vocab = load_vocab(&vocab_path).expect("Failed to load vocab");
+
+        // Input text string to classify
+        let input_texts = [
+            "The government plans new trade policies.",
+            "The latest computer model has impressive features.",
+            "The football match ended in a thrilling draw.",
+            "The new movie has received rave reviews from critics.",
+            "The stock market saw a significant drop today.",
+        ];
+
+        let expected_classes = ["business", "tech", "sport", "entertainment", "business"];
+
+        let mut predicted_classes = Vec::new();
+
+        for input_text in &input_texts {
+            // Build input vector from the input text
+            let input_vector = build_input_vector(input_text, &vocab);
+
+            let input = Tensor::new(Some(&input_vector), &[1, 512]).unwrap();
+
+            // Load model
+            let model = model(&PathBuf::from(format!("{working_dir}network.onnx")));
+
+            // Run inference
+            let result = model.forward(&[input.clone()]).unwrap();
+            let output = result.outputs[0].clone();
+
+            // Map index to label
+            let classes = ["business", "entertainment", "politics", "sport", "tech"];
+            let (pred_idx, max_val) = output
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .unwrap();
+
+            println!("Input text: '{input_text}'");
+            println!("Output: {}", output.show());
+            println!("Max value: {max_val} at index: {pred_idx}");
+            println!("Predicted class: {}", classes[pred_idx]);
+
+            predicted_classes.push(classes[pred_idx]);
+        }
+        // Check if predicted classes match expected classes
+        for (predicted, expected) in predicted_classes.iter().zip(expected_classes.iter()) {
+            assert_eq!(predicted, expected, "Mismatch in predicted class");
+        }
+    }
+
+    #[serial]
+    #[test]
+    pub fn test_article_classification() {
+        let working_dir: &str = "../onnx-tracer/models/article_classification/";
+
+        // Load the vocab mapping from JSON
+        let vocab_path = format!("{working_dir}/vocab.json",);
+        let vocab = load_vocab(&vocab_path).expect("Failed to load vocab");
+
+        // Input text string to classify
+        let input_text = "The government plans new trade policies.";
+
+        // Build input vector from the input text (512 features for small MLP)
+        let input_vector = build_input_vector(input_text, &vocab);
+
+        run_snark_test(
+            || model(&PathBuf::from(format!("{working_dir}network.onnx"))),
+            &input_vector,
+            &[1, 512],
+        );
+    }
+
+    // ========================================================================================
+    // AUTHORIZATION MODEL TESTS
+    // ========================================================================================
+    //
+    // These tests validate the authorization model which performs transaction authorization
+    // decisions using an MLP neural network with one-hot encoded features.
+    //
+    // Model Architecture:
+    // - Input Size: 64 (one-hot encoded features)
+    // - Architecture: 64 → 32 → 16 → 4
+    // - Output: 4 classes (Authorized=0, Denied=1, Padding=2,3)
+    // - Features: Budget, Trust, Amount, Category, Velocity, Day, Time (Risk unused)
+    //
+    // The model follows the same pattern as article classification but for financial
+    // transaction authorization with power-of-2 dimensions for SNARK compatibility.
+    // ========================================================================================
+
+    /// Load authorization vocab.json into HashMap<String, usize>
+    pub fn load_authorization_vocab(
+        path: &str,
+    ) -> Result<HashMap<String, usize>, Box<dyn std::error::Error>> {
+        let mut file = File::open(path)?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+
+        let json_value: Value = serde_json::from_str(&contents)?;
+        let mut vocab = HashMap::new();
+
+        if let Some(Value::Object(map)) = json_value.get("vocab_mapping") {
+            for (feature_key, data) in map {
+                if let Some(index) = data.get("index").and_then(|v| v.as_u64()) {
+                    vocab.insert(feature_key.clone(), index as usize);
+                }
+            }
+        }
+
+        Ok(vocab)
+    }
+
+    /// Transaction features for the authorization model
+    pub struct AuthorizationFeatures {
+        pub budget: usize,
+        pub trust: usize,
+        pub amount: usize,
+        pub category: usize,
+        pub velocity: usize,
+        pub day: usize,
+        pub time: usize,
+        pub risk: usize,
+    }
+
+    /// Build input vector for authorization model from transaction features
+    pub fn build_authorization_vector(
+        features: &AuthorizationFeatures,
+        vocab: &HashMap<String, usize>,
+    ) -> Vec<i32> {
+        let mut vec = vec![0; 64];
+
+        // Map each feature to its one-hot position
+        let feature_values = [
+            ("budget", features.budget),
+            ("trust", features.trust),
+            ("amount", features.amount),
+            ("category", features.category),
+            ("velocity", features.velocity),
+            ("day", features.day),
+            ("time", features.time),
+            ("risk", features.risk),
+        ];
+
+        for (feature_type, value) in feature_values {
+            let feature_key = format!("{feature_type}_{value}");
+            if let Some(&index) = vocab.get(&feature_key) {
+                if index < 64 {
+                    vec[index] = 1; // One-hot encoding
+                }
+            }
+        }
+
+        vec
+    }
+
+    #[test]
+    pub fn test_authorization_output() {
+        let working_dir: &str = "../onnx-tracer/models/authorization/";
+
+        // Load the vocab mapping from JSON
+        let vocab_path = format!("{working_dir}/vocab.json");
+        let vocab =
+            load_authorization_vocab(&vocab_path).expect("Failed to load authorization vocab");
+
+        // Test authorization scenarios
+        let test_scenarios = [
+            // (budget, trust, amount, category, velocity, day, time, risk, expected_decision)
+            (15, 7, 8, 0, 2, 1, 1, 0, "AUTHORIZED"), // High trust, sufficient budget
+            (5, 4, 12, 0, 2, 1, 1, 0, "DENIED"),     // Amount exceeds budget
+            (15, 1, 12, 0, 2, 1, 1, 0, "DENIED"),    // Low trust, high amount
+            (15, 7, 8, 0, 7, 1, 1, 0, "DENIED"),     // High velocity
+            (15, 0, 5, 2, 2, 1, 1, 0, "DENIED"),     // Restricted category for untrusted merchant
+            (15, 7, 14, 0, 2, 1, 3, 0, "DENIED"),    // Late night high-value transaction
+        ];
+
+        let mut correct_predictions = 0;
+
+        for (i, &(budget, trust, amount, category, velocity, day, time, risk, expected)) in
+            test_scenarios.iter().enumerate()
+        {
+            // Build input vector from transaction features
+            let features = AuthorizationFeatures {
+                budget,
+                trust,
+                amount,
+                category,
+                velocity,
+                day,
+                time,
+                risk,
+            };
+            let input_vector = build_authorization_vector(&features, &vocab);
+
+            let input = Tensor::new(Some(&input_vector), &[1, 64]).unwrap();
+
+            // Load model
+            let model = model(&PathBuf::from(format!("{working_dir}network.onnx")));
+
+            // Run inference
+            let result = model.forward(&[input.clone()]).unwrap();
+            let output = result.outputs[0].clone();
+
+            // Get prediction (class 0 = AUTHORIZED, class 1 = DENIED)
+            let (pred_idx, max_val) = output
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .unwrap();
+
+            let prediction = if pred_idx == 0 {
+                "AUTHORIZED"
+            } else {
+                "DENIED"
+            };
+
+            println!(
+                "Test {}: budget={}, trust={}, amount={}, category={}, velocity={}, day={}, time={}, risk={}",
+                i + 1,
+                budget,
+                trust,
+                amount,
+                category,
+                velocity,
+                day,
+                time,
+                risk
+            );
+            println!("Output: {}", output.show());
+            println!("Max value: {max_val} at index: {pred_idx}");
+            println!("Expected: {expected}, Predicted: {prediction}");
+
+            if prediction == expected {
+                correct_predictions += 1;
+                println!("✅ CORRECT");
+            } else {
+                println!("❌ INCORRECT");
+            }
+            println!();
+        }
+
+        let accuracy = correct_predictions as f32 / test_scenarios.len() as f32 * 100.0;
+        println!(
+            "Authorization Test Accuracy: {}/{} ({:.1}%)",
+            correct_predictions,
+            test_scenarios.len(),
+            accuracy
+        );
+
+        // Require at least 80% accuracy
+        assert!(
+            accuracy >= 80.0,
+            "Authorization accuracy too low: {accuracy:.1}%"
+        );
+    }
+
+    #[serial]
+    #[test]
+    pub fn test_authorization() {
+        let working_dir: &str = "../onnx-tracer/models/authorization/";
+
+        // Load the vocab mapping from JSON
+        let vocab_path = format!("{working_dir}/vocab.json");
+        let vocab =
+            load_authorization_vocab(&vocab_path).expect("Failed to load authorization vocab");
+
+        // Test with a high trust merchant and sufficient budget (should authorize)
+        let budget = 15; // High budget
+        let trust = 7; // High trust
+        let amount = 8; // Moderate amount
+        let category = 0; // Safe category
+        let velocity = 2; // Low velocity
+        let day = 1; // Tuesday
+        let time = 1; // Morning
+        let risk = 0; // No risk (not used)
+
+        // Build input vector from transaction features (64 features for authorization MLP)
+        let features = AuthorizationFeatures {
+            budget,
+            trust,
+            amount,
+            category,
+            velocity,
+            day,
+            time,
+            risk,
+        };
+        let input_vector = build_authorization_vector(&features, &vocab);
+
+        run_snark_test(
+            || model(&PathBuf::from(format!("{working_dir}network.onnx"))),
+            &input_vector,
+            &[1, 64],
+        );
     }
 
     #[test]

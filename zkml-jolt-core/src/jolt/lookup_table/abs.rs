@@ -25,17 +25,14 @@ impl<const WORD_SIZE: usize> AtlasLookupTable for AbsTable<WORD_SIZE> {
         debug_assert_eq!(r.len(), 2 * WORD_SIZE);
 
         let mut positive_case = F::zero();
-        for i in 0..WORD_SIZE - 1 {
-            positive_case += F::from_u64(1 << i) * r[r.len() - 1 - i];
-        }
-
         // if x < 0, abs(x) = -x = (!x) + 1
         let mut negative_case = F::one();
         for i in 0..WORD_SIZE - 1 {
+            positive_case += F::from_u64(1 << i) * r[r.len() - 1 - i];
             negative_case += F::from_u64(1 << i) * (F::one() - r[r.len() - 1 - i]);
         }
 
-        // Keep positive
+        // r[WORD_SIZE] is the sign bit, we select which of positive or negative case we keep according to it.
         positive_case * (F::one() - r[WORD_SIZE]) + negative_case * r[WORD_SIZE]
     }
 }

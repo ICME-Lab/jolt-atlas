@@ -9,7 +9,7 @@ pub enum AbsNegativeCaseSuffix<const WORD_SIZE: usize> {}
 impl<const WORD_SIZE: usize> SparseDenseSuffix for AbsNegativeCaseSuffix<WORD_SIZE> {
     fn suffix_mle(b: LookupBits) -> u32 {
         if b.len() == 0 {
-            // Suffix is empty, return 1 prefix will handle whole word, we just cover the "+1"
+            // Suffix is empty, prefix will handle whole word, we just cover the "+1" from (-x = !x + 1)
             return 1;
         }
         let sign_bit = if b.len() < WORD_SIZE {
@@ -23,8 +23,9 @@ impl<const WORD_SIZE: usize> SparseDenseSuffix for AbsNegativeCaseSuffix<WORD_SI
             sign_bit as u32
         };
 
+        // mask must equal b length, but should not exceed exceed WORD_SIZE-1 to not include sign bit
         let mask = std::cmp::min(WORD_SIZE - 1, b.len());
-        sign_bit * (!u64::from(b) % (1 << mask) + 1) as u32
+        sign_bit * ((!u64::from(b)).wrapping_add(1) % (1 << mask)) as u32
     }
 }
 

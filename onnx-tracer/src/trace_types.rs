@@ -412,6 +412,7 @@ impl ONNXInstr {
             | ONNXOpcode::Sum
             | ONNXOpcode::Relu
             | ONNXOpcode::Output
+            | ONNXOpcode::VirtualPow2
         );
 
         flags[CircuitFlags::RightOperandIsTs2Value as usize] = matches!(
@@ -436,6 +437,7 @@ impl ONNXInstr {
             | ONNXOpcode::VirtualMove
             | ONNXOpcode::Relu
             | ONNXOpcode::Output
+            | ONNXOpcode::VirtualPow2
         );
 
         flags[CircuitFlags::SubtractOperands as usize] = matches!(
@@ -460,6 +462,7 @@ impl ONNXInstr {
             | ONNXOpcode::Sum
             | ONNXOpcode::Relu
             | ONNXOpcode::Output
+            | ONNXOpcode::VirtualPow2
         );
 
         flags[CircuitFlags::Advice as usize] = matches!(
@@ -622,9 +625,14 @@ pub enum ONNXOpcode {
     Softmax,
     RebaseScale(Box<ONNXOpcode>),
     Gte,
+    Le,
     Reshape,
     ArgMax,
+    Max,
+    ArgMin,
+    Min,
     ReduceMax,
+    ReduceMin,
     Select,
     Broadcast,
     Abs,
@@ -674,12 +682,17 @@ impl ONNXOpcode {
             ONNXOpcode::VirtualPow2 => 1u64 << 24,
 
             ONNXOpcode::Gte => 1u64 << 25,
-            ONNXOpcode::Reshape => 1u64 << 26,
-            ONNXOpcode::ArgMax => 1u64 << 27,
-            ONNXOpcode::Select => 1u64 << 28,
-            ONNXOpcode::ReduceMax => 1u64 << 29,
-            ONNXOpcode::Broadcast => 1u64 << 30,
-            ONNXOpcode::Abs => 1u64 << 31,
+            ONNXOpcode::Le => 1u64 << 26,
+            ONNXOpcode::Reshape => 1u64 << 27,
+            ONNXOpcode::ArgMax => 1u64 << 28,
+            ONNXOpcode::Max => 1u64 << 29,
+            ONNXOpcode::ArgMin => 1u64 << 30,
+            ONNXOpcode::Min => 1u64 << 31,
+            ONNXOpcode::Select => 1u64 << 32,
+            ONNXOpcode::Broadcast => 1u64 << 33,
+            ONNXOpcode::ReduceMax => 1u64 << 34,
+            ONNXOpcode::ReduceMin => 1u64 << 35,
+            ONNXOpcode::Abs => 1u64 << 36,
             _ => panic!("ONNXOpcode {self:#?} not implemented in into_bitflag"),
         }
     }

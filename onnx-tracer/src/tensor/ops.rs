@@ -2927,9 +2927,11 @@ pub mod nonlinearities {
     /// ```
     pub fn sigmoid(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
         a.par_enum_map(|_, a_i| {
+            let q = 128.0;
             let kix = (a_i as f64) / scale_input;
-            let fout = scale_input / (1.0 + (-kix).exp());
-            let rounded = fout.round();
+            // Change exp to 2
+            let fout = q * scale_input / (1.0 + (-kix).exp2());
+            let rounded = fout.floor();
             Ok::<_, TensorError>(rounded as i32)
         })
         .unwrap()

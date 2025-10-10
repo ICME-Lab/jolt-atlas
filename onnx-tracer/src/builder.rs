@@ -36,16 +36,14 @@
 ///            [3, 6, 9, 12]]    // Third output neuron weights
 /// ```
 use crate::{
-    graph::{
+    constants::MAX_TENSOR_SIZE, graph::{
         model::Model,
         node::{RebaseScale, SupportedOp},
         utilities::{
             create_const_node, create_div_node, create_iff_node, create_input_node,
-            create_matmul_node, create_node, create_polyop_node, create_relu_node,
+            create_matmul_node, create_node, create_polyop_node, create_relu_node, create_sigmoid_node,
         },
-    },
-    ops::{hybrid::HybridOp, poly::PolyOp},
-    tensor::Tensor,
+    }, ops::{hybrid::HybridOp, poly::PolyOp}, tensor::Tensor
 };
 
 type Wire = (usize, usize); // (node_id, output_idx)
@@ -383,6 +381,13 @@ impl ModelBuilder {
         self.model.insert_node(relu_node);
         (id, O)
     }
+
+    fn sigmoid(&mut self, input: Wire, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
+        let id = self.alloc();
+        let sigmoid_node = create_sigmoid_node(self.scale, vec![input], out_dims, id, fanout_hint);
+        self.model.insert_node(sigmoid_node);
+        (id, O)
+    }
 }
 
 /* ********************** Testing Model's ********************** */
@@ -709,6 +714,18 @@ pub fn greater_equal_model() -> Model {
     let gte_result = b.greater_equal(input_a, input_b_const, vec![1, 5], 1);
 
     b.take(vec![input_a.0], vec![gte_result])
+}
+
+pub fn sigmoid_model() -> Model {
+    const SCALE: i32 = 0;
+    let mut b = ModelBuilder::new(SCALE);
+    let mut v = [0; MAX_TENSOR_SIZE];
+    v[0] = 3;
+    v[1] = 4;
+    v[2] = 5;
+    let input = b.input(vec![1, MAX_TENSOR_SIZE], 1);
+    let sigmoid_result = b.sigmoid(input, vec![1, MAX_TENSOR_SIZE], 1);
+    b.take(vec![input.0], vec![sigmoid_result])
 }
 
 /// Analog to onnx-tracer/models/multiclass0/network.onnx

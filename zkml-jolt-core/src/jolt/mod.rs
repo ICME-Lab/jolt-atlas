@@ -288,7 +288,7 @@ mod e2e_tests {
         poly::commitment::dory::DoryCommitmentScheme, utils::transcript::KeccakTranscript,
     };
     use log::{debug, info};
-    use onnx_tracer::{builder, graph::model::Model, logger::init_logger, model, tensor::Tensor};
+    use onnx_tracer::{builder, constants::MAX_TENSOR_SIZE, graph::model::Model, logger::init_logger, model, tensor::Tensor};
     use serde_json::Value;
     use serial_test::serial;
     use std::{collections::HashMap, fs::File, io::Read};
@@ -833,11 +833,18 @@ mod e2e_tests {
     #[serial]
     #[test]
     fn test_sigmoid_e2e() {
+        let mut v = [0; MAX_TENSOR_SIZE];
+        v[0] = 3;
+        v[1] = 4;
+        v[2] = 5;
+        v[3] = -1;
+        v[4] = -3;
         // Simple case: input tensor with both positive and negative values
         let config =
-            ModelTestConfig::new("sigmoid", vec![3, 4, 5, 0, 0, 0, 0, 0, 0, 0], vec![1, 10]);
+            ModelTestConfig::new("sigmoid", v.to_vec(), vec![1, MAX_TENSOR_SIZE]);
 
-        let model_fn = || model(&"../onnx-tracer/models/sigmoid/network.onnx".into());
+        // let model_fn = || model(&"../onnx-tracer/models/sigmoid/network.onnx".into());
+        let model_fn = builder::sigmoid_model;
 
         ZKMLTestHelper::prove_and_verify_simple(model_fn, &config.to_tensor());
     }

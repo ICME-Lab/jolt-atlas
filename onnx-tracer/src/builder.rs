@@ -723,10 +723,6 @@ pub fn greater_equal_model() -> Model {
 pub fn sigmoid_model() -> Model {
     const SCALE: i32 = 0;
     let mut b = ModelBuilder::new(SCALE);
-    let mut v = [0; MAX_TENSOR_SIZE];
-    v[0] = 3;
-    v[1] = 4;
-    v[2] = 5;
     let input = b.input(vec![1, MAX_TENSOR_SIZE], 1);
     let sigmoid_result = b.sigmoid(input, vec![1, MAX_TENSOR_SIZE], 1);
     b.take(vec![input.0], vec![sigmoid_result])

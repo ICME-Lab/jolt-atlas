@@ -107,7 +107,6 @@ where
 {
     #[tracing::instrument(skip_all, name = "Jolt::preprocess")]
     pub fn shared_preprocess(bytecode: Vec<ONNXInstr>) -> JoltSharedPreprocessing {
-        println!("bytecode: {:#?}", bytecode);
         let bytecode: Vec<ONNXInstr> = bytecode
             .into_iter()
             .flat_map(|instr| match instr.opcode {

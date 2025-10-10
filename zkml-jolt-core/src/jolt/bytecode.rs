@@ -46,8 +46,6 @@ impl BytecodePreprocessing {
         let mut virtual_address = 1; // Account for no-op instruction prepended to bytecode
         // println!("bytecode: {:#?}", bytecode);
         for instruction in bytecode.iter_mut() {
-            println!("virtual_address_map: {:#?}", virtual_address_map);
-            println!("instruction: {:#?}", instruction);
             assert_eq!(
                 virtual_address_map.insert(
                     (

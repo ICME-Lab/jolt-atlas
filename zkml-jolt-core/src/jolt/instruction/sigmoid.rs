@@ -468,7 +468,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 (1, 1 + b)
             };
             let q = ((Q * num) as f64 / den as f64).round() as u64;
-            out[i] = (q as u64).min(128);
+            out[i] = q.min(128);
         }
         out
     }

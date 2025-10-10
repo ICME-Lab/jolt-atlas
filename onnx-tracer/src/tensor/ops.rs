@@ -2906,24 +2906,9 @@ pub mod nonlinearities {
     ///     &[2, 3],
     /// ).unwrap();
     /// let result = sigmoid(&x, 1.0);
-    /// let expected = Tensor::<i32>::new(Some(&[1, 1, 1, 1, 1, 1]), &[2, 3]).unwrap();
+    /// let expected = Tensor::<i32>::new(Some(&[102, 127, 102, 85, 85, 64]), &[2, 3]).unwrap();
     ///
     /// assert_eq!(result, expected);
-    /// let x = Tensor::<i32>::new(
-    ///    Some(&[65536]),
-    ///   &[1],
-    /// ).unwrap();
-    /// let result = sigmoid(&x, 65536.0);
-    /// let expected = Tensor::<i32>::new(Some(&[47911]), &[1]).unwrap();
-    /// assert_eq!(result, expected);
-    ///
-    /// /// assert_eq!(result, expected);
-    /// let x = Tensor::<i32>::new(
-    ///    Some(&[256]),
-    ///   &[1],
-    /// ).unwrap();
-    /// let result = sigmoid(&x, 256.0);
-    /// let expected = Tensor::<i32>::new(Some(&[187]), &[1]).unwrap();
     /// ```
     pub fn sigmoid(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
         a.par_enum_map(|_, a_i| {

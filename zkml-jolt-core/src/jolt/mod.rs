@@ -837,7 +837,6 @@ mod e2e_tests {
     #[serial]
     #[test]
     fn test_sigmoid_e2e() {
-        // vector of random u8 values
         let mut rng = thread_rng();
         let mut v = vec![0; MAX_TENSOR_SIZE];
         for i in 0..MAX_TENSOR_SIZE {

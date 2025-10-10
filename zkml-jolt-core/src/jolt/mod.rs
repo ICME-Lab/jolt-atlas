@@ -292,7 +292,7 @@ mod e2e_tests {
         builder, constants::MAX_TENSOR_SIZE, graph::model::Model, logger::init_logger, model,
         tensor::Tensor,
     };
-    use rand::{thread_rng, Rng};
+    use rand::{Rng, thread_rng};
     use serde_json::Value;
     use serial_test::serial;
     use std::{collections::HashMap, fs::File, io::Read};

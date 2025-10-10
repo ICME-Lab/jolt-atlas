@@ -7,8 +7,8 @@ use crate::{
         instruction::{
             VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction,
             rebase_scale::REBASEInstruction, reduce_sum::ReduceSumInstruction, relu::RELU,
-            virtual_advice::ADVICEInstruction, virtual_const::ConstInstruction,
-            virtual_pow2::VirtualPow2,
+            sigmoid::SigmoidInstruction, virtual_advice::ADVICEInstruction,
+            virtual_const::ConstInstruction, virtual_pow2::VirtualPow2,
         },
         precompiles::{PrecompileOp, PrecompilePreprocessing, matmult::MatMultPrecompile},
     },
@@ -253,6 +253,7 @@ pub fn jolt_execution_trace(raw_trace: Vec<ONNXCycle>) -> ExecutionTrace {
             ONNXOpcode::Div => DIVInstruction::<32>::virtual_trace(raw),
             ONNXOpcode::ArgMax => ArgMaxInstruction::<32>::virtual_trace(raw),
             ONNXOpcode::RebaseScale(_) => REBASEInstruction::<32>::virtual_trace(raw),
+            ONNXOpcode::Sigmoid => SigmoidInstruction::<32>::virtual_trace(raw),
             _ => vec![raw],
         };
 

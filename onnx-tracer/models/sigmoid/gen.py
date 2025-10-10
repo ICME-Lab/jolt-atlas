@@ -5,18 +5,18 @@ import math
 class Sigmoid(nn.Module):
     def __init__(self):
         super().__init__()
-        self.ln2 = math.log(2.0)
-        self.q = 256
 
     def forward(self, x):
-        return self.q * torch.sigmoid(x * math.log(2.0))
+        # Continuous base-2 sigmoid
+        y = torch.sigmoid(x)
+        return y
 
 # Create model
 model = Sigmoid()
 model.eval()
 
 # Example input
-x = torch.randn(1, 10)
+x = torch.randn(1, 64)
 
 # Export to ONNX
 torch.onnx.export(

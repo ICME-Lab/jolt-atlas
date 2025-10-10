@@ -146,7 +146,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 ts3: None,
                 td: v_neg_z_clamped,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - 2),
+                virtual_sequence_remaining: remain(vt.len()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims,
             },
@@ -179,7 +179,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 ts3: v_neg_z_clamped,
                 td: v_abs,
                 imm: None,
-                virtual_sequence_remaining: Some(0),
+                virtual_sequence_remaining: remain(vt.len()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims,
             },
@@ -227,7 +227,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
         // ------------------------------------------------------------------
         // Step 7. Load Q and compute Q^2
         // ------------------------------------------------------------------
-        const Q: u64 = 1 << 8;
+        const Q: u64 = 128;
         let q_tensor = vec![Q; MAX_TENSOR_SIZE];
 
         vt.push(ONNXCycle {
@@ -292,7 +292,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 ts3: None,
                 td: v_div_Q_pow,
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&pow2_vals))),
-                virtual_sequence_remaining: None, // inner trace manages its own counters
+                virtual_sequence_remaining: remain(vt.len()), // inner trace manages its own counters
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims,
             },
@@ -408,7 +408,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 ts3: None,
                 td: v_c,
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&b_vals))),
-                virtual_sequence_remaining: None,
+                virtual_sequence_remaining: remain(vt.len()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims,
             },
@@ -455,7 +455,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
     fn sequence_output(x: Vec<u64>, _: Vec<u64>, _: Option<ONNXOpcode>) -> Vec<u64> {
         // Reference (host-side) quantized σ_Q(z) with base 2, clamped to [-8,8]
         let mut out = vec![0u64; MAX_TENSOR_SIZE];
-        const Q: u128 = 256;
+        const Q: u128 = 128;
 
         for i in 0..MAX_TENSOR_SIZE {
             let xi = x[i] as i32;
@@ -467,8 +467,8 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 let b = 1u128 << ((-e) as u32); // 2^{|e|}
                 (1, 1 + b)
             };
-            let q = (Q * num) / den;
-            out[i] = (q as u64).min(255);
+            let q = ((Q * num) as f64 / den as f64).round() as u64;
+            out[i] = q.min(128);
         }
         out
     }

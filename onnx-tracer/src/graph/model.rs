@@ -1372,12 +1372,6 @@ mod tests {
         assert_eq!(result.outputs.len(), 1);
 
         let _out: Vec<i32> = result.outputs[0].iter().copied().collect();
-
-        // TODO(Alberto): Not sure how to handle precision yet
-        // sigmoid(-2)≈0.119, sigmoid(0)=0.5, sigmoid(2)≈0.881
-        // assert!((out[0] - 0.119).abs() < 1e-3);
-        // assert!((out[1] - 0.5).abs() < 1e-3);
-        // assert!((out[2] - 0.881).abs() < 1e-3);
     }
 
     #[test]

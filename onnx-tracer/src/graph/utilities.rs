@@ -1362,6 +1362,14 @@ dimensions"
                 panic!("Expected 2 inputs for >=, got {}", inputs.len())
             }
         }
+        "<" => {
+            // Extract the slope layer hyperparams
+            if inputs.len() == 2 {
+                SupportedOp::Hybrid(HybridOp::Less)
+            } else {
+                panic!("Expected 2 inputs for <, got {}", inputs.len())
+            }
+        }
         c => {
             panic!("Unknown op: {c}");
         }

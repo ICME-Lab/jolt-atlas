@@ -10,7 +10,8 @@ use crate::jolt::{
     bytecode::{BytecodePreprocessing, BytecodeProof},
     execution_trace::JoltONNXCycle,
     instruction::{
-        argmax::ArgMaxInstruction, div::DIVInstruction, rebase_scale::REBASEInstruction, sigmoid::SigmoidInstruction, VirtualInstructionSequence
+        VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction,
+        rebase_scale::REBASEInstruction, sigmoid::SigmoidInstruction,
     },
     instruction_lookups::LookupsProof,
     precompiles::{PrecompilePreprocessing, PrecompileProof},
@@ -288,7 +289,10 @@ mod e2e_tests {
         poly::commitment::dory::DoryCommitmentScheme, utils::transcript::KeccakTranscript,
     };
     use log::{debug, info};
-    use onnx_tracer::{builder, constants::MAX_TENSOR_SIZE, graph::model::Model, logger::init_logger, model, tensor::Tensor};
+    use onnx_tracer::{
+        builder, constants::MAX_TENSOR_SIZE, graph::model::Model, logger::init_logger, model,
+        tensor::Tensor,
+    };
     use serde_json::Value;
     use serial_test::serial;
     use std::{collections::HashMap, fs::File, io::Read};
@@ -840,8 +844,7 @@ mod e2e_tests {
         v[3] = -1;
         v[4] = -3;
         // Simple case: input tensor with both positive and negative values
-        let config =
-            ModelTestConfig::new("sigmoid", v.to_vec(), vec![1, MAX_TENSOR_SIZE]);
+        let config = ModelTestConfig::new("sigmoid", v.to_vec(), vec![1, MAX_TENSOR_SIZE]);
 
         // let model_fn = || model(&"../onnx-tracer/models/sigmoid/network.onnx".into());
         let model_fn = builder::sigmoid_model;

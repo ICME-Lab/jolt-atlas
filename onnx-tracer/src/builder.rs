@@ -36,14 +36,18 @@
 ///            [3, 6, 9, 12]]    // Third output neuron weights
 /// ```
 use crate::{
-    constants::MAX_TENSOR_SIZE, graph::{
+    constants::MAX_TENSOR_SIZE,
+    graph::{
         model::Model,
         node::{RebaseScale, SupportedOp},
         utilities::{
             create_const_node, create_div_node, create_iff_node, create_input_node,
-            create_matmul_node, create_node, create_polyop_node, create_relu_node, create_sigmoid_node,
+            create_matmul_node, create_node, create_polyop_node, create_relu_node,
+            create_sigmoid_node,
         },
-    }, ops::{hybrid::HybridOp, poly::PolyOp}, tensor::Tensor
+    },
+    ops::{hybrid::HybridOp, poly::PolyOp},
+    tensor::Tensor,
 };
 
 type Wire = (usize, usize); // (node_id, output_idx)

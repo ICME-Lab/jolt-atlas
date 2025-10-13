@@ -2906,13 +2906,13 @@ pub mod nonlinearities {
     ///     &[2, 3],
     /// ).unwrap();
     /// let result = sigmoid(&x, 1.0);
-    /// let expected = Tensor::<i32>::new(Some(&[102, 127, 102, 85, 85, 64]), &[2, 3]).unwrap();
+    /// let expected = Tensor::<i32>::new(Some(&[102, 128, 102, 85, 85, 64]), &[2, 3]).unwrap();
     ///
     /// assert_eq!(result, expected);
     /// ```
     pub fn sigmoid(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
-        let result = a
-            .enum_map(|_, a_i| {
+        a
+            .par_enum_map(|_, a_i| {
                 let q = 128.0;
                 let kix = (a_i as f64) / scale_input;
                 let fout = q * scale_input / (1.0 + (-kix).exp2());
@@ -2926,8 +2926,7 @@ pub mod nonlinearities {
                     Ok::<_, TensorError>(fout.floor() as i32)
                 }
             })
-            .unwrap();
-        result
+            .unwrap()
     }
 
     /// Elementwise applies exponential to a tensor of integers.

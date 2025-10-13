@@ -114,8 +114,32 @@ pub fn prefix_suffix_test<F: JoltField, T: PrefixSuffixDecomposition<32>>() {
                         j,
                     );
                 }
-
                 j += 1;
+
+                // Last round, check that prefix-suffix combine still matches, since used in [`ReadRafProverState::init_log_t_rounds`].
+                if j == 64 {
+                    eval_point = r.clone();
+                    assert_eq!(eval_point.len(), 64); // r should be fully defined over address' 64 variables.
+                    let prefixes: Vec<_> = std::mem::take(&mut prefix_checkpoints)
+                        .into_iter()
+                        .map(|checkpoint| checkpoint.unwrap())
+                        .collect();
+
+                    let mle_eval = T::default().evaluate_mle(&eval_point);
+
+                    let combined = T::default().combine(&prefixes, &suffix_evals);
+                    if combined != mle_eval {
+                        println!("Lookup index: {lookup_index}");
+                        println!("{j} {prefix_bits} {suffix_bits}");
+                        for (i, x) in prefix_evals.iter().enumerate() {
+                            println!("prefix_evals[{i}] = {x}");
+                        }
+                        for (i, x) in suffix_evals.iter().enumerate() {
+                            println!("suffix_evals[{i}] = {x}");
+                        }
+                    }
+                    assert_eq!(combined, mle_eval);
+                }
             }
         }
     }

@@ -442,10 +442,8 @@ impl<F: JoltField> SumcheckInstance<F> for ReadRafSumcheck<F> {
             + (F::one() - raf_flag_claim)
                 * (self.gamma * left_operand_eval + self.gamma_squared * right_operand_eval)
             + raf_flag_claim * self.gamma_squared * identity_poly_eval;
-        println!("val_eval: {val_eval}");
-        let res = eq_eval_cycle * ra_claim * val_eval;
-        println!("result: {res}");
-        res
+
+        eq_eval_cycle * ra_claim * val_eval
     }
 
     fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {

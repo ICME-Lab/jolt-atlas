@@ -21,6 +21,7 @@ impl<const WORD_SIZE: usize> AtlasLookupTable for AbsTable<WORD_SIZE> {
         }
     }
 
+    // TODO(AntoineF4C5): handle the i32::MIN edge case
     fn evaluate_mle<F: JoltField>(&self, r: &[F]) -> F {
         debug_assert_eq!(r.len(), 2 * WORD_SIZE);
 

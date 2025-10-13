@@ -258,7 +258,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             advice_value: None,
         });
 
-        let q2_vals= Tensor::from(q_tensor.inner.iter().map(|&t| t * t).into_iter());
+        let q2_vals = Tensor::from(q_tensor.inner.iter().map(|&t| t * t));
         vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,

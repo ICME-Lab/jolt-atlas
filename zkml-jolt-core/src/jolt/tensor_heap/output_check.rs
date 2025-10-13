@@ -69,7 +69,6 @@ impl<F: JoltField> OutputSumcheckProverState<F> {
         let input_addresses = index_to_addresses(INPUT_ADDR);
         let input_end = *input_addresses.last().unwrap();
 
-
         let mut val_output = vec![0; K];
         val_output[output_start..input_end]
             .copy_from_slice(&final_heap_state[output_start..input_end]);
@@ -204,11 +203,9 @@ impl<F: JoltField> OutputSumcheck<F> {
             prover_state: None,
             val_final_claim: Some(proof.val_final_claim),
         };
-        println!("Output Sumcheck: {:?}", output_sumcheck);
 
         let _r_address_prime =
             output_sumcheck.verify_single(&proof.output_sumcheck_proof, transcript)?;
-
 
         let val_final_sumcheck = ValFinalSumcheck {
             T,

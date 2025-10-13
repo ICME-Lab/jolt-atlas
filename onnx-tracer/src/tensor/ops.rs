@@ -2911,21 +2911,24 @@ pub mod nonlinearities {
     /// assert_eq!(result, expected);
     /// ```
     pub fn sigmoid(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
-        a.par_enum_map(|_, a_i| {
+        let result = a.enum_map(|_, a_i| {
             let q = 128.0;
             let kix = (a_i as f64) / scale_input;
             let fout = q * scale_input / (1.0 + (-kix).exp2());
-            let rounded = fout.round();
-            let delta = 0.01;
+            let ceil = fout.ceil();
+            let delta = 0.5;
             // Division in the sigmoid virtual instruction floors.
             // This hack is to avoid rounding 127.999999 to 127
-            if rounded - fout > delta {
-                Ok::<_, TensorError>(fout.floor() as i32)
+            if ceil as u64 == 128 && ceil - fout <= delta {
+                Ok::<_, TensorError>(ceil as i32)
             } else {
-                Ok::<_, TensorError>(rounded as i32)
+                Ok::<_, TensorError>(fout.floor() as i32)
             }
         })
         .unwrap()
+        ;
+        println!("result: {:?}", result);
+        result
     }
 
     /// Elementwise applies exponential to a tensor of integers.

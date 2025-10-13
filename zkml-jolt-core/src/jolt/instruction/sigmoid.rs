@@ -422,6 +422,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             advice_value: None,
         });
 
+        println!("c_vals: {:?}", c_vals);
 
         // ------------------------------------------------------------------
         // Step 12. Move result to final td

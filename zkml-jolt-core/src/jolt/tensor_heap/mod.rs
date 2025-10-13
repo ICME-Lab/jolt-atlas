@@ -118,13 +118,13 @@ impl<F: JoltField, ProofTranscript: Transcript> TensorHeapTwistProof<F, ProofTra
         T: usize,
         _opening_accumulator: &mut VerifierOpeningAccumulator<F, PCS, ProofTranscript>,
         transcript: &mut ProofTranscript,
-        _program_output: ProgramIO,
+        program_output: ProgramIO,
     ) -> Result<(), ProofVerifyError> {
         let log_K = self.K.log_2();
         let log_T = T.log_2();
         let r: Vec<F> = transcript.challenge_vector(log_K);
         let r_prime: Vec<F> = transcript.challenge_vector(log_T);
-        let (_r_address, r_cycle) = self
+        let (r_address, r_cycle) = self
             .read_write_checking_proof
             .verify(r, r_prime, transcript);
 
@@ -160,13 +160,13 @@ impl<F: JoltField, ProofTranscript: Transcript> TensorHeapTwistProof<F, ProofTra
             "Val evaluation sumcheck failed"
         );
 
-        // OutputSumcheck::verify(
-        //     &r_address,
-        //     T,
-        //     &self.output_proof,
-        //     transcript,
-        //     program_output,
-        // )?;
+        OutputSumcheck::verify(
+            &r_address,
+            T,
+            &self.output_proof,
+            transcript,
+            program_output,
+        )?;
         Ok(())
     }
 }

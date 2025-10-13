@@ -2927,7 +2927,6 @@ pub mod nonlinearities {
                 }
             })
             .unwrap();
-        println!("result: {:?}", result);
         result
     }
 

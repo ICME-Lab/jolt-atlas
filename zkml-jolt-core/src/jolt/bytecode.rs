@@ -44,7 +44,6 @@ impl BytecodePreprocessing {
     pub fn preprocess(mut bytecode: Vec<ONNXInstr>) -> Self {
         let mut virtual_address_map = BTreeMap::new();
         let mut virtual_address = 1; // Account for no-op instruction prepended to bytecode
-        // println!("bytecode: {:#?}", bytecode);
         for instruction in bytecode.iter_mut() {
             assert_eq!(
                 virtual_address_map.insert(

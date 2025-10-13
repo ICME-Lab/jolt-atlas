@@ -69,13 +69,11 @@ impl<F: JoltField> OutputSumcheckProverState<F> {
         let input_addresses = index_to_addresses(INPUT_ADDR);
         let input_end = *input_addresses.last().unwrap();
 
+
         let mut val_output = vec![0; K];
         val_output[output_start..input_end]
-            .par_iter_mut()
-            .zip(final_heap_state[output_start..input_end].par_iter())
-            .for_each(|(dest, src)| *dest = *src);
+            .copy_from_slice(&final_heap_state[output_start..input_end]);
 
-        // Compute io_mask by setting the relevant coefficients to 1
         let mut output_mask = vec![0u8; K];
         output_mask[output_start..input_end]
             .par_iter_mut()
@@ -206,9 +204,11 @@ impl<F: JoltField> OutputSumcheck<F> {
             prover_state: None,
             val_final_claim: Some(proof.val_final_claim),
         };
+        println!("Output Sumcheck: {:?}", output_sumcheck);
 
         let _r_address_prime =
             output_sumcheck.verify_single(&proof.output_sumcheck_proof, transcript)?;
+
 
         let val_final_sumcheck = ValFinalSumcheck {
             T,
@@ -337,6 +337,8 @@ impl<F: JoltField, ProofTranscript: Transcript> BatchableSumcheckInstance<F, Pro
             .zip(program_output.input.par_iter().map(normalize))
             .for_each(|(dest, src)| *dest = F::from_u64(src));
 
+        // println!("val_output: {:?}", val_output);
+
         let val_output = MultilinearPolynomial::from(val_output);
 
         let eq_eval = EqPolynomial::mle(r_address, r_address_prime);
@@ -345,6 +347,11 @@ impl<F: JoltField, ProofTranscript: Transcript> BatchableSumcheckInstance<F, Pro
 
         // Recall that the sumcheck expression is:
         //   0 = \sum_k eq(r_address, k) * output_range(k) * (Val_final(k) - Val_output(k))
+        // println!("val_final_claim: {:?}", val_final_claim);
+        // println!("val_output_eval: {:?}", val_output_eval);
+        // println!("eq_eval: {:?}", eq_eval);
+        // println!("output_range_eval: {:?}", output_range_eval);
+        // println!("eq_eval * output_range_eval * (*val_final_claim - val_output_eval): {:?}", eq_eval * output_range_eval * (*val_final_claim - val_output_eval));
         eq_eval * output_range_eval * (*val_final_claim - val_output_eval)
     }
 }

@@ -72,11 +72,8 @@ impl SingleSumcheck {
         let num_rounds = sumcheck_instance.num_rounds();
         let mut r_sumcheck: Vec<F> = Vec::with_capacity(num_rounds);
         let mut compressed_polys: Vec<CompressedUniPoly<F>> = Vec::with_capacity(num_rounds);
-        println!("Enter proving");
 
         let mut previous_claim = sumcheck_instance.input_claim();
-        println!("Input claim: {previous_claim}");
-
         for round in 0..num_rounds {
             let mut univariate_poly_evals =
                 sumcheck_instance.compute_prover_message(round, previous_claim);
@@ -93,7 +90,6 @@ impl SingleSumcheck {
 
             // Cache claim for this round
             previous_claim = univariate_poly.evaluate(&r_j);
-            println!("Round {round} claim: {previous_claim}");
 
             sumcheck_instance.bind(r_j, round);
         }
@@ -187,7 +183,6 @@ impl BatchedSumcheck {
         let mut r_sumcheck: Vec<F> = Vec::with_capacity(max_num_rounds);
         let mut compressed_polys: Vec<CompressedUniPoly<F>> = Vec::with_capacity(max_num_rounds);
 
-        // XXX: Build prover sumcheck claim (equals verfier recovered's claim)
         for round in 0..max_num_rounds {
             #[cfg(not(target_arch = "wasm32"))]
             {

@@ -294,7 +294,6 @@ impl<F: JoltField> SumcheckInstance<F> for ReadRafSumcheck<F> {
                 ps.ra = Some(MultilinearPolynomial::from(ra_acc));
             }
 
-            // XXX; Prover messages i > log_k
             (0..ps.eq_r_cycle.len() / 2)
                 .into_par_iter()
                 .map(|i| {
@@ -402,7 +401,7 @@ impl<F: JoltField> SumcheckInstance<F> for ReadRafSumcheck<F> {
         let accumulator = accumulator.as_ref().unwrap();
 
         let eq_eval_cycle = EqPolynomial::mle(&self.r_cycle, r_cycle_prime);
-        // XXX: Read Openings - expected claims
+
         let ra_claim = accumulator
             .borrow()
             .get_virtual_polynomial_opening(
@@ -437,12 +436,10 @@ impl<F: JoltField> SumcheckInstance<F> for ReadRafSumcheck<F> {
             .map(|(claim, val)| claim * val)
             .sum::<F>();
 
-        // XXX: Verify that those claims correspond to prover messages < log_k
         let val_eval = rv_val_claim
             + (F::one() - raf_flag_claim)
                 * (self.gamma * left_operand_eval + self.gamma_squared * right_operand_eval)
             + raf_flag_claim * self.gamma_squared * identity_poly_eval;
-
         eq_eval_cycle * ra_claim * val_eval
     }
 
@@ -643,8 +640,6 @@ impl<F: JoltField> ReadRafProverState<F> {
                     *val += table.combine(&prefixes, &suffixes);
                 }
 
-                // XXX: Seemingly equivalent to `val_eval` in expected_output_claim
-                // Need to make sure prefix_registry.checkpoints include the (1 - raf_flag) or raf_flag depending on interleaving
                 if is_interleaved_operands {
                     *val += gamma * self.prefix_registry.checkpoints[Prefix::LeftOperand].unwrap()
                         + gamma_squared
@@ -663,7 +658,6 @@ impl<F: JoltField> ReadRafSumcheck<F> {
         let mut read_checking = [F::zero(), F::zero()];
         let mut raf = [F::zero(), F::zero()];
 
-        // XXX: Prover messages i < log_k
         rayon::join(
             || {
                 read_checking = self.prover_msg_read_checking(round);
@@ -761,7 +755,6 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::jolt::sumcheck::SingleSumcheck;
     use crate::jolt::{
         JoltProverPreprocessing, JoltSharedPreprocessing, JoltVerifierPreprocessing,
         bytecode::BytecodePreprocessing, precompiles::PrecompilePreprocessing,
@@ -782,7 +775,7 @@ mod tests {
     };
     use rand::{SeedableRng, rngs::StdRng};
 
-    const LOG_T: usize = 1;
+    const LOG_T: usize = 8;
     const T: usize = 1 << LOG_T;
 
     fn random_instruction(rng: &mut StdRng, instruction: &Option<ONNXOpcode>) -> JoltONNXCycle {
@@ -921,8 +914,8 @@ mod tests {
 
         let mut prover_transcript_ref = prover_sm.transcript.borrow_mut();
 
-        let (proof, r_sumcheck) = SingleSumcheck::prove(
-            &mut prover_sumcheck,
+        let (proof, r_sumcheck) = BatchedSumcheck::prove(
+            vec![&mut prover_sumcheck],
             Some(prover_accumulator.clone()),
             &mut *prover_transcript_ref,
         );
@@ -960,9 +953,9 @@ mod tests {
 
         let mut verifier_sumcheck = ReadRafSumcheck::new_verifier(&mut verifier_sm);
 
-        let r_sumcheck_verif = SingleSumcheck::verify(
-            &mut verifier_sumcheck,
+        let r_sumcheck_verif = BatchedSumcheck::verify(
             &proof,
+            vec![&mut verifier_sumcheck],
             Some(verifier_accumulator.clone()),
             &mut *verifier_sm.transcript.borrow_mut(),
         )

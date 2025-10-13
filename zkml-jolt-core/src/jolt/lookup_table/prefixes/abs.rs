@@ -1,4 +1,7 @@
-use jolt_core::{field::JoltField, utils::lookup_bits::LookupBits};
+use jolt_core::{
+    field::JoltField, utils::lookup_bits::LookupBits,
+    zkvm::instruction_lookups::read_raf_checking::current_suffix_len,
+};
 
 use super::{PrefixCheckpoint, Prefixes, SparseDensePrefix};
 
@@ -19,14 +22,20 @@ impl<const WORD_SIZE: usize, F: JoltField> SparseDensePrefix<F> for AbsPrefix<WO
             return F::zero();
         }
 
-        // TODO(AntoineF4C5): Should be able to get rid of UnaryMsb and NOTLowerNoMsb prefixes by refactoring
-        let sign_bit = *Prefixes::UnaryMsb.prefix_mle::<WORD_SIZE, F>(checkpoints, r_x, c, b, j);
-        let word = *Prefixes::LowerWordNoMsb.prefix_mle::<WORD_SIZE, F>(checkpoints, r_x, c, b, j);
-        let negated_word =
-            *Prefixes::NOTLowerNoMsb.prefix_mle::<WORD_SIZE, F>(checkpoints, r_x, c, b, j);
+        let two = 2 * WORD_SIZE;
+        let suffix_len = current_suffix_len(two, j);
 
-        // (1 - sign_bit) * word + sign_bit * negated_word
-        sign_bit * (negated_word - word) + word
+        // \sum_{suffix_len <= k < WORD_SIZE}2^k = 2^WORD_SIZE - 2^suffix_len
+        let sum_2powk = F::from_u64((1 << (WORD_SIZE - 1)) - (1 << suffix_len));
+
+        let nsign_bit =
+            *Prefixes::NotUnaryMsb.prefix_mle::<WORD_SIZE, F>(checkpoints, r_x, c, b, j);
+        let word = *Prefixes::LowerWordNoMsb.prefix_mle::<WORD_SIZE, F>(checkpoints, r_x, c, b, j);
+
+        // !x = \sum_{k<WORD_SIZE} 2^k - x
+        // for the prefix-part: !x = \sum_{suffix_len <= k < WORD_SIZE} 2^k - x
+        // result = nsign_bit * word + (1 - nsign_bit) * (sum_2powk - x) (factored to reduce multiplications)
+        sum_2powk - word + nsign_bit * (word + word - sum_2powk)
     }
 
     fn update_prefix_checkpoint(

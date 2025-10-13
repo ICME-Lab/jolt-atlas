@@ -2914,10 +2914,16 @@ pub mod nonlinearities {
         a.par_enum_map(|_, a_i| {
             let q = 128.0;
             let kix = (a_i as f64) / scale_input;
-            // Change exp to 2
             let fout = q * scale_input / (1.0 + (-kix).exp2());
-            let rounded = fout.floor();
-            Ok::<_, TensorError>(rounded as i32)
+            let rounded = fout.round();
+            let delta = 0.01;
+            // Division in the sigmoid virtual instruction floors.
+            // This hack is to avoid rounding 127.999999 to 127
+            if rounded - fout > delta {
+                Ok::<_, TensorError>(fout.floor() as i32)
+            } else {
+                Ok::<_, TensorError>(rounded as i32)
+            }
         })
         .unwrap()
     }

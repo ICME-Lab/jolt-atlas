@@ -12,7 +12,7 @@ use onnx_tracer::{
     tensor::Tensor,
     trace_types::{MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode},
 };
-use rand::{RngCore, SeedableRng, rngs::StdRng};
+use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
 
 /// Tests the consistency and correctness of a virtual instruction sequence.
 /// In detail:
@@ -44,7 +44,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(opcode: ONNXOpc
             vec![0u64; MAX_TENSOR_SIZE]
         } else {
             (0..MAX_TENSOR_SIZE)
-                .map(|_| rng.next_u32() as u64)
+                .map(|_| rng.gen_range(-128..=128) as u64)
                 .collect::<Vec<u64>>()
         };
 
@@ -58,7 +58,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(opcode: ONNXOpc
             vec![0u64; MAX_TENSOR_SIZE]
         } else {
             (0..MAX_TENSOR_SIZE)
-                .map(|_| rng.next_u32() as u64)
+                .map(|_| rng.gen_range(-128..=128) as u64)
                 .collect::<Vec<u64>>()
         };
 

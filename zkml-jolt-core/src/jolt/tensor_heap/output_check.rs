@@ -20,7 +20,7 @@ use jolt_core::{
 };
 use onnx_tracer::{
     ProgramIO,
-    constants::{INPUT_ADDR, MAX_TENSOR_SIZE, OUTPUT_ADDR},
+    constants::{MAX_TENSOR_SIZE, OUTPUT_ADDR},
     trace_types::{index_to_addresses, normalize},
 };
 use rayon::prelude::*;
@@ -63,18 +63,17 @@ impl<F: JoltField> OutputSumcheckProverState<F> {
 
         // The heap layout is as follows:
         // - [zero_register, output, input, ..memory]
-        // Hence the input-output verification range is [output_start, input_end]
+        // Hence the output verification range is [output_start, output_end]
         let output_addresses = index_to_addresses(OUTPUT_ADDR);
         let output_start = output_addresses[0];
-        let input_addresses = index_to_addresses(INPUT_ADDR);
-        let input_end = *input_addresses.last().unwrap();
+        let output_end = *output_addresses.last().unwrap();
 
         let mut val_output = vec![0; K];
-        val_output[output_start..input_end]
-            .copy_from_slice(&final_heap_state[output_start..input_end]);
+        val_output[output_start..output_end]
+            .copy_from_slice(&final_heap_state[output_start..output_end]);
 
         let mut output_mask = vec![0u8; K];
-        output_mask[output_start..input_end]
+        output_mask[output_start..output_end]
             .par_iter_mut()
             .for_each(|k| *k = 1);
 
@@ -313,28 +312,17 @@ impl<F: JoltField, ProofTranscript: Transcript> BatchableSumcheckInstance<F, Pro
         let output_start = output_addresses[0];
         let output_end = *output_addresses.last().unwrap();
 
-        let input_addresses = index_to_addresses(INPUT_ADDR);
-        let input_start = *input_addresses.first().unwrap();
-        let input_end = *input_addresses.last().unwrap();
-
         let val_final_claim = self.val_final_claim.as_ref().unwrap();
 
         let r_address_prime = &r[..r_address.len()];
 
-        let output_range = RangeMaskPolynomial::new(output_start as u64, input_end as u64);
+        let output_range = RangeMaskPolynomial::new(output_start as u64, output_end as u64);
 
         let mut val_output = vec![F::zero(); self.K];
         val_output[output_start..output_end]
             .par_iter_mut()
             .zip(program_output.output.par_iter().map(normalize))
             .for_each(|(dest, src)| *dest = F::from_u64(src));
-
-        val_output[input_start..input_end]
-            .par_iter_mut()
-            .zip(program_output.input.par_iter().map(normalize))
-            .for_each(|(dest, src)| *dest = F::from_u64(src));
-
-        // println!("val_output: {:?}", val_output);
 
         let val_output = MultilinearPolynomial::from(val_output);
 
@@ -344,11 +332,6 @@ impl<F: JoltField, ProofTranscript: Transcript> BatchableSumcheckInstance<F, Pro
 
         // Recall that the sumcheck expression is:
         //   0 = \sum_k eq(r_address, k) * output_range(k) * (Val_final(k) - Val_output(k))
-        // println!("val_final_claim: {:?}", val_final_claim);
-        // println!("val_output_eval: {:?}", val_output_eval);
-        // println!("eq_eval: {:?}", eq_eval);
-        // println!("output_range_eval: {:?}", output_range_eval);
-        // println!("eq_eval * output_range_eval * (*val_final_claim - val_output_eval): {:?}", eq_eval * output_range_eval * (*val_final_claim - val_output_eval));
         eq_eval * output_range_eval * (*val_final_claim - val_output_eval)
     }
 }

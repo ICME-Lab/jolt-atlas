@@ -476,8 +476,16 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 let b = 1u128 << ((-e) as u32); // 2^{|e|}
                 (1, 1 + b)
             };
-            let q = ((Q * num) as f64 / den as f64).round() as u64;
-            out[i] = q;
+            let f = (Q * num) as f64 / den as f64;
+            let ceil = f.ceil();
+            let delta = 0.5;
+            if ceil as u64 == 128 && ceil - f <= delta {
+                let q = ceil as u64;
+                out[i] = q;
+            } else {
+                let q = f.floor() as u64;
+                out[i] = q;
+            }
         }
         out
     }

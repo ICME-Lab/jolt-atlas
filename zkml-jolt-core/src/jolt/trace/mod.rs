@@ -103,6 +103,10 @@ where
     // Execute the ONNX model to get the raw execution trace
     let (raw_trace, program_io) = onnx_tracer::execution_trace(model(), input);
 
+    #[cfg(test)]
+    {
+        println!("Raw trace: {raw_trace:#?}");
+    }
     let raw_trace = expand_raw_trace(raw_trace, preprocessing.max_td);
     // Convert the raw ONNX trace to Jolt-compatible format
     let trace = inline_tensor_trace(raw_trace, preprocessing);
@@ -171,6 +175,10 @@ pub fn inline_tensor_trace(
 
         // Advance program counter by the number of elements processed
         current_pc += current_active_output_els;
+    }
+    #[cfg(test)]
+    {
+        println!("Trace: {trace:#?}");
     }
 
     // Pad the trace to the expected code size with no-op cycles
@@ -378,6 +386,9 @@ impl JoltONNXCycle {
         advice_value: Option<u64>,
     ) -> Option<LookupFunction> {
         match instr.opcode {
+            ONNXOpcode::Abs => Some(LookupFunction::Abs(AbsInstruction::<WORD_SIZE>(
+                memory_ops.ts1_val,
+            ))),
             ONNXOpcode::Add => Some(LookupFunction::Add(AddInstruction::<WORD_SIZE>(
                 memory_ops.ts1_val,
                 memory_ops.ts2_val,
@@ -424,9 +435,6 @@ impl JoltONNXCycle {
                 ))
             }
             // Other opcodes (like MatMult) don't have lookup functions
-            ONNXOpcode::Abs => Some(LookupFunction::Abs(AbsInstruction::<WORD_SIZE>(
-                memory_ops.ts1_val,
-            ))),
             _ => None,
         }
     }
@@ -704,12 +712,12 @@ macro_rules! define_lookup_enum {
 define_lookup_enum!(
     enum LookupFunction,
     const WORD_SIZE,
+    Abs: AbsInstruction<WORD_SIZE>,
     Add: AddInstruction<WORD_SIZE>,
     Sub: SubInstruction<WORD_SIZE>,
     Mul: MulInstruction<WORD_SIZE>,
     Const: ConstInstruction<WORD_SIZE>,
     Relu: ReluInstruction<WORD_SIZE>,
-    Abs: AbsInstruction<WORD_SIZE>,
     Advice: AdviceInstruction<WORD_SIZE>,
     VirtualAssertValidSignedRemainder: AssertValidSignedRemainderInstruction<WORD_SIZE>,
     VirtualAssertValidDiv0: AssertValidDiv0Instruction<WORD_SIZE>,

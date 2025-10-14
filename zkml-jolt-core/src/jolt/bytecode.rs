@@ -53,7 +53,12 @@ impl BytecodePreprocessing {
                     ),
                     virtual_address
                 ),
-                None
+                None,
+                "virtual_address_map already contains this key: {:?}",
+                (
+                    instruction.address,
+                    instruction.virtual_sequence_remaining.unwrap_or(0)
+                )
             );
             virtual_address += 1;
         }

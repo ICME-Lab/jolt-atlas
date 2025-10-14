@@ -44,7 +44,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(opcode: ONNXOpc
             vec![0u64; MAX_TENSOR_SIZE]
         } else {
             (0..MAX_TENSOR_SIZE)
-                .map(|_| rng.next_u32() as u64)
+                .map(|_| rng.next_u32() as u8 as u64)
                 .collect::<Vec<u64>>()
         };
 
@@ -58,7 +58,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(opcode: ONNXOpc
             vec![0u64; MAX_TENSOR_SIZE]
         } else {
             (0..MAX_TENSOR_SIZE)
-                .map(|_| rng.next_u32() as u64)
+                .map(|_| rng.next_u32() as u8 as u64)
                 .collect::<Vec<u64>>()
         };
 

@@ -46,6 +46,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
         let z_clamped: Vec<i64> = z_i64.iter().map(|&v| v.clamp(-8, 8)).collect();
         let z_clamped_u64: Vec<u64> = z_clamped.iter().map(|&x| x as u64).collect();
 
+        let z_clamped_tensor = Tensor::from(u64_vec_to_i32_iter(&z_clamped_u64));
         vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
@@ -64,15 +65,15 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 ts2_val: None,
                 ts3_val: None,
                 td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&z_clamped_u64))),
+                td_post_val: Some(z_clamped_tensor.clone()),
             },
-            advice_value: Some(Tensor::from(u64_vec_to_i32_iter(&z_clamped_u64))),
+            advice_value: Some(z_clamped_tensor.clone()),
         });
 
         // ------------------------------------------------------------------
         // Step 2. Materialize constant zero for comparisons
         // ------------------------------------------------------------------
-        let zero_tensor = vec![0u64; MAX_TENSOR_SIZE];
+        let zero_tensor = Tensor::from(u64_vec_to_i32_iter(&vec![0u64; MAX_TENSOR_SIZE]));
         vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
@@ -81,7 +82,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 ts2: None,
                 ts3: None,
                 td: v_zero,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&zero_tensor))),
+                imm: Some(zero_tensor.clone()),
                 virtual_sequence_remaining: remain(vt.len()),
                 active_output_elements: MAX_TENSOR_SIZE,
                 output_dims: [1, MAX_TENSOR_SIZE],
@@ -91,7 +92,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 ts2_val: None,
                 ts3_val: None,
                 td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&zero_tensor))),
+                td_post_val: Some(zero_tensor.clone()),
             },
             advice_value: None,
         });
@@ -103,6 +104,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             .iter()
             .map(|&v| if v >= 0 { 1 } else { 0 })
             .collect();
+        let ge0_tensor = Tensor::from(u64_vec_to_i32_iter(&ge0_vals));
         vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
@@ -117,11 +119,11 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 output_dims: [1, MAX_TENSOR_SIZE],
             },
             memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&z_clamped_u64))),
-                ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&zero_tensor))),
+                ts1_val: Some(z_clamped_tensor.clone()),
+                ts2_val: Some(zero_tensor.clone()),
                 ts3_val: None,
                 td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&ge0_vals))),
+                td_post_val: Some(ge0_tensor.clone()),
             },
             advice_value: None,
         });
@@ -137,6 +139,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             })
             .collect();
 
+        let neg_vals_tensor = Tensor::from(u64_vec_to_i32_iter(&neg_vals));
         vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
@@ -146,16 +149,16 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 ts3: None,
                 td: v_neg_z_clamped,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - 2),
+                virtual_sequence_remaining: remain(vt.len()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&vec![0; MAX_TENSOR_SIZE]))),
-                ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&z_clamped_u64))),
+                ts1_val: Some(zero_tensor.clone()),
+                ts2_val: Some(z_clamped_tensor.clone()),
                 ts3_val: None,
                 td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&neg_vals))),
+                td_post_val: Some(neg_vals_tensor.clone()),
             },
             advice_value: None,
         });
@@ -169,6 +172,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             .zip(&neg_vals)
             .map(|((&x, &cond), &nx)| if cond != 0 { x } else { nx })
             .collect();
+        let abs_vals_tensor = Tensor::from(u64_vec_to_i32_iter(&abs_vals));
 
         vt.push(ONNXCycle {
             instr: ONNXInstr {
@@ -179,16 +183,16 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 ts3: v_neg_z_clamped,
                 td: v_abs,
                 imm: None,
-                virtual_sequence_remaining: Some(0),
+                virtual_sequence_remaining: remain(vt.len()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&ge0_vals))),
-                ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&z_clamped_u64))),
-                ts3_val: Some(Tensor::from(u64_vec_to_i32_iter(&neg_vals))),
+                ts1_val: Some(ge0_tensor.clone()),
+                ts2_val: Some(z_clamped_tensor.clone()),
+                ts3_val: Some(neg_vals_tensor.clone()),
                 td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&abs_vals))),
+                td_post_val: Some(abs_vals_tensor.clone()),
             },
             advice_value: None,
         });
@@ -200,6 +204,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
             .iter()
             .map(|&ai| VirtualPow2::<WORD_SIZE>(ai).to_lookup_output())
             .collect();
+        let pow2_vals_tensor = Tensor::from(u64_vec_to_i32_iter(&pow2_vals));
 
         vt.push(ONNXCycle {
             instr: ONNXInstr {
@@ -215,11 +220,11 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&abs_vals))),
+                ts1_val: Some(abs_vals_tensor.clone()),
                 ts2_val: None,
                 ts3_val: None,
                 td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&pow2_vals))),
+                td_post_val: Some(pow2_vals_tensor.clone()),
             },
             advice_value: None,
         });
@@ -227,8 +232,8 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
         // ------------------------------------------------------------------
         // Step 7. Load Q and compute Q^2
         // ------------------------------------------------------------------
-        const Q: u64 = 1 << 8;
-        let q_tensor = vec![Q; MAX_TENSOR_SIZE];
+        const Q: u64 = 128;
+        let q_tensor = Tensor::from(u64_vec_to_i32_iter(&vec![Q; MAX_TENSOR_SIZE]));
 
         vt.push(ONNXCycle {
             instr: ONNXInstr {
@@ -238,7 +243,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 ts2: None,
                 ts3: None,
                 td: v_q_const,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&q_tensor))),
+                imm: Some(q_tensor.clone()),
                 virtual_sequence_remaining: remain(vt.len()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims,
@@ -248,12 +253,12 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 ts2_val: None,
                 ts3_val: None,
                 td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&q_tensor))),
+                td_post_val: Some(q_tensor.clone()),
             },
             advice_value: None,
         });
 
-        let q2_vals: Vec<u64> = q_tensor.iter().map(|&t| t * t).collect();
+        let q2_vals = Tensor::from(q_tensor.inner.iter().map(|&t| t * t));
         vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
@@ -268,11 +273,11 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&q_tensor))),
-                ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&q_tensor))),
+                ts1_val: Some(q_tensor.clone()),
+                ts2_val: Some(q_tensor.clone()),
                 ts3_val: None,
                 td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&q2_vals))),
+                td_post_val: Some(q2_vals.clone()),
             },
             advice_value: None,
         });
@@ -283,6 +288,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
 
         // div_Q_pow = Q / 2^{|z|}
         let div_Q_pow_vals: Vec<u64> = pow2_vals.iter().map(|&p| Q / p).collect();
+        let div_Q_pow_vals_tensor = Tensor::from(u64_vec_to_i32_iter(&div_Q_pow_vals));
         vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
@@ -292,22 +298,23 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 ts3: None,
                 td: v_div_Q_pow,
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&pow2_vals))),
-                virtual_sequence_remaining: None, // inner trace manages its own counters
+                virtual_sequence_remaining: remain(vt.len()), // inner trace manages its own counters
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&q_tensor))),
+                ts1_val: Some(q_tensor.clone()),
                 ts2_val: None,
                 ts3_val: None,
                 td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&div_Q_pow_vals))),
+                td_post_val: Some(div_Q_pow_vals_tensor.clone()),
             },
             advice_value: None,
         });
 
         // mul_Q_pow = Q * 2^{|z|}
         let mul_Q_pow_vals: Vec<u64> = pow2_vals.iter().map(|&p| p * Q).collect();
+        let mul_Q_pow_vals_tensor = Tensor::from(u64_vec_to_i32_iter(&mul_Q_pow_vals));
         vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
@@ -322,11 +329,11 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&pow2_vals))),
-                ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&q_tensor))),
+                ts1_val: Some(pow2_vals_tensor.clone()),
+                ts2_val: Some(q_tensor.clone()),
                 ts3_val: None,
                 td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&mul_Q_pow_vals))),
+                td_post_val: Some(mul_Q_pow_vals_tensor.clone()),
             },
             advice_value: None,
         });
@@ -345,6 +352,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 }
             })
             .collect();
+        let a_vals_tensor = Tensor::from(u64_vec_to_i32_iter(&a_vals));
         vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
@@ -359,11 +367,11 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&ge0_vals))),
-                ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&div_Q_pow_vals))),
-                ts3_val: Some(Tensor::from(u64_vec_to_i32_iter(&mul_Q_pow_vals))),
+                ts1_val: Some(ge0_tensor.clone()),
+                ts2_val: Some(div_Q_pow_vals_tensor.clone()),
+                ts3_val: Some(mul_Q_pow_vals_tensor.clone()),
                 td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&a_vals))),
+                td_post_val: Some(a_vals_tensor.clone()),
             },
             advice_value: None,
         });
@@ -372,6 +380,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
         // Step 10. b = Q + a
         // ------------------------------------------------------------------
         let b_vals: Vec<u64> = a_vals.iter().map(|&a| a + Q).collect();
+        let b_vals_tensor = Tensor::from(u64_vec_to_i32_iter(&b_vals));
         vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
@@ -386,11 +395,11 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&q_tensor))),
-                ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&a_vals))),
+                ts1_val: Some(q_tensor.clone()),
+                ts2_val: Some(a_vals_tensor.clone()),
                 ts3_val: None,
                 td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&b_vals))),
+                td_post_val: Some(b_vals_tensor.clone()),
             },
             advice_value: None,
         });
@@ -399,6 +408,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
         // Step 11. c = Q^2 / b   => final σ_Q(z)
         // ------------------------------------------------------------------
         let c_vals: Vec<u64> = b_vals.iter().map(|&b| (Q * Q) / b).collect();
+        let c_vals_tensor = Tensor::from(u64_vec_to_i32_iter(&c_vals));
         vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
@@ -407,17 +417,17 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 ts2: None,
                 ts3: None,
                 td: v_c,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&b_vals))),
-                virtual_sequence_remaining: None,
+                imm: Some(b_vals_tensor.clone()),
+                virtual_sequence_remaining: remain(vt.len()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&q2_vals))),
+                ts1_val: Some(q2_vals.clone()),
                 ts2_val: None,
                 ts3_val: None,
                 td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&c_vals))),
+                td_post_val: Some(c_vals_tensor.clone()),
             },
             advice_value: None,
         });
@@ -439,11 +449,11 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&c_vals))),
+                ts1_val: Some(c_vals_tensor.clone()),
                 ts2_val: None,
                 ts3_val: None,
                 td_pre_val: cycle.memory_state.td_pre_val.clone(),
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&c_vals))),
+                td_post_val: Some(c_vals_tensor.clone()),
             },
             advice_value: None,
         });
@@ -453,9 +463,8 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
     }
 
     fn sequence_output(x: Vec<u64>, _: Vec<u64>, _: Option<ONNXOpcode>) -> Vec<u64> {
-        // Reference (host-side) quantized σ_Q(z) with base 2, clamped to [-8,8]
         let mut out = vec![0u64; MAX_TENSOR_SIZE];
-        const Q: u128 = 256;
+        const Q: u128 = 128;
 
         for i in 0..MAX_TENSOR_SIZE {
             let xi = x[i] as i32;
@@ -467,8 +476,16 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SigmoidInstruction<W
                 let b = 1u128 << ((-e) as u32); // 2^{|e|}
                 (1, 1 + b)
             };
-            let q = (Q * num) / den;
-            out[i] = (q as u64).min(255);
+            let f = (Q * num) as f64 / den as f64;
+            let ceil = f.ceil();
+            let delta = 0.5;
+            if ceil as u64 == 128 && ceil - f <= delta {
+                let q = ceil as u64;
+                out[i] = q;
+            } else {
+                let q = f.floor() as u64;
+                out[i] = q;
+            }
         }
         out
     }

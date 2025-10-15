@@ -1,7 +1,7 @@
 use crate::{
     jolt::{
         execution_trace::{JoltONNXCycle, ONNXLookupQuery, WORD_SIZE},
-        instruction::{VirtualInstructionSequence, div::DIVInstruction},
+        instruction::{VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction},
     },
     utils::u64_vec_to_i32_iter,
 };
@@ -12,7 +12,7 @@ use onnx_tracer::{
     tensor::Tensor,
     trace_types::{MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode},
 };
-use rand::{RngCore, SeedableRng, rngs::StdRng};
+use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
 
 /// Tests the consistency and correctness of a virtual instruction sequence.
 /// In detail:
@@ -44,7 +44,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(opcode: ONNXOpc
             vec![0u64; MAX_TENSOR_SIZE]
         } else {
             (0..MAX_TENSOR_SIZE)
-                .map(|_| rng.next_u32() as u8 as u64)
+                .map(|_| rng.gen_range(0..=63) as u8 as u64)
                 .collect::<Vec<u64>>()
         };
 
@@ -58,7 +58,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(opcode: ONNXOpc
             vec![0u64; MAX_TENSOR_SIZE]
         } else {
             (0..MAX_TENSOR_SIZE)
-                .map(|_| rng.next_u32() as u8 as u64)
+                .map(|_| rng.gen_range(0..=63) as u8 as u64)
                 .collect::<Vec<u64>>()
         };
 
@@ -112,6 +112,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(opcode: ONNXOpc
                 ONNXOpcode::Gather => gather_output(&cycle),
                 ONNXOpcode::Select => select_output(&cycle),
                 ONNXOpcode::Div => div_output(&cycle),
+                ONNXOpcode::ArgMax => argmax_output(&cycle),
                 _ => ONNXLookupQuery::<WORD_SIZE>::to_lookup_output(&JoltONNXCycle::from(&cycle)),
             };
 
@@ -209,7 +210,18 @@ fn select_output(cycle: &ONNXCycle) -> Vec<u64> {
 
 fn div_output(cycle: &ONNXCycle) -> Vec<u64> {
     assert_eq!(cycle.instr.opcode, ONNXOpcode::Div);
-    DIVInstruction::<WORD_SIZE>::virtual_trace(cycle.clone())
+    let x = DIVInstruction::<WORD_SIZE>::virtual_trace(cycle.clone())
+        .last()
+        .unwrap()
+        .td_post_vals()
+        .clone();
+    println!("x: {:#?}", x);
+    x
+}
+
+fn argmax_output(cycle: &ONNXCycle) -> Vec<u64> {
+    assert_eq!(cycle.instr.opcode, ONNXOpcode::ArgMax);
+    ArgMaxInstruction::<WORD_SIZE>::virtual_trace(cycle.clone())
         .last()
         .unwrap()
         .td_post_vals()

@@ -1,370 +1,375 @@
-use itertools::Itertools;
 use jolt_core::jolt::instruction::LookupQuery;
 use onnx_tracer::{
     constants::{MAX_TENSOR_SIZE, virtual_tensor_index},
     tensor::Tensor,
     trace_types::{MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode},
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    jolt::instruction::{
-        add::ADD, argmax::ArgMaxInstruction, beq::BEQInstruction, mul::MUL, virtual_advice::ADVICEInstruction, virtual_assert_valid_div0::AssertValidDiv0Instruction, virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction, virtual_pow2::VirtualPow2, VirtualInstructionSequence
-    },
-    utils::{u64_vec_to_i32_iter, u64_vec_to_i32_saturating},
+    jolt::instruction::{VirtualInstructionSequence, virtual_pow2::VirtualPow2},
+    utils::u64_vec_to_i32_iter,
 };
 
-/// Perform softmax and return the result
+/// Quantized Softmax producing Q * softmax(z)
+///
+/// Steps:
+/// 1. a <- z_max via ArgMax + Gather (replicate z_max to a full vector)
+/// 2. b <- Sub(a, z)                      // b_i = z_max - z_i  (>= 0)
+/// 3. c <- Pow2(b)                        // c_i = 2^{b_i}
+/// 4. d <- Div(Q, c)                      // d_i = Q / 2^{b_i}
+/// 5. e <- ReduceSum(d)                   // e = sum_j d_j  (replicated as a vector)
+/// 6. f <- Mul(Q, d)                      // f_i = Q * d_i
+/// 7. g <- Div(f, e)                      // g_i = f_i / e    == Q * softmax(z_i)
+#[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SoftmaxInstruction<const WORD_SIZE: usize>;
 
 impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<WORD_SIZE> {
-    const SEQUENCE_LENGTH: usize = ArgMaxInstruction::<WORD_SIZE>::SEQUENCE_LENGTH + MAX_TENSOR_SIZE + 7;
-        // ArgMaxInstruction::<WORD_SIZE>::SEQUENCE_LENGTH + (5 * MAX_TENSOR_SIZE) + 3;
+    // ArgMax, Gather, Sub, VirtualPow2, VirtualConst(Q), Div(Q,c), ReduceSum(d),
+    // Mul(Q,d), Div(f,e), VirtualMove  => 10 steps
+    const SEQUENCE_LENGTH: usize = 10;
 
     fn virtual_trace(cycle: ONNXCycle) -> Vec<ONNXCycle> {
         assert_eq!(cycle.instr.opcode, ONNXOpcode::Softmax);
 
-        let z = cycle.ts1_vals();
-        let mut virtual_trace = vec![];
+        let mut vt = Vec::with_capacity(Self::SEQUENCE_LENGTH);
+        let remain = |vt_len: usize| Some(Self::SEQUENCE_LENGTH - (vt_len + 1));
 
-        // Virtual registers
-        let v_idx = Some(virtual_tensor_index(0)); // argmax index
-        let v_zmax = Some(virtual_tensor_index(1)); // z_max value
-        let v_num = Some(virtual_tensor_index(2)); // per-elem numerator = z_i * 63
-        let v_scaled = Some(virtual_tensor_index(3)); // per-elem z'_i after division
-        let v_a = Some(virtual_tensor_index(4)); // per-elem a_i = 2^(z'_i)
-        let v_sum = Some(virtual_tensor_index(5)); // running sum for N
-        let v_broadcast_sum = Some(virtual_tensor_index(6)); // running sum for N
-        let v_probs = Some(virtual_tensor_index(7)); // per-elem p_i
-        let v_const_63 = Some(virtual_tensor_index(8)); // const 63
-        // let v_diff = Some(virtual_tensor_index(9)); // per-elem z_i - z_max
+        // ---- Virtual registers (distinct) ----
+        let v_argmax_idx = Some(virtual_tensor_index(0));
+        let v_zmax_vec = Some(virtual_tensor_index(1));
+        let v_b = Some(virtual_tensor_index(2));
+        let v_c_pow2 = Some(virtual_tensor_index(3));
+        let v_q_const = Some(virtual_tensor_index(4));
+        let v_d_q_over_c = Some(virtual_tensor_index(5));
+        let v_e_sum = Some(virtual_tensor_index(6));
+        let v_f_q_times_d = Some(virtual_tensor_index(7));
+        let v_g_out = Some(virtual_tensor_index(8));
 
-        // ----------------------------------------------------------------
-        // Find z_max
-        // 1. Use ArgMaxInstruction to get the index of the max.
-        // 2. Use Gather to fetch the max value.
-        // Let this be z_max.
-        // ----------------------------------------------------------------
-        let argmax_cycles = ArgMaxInstruction::<WORD_SIZE>::virtual_trace(ONNXCycle {
+        // Input tensor z
+        let z_u64 = cycle.ts1_vals();
+        let z_tensor = Tensor::from(u64_vec_to_i32_iter(&z_u64));
+
+        // 1a) ArgMax(z)
+        let (argmax_idx, _zmax_val) = {
+            let mut idx = 0usize;
+            let mut best = z_u64[0];
+            for i in 1..MAX_TENSOR_SIZE {
+                if z_u64[i] > best {
+                    best = z_u64[i];
+                    idx = i;
+                }
+            }
+            (idx as u64, best)
+        };
+        let mut argmax_tensor = Tensor::from(u64_vec_to_i32_iter(&vec![0; MAX_TENSOR_SIZE]));
+        argmax_tensor[0] = argmax_idx as u32 as i32;
+        vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
                 opcode: ONNXOpcode::ArgMax,
                 ts1: cycle.instr.ts1,
                 ts2: None,
                 ts3: None,
-                td: v_idx,
+                td: v_argmax_idx,
                 imm: None,
-                virtual_sequence_remaining: None,
+                virtual_sequence_remaining: remain(vt.len()),
                 active_output_elements: 1,
                 output_dims: [1, 1],
             },
-            memory_state: cycle.memory_state.clone(),
+            memory_state: MemoryState {
+                ts1_val: Some(z_tensor.clone()),
+                ts2_val: None,
+                ts3_val: None,
+                td_pre_val: None,
+                td_post_val: Some(argmax_tensor.clone()),
+            },
             advice_value: None,
         });
 
-        virtual_trace.extend(argmax_cycles);
-
-        // 2) Gather z[idx] into v_zmax
-        let x = z
-            .iter()
-            .map(|&v| v as u32 as i32 as i64)
-            .collect::<Vec<_>>();
-        let mut z_max_idx = 0;
-        let mut z_max_val = x[0];
-        for (i, &xi) in x.iter().enumerate().skip(1) {
-            if xi >= z_max_val {
-                z_max_val = xi;
-                z_max_idx = i;
-            }
-        }
-        // let x = u64_vec_to_i32_saturating(&z);
-        // let mut z_max_idx = 0;
-        // let mut z_max_val = x[0];
-        // for (i, &xi) in x.iter().enumerate().skip(1) {
-        //     if xi >= z_max_val {
-        //         z_max_val = xi;
-        //         z_max_idx = i;
-        //     }
-        // }
-        let mut zmax_tensor = vec![0; MAX_TENSOR_SIZE];
-        zmax_tensor[0] = z[z_max_idx];
-
-        virtual_trace.push(ONNXCycle {
+        // 1b) Gather -> replicate z_max as a full vector
+        let zmax_val_u64 = z_u64[argmax_idx as usize];
+        let mut zmax_vec: Vec<u64> = vec![0; MAX_TENSOR_SIZE];
+        zmax_vec[0] = zmax_val_u64;
+        let zmax_vec_tensor = Tensor::from(u64_vec_to_i32_iter(&zmax_vec));
+        vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
                 opcode: ONNXOpcode::Gather,
                 ts1: cycle.instr.ts1,
-                ts2: v_idx,
+                ts2: v_argmax_idx,
                 ts3: None,
-                td: v_zmax,
+                td: v_zmax_vec,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: remain(vt.len()),
                 active_output_elements: 1,
                 output_dims: [1, 1],
             },
             memory_state: MemoryState {
-                ts1_val: cycle.memory_state.ts1_val.clone(),
-                ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&vec![z_max_idx as u64]))),
+                ts1_val: Some(z_tensor.clone()),
+                ts2_val: Some(argmax_tensor.clone()),
                 ts3_val: None,
                 td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&zmax_tensor))),
+                td_post_val: Some(zmax_vec_tensor.clone()),
             },
             advice_value: None,
         });
 
-        let const_63_tensor = vec![63u64; MAX_TENSOR_SIZE];
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
-                address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualConst,
-                ts1: None,
-                ts2: None,
-                ts3: None,
-                td: v_const_63,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&const_63_tensor))),
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
-                active_output_elements: MAX_TENSOR_SIZE,
-                output_dims: [1, MAX_TENSOR_SIZE],
-            },
-            memory_state: MemoryState {
-                ts1_val: None,
-                ts2_val: None,
-                ts3_val: None,
-                td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&const_63_tensor))),
-            },
-            advice_value: None,
-        });
+        // TODO: Broadcast z_max
 
-        let z_times_63: Vec<u64> = z.iter().map(|&zi| zi * 63).collect();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
-                address: cycle.instr.address,
-                opcode: ONNXOpcode::Mul,
-                ts1: cycle.instr.ts1,
-                ts2: v_const_63,
-                ts3: None,
-                td: v_num,
-                imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
-                active_output_elements: MAX_TENSOR_SIZE,
-                output_dims: [1, MAX_TENSOR_SIZE],
-            },
-            memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&z))),
-                ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&const_63_tensor))),
-                ts3_val: None,
-                td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&z_times_63))),
-            },
-            advice_value: None,
-        });
-
-        println!("virtual_trace: {:#?}", virtual_trace);
-
-        let z_max = z[z_max_idx];
-        println!("z_max: {}", z_max);
-        let zmax_tensor = vec![z_max; MAX_TENSOR_SIZE];
-        let scaled: Vec<u64> = z_times_63.iter().map(|&ni| {
-            println!("ni: {}, z_max: {}", ni, z_max);
-            println!("ni as u32 as i32 as u64: {}, z_max: {}", ni as u32 as i32 as i64, z_max);
-            (ni as i64 / z_max as i64) as u64
-        }).collect();
-        println!("scaled: {:?}", scaled);
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
-                address: cycle.instr.address,
-                opcode: ONNXOpcode::Div,
-                ts1: v_num, 
-                ts2: None, // broadcast z_max
-                ts3: None,
-                td: v_scaled,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&zmax_tensor))),
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
-                active_output_elements: MAX_TENSOR_SIZE,
-                output_dims: [1, MAX_TENSOR_SIZE],
-            },
-            memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&z_times_63))),
-                ts2_val: None,
-                ts3_val: None,
-                td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&scaled))),
-            },
-            advice_value: None,
-        });
-
-        let a_vals: Vec<u64> = scaled
+        // 2) b = z_max - z
+        let b_vals: Vec<u64> = zmax_vec
             .iter()
-            .map(|&e| VirtualPow2::<WORD_SIZE>(e).to_lookup_output())
+            .zip(z_u64.iter())
+            .map(|(&a, &z)| a.wrapping_sub(z))
             .collect();
-
-        // One vectorized VirtualPow2 cycle
-        virtual_trace.push(ONNXCycle {
+        let b_tensor = Tensor::from(u64_vec_to_i32_iter(&b_vals));
+        vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualPow2,
-                ts1: v_scaled, // exponent tensor (z'_i)
-                ts2: None,
+                opcode: ONNXOpcode::Sub,
+                ts1: v_zmax_vec,
+                ts2: cycle.instr.ts1,
                 ts3: None,
-                td: v_a, // weights a
+                td: v_b,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
-                active_output_elements: MAX_TENSOR_SIZE,
-                output_dims: [1, MAX_TENSOR_SIZE],
-            },
-            memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&scaled))),
-                ts2_val: None,
-                ts3_val: None,
-                td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&a_vals))),
-            },
-            advice_value: None,
-        });
-
-        // ----------------------------------------------------------
-        // (4) N = sum_i a_i  via ADD reductions (linear chain)
-        // ----------------------------------------------------------
-        let mut running_sum = a_vals.get(0).copied().unwrap_or(0);
-
-        for i in 1..MAX_TENSOR_SIZE {
-            let prev = running_sum;
-            let next = running_sum + a_vals[i];
-            running_sum = running_sum.saturating_add(a_vals[i]);
-
-            // ADD: v_sum = v_sum + a_i
-            virtual_trace.push(ONNXCycle {
-                instr: ONNXInstr {
-                    address: cycle.instr.address,
-                    opcode: ONNXOpcode::Add,
-                    ts1: v_sum,
-                    ts2: v_a, // we materialize a_i for this step
-                    ts3: None,
-                    td: v_sum,
-                    imm: None,
-                    virtual_sequence_remaining: Some(
-                        Self::SEQUENCE_LENGTH - virtual_trace.len() - 1,
-                    ),
-                    active_output_elements: 1,
-                    output_dims: [1, 1],
-                },
-                memory_state: MemoryState {
-                    ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&[prev]))),
-                    ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&[a_vals[i]]))),
-                    ts3_val: None,
-                    td_pre_val: Some(Tensor::from(u64_vec_to_i32_iter(&[prev]))),
-                    td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&[next]))),
-                },
-                advice_value: None,
-            });
-        }
-
-        let n_tensor = vec![running_sum; MAX_TENSOR_SIZE];
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
-                address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualConst,
-                ts1: None,
-                ts2: None,
-                ts3: None,
-                td: v_broadcast_sum, // virtual register holding N
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&n_tensor))),
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
-                active_output_elements: MAX_TENSOR_SIZE,
-                output_dims: [1, MAX_TENSOR_SIZE],
-            },
-            memory_state: MemoryState {
-                ts1_val: None,
-                ts2_val: None,
-                ts3_val: None,
-                td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&n_tensor))),
-            },
-            advice_value: None,
-        });
-
-        let probs: Vec<u64> = a_vals.iter().map(|&ai| ai / running_sum).collect();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
-                address: cycle.instr.address,
-                opcode: ONNXOpcode::Div,
-                ts1: v_a, // the tensor [a_1, ..., a_n]
-                ts2: None, // the broadcasted N
-                ts3: None,
-                td: v_probs,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&n_tensor))),
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
-                active_output_elements: MAX_TENSOR_SIZE,
-                output_dims: [1, MAX_TENSOR_SIZE],
-            },
-            memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&a_vals))),
-                ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&n_tensor))),
-                ts3_val: None,
-                td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&probs))),
-            },
-            advice_value: None,
-        });
-
-        println!("virtual_trace.len(): {}", virtual_trace.len());
-
-        println!("Self::SEQUENCE_LENGTH: {}", Self::SEQUENCE_LENGTH);
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
-                address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualMove,
-                ts1: v_probs,
-                ts2: None,
-                ts3: None,
-                td: cycle.instr.td,
-                imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: remain(vt.len()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&probs))),
+                ts1_val: Some(zmax_vec_tensor.clone()),
+                ts2_val: Some(z_tensor.clone()),
+                ts3_val: None,
+                td_pre_val: None,
+                td_post_val: Some(b_tensor.clone()),
+            },
+            advice_value: None,
+        });
+        println!("b_vals: {:?}", b_vals);
+
+        // 3) c = 2^{b}
+        let c_vals: Vec<u64> = b_vals
+            .iter()
+            .map(|&bi| VirtualPow2::<WORD_SIZE>(bi).to_lookup_output())
+            .collect();
+        let c_tensor = Tensor::from(u64_vec_to_i32_iter(&c_vals));
+        vt.push(ONNXCycle {
+            instr: ONNXInstr {
+                address: cycle.instr.address,
+                opcode: ONNXOpcode::VirtualPow2,
+                ts1: v_b,
+                ts2: None,
+                ts3: None,
+                td: v_c_pow2,
+                imm: None,
+                virtual_sequence_remaining: remain(vt.len()),
+                active_output_elements: cycle.instr.active_output_elements,
+                output_dims: cycle.instr.output_dims,
+            },
+            memory_state: MemoryState {
+                ts1_val: Some(b_tensor.clone()),
                 ts2_val: None,
                 ts3_val: None,
-                td_pre_val: cycle.memory_state.td_pre_val.clone(),
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&probs))),
+                td_pre_val: None,
+                td_post_val: Some(c_tensor.clone()),
             },
             advice_value: None,
         });
 
-        virtual_trace
+        // 4) d = Q / c
+        const Q: u64 = 128;
+        let q_tensor = Tensor::from(u64_vec_to_i32_iter(&vec![Q; MAX_TENSOR_SIZE]));
+        let d_vals: Vec<u64> = c_vals.iter().map(|&ci| Q / ci).collect();
+        let d_tensor = Tensor::from(u64_vec_to_i32_iter(&d_vals));
+
+        // Q const
+        vt.push(ONNXCycle {
+            instr: ONNXInstr {
+                address: cycle.instr.address,
+                opcode: ONNXOpcode::VirtualConst,
+                ts1: None,
+                ts2: None,
+                ts3: None,
+                td: v_q_const,
+                imm: Some(q_tensor.clone()),
+                virtual_sequence_remaining: remain(vt.len()),
+                active_output_elements: cycle.instr.active_output_elements,
+                output_dims: cycle.instr.output_dims,
+            },
+            memory_state: MemoryState {
+                ts1_val: None,
+                ts2_val: None,
+                ts3_val: None,
+                td_pre_val: None,
+                td_post_val: Some(q_tensor.clone()),
+            },
+            advice_value: None,
+        });
+
+        // Div(Q, c) with c as imm (mirrors your Sigmoid Div pattern)
+        vt.push(ONNXCycle {
+            instr: ONNXInstr {
+                address: cycle.instr.address,
+                opcode: ONNXOpcode::Div,
+                ts1: v_q_const,
+                ts2: None,
+                ts3: None,
+                td: v_d_q_over_c,
+                imm: Some(c_tensor.clone()),
+                virtual_sequence_remaining: remain(vt.len()),
+                active_output_elements: cycle.instr.active_output_elements,
+                output_dims: cycle.instr.output_dims,
+            },
+            memory_state: MemoryState {
+                ts1_val: Some(q_tensor.clone()),
+                ts2_val: None,
+                ts3_val: None,
+                td_pre_val: None,
+                td_post_val: Some(d_tensor.clone()),
+            },
+            advice_value: None,
+        });
+
+        // 5) e = ReduceSum(d)  (store replicated)
+        let e_sum: u64 = d_vals.iter().copied().sum();
+        let e_tensor = Tensor::from(u64_vec_to_i32_iter(&vec![e_sum; MAX_TENSOR_SIZE]));
+        vt.push(ONNXCycle {
+            instr: ONNXInstr {
+                address: cycle.instr.address,
+                opcode: ONNXOpcode::Sum,
+                ts1: v_d_q_over_c,
+                ts2: None,
+                ts3: None,
+                td: v_e_sum,
+                imm: None,
+                virtual_sequence_remaining: remain(vt.len()),
+                active_output_elements: cycle.instr.active_output_elements,
+                output_dims: [1, 1],
+            },
+            memory_state: MemoryState {
+                ts1_val: Some(d_tensor.clone()),
+                ts2_val: None,
+                ts3_val: None,
+                td_pre_val: None,
+                td_post_val: Some(e_tensor.clone()),
+            },
+            advice_value: None,
+        });
+
+        // 6) f = Q * d
+        let f_vals: Vec<u64> = d_vals.iter().map(|&di| Q.saturating_mul(di)).collect();
+        let f_tensor = Tensor::from(u64_vec_to_i32_iter(&f_vals));
+        vt.push(ONNXCycle {
+            instr: ONNXInstr {
+                address: cycle.instr.address,
+                opcode: ONNXOpcode::Mul,
+                ts1: v_q_const,
+                ts2: v_d_q_over_c,
+                ts3: None,
+                td: v_f_q_times_d,
+                imm: None,
+                virtual_sequence_remaining: remain(vt.len()),
+                active_output_elements: cycle.instr.active_output_elements,
+                output_dims: cycle.instr.output_dims,
+            },
+            memory_state: MemoryState {
+                ts1_val: Some(q_tensor.clone()),
+                ts2_val: Some(d_tensor.clone()),
+                ts3_val: None,
+                td_pre_val: None,
+                td_post_val: Some(f_tensor.clone()),
+            },
+            advice_value: None,
+        });
+
+        // 7) g = f / e
+        // Use Div with e (replicated scalar) as ts2
+        let g_vals: Vec<u64> = f_vals
+            .iter()
+            .map(|&fi| if e_sum == 0 { 0 } else { fi / e_sum })
+            .collect();
+        let g_tensor = Tensor::from(u64_vec_to_i32_iter(&g_vals));
+        vt.push(ONNXCycle {
+            instr: ONNXInstr {
+                address: cycle.instr.address,
+                opcode: ONNXOpcode::Div,
+                ts1: v_f_q_times_d,
+                ts2: v_e_sum,
+                ts3: None,
+                td: v_g_out,
+                imm: None,
+                virtual_sequence_remaining: remain(vt.len()),
+                active_output_elements: cycle.instr.active_output_elements,
+                output_dims: cycle.instr.output_dims,
+            },
+            memory_state: MemoryState {
+                ts1_val: Some(f_tensor.clone()),
+                ts2_val: Some(e_tensor.clone()),
+                ts3_val: None,
+                td_pre_val: None,
+                td_post_val: Some(g_tensor.clone()),
+            },
+            advice_value: None,
+        });
+
+        // Move to final td
+        vt.push(ONNXCycle {
+            instr: ONNXInstr {
+                address: cycle.instr.address,
+                opcode: ONNXOpcode::VirtualMove,
+                ts1: v_g_out,
+                ts2: None,
+                ts3: None,
+                td: cycle.instr.td,
+                imm: None,
+                virtual_sequence_remaining: remain(vt.len()),
+                active_output_elements: cycle.instr.active_output_elements,
+                output_dims: cycle.instr.output_dims,
+            },
+            memory_state: MemoryState {
+                ts1_val: Some(g_tensor.clone()),
+                ts2_val: None,
+                ts3_val: None,
+                td_pre_val: cycle.memory_state.td_pre_val.clone(),
+                td_post_val: Some(g_tensor.clone()),
+            },
+            advice_value: None,
+        });
+
+        debug_assert_eq!(vt.len(), Self::SEQUENCE_LENGTH, "sequence length mismatch");
+        vt
     }
 
-    fn sequence_output(z: Vec<u64>, _imm: Vec<u64>, _: Option<ONNXOpcode>) -> Vec<u64> {
-        // Host-side oracle (integer version)
-        if MAX_TENSOR_SIZE == 0 {
-            return vec![];
-        }
-        let mut z_max = i64::MIN;
-        for i in 0..MAX_TENSOR_SIZE {
-            z_max = z_max.max(z[i] as i64);
-        }
-        let zmax_u64 = (z_max as u64).max(1);
-
-        let mut a: Vec<u128> = vec![0; MAX_TENSOR_SIZE];
-        for i in 0..MAX_TENSOR_SIZE {
-            let num = (z[i] as u128).saturating_mul(63);
-            let zpi = (num / zmax_u64 as u128) as u64;
-            let zpi = zpi.min(63);
-            a[i] = 1u128 << zpi;
-        }
-        let mut N: u128 = 0;
-        for i in 0..MAX_TENSOR_SIZE {
-            N = N.saturating_add(a[i]);
-        }
-        if N == 0 {
-            return vec![0; MAX_TENSOR_SIZE];
-        }
-
+    fn sequence_output(x: Vec<u64>, _y: Vec<u64>, _op: Option<ONNXOpcode>) -> Vec<u64> {
         let mut out = vec![0u64; MAX_TENSOR_SIZE];
+        const Q: u128 = 128;
+
+        // z_max
+        let mut zmax = x[0] as u128;
+        for i in 1..MAX_TENSOR_SIZE {
+            let v = x[i] as u128;
+            if v > zmax {
+                zmax = v;
+            }
+        }
+
+        // c_i = 2^{zmax - z_i}, d_i = Q / c_i
+        let mut d_sum: u128 = 0;
+        let mut d_vec: [u128; MAX_TENSOR_SIZE] = [0; MAX_TENSOR_SIZE];
         for i in 0..MAX_TENSOR_SIZE {
-            out[i] = (a[i] / N) as u64; // integer division (0/1 mostly)
+            let b = zmax.saturating_sub(x[i] as u128);
+            let c = 1u128 << (b as u32); // 2^b
+            let d = Q / c; // integer division
+            d_vec[i] = d;
+            d_sum = d_sum.saturating_add(d);
+        }
+
+        // g_i = (Q * d_i) / d_sum
+        for i in 0..MAX_TENSOR_SIZE {
+            let f = Q.saturating_mul(d_vec[i]);
+            let g = if d_sum == 0 { 0 } else { f / d_sum };
+            out[i] = g as u64;
         }
         out
     }

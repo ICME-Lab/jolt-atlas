@@ -602,9 +602,9 @@ impl Model {
                         Node::new(n.clone(), &mut nodes, scales, symbol_values, &remappings)
                             .expect("Failed to create node");
 
-                    // if node.opkind.requires_shape_equality() {
-                    //     node.homogenize_input_shapes(&mut nodes);
-                    // }
+                    if node.opkind.requires_shape_equality() {
+                        node.homogenize_input_shapes(&mut nodes);
+                    }
 
                     Self::apply_input_scale_override(
                         &mut node,

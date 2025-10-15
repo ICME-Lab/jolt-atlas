@@ -327,7 +327,6 @@ mod e2e_tests {
 
     #[test]
     fn test_self_attention_transformer() {
-        // init_logger();
         let model = model(&PathBuf::from(
             "../onnx-tracer/models/self_attention_transformer/network.onnx",
         ));
@@ -339,7 +338,6 @@ mod e2e_tests {
 
     #[test]
     fn test_self_attention_2d_transformer() {
-        // init_logger();
         let model = model(&PathBuf::from(
             "../onnx-tracer/models/self_attention_2d_transformer/network.onnx",
         ));
@@ -351,7 +349,6 @@ mod e2e_tests {
 
     #[test]
     fn test_layernorm_head() {
-        onnx_tracer::logger::init_logger();
         let model = model(&PathBuf::from(
             "../onnx-tracer/models/layernorm_head/network.onnx",
         ));

@@ -52,7 +52,7 @@ use crate::{
     tensor::{Tensor, TensorError},
     trace_types::{ONNXInstr, ONNXOpcode},
 };
-use log::{info, trace, warn};
+use log::{trace, warn};
 use std::{collections::BTreeMap, error::Error, fmt, fmt::Debug};
 use tabled::Tabled;
 use tract_onnx::{
@@ -408,10 +408,6 @@ impl Node {
             // For all node inputs, if the input's out_dims doesn't match the current node's output dims,
             // we insert a broadcast node in between.
             if input.out_dims != self.out_dims {
-                info!(
-                    "inserting broadcast node for input {j} of node {}",
-                    self.idx
-                );
                 let new_node_index = self.idx;
                 let opkind = SupportedOp::Linear(PolyOp::MultiBroadcastTo {
                     shape: self.out_dims.clone(),

@@ -14,6 +14,7 @@ use std::error::Error;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
 pub enum LookupOp {
     Abs,
+    Test,
     Div { denom: utils::F32 },
     Cast { scale: utils::F32 },
     ReLU,
@@ -60,6 +61,7 @@ impl From<&LookupOp> for ONNXOpcode {
             LookupOp::Rsqrt { .. } => ONNXOpcode::Sqrt,
             LookupOp::Div { .. } => ONNXOpcode::Div,
             LookupOp::Abs => ONNXOpcode::Abs,
+            LookupOp::Test => ONNXOpcode::Test,
             _ => {
                 panic!("LookupOp {value:?} cannot be converted to ONNXOpcode",);
             }
@@ -91,6 +93,7 @@ where
         let x = x.map(|x| i32::from(x));
         let res = match &self {
             LookupOp::Abs => Ok(tensor::ops::abs(&x)?),
+            LookupOp::Test => Ok(tensor::ops::test_ops(&x)?),
             LookupOp::Ceil { scale } => Ok(tensor::ops::nonlinearities::ceil(&x, scale.into())),
             LookupOp::Floor { scale } => Ok(tensor::ops::nonlinearities::floor(&x, scale.into())),
             LookupOp::Round { scale } => Ok(tensor::ops::nonlinearities::round(&x, scale.into())),
@@ -177,6 +180,7 @@ where
     fn as_string(&self) -> String {
         match self {
             LookupOp::Abs => "ABS".into(),
+            LookupOp::Test => "TEST_ABS".into(),
             LookupOp::Ceil { scale } => format!("CEIL(scale={scale})"),
             LookupOp::Floor { scale } => format!("FLOOR(scale={scale})"),
             LookupOp::Round { scale } => format!("ROUND(scale={scale})"),

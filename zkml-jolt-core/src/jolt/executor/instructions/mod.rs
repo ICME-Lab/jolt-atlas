@@ -2,6 +2,7 @@ use crate::jolt::lookup_table::LookupTables;
 use onnx_tracer::trace_types::{MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode};
 
 pub mod abs;
+pub mod abs_minus_one;
 pub mod add;
 pub mod beq;
 pub mod div;

@@ -366,6 +366,7 @@ pub enum ONNXOpcode {
     Select,
     Broadcast,
     AddressedNoop,
+    Test,
 
     // Virtual instructions
     VirtualAdvice,

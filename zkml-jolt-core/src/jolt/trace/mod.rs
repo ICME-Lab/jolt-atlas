@@ -42,10 +42,10 @@
 use crate::jolt::{
     bytecode::{BytecodePreprocessing, JoltONNXBytecode},
     executor::instructions::{
-        InstructionLookup, VirtualInstructionSequence, abs::AbsInstruction, add::AddInstruction,
-        beq::BeqInstruction, div::DivInstruction, mul::MulInstruction, relu::ReluInstruction,
-        sub::SubInstruction, virtual_advice::AdviceInstruction,
-        virtual_assert_valid_div0::AssertValidDiv0Instruction,
+        InstructionLookup, VirtualInstructionSequence, abs::AbsInstruction,
+        abs_minus_one::TestInstruction, add::AddInstruction, beq::BeqInstruction,
+        div::DivInstruction, mul::MulInstruction, relu::ReluInstruction, sub::SubInstruction,
+        virtual_advice::AdviceInstruction, virtual_assert_valid_div0::AssertValidDiv0Instruction,
         virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction,
         virtual_const::ConstInstruction, virtual_move::MoveInstruction,
     },
@@ -389,6 +389,9 @@ impl JoltONNXCycle {
             ONNXOpcode::Abs => Some(LookupFunction::Abs(AbsInstruction::<WORD_SIZE>(
                 memory_ops.ts1_val,
             ))),
+            ONNXOpcode::Test => Some(LookupFunction::Test(TestInstruction::<WORD_SIZE>(
+                memory_ops.ts1_val,
+            ))),
             ONNXOpcode::Add => Some(LookupFunction::Add(AddInstruction::<WORD_SIZE>(
                 memory_ops.ts1_val,
                 memory_ops.ts2_val,
@@ -713,6 +716,7 @@ define_lookup_enum!(
     enum LookupFunction,
     const WORD_SIZE,
     Abs: AbsInstruction<WORD_SIZE>,
+    Test: TestInstruction<WORD_SIZE>,
     Add: AddInstruction<WORD_SIZE>,
     Sub: SubInstruction<WORD_SIZE>,
     Mul: MulInstruction<WORD_SIZE>,

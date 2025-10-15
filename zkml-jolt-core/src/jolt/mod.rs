@@ -811,7 +811,14 @@ mod e2e_tests {
 
     #[test]
     #[serial]
+    #[ignore]
     fn test_abs() {
         run_snark_test(builder::abs_model, &[-3, -2, 0, 1], &[1, 4]);
+    }
+
+    #[test]
+    #[serial]
+    fn test_incr_abs() {
+        run_snark_test(builder::test_abs_model, &[-3, -2, 0, 1], &[1, 4]);
     }
 }

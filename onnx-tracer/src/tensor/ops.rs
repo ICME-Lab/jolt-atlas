@@ -1613,6 +1613,14 @@ pub fn abs<T: TensorType + Add<Output = T> + std::cmp::Ord + Neg<Output = T>>(
     Ok(output)
 }
 
+// Go from relu to abs, step by step and ensuring everything works at all steps
+pub fn test_ops(a: &Tensor<i32>) -> Result<Tensor<i32>, TensorError> {
+    a.par_enum_map(|_, a_i| {
+        let abs_a = if a_i < 0 { !a_i } else { a_i };
+        Ok::<_, TensorError>(abs_a)
+    })
+}
+
 /// Max of a tensor along specific axes.
 /// # Arguments
 ///

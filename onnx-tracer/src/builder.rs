@@ -42,7 +42,7 @@ use crate::{
         utilities::{
             create_abs_node, create_const_node, create_div_node, create_iff_node,
             create_input_node, create_matmul_node, create_node, create_polyop_node,
-            create_relu_node,
+            create_relu_node, create_test_abs_node,
         },
     },
     ops::{hybrid::HybridOp, poly::PolyOp},
@@ -402,6 +402,13 @@ impl ModelBuilder {
         self.model.insert_node(abs_node);
         (id, O)
     }
+
+    fn test_abs(&mut self, input: Wire, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
+        let id = self.alloc();
+        let abs_node = create_test_abs_node(self.scale, vec![input], out_dims, id, fanout_hint);
+        self.model.insert_node(abs_node);
+        (id, O)
+    }
 }
 
 /* ********************** Testing Model's ********************** */
@@ -649,6 +656,17 @@ pub fn abs_model() -> Model {
 
     let x = b.input(dims.clone(), 1);
     let r = b.abs(x, dims.clone(), 1);
+
+    b.take(vec![x.0], vec![r])
+}
+
+pub fn test_abs_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+    let dims = vec![1, 4];
+
+    let x = b.input(dims.clone(), 2);
+    let r = b.test_abs(x, dims.clone(), 1);
 
     b.take(vec![x.0], vec![r])
 }

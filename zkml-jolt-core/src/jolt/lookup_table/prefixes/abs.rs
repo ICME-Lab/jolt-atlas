@@ -22,20 +22,34 @@ impl<const WORD_SIZE: usize, F: JoltField> SparseDensePrefix<F> for AbsPrefix<WO
             return F::zero();
         }
 
-        let two = 2 * WORD_SIZE;
-        let suffix_len = current_suffix_len(two, j);
+        let first_possibility = false;
 
-        // \sum_{suffix_len <= k < WORD_SIZE}2^k = 2^WORD_SIZE - 2^suffix_len
-        let sum_2powk = F::from_u64((1 << (WORD_SIZE - 1)) - (1 << suffix_len));
+        if first_possibility {
+            let two = 2 * WORD_SIZE;
+            let suffix_len = current_suffix_len(two, j);
 
-        let nsign_bit =
-            *Prefixes::NotUnaryMsb.prefix_mle::<WORD_SIZE, F>(checkpoints, r_x, c, b, j);
-        let word = *Prefixes::LowerWordNoMsb.prefix_mle::<WORD_SIZE, F>(checkpoints, r_x, c, b, j);
+            // \sum_{suffix_len <= k < WORD_SIZE}2^k = 2^WORD_SIZE - 2^suffix_len
+            let sum_2powk = F::from_u64((1 << (WORD_SIZE - 1)) - (1 << suffix_len));
 
-        // !x = \sum_{k<WORD_SIZE} 2^k - x
-        // for the prefix-part: !x = \sum_{suffix_len <= k < WORD_SIZE} 2^k - x
-        // result = nsign_bit * word + (1 - nsign_bit) * (sum_2powk - x) (factored to reduce multiplications)
-        sum_2powk - word + nsign_bit * (word + word - sum_2powk)
+            let nsign_bit =
+                *Prefixes::NotUnaryMsb.prefix_mle::<WORD_SIZE, F>(checkpoints, r_x, c, b, j);
+            let word =
+                *Prefixes::LowerWordNoMsb.prefix_mle::<WORD_SIZE, F>(checkpoints, r_x, c, b, j);
+
+            // !x = \sum_{k<WORD_SIZE} 2^k - x
+            // for the prefix-part: !x = \sum_{suffix_len <= k < WORD_SIZE} 2^k - x
+            // result = nsign_bit * word + (1 - nsign_bit) * (sum_2powk - x) (factored to reduce multiplications)
+            sum_2powk - word + nsign_bit * (word + word - sum_2powk)
+        } else {
+            let nsign_bit =
+                *Prefixes::NotUnaryMsb.prefix_mle::<WORD_SIZE, F>(checkpoints, r_x, c, b, j);
+            let word =
+                *Prefixes::LowerWordNoMsb.prefix_mle::<WORD_SIZE, F>(checkpoints, r_x, c, b, j);
+            let negated_word =
+                *Prefixes::NOTLowerNoMsb.prefix_mle::<WORD_SIZE, F>(checkpoints, r_x, c, b, j);
+
+            negated_word + nsign_bit * (word - negated_word)
+        }
     }
 
     fn update_prefix_checkpoint(

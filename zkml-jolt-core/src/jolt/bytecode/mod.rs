@@ -5,7 +5,7 @@ use crate::jolt::{
     },
     dag::{stage::SumcheckStages, state_manager::StateManager},
     executor::instructions::{InstructionLookup, VirtualInstructionSequence, div::DivInstruction},
-    lookup_table::{AbsTable, LookupTables, RangeCheckTable, ReLUTable},
+    lookup_table::{AbsTable, LookupTables, RangeCheckTable, ReLUTable, TestTable},
     pcs::SumcheckId,
     sumcheck::SumcheckInstance,
     trace::{JoltONNXCycle, WORD_SIZE},
@@ -217,6 +217,7 @@ impl JoltONNXBytecode {
         flags[CircuitFlags::LeftOperandIsTs1Value as usize] = matches!(
             self.opcode,
             ONNXOpcode::Abs
+            | ONNXOpcode::Test
             | ONNXOpcode::Add
             | ONNXOpcode::Sub
             | ONNXOpcode::Mul
@@ -249,6 +250,7 @@ impl JoltONNXBytecode {
         flags[CircuitFlags::AddOperands as usize] = matches!(
             self.opcode,
             ONNXOpcode::Abs
+            | ONNXOpcode::Test
             | ONNXOpcode::Add
             | ONNXOpcode::VirtualMove
             | ONNXOpcode::Relu
@@ -268,6 +270,7 @@ impl JoltONNXBytecode {
         flags[CircuitFlags::WriteLookupOutputToTD as usize] = matches!(
             self.opcode,
             ONNXOpcode::Abs
+            | ONNXOpcode::Test
             | ONNXOpcode::Add
             | ONNXOpcode::Sub
             | ONNXOpcode::Mul
@@ -324,6 +327,7 @@ impl InstructionLookup<WORD_SIZE> for JoltONNXBytecode {
     fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
         match self.opcode {
             ONNXOpcode::Abs => Some(AbsTable.into()),
+            ONNXOpcode::Test => Some(TestTable.into()),
             ONNXOpcode::Add => Some(RangeCheckTable.into()),
             ONNXOpcode::Sub => Some(RangeCheckTable.into()),
             ONNXOpcode::Mul => Some(RangeCheckTable.into()),

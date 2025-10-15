@@ -12,6 +12,7 @@ pub use jolt_tables::{
 };
 
 pub use abs::AbsTable;
+pub use abs_minus_one::TestTable;
 pub use relu::ReLUTable;
 
 use serde::{Deserialize, Serialize};
@@ -55,6 +56,7 @@ pub const NUM_LOOKUP_TABLES: usize = LookupTables::<32>::COUNT;
 #[repr(u8)]
 pub enum LookupTables<const WORD_SIZE: usize> {
     Abs(AbsTable<WORD_SIZE>),
+    Test(TestTable<WORD_SIZE>),
     // And(AndTable<WORD_SIZE>),
     Equal(EqualTable<WORD_SIZE>),
     // HalfwordAlignment(HalfwordAlignmentTable<WORD_SIZE>),
@@ -90,6 +92,7 @@ impl<const WORD_SIZE: usize> LookupTables<WORD_SIZE> {
     pub fn materialize_entry(&self, index: u64) -> u64 {
         match self {
             LookupTables::Abs(table) => table.materialize_entry(index),
+            LookupTables::Test(table) => table.materialize_entry(index),
             // LookupTables::And(table) => table.materialize_entry(index),
             LookupTables::Equal(table) => table.materialize_entry(index),
             // LookupTables::HalfwordAlignment(table) => table.materialize_entry(index),
@@ -119,6 +122,7 @@ impl<const WORD_SIZE: usize> LookupTables<WORD_SIZE> {
     pub fn evaluate_mle<F: JoltField>(&self, r: &[F]) -> F {
         match self {
             LookupTables::Abs(table) => table.evaluate_mle(r),
+            LookupTables::Test(table) => table.evaluate_mle(r),
             // LookupTables::And(table) => table.evaluate_mle(r),
             LookupTables::Equal(table) => table.evaluate_mle(r),
             // LookupTables::HalfwordAlignment(table) => table.evaluate_mle(r),
@@ -148,6 +152,7 @@ impl<const WORD_SIZE: usize> LookupTables<WORD_SIZE> {
     pub fn suffixes(&self) -> Vec<Suffixes> {
         match self {
             LookupTables::Abs(table) => table.suffixes(),
+            LookupTables::Test(table) => table.suffixes(),
             // LookupTables::And(table) => table.suffixes(),
             LookupTables::Equal(table) => table.suffixes(),
             // LookupTables::HalfwordAlignment(table) => table.suffixes(),
@@ -181,6 +186,7 @@ impl<const WORD_SIZE: usize> LookupTables<WORD_SIZE> {
     ) -> F {
         match self {
             LookupTables::Abs(table) => table.combine(prefixes, suffixes),
+            LookupTables::Test(table) => table.combine(prefixes, suffixes),
             // LookupTables::And(table) => table.combine(prefixes, suffixes),
             LookupTables::Equal(table) => table.combine(prefixes, suffixes),
             // LookupTables::HalfwordAlignment(table) => table.combine(prefixes, suffixes),
@@ -212,5 +218,6 @@ pub mod prefixes;
 pub mod suffixes;
 
 mod abs;
+mod abs_minus_one;
 mod jolt_tables;
 mod relu;

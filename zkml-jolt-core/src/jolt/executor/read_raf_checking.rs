@@ -804,6 +804,7 @@ mod tests {
             )),
             ONNXOpcode::Relu => SupportedOp::Nonlinear(LookupOp::ReLU),
             ONNXOpcode::Abs => SupportedOp::Nonlinear(LookupOp::Abs),
+            ONNXOpcode::Test => SupportedOp::Nonlinear(LookupOp::Test),
             _ => unimplemented!("Unsupported instruction"),
         }
     }
@@ -992,5 +993,10 @@ mod tests {
     #[test]
     fn test_abs() {
         test_read_raf_sumcheck(Some(ONNXOpcode::Abs));
+    }
+
+    #[test]
+    fn test_incr_abs() {
+        test_read_raf_sumcheck(Some(ONNXOpcode::Test));
     }
 }

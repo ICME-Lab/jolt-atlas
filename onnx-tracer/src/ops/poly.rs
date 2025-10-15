@@ -419,7 +419,7 @@ where
 /// # Returns
 /// * `Ok(Tensor<T>)` - Result tensor with dimensions [m, n]
 /// * `Err(TensorError)` - If padding, computation, or cropping fails
-fn einsum_matmul_mk_nk_mn_padded<T>(
+pub fn einsum_matmul_mk_nk_mn_padded<T>(
     equation: &str,
     inputs: &[Tensor<T>],
 ) -> Result<Tensor<T>, TensorError>

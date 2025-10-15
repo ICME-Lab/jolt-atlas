@@ -668,6 +668,9 @@ pub fn new_op_from_onnx(
         "Sigmoid" => SupportedOp::Nonlinear(LookupOp::Sigmoid {
             scale: scale_to_multiplier(inputs[0].out_scales()[0]).into(),
         }),
+        "Softmax" => SupportedOp::Nonlinear(LookupOp::Softmax {
+            scale: scale_to_multiplier(inputs[0].out_scales()[0]).into(),
+        }),
         "Sqrt" => SupportedOp::Nonlinear(LookupOp::Sqrt {
             scale: scale_to_multiplier(inputs[0].out_scales()[0]).into(),
         }),

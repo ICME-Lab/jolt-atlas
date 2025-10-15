@@ -9,7 +9,7 @@ use crate::{
     tensor::Tensor,
     RunArgs,
 };
-use log::{debug, trace};
+use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -44,7 +44,7 @@ impl Model {
             graph,
             tracer: Tracer::default(),
         };
-        debug!("\n {}", om.table_nodes());
+        info!("\n {}", om.table_nodes());
         om
     }
 
@@ -602,9 +602,9 @@ impl Model {
                         Node::new(n.clone(), &mut nodes, scales, symbol_values, &remappings)
                             .expect("Failed to create node");
 
-                    if node.opkind.requires_shape_equality() {
-                        node.homogenize_input_shapes(&mut nodes);
-                    }
+                    // if node.opkind.requires_shape_equality() {
+                    //     node.homogenize_input_shapes(&mut nodes);
+                    // }
 
                     Self::apply_input_scale_override(
                         &mut node,

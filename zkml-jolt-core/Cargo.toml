@@ -18,6 +18,7 @@ tracing = { version = "0.1.41", features = [
 ], default-features = false }
 tracing-chrome = "0.7.1"
 tracing-subscriber = "0.3.18"
+paste = "1.0"
 strum = "0.26.3"
 strum_macros = "0.26.4"
 rand = "0.8.5"

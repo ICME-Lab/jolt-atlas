@@ -1617,3 +1617,20 @@ pub fn non_power_of_two_matmult_rebase_model() -> Model {
 
     b.take(vec![input.0], vec![result])
 }
+
+/// Reduce mean is a common operation in LayerNorm implementations.
+pub fn reduce_mean_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [4, 4])
+    let input = b.input(vec![4, 4], 2); // fanout=2 since input is used in SUM and SUB
+
+    // Node 1: SUM - reduce along axis 1 to get sums for each row
+    let summed = b.sum(input, vec![1], vec![4, 1], 1); // sum along axis 1, result [4, 1]
+
+    // Node 2: DIV - divide sum by 4 to get mean
+    let mean = b.div(4, summed, vec![4, 1], 1); // divide by 4 to get mean
+
+    b.take(vec![input.0], vec![mean])
+}

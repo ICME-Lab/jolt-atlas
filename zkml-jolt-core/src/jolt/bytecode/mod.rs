@@ -224,7 +224,6 @@ impl JoltONNXBytecode {
             | ONNXOpcode::VirtualAssertValidDiv0
             | ONNXOpcode::VirtualAssertEq
             | ONNXOpcode::Gte
-            | ONNXOpcode::Sum
             | ONNXOpcode::Relu
             | ONNXOpcode::Output
         );
@@ -272,7 +271,6 @@ impl JoltONNXBytecode {
             | ONNXOpcode::VirtualMove
             | ONNXOpcode::VirtualConst
             | ONNXOpcode::Gte
-            | ONNXOpcode::Sum
             | ONNXOpcode::Relu
             | ONNXOpcode::Output
         );
@@ -390,6 +388,7 @@ impl BytecodePreprocessing {
         ModelFunc: Fn() -> Model,
     {
         let bytecode = onnx_tracer::decode_model(model());
+        // println!("Raw bytecode: {bytecode:#?}");
         // Get largest td value
         let max_td = bytecode
             .iter()
@@ -448,12 +447,42 @@ impl BytecodePreprocessing {
             .unwrap()
     }
 
-    fn expand_raw_bytecode(bytecode: Vec<ONNXInstr>, max_td: usize) -> Vec<ONNXInstr> {
-        bytecode
+    /// Expand the virtual instructions of the raw ONNX bytecode.
+    ///
+    /// # Parameters
+    ///
+    /// * `raw_bytecode` - The raw ONNX bytecode to be expanded
+    /// * `max_td` - used to calculate a unique register address for virtual registers used in virtual instructions
+    fn expand_raw_bytecode(raw_bytecode: Vec<ONNXInstr>, max_td: usize) -> Vec<ONNXInstr> {
+        raw_bytecode
             .into_iter()
             .flat_map(|instr| match instr.opcode {
                 ONNXOpcode::Div => DivInstruction::<32>::virtual_sequence(instr, max_td),
                 _ => vec![instr],
+            })
+            .collect()
+    }
+
+    /// Collects memory addresses for tensor elements based on an instruction.
+    ///
+    /// This helper method extracts the memory addresses for all active output elements
+    /// of a given instruction by querying the bytecode preprocessing map.
+    ///
+    /// # Parameters
+    ///
+    /// * `instr` - The ONNX instruction containing tensor information
+    /// * `bytecode_preprocessing` - Contains the mapping from virtual addresses to physical addresses
+    ///
+    /// # Returns
+    ///
+    /// A vector of memory addresses for the instruction's active output elements
+    pub fn collect_addresses(&self, instr: &ONNXInstr) -> Vec<usize> {
+        (0..instr.active_output_elements)
+            .map(|i| {
+                self.vt_address_map[&(
+                    zkvm_address(instr.td),
+                    tensor_sequence_remaining(instr.active_output_elements, i),
+                )]
             })
             .collect()
     }
@@ -482,31 +511,33 @@ pub fn raw_to_jolt_bytecode(
     let active_output_elements = raw.active_output_elements;
 
     // get ts1 and ts2 addresses
-    let (vts1, vts2) = if raw.opcode == ONNXOpcode::MatMult {
-        // We need this because MatMults MCC do not follow the same pattern as other ops (it is handled separately) and we can safely store ts1 and ts2 as zero registers
-        // TODO: Extend this match statement to all non-elementwise ops
-        (
-            vec![0; active_output_elements],
-            vec![0; active_output_elements],
-        )
-    } else {
-        let vts1 = (0..active_output_elements)
-            .map(|i| {
-                vt_address_map[&(
-                    zkvm_address(raw.ts1),
-                    tensor_sequence_remaining(active_output_elements, i),
-                )]
-            })
-            .collect::<Vec<usize>>();
-        let vts2 = (0..active_output_elements)
-            .map(|i| {
-                vt_address_map[&(
-                    zkvm_address(raw.ts2),
-                    tensor_sequence_remaining(active_output_elements, i),
-                )]
-            })
-            .collect::<Vec<usize>>();
-        (vts1, vts2)
+    let (vts1, vts2) = match raw.opcode {
+        ONNXOpcode::MatMult | ONNXOpcode::Sum => {
+            // We need this because MatMults MCC do not follow the same pattern as other ops (it is handled separately) and we can safely store ts1 and ts2 as zero registers
+            (
+                vec![0; active_output_elements],
+                vec![0; active_output_elements],
+            )
+        }
+        _ => {
+            let vts1 = (0..active_output_elements)
+                .map(|i| {
+                    vt_address_map[&(
+                        zkvm_address(raw.ts1),
+                        tensor_sequence_remaining(active_output_elements, i),
+                    )]
+                })
+                .collect::<Vec<usize>>();
+            let vts2 = (0..active_output_elements)
+                .map(|i| {
+                    vt_address_map[&(
+                        zkvm_address(raw.ts2),
+                        tensor_sequence_remaining(active_output_elements, i),
+                    )]
+                })
+                .collect::<Vec<usize>>();
+            (vts1, vts2)
+        }
     };
 
     // calculate td address

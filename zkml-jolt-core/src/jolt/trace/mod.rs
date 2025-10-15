@@ -318,7 +318,7 @@ impl TensorValues {
     ///
     /// `true` if the operation is non-elementwise, `false` otherwise.
     fn is_non_elementwise_op(opcode: &ONNXOpcode) -> bool {
-        matches!(opcode, ONNXOpcode::MatMult)
+        matches!(opcode, ONNXOpcode::MatMult | ONNXOpcode::Sum)
     }
 }
 

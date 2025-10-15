@@ -211,7 +211,7 @@ where
     }
 
     pub fn is_precompiles_enabled(&self) -> bool {
-        !self.shared.precompiles.matvec_instances.is_empty()
+        !self.shared.precompiles.is_empty()
     }
 }
 
@@ -236,7 +236,7 @@ where
     }
 
     pub fn is_precompiles_enabled(&self) -> bool {
-        !self.shared.precompiles.matvec_instances.is_empty()
+        !self.shared.precompiles.is_empty()
     }
 }
 
@@ -303,7 +303,8 @@ mod e2e_tests {
         poly::commitment::{dory::DoryCommitmentScheme, mock::MockCommitScheme},
         transcripts::KeccakTranscript,
     };
-    use onnx_tracer::{builder, graph::model::Model, model, tensor::Tensor};
+    use log::debug;
+    use onnx_tracer::{builder, decode_model, graph::model::Model, model, tensor::Tensor};
     use serde_json::Value;
     use serial_test::serial;
 
@@ -322,6 +323,42 @@ mod e2e_tests {
         snark
             .verify(&(&preprocessing).into(), program_io, None)
             .unwrap();
+    }
+
+    #[test]
+    fn test_self_attention_transformer() {
+        // init_logger();
+        let model = model(&PathBuf::from(
+            "../onnx-tracer/models/self_attention_transformer/network.onnx",
+        ));
+        let bytecode = decode_model(model);
+        for b in bytecode.iter() {
+            debug!("{:#?}", b.opcode)
+        }
+    }
+
+    #[test]
+    fn test_self_attention_2d_transformer() {
+        // init_logger();
+        let model = model(&PathBuf::from(
+            "../onnx-tracer/models/self_attention_2d_transformer/network.onnx",
+        ));
+        let bytecode = decode_model(model);
+        for b in bytecode.iter() {
+            debug!("{:#?}", b.opcode)
+        }
+    }
+
+    #[test]
+    fn test_layernorm_head() {
+        onnx_tracer::logger::init_logger();
+        let model = model(&PathBuf::from(
+            "../onnx-tracer/models/layernorm_head/network.onnx",
+        ));
+        let bytecode = decode_model(model);
+        for b in bytecode.iter() {
+            debug!("{:#?}", b.opcode)
+        }
     }
 
     /// Load vocab.json into HashMap<String, (usize, i32)>
@@ -672,6 +709,16 @@ mod e2e_tests {
             builder::triple_matmult_model,
             &[1, 2, 3, 4, 1, 2, 3, 4],
             &[1, 8],
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_reduce_mean() {
+        run_snark_test(
+            builder::reduce_mean_model,
+            &[1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4],
+            &[4, 4],
         );
     }
 

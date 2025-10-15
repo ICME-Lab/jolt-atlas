@@ -125,7 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Generate a proof for the first test case
-    println!("\nGenerating SNARK proof for first example:");
+    println!("\nGenerating SNARK for first example:");
     println!("==========================================");
 
     let proof_text = test_cases[0].0;

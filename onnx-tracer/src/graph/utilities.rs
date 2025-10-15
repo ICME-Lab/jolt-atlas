@@ -46,12 +46,28 @@ pub fn quantize_float(elem: &f64, shift: f64, scale: crate::Scale) -> Result<i32
     let mult = scale_to_multiplier(scale);
     let max_value = ((i32::MAX as f64 - shift) / mult).round(); // the maximum value that can be represented w/o sig bit truncation
 
-    if *elem > max_value || *elem < -max_value {
-        return Err(TensorError::SigBitTruncationError);
-    }
+    // Handle extreme values that are commonly used for masking in attention mechanisms
+    // If the value is extremely negative (like -1e9), clamp it to a representable negative value
+    let clamped_elem = if *elem < -max_value {
+        if *elem < -1e6 {
+            // Common attention mask values
+            -max_value
+        } else {
+            return Err(TensorError::SigBitTruncationError);
+        }
+    } else if *elem > max_value {
+        if *elem > 1e6 {
+            // Also handle extremely positive values
+            max_value
+        } else {
+            return Err(TensorError::SigBitTruncationError);
+        }
+    } else {
+        *elem
+    };
 
     // we parallelize the quantization process as it seems to be quite slow at times
-    let scaled = (mult * *elem + shift).round() as i32;
+    let scaled = (mult * clamped_elem + shift).round() as i32;
 
     Ok(scaled)
 }

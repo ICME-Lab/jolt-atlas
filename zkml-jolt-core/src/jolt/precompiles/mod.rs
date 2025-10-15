@@ -4,14 +4,6 @@
 //! proof system, with a focus on matrix-vector multiplication operations that are crucial for
 //! efficient machine learning model execution.
 //!
-//! ## Core Components
-//!
-//! * `MatVecPreprocessing` - Stores memory addresses for matrix-vector multiplication operands and results
-//! * `PrecompilePreprocessing` - Handles preprocessing of model operations to extract precompile instances
-//! * `PrecompileDag` - Manages the directed acyclic graph of precompile operations, handling both prover
-//!   and verifier workflows
-//! * `MatVecMultPrecompile` - Implements the matrix-vector multiplication precompile (in the matvecmult submodule)
-//!
 //! ## Workflow
 //!
 //! The precompile system works in two main phases:
@@ -23,67 +15,193 @@
 //!    to efficiently prove the correctness of precompile operations.
 //!
 //! The system is designed to optimize performance-critical operations in ML inference by handling
-//! them with specialized proof techniques rather than processing them through the general-purpose
+//! them with specialized sum-checks rather than processing them through the general-purpose
 //! VM execution proof system.
+use std::collections::HashMap;
+
 use crate::jolt::{
-    bytecode::{BytecodePreprocessing, tensor_sequence_remaining, zkvm_address},
+    bytecode::BytecodePreprocessing,
     dag::state_manager::StateManager,
-    precompiles::{matvecmult::MatVecMultPrecompile, val_final::ValFinalSumcheck},
+    precompiles::{
+        matvecmult::{MatVecPrecompile, MatVecPreprocessing},
+        reduce_sum::{ReduceSumPrecompile, ReduceSumPreprocessing},
+        val_final::ValFinalSumcheck,
+    },
     sumcheck::{BatchedSumcheck, SingleSumcheck, SumcheckInstance},
 };
-use itertools::Itertools;
 use jolt_core::{
     field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme,
     subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
 use onnx_tracer::{
+    self,
     graph::model::Model,
     trace_types::{ONNXInstr, ONNXOpcode},
 };
+use paste::paste;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 pub mod matvecmult;
+pub mod reduce_sum;
 pub mod val_final;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Represents preprocessing information for matrix-vector multiplication.
-///
-/// This structure holds memory addresses for operands and results of a matrix-vector
-/// multiplication operation. These addresses refer to locations in the `Val_final` memory space.
-///
-/// # Fields
-///
-/// * `a` - Memory addresses for the vector operand
-/// * `b` - Memory addresses for the matrix operand
-/// * `c` - Memory addresses for the resulting vector after multiplication
-pub struct MatVecPreprocessing {
-    /// Memory addresses (in Val_final) for vector operand a
-    pub a: Vec<usize>,
-    /// Memory addresses (in Val_final) for Matrix operand b
-    pub b: Vec<usize>,
-    /// Memory addresses (in Val_final) for result vector c
-    pub c: Vec<usize>,
+/// Macro to define all precompile types and generate associated code
+macro_rules! define_precompiles {
+    ($(($variant:ident, $opcode:pat)),* $(,)?) => {
+        paste! {
+            /// Enum containing all possible precompile instance types
+            #[derive(Debug, Clone)]
+            pub enum PrecompileInstance {
+                $(
+                    $variant([<$variant Precompile>]),
+                )*
+            }
+
+            impl PrecompileInstance {
+                /// Creates a new prover instance based on the variant
+                pub fn new_prover(variant: PrecompileVariant, index: usize) -> Self {
+                    match variant {
+                        $(
+                            PrecompileVariant::$variant => {
+                                Self::$variant([<$variant Precompile>]::new_prover(index))
+                            },
+                        )*
+                    }
+                }
+
+                /// Creates a new verifier instance based on the variant
+                pub fn new_verifier(variant: PrecompileVariant, index: usize) -> Self {
+                    match variant {
+                        $(
+                            PrecompileVariant::$variant => {
+                                Self::$variant([<$variant Precompile>]::new_verifier(index))
+                            },
+                        )*
+                    }
+                }
+            }
+
+            impl PrecompileTrait for PrecompileInstance {
+                fn execution_prover_instance<
+                    F: JoltField,
+                    ProofTranscript: Transcript,
+                    PCS: CommitmentScheme<Field = F>,
+                >(
+                    &mut self,
+                    sm: &StateManager<'_, F, ProofTranscript, PCS>,
+                ) -> Box<dyn SumcheckInstance<F>> {
+                    match self {
+                        $(
+                            Self::$variant(instance) => instance.execution_prover_instance(sm),
+                        )*
+                    }
+                }
+
+                fn read_checking_prover_instance<
+                    F: JoltField,
+                    ProofTranscript: Transcript,
+                    PCS: CommitmentScheme<Field = F>,
+                >(
+                    &self,
+                    sm: &StateManager<'_, F, ProofTranscript, PCS>,
+                ) -> Box<dyn SumcheckInstance<F>> {
+                    match self {
+                        $(
+                            Self::$variant(instance) => instance.read_checking_prover_instance(sm),
+                        )*
+                    }
+                }
+
+                fn execution_verifier_instance<
+                    F: JoltField,
+                    ProofTranscript: Transcript,
+                    PCS: CommitmentScheme<Field = F>,
+                >(
+                    &mut self,
+                    sm: &mut StateManager<'_, F, ProofTranscript, PCS>,
+                ) -> Box<dyn SumcheckInstance<F>> {
+                    match self {
+                        $(
+                            Self::$variant(instance) => instance.execution_verifier_instance(sm),
+                        )*
+                    }
+                }
+
+                fn read_checking_verifier_instance<
+                    F: JoltField,
+                    ProofTranscript: Transcript,
+                    PCS: CommitmentScheme<Field = F>,
+                >(
+                    &mut self,
+                    sm: &StateManager<'_, F, ProofTranscript, PCS>,
+                ) -> Box<dyn SumcheckInstance<F>> {
+                    match self {
+                        $(
+                            Self::$variant(instance) => instance.read_checking_verifier_instance(sm),
+                        )*
+                    }
+                }
+            }
+
+            /// Enum defining the types of precompile variants available
+            #[derive(Debug, Clone, Copy)]
+            pub enum PrecompileVariant {
+                $(
+                    $variant,
+                )*
+            }
+
+            impl PrecompilePreprocessing {
+                /// Helper method to get the count for a specific precompile type
+                pub fn get_count(&self, variant: PrecompileVariant) -> usize {
+                    match variant {
+                        $(
+                            PrecompileVariant::$variant => self.[<$variant:snake>].len(),
+                        )*
+                    }
+                }
+
+                /// Generate all precompile instances from preprocessing
+                pub fn generate_instances(&self) -> Vec<(PrecompileVariant, usize)> {
+                    let mut instances = Vec::new();
+                    $(
+                        for i in 0..self.[<$variant:snake>].len() {
+                            instances.push((PrecompileVariant::$variant, i));
+                        }
+                    )*
+                    instances
+                }
+
+                /// Process a single instruction and add it to the appropriate preprocessing collection
+                /// This method is generated by the macro to handle all supported opcodes
+                fn process_instruction(
+                    &mut self,
+                    instr: &ONNXInstr,
+                    td_lookup: &HashMap<usize, &ONNXInstr>,
+                    bytecode_preprocessing: &BytecodePreprocessing,
+                ) {
+                    match instr.opcode {
+                        $(
+                            $opcode => {
+                                self.[<$variant:snake>].push([<$variant Preprocessing>]::new(
+                                    instr,
+                                    td_lookup,
+                                    bytecode_preprocessing,
+                                ));
+                            },
+                        )*
+                        _ => {}
+                    }
+                }
+            }
+        }
+    };
 }
 
-impl MatVecPreprocessing {
-    /// Extracts read-values from val_final using the stored read-addresses.
-    /// Given the val_final lookup table, computes the actual values of operands and results
-    /// by indexing into val_final with the preprocessed memory addresses.
-    pub fn extract_rv<T>(&self, val_final: &[i64], field_selector: impl Fn(&Self) -> &T) -> Vec<i64>
-    where
-        T: AsRef<[usize]>,
-    {
-        field_selector(self)
-            .as_ref()
-            .iter()
-            .map(|&k| val_final[k])
-            .collect_vec()
-    }
-}
+define_precompiles!((MatVec, ONNXOpcode::MatMult), (ReduceSum, ONNXOpcode::Sum),);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 /// A structure that holds preprocessing data for precompiled operations.
 ///
 /// This struct contains collections of preprocessing instances for different
@@ -91,9 +209,10 @@ impl MatVecPreprocessing {
 ///
 /// # Fields
 ///
-/// * `matvec_instances` - A collection of matrix-vector operation preprocessing instances.
+/// * `mat_vec` - A collection of matrix-vector operation preprocessing instances.
 pub struct PrecompilePreprocessing {
-    pub matvec_instances: Vec<MatVecPreprocessing>,
+    pub mat_vec: Vec<MatVecPreprocessing>,
+    pub reduce_sum: Vec<ReduceSumPreprocessing>,
 }
 
 impl PrecompilePreprocessing {
@@ -102,7 +221,7 @@ impl PrecompilePreprocessing {
     ///
     /// This function extracts all matrix multiplication instructions from the provided model,
     /// identifies their memory addresses for both operands and results, and organizes them
-    /// into a collection of `MatVecPreprocessing` instances. This preprocessing step is crucial
+    /// into a collection of `ReduceSumPreprocessing` instances. This preprocessing step is crucial
     /// for enabling efficient proof generation and verification for these operations.
     ///
     /// # Parameters
@@ -131,10 +250,10 @@ impl PrecompilePreprocessing {
         bytecode_preprocessing: &BytecodePreprocessing,
     ) -> Self
     where
-        ModelFunc: Fn() -> Model,
+        ModelFunc: Fn() -> Model + Copy,
     {
-        // Extract MatMult instructions from the model and collect their memory addresses
-        // for operands (a, b) and results (c) to enable prover/verifier to efficiently prove/verify the PrecompileProofs
+        // Extract instructions from the model and collect their memory addresses
+        // for operands and results to enable prover/verifier to efficiently prove/verify the PrecompileProofs
         let bytecode = onnx_tracer::decode_model(model());
         // Build a lookup map for O(1) instruction lookups by td value
         let td_lookup: HashMap<usize, &ONNXInstr> = bytecode
@@ -142,107 +261,78 @@ impl PrecompilePreprocessing {
             .filter_map(|instr| instr.td.map(|td| (td, instr)))
             .collect();
 
-        let mut matvec_instances: Vec<MatVecPreprocessing> = Vec::new();
-
+        let mut instance = Self::empty();
         for instr in bytecode.iter() {
-            if instr.opcode == ONNXOpcode::MatMult {
-                let ts1 = instr.ts1.unwrap(); // Safe to unwrap - MatMult always has operands
-                let ts2 = instr.ts2.unwrap(); // Safe to unwrap - MatMult always has operands
-
-                // O(1) lookup for operand instructions
-                let a_instr = td_lookup[&ts1];
-                let b_instr = td_lookup[&ts2];
-
-                // Collect addresses for operands and result
-                let mut a = Self::collect_addresses(a_instr, bytecode_preprocessing);
-                let mut b = Self::collect_addresses(b_instr, bytecode_preprocessing);
-                let mut c = Self::collect_addresses(instr, bytecode_preprocessing);
-
-                // Extract original dimensions to match onnx-tracer's padding logic
-                // For input a: [m, k] where m=1 (batch), k=input_length
-                // For weight b: [n, k] where n=output_length, k=input_length
-                // For result c: [m, n] where m=1 (batch), n=output_length
-
-                // a_instr represents the input vector with k elements
-                let k = a_instr.output_dims[1]; // k dimension from input vector [1, k]
-                // instr represents the result with n elements
-                let n = instr.output_dims[1]; // n dimension from output vector [1, n]
-                // m is always 1 for our vector case
-                let m: usize = 1;
-
-                // Calculate power-of-two dimensions matching onnx-tracer logic
-                let m_pow2 = if m.is_power_of_two() {
-                    m
-                } else {
-                    m.next_power_of_two()
-                };
-                let k_pow2 = if k.is_power_of_two() {
-                    k
-                } else {
-                    k.next_power_of_two()
-                };
-                let n_pow2 = if n.is_power_of_two() {
-                    n
-                } else {
-                    n.next_power_of_two()
-                };
-
-                // Resize to match onnx-tracer's padded dimensions
-                a.resize(m_pow2 * k_pow2, 0); // [m_pow2, k_pow2] flattened 
-                b.resize(n_pow2 * k_pow2, 0); // [n_pow2, k_pow2] flattened
-                c.resize(n_pow2, 0); // n_pow2 to ensure power-of-2 for polynomial construction
-                matvec_instances.push(MatVecPreprocessing { a, b, c });
-            }
+            instance.process_instruction(instr, &td_lookup, bytecode_preprocessing);
         }
-        Self { matvec_instances }
+        instance
     }
 
-    /// Collects memory addresses for tensor elements based on an instruction.
-    ///
-    /// This helper method extracts the memory addresses for all active output elements
-    /// of a given instruction by querying the bytecode preprocessing map.
-    ///
-    /// # Parameters
-    ///
-    /// * `instr` - The ONNX instruction containing tensor information
-    /// * `bytecode_preprocessing` - Contains the mapping from virtual addresses to physical addresses
-    ///
-    /// # Returns
-    ///
-    /// A vector of memory addresses for the instruction's active output elements
-    fn collect_addresses(
-        instr: &ONNXInstr,
-        bytecode_preprocessing: &BytecodePreprocessing,
-    ) -> Vec<usize> {
-        (0..instr.active_output_elements)
-            .map(|i| {
-                bytecode_preprocessing.vt_address_map[&(
-                    zkvm_address(instr.td),
-                    tensor_sequence_remaining(instr.active_output_elements, i),
-                )]
-            })
-            .collect()
+    /// Create an empty instance of PrecompilePreprocessing
+    pub fn empty() -> Self {
+        Self::default()
     }
+
+    /// Check if there are no precompile instances
+    pub fn is_empty(&self) -> bool {
+        self.mat_vec.is_empty() && self.reduce_sum.is_empty()
+    }
+}
+
+pub trait PrecompileTrait {
+    fn execution_prover_instance<
+        F: JoltField,
+        ProofTranscript: Transcript,
+        PCS: CommitmentScheme<Field = F>,
+    >(
+        &mut self,
+        sm: &StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Box<dyn SumcheckInstance<F>>;
+
+    fn read_checking_prover_instance<
+        F: JoltField,
+        ProofTranscript: Transcript,
+        PCS: CommitmentScheme<Field = F>,
+    >(
+        &self,
+        sm: &StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Box<dyn SumcheckInstance<F>>;
+
+    fn execution_verifier_instance<
+        F: JoltField,
+        ProofTranscript: Transcript,
+        PCS: CommitmentScheme<Field = F>,
+    >(
+        &mut self,
+        sm: &mut StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Box<dyn SumcheckInstance<F>>;
+
+    fn read_checking_verifier_instance<
+        F: JoltField,
+        ProofTranscript: Transcript,
+        PCS: CommitmentScheme<Field = F>,
+    >(
+        &mut self,
+        sm: &StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Box<dyn SumcheckInstance<F>>;
 }
 
 #[derive(Debug, Clone)]
 /// A directed acyclic graph structure that manages precompiled operations for the ZKML system.
 ///
 /// The `PrecompileDag` serves as the central coordinator for all precompiled operations
-/// in the Jolt  proof system, particularly focused on matrix-vector
-/// multiplication operations which are common in machine learning models.
+/// in the Jolt  proof system
 ///
-/// This structure maintains a collection of precompile instances (currently matrix-vector
-/// multiplication instances) and provides methods to construct both prover and verifier
-/// variants, as well as methods to access execution and read-checking instances for
-/// sumcheck protocols.
+/// This structure maintains a collection of precompile instances and provides methods to
+/// construct both prover and verifier variants, as well as methods to access execution
+/// and read-checking instances for sumcheck protocols.
 ///
 /// # Fields
 ///
-/// * `matvec_instances` - A vector of matrix-vector multiplication precompile instances
+/// * `instances` - A vector of all precompile instances managed by this DAG
 pub struct PrecompileDag {
-    /// Collection of matrix-vector multiplication precompile instances used in the DAG
-    matvec_instances: Vec<MatVecMultPrecompile>,
+    /// Collection of all precompile instances used in the Precompile DAG
+    instances: Vec<PrecompileInstance>,
 }
 
 impl PrecompileDag {
@@ -272,17 +362,15 @@ impl PrecompileDag {
     >(
         sm: &StateManager<'_, F, ProofTranscript, PCS>,
     ) -> Self {
-        let num_matvec_instances = sm
-            .get_prover_data()
-            .0
-            .shared
-            .precompiles
-            .matvec_instances
-            .len();
-        let matvec_instances = (0..num_matvec_instances)
-            .map(MatVecMultPrecompile::new_prover)
+        let preprocessing = sm.get_precompile_preprocessing();
+        let instance_specs = preprocessing.generate_instances();
+
+        let instances = instance_specs
+            .into_iter()
+            .map(|(variant, index)| PrecompileInstance::new_prover(variant, index))
             .collect();
-        Self { matvec_instances }
+
+        Self { instances }
     }
 
     /// Creates a new verifier instance of the `PrecompileDag`.
@@ -312,26 +400,22 @@ impl PrecompileDag {
     >(
         sm: &StateManager<'_, F, ProofTranscript, PCS>,
     ) -> Self {
-        let num_matvec_instances = sm
-            .get_verifier_data()
-            .0
-            .shared
-            .precompiles
-            .matvec_instances
-            .len();
-        let matvec_instances = (0..num_matvec_instances)
-            .map(MatVecMultPrecompile::new_verifier)
+        let preprocessing = sm.get_precompile_preprocessing();
+        let instance_specs = preprocessing.generate_instances();
+        let instances = instance_specs
+            .into_iter()
+            .map(|(variant, index)| PrecompileInstance::new_verifier(variant, index))
             .collect();
-        Self { matvec_instances }
+        Self { instances }
     }
 }
 
 impl PrecompileDag {
     /// Gathers all prover instances for execution sum-checks.
     ///
-    /// This method collects sumcheck instances from all matrix-vector multiplication precompiles
+    /// This method collects sumcheck instances from all precompiles
     /// for the execution phase of the proof generation. The execution phase proves that the
-    /// matrix-vector multiplication operations were performed correctly.
+    /// precompile operations were performed correctly.
     ///
     /// # Type Parameters
     ///
@@ -355,7 +439,7 @@ impl PrecompileDag {
         &mut self,
         sm: &StateManager<'_, F, ProofTranscript, PCS>,
     ) -> Vec<Box<dyn SumcheckInstance<F>>> {
-        self.matvec_instances
+        self.instances
             .iter_mut()
             .map(|instance| instance.execution_prover_instance(sm))
             .collect()
@@ -365,7 +449,7 @@ impl PrecompileDag {
     ///
     /// This method collects sumcheck instances from all matrix-vector multiplication precompiles
     /// for the read-checking phase of the proof generation. The read-checking phase proves that
-    /// the values used in the matrix-vector multiplications were correctly read from memory.
+    /// the values used in the precompiles were correctly read from memory.
     ///
     /// # Type Parameters
     ///
@@ -389,7 +473,7 @@ impl PrecompileDag {
         &self,
         sm: &StateManager<'_, F, ProofTranscript, PCS>,
     ) -> Vec<Box<dyn SumcheckInstance<F>>> {
-        self.matvec_instances
+        self.instances
             .iter()
             .map(|instance| instance.read_checking_prover_instance(sm))
             .collect()
@@ -397,10 +481,10 @@ impl PrecompileDag {
 
     /// Gets all verifier instance for val_final sum-checks.
     ///
-    /// This method collects sumcheck instances from all matrix-vector multiplication precompiles
+    /// This method collects sumcheck instances from all precompiles
     /// for the val_final phase of proof verification. These instances are used to verify the
-    /// val_final part of the proof, which shows that the values used in the matrix-vector
-    /// multiplications were correctly read from memory.
+    /// val_final part of the proof, which verifies the val_final claim used in the
+    /// read-checking phase.
     ///
     /// # Type Parameters
     ///
@@ -428,9 +512,9 @@ impl PrecompileDag {
 
     /// Gets all verifier instances for execution sum-checks.
     ///
-    /// This method collects sumcheck instances from all matrix-vector multiplication precompiles
+    /// This method collects the sumcheck instances from all precompiles
     /// for the execution phase of proof verification. These instances are used to verify the
-    /// execution part of the proof, which shows the matrix-vector operations were performed correctly.
+    /// execution part of the proof, which shows the precomile operations were performed correctly.
     ///
     /// # Type Parameters
     ///
@@ -454,7 +538,7 @@ impl PrecompileDag {
         &mut self,
         sm: &mut StateManager<'_, F, ProofTranscript, PCS>,
     ) -> Vec<Box<dyn SumcheckInstance<F>>> {
-        self.matvec_instances
+        self.instances
             .iter_mut()
             .map(|instance| instance.execution_verifier_instance(sm))
             .collect()
@@ -462,10 +546,10 @@ impl PrecompileDag {
 
     /// Gets all verifier instances for read-checking sum-checks.
     ///
-    /// This method collects sumcheck instances from all matrix-vector multiplication precompiles
+    /// This method collects sumcheck instances from all the precompiles
     /// for the read-checking phase of proof verification. These instances are used to verify the
-    /// read-checking part of the proof, which shows that the values used in the matrix-vector
-    /// multiplications were correctly read from memory.
+    /// read-checking part of the proof, which shows that the values used in the precompiles
+    /// were correctly read from memory.
     ///
     /// # Type Parameters
     ///
@@ -488,7 +572,7 @@ impl PrecompileDag {
         &mut self,
         sm: &StateManager<'_, F, ProofTranscript, PCS>,
     ) -> Vec<Box<dyn SumcheckInstance<F>>> {
-        self.matvec_instances
+        self.instances
             .iter_mut()
             .map(|instance| instance.read_checking_verifier_instance(sm))
             .collect()
@@ -498,8 +582,7 @@ impl PrecompileDag {
     ///
     /// This method collects sumcheck instances from all matrix-vector multiplication precompiles
     /// for the val_final phase of proof verification. These instances are used to verify the
-    /// val_final part of the proof, which shows that the values used in the matrix-vector
-    /// multiplications were correctly read from memory.
+    /// val_final part of the proof, which verifies the val_final claim from the read-checking phase of the precompile
     ///
     /// # Type Parameters
     ///
@@ -537,11 +620,9 @@ impl<F: JoltField, FS: Transcript> PrecompileSNARK<F, FS> {
     #[tracing::instrument(name = "PrecompileSNARK::prove", skip(sm))]
     pub fn prove<'a, PCS: CommitmentScheme<Field = F>>(sm: &StateManager<'a, F, FS, PCS>) -> Self {
         let mut precompile_dag = PrecompileDag::new_prover(sm);
-
         let execution_proof = Self::prove_execution(&mut precompile_dag, sm);
         let read_checking_proof = Self::prove_read_checking(&precompile_dag, sm);
         let val_final_proof = Self::prove_val_final(&precompile_dag, sm);
-
         PrecompileSNARK {
             execution_proof,
             read_checking_proof,
@@ -586,7 +667,6 @@ impl<F: JoltField, FS: Transcript> PrecompileSNARK<F, FS> {
                 .iter_mut()
                 .map(|instance| &mut **instance as &mut dyn SumcheckInstance<F>)
                 .collect();
-
         let transcript = sm.get_transcript();
         let accumulator = sm.get_prover_accumulator();
         let (read_checking_proof, _r_read_checking) = BatchedSumcheck::prove(
@@ -672,7 +752,7 @@ mod tests {
     type PCS = MockCommitScheme<Fr>;
 
     /// Helper function to test matrix multiplication models
-    fn test_matmult_model_helper<ModelFunc>(model: ModelFunc, input: Tensor<i32>)
+    fn test_model_helper<ModelFunc>(model: ModelFunc, input: Tensor<i32>)
     where
         ModelFunc: Fn() -> onnx_tracer::graph::model::Model + Copy,
     {
@@ -717,30 +797,40 @@ mod tests {
     #[test]
     fn test_minimal_matmult_non_power_of_two_model() {
         let input = Tensor::new(Some(&[1, 2, 3, 4, 5]), &[1, 5]).unwrap();
-        test_matmult_model_helper(builder::minimal_matmult_non_power_of_two_model, input);
+        test_model_helper(builder::minimal_matmult_non_power_of_two_model, input);
     }
 
     #[test]
     fn test_dual_matmult_non_power_of_two_model() {
         let input = Tensor::new(Some(&[1, 2, 3, 4, 5]), &[1, 5]).unwrap();
-        test_matmult_model_helper(builder::dual_matmult_non_power_of_two_model, input);
+        test_model_helper(builder::dual_matmult_non_power_of_two_model, input);
     }
 
     #[test]
     fn test_neg_dual_matmult_model() {
         let input = Tensor::new(Some(&[-1, -2, -3, -4]), &[1, 4]).unwrap();
-        test_matmult_model_helper(builder::dual_matmult_model, input);
+        test_model_helper(builder::dual_matmult_model, input);
     }
 
     #[test]
     fn test_dual_matmult_model() {
         let input = Tensor::new(Some(&[1, 2, 3, 4]), &[1, 4]).unwrap();
-        test_matmult_model_helper(builder::dual_matmult_model, input);
+        test_model_helper(builder::dual_matmult_model, input);
     }
 
     #[test]
     fn test_triple_matmult_model() {
         let input = Tensor::new(Some(&[1, 2, 3, 4, 1, 2, 3, 4]), &[1, 8]).unwrap();
-        test_matmult_model_helper(builder::triple_matmult_model, input);
+        test_model_helper(builder::triple_matmult_model, input);
+    }
+
+    #[test]
+    fn test_layernorm_prefix_model() {
+        let input = Tensor::new(
+            Some(&[1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4]),
+            &[4, 4],
+        )
+        .unwrap();
+        test_model_helper(builder::reduce_mean_model, input);
     }
 }

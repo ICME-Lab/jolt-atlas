@@ -57,6 +57,8 @@ pub enum SumcheckId {
     MatVecExecution,
     MatVecReadChecking,
     PrecompileValFinal,
+    ReduceSumExecution,
+    ReduceSumReadChecking,
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord)]

@@ -341,6 +341,7 @@ pub enum ONNXOpcode {
     Constant,
     Input,
     Output,
+    Abs,
     Add,
     Sub,
     Mul,
@@ -365,6 +366,7 @@ pub enum ONNXOpcode {
     Select,
     Broadcast,
     AddressedNoop,
+    Test,
 
     // Virtual instructions
     VirtualAdvice,

@@ -1544,6 +1544,40 @@ pub fn create_relu_node(
     )
 }
 
+pub fn create_abs_node(
+    out_scale: i32,
+    inputs: Vec<(usize, usize)>,
+    out_dims: Vec<usize>,
+    idx: usize,
+    num_uses: usize,
+) -> Node {
+    create_node(
+        SupportedOp::Nonlinear(LookupOp::Abs),
+        out_scale,
+        inputs,
+        out_dims,
+        idx,
+        num_uses,
+    )
+}
+
+pub fn create_test_abs_node(
+    out_scale: i32,
+    inputs: Vec<(usize, usize)>,
+    out_dims: Vec<usize>,
+    idx: usize,
+    num_uses: usize,
+) -> Node {
+    create_node(
+        SupportedOp::Nonlinear(LookupOp::Test),
+        out_scale,
+        inputs,
+        out_dims,
+        idx,
+        num_uses,
+    )
+}
+
 pub fn create_matmul_node(
     equation: String,
     out_scale: i32,

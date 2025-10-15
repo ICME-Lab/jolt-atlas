@@ -1,5 +1,6 @@
 use jolt_core::{field::JoltField, utils::lookup_bits::LookupBits};
 
+use abs::AbsPrefix;
 use jolt_prefixes::{
     AndPrefix, DivByZeroPrefix, EqPrefix, LeftMsbPrefix, LeftOperandIsZeroPrefix,
     LeftShiftHelperPrefix, LeftShiftPrefix, LessThanPrefix, LowerWordPrefix, LsbPrefix,
@@ -9,8 +10,10 @@ use jolt_prefixes::{
     RightShiftPrefix, SignExtensionPrefix, UpperWordPrefix, XorPrefix,
 };
 use lower_word_no_msb::LowerWordNoMsbPrefix;
+use not_lower_no_msb::NotLowerNoMsbPrefix;
 use not_unary_msb::NotUnaryMsbPrefix;
 use relu::ReluPrefix;
+use unary_msb::UnaryMsbPrefix;
 
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
@@ -63,6 +66,7 @@ pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
 #[repr(u8)]
 #[derive(EnumCountMacro, EnumIter, FromPrimitive)]
 pub enum Prefixes {
+    Abs,
     And,
     DivByZero,
     Eq,
@@ -77,6 +81,7 @@ pub enum Prefixes {
     NegativeDivisorEqualsRemainder,
     NegativeDivisorGreaterThanRemainder,
     NegativeDivisorZeroRemainder,
+    NOTLowerNoMsb,
     NotUnaryMsb,
     Or,
     PositiveRemainderEqualsDivisor,
@@ -87,6 +92,7 @@ pub enum Prefixes {
     RightOperandMsb,
     RightShift,
     SignExtension,
+    UnaryMsb,
     UpperWord,
     Xor,
 }
@@ -219,6 +225,7 @@ macro_rules! impl_prefixes {
 }
 
 impl_prefixes!(
+    Abs: AbsPrefix<WORD_SIZE>,
     And: AndPrefix<WORD_SIZE>,
     DivByZero: DivByZeroPrefix,
     Eq: EqPrefix,
@@ -233,6 +240,7 @@ impl_prefixes!(
     NegativeDivisorEqualsRemainder: NegativeDivisorEqualsRemainderPrefix,
     NegativeDivisorGreaterThanRemainder: NegativeDivisorGreaterThanRemainderPrefix,
     NegativeDivisorZeroRemainder: NegativeDivisorZeroRemainderPrefix,
+    NOTLowerNoMsb: NotLowerNoMsbPrefix<WORD_SIZE>,
     NotUnaryMsb: NotUnaryMsbPrefix<WORD_SIZE>,
     Or: OrPrefix<WORD_SIZE>,
     PositiveRemainderEqualsDivisor: PositiveRemainderEqualsDivisorPrefix,
@@ -243,11 +251,15 @@ impl_prefixes!(
     RightOperandMsb: RightMsbPrefix,
     RightShift: RightShiftPrefix,
     SignExtension: SignExtensionPrefix<WORD_SIZE>,
+    UnaryMsb: UnaryMsbPrefix<WORD_SIZE>,
     UpperWord: UpperWordPrefix<WORD_SIZE>,
     Xor: XorPrefix<WORD_SIZE>,
 );
 
+mod abs;
 mod jolt_prefixes;
 mod lower_word_no_msb;
+mod not_lower_no_msb;
 mod not_unary_msb;
 mod relu;
+mod unary_msb;

@@ -1,6 +1,8 @@
 use jolt_core::utils::lookup_bits::LookupBits;
 use jolt_core::zkvm::lookup_table::suffixes::SparseDenseSuffix;
 
+use abs_minus_one::AbsIncrSuffix;
+use abs_negative_case::AbsNegativeCaseSuffix;
 use jolt_suffixes::{
     AndSuffix, DivByZeroSuffix, EqSuffix, GreaterThanSuffix, LeftOperandIsZeroSuffix,
     LeftShiftSuffix, LessThanSuffix, LowerWordSuffix, LsbSuffix, OneSuffix, OrSuffix,
@@ -16,6 +18,8 @@ use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 #[repr(u8)]
 #[derive(EnumCountMacro, EnumIter, FromPrimitive)]
 pub enum Suffixes {
+    AbsNegativeCase,
+    AbsIncr,
     And,
     DivByZero,
     Eq,
@@ -45,6 +49,8 @@ impl Suffixes {
     /// `b` represents `b.len()` variables, each assuming a Boolean value.
     pub fn suffix_mle<const WORD_SIZE: usize>(&self, b: LookupBits) -> u32 {
         match self {
+            Suffixes::AbsIncr => AbsIncrSuffix::<WORD_SIZE>::suffix_mle(b),
+            Suffixes::AbsNegativeCase => AbsNegativeCaseSuffix::<WORD_SIZE>::suffix_mle(b),
             Suffixes::And => AndSuffix::suffix_mle(b),
             Suffixes::DivByZero => DivByZeroSuffix::suffix_mle(b),
             Suffixes::Eq => EqSuffix::suffix_mle(b),
@@ -69,5 +75,7 @@ impl Suffixes {
     }
 }
 
+mod abs_minus_one;
+mod abs_negative_case;
 mod jolt_suffixes;
 mod relu;

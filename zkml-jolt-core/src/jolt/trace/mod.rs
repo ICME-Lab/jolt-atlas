@@ -39,16 +39,21 @@
 //! let (trace, program_io) = trace(|| model, &input, &preprocessing);
 //! ```
 
-use crate::jolt::{
-    bytecode::{BytecodePreprocessing, JoltONNXBytecode},
-    executor::instructions::{
-        InstructionLookup, VirtualInstructionSequence, add::AddInstruction, beq::BeqInstruction,
-        div::DivInstruction, mul::MulInstruction, relu::ReluInstruction, sub::SubInstruction,
-        virtual_advice::AdviceInstruction, virtual_assert_valid_div0::AssertValidDiv0Instruction,
-        virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction,
-        virtual_const::ConstInstruction, virtual_move::MoveInstruction,
+use crate::{
+    jolt::{
+        bytecode::{BytecodePreprocessing, JoltONNXBytecode},
+        executor::instructions::{
+            InstructionLookup, VirtualInstructionSequence, add::AddInstruction,
+            beq::BeqInstruction, broadcast::BroadCastInstruction, div::DivInstruction,
+            mul::MulInstruction, relu::ReluInstruction, sub::SubInstruction,
+            virtual_advice::AdviceInstruction,
+            virtual_assert_valid_div0::AssertValidDiv0Instruction,
+            virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction,
+            virtual_const::ConstInstruction, virtual_move::MoveInstruction,
+        },
+        lookup_table::LookupTables,
     },
-    lookup_table::LookupTables,
+    utils::tensor_to_u64s,
 };
 use jolt_core::zkvm::instruction::LookupQuery;
 use onnx_tracer::{
@@ -288,15 +293,24 @@ impl TensorValues {
     /// operations use a different memory consistency check (MCC) pattern and are
     /// handled separately from other element-wise operations.
     fn from_cycle(raw_cycle: &ONNXCycle, size: usize) -> Self {
-        let (ts1_vals, ts2_vals) = if Self::is_non_elementwise_op(&raw_cycle.instr.opcode) {
-            // Non-elementwise operations don't use ts1/ts2 in the same way
-            (vec![0; size], vec![0; size])
-        } else {
-            // Extract tensor values, defaulting to zero if not present
-            (
+        let (ts1_vals, ts2_vals) = match raw_cycle.instr.opcode {
+            ONNXOpcode::MatMult | ONNXOpcode::Sum => (vec![0; size], vec![0; size]),
+            ONNXOpcode::Broadcast => {
+                // broadcast ts1
+                let mut ts1 = raw_cycle
+                    .memory_state
+                    .ts1_val
+                    .clone()
+                    .expect("Broadcast ts1 should be set");
+                ts1 = ts1
+                    .expand(&raw_cycle.instr.output_dims)
+                    .expect("Expand should always work for broadcast cycles");
+                (tensor_to_u64s(&ts1), vec![0; size])
+            }
+            _ => (
                 raw_cycle.ts1_vals().unwrap_or_else(|| vec![0; size]),
                 raw_cycle.ts2_vals().unwrap_or_else(|| vec![0; size]),
-            )
+            ),
         };
 
         Self {
@@ -306,19 +320,6 @@ impl TensorValues {
             td_post_vals: raw_cycle.td_post_vals().unwrap_or_else(|| vec![0; size]),
             advice_vals: raw_cycle.advice_value(),
         }
-    }
-
-    /// Checks if an operation is non-elementwise and requires special handling.
-    ///
-    /// # Arguments
-    ///
-    /// * `opcode` - The ONNX operation code to check
-    ///
-    /// # Returns
-    ///
-    /// `true` if the operation is non-elementwise, `false` otherwise.
-    fn is_non_elementwise_op(opcode: &ONNXOpcode) -> bool {
-        matches!(opcode, ONNXOpcode::MatMult | ONNXOpcode::Sum)
     }
 }
 
@@ -402,6 +403,11 @@ impl JoltONNXCycle {
                 Some(LookupFunction::VirtualMove(MoveInstruction::<WORD_SIZE>(
                     memory_ops.ts1_val,
                 )))
+            }
+            ONNXOpcode::Broadcast => {
+                Some(LookupFunction::BroadCast(
+                    BroadCastInstruction::<WORD_SIZE>(memory_ops.ts1_val),
+                ))
             }
             ONNXOpcode::VirtualAdvice => Some(LookupFunction::Advice(
                 AdviceInstruction::<WORD_SIZE>(advice_value.expect("Advice value should be set")),
@@ -710,6 +716,7 @@ define_lookup_enum!(
     VirtualAssertValidDiv0: AssertValidDiv0Instruction<WORD_SIZE>,
     VirtualAssertEq: BeqInstruction<WORD_SIZE>,
     VirtualMove: MoveInstruction<WORD_SIZE>,
+    BroadCast: BroadCastInstruction<WORD_SIZE>,
     VirtualConst: ConstInstruction<WORD_SIZE>,
 );
 

@@ -253,8 +253,7 @@ where
         ModelFunc: Fn() -> Model + Copy,
     {
         let bytecode_preprocessing = BytecodePreprocessing::preprocess(model);
-        let precompile_preprocessing =
-            PrecompilePreprocessing::preprocess(model, &bytecode_preprocessing);
+        let precompile_preprocessing = PrecompilePreprocessing::preprocess(&bytecode_preprocessing);
         JoltSharedPreprocessing {
             bytecode: bytecode_preprocessing,
             precompiles: precompile_preprocessing,
@@ -304,7 +303,9 @@ mod e2e_tests {
         transcripts::KeccakTranscript,
     };
     use log::debug;
-    use onnx_tracer::{builder, decode_model, graph::model::Model, model, tensor::Tensor};
+    use onnx_tracer::{
+        builder, decode_model, graph::model::Model, logger::init_logger, model, tensor::Tensor,
+    };
     use serde_json::Value;
     use serial_test::serial;
 
@@ -338,6 +339,7 @@ mod e2e_tests {
 
     #[test]
     fn test_self_attention_2d_transformer() {
+        init_logger();
         let model = model(&PathBuf::from(
             "../onnx-tracer/models/self_attention_2d_transformer/network.onnx",
         ));
@@ -714,6 +716,16 @@ mod e2e_tests {
     fn test_reduce_mean() {
         run_snark_test(
             builder::reduce_mean_model,
+            &[1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4],
+            &[4, 4],
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_layernorm_prefix() {
+        run_snark_test(
+            builder::layernorm_prefix_model,
             &[1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4],
             &[4, 4],
         );

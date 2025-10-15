@@ -91,7 +91,7 @@ impl ReduceSumPreprocessing {
     /// Create a new instance of [ReduceSumPreprocessing]
     pub fn new(
         instr: &ONNXInstr,
-        td_lookup: &HashMap<usize, &ONNXInstr>,
+        td_lookup: &HashMap<usize, ONNXInstr>,
         bytecode_preprocessing: &BytecodePreprocessing,
     ) -> Self {
         // Get operand instruction

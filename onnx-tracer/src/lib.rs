@@ -59,6 +59,8 @@ pub mod parallel_utils;
 pub mod tensor;
 pub mod trace_types;
 
+/// The input and output of inference runs
+/// Used by the zkVM to check output and input node cycles
 #[derive(Debug, Clone)]
 pub struct ProgramIO {
     pub input: Tensor<i32>,
@@ -66,6 +68,9 @@ pub struct ProgramIO {
 }
 
 impl ProgramIO {
+    /// Create new [ProgramIO] from input and ForwardResult
+    /// # Panics
+    /// Panics if ForwardResult does not contain exactly one output tensor
     pub fn new(input: Tensor<i32>, res: ForwardResult) -> Self {
         let outputs = res.outputs;
         assert!(outputs.len() == 1);

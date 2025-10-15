@@ -36,7 +36,6 @@ use jolt_core::{
 };
 use onnx_tracer::{
     self,
-    graph::model::Model,
     trace_types::{ONNXInstr, ONNXOpcode},
 };
 use paste::paste;
@@ -178,7 +177,7 @@ macro_rules! define_precompiles {
                 fn process_instruction(
                     &mut self,
                     instr: &ONNXInstr,
-                    td_lookup: &HashMap<usize, &ONNXInstr>,
+                    td_lookup: &HashMap<usize, ONNXInstr>,
                     bytecode_preprocessing: &BytecodePreprocessing,
                 ) {
                     match instr.opcode {
@@ -245,25 +244,14 @@ impl PrecompilePreprocessing {
     /// # Type Parameters
     ///
     /// * `ModelFunc` - A function type that returns a `Model`
-    pub fn preprocess<ModelFunc>(
-        model: ModelFunc,
-        bytecode_preprocessing: &BytecodePreprocessing,
-    ) -> Self
-    where
-        ModelFunc: Fn() -> Model + Copy,
-    {
-        // Extract instructions from the model and collect their memory addresses
-        // for operands and results to enable prover/verifier to efficiently prove/verify the PrecompileProofs
-        let bytecode = onnx_tracer::decode_model(model());
-        // Build a lookup map for O(1) instruction lookups by td value
-        let td_lookup: HashMap<usize, &ONNXInstr> = bytecode
-            .iter()
-            .filter_map(|instr| instr.td.map(|td| (td, instr)))
-            .collect();
-
+    pub fn preprocess(bytecode_preprocessing: &BytecodePreprocessing) -> Self {
         let mut instance = Self::empty();
-        for instr in bytecode.iter() {
-            instance.process_instruction(instr, &td_lookup, bytecode_preprocessing);
+        for instr in bytecode_preprocessing.raw_bytecode().iter() {
+            instance.process_instruction(
+                instr,
+                bytecode_preprocessing.td_lookup(),
+                bytecode_preprocessing,
+            );
         }
         instance
     }

@@ -438,6 +438,9 @@ impl Node {
 /// * `remappings` - A `BTreeMap` of remapping indices to apply. The keys are the `Graph` node indices,
 ///   and the values are the node indices in the `nodes` collection.
 ///   It is populated each time a new node from the `Graph` is added to the `nodes` collection.
+///
+/// # Returns
+/// A vector of tuples, where each tuple contains the mapped node index and the output slot.
 pub fn map_outlet_indices(
     outlets: &[OutletId],
     remappings: &BTreeMap<usize, usize>,

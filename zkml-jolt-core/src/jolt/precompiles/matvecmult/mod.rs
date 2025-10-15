@@ -96,7 +96,7 @@ impl MatVecPreprocessing {
     /// Create a new instance of [MatVecPreprocessing]
     pub fn new(
         instr: &ONNXInstr,
-        td_lookup: &HashMap<usize, &ONNXInstr>,
+        td_lookup: &HashMap<usize, ONNXInstr>,
         bytecode_preprocessing: &BytecodePreprocessing,
     ) -> Self {
         // Get operand instructions

@@ -30,7 +30,7 @@ impl PreprocessingHelper {
 
     /// Extract operand instruction from td_lookup
     pub fn get_operand_instruction<'a>(
-        td_lookup: &'a HashMap<usize, &ONNXInstr>,
+        td_lookup: &'a HashMap<usize, ONNXInstr>,
         ts: Option<usize>,
         operation_name: &str,
     ) -> &'a ONNXInstr {

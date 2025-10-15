@@ -180,7 +180,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Generate a proof for the first test case (authorized transaction)
-    println!("\nGenerating SNARK proof for authorized transaction:");
+    println!("\nGenerating SNARK for authorized transaction:");
     println!("=================================================");
 
     let proof_scenario = test_scenarios[0];

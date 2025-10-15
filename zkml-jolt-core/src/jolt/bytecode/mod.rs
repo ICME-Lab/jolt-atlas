@@ -26,11 +26,12 @@ use jolt_core::{
 };
 use onnx_tracer::{
     graph::model::Model,
+    tensor::Tensor,
     trace_types::{CircuitFlags, NUM_CIRCUIT_FLAGS, ONNXInstr, ONNXOpcode},
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub const ZERO_ADDR_PREPEND: usize = 1; // TODO(Forpee): reserve output
 
@@ -159,6 +160,10 @@ pub struct BytecodePreprocessing {
     pub vt_address_map: BTreeMap<(usize, usize), usize>,
     /// Used to expand the virtual trace
     pub max_td: usize,
+    /// Get info of the bytecode from its td address
+    pub td_lookup: HashMap<usize, ONNXInstr>,
+    /// raw bytecode (used in precompiles)
+    pub raw_bytecode: Vec<ONNXInstr>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -183,6 +188,7 @@ pub struct JoltONNXBytecode {
 }
 
 impl JoltONNXBytecode {
+    /// Used for padding
     pub fn no_op() -> Self {
         Self {
             address: 0,
@@ -224,9 +230,9 @@ impl JoltONNXBytecode {
             | ONNXOpcode::VirtualAssertValidDiv0
             | ONNXOpcode::VirtualAssertEq
             | ONNXOpcode::Gte
-            | ONNXOpcode::Sum
             | ONNXOpcode::Relu
             | ONNXOpcode::Output
+            | ONNXOpcode::Broadcast
         );
 
         flags[CircuitFlags::RightOperandIsTs2Value as usize] = matches!(
@@ -251,6 +257,7 @@ impl JoltONNXBytecode {
             | ONNXOpcode::VirtualMove
             | ONNXOpcode::Relu
             | ONNXOpcode::Output
+            | ONNXOpcode::Broadcast
         );
 
         flags[CircuitFlags::SubtractOperands as usize] = matches!(
@@ -272,9 +279,9 @@ impl JoltONNXBytecode {
             | ONNXOpcode::VirtualMove
             | ONNXOpcode::VirtualConst
             | ONNXOpcode::Gte
-            | ONNXOpcode::Sum
             | ONNXOpcode::Relu
             | ONNXOpcode::Output
+            | ONNXOpcode::Broadcast
         );
 
         flags[CircuitFlags::Advice as usize] = matches!(
@@ -331,6 +338,7 @@ impl InstructionLookup<WORD_SIZE> for JoltONNXBytecode {
             ONNXOpcode::VirtualAssertValidSignedRemainder => Some(ValidSignedRemainderTable.into()),
             ONNXOpcode::VirtualAssertValidDiv0 => Some(ValidDiv0Table.into()),
             ONNXOpcode::VirtualAssertEq => Some(EqualTable.into()),
+            ONNXOpcode::Broadcast => Some(RangeCheckTable.into()),
             _ => None,
         }
     }
@@ -342,7 +350,8 @@ impl BytecodePreprocessing {
     where
         ModelFunc: Fn() -> Model,
     {
-        let (mut bytecode, memory_K, vt_address_map, max_td) = Self::inline_tensor_instrs(model);
+        let (mut bytecode, memory_K, vt_address_map, max_td, td_lookup, raw_bytecode) =
+            Self::inline_tensor_instrs(model);
         // Append an addressed no-op instruction at the end to simplify the PC logic in the VM
         bytecode.push(JoltONNXBytecode::addressed_no_op(
             bytecode.last().map_or(0, |cycle| cycle.address) + 1,
@@ -382,21 +391,34 @@ impl BytecodePreprocessing {
             tensor_virtual_pc_map,
             vt_address_map,
             max_td,
+            td_lookup,
+            raw_bytecode,
         }
+    }
+
+    /// Getter for td_lookup
+    pub fn td_lookup(&self) -> &HashMap<usize, ONNXInstr> {
+        &self.td_lookup
     }
 
     pub fn inline_tensor_instrs<ModelFunc>(model: ModelFunc) -> RawToJoltResult
     where
         ModelFunc: Fn() -> Model,
     {
-        let bytecode = onnx_tracer::decode_model(model());
+        let raw_bytecode = onnx_tracer::decode_model(model());
+        println!("Raw bytecode: {raw_bytecode:#?}");
+        // Build a lookup map for O(1) instruction lookups by td value
+        let td_lookup: HashMap<usize, ONNXInstr> = raw_bytecode
+            .iter()
+            .filter_map(|instr| instr.td.map(|td| (td, instr.clone())))
+            .collect();
         // Get largest td value
-        let max_td = bytecode
+        let max_td = raw_bytecode
             .iter()
             .filter_map(|instr| instr.td)
             .max()
             .unwrap_or(0);
-        let bytecode = Self::expand_raw_bytecode(bytecode, max_td);
+        let raw_bytecode = Self::expand_raw_bytecode(raw_bytecode, max_td);
 
         let mut preprocessed_bytecode: Vec<JoltONNXBytecode> = Vec::new();
 
@@ -409,7 +431,7 @@ impl BytecodePreprocessing {
         let mut vt_address: usize = 0;
         // virtual tensor address map
         let mut vt_address_map: BTreeMap<(usize, usize), usize> = BTreeMap::new();
-        let max_active_output_elements = max_output_elements(&bytecode);
+        let max_active_output_elements = max_output_elements(&raw_bytecode);
 
         // reserve address space for zero registers
         for i in 0..max_active_output_elements {
@@ -424,9 +446,13 @@ impl BytecodePreprocessing {
         // e.g., ONNX tensor address 0 (zero register) maps to virtual addresses 0..max_active_output_elements
         // e.g., ONNX tensor address 1 maps to virtual addresses max_active_output_elements..(max_active_output_elements + its size)
         // etc.
-        for instruction in bytecode.into_iter() {
-            let jolt_instructions =
-                raw_to_jolt_bytecode(instruction, &mut vt_address, &mut vt_address_map);
+        for instruction in raw_bytecode.iter() {
+            let jolt_instructions = raw_to_jolt_bytecode(
+                instruction,
+                &mut vt_address,
+                &mut vt_address_map,
+                &td_lookup,
+            );
             preprocessed_bytecode.extend(jolt_instructions);
         }
         (
@@ -434,6 +460,8 @@ impl BytecodePreprocessing {
             vt_address.next_power_of_two(),
             vt_address_map,
             max_td,
+            td_lookup,
+            raw_bytecode,
         )
     }
 
@@ -448,12 +476,47 @@ impl BytecodePreprocessing {
             .unwrap()
     }
 
-    fn expand_raw_bytecode(bytecode: Vec<ONNXInstr>, max_td: usize) -> Vec<ONNXInstr> {
-        bytecode
+    /// Expand the virtual instructions of the raw ONNX bytecode.
+    ///
+    /// # Parameters
+    ///
+    /// * `raw_bytecode` - The raw ONNX bytecode to be expanded
+    /// * `max_td` - used to calculate a unique register address for virtual registers used in virtual instructions
+    fn expand_raw_bytecode(raw_bytecode: Vec<ONNXInstr>, max_td: usize) -> Vec<ONNXInstr> {
+        raw_bytecode
             .into_iter()
             .flat_map(|instr| match instr.opcode {
                 ONNXOpcode::Div => DivInstruction::<32>::virtual_sequence(instr, max_td),
                 _ => vec![instr],
+            })
+            .collect()
+    }
+
+    /// Getter for raw bytecode
+    pub fn raw_bytecode(&self) -> &[ONNXInstr] {
+        &self.raw_bytecode
+    }
+
+    /// Collects memory addresses for tensor elements based on an instruction.
+    ///
+    /// This helper method extracts the memory addresses for all active output elements
+    /// of a given instruction by querying the bytecode preprocessing map.
+    ///
+    /// # Parameters
+    ///
+    /// * `instr` - The ONNX instruction containing tensor information
+    /// * `bytecode_preprocessing` - Contains the mapping from virtual addresses to physical addresses
+    ///
+    /// # Returns
+    ///
+    /// A vector of memory addresses for the instruction's active output elements
+    pub fn collect_addresses(&self, instr: &ONNXInstr) -> Vec<usize> {
+        (0..instr.active_output_elements)
+            .map(|i| {
+                self.vt_address_map[&(
+                    zkvm_address(instr.td),
+                    tensor_sequence_remaining(instr.active_output_elements, i),
+                )]
             })
             .collect()
     }
@@ -464,12 +527,18 @@ pub type RawToJoltResult = (
     usize,
     BTreeMap<(usize, usize), usize>,
     usize,
+    HashMap<usize, ONNXInstr>,
+    Vec<ONNXInstr>,
 );
 
+/// Convert a raw ONNX instruction to one or more Jolt bytecode instructions.
+/// This is done by decomposing tensor operations into scalar instructions
+/// and mapping tensor addresses to virtual memory addresses.
 pub fn raw_to_jolt_bytecode(
-    raw: ONNXInstr,
+    raw: &ONNXInstr,
     vt_address: &mut usize,
     vt_address_map: &mut BTreeMap<(usize, usize), usize>,
+    td_lookup: &HashMap<usize, ONNXInstr>,
 ) -> Vec<JoltONNXBytecode> {
     let mut jolt_instructions: Vec<JoltONNXBytecode> = vec![];
     // Address allocation strategy:
@@ -482,31 +551,67 @@ pub fn raw_to_jolt_bytecode(
     let active_output_elements = raw.active_output_elements;
 
     // get ts1 and ts2 addresses
-    let (vts1, vts2) = if raw.opcode == ONNXOpcode::MatMult {
-        // We need this because MatMults MCC do not follow the same pattern as other ops (it is handled separately) and we can safely store ts1 and ts2 as zero registers
-        // TODO: Extend this match statement to all non-elementwise ops
-        (
-            vec![0; active_output_elements],
-            vec![0; active_output_elements],
-        )
-    } else {
-        let vts1 = (0..active_output_elements)
-            .map(|i| {
-                vt_address_map[&(
-                    zkvm_address(raw.ts1),
-                    tensor_sequence_remaining(active_output_elements, i),
-                )]
-            })
-            .collect::<Vec<usize>>();
-        let vts2 = (0..active_output_elements)
-            .map(|i| {
-                vt_address_map[&(
-                    zkvm_address(raw.ts2),
-                    tensor_sequence_remaining(active_output_elements, i),
-                )]
-            })
-            .collect::<Vec<usize>>();
-        (vts1, vts2)
+    let (vts1, vts2) = match raw.opcode {
+        ONNXOpcode::MatMult | ONNXOpcode::Sum => {
+            // We need this because MatMults MCC do not follow the same pattern as other ops (it is handled separately) and we can safely store ts1 and ts2 as zero registers
+            (
+                vec![0; active_output_elements],
+                vec![0; active_output_elements],
+            )
+        }
+        ONNXOpcode::Broadcast => {
+            // Get the operand instruction
+            let operand_instr = td_lookup
+                .get(&raw.ts1.unwrap())
+                .unwrap_or_else(|| panic!("Missing instruction for td {}", raw.ts1.unwrap()));
+
+            // map the ts1 addresses to the broadcasted addresses
+            let vts1 = (0..operand_instr.active_output_elements)
+                .map(|i| {
+                    vt_address_map[&(
+                        zkvm_address(operand_instr.td),
+                        tensor_sequence_remaining(operand_instr.active_output_elements, i),
+                    )]
+                })
+                .collect::<Vec<usize>>();
+            // convert it to a tensor
+            let vts1_tensor = Tensor::new(
+                Some(&vts1.iter().map(|&x| x as i32).collect::<Vec<i32>>()),
+                &operand_instr.output_dims,
+            )
+            .unwrap();
+            // broadcast it to the new shape
+            let broadcasted_tensor = vts1_tensor.expand(&raw.output_dims).unwrap();
+            // flatten it back to a vector
+            let vts1 = broadcasted_tensor
+                .data()
+                .iter()
+                .map(|&x| x as usize)
+                .collect::<Vec<usize>>();
+            (
+                vts1,
+                vec![0; active_output_elements], // ts2 is unused in broadcast
+            )
+        }
+        _ => {
+            let vts1 = (0..active_output_elements)
+                .map(|i| {
+                    vt_address_map[&(
+                        zkvm_address(raw.ts1),
+                        tensor_sequence_remaining(active_output_elements, i),
+                    )]
+                })
+                .collect::<Vec<usize>>();
+            let vts2 = (0..active_output_elements)
+                .map(|i| {
+                    vt_address_map[&(
+                        zkvm_address(raw.ts2),
+                        tensor_sequence_remaining(active_output_elements, i),
+                    )]
+                })
+                .collect::<Vec<usize>>();
+            (vts1, vts2)
+        }
     };
 
     // calculate td address
@@ -548,6 +653,8 @@ pub fn raw_to_jolt_bytecode(
     jolt_instructions
 }
 
+/// Returns the maximum number of active output elements across all instructions in the bytecode.
+/// This is used to determine the size of the zero register space that needs to be reserved in memory.
 pub fn max_output_elements(bytecode: &[ONNXInstr]) -> usize {
     bytecode
         .iter()
@@ -556,11 +663,23 @@ pub fn max_output_elements(bytecode: &[ONNXInstr]) -> usize {
         .unwrap_or(1)
 }
 
+/// Convert the raw pc to the zkvm address by prepending space for the zero register
 #[inline]
 pub fn zkvm_address(t: Option<usize>) -> usize {
     t.map_or(0, |t| t + ZERO_ADDR_PREPEND)
 }
 
+/// Given the number of active output elements and the current index,
+/// returns the remaining number of elements in the tensor sequence.
+/// This is used to track the progress of tensor operations that have been
+/// decomposed into scalar instructions.
+///
+/// # Parameters
+/// - `active_output_elements`: Total number of active output elements in the tensor.
+/// - `current_index`: The current index in the tensor sequence (0-based).
+///
+/// # Returns
+/// The number of remaining elements in the tensor sequence after the current index.
 #[inline]
 pub fn tensor_sequence_remaining(active_output_elements: usize, current_index: usize) -> usize {
     active_output_elements - current_index - 1

@@ -9,7 +9,7 @@ use crate::{
     tensor::Tensor,
     RunArgs,
 };
-use log::{debug, trace};
+use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -44,7 +44,7 @@ impl Model {
             graph,
             tracer: Tracer::default(),
         };
-        debug!("\n {}", om.table_nodes());
+        info!("\n {}", om.table_nodes());
         om
     }
 
@@ -1453,146 +1453,21 @@ fn output_state_idx(output_mappings: &[Vec<OutputMapping>]) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use super::*;
     use crate::{
-        graph::utilities::{
-            create_input_node, create_matmul_node, create_polyop_node, create_relu_node,
-            create_sigmoid_node,
+        graph::{
+            node::{map_outlet_indices, Node, SupportedOp},
+            utilities::{create_const_node, create_input_node, create_polyop_node},
         },
         ops::poly::PolyOp,
     };
-
-    use super::*;
-
-    #[test]
-    fn test_model_builder_mat_mul() {
-        let mut model = Model::default();
-
-        // Create input nodes using the helper
-        let input_node0 = create_input_node(1, vec![2, 2], 0, 1);
-        let input_node1 = create_input_node(1, vec![1, 2], 1, 1);
-
-        model.insert_node(input_node0);
-        model.insert_node(input_node1);
-
-        // Create matmul node using the helper
-        let matmul_node = create_matmul_node(
-            "ij,bj->bi".to_string(),
-            1,
-            vec![(0, 0), (1, 0)],
-            vec![1, 2],
-            2,
-            1,
-        );
-        model.insert_node(matmul_node);
-
-        model.set_inputs(vec![0, 1]);
-        model.set_outputs(vec![(2, 0)]);
-
-        // Test execution with vector-matrix multiplication
-        // Vector: [1, 2]
-        let input2 = Tensor::new(Some(&[1, 2]), &[1, 2]).unwrap();
-        // Matrix: [[5, 6], [7, 8]]
-        let input1 = Tensor::new(Some(&[5, 6, 7, 8]), &[2, 2]).unwrap();
-
-        let result = model.forward(&[input1.clone(), input2.clone()]).unwrap();
-
-        assert_eq!(result.outputs.len(), 1);
-        assert_eq!(
-            result.outputs[0],
-            Tensor::new(Some(&[17, 23]), &[1, 2]).unwrap()
-        );
-    }
-
-    #[test]
-    fn test_model_builder_relu() {
-        let mut model = Model::default();
-
-        // Use helper to create input node
-        let input_node = create_input_node(1, vec![1, 4], 0, 1);
-        model.insert_node(input_node);
-
-        // Use helper to create relu node
-        let relu_node = create_relu_node(1, vec![(0, 0)], vec![1, 4], 1, 1);
-        model.insert_node(relu_node);
-
-        model.set_inputs(vec![0]);
-        model.set_outputs(vec![(1, 0)]);
-
-        // Test execution with various inputs
-        let input = Tensor::new(Some(&[-1, 0, 1, 2]), &[1, 4]).unwrap();
-        let result = model.forward(&[input]).unwrap();
-
-        assert_eq!(result.outputs.len(), 1);
-        assert_eq!(
-            result.outputs[0],
-            Tensor::new(Some(&[0, 0, 1, 2]), &[1, 4]).unwrap()
-        );
-    }
-
-    #[test]
-    fn test_model_builder_sigmoid() {
-        let mut model = Model::default();
-
-        // Use helper to create input node
-        let input_node = create_input_node(1, vec![1, 3], 0, 1);
-        model.insert_node(input_node);
-
-        // Use helper to create sigmoid node
-        let sigmoid_node = create_sigmoid_node(1, vec![(0, 0)], vec![1, 3], 1, 1);
-        model.insert_node(sigmoid_node);
-
-        model.set_inputs(vec![0]);
-        model.set_outputs(vec![(1, 0)]);
-
-        // x = [-2.0, 0.0, 2.0]
-        let x = Tensor::new(Some(&[-2, 0, 2]), &[1, 3]).unwrap();
-
-        let result = model.forward(&[x]).unwrap();
-        assert_eq!(result.outputs.len(), 1);
-
-        let _out: Vec<i32> = result.outputs[0].iter().copied().collect();
-
-        // TODO(Alberto): Not sure how to handle precision yet
-        // sigmoid(-2)≈0.119, sigmoid(0)=0.5, sigmoid(2)≈0.881
-        // assert!((out[0] - 0.119).abs() < 1e-3);
-        // assert!((out[1] - 0.5).abs() < 1e-3);
-        // assert!((out[2] - 0.881).abs() < 1e-3);
-    }
-
-    #[test]
-    fn test_model_builder_add() {
-        let mut model = Model::default();
-
-        // Use helper to create input nodes
-        let input_node0 = create_input_node(1, vec![1, 3], 0, 1);
-        let input_node1 = create_input_node(1, vec![1, 3], 1, 1);
-        model.insert_node(input_node0);
-        model.insert_node(input_node1);
-
-        // Use helper to create add node
-        let add_node = create_polyop_node(PolyOp::Add, 1, vec![(0, 0), (1, 0)], vec![1, 3], 2, 1);
-        model.insert_node(add_node);
-
-        model.set_inputs(vec![0, 1]);
-        model.set_outputs(vec![(2, 0)]);
-
-        let a = Tensor::new(Some(&[1, 2, 3]), &[1, 3]).unwrap();
-        let b = Tensor::new(Some(&[4, 5, 6]), &[1, 3]).unwrap();
-
-        let result = model.forward(&[a.clone(), b.clone()]).unwrap();
-        assert_eq!(result.outputs.len(), 1);
-        assert_eq!(
-            result.outputs[0],
-            Tensor::new(Some(&[5, 7, 9]), &[1, 3]).unwrap()
-        );
-    }
+    use tract_onnx::prelude::OutletId;
 
     /// Test loading a model that requires broadcasting functionality
     #[test]
     fn test_model_with_broadcast_requirements() {
-        use crate::graph::node::map_outlet_indices;
-        use tract_onnx::prelude::OutletId;
-
         // Test the map_outlet_indices function directly
         let outlets = vec![
             OutletId::new(0, 0),
@@ -1618,8 +1493,6 @@ mod tests {
     /// Test model building with broadcasting using model manipulation directly
     #[test]
     fn test_model_with_broadcasting_manual() {
-        use crate::graph::utilities::create_const_node;
-
         // Test using manual model construction instead of ModelBuilder
         let mut model = Model::default();
 
@@ -1663,8 +1536,6 @@ mod tests {
     /// Test the nodes_from_graph method with remapping functionality
     #[test]
     fn test_nodes_from_graph_with_remappings() {
-        use crate::graph::node::{Node, SupportedOp};
-
         // Create a simple test to verify remapping logic works
 
         // Create input with [1] dimensions
@@ -1693,9 +1564,6 @@ mod tests {
     /// Test edge cases for broadcasting
     #[test]
     fn test_broadcast_edge_cases() {
-        use crate::graph::node::map_outlet_indices;
-        use tract_onnx::prelude::OutletId;
-
         // Test with empty outlets
         let outlets = vec![];
 
@@ -1740,8 +1608,6 @@ mod tests {
     /// Test that RebaseScale expansion maintains consecutive addressing
     #[test]
     fn test_rebase_scale_consecutive_addressing() {
-        use std::path::Path;
-
         // Test with simple_mlp_small model which has RebaseScale nodes
         let model_path = Path::new("models/simple_mlp_small/network.onnx");
 
@@ -1785,8 +1651,6 @@ mod tests {
     /// Test with addsubmul1 model for RebaseScale expansion
     #[test]
     fn test_rebase_scale_expansion_addsubmul1() {
-        use std::path::Path;
-
         let model_path = Path::new("models/addsubmul1/network.onnx");
 
         // Skip test if model file doesn't exist

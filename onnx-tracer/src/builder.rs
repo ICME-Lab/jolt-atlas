@@ -1617,3 +1617,67 @@ pub fn non_power_of_two_matmult_rebase_model() -> Model {
 
     b.take(vec![input.0], vec![result])
 }
+
+/// Reduce mean is a common operation in LayerNorm implementations.
+pub fn reduce_mean_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [4, 4])
+    let input = b.input(vec![4, 4], 2); // fanout=2 since input is used in SUM and SUB
+
+    // Node 1: SUM - reduce along axis 1 to get sums for each row
+    let summed = b.sum(input, vec![1], vec![4, 1], 1); // sum along axis 1, result [4, 1]
+
+    // Node 2: DIV - divide sum by 4 to get mean
+    let mean = b.div(4, summed, vec![4, 1], 1); // divide by 4 to get mean
+
+    b.take(vec![input.0], vec![mean])
+}
+
+/// Layernorm prefix model that implements the first 5 operations of layer normalization.
+///
+/// This model demonstrates the initial steps of layer normalization:
+/// 1. Takes an input tensor of shape [4, 4] with scale 7
+/// 2. **SUM**: Reduces input along axis 1 from [4, 4] to [4, 1] (mean calculation)
+/// 3. **DIV(denom=4)**: Divides the sum by 4 to get the mean, shape [4, 1]
+/// 4. **BROADCAST**: Broadcasts mean from [4, 1] to [4, 4] for element-wise operations
+/// 5. **SUB**: Subtracts the broadcasted mean from original input (mean centering), shape [4, 4]
+///
+/// **Operations sequence**: Input → SUM → DIV → BROADCAST → SUB → Output
+///
+/// This matches the first 5 operations from the full layernorm model (scaled down):
+/// ```ignore
+/// │ 0   │ Input              │ 7  │                  │ [4, 4] │
+/// │ 1   │ SUM                │ 7  │ [(0, 0)]         │ [4, 1] │
+/// │ 2   │ DIV(denom=4)       │ 7  │ [(1, 0)]         │ [4, 1] │
+/// │ 3   │ BROADCAST          │ 7  │ [(2, 0)]         │ [4, 4] │
+/// │ 4   │ SUB                │ 7  │ [(0, 0), (3, 0)] │ [4, 4] │
+/// ```
+///
+/// The result is the mean-centered input tensor, which is the first step in layer normalization
+/// before computing variance and applying the final scaling/shifting.
+///
+/// # Returns
+/// A `Model` representing the first 4 operations of layer normalization
+pub fn layernorm_prefix_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [4, 4])
+    let input = b.input(vec![4, 4], 2); // fanout=2 since input is used in SUM and SUB
+
+    // Node 1: SUM - reduce along axis 1 to get sums for each row
+    let summed = b.sum(input, vec![1], vec![4, 1], 1); // sum along axis 1, result [4, 1]
+
+    // Node 2: DIV - divide sum by 4 to get mean
+    let mean = b.div(4, summed, vec![4, 1], 1); // divide by 4 to get mean
+
+    // Node 3: BROADCAST - broadcast mean from [4, 1] to [4, 4]
+    let mean_broadcasted = b.broadcast(mean, vec![4, 4], vec![4, 4], 1);
+
+    // Node 4: SUB - subtract broadcasted mean from original input (mean centering)
+    let mean_centered = b.poly(PolyOp::Sub, input, mean_broadcasted, vec![4, 4], 1);
+
+    b.take(vec![input.0], vec![mean_centered])
+}

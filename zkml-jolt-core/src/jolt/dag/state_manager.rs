@@ -17,7 +17,7 @@ use crate::jolt::{
     JoltProverPreprocessing, JoltVerifierPreprocessing,
     bytecode::JoltONNXBytecode,
     pcs::{ProverOpeningAccumulator, ReducedOpeningProof, SumcheckId, VerifierOpeningAccumulator},
-    precompiles::PrecompileSNARK,
+    precompiles::{PrecompilePreprocessing, PrecompileSNARK},
     trace::JoltONNXCycle,
     witness::{CommittedPolynomial, VirtualPolynomial},
 };
@@ -301,5 +301,15 @@ where
 
     pub fn get_memory_K(&self) -> usize {
         self.memory_K
+    }
+
+    pub fn get_precompile_preprocessing(&self) -> &PrecompilePreprocessing {
+        if let Some(ref verifier_state) = self.verifier_state {
+            &verifier_state.preprocessing.shared.precompiles
+        } else if let Some(ref prover_state) = self.prover_state {
+            &prover_state.preprocessing.shared.precompiles
+        } else {
+            panic!("Neither prover nor verifier state initialized");
+        }
     }
 }

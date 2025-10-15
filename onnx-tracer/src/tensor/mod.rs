@@ -1,8 +1,8 @@
-use crate::ops::utils;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use crate::parallel_utils::IndexedParallelIterator;
-use crate::parallel_utils::{
-    IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelSliceMut,
+use crate::{
+    ops::utils,
+    parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelSliceMut},
 };
 use maybe_rayon::iter::ParallelIterator;
 use serde::{Deserialize, Serialize};
@@ -256,6 +256,11 @@ impl<T: Clone + TensorType> Tensor<T> {
                 scale: None,
             }),
         }
+    }
+
+    /// Get the inner values
+    pub fn data(&self) -> &[T] {
+        &self.inner
     }
 
     /// Creates a new tensor with power-of-two padding applied if enabled.

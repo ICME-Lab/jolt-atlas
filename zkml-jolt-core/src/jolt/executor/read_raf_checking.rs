@@ -837,9 +837,7 @@ mod tests {
         let bytecode_preprocessing = BytecodePreprocessing::preprocess(model_fn);
         let shared_preprocessing = JoltSharedPreprocessing {
             bytecode: bytecode_preprocessing,
-            precompiles: PrecompilePreprocessing {
-                matvec_instances: vec![],
-            },
+            precompiles: PrecompilePreprocessing::empty(),
         };
         let prover_preprocessing: JoltProverPreprocessing<Fr, MockCommitScheme<Fr>> =
             JoltProverPreprocessing {

@@ -46,12 +46,28 @@ pub fn quantize_float(elem: &f64, shift: f64, scale: crate::Scale) -> Result<i32
     let mult = scale_to_multiplier(scale);
     let max_value = ((i32::MAX as f64 - shift) / mult).round(); // the maximum value that can be represented w/o sig bit truncation
 
-    if *elem > max_value || *elem < -max_value {
-        return Err(TensorError::SigBitTruncationError);
-    }
+    // Handle extreme values that are commonly used for masking in attention mechanisms
+    // If the value is extremely negative (like -1e9), clamp it to a representable negative value
+    let clamped_elem = if *elem < -max_value {
+        if *elem < -1e6 {
+            // Common attention mask values
+            -max_value
+        } else {
+            return Err(TensorError::SigBitTruncationError);
+        }
+    } else if *elem > max_value {
+        if *elem > 1e6 {
+            // Also handle extremely positive values
+            max_value
+        } else {
+            return Err(TensorError::SigBitTruncationError);
+        }
+    } else {
+        *elem
+    };
 
     // we parallelize the quantization process as it seems to be quite slow at times
-    let scaled = (mult * *elem + shift).round() as i32;
+    let scaled = (mult * clamped_elem + shift).round() as i32;
 
     Ok(scaled)
 }
@@ -289,8 +305,6 @@ pub fn new_op_from_onnx(
                 dim: axis,
                 constant_idx: None,
             });
-
-            // if param_visibility.is_public() {
             if let Some(c) = inputs[1].opkind().get_mutable_constant() {
                 inputs[1].decrement_use();
                 deleted_indices.push(inputs.len() - 1);
@@ -319,7 +333,6 @@ pub fn new_op_from_onnx(
         "Topk" => {
             let op = load_op::<Topk>(node.op(), idx, node.op().name().to_string())?;
             let axis = op.axis;
-            // if param_visibility.is_public() {
             let k = if let Some(c) = inputs[1].opkind().get_mutable_constant() {
                 inputs[1].decrement_use();
                 deleted_indices.push(inputs.len() - 1);
@@ -364,7 +377,6 @@ pub fn new_op_from_onnx(
                     constant_idx: Some(c.raw_values.map(|x| x as usize)),
                 })
             }
-            //   }
             if inputs[1].opkind().is_input() {
                 inputs[1].replace_opkind(SupportedOp::Input(crate::ops::Input {
                     scale: 0,
@@ -989,163 +1001,11 @@ pub fn new_op_from_onnx(
         }
         "Cube" => SupportedOp::Linear(PolyOp::Pow(3)),
         "Square" => SupportedOp::Linear(PolyOp::Pow(2)),
-        // "ConvUnary" => {
-        //   let conv_node: &ConvUnary = match node.op().downcast_ref::<ConvUnary>() {
-        //     Some(b) => b,
-        //     None => {
-        //       return Err(Box::new(GraphError::OpMismatch(idx, "conv".to_string())));
-        //     }
-        //   };
-
-        //   if let Some(dilations) = &conv_node.pool_spec.dilations {
-        //     if dilations.iter().any(|x| *x != 1) {
-        //       return Err(Box::new(GraphError::MisformedParams(
-        //         "non unit dilations not supported".to_string(),
-        //       )));
-        //     }
-        //   }
-
-        //   if ((conv_node.pool_spec.data_format != DataFormat::NCHW)
-        //     && (conv_node.pool_spec.data_format != DataFormat::CHW))
-        //     || (conv_node.kernel_fmt != KernelFormat::OIHW)
-        //   {
-        //     return Err(Box::new(GraphError::MisformedParams(
-        //       "data or kernel in wrong format".to_string(),
-        //     )));
-        //   }
-
-        //   let stride = match conv_node.pool_spec.strides.clone() {
-        //     Some(s) => {
-        //       if s.len() == 1 {
-        //         (s[0], s[0])
-        //       } else if s.len() == 2 {
-        //         (s[0], s[1])
-        //       } else {
-        //         return Err(Box::new(GraphError::MissingParams("strides".to_string())));
-        //       }
-        //     }
-        //     None => {
-        //       return Err(Box::new(GraphError::MissingParams("strides".to_string())));
-        //     }
-        //   };
-
-        //   let padding = match &conv_node.pool_spec.padding {
-        //     PaddingSpec::Explicit(b, a) | PaddingSpec::ExplicitOnnxPool(b, a, _) => {
-        //       if b.len() == 2 && a.len() == 2 {
-        //         [(b[0], b[1]), (a[0], a[1])]
-        //       } else if b.len() == 1 && a.len() == 1 {
-        //         [(b[0], b[0]), (a[0], a[0])]
-        //       } else if b.len() == 1 && a.len() == 2 {
-        //         [(b[0], b[0]), (a[0], a[1])]
-        //       } else if b.len() == 2 && a.len() == 1 {
-        //         [(b[0], b[1]), (a[0], a[0])]
-        //       } else {
-        //         return Err(Box::new(GraphError::MissingParams("padding".to_string())));
-        //       }
-        //     }
-        //     _ => {
-        //       return Err(Box::new(GraphError::MissingParams("padding".to_string())));
-        //     }
-        //   };
-
-        //   let kernel = extract_tensor_value(conv_node.kernel.clone())?;
-        //   let kernel = quantize_tensor(kernel, scales.params)?;
-
-        //   let bias = match conv_node.bias.clone() {
-        //     Some(b) => {
-        //       let const_value = extract_tensor_value(b)?;
-
-        //       let val = quantize_tensor(const_value, scales.params + inputs[0].out_scales()[0])?;
-        //       Some(val)
-        //     }
-        //     None => None,
-        //   };
-
-        //   SupportedOp::Linear(PolyOp::Conv {
-        //     kernel,
-        //     bias,
-        //     padding,
-        //     stride,
-        //   })
-        // }
         "Not" => SupportedOp::Linear(PolyOp::Not),
         "And" => SupportedOp::Linear(PolyOp::And),
         "Or" => SupportedOp::Linear(PolyOp::Or),
         "Xor" => SupportedOp::Linear(PolyOp::Xor),
         "Equals" => SupportedOp::Hybrid(HybridOp::Equals),
-        // "DeconvUnary" => {
-        //   let deconv_node: &DeconvUnary = match node.op().downcast_ref::<DeconvUnary>() {
-        //     Some(b) => b,
-        //     None => {
-        //       return Err(Box::new(GraphError::OpMismatch(idx, "deconv".to_string())));
-        //     }
-        //   };
-
-        //   if let Some(dilations) = &deconv_node.pool_spec.dilations {
-        //     if dilations.iter().any(|x| *x != 1) {
-        //       return Err(Box::new(GraphError::MisformedParams(
-        //         "non unit dilations not supported".to_string(),
-        //       )));
-        //     }
-        //   }
-
-        //   if (deconv_node.pool_spec.data_format != DataFormat::NCHW)
-        //     || (deconv_node.kernel_format != KernelFormat::OIHW)
-        //   {
-        //     return Err(Box::new(GraphError::MisformedParams(
-        //       "data or kernel in wrong format".to_string(),
-        //     )));
-        //   }
-
-        //   let stride = match deconv_node.pool_spec.strides.clone() {
-        //     Some(s) => (s[0], s[1]),
-        //     None => {
-        //       return Err(Box::new(GraphError::MissingParams("strides".to_string())));
-        //     }
-        //   };
-        //   let padding = match &deconv_node.pool_spec.padding {
-        //     PaddingSpec::Explicit(b, a) | PaddingSpec::ExplicitOnnxPool(b, a, _) => {
-        //       if b.len() == 2 && a.len() == 2 {
-        //         [(b[0], b[1]), (a[0], a[1])]
-        //       } else if b.len() == 1 && a.len() == 1 {
-        //         [(b[0], b[0]), (a[0], a[0])]
-        //       } else if b.len() == 1 && a.len() == 2 {
-        //         [(b[0], b[0]), (a[0], a[1])]
-        //       } else if b.len() == 2 && a.len() == 1 {
-        //         [(b[0], b[1]), (a[0], a[0])]
-        //       } else {
-        //         return Err(Box::new(GraphError::MissingParams("padding".to_string())));
-        //       }
-        //     }
-        //     _ => {
-        //       return Err(Box::new(GraphError::MissingParams("padding".to_string())));
-        //     }
-        //   };
-
-        //   let kernel = extract_tensor_value(deconv_node.kernel.clone())?;
-        //   let kernel = quantize_tensor(kernel, scales.params)?;
-
-        //   let bias = match deconv_node.bias.clone() {
-        //     Some(b) => {
-        //       let const_value = extract_tensor_value(b)?;
-
-        //       let val = quantize_tensor(const_value, scales.params + inputs[0].out_scales()[0])?;
-        //       Some(val)
-        //     }
-        //     None => None,
-        //   };
-
-        //   let output_padding: (usize, usize) = (deconv_node.adjustments[0],
-        // deconv_node.adjustments[1]);
-
-        //   SupportedOp::Linear(PolyOp::DeConv {
-        //     kernel,
-        //     bias,
-        //     padding,
-        //     output_padding,
-        //     stride,
-        //   })
-        // }
         "Downsample" => {
             let downsample_node: Downsample = match node.op().downcast_ref::<Downsample>() {
                 Some(b) => b.clone(),
@@ -1174,10 +1034,7 @@ pub fn new_op_from_onnx(
             if !resize_node.contains("interpolator: Nearest")
                 && !resize_node.contains("nearest: Floor")
             {
-                unimplemented!(
-                    "Only nearest
-neighbor interpolation is supported"
-                )
+                unimplemented!("Only nearest neighbor interpolation is supported")
             }
             // check if optional scale factor is present
             if inputs.len() != 2 && inputs.len() != 3 {
@@ -1291,11 +1148,6 @@ neighbor interpolation is supported"
                 normalized: sumpool_node.normalize,
             })
         }
-        // "GlobalAvgPool" => SupportedOp::Linear(PolyOp::SumPool {
-        //     padding: [(0, 0); 2],
-        //     stride: (1, 1),
-        //     kernel_shape: (inputs[0].out_dims()[0][1], inputs[0].out_dims()[0][2]),
-        // }),
         "Pad" => {
             let pad_node: &Pad = match node.op().downcast_ref::<Pad>() {
                 Some(b) => b,
@@ -1321,8 +1173,7 @@ neighbor interpolation is supported"
             for (i, pad_params) in pad_node.pads.iter().enumerate() {
                 if (i < padding_len - 2) && ((pad_params.0 != 0) || (pad_params.1 != 0)) {
                     return Err(Box::new(GraphError::MisformedParams(
-                        "ezkl currently only supports padding height and width
-dimensions"
+                        "onnx-tracer currently only supports padding height and width dimensions"
                             .to_string(),
                     )));
                 }

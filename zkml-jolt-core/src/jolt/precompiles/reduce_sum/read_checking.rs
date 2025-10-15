@@ -18,16 +18,15 @@ use crate::{
     utils::precompile_pp::PrecompilePreprocessingTrait,
 };
 
-pub struct ReadCheckingABCSumcheck<F: JoltField> {
-    prover_state: Option<ReadCheckingABCProverState<F>>,
+pub struct ReadCheckingReduceSumcheck<F: JoltField> {
+    prover_state: Option<ReadCheckingReduceProverState<F>>,
     rv_claim: F,
     gamma: F,
-    gamma_sqr: F,
     K: usize,
     index: usize,
 }
 
-impl<F: JoltField> SumcheckInstance<F> for ReadCheckingABCSumcheck<F> {
+impl<F: JoltField> SumcheckInstance<F> for ReadCheckingReduceSumcheck<F> {
     fn num_rounds(&self) -> usize {
         self.K.log_2()
     }
@@ -55,21 +54,12 @@ impl<F: JoltField> SumcheckInstance<F> for ReadCheckingABCSumcheck<F> {
                 let ra_a_evals = prover_state
                     .ra_a
                     .sumcheck_evals_array::<DEGREE>(i, BindingOrder::HighToLow);
-                let ra_b_evals = prover_state
-                    .ra_b
-                    .sumcheck_evals_array::<DEGREE>(i, BindingOrder::HighToLow);
-                let ra_c_evals = prover_state
-                    .ra_c
+                let ra_res_evals = prover_state
+                    .ra_res
                     .sumcheck_evals_array::<DEGREE>(i, BindingOrder::HighToLow);
                 [
-                    val_evals[0]
-                        * (ra_a_evals[0]
-                            + self.gamma * ra_b_evals[0]
-                            + self.gamma_sqr * ra_c_evals[0]), // eval at 0
-                    val_evals[1]
-                        * (ra_a_evals[1]
-                            + self.gamma * ra_b_evals[1]
-                            + self.gamma_sqr * ra_c_evals[1]), // eval at 2
+                    val_evals[0] * (ra_a_evals[0] + self.gamma * ra_res_evals[0]), // eval at 0
+                    val_evals[1] * (ra_a_evals[1] + self.gamma * ra_res_evals[1]), // eval at 2
                 ]
             })
             .reduce(
@@ -103,12 +93,7 @@ impl<F: JoltField> SumcheckInstance<F> for ReadCheckingABCSumcheck<F> {
             });
             s.spawn(|_| {
                 prover_state
-                    .ra_b
-                    .bind_parallel(r_j, BindingOrder::HighToLow)
-            });
-            s.spawn(|_| {
-                prover_state
-                    .ra_c
+                    .ra_res
                     .bind_parallel(r_j, BindingOrder::HighToLow)
             });
         });
@@ -125,8 +110,7 @@ impl<F: JoltField> SumcheckInstance<F> for ReadCheckingABCSumcheck<F> {
             .expect("Prover state not initialized");
         let val_final_claim = prover_state.val_final.final_sumcheck_claim();
         let ra_a_claim = prover_state.ra_a.final_sumcheck_claim();
-        let ra_b_claim = prover_state.ra_b.final_sumcheck_claim();
-        let ra_c_claim = prover_state.ra_c.final_sumcheck_claim();
+        let ra_res_claim = prover_state.ra_res.final_sumcheck_claim();
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::ValFinal,
             SumcheckId::MatVecReadChecking,
@@ -134,22 +118,16 @@ impl<F: JoltField> SumcheckInstance<F> for ReadCheckingABCSumcheck<F> {
             val_final_claim,
         );
         accumulator.borrow_mut().append_virtual(
-            VirtualPolynomial::RaA(self.index),
-            SumcheckId::MatVecReadChecking,
+            VirtualPolynomial::ReduceRaA(self.index),
+            SumcheckId::ReduceSumReadChecking,
             opening_point.clone(),
             ra_a_claim,
         );
         accumulator.borrow_mut().append_virtual(
-            VirtualPolynomial::RaB(self.index),
-            SumcheckId::MatVecReadChecking,
+            VirtualPolynomial::ReduceRaRes(self.index),
+            SumcheckId::ReduceSumReadChecking,
             opening_point.clone(),
-            ra_b_claim,
-        );
-        accumulator.borrow_mut().append_virtual(
-            VirtualPolynomial::RaC(self.index),
-            SumcheckId::MatVecReadChecking,
-            opening_point.clone(),
-            ra_c_claim,
+            ra_res_claim,
         );
     }
 
@@ -173,18 +151,14 @@ impl<F: JoltField> SumcheckInstance<F> for ReadCheckingABCSumcheck<F> {
             SumcheckId::MatVecReadChecking,
         );
         let (_, a_claim) = accumulator.borrow().get_virtual_polynomial_opening(
-            VirtualPolynomial::RaA(self.index),
-            SumcheckId::MatVecReadChecking,
+            VirtualPolynomial::ReduceRaA(self.index),
+            SumcheckId::ReduceSumReadChecking,
         );
-        let (_, b_claim) = accumulator.borrow().get_virtual_polynomial_opening(
-            VirtualPolynomial::RaB(self.index),
-            SumcheckId::MatVecReadChecking,
+        let (_, res_claim) = accumulator.borrow().get_virtual_polynomial_opening(
+            VirtualPolynomial::ReduceRaRes(self.index),
+            SumcheckId::ReduceSumReadChecking,
         );
-        let (_, c_claim) = accumulator.borrow().get_virtual_polynomial_opening(
-            VirtualPolynomial::RaC(self.index),
-            SumcheckId::MatVecReadChecking,
-        );
-        val_final_claim * (a_claim + self.gamma * b_claim + self.gamma_sqr * c_claim)
+        val_final_claim * (a_claim + self.gamma * res_claim)
     }
 
     fn cache_openings_verifier(
@@ -200,64 +174,51 @@ impl<F: JoltField> SumcheckInstance<F> for ReadCheckingABCSumcheck<F> {
             opening_point.clone(),
         );
         accumulator.borrow_mut().append_virtual(
-            VirtualPolynomial::RaA(self.index),
-            SumcheckId::MatVecReadChecking,
+            VirtualPolynomial::ReduceRaA(self.index),
+            SumcheckId::ReduceSumReadChecking,
             opening_point.clone(),
         );
         accumulator.borrow_mut().append_virtual(
-            VirtualPolynomial::RaB(self.index),
-            SumcheckId::MatVecReadChecking,
+            VirtualPolynomial::ReduceRaRes(self.index),
+            SumcheckId::ReduceSumReadChecking,
             opening_point.clone(),
-        );
-        accumulator.borrow_mut().append_virtual(
-            VirtualPolynomial::RaC(self.index),
-            SumcheckId::MatVecReadChecking,
-            opening_point,
         );
     }
 }
 
-impl<F: JoltField> ReadCheckingABCSumcheck<F> {
+impl<F: JoltField> ReadCheckingReduceSumcheck<F> {
     pub fn new_prover(
         val_final: &[i64],
         sm: &StateManager<F, impl Transcript, impl CommitmentScheme<Field = F>>,
         index: usize,
     ) -> Self {
         let (preprocessing, _, _) = sm.get_prover_data();
-        let matvec_pp = &preprocessing.shared.precompiles.mat_vec[index];
+        let reduce_pp = &preprocessing.shared.precompiles.reduce_sum[index];
         let K = sm.get_memory_K();
         let gamma: F = sm.transcript.borrow_mut().challenge_scalar();
-        let gamma_sqr = gamma.square();
         let val_final: MultilinearPolynomial<F> = MultilinearPolynomial::from(val_final.to_vec());
-        let (r_a, rv_claim_a) = sm.get_virtual_polynomial_opening(
-            VirtualPolynomial::AVec(index),
-            SumcheckId::MatVecExecution,
+        let (r_y, rv_claim_a) = sm.get_virtual_polynomial_opening(
+            VirtualPolynomial::ReduceA(index),
+            SumcheckId::ReduceSumExecution,
         );
-        let r_a = r_a.r;
-        let (_, rv_claim_b) = sm.get_virtual_polynomial_opening(
-            VirtualPolynomial::BMat(index),
-            SumcheckId::MatVecExecution,
+        let r_y = r_y.r;
+        let (r_x, rv_claim_reduce) = sm.get_virtual_polynomial_opening(
+            VirtualPolynomial::ReduceRes(index),
+            SumcheckId::ReduceSumExecution,
         );
-        let (r_c, rv_claim_c) = sm.get_virtual_polynomial_opening(
-            VirtualPolynomial::CRes(index),
-            SumcheckId::MatVecExecution,
-        );
-        let r_c = r_c.r;
-        let r_b = [r_c.clone(), r_a.clone()].concat();
-        let rv_claim = rv_claim_a + gamma * rv_claim_b + gamma_sqr * rv_claim_c;
-        let ra_a = matvec_pp.compute_ra(&r_a, |m| &m.a, K);
-        let ra_b = matvec_pp.compute_ra(&r_b, |m| &m.b, K);
-        let ra_c = matvec_pp.compute_ra(&r_c, |m| &m.c, K);
+        let r_x = r_x.r;
+        let r_a = [r_x.clone(), r_y.clone()].concat();
+        let rv_claim = rv_claim_a + gamma * rv_claim_reduce;
+        let ra_a = reduce_pp.compute_ra(&r_a, |m| &m.a, K);
+        let ra_res = reduce_pp.compute_ra(&r_x, |m| &m.res, K);
         Self {
-            prover_state: Some(ReadCheckingABCProverState {
+            prover_state: Some(ReadCheckingReduceProverState {
                 ra_a,
-                ra_b,
-                ra_c,
+                ra_res,
                 val_final,
             }),
             rv_claim,
             gamma,
-            gamma_sqr,
             K,
             index,
         }
@@ -269,34 +230,27 @@ impl<F: JoltField> ReadCheckingABCSumcheck<F> {
     ) -> Self {
         let K = sm.get_memory_K();
         let gamma: F = sm.transcript.borrow_mut().challenge_scalar();
-        let gamma_sqr = gamma.square();
         let (_, rv_claim_a) = sm.get_virtual_polynomial_opening(
-            VirtualPolynomial::AVec(index),
-            SumcheckId::MatVecExecution,
+            VirtualPolynomial::ReduceA(index),
+            SumcheckId::ReduceSumExecution,
         );
-        let (_, rv_claim_b) = sm.get_virtual_polynomial_opening(
-            VirtualPolynomial::BMat(index),
-            SumcheckId::MatVecExecution,
+        let (_, rv_claim_res) = sm.get_virtual_polynomial_opening(
+            VirtualPolynomial::ReduceRes(index),
+            SumcheckId::ReduceSumExecution,
         );
-        let (_, rv_claim_c) = sm.get_virtual_polynomial_opening(
-            VirtualPolynomial::CRes(index),
-            SumcheckId::MatVecExecution,
-        );
-        let rv_claim = rv_claim_a + gamma * rv_claim_b + gamma_sqr * rv_claim_c;
+        let rv_claim = rv_claim_a + gamma * rv_claim_res;
         Self {
             prover_state: None,
             rv_claim,
             gamma,
-            gamma_sqr,
             K,
             index,
         }
     }
 }
 
-pub struct ReadCheckingABCProverState<F: JoltField> {
+pub struct ReadCheckingReduceProverState<F: JoltField> {
     ra_a: MultilinearPolynomial<F>,
-    ra_b: MultilinearPolynomial<F>,
-    ra_c: MultilinearPolynomial<F>,
+    ra_res: MultilinearPolynomial<F>,
     val_final: MultilinearPolynomial<F>,
 }

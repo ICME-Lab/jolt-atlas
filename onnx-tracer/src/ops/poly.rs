@@ -185,11 +185,7 @@ where
                 #[cfg(feature = "matmul_power_of_two_padding")]
                 {
                     // Handle matmul pattern regardless of spacing
-                    if equation.contains("mk,nk->mn")
-                        || equation.contains("mk, nk -> mn")
-                        || equation.contains("mk,nk->n")
-                        || equation.contains("k,nk->mn")
-                    {
+                    if equation.contains("mk,nk->mn") || equation.contains("mk, nk -> mn") {
                         let padded_result = einsum_matmul_mk_nk_mn_padded(equation, &inputs)?;
                         return Ok(ForwardResult {
                             output: padded_result,
@@ -404,21 +400,21 @@ where
     }
 }
 
-/// MatMul-specific power-of-two padding for einsum patterns including "mk,nk->mn", "mk,nk->n", and "k,nk->mn".
+/// MatMul-specific power-of-two padding for the "mk,nk->mn" einsum pattern.
 ///
 /// This function implements power-of-two padding specifically for matrix multiplication
-/// operations of the form:
-/// - "mk,nk->mn": Input A: [m, k], Input B: [n, k], Output: [m, n]
-/// - "mk,nk->n": Input A: [m, k], Input B: [n, k], Output: [n] (reduction over m)
-/// - "k,nk->mn": Input A: [k], Input B: [n, k], Output: [m, n] (broadcast A to [1,k])
+/// operations of the form "mk,nk->mn", where:
+/// - Input A: [m, k]
+/// - Input B: [n, k]
+/// - Output: [m, n]
 ///
 /// The function pads M, N, K dimensions to the next power of two, performs the einsum
 /// operation on the padded tensors, and then crops the result back to the original
 /// expected output dimensions.
 ///
 /// # Arguments
-/// * `equation` - The einsum equation ("mk,nk->mn", "mk,nk->n", or "k,nk->mn")
-/// * `inputs` - Input tensors [A, B] where shapes depend on the equation
+/// * `equation` - The einsum equation (should be "mk,nk->mn")
+/// * `inputs` - Input tensors [A, B] where A is [m,k] and B is [n,k]
 ///
 /// # Returns
 /// * `Ok(Tensor<T>)` - Result tensor with dimensions [m, n]
@@ -432,46 +428,27 @@ where
 {
     if inputs.len() != 2 {
         return Err(TensorError::DimMismatch(
-            "einsum patterns require exactly 2 input tensors".to_string(),
+            "mk,nk->mn requires exactly 2 input tensors".to_string(),
         ));
     }
 
-    let a = &inputs[0];
-    let b = &inputs[1];
+    let a = &inputs[0]; // [m, k]
+    let b = &inputs[1]; // [n, k]
 
-    // Handle different patterns - check for exact matches to avoid conflicts
-    let (m, k_a, n, k_b, a_to_use) = if equation == "k,nk->mn" {
-        // Pattern: k,nk->mn
-        if a.dims().len() != 1 || b.dims().len() != 2 {
-            return Err(TensorError::DimMismatch(
-                "k,nk->mn pattern requires first tensor to be 1D and second to be 2D".to_string(),
-            ));
-        }
-        let k = a.dims()[0];
-        let n = b.dims()[0];
-        let k_b = b.dims()[1];
+    if a.dims().len() != 2 || b.dims().len() != 2 {
+        return Err(TensorError::DimMismatch(
+            "mk,nk->mn requires 2D input tensors".to_string(),
+        ));
+    }
 
-        // Reshape a from [k] to [1, k] to match mk,nk pattern
-        let mut a_reshaped = a.clone();
-        a_reshaped.reshape(&[1, k])?;
-        (1, k, n, k_b, a_reshaped)
-    } else {
-        // Patterns: mk,nk->mn or mk,nk->n
-        if a.dims().len() != 2 || b.dims().len() != 2 {
-            return Err(TensorError::DimMismatch(
-                "mk,nk patterns require 2D input tensors".to_string(),
-            ));
-        }
-        let m = a.dims()[0];
-        let k_a = a.dims()[1];
-        let n = b.dims()[0];
-        let k_b = b.dims()[1];
-        (m, k_a, n, k_b, a.clone())
-    };
+    let m = a.dims()[0];
+    let k_a = a.dims()[1];
+    let n = b.dims()[0];
+    let k_b = b.dims()[1];
 
     if k_a != k_b {
         return Err(TensorError::DimMismatch(
-            "k dimensions must match for mk,nk patterns".to_string(),
+            "k dimensions must match for mk,nk->mn".to_string(),
         ));
     }
 
@@ -494,82 +471,17 @@ where
         k.next_power_of_two()
     };
 
-    // Pad tensor a to [m_pow2, k_pow2]
-    let mut a_padded = a_to_use.clone();
+    // Clone and pad input tensors
+    let mut a_padded = a.clone();
+    let mut b_padded = b.clone();
+
     a_padded.pad_to_dims(&[m_pow2, k_pow2])?;
-
-    // For tensor b: match zkml-jolt-core's padding strategy
-    // zkml-jolt-core stores the original data sequentially then pads to n_pow2 * k_pow2 elements
-    let original_b_data = b.inner.clone();
-    let n_k = n * k;
-    let target_size = n_pow2 * k_pow2;
-
-    // Create new data array with the sequential layout that zkml-jolt-core expects
-    let mut b_padded_data = Vec::with_capacity(target_size);
-
-    // Copy original data sequentially
-    for value in original_b_data.iter().take(n_k) {
-        b_padded_data.push(value.clone());
-    }
-
-    // Pad with zeros to reach target size
-    while b_padded_data.len() < target_size {
-        b_padded_data.push(T::zero().unwrap_or_else(|| original_b_data[0].clone()));
-    }
-
-    // Create the padded b tensor with the sequential layout, then reshape to [n_pow2, k_pow2]
-    let b_padded = Tensor::new(Some(&b_padded_data), &[n_pow2, k_pow2])?;
+    b_padded.pad_to_dims(&[n_pow2, k_pow2])?;
 
     // Perform einsum on padded tensors
-    // Handle special case: k,nk->mn should probably be k,nk->n, but after reshaping k to mk, it becomes mk,nk->n
-    let actual_equation = if equation == "k,nk->mn" {
-        "mk,nk->n"
-    } else {
-        equation
-    };
-
-    let padded_result = tensor::ops::einsum(actual_equation, &[a_padded, b_padded])?;
-
-    // Handle different output patterns based on original equation
-    if equation.contains("mk,nk->mn") {
-        // Output should be [m, n] - crop the padded result
-        let mut cropped_values = Vec::with_capacity(m * n);
-
-        // Copy values from the padded result, row by row
-        for i in 0..m {
-            for j in 0..n {
-                let padded_idx = i * padded_result.dims()[1] + j;
-                if padded_idx < padded_result.inner.len() {
-                    cropped_values.push(padded_result.inner[padded_idx].clone());
-                } else {
-                    // This shouldn't happen if padding worked correctly
-                    cropped_values
-                        .push(T::zero().unwrap_or_else(|| padded_result.inner[0].clone()));
-                }
-            }
-        }
-
-        // Create a tensor with the original expected dimensions but with values from padded calculation
-        let result = Tensor::new(Some(&cropped_values), &[m, n])?;
-        Ok(result)
-    } else if equation.contains("mk,nk->n") || equation.contains("k,nk->mn") {
-        // Output should be [n] - crop the padded result to first n elements
-        let mut cropped_values = Vec::with_capacity(n);
-        for i in 0..n {
-            if i < padded_result.inner.len() {
-                cropped_values.push(padded_result.inner[i].clone());
-            } else {
-                cropped_values.push(T::zero().unwrap_or_else(|| padded_result.inner[0].clone()));
-            }
-        }
-
-        let result = Tensor::new(Some(&cropped_values), &[n])?;
-        Ok(result)
-    } else {
-        Err(TensorError::DimMismatch(format!(
-            "Unsupported einsum pattern: {equation}"
-        )))
-    }
+    let padded_result = tensor::ops::einsum(equation, &[a_padded, b_padded])?;
+    // Crop result back to original expected dimensions [m, n]
+    padded_result.crop_to_dims(&[m, n])
 }
 
 #[cfg(test)]

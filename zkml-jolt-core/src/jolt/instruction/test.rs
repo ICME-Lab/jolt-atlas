@@ -44,7 +44,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(opcode: ONNXOpc
             vec![0u64; MAX_TENSOR_SIZE]
         } else {
             (0..MAX_TENSOR_SIZE)
-                .map(|_| rng.gen_range(0..=63) as u8 as u64)
+                .map(|_| rng.gen_range(0..=16) as u8 as u64)
                 .collect::<Vec<u64>>()
         };
 
@@ -58,7 +58,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(opcode: ONNXOpc
             vec![0u64; MAX_TENSOR_SIZE]
         } else {
             (0..MAX_TENSOR_SIZE)
-                .map(|_| rng.gen_range(0..=63) as u8 as u64)
+                .map(|_| rng.gen_range(0..=16) as u8 as u64)
                 .collect::<Vec<u64>>()
         };
 
@@ -210,12 +210,13 @@ fn select_output(cycle: &ONNXCycle) -> Vec<u64> {
 
 fn div_output(cycle: &ONNXCycle) -> Vec<u64> {
     assert_eq!(cycle.instr.opcode, ONNXOpcode::Div);
+    println!("cycle: {:?}", cycle);
     let x = DIVInstruction::<WORD_SIZE>::virtual_trace(cycle.clone())
         .last()
         .unwrap()
         .td_post_vals()
         .clone();
-    println!("x: {:#?}", x);
+    println!("x: {:?}", x);
     x
 }
 

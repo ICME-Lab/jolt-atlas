@@ -3,6 +3,7 @@ use onnx_tracer::trace_types::{MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode};
 pub mod add;
 pub mod argmax;
 pub mod beq;
+pub mod broadcast;
 pub mod div;
 pub mod ge;
 pub mod le;

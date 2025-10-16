@@ -146,7 +146,9 @@ where
             LookupOp::Sigmoid { scale } => {
                 Ok(tensor::ops::nonlinearities::sigmoid(&x, scale.into()))
             }
-            LookupOp::Softmax { scale } => Ok(tensor::ops::nonlinearities::softmax(&x, scale.into()).0),
+            LookupOp::Softmax { scale } => {
+                Ok(tensor::ops::nonlinearities::softmax(&x, scale.into()).0)
+            }
             LookupOp::Sqrt { scale } => Ok(tensor::ops::nonlinearities::sqrt(&x, scale.into())),
             LookupOp::Rsqrt { scale } => Ok(tensor::ops::nonlinearities::rsqrt(&x, scale.into())),
             LookupOp::Erf { scale } => Ok(tensor::ops::nonlinearities::erffunc(&x, scale.into())),

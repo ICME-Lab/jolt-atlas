@@ -25,9 +25,9 @@ use crate::{
 pub struct SoftmaxInstruction<const WORD_SIZE: usize>;
 
 impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<WORD_SIZE> {
-    // ArgMax, Gather, Sub, VirtualPow2, VirtualConst(Q), Div(Q,c), ReduceSum(d),
-    // Mul(Q,d), Div(f,e), VirtualMove  => 10 steps
-    const SEQUENCE_LENGTH: usize = 10;
+    // ArgMax, Gather, Broadcast, Sub, VirtualPow2, VirtualConst(Q), Div(Q,c), ReduceSum(d),
+    // Broadcast, Mul(Q,d), Div(f,e), VirtualMove  => 12 steps
+    const SEQUENCE_LENGTH: usize = 12;
 
     fn virtual_trace(cycle: ONNXCycle) -> Vec<ONNXCycle> {
         assert_eq!(cycle.instr.opcode, ONNXOpcode::Softmax);
@@ -38,13 +38,15 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
         // ---- Virtual registers (distinct) ----
         let v_argmax_idx = Some(virtual_tensor_index(0));
         let v_zmax_vec = Some(virtual_tensor_index(1));
-        let v_b = Some(virtual_tensor_index(2));
-        let v_c_pow2 = Some(virtual_tensor_index(3));
-        let v_q_const = Some(virtual_tensor_index(4));
-        let v_d_q_over_c = Some(virtual_tensor_index(5));
-        let v_e_sum = Some(virtual_tensor_index(6));
-        let v_f_q_times_d = Some(virtual_tensor_index(7));
-        let v_g_out = Some(virtual_tensor_index(8));
+        let v_broadcast_zmax = Some(virtual_tensor_index(2));
+        let v_b = Some(virtual_tensor_index(3));
+        let v_c_pow2 = Some(virtual_tensor_index(4));
+        let v_q_const = Some(virtual_tensor_index(5));
+        let v_d_q_over_c = Some(virtual_tensor_index(6));
+        let v_e_sum = Some(virtual_tensor_index(7));
+        let v_broadcast_e_sum = Some(virtual_tensor_index(8));
+        let v_f_q_times_d = Some(virtual_tensor_index(9));
+        let v_g_out = Some(virtual_tensor_index(10));
 
         // Input tensor z
         let z_u64 = cycle.ts1_vals();
@@ -55,7 +57,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
             let mut idx = 0usize;
             let mut best = z_u64[0];
             for i in 1..MAX_TENSOR_SIZE {
-                if z_u64[i] > best {
+                if z_u64[i] >= best {
                     best = z_u64[i];
                     idx = i;
                 }
@@ -115,10 +117,34 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
             advice_value: None,
         });
 
-        // TODO: Broadcast z_max
+        let broadcast_zmax_vals: Vec<u64> = vec![zmax_val_u64; MAX_TENSOR_SIZE];
+        let broadcast_zmax_tensor = Tensor::from(u64_vec_to_i32_iter(&broadcast_zmax_vals));
+        // TODO: Broadcast z_max to all elements in tensor
+        vt.push(ONNXCycle {
+            instr: ONNXInstr {
+                address: cycle.instr.address,
+                opcode: ONNXOpcode::Broadcast,
+                ts1: v_zmax_vec,
+                ts2: None,
+                ts3: None,
+                td: v_broadcast_zmax,
+                imm: None,
+                virtual_sequence_remaining: remain(vt.len()),
+                active_output_elements: cycle.instr.active_output_elements,
+                output_dims: cycle.instr.output_dims,
+            },
+            memory_state: MemoryState {
+                ts1_val: Some(zmax_vec_tensor.clone()),
+                ts2_val: None,
+                ts3_val: None,
+                td_pre_val: None,
+                td_post_val: Some(broadcast_zmax_tensor.clone()),
+            },
+            advice_value: None,
+        });
 
         // 2) b = z_max - z
-        let b_vals: Vec<u64> = zmax_vec
+        let b_vals: Vec<u64> = broadcast_zmax_vals
             .iter()
             .zip(z_u64.iter())
             .map(|(&a, &z)| a.wrapping_sub(z))
@@ -128,7 +154,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
             instr: ONNXInstr {
                 address: cycle.instr.address,
                 opcode: ONNXOpcode::Sub,
-                ts1: v_zmax_vec,
+                ts1: v_broadcast_zmax,
                 ts2: cycle.instr.ts1,
                 ts3: None,
                 td: v_b,
@@ -138,7 +164,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
                 output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
-                ts1_val: Some(zmax_vec_tensor.clone()),
+                ts1_val: Some(broadcast_zmax_tensor.clone()),
                 ts2_val: Some(z_tensor.clone()),
                 ts3_val: None,
                 td_pre_val: None,
@@ -146,7 +172,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
             },
             advice_value: None,
         });
-        println!("b_vals: {:?}", b_vals);
 
         // 3) c = 2^{b}
         let c_vals: Vec<u64> = b_vals
@@ -233,7 +258,8 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
 
         // 5) e = ReduceSum(d)  (store replicated)
         let e_sum: u64 = d_vals.iter().copied().sum();
-        let e_tensor = Tensor::from(u64_vec_to_i32_iter(&vec![e_sum; MAX_TENSOR_SIZE]));
+        let mut e_tensor = Tensor::from(u64_vec_to_i32_iter(&vec![0; MAX_TENSOR_SIZE]));
+        e_tensor[0] = e_sum as u32 as i32;
         vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
@@ -253,6 +279,32 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
                 ts3_val: None,
                 td_pre_val: None,
                 td_post_val: Some(e_tensor.clone()),
+            },
+            advice_value: None,
+        });
+
+        // broadcast e_sum to all elements in tensor
+        let broadcast_e_sum_vals: Vec<u64> = vec![e_sum; MAX_TENSOR_SIZE];
+        let broadcast_e_sum_tensor = Tensor::from(u64_vec_to_i32_iter(&broadcast_e_sum_vals));
+        vt.push(ONNXCycle {
+            instr: ONNXInstr {
+                address: cycle.instr.address,
+                opcode: ONNXOpcode::Broadcast,
+                ts1: v_e_sum,
+                ts2: None,
+                ts3: None,
+                td: v_broadcast_e_sum,
+                imm: None,
+                virtual_sequence_remaining: remain(vt.len()),
+                active_output_elements: cycle.instr.active_output_elements,
+                output_dims: cycle.instr.output_dims,
+            },
+            memory_state: MemoryState {
+                ts1_val: Some(e_tensor.clone()),
+                ts2_val: None,
+                ts3_val: None,
+                td_pre_val: None,
+                td_post_val: Some(broadcast_e_sum_tensor.clone()),
             },
             advice_value: None,
         });
@@ -295,17 +347,17 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
                 address: cycle.instr.address,
                 opcode: ONNXOpcode::Div,
                 ts1: v_f_q_times_d,
-                ts2: v_e_sum,
+                ts2: None,
                 ts3: None,
                 td: v_g_out,
-                imm: None,
+                imm: Some(broadcast_e_sum_tensor.clone()),
                 virtual_sequence_remaining: remain(vt.len()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims,
             },
             memory_state: MemoryState {
                 ts1_val: Some(f_tensor.clone()),
-                ts2_val: Some(e_tensor.clone()),
+                ts2_val: None,
                 ts3_val: None,
                 td_pre_val: None,
                 td_post_val: Some(g_tensor.clone()),

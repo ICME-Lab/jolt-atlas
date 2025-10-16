@@ -2967,6 +2967,32 @@ pub mod nonlinearities {
         .unwrap()
     }
 
+    /// Elementwise applies exponential of base 2 to a tensor of integers.
+    /// # Arguments
+    ///
+    /// * `a` - Tensor
+    /// * `scale_input` - Single value
+    /// * `scale_output` - Single value
+    /// # Examples
+    /// ```
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::exp2;
+    /// let x = Tensor::<i32>::new(
+    ///     Some(&[2, 15, 2, 1, 1, 3000]),
+    ///     &[2, 3],
+    /// ).unwrap();
+    /// let result = exp2(&x, 1.0);
+    /// let expected = Tensor::<i32>::new(Some(&[4, 32, 4, 2, 2, 1024]), &[2, 3]).unwrap();
+    /// ```
+    pub fn exp2(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
+        a.par_enum_map(|_, a_i| {
+            let kix = (a_i as f64) / scale_input;
+            let fout = scale_input * kix.exp2();
+            let rounded = fout.round();
+            Ok::<_, TensorError>(rounded as i32)
+        })
+        .unwrap()
+    }
     /// Elementwise applies exponential to a tensor of integers.
     /// # Arguments
     ///
@@ -3094,6 +3120,7 @@ pub mod nonlinearities {
     /// let expected = Tensor::<i32>::new(Some(&[2730, 2730, 2751, 2730, 2730, 2688]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
+    /// TODO: Use base 2 and scaling factor
     pub fn softmax(a: &Tensor<i32>, scale: f64) -> (Tensor<i32>, Vec<Tensor<i32>>) {
         // the more accurate calculation is commented out and we implement as below so it
         // matches the steps in layout
@@ -3101,7 +3128,7 @@ pub mod nonlinearities {
 
         intermediate_values.push(a.clone());
 
-        let exp = exp(a, scale);
+        let exp = exp2(a, scale);
 
         let sum = sum(&exp).unwrap();
         intermediate_values.push(sum.clone());

@@ -3,14 +3,9 @@
 
 use crate::{
     jolt::{
-        JoltProverPreprocessing,
         instruction::{
-            VirtualInstructionSequence, argmax::ArgMaxInstruction, broadcast::BroadCastInstruction,
-            div::DIVInstruction, rebase_scale::REBASEInstruction, reduce_sum::ReduceSumInstruction,
-            relu::RELU, sigmoid::SigmoidInstruction, virtual_advice::ADVICEInstruction,
-            virtual_const::ConstInstruction, virtual_pow2::VirtualPow2,
-        },
-        precompiles::{PrecompileOp, PrecompilePreprocessing, matmult::MatMultPrecompile},
+            argmax::ArgMaxInstruction, broadcast::BroadCastInstruction, div::DIVInstruction, rebase_scale::REBASEInstruction, reduce_sum::ReduceSumInstruction, relu::RELU, sigmoid::SigmoidInstruction, softmax::SoftmaxInstruction, virtual_advice::ADVICEInstruction, virtual_const::ConstInstruction, virtual_pow2::VirtualPow2, VirtualInstructionSequence
+        }, precompiles::{matmult::MatMultPrecompile, PrecompileOp, PrecompilePreprocessing}, JoltProverPreprocessing
     },
     utils::u64_vec_to_i32_iter,
 };
@@ -254,6 +249,7 @@ pub fn jolt_execution_trace(raw_trace: Vec<ONNXCycle>) -> ExecutionTrace {
             ONNXOpcode::ArgMax => ArgMaxInstruction::<32>::virtual_trace(raw),
             ONNXOpcode::RebaseScale(_) => REBASEInstruction::<32>::virtual_trace(raw),
             ONNXOpcode::Sigmoid => SigmoidInstruction::<32>::virtual_trace(raw),
+            ONNXOpcode::Softmax => SoftmaxInstruction::<32>::virtual_trace(raw),
             _ => vec![raw],
         };
 

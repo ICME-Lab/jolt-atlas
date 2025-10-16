@@ -43,7 +43,7 @@ use crate::{
         utilities::{
             create_const_node, create_div_node, create_iff_node, create_input_node,
             create_matmul_node, create_node, create_polyop_node, create_relu_node,
-            create_sigmoid_node,
+            create_sigmoid_node, create_softmax_node,
         },
     },
     ops::{hybrid::HybridOp, poly::PolyOp},
@@ -392,6 +392,12 @@ impl ModelBuilder {
         self.model.insert_node(sigmoid_node);
         (id, O)
     }
+    fn softmax(&mut self, input: Wire, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
+        let id = self.alloc();
+        let softmax_node = create_softmax_node(self.scale, vec![input], out_dims, id, fanout_hint);
+        self.model.insert_node(softmax_node);
+        (id, O)
+    }
 }
 
 /* ********************** Testing Model's ********************** */
@@ -726,6 +732,14 @@ pub fn sigmoid_model() -> Model {
     let input = b.input(vec![1, MAX_TENSOR_SIZE], 1);
     let sigmoid_result = b.sigmoid(input, vec![1, MAX_TENSOR_SIZE], 1);
     b.take(vec![input.0], vec![sigmoid_result])
+}
+
+pub fn softmax_model() -> Model {
+    const SCALE: i32 = 0;
+    let mut b = ModelBuilder::new(SCALE);
+    let input = b.input(vec![1, MAX_TENSOR_SIZE], 1);
+    let softmax_result = b.softmax(input, vec![1, MAX_TENSOR_SIZE], 1);
+    b.take(vec![input.0], vec![softmax_result])
 }
 
 /// Analog to onnx-tracer/models/multiclass0/network.onnx

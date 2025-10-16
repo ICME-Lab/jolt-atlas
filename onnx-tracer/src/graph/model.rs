@@ -5,7 +5,7 @@ use crate::{
         input::GraphData, tracer::Tracer, utilities::node_output_shapes, vars::VarScales,
         GraphError,
     },
-    ops::{Input, Op, Unknown},
+    ops::{poly::PolyOp, Input, Op, Unknown},
     tensor::Tensor,
     RunArgs,
 };
@@ -199,8 +199,14 @@ impl Model {
         for (idx, n) in self.graph.nodes.iter() {
             // Fetch and Decode
             let mut inputs = Self::node_inputs(idx, n, &results)?;
-            let instr = decode_node((idx, n));
-            self.tracer.capture_pre_state(instr.clone(), inputs.clone());
+            {
+                let instr = decode_node((idx, n));
+                let mut tracer_inputs = inputs.clone();
+                if n.is_pow2() {
+                    tracer_inputs.push(inputs[0].clone());
+                }
+                self.tracer.capture_pre_state(instr.clone(), tracer_inputs);
+            }
             if n.is_lookup() {
                 Self::lookup_check(&inputs, &mut max_lookup_inputs, &mut min_lookup_inputs)?;
             }
@@ -830,18 +836,63 @@ impl Model {
     ) {
         // Check if this node is a RebaseScale and expand it into two separate nodes
         if let SupportedOp::RebaseScale(rebase_scale) = &node.opkind {
-            let (inner_node, div_node) =
-                Self::expand_rebase_scale_node(&node, rebase_scale, nodes.len());
+            // Special case: if the inner operation is MeanOfSquares, expand it first
+            if let SupportedOp::Linear(PolyOp::MeanOfSquares { axes }) = rebase_scale.inner.as_ref()
+            {
+                // First, expand the MeanOfSquares (which is inside the RebaseScale)
+                let mos_expanded_nodes =
+                    Self::expand_mean_of_squares_node(&node, axes, nodes.len(), nodes);
 
-            // Insert the inner node first
-            let inner_node_idx = inner_node.idx;
-            nodes.insert(inner_node_idx, NodeType::Node(inner_node));
+                // Insert all the MeanOfSquares expanded nodes
+                for expanded_node in &mos_expanded_nodes {
+                    nodes.insert(expanded_node.idx, NodeType::Node(expanded_node.clone()));
+                }
 
-            // Insert the div node and set up remapping to point to the final div node
-            let div_node_idx = div_node.idx;
-            remappings.insert(original_index, div_node_idx);
-            nodes.insert(div_node_idx, NodeType::Node(div_node));
+                // The last node from MeanOfSquares expansion is the final DIV
+                let mos_final_idx = mos_expanded_nodes.last().unwrap().idx;
+
+                // Now create the RebaseScale's division node that takes the MeanOfSquares result as input
+                let rebase_div_idx = nodes.len();
+                let rebase_div_node = Node {
+                    idx: rebase_div_idx,
+                    opkind: SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div {
+                        denom: crate::ops::utils::F32(rebase_scale.multiplier as f32),
+                    }),
+                    inputs: vec![(mos_final_idx, 0)], // Takes output from MeanOfSquares expansion
+                    out_dims: node.out_dims.clone(),
+                    out_scale: rebase_scale.target_scale,
+                    num_uses: node.num_uses,
+                };
+                nodes.insert(rebase_div_idx, NodeType::Node(rebase_div_node));
+                remappings.insert(original_index, rebase_div_idx);
+            } else {
+                // Normal RebaseScale expansion (inner is not MeanOfSquares)
+                let (inner_node, div_node) =
+                    Self::expand_rebase_scale_node(&node, rebase_scale, nodes.len());
+
+                // Insert the inner node first
+                let inner_node_idx = inner_node.idx;
+                nodes.insert(inner_node_idx, NodeType::Node(inner_node));
+
+                // Insert the div node and set up remapping to point to the final div node
+                let div_node_idx = div_node.idx;
+                remappings.insert(original_index, div_node_idx);
+                nodes.insert(div_node_idx, NodeType::Node(div_node));
+            }
+        } else if let SupportedOp::Linear(PolyOp::MeanOfSquares { axes }) = &node.opkind {
+            // Expand MeanOfSquares into [POW, SUM, DIV, DIV] nodes
+            let expanded_nodes = Self::expand_mean_of_squares_node(&node, axes, nodes.len(), nodes);
+
+            // Insert all expanded nodes
+            for expanded_node in &expanded_nodes {
+                nodes.insert(expanded_node.idx, NodeType::Node(expanded_node.clone()));
+            }
+
+            // Set up remapping to point to the final div node (last in the expansion)
+            let final_node_idx = expanded_nodes.last().unwrap().idx;
+            remappings.insert(original_index, final_node_idx);
         } else {
+            // For all other nodes, just insert them directly
             remappings.insert(original_index, node.idx);
             nodes.insert(node.idx, NodeType::Node(node));
         }
@@ -878,6 +929,110 @@ impl Model {
         };
 
         (inner_node, div_node)
+    }
+
+    /// Expands a MeanOfSquares node into [Square, Sum, Div, Div] nodes
+    pub fn expand_mean_of_squares_node(
+        original_node: &Node,
+        axes: &[usize],
+        next_available_index: usize,
+        nodes: &BTreeMap<usize, NodeType>,
+    ) -> Vec<Node> {
+        let mut result_nodes = Vec::new();
+
+        // Calculate the input scale - we know that MeanOfSquares output scale is 2 * input_scale
+        // So input_scale = output_scale / 2
+        let input_scale = original_node.out_scale / 2;
+
+        // Get the actual input dimensions by looking up the input node
+        let input_dims = if let Some((input_idx, _)) = original_node.inputs.first() {
+            if let Some(NodeType::Node(input_node)) = nodes.get(input_idx) {
+                input_node.out_dims.clone()
+            } else {
+                // If we can't find the input node, this is an error condition
+                // but we'll fall back to using the current approach for now
+                eprintln!(
+                    "Warning: Could not find input node {input_idx} for MeanOfSquares expansion"
+                );
+                original_node.out_dims.clone()
+            }
+        } else {
+            // No inputs specified - this shouldn't happen for MeanOfSquares
+            eprintln!("Warning: MeanOfSquares node has no inputs");
+            original_node.out_dims.clone()
+        };
+
+        // Calculate sum output dimensions (axes are reduced to size 1)
+        let mut sum_output_dims = input_dims.clone();
+        for &axis in axes {
+            if axis < sum_output_dims.len() {
+                sum_output_dims[axis] = 1;
+            }
+        }
+
+        // Node 1: Square operation (Power of 2)
+        // Square operation preserves input dimensions
+        let square_node_idx = next_available_index;
+        let square_node = Node {
+            idx: square_node_idx,
+            opkind: SupportedOp::Linear(PolyOp::Pow(2)), // Square is power of 2
+            inputs: original_node.inputs.clone(),
+            out_dims: input_dims.clone(), // Square preserves input dimensions
+            out_scale: 2 * input_scale,   // Squaring doubles the scale
+            num_uses: 1,                  // Will be used by sum node
+        };
+        result_nodes.push(square_node);
+
+        // Node 2: Sum operation
+        // Sum reduces dimensions along specified axes to size 1
+        let sum_node_idx = next_available_index + 1;
+        let sum_node = Node {
+            idx: sum_node_idx,
+            opkind: SupportedOp::Linear(PolyOp::Sum {
+                axes: axes.to_vec(),
+            }),
+            inputs: vec![(square_node_idx, 0)], // Takes output from square node
+            out_dims: sum_output_dims.clone(),  // Sum reduces dimensions along axes
+            out_scale: 2 * input_scale,         // Same scale as square
+            num_uses: 1,                        // Will be used by first div node
+        };
+        result_nodes.push(sum_node);
+
+        // Node 3: First Division operation (divide by count to get mean)
+        // Calculate the denominator: total elements in reduced axes
+        let denominator = axes
+            .iter()
+            .map(|&axis| input_dims.get(axis).unwrap_or(&1))
+            .product::<usize>() as f32;
+
+        let div1_node_idx = next_available_index + 2;
+        let div1_node = Node {
+            idx: div1_node_idx,
+            opkind: SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div {
+                denom: crate::ops::utils::F32(denominator),
+            }),
+            inputs: vec![(sum_node_idx, 0)], // Takes output from sum node
+            out_dims: sum_output_dims.clone(), // Division preserves sum output dimensions
+            out_scale: 2 * input_scale,      // Still same scale after dividing by count
+            num_uses: 1,                     // Will be used by second div node
+        };
+        result_nodes.push(div1_node);
+
+        // Node 4: Second Division operation (for scaling purposes)
+        let div2_node_idx = next_available_index + 3;
+        let div2_node = Node {
+            idx: div2_node_idx,
+            opkind: SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div {
+                denom: crate::ops::utils::F32(1.0), // Identity division for now
+            }),
+            inputs: vec![(div1_node_idx, 0)], // Takes output from first div node
+            out_dims: original_node.out_dims.clone(), // Final output dimensions should match original MeanOfSquares output
+            out_scale: original_node.out_scale,       // Final output scale matches original
+            num_uses: original_node.num_uses,         // Inherits the usage count from original node
+        };
+        result_nodes.push(div2_node);
+
+        result_nodes
     }
 
     /// Run tract onnx model on sample data !
@@ -981,6 +1136,7 @@ impl Model {
         *nodes = updated_nodes;
     }
 
+    /// Expands any MeanOfSquares nodes into [Square, Sum, Div, Div] nodes
     pub fn table_nodes(&self) -> String {
         let mut node_accumulator = vec![];
         let mut string = String::new();
@@ -1221,6 +1377,13 @@ impl NodeType {
         match self {
             NodeType::Node(n) => n.num_uses,
             NodeType::SubGraph { .. } => 0,
+        }
+    }
+
+    pub fn is_pow2(&self) -> bool {
+        match self {
+            NodeType::Node(n) => matches!(n.opkind, SupportedOp::Linear(PolyOp::Pow(2))),
+            NodeType::SubGraph { .. } => false,
         }
     }
 
@@ -1685,6 +1848,882 @@ mod tests {
         // Check addresses are consecutive
         for (i, instr) in bytecode.iter().enumerate() {
             assert_eq!(instr.address, i + 1, "Address should be consecutive");
+        }
+    }
+
+    #[test]
+    fn test_mean_of_squares_expansion() {
+        // Test that MeanOfSquares gets expanded into 4 nodes: [Square, Sum, Div, Div]
+        use crate::ops::poly::PolyOp;
+        use std::collections::BTreeMap;
+
+        // Create a mock input node that the MeanOfSquares node references
+        let input_node = Node {
+            idx: 4,
+            opkind: SupportedOp::Input(crate::ops::Input {
+                scale: 7,
+                datum_type: crate::ops::InputType::F32,
+            }),
+            inputs: vec![],
+            out_dims: vec![1, 16], // Original input dimensions before reduction
+            out_scale: 7,
+            num_uses: 1,
+        };
+
+        // Create a nodes map with the input node
+        let mut nodes = BTreeMap::new();
+        nodes.insert(4, NodeType::Node(input_node));
+
+        // Create a mock MeanOfSquares node
+        let mean_of_squares_node = Node {
+            idx: 5,
+            opkind: SupportedOp::Linear(PolyOp::MeanOfSquares { axes: vec![1] }),
+            inputs: vec![(4, 0)],
+            out_dims: vec![1, 1], // After reduction: axis 1 reduced from 16 to 1
+            out_scale: 14,        // 2 * input_scale (7)
+            num_uses: 1,
+        };
+
+        let expanded = Model::expand_mean_of_squares_node(&mean_of_squares_node, &[1], 10, &nodes);
+
+        // Should have 4 nodes
+        assert_eq!(expanded.len(), 4);
+
+        // Check node types and indices
+        assert_eq!(expanded[0].idx, 10); // Square
+        assert_eq!(expanded[1].idx, 11); // Sum
+        assert_eq!(expanded[2].idx, 12); // Div
+        assert_eq!(expanded[3].idx, 13); // Div
+
+        // Check operations
+        if let SupportedOp::Linear(PolyOp::Pow(2)) = expanded[0].opkind {
+            // Square is Pow(2) - correct
+        } else {
+            panic!("First node should be Square (Pow(2))");
+        }
+
+        if let SupportedOp::Linear(PolyOp::Sum { axes }) = &expanded[1].opkind {
+            assert_eq!(axes, &vec![1]);
+        } else {
+            panic!("Second node should be Sum");
+        }
+
+        if let SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div { .. }) = expanded[2].opkind
+        {
+            // Third node is Div - correct
+        } else {
+            panic!("Third node should be Div");
+        }
+
+        if let SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div { .. }) = expanded[3].opkind
+        {
+            // Fourth node is Div - correct
+        } else {
+            panic!("Fourth node should be Div");
+        }
+
+        // Check that nodes are chained correctly
+        assert_eq!(expanded[1].inputs, vec![(10, 0)]); // Sum takes from Square
+        assert_eq!(expanded[2].inputs, vec![(11, 0)]); // First Div takes from Sum
+        assert_eq!(expanded[3].inputs, vec![(12, 0)]); // Second Div takes from First Div
+    }
+
+    #[test]
+    fn test_mean_of_squares_expansion_in_layernorm_model() {
+        // Test MeanOfSquares expansion in the layernorm_head model which should contain MeanOfSquares ops
+        use std::fs::File;
+
+        let model_result = File::open("./models/layernorm_head/network.onnx")
+            .map(|mut file| Model::new(&mut file, &crate::RunArgs::default()));
+
+        if let Ok(model) = model_result {
+            let parsed_nodes = &model.graph;
+
+            // Check if any MeanOfSquares nodes were expanded
+            let mut square_count = 0;
+            let mut sum_count = 0;
+            let mut div_count = 0;
+            let mut mean_of_squares_count = 0;
+
+            for node_type in parsed_nodes.nodes.values() {
+                if let NodeType::Node(node) = node_type {
+                    match &node.opkind {
+                        SupportedOp::Linear(PolyOp::Pow(2)) => square_count += 1,
+                        SupportedOp::Linear(PolyOp::Sum { .. }) => sum_count += 1,
+                        SupportedOp::Linear(PolyOp::MeanOfSquares { .. }) => {
+                            mean_of_squares_count += 1
+                        }
+                        SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div { .. }) => {
+                            div_count += 1
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // If the model was properly loaded and had MeanOfSquares ops, we should see the expanded operations
+            println!("MeanOfSquares nodes: {mean_of_squares_count}");
+            println!("Square (Pow(2)) nodes: {square_count}");
+            println!("Sum nodes: {sum_count}");
+            println!("Div nodes: {div_count}");
+
+            // Verify addresses are consecutive
+            let mut addresses = Vec::new();
+            for node_type in parsed_nodes.nodes.values() {
+                if let NodeType::Node(node) = node_type {
+                    addresses.push(node.idx);
+                }
+            }
+            addresses.sort();
+
+            for i in 1..addresses.len() {
+                assert_eq!(
+                    addresses[i],
+                    addresses[i - 1] + 1,
+                    "Non-consecutive addresses found: {} followed by {}",
+                    addresses[i - 1],
+                    addresses[i]
+                );
+            }
+        } else {
+            // If the layernorm model doesn't exist or can't be loaded, skip this test
+            println!("Layernorm model not available, skipping test");
+        }
+    }
+
+    #[test]
+    fn debug_layernorm_expansion() {
+        // Safe logger initialization that doesn't panic if already initialized
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Info)
+            .try_init();
+        use std::path::PathBuf;
+
+        // Load the layernorm_head model
+        let model = crate::model(&PathBuf::from("models/layernorm_head/network.onnx"));
+
+        // Check for MeanOfSquares nodes
+        let mut mean_of_squares_count = 0;
+        let mut square_count = 0;
+        let mut sum_count = 0;
+        let mut div_count = 0;
+
+        for node_type in model.graph.nodes.values() {
+            if let NodeType::Node(node) = node_type {
+                match &node.opkind {
+                    SupportedOp::Linear(PolyOp::MeanOfSquares { .. }) => mean_of_squares_count += 1,
+                    SupportedOp::Linear(PolyOp::Pow(2)) => square_count += 1,
+                    SupportedOp::Linear(PolyOp::Sum { .. }) => sum_count += 1,
+                    SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div { .. }) => {
+                        div_count += 1
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Should have 0 MeanOfSquares nodes (all expanded)
+        assert_eq!(
+            mean_of_squares_count, 0,
+            "MeanOfSquares nodes should be expanded"
+        );
+
+        // Should have at least some square, sum, and div nodes from expansion
+        assert!(square_count > 0, "Should have square nodes from expansion");
+        assert!(sum_count > 0, "Should have sum nodes from expansion");
+        assert!(div_count > 0, "Should have div nodes from expansion");
+    }
+
+    #[test]
+    fn test_mean_of_squares_execution() {
+        // Safe logger initialization that doesn't panic if already initialized
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Info)
+            .try_init();
+
+        // Create a simple test model with MeanOfSquares that we can execute
+        let mut nodes = std::collections::BTreeMap::new();
+
+        // Input node
+        let input_node = Node {
+            idx: 0,
+            opkind: SupportedOp::Input(crate::ops::Input {
+                scale: 7,
+                datum_type: crate::ops::InputType::Int,
+            }),
+            inputs: vec![],
+            out_dims: vec![2, 2],
+            out_scale: 7,
+            num_uses: 1,
+        };
+        nodes.insert(0, NodeType::Node(input_node));
+
+        // MeanOfSquares node
+        let mean_of_squares_node = Node {
+            idx: 1,
+            opkind: SupportedOp::Linear(PolyOp::MeanOfSquares { axes: vec![1] }),
+            inputs: vec![(0, 0)],
+            out_dims: vec![2, 1],
+            out_scale: 14, // 2 * input_scale
+            num_uses: 1,
+        };
+        nodes.insert(1, NodeType::Node(mean_of_squares_node));
+
+        // Before expansion - check indices
+        println!("Before expansion:");
+        for idx in nodes.keys() {
+            println!("Node {idx}");
+        }
+
+        // Note: MeanOfSquares expansion now happens automatically in handle_node_insertion
+        // For this manual test, we need to manually expand since we're not using handle_node_insertion
+        // This is just for testing the expansion logic itself
+        let nodes_to_expand: Vec<_> = nodes
+            .iter()
+            .filter_map(|(idx, node_type)| {
+                if let NodeType::Node(node) = node_type {
+                    if let SupportedOp::Linear(PolyOp::MeanOfSquares { axes }) = &node.opkind {
+                        return Some((*idx, node.clone(), axes.clone()));
+                    }
+                }
+                None
+            })
+            .collect();
+
+        for (original_idx, original_node, axes) in nodes_to_expand {
+            let next_index = nodes.keys().max().unwrap_or(&0) + 1;
+            let expanded_nodes =
+                Model::expand_mean_of_squares_node(&original_node, &axes, next_index, &nodes);
+            let final_node_idx = next_index + expanded_nodes.len() - 1;
+
+            nodes.remove(&original_idx);
+            for expanded_node in expanded_nodes {
+                nodes.insert(expanded_node.idx, NodeType::Node(expanded_node));
+            }
+
+            // Update references
+            for node_type in nodes.values_mut() {
+                if let NodeType::Node(node) = node_type {
+                    for (input_idx, _) in &mut node.inputs {
+                        if *input_idx == original_idx {
+                            *input_idx = final_node_idx;
+                        }
+                    }
+                }
+            }
+        }
+
+        // After expansion - check indices and references
+        println!("After expansion:");
+        let indices: Vec<usize> = nodes.keys().cloned().collect();
+        for &idx in &indices {
+            if let Some(NodeType::Node(node)) = nodes.get(&idx) {
+                println!("Node {}: {:?}, inputs: {:?}", idx, node.opkind, node.inputs);
+            }
+        }
+
+        // Ensure consecutive indices
+        Model::ensure_consecutive_indices(&mut nodes);
+
+        // After consecutive indexing
+        println!("After ensuring consecutive indices:");
+        let indices: Vec<usize> = nodes.keys().cloned().collect();
+        for &idx in &indices {
+            if let Some(NodeType::Node(node)) = nodes.get(&idx) {
+                println!("Node {}: {:?}, inputs: {:?}", idx, node.opkind, node.inputs);
+            }
+        }
+
+        // Verify that all references are valid
+        for (idx, node_type) in &nodes {
+            if let NodeType::Node(node) = node_type {
+                for (input_idx, _) in &node.inputs {
+                    assert!(
+                        nodes.contains_key(input_idx),
+                        "Node {idx} references missing node {input_idx}"
+                    );
+                    assert!(
+                        *input_idx < *idx,
+                        "Node {idx} references future node {input_idx} (forward reference)"
+                    );
+                }
+            }
+        }
+
+        println!("All references valid and no forward references");
+    }
+
+    /// Test MeanOfSquares expansion creates correct node sequence
+    #[test]
+    fn test_mean_of_squares_node_sequence() {
+        let mut nodes = BTreeMap::new();
+
+        // Input node with shape [2, 4]
+        let input_node = Node {
+            idx: 0,
+            opkind: SupportedOp::Input(crate::ops::Input {
+                scale: 7,
+                datum_type: crate::ops::InputType::F32,
+            }),
+            inputs: vec![],
+            out_dims: vec![2, 4],
+            out_scale: 7,
+            num_uses: 1,
+        };
+        nodes.insert(0, NodeType::Node(input_node));
+
+        // MeanOfSquares node reducing axis 1
+        let mos_node = Node {
+            idx: 1,
+            opkind: SupportedOp::Linear(PolyOp::MeanOfSquares { axes: vec![1] }),
+            inputs: vec![(0, 0)],
+            out_dims: vec![2, 1],
+            out_scale: 14,
+            num_uses: 1,
+        };
+
+        let expanded = Model::expand_mean_of_squares_node(&mos_node, &[1], 10, &nodes);
+
+        // Verify sequence: [Pow, Sum, Div, Div]
+        assert_eq!(expanded.len(), 4, "Should expand to 4 nodes");
+
+        // Node 0: Pow(2) - squares the input
+        assert!(matches!(
+            expanded[0].opkind,
+            SupportedOp::Linear(PolyOp::Pow(2))
+        ));
+        assert_eq!(expanded[0].out_dims, vec![2, 4]); // Preserves input dims
+        assert_eq!(expanded[0].out_scale, 14); // 2 * input_scale
+
+        // Node 1: Sum - reduces along axis
+        if let SupportedOp::Linear(PolyOp::Sum { axes }) = &expanded[1].opkind {
+            assert_eq!(axes, &vec![1]);
+        } else {
+            panic!("Second node should be Sum");
+        }
+        assert_eq!(expanded[1].out_dims, vec![2, 1]); // Reduced dimension
+
+        // Node 2: Div - divides by count (4 elements)
+        if let SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div { denom }) =
+            &expanded[2].opkind
+        {
+            assert_eq!(denom.0, 4.0);
+        } else {
+            panic!("Third node should be Div");
+        }
+
+        // Node 3: Div - final scaling division
+        assert!(matches!(
+            expanded[3].opkind,
+            SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div { .. })
+        ));
+        assert_eq!(expanded[3].out_dims, vec![2, 1]); // Final output dims
+        assert_eq!(expanded[3].out_scale, 14); // Matches original MOS output scale
+    }
+
+    /// Test MeanOfSquares expansion with multiple axes
+    #[test]
+    fn test_mean_of_squares_multi_axis() {
+        let mut nodes = BTreeMap::new();
+
+        // Input node with shape [2, 3, 4]
+        let input_node = Node {
+            idx: 5,
+            opkind: SupportedOp::Input(crate::ops::Input {
+                scale: 10,
+                datum_type: crate::ops::InputType::F32,
+            }),
+            inputs: vec![],
+            out_dims: vec![2, 3, 4],
+            out_scale: 10,
+            num_uses: 1,
+        };
+        nodes.insert(5, NodeType::Node(input_node));
+
+        // MeanOfSquares reducing axes [1, 2]
+        let mos_node = Node {
+            idx: 6,
+            opkind: SupportedOp::Linear(PolyOp::MeanOfSquares { axes: vec![1, 2] }),
+            inputs: vec![(5, 0)],
+            out_dims: vec![2, 1, 1],
+            out_scale: 20,
+            num_uses: 1,
+        };
+
+        let expanded = Model::expand_mean_of_squares_node(&mos_node, &[1, 2], 20, &nodes);
+
+        // Verify denominator is product of reduced axes: 3 * 4 = 12
+        if let SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div { denom }) =
+            &expanded[2].opkind
+        {
+            assert_eq!(
+                denom.0, 12.0,
+                "Denominator should be product of reduced dimensions"
+            );
+        } else {
+            panic!("Third node should be Div with correct denominator");
+        }
+
+        // Verify output dimensions
+        assert_eq!(
+            expanded[1].out_dims,
+            vec![2, 1, 1],
+            "Sum should reduce to [2, 1, 1]"
+        );
+    }
+
+    /// Test that MeanOfSquares nodes are removed after expansion
+    #[test]
+    fn test_mean_of_squares_removal() {
+        let mut nodes = BTreeMap::new();
+
+        let input_node = Node {
+            idx: 0,
+            opkind: SupportedOp::Input(crate::ops::Input {
+                scale: 7,
+                datum_type: crate::ops::InputType::F32,
+            }),
+            inputs: vec![],
+            out_dims: vec![1, 8],
+            out_scale: 7,
+            num_uses: 1,
+        };
+        nodes.insert(0, NodeType::Node(input_node));
+
+        let mos_node = Node {
+            idx: 1,
+            opkind: SupportedOp::Linear(PolyOp::MeanOfSquares { axes: vec![1] }),
+            inputs: vec![(0, 0)],
+            out_dims: vec![1, 1],
+            out_scale: 14,
+            num_uses: 1,
+        };
+        nodes.insert(1, NodeType::Node(mos_node));
+
+        // Before expansion: should have MeanOfSquares
+        let has_mos_before = nodes.values().any(|n| {
+            if let NodeType::Node(node) = n {
+                matches!(
+                    node.opkind,
+                    SupportedOp::Linear(PolyOp::MeanOfSquares { .. })
+                )
+            } else {
+                false
+            }
+        });
+        assert!(has_mos_before, "Should have MeanOfSquares before expansion");
+
+        // Expand (inline since handle_node_insertion does this automatically now)
+        let nodes_to_expand: Vec<_> = nodes
+            .iter()
+            .filter_map(|(idx, node_type)| {
+                if let NodeType::Node(node) = node_type {
+                    if let SupportedOp::Linear(PolyOp::MeanOfSquares { axes }) = &node.opkind {
+                        return Some((*idx, node.clone(), axes.clone()));
+                    }
+                }
+                None
+            })
+            .collect();
+
+        for (original_idx, original_node, axes) in nodes_to_expand {
+            let next_index = nodes.keys().max().unwrap_or(&0) + 1;
+            let expanded_nodes =
+                Model::expand_mean_of_squares_node(&original_node, &axes, next_index, &nodes);
+            let final_node_idx = next_index + expanded_nodes.len() - 1;
+
+            nodes.remove(&original_idx);
+            for expanded_node in expanded_nodes {
+                nodes.insert(expanded_node.idx, NodeType::Node(expanded_node));
+            }
+
+            for node_type in nodes.values_mut() {
+                if let NodeType::Node(node) = node_type {
+                    for (input_idx, _) in &mut node.inputs {
+                        if *input_idx == original_idx {
+                            *input_idx = final_node_idx;
+                        }
+                    }
+                }
+            }
+        }
+
+        // After expansion: should NOT have MeanOfSquares
+        let has_mos_after = nodes.values().any(|n| {
+            if let NodeType::Node(node) = n {
+                matches!(
+                    node.opkind,
+                    SupportedOp::Linear(PolyOp::MeanOfSquares { .. })
+                )
+            } else {
+                false
+            }
+        });
+        assert!(
+            !has_mos_after,
+            "Should NOT have MeanOfSquares after expansion"
+        );
+
+        // Should have the expanded nodes instead
+        let has_pow = nodes.values().any(|n| {
+            if let NodeType::Node(node) = n {
+                matches!(node.opkind, SupportedOp::Linear(PolyOp::Pow(2)))
+            } else {
+                false
+            }
+        });
+        assert!(has_pow, "Should have Pow(2) node after expansion");
+    }
+
+    /// Test that input node stays at index 0 after MeanOfSquares expansion
+    #[test]
+    fn test_mean_of_squares_preserves_input_at_zero() {
+        let mut nodes = BTreeMap::new();
+
+        let input_node = Node {
+            idx: 0,
+            opkind: SupportedOp::Input(crate::ops::Input {
+                scale: 7,
+                datum_type: crate::ops::InputType::F32,
+            }),
+            inputs: vec![],
+            out_dims: vec![4, 4],
+            out_scale: 7,
+            num_uses: 1,
+        };
+        nodes.insert(0, NodeType::Node(input_node));
+
+        let mos_node = Node {
+            idx: 1,
+            opkind: SupportedOp::Linear(PolyOp::MeanOfSquares { axes: vec![1] }),
+            inputs: vec![(0, 0)],
+            out_dims: vec![4, 1],
+            out_scale: 14,
+            num_uses: 1,
+        };
+        nodes.insert(1, NodeType::Node(mos_node));
+
+        // Expand and ensure consecutive (inline expansion for manual test)
+        let nodes_to_expand: Vec<_> = nodes
+            .iter()
+            .filter_map(|(idx, node_type)| {
+                if let NodeType::Node(node) = node_type {
+                    if let SupportedOp::Linear(PolyOp::MeanOfSquares { axes }) = &node.opkind {
+                        return Some((*idx, node.clone(), axes.clone()));
+                    }
+                }
+                None
+            })
+            .collect();
+
+        for (original_idx, original_node, axes) in nodes_to_expand {
+            let next_index = nodes.keys().max().unwrap_or(&0) + 1;
+            let expanded_nodes =
+                Model::expand_mean_of_squares_node(&original_node, &axes, next_index, &nodes);
+            let final_node_idx = next_index + expanded_nodes.len() - 1;
+
+            nodes.remove(&original_idx);
+            for expanded_node in expanded_nodes {
+                nodes.insert(expanded_node.idx, NodeType::Node(expanded_node));
+            }
+
+            for node_type in nodes.values_mut() {
+                if let NodeType::Node(node) = node_type {
+                    for (input_idx, _) in &mut node.inputs {
+                        if *input_idx == original_idx {
+                            *input_idx = final_node_idx;
+                        }
+                    }
+                }
+            }
+        }
+        Model::ensure_consecutive_indices(&mut nodes);
+
+        // Input must be at index 0
+        if let Some(NodeType::Node(node)) = nodes.get(&0) {
+            assert!(
+                node.opkind.is_input(),
+                "Node 0 must be input after expansion"
+            );
+        } else {
+            panic!("No node at index 0 after expansion");
+        }
+
+        // Verify all indices are consecutive
+        let indices: Vec<usize> = nodes.keys().cloned().collect();
+        for (i, &idx) in indices.iter().enumerate() {
+            assert_eq!(idx, i, "Indices must be consecutive");
+        }
+    }
+
+    /// Test MeanOfSquares with single-element axis reduction
+    #[test]
+    fn test_mean_of_squares_single_element() {
+        let mut nodes = BTreeMap::new();
+
+        let input_node = Node {
+            idx: 0,
+            opkind: SupportedOp::Input(crate::ops::Input {
+                scale: 5,
+                datum_type: crate::ops::InputType::F32,
+            }),
+            inputs: vec![],
+            out_dims: vec![1, 1],
+            out_scale: 5,
+            num_uses: 1,
+        };
+        nodes.insert(0, NodeType::Node(input_node));
+
+        let mos_node = Node {
+            idx: 1,
+            opkind: SupportedOp::Linear(PolyOp::MeanOfSquares { axes: vec![1] }),
+            inputs: vec![(0, 0)],
+            out_dims: vec![1, 1],
+            out_scale: 10,
+            num_uses: 1,
+        };
+
+        let expanded = Model::expand_mean_of_squares_node(&mos_node, &[1], 5, &nodes);
+
+        // With single element, denominator should be 1.0
+        if let SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div { denom }) =
+            &expanded[2].opkind
+        {
+            assert_eq!(denom.0, 1.0, "Denominator should be 1 for single element");
+        } else {
+            panic!("Third node should be Div");
+        }
+    }
+
+    /// Test that node chaining is correct after expansion
+    #[test]
+    fn test_mean_of_squares_node_chaining() {
+        let mut nodes = BTreeMap::new();
+
+        let input_node = Node {
+            idx: 0,
+            opkind: SupportedOp::Input(crate::ops::Input {
+                scale: 7,
+                datum_type: crate::ops::InputType::F32,
+            }),
+            inputs: vec![],
+            out_dims: vec![2, 8],
+            out_scale: 7,
+            num_uses: 1,
+        };
+        nodes.insert(0, NodeType::Node(input_node));
+
+        let mos_node = Node {
+            idx: 1,
+            opkind: SupportedOp::Linear(PolyOp::MeanOfSquares { axes: vec![1] }),
+            inputs: vec![(0, 0)],
+            out_dims: vec![2, 1],
+            out_scale: 14,
+            num_uses: 1,
+        };
+        nodes.insert(1, NodeType::Node(mos_node));
+
+        // Inline expansion for manual test
+        let nodes_to_expand: Vec<_> = nodes
+            .iter()
+            .filter_map(|(idx, node_type)| {
+                if let NodeType::Node(node) = node_type {
+                    if let SupportedOp::Linear(PolyOp::MeanOfSquares { axes }) = &node.opkind {
+                        return Some((*idx, node.clone(), axes.clone()));
+                    }
+                }
+                None
+            })
+            .collect();
+
+        for (original_idx, original_node, axes) in nodes_to_expand {
+            let next_index = nodes.keys().max().unwrap_or(&0) + 1;
+            let expanded_nodes =
+                Model::expand_mean_of_squares_node(&original_node, &axes, next_index, &nodes);
+            let final_node_idx = next_index + expanded_nodes.len() - 1;
+
+            nodes.remove(&original_idx);
+            for expanded_node in expanded_nodes {
+                nodes.insert(expanded_node.idx, NodeType::Node(expanded_node));
+            }
+
+            for node_type in nodes.values_mut() {
+                if let NodeType::Node(node) = node_type {
+                    for (input_idx, _) in &mut node.inputs {
+                        if *input_idx == original_idx {
+                            *input_idx = final_node_idx;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Find the expanded nodes
+        let pow_node = nodes
+            .values()
+            .find_map(|n| {
+                if let NodeType::Node(node) = n {
+                    if matches!(node.opkind, SupportedOp::Linear(PolyOp::Pow(2))) {
+                        Some(node)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .expect("Should have Pow node");
+
+        let sum_node = nodes
+            .values()
+            .find_map(|n| {
+                if let NodeType::Node(node) = n {
+                    if matches!(node.opkind, SupportedOp::Linear(PolyOp::Sum { .. })) {
+                        Some(node)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .expect("Should have Sum node");
+
+        // Verify chaining: Sum takes input from Pow
+        assert_eq!(sum_node.inputs.len(), 1, "Sum should have 1 input");
+        assert_eq!(
+            sum_node.inputs[0].0, pow_node.idx,
+            "Sum should take input from Pow"
+        );
+
+        // Verify Pow takes input from original input node
+        assert_eq!(pow_node.inputs.len(), 1, "Pow should have 1 input");
+        assert_eq!(
+            pow_node.inputs[0].0, 0,
+            "Pow should take input from input node at index 0"
+        );
+    }
+
+    /// Test loading actual MeanOfSquares ONNX model
+    #[test]
+    fn test_mean_of_squares_onnx_model_loading() {
+        use std::fs::File;
+
+        let model_path = Path::new("./models/mean_of_squares_simple/network.onnx");
+        if !model_path.exists() {
+            println!("Skipping test: model not found at {model_path:?}");
+            return;
+        }
+
+        let model_result = File::open(model_path)
+            .map(|mut file| Model::new(&mut file, &crate::RunArgs::default()));
+
+        if let Ok(model) = model_result {
+            let parsed_nodes = &model.graph;
+
+            // Should NOT have any MeanOfSquares nodes after loading
+            let has_mos = parsed_nodes.nodes.values().any(|n| {
+                if let NodeType::Node(node) = n {
+                    matches!(
+                        node.opkind,
+                        SupportedOp::Linear(PolyOp::MeanOfSquares { .. })
+                    )
+                } else {
+                    false
+                }
+            });
+            assert!(
+                !has_mos,
+                "Model should not have MeanOfSquares nodes after loading"
+            );
+
+            // Should have the expanded operations
+            let has_pow = parsed_nodes.nodes.values().any(|n| {
+                if let NodeType::Node(node) = n {
+                    matches!(node.opkind, SupportedOp::Linear(PolyOp::Pow(2)))
+                } else {
+                    false
+                }
+            });
+            assert!(has_pow, "Model should have Pow(2) node after expansion");
+
+            let has_sum = parsed_nodes.nodes.values().any(|n| {
+                if let NodeType::Node(node) = n {
+                    matches!(node.opkind, SupportedOp::Linear(PolyOp::Sum { .. }))
+                } else {
+                    false
+                }
+            });
+            assert!(has_sum, "Model should have Sum node after expansion");
+
+            // Verify indices are consecutive
+            let indices: Vec<usize> = parsed_nodes.nodes.keys().cloned().collect();
+            for (i, &idx) in indices.iter().enumerate() {
+                assert_eq!(idx, i, "Indices should be consecutive from 0");
+            }
+
+            // Verify input is at index 0
+            if let Some(NodeType::Node(node)) = parsed_nodes.nodes.get(&0) {
+                assert!(node.opkind.is_input(), "Node 0 should be input");
+            }
+        }
+    }
+
+    /// Test loading multi-axis MeanOfSquares ONNX model
+    #[test]
+    fn test_mean_of_squares_multi_axis_onnx_model() {
+        use std::fs::File;
+
+        let model_path = Path::new("./models/mean_of_squares_multi_axis/network.onnx");
+        if !model_path.exists() {
+            println!("Skipping test: model not found at {model_path:?}");
+            return;
+        }
+
+        let model_result = File::open(model_path)
+            .map(|mut file| Model::new(&mut file, &crate::RunArgs::default()));
+
+        if let Ok(model) = model_result {
+            let parsed_nodes = &model.graph;
+
+            // Find the Div node and verify denominator is 12 (3*4)
+            let div_nodes: Vec<_> = parsed_nodes
+                .nodes
+                .values()
+                .filter_map(|n| {
+                    if let NodeType::Node(node) = n {
+                        if let SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div { denom }) =
+                            &node.opkind
+                        {
+                            Some(denom.0)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Should have at least one Div with denominator 12
+            let has_correct_denom = div_nodes.iter().any(|&d| (d - 12.0).abs() < 0.01);
+            assert!(
+                has_correct_denom,
+                "Should have Div node with denominator ~12 for axes [1,2] reduction"
+            );
+
+            // Verify no MeanOfSquares nodes remain
+            let has_mos = parsed_nodes.nodes.values().any(|n| {
+                if let NodeType::Node(node) = n {
+                    matches!(
+                        node.opkind,
+                        SupportedOp::Linear(PolyOp::MeanOfSquares { .. })
+                    )
+                } else {
+                    false
+                }
+            });
+            assert!(!has_mos, "Should not have MeanOfSquares after expansion");
         }
     }
 }

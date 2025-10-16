@@ -9,6 +9,7 @@ use std::{
     sync::Arc,
 };
 
+use crate::jolt::bytecode::CircuitFlags;
 use jolt_core::{
     field::JoltField,
     poly::{
@@ -18,7 +19,6 @@ use jolt_core::{
     utils::math::Math,
     zkvm::instruction::LookupQuery,
 };
-use onnx_tracer::trace_types::CircuitFlags;
 use rayon::iter::ParallelIterator;
 
 use crate::jolt::{JoltProverPreprocessing, trace::JoltONNXCycle};
@@ -62,6 +62,10 @@ pub enum CommittedPolynomial {
     InstructionRa(usize),
     /// One-hot ra polynomial for the bytecode instance of Shout
     BytecodeRa(usize),
+    /// Product of Ts1Value and OpFlags(CircuitFlags::Select)
+    SelectCond,
+    /// Product of TdWriteValue and OpFlags(CircuitFlags::Select)
+    SelectRes,
 }
 
 pub static mut ALL_COMMITTED_POLYNOMIALS: OnceCell<Vec<CommittedPolynomial>> = OnceCell::new();
@@ -72,6 +76,8 @@ struct WitnessData {
     right_instruction_input: Vec<i64>,
     product: Vec<u64>,
     write_lookup_output_to_td: Vec<u64>,
+    select_cond: Vec<u8>,
+    select_res: Vec<u64>,
     td_inc: Vec<i64>,
     td_inc_s: Vec<i64>,
 
@@ -92,7 +98,8 @@ impl WitnessData {
             write_lookup_output_to_td: vec![0; trace_len],
             td_inc: vec![0; trace_len],
             td_inc_s: vec![0; trace_len],
-
+            select_cond: vec![0; trace_len],
+            select_res: vec![0; trace_len],
             instruction_ra: [
                 vec![None; trace_len],
                 vec![None; trace_len],
@@ -115,6 +122,8 @@ impl AllCommittedPolynomials {
             CommittedPolynomial::LeftInstructionInput,
             CommittedPolynomial::RightInstructionInput,
             CommittedPolynomial::Product,
+            CommittedPolynomial::SelectCond,
+            CommittedPolynomial::SelectRes,
             CommittedPolynomial::WriteLookupOutputToTD,
             CommittedPolynomial::TdInc,
             CommittedPolynomial::TdIncS,
@@ -249,6 +258,7 @@ impl CommittedPolynomial {
                 let (left, right) = LookupQuery::<32>::to_instruction_inputs(cycle);
                 let circuit_flags = bytecode_line.circuit_flags();
                 let (td_write_flag, (pre_td, post_td)) = (bytecode_line.td, cycle.td_write());
+                let ts1_val = cycle.ts1_read();
 
                 batch_ref.left_instruction_input[i] = left;
                 batch_ref.right_instruction_input[i] = right;
@@ -256,6 +266,10 @@ impl CommittedPolynomial {
 
                 batch_ref.write_lookup_output_to_td[i] = td_write_flag
                     * (circuit_flags[CircuitFlags::WriteLookupOutputToTD as usize] as u8 as u64);
+                batch_ref.select_cond[i] =
+                    (ts1_val as u8) * (circuit_flags[CircuitFlags::Select as usize] as u8);
+                batch_ref.select_res[i] =
+                    (post_td) * (circuit_flags[CircuitFlags::Select as usize] as u8 as u64);
 
                 batch_ref.td_inc[i] = post_td as i64 - pre_td as i64;
                 batch_ref.td_inc_s[i] = post_td as i32 as i64 - pre_td as i32 as i64;
@@ -306,6 +320,14 @@ impl CommittedPolynomial {
                     let coeffs = std::mem::take(&mut batch.write_lookup_output_to_td);
                     results.insert(*poly, MultilinearPolynomial::<F>::from(coeffs));
                 }
+                CommittedPolynomial::SelectCond => {
+                    let coeffs = std::mem::take(&mut batch.select_cond);
+                    results.insert(*poly, MultilinearPolynomial::<F>::from(coeffs));
+                }
+                CommittedPolynomial::SelectRes => {
+                    let coeffs = std::mem::take(&mut batch.select_res);
+                    results.insert(*poly, MultilinearPolynomial::<F>::from(coeffs));
+                }
                 CommittedPolynomial::TdInc => {
                     let coeffs = std::mem::take(&mut batch.td_inc);
                     results.insert(*poly, MultilinearPolynomial::<F>::from(coeffs));
@@ -314,6 +336,7 @@ impl CommittedPolynomial {
                     let coeffs = std::mem::take(&mut batch.td_inc_s);
                     results.insert(*poly, MultilinearPolynomial::<F>::from(coeffs));
                 }
+
                 CommittedPolynomial::InstructionRa(i) => {
                     if *i < 8 {
                         let indices = std::mem::take(&mut batch.instruction_ra[*i]);
@@ -384,6 +407,30 @@ impl CommittedPolynomial {
                         let flag =
                             instr.circuit_flags()[CircuitFlags::WriteLookupOutputToTD as usize];
                         (instr.td) * (flag as u8 as u64)
+                    })
+                    .collect();
+                coeffs.into()
+            }
+            CommittedPolynomial::SelectCond => {
+                let coeffs: Vec<u8> = preprocessing
+                    .bytecode()
+                    .par_iter()
+                    .zip(trace.par_iter())
+                    .map(|(instr, cycle)| {
+                        let flag = instr.circuit_flags()[CircuitFlags::Select as usize];
+                        (cycle.ts1_read() as u8) * (flag as u8)
+                    })
+                    .collect();
+                coeffs.into()
+            }
+            CommittedPolynomial::SelectRes => {
+                let coeffs: Vec<u64> = preprocessing
+                    .bytecode()
+                    .par_iter()
+                    .zip(trace.par_iter())
+                    .map(|(instr, cycle)| {
+                        let flag = instr.circuit_flags()[CircuitFlags::Select as usize];
+                        (cycle.td_write().1) * (flag as u8 as u64)
                     })
                     .collect();
                 coeffs.into()
@@ -465,9 +512,11 @@ pub enum VirtualPolynomial {
     Imm,
     Ts1Value,
     Ts2Value,
+    Ts3Value,
     TdWriteValue,
     Ts1Ra,
     Ts2Ra,
+    Ts3Ra,
     TdWa,
     LookupOutput,
     InstructionRaf,

@@ -86,7 +86,7 @@ impl<F: TensorType + PartialOrd> From<&PolyOp<F>> for ONNXOpcode {
             PolyOp::Add => ONNXOpcode::Add,
             PolyOp::Sub => ONNXOpcode::Sub,
             PolyOp::Mult => ONNXOpcode::Mul,
-            PolyOp::Pow(_) => ONNXOpcode::Pow,
+            PolyOp::Pow(_) => ONNXOpcode::Mul,
             PolyOp::Einsum { .. } => ONNXOpcode::MatMult,
             PolyOp::Sum { .. } => ONNXOpcode::Sum,
             PolyOp::MeanOfSquares { .. } => ONNXOpcode::MeanOfSquares,
@@ -140,7 +140,7 @@ where
                 format!("MEANOFSQUARES (axes={axes:?})")
             }
             PolyOp::Prod { .. } => "PROD".into(),
-            PolyOp::Pow(_) => "POW".into(),
+            PolyOp::Pow(exponent) => format!("POW({exponent})"),
             PolyOp::Pack(_, _) => "PACK".into(),
             PolyOp::GlobalSumPool => "GLOBALSUMPOOL".into(),
             PolyOp::Conv { .. } => "CONV".into(),

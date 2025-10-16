@@ -43,20 +43,21 @@ struct DataBuffers<F: JoltField> {
     /// `ra[1]` contains
     ///     ra(k, j'', 1, r_i, ..., r_1)
     /// as we iterate over rows j' \in {0, 1}^(log(T) - i),
-    rs1_ra: [Vec<F>; 2],
-    rs2_ra: [Vec<F>; 2],
+    ts1_ra: [Vec<F>; 2],
+    ts2_ra: [Vec<F>; 2],
+    ts3_ra: [Vec<F>; 2],
     /// `wa[0]` contains
     ///     wa(k, j'', 0, r_i, ..., r_1)
     /// `wa[1]` contains
     ///     wa(k, j'', 1, r_i, ..., r_1)
     /// as we iterate over rows j' \in {0, 1}^(log(T) - i),
     /// where j'' are the higher (log(T) - i - 1) bits of j'
-    rd_wa: [Vec<F>; 2],
+    td_wa: [Vec<F>; 2],
     dirty_indices: Vec<usize>,
 }
 
 struct ReadWriteCheckingProverState<F: JoltField> {
-    addresses: Vec<(u64, u64, u64)>,
+    addresses: Vec<(u64, u64, u64, u64)>,
     chunk_size: usize,
     val_checkpoints: Vec<F>,
     data_buffers: Vec<DataBuffers<F>>,
@@ -67,9 +68,10 @@ struct ReadWriteCheckingProverState<F: JoltField> {
     // The following polynomials are instantiated after
     // the first phase
     eq_r_prime: Option<MultilinearPolynomial<F>>,
-    rs1_ra: Option<MultilinearPolynomial<F>>,
-    rs2_ra: Option<MultilinearPolynomial<F>>,
-    rd_wa: Option<MultilinearPolynomial<F>>,
+    ts1_ra: Option<MultilinearPolynomial<F>>,
+    ts2_ra: Option<MultilinearPolynomial<F>>,
+    ts3_ra: Option<MultilinearPolynomial<F>>,
+    td_wa: Option<MultilinearPolynomial<F>>,
     val: Option<MultilinearPolynomial<F>>,
 }
 
@@ -186,9 +188,10 @@ impl<F: JoltField> ReadWriteCheckingProverState<F> {
             .map(|_| DataBuffers {
                 val_j_0: Vec::with_capacity(K),
                 val_j_r: [unsafe_allocate_zero_vec(K), unsafe_allocate_zero_vec(K)],
-                rs1_ra: [unsafe_allocate_zero_vec(K), unsafe_allocate_zero_vec(K)],
-                rs2_ra: [unsafe_allocate_zero_vec(K), unsafe_allocate_zero_vec(K)],
-                rd_wa: [unsafe_allocate_zero_vec(K), unsafe_allocate_zero_vec(K)],
+                ts1_ra: [unsafe_allocate_zero_vec(K), unsafe_allocate_zero_vec(K)],
+                ts2_ra: [unsafe_allocate_zero_vec(K), unsafe_allocate_zero_vec(K)],
+                ts3_ra: [unsafe_allocate_zero_vec(K), unsafe_allocate_zero_vec(K)],
+                td_wa: [unsafe_allocate_zero_vec(K), unsafe_allocate_zero_vec(K)],
                 dirty_indices: Vec::with_capacity(K),
             })
             .collect();
@@ -196,7 +199,7 @@ impl<F: JoltField> ReadWriteCheckingProverState<F> {
         let addresses = preprocessing
             .bytecode()
             .par_iter()
-            .map(|instr| (instr.ts1, instr.ts2, instr.td))
+            .map(|instr| (instr.ts1, instr.ts2, instr.ts3, instr.td))
             .collect::<Vec<_>>();
 
         ReadWriteCheckingProverState {
@@ -209,9 +212,10 @@ impl<F: JoltField> ReadWriteCheckingProverState<F> {
             gruens_eq_r_prime,
             inc_cycle,
             eq_r_prime: None,
-            rs1_ra: None,
-            rs2_ra: None,
-            rd_wa: None,
+            ts1_ra: None,
+            ts2_ra: None,
+            ts3_ra: None,
+            td_wa: None,
             val: None,
         }
     }
@@ -220,18 +224,20 @@ impl<F: JoltField> ReadWriteCheckingProverState<F> {
 #[derive(CanonicalSerialize, CanonicalDeserialize, Debug, Clone, Default)]
 pub struct ReadWriteSumcheckClaims<F: JoltField> {
     pub val_claim: F,
-    pub rs1_ra_claim: F,
-    pub rs2_ra_claim: F,
-    pub rd_wa_claim: F,
+    pub ts1_ra_claim: F,
+    pub ts2_ra_claim: F,
+    pub ts3_ra_claim: F,
+    pub td_wa_claim: F,
     pub inc_claim: F,
 }
 
 /// Claims for register read/write values from Spartan
 #[derive(Debug, Clone, Default)]
 pub struct ReadWriteValueClaims<F: JoltField> {
-    pub rs1_rv_claim: F,
-    pub rs2_rv_claim: F,
-    pub rd_wv_claim: F,
+    pub ts1_rv_claim: F,
+    pub ts2_rv_claim: F,
+    pub ts3_rv_claim: F,
+    pub td_wv_claim: F,
 }
 
 pub struct RegistersReadWriteChecking<F: JoltField> {
@@ -239,6 +245,7 @@ pub struct RegistersReadWriteChecking<F: JoltField> {
     T: usize,
     gamma: F,
     gamma_sqr: F,
+    gamma_cube: F,
     sumcheck_switch_index: usize,
     prover_state: Option<ReadWriteCheckingProverState<F>>,
     input_claim: F,
@@ -257,20 +264,28 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
         let (preprocessing, trace, _) = state_manager.get_prover_data();
         let accumulator = state_manager.get_prover_accumulator();
 
-        let (r_cycle, rs1_rv_claim) = accumulator
+        let (r_cycle, ts1_rv_claim) = accumulator
             .borrow()
             .get_virtual_polynomial_opening(VirtualPolynomial::Ts1Value, SumcheckId::SpartanOuter);
-        let (_, rs2_rv_claim) = accumulator
+        let (_, ts2_rv_claim) = accumulator
             .borrow()
             .get_virtual_polynomial_opening(VirtualPolynomial::Ts2Value, SumcheckId::SpartanOuter);
-        let (_, rd_wv_claim) = accumulator.borrow().get_virtual_polynomial_opening(
+        let (_, ts3_rv_claim) = accumulator
+            .borrow()
+            .get_virtual_polynomial_opening(VirtualPolynomial::Ts3Value, SumcheckId::SpartanOuter);
+        let (_, td_wv_claim) = accumulator.borrow().get_virtual_polynomial_opening(
             VirtualPolynomial::TdWriteValue,
             SumcheckId::SpartanOuter,
         );
 
         let transcript = &mut *state_manager.transcript.borrow_mut();
         let gamma: F = transcript.challenge_scalar();
-        let input_claim = rd_wv_claim + gamma * rs1_rv_claim + gamma.square() * rs2_rv_claim;
+        let gamma_sqr = gamma.square();
+        let gamma_cube = gamma_sqr * gamma;
+        let input_claim = td_wv_claim
+            + gamma * ts1_rv_claim
+            + gamma_sqr * ts2_rv_claim
+            + gamma_cube * ts3_rv_claim;
 
         let prover_state =
             ReadWriteCheckingProverState::initialize(preprocessing, trace, &r_cycle.r);
@@ -279,7 +294,8 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
             K: preprocessing.memory_K(),
             T: trace.len(),
             gamma,
-            gamma_sqr: gamma.square(),
+            gamma_sqr,
+            gamma_cube,
             sumcheck_switch_index: state_manager.twist_sumcheck_switch_index,
             prover_state: Some(prover_state),
             input_claim,
@@ -292,26 +308,35 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
         let (_, _, trace_length) = state_manager.get_verifier_data();
         let accumulator = state_manager.get_verifier_accumulator();
 
-        let (_, rs1_rv_claim) = accumulator
+        let (_, ts1_rv_claim) = accumulator
             .borrow()
             .get_virtual_polynomial_opening(VirtualPolynomial::Ts1Value, SumcheckId::SpartanOuter);
-        let (_, rs2_rv_claim) = accumulator
+        let (_, ts2_rv_claim) = accumulator
             .borrow()
             .get_virtual_polynomial_opening(VirtualPolynomial::Ts2Value, SumcheckId::SpartanOuter);
-        let (_, rd_wv_claim) = accumulator.borrow().get_virtual_polynomial_opening(
+        let (_, ts3_rv_claim) = accumulator
+            .borrow()
+            .get_virtual_polynomial_opening(VirtualPolynomial::Ts3Value, SumcheckId::SpartanOuter);
+        let (_, td_wv_claim) = accumulator.borrow().get_virtual_polynomial_opening(
             VirtualPolynomial::TdWriteValue,
             SumcheckId::SpartanOuter,
         );
 
         let transcript = &mut *state_manager.transcript.borrow_mut();
         let gamma: F = transcript.challenge_scalar();
-        let input_claim = rd_wv_claim + gamma * rs1_rv_claim + gamma.square() * rs2_rv_claim;
+        let gamma_sqr = gamma.square();
+        let gamma_cube = gamma_sqr * gamma;
+        let input_claim = td_wv_claim
+            + gamma * ts1_rv_claim
+            + gamma_sqr * ts2_rv_claim
+            + gamma_cube * ts3_rv_claim;
 
         Self {
             K: state_manager.get_memory_K(),
             T: trace_length,
             gamma,
-            gamma_sqr: gamma.square(),
+            gamma_sqr,
+            gamma_cube,
             sumcheck_switch_index: state_manager.twist_sumcheck_switch_index,
             prover_state: None,
             input_claim,
@@ -343,9 +368,10 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
                     let DataBuffers {
                         val_j_0,
                         val_j_r,
-                        rs1_ra,
-                        rs2_ra,
-                        rd_wa,
+                        ts1_ra,
+                        ts2_ra,
+                        ts3_ra,
+                        td_wa,
                         dirty_indices,
                     } = buffers;
 
@@ -362,15 +388,19 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
 
                                 let k = addresses[j].0 as usize;
                                 dirty_indices.push(k);
-                                rs1_ra[0][k] += A[j_bound];
+                                ts1_ra[0][k] += A[j_bound];
 
                                 let k = addresses[j].1 as usize;
                                 dirty_indices.push(k);
-                                rs2_ra[0][k] += A[j_bound];
+                                ts2_ra[0][k] += A[j_bound];
 
                                 let k = addresses[j].2 as usize;
                                 dirty_indices.push(k);
-                                rd_wa[0][k] += A[j_bound];
+                                ts3_ra[0][k] += A[j_bound];
+
+                                let k = addresses[j].3 as usize;
+                                dirty_indices.push(k);
+                                td_wa[0][k] += A[j_bound];
                             }
 
                             for j in (j_prime + 1) << round..(j_prime + 2) << round {
@@ -378,15 +408,19 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
 
                                 let k = addresses[j].0 as usize;
                                 dirty_indices.push(k);
-                                rs1_ra[1][k] += A[j_bound];
+                                ts1_ra[1][k] += A[j_bound];
 
                                 let k = addresses[j].1 as usize;
                                 dirty_indices.push(k);
-                                rs2_ra[1][k] += A[j_bound];
+                                ts2_ra[1][k] += A[j_bound];
 
                                 let k = addresses[j].2 as usize;
                                 dirty_indices.push(k);
-                                rd_wa[1][k] += A[j_bound];
+                                ts3_ra[1][k] += A[j_bound];
+
+                                let k = addresses[j].3 as usize;
+                                dirty_indices.push(k);
+                                td_wa[1][k] += A[j_bound];
                             }
 
                             for &k in dirty_indices.iter() {
@@ -424,48 +458,61 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
                                 [inc_cycle_0, inc_cycle_infty]
                             };
 
-                            let mut rd_inner_sum_evals = [F::zero(); DEGREE - 1];
-                            let mut rs1_inner_sum_evals = [F::zero(); DEGREE - 1];
-                            let mut rs2_inner_sum_evals = [F::zero(); DEGREE - 1];
+                            let mut td_inner_sum_evals = [F::zero(); DEGREE - 1];
+                            let mut ts1_inner_sum_evals = [F::zero(); DEGREE - 1];
+                            let mut ts2_inner_sum_evals = [F::zero(); DEGREE - 1];
+                            let mut ts3_inner_sum_evals = [F::zero(); DEGREE - 1];
 
                             for k in dirty_indices.drain(..) {
                                 let val_evals = [val_j_r[0][k], val_j_r[1][k] - val_j_r[0][k]];
 
-                                // Check rd_wa and compute its contribution if non-zero
-                                if !rd_wa[0][k].is_zero() || !rd_wa[1][k].is_zero() {
-                                    let wa_evals = [rd_wa[0][k], rd_wa[1][k] - rd_wa[0][k]];
+                                // Check td_wa and compute its contribution if non-zero
+                                if !td_wa[0][k].is_zero() || !td_wa[1][k].is_zero() {
+                                    let wa_evals = [td_wa[0][k], td_wa[1][k] - td_wa[0][k]];
 
-                                    rd_inner_sum_evals[0] += wa_evals[0]
+                                    td_inner_sum_evals[0] += wa_evals[0]
                                         .mul_0_optimized(inc_cycle_evals[0] + val_evals[0]);
-                                    rd_inner_sum_evals[1] +=
+                                    td_inner_sum_evals[1] +=
                                         wa_evals[1] * (inc_cycle_evals[1] + val_evals[1]);
 
-                                    rd_wa[0][k] = F::zero();
-                                    rd_wa[1][k] = F::zero();
+                                    td_wa[0][k] = F::zero();
+                                    td_wa[1][k] = F::zero();
                                 }
 
-                                // Check rs1_ra and compute its contribution if non-zero
-                                if !rs1_ra[0][k].is_zero() || !rs1_ra[1][k].is_zero() {
-                                    let ra_evals_rs1 = [rs1_ra[0][k], rs1_ra[1][k] - rs1_ra[0][k]];
+                                // Check ts1_ra and compute its contribution if non-zero
+                                if !ts1_ra[0][k].is_zero() || !ts1_ra[1][k].is_zero() {
+                                    let ra_evals_ts1 = [ts1_ra[0][k], ts1_ra[1][k] - ts1_ra[0][k]];
 
-                                    rs1_inner_sum_evals[0] +=
-                                        ra_evals_rs1[0].mul_0_optimized(val_evals[0]);
-                                    rs1_inner_sum_evals[1] += ra_evals_rs1[1] * val_evals[1];
+                                    ts1_inner_sum_evals[0] +=
+                                        ra_evals_ts1[0].mul_0_optimized(val_evals[0]);
+                                    ts1_inner_sum_evals[1] += ra_evals_ts1[1] * val_evals[1];
 
-                                    rs1_ra[0][k] = F::zero();
-                                    rs1_ra[1][k] = F::zero();
+                                    ts1_ra[0][k] = F::zero();
+                                    ts1_ra[1][k] = F::zero();
                                 }
 
-                                // Check rs2_ra and compute its contribution if non-zero
-                                if !rs2_ra[0][k].is_zero() || !rs2_ra[1][k].is_zero() {
-                                    let ra_evals_rs2 = [rs2_ra[0][k], rs2_ra[1][k] - rs2_ra[0][k]];
+                                // Check ts2_ra and compute its contribution if non-zero
+                                if !ts2_ra[0][k].is_zero() || !ts2_ra[1][k].is_zero() {
+                                    let ra_evals_ts2 = [ts2_ra[0][k], ts2_ra[1][k] - ts2_ra[0][k]];
 
-                                    rs2_inner_sum_evals[0] +=
-                                        ra_evals_rs2[0].mul_0_optimized(val_evals[0]);
-                                    rs2_inner_sum_evals[1] += ra_evals_rs2[1] * val_evals[1];
+                                    ts2_inner_sum_evals[0] +=
+                                        ra_evals_ts2[0].mul_0_optimized(val_evals[0]);
+                                    ts2_inner_sum_evals[1] += ra_evals_ts2[1] * val_evals[1];
 
-                                    rs2_ra[0][k] = F::zero();
-                                    rs2_ra[1][k] = F::zero();
+                                    ts2_ra[0][k] = F::zero();
+                                    ts2_ra[1][k] = F::zero();
+                                }
+
+                                // Check ts3_ra and compute its contribution if non-zero
+                                if !ts3_ra[0][k].is_zero() || !ts3_ra[1][k].is_zero() {
+                                    let ra_evals_ts3 = [ts3_ra[0][k], ts3_ra[1][k] - ts3_ra[0][k]];
+
+                                    ts3_inner_sum_evals[0] +=
+                                        ra_evals_ts3[0].mul_0_optimized(val_evals[0]);
+                                    ts3_inner_sum_evals[1] += ra_evals_ts3[1] * val_evals[1];
+
+                                    ts3_ra[0][k] = F::zero();
+                                    ts3_ra[1][k] = F::zero();
                                 }
 
                                 val_j_r[0][k] = F::zero();
@@ -474,13 +521,15 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
                             dirty_indices.clear();
 
                             evals[0] += eq_r_prime_eval
-                                * (rd_inner_sum_evals[0]
-                                    + self.gamma * rs1_inner_sum_evals[0]
-                                    + self.gamma_sqr * rs2_inner_sum_evals[0]);
+                                * (td_inner_sum_evals[0]
+                                    + self.gamma * ts1_inner_sum_evals[0]
+                                    + self.gamma_sqr * ts2_inner_sum_evals[0]
+                                    + self.gamma_cube * ts3_inner_sum_evals[0]);
                             evals[1] += eq_r_prime_eval
-                                * (rd_inner_sum_evals[1]
-                                    + self.gamma * rs1_inner_sum_evals[1]
-                                    + self.gamma_sqr * rs2_inner_sum_evals[1]);
+                                * (td_inner_sum_evals[1]
+                                    + self.gamma * ts1_inner_sum_evals[1]
+                                    + self.gamma_sqr * ts2_inner_sum_evals[1]
+                                    + self.gamma_cube * ts3_inner_sum_evals[1]);
                         });
 
                     evals
@@ -506,9 +555,10 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
                     let DataBuffers {
                         val_j_0,
                         val_j_r,
-                        rs1_ra,
-                        rs2_ra,
-                        rd_wa,
+                        ts1_ra,
+                        ts2_ra,
+                        ts3_ra,
+                        td_wa,
                         dirty_indices,
                     } = buffers;
                     *val_j_0 = checkpoint.to_vec();
@@ -524,15 +574,19 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
 
                                 let k = addresses[j].0;
                                 dirty_indices.push(k as usize);
-                                rs1_ra[0][k as usize] += A[j_bound];
+                                ts1_ra[0][k as usize] += A[j_bound];
 
                                 let k = addresses[j].1;
                                 dirty_indices.push(k as usize);
-                                rs2_ra[0][k as usize] += A[j_bound];
+                                ts2_ra[0][k as usize] += A[j_bound];
 
                                 let k = addresses[j].2;
                                 dirty_indices.push(k as usize);
-                                rd_wa[0][k as usize] += A[j_bound];
+                                ts3_ra[0][k as usize] += A[j_bound];
+
+                                let k = addresses[j].3;
+                                dirty_indices.push(k as usize);
+                                td_wa[0][k as usize] += A[j_bound];
                             }
 
                             for j in (j_prime + 1) << round..(j_prime + 2) << round {
@@ -540,15 +594,19 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
 
                                 let k = addresses[j].0;
                                 dirty_indices.push(k as usize);
-                                rs1_ra[1][k as usize] += A[j_bound];
+                                ts1_ra[1][k as usize] += A[j_bound];
 
                                 let k = addresses[j].1;
                                 dirty_indices.push(k as usize);
-                                rs2_ra[1][k as usize] += A[j_bound];
+                                ts2_ra[1][k as usize] += A[j_bound];
 
                                 let k = addresses[j].2;
                                 dirty_indices.push(k as usize);
-                                rd_wa[1][k as usize] += A[j_bound];
+                                ts2_ra[1][k as usize] += A[j_bound];
+
+                                let k = addresses[j].3;
+                                dirty_indices.push(k as usize);
+                                td_wa[1][k as usize] += A[j_bound];
                             }
 
                             for &k in dirty_indices.iter() {
@@ -607,48 +665,61 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
                                 _ => (),
                             }
 
-                            let mut rd_inner_sum_evals = [F::zero(); DEGREE - 1];
-                            let mut rs1_inner_sum_evals = [F::zero(); DEGREE - 1];
-                            let mut rs2_inner_sum_evals = [F::zero(); DEGREE - 1];
+                            let mut td_inner_sum_evals = [F::zero(); DEGREE - 1];
+                            let mut ts1_inner_sum_evals = [F::zero(); DEGREE - 1];
+                            let mut ts2_inner_sum_evals = [F::zero(); DEGREE - 1];
+                            let mut ts3_inner_sum_evals = [F::zero(); DEGREE - 1];
 
                             for k in dirty_indices.drain(..) {
                                 let val_evals = [val_j_r[0][k], val_j_r[1][k] - val_j_r[0][k]];
 
-                                // Check rd_wa and compute its contribution if non-zero
-                                if !rd_wa[0][k].is_zero() || !rd_wa[1][k].is_zero() {
-                                    let wa_evals = [rd_wa[0][k], rd_wa[1][k] - rd_wa[0][k]];
+                                // Check td_wa and compute its contribution if non-zero
+                                if !td_wa[0][k].is_zero() || !td_wa[1][k].is_zero() {
+                                    let wa_evals = [td_wa[0][k], td_wa[1][k] - td_wa[0][k]];
 
-                                    rd_inner_sum_evals[0] += wa_evals[0]
+                                    td_inner_sum_evals[0] += wa_evals[0]
                                         .mul_0_optimized(inc_cycle_evals[0] + val_evals[0]);
-                                    rd_inner_sum_evals[1] +=
+                                    td_inner_sum_evals[1] +=
                                         wa_evals[1] * (inc_cycle_evals[1] + val_evals[1]);
 
-                                    rd_wa[0][k] = F::zero();
-                                    rd_wa[1][k] = F::zero();
+                                    td_wa[0][k] = F::zero();
+                                    td_wa[1][k] = F::zero();
                                 }
 
-                                // Check rs1_ra and compute its contribution if non-zero
-                                if !rs1_ra[0][k].is_zero() || !rs1_ra[1][k].is_zero() {
-                                    let ra_evals_rs1 = [rs1_ra[0][k], rs1_ra[1][k] - rs1_ra[0][k]];
+                                // Check ts1_ra and compute its contribution if non-zero
+                                if !ts1_ra[0][k].is_zero() || !ts1_ra[1][k].is_zero() {
+                                    let ra_evals_ts1 = [ts1_ra[0][k], ts1_ra[1][k] - ts1_ra[0][k]];
 
-                                    rs1_inner_sum_evals[0] +=
-                                        ra_evals_rs1[0].mul_0_optimized(val_evals[0]);
-                                    rs1_inner_sum_evals[1] += ra_evals_rs1[1] * val_evals[1];
+                                    ts1_inner_sum_evals[0] +=
+                                        ra_evals_ts1[0].mul_0_optimized(val_evals[0]);
+                                    ts1_inner_sum_evals[1] += ra_evals_ts1[1] * val_evals[1];
 
-                                    rs1_ra[0][k] = F::zero();
-                                    rs1_ra[1][k] = F::zero();
+                                    ts1_ra[0][k] = F::zero();
+                                    ts1_ra[1][k] = F::zero();
                                 }
 
-                                // Check rs2_ra and compute its contribution if non-zero
-                                if !rs2_ra[0][k].is_zero() || !rs2_ra[1][k].is_zero() {
-                                    let ra_evals_rs2 = [rs2_ra[0][k], rs2_ra[1][k] - rs2_ra[0][k]];
+                                // Check ts2_ra and compute its contribution if non-zero
+                                if !ts2_ra[0][k].is_zero() || !ts2_ra[1][k].is_zero() {
+                                    let ra_evals_ts2 = [ts2_ra[0][k], ts2_ra[1][k] - ts2_ra[0][k]];
 
-                                    rs2_inner_sum_evals[0] +=
-                                        ra_evals_rs2[0].mul_0_optimized(val_evals[0]);
-                                    rs2_inner_sum_evals[1] += ra_evals_rs2[1] * val_evals[1];
+                                    ts2_inner_sum_evals[0] +=
+                                        ra_evals_ts2[0].mul_0_optimized(val_evals[0]);
+                                    ts2_inner_sum_evals[1] += ra_evals_ts2[1] * val_evals[1];
 
-                                    rs2_ra[0][k] = F::zero();
-                                    rs2_ra[1][k] = F::zero();
+                                    ts2_ra[0][k] = F::zero();
+                                    ts2_ra[1][k] = F::zero();
+                                }
+
+                                // Check ts3_ra and compute its contribution if non-zero
+                                if !ts3_ra[0][k].is_zero() || !ts3_ra[1][k].is_zero() {
+                                    let ra_evals_ts3 = [ts3_ra[0][k], ts3_ra[1][k] - ts3_ra[0][k]];
+
+                                    ts3_inner_sum_evals[0] +=
+                                        ra_evals_ts3[0].mul_0_optimized(val_evals[0]);
+                                    ts3_inner_sum_evals[1] += ra_evals_ts3[1] * val_evals[1];
+
+                                    ts3_ra[0][k] = F::zero();
+                                    ts3_ra[1][k] = F::zero();
                                 }
 
                                 val_j_r[0][k] = F::zero();
@@ -657,13 +728,15 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
                             dirty_indices.clear();
 
                             evals_for_current_E_out[0] += E_in_eval
-                                * (rd_inner_sum_evals[0]
-                                    + self.gamma * rs1_inner_sum_evals[0]
-                                    + self.gamma_sqr * rs2_inner_sum_evals[0]);
+                                * (td_inner_sum_evals[0]
+                                    + self.gamma * ts1_inner_sum_evals[0]
+                                    + self.gamma_sqr * ts2_inner_sum_evals[0]
+                                    + self.gamma_cube * ts3_inner_sum_evals[0]);
                             evals_for_current_E_out[1] += E_in_eval
-                                * (rd_inner_sum_evals[1]
-                                    + self.gamma * rs1_inner_sum_evals[1]
-                                    + self.gamma_sqr * rs2_inner_sum_evals[1]);
+                                * (td_inner_sum_evals[1]
+                                    + self.gamma * ts1_inner_sum_evals[1]
+                                    + self.gamma_sqr * ts2_inner_sum_evals[1]
+                                    + self.gamma_cube * ts3_inner_sum_evals[1]);
                         });
 
                     // Multiply the final running sum by the final value of E_out_eval and add the
@@ -693,15 +766,17 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
         let ReadWriteCheckingProverState {
             inc_cycle,
             eq_r_prime,
-            rs1_ra,
-            rs2_ra,
-            rd_wa,
+            ts1_ra,
+            ts2_ra,
+            ts3_ra,
+            td_wa,
             val,
             ..
         } = self.prover_state.as_ref().unwrap();
-        let rs1_ra = rs1_ra.as_ref().unwrap();
-        let rs2_ra = rs2_ra.as_ref().unwrap();
-        let rd_wa = rd_wa.as_ref().unwrap();
+        let ts1_ra = ts1_ra.as_ref().unwrap();
+        let ts2_ra = ts2_ra.as_ref().unwrap();
+        let ts3_ra = ts3_ra.as_ref().unwrap();
+        let td_wa = td_wa.as_ref().unwrap();
         let val = val.as_ref().unwrap();
         let eq_r_prime = eq_r_prime.as_ref().unwrap();
 
@@ -717,25 +792,30 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
                     .into_par_iter()
                     .map(|k| {
                         let index = j * self.K + k;
-                        let rs1_ra_evals =
-                            rs1_ra.sumcheck_evals_array::<DEGREE>(index, BindingOrder::HighToLow);
-                        let rs2_ra_evals =
-                            rs2_ra.sumcheck_evals_array::<DEGREE>(index, BindingOrder::HighToLow);
+                        let ts1_ra_evals =
+                            ts1_ra.sumcheck_evals_array::<DEGREE>(index, BindingOrder::HighToLow);
+                        let ts2_ra_evals =
+                            ts2_ra.sumcheck_evals_array::<DEGREE>(index, BindingOrder::HighToLow);
+                        let ts3_ra_evals =
+                            ts3_ra.sumcheck_evals_array::<DEGREE>(index, BindingOrder::HighToLow);
                         let wa_evals =
-                            rd_wa.sumcheck_evals_array::<DEGREE>(index, BindingOrder::HighToLow);
+                            td_wa.sumcheck_evals_array::<DEGREE>(index, BindingOrder::HighToLow);
                         let val_evals =
                             val.sumcheck_evals_array::<DEGREE>(index, BindingOrder::HighToLow);
 
                         [
                             wa_evals[0].mul_0_optimized(inc_evals[0] + val_evals[0])
-                                + self.gamma * rs1_ra_evals[0].mul_0_optimized(val_evals[0])
-                                + self.gamma_sqr * rs2_ra_evals[0].mul_0_optimized(val_evals[0]),
+                                + self.gamma * ts1_ra_evals[0].mul_0_optimized(val_evals[0])
+                                + self.gamma_sqr * ts2_ra_evals[0].mul_0_optimized(val_evals[0])
+                                + self.gamma_cube * ts3_ra_evals[0].mul_0_optimized(val_evals[0]),
                             wa_evals[1].mul_0_optimized(inc_evals[1] + val_evals[1])
-                                + self.gamma * rs1_ra_evals[1].mul_0_optimized(val_evals[1])
-                                + self.gamma_sqr * rs2_ra_evals[1].mul_0_optimized(val_evals[1]),
+                                + self.gamma * ts1_ra_evals[1].mul_0_optimized(val_evals[1])
+                                + self.gamma_sqr * ts2_ra_evals[1].mul_0_optimized(val_evals[1])
+                                + self.gamma_cube * ts3_ra_evals[1].mul_0_optimized(val_evals[1]),
                             wa_evals[2].mul_0_optimized(inc_evals[2] + val_evals[2])
-                                + self.gamma * rs1_ra_evals[2].mul_0_optimized(val_evals[2])
-                                + self.gamma_sqr * rs2_ra_evals[2].mul_0_optimized(val_evals[2]),
+                                + self.gamma * ts1_ra_evals[2].mul_0_optimized(val_evals[2])
+                                + self.gamma_sqr * ts2_ra_evals[2].mul_0_optimized(val_evals[2])
+                                + self.gamma_cube * ts3_ra_evals[2].mul_0_optimized(val_evals[2]),
                         ]
                     })
                     .reduce(
@@ -775,15 +855,17 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
         let ReadWriteCheckingProverState {
             inc_cycle,
             eq_r_prime,
-            rs1_ra,
-            rs2_ra,
-            rd_wa,
+            ts1_ra,
+            ts2_ra,
+            ts3_ra,
+            td_wa,
             val,
             ..
         } = self.prover_state.as_ref().unwrap();
-        let rs1_ra = rs1_ra.as_ref().unwrap();
-        let rs2_ra = rs2_ra.as_ref().unwrap();
-        let rd_wa = rd_wa.as_ref().unwrap();
+        let ts1_ra = ts1_ra.as_ref().unwrap();
+        let ts2_ra = ts2_ra.as_ref().unwrap();
+        let ts3_ra = ts3_ra.as_ref().unwrap();
+        let td_wa = td_wa.as_ref().unwrap();
         let val = val.as_ref().unwrap();
 
         // Cycle variables are fully bound, so:
@@ -792,26 +874,31 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
         // ...and Inc(r_cycle) is a constant
         let inc_eval = inc_cycle.final_sumcheck_claim();
 
-        let evals = (0..rs1_ra.len() / 2)
+        let evals = (0..ts1_ra.len() / 2)
             .into_par_iter()
             .map(|k| {
-                let rs1_ra_evals =
-                    rs1_ra.sumcheck_evals_array::<DEGREE>(k, BindingOrder::HighToLow);
-                let rs2_ra_evals =
-                    rs2_ra.sumcheck_evals_array::<DEGREE>(k, BindingOrder::HighToLow);
-                let wa_evals = rd_wa.sumcheck_evals_array::<DEGREE>(k, BindingOrder::HighToLow);
+                let ts1_ra_evals =
+                    ts1_ra.sumcheck_evals_array::<DEGREE>(k, BindingOrder::HighToLow);
+                let ts2_ra_evals =
+                    ts2_ra.sumcheck_evals_array::<DEGREE>(k, BindingOrder::HighToLow);
+                let ts3_ra_evals =
+                    ts3_ra.sumcheck_evals_array::<DEGREE>(k, BindingOrder::HighToLow);
+                let wa_evals = td_wa.sumcheck_evals_array::<DEGREE>(k, BindingOrder::HighToLow);
                 let val_evals = val.sumcheck_evals_array::<DEGREE>(k, BindingOrder::HighToLow);
 
                 [
                     wa_evals[0] * (inc_eval + val_evals[0])
-                        + self.gamma * rs1_ra_evals[0] * val_evals[0]
-                        + self.gamma_sqr * rs2_ra_evals[0] * val_evals[0],
+                        + self.gamma * ts1_ra_evals[0] * val_evals[0]
+                        + self.gamma_sqr * ts2_ra_evals[0] * val_evals[0]
+                        + self.gamma_cube * ts3_ra_evals[0] * val_evals[0],
                     wa_evals[1] * (inc_eval + val_evals[1])
-                        + self.gamma * rs1_ra_evals[1] * val_evals[1]
-                        + self.gamma_sqr * rs2_ra_evals[1] * val_evals[1],
+                        + self.gamma * ts1_ra_evals[1] * val_evals[1]
+                        + self.gamma_sqr * ts2_ra_evals[1] * val_evals[1]
+                        + self.gamma_cube * ts3_ra_evals[1] * val_evals[1],
                     wa_evals[2] * (inc_eval + val_evals[2])
-                        + self.gamma * rs1_ra_evals[2] * val_evals[2]
-                        + self.gamma_sqr * rs2_ra_evals[2] * val_evals[2],
+                        + self.gamma * ts1_ra_evals[2] * val_evals[2]
+                        + self.gamma_sqr * ts2_ra_evals[2] * val_evals[2]
+                        + self.gamma_cube * ts3_ra_evals[2] * val_evals[2],
                 ]
             })
             .reduce(
@@ -842,9 +929,10 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
             eq_r_prime,
             chunk_size,
             val_checkpoints,
-            rs1_ra,
-            rs2_ra,
-            rd_wa,
+            ts1_ra,
+            ts2_ra,
+            ts3_ra,
+            td_wa,
             val,
             ..
         } = self.prover_state.as_mut().unwrap();
@@ -911,12 +999,12 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
             let _guard = span.enter();
 
             let num_chunks = addresses.len() / *chunk_size;
-            let mut rs1_ra_evals: Vec<F> = unsafe_allocate_zero_vec(self.K * num_chunks);
-            rs1_ra_evals
+            let mut ts1_ra_evals: Vec<F> = unsafe_allocate_zero_vec(self.K * num_chunks);
+            ts1_ra_evals
                 .par_chunks_mut(self.K)
                 .enumerate()
                 .for_each(|(chunk_index, ra_chunk)| {
-                    for (j_bound, (k, _, _)) in addresses
+                    for (j_bound, (k, _, _, _)) in addresses
                         [chunk_index * *chunk_size..(chunk_index + 1) * *chunk_size]
                         .iter()
                         .enumerate()
@@ -924,7 +1012,7 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
                         ra_chunk[*k as usize] += A[j_bound];
                     }
                 });
-            *rs1_ra = Some(MultilinearPolynomial::from(rs1_ra_evals));
+            *ts1_ra = Some(MultilinearPolynomial::from(ts1_ra_evals));
 
             drop(_guard);
             drop(span);
@@ -933,12 +1021,12 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
             let _guard = span.enter();
 
             let num_chunks = addresses.len() / *chunk_size;
-            let mut rs2_ra_evals: Vec<F> = unsafe_allocate_zero_vec(self.K * num_chunks);
-            rs2_ra_evals
+            let mut ts2_ra_evals: Vec<F> = unsafe_allocate_zero_vec(self.K * num_chunks);
+            ts2_ra_evals
                 .par_chunks_mut(self.K)
                 .enumerate()
                 .for_each(|(chunk_index, ra_chunk)| {
-                    for (j_bound, (_, k, _)) in addresses
+                    for (j_bound, (_, k, _, _)) in addresses
                         [chunk_index * *chunk_size..(chunk_index + 1) * *chunk_size]
                         .iter()
                         .enumerate()
@@ -946,7 +1034,29 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
                         ra_chunk[*k as usize] += A[j_bound];
                     }
                 });
-            *rs2_ra = Some(MultilinearPolynomial::from(rs2_ra_evals));
+            *ts2_ra = Some(MultilinearPolynomial::from(ts2_ra_evals));
+
+            drop(_guard);
+            drop(span);
+
+            let span = tracing::span!(tracing::Level::INFO, "Materialize ts2_ra polynomial");
+            let _guard = span.enter();
+
+            let num_chunks = addresses.len() / *chunk_size;
+            let mut ts3_ra_evals: Vec<F> = unsafe_allocate_zero_vec(self.K * num_chunks);
+            ts3_ra_evals
+                .par_chunks_mut(self.K)
+                .enumerate()
+                .for_each(|(chunk_index, ra_chunk)| {
+                    for (j_bound, (_, _, k, _)) in addresses
+                        [chunk_index * *chunk_size..(chunk_index + 1) * *chunk_size]
+                        .iter()
+                        .enumerate()
+                    {
+                        ra_chunk[*k as usize] += A[j_bound];
+                    }
+                });
+            *ts3_ra = Some(MultilinearPolynomial::from(ts3_ra_evals));
 
             drop(_guard);
             drop(span);
@@ -955,12 +1065,12 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
             let _guard = span.enter();
 
             let num_chunks = addresses.len() / *chunk_size;
-            let mut rd_wa_evals: Vec<F> = unsafe_allocate_zero_vec(self.K * num_chunks);
-            rd_wa_evals
+            let mut td_wa_evals: Vec<F> = unsafe_allocate_zero_vec(self.K * num_chunks);
+            td_wa_evals
                 .par_chunks_mut(self.K)
                 .enumerate()
                 .for_each(|(chunk_index, wa_chunk)| {
-                    for (j_bound, (_, _, k)) in addresses
+                    for (j_bound, (_, _, _, k)) in addresses
                         [chunk_index * *chunk_size..(chunk_index + 1) * *chunk_size]
                         .iter()
                         .enumerate()
@@ -968,7 +1078,7 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
                         wa_chunk[*k as usize] += A[j_bound];
                     }
                 });
-            *rd_wa = Some(MultilinearPolynomial::from(rd_wa_evals));
+            *td_wa = Some(MultilinearPolynomial::from(td_wa_evals));
 
             drop(_guard);
             drop(span);
@@ -1006,41 +1116,45 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
 
     fn phase2_bind(&mut self, r_j: F) {
         let ReadWriteCheckingProverState {
-            rs1_ra,
-            rs2_ra,
-            rd_wa,
+            ts1_ra,
+            ts2_ra,
+            ts3_ra,
+            td_wa,
             val,
             inc_cycle,
             eq_r_prime,
             ..
         } = self.prover_state.as_mut().unwrap();
-        let rs1_ra = rs1_ra.as_mut().unwrap();
-        let rs2_ra = rs2_ra.as_mut().unwrap();
-        let rd_wa = rd_wa.as_mut().unwrap();
+        let ts1_ra = ts1_ra.as_mut().unwrap();
+        let ts2_ra = ts2_ra.as_mut().unwrap();
+        let ts3_ra = ts3_ra.as_mut().unwrap();
+        let td_wa = td_wa.as_mut().unwrap();
         let val = val.as_mut().unwrap();
         let eq_r_prime = eq_r_prime.as_mut().unwrap();
 
-        [rs1_ra, rs2_ra, rd_wa, val, inc_cycle, eq_r_prime]
+        [ts1_ra, ts2_ra, ts3_ra, td_wa, val, inc_cycle, eq_r_prime]
             .into_par_iter()
             .for_each(|poly| poly.bind_parallel(r_j, BindingOrder::HighToLow));
     }
 
     fn phase3_bind(&mut self, r_j: F) {
         let ReadWriteCheckingProverState {
-            rs1_ra,
-            rs2_ra,
-            rd_wa,
+            ts1_ra,
+            ts2_ra,
+            ts3_ra,
+            td_wa,
             val,
             ..
         } = self.prover_state.as_mut().unwrap();
-        let rs1_ra = rs1_ra.as_mut().unwrap();
-        let rs2_ra = rs2_ra.as_mut().unwrap();
-        let rd_wa = rd_wa.as_mut().unwrap();
+        let ts1_ra = ts1_ra.as_mut().unwrap();
+        let ts2_ra = ts2_ra.as_mut().unwrap();
+        let ts3_ra = ts3_ra.as_mut().unwrap();
+        let td_wa = td_wa.as_mut().unwrap();
         let val = val.as_mut().unwrap();
 
         // Note that `eq_r_prime` and `inc` are polynomials over only the cycle
         // variables, so they are not bound here
-        [rs1_ra, rs2_ra, rd_wa, val]
+        [ts1_ra, ts2_ra, ts3_ra, td_wa, val]
             .into_par_iter()
             .for_each(|poly| poly.bind_parallel(r_j, BindingOrder::HighToLow));
     }
@@ -1107,15 +1221,19 @@ impl<F: JoltField> SumcheckInstance<F> for RegistersReadWriteChecking<F> {
             VirtualPolynomial::RegistersVal,
             SumcheckId::RegistersReadWriteChecking,
         );
-        let (_, rs1_ra_claim) = accumulator.borrow().get_virtual_polynomial_opening(
+        let (_, ts1_ra_claim) = accumulator.borrow().get_virtual_polynomial_opening(
             VirtualPolynomial::Ts1Ra,
             SumcheckId::RegistersReadWriteChecking,
         );
-        let (_, rs2_ra_claim) = accumulator.borrow().get_virtual_polynomial_opening(
+        let (_, ts2_ra_claim) = accumulator.borrow().get_virtual_polynomial_opening(
             VirtualPolynomial::Ts2Ra,
             SumcheckId::RegistersReadWriteChecking,
         );
-        let (_, rd_wa_claim) = accumulator.borrow().get_virtual_polynomial_opening(
+        let (_, ts3_ra_claim) = accumulator.borrow().get_virtual_polynomial_opening(
+            VirtualPolynomial::Ts3Ra,
+            SumcheckId::RegistersReadWriteChecking,
+        );
+        let (_, td_wa_claim) = accumulator.borrow().get_virtual_polynomial_opening(
             VirtualPolynomial::TdWa,
             SumcheckId::RegistersReadWriteChecking,
         );
@@ -1125,9 +1243,10 @@ impl<F: JoltField> SumcheckInstance<F> for RegistersReadWriteChecking<F> {
         );
 
         eq_eval_cycle
-            * (rd_wa_claim * (inc_claim + val_claim)
-                + self.gamma * rs1_ra_claim * val_claim
-                + self.gamma_sqr * rs2_ra_claim * val_claim)
+            * (td_wa_claim * (inc_claim + val_claim)
+                + self.gamma * ts1_ra_claim * val_claim
+                + self.gamma_sqr * ts2_ra_claim * val_claim
+                + self.gamma_cube * ts3_ra_claim * val_claim)
     }
 
     fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -1152,9 +1271,10 @@ impl<F: JoltField> SumcheckInstance<F> for RegistersReadWriteChecking<F> {
             .expect("Prover state not initialized");
 
         let val_claim = prover_state.val.as_ref().unwrap().final_sumcheck_claim();
-        let rs1_ra_claim = prover_state.rs1_ra.as_ref().unwrap().final_sumcheck_claim();
-        let rs2_ra_claim = prover_state.rs2_ra.as_ref().unwrap().final_sumcheck_claim();
-        let rd_wa_claim = prover_state.rd_wa.as_ref().unwrap().final_sumcheck_claim();
+        let ts1_ra_claim = prover_state.ts1_ra.as_ref().unwrap().final_sumcheck_claim();
+        let ts2_ra_claim = prover_state.ts2_ra.as_ref().unwrap().final_sumcheck_claim();
+        let ts3_ra_claim = prover_state.ts3_ra.as_ref().unwrap().final_sumcheck_claim();
+        let td_wa_claim = prover_state.td_wa.as_ref().unwrap().final_sumcheck_claim();
         let inc_claim = prover_state.inc_cycle.final_sumcheck_claim();
 
         accumulator.borrow_mut().append_virtual(
@@ -1167,19 +1287,25 @@ impl<F: JoltField> SumcheckInstance<F> for RegistersReadWriteChecking<F> {
             VirtualPolynomial::Ts1Ra,
             SumcheckId::RegistersReadWriteChecking,
             opening_point.clone(),
-            rs1_ra_claim,
+            ts1_ra_claim,
         );
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::Ts2Ra,
             SumcheckId::RegistersReadWriteChecking,
             opening_point.clone(),
-            rs2_ra_claim,
+            ts2_ra_claim,
+        );
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::Ts3Ra,
+            SumcheckId::RegistersReadWriteChecking,
+            opening_point.clone(),
+            ts3_ra_claim,
         );
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::TdWa,
             SumcheckId::RegistersReadWriteChecking,
             opening_point.clone(),
-            rd_wa_claim,
+            td_wa_claim,
         );
 
         let (_, r_cycle) = opening_point.split_at(self.K.log_2());

@@ -1,5 +1,6 @@
 #![allow(clippy::extra_unused_lifetimes)]
 use crate::jolt::{
+    bytecode::InterleavedBitsMarker,
     dag::state_manager::StateManager,
     executor::instructions::InstructionLookup,
     lookup_table::{
@@ -36,7 +37,6 @@ use jolt_core::{
         instruction_lookups::{LOG_K, LOG_M, M, PHASES},
     },
 };
-use onnx_tracer::trace_types::InterleavedBitsMarker;
 use rayon::prelude::*;
 use std::{cell::RefCell, rc::Rc};
 use strum::{EnumCount, IntoEnumIterator};

@@ -244,6 +244,7 @@ fn create_jolt_cycle(
     let memory_ops = MemoryOps::new(
         tensor_values.ts1_vals[element_index],
         tensor_values.ts2_vals[element_index],
+        tensor_values.ts3_vals[element_index],
         tensor_values.td_pre_vals[element_index],
         tensor_values.td_post_vals[element_index],
     );
@@ -267,6 +268,8 @@ struct TensorValues {
     ts1_vals: Vec<u64>,
     /// Source tensor 2 values for each active element  
     ts2_vals: Vec<u64>,
+    /// Source tensor 3 values for each active element  
+    ts3_vals: Vec<u64>,
     /// Destination tensor pre-operation values for each active element
     td_pre_vals: Vec<u64>,
     /// Destination tensor post-operation values for each active element
@@ -293,8 +296,8 @@ impl TensorValues {
     /// operations use a different memory consistency check (MCC) pattern and are
     /// handled separately from other element-wise operations.
     fn from_cycle(raw_cycle: &ONNXCycle, size: usize) -> Self {
-        let (ts1_vals, ts2_vals) = match raw_cycle.instr.opcode {
-            ONNXOpcode::MatMult | ONNXOpcode::Sum => (vec![0; size], vec![0; size]),
+        let (ts1_vals, ts2_vals, ts3_vals) = match raw_cycle.instr.opcode {
+            ONNXOpcode::MatMult | ONNXOpcode::Sum => (vec![0; size], vec![0; size], vec![0; size]),
             ONNXOpcode::Broadcast => {
                 // broadcast ts1
                 let mut ts1 = raw_cycle
@@ -305,17 +308,19 @@ impl TensorValues {
                 ts1 = ts1
                     .expand(&raw_cycle.instr.output_dims)
                     .expect("Expand should always work for broadcast cycles");
-                (tensor_to_u64s(&ts1), vec![0; size])
+                (tensor_to_u64s(&ts1), vec![0; size], vec![0; size])
             }
             _ => (
                 raw_cycle.ts1_vals().unwrap_or_else(|| vec![0; size]),
                 raw_cycle.ts2_vals().unwrap_or_else(|| vec![0; size]),
+                raw_cycle.ts3_vals().unwrap_or_else(|| vec![0; size]),
             ),
         };
 
         Self {
             ts1_vals,
             ts2_vals,
+            ts3_vals,
             td_pre_vals: raw_cycle.td_pre_vals().unwrap_or_else(|| vec![0; size]),
             td_post_vals: raw_cycle.td_post_vals().unwrap_or_else(|| vec![0; size]),
             advice_vals: raw_cycle.advice_value(),
@@ -474,6 +479,11 @@ impl JoltONNXCycle {
         self.memory_ops.ts2_val
     }
 
+    /// Returns the value read from the third source tensor register (ts3).
+    pub fn ts3_read(&self) -> u64 {
+        self.memory_ops.ts3_val
+    }
+
     /// Returns the destination tensor write values.
     ///
     /// # Returns
@@ -580,6 +590,8 @@ pub struct MemoryOps {
     ts1_val: u64,
     /// Value read from the second source tensor register (ts2)  
     ts2_val: u64,
+    /// Value read from the third source tensor register (ts3)
+    ts3_val: u64,
     /// Value in the destination tensor register before the operation
     td_pre_val: u64,
     /// Value in the destination tensor register after the operation
@@ -595,10 +607,17 @@ impl MemoryOps {
     /// * `ts2_val` - Value for the second source tensor register
     /// * `td_pre_val` - Value in destination register before operation
     /// * `td_post_val` - Value in destination register after operation
-    pub fn new(ts1_val: u64, ts2_val: u64, td_pre_val: u64, td_post_val: u64) -> Self {
+    pub fn new(
+        ts1_val: u64,
+        ts2_val: u64,
+        ts3_val: u64,
+        td_pre_val: u64,
+        td_post_val: u64,
+    ) -> Self {
         Self {
             ts1_val,
             ts2_val,
+            ts3_val,
             td_pre_val,
             td_post_val,
         }
@@ -616,6 +635,7 @@ impl MemoryOps {
     pub fn random(rng: &mut rand::rngs::StdRng) -> Self {
         use rand::RngCore;
         Self::new(
+            rng.next_u64(),
             rng.next_u64(),
             rng.next_u64(),
             rng.next_u64(),

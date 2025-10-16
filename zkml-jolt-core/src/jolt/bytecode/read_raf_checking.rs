@@ -1,13 +1,12 @@
 use crate::jolt::{
+    bytecode::{CircuitFlags, InterleavedBitsMarker, NUM_CIRCUIT_FLAGS},
     dag::state_manager::StateManager,
+    executor::instructions::InstructionLookup,
+    lookup_table::{LookupTables, NUM_LOOKUP_TABLES},
     pcs::{ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
     sumcheck::SumcheckInstance,
     trace::WORD_SIZE,
     witness::{CommittedPolynomial, VirtualPolynomial},
-};
-use crate::jolt::{
-    executor::instructions::InstructionLookup,
-    lookup_table::{LookupTables, NUM_LOOKUP_TABLES},
 };
 use jolt_core::{
     field::JoltField,
@@ -24,7 +23,6 @@ use jolt_core::{
     transcripts::Transcript,
     utils::{expanding_table::ExpandingTable, math::Math, thread::unsafe_allocate_zero_vec},
 };
-use onnx_tracer::trace_types::{CircuitFlags, InterleavedBitsMarker, NUM_CIRCUIT_FLAGS};
 use rayon::prelude::*;
 use std::{cell::RefCell, iter::once, rc::Rc};
 use strum::{EnumCount, IntoEnumIterator};
@@ -268,7 +266,7 @@ impl<F: JoltField> ReadRafSumcheck<F> {
             ReadCheckingValType::Stage2 => {
                 let gamma: F = sm.get_transcript().borrow_mut().challenge_scalar();
                 let mut gamma_powers = vec![F::one()];
-                for _ in 0..2 {
+                for _ in 0..3 {
                     gamma_powers.push(gamma * gamma_powers.last().unwrap());
                 }
                 let (r, _) = sm.get_virtual_polynomial_opening(
@@ -387,6 +385,7 @@ impl<F: JoltField> ReadRafSumcheck<F> {
                     .chain(once(instruction.td))
                     .chain(once(instruction.ts1))
                     .chain(once(instruction.ts2))
+                    .chain(once(instruction.ts3))
                     .map(|r| eq_r_register[r as usize])
                     .zip(gamma_powers)
                     .map(|(claim, gamma)| claim * gamma)
@@ -403,6 +402,7 @@ impl<F: JoltField> ReadRafSumcheck<F> {
             .chain(once(VirtualPolynomial::TdWa))
             .chain(once(VirtualPolynomial::Ts1Ra))
             .chain(once(VirtualPolynomial::Ts2Ra))
+            .chain(once(VirtualPolynomial::Ts3Ra))
             .map(|vp| {
                 sm.get_virtual_polynomial_opening(vp, SumcheckId::RegistersReadWriteChecking)
                     .1

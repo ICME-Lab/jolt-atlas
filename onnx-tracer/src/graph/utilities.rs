@@ -1589,6 +1589,25 @@ pub fn create_sigmoid_node(
     )
 }
 
+pub fn create_softmax_node(
+    out_scale: i32,
+    inputs: Vec<(usize, usize)>,
+    out_dims: Vec<usize>,
+    idx: usize,
+    num_uses: usize,
+) -> Node {
+    create_node(
+        SupportedOp::Nonlinear(LookupOp::Softmax {
+            scale: scale_to_multiplier(out_scale).into(),
+        }),
+        out_scale,
+        inputs,
+        out_dims,
+        idx,
+        num_uses,
+    )
+}
+
 pub fn create_div_node(
     denom: i32,
     out_scale: i32,

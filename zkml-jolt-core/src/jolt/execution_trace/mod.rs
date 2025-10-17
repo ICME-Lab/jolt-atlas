@@ -7,8 +7,9 @@ use crate::{
         instruction::{
             VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction,
             rebase_scale::REBASEInstruction, reduce_sum::ReduceSumInstruction, relu::RELU,
-            sigmoid::SigmoidInstruction, virtual_advice::ADVICEInstruction,
-            virtual_const::ConstInstruction, virtual_pow2::VirtualPow2,
+            sigmoid::SigmoidInstruction, softmax::SoftmaxInstruction,
+            virtual_advice::ADVICEInstruction, virtual_const::ConstInstruction,
+            virtual_pow2::VirtualPow2,
         },
         precompiles::{PrecompileOp, PrecompilePreprocessing, matmult::MatMultPrecompile},
     },
@@ -254,6 +255,7 @@ pub fn jolt_execution_trace(raw_trace: Vec<ONNXCycle>) -> ExecutionTrace {
             ONNXOpcode::ArgMax => ArgMaxInstruction::<32>::virtual_trace(raw),
             ONNXOpcode::RebaseScale(_) => REBASEInstruction::<32>::virtual_trace(raw),
             ONNXOpcode::Sigmoid => SigmoidInstruction::<32>::virtual_trace(raw),
+            ONNXOpcode::Softmax => SoftmaxInstruction::<32>::virtual_trace(raw),
             _ => vec![raw],
         };
 
@@ -925,9 +927,9 @@ impl WitnessGenerator for JoltONNXR1CSInputs {
                 let coeffs: Vec<u8> = trace
                     .par_iter()
                     .map(|cycle| {
-                        let is_gather =
+                        let is_broadcast =
                             cycle.instr().to_circuit_flags()[CircuitFlags::BroadCast as usize];
-                        (*i < cycle.instr.active_output_elements) as u8 * (is_gather as u8)
+                        (*i < cycle.instr.active_output_elements) as u8 * (is_broadcast as u8)
                     })
                     .collect();
                 coeffs.into()
@@ -1348,6 +1350,7 @@ impl JoltONNXCycle {
                 ElementWiseLookup::Const(_) => "Const",
                 ElementWiseLookup::Relu(_) => "Relu",
                 ElementWiseLookup::Output(_) => "Output",
+                // ElementWiseLookup::Broadcast(_) => "Broadcast",
             })
     }
 }

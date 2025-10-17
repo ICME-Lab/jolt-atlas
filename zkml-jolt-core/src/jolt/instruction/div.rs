@@ -5,6 +5,7 @@ use onnx_tracer::{
     tensor::Tensor,
     trace_types::{MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode},
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{
     jolt::instruction::{
@@ -16,6 +17,7 @@ use crate::{
 };
 
 /// Perform signed division and return the result
+#[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DIVInstruction<const WORD_SIZE: usize>;
 
 impl<const WORD_SIZE: usize> VirtualInstructionSequence for DIVInstruction<WORD_SIZE> {

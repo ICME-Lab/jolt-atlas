@@ -389,7 +389,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
         });
 
         debug_assert_eq!(vt.len(), Self::SEQUENCE_LENGTH, "sequence length mismatch");
-        println!("Virtual trace: {:#?}", vt);
         vt
     }
 

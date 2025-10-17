@@ -5,9 +5,9 @@ use crate::{
     jolt::{
         JoltProverPreprocessing,
         instruction::{
-            VirtualInstructionSequence, argmax::ArgMaxInstruction,
-            div::DIVInstruction, rebase_scale::REBASEInstruction, reduce_sum::ReduceSumInstruction,
-            relu::RELU, sigmoid::SigmoidInstruction, softmax::SoftmaxInstruction,
+            VirtualInstructionSequence, argmax::ArgMaxInstruction, div::DIVInstruction,
+            rebase_scale::REBASEInstruction, reduce_sum::ReduceSumInstruction, relu::RELU,
+            sigmoid::SigmoidInstruction, softmax::SoftmaxInstruction,
             virtual_advice::ADVICEInstruction, virtual_const::ConstInstruction,
             virtual_pow2::VirtualPow2,
         },

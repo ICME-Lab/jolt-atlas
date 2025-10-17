@@ -3,9 +3,15 @@
 
 use crate::{
     jolt::{
+        JoltProverPreprocessing,
         instruction::{
-            argmax::ArgMaxInstruction, broadcast::BroadCastInstruction, div::DIVInstruction, rebase_scale::REBASEInstruction, reduce_sum::ReduceSumInstruction, relu::RELU, sigmoid::SigmoidInstruction, softmax::SoftmaxInstruction, virtual_advice::ADVICEInstruction, virtual_const::ConstInstruction, virtual_pow2::VirtualPow2, VirtualInstructionSequence
-        }, precompiles::{matmult::MatMultPrecompile, PrecompileOp, PrecompilePreprocessing}, JoltProverPreprocessing
+            VirtualInstructionSequence, argmax::ArgMaxInstruction, broadcast::BroadCastInstruction,
+            div::DIVInstruction, rebase_scale::REBASEInstruction, reduce_sum::ReduceSumInstruction,
+            relu::RELU, sigmoid::SigmoidInstruction, softmax::SoftmaxInstruction,
+            virtual_advice::ADVICEInstruction, virtual_const::ConstInstruction,
+            virtual_pow2::VirtualPow2,
+        },
+        precompiles::{PrecompileOp, PrecompilePreprocessing, matmult::MatMultPrecompile},
     },
     utils::u64_vec_to_i32_iter,
 };
@@ -921,9 +927,9 @@ impl WitnessGenerator for JoltONNXR1CSInputs {
                 let coeffs: Vec<u8> = trace
                     .par_iter()
                     .map(|cycle| {
-                        let is_gather =
+                        let is_broadcast =
                             cycle.instr().to_circuit_flags()[CircuitFlags::BroadCast as usize];
-                        (*i < cycle.instr.active_output_elements) as u8 * (is_gather as u8)
+                        (*i < cycle.instr.active_output_elements) as u8 * (is_broadcast as u8)
                     })
                     .collect();
                 coeffs.into()

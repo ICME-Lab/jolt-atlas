@@ -3120,21 +3120,36 @@ pub mod nonlinearities {
     /// let expected = Tensor::<i32>::new(Some(&[2730, 2730, 2751, 2730, 2730, 2688]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
-    /// TODO: Use base 2 and scaling factor
-    pub fn softmax(a: &Tensor<i32>, scale: f64) -> (Tensor<i32>, Vec<Tensor<i32>>) {
-        // the more accurate calculation is commented out and we implement as below so it
-        // matches the steps in layout
+    pub fn softmax(a: &Tensor<i32>, _scale: f64) -> (Tensor<i32>, Vec<Tensor<i32>>) {
+        const Q: i32 = 128;
+        let l = a.len();
+        let mut out = vec![0; l];
         let mut intermediate_values = vec![];
-
         intermediate_values.push(a.clone());
 
-        let exp = exp2(a, scale);
+        let z_max = a.par_iter().max().unwrap();
 
-        let sum = sum(&exp).unwrap();
-        intermediate_values.push(sum.clone());
-        let inv_denom = recip(&sum, scale.powf(2.0));
+        // c_i = 2^{zmax - z_i}
+        // d_i = Q / c_i
+        // d_sum = sum_j d_j
+        let mut d_sum: i32 = 0;
+        let mut d_vec = vec![];
+        for z in a.iter() {
+            let b = z_max.saturating_sub(z.clone() as i32);
+            let c = (1u128 << (b as u32)) as i32; // 2^b
+            let d = Q / c; // integer division
+            d_vec.push(d);
+            d_sum = d_sum.saturating_add(d);
+        }
 
-        ((exp * inv_denom).unwrap(), intermediate_values)
+        // g_i = (Q * d_i) / d_sum
+        for i in 0..l {
+            let f = Q.saturating_mul(d_vec[i]);
+            let g = if d_sum == 0 { 0 } else { f / d_sum };
+            out[i] = g as i32;
+        }
+
+        (Tensor::from(out.into_iter()), intermediate_values)
     }
 
     /// Applies range_check_percent

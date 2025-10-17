@@ -1597,7 +1597,9 @@ pub fn create_softmax_node(
     num_uses: usize,
 ) -> Node {
     create_node(
-        SupportedOp::Nonlinear(LookupOp::Softmax { scale: scale_to_multiplier(out_scale).into() }),
+        SupportedOp::Nonlinear(LookupOp::Softmax {
+            scale: scale_to_multiplier(out_scale).into(),
+        }),
         out_scale,
         inputs,
         out_dims,

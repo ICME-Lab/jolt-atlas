@@ -211,7 +211,6 @@ fn select_output(cycle: &ONNXCycle) -> Vec<u64> {
 
 fn div_output(cycle: &ONNXCycle) -> Vec<u64> {
     assert_eq!(cycle.instr.opcode, ONNXOpcode::Div);
-    println!("cycle: {:?}", cycle);
     DIVInstruction::<WORD_SIZE>::virtual_trace(cycle.clone())
         .last()
         .unwrap()

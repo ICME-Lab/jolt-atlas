@@ -3140,12 +3140,10 @@ pub mod nonlinearities {
             //   if b < 0  → d_i = Q / 2^{|b|}
             let d = if b >= 0 {
                 (Q as i64).saturating_mul(pow2 as i64)
+            } else if pow2 == 0 {
+                Q as i64
             } else {
-                if pow2 == 0 {
-                    Q as i64
-                } else {
-                    (Q as i64).saturating_div(pow2 as i64)
-                }
+                (Q as i64).saturating_div(pow2 as i64)
             };
 
             let d_i32 = d.clamp(i32::MIN as i64, i32::MAX as i64) as i32;

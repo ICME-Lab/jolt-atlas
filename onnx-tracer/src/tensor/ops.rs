@@ -3113,11 +3113,11 @@ pub mod nonlinearities {
     /// use onnx_tracer::tensor::ops::nonlinearities::softmax;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 2, 3, 2, 2, 0]),
-    ///     &[6],
+    ///     &[3,2],
     /// ).unwrap();
     /// let result = softmax(&x, 128.0).0;
     /// // doubles the scale of the input
-    /// let expected = Tensor::<i32>::new(Some(&[20, 20, 40, 20, 20, 5]), &[6]).unwrap();
+    /// let expected = Tensor::<i32>::new(Some(&[20, 20, 40, 20, 20, 5]), &[3,2]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
     // TODO: Fix dimensions of the output tensor
@@ -3149,7 +3149,9 @@ pub mod nonlinearities {
             out[i] = g;
         }
 
-        (Tensor::from(out.into_iter()), intermediate_values)
+        let out_tensor = Tensor::new(Some(&out), a.dims()).unwrap();
+
+        (out_tensor, intermediate_values)
     }
 
     /// Applies range_check_percent

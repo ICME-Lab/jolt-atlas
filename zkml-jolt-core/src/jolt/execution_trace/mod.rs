@@ -5,7 +5,7 @@ use crate::{
     jolt::{
         JoltProverPreprocessing,
         instruction::{
-            VirtualInstructionSequence, argmax::ArgMaxInstruction, broadcast::BroadCastInstruction,
+            VirtualInstructionSequence, argmax::ArgMaxInstruction,
             div::DIVInstruction, rebase_scale::REBASEInstruction, reduce_sum::ReduceSumInstruction,
             relu::RELU, sigmoid::SigmoidInstruction, softmax::SoftmaxInstruction,
             virtual_advice::ADVICEInstruction, virtual_const::ConstInstruction,
@@ -1142,7 +1142,6 @@ define_lookup_enum!(
     Relu: RELU<WORD_SIZE>,
     Output: OUTPUT<WORD_SIZE>,
     VirtualPow2: VirtualPow2<WORD_SIZE>,
-    Broadcast: BroadCastInstruction<WORD_SIZE>,
 );
 
 impl JoltONNXCycle {
@@ -1229,11 +1228,6 @@ impl JoltONNXCycle {
             ONNXOpcode::VirtualPow2 => Some(
                 (0..MAX_TENSOR_SIZE)
                     .map(|i| ElementWiseLookup::VirtualPow2(VirtualPow2(ts1[i])))
-                    .collect(),
-            ),
-            ONNXOpcode::Broadcast => Some(
-                (0..MAX_TENSOR_SIZE)
-                    .map(|_| ElementWiseLookup::Broadcast(BroadCastInstruction(ts1[0])))
                     .collect(),
             ),
             _ => None,
@@ -1356,7 +1350,7 @@ impl JoltONNXCycle {
                 ElementWiseLookup::Const(_) => "Const",
                 ElementWiseLookup::Relu(_) => "Relu",
                 ElementWiseLookup::Output(_) => "Output",
-                ElementWiseLookup::Broadcast(_) => "Broadcast",
+                // ElementWiseLookup::Broadcast(_) => "Broadcast",
             })
     }
 }

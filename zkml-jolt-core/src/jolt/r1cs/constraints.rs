@@ -55,11 +55,11 @@ impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
             );
 
             // if LeftOperandIsTs1Value { assert!(LeftInstructionInput == Rs1Value) }
-            // cs.constrain_eq_conditional(
-            //     JoltONNXR1CSInputs::OpFlags(CircuitFlags::LeftOperandIsTs1Value),
-            //     JoltONNXR1CSInputs::LeftInstructionInput(i),
-            //     JoltONNXR1CSInputs::Ts1Value(i),
-            // );
+            cs.constrain_eq_conditional(
+                JoltONNXR1CSInputs::OpFlags(CircuitFlags::LeftOperandIsTs1Value),
+                JoltONNXR1CSInputs::LeftInstructionInput(i),
+                JoltONNXR1CSInputs::Ts1Value(i),
+            );
 
             // if !(LeftOperandIsTs1Value)  {
             //     assert!(LeftInstructionInput == 0)

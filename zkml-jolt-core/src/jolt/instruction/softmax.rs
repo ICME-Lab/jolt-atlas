@@ -119,7 +119,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
 
         let broadcast_zmax_vals: Vec<u64> = vec![zmax_val_u64; MAX_TENSOR_SIZE];
         let broadcast_zmax_tensor = Tensor::from(u64_vec_to_i32_iter(&broadcast_zmax_vals));
-        // TODO: Broadcast z_max to all elements in tensor
         vt.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
@@ -390,6 +389,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
         });
 
         debug_assert_eq!(vt.len(), Self::SEQUENCE_LENGTH, "sequence length mismatch");
+        println!("Virtual trace: {:#?}", vt);
         vt
     }
 

@@ -113,6 +113,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(opcode: ONNXOpc
                 ONNXOpcode::Select => select_output(&cycle),
                 ONNXOpcode::Div => div_output(&cycle),
                 ONNXOpcode::ArgMax => argmax_output(&cycle),
+                ONNXOpcode::Broadcast => broadcast_output(&cycle),
                 _ => ONNXLookupQuery::<WORD_SIZE>::to_lookup_output(&JoltONNXCycle::from(&cycle)),
             };
 
@@ -210,14 +211,10 @@ fn select_output(cycle: &ONNXCycle) -> Vec<u64> {
 
 fn div_output(cycle: &ONNXCycle) -> Vec<u64> {
     assert_eq!(cycle.instr.opcode, ONNXOpcode::Div);
-    println!("cycle: {:?}", cycle);
-    let x = DIVInstruction::<WORD_SIZE>::virtual_trace(cycle.clone())
+    DIVInstruction::<WORD_SIZE>::virtual_trace(cycle.clone())
         .last()
         .unwrap()
         .td_post_vals()
-        .clone();
-    println!("x: {:?}", x);
-    x
 }
 
 fn argmax_output(cycle: &ONNXCycle) -> Vec<u64> {
@@ -226,7 +223,12 @@ fn argmax_output(cycle: &ONNXCycle) -> Vec<u64> {
         .last()
         .unwrap()
         .td_post_vals()
-        .clone()
+}
+
+fn broadcast_output(cycle: &ONNXCycle) -> Vec<u64> {
+    assert_eq!(cycle.instr.opcode, ONNXOpcode::Broadcast);
+    let ts1 = cycle.ts1_vals()[0];
+    vec![ts1; MAX_TENSOR_SIZE]
 }
 
 pub fn materialize_entry_test(opcode: ONNXOpcode) {

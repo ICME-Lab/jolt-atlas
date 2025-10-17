@@ -413,7 +413,6 @@ impl ONNXInstr {
             | ONNXOpcode::Relu
             | ONNXOpcode::Output
             | ONNXOpcode::VirtualPow2
-            | ONNXOpcode::Broadcast
         );
 
         flags[CircuitFlags::RightOperandIsTs2Value as usize] = matches!(
@@ -425,7 +424,6 @@ impl ONNXInstr {
             | ONNXOpcode::VirtualAssertValidDiv0
             | ONNXOpcode::VirtualAssertEq
             | ONNXOpcode::Gte
-            | ONNXOpcode::Broadcast
         );
 
         flags[CircuitFlags::RightOperandIsImm as usize] = matches!(
@@ -440,7 +438,6 @@ impl ONNXInstr {
             | ONNXOpcode::Relu
             | ONNXOpcode::Output
             | ONNXOpcode::VirtualPow2
-            | ONNXOpcode::Broadcast
         );
 
         flags[CircuitFlags::SubtractOperands as usize] = matches!(
@@ -466,7 +463,6 @@ impl ONNXInstr {
             | ONNXOpcode::Relu
             | ONNXOpcode::Output
             | ONNXOpcode::VirtualPow2
-            | ONNXOpcode::Broadcast
         );
 
         flags[CircuitFlags::Advice as usize] = matches!(

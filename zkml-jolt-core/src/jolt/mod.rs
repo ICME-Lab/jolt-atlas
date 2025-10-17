@@ -303,9 +303,8 @@ mod e2e_tests {
         transcripts::KeccakTranscript,
     };
     use log::debug;
-    use onnx_tracer::{
-        builder, decode_model, graph::model::Model, logger::init_logger, model, tensor::Tensor,
-    };
+    use onnx_tracer::{builder, decode_model, graph::model::Model, model, tensor::Tensor};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
     use serde_json::Value;
     use serial_test::serial;
 
@@ -337,9 +336,25 @@ mod e2e_tests {
         }
     }
 
+    #[serial]
     #[test]
     fn test_self_attention_2d_transformer() {
-        init_logger();
+        let mut rng = StdRng::seed_from_u64(12345);
+        // use small values to prevent overflow in onnx-tracer
+        let input_data: Vec<i32> = (0..256).map(|_| rng.gen_range(0..1)).collect();
+        run_snark_test(
+            || {
+                model(&PathBuf::from(
+                    "../onnx-tracer/models/self_attention_2d_transformer/network.onnx",
+                ))
+            },
+            &input_data,
+            &[16, 16],
+        );
+    }
+
+    #[test]
+    fn test_self_attention_2d_transformer2() {
         let model = model(&PathBuf::from(
             "../onnx-tracer/models/self_attention_2d_transformer/network.onnx",
         ));
@@ -349,15 +364,38 @@ mod e2e_tests {
         }
     }
 
+    #[serial]
+    #[test]
+    fn test_layernorm_partial_head() {
+        let mut rng = StdRng::seed_from_u64(12345);
+        // use small values to prevent overflow in onnx-tracer
+        let input_data: Vec<i32> = (0..256).map(|_| rng.gen_range(0..3)).collect();
+        run_snark_test(
+            || {
+                model(&PathBuf::from(
+                    "../onnx-tracer/models/layernorm_partial_head/network.onnx",
+                ))
+            },
+            &input_data,
+            &[16, 16],
+        );
+    }
+
+    #[serial]
     #[test]
     fn test_layernorm_head() {
-        let model = model(&PathBuf::from(
-            "../onnx-tracer/models/layernorm_head/network.onnx",
-        ));
-        let bytecode = decode_model(model);
-        for b in bytecode.iter() {
-            debug!("{:#?}", b.opcode)
-        }
+        let mut rng = StdRng::seed_from_u64(123456);
+        // use small values to prevent overflow in onnx-tracer
+        let input_data: Vec<i32> = (0..256).map(|_| rng.gen_range(0..2)).collect();
+        run_snark_test(
+            || {
+                model(&PathBuf::from(
+                    "../onnx-tracer/models/layernorm_head/network.onnx",
+                ))
+            },
+            &input_data,
+            &[16, 16],
+        );
     }
 
     /// Load vocab.json into HashMap<String, (usize, i32)>

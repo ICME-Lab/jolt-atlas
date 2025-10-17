@@ -42,7 +42,7 @@ use paste::paste;
 use serde::{Deserialize, Serialize};
 
 pub mod matvecmult;
-pub mod reduce_sum;
+pub mod reduce_sum; // TODO: Precompile for reducing over axes 0
 pub mod val_final;
 
 /// Macro to define all precompile types and generate associated code

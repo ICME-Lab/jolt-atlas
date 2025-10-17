@@ -27,11 +27,17 @@ use jolt_core::{
 use onnx_tracer::{
     graph::model::Model,
     tensor::Tensor,
-    trace_types::{CircuitFlags, NUM_CIRCUIT_FLAGS, ONNXInstr, ONNXOpcode},
+    trace_types::{ONNXInstr, ONNXOpcode},
 };
+
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    ops::{Index, IndexMut},
+};
+use strum::EnumCount;
+use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 pub const ZERO_ADDR_PREPEND: usize = 1; // TODO(Forpee): reserve output
 
@@ -179,6 +185,8 @@ pub struct JoltONNXBytecode {
     pub ts1: u64,
     /// Index of the second source register for this instruction (0 if register is unused).
     pub ts2: u64,
+    /// Index of the second source register for this instruction (0 if register is unused).
+    pub ts3: u64,
     /// "Immediate" value for this instruction (0 if unused).
     pub imm: u64,
     /// Element-wise operations are decomposed into sequences of scalar instructions during preprocessing.
@@ -196,6 +204,7 @@ impl JoltONNXBytecode {
             td: 0,
             ts1: 0,
             ts2: 0,
+            ts3: 0,
             imm: 0,
             tensor_sequence_remaining: None,
             virtual_sequence_remaining: None,
@@ -210,6 +219,7 @@ impl JoltONNXBytecode {
             td: 0,
             ts1: 0,
             ts2: 0,
+            ts3: 0,
             imm: 0,
             tensor_sequence_remaining: None,
             virtual_sequence_remaining: None,
@@ -314,6 +324,11 @@ impl JoltONNXBytecode {
             ONNXOpcode::Noop
         );
 
+        flags[CircuitFlags::Select as usize] = matches!(
+            self.opcode,
+            ONNXOpcode::Select
+        );
+
         flags[CircuitFlags::DoNotUpdateUnexpandedPC as usize] =
             !(self.tensor_sequence_remaining.unwrap_or(0) == 0 && self.virtual_sequence_remaining.unwrap_or(0) == 0);
 
@@ -406,7 +421,6 @@ impl BytecodePreprocessing {
         ModelFunc: Fn() -> Model,
     {
         let raw_bytecode = onnx_tracer::decode_model(model());
-        println!("Raw bytecode: {raw_bytecode:#?}");
         // Build a lookup map for O(1) instruction lookups by td value
         let td_lookup: HashMap<usize, ONNXInstr> = raw_bytecode
             .iter()
@@ -522,6 +536,70 @@ impl BytecodePreprocessing {
     }
 }
 
+/// Boolean flags used in Jolt's R1CS constraints (`opflags` in the Jolt paper).
+/// Note that the flags below deviate somewhat from those described in Appendix A.1
+/// of the Jolt paper.
+#[derive(Clone, Copy, Debug, PartialEq, EnumCountMacro, EnumIter, Eq, Hash, PartialOrd, Ord)]
+pub enum CircuitFlags {
+    /// 1 if the first instruction operand is TS1 value; 0 otherwise.
+    LeftOperandIsTs1Value,
+    /// 1 if the first instruction operand is TS2 value; 0 otherwise.
+    RightOperandIsTs2Value,
+    /// 1 if the second instruction operand is `imm`; 0 otherwise.
+    RightOperandIsImm,
+    /// 1 if the first lookup operand is the sum of the two instruction operands.
+    AddOperands,
+    /// 1 if the first lookup operand is the difference between the two instruction operands.
+    SubtractOperands,
+    /// 1 if the first lookup operand is the product of the two instruction operands.
+    MultiplyOperands,
+    /// 1 if the lookup output is to be stored in `td` at the end of the step.
+    WriteLookupOutputToTD,
+    /// 1 if the instruction is "inline", as defined in Section 6.1 of the Jolt paper.
+    InlineSequenceInstruction,
+    /// 1 if the instruction is an assert, as defined in Section 6.1.1 of the Jolt paper.
+    Assert,
+    /// Used in virtual sequences; the program counter should be the same for the full sequence.
+    DoNotUpdateUnexpandedPC,
+    /// Is (virtual) advice instruction
+    Advice,
+    /// 1 if this is constant instruction; 0 otherwise.
+    Const,
+    /// Is noop instruction
+    IsNoop,
+    /// 1 if this is the select operator
+    Select,
+}
+
+pub const NUM_CIRCUIT_FLAGS: usize = CircuitFlags::COUNT;
+
+pub trait InterleavedBitsMarker {
+    fn is_interleaved_operands(&self) -> bool;
+}
+
+impl InterleavedBitsMarker for [bool; NUM_CIRCUIT_FLAGS] {
+    fn is_interleaved_operands(&self) -> bool {
+        !self[CircuitFlags::AddOperands]
+            && !self[CircuitFlags::SubtractOperands]
+            && !self[CircuitFlags::MultiplyOperands]
+            && !self[CircuitFlags::Advice]
+            && !self[CircuitFlags::Const]
+    }
+}
+
+impl Index<CircuitFlags> for [bool; NUM_CIRCUIT_FLAGS] {
+    type Output = bool;
+    fn index(&self, index: CircuitFlags) -> &bool {
+        &self[index as usize]
+    }
+}
+
+impl IndexMut<CircuitFlags> for [bool; NUM_CIRCUIT_FLAGS] {
+    fn index_mut(&mut self, index: CircuitFlags) -> &mut bool {
+        &mut self[index as usize]
+    }
+}
+
 pub type RawToJoltResult = (
     Vec<JoltONNXBytecode>,
     usize,
@@ -551,10 +629,11 @@ pub fn raw_to_jolt_bytecode(
     let active_output_elements = raw.active_output_elements;
 
     // get ts1 and ts2 addresses
-    let (vts1, vts2) = match raw.opcode {
+    let (vts1, vts2, vts3) = match raw.opcode {
         ONNXOpcode::MatMult | ONNXOpcode::Sum => {
             // We need this because MatMults MCC do not follow the same pattern as other ops (it is handled separately) and we can safely store ts1 and ts2 as zero registers
             (
+                vec![0; active_output_elements],
                 vec![0; active_output_elements],
                 vec![0; active_output_elements],
             )
@@ -591,26 +670,25 @@ pub fn raw_to_jolt_bytecode(
             (
                 vts1,
                 vec![0; active_output_elements], // ts2 is unused in broadcast
+                vec![0; active_output_elements], // ts3 is unused in broadcast
             )
         }
         _ => {
-            let vts1 = (0..active_output_elements)
-                .map(|i| {
-                    vt_address_map[&(
-                        zkvm_address(raw.ts1),
-                        tensor_sequence_remaining(active_output_elements, i),
-                    )]
-                })
-                .collect::<Vec<usize>>();
-            let vts2 = (0..active_output_elements)
-                .map(|i| {
-                    vt_address_map[&(
-                        zkvm_address(raw.ts2),
-                        tensor_sequence_remaining(active_output_elements, i),
-                    )]
-                })
-                .collect::<Vec<usize>>();
-            (vts1, vts2)
+            // Helper function to map tensor sequence addresses
+            let map_tensor_addresses = |ts_opt: Option<usize>| -> Vec<usize> {
+                (0..active_output_elements)
+                    .map(|i| {
+                        vt_address_map[&(
+                            zkvm_address(ts_opt),
+                            tensor_sequence_remaining(active_output_elements, i),
+                        )]
+                    })
+                    .collect()
+            };
+            let vts1 = map_tensor_addresses(raw.ts1);
+            let vts2 = map_tensor_addresses(raw.ts2);
+            let vts3 = map_tensor_addresses(raw.ts3);
+            (vts1, vts2, vts3)
         }
     };
 
@@ -645,6 +723,7 @@ pub fn raw_to_jolt_bytecode(
             td: vtd[i] as u64,
             ts1: vts1[i] as u64,
             ts2: vts2[i] as u64,
+            ts3: vts3[i] as u64,
             imm: imm[i],
             tensor_sequence_remaining: Some(tensor_sequence_remaining(active_output_elements, i)),
             virtual_sequence_remaining: raw.virtual_sequence_remaining,

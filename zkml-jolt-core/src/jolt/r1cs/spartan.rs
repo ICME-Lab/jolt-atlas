@@ -1,3 +1,4 @@
+use crate::jolt::bytecode::CircuitFlags;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jolt_core::{
     poly::{
@@ -14,7 +15,6 @@ use jolt_core::{
     utils::{math::Math, small_value::NUM_SVO_ROUNDS},
     zkvm::r1cs::builder::Constraint,
 };
-use onnx_tracer::trace_types::CircuitFlags;
 
 use std::{cell::RefCell, marker::PhantomData, rc::Rc, sync::Arc};
 use thiserror::Error;

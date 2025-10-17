@@ -495,7 +495,7 @@ impl Node {
             address,
             opcode: op.into(),
             ts1: self.extract_input_operand(0),
-            ts2: self.extract_input_operand(1),
+            ts2: self.calculate_ts2_address(),
             ts3: self.extract_input_operand(2),
             // The output tensor is always the current node's index.
             td: Some(self.idx),
@@ -503,6 +503,15 @@ impl Node {
             virtual_sequence_remaining: None,
             active_output_elements: self.calculate_active_output_elements(),
             output_dims: self.normalize_output_dimensions(),
+        }
+    }
+
+    /// Calculate ts2 address
+    pub fn calculate_ts2_address(&self) -> Option<usize> {
+        if self.opkind.as_op().as_string() == "POW(2)" {
+            self.extract_input_operand(0)
+        } else {
+            self.extract_input_operand(1)
         }
     }
 

@@ -5,9 +5,6 @@
 use crate::tensor::Tensor;
 use rand::{rngs::StdRng, RngCore};
 use serde::{Deserialize, Serialize};
-use std::ops::{Index, IndexMut};
-use strum::EnumCount;
-use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 /// Represents a step in the execution trace, where an execution trace is a `Vec<ONNXCycle>`.
 /// Records what the VM did at a cycle of execution.
@@ -218,68 +215,6 @@ impl ONNXCycle {
 // Used in the zkVM to convert raw trace values into the zkVM's 64 bit container type
 pub fn normalize(value: &i32) -> u64 {
     *value as u32 as u64
-}
-
-/// Boolean flags used in Jolt's R1CS constraints (`opflags` in the Jolt paper).
-/// Note that the flags below deviate somewhat from those described in Appendix A.1
-/// of the Jolt paper.
-#[derive(Clone, Copy, Debug, PartialEq, EnumCountMacro, EnumIter, Eq, Hash, PartialOrd, Ord)]
-pub enum CircuitFlags {
-    /// 1 if the first instruction operand is TS1 value; 0 otherwise.
-    LeftOperandIsTs1Value,
-    /// 1 if the first instruction operand is TS2 value; 0 otherwise.
-    RightOperandIsTs2Value,
-    /// 1 if the second instruction operand is `imm`; 0 otherwise.
-    RightOperandIsImm,
-    /// 1 if the first lookup operand is the sum of the two instruction operands.
-    AddOperands,
-    /// 1 if the first lookup operand is the difference between the two instruction operands.
-    SubtractOperands,
-    /// 1 if the first lookup operand is the product of the two instruction operands.
-    MultiplyOperands,
-    /// 1 if the lookup output is to be stored in `td` at the end of the step.
-    WriteLookupOutputToTD,
-    /// 1 if the instruction is "inline", as defined in Section 6.1 of the Jolt paper.
-    InlineSequenceInstruction,
-    /// 1 if the instruction is an assert, as defined in Section 6.1.1 of the Jolt paper.
-    Assert,
-    /// Used in virtual sequences; the program counter should be the same for the full sequence.
-    DoNotUpdateUnexpandedPC,
-    /// Is (virtual) advice instruction
-    Advice,
-    /// 1 if this is constant instruction; 0 otherwise.
-    Const,
-    /// Is noop instruction
-    IsNoop,
-}
-
-pub const NUM_CIRCUIT_FLAGS: usize = CircuitFlags::COUNT;
-
-pub trait InterleavedBitsMarker {
-    fn is_interleaved_operands(&self) -> bool;
-}
-
-impl InterleavedBitsMarker for [bool; NUM_CIRCUIT_FLAGS] {
-    fn is_interleaved_operands(&self) -> bool {
-        !self[CircuitFlags::AddOperands]
-            && !self[CircuitFlags::SubtractOperands]
-            && !self[CircuitFlags::MultiplyOperands]
-            && !self[CircuitFlags::Advice]
-            && !self[CircuitFlags::Const]
-    }
-}
-
-impl Index<CircuitFlags> for [bool; NUM_CIRCUIT_FLAGS] {
-    type Output = bool;
-    fn index(&self, index: CircuitFlags) -> &bool {
-        &self[index as usize]
-    }
-}
-
-impl IndexMut<CircuitFlags> for [bool; NUM_CIRCUIT_FLAGS] {
-    fn index_mut(&mut self, index: CircuitFlags) -> &mut bool {
-        &mut self[index as usize]
-    }
 }
 
 impl ONNXInstr {

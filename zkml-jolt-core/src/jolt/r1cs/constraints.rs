@@ -1,5 +1,5 @@
+use crate::jolt::bytecode::CircuitFlags;
 use jolt_core::field::JoltField;
-use onnx_tracer::trace_types::CircuitFlags;
 
 use crate::jolt::r1cs::{
     builder::{CombinedUniformBuilder, R1CSBuilder},
@@ -133,6 +133,39 @@ impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
             JoltONNXR1CSInputs::OpFlags(CircuitFlags::Assert),
             JoltONNXR1CSInputs::LookupOutput,
             1,
+        );
+
+        // if Select && Condition (Ts1Value) {
+        //     assert!(TdWriteValue == Ts2Value)
+        // } else if Select && !Condition (Ts1Value) {
+        //     assert!(TdWriteValue == Ts3Value)
+        // } else {
+        //     assert!(TdWriteValue == /* Further assertions down below */)
+        // }
+        cs.constrain_prod(
+            JoltONNXR1CSInputs::Ts1Value,
+            JoltONNXR1CSInputs::OpFlags(CircuitFlags::Select),
+            JoltONNXR1CSInputs::SelectCond,
+        );
+        cs.constrain_prod(
+            JoltONNXR1CSInputs::TdWriteValue,
+            JoltONNXR1CSInputs::OpFlags(CircuitFlags::Select),
+            JoltONNXR1CSInputs::SelectRes,
+        );
+        cs.constrain_if_else(
+            JoltONNXR1CSInputs::SelectCond,
+            JoltONNXR1CSInputs::Ts2Value,
+            JoltONNXR1CSInputs::Ts3Value,
+            JoltONNXR1CSInputs::SelectRes,
+        );
+
+        // if !Select {
+        //     assert!(Ts3Value == 0)
+        // }
+        cs.constrain_eq_conditional(
+            1 - JoltONNXR1CSInputs::OpFlags(CircuitFlags::Select),
+            JoltONNXR1CSInputs::Ts3Value,
+            0,
         );
 
         // if Td != 0 && WriteLookupOutputToTD {

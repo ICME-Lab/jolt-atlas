@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 
 use crate::jolt::{
     JoltProverPreprocessing,
-    bytecode::JoltONNXBytecode,
+    bytecode::{CircuitFlags, JoltONNXBytecode},
     pcs::{OpeningId, SumcheckId},
     r1cs::{key::UniformSpartanKey, spartan::UniformSpartanProof},
     trace::JoltONNXCycle,
@@ -26,7 +26,8 @@ use jolt_core::{
         r1cs::ops::{LC, Term, Variable},
     },
 };
-use onnx_tracer::trace_types::{CircuitFlags, ONNXOpcode};
+
+use onnx_tracer::trace_types::ONNXOpcode;
 use rayon::prelude::*;
 
 pub struct R1CSProof<F: JoltField, ProofTranscript: Transcript> {
@@ -43,6 +44,7 @@ pub enum JoltONNXR1CSInputs {
     Imm,                   // Virtual (bytecode rv)
     Ts1Value,              // Virtual (registers rv)
     Ts2Value,              // Virtual (registers rv)
+    Ts3Value,              // Virtual (registers rv)
     TdWriteValue,          // Virtual (registers wv)
     LeftInstructionInput,  // to_lookup_query -> to_instruction_operands
     RightInstructionInput, // to_lookup_query -> to_instruction_operands
@@ -54,6 +56,8 @@ pub enum JoltONNXR1CSInputs {
     NextPC,           // Virtual (spartan shift sumcheck)
     LookupOutput,     // Virtual (instruction rv)
     NextIsNoop,       // Virtual (spartan shift sumcheck)
+    SelectCond,       // Ts1Value * Select
+    SelectRes,        // TdWriteValue * Select
     OpFlags(CircuitFlags),
 }
 
@@ -72,6 +76,8 @@ impl TryFrom<JoltONNXR1CSInputs> for CommittedPolynomial {
             JoltONNXR1CSInputs::WriteLookupOutputToTD => {
                 Ok(CommittedPolynomial::WriteLookupOutputToTD)
             }
+            JoltONNXR1CSInputs::SelectCond => Ok(CommittedPolynomial::SelectCond),
+            JoltONNXR1CSInputs::SelectRes => Ok(CommittedPolynomial::SelectRes),
             _ => Err("{value} is not a committed polynomial"),
         }
     }
@@ -88,6 +94,7 @@ impl TryFrom<JoltONNXR1CSInputs> for VirtualPolynomial {
             JoltONNXR1CSInputs::Imm => Ok(VirtualPolynomial::Imm),
             JoltONNXR1CSInputs::Ts1Value => Ok(VirtualPolynomial::Ts1Value),
             JoltONNXR1CSInputs::Ts2Value => Ok(VirtualPolynomial::Ts2Value),
+            JoltONNXR1CSInputs::Ts3Value => Ok(VirtualPolynomial::Ts3Value),
             JoltONNXR1CSInputs::TdWriteValue => Ok(VirtualPolynomial::TdWriteValue),
             JoltONNXR1CSInputs::LeftLookupOperand => Ok(VirtualPolynomial::LeftLookupOperand),
             JoltONNXR1CSInputs::RightLookupOperand => Ok(VirtualPolynomial::RightLookupOperand),
@@ -117,7 +124,7 @@ impl TryFrom<JoltONNXR1CSInputs> for OpeningId {
 
 /// This const serves to define a canonical ordering over inputs (and thus indices
 /// for each input). This is needed for sumcheck.
-pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs; 30] = [
+pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs; 34] = [
     JoltONNXR1CSInputs::LeftInstructionInput,
     JoltONNXR1CSInputs::RightInstructionInput,
     JoltONNXR1CSInputs::Product,
@@ -128,6 +135,7 @@ pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs; 30] = [
     JoltONNXR1CSInputs::Imm,
     JoltONNXR1CSInputs::Ts1Value,
     JoltONNXR1CSInputs::Ts2Value,
+    JoltONNXR1CSInputs::Ts3Value,
     JoltONNXR1CSInputs::TdWriteValue,
     JoltONNXR1CSInputs::LeftLookupOperand,
     JoltONNXR1CSInputs::RightLookupOperand,
@@ -135,6 +143,8 @@ pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs; 30] = [
     JoltONNXR1CSInputs::NextPC,
     JoltONNXR1CSInputs::NextIsNoop,
     JoltONNXR1CSInputs::LookupOutput,
+    JoltONNXR1CSInputs::SelectCond,
+    JoltONNXR1CSInputs::SelectRes,
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::LeftOperandIsTs1Value),
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::RightOperandIsTs2Value),
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::RightOperandIsImm),
@@ -148,14 +158,17 @@ pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs; 30] = [
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::Advice),
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::Const),
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::IsNoop),
+    JoltONNXR1CSInputs::OpFlags(CircuitFlags::Select),
 ];
 
 /// The subset of `ALL_R1CS_INPUTS` that are committed. The rest of
 /// the inputs are virtual polynomials.
-pub const COMMITTED_R1CS_INPUTS: [JoltONNXR1CSInputs; 4] = [
+pub const COMMITTED_R1CS_INPUTS: [JoltONNXR1CSInputs; 6] = [
     JoltONNXR1CSInputs::LeftInstructionInput,
     JoltONNXR1CSInputs::RightInstructionInput,
     JoltONNXR1CSInputs::Product,
+    JoltONNXR1CSInputs::SelectCond,
+    JoltONNXR1CSInputs::SelectRes,
     JoltONNXR1CSInputs::WriteLookupOutputToTD,
 ];
 
@@ -237,6 +250,10 @@ impl JoltONNXR1CSInputs {
                 let coeffs: Vec<u64> = trace.par_iter().map(|cycle| cycle.ts2_read()).collect();
                 coeffs.into()
             }
+            JoltONNXR1CSInputs::Ts3Value => {
+                let coeffs: Vec<u64> = trace.par_iter().map(|cycle| cycle.ts3_read()).collect();
+                coeffs.into()
+            }
             JoltONNXR1CSInputs::TdWriteValue => {
                 let coeffs: Vec<u64> = trace.par_iter().map(|cycle| cycle.td_write().1).collect();
                 coeffs.into()
@@ -263,6 +280,12 @@ impl JoltONNXR1CSInputs {
             }
             JoltONNXR1CSInputs::Product => {
                 CommittedPolynomial::Product.generate_witness(preprocessing, trace)
+            }
+            JoltONNXR1CSInputs::SelectCond => {
+                CommittedPolynomial::SelectCond.generate_witness(preprocessing, trace)
+            }
+            JoltONNXR1CSInputs::SelectRes => {
+                CommittedPolynomial::SelectRes.generate_witness(preprocessing, trace)
             }
             JoltONNXR1CSInputs::WriteLookupOutputToTD => {
                 CommittedPolynomial::WriteLookupOutputToTD.generate_witness(preprocessing, trace)

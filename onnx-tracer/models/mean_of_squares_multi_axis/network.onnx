@@ -1,0 +1,22 @@
+pytorch2.8.0:×
+(
+input
+input/Mul_output_0/Mul"Mul
+P
+/Mul_output_0output/ReduceMean"
+ReduceMean*
+axes@@ *
+keepdims 
+main_graphZ%
+input
+
+
+batch_size
+
+b&
+output
+
+
+batch_size
+
+B

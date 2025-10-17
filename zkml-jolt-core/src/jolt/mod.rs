@@ -858,7 +858,7 @@ mod e2e_tests {
         let mut rng = thread_rng();
         let mut v = vec![0; MAX_TENSOR_SIZE];
         for i in 0..MAX_TENSOR_SIZE {
-            v[i] = rng.gen_range(0..=16);
+            v[i] = rng.gen_range(-8..=8);
         }
         let config = ModelTestConfig::new("softmax", v.to_vec(), vec![v.len()]);
 

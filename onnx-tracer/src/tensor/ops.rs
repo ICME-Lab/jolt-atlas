@@ -3119,38 +3119,48 @@ pub mod nonlinearities {
     /// // doubles the scale of the input
     /// let expected = Tensor::<i32>::new(Some(&[20, 20, 40, 20, 20, 5]), &[3,2]).unwrap();
     /// assert_eq!(result, expected);
-    /// ```
-    // TODO: Fix dimensions of the output tensor
     pub fn softmax(a: &Tensor<i32>, _scale: f64) -> (Tensor<i32>, Vec<Tensor<i32>>) {
         const Q: i32 = 128;
         let l = a.len();
         let mut out = vec![0; l];
         let intermediate_values = vec![a.clone()];
 
-        let z_max = a.par_iter().max().unwrap();
-
-        // c_i = 2^{zmax - z_i}
-        // d_i = Q / c_i
-        // d_sum = sum_j d_j
-        let mut d_sum: i32 = 0;
+        // For consistency, allow both positive and negative inputs directly (no z_max subtraction)
+        // and apply 2^{|z_i|} scaling with correct branch.
+        let mut d_sum: i64 = 0;
         let mut d_vec = vec![];
-        for z in a.iter() {
-            let b = z_max.saturating_sub(*z);
-            let c = (1u128 << (b as u32)) as i32; // 2^b
-            let d = Q / c; // integer division
-            d_vec.push(d);
-            d_sum = d_sum.saturating_add(d);
+
+        for &z in a.iter() {
+            let b = z; // directly use z_i as exponent
+            let abs_b = b.abs().min(63); // cap to prevent overflow
+            let pow2 = 1u64.checked_shl(abs_b as u32).unwrap_or(u64::MAX);
+
+            // For standard softmax semantics:
+            //   if b >= 0 → d_i = Q * 2^{b}
+            //   if b < 0  → d_i = Q / 2^{|b|}
+            let d = if b >= 0 {
+                (Q as i64).saturating_mul(pow2 as i64)
+            } else {
+                if pow2 == 0 {
+                    Q as i64
+                } else {
+                    (Q as i64).saturating_div(pow2 as i64)
+                }
+            };
+
+            let d_i32 = d.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+            d_vec.push(d_i32);
+            d_sum = d_sum.saturating_add(d_i32 as i64);
         }
 
-        // g_i = (Q * d_i) / d_sum
+        // Normalize: g_i = (Q * d_i) / sum_j d_j
         for i in 0..l {
-            let f = Q.saturating_mul(d_vec[i]);
+            let f = (Q as i64).saturating_mul(d_vec[i] as i64);
             let g = if d_sum == 0 { 0 } else { f / d_sum };
-            out[i] = g;
+            out[i] = g.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         }
 
         let out_tensor = Tensor::new(Some(&out), a.dims()).unwrap();
-
         (out_tensor, intermediate_values)
     }
 

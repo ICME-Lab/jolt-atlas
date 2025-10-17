@@ -35,3 +35,15 @@ impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for GEInstruction<WORD_SIZE>
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use onnx_tracer::trace_types::ONNXOpcode;
+
+    use crate::jolt::instruction::test::materialize_entry_test;
+
+    #[test]
+    fn materialize_entry() {
+        materialize_entry_test(ONNXOpcode::Gte);
+    }
+}

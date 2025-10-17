@@ -56,13 +56,13 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
         let (argmax_idx, _zmax_val) = {
             let mut idx = 0usize;
             let mut best = z_u64[0];
-            for i in 1..MAX_TENSOR_SIZE {
-                if z_u64[i] >= best {
-                    best = z_u64[i];
+            for (i, &z) in z_u64.iter().enumerate().skip(1) {
+                if z >= best {
+                    best = z;
                     idx = i;
                 }
             }
-            (idx as u64, best)
+            (idx, best)
         };
         let mut argmax_tensor = Tensor::from(u64_vec_to_i32_iter(&vec![0; MAX_TENSOR_SIZE]));
         argmax_tensor[0] = argmax_idx as u32 as i32;
@@ -90,7 +90,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
         });
 
         // 1b) Gather -> replicate z_max as a full vector
-        let zmax_val_u64 = z_u64[argmax_idx as usize];
+        let zmax_val_u64 = z_u64[argmax_idx];
         let mut zmax_vec: Vec<u64> = vec![0; MAX_TENSOR_SIZE];
         zmax_vec[0] = zmax_val_u64;
         let zmax_vec_tensor = Tensor::from(u64_vec_to_i32_iter(&zmax_vec));
@@ -395,23 +395,22 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
 
     fn sequence_output(x: Vec<u64>, _y: Vec<u64>, _op: Option<ONNXOpcode>) -> Vec<u64> {
         let mut out = vec![0u64; MAX_TENSOR_SIZE];
-        const Q: u128 = 128;
+        const Q: u64 = 128;
 
         // z_max
-        let mut zmax = x[0] as u128;
-        for i in 1..MAX_TENSOR_SIZE {
-            let v = x[i] as u128;
+        let mut zmax = x[0];
+        for &v in x.iter().skip(1) {
             if v > zmax {
                 zmax = v;
             }
         }
 
         // c_i = 2^{zmax - z_i}, d_i = Q / c_i
-        let mut d_sum: u128 = 0;
-        let mut d_vec: [u128; MAX_TENSOR_SIZE] = [0; MAX_TENSOR_SIZE];
+        let mut d_sum: u64 = 0;
+        let mut d_vec: [u64; MAX_TENSOR_SIZE] = [0; MAX_TENSOR_SIZE];
         for i in 0..MAX_TENSOR_SIZE {
-            let b = zmax.saturating_sub(x[i] as u128);
-            let c = 1u128 << (b as u32); // 2^b
+            let b = zmax.saturating_sub(x[i]);
+            let c = 1u64 << (b as u32); // 2^b
             let d = Q / c; // integer division
             d_vec[i] = d;
             d_sum = d_sum.saturating_add(d);
@@ -421,7 +420,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SoftmaxInstruction<W
         for i in 0..MAX_TENSOR_SIZE {
             let f = Q.saturating_mul(d_vec[i]);
             let g = if d_sum == 0 { 0 } else { f / d_sum };
-            out[i] = g as u64;
+            out[i] = g;
         }
         out
     }

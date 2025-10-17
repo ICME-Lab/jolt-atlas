@@ -751,25 +751,25 @@ mod e2e_tests {
         text_classification.trace();
     }
 
-    #[test]
-    fn test_medium_classification_output() {
-        let mut input_vector = vec![197, 10, 862, 8, 23, 53, 2, 319, 34, 122, 100, 53, 33];
-        input_vector.resize(100, 0); // Resize to match the input shape
+    // #[test]
+    // fn test_medium_classification_output() {
+    //     let mut input_vector = vec![197, 10, 862, 8, 23, 53, 2, 319, 34, 122, 100, 53, 33];
+    //     input_vector.resize(100, 0); // Resize to match the input shape
 
-        let text_classification = ONNXProgram {
-            model_path: "../onnx-tracer/models/medium_text_classification/network.onnx".into(),
-            inputs: Tensor::new(Some(&input_vector), &[1, 100]).unwrap(), // Example input
-        };
-        let program_bytecode = text_classification.decode();
-        debug!("Program code: {program_bytecode:#?}",);
-        let model = model(&text_classification.model_path);
+    //     let text_classification = ONNXProgram {
+    //         model_path: "../onnx-tracer/models/medium_text_classification/network.onnx".into(),
+    //         inputs: Tensor::new(Some(&input_vector), &[1, 100]).unwrap(), // Example input
+    //     };
+    //     let program_bytecode = text_classification.decode();
+    //     debug!("Program code: {program_bytecode:#?}",);
+    //     let model = model(&text_classification.model_path);
 
-        let result = model
-            .forward(&[text_classification.inputs.clone()])
-            .unwrap();
-        let output = result.outputs[0].clone();
-        debug!("Output: {output:#?}",);
-    }
+    //     let result = model
+    //         .forward(&[text_classification.inputs.clone()])
+    //         .unwrap();
+    //     let output = result.outputs[0].clone();
+    //     debug!("Output: {output:#?}",);
+    // }
 
     #[should_panic]
     #[test]

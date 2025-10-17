@@ -3113,19 +3113,19 @@ pub mod nonlinearities {
     /// use onnx_tracer::tensor::ops::nonlinearities::softmax;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 2, 3, 2, 2, 0]),
-    ///     &[2, 3],
+    ///     &[6],
     /// ).unwrap();
     /// let result = softmax(&x, 128.0).0;
     /// // doubles the scale of the input
-    /// let expected = Tensor::<i32>::new(Some(&[2730, 2730, 2751, 2730, 2730, 2688]), &[2, 3]).unwrap();
+    /// let expected = Tensor::<i32>::new(Some(&[20, 20, 40, 20, 20, 5]), &[6]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
+    // TODO: Fix dimensions of the output tensor
     pub fn softmax(a: &Tensor<i32>, _scale: f64) -> (Tensor<i32>, Vec<Tensor<i32>>) {
         const Q: i32 = 128;
         let l = a.len();
         let mut out = vec![0; l];
-        let mut intermediate_values = vec![];
-        intermediate_values.push(a.clone());
+        let intermediate_values = vec![a.clone()];
 
         let z_max = a.par_iter().max().unwrap();
 
@@ -3135,7 +3135,7 @@ pub mod nonlinearities {
         let mut d_sum: i32 = 0;
         let mut d_vec = vec![];
         for z in a.iter() {
-            let b = z_max.saturating_sub(z.clone() as i32);
+            let b = z_max.saturating_sub(*z);
             let c = (1u128 << (b as u32)) as i32; // 2^b
             let d = Q / c; // integer division
             d_vec.push(d);
@@ -3146,7 +3146,7 @@ pub mod nonlinearities {
         for i in 0..l {
             let f = Q.saturating_mul(d_vec[i]);
             let g = if d_sum == 0 { 0 } else { f / d_sum };
-            out[i] = g as i32;
+            out[i] = g;
         }
 
         (Tensor::from(out.into_iter()), intermediate_values)

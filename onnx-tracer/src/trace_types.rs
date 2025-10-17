@@ -282,6 +282,7 @@ pub enum ONNXOpcode {
     Div,
     Pow,
     Relu,
+    Rsqrt,
     MatMult,
     Gather,
     Transpose,

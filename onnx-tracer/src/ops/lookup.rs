@@ -57,7 +57,8 @@ impl From<&LookupOp> for ONNXOpcode {
         match value {
             LookupOp::ReLU => ONNXOpcode::Relu,
             LookupOp::Sigmoid { .. } => ONNXOpcode::Sigmoid,
-            LookupOp::Rsqrt { .. } => ONNXOpcode::Sqrt,
+            LookupOp::Sqrt { .. } => ONNXOpcode::Sqrt,
+            LookupOp::Rsqrt { .. } => ONNXOpcode::Rsqrt,
             LookupOp::Div { .. } => ONNXOpcode::Div,
             _ => {
                 panic!("LookupOp {value:?} cannot be converted to ONNXOpcode",);

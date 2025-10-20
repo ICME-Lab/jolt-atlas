@@ -16,7 +16,6 @@ use crate::{
 };
 
 // Scale factor
-const SF_LOG: usize = 7;
 const SF: u64 = 128;
 
 /// Performs 1 / sqrt(x) and return the result
@@ -344,6 +343,8 @@ mod test {
     use super::*;
     use rand::prelude::*;
 
+    const SF_LOG: usize = 7;
+
     #[test]
     fn div_virtual_sequence_32() {
         jolt_virtual_sequence_test::<RsqrtInstruction<32>>(ONNXOpcode::Rsqrt, 16);
@@ -480,7 +481,7 @@ mod test {
                     );
                 }
 
-                let output = to_lookup_output(&cycle);
+                let output = to_lookup_output(cycle);
 
                 if let Some(td_addr) = cycle.instr.td {
                     let mapped_addr = if td_addr >= 32 {
@@ -574,6 +575,83 @@ mod test {
                 result, expected as u64,
                 "Mismatch: x = {x}, result =! expected: {result} != {expected}"
             );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn test_sequence() {
+        let mut rng = StdRng::seed_from_u64(123456);
+        for _ in 0..1000 {
+            let x: f32 = rng.r#gen();
+            let q_x = (x * SF_FLOAT).round() as i32;
+
+            let method_one = false;
+            if method_one {
+                // advice =  expected result
+                // res2_ns = advice * advice
+                // res2 = res2_ns / SF
+                // xres2_ns = x * res2
+                // xres2 = rs2_ns / SF
+                // assert = assert_eq(xres2, SF)
+                // if assert td <- advice
+
+                let advice = {
+                    let x = q_x as u32 as u64;
+                    if x == 0 {
+                        u32::MAX as u64
+                    } else {
+                        // x is input represented in the vm, i.e. scaled by SF (x = input * SF)
+                        let sqrt = ((x * SF) as i32).sqrt(); // sqrt  = sqrt(x * SF)                 = sqrt(input * SF * SF)  = sqrt(input) * SF
+                        let rsqrt = (SF * SF) as i32 / sqrt; // rsqrt = SF * SF / (sqrt(input) * SF) = (1 / sqrt(input)) * SF = rsqrt(input) * SF
+                        rsqrt as u32 as u64
+                    }
+                };
+
+                let res2_ns = (advice * advice) as i32;
+                println!("res2_ns:  {res2_ns}");
+
+                let res2 = res2_ns / 128;
+                println!("res2: {res2}");
+
+                let xres2_ns = q_x * res2;
+                println!("xres2_ns: {xres2_ns}");
+
+                let xres2 = xres2_ns / 128;
+                println!("xres2:    {xres2}");
+            } else {
+                // advice = expected_result
+                // res2_ns = advice * advice
+                // res2 = res2_ns / SF
+                // xinv = div(128^2, x)
+                // assert_eq(xinv, res2)
+
+                let advice = {
+                    let x = q_x;
+                    if x == 0 {
+                        i32::MAX
+                    } else {
+                        // x is input represented in the vm, i.e. scaled by SF (x = input * SF)
+                        let xinv = (SF * SF) as i32 / x; // rsqrt = SF * SF / (sqrt(input) * SF) = (1 / sqrt(input)) * SF = rsqrt(input) * SF
+                        (xinv * SF as i32).sqrt() // sqrt  = sqrt(x * SF)                 = sqrt(input * SF * SF)  = sqrt(input) * SF
+                    }
+                };
+
+                let res2_ns = advice * advice;
+
+                let res2 = res2_ns / 128;
+
+                let xinv = 128 * 128 / q_x;
+                if xinv != res2 {
+                    println!("x:    {x}");
+                    println!("q_x:  {q_x}");
+                    println!("advice:   {advice}");
+                    println!("res2_ns:  {res2_ns}");
+                    println!("res2: {res2}");
+                    println!("xinv: {xinv}");
+                    panic!("1/x != y^2")
+                }
+            }
         }
     }
 }

@@ -3207,11 +3207,36 @@ pub mod nonlinearities {
     /// assert_eq!(result, expected);
     /// ```
     pub fn rsqrt(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
+        let sf = scale_input as i32;
+        let sf_log = sf.ilog2() as i32;
+        // NOTE: implements div as in zkvm, this floors the result
+        let rescale_down = |q: i32| {
+            if q % sf < 0 {
+                q / sf - 1
+            } else {
+                q / sf
+            }
+        };
         a.par_enum_map(|_, a_i| {
-            let kix = (a_i as f64) / scale_input;
-            let fout = scale_input / (kix.sqrt() + f64::EPSILON);
-            let rounded = fout.round();
-            Ok::<_, TensorError>(rounded as i32)
+            let sqrt_2 = (2f32.sqrt() * sf as f32).round() as i32;
+
+            let x = if a_i != 0 { a_i as u32 } else { 1 };
+            let d = {
+                let exp = 3 * sf_log - x.ilog2() as i32;
+                if exp < 0 {
+                    0
+                } else {
+                    2_i32.pow(exp as u32 / 2)
+                }
+            };
+            let xd = rescale_down(x as i32 * d);
+            let xd_sq_minus1 = rescale_down(d * xd) - sf;
+            let xd_cub_minusd = rescale_down(d * xd_sq_minus1);
+            let a = sqrt_2 / 2 - sf;
+            let axd_cub_minusd = rescale_down(a * xd_cub_minusd);
+            let approximation = d + axd_cub_minusd;
+
+            Ok::<_, TensorError>(approximation)
         })
         .unwrap()
     }

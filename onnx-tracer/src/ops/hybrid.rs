@@ -75,10 +75,11 @@ pub enum HybridOp {
 impl From<&HybridOp> for ONNXOpcode {
     fn from(value: &HybridOp) -> Self {
         match value {
-            HybridOp::Softmax { .. } => ONNXOpcode::Softmax,
+            HybridOp::Equals => ONNXOpcode::Eq,
             HybridOp::Gather { .. } => ONNXOpcode::Gather,
             HybridOp::GreaterEqual => ONNXOpcode::Gte,
             HybridOp::ReduceArgMax { .. } => ONNXOpcode::ArgMax,
+            HybridOp::Softmax { .. } => ONNXOpcode::Softmax,
             _ => {
                 panic!("HybridOp {value:?} cannot be converted to ONNXOpcode",);
             }

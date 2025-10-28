@@ -769,7 +769,7 @@ mod tests {
             model::{Model, NodeType},
             node::{Node, SupportedOp},
         },
-        ops::{Constant, lookup::LookupOp, poly::PolyOp},
+        ops::{Constant, hybrid::HybridOp, lookup::LookupOp, poly::PolyOp},
         tensor::Tensor,
         trace_types::ONNXOpcode,
     };
@@ -796,13 +796,14 @@ mod tests {
     fn opkind_from_instruction(instruction: &ONNXOpcode) -> SupportedOp {
         match instruction {
             ONNXOpcode::Add => SupportedOp::Linear(PolyOp::Add),
-            ONNXOpcode::Sub => SupportedOp::Linear(PolyOp::Sub),
-            ONNXOpcode::Mul => SupportedOp::Linear(PolyOp::Mult),
             ONNXOpcode::Constant => SupportedOp::Constant(Constant::new(
                 Tensor::new(Some(&[1]), &[]).unwrap(),
                 Tensor::new(Some(&[1.0]), &[]).unwrap(),
             )),
+            ONNXOpcode::Eq => SupportedOp::Hybrid(HybridOp::Equals),
+            ONNXOpcode::Mul => SupportedOp::Linear(PolyOp::Mult),
             ONNXOpcode::Relu => SupportedOp::Nonlinear(LookupOp::ReLU),
+            ONNXOpcode::Sub => SupportedOp::Linear(PolyOp::Sub),
             _ => unimplemented!("Unsupported instruction"),
         }
     }
@@ -984,5 +985,10 @@ mod tests {
     #[test]
     fn test_relu() {
         test_read_raf_sumcheck(Some(ONNXOpcode::Relu));
+    }
+
+    #[test]
+    fn test_rsqrt() {
+        test_read_raf_sumcheck(Some(ONNXOpcode::Rsqrt));
     }
 }

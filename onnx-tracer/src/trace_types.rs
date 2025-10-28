@@ -295,6 +295,7 @@ pub enum ONNXOpcode {
     Softmax,
     RebaseScale(Box<ONNXOpcode>),
     Gte,
+    Eq,
     Reshape,
     ArgMax,
     ReduceMax,

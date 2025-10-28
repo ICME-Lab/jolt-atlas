@@ -42,6 +42,7 @@ use crate::{
         utilities::{
             create_const_node, create_div_node, create_iff_node, create_input_node,
             create_matmul_node, create_node, create_polyop_node, create_relu_node,
+            create_rsqrt_node,
         },
     },
     ops::{hybrid::HybridOp, poly::PolyOp},
@@ -383,6 +384,13 @@ impl ModelBuilder {
         self.model.insert_node(relu_node);
         (id, O)
     }
+
+    fn rsqrt(&mut self, input: Wire, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
+        let id = self.alloc();
+        let rsqrt_node = create_rsqrt_node(self.scale, vec![input], out_dims, id, fanout_hint);
+        self.model.insert_node(rsqrt_node);
+        (id, O)
+    }
 }
 
 /* ********************** Testing Model's ********************** */
@@ -619,6 +627,17 @@ pub fn relu_model() -> Model {
 
     let x = b.input(dims.clone(), 2);
     let r = b.relu(x, dims.clone(), 1);
+
+    b.take(vec![x.0], vec![r])
+}
+
+pub fn rsqrt_model() -> Model {
+    const SCALE: i32 = 2i32.pow(7);
+    let mut b = ModelBuilder::new(SCALE);
+    let dims = vec![1, 4];
+
+    let x = b.input(dims.clone(), 1);
+    let r = b.rsqrt(x, dims.clone(), 1);
 
     b.take(vec![x.0], vec![r])
 }

@@ -819,8 +819,7 @@ mod e2e_tests {
 
     #[test]
     #[serial]
-    #[ignore]
-    fn test_rsqrt() {
+    fn test_rsqrt_binary() {
         run_snark_test(
             || model(&PathBuf::from("../onnx-tracer/models/rsqrt/network.onnx")),
             &[512],
@@ -912,5 +911,11 @@ mod e2e_tests {
     #[serial]
     fn test_relu() {
         run_snark_test(builder::relu_model, &[-3, -2, 0, 1], &[1, 4]);
+    }
+
+    #[test]
+    #[serial]
+    fn test_rsqrt() {
+        run_snark_test(builder::rsqrt_model, &[-3, -2, 0, 1], &[1, 4]);
     }
 }

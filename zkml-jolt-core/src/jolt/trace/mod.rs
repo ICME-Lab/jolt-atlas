@@ -45,8 +45,8 @@ use crate::{
         executor::instructions::{
             InstructionLookup, VirtualInstructionSequence, add::AddInstruction,
             beq::BeqInstruction, broadcast::BroadCastInstruction, div::DivInstruction,
-            mul::MulInstruction, relu::ReluInstruction, sub::SubInstruction,
-            virtual_advice::AdviceInstruction,
+            mul::MulInstruction, relu::ReluInstruction, rsqrt::RsqrtInstruction,
+            sub::SubInstruction, virtual_advice::AdviceInstruction,
             virtual_assert_valid_div0::AssertValidDiv0Instruction,
             virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction,
             virtual_const::ConstInstruction, virtual_move::MoveInstruction,
@@ -118,6 +118,7 @@ pub fn expand_raw_trace(raw_trace: Vec<ONNXCycle>, max_td: usize) -> Vec<ONNXCyc
         .into_iter()
         .flat_map(|cycle| match cycle.instr.opcode {
             ONNXOpcode::Div => DivInstruction::<32>::virtual_trace(cycle, max_td),
+            ONNXOpcode::Rsqrt => RsqrtInstruction::<32>::virtual_trace(cycle, max_td),
             _ => vec![cycle],
         })
         .collect()
@@ -387,7 +388,15 @@ impl JoltONNXCycle {
                 memory_ops.ts1_val,
                 memory_ops.ts2_val,
             ))),
-            ONNXOpcode::Sub => Some(LookupFunction::Sub(SubInstruction::<WORD_SIZE>(
+            ONNXOpcode::Broadcast => {
+                Some(LookupFunction::BroadCast(
+                    BroadCastInstruction::<WORD_SIZE>(memory_ops.ts1_val),
+                ))
+            }
+            ONNXOpcode::Constant => Some(LookupFunction::Const(ConstInstruction::<WORD_SIZE>(
+                instr.imm,
+            ))),
+            ONNXOpcode::Eq => Some(LookupFunction::Eq(BeqInstruction(
                 memory_ops.ts1_val,
                 memory_ops.ts2_val,
             ))),
@@ -395,28 +404,20 @@ impl JoltONNXCycle {
                 memory_ops.ts1_val,
                 memory_ops.ts2_val,
             ))),
-            ONNXOpcode::Constant => Some(LookupFunction::Const(ConstInstruction::<WORD_SIZE>(
-                instr.imm,
-            ))),
             ONNXOpcode::Relu => Some(LookupFunction::Relu(ReluInstruction::<WORD_SIZE>(
                 memory_ops.ts1_val,
             ))),
-            ONNXOpcode::VirtualConst => Some(LookupFunction::Const(ConstInstruction::<WORD_SIZE>(
-                instr.imm,
+            ONNXOpcode::Sub => Some(LookupFunction::Sub(SubInstruction::<WORD_SIZE>(
+                memory_ops.ts1_val,
+                memory_ops.ts2_val,
             ))),
-            ONNXOpcode::VirtualMove => {
-                Some(LookupFunction::VirtualMove(MoveInstruction::<WORD_SIZE>(
-                    memory_ops.ts1_val,
-                )))
-            }
-            ONNXOpcode::Broadcast => {
-                Some(LookupFunction::BroadCast(
-                    BroadCastInstruction::<WORD_SIZE>(memory_ops.ts1_val),
-                ))
-            }
             ONNXOpcode::VirtualAdvice => Some(LookupFunction::Advice(
                 AdviceInstruction::<WORD_SIZE>(advice_value.expect("Advice value should be set")),
             )),
+            ONNXOpcode::VirtualAssertEq => Some(LookupFunction::Eq(BeqInstruction::<WORD_SIZE>(
+                memory_ops.ts1_val,
+                memory_ops.ts2_val,
+            ))),
             ONNXOpcode::VirtualAssertValidDiv0 => Some(LookupFunction::VirtualAssertValidDiv0(
                 AssertValidDiv0Instruction::<WORD_SIZE>(memory_ops.ts1_val, memory_ops.ts2_val),
             )),
@@ -428,10 +429,13 @@ impl JoltONNXCycle {
                     ),
                 ))
             }
-            ONNXOpcode::VirtualAssertEq => {
-                Some(LookupFunction::VirtualAssertEq(
-                    BeqInstruction::<WORD_SIZE>(memory_ops.ts1_val, memory_ops.ts2_val),
-                ))
+            ONNXOpcode::VirtualConst => Some(LookupFunction::Const(ConstInstruction::<WORD_SIZE>(
+                instr.imm,
+            ))),
+            ONNXOpcode::VirtualMove => {
+                Some(LookupFunction::VirtualMove(MoveInstruction::<WORD_SIZE>(
+                    memory_ops.ts1_val,
+                )))
             }
             // Other opcodes (like MatMult) don't have lookup functions
             _ => None,
@@ -727,17 +731,17 @@ define_lookup_enum!(
     enum LookupFunction,
     const WORD_SIZE,
     Add: AddInstruction<WORD_SIZE>,
-    Sub: SubInstruction<WORD_SIZE>,
-    Mul: MulInstruction<WORD_SIZE>,
-    Const: ConstInstruction<WORD_SIZE>,
-    Relu: ReluInstruction<WORD_SIZE>,
     Advice: AdviceInstruction<WORD_SIZE>,
+    BroadCast: BroadCastInstruction<WORD_SIZE>,
+    Const: ConstInstruction<WORD_SIZE>,
+    Mul: MulInstruction<WORD_SIZE>,
+    Relu: ReluInstruction<WORD_SIZE>,
+    Sub: SubInstruction<WORD_SIZE>,
+    Eq: BeqInstruction<WORD_SIZE>,
     VirtualAssertValidSignedRemainder: AssertValidSignedRemainderInstruction<WORD_SIZE>,
     VirtualAssertValidDiv0: AssertValidDiv0Instruction<WORD_SIZE>,
-    VirtualAssertEq: BeqInstruction<WORD_SIZE>,
-    VirtualMove: MoveInstruction<WORD_SIZE>,
-    BroadCast: BroadCastInstruction<WORD_SIZE>,
     VirtualConst: ConstInstruction<WORD_SIZE>,
+    VirtualMove: MoveInstruction<WORD_SIZE>,
 );
 
 /// This function validates that the execution trace matches the expected memory

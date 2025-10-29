@@ -1,3 +1,9 @@
+use crate::jolt::{
+    dag::state_manager::StateManager,
+    pcs::{ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
+    sumcheck::SumcheckInstance,
+    witness::{CommittedPolynomial, VirtualPolynomial},
+};
 use jolt_core::{
     field::JoltField,
     poly::{
@@ -10,15 +16,7 @@ use jolt_core::{
     utils::math::Math,
 };
 use rayon::prelude::*;
-
 use std::{cell::RefCell, rc::Rc};
-
-use crate::jolt::{
-    dag::state_manager::StateManager,
-    pcs::{ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
-    sumcheck::SumcheckInstance,
-    witness::{CommittedPolynomial, VirtualPolynomial},
-};
 
 struct ValFinalSumcheckProverState<F: JoltField> {
     inc: MultilinearPolynomial<F>,
@@ -47,7 +45,7 @@ impl<F: JoltField> ValFinalSumcheck<F> {
         let r_address = state_manager
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::ValFinal,
-                SumcheckId::MatVecReadChecking,
+                SumcheckId::PrecompileReadChecking,
             )
             .0
             .r;
@@ -75,7 +73,7 @@ impl<F: JoltField> ValFinalSumcheck<F> {
         let val_final_claim = state_manager
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::ValFinal,
-                SumcheckId::MatVecReadChecking,
+                SumcheckId::PrecompileReadChecking,
             )
             .1;
 
@@ -93,7 +91,7 @@ impl<F: JoltField> ValFinalSumcheck<F> {
         let val_final_claim = state_manager
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::ValFinal,
-                SumcheckId::MatVecReadChecking,
+                SumcheckId::PrecompileReadChecking,
             )
             .1;
         Self {
@@ -181,7 +179,7 @@ impl<F: JoltField> SumcheckInstance<F> for ValFinalSumcheck<F> {
             .borrow()
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::ValFinal,
-                SumcheckId::MatVecReadChecking,
+                SumcheckId::PrecompileReadChecking,
             )
             .0;
         let wa_opening_point =
@@ -210,7 +208,7 @@ impl<F: JoltField> SumcheckInstance<F> for ValFinalSumcheck<F> {
             .borrow()
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::ValFinal,
-                SumcheckId::MatVecReadChecking,
+                SumcheckId::PrecompileReadChecking,
             )
             .0;
         let wa_opening_point =

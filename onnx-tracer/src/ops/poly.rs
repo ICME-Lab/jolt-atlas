@@ -87,14 +87,17 @@ impl<F: TensorType + PartialOrd> From<&PolyOp<F>> for ONNXOpcode {
             PolyOp::Sub => ONNXOpcode::Sub,
             PolyOp::Mult => ONNXOpcode::Mul,
             PolyOp::Pow(_) => ONNXOpcode::Mul,
-            PolyOp::Einsum { .. } => ONNXOpcode::MatMult,
-            PolyOp::Sum { .. } => ONNXOpcode::Sum,
+            PolyOp::Einsum { equation } => ONNXOpcode::Einsum(equation.clone()),
+            PolyOp::Sum { axes } => ONNXOpcode::Sum(axes[0]), // we only accept single axis sum for now
             PolyOp::MeanOfSquares { .. } => ONNXOpcode::MeanOfSquares,
             PolyOp::Reshape(..) => ONNXOpcode::Reshape,
             PolyOp::Iff => ONNXOpcode::Select,
             PolyOp::MultiBroadcastTo { .. } => ONNXOpcode::Broadcast,
             _ => {
-                panic!("PolyOp {value:?} cannot be converted to ONNXOpcode",);
+                unimplemented!(
+                    "ONNXOpcode::from not implemented for PolyOp variant {:?}",
+                    value
+                );
             }
         }
     }
@@ -135,7 +138,7 @@ where
             PolyOp::Add => "ADD".into(),
             PolyOp::Mult => "MULT".into(),
             PolyOp::Sub => "SUB".into(),
-            PolyOp::Sum { .. } => "SUM".into(),
+            PolyOp::Sum { axes } => format!("SUM(axes={axes:?})"),
             PolyOp::MeanOfSquares { axes } => {
                 format!("MEANOFSQUARES (axes={axes:?})")
             }

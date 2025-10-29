@@ -1,8 +1,10 @@
 use super::TensorError;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use crate::parallel_utils::IndexedParallelIterator;
-use crate::parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator};
-use crate::tensor::{Tensor, TensorType};
+use crate::{
+    parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator},
+    tensor::{Tensor, TensorType},
+};
 use maybe_rayon::iter::ParallelIterator;
 use std::collections::{HashMap, HashSet};
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -1174,7 +1176,7 @@ pub fn gather<T: TensorType + Send + Sync>(
 ) -> Result<Tensor<T>, TensorError> {
     let mut index_clone = index.clone();
     index_clone.flatten();
-    // TODO: not sure what this prevents from erorring
+    // TODO: not sure what this prevents from erroring
     if index_clone.is_singleton() {
         index_clone.reshape(&[1])?;
     }

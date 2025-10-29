@@ -191,7 +191,7 @@ impl JoltDAG {
         drop(span);
 
         if pp.is_precompiles_enabled() {
-            let precompile_proof = PrecompileSNARK::prove(&state_manager);
+            let precompile_proof = PrecompileSNARK::prove(&mut state_manager);
             state_manager.proofs.borrow_mut().insert(
                 ProofKeys::PrecompileProof,
                 ProofData::PrecompileProof(precompile_proof),

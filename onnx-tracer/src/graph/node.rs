@@ -502,7 +502,7 @@ impl Node {
             imm: self.extract_immediate_value(),
             virtual_sequence_remaining: None,
             active_output_elements: self.calculate_active_output_elements(),
-            output_dims: self.normalize_output_dimensions(),
+            output_dims: self.out_dims.clone(),
         }
     }
 
@@ -523,18 +523,6 @@ impl Node {
     /// Calculates the total number of active elements in the output tensor
     pub fn calculate_active_output_elements(&self) -> usize {
         self.out_dims.iter().product()
-    }
-
-    /// Normalizes output dimensions to a 2D format [height, width]
-    /// 1D tensors are converted to [1, width] format
-    pub fn normalize_output_dimensions(&self) -> [usize; 2] {
-        if self.out_dims.len() == 1 {
-            [1, self.out_dims[0]]
-        } else if self.out_dims.len() >= 2 {
-            [self.out_dims[0], self.out_dims[1]]
-        } else {
-            [1, 1] // Default for empty dimensions
-        }
     }
 
     /// Extracts immediate values based on the operation type

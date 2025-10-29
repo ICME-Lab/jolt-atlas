@@ -525,18 +525,13 @@ pub enum VirtualPolynomial {
     RegistersVal,
     OpFlags(CircuitFlags),
     LookupTableFlag(usize),
-    // matrix multiplication precompile polys
-    AVec(usize),
-    BMat(usize),
-    CRes(usize),
-    RaA(usize),
-    RaB(usize),
-    RaC(usize),
-    // reduce sum precompile polys
-    ReduceA(usize),
-    ReduceRes(usize),
-    ReduceRaA(usize),
-    ReduceRaRes(usize),
+    // precompile polys
+    PrecompileA(usize),
+    PrecompileB(usize),
+    PrecompileC(usize),
+    RaAPrecompile(usize),
+    RaBPrecompile(usize),
+    RaCPrecompile(usize),
     ValFinal,
 }
 

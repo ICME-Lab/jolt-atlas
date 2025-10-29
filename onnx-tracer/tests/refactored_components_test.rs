@@ -48,22 +48,6 @@ mod refactored_components_tests {
         assert_eq!(node_3d.calculate_active_output_elements(), 24);
     }
 
-    /// Test the refactored normalize_output_dimensions method
-    #[test]
-    fn test_normalize_output_dimensions() {
-        // Test 1D tensor (should become [1, n])
-        let node_1d = create_input_node(7, vec![5], 0, 1);
-        assert_eq!(node_1d.normalize_output_dimensions(), [1, 5]);
-
-        // Test 2D tensor (should preserve [m, n])
-        let node_2d = create_input_node(7, vec![3, 4], 1, 1);
-        assert_eq!(node_2d.normalize_output_dimensions(), [3, 4]);
-
-        // Test 3D tensor (should take first two dimensions)
-        let node_3d = create_input_node(7, vec![2, 3, 4], 2, 1);
-        assert_eq!(node_3d.normalize_output_dimensions(), [2, 3]);
-    }
-
     /// Test the refactored extract_immediate_value method
     #[test]
     fn test_extract_immediate_value() {

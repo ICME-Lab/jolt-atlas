@@ -102,7 +102,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&y))),
                 virtual_sequence_remaining: None,
                 active_output_elements: output_size,
-                output_dims: [1, output_size],
+                output_dims: vec![1, output_size],
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&x))),

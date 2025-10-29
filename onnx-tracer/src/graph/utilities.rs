@@ -1395,7 +1395,7 @@ pub fn create_relu_node(
     )
 }
 
-pub fn create_matmul_node(
+pub fn create_einsum_node(
     equation: String,
     out_scale: i32,
     inputs: Vec<(usize, usize)>,

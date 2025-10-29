@@ -12,7 +12,7 @@ mod decode_tests {
         graph::{
             model::{Model, NodeType},
             utilities::{
-                create_const_node, create_div_node, create_input_node, create_matmul_node,
+                create_const_node, create_div_node, create_einsum_node, create_input_node,
                 create_polyop_node, create_relu_node, create_sigmoid_node,
             },
         },
@@ -139,7 +139,7 @@ mod decode_tests {
     /// Test decode with matmul operation
     #[test]
     fn test_decode_matmul_node() {
-        let matmul_node = create_matmul_node(
+        let matmul_node = create_einsum_node(
             "mk,nk->mn".to_string(),
             7,
             vec![(0, 0), (1, 0)],
@@ -151,7 +151,7 @@ mod decode_tests {
         let instr = decode_node((&idx, &node_type));
 
         assert_eq!(instr.address, 3);
-        assert_eq!(instr.opcode, ONNXOpcode::MatMult);
+        assert_eq!(instr.opcode, ONNXOpcode::Einsum("mk,nk->mn".to_string()));
         assert_eq!(instr.td, Some(2));
         assert_eq!(instr.ts1, Some(0));
         assert_eq!(instr.ts2, Some(1));
@@ -166,7 +166,7 @@ mod decode_tests {
         let node_1d = create_input_node(7, vec![5], 0, 1);
         let (idx, node_type) = (0_usize, NodeType::Node(node_1d));
         let instr = decode_node((&idx, &node_type));
-        assert_eq!(instr.output_dims, [1, 5]);
+        assert_eq!(instr.output_dims, [5]);
         assert_eq!(instr.active_output_elements, 5);
 
         // Test 2D output (should preserve [m, n])

@@ -4,7 +4,9 @@ use crate::jolt::{
         read_raf_checking::ReadRafSumcheck,
     },
     dag::{stage::SumcheckStages, state_manager::StateManager},
-    executor::instructions::{InstructionLookup, VirtualInstructionSequence, div::DivInstruction},
+    executor::instructions::{
+        InstructionLookup, VirtualInstructionSequence, div::DivInstruction, rsqrt::RsqrtInstruction,
+    },
     lookup_table::{LookupTables, RangeCheckTable, ReLUTable},
     pcs::SumcheckId,
     sumcheck::SumcheckInstance,
@@ -18,8 +20,8 @@ use jolt_core::{
     utils::{math::Math, thread::unsafe_allocate_zero_vec},
     zkvm::{
         lookup_table::{
-            equal::EqualTable, valid_div0::ValidDiv0Table,
-            valid_signed_remainder::ValidSignedRemainderTable,
+            equal::EqualTable, signed_greater_than_equal::SignedGreaterThanEqualTable,
+            valid_div0::ValidDiv0Table, valid_signed_remainder::ValidSignedRemainderTable,
         },
         witness::{DTH_ROOT_OF_K, compute_d_parameter},
     },
@@ -220,27 +222,29 @@ impl JoltONNXBytecode {
         flags[CircuitFlags::LeftOperandIsTs1Value as usize] = matches!(
             self.opcode,
             ONNXOpcode::Add
-            | ONNXOpcode::Sub
-            | ONNXOpcode::Mul
-            | ONNXOpcode::VirtualMove
-            | ONNXOpcode::VirtualAssertValidSignedRemainder
-            | ONNXOpcode::VirtualAssertValidDiv0
-            | ONNXOpcode::VirtualAssertEq
-            | ONNXOpcode::Gte
-            | ONNXOpcode::Relu
-            | ONNXOpcode::Output
             | ONNXOpcode::Broadcast
+            | ONNXOpcode::Eq
+            | ONNXOpcode::Gte
+            | ONNXOpcode::Mul
+            | ONNXOpcode::Output
+            | ONNXOpcode::Relu
+            | ONNXOpcode::Sub
+            | ONNXOpcode::VirtualAssertEq
+            | ONNXOpcode::VirtualAssertValidDiv0
+            | ONNXOpcode::VirtualAssertValidSignedRemainder
+            | ONNXOpcode::VirtualMove
         );
 
         flags[CircuitFlags::RightOperandIsTs2Value as usize] = matches!(
             self.opcode,
             ONNXOpcode::Add
-            | ONNXOpcode::Sub
-            | ONNXOpcode::Mul
-            | ONNXOpcode::VirtualAssertValidSignedRemainder
-            | ONNXOpcode::VirtualAssertValidDiv0
-            | ONNXOpcode::VirtualAssertEq
+            | ONNXOpcode::Eq
             | ONNXOpcode::Gte
+            | ONNXOpcode::Mul
+            | ONNXOpcode::Sub
+            | ONNXOpcode::VirtualAssertEq
+            | ONNXOpcode::VirtualAssertValidDiv0
+            | ONNXOpcode::VirtualAssertValidSignedRemainder
         );
 
         flags[CircuitFlags::RightOperandIsImm as usize] = matches!(
@@ -251,10 +255,10 @@ impl JoltONNXBytecode {
         flags[CircuitFlags::AddOperands as usize] = matches!(
             self.opcode,
             ONNXOpcode::Add
-            | ONNXOpcode::VirtualMove
-            | ONNXOpcode::Relu
-            | ONNXOpcode::Output
             | ONNXOpcode::Broadcast
+            | ONNXOpcode::Output
+            | ONNXOpcode::Relu
+            | ONNXOpcode::VirtualMove
         );
 
         flags[CircuitFlags::SubtractOperands as usize] = matches!(
@@ -270,15 +274,16 @@ impl JoltONNXBytecode {
         flags[CircuitFlags::WriteLookupOutputToTD as usize] = matches!(
             self.opcode,
             ONNXOpcode::Add
-            | ONNXOpcode::Sub
-            | ONNXOpcode::Mul
-            | ONNXOpcode::VirtualAdvice
-            | ONNXOpcode::VirtualMove
-            | ONNXOpcode::VirtualConst
-            | ONNXOpcode::Gte
-            | ONNXOpcode::Relu
-            | ONNXOpcode::Output
             | ONNXOpcode::Broadcast
+            | ONNXOpcode::Eq
+            | ONNXOpcode::Gte
+            | ONNXOpcode::Output
+            | ONNXOpcode::Mul
+            | ONNXOpcode::Relu
+            | ONNXOpcode::Sub
+            | ONNXOpcode::VirtualAdvice
+            | ONNXOpcode::VirtualConst
+            | ONNXOpcode::VirtualMove
         );
 
         flags[CircuitFlags::Advice as usize] = matches!(
@@ -288,22 +293,15 @@ impl JoltONNXBytecode {
 
         flags[CircuitFlags::Const as usize] = matches!(
             self.opcode,
-            ONNXOpcode::VirtualConst
-            | ONNXOpcode::Constant
+            ONNXOpcode::Constant
+            | ONNXOpcode::VirtualConst
         );
 
         flags[CircuitFlags::Assert as usize] = matches!(
             self.opcode,
-            ONNXOpcode::VirtualAssertValidSignedRemainder
+            ONNXOpcode::VirtualAssertEq
             | ONNXOpcode::VirtualAssertValidDiv0
-            | ONNXOpcode::VirtualAssertEq
-        );
-
-        flags[CircuitFlags::Assert as usize] = matches!(
-            self.opcode,
-            ONNXOpcode::VirtualAssertValidSignedRemainder
-            | ONNXOpcode::VirtualAssertValidDiv0
-            | ONNXOpcode::VirtualAssertEq
+            | ONNXOpcode::VirtualAssertValidSignedRemainder
         );
 
         flags[CircuitFlags::IsNoop as usize] = matches!(
@@ -330,17 +328,19 @@ impl InstructionLookup<WORD_SIZE> for JoltONNXBytecode {
     fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
         match self.opcode {
             ONNXOpcode::Add => Some(RangeCheckTable.into()),
-            ONNXOpcode::Sub => Some(RangeCheckTable.into()),
-            ONNXOpcode::Mul => Some(RangeCheckTable.into()),
-            ONNXOpcode::Constant => Some(RangeCheckTable.into()),
-            ONNXOpcode::Relu => Some(ReLUTable.into()),
-            ONNXOpcode::VirtualConst => Some(RangeCheckTable.into()),
-            ONNXOpcode::VirtualAdvice => Some(RangeCheckTable.into()),
-            ONNXOpcode::VirtualMove => Some(RangeCheckTable.into()),
-            ONNXOpcode::VirtualAssertValidSignedRemainder => Some(ValidSignedRemainderTable.into()),
-            ONNXOpcode::VirtualAssertValidDiv0 => Some(ValidDiv0Table.into()),
-            ONNXOpcode::VirtualAssertEq => Some(EqualTable.into()),
             ONNXOpcode::Broadcast => Some(RangeCheckTable.into()),
+            ONNXOpcode::Constant => Some(RangeCheckTable.into()),
+            ONNXOpcode::Eq => Some(EqualTable.into()),
+            ONNXOpcode::Gte => Some(SignedGreaterThanEqualTable.into()),
+            ONNXOpcode::Mul => Some(RangeCheckTable.into()),
+            ONNXOpcode::Relu => Some(ReLUTable.into()),
+            ONNXOpcode::Sub => Some(RangeCheckTable.into()),
+            ONNXOpcode::VirtualAssertEq => Some(EqualTable.into()),
+            ONNXOpcode::VirtualAssertValidDiv0 => Some(ValidDiv0Table.into()),
+            ONNXOpcode::VirtualAssertValidSignedRemainder => Some(ValidSignedRemainderTable.into()),
+            ONNXOpcode::VirtualAdvice => Some(RangeCheckTable.into()),
+            ONNXOpcode::VirtualConst => Some(RangeCheckTable.into()),
+            ONNXOpcode::VirtualMove => Some(RangeCheckTable.into()),
             _ => None,
         }
     }
@@ -488,6 +488,7 @@ impl BytecodePreprocessing {
             .into_iter()
             .flat_map(|instr| match instr.opcode {
                 ONNXOpcode::Div => DivInstruction::<32>::virtual_sequence(instr, max_td),
+                ONNXOpcode::Rsqrt => RsqrtInstruction::<32>::virtual_sequence(instr, max_td),
                 _ => vec![instr],
             })
             .collect()

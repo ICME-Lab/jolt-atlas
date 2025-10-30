@@ -868,6 +868,18 @@ mod e2e_tests {
     }
 
     #[test]
+    #[ignore] // TODO(AntoineF4C5): Solve error when 1-element input is fed to rsqrt (see Issue#67)
+    #[serial]
+    fn test_rsqrt_binary() {
+        run_snark_test(
+            || model(&PathBuf::from("../onnx-tracer/models/rsqrt/network.onnx")),
+            &[512],
+            &[1, 1],
+            None,
+        );
+    }
+
+    #[test]
     #[serial]
     fn test_simple_mlp_small() {
         run_snark_test(
@@ -956,5 +968,11 @@ mod e2e_tests {
     #[serial]
     fn test_rank_0() {
         run_snark_test(builder::rank_0_addsubmul_model, &[10], &[1, 1], None);
+    }
+
+    #[test]
+    #[serial]
+    fn test_rsqrt() {
+        run_snark_test(builder::rsqrt_model, &[-3, -2, 0, 1], &[1, 4], None);
     }
 }

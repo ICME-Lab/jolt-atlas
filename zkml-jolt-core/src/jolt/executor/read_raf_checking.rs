@@ -801,6 +801,7 @@ mod tests {
                 Tensor::new(Some(&[1.0]), &[]).unwrap(),
             )),
             ONNXOpcode::Eq => SupportedOp::Hybrid(HybridOp::Equals),
+            ONNXOpcode::Gte => SupportedOp::Hybrid(HybridOp::GreaterEqual),
             ONNXOpcode::Mul => SupportedOp::Linear(PolyOp::Mult),
             ONNXOpcode::Relu => SupportedOp::Nonlinear(LookupOp::ReLU),
             ONNXOpcode::Sub => SupportedOp::Linear(PolyOp::Sub),

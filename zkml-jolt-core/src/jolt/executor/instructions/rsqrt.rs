@@ -9,7 +9,7 @@ use onnx_tracer::{
 use crate::{
     jolt::executor::instructions::{
         VirtualInstructionSequence, add::AddInstruction, beq::BeqInstruction, div::DivInstruction,
-        mul::MulInstruction, sub::SubInstruction,
+        gte::GteInstruction, mul::MulInstruction, sub::SubInstruction,
     },
     utils::u64_vec_to_i32_iter,
 };
@@ -42,19 +42,22 @@ const SF_LOG: u64 = 7;
 /// | 2     | `VirtualConst(1)`     | Initialize ulp tensor                             | `1`                           |
 /// | 3     | `Eq`                  | Returns `x == 0`                                  | `x == 0`                      |
 /// | 4     | `Select`              | Compute `x = select(x, x, ulp)`                   | `max(x, 1)`                   |
-/// | 5     | `VirtualConst(a)`     | Initialize a tensor                               | `(sqrt(2)/2 - 1)`             |
-/// | 6     | `VirtualAdvice(d)`    | Initialize d tensor                               | `2^((3log(Q) - log(x))/2)`    |
-/// | 7     | `Mul`                 | Compute `xd_ns = x * d`                           | `Q * xd`                      |
-/// | 8     | `Div`                 | Compute `xd = xd_ns / Q`                          | `xd`                          |
-/// | 9     | `Mul`                 | Compute `xd_sq_ns = d * xd`                       | `Q * xd^2`                    |
-/// | 10    | `Div`                 | Compute `xd_sq = xd_sq_ns / Q`                    | `xd^2`                        |
-/// | 11    | `Sub`                 | Compute `xd_sq_minus1 = xd_sq - 1`                | `xd^2-1`                      |
-/// | 12    | `Mul`                 | Compute `xd_cub_minusd_ns = d * xd_sq_minus1`     | `Q * d(xd^2-1)`               |
-/// | 13    | `Div`                 | Compute `xd_cub_minusd = xd_cub_minusd_ns / Q`    | `d(xd^2-1)`                   |
-/// | 14    | `Mul`                 | Compute `axd_cub_minusd_ns = a * xd_cub_minusd`   | `Q * d(xd^2-1)(sqrt(2)/2-1)`  |
-/// | 15    | `Div`                 | Compute `axd_cub_minusd = axd_cub_minusd_ns / Q`  | `d(xd^2-1)(sqrt(2)/2-1)`      |
-/// | 16    | `Add`                 | Compute `approx = d + axd_cub_minusd`             | `d + d(xd^2-1)(sqrt(2)/2-1)`  |
-/// | 17    | `VirtualMove`         | Write final result to output tensor               | `d + d(xd^2-1)(sqrt(2)/2-1)`  |
+/// | 5     | `VirtualConst(a_lt_0)`| Initialize a_lt_0 tensor, if `xd^2-1 < 0`         | `2 - 2 * sqrt(2)`             |
+/// | 6     | `VirtualConst(a)`     | Initialize a_gt_0 tensor, if `xd^2-1 >= 0`        | `sqrt(2)/2 - 1`               |
+/// | 7     | `VirtualAdvice(d)`    | Initialize d tensor                               | `2^((3log(Q) - log(x))/2)`    |
+/// | 8     | `Mul`                 | Compute `xd_ns = x * d`                           | `Q * xd`                      |
+/// | 9     | `Div`                 | Compute `xd = xd_ns / Q`                          | `xd`                          |
+/// | 10    | `Mul`                 | Compute `xd_sq_ns = d * xd`                       | `Q * xd^2`                    |
+/// | 11    | `Div`                 | Compute `xd_sq = xd_sq_ns / Q`                    | `xd^2`                        |
+/// | 12    | `Sub`                 | Compute `xd_sq_minus1 = xd_sq - 1`                | `xd^2-1`                      |
+/// | 13    | `Gte`                 | Returns `gt_0 = xd^2-1 >= 0`                      | `xd^2-1 >= 0`                 |
+/// | 14    | `Select`              | Compute `a = select(gt0, a_gt_0, a_lt_0)`         | `xd^2-1>=0 ? a_gt_0 : a_lt_0` |
+/// | 15    | `Mul`                 | Compute `xd_cub_minusd_ns = d * xd_sq_minus1`     | `Q * d(xd^2-1)`               |
+/// | 16    | `Div`                 | Compute `xd_cub_minusd = xd_cub_minusd_ns / Q`    | `d(xd^2-1)`                   |
+/// | 17    | `Mul`                 | Compute `axd_cub_minusd_ns = a * xd_cub_minusd`   | `Q * d(xd^2-1)(sqrt(2)/2-1)`  |
+/// | 18    | `Div`                 | Compute `axd_cub_minusd = axd_cub_minusd_ns / Q`  | `d(xd^2-1)(sqrt(2)/2-1)`      |
+/// | 19    | `Add`                 | Compute `approx = d + axd_cub_minusd`             | `d + d(xd^2-1)(sqrt(2)/2-1)`  |
+/// | 20    | `VirtualMove`         | Write final result to output tensor               | `d + d(xd^2-1)(sqrt(2)/2-1)`  |
 ///
 /// Each `ONNXCycle` represents one of these steps in the virtualized trace.
 ///
@@ -63,7 +66,7 @@ const SF_LOG: u64 = 7;
 /// - Designed for quantized circuits or proof backends where fractional values are approximated in integer space.
 pub struct RsqrtInstruction<const WORD_SIZE: usize>;
 impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WORD_SIZE> {
-    const SEQUENCE_LENGTH: usize = 17;
+    const SEQUENCE_LENGTH: usize = 20;
 
     fn virtual_trace(cycle: ONNXCycle, K: usize) -> Vec<ONNXCycle> {
         assert_eq!(cycle.instr.opcode, ONNXOpcode::Rsqrt);
@@ -84,13 +87,16 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         let v_ulp = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
         let v_xeq0 = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
         let v_x = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_a = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
+        let v_a_lt_0 = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
+        let v_a_gt_0 = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
         let v_d = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
         let v_xd_ns = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
         let v_xd = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
         let v_xd_sq_ns = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
         let v_xd_sq = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
         let v_xd_sq_minus1 = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
+        let v_gt0 = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
+        let v_a = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
         let v_xd_cub_minusd_ns = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
         let v_xd_cub_minusd = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
         let v_axd_cub_minusd_ns = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
@@ -210,10 +216,10 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         });
         let x = clamped_x;
 
-        // Constant sqrt(2)/2-1, factor used to calculate approximation
+        // Constant 2 - 2 * sqrt(2), factor conditionally used to calculate approximation
         let sqrt_2 = (2f32.sqrt() * SF as f32).round() as u64;
-        let a = (sqrt_2 as i32 / 2 - SF as i32) as u32 as u64;
-        let a = vec![a; num_outputs];
+        let a_lt_0 = (2 * SF as i32 - 2 * sqrt_2 as i32) as u32 as u64;
+        let a_lt_0 = vec![a_lt_0; num_outputs];
         virtual_trace.push(ONNXCycle {
             instr: ONNXInstr {
                 address: cycle.instr.address,
@@ -221,8 +227,8 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts1: None,
                 ts2: None,
                 ts3: None,
-                td: v_a,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&a))),
+                td: v_a_lt_0,
+                imm: Some(Tensor::from(u64_vec_to_i32_iter(&a_lt_0))),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: num_outputs,
                 output_dims: cycle.instr.output_dims.clone(),
@@ -232,7 +238,33 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts2_val: None,
                 ts3_val: None,
                 td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&a))),
+                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&a_lt_0))),
+            },
+            advice_value: None,
+        });
+
+        // Constant sqrt(2)/2-1, factor conditionally used to calculate approximation
+        let a_gt_0 = (sqrt_2 as i32 / 2 - SF as i32) as u32 as u64;
+        let a_gt_0 = vec![a_gt_0; num_outputs];
+        virtual_trace.push(ONNXCycle {
+            instr: ONNXInstr {
+                address: cycle.instr.address,
+                opcode: ONNXOpcode::VirtualConst,
+                ts1: None,
+                ts2: None,
+                ts3: None,
+                td: v_a_gt_0,
+                imm: Some(Tensor::from(u64_vec_to_i32_iter(&a_gt_0))),
+                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                active_output_elements: num_outputs,
+                output_dims: cycle.instr.output_dims.clone(),
+            },
+            memory_state: MemoryState {
+                ts1_val: None,
+                ts2_val: None,
+                ts3_val: None,
+                td_pre_val: None,
+                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&a_gt_0))),
             },
             advice_value: None,
         });
@@ -407,6 +439,67 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3_val: None,
                 td_pre_val: None,
                 td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_sq_minus1))),
+            },
+            advice_value: None,
+        });
+
+        // xd^2-1 >= 0
+        let gt_0: Vec<u64> = (0..num_outputs)
+            .map(|i| GteInstruction::<WORD_SIZE>(xd_sq_minus1[i], 0).to_lookup_output())
+            .collect_vec();
+        virtual_trace.push(ONNXCycle {
+            instr: ONNXInstr {
+                address: cycle.instr.address,
+                opcode: ONNXOpcode::Gte,
+                ts1: v_xd_sq_minus1,
+                ts2: None,
+                ts3: None,
+                td: v_gt0,
+                imm: None,
+                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                active_output_elements: cycle.instr.active_output_elements,
+                output_dims: cycle.instr.output_dims.clone(),
+            },
+            memory_state: MemoryState {
+                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_sq_minus1))),
+                ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&vec![0; num_outputs]))),
+                ts3_val: None,
+                td_pre_val: None,
+                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&gt_0))),
+            },
+            advice_value: None,
+        });
+
+        // a = if xd^2-1 >= 0 { sqrt(2)/2 - 1 } else { 2 - 2 * sqrt(2) }
+        let a: Vec<u64> = gt_0
+            .iter()
+            .zip(a_gt_0.iter())
+            .zip(a_lt_0.iter())
+            .map(
+                |((&gt0, &a_gt0), &a_lt0)| {
+                    if gt0 != 0 { a_gt0 } else { a_lt0 }
+                },
+            )
+            .collect_vec();
+        virtual_trace.push(ONNXCycle {
+            instr: ONNXInstr {
+                address: cycle.instr.address,
+                opcode: ONNXOpcode::Select,
+                ts1: v_gt0,
+                ts2: v_a_gt_0,
+                ts3: v_a_lt_0,
+                td: v_a,
+                imm: None,
+                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                active_output_elements: cycle.instr.active_output_elements,
+                output_dims: cycle.instr.output_dims.clone(),
+            },
+            memory_state: MemoryState {
+                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&gt_0))),
+                ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&a_gt_0))),
+                ts3_val: Some(Tensor::from(u64_vec_to_i32_iter(&a_lt_0))),
+                td_pre_val: None,
+                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&a))),
             },
             advice_value: None,
         });
@@ -603,13 +696,11 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             let xd_sq = rescale_down(d * xd);
             let xd_sq_minus1 = xd_sq - sf;
             let xd_cub_minusd = rescale_down(d * xd_sq_minus1);
-            let a = sqrt_2 / 2 - sf;
-            // TODO(AntoineF4C5): For better approximation, a should differ wether xd^2-1 is greater than 0
-            // let a = if xd_sq_minus_1 < 0 {
-            //     2 * sf - 2 * sqrt_2
-            // } else {
-            //     sqrt_2 / 2 - sf
-            // };
+            let a = if xd_sq_minus1 >= 0 {
+                sqrt_2 / 2 - sf
+            } else {
+                2 * sf - 2 * sqrt_2
+            };
             let axd_cub_minusd = rescale_down(a * xd_cub_minusd);
             let approximation = d + axd_cub_minusd;
 
@@ -635,11 +726,12 @@ mod test {
     use crate::jolt::executor::instructions::test::jolt_virtual_sequence_test;
 
     use super::*;
+    use num_traits::Pow;
     use rand::prelude::*;
 
     #[test]
     fn rsqrt_virtual_sequence_32() {
-        jolt_virtual_sequence_test::<RsqrtInstruction<32>>(ONNXOpcode::Rsqrt, 16);
+        jolt_virtual_sequence_test::<RsqrtInstruction<32>>(ONNXOpcode::Rsqrt, 1);
     }
 
     #[test]
@@ -653,7 +745,7 @@ mod test {
 
         let mut total_offset = 0;
         for _ in 0..nb_loops {
-            let input: f32 = (rng.r#gen::<f32>() * 2.0 - 1.0) * (i32::MAX >> 7) as f32;
+            let input: f32 = (rng.r#gen::<f32>()) * 2f32.pow(10); // Select values between 0 and 1000 (quantized to [0..128_000])
             let expected = 1.0 / input.sqrt();
 
             // Input to the zkvm, this is quantized with a precision of 1/sf.

@@ -20,8 +20,8 @@ use jolt_core::{
     utils::{math::Math, thread::unsafe_allocate_zero_vec},
     zkvm::{
         lookup_table::{
-            equal::EqualTable, valid_div0::ValidDiv0Table,
-            valid_signed_remainder::ValidSignedRemainderTable,
+            equal::EqualTable, signed_greater_than_equal::SignedGreaterThanEqualTable,
+            valid_div0::ValidDiv0Table, valid_signed_remainder::ValidSignedRemainderTable,
         },
         witness::{DTH_ROOT_OF_K, compute_d_parameter},
     },
@@ -331,6 +331,7 @@ impl InstructionLookup<WORD_SIZE> for JoltONNXBytecode {
             ONNXOpcode::Broadcast => Some(RangeCheckTable.into()),
             ONNXOpcode::Constant => Some(RangeCheckTable.into()),
             ONNXOpcode::Eq => Some(EqualTable.into()),
+            ONNXOpcode::Gte => Some(SignedGreaterThanEqualTable.into()),
             ONNXOpcode::Mul => Some(RangeCheckTable.into()),
             ONNXOpcode::Relu => Some(ReLUTable.into()),
             ONNXOpcode::Sub => Some(RangeCheckTable.into()),

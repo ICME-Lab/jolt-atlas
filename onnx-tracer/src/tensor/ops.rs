@@ -3234,7 +3234,11 @@ pub mod nonlinearities {
             let xd = rescale_down(x as i32 * d);
             let xd_sq_minus1 = rescale_down(d * xd) - sf;
             let xd_cub_minusd = rescale_down(d * xd_sq_minus1);
-            let a = sqrt_2 / 2 - sf;
+            let a = if xd_sq_minus1 >= 0 {
+                sqrt_2 / 2 - sf
+            } else {
+                2 * sf - 2 * sqrt_2
+            };
             let axd_cub_minusd = rescale_down(a * xd_cub_minusd);
             let approximation = d + axd_cub_minusd;
 

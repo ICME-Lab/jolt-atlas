@@ -5,6 +5,7 @@ pub mod add;
 pub mod beq;
 pub mod broadcast;
 pub mod div;
+pub mod gte;
 pub mod mul;
 pub mod relu;
 pub mod rsqrt;

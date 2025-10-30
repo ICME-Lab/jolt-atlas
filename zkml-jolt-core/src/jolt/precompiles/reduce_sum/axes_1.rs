@@ -1,6 +1,7 @@
 use jolt_core::{
     field::JoltField,
     poly::{
+        commitment::commitment_scheme::CommitmentScheme,
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{BIG_ENDIAN, OpeningPoint},
@@ -11,6 +12,7 @@ use jolt_core::{
 use rayon::prelude::*;
 
 use crate::jolt::{
+    dag::state_manager::StateManager,
     pcs::{SumcheckId, VerifierOpeningAccumulator},
     sumcheck::SumcheckInstance,
     witness::VirtualPolynomial,
@@ -19,7 +21,7 @@ use crate::jolt::{
 pub struct ExecutionSumcheck<F: JoltField> {
     prover_state: Option<ExecutionProverState<F>>,
     r_x: Vec<F>,
-    rv_claim_res: F,
+    rv_claim_c: F,
     index: usize,
     num_rounds: usize,
 }
@@ -34,7 +36,7 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
     }
 
     fn input_claim(&self) -> F {
-        self.rv_claim_res
+        self.rv_claim_c
     }
 
     fn compute_prover_message(&mut self, _round: usize, _previous_claim: F) -> Vec<F> {
@@ -79,11 +81,25 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
             .prover_state
             .as_ref()
             .expect("Prover state not initialized");
+        let r_a = [self.r_x.clone(), opening_point.r.clone()].concat();
         accumulator.borrow_mut().append_virtual(
-            VirtualPolynomial::ReduceA(self.index),
-            SumcheckId::ReduceSumExecution,
-            opening_point.clone(),
+            VirtualPolynomial::PrecompileA(self.index),
+            SumcheckId::PrecompileExecution,
+            r_a.into(),
             prover_state.a_r.final_sumcheck_claim(),
+        );
+        let r_b = vec![F::zero()];
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::PrecompileB(self.index),
+            SumcheckId::PrecompileExecution,
+            r_b.into(),
+            F::zero(),
+        );
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::PrecompileC(self.index),
+            SumcheckId::PrecompileExecution,
+            self.r_x.clone().into(),
+            self.rv_claim_c,
         );
     }
 
@@ -103,8 +119,8 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
         accumulator
             .borrow()
             .get_virtual_polynomial_opening(
-                VirtualPolynomial::ReduceA(self.index),
-                SumcheckId::ReduceSumExecution,
+                VirtualPolynomial::PrecompileA(self.index),
+                SumcheckId::PrecompileExecution,
             )
             .1
     }
@@ -114,12 +130,18 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
         accumulator: std::rc::Rc<
             std::cell::RefCell<crate::jolt::pcs::VerifierOpeningAccumulator<F>>,
         >,
-        r_y: OpeningPoint<BIG_ENDIAN, F>,
+        opening_point: OpeningPoint<BIG_ENDIAN, F>,
     ) {
-        let r_b = [self.r_x.clone(), r_y.r.clone()].concat();
+        let r_a = [self.r_x.clone(), opening_point.r.clone()].concat();
         accumulator.borrow_mut().append_virtual(
-            VirtualPolynomial::ReduceA(self.index),
-            SumcheckId::ReduceSumExecution,
+            VirtualPolynomial::PrecompileA(self.index),
+            SumcheckId::PrecompileExecution,
+            r_a.into(),
+        );
+        let r_b = vec![F::zero()];
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::PrecompileB(self.index),
+            SumcheckId::PrecompileExecution,
             r_b.into(),
         );
     }
@@ -127,41 +149,93 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
 
 impl<F: JoltField> ExecutionSumcheck<F> {
     /// Create the prover sum-check instance for matvec precompile
-    pub fn new_prover<ProofTranscript: Transcript>(
+    pub fn new_prover<ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>>(
+        index: usize,
+        sm: &mut StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Self {
+        // Get the final memory state (val_final) from the prover
+        let final_memory_state = sm.get_val_final();
+        let (pp, _, _) = sm.get_prover_data();
+        let pp = &pp.shared.precompiles.instances[index];
+
+        // Get the size of the result vector and generate a random challenge
+        let m = pp.c_dims[0];
+        let r_x: Vec<F> = sm.get_transcript().borrow_mut().challenge_vector(m.log_2());
+
+        // Extract values for operands a and b from memory
+        let E = EqPolynomial::evals(&r_x);
+        let rv_a = pp.extract_rv(final_memory_state, |m| &m.a_addr);
+        let rv_claim_c: F = pp
+            .c_addr
+            .iter()
+            .enumerate()
+            .map(|(j, &k)| E[j] * F::from_i64(final_memory_state[k]))
+            .sum();
+        Self::init_prover(rv_a, r_x, E, rv_claim_c, index)
+    }
+
+    /// Create the prover sum-check instance for matvec precompile
+    pub fn init_prover(
         a: Vec<i64>,
         r_x: Vec<F>,
-        rv_claim_res: F,
+        eq_rx: Vec<F>,
+        rv_claim_c: F,
         index: usize,
     ) -> Self {
-        let eq_r = EqPolynomial::evals(&r_x);
         // num rows in a
         let m = r_x.len().pow2();
         // num cols in a
         let n = a.len() / m;
         let a_r = (0..n)
             .into_par_iter()
-            .map(|y| (0..m).map(|x| F::from_i64(a[x * n + y]) * eq_r[x]).sum())
+            .map(|y| (0..m).map(|x| F::from_i64(a[x * n + y]) * eq_rx[x]).sum())
             .collect::<Vec<_>>();
-        debug_assert_eq!(rv_claim_res, a_r.iter().sum());
+        debug_assert_eq!(rv_claim_c, a_r.iter().sum());
         Self {
             prover_state: Some(ExecutionProverState {
                 a_r: MultilinearPolynomial::from(a_r),
             }),
             r_x,
-            rv_claim_res,
+            rv_claim_c,
             index,
             num_rounds: n.log_2(),
         }
     }
 
     /// Create the verifier sum-check instance for matvec precompile
-    pub fn new_verifier(r_x: Vec<F>, rv_claim_res: F, index: usize, m: usize) -> Self {
+    pub fn new_verifier<ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>>(
+        index: usize,
+        sm: &mut StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Self {
+        // Get preprocessing data for this matrix-vector multiplication
+        let (pp, _, _) = sm.get_verifier_data();
+        let pp = &pp.shared.precompiles.instances[index];
+
+        let m = pp.c_dims[0];
+        let n = pp.a_dims[1];
+
+        // Generate the same random challenge as the prover (using the transcript)
+        let r_x: Vec<F> = sm.get_transcript().borrow_mut().challenge_vector(m.log_2());
+
+        // cache r_x
+        let verifier_accumulator = sm.get_verifier_accumulator();
+        verifier_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::PrecompileC(index),
+            SumcheckId::PrecompileExecution,
+            r_x.clone().into(),
+        );
+        let rv_claim_c = sm
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::PrecompileC(index),
+                SumcheckId::PrecompileExecution,
+            )
+            .1;
         Self {
             prover_state: None,
             r_x,
-            rv_claim_res,
+            rv_claim_c,
             index,
-            num_rounds: m.log_2(),
+            num_rounds: n.log_2(),
         }
     }
 }

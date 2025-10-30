@@ -41,7 +41,7 @@ use std::{
 use strum::EnumCount;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
-pub const ZERO_ADDR_PREPEND: usize = 1; // TODO(Forpee): reserve output
+pub const ZERO_ADDR_PREPEND: usize = 1; // TODO(AntoineF4C5): reserve output
 
 pub mod booleanity;
 pub mod hamming_weight;
@@ -152,7 +152,7 @@ fn compute_ra_evals<F: JoltField>(
 }
 
 /// # Note: For our models (non-subgraph ones) bytecode trace is known up-front so we can preprocess it
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BytecodePreprocessing {
     pub code_size: usize,
     pub bytecode: Vec<JoltONNXBytecode>,
@@ -174,7 +174,7 @@ pub struct BytecodePreprocessing {
     pub raw_bytecode: Vec<ONNXInstr>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// (Jolt-Optimized Unitary Logic Execution) bytecode line
 pub struct JoltONNXBytecode {
     /// The unexpanded program counter (PC) address of this instruction in the ONNX binary bytecode.
@@ -201,15 +201,8 @@ impl JoltONNXBytecode {
     /// Used for padding
     pub fn no_op() -> Self {
         Self {
-            address: 0,
             opcode: ONNXOpcode::Noop,
-            td: 0,
-            ts1: 0,
-            ts2: 0,
-            ts3: 0,
-            imm: 0,
-            tensor_sequence_remaining: None,
-            virtual_sequence_remaining: None,
+            ..Default::default()
         }
     }
 
@@ -218,13 +211,7 @@ impl JoltONNXBytecode {
         Self {
             address,
             opcode: ONNXOpcode::AddressedNoop,
-            td: 0,
-            ts1: 0,
-            ts2: 0,
-            ts3: 0,
-            imm: 0,
-            tensor_sequence_remaining: None,
-            virtual_sequence_remaining: None,
+            ..Self::no_op()
         }
     }
 
@@ -630,7 +617,7 @@ pub fn raw_to_jolt_bytecode(
 
     // get ts1 and ts2 addresses
     let (vts1, vts2, vts3) = match raw.opcode {
-        ONNXOpcode::MatMult | ONNXOpcode::Sum => {
+        ONNXOpcode::Einsum(_) | ONNXOpcode::Sum(_) => {
             // We need this because MatMults MCC do not follow the same pattern as other ops (it is handled separately) and we can safely store ts1 and ts2 as zero registers
             (
                 vec![0; active_output_elements],

@@ -211,7 +211,7 @@ where
     }
 
     pub fn is_precompiles_enabled(&self) -> bool {
-        !self.shared.precompiles.is_empty()
+        !self.shared.precompiles.instances.is_empty()
     }
 }
 
@@ -236,7 +236,7 @@ where
     }
 
     pub fn is_precompiles_enabled(&self) -> bool {
-        !self.shared.precompiles.is_empty()
+        !self.shared.precompiles.instances.is_empty()
     }
 }
 
@@ -302,8 +302,7 @@ mod e2e_tests {
         poly::commitment::{dory::DoryCommitmentScheme, mock::MockCommitScheme},
         transcripts::KeccakTranscript,
     };
-    use log::debug;
-    use onnx_tracer::{builder, decode_model, graph::model::Model, model, tensor::Tensor};
+    use onnx_tracer::{builder, graph::model::Model, model, tensor::Tensor};
     use rand::{Rng, SeedableRng, rngs::StdRng};
     use serde_json::Value;
     use serial_test::serial;
@@ -311,13 +310,18 @@ mod e2e_tests {
     type PCS0 = DoryCommitmentScheme;
     type _PCS1 = MockCommitScheme<Fr>;
 
-    fn run_snark_test<ModelFunc>(model: ModelFunc, input_data: &[i32], shape: &[usize])
-    where
+    fn run_snark_test<ModelFunc>(
+        model: ModelFunc,
+        input_data: &[i32],
+        shape: &[usize],
+        max_trace_length: Option<usize>,
+    ) where
         ModelFunc: Fn() -> Model + Copy,
     {
+        let max_trace_length = max_trace_length.unwrap_or(1 << 20);
         let input = Tensor::new(Some(input_data), shape).unwrap();
         let preprocessing =
-            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prover_preprocess(model, 1 << 20);
+            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prover_preprocess(model, max_trace_length);
         let (snark, program_io, _debug_info) =
             JoltSNARK::<Fr, PCS0, KeccakTranscript>::prove(&preprocessing, model, &input);
         snark
@@ -325,59 +329,84 @@ mod e2e_tests {
             .unwrap();
     }
 
+    // TODO: Replace with real test once all nanoGPT ops are supported
     #[test]
-    fn test_self_attention_transformer() {
-        let model = model(&PathBuf::from(
-            "../onnx-tracer/models/self_attention_transformer/network.onnx",
-        ));
-        let bytecode = decode_model(model);
-        for b in bytecode.iter() {
-            debug!("{:#?}", b.opcode)
-        }
+    #[ignore]
+    fn print_nanoGPT_bytecode() {
+        onnx_tracer::logger::init_logger();
+        model(&PathBuf::from("../onnx-tracer/models/nanoGPT/network.onnx"));
     }
 
     #[serial]
     #[test]
-    fn test_self_attention_2d_transformer() {
-        let mut rng = StdRng::seed_from_u64(12345);
-        // use small values to prevent overflow in onnx-tracer
-        let input_data: Vec<i32> = (0..256).map(|_| rng.gen_range(0..1)).collect();
+    fn test_self_attention() {
+        let _rng = StdRng::seed_from_u64(123456);
+        let shape = [1, 64, 64];
+        let input_data = vec![0; shape.iter().product()];
+        // // onnx-tracer overflows, if the below line is uncommented
+        // let i = rng.gen_range(0..1024);
+        // input_data[i] = 1;
         run_snark_test(
             || {
                 model(&PathBuf::from(
-                    "../onnx-tracer/models/self_attention_2d_transformer/network.onnx",
+                    "../onnx-tracer/models/self_attention/network.onnx",
                 ))
             },
             &input_data,
-            &[16, 16],
+            &shape,
+            Some(1 << 21),
         );
     }
 
     #[test]
-    fn test_self_attention_2d_transformer2() {
-        let model = model(&PathBuf::from(
-            "../onnx-tracer/models/self_attention_2d_transformer/network.onnx",
+    #[ignore]
+    fn print_self_attention_bytecode() {
+        onnx_tracer::logger::init_logger();
+        model(&PathBuf::from(
+            "../onnx-tracer/models/self_attention/network.onnx",
         ));
-        let bytecode = decode_model(model);
-        for b in bytecode.iter() {
-            debug!("{:#?}", b.opcode)
-        }
     }
 
-    #[serial]
     #[test]
-    fn test_layernorm_partial_head() {
-        let mut rng = StdRng::seed_from_u64(12345);
-        // use small values to prevent overflow in onnx-tracer
-        let input_data: Vec<i32> = (0..256).map(|_| rng.gen_range(0..3)).collect();
+    #[serial]
+    fn test_attention_value_matmul() {
+        // Input: Attention weights [1, 4, 64, 64]
+        // These represent the attention scores after softmax for each head
+        let mut input_data = vec![0i32; 4 * 64 * 64];
+        for i in 0..input_data.len() {
+            // Create normalized-looking values (softmax outputs are typically small positive values)
+            // Using values that sum to ~1.0 per attention distribution
+            input_data[i] = ((i % 64) + 1) as i32; // Values from 1 to 64
+        }
         run_snark_test(
-            || {
-                model(&PathBuf::from(
-                    "../onnx-tracer/models/layernorm_partial_head/network.onnx",
-                ))
-            },
+            builder::attention_value_matmul_model,
             &input_data,
-            &[16, 16],
+            &[1, 4, 64, 64],
+            None,
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_attention_qk_scores() {
+        // This test verifies the Query @ Key^T computation (operation 26)
+        // The model has Q and K embedded as constants, so we provide empty input
+        let input_data = vec![0i32; 1];
+        run_snark_test(builder::attention_qk_scores_model, &input_data, &[1], None);
+    }
+
+    #[test]
+    #[serial]
+    fn test_qkv_projection() {
+        let mut input_data = vec![0i32; 64 * 64];
+        for i in 0..input_data.len() {
+            input_data[i] = (i % 127) as i32 - 63;
+        }
+        run_snark_test(
+            builder::qkv_projection_model,
+            &input_data,
+            &[1, 64, 64],
+            None,
         );
     }
 
@@ -395,6 +424,36 @@ mod e2e_tests {
             },
             &input_data,
             &[16, 16],
+            None,
+        );
+    }
+
+    #[serial]
+    #[test]
+    fn test_layernorm_partial_head() {
+        let mut rng = StdRng::seed_from_u64(12345);
+        // use small values to prevent overflow in onnx-tracer
+        let input_data: Vec<i32> = (0..256).map(|_| rng.gen_range(0..3)).collect();
+        run_snark_test(
+            || {
+                model(&PathBuf::from(
+                    "../onnx-tracer/models/layernorm_partial_head/network.onnx",
+                ))
+            },
+            &input_data,
+            &[16, 16],
+            None,
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_layernorm_prefix() {
+        run_snark_test(
+            builder::layernorm_prefix_model,
+            &[1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4],
+            &[4, 4],
+            None,
         );
     }
 
@@ -514,6 +573,7 @@ mod e2e_tests {
             || model(&PathBuf::from(format!("{working_dir}network.onnx"))),
             &input_vector,
             &[1, 512],
+            None,
         );
     }
 
@@ -736,16 +796,7 @@ mod e2e_tests {
             || model(&PathBuf::from(format!("{working_dir}network.onnx"))),
             &input_vector,
             &[1, 64],
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn test_triple_matmult_model() {
-        run_snark_test(
-            builder::triple_matmult_model,
-            &[1, 2, 3, 4, 1, 2, 3, 4],
-            &[1, 8],
+            None,
         );
     }
 
@@ -756,36 +807,22 @@ mod e2e_tests {
             builder::reduce_mean_model,
             &[1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4],
             &[4, 4],
+            None,
         );
     }
 
     #[test]
     #[serial]
-    fn test_layernorm_prefix() {
-        run_snark_test(
-            builder::layernorm_prefix_model,
-            &[1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4],
-            &[4, 4],
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn test_addsubmuldivdiv() {
-        run_snark_test(builder::addsubmuldivdiv_model, &[1, 2, 3, 4], &[1, 4]);
-    }
-
-    #[test]
-    #[serial]
-    fn test_addsubmul_binary() {
+    fn test_perceptron_binary() {
         run_snark_test(
             || {
                 model(&PathBuf::from(
-                    "../onnx-tracer/models/addsubmul1/network.onnx",
+                    "../onnx-tracer/models/perceptron/network.onnx",
                 ))
             },
-            &[1, 2, 3, 4, 1, 2, 3, 4, 1, 2],
-            &[1, 10],
+            &[1, 2, 3, 4],
+            &[1, 4],
+            None,
         );
     }
 
@@ -800,20 +837,33 @@ mod e2e_tests {
             },
             &[1, 2, 3, 4, 1, 2, 3, 4],
             &[1, 8],
+            None,
         );
     }
 
     #[test]
     #[serial]
-    fn test_simple_mlp_small_binary() {
+    fn test_simple_mlp_1_binary() {
         run_snark_test(
             || {
                 model(&PathBuf::from(
-                    "../onnx-tracer/models/simple_mlp_small/network.onnx",
+                    "../onnx-tracer/models/simple_mlp_1/network.onnx",
                 ))
             },
-            &[1, 2, 3, 4],
-            &[1, 4],
+            &[1, 2, 3, 4, 1, 2, 3],
+            &[1, 7],
+            None,
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_triple_matmult_model() {
+        run_snark_test(
+            builder::triple_matmult_model,
+            &[1, 2, 3, 4, 1, 2, 3, 4],
+            &[1, 8],
+            None,
         );
     }
 
@@ -824,98 +874,104 @@ mod e2e_tests {
             || model(&PathBuf::from("../onnx-tracer/models/rsqrt/network.onnx")),
             &[512],
             &[1, 1],
+            None,
         );
     }
 
     #[test]
     #[serial]
     fn test_simple_mlp_small() {
-        run_snark_test(builder::simple_mlp_small_model, &[1, 2, 3, 4], &[1, 4]);
-    }
-
-    #[test]
-    #[serial]
-    fn test_perceptron_binary() {
         run_snark_test(
-            || model(&PathBuf::from("../tests/perceptron.onnx")),
-            &[1, 2, 3, 4, 1, 2, 3, 4, 1, 2],
-            &[1, 10],
+            builder::simple_mlp_small_model,
+            &[1, 2, 3, 4],
+            &[1, 4],
+            None,
         );
     }
 
     #[test]
     #[serial]
-    fn test_perceptron_2_binary() {
+    fn test_tiny_mlp_head() {
+        run_snark_test(builder::tiny_mlp_head_model, &[1, 2, 3, 4], &[1, 4], None);
+    }
+
+    #[test]
+    #[serial]
+    fn test_relu() {
+        run_snark_test(builder::relu_model, &[-3, -2, 0, 1], &[1, 4], None);
+    }
+
+    #[test]
+    #[serial]
+    fn test_addsubmuldivdiv() {
+        run_snark_test(builder::addsubmuldivdiv_model, &[1, 2, 3, 4], &[1, 4], None);
+    }
+
+    #[test]
+    #[serial]
+    fn test_addsubmul_binary() {
         run_snark_test(
-            || model(&PathBuf::from("../tests/perceptron_2.onnx")),
-            &[1, 2, 3, 4],
-            &[1, 4],
+            || {
+                model(&PathBuf::from(
+                    "../onnx-tracer/models/addsubmul1/network.onnx",
+                ))
+            },
+            &[1, 2, 3, 4, 1, 2, 3, 4, 1, 2],
+            &[1, 10],
+            None,
         );
     }
 
     #[test]
     #[serial]
     fn test_addsubmuldiv() {
-        run_snark_test(builder::addsubmuldiv_model, &[1, 2, 3, 4], &[1, 4]);
+        run_snark_test(builder::addsubmuldiv_model, &[1, 2, 3, 4], &[1, 4], None);
     }
 
     #[test]
     #[serial]
     fn test_addsubmuldivadd() {
-        run_snark_test(builder::addsubmuldivadd_model, &[1, 2, 3, 4], &[1, 4]);
-    }
-
-    #[test]
-    #[serial]
-    fn test_tiny_mlp_head() {
-        run_snark_test(builder::tiny_mlp_head_model, &[1, 2, 3, 4], &[1, 4]);
+        run_snark_test(builder::addsubmuldivadd_model, &[1, 2, 3, 4], &[1, 4], None);
     }
 
     #[test]
     #[serial]
     fn test_dual_matmult_model() {
-        run_snark_test(builder::dual_matmult_model, &[1, 2, 3, 4], &[1, 4]);
+        run_snark_test(builder::dual_matmult_model, &[1, 2, 3, 4], &[1, 4], None);
     }
 
     #[test]
     #[serial]
     fn test_neg_dual_matmult_model() {
-        run_snark_test(builder::dual_matmult_model, &[-1, -2, -3, -4], &[1, 4]);
+        run_snark_test(
+            builder::dual_matmult_model,
+            &[-1, -2, -3, -4],
+            &[1, 4],
+            None,
+        );
     }
 
     #[test]
     #[serial]
     fn test_addsubmulconst() {
-        run_snark_test(builder::addsubmulconst_model, &[1, 2, 3, 4], &[1, 4]);
-    }
-
-    #[test]
-    #[serial]
-    fn test_addsubmul() {
-        run_snark_test(builder::addsubmul_model, &[1, 2, 3, 4], &[1, 4]);
+        run_snark_test(builder::addsubmulconst_model, &[1, 2, 3, 4], &[1, 4], None);
     }
 
     #[test]
     #[serial]
     fn test_add() {
-        run_snark_test(builder::add_model, &[3, 4, 5, 0], &[1, 4]);
+        run_snark_test(builder::add_model, &[3, 4, 5, 0], &[1, 4], None);
     }
 
     #[test]
     #[serial]
-    fn test_scalar() {
-        run_snark_test(builder::scalar_addsubmul_model, &[10], &[1, 1]);
-    }
-
-    #[test]
-    #[serial]
-    fn test_relu() {
-        run_snark_test(builder::relu_model, &[-3, -2, 0, 1], &[1, 4]);
+    fn test_rank_0() {
+        run_snark_test(builder::rank_0_addsubmul_model, &[10], &[1, 1], None);
     }
 
     #[test]
     #[serial]
     fn test_rsqrt() {
-        run_snark_test(builder::rsqrt_model, &[-3, -2, 0, 1], &[1, 4]);
+        run_snark_test(builder::rsqrt_model, &[-3, -2, 0, 1], &[1, 4], None);
     }
 }

@@ -40,8 +40,8 @@ use crate::{
         model::Model,
         node::{RebaseScale, SupportedOp},
         utilities::{
-            create_const_node, create_div_node, create_iff_node, create_input_node,
-            create_matmul_node, create_node, create_polyop_node, create_relu_node,
+            create_const_node, create_div_node, create_einsum_node, create_iff_node,
+            create_input_node, create_node, create_polyop_node, create_relu_node,
             create_rsqrt_node,
         },
     },
@@ -354,7 +354,7 @@ impl ModelBuilder {
     /// For input tensors of shapes [m, n] and [n, p], the output will have shape [m, p].
     fn matmult(&mut self, a: Wire, b: Wire, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
         let id = self.alloc();
-        let matmul_node = create_matmul_node(
+        let matmul_node = create_einsum_node(
             "mk,nk->mn".to_string(), // ONNX MatMul equation (implicitly transposes second matrix)
             self.scale,
             vec![a, b],
@@ -363,6 +363,41 @@ impl ModelBuilder {
             fanout_hint,
         );
         self.model.insert_node(matmul_node);
+        (id, O)
+    }
+
+    /// Performs Einstein summation (einsum) with a custom equation.
+    ///
+    /// This is a generalized matrix multiplication that supports custom
+    /// tensor contraction equations beyond the fixed "mk,nk->mn" used by matmult.
+    ///
+    /// # Arguments
+    /// * `equation` - Einstein summation equation (e.g., "amk,kn->mn", "mbk,nbk->abmn")
+    /// * `a` - First input tensor
+    /// * `b` - Second input tensor
+    /// * `out_dims` - Expected output dimensions
+    /// * `fanout_hint` - Hint for optimization purposes
+    ///
+    /// # Returns
+    /// A `Wire` representing the einsum result
+    fn einsum(
+        &mut self,
+        equation: &str,
+        a: Wire,
+        b: Wire,
+        out_dims: Vec<usize>,
+        fanout_hint: usize,
+    ) -> Wire {
+        let id = self.alloc();
+        let einsum_node = create_einsum_node(
+            equation.to_string(),
+            self.scale,
+            vec![a, b],
+            out_dims,
+            id,
+            fanout_hint,
+        );
+        self.model.insert_node(einsum_node);
         (id, O)
     }
 
@@ -606,7 +641,7 @@ pub fn addsubmuldivdiv_model() -> Model {
 }
 
 /// [(0, input, []), (1, add, [0, 0]), (2, sub, [1, 0]), (3, mul, [1, 2]), (4, add, [2, 3]), (5, output, [4])]
-pub fn scalar_addsubmul_model() -> Model {
+pub fn rank_0_addsubmul_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
     let dims = vec![1];
@@ -1699,4 +1734,200 @@ pub fn layernorm_prefix_model() -> Model {
     let mean_centered = b.poly(PolyOp::Sub, input, mean_broadcasted, vec![4, 4], 1);
 
     b.take(vec![input.0], vec![mean_centered])
+}
+
+/// QKV projection model that implements Query, Key, and Value projections from multi-head attention.
+///
+/// This model extracts just the QKV projection operations from the self_attention model:
+/// 1. Takes a normalized input tensor of shape [1, 64, 64]
+/// 2. **Q Projection**: Projects input to Query space via EINSUM → DIV → RESHAPE to [64, 4, 16]
+/// 3. **K Projection**: Projects input to Key space via EINSUM → DIV → RESHAPE to [64, 4, 16]
+/// 4. **V Projection**: Projects input to Value space via EINSUM → DIV → RESHAPE to [64, 4, 16]
+///
+/// **Architecture Details**:
+/// - Input embedding dimension: 64
+/// - Number of attention heads: 4
+/// - Head dimension: 64 / 4 = 16
+/// - Each projection: [64, 64] weight matrix
+/// - Output shape for each: [64, 4, 16] = [seq_len, num_heads, head_dim]
+///
+/// **Operations sequence**:
+/// ```ignore
+/// Input [1, 64, 64]
+///   ├─→ Q: EINSUM [64,64] → DIV/128 → RESHAPE → [64, 4, 16]
+///   ├─→ K: EINSUM [64,64] → DIV/128 → RESHAPE → [64, 4, 16]
+///   └─→ V: EINSUM [64,64] → DIV/128 → RESHAPE → [64, 4, 16]
+/// ```
+///
+/// The three projections are independent and can be computed in parallel. The reshape
+/// splits the embedding dimension into (num_heads, head_dim) for multi-head attention.
+///
+/// # Returns
+/// A `Model` with three outputs: (Q, K, V) projections, each with shape [64, 4, 16]
+pub fn qkv_projection_model() -> Model {
+    const SCALE: i32 = 7;
+    const REBASE_SCALE: i32 = 128;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Input: normalized tensor from LayerNorm, shape [1, 64, 64]
+    let input = b.input(vec![1, 64, 64], 3); // fanout=3 (used for Q, K, V projections)
+
+    // ===== Q PROJECTION =====
+    // Weight matrix for Query projection: [64, 64]
+    let q_weights = Tensor::new(
+        Some(&(0..4096).map(|i| ((i % 127) - 63)).collect::<Vec<_>>()),
+        &[64, 64],
+    )
+    .unwrap();
+    let q_weight_const = b.const_tensor(q_weights, vec![64, 64], 1);
+
+    // Q = Input @ Q_weights using einsum
+    let q_matmul = b.einsum("amk,kn->mn", input, q_weight_const, vec![64, 64], 1);
+
+    // Scale down from scale 14 (product) to scale 7
+    let q_scaled = b.div(REBASE_SCALE, q_matmul, vec![64, 64], 1);
+
+    // Reshape [64, 64] → [64, 4, 16] to split into heads
+    let q_reshaped = b.reshape(q_scaled, vec![64, 4, 16], vec![64, 4, 16], 1);
+
+    // ===== K PROJECTION =====
+    // Weight matrix for Key projection: [64, 64]
+    let k_weights = Tensor::new(
+        Some(&(0..4096).map(|i| ((i % 97) - 48)).collect::<Vec<_>>()),
+        &[64, 64],
+    )
+    .unwrap();
+    let k_weight_const = b.const_tensor(k_weights, vec![64, 64], 1);
+
+    // K = Input @ K_weights
+    let k_matmul = b.einsum("amk,kn->mn", input, k_weight_const, vec![64, 64], 1);
+
+    // Scale down from scale 14 (product) to scale 7
+    let k_scaled = b.div(REBASE_SCALE, k_matmul, vec![64, 64], 1);
+
+    // Reshape [64, 64] → [64, 4, 16] to split into heads
+    let _k_reshaped = b.reshape(k_scaled, vec![64, 4, 16], vec![64, 4, 16], 1);
+
+    // ===== V PROJECTION =====
+    // Weight matrix for Value projection: [64, 64]
+    let v_weights = Tensor::new(
+        Some(&(0..4096).map(|i| ((i % 83) - 41)).collect::<Vec<_>>()),
+        &[64, 64],
+    )
+    .unwrap();
+    let v_weight_const = b.const_tensor(v_weights, vec![64, 64], 1);
+
+    // V = Input @ V_weights
+    let v_matmul = b.einsum("amk,kn->mn", input, v_weight_const, vec![64, 64], 1);
+
+    // Scale down from scale 14 (product) to scale 7
+    let v_scaled = b.div(REBASE_SCALE, v_matmul, vec![64, 64], 1);
+
+    // Reshape [64, 64] → [64, 4, 16] to split into heads
+    let _v_reshaped = b.reshape(v_scaled, vec![64, 4, 16], vec![64, 4, 16], 3);
+
+    // dummy output to satisfy function signature
+    b.take(vec![input.0], vec![q_reshaped])
+}
+
+/// Model for testing the attention-value multiplication (operation 41 in self_attention)
+///
+/// This model represents: Attention_output = Attention_weights @ Value
+/// where the einsum equation is "abmk,kbn->mbn"
+///
+/// Architecture:
+/// - Input 1: Attention weights after softmax [1, 4, 64, 64] (batch=1, heads=4, seq_len=64, seq_len=64)
+/// - Input 2: Value projection reshaped [64, 4, 16] (seq_len=64, heads=4, head_dim=16)
+/// - Operation: einsum "abmk,kbn->mbn" producing [64, 4, 16]
+///
+/// This is the final step in multi-head attention that applies the learned attention
+/// weights to the value vectors to produce the attention output.
+pub fn attention_value_matmul_model() -> Model {
+    const SCALE: i32 = 7;
+    const REBASE_SCALE: i32 = 128;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Input 1: Attention weights after softmax
+    // Shape: [1, 4, 64, 64] (batch, num_heads, seq_len, seq_len)
+    // These are the normalized attention scores that tell us how much each position
+    // should attend to every other position, per head
+    let attention_weights = b.input(vec![1, 4, 64, 64], 1);
+
+    // Input 2: Value projection (already reshaped for multi-head)
+    // Shape: [64, 4, 16] (seq_len, num_heads, head_dim)
+    // Create a constant tensor to simulate the V values
+    let v_values = Tensor::new(
+        Some(&(0..4096).map(|i| (i % 127) - 63).collect::<Vec<_>>()),
+        &[64, 4, 16],
+    )
+    .unwrap();
+    let v_const = b.const_tensor(v_values, vec![64, 4, 16], 1);
+
+    // Attention output = Attention_weights @ Value
+    // einsum "abmk,kbn->mbn" where:
+    //   a=batch(1), b=heads(4), m=seq_len_out(64), k=seq_len_in(64), n=head_dim(16)
+    // Result shape: [64, 4, 16] (seq_len, num_heads, head_dim)
+    let attention_output = b.einsum(
+        "abmk,kbn->mbn",
+        attention_weights,
+        v_const,
+        vec![64, 4, 16],
+        1,
+    );
+
+    // Scale down from scale 14 (product) to scale 7
+    let attention_scaled = b.div(REBASE_SCALE, attention_output, vec![64, 4, 16], 1);
+
+    b.take(vec![attention_weights.0], vec![attention_scaled])
+}
+
+/// Model for testing the attention score computation (operation 26 in self_attention)
+///
+/// This model represents: Attention_scores = Query @ Key^T
+/// where the einsum equation is "mbk,nbk->abmn"
+///
+/// Architecture:
+/// - Input 1: Query projection reshaped [64, 4, 16] (seq_len=64, num_heads=4, head_dim=16)
+/// - Input 2: Key projection reshaped [64, 4, 16] (seq_len=64, num_heads=4, head_dim=16)
+/// - Operation: einsum "mbk,nbk->abmn" producing [1, 4, 64, 64]
+///
+/// This computes the attention scores by taking the dot product of queries and keys
+/// for each head. The result is a [batch, num_heads, seq_len, seq_len] tensor where
+/// each entry represents how much one position should attend to another position.
+pub fn attention_qk_scores_model() -> Model {
+    const SCALE: i32 = 7;
+    const REBASE_SCALE: i32 = 128;
+    let mut b = ModelBuilder::new(SCALE);
+    let input = b.input(vec![1], 0); // dummy input to satisfy function signature
+
+    // Input 1: Query projection (already reshaped for multi-head)
+    // Shape: [64, 4, 16] (seq_len, num_heads, head_dim)
+    // Create a constant tensor to simulate the Q values
+    let q_values = Tensor::new(
+        Some(&(0..4096).map(|i| (i % 127) - 63).collect::<Vec<_>>()),
+        &[64, 4, 16],
+    )
+    .unwrap();
+    let q_const = b.const_tensor(q_values, vec![64, 4, 16], 1);
+
+    // Input 2: Key projection (already reshaped for multi-head)
+    // Shape: [64, 4, 16] (seq_len, num_heads, head_dim)
+    let k_values = Tensor::new(
+        Some(&(0..4096).map(|i| (i % 97) - 48).collect::<Vec<_>>()),
+        &[64, 4, 16],
+    )
+    .unwrap();
+    let k_const = b.const_tensor(k_values, vec![64, 4, 16], 1);
+
+    // Attention scores = Query @ Key^T
+    // einsum "mbk,nbk->abmn" where:
+    //   m=seq_len_q(64), b=heads(4), k=head_dim(16), n=seq_len_k(64), a=batch(1)
+    // This computes dot products between all pairs of query and key vectors
+    // Result shape: [1, 4, 64, 64] (batch, num_heads, seq_len_q, seq_len_k)
+    let attention_scores = b.einsum("mbk,nbk->abmn", q_const, k_const, vec![1, 4, 64, 64], 1);
+
+    // Scale down from scale 14 (product) to scale 7
+    let scores_scaled = b.div(REBASE_SCALE, attention_scores, vec![1, 4, 64, 64], 1);
+
+    b.take(vec![input.0], vec![scores_scaled])
 }

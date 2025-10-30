@@ -48,6 +48,7 @@ use crate::{
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use std::{fs::File, path::PathBuf};
+use tabled::{settings::Style, Table};
 pub mod builder;
 pub mod constants;
 /// Methods for loading onnx format models
@@ -94,7 +95,12 @@ pub fn decode(model_path: &PathBuf) -> Vec<ONNXInstr> {
 /// Converts a [`Model`] into a vector of [`ONNXInstr`].
 /// This function extracts the nodes from the model and decodes them into [`ONNXInstr`]'s.
 pub fn decode_model(model: Model) -> Vec<ONNXInstr> {
-    model.graph.nodes.iter().map(decode_node).collect()
+    model
+        .graph
+        .nodes
+        .iter()
+        .map(decode_node)
+        .collect::<Vec<_>>()
 }
 
 /// Provides a simple API to obtain the execution trace for an ONNX model.
@@ -149,8 +155,7 @@ pub fn decode_node((pc, node): (&usize, &NodeType)) -> ONNXInstr {
 #[derive(Debug, Args, Deserialize, Serialize, Clone, PartialEq, PartialOrd)]
 pub struct RunArgs {
     /// Hand-written parser for graph variables, eg. batch_size=1
-    #[arg(short = 'V', long, value_parser = parse_key_val::<String, usize>, default_value =
-  "batch_size=1", value_delimiter = ',')]
+    #[arg(short = 'V', long, value_parser = parse_key_val::<String, usize>, default_value ="batch_size=1", value_delimiter = ',')]
     pub variables: Vec<(String, usize)>,
     /// if the scale is ever > scale_rebase_multiplier * input_scale then the scale is
     /// rebased
@@ -191,4 +196,20 @@ where
         .find('=')
         .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
     Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
+}
+
+/// Format a vector of ONNXInstr as a nicely formatted table string
+///
+/// This function converts the raw bytecode (Vec<ONNXInstr>) into a human-readable
+/// table format for debugging and visualization purposes.
+///
+/// # Arguments
+/// * `bytecode` - A vector of ONNX instructions to format
+///
+/// # Returns
+/// A formatted string containing a table representation of the bytecode
+pub fn table_bytecode(bytecode: &[ONNXInstr]) -> String {
+    let mut table = Table::new(bytecode.iter());
+    table.with(Style::modern());
+    format!("\nBytecode:\n{table}")
 }

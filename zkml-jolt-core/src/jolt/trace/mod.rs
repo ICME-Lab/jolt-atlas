@@ -106,7 +106,7 @@ where
 {
     // Execute the ONNX model to get the raw execution trace
     let (raw_trace, program_io) = onnx_tracer::execution_trace(model(), input);
-
+    // println!("Raw trace: {raw_trace:#?}");
     let raw_trace = expand_raw_trace(raw_trace, preprocessing.max_td);
     // Convert the raw ONNX trace to Jolt-compatible format
     let trace = inline_tensor_trace(raw_trace, preprocessing);
@@ -298,7 +298,9 @@ impl TensorValues {
     /// handled separately from other element-wise operations.
     fn from_cycle(raw_cycle: &ONNXCycle, size: usize) -> Self {
         let (ts1_vals, ts2_vals, ts3_vals) = match raw_cycle.instr.opcode {
-            ONNXOpcode::MatMult | ONNXOpcode::Sum => (vec![0; size], vec![0; size], vec![0; size]),
+            ONNXOpcode::Einsum(_) | ONNXOpcode::Sum(_) => {
+                (vec![0; size], vec![0; size], vec![0; size])
+            }
             ONNXOpcode::Broadcast => {
                 // broadcast ts1
                 let mut ts1 = raw_cycle

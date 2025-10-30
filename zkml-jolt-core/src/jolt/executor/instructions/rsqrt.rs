@@ -114,7 +114,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&one))),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: num_outputs,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: None,
@@ -139,7 +139,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&ulp))),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: None,
@@ -165,7 +165,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: None,
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&x))),
@@ -197,7 +197,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: None,
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xeq0))),
@@ -225,7 +225,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&a))),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: num_outputs,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: None,
@@ -260,7 +260,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: None,
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: num_outputs,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: None,
@@ -287,7 +287,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: None,
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&x))),
@@ -316,7 +316,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![128; num_outputs]))),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_ns))),
@@ -343,7 +343,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: None,
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&d))),
@@ -372,7 +372,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![128; num_outputs]))),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_sq_ns))),
@@ -399,7 +399,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: None,
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_sq))),
@@ -426,7 +426,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: None,
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_sq_minus1))),
@@ -455,7 +455,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_cub_minusd_ns))),
@@ -482,7 +482,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: None,
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_cub_minusd))),
@@ -511,7 +511,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&axd_cub_minusd_ns))),
@@ -538,7 +538,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: None,
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&d))),
@@ -562,7 +562,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 imm: None,
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&approx))),

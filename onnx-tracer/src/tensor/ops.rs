@@ -3199,11 +3199,11 @@ pub mod nonlinearities {
     /// use onnx_tracer::tensor::Tensor;
     /// use onnx_tracer::tensor::ops::nonlinearities::rsqrt;
     /// let x = Tensor::<i32>::new(
-    ///     Some(&[4, 25, 8, 1, 1, 1]),
+    ///     Some(&[32, 128, 512, 2048, 8, 1]),
     ///     &[2, 3],
     /// ).unwrap();
-    /// let result = rsqrt(&x, 1.0);
-    /// let expected = Tensor::<i32>::new(Some(&[1, 0, 0, 1, 1, 1]), &[2, 3]).unwrap();
+    /// let result = rsqrt(&x, 128.0);
+    /// let expected = Tensor::<i32>::new(Some(&[256, 128, 64, 32, 512, 1176]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
     pub fn rsqrt(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {

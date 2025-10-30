@@ -769,7 +769,7 @@ mod tests {
             model::{Model, NodeType},
             node::{Node, SupportedOp},
         },
-        ops::{Constant, hybrid::HybridOp, lookup::LookupOp, poly::PolyOp},
+        ops::{Constant, hybrid::HybridOp, lookup::LookupOp, poly::PolyOp, utils::F32},
         tensor::Tensor,
         trace_types::ONNXOpcode,
     };
@@ -804,6 +804,7 @@ mod tests {
             ONNXOpcode::Mul => SupportedOp::Linear(PolyOp::Mult),
             ONNXOpcode::Relu => SupportedOp::Nonlinear(LookupOp::ReLU),
             ONNXOpcode::Sub => SupportedOp::Linear(PolyOp::Sub),
+            ONNXOpcode::Rsqrt => SupportedOp::Nonlinear(LookupOp::Rsqrt { scale: F32(128.0) }),
             _ => unimplemented!("Unsupported instruction"),
         }
     }
@@ -813,7 +814,7 @@ mod tests {
         move || {
             let mut model = Model::default();
             let mut nodes = BTreeMap::new();
-            for i in 0..T {
+            for i in 1..=T {
                 let node = Node {
                     opkind: opkind.clone(),
                     out_dims: vec![1],

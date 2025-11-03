@@ -3201,19 +3201,48 @@ pub mod nonlinearities {
     /// use onnx_tracer::tensor::Tensor;
     /// use onnx_tracer::tensor::ops::nonlinearities::rsqrt;
     /// let x = Tensor::<i32>::new(
-    ///     Some(&[4, 25, 8, 1, 1, 1]),
+    ///     Some(&[32, 128, 512, 2048, 8, 1]),
     ///     &[2, 3],
     /// ).unwrap();
-    /// let result = rsqrt(&x, 1.0);
-    /// let expected = Tensor::<i32>::new(Some(&[1, 0, 0, 1, 1, 1]), &[2, 3]).unwrap();
+    /// let result = rsqrt(&x, 7.0);
+    /// let expected = Tensor::<i32>::new(Some(&[256, 128, 64, 32, 512, 1448]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
     pub fn rsqrt(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
+        let sf_log = scale_input as i32;
+        let sf = 1 << sf_log;
+        // NOTE: implements div as in zkvm, this floors the result
+        let rescale_down = |q: i32| {
+            if q % sf < 0 {
+                q / sf - 1
+            } else {
+                q / sf
+            }
+        };
         a.par_enum_map(|_, a_i| {
-            let kix = (a_i as f64) / scale_input;
-            let fout = scale_input / (kix.sqrt() + f64::EPSILON);
-            let rounded = fout.round();
-            Ok::<_, TensorError>(rounded as i32)
+            let sqrt_2 = (2f32.sqrt() * sf as f32).round() as i32;
+
+            let x = if a_i != 0 { a_i as u32 } else { 1 };
+            let d = {
+                let exp = 3 * sf_log - x.ilog2() as i32;
+                if exp < 0 {
+                    0
+                } else {
+                    2_i32.pow(exp as u32 / 2)
+                }
+            };
+            let xd = rescale_down(x as i32 * d);
+            let xd_sq_minus1 = rescale_down(d * xd) - sf;
+            let xd_cub_minusd = rescale_down(d * xd_sq_minus1);
+            let a = if xd_sq_minus1 >= 0 {
+                sqrt_2 / 2 - sf
+            } else {
+                2 * sf - 2 * sqrt_2
+            };
+            let axd_cub_minusd = rescale_down(a * xd_cub_minusd);
+            let approximation = d + axd_cub_minusd;
+
+            Ok::<_, TensorError>(approximation)
         })
         .unwrap()
     }

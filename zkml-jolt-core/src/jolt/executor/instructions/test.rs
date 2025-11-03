@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use crate::{
     jolt::{
         bytecode::JoltONNXBytecode,
-        executor::instructions::{InstructionLookup, VirtualInstructionSequence},
+        executor::instructions::{
+            InstructionLookup, VirtualInstructionSequence, div::DivInstruction,
+        },
         trace::{JoltONNXCycle, inline_tensor_cycle},
     },
     utils::u64_vec_to_i32_iter,
@@ -226,15 +228,39 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
 }
 
 fn to_lookup_output(cycle: &ONNXCycle) -> Vec<u64> {
-    let output_els = cycle.instr.active_output_elements;
-    let mut bytecode_line = JoltONNXBytecode::no_op();
-    bytecode_line.opcode = cycle.instr.opcode.clone();
-    let mut bytecode = vec![bytecode_line.clone(); output_els];
-    for i in 0..output_els {
-        bytecode[i].imm = cycle.instr.imm.as_ref().map_or(0, |t| t[i] as u32 as u64);
+    match cycle.instr.opcode {
+        ONNXOpcode::Div => DivInstruction::<32>::sequence_output(
+            cycle.ts1_vals().unwrap(),
+            cycle.imm().unwrap(),
+            None,
+        ),
+        ONNXOpcode::Select => {
+            let cond = cycle.ts1_vals().unwrap();
+            let x_true = cycle.ts2_vals().unwrap();
+            let x_false = cycle.ts3_vals().unwrap();
+
+            cond.iter()
+                .zip(x_true)
+                .zip(x_false)
+                .map(
+                    |((&cond, value_true), value_false)| {
+                        if cond != 0 { value_true } else { value_false }
+                    },
+                )
+                .collect()
+        }
+        _ => {
+            let output_els = cycle.instr.active_output_elements;
+            let mut bytecode_line = JoltONNXBytecode::no_op();
+            bytecode_line.opcode = cycle.instr.opcode.clone();
+            let mut bytecode = vec![bytecode_line.clone(); output_els];
+            for i in 0..output_els {
+                bytecode[i].imm = cycle.instr.imm.as_ref().map_or(0, |t| t[i] as u32 as u64);
+            }
+            let cycles = inline_tensor_cycle(cycle, &bytecode);
+            (0..output_els)
+                .map(|i| cycles[i].to_lookup_output())
+                .collect()
+        }
     }
-    let cycles = inline_tensor_cycle(cycle, &bytecode);
-    (0..output_els)
-        .map(|i| cycles[i].to_lookup_output())
-        .collect()
 }

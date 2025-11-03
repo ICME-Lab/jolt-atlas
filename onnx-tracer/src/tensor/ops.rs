@@ -3209,8 +3209,8 @@ pub mod nonlinearities {
     /// assert_eq!(result, expected);
     /// ```
     pub fn rsqrt(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
-        let sf = scale_input as i32;
-        let sf_log = sf.ilog2() as i32;
+        let sf_log = scale_input as i32;
+        let sf = 1 << sf_log;
         // NOTE: implements div as in zkvm, this floors the result
         let rescale_down = |q: i32| {
             if q % sf < 0 {

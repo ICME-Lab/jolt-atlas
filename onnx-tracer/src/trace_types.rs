@@ -314,9 +314,21 @@ fn display_imm(imm: &Option<Tensor<i32>>) -> String {
             if len <= MAX_DISPLAY {
                 format!("{:?}", tensor.inner)
             } else {
-                let start: Vec<_> = tensor.inner.iter().take(SHOW_EACH_SIDE).collect();
-                let end: Vec<_> = tensor.inner.iter().skip(len - SHOW_EACH_SIDE).collect();
-                format!("[{start:?}...{end:?}] ({len})")
+                let start: String = tensor
+                    .inner
+                    .iter()
+                    .take(SHOW_EACH_SIDE)
+                    .map(|n| format!("{n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let end: String = tensor
+                    .inner
+                    .iter()
+                    .skip(len - SHOW_EACH_SIDE)
+                    .map(|n| format!("{n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{start}...{end}] ({len})")
             }
         }
     }
@@ -383,5 +395,19 @@ impl Tabled for ONNXInstr {
             std::borrow::Cow::Owned(format!("{:?}", self.output_dims)),
             std::borrow::Cow::Owned(self.active_output_elements.to_string()),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_display_imm() {
+        let small_imm = Tensor::new(Some(&[1, 2, 3]), &[1, 3]).ok();
+        let large_imm = Tensor::new(Some(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]), &[1, 10]).ok();
+        let none_imm: Option<Tensor<i32>> = None;
+        assert_eq!(display_imm(&small_imm), "[1, 2, 3]");
+        assert_eq!(display_imm(&large_imm), "[0, 1...8, 9] (10)");
+        assert_eq!(display_imm(&none_imm), "");
     }
 }

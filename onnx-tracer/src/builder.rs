@@ -426,6 +426,20 @@ impl ModelBuilder {
         self.model.insert_node(rsqrt_node);
         (id, O)
     }
+
+    fn pow(&mut self, a: Wire, pow: u32, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
+        let id = self.alloc();
+        let n = create_polyop_node(
+            PolyOp::Pow(pow),
+            self.scale,
+            vec![a],
+            out_dims,
+            id,
+            fanout_hint,
+        );
+        self.model.insert_node(n);
+        (id, O)
+    }
 }
 
 /* ********************** Testing Model's ********************** */
@@ -667,7 +681,7 @@ pub fn relu_model() -> Model {
 }
 
 pub fn rsqrt_model() -> Model {
-    const SCALE: i32 = 2i32.pow(7);
+    const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
     let dims = vec![1, 4];
 
@@ -675,6 +689,30 @@ pub fn rsqrt_model() -> Model {
     let r = b.rsqrt(x, dims.clone(), 1);
 
     b.take(vec![x.0], vec![r])
+}
+
+/// Implements a building block of the nanoGPT's self attention that includes a rsqrt instruction
+pub fn self_attention_block() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+    let cols = 64;
+    let rows = 64;
+    let dims = vec![1, rows, cols];
+    let mut add_const: Tensor<i32> = Tensor::new(Some(&[1]), &[1, 1, 1]).unwrap();
+    add_const.set_scale(SCALE);
+
+    let input = b.input(dims.clone(), 2);
+    let pow2 = b.pow(input, 2, dims.clone(), 1);
+    let sum = b.sum(pow2, vec![2], vec![1, rows, 1], 1);
+    let mean = b.div(64, sum, vec![1, rows, 1], 1);
+    let add_const_node = b.const_tensor(add_const, vec![1, 1, 1], 1);
+    let broadcast = b.broadcast(add_const_node, vec![1, rows, 1], vec![1, rows, 1], 1);
+    let add = b.poly(PolyOp::Add, mean, broadcast, vec![1, rows, 1], 1);
+    let rsqrt = b.rsqrt(add, vec![1, rows, 1], 1);
+    let b_rsqrt = b.broadcast(rsqrt, dims.clone(), dims.clone(), 1);
+    let mul = b.poly(PolyOp::Mult, input, b_rsqrt, dims.clone(), 1);
+
+    b.take(vec![input.0], vec![mul])
 }
 
 /// Implements a simple embedding-based sentiment analysis model:

@@ -684,7 +684,7 @@ pub fn new_op_from_onnx(
             scale: scale_to_multiplier(inputs[0].out_scales()[0]).into(),
         }),
         "Rsqrt" => SupportedOp::Nonlinear(LookupOp::Rsqrt {
-            scale: scale_to_multiplier(inputs[0].out_scales()[0]).into(),
+            scale: F32(inputs[0].out_scales()[0] as f32),
         }),
         "Exp" => SupportedOp::Nonlinear(LookupOp::Exp {
             scale: scale_to_multiplier(inputs[0].out_scales()[0]).into(),

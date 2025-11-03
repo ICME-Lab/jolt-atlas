@@ -345,7 +345,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts2: None,
                 ts3: None,
                 td: v_xd,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![128; num_outputs]))),
+                imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
@@ -401,7 +401,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts2: None,
                 ts3: None,
                 td: v_xd_sq,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![128; num_outputs]))),
+                imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
                 virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
@@ -751,14 +751,14 @@ mod test {
             // Input to the zkvm, this is quantized with a precision of 1/sf.
             let x = (input * sf) as i32 as u32 as u64; // cast to vm compatible type
             let result = RsqrtInstruction::<32>::sequence_output(vec![x], vec![], None)[0];
-            let dequantized = result as f32 / 128.0;
+            let dequantized = result as f32 / sf;
             let error = (dequantized - expected).abs() / expected;
             // If result == 0, we consider the offset between quantized expected result and 0.
             if result != 0 {
                 valid_tries += 1;
                 total_error += error;
             } else {
-                let offset = (expected * 128.0) as u32;
+                let offset = (expected * sf) as u32;
                 total_offset += offset;
             }
         }

@@ -3204,8 +3204,8 @@ pub mod nonlinearities {
     ///     Some(&[32, 128, 512, 2048, 8, 1]),
     ///     &[2, 3],
     /// ).unwrap();
-    /// let result = rsqrt(&x, 128.0);
-    /// let expected = Tensor::<i32>::new(Some(&[256, 128, 64, 32, 512, 1176]), &[2, 3]).unwrap();
+    /// let result = rsqrt(&x, 7.0);
+    /// let expected = Tensor::<i32>::new(Some(&[256, 128, 64, 32, 512, 1448]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
     pub fn rsqrt(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {

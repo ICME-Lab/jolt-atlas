@@ -89,7 +89,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
         };
         let result = I::sequence_output(x.clone(), y.clone(), inner);
 
-        let mut tensor_registers = vec![vec![0u64; output_size]; 64];
+        let mut tensor_registers = vec![vec![0u64; output_size]; 128];
         tensor_registers[t_x as usize] = x.clone();
         tensor_registers[t_y as usize] = y.clone();
 

@@ -34,3 +34,32 @@ impl FromI32 for u64 {
 pub fn tensor_to_nums<T: FromI32>(t: &Tensor<i32>) -> Vec<T> {
     t.inner.iter().map(|&v| T::from_i32(v)).collect()
 }
+
+// Used in virtual instructions to manage virtual sequence remaining elements
+pub struct VirtualSequenceCounter {
+    counter: usize,
+}
+
+impl VirtualSequenceCounter {
+    pub fn new(length: usize) -> Self {
+        Self { counter: length }
+    }
+
+    pub fn dec(&mut self) -> usize {
+        assert!(self.counter > 0, "Virtual sequence counter underflow");
+        self.counter -= 1;
+        self.counter
+    }
+
+    pub fn get(&self) -> usize {
+        self.counter
+    }
+
+    pub fn substract(&mut self, value: usize) {
+        assert!(
+            self.counter >= value,
+            "Virtual sequence counter underflow on subtract"
+        );
+        self.counter -= value;
+    }
+}

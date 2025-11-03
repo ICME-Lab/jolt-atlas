@@ -12,7 +12,7 @@ use crate::{
         virtual_advice::AdviceInstruction, virtual_assert_valid_div0::AssertValidDiv0Instruction,
         virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction,
     },
-    utils::u64_vec_to_i32_iter,
+    utils::{VirtualSequenceCounter, u64_vec_to_i32_iter},
 };
 
 /// Perform signed division and return the result
@@ -24,6 +24,21 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
     fn virtual_trace(cycle: ONNXCycle, K: usize) -> Vec<ONNXCycle> {
         assert_eq!(cycle.instr.opcode, ONNXOpcode::Div);
         let num_outputs = cycle.instr.active_output_elements;
+
+        // If DIV is part of a longer virtual sequence, recover the counter to continue decrementing it
+        let virtual_sequence_remaining =
+            if let Some(remaining) = cycle.instr.virtual_sequence_remaining {
+                assert!(
+                    remaining >= Self::SEQUENCE_LENGTH,
+                    "Not enough remaining virtual sequence steps"
+                );
+                remaining
+            } else {
+                Self::SEQUENCE_LENGTH
+            };
+
+        let mut vseq_counter = VirtualSequenceCounter::new(virtual_sequence_remaining);
+
         // DIV source registers
         let r_x = cycle.instr.ts1;
 
@@ -94,7 +109,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 ts3: None,
                 td: v_c,
                 imm: cycle.instr.imm.clone(),
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -120,7 +135,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 ts3: None,
                 td: v_q,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -146,7 +161,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 ts3: None,
                 td: v_r,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -177,7 +192,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 ts3: None,
                 td: None,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -206,7 +221,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 ts3: None,
                 td: None,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -232,7 +247,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 ts3: None,
                 td: v_qy,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -258,7 +273,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 ts3: None,
                 td: v_0,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -284,7 +299,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 ts3: None,
                 td: None,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -307,7 +322,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 ts3: None,
                 td: cycle.instr.td,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -320,6 +335,12 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
             },
             advice_value: None,
         });
+
+        assert_eq!(
+            virtual_trace.len(),
+            Self::SEQUENCE_LENGTH,
+            "Incorrect virtual trace length"
+        );
 
         virtual_trace
     }

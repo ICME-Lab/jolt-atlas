@@ -1,6 +1,10 @@
 # JOLT Atlas
 
-A high-performance zkML framework built on JOLT for efficient neural network inference with cryptographic proofs.
+JOLT Atlas is a zero-knowledge machine learning (zkML) framework that extends the [JOLT](https://github.com/a16z/jolt) proving system to support ML inference verification from ONNX models. 
+
+Made with ❤️ by [ICME Labs](https://blog.icme.io/).
+
+<img width="983" height="394" alt="icme_labs" src="https://github.com/user-attachments/assets/ffc334ed-c301-4ce6-8ca3-a565328904fe" />
 
 ## Overview
 

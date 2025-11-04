@@ -28,7 +28,6 @@ pub enum LookupOp {
     Recip { scale: utils::F32 },
     LeakyReLU { slope: utils::F32 },
     Sigmoid { scale: utils::F32 },
-    Softmax { scale: utils::F32 },
     Ln { scale: utils::F32 },
     Exp { scale: utils::F32 },
     Cos { scale: utils::F32 },
@@ -58,9 +57,9 @@ impl From<&LookupOp> for ONNXOpcode {
         match value {
             LookupOp::ReLU => ONNXOpcode::Relu,
             LookupOp::Sigmoid { .. } => ONNXOpcode::Sigmoid,
-            LookupOp::Rsqrt { .. } => ONNXOpcode::Sqrt,
+            LookupOp::Sqrt { .. } => ONNXOpcode::Sqrt,
+            LookupOp::Rsqrt { .. } => ONNXOpcode::Rsqrt,
             LookupOp::Div { .. } => ONNXOpcode::Div,
-            LookupOp::Softmax { .. } => ONNXOpcode::Softmax,
             _ => {
                 panic!("LookupOp {value:?} cannot be converted to ONNXOpcode",);
             }
@@ -147,9 +146,6 @@ where
             LookupOp::Sigmoid { scale } => {
                 Ok(tensor::ops::nonlinearities::sigmoid(&x, scale.into()))
             }
-            LookupOp::Softmax { scale } => {
-                Ok(tensor::ops::nonlinearities::softmax(&x, scale.into()).0)
-            }
             LookupOp::Sqrt { scale } => Ok(tensor::ops::nonlinearities::sqrt(&x, scale.into())),
             LookupOp::Rsqrt { scale } => Ok(tensor::ops::nonlinearities::rsqrt(&x, scale.into())),
             LookupOp::Erf { scale } => Ok(tensor::ops::nonlinearities::erffunc(&x, scale.into())),
@@ -201,7 +197,6 @@ where
             LookupOp::ReLU => "RELU".to_string(),
             LookupOp::LeakyReLU { slope: a } => format!("L_RELU(slope={a})"),
             LookupOp::Sigmoid { scale } => format!("SIGMOID(scale={scale})"),
-            LookupOp::Softmax { scale } => format!("SOFTMAX(scale={scale})"),
             LookupOp::Sqrt { scale } => format!("SQRT(scale={scale})"),
             LookupOp::Erf { scale } => format!("ERF(scale={scale})"),
             LookupOp::Rsqrt { scale } => format!("RSQRT(scale={scale})"),
@@ -220,6 +215,20 @@ where
             LookupOp::ASinh { scale } => format!("ASINH(scale={scale})"),
         }
     }
+
+    // fn layout(
+    //     &self,
+    //     config: &mut crate::circuit::BaseConfig<F>,
+    //     region: &mut RegionCtx<F>,
+    //     values: &[ValTensor<F>],
+    // ) -> Result<Option<ValTensor<F>>, Box<dyn Error>> {
+    //     Ok(Some(layouts::nonlinearity(
+    //         config,
+    //         region,
+    //         values[..].try_into()?,
+    //         self,
+    //     )?))
+    // }
 
     /// Returns the scale of the output of the operation.
     fn out_scale(&self, inputs_scale: Vec<crate::Scale>) -> Result<crate::Scale, Box<dyn Error>> {

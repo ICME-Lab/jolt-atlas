@@ -1,149 +1,209 @@
-import json
-import numpy as np
+#!/usr/bin/env python3
+
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.model_selection import train_test_split
-from sklearn.decomposition import TruncatedSVD
-from sklearn.preprocessing import LabelEncoder
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+import json
+import re
+import warnings
+warnings.filterwarnings('ignore')
 
 # --------------------------
-# Config
+# Configuration (Smaller dimensions)
 # --------------------------
-VOCAB_SIZE = 1000
-SVD_COMPONENTS = 100
-EPOCHS = 200
+VOCAB_SIZE = 512   # Power of 2, reduced from 1024
+HIDDEN_SIZE = 256  # Power of 2, reduced from 512
+NUM_CLASSES = 8    # Pad to power of 2 (original 5 classes)
 BATCH_SIZE = 32
-LR = 1e-3
-SCALE_FACTOR = 1000  # For integer scaling of TF-IDF
+EPOCHS = 25        # Slightly more epochs for smaller model
+LEARNING_RATE = 0.001
+
+class MLPClassifierSmall(nn.Module):
+    """
+    Smaller MLP classifier with power-of-two dimensions for SNARK compatibility.
+    Architecture: Input -> Linear(512->256) -> ReLU -> Linear(256->128) -> ReLU -> Linear(128->8)
+    Max dimension: 512
+    """
+    def __init__(self, vocab_size=512, hidden_size=256, num_classes=8):
+        super(MLPClassifierSmall, self).__init__()
+        
+        # All dimensions are powers of 2 for SNARK efficiency, max 512
+        self.fc1 = nn.Linear(vocab_size, hidden_size)       # 512 -> 256
+        self.fc2 = nn.Linear(hidden_size, hidden_size // 2) # 256 -> 128  
+        self.fc3 = nn.Linear(hidden_size // 2, num_classes) # 128 -> 8
+        self.relu = nn.ReLU()
+        
+    def forward(self, x):
+        # Input: [batch_size, 512]
+        x = self.fc1(x)           # [batch_size, 256]
+        x = self.relu(x)          # [batch_size, 256]
+        x = self.fc2(x)           # [batch_size, 128]
+        x = self.relu(x)          # [batch_size, 128]
+        x = self.fc3(x)           # [batch_size, 8]
+        return x
 
 # --------------------------
-# 1. Load Dataset
+# 1. Load and preprocess data
 # --------------------------
-data = pd.read_csv("bbc_data.csv")  # columns: "data", "labels"
-texts = data["data"].astype(str).tolist()
-labels = data["labels"].tolist()
+print("Loading BBC dataset...")
+df = pd.read_csv('bbc_data.csv')
 
-# --------------------------
-# 2. TF-IDF and vocab creation
-# --------------------------
-vectorizer = TfidfVectorizer(max_features=VOCAB_SIZE)
-tfidf_matrix = vectorizer.fit_transform(texts)
+print(f"Dataset loaded: {len(df)} articles")
+print("Label distribution:")
+print(df['labels'].value_counts())
 
-# Save vocab
-vocab = vectorizer.vocabulary_  # word -> index
-
-# Get IDF and scale
-idf_values = vectorizer.idf_
-idf_scaled = (idf_values * SCALE_FACTOR).astype(int)
-
-idf_mapping = {
-    word: {"index": int(idx), "idf": int(idf_scaled[idx])}
-    for word, idx in vocab.items()
-}
-
-with open("vocab.json", "w") as f:
-    json.dump(idf_mapping, f)
+# Get unique labels
+unique_labels = sorted(df['labels'].unique())
+print(f"Loaded {len(df)} texts with {len(unique_labels)} unique labels: {set(unique_labels)}")
 
 # --------------------------
-# 3. Encode Labels
+# 2. Create TF-IDF features with smaller power-of-2 vocab size
 # --------------------------
-label_encoder = LabelEncoder()
-labels_encoded = label_encoder.fit_transform(labels)
-
-X_train, X_test, y_train, y_test = train_test_split(
-    tfidf_matrix, labels_encoded, test_size=0.2, random_state=42
+# Use top 512 features (power of 2) for SNARK efficiency
+vectorizer = TfidfVectorizer(
+    max_features=VOCAB_SIZE,
+    stop_words='english',
+    ngram_range=(1, 2),  # Include bigrams
+    min_df=2,
+    max_df=0.95
 )
 
-# --------------------------
-# 4. Apply SVD (Dim Reduction)
-# --------------------------
-svd = TruncatedSVD(n_components=SVD_COMPONENTS, random_state=42)
-reduced_features = svd.fit_transform(X_train)
+X = vectorizer.fit_transform(df['data'])
+X_dense = X.toarray()
 
-# Save SVD components for ONNX
-svd_components = torch.tensor(svd.components_, dtype=torch.float32)
-svd_mean = torch.tensor(svd.mean_, dtype=torch.float32) if hasattr(svd, "mean_") else torch.zeros(VOCAB_SIZE)
+# Save vocabulary mapping for inference
+vocab = vectorizer.get_feature_names_out()
+vocab_mapping = {}
+for idx, word in enumerate(vocab):
+    # For compatibility with existing code, store index and a dummy IDF
+    vocab_mapping[word] = {
+        "index": idx,
+        "idf": 1.0  # Simplified for MLP - actual TF-IDF is handled in preprocessing
+    }
 
+with open('vocab.json', 'w') as f:
+    json.dump(vocab_mapping, f, indent=2)
 
-# --------------------------
-# 5. PyTorch Model (SVD layer + classifier)
-# --------------------------
-class SVDClassifier(nn.Module):
-    def __init__(self, svd_components, svd_mean, num_classes=5):
-        super().__init__()
-        self.svd_components = nn.Parameter(svd_components, requires_grad=False)
-        self.svd_mean = nn.Parameter(svd_mean, requires_grad=False)
-        self.fc = nn.Linear(svd_components.shape[0], num_classes)
-
-    def forward(self, x):
-        # Apply SVD projection: (x - mean) @ components.T
-        x_centered = x - self.svd_mean
-        x_reduced = torch.matmul(x_centered, self.svd_components.T)
-        return self.fc(x_reduced)
-
-model = SVDClassifier(svd_components, svd_mean, num_classes=len(label_encoder.classes_))
+print(f"✅ Vocabulary saved with {len(vocab_mapping)} features")
 
 # --------------------------
-# 6. Train
+# 3. Encode labels and pad to power of 2
 # --------------------------
-train_dataset = TensorDataset(torch.tensor(X_train.toarray(), dtype=torch.float32),
-                              torch.tensor(y_train, dtype=torch.long))
+label_encoder = LabelEncoder()
+y = label_encoder.fit_transform(df['labels'])
+
+# Create mapping for the 5 real classes to 8 padded classes
+real_classes = label_encoder.classes_
+class_mapping = {i: real_classes[i] for i in range(len(real_classes))}
+# Pad with dummy classes for power of 2
+for i in range(len(real_classes), NUM_CLASSES):
+    class_mapping[i] = f"dummy_class_{i}"
+
+# Save class mapping
+with open('labels.json', 'w') as f:
+    json.dump(class_mapping, f, indent=2)
+
+print(f"✅ Class mapping saved: {class_mapping}")
+
+# --------------------------
+# 4. Split data
+# --------------------------
+X_train, X_test, y_train, y_test = train_test_split(
+    X_dense, y, test_size=0.2, random_state=42, stratify=y
+)
+
+print(f"Training samples: {len(X_train)}, Test samples: {len(X_test)}")
+
+# --------------------------
+# 5. Train model
+# --------------------------
+model = MLPClassifierSmall(vocab_size=VOCAB_SIZE, hidden_size=HIDDEN_SIZE, num_classes=NUM_CLASSES)
+
+# Convert to tensors
+X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
+y_train_tensor = torch.tensor(y_train, dtype=torch.long)
+X_test_tensor = torch.tensor(X_test, dtype=torch.float32)
+y_test_tensor = torch.tensor(y_test, dtype=torch.long)
+
+# Create data loaders
+train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 
+# Loss and optimizer
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=LR)
+optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
+# Training loop
+model.train()
 for epoch in range(EPOCHS):
-    model.train()
     total_loss = 0
     for batch_x, batch_y in train_loader:
         optimizer.zero_grad()
         outputs = model(batch_x)
-        loss = criterion(outputs, batch_y)
+        
+        # Only use the first 5 outputs for the real classes
+        outputs_real = outputs[:, :len(real_classes)]
+        loss = criterion(outputs_real, batch_y)
+        
         loss.backward()
         optimizer.step()
         total_loss += loss.item()
-    if (epoch + 1) % 10 == 0 or epoch == EPOCHS - 1:
-        print(f"Epoch {epoch+1}/{EPOCHS}, Loss: {total_loss:.4f}")
+    
+    if (epoch + 1) % 10 == 0:
+        print(f"Epoch {epoch+1}/{EPOCHS}, Loss: {total_loss/len(train_loader):.4f}")
 
-
-# ---- Evaluation ----
+# --------------------------
+# 6. Evaluate model
+# --------------------------
 model.eval()
 with torch.no_grad():
-    # Forward pass on test set
-    y_pred_logits = model(torch.tensor(X_test.toarray(), dtype=torch.float32))
-    y_pred = torch.argmax(y_pred_logits, dim=1).numpy()
+    test_outputs = model(X_test_tensor)
+    # Only use the first 5 outputs for prediction
+    test_outputs_real = test_outputs[:, :len(real_classes)]
+    test_predictions = torch.argmax(test_outputs_real, dim=1)
+    
+accuracy = accuracy_score(y_test, test_predictions.numpy())
+print(f"Accuracy: {accuracy:.4f}")
 
-# Compute metrics
-print("Accuracy:", accuracy_score(y_test, y_pred))
-print(classification_report(y_test, y_pred, target_names=label_encoder.classes_))
+print("\nClassification Report:")
+print(classification_report(y_test, test_predictions.numpy(), target_names=real_classes))
 
-# Confusion matrix
-cm = confusion_matrix(y_test, y_pred)
-print("Confusion Matrix:\n", cm)
+print("\nConfusion Matrix:")
+print(confusion_matrix(y_test, test_predictions.numpy()))
 
 # --------------------------
-# 7. Export ONNX
+# 7. Export ONNX model
 # --------------------------
-dummy_input = torch.randn(1, VOCAB_SIZE)  # integer-scaled TF-IDF vector
+model.eval()
+# Use batch_size=1 for inference
+dummy_input = torch.randn(1, VOCAB_SIZE)
+
 torch.onnx.export(
     model,
     dummy_input,
     "network.onnx",
     input_names=["input"],
     output_names=["output"],
-    dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}},
-    opset_version=13
+    dynamic_axes={
+        "input": {0: "batch_size"},
+        "output": {0: "batch_size"}
+    },
+    opset_version=11
 )
 
-# Save label mapping
-with open("labels.json", "w") as f:
-    json.dump({i: label for i, label in enumerate(label_encoder.classes_)}, f)
-    print("✅ labels.json saved.")
+print("✅ ONNX model exported successfully")
+
+# --------------------------
+# 8. Save PyTorch model for testing
+# --------------------------
+torch.save(model, 'model.pt')
+print("✅ PyTorch model saved")
 
 print("✅ Training complete, ONNX and mappings saved.")

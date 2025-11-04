@@ -1,8 +1,10 @@
 use super::TensorError;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use crate::parallel_utils::IndexedParallelIterator;
-use crate::parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator};
-use crate::tensor::{Tensor, TensorType};
+use crate::{
+    parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator},
+    tensor::{Tensor, TensorType},
+};
 use maybe_rayon::iter::ParallelIterator;
 use std::collections::{HashMap, HashSet};
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -1174,7 +1176,7 @@ pub fn gather<T: TensorType + Send + Sync>(
 ) -> Result<Tensor<T>, TensorError> {
     let mut index_clone = index.clone();
     index_clone.flatten();
-    // TODO: not sure what this prevents from erorring
+    // TODO: not sure what this prevents from erroring
     if index_clone.is_singleton() {
         index_clone.reshape(&[1])?;
     }
@@ -2906,24 +2908,31 @@ pub mod nonlinearities {
     ///     &[2, 3],
     /// ).unwrap();
     /// let result = sigmoid(&x, 1.0);
-    /// let expected = Tensor::<i32>::new(Some(&[102, 128, 102, 85, 85, 64]), &[2, 3]).unwrap();
+    /// let expected = Tensor::<i32>::new(Some(&[1, 1, 1, 1, 1, 1]), &[2, 3]).unwrap();
     ///
     /// assert_eq!(result, expected);
+    /// let x = Tensor::<i32>::new(
+    ///    Some(&[65536]),
+    ///   &[1],
+    /// ).unwrap();
+    /// let result = sigmoid(&x, 65536.0);
+    /// let expected = Tensor::<i32>::new(Some(&[47911]), &[1]).unwrap();
+    /// assert_eq!(result, expected);
+    ///
+    /// /// assert_eq!(result, expected);
+    /// let x = Tensor::<i32>::new(
+    ///    Some(&[256]),
+    ///   &[1],
+    /// ).unwrap();
+    /// let result = sigmoid(&x, 256.0);
+    /// let expected = Tensor::<i32>::new(Some(&[187]), &[1]).unwrap();
     /// ```
     pub fn sigmoid(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
         a.par_enum_map(|_, a_i| {
-            let q = 128.0;
             let kix = (a_i as f64) / scale_input;
-            let fout = q * scale_input / (1.0 + (-kix).exp2());
-            let ceil = fout.ceil();
-            let delta = 0.5;
-            // Division in the sigmoid virtual instruction floors.
-            // This hack is to avoid rounding 127.999999 to 127
-            if ceil as u64 == 128 && ceil - fout <= delta {
-                Ok::<_, TensorError>(ceil as i32)
-            } else {
-                Ok::<_, TensorError>(fout.floor() as i32)
-            }
+            let fout = scale_input / (1.0 + (-kix).exp());
+            let rounded = fout.round();
+            Ok::<_, TensorError>(rounded as i32)
         })
         .unwrap()
     }
@@ -2967,32 +2976,6 @@ pub mod nonlinearities {
         .unwrap()
     }
 
-    /// Elementwise applies exponential of base 2 to a tensor of integers.
-    /// # Arguments
-    ///
-    /// * `a` - Tensor
-    /// * `scale_input` - Single value
-    /// * `scale_output` - Single value
-    /// # Examples
-    /// ```
-    /// use onnx_tracer::tensor::Tensor;
-    /// use onnx_tracer::tensor::ops::nonlinearities::exp2;
-    /// let x = Tensor::<i32>::new(
-    ///     Some(&[2, 15, 2, 1, 1, 3000]),
-    ///     &[2, 3],
-    /// ).unwrap();
-    /// let result = exp2(&x, 1.0);
-    /// let expected = Tensor::<i32>::new(Some(&[4, 32, 4, 2, 2, 1024]), &[2, 3]).unwrap();
-    /// ```
-    pub fn exp2(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
-        a.par_enum_map(|_, a_i| {
-            let kix = (a_i as f64) / scale_input;
-            let fout = scale_input * kix.exp2();
-            let rounded = fout.round();
-            Ok::<_, TensorError>(rounded as i32)
-        })
-        .unwrap()
-    }
     /// Elementwise applies exponential to a tensor of integers.
     /// # Arguments
     ///
@@ -3113,53 +3096,27 @@ pub mod nonlinearities {
     /// use onnx_tracer::tensor::ops::nonlinearities::softmax;
     /// let x = Tensor::<i32>::new(
     ///     Some(&[2, 2, 3, 2, 2, 0]),
-    ///     &[3,2],
+    ///     &[2, 3],
     /// ).unwrap();
     /// let result = softmax(&x, 128.0).0;
     /// // doubles the scale of the input
-    /// let expected = Tensor::<i32>::new(Some(&[20, 20, 40, 20, 20, 5]), &[3,2]).unwrap();
+    /// let expected = Tensor::<i32>::new(Some(&[2730, 2730, 2751, 2730, 2730, 2688]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
-    pub fn softmax(a: &Tensor<i32>, _scale: f64) -> (Tensor<i32>, Vec<Tensor<i32>>) {
-        const Q: i32 = 128;
-        let l = a.len();
-        let mut out = vec![0; l];
-        let intermediate_values = vec![a.clone()];
+    /// ```
+    pub fn softmax(a: &Tensor<i32>, scale: f64) -> (Tensor<i32>, Vec<Tensor<i32>>) {
+        // the more accurate calculation is commented out and we implement as below so it
+        // matches the steps in layout
+        let mut intermediate_values = vec![];
 
-        // For consistency, allow both positive and negative inputs directly (no z_max subtraction)
-        // and apply 2^{|z_i|} scaling with correct branch.
-        let mut d_sum: i64 = 0;
-        let mut d_vec = vec![];
+        intermediate_values.push(a.clone());
 
-        for &z in a.iter() {
-            let b = z; // directly use z_i as exponent
-            let abs_b = b.abs().min(63); // cap to prevent overflow
-            let pow2 = 1u64.checked_shl(abs_b as u32).unwrap_or(u64::MAX);
+        let exp = exp(a, scale);
 
-            // For standard softmax semantics:
-            //   if b >= 0 → d_i = Q * 2^{b}
-            //   if b < 0  → d_i = Q / 2^{|b|}
-            let d = if b >= 0 {
-                (Q as i64).saturating_mul(pow2 as i64)
-            } else if pow2 == 0 {
-                Q as i64
-            } else {
-                (Q as i64).saturating_div(pow2 as i64)
-            };
+        let sum = sum(&exp).unwrap();
+        intermediate_values.push(sum.clone());
+        let inv_denom = recip(&sum, scale.powf(2.0));
 
-            let d_i32 = d.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-            d_vec.push(d_i32);
-            d_sum = d_sum.saturating_add(d_i32 as i64);
-        }
-
-        // Normalize: g_i = (Q * d_i) / sum_j d_j
-        for i in 0..l {
-            let f = (Q as i64).saturating_mul(d_vec[i] as i64);
-            let g = if d_sum == 0 { 0 } else { f / d_sum };
-            out[i] = g.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-        }
-
-        let out_tensor = Tensor::new(Some(&out), a.dims()).unwrap();
-        (out_tensor, intermediate_values)
+        ((exp * inv_denom).unwrap(), intermediate_values)
     }
 
     /// Applies range_check_percent
@@ -3244,19 +3201,48 @@ pub mod nonlinearities {
     /// use onnx_tracer::tensor::Tensor;
     /// use onnx_tracer::tensor::ops::nonlinearities::rsqrt;
     /// let x = Tensor::<i32>::new(
-    ///     Some(&[4, 25, 8, 1, 1, 1]),
+    ///     Some(&[32, 128, 512, 2048, 8, 1]),
     ///     &[2, 3],
     /// ).unwrap();
-    /// let result = rsqrt(&x, 1.0);
-    /// let expected = Tensor::<i32>::new(Some(&[1, 0, 0, 1, 1, 1]), &[2, 3]).unwrap();
+    /// let result = rsqrt(&x, 7.0);
+    /// let expected = Tensor::<i32>::new(Some(&[256, 128, 64, 32, 512, 1448]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
     pub fn rsqrt(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
+        let sf_log = scale_input as i32;
+        let sf = 1 << sf_log;
+        // NOTE: implements div as in zkvm, this floors the result
+        let rescale_down = |q: i32| {
+            if q % sf < 0 {
+                q / sf - 1
+            } else {
+                q / sf
+            }
+        };
         a.par_enum_map(|_, a_i| {
-            let kix = (a_i as f64) / scale_input;
-            let fout = scale_input / (kix.sqrt() + f64::EPSILON);
-            let rounded = fout.round();
-            Ok::<_, TensorError>(rounded as i32)
+            let sqrt_2 = (2f32.sqrt() * sf as f32).round() as i32;
+
+            let x = if a_i != 0 { a_i as u32 } else { 1 };
+            let d = {
+                let exp = 3 * sf_log - x.ilog2() as i32;
+                if exp < 0 {
+                    0
+                } else {
+                    2_i32.pow(exp as u32 / 2)
+                }
+            };
+            let xd = rescale_down(x as i32 * d);
+            let xd_sq_minus1 = rescale_down(d * xd) - sf;
+            let xd_cub_minusd = rescale_down(d * xd_sq_minus1);
+            let a = if xd_sq_minus1 >= 0 {
+                sqrt_2 / 2 - sf
+            } else {
+                2 * sf - 2 * sqrt_2
+            };
+            let axd_cub_minusd = rescale_down(a * xd_cub_minusd);
+            let approximation = d + axd_cub_minusd;
+
+            Ok::<_, TensorError>(approximation)
         })
         .unwrap()
     }

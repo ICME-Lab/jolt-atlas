@@ -1,12 +1,10 @@
+use crate::{
+    tensor::{self, Tensor, TensorError},
+    trace_types::ONNXOpcode,
+};
 use std::{
     any::Any,
     ops::{Add, Mul, Neg, Sub},
-};
-
-use crate::{
-    //   circuit::layouts,
-    tensor::{self, Tensor, TensorError},
-    trace_types::ONNXOpcode,
 };
 
 use super::*;
@@ -88,15 +86,18 @@ impl<F: TensorType + PartialOrd> From<&PolyOp<F>> for ONNXOpcode {
             PolyOp::Add => ONNXOpcode::Add,
             PolyOp::Sub => ONNXOpcode::Sub,
             PolyOp::Mult => ONNXOpcode::Mul,
-            PolyOp::Pow(_) => ONNXOpcode::Pow,
-            PolyOp::Einsum { .. } => ONNXOpcode::MatMult,
-            PolyOp::Sum { .. } => ONNXOpcode::Sum,
+            PolyOp::Pow(_) => ONNXOpcode::Mul,
+            PolyOp::Einsum { equation } => ONNXOpcode::Einsum(equation.clone()),
+            PolyOp::Sum { axes } => ONNXOpcode::Sum(axes[0]), // we only accept single axis sum for now
             PolyOp::MeanOfSquares { .. } => ONNXOpcode::MeanOfSquares,
             PolyOp::Reshape(..) => ONNXOpcode::Reshape,
             PolyOp::Iff => ONNXOpcode::Select,
             PolyOp::MultiBroadcastTo { .. } => ONNXOpcode::Broadcast,
             _ => {
-                panic!("PolyOp {value:?} cannot be converted to ONNXOpcode",);
+                unimplemented!(
+                    "ONNXOpcode::from not implemented for PolyOp variant {:?}",
+                    value
+                );
             }
         }
     }
@@ -137,12 +138,12 @@ where
             PolyOp::Add => "ADD".into(),
             PolyOp::Mult => "MULT".into(),
             PolyOp::Sub => "SUB".into(),
-            PolyOp::Sum { .. } => "SUM".into(),
+            PolyOp::Sum { axes } => format!("SUM(axes={axes:?})"),
             PolyOp::MeanOfSquares { axes } => {
                 format!("MEANOFSQUARES (axes={axes:?})")
             }
             PolyOp::Prod { .. } => "PROD".into(),
-            PolyOp::Pow(_) => "POW".into(),
+            PolyOp::Pow(exponent) => format!("POW({exponent})"),
             PolyOp::Pack(_, _) => "PACK".into(),
             PolyOp::GlobalSumPool => "GLOBALSUMPOOL".into(),
             PolyOp::Conv { .. } => "CONV".into(),
@@ -183,12 +184,20 @@ where
             PolyOp::Resize { scale_factor } => tensor::ops::resize(&inputs[0], scale_factor),
             PolyOp::Iff => tensor::ops::iff(&inputs[0], &inputs[1], &inputs[2]),
             PolyOp::Einsum { equation } => {
-                // Check if this is the MatMul pattern "mk,nk->mn" and apply power-of-two padding
-                if equation == "mk,nk->mn" && cfg!(feature = "matmul_power_of_two_padding") {
-                    einsum_matmul_mk_nk_mn_padded(equation, &inputs)
-                } else {
-                    tensor::ops::einsum(equation, &inputs)
+                // Check if this is the MatMul pattern (potentially with different spacing/format)
+                #[cfg(feature = "matmul_power_of_two_padding")]
+                {
+                    // Handle matmul pattern regardless of spacing
+                    if equation.contains("mk,nk->mn") || equation.contains("mk, nk -> mn") {
+                        let padded_result = einsum_matmul_mk_nk_mn_padded(equation, &inputs)?;
+                        return Ok(ForwardResult {
+                            output: padded_result,
+                            intermediate_lookups: vec![],
+                        });
+                    }
                 }
+
+                tensor::ops::einsum(equation, &inputs)
             }
             PolyOp::Identity => Ok(inputs[0].clone()),
             PolyOp::Reshape(new_dims) => {
@@ -413,7 +422,7 @@ where
 /// # Returns
 /// * `Ok(Tensor<T>)` - Result tensor with dimensions [m, n]
 /// * `Err(TensorError)` - If padding, computation, or cropping fails
-fn einsum_matmul_mk_nk_mn_padded<T>(
+pub fn einsum_matmul_mk_nk_mn_padded<T>(
     equation: &str,
     inputs: &[Tensor<T>],
 ) -> Result<Tensor<T>, TensorError>

@@ -1,8 +1,8 @@
-use crate::ops::utils;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use crate::parallel_utils::IndexedParallelIterator;
-use crate::parallel_utils::{
-    IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelSliceMut,
+use crate::{
+    ops::utils,
+    parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelSliceMut},
 };
 use maybe_rayon::iter::ParallelIterator;
 use serde::{Deserialize, Serialize};
@@ -258,19 +258,9 @@ impl<T: Clone + TensorType> Tensor<T> {
         }
     }
 
-    /// Creates a new tensor with power-of-two padding applied if enabled.
-    /// This is useful for operations that benefit from power-of-two sizes in cryptographic circuits.
-    pub fn new_with_power_of_two_padding(
-        values: Option<&[T]>,
-        dims: &[usize],
-        enable_padding: bool,
-    ) -> Result<Self, TensorError> {
-        let tensor = Self::new(values, dims)?;
-        if enable_padding {
-            tensor.pad_to_power_of_two()
-        } else {
-            Ok(tensor)
-        }
+    /// Get the inner values
+    pub fn data(&self) -> &[T] {
+        &self.inner
     }
 
     /// set the tensor's (optional) scale parameter
@@ -365,39 +355,6 @@ impl<T: Clone + TensorType> Tensor<T> {
         if remainder != 0 {
             inner.resize(self.len() + n - remainder, T::zero().unwrap());
         }
-        Tensor::new(Some(&inner), &[inner.len()])
-    }
-
-    /// Pad to the next power of two length
-    /// ```
-    /// use onnx_tracer::tensor::Tensor;
-    /// let a = Tensor::<i32>::new(Some(&[1,2,3,4,5,6]), &[2, 3]).unwrap();
-    /// let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6, 0, 0]), &[8]).unwrap();
-    /// assert_eq!(a.pad_to_power_of_two().unwrap(), expected);
-    ///
-    /// let b = Tensor::<i32>::new(Some(&[1,2,3]), &[3]).unwrap();
-    /// let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 0]), &[4]).unwrap();
-    /// assert_eq!(b.pad_to_power_of_two().unwrap(), expected);
-    ///
-    /// let c = Tensor::<i32>::new(Some(&[1,2,3,4]), &[4]).unwrap();
-    /// let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[4]).unwrap();
-    /// assert_eq!(c.pad_to_power_of_two().unwrap(), expected);
-    /// ```
-    pub fn pad_to_power_of_two(&self) -> Result<Tensor<T>, TensorError> {
-        let current_len = self.len();
-        if current_len == 0 {
-            return Ok(self.clone());
-        }
-
-        // Find the next power of two
-        let next_power_of_two = if current_len.is_power_of_two() {
-            current_len
-        } else {
-            1 << (64 - (current_len - 1).leading_zeros())
-        };
-
-        let mut inner = self.inner.clone();
-        inner.resize(next_power_of_two, T::zero().unwrap());
         Tensor::new(Some(&inner), &[inner.len()])
     }
 
@@ -1470,65 +1427,12 @@ mod tests {
         assert_ne!(a, c);
         assert_ne!(a, d);
     }
+
     #[test]
     fn tensor_slice() {
         let a = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[2, 3]).unwrap();
         let b = Tensor::<i32>::new(Some(&[1, 4]), &[2, 1]).unwrap();
         assert_eq!(a.get_slice(&[0..2, 0..1]).unwrap(), b);
-    }
-
-    #[test]
-    fn test_pad_to_power_of_two() {
-        // Test power-of-two padding
-        let a = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[6]).unwrap();
-        let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6, 0, 0]), &[8]).unwrap();
-        assert_eq!(a.pad_to_power_of_two().unwrap(), expected);
-
-        let b = Tensor::<i32>::new(Some(&[1, 2, 3]), &[3]).unwrap();
-        let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 0]), &[4]).unwrap();
-        assert_eq!(b.pad_to_power_of_two().unwrap(), expected);
-
-        let c = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[4]).unwrap();
-        let expected = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[4]).unwrap();
-        assert_eq!(c.pad_to_power_of_two().unwrap(), expected);
-
-        // Test edge cases
-        let empty = Tensor::<i32>::new(Some(&[]), &[0]).unwrap();
-        let empty_padded = empty.pad_to_power_of_two().unwrap();
-        assert_eq!(empty_padded.len(), 0);
-
-        let single = Tensor::<i32>::new(Some(&[42]), &[1]).unwrap();
-        let single_padded = single.pad_to_power_of_two().unwrap();
-        assert_eq!(
-            single_padded,
-            Tensor::<i32>::new(Some(&[42]), &[1]).unwrap()
-        );
-
-        // Test large size
-        let large_input: Vec<i32> = (0..50).collect();
-        let large = Tensor::<i32>::new(Some(&large_input), &[50]).unwrap();
-        let large_padded = large.pad_to_power_of_two().unwrap();
-        assert_eq!(large_padded.len(), 64); // Next power of two after 50 is 64
-        assert_eq!(&large_padded[..50], &large_input[..]);
-        assert_eq!(&large_padded[50..], &vec![0; 14][..]);
-    }
-
-    #[test]
-    fn test_new_with_power_of_two_padding() {
-        let data = &[1, 2, 3, 4, 5, 6];
-
-        // Test with padding disabled
-        let tensor_no_padding =
-            Tensor::<i32>::new_with_power_of_two_padding(Some(data), &[6], false).unwrap();
-        assert_eq!(tensor_no_padding.len(), 6);
-        assert_eq!(&tensor_no_padding[..], data);
-
-        // Test with padding enabled
-        let tensor_with_padding =
-            Tensor::<i32>::new_with_power_of_two_padding(Some(data), &[6], true).unwrap();
-        assert_eq!(tensor_with_padding.len(), 8); // Next power of two
-        assert_eq!(&tensor_with_padding[..6], data);
-        assert_eq!(&tensor_with_padding[6..], &[0, 0]);
     }
 
     #[test]

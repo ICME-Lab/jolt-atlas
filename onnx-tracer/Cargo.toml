@@ -26,6 +26,7 @@ strum_macros = "0.26.4"
 instant = { version = "0.1" }
 tract-onnx = { git = "https://github.com/sonos/tract/", rev = "37132e0397d0a73e5bd3a8615d932dabe44f6736", default-features = false }
 tabled = { version = "0.12.0" }
+ark-serialize = { workspace = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }

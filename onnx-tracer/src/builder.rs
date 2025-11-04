@@ -36,14 +36,13 @@
 ///            [3, 6, 9, 12]]    // Third output neuron weights
 /// ```
 use crate::{
-    constants::MAX_TENSOR_SIZE,
     graph::{
         model::Model,
         node::{RebaseScale, SupportedOp},
         utilities::{
-            create_const_node, create_div_node, create_iff_node, create_input_node,
-            create_matmul_node, create_node, create_polyop_node, create_relu_node,
-            create_sigmoid_node, create_softmax_node,
+            create_const_node, create_div_node, create_einsum_node, create_iff_node,
+            create_input_node, create_node, create_polyop_node, create_relu_node,
+            create_rsqrt_node,
         },
     },
     ops::{hybrid::HybridOp, poly::PolyOp},
@@ -355,7 +354,7 @@ impl ModelBuilder {
     /// For input tensors of shapes [m, n] and [n, p], the output will have shape [m, p].
     fn matmult(&mut self, a: Wire, b: Wire, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
         let id = self.alloc();
-        let matmul_node = create_matmul_node(
+        let matmul_node = create_einsum_node(
             "mk,nk->mn".to_string(), // ONNX MatMul equation (implicitly transposes second matrix)
             self.scale,
             vec![a, b],
@@ -364,6 +363,41 @@ impl ModelBuilder {
             fanout_hint,
         );
         self.model.insert_node(matmul_node);
+        (id, O)
+    }
+
+    /// Performs Einstein summation (einsum) with a custom equation.
+    ///
+    /// This is a generalized matrix multiplication that supports custom
+    /// tensor contraction equations beyond the fixed "mk,nk->mn" used by matmult.
+    ///
+    /// # Arguments
+    /// * `equation` - Einstein summation equation (e.g., "amk,kn->mn", "mbk,nbk->abmn")
+    /// * `a` - First input tensor
+    /// * `b` - Second input tensor
+    /// * `out_dims` - Expected output dimensions
+    /// * `fanout_hint` - Hint for optimization purposes
+    ///
+    /// # Returns
+    /// A `Wire` representing the einsum result
+    fn einsum(
+        &mut self,
+        equation: &str,
+        a: Wire,
+        b: Wire,
+        out_dims: Vec<usize>,
+        fanout_hint: usize,
+    ) -> Wire {
+        let id = self.alloc();
+        let einsum_node = create_einsum_node(
+            equation.to_string(),
+            self.scale,
+            vec![a, b],
+            out_dims,
+            id,
+            fanout_hint,
+        );
+        self.model.insert_node(einsum_node);
         (id, O)
     }
 
@@ -386,25 +420,109 @@ impl ModelBuilder {
         (id, O)
     }
 
-    fn sigmoid(&mut self, input: Wire, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
+    fn rsqrt(&mut self, input: Wire, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
         let id = self.alloc();
-        let sigmoid_node = create_sigmoid_node(self.scale, vec![input], out_dims, id, fanout_hint);
-        self.model.insert_node(sigmoid_node);
+        let rsqrt_node = create_rsqrt_node(self.scale, vec![input], out_dims, id, fanout_hint);
+        self.model.insert_node(rsqrt_node);
         (id, O)
     }
-    fn softmax(&mut self, input: Wire, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
+
+    fn pow(&mut self, a: Wire, pow: u32, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
         let id = self.alloc();
-        let softmax_node = create_softmax_node(self.scale, vec![input], out_dims, id, fanout_hint);
-        self.model.insert_node(softmax_node);
+        let n = create_polyop_node(
+            PolyOp::Pow(pow),
+            self.scale,
+            vec![a],
+            out_dims,
+            id,
+            fanout_hint,
+        );
+        self.model.insert_node(n);
         (id, O)
     }
 }
 
 /* ********************** Testing Model's ********************** */
 
+/// Simplified multiclass classification model using only basic operations:
+/// input, const, gather, matmult, add, sub, mul, div, reshape
+///
+/// This model:
+/// 1. Takes embedding tensor and input indices
+/// 2. Gathers embeddings based on input indices  
+/// 3. Sums the gathered embeddings via matrix multiplication
+/// 4. Performs linear transformation (matmult + add bias)
+/// 5. Returns logits (no ArgMax - let caller handle classification)
+pub fn multiclass1() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input indices (shape [1, 8])
+    let input_indices = b.input(vec![1, 8], 1);
+
+    // Node 1: Embedding matrix (shape [31, 1]) - same values as before
+    let mut embedding: Tensor<i32> = Tensor::new(
+        Some(&[
+            -61, -287, -437, -294, -318, 345, 331, 330, -28, 337, 113, 111, 91, 103, -58, 85, 72,
+            -463, -342, -345, -318, 355, 385, 376, 180, 125, 10, 143, 137, -45, 128,
+        ]),
+        &[31, 1],
+    )
+    .unwrap();
+    embedding.set_scale(SCALE);
+    let embedding_const = b.const_tensor_with_scale(embedding, SCALE, vec![31, 1], 1);
+
+    // Node 2: Gather embeddings - results in [1, 8, 1]
+    let gathered = b.gather(embedding_const, input_indices, 0, vec![1, 8, 1], 1);
+
+    // Node 3: Reshape gathered embeddings to [1, 8] for matrix operations
+    let reshaped_gathered = b.reshape(gathered, vec![1, 8], vec![1, 8], 1);
+
+    // Node 4: Sum weights (all ones) to sum embeddings via matrix multiplication
+    // Shape [8, 1] - each row is 1, so matmult will sum the 8 embeddings
+    let mut sum_weights: Tensor<i32> = Tensor::new(Some(&[1; 8]), &[8, 1]).unwrap();
+    sum_weights.set_scale(SCALE);
+    let sum_weights_const = b.const_tensor_with_scale(sum_weights, SCALE, vec![8, 1], 1);
+
+    // Node 5: Sum embeddings via matrix multiplication [1, 8] × [8, 1] → [1, 1]
+    let summed = b.matmult(reshaped_gathered, sum_weights_const, vec![1, 1], 1);
+
+    // Node 6: Weight matrix for classification (shape [1, 10])
+    let mut weights: Tensor<i32> = Tensor::new(
+        Some(&[388, 16, -93, 517, 208, 208, 208, 208, 208, 208]),
+        &[1, 10],
+    )
+    .unwrap();
+    weights.set_scale(SCALE);
+    let weights_const = b.const_tensor_with_scale(weights, SCALE, vec![1, 10], 1);
+
+    // Node 7: Linear transformation [1, 1] × [1, 10] → [1, 10]
+    // This broadcasts the scalar across all 10 classes and applies weights
+    let weighted = b.matmult(summed, weights_const, vec![1, 10], 1);
+
+    // Node 8: Scale down by dividing by 128 (replacing the RebaseScale division)
+    let scaled = b.div(128, weighted, vec![1, 10], 1);
+
+    // Node 9: Bias vector (shape [1, 10])
+    let mut bias: Tensor<i32> = Tensor::new(
+        Some(&[449, 421, -137, -95, -155, -155, -155, -155, -155, -155]),
+        &[1, 10],
+    )
+    .unwrap();
+    bias.set_scale(SCALE);
+    let bias_const = b.const_tensor_with_scale(bias, SCALE, vec![1, 10], 1);
+
+    // Node 10: Add bias to get final logits
+    let logits = b.poly(PolyOp::Add, scaled, bias_const, vec![1, 10], 1);
+
+    // Return logits instead of argmax - let the caller handle classification
+    // This is more flexible and potentially faster for training scenarios
+    b.take(vec![input_indices.0], vec![logits])
+}
+
 /// Creates a model with 3 nodes
 /// Has a trace lenght of 2^s - 1
-pub fn custom_add_model() -> Model {
+pub fn add_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
     let mut const_tensor: Tensor<i32> = Tensor::new(Some(&[50, 60, 70, 80]), &[1, 4]).unwrap();
@@ -418,7 +536,7 @@ pub fn custom_add_model() -> Model {
 
 /// Creates a model with 4 nodes
 /// Has a trace lenght of 2^s
-pub fn custom_addmul_model() -> Model {
+pub fn addmul_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
     let mut const_tensor: Tensor<i32> = Tensor::new(Some(&[50, 60, 70, 80]), &[1, 4]).unwrap();
@@ -432,7 +550,7 @@ pub fn custom_addmul_model() -> Model {
 }
 
 /// [(0, input, []), (1, add, [0, 0]), (2, sub, [1, 0]), (3, mul, [1, 2]), (4, add, [2, 3]), (5, output, [4])]
-pub fn custom_addsubmul_model() -> Model {
+pub fn addsubmul_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
     let out_dims = vec![1, 4];
@@ -447,7 +565,7 @@ pub fn custom_addsubmul_model() -> Model {
 }
 
 /// [(0, input, []), (1, const, []), (2, add, [0, 1]), (3, sub, [0, 1]), (4, mul, [2, 3]), (5, output, [4])]
-pub fn custom_addsubmulconst_model() -> Model {
+pub fn addsubmulconst_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
 
@@ -465,7 +583,7 @@ pub fn custom_addsubmulconst_model() -> Model {
 
 /// Creates a model with 15 nodes (a div op creates 9 nodes)
 /// Has a trace lenght of 2^s - 1, finishing with a virtual instruction
-pub fn custom_addsubmuldiv15_model() -> Model {
+pub fn addsubmuldiv15_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
     let out_dims = vec![1, 4];
@@ -483,7 +601,7 @@ pub fn custom_addsubmuldiv15_model() -> Model {
 
 /// Creates a model with 16 nodes (a div op creates 9 nodes)
 /// Has a trace lenght of 2^s, finishing with a virtual instruction
-pub fn custom_addsubmuldiv_model() -> Model {
+pub fn addsubmuldiv_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
     let out_dims = vec![1, 4];
@@ -500,8 +618,27 @@ pub fn custom_addsubmuldiv_model() -> Model {
     b.take(vec![x.0], vec![y])
 }
 
+/// Creates a model with add, sub, mul, div, add operations
+/// Has a trace length of 2^s, finishing with a virtual instruction  
+pub fn addsubmuldivadd_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+    let out_dims = vec![1, 4];
+
+    let x = b.input(out_dims.clone(), 4);
+    let a = b.poly(PolyOp::Add, x, x, out_dims.clone(), 1);
+    let a = b.poly(PolyOp::Add, a, x, out_dims.clone(), 1);
+    let a = b.poly(PolyOp::Add, a, x, out_dims.clone(), 2);
+    let s = b.poly(PolyOp::Sub, a, x, out_dims.clone(), 1);
+    let m = b.poly(PolyOp::Mult, a, s, out_dims.clone(), 1);
+    let d = b.div(2, m, out_dims.clone(), 1);
+    let y = b.poly(PolyOp::Add, d, s, out_dims.clone(), 1);
+
+    b.take(vec![x.0], vec![y])
+}
+
 /// [(0, input, []), (1, add, [0, 0]), (2, sub, [1, 0]), (3, mul, [1, 2]), (4, add, [2, 3]), (5, div, [4]), (6, div, [5]), (7, output, [6])]
-pub fn custom_addsubmuldivdiv_model() -> Model {
+pub fn addsubmuldivdiv_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
     let out_dims = vec![1, 4];
@@ -518,7 +655,7 @@ pub fn custom_addsubmuldivdiv_model() -> Model {
 }
 
 /// [(0, input, []), (1, add, [0, 0]), (2, sub, [1, 0]), (3, mul, [1, 2]), (4, add, [2, 3]), (5, output, [4])]
-pub fn scalar_addsubmul_model() -> Model {
+pub fn rank_0_addsubmul_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
     let dims = vec![1];
@@ -530,6 +667,52 @@ pub fn scalar_addsubmul_model() -> Model {
     let y = b.poly(PolyOp::Add, s, m, dims.clone(), 1);
 
     b.take(vec![x.0], vec![y])
+}
+
+pub fn relu_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+    let dims = vec![1, 4];
+
+    let x = b.input(dims.clone(), 2);
+    let r = b.relu(x, dims.clone(), 1);
+
+    b.take(vec![x.0], vec![r])
+}
+
+pub fn rsqrt_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+    let dims = vec![1, 4];
+
+    let x = b.input(dims.clone(), 1);
+    let r = b.rsqrt(x, dims.clone(), 1);
+
+    b.take(vec![x.0], vec![r])
+}
+
+/// Implements a building block of the nanoGPT's self attention that includes a rsqrt instruction
+pub fn self_attention_block() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+    let cols = 64;
+    let rows = 64;
+    let dims = vec![1, rows, cols];
+    let mut add_const: Tensor<i32> = Tensor::new(Some(&[1]), &[1, 1, 1]).unwrap();
+    add_const.set_scale(SCALE);
+
+    let input = b.input(dims.clone(), 2);
+    let pow2 = b.pow(input, 2, dims.clone(), 1);
+    let sum = b.sum(pow2, vec![2], vec![1, rows, 1], 1);
+    let mean = b.div(64, sum, vec![1, rows, 1], 1);
+    let add_const_node = b.const_tensor(add_const, vec![1, 1, 1], 1);
+    let broadcast = b.broadcast(add_const_node, vec![1, rows, 1], vec![1, rows, 1], 1);
+    let add = b.poly(PolyOp::Add, mean, broadcast, vec![1, rows, 1], 1);
+    let rsqrt = b.rsqrt(add, vec![1, rows, 1], 1);
+    let b_rsqrt = b.broadcast(rsqrt, dims.clone(), dims.clone(), 1);
+    let mul = b.poly(PolyOp::Mult, input, b_rsqrt, dims.clone(), 1);
+
+    b.take(vec![input.0], vec![mul])
 }
 
 /// Implements a simple embedding-based sentiment analysis model:
@@ -724,22 +907,6 @@ pub fn greater_equal_model() -> Model {
     let gte_result = b.greater_equal(input_a, input_b_const, vec![1, 5], 1);
 
     b.take(vec![input_a.0], vec![gte_result])
-}
-
-pub fn sigmoid_model() -> Model {
-    const SCALE: i32 = 0;
-    let mut b = ModelBuilder::new(SCALE);
-    let input = b.input(vec![1, MAX_TENSOR_SIZE], 1);
-    let sigmoid_result = b.sigmoid(input, vec![1, MAX_TENSOR_SIZE], 1);
-    b.take(vec![input.0], vec![sigmoid_result])
-}
-
-pub fn softmax_model() -> Model {
-    const SCALE: i32 = 0;
-    let mut b = ModelBuilder::new(SCALE);
-    let input = b.input(vec![1, MAX_TENSOR_SIZE], 1);
-    let softmax_result = b.softmax(input, vec![1, MAX_TENSOR_SIZE], 1);
-    b.take(vec![input.0], vec![softmax_result])
 }
 
 /// Analog to onnx-tracer/models/multiclass0/network.onnx
@@ -1013,6 +1180,465 @@ pub fn non_power_of_two_matmult_model() -> Model {
     b.take(vec![input.0], vec![result])
 }
 
+/// Simple linear head model using only basic operations: input, matmult, add, mul, const.
+///
+/// This model demonstrates a minimal linear transformation:
+/// 1. Takes an input tensor of shape [1, 4]
+/// 2. Multiplies it with a weight matrix [2, 4] → [1, 2]
+/// 3. Adds a bias vector [1, 2]
+/// 4. Multiplies by a scale factor [1, 2]
+/// 5. Outputs the final result of shape [1, 2]
+///
+/// Operations used: Input → MatMult → Add → Mult → Output
+/// Total nodes: 5 (input, 3 constants, matmult, add, mult)
+///
+/// # Returns
+/// A `Model` representing the simple linear head computation graph
+pub fn simple_linear_head_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 4])
+    let input = b.input(vec![1, 4], 1);
+
+    // Node 1: Weight matrix constant (shape [2, 4])
+    let mut weights: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, // First output neuron weights
+            5, 6, 7, 8, // Second output neuron weights
+        ]),
+        &[2, 4],
+    )
+    .unwrap();
+    weights.set_scale(SCALE);
+    let weight_matrix = b.const_tensor(weights, vec![2, 4], 1);
+
+    // Node 2: Matrix multiplication: [1, 4] × [2, 4] → [1, 2]
+    let linear_out = b.matmult(input, weight_matrix, vec![1, 2], 1);
+
+    // Node 3: Bias vector constant (shape [1, 2])
+    let mut bias: Tensor<i32> = Tensor::new(Some(&[10, 20]), &[1, 2]).unwrap();
+    bias.set_scale(SCALE);
+    let bias_vector = b.const_tensor(bias, vec![1, 2], 1);
+
+    // Node 4: Add bias: [1, 2] + [1, 2] → [1, 2]
+    let biased_out = b.poly(PolyOp::Add, linear_out, bias_vector, vec![1, 2], 1);
+
+    // Node 5: Scale factor constant (shape [1, 2])
+    let mut scale: Tensor<i32> = Tensor::new(Some(&[2, 3]), &[1, 2]).unwrap();
+    scale.set_scale(SCALE);
+    let scale_vector = b.const_tensor(scale, vec![1, 2], 1);
+
+    // Node 6: Multiply by scale: [1, 2] * [1, 2] → [1, 2]
+    let final_out = b.poly(PolyOp::Mult, biased_out, scale_vector, vec![1, 2], 1);
+
+    b.take(vec![input.0], vec![final_out])
+}
+
+/// Simple linear head model with 4x4 matrix multiplication using only basic operations.
+///
+/// This model demonstrates a minimal linear transformation with square matrices:
+/// 1. Takes an input tensor of shape [1, 4]
+/// 2. Multiplies it with a 4x4 weight matrix → [1, 4]
+/// 3. Adds a bias vector [1, 4]
+/// 4. Multiplies by a scale factor [1, 4]
+/// 5. Outputs the final result of shape [1, 4]
+///
+/// Operations used: Input → MatMult(4x4) → Add → Mult → Output
+/// Total nodes: 7 (input, 3 constants, matmult, add, mult)
+///
+/// # Returns
+/// A `Model` representing the 4x4 matrix linear head computation graph
+pub fn simple_linear_head_4x4_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 4])
+    let input = b.input(vec![1, 4], 1);
+
+    // Node 1: 4x4 Weight matrix constant (shape [4, 4])
+    let mut weights: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, // First output neuron weights
+            5, 6, 7, 8, // Second output neuron weights
+            9, 10, 11, 12, // Third output neuron weights
+            13, 14, 15, 16, // Fourth output neuron weights
+        ]),
+        &[4, 4],
+    )
+    .unwrap();
+    weights.set_scale(SCALE);
+    let weight_matrix = b.const_tensor(weights, vec![4, 4], 1);
+
+    // Node 2: Matrix multiplication: [1, 4] × [4, 4] → [1, 4]
+    let linear_out = b.matmult(input, weight_matrix, vec![1, 4], 1);
+
+    // Node 3: Bias vector constant (shape [1, 4])
+    let mut bias: Tensor<i32> = Tensor::new(Some(&[10, 20, 30, 40]), &[1, 4]).unwrap();
+    bias.set_scale(SCALE);
+    let bias_vector = b.const_tensor(bias, vec![1, 4], 1);
+
+    // Node 4: Add bias: [1, 4] + [1, 4] → [1, 4]
+    let biased_out = b.poly(PolyOp::Add, linear_out, bias_vector, vec![1, 4], 1);
+
+    // Node 5: Scale factor constant (shape [1, 4])
+    let mut scale: Tensor<i32> = Tensor::new(Some(&[2, 3, 4, 5]), &[1, 4]).unwrap();
+    scale.set_scale(SCALE);
+    let scale_vector = b.const_tensor(scale, vec![1, 4], 1);
+
+    // Node 6: Multiply by scale: [1, 4] * [1, 4] → [1, 4]
+    let final_out = b.poly(PolyOp::Mult, biased_out, scale_vector, vec![1, 4], 1);
+
+    b.take(vec![input.0], vec![final_out])
+}
+
+/// Minimal matrix multiplication model: input, const, matmult only.
+///
+/// This model demonstrates the simplest possible linear transformation:
+/// 1. Takes an input tensor of shape [1, 4]
+/// 2. Multiplies it with a weight matrix [2, 4] → [1, 2]
+/// 3. Outputs the final result of shape [1, 2]
+///
+/// Operations used: Input → MatMult → Output
+/// Total nodes: 3 (input, const, matmult)
+///
+/// # Returns
+/// A `Model` representing the minimal matrix multiplication computation graph
+pub fn minimal_matmult_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 4])
+    let input = b.input(vec![1, 4], 1);
+
+    // Node 1: Weight matrix constant (shape [2, 4])
+    let mut weights: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, // First output neuron weights
+            5, 6, 7, 8, // Second output neuron weights
+        ]),
+        &[2, 4],
+    )
+    .unwrap();
+    weights.set_scale(SCALE);
+    let weight_matrix = b.const_tensor(weights, vec![2, 4], 1);
+
+    // Node 2: Matrix multiplication: [1, 4] × [2, 4] → [1, 2]
+    let result = b.matmult(input, weight_matrix, vec![1, 2], 1);
+
+    b.take(vec![input.0], vec![result])
+}
+
+/// Minimal matrix multiplication model with non-power-of-two dimensions: input, const, matmult only.
+///
+/// This model demonstrates the simplest possible linear transformation with non-power-of-two dimensions:
+/// 1. Takes an input tensor of shape [1, 5] (5 is not a power of two)
+/// 2. Multiplies it with a weight matrix [3, 5] → [1, 3] (3 is not a power of two)
+/// 3. Outputs the final result of shape [1, 3]
+///
+/// **Power-of-Two Padding Behavior** (when feature enabled):
+/// - Input [1, 5] gets padded to [1, 8] (next power of two for second dimension)
+/// - Weights [3, 5] get padded to [4, 8] (next powers of two)
+/// - Computation is performed as [1, 8] × [4, 8] → [1, 4]
+/// - Result is cropped back to [1, 3]
+///
+/// Neither input dimension (5) nor output dimension (3) are powers of two
+/// Operations used: Input → MatMult → Output
+/// Total nodes: 3 (input, const, matmult)
+///
+/// # Returns
+/// A `Model` representing the minimal matrix multiplication computation graph with non-power-of-two dimensions
+pub fn minimal_matmult_non_power_of_two_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 5] - non-power-of-two)
+    let input = b.input(vec![1, 5], 1);
+
+    // Node 1: Weight matrix constant (shape [3, 5] - non-power-of-two dimensions)
+    let mut weights: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, 5, // First output neuron weights
+            6, 7, 8, 9, 10, // Second output neuron weights
+            11, 12, 13, 14, 15, // Third output neuron weights
+        ]),
+        &[3, 5],
+    )
+    .unwrap();
+    weights.set_scale(SCALE);
+    let weight_matrix = b.const_tensor(weights, vec![3, 5], 1);
+
+    // Node 2: Matrix multiplication: [1, 5] × [3, 5] → [1, 3]
+    let result = b.matmult(input, weight_matrix, vec![1, 3], 1);
+
+    b.take(vec![input.0], vec![result])
+}
+
+/// Dual matrix multiplication model with power-of-two dimensions and non-overflowing weights.
+///
+/// This model demonstrates a 2-layer neural network with power-of-two dimensions:
+/// 1. Takes an input tensor of shape [1, 4] (4 = 2^2)
+/// 2. First matmult: [1, 4] × [4, 4] → [1, 4] with weights (1-16)
+/// 3. Second matmult: [1, 4] × [2, 4] → [1, 2] with weights (1-8)
+/// 4. Outputs the final result of shape [1, 2] (2 = 2^1)
+///
+/// All dimensions are powers of two: 4=2^2, 2=2^1, 1=2^0
+/// Weight values are chosen to avoid overflow while being reasonably sized
+/// Operations used: Input → MatMult → MatMult → Output
+/// Total nodes: 4 (input, 2 consts, 2 matmults)
+///
+/// # Returns
+/// A `Model` representing the dual matrix multiplication computation graph
+pub fn dual_matmult_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 4])
+    let input = b.input(vec![1, 4], 1);
+
+    // Node 1: First weight matrix constant (shape [4, 4] - square matrix)
+    let mut weights1: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, // First output neuron weights
+            5, 6, 7, 8, // Second output neuron weights
+            9, 10, 11, 12, // Third output neuron weights
+            13, 14, 15, 16, // Fourth output neuron weights
+        ]),
+        &[4, 4],
+    )
+    .unwrap();
+    weights1.set_scale(SCALE);
+    let weight_matrix1 = b.const_tensor(weights1, vec![4, 4], 1);
+
+    // Node 2: First matrix multiplication: [1, 4] × [4, 4] → [1, 4]
+    let first_result = b.matmult(input, weight_matrix1, vec![1, 4], 1);
+
+    // Node 3: Second weight matrix constant (shape [2, 4])
+    let mut weights2: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, // First output neuron weights
+            5, 6, 7, 8, // Second output neuron weights
+        ]),
+        &[2, 4],
+    )
+    .unwrap();
+    weights2.set_scale(SCALE);
+    let weight_matrix2 = b.const_tensor(weights2, vec![2, 4], 1);
+
+    // Node 4: Second matrix multiplication: [1, 4] × [2, 4] → [1, 2]
+    let final_result = b.matmult(first_result, weight_matrix2, vec![1, 2], 1);
+
+    b.take(vec![input.0], vec![final_result])
+}
+
+/// Dual matrix multiplication model with non-power-of-two dimensions for testing padding.
+///
+/// This model demonstrates a 2-layer neural network with non-power-of-two dimensions:
+/// 1. Takes an input tensor of shape [1, 5] (5 is not a power of two)
+/// 2. First matmult: [1, 5] × [6, 5] → [1, 6] with weights (1-30)
+/// 3. Second matmult: [1, 6] × [3, 6] → [1, 3] with weights (1-18)
+/// 4. Outputs the final result of shape [1, 3] (3 is not a power of two)
+///
+/// **Power-of-Two Padding Behavior** (when feature enabled):
+/// - Input [1, 5] gets padded to [1, 8] (next power of two for second dimension)
+/// - First weights [6, 5] get padded to [8, 8] (next powers of two)
+/// - First result [1, 6] gets padded to [1, 8] (next power of two)
+/// - Second weights [3, 6] get padded to [4, 8] (next powers of two)
+/// - Final result is cropped back to [1, 3]
+///
+/// None of the dimensions are powers of two: 5, 6, 3
+/// Weight values are chosen to avoid overflow while being reasonably sized
+/// Operations used: Input → MatMult → MatMult → Output
+/// Total nodes: 4 (input, 2 consts, 2 matmults)
+///
+/// # Returns
+/// A `Model` representing the dual matrix multiplication computation graph with non-power-of-two dimensions
+pub fn dual_matmult_non_power_of_two_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 5] - non-power-of-two)
+    let input = b.input(vec![1, 5], 1);
+
+    // Node 1: First weight matrix constant (shape [6, 5] - non-power-of-two dimensions)
+    let mut weights1: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, 5, // First output neuron weights
+            6, 7, 8, 9, 10, // Second output neuron weights
+            11, 12, 13, 14, 15, // Third output neuron weights
+            16, 17, 18, 19, 20, // Fourth output neuron weights
+            21, 22, 23, 24, 25, // Fifth output neuron weights
+            26, 27, 28, 29, 30, // Sixth output neuron weights
+        ]),
+        &[6, 5],
+    )
+    .unwrap();
+    weights1.set_scale(SCALE);
+    let weight_matrix1 = b.const_tensor(weights1, vec![6, 5], 1);
+
+    // Node 2: First matrix multiplication: [1, 5] × [6, 5] → [1, 6]
+    let first_result = b.matmult(input, weight_matrix1, vec![1, 6], 1);
+
+    // Node 3: Second weight matrix constant (shape [3, 6] - non-power-of-two dimensions)
+    let mut weights2: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, 5, 6, // First output neuron weights
+            7, 8, 9, 10, 11, 12, // Second output neuron weights
+            13, 14, 15, 16, 17, 18, // Third output neuron weights
+        ]),
+        &[3, 6],
+    )
+    .unwrap();
+    weights2.set_scale(SCALE);
+    let weight_matrix2 = b.const_tensor(weights2, vec![3, 6], 1);
+
+    // Node 4: Second matrix multiplication: [1, 6] × [3, 6] → [1, 3]
+    let final_result = b.matmult(first_result, weight_matrix2, vec![1, 3], 1);
+
+    b.take(vec![input.0], vec![final_result])
+}
+
+/// Triple matrix multiplication model with power-of-two dimensions and non-overflowing weights.
+///
+/// This model demonstrates a 3-layer neural network with power-of-two dimensions:
+/// 1. Takes an input tensor of shape [1, 8] (8 = 2^3)
+/// 2. First matmult: [1, 8] × [8, 8] → [1, 8] with weights (1-64)
+/// 3. Second matmult: [1, 8] × [4, 8] → [1, 4] with weights (1-32)
+/// 4. Third matmult: [1, 4] × [2, 4] → [1, 2] with weights (1-8)
+/// 5. Outputs the final result of shape [1, 2] (2 = 2^1)
+///
+/// All dimensions are powers of two: 8=2^3, 4=2^2, 2=2^1, 1=2^0
+/// Weight values are chosen to avoid overflow while being reasonably sized
+/// Operations used: Input → MatMult → MatMult → MatMult → Output
+/// Total nodes: 6 (input, 3 consts, 3 matmults)
+///
+/// # Returns
+/// A `Model` representing the triple matrix multiplication computation graph
+pub fn triple_matmult_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 8])
+    let input = b.input(vec![1, 8], 1);
+
+    // Node 1: First weight matrix constant (shape [8, 8] - square matrix)
+    let mut weights1: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, 5, 6, 7, 8, // First output neuron weights
+            9, 10, 11, 12, 13, 14, 15, 16, // Second output neuron weights
+            17, 18, 19, 20, 21, 22, 23, 24, // Third output neuron weights
+            25, 26, 27, 28, 29, 30, 31, 32, // Fourth output neuron weights
+            33, 34, 35, 36, 37, 38, 39, 40, // Fifth output neuron weights
+            41, 42, 43, 44, 45, 46, 47, 48, // Sixth output neuron weights
+            49, 50, 51, 52, 53, 54, 55, 56, // Seventh output neuron weights
+            57, 58, 59, 60, 61, 62, 63, 64, // Eighth output neuron weights
+        ]),
+        &[8, 8],
+    )
+    .unwrap();
+    weights1.set_scale(SCALE);
+    let weight_matrix1 = b.const_tensor(weights1, vec![8, 8], 1);
+
+    // Node 2: First matrix multiplication: [1, 8] × [8, 8] → [1, 8]
+    let first_result = b.matmult(input, weight_matrix1, vec![1, 8], 1);
+
+    // Node 3: Second weight matrix constant (shape [4, 8])
+    let mut weights2: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, 5, 6, 7, 8, // First output neuron weights
+            9, 10, 11, 12, 13, 14, 15, 16, // Second output neuron weights
+            17, 18, 19, 20, 21, 22, 23, 24, // Third output neuron weights
+            25, 26, 27, 28, 29, 30, 31, 32, // Fourth output neuron weights
+        ]),
+        &[4, 8],
+    )
+    .unwrap();
+    weights2.set_scale(SCALE);
+    let weight_matrix2 = b.const_tensor(weights2, vec![4, 8], 1);
+
+    // Node 4: Second matrix multiplication: [1, 8] × [4, 8] → [1, 4]
+    let second_result = b.matmult(first_result, weight_matrix2, vec![1, 4], 1);
+
+    // Node 5: Third weight matrix constant (shape [2, 4])
+    let mut weights3: Tensor<i32> = Tensor::new(
+        Some(&[
+            1, 2, 3, 4, // First output neuron weights
+            5, 6, 7, 8, // Second output neuron weights
+        ]),
+        &[2, 4],
+    )
+    .unwrap();
+    weights3.set_scale(SCALE);
+    let weight_matrix3 = b.const_tensor(weights3, vec![2, 4], 1);
+
+    // Node 6: Third matrix multiplication: [1, 4] × [2, 4] → [1, 2]
+    let final_result = b.matmult(second_result, weight_matrix3, vec![1, 2], 1);
+
+    b.take(vec![input.0], vec![final_result])
+}
+
+/// Simple MLP Small model that recreates the exact bytecode structure.
+///
+/// This model matches the bytecode from the test case:
+/// 1. Takes an input tensor of shape [1, 4] with scale 7
+/// 2. Matrix multiplies with a 4x4 weight matrix (Einsum "mk,nk->mn", scale 14)
+/// 3. Divides by 128 to rescale back to scale 7
+/// 4. Adds a bias vector [1, 4] with scale 7
+/// 5. Applies ReLU activation with scale 7
+/// 6. Outputs the result of shape [1, 4]
+///
+/// The exact values match those seen in the bytecode:
+/// - Weight matrix: [16, -11, 8, 29, -14, 53, 3, -3, 8, -26, 100, 15, -15, 1, -17, 47]
+/// - Bias vector: [82, 71, 30, 76]
+///
+/// Operations sequence: Input → MatMult → Div → Add → ReLU → Output
+///
+/// # Returns
+/// A `Model` representing the simple MLP small computation graph
+pub fn simple_mlp_small_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [1, 4], scale 7)
+    let input = b.input(vec![1, 4], 1);
+
+    // Node 1: Weight matrix constant (shape [4, 4], scale 7)
+    // Exact values from the bytecode
+    let mut weights: Tensor<i32> = Tensor::new(
+        Some(&[
+            16, -11, 8, 29, // First row
+            -14, 53, 3, -3, // Second row
+            8, -26, 100, 15, // Third row
+            -15, 1, -17, 47, // Fourth row
+        ]),
+        &[4, 4],
+    )
+    .unwrap();
+    weights.set_scale(SCALE);
+    let weight_matrix = b.const_tensor(weights, vec![4, 4], 1);
+
+    // Node 2: Matrix multiplication (Einsum "mk,nk->mn"): [1, 4] × [4, 4] → [1, 4]
+    // This creates scale 14 (7 + 7)
+    let matmul_result = b.matmult(input, weight_matrix, vec![1, 4], 1);
+
+    // Node 3: Division by 128 to rescale from 14 back to 7
+    let rescaled = b.div(128, matmul_result, vec![1, 4], 1);
+
+    // Node 4: Bias vector constant (shape [1, 4], scale 7)
+    // Exact values from the bytecode
+    let mut bias: Tensor<i32> = Tensor::new(Some(&[82, 71, 30, 76]), &[1, 4]).unwrap();
+    bias.set_scale(SCALE);
+    let bias_vector = b.const_tensor(bias, vec![1, 4], 1);
+
+    // Node 5: Add bias: [1, 4] + [1, 4] → [1, 4] (scale 7)
+    let biased = b.poly(PolyOp::Add, rescaled, bias_vector, vec![1, 4], 1);
+
+    // Node 7: ReLU activation: [1, 4] → [1, 4] (scale 7)
+    let output = b.relu(biased, vec![1, 4], 1);
+
+    b.take(vec![input.0], vec![output])
+}
+
 /// Matrix multiplication model with RebaseScale wrapper for testing ONNX binary compilation scenarios.
 ///
 /// This model demonstrates matrix multiplication wrapped in RebaseScale, which is common
@@ -1082,4 +1708,264 @@ pub fn non_power_of_two_matmult_rebase_model() -> Model {
     let result = b.rebase_scale_matmult(input, weight_matrix, vec![3, 7], 1);
 
     b.take(vec![input.0], vec![result])
+}
+
+/// Reduce mean is a common operation in LayerNorm implementations.
+pub fn reduce_mean_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [4, 4])
+    let input = b.input(vec![4, 4], 2); // fanout=2 since input is used in SUM and SUB
+
+    // Node 1: SUM - reduce along axis 1 to get sums for each row
+    let summed = b.sum(input, vec![1], vec![4, 1], 1); // sum along axis 1, result [4, 1]
+
+    // Node 2: DIV - divide sum by 4 to get mean
+    let mean = b.div(4, summed, vec![4, 1], 1); // divide by 4 to get mean
+
+    b.take(vec![input.0], vec![mean])
+}
+
+/// Layernorm prefix model that implements the first 5 operations of layer normalization.
+///
+/// This model demonstrates the initial steps of layer normalization:
+/// 1. Takes an input tensor of shape [4, 4] with scale 7
+/// 2. **SUM**: Reduces input along axis 1 from [4, 4] to [4, 1] (mean calculation)
+/// 3. **DIV(denom=4)**: Divides the sum by 4 to get the mean, shape [4, 1]
+/// 4. **BROADCAST**: Broadcasts mean from [4, 1] to [4, 4] for element-wise operations
+/// 5. **SUB**: Subtracts the broadcasted mean from original input (mean centering), shape [4, 4]
+///
+/// **Operations sequence**: Input → SUM → DIV → BROADCAST → SUB → Output
+///
+/// This matches the first 5 operations from the full layernorm model (scaled down):
+/// ```ignore
+/// │ 0   │ Input              │ 7  │                  │ [4, 4] │
+/// │ 1   │ SUM                │ 7  │ [(0, 0)]         │ [4, 1] │
+/// │ 2   │ DIV(denom=4)       │ 7  │ [(1, 0)]         │ [4, 1] │
+/// │ 3   │ BROADCAST          │ 7  │ [(2, 0)]         │ [4, 4] │
+/// │ 4   │ SUB                │ 7  │ [(0, 0), (3, 0)] │ [4, 4] │
+/// ```
+///
+/// The result is the mean-centered input tensor, which is the first step in layer normalization
+/// before computing variance and applying the final scaling/shifting.
+///
+/// # Returns
+/// A `Model` representing the first 4 operations of layer normalization
+pub fn layernorm_prefix_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Node 0: Input tensor (shape [4, 4])
+    let input = b.input(vec![4, 4], 2); // fanout=2 since input is used in SUM and SUB
+
+    // Node 1: SUM - reduce along axis 1 to get sums for each row
+    let summed = b.sum(input, vec![1], vec![4, 1], 1); // sum along axis 1, result [4, 1]
+
+    // Node 2: DIV - divide sum by 4 to get mean
+    let mean = b.div(4, summed, vec![4, 1], 1); // divide by 4 to get mean
+
+    // Node 3: BROADCAST - broadcast mean from [4, 1] to [4, 4]
+    let mean_broadcasted = b.broadcast(mean, vec![4, 4], vec![4, 4], 1);
+
+    // Node 4: SUB - subtract broadcasted mean from original input (mean centering)
+    let mean_centered = b.poly(PolyOp::Sub, input, mean_broadcasted, vec![4, 4], 1);
+
+    b.take(vec![input.0], vec![mean_centered])
+}
+
+/// QKV projection model that implements Query, Key, and Value projections from multi-head attention.
+///
+/// This model extracts just the QKV projection operations from the self_attention model:
+/// 1. Takes a normalized input tensor of shape [1, 64, 64]
+/// 2. **Q Projection**: Projects input to Query space via EINSUM → DIV → RESHAPE to [64, 4, 16]
+/// 3. **K Projection**: Projects input to Key space via EINSUM → DIV → RESHAPE to [64, 4, 16]
+/// 4. **V Projection**: Projects input to Value space via EINSUM → DIV → RESHAPE to [64, 4, 16]
+///
+/// **Architecture Details**:
+/// - Input embedding dimension: 64
+/// - Number of attention heads: 4
+/// - Head dimension: 64 / 4 = 16
+/// - Each projection: [64, 64] weight matrix
+/// - Output shape for each: [64, 4, 16] = [seq_len, num_heads, head_dim]
+///
+/// **Operations sequence**:
+/// ```ignore
+/// Input [1, 64, 64]
+///   ├─→ Q: EINSUM [64,64] → DIV/128 → RESHAPE → [64, 4, 16]
+///   ├─→ K: EINSUM [64,64] → DIV/128 → RESHAPE → [64, 4, 16]
+///   └─→ V: EINSUM [64,64] → DIV/128 → RESHAPE → [64, 4, 16]
+/// ```
+///
+/// The three projections are independent and can be computed in parallel. The reshape
+/// splits the embedding dimension into (num_heads, head_dim) for multi-head attention.
+///
+/// # Returns
+/// A `Model` with three outputs: (Q, K, V) projections, each with shape [64, 4, 16]
+pub fn qkv_projection_model() -> Model {
+    const SCALE: i32 = 7;
+    const REBASE_SCALE: i32 = 128;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Input: normalized tensor from LayerNorm, shape [1, 64, 64]
+    let input = b.input(vec![1, 64, 64], 3); // fanout=3 (used for Q, K, V projections)
+
+    // ===== Q PROJECTION =====
+    // Weight matrix for Query projection: [64, 64]
+    let q_weights = Tensor::new(
+        Some(&(0..4096).map(|i| ((i % 127) - 63)).collect::<Vec<_>>()),
+        &[64, 64],
+    )
+    .unwrap();
+    let q_weight_const = b.const_tensor(q_weights, vec![64, 64], 1);
+
+    // Q = Input @ Q_weights using einsum
+    let q_matmul = b.einsum("amk,kn->mn", input, q_weight_const, vec![64, 64], 1);
+
+    // Scale down from scale 14 (product) to scale 7
+    let q_scaled = b.div(REBASE_SCALE, q_matmul, vec![64, 64], 1);
+
+    // Reshape [64, 64] → [64, 4, 16] to split into heads
+    let q_reshaped = b.reshape(q_scaled, vec![64, 4, 16], vec![64, 4, 16], 1);
+
+    // ===== K PROJECTION =====
+    // Weight matrix for Key projection: [64, 64]
+    let k_weights = Tensor::new(
+        Some(&(0..4096).map(|i| ((i % 97) - 48)).collect::<Vec<_>>()),
+        &[64, 64],
+    )
+    .unwrap();
+    let k_weight_const = b.const_tensor(k_weights, vec![64, 64], 1);
+
+    // K = Input @ K_weights
+    let k_matmul = b.einsum("amk,kn->mn", input, k_weight_const, vec![64, 64], 1);
+
+    // Scale down from scale 14 (product) to scale 7
+    let k_scaled = b.div(REBASE_SCALE, k_matmul, vec![64, 64], 1);
+
+    // Reshape [64, 64] → [64, 4, 16] to split into heads
+    let _k_reshaped = b.reshape(k_scaled, vec![64, 4, 16], vec![64, 4, 16], 1);
+
+    // ===== V PROJECTION =====
+    // Weight matrix for Value projection: [64, 64]
+    let v_weights = Tensor::new(
+        Some(&(0..4096).map(|i| ((i % 83) - 41)).collect::<Vec<_>>()),
+        &[64, 64],
+    )
+    .unwrap();
+    let v_weight_const = b.const_tensor(v_weights, vec![64, 64], 1);
+
+    // V = Input @ V_weights
+    let v_matmul = b.einsum("amk,kn->mn", input, v_weight_const, vec![64, 64], 1);
+
+    // Scale down from scale 14 (product) to scale 7
+    let v_scaled = b.div(REBASE_SCALE, v_matmul, vec![64, 64], 1);
+
+    // Reshape [64, 64] → [64, 4, 16] to split into heads
+    let _v_reshaped = b.reshape(v_scaled, vec![64, 4, 16], vec![64, 4, 16], 3);
+
+    // dummy output to satisfy function signature
+    b.take(vec![input.0], vec![q_reshaped])
+}
+
+/// Model for testing the attention-value multiplication (operation 41 in self_attention)
+///
+/// This model represents: Attention_output = Attention_weights @ Value
+/// where the einsum equation is "abmk,kbn->mbn"
+///
+/// Architecture:
+/// - Input 1: Attention weights after softmax [1, 4, 64, 64] (batch=1, heads=4, seq_len=64, seq_len=64)
+/// - Input 2: Value projection reshaped [64, 4, 16] (seq_len=64, heads=4, head_dim=16)
+/// - Operation: einsum "abmk,kbn->mbn" producing [64, 4, 16]
+///
+/// This is the final step in multi-head attention that applies the learned attention
+/// weights to the value vectors to produce the attention output.
+pub fn attention_value_matmul_model() -> Model {
+    const SCALE: i32 = 7;
+    const REBASE_SCALE: i32 = 128;
+    let mut b = ModelBuilder::new(SCALE);
+
+    // Input 1: Attention weights after softmax
+    // Shape: [1, 4, 64, 64] (batch, num_heads, seq_len, seq_len)
+    // These are the normalized attention scores that tell us how much each position
+    // should attend to every other position, per head
+    let attention_weights = b.input(vec![1, 4, 64, 64], 1);
+
+    // Input 2: Value projection (already reshaped for multi-head)
+    // Shape: [64, 4, 16] (seq_len, num_heads, head_dim)
+    // Create a constant tensor to simulate the V values
+    let v_values = Tensor::new(
+        Some(&(0..4096).map(|i| (i % 127) - 63).collect::<Vec<_>>()),
+        &[64, 4, 16],
+    )
+    .unwrap();
+    let v_const = b.const_tensor(v_values, vec![64, 4, 16], 1);
+
+    // Attention output = Attention_weights @ Value
+    // einsum "abmk,kbn->mbn" where:
+    //   a=batch(1), b=heads(4), m=seq_len_out(64), k=seq_len_in(64), n=head_dim(16)
+    // Result shape: [64, 4, 16] (seq_len, num_heads, head_dim)
+    let attention_output = b.einsum(
+        "abmk,kbn->mbn",
+        attention_weights,
+        v_const,
+        vec![64, 4, 16],
+        1,
+    );
+
+    // Scale down from scale 14 (product) to scale 7
+    let attention_scaled = b.div(REBASE_SCALE, attention_output, vec![64, 4, 16], 1);
+
+    b.take(vec![attention_weights.0], vec![attention_scaled])
+}
+
+/// Model for testing the attention score computation (operation 26 in self_attention)
+///
+/// This model represents: Attention_scores = Query @ Key^T
+/// where the einsum equation is "mbk,nbk->abmn"
+///
+/// Architecture:
+/// - Input 1: Query projection reshaped [64, 4, 16] (seq_len=64, num_heads=4, head_dim=16)
+/// - Input 2: Key projection reshaped [64, 4, 16] (seq_len=64, num_heads=4, head_dim=16)
+/// - Operation: einsum "mbk,nbk->abmn" producing [1, 4, 64, 64]
+///
+/// This computes the attention scores by taking the dot product of queries and keys
+/// for each head. The result is a [batch, num_heads, seq_len, seq_len] tensor where
+/// each entry represents how much one position should attend to another position.
+pub fn attention_qk_scores_model() -> Model {
+    const SCALE: i32 = 7;
+    const REBASE_SCALE: i32 = 128;
+    let mut b = ModelBuilder::new(SCALE);
+    let input = b.input(vec![1], 0); // dummy input to satisfy function signature
+
+    // Input 1: Query projection (already reshaped for multi-head)
+    // Shape: [64, 4, 16] (seq_len, num_heads, head_dim)
+    // Create a constant tensor to simulate the Q values
+    let q_values = Tensor::new(
+        Some(&(0..4096).map(|i| (i % 127) - 63).collect::<Vec<_>>()),
+        &[64, 4, 16],
+    )
+    .unwrap();
+    let q_const = b.const_tensor(q_values, vec![64, 4, 16], 1);
+
+    // Input 2: Key projection (already reshaped for multi-head)
+    // Shape: [64, 4, 16] (seq_len, num_heads, head_dim)
+    let k_values = Tensor::new(
+        Some(&(0..4096).map(|i| (i % 97) - 48).collect::<Vec<_>>()),
+        &[64, 4, 16],
+    )
+    .unwrap();
+    let k_const = b.const_tensor(k_values, vec![64, 4, 16], 1);
+
+    // Attention scores = Query @ Key^T
+    // einsum "mbk,nbk->abmn" where:
+    //   m=seq_len_q(64), b=heads(4), k=head_dim(16), n=seq_len_k(64), a=batch(1)
+    // This computes dot products between all pairs of query and key vectors
+    // Result shape: [1, 4, 64, 64] (batch, num_heads, seq_len_q, seq_len_k)
+    let attention_scores = b.einsum("mbk,nbk->abmn", q_const, k_const, vec![1, 4, 64, 64], 1);
+
+    // Scale down from scale 14 (product) to scale 7
+    let scores_scaled = b.div(REBASE_SCALE, attention_scores, vec![1, 4, 64, 64], 1);
+
+    b.take(vec![input.0], vec![scores_scaled])
 }

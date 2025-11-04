@@ -1,0 +1,208 @@
+use crate::jolt::lookup_table::{
+    prefixes::PrefixEval,
+    suffixes::{SuffixEval, Suffixes},
+};
+
+pub use crate::jolt::lookup_table::jolt_tables::{
+    AndTable, EqualTable, HalfwordAlignmentTable, MovsignTable, NotEqualTable, OrTable, Pow2Table,
+    RangeCheckTable, ShiftRightBitmaskTable, SignedGreaterThanEqualTable, SignedLessThanTable,
+    UnsignedGreaterThanEqualTable, UnsignedLessThanEqualTable, UnsignedLessThanTable,
+    UpperWordTable, ValidDiv0Table, ValidSignedRemainderTable, ValidUnsignedRemainderTable,
+    VirtualRotrTable, VirtualSRATable, VirtualSRLTable, XorTable,
+};
+pub use relu::ReLUTable;
+
+use serde::{Deserialize, Serialize};
+use std::marker::Sync;
+use strum::EnumCount;
+use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
+
+use derive_more::From;
+use jolt_core::field::JoltField;
+use std::fmt::Debug;
+
+pub trait AtlasLookupTable: Clone + Debug + Send + Sync + Serialize {
+    /// Materializes the entire lookup table for this instruction (assuming an 8-bit word size).
+    #[cfg(test)]
+    fn materialize(&self) -> Vec<u64> {
+        (0..1 << 16).map(|i| self.materialize_entry(i)).collect()
+    }
+
+    /// Materialize the entry at the given `index` in the lookup table for this instruction.
+    fn materialize_entry(&self, index: u64) -> u64;
+
+    /// Evaluates the MLE of this lookup table on the given point `r`.
+    fn evaluate_mle<F: JoltField>(&self, r: &[F]) -> F;
+}
+
+pub trait PrefixSuffixDecomposition<const WORD_SIZE: usize>: AtlasLookupTable + Default {
+    fn suffixes(&self) -> Vec<Suffixes>;
+    fn combine<F: JoltField>(&self, prefixes: &[PrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F;
+    #[cfg(test)]
+    fn random_lookup_index(rng: &mut rand::rngs::StdRng) -> u64 {
+        rand::RngCore::next_u64(rng)
+    }
+}
+
+#[cfg(test)]
+pub mod test;
+
+pub const NUM_LOOKUP_TABLES: usize = LookupTables::<32>::COUNT;
+
+#[derive(Copy, Clone, Debug, From, Serialize, Deserialize, EnumIter, EnumCountMacro)]
+#[repr(u8)]
+pub enum LookupTables<const WORD_SIZE: usize> {
+    // And(AndTable<WORD_SIZE>),
+    Equal(EqualTable<WORD_SIZE>),
+    // HalfwordAlignment(HalfwordAlignmentTable<WORD_SIZE>),
+    // LessThanEqual(UnsignedLessThanEqualTable<WORD_SIZE>),
+    // Movsign(MovsignTable<WORD_SIZE>),
+    // NotEqual(NotEqualTable<WORD_SIZE>),
+    // Or(OrTable<WORD_SIZE>),
+    // Pow2(Pow2Table<WORD_SIZE>),
+    RangeCheck(RangeCheckTable<WORD_SIZE>),
+    Relu(ReLUTable<WORD_SIZE>),
+    // ShiftRightBitmask(ShiftRightBitmaskTable<WORD_SIZE>),
+    SignedGreaterThanEqual(SignedGreaterThanEqualTable<WORD_SIZE>),
+    // SignedLessThan(SignedLessThanTable<WORD_SIZE>),
+    // UnsignedGreaterThanEqual(UnsignedGreaterThanEqualTable<WORD_SIZE>),
+    // UnsignedLessThan(UnsignedLessThanTable<WORD_SIZE>),
+    // UpperWord(UpperWordTable<WORD_SIZE>),
+    ValidSignedRemainder(ValidSignedRemainderTable<WORD_SIZE>),
+    ValidUnsignedRemainder(ValidUnsignedRemainderTable<WORD_SIZE>),
+    ValidDiv0(ValidDiv0Table<WORD_SIZE>),
+    // VirtualSRL(VirtualSRLTable<WORD_SIZE>),
+    // VirtualSRA(VirtualSRATable<WORD_SIZE>),
+    // VirtualROTRI(VirtualRotrTable<WORD_SIZE>),
+    // Xor(XorTable<WORD_SIZE>),
+}
+
+impl<const WORD_SIZE: usize> LookupTables<WORD_SIZE> {
+    pub fn enum_index(table: &Self) -> usize {
+        // Discriminant: https://doc.rust-lang.org/reference/items/enumerations.html#pointer-casting
+        let byte = unsafe { *(table as *const Self as *const u8) };
+        byte as usize
+    }
+
+    pub fn materialize_entry(&self, index: u64) -> u64 {
+        match self {
+            // LookupTables::And(table) => table.materialize_entry(index),
+            LookupTables::Equal(table) => table.materialize_entry(index),
+            // LookupTables::HalfwordAlignment(table) => table.materialize_entry(index),
+            // LookupTables::LessThanEqual(table) => table.materialize_entry(index),
+            // LookupTables::Movsign(table) => table.materialize_entry(index),
+            // LookupTables::NotEqual(table) => table.materialize_entry(index),
+            // LookupTables::Or(table) => table.materialize_entry(index),
+            // LookupTables::Pow2(table) => table.materialize_entry(index),
+            LookupTables::RangeCheck(table) => table.materialize_entry(index),
+            LookupTables::Relu(table) => table.materialize_entry(index),
+            // LookupTables::ShiftRightBitmask(table) => table.materialize_entry(index),
+            LookupTables::SignedGreaterThanEqual(table) => table.materialize_entry(index),
+            // LookupTables::SignedLessThan(table) => table.materialize_entry(index),
+            // LookupTables::UnsignedGreaterThanEqual(table) => table.materialize_entry(index),
+            // LookupTables::UnsignedLessThan(table) => table.materialize_entry(index),
+            // LookupTables::UpperWord(table) => table.materialize_entry(index),
+            LookupTables::ValidSignedRemainder(table) => table.materialize_entry(index),
+            LookupTables::ValidUnsignedRemainder(table) => table.materialize_entry(index),
+            LookupTables::ValidDiv0(table) => table.materialize_entry(index),
+            // LookupTables::VirtualSRL(table) => table.materialize_entry(index),
+            // LookupTables::VirtualSRA(table) => table.materialize_entry(index),
+            // LookupTables::VirtualROTRI(table) => table.materialize_entry(index),
+            // LookupTables::Xor(table) => table.materialize_entry(index),
+        }
+    }
+
+    pub fn evaluate_mle<F: JoltField>(&self, r: &[F]) -> F {
+        match self {
+            // LookupTables::And(table) => table.evaluate_mle(r),
+            LookupTables::Equal(table) => table.evaluate_mle(r),
+            // LookupTables::HalfwordAlignment(table) => table.evaluate_mle(r),
+            // LookupTables::LessThanEqual(table) => table.evaluate_mle(r),
+            // LookupTables::Movsign(table) => table.evaluate_mle(r),
+            // LookupTables::NotEqual(table) => table.evaluate_mle(r),
+            // LookupTables::Or(table) => table.evaluate_mle(r),
+            // LookupTables::Pow2(table) => table.evaluate_mle(r),
+            LookupTables::RangeCheck(table) => table.evaluate_mle(r),
+            LookupTables::Relu(table) => table.evaluate_mle(r),
+            // LookupTables::ShiftRightBitmask(table) => table.evaluate_mle(r),
+            LookupTables::SignedGreaterThanEqual(table) => table.evaluate_mle(r),
+            // LookupTables::SignedLessThan(table) => table.evaluate_mle(r),
+            // LookupTables::UnsignedGreaterThanEqual(table) => table.evaluate_mle(r),
+            // LookupTables::UnsignedLessThan(table) => table.evaluate_mle(r),
+            // LookupTables::UpperWord(table) => table.evaluate_mle(r),
+            LookupTables::ValidSignedRemainder(table) => table.evaluate_mle(r),
+            LookupTables::ValidUnsignedRemainder(table) => table.evaluate_mle(r),
+            LookupTables::ValidDiv0(table) => table.evaluate_mle(r),
+            // LookupTables::VirtualSRL(table) => table.evaluate_mle(r),
+            // LookupTables::VirtualSRA(table) => table.evaluate_mle(r),
+            // LookupTables::VirtualROTRI(table) => table.evaluate_mle(r),
+            // LookupTables::Xor(table) => table.evaluate_mle(r),
+        }
+    }
+
+    pub fn suffixes(&self) -> Vec<Suffixes> {
+        match self {
+            // LookupTables::And(table) => table.suffixes(),
+            LookupTables::Equal(table) => table.suffixes(),
+            // LookupTables::HalfwordAlignment(table) => table.suffixes(),
+            // LookupTables::LessThanEqual(table) => table.suffixes(),
+            // LookupTables::Movsign(table) => table.suffixes(),
+            // LookupTables::NotEqual(table) => table.suffixes(),
+            // LookupTables::Or(table) => table.suffixes(),
+            // LookupTables::Pow2(table) => table.suffixes(),
+            LookupTables::RangeCheck(table) => table.suffixes(),
+            LookupTables::Relu(table) => table.suffixes(),
+            // LookupTables::ShiftRightBitmask(table) => table.suffixes(),
+            LookupTables::SignedGreaterThanEqual(table) => table.suffixes(),
+            // LookupTables::SignedLessThan(table) => table.suffixes(),
+            // LookupTables::UnsignedGreaterThanEqual(table) => table.suffixes(),
+            // LookupTables::UnsignedLessThan(table) => table.suffixes(),
+            // LookupTables::UpperWord(table) => table.suffixes(),
+            LookupTables::ValidSignedRemainder(table) => table.suffixes(),
+            LookupTables::ValidUnsignedRemainder(table) => table.suffixes(),
+            LookupTables::ValidDiv0(table) => table.suffixes(),
+            // LookupTables::VirtualSRL(table) => table.suffixes(),
+            // LookupTables::VirtualSRA(table) => table.suffixes(),
+            // LookupTables::VirtualROTRI(table) => table.suffixes(),
+            // LookupTables::Xor(table) => table.suffixes(),
+        }
+    }
+
+    pub fn combine<F: JoltField>(
+        &self,
+        prefixes: &[PrefixEval<F>],
+        suffixes: &[SuffixEval<F>],
+    ) -> F {
+        match self {
+            // LookupTables::And(table) => table.combine(prefixes, suffixes),
+            LookupTables::Equal(table) => table.combine(prefixes, suffixes),
+            // LookupTables::HalfwordAlignment(table) => table.combine(prefixes, suffixes),
+            // LookupTables::LessThanEqual(table) => table.combine(prefixes, suffixes),
+            // LookupTables::Movsign(table) => table.combine(prefixes, suffixes),
+            // LookupTables::NotEqual(table) => table.combine(prefixes, suffixes),
+            // LookupTables::Or(table) => table.combine(prefixes, suffixes),
+            // LookupTables::Pow2(table) => table.combine(prefixes, suffixes),
+            LookupTables::RangeCheck(table) => table.combine(prefixes, suffixes),
+            LookupTables::Relu(table) => table.combine(prefixes, suffixes),
+            // LookupTables::ShiftRightBitmask(table) => table.combine(prefixes, suffixes),
+            LookupTables::SignedGreaterThanEqual(table) => table.combine(prefixes, suffixes),
+            // LookupTables::SignedLessThan(table) => table.combine(prefixes, suffixes),
+            // LookupTables::UnsignedGreaterThanEqual(table) => table.combine(prefixes, suffixes),
+            // LookupTables::UnsignedLessThan(table) => table.combine(prefixes, suffixes),
+            // LookupTables::UpperWord(table) => table.combine(prefixes, suffixes),
+            LookupTables::ValidSignedRemainder(table) => table.combine(prefixes, suffixes),
+            LookupTables::ValidUnsignedRemainder(table) => table.combine(prefixes, suffixes),
+            LookupTables::ValidDiv0(table) => table.combine(prefixes, suffixes),
+            // LookupTables::VirtualSRL(table) => table.combine(prefixes, suffixes),
+            // LookupTables::VirtualSRA(table) => table.combine(prefixes, suffixes),
+            // LookupTables::VirtualROTRI(table) => table.combine(prefixes, suffixes),
+            // LookupTables::Xor(table) => table.combine(prefixes, suffixes),
+        }
+    }
+}
+
+pub mod prefixes;
+pub mod suffixes;
+
+mod jolt_tables;
+mod relu;

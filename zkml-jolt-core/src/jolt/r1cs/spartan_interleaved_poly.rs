@@ -2,9 +2,9 @@ use jolt_core::{
     field::JoltField,
     poly::{
         dense_mlpoly::DensePolynomial, multilinear_polynomial::MultilinearPolynomial,
-        sparse_interleaved_poly::SparseCoefficient,
+        spartan_interleaved_poly::SparseCoefficient,
     },
-    r1cs::builder::Constraint,
+    zkvm::r1cs::builder::Constraint,
 };
 
 #[derive(Default, Debug, Clone)]
@@ -45,60 +45,60 @@ impl<F: JoltField> SpartanInterleavedPolynomial<F> {
             for step_index in chunk_size * chunk_index..chunk_size * (chunk_index + 1) {
                 // Uniform constraints
                 for (constraint_index, constraint) in uniform_constraints.iter().enumerate() {
-                let global_index =
-                    3 * (step_index * padded_num_constraints + constraint_index);
+                    let global_index =
+                        3 * (step_index * padded_num_constraints + constraint_index);
 
-                // Az
-                let mut az_coeff = 0;
-                if !constraint.a.terms().is_empty() {
-                    az_coeff = constraint
-                    .a
-                    .evaluate_row(flattened_polynomials, step_index);
-                    if az_coeff != 0 {
-                    coeffs.push((global_index, az_coeff).into());
+                    // Az
+                    let mut az_coeff = 0;
+                    if !constraint.a.terms().is_empty() {
+                        az_coeff = constraint
+                        .a
+                        .evaluate_row(flattened_polynomials, step_index);
+                        if az_coeff != 0 {
+                        coeffs.push((global_index, az_coeff).into());
+                        }
                     }
-                }
-                // Bz
-                let mut bz_coeff = 0;
-                if !constraint.b.terms().is_empty() {
-                    bz_coeff = constraint
-                    .b
-                    .evaluate_row(flattened_polynomials, step_index);
-                    if bz_coeff != 0 {
-                    coeffs.push((global_index + 1, bz_coeff).into());
+                    // Bz
+                    let mut bz_coeff = 0;
+                    if !constraint.b.terms().is_empty() {
+                        bz_coeff = constraint
+                        .b
+                        .evaluate_row(flattened_polynomials, step_index);
+                        if bz_coeff != 0 {
+                        coeffs.push((global_index + 1, bz_coeff).into());
+                        }
                     }
-                }
-                #[cfg(test)]
-                {
-                    let cz_coeff = az_coeff * bz_coeff;
-                    if cz_coeff != constraint
-                    .c
-                    .evaluate_row(flattened_polynomials, step_index) {
-                        use crate::jolt::r1cs::builder::R1CSConstraintFormatter;
+                    #[cfg(test)]
+                    {
+                        let cz_coeff = az_coeff * bz_coeff;
+                        if cz_coeff != constraint
+                        .c
+                        .evaluate_row(flattened_polynomials, step_index) {
+                            use crate::jolt::r1cs::builder::R1CSConstraintFormatter;
 
-                        let mut constraint_string = String::new();
-                        let _ = constraint
-                        .format_constraint::<F>(
-                            &mut constraint_string,
-                            flattened_polynomials,
-                            step_index,
-                        );
-                        println!("{constraint_string}");
-                        panic!(
-                        "Uniform constraint {constraint_index} violated at step {step_index}",
-                        );
+                            let mut constraint_string = String::new();
+                            let _ = constraint
+                            .format_constraint::<F>(
+                                &mut constraint_string,
+                                flattened_polynomials,
+                                step_index,
+                            );
+                            println!("{constraint_string}");
+                            panic!(
+                            "Uniform constraint {constraint_index} violated at step {step_index}",
+                            );
+                        }
                     }
-                }
-                // Cz = Az ⊙ Cz
-                if az_coeff != 0 && bz_coeff != 0 {
-                    let cz_coeff = az_coeff * bz_coeff;
-                    coeffs.push((global_index + 2, cz_coeff).into());
-                }
+                    // Cz = Az ⊙ Cz
+                    if az_coeff != 0 && bz_coeff != 0 {
+                        let cz_coeff = az_coeff * bz_coeff;
+                        coeffs.push((global_index + 2, cz_coeff).into());
+                    }
                 }
             }
             coeffs
-            })
-            .collect();
+        })
+        .collect();
 
         #[cfg(test)]
         {

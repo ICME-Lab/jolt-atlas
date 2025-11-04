@@ -1,0 +1,341 @@
+{
+  "vocab_mapping": {
+    "budget_0": {
+      "index": 0,
+      "feature_type": "budget"
+    },
+    "budget_1": {
+      "index": 1,
+      "feature_type": "budget"
+    },
+    "budget_2": {
+      "index": 2,
+      "feature_type": "budget"
+    },
+    "budget_3": {
+      "index": 3,
+      "feature_type": "budget"
+    },
+    "budget_4": {
+      "index": 4,
+      "feature_type": "budget"
+    },
+    "budget_5": {
+      "index": 5,
+      "feature_type": "budget"
+    },
+    "budget_6": {
+      "index": 6,
+      "feature_type": "budget"
+    },
+    "budget_7": {
+      "index": 7,
+      "feature_type": "budget"
+    },
+    "budget_8": {
+      "index": 8,
+      "feature_type": "budget"
+    },
+    "budget_9": {
+      "index": 9,
+      "feature_type": "budget"
+    },
+    "budget_10": {
+      "index": 10,
+      "feature_type": "budget"
+    },
+    "budget_11": {
+      "index": 11,
+      "feature_type": "budget"
+    },
+    "budget_12": {
+      "index": 12,
+      "feature_type": "budget"
+    },
+    "budget_13": {
+      "index": 13,
+      "feature_type": "budget"
+    },
+    "budget_14": {
+      "index": 14,
+      "feature_type": "budget"
+    },
+    "budget_15": {
+      "index": 15,
+      "feature_type": "budget"
+    },
+    "trust_0": {
+      "index": 16,
+      "feature_type": "trust"
+    },
+    "trust_1": {
+      "index": 17,
+      "feature_type": "trust"
+    },
+    "trust_2": {
+      "index": 18,
+      "feature_type": "trust"
+    },
+    "trust_3": {
+      "index": 19,
+      "feature_type": "trust"
+    },
+    "trust_4": {
+      "index": 20,
+      "feature_type": "trust"
+    },
+    "trust_5": {
+      "index": 21,
+      "feature_type": "trust"
+    },
+    "trust_6": {
+      "index": 22,
+      "feature_type": "trust"
+    },
+    "trust_7": {
+      "index": 23,
+      "feature_type": "trust"
+    },
+    "amount_0": {
+      "index": 24,
+      "feature_type": "amount"
+    },
+    "amount_1": {
+      "index": 25,
+      "feature_type": "amount"
+    },
+    "amount_2": {
+      "index": 26,
+      "feature_type": "amount"
+    },
+    "amount_3": {
+      "index": 27,
+      "feature_type": "amount"
+    },
+    "amount_4": {
+      "index": 28,
+      "feature_type": "amount"
+    },
+    "amount_5": {
+      "index": 29,
+      "feature_type": "amount"
+    },
+    "amount_6": {
+      "index": 30,
+      "feature_type": "amount"
+    },
+    "amount_7": {
+      "index": 31,
+      "feature_type": "amount"
+    },
+    "amount_8": {
+      "index": 32,
+      "feature_type": "amount"
+    },
+    "amount_9": {
+      "index": 33,
+      "feature_type": "amount"
+    },
+    "amount_10": {
+      "index": 34,
+      "feature_type": "amount"
+    },
+    "amount_11": {
+      "index": 35,
+      "feature_type": "amount"
+    },
+    "amount_12": {
+      "index": 36,
+      "feature_type": "amount"
+    },
+    "amount_13": {
+      "index": 37,
+      "feature_type": "amount"
+    },
+    "amount_14": {
+      "index": 38,
+      "feature_type": "amount"
+    },
+    "amount_15": {
+      "index": 39,
+      "feature_type": "amount"
+    },
+    "category_0": {
+      "index": 40,
+      "feature_type": "category"
+    },
+    "category_1": {
+      "index": 41,
+      "feature_type": "category"
+    },
+    "category_2": {
+      "index": 42,
+      "feature_type": "category"
+    },
+    "category_3": {
+      "index": 43,
+      "feature_type": "category"
+    },
+    "velocity_0": {
+      "index": 44,
+      "feature_type": "velocity"
+    },
+    "velocity_1": {
+      "index": 45,
+      "feature_type": "velocity"
+    },
+    "velocity_2": {
+      "index": 46,
+      "feature_type": "velocity"
+    },
+    "velocity_3": {
+      "index": 47,
+      "feature_type": "velocity"
+    },
+    "velocity_4": {
+      "index": 48,
+      "feature_type": "velocity"
+    },
+    "velocity_5": {
+      "index": 49,
+      "feature_type": "velocity"
+    },
+    "velocity_6": {
+      "index": 50,
+      "feature_type": "velocity"
+    },
+    "velocity_7": {
+      "index": 51,
+      "feature_type": "velocity"
+    },
+    "day_0": {
+      "index": 52,
+      "feature_type": "day"
+    },
+    "day_1": {
+      "index": 53,
+      "feature_type": "day"
+    },
+    "day_2": {
+      "index": 54,
+      "feature_type": "day"
+    },
+    "day_3": {
+      "index": 55,
+      "feature_type": "day"
+    },
+    "day_4": {
+      "index": 56,
+      "feature_type": "day"
+    },
+    "day_5": {
+      "index": 57,
+      "feature_type": "day"
+    },
+    "day_6": {
+      "index": 58,
+      "feature_type": "day"
+    },
+    "day_7": {
+      "index": 59,
+      "feature_type": "day"
+    },
+    "time_0": {
+      "index": 60,
+      "feature_type": "time"
+    },
+    "time_1": {
+      "index": 61,
+      "feature_type": "time"
+    },
+    "time_2": {
+      "index": 62,
+      "feature_type": "time"
+    },
+    "time_3": {
+      "index": 63,
+      "feature_type": "time"
+    }
+  },
+  "feature_mapping": {
+    "budget": [
+      "budget_0",
+      "budget_1",
+      "budget_2",
+      "budget_3",
+      "budget_4",
+      "budget_5",
+      "budget_6",
+      "budget_7",
+      "budget_8",
+      "budget_9",
+      "budget_10",
+      "budget_11",
+      "budget_12",
+      "budget_13",
+      "budget_14",
+      "budget_15"
+    ],
+    "trust": [
+      "trust_0",
+      "trust_1",
+      "trust_2",
+      "trust_3",
+      "trust_4",
+      "trust_5",
+      "trust_6",
+      "trust_7"
+    ],
+    "amount": [
+      "amount_0",
+      "amount_1",
+      "amount_2",
+      "amount_3",
+      "amount_4",
+      "amount_5",
+      "amount_6",
+      "amount_7",
+      "amount_8",
+      "amount_9",
+      "amount_10",
+      "amount_11",
+      "amount_12",
+      "amount_13",
+      "amount_14",
+      "amount_15"
+    ],
+    "category": [
+      "category_0",
+      "category_1",
+      "category_2",
+      "category_3"
+    ],
+    "velocity": [
+      "velocity_0",
+      "velocity_1",
+      "velocity_2",
+      "velocity_3",
+      "velocity_4",
+      "velocity_5",
+      "velocity_6",
+      "velocity_7"
+    ],
+    "day": [
+      "day_0",
+      "day_1",
+      "day_2",
+      "day_3",
+      "day_4",
+      "day_5",
+      "day_6",
+      "day_7"
+    ],
+    "time": [
+      "time_0",
+      "time_1",
+      "time_2",
+      "time_3"
+    ],
+    "risk": []
+  }
+}

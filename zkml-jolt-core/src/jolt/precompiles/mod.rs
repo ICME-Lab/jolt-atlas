@@ -1,306 +1,596 @@
-//! Precompile proofs for ONNX runtime.
-//!
-//! This module provides a custom SNARK for precompiles in the [`ONNXJoltVM`].
-//! These precompile proofs are sum-check based.
-
-use itertools::Itertools;
+use crate::{
+    jolt::{
+        bytecode::BytecodePreprocessing,
+        dag::state_manager::StateManager,
+        precompiles::{read_checking::ReadCheckingABCSumcheck, val_final::ValFinalSumcheck},
+        sumcheck::{BatchedSumcheck, SingleSumcheck, SumcheckInstance},
+    },
+    utils::precompile_pp::{DimExtractor, EINSUM_REGISTRY, PreprocessingHelper},
+};
 use jolt_core::{
     field::JoltField,
-    subprotocols::sumcheck::{BatchableSumcheckInstance, BatchedSumcheck, SumcheckInstanceProof},
-    utils::{errors::ProofVerifyError, transcript::Transcript},
-};
-use onnx_tracer::trace_types::ONNXInstr;
-use serde::{Deserialize, Serialize};
-
-use crate::jolt::{
-    execution_trace::JoltONNXCycle,
-    precompiles::matmult::{
-        MatMultClaims, MatMultPrecompile, MatMultPrecompileDims, MatMultProverState,
-        MatMultSumcheck, MatMultVerifierState,
+    poly::{
+        commitment::commitment_scheme::CommitmentScheme, eq_poly::EqPolynomial,
+        multilinear_polynomial::MultilinearPolynomial,
     },
+    subprotocols::sumcheck::SumcheckInstanceProof,
+    transcripts::Transcript,
+    utils::{errors::ProofVerifyError, thread::unsafe_allocate_zero_vec},
 };
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-pub mod matmult;
+use onnx_tracer::trace_types::{ONNXInstr, ONNXOpcode};
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-/// Specifies the ONNX precompile operators used in the Jolt ONNX VM.
-/// Used to specifiy the precompile type and its input's in the [`JoltONNXTraceStep`]
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub enum PrecompileOp {
-    /// Matrix multiplication precompile.
-    MatMult(MatMultPrecompile),
-}
-
-impl PrecompileOp {
-    /// Get the output of the precompile operation.
-    /// If no precompile operation, return a zeroed vector of size `MAX_TENSOR_SIZE`.
-    pub fn output(&self, pp: &PrecompilePreprocessing, i: usize) -> Vec<u64> {
-        match self {
-            PrecompileOp::MatMult(mat_mult) => mat_mult.output(pp.mat_mult_precompile_dims[i]),
-        }
-    }
-
-    /// Return the left operand of the precompile
-    pub fn left_operand(&self) -> Vec<u64> {
-        match self {
-            PrecompileOp::MatMult(mat_mult) => mat_mult.left_operand(),
-        }
-    }
-
-    /// Return the right operand of the precompile
-    pub fn right_operand(&self) -> Vec<u64> {
-        match self {
-            PrecompileOp::MatMult(mat_mult) => mat_mult.right_operand(),
-        }
-    }
-}
-
-/// Preprocessing of the models matrices for the precompile proof.
-/// Store the dimensions of the matrix multiplication precompile.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+pub mod einsum;
+pub mod read_checking;
+pub mod reduce_sum;
+pub mod val_final;
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PrecompilePreprocessing {
-    /// The dimensions used in the matrix multiplication precompile's.
-    pub mat_mult_precompile_dims: Vec<MatMultPrecompileDims>,
+    pub instances: Vec<PreprocessingInstance>,
 }
 
 impl PrecompilePreprocessing {
-    /// Preprocess the ONNX model to extract the dimensions of the matrix multiplication precompile.
-    #[tracing::instrument(skip_all, name = "PrecompilePreprocessing::preprocess")]
-    pub fn preprocess(instrs: &[ONNXInstr]) -> Self {
-        // For each matmult instruction store the [`MatMultPrecompileDims`]
-        // We pad the dimensions to the next power of two.
-        let mat_mult_precompile_dims = instrs
+    /// Create a new instance of PrecompilePreprocessing by scanning the bytecode for precompile operations.
+    pub fn preprocess(bytecode_preprocessing: &BytecodePreprocessing) -> Self {
+        let td_lookup = bytecode_preprocessing.td_lookup();
+        let instances = bytecode_preprocessing
+            .raw_bytecode()
             .iter()
-            .filter_map(|instr| {
-                if instr.opcode == onnx_tracer::trace_types::ONNXOpcode::MatMult {
-                    // For matrix multiplication A × B = C:
-                    // - A is the first input (ts1) with dimensions [m, k]
-                    // - B is the second input (ts2) with dimensions [k, n]
-                    // - C is the output with dimensions [m, n]
-
-                    // Get m, n from the output dimensions
-                    let m = instr.output_dims[0];
-                    let n = instr.output_dims[1];
-
-                    // Get k by finding the instruction that produces ts1 (first input)
-                    // k is the second dimension of the first matrix
-                    let k = if let Some(ts1_addr) = instr.ts1 {
-                        // Find the instruction with td == ts1_addr to get the first input's dimensions
-                        instrs
-                            .iter()
-                            .find(|&other_instr| other_instr.td == Some(ts1_addr))
-                            .map(|ts1_instr| ts1_instr.output_dims[1])
-                            .unwrap_or(1) // Default to 1 if not found
-                    } else {
-                        1 // Default to 1 if ts1 is None
-                    };
-
-                    Some((m, n, k))
-                } else {
-                    None
-                }
-            })
-            .collect_vec();
-        Self {
-            mat_mult_precompile_dims,
-        }
-    }
-
-    /// Check if no precompiles
-    pub fn is_empty(&self) -> bool {
-        self.mat_mult_precompile_dims.is_empty()
-    }
-}
-
-/// A special-purpose SNARK designed for specific functionality, such as ONNX operators that are more efficient to prove using a sum-check precompile than an [`InstructionLookupProof`].
-/// This is a sum-check-based precompile proof tailored for ONNX runtime.
-/// It is used to prove the correctness of certain ONNX operators via a custom sum-check precompile instead of a lookup-based approach.
-#[derive(Debug, Clone, CanonicalSerialize, CanonicalDeserialize)]
-pub struct PrecompileProof<F, ProofTranscript>
-where
-    F: JoltField,
-    ProofTranscript: Transcript,
-{
-    sumcheck_proof: SumcheckInstanceProof<F, ProofTranscript>,
-    init_claims: Vec<F>,
-    final_claims: Vec<MatMultClaims<F>>,
-}
-
-impl<F, ProofTranscript> PrecompileProof<F, ProofTranscript>
-where
-    F: JoltField,
-    ProofTranscript: Transcript,
-{
-    /// Run the precompile sum-check instances through [`BatchedSumcheck::prove`] protcol.
-    #[tracing::instrument(skip_all, name = "PrecompileProof::prove")]
-    pub fn prove(
-        pp: &PrecompilePreprocessing,
-        execution_trace: &[JoltONNXCycle],
-        transcript: &mut ProofTranscript,
-    ) -> Option<Self> {
-        if pp.is_empty() {
-            return None;
-        }
-        // Given the execution trace, construct the polynomials used in the batched sum-check proof.
-        // The witness polynomials are abstracted as `MatMultSumcheck` instances, which hold a MatMultProverState which contains the witness polynomials `a` & `b` for the matrix multiplication precompile.
-        //
-        // # Note
-        // - We require the `transcript` to generate the challenges for the matrix multiplication precompile.
-        //
-        // Filter the operations to only include those that are proven with precompiles.
-        // For each precompile operator, initialize the prover state and create a new `MatMultSumcheck`.
-        let mut i = 0;
-        let mut witness = execution_trace
-            .iter()
-            .filter_map(|op| match &op.precompile {
-                Some(PrecompileOp::MatMult(mat_mult)) => {
-                    // Initialize the prover state for the matrix multiplication precompile.
-                    // `MatMultProverState::initialize` constructs the witness polynomials `a` & `b` for the matrix multiplication precompile.
-                    // It takes the `transcript` as an argument to generate the challenges, rx & ry to compute the evaluation for Sum_k A(rx, k) & B(ry, k)
-                    let prover_state: MatMultProverState<F> = MatMultProverState::initialize(
-                        pp.mat_mult_precompile_dims[i],
-                        mat_mult,
-                        transcript,
-                    );
-
-                    // Create a new `MatMultSumcheck` instance with the prover state.
-                    i += 1;
-                    Some(MatMultSumcheck::new(Some(prover_state), None, None))
-                }
+            .filter_map(|instr| match &instr.opcode {
+                ONNXOpcode::Einsum(_) | ONNXOpcode::Sum(_) => Some(PreprocessingInstance::new(
+                    instr,
+                    td_lookup,
+                    bytecode_preprocessing,
+                )),
                 _ => None,
             })
-            .collect_vec();
-        let init_claims = witness
-            .iter()
-            .map(|p| p.prover_state.as_ref().unwrap().input_claim)
-            .collect_vec();
-        let trait_objects: Vec<&mut dyn BatchableSumcheckInstance<F, ProofTranscript>> = witness
-            .iter_mut()
-            .map(|p| p as &mut dyn BatchableSumcheckInstance<F, ProofTranscript>)
             .collect();
-        let (sumcheck_proof, _rsc) = BatchedSumcheck::prove(trait_objects, transcript);
-        let final_claims = witness
-            .iter()
-            .map(|p| p.claims.as_ref().unwrap().clone())
-            .collect_vec(); // TODO: Append these claims to opening accumulator
-        Some(Self {
-            sumcheck_proof,
-            init_claims,
-            final_claims,
-        })
+
+        PrecompilePreprocessing { instances }
     }
 
-    /// Verify the sum-check precompile instances via [`BatchedSumcheck::verify`].
-    #[tracing::instrument(skip_all, name = "PrecompileProof::verify")]
-    pub fn verify(
+    /// Create an empty PrecompilePreprocessing instance
+    pub fn empty() -> Self {
+        Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreprocessingInstance {
+    /// Memory addresses (in Val_final) for [super::witness::VirtualPolynomial::EinsumA]
+    pub a_addr: Vec<usize>,
+    /// Memory addresses (in Val_final) for [super::witness::VirtualPolynomial::EinsumB]
+    pub b_addr: Vec<usize>,
+    /// Memory addresses (in Val_final) for [super::witness::VirtualPolynomial::EinsumC]
+    pub c_addr: Vec<usize>,
+    /// dims of operand a
+    pub a_dims: Vec<usize>,
+    /// dims of operand b
+    pub b_dims: Vec<usize>,
+    /// dims of result c
+    pub c_dims: Vec<usize>,
+    /// einsum equation string
+    pub equation: String,
+}
+
+/// Helper to create preprocessing instance with deduplication
+struct InstanceBuilder;
+
+impl InstanceBuilder {
+    /// Generic instance builder for einsum operations
+    fn build_einsum_instance(
+        instr: &ONNXInstr,
+        td_lookup: &HashMap<usize, ONNXInstr>,
+        bytecode_preprocessing: &BytecodePreprocessing,
+        equation: &str,
+        dims_extractor: DimExtractor,
+    ) -> PreprocessingInstance {
+        let (a_dims, b_dims, c_dims) = dims_extractor(instr, td_lookup);
+
+        let a_instr = PreprocessingHelper::get_operand_instruction(td_lookup, instr.ts1, equation);
+        let b_instr = PreprocessingHelper::get_operand_instruction(td_lookup, instr.ts2, equation);
+
+        let a_addr = PreprocessingHelper::collect_and_pad(a_instr, bytecode_preprocessing, &a_dims);
+        let b_addr = PreprocessingHelper::collect_and_pad(b_instr, bytecode_preprocessing, &b_dims);
+        let c_addr = PreprocessingHelper::collect_and_pad(instr, bytecode_preprocessing, &c_dims);
+
+        PreprocessingInstance {
+            a_addr,
+            b_addr,
+            c_addr,
+            a_dims: PreprocessingHelper::calculate_padded_dims(&a_dims),
+            b_dims: PreprocessingHelper::calculate_padded_dims(&b_dims),
+            c_dims: PreprocessingHelper::calculate_padded_dims(&c_dims),
+            equation: equation.to_string(),
+        }
+    }
+
+    /// Specialized builder for sum operations
+    fn build_sum_instance(
+        instr: &ONNXInstr,
+        td_lookup: &HashMap<usize, ONNXInstr>,
+        bytecode_preprocessing: &BytecodePreprocessing,
+        _axes: i32,
+    ) -> PreprocessingInstance {
+        let a_instr = PreprocessingHelper::get_operand_instruction(td_lookup, instr.ts1, "Sum");
+
+        let mut m = a_instr.output_dims[0];
+        let mut n = a_instr.output_dims[1];
+
+        if a_instr.output_dims.len() == 3 {
+            m = a_instr.output_dims[1];
+            n = a_instr.output_dims[2];
+        }
+
+        let a_addr = PreprocessingHelper::collect_and_pad(a_instr, bytecode_preprocessing, &[m, n]);
+        let b_addr = vec![0, 0]; // Sum has only one operand
+        let c_addr = PreprocessingHelper::collect_and_pad(instr, bytecode_preprocessing, &[m]);
+
+        PreprocessingInstance {
+            a_addr,
+            b_addr,
+            c_addr,
+            a_dims: PreprocessingHelper::calculate_padded_dims(&[m, n]),
+            b_dims: vec![2], // dummy
+            c_dims: PreprocessingHelper::calculate_padded_dims(&[m]),
+            equation: "sum(1)".to_string(),
+        }
+    }
+}
+
+impl PreprocessingInstance {
+    /// Create a new PreprocessingInstance based on the instruction opcode
+    pub fn new(
+        instr: &ONNXInstr,
+        td_lookup: &HashMap<usize, ONNXInstr>,
+        bytecode_preprocessing: &BytecodePreprocessing,
+    ) -> Self {
+        match &instr.opcode {
+            ONNXOpcode::Einsum(equation) => {
+                // Look up configuration for this equation pattern
+                let config = EINSUM_REGISTRY
+                    .iter()
+                    .find(|(pattern, _)| pattern == &equation.as_str())
+                    .map(|(_, config)| config)
+                    .unwrap_or_else(|| {
+                        panic!("Einsum equation ({equation}) not supported by precompile system")
+                    });
+
+                // Special validation for mk,nk->mn case
+                if equation == "mk,nk->mn" {
+                    assert!(instr.output_dims[0] == 1);
+                }
+
+                InstanceBuilder::build_einsum_instance(
+                    instr,
+                    td_lookup,
+                    bytecode_preprocessing,
+                    config.equation,
+                    config.dims_extractor,
+                )
+            }
+            ONNXOpcode::Sum(axes) => match (axes, instr.output_dims[0], instr.output_dims.len()) {
+                (1, _, 2) | (2, 1, 3) => InstanceBuilder::build_sum_instance(
+                    instr,
+                    td_lookup,
+                    bytecode_preprocessing,
+                    *axes as i32,
+                ),
+                _ => panic!("Sum operation not supported by precompile system"),
+            },
+            _ => panic!("Operation not supported by precompile system"),
+        }
+    }
+}
+
+impl PreprocessingInstance {
+    /// Extracts read-values from val_final using the stored read-addresses.
+    /// Given the val_final lookup table, computes the actual values of operands and results
+    /// by indexing into val_final with the preprocessed memory addresses.
+    fn extract_rv<T>(&self, val_final: &[i64], field_selector: impl Fn(&Self) -> &T) -> Vec<i64>
+    where
+        T: AsRef<[usize]>,
+    {
+        field_selector(self)
+            .as_ref()
+            .par_iter()
+            .map(|&k| val_final[k])
+            .collect::<Vec<_>>()
+    }
+
+    /// From the addresses compute the binded one-hot poly needed for the read-checking instance
+    fn compute_ra<F, T>(
         &self,
-        pp: &PrecompilePreprocessing,
-        transcript: &mut ProofTranscript,
+        r: &[F],
+        field_selector: impl Fn(&Self) -> &T,
+        K: usize,
+    ) -> MultilinearPolynomial<F>
+    where
+        T: AsRef<[usize]>,
+        F: JoltField,
+    {
+        let E = EqPolynomial::evals(r);
+        let addresses = field_selector(self).as_ref();
+        let num_threads = rayon::current_num_threads();
+        let chunk_size = addresses.len().div_ceil(num_threads);
+        let partial_results: Vec<Vec<F>> = addresses
+            .par_chunks(chunk_size)
+            .enumerate()
+            .map(|(chunk_idx, chunk)| {
+                let mut local_ra = unsafe_allocate_zero_vec::<F>(K);
+                let base_idx = chunk_idx * chunk_size;
+                chunk.iter().enumerate().for_each(|(local_j, &k)| {
+                    let global_j = base_idx + local_j;
+                    local_ra[k] += E[global_j];
+                });
+                local_ra
+            })
+            .collect();
+        let mut ra = unsafe_allocate_zero_vec::<F>(K);
+        for partial in partial_results {
+            ra.par_iter_mut()
+                .zip(partial.par_iter())
+                .for_each(|(dest, &src)| *dest += src);
+        }
+        MultilinearPolynomial::from(ra)
+    }
+}
+
+pub struct PrecompileDag {}
+
+impl PrecompileDag {
+    /// Creates sumcheck instances for prover/verifier
+    fn create_instances<F, ProofTranscript, PCS>(
+        sm: &mut StateManager<'_, F, ProofTranscript, PCS>,
+        is_prover: bool,
+    ) -> Vec<Box<dyn SumcheckInstance<F>>>
+    where
+        F: JoltField,
+        ProofTranscript: Transcript,
+        PCS: CommitmentScheme<Field = F>,
+    {
+        let equations: Vec<String> = sm
+            .get_precompile_preprocessing()
+            .instances
+            .iter()
+            .map(|pp| pp.equation.clone())
+            .collect();
+
+        equations
+            .iter()
+            .enumerate()
+            .map(|(index, equation)| match equation.as_str() {
+                "mk,kn->mn" => {
+                    (if is_prover {
+                        Box::new(einsum::mk_kn_mn::ExecutionSumcheck::new_prover(index, sm))
+                    } else {
+                        Box::new(einsum::mk_kn_mn::ExecutionSumcheck::new_verifier(index, sm))
+                    }) as Box<dyn SumcheckInstance<F>>
+                }
+                "bmk,kbn->mbn" => {
+                    (if is_prover {
+                        Box::new(einsum::bmk_kbn_mbn::ExecutionSumcheck::new_prover(
+                            index, sm,
+                        ))
+                    } else {
+                        Box::new(einsum::bmk_kbn_mbn::ExecutionSumcheck::new_verifier(
+                            index, sm,
+                        ))
+                    }) as Box<dyn SumcheckInstance<F>>
+                }
+                "k,nk->n" => {
+                    (if is_prover {
+                        Box::new(einsum::k_nk_n::ExecutionSumcheck::new_prover(index, sm))
+                    } else {
+                        Box::new(einsum::k_nk_n::ExecutionSumcheck::new_verifier(index, sm))
+                    }) as Box<dyn SumcheckInstance<F>>
+                }
+                "mbk,nbk->bmn" => {
+                    (if is_prover {
+                        Box::new(einsum::mbk_nbk_bmn::ExecutionSumcheck::new_prover(
+                            index, sm,
+                        ))
+                    } else {
+                        Box::new(einsum::mbk_nbk_bmn::ExecutionSumcheck::new_verifier(
+                            index, sm,
+                        ))
+                    }) as Box<dyn SumcheckInstance<F>>
+                }
+                "sum(1)" => {
+                    (if is_prover {
+                        Box::new(reduce_sum::axes_1::ExecutionSumcheck::new_prover(index, sm))
+                    } else {
+                        Box::new(reduce_sum::axes_1::ExecutionSumcheck::new_verifier(
+                            index, sm,
+                        ))
+                    }) as Box<dyn SumcheckInstance<F>>
+                }
+                _ => panic!("equation {equation} not supported"),
+            })
+            .collect()
+    }
+
+    pub fn execution_prover_instances<
+        F: JoltField,
+        ProofTranscript: Transcript,
+        PCS: CommitmentScheme<Field = F>,
+    >(
+        sm: &mut StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Vec<Box<dyn SumcheckInstance<F>>> {
+        Self::create_instances(sm, true)
+    }
+
+    pub fn execution_verifier_instances<
+        F: JoltField,
+        ProofTranscript: Transcript,
+        PCS: CommitmentScheme<Field = F>,
+    >(
+        sm: &mut StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Vec<Box<dyn SumcheckInstance<F>>> {
+        Self::create_instances(sm, false)
+    }
+
+    /// Gets the prover instance for the precompile read-checking sum-check.
+    ///
+    /// This method creates the sumcheck instance for the read-checking phase of [PrecompileSNARK].
+    /// Proves polys from execution sum-checks were read correctly from memory.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F` - The field type implementing the `JoltField` trait
+    /// * `ProofTranscript` - The transcript type implementing the `Transcript` trait
+    /// * `PCS` - The polynomial commitment scheme type implementing `CommitmentScheme` with field type `F`
+    ///
+    /// # Parameters
+    ///
+    /// * `sm` - A reference to the state manager containing verification state and data
+    ///
+    /// # Returns
+    ///
+    /// A boxed sumcheck instance that implement the `SumcheckInstance<F>` trait
+    pub fn read_checking_prover_instance<
+        F: JoltField,
+        ProofTranscript: Transcript,
+        PCS: CommitmentScheme<Field = F>,
+    >(
+        sm: &StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Box<dyn SumcheckInstance<F>> {
+        Box::new(ReadCheckingABCSumcheck::new_prover(sm))
+    }
+
+    /// Gets the verifier instance for the precompile read-checking sum-check.
+    ///
+    /// This method creates the verifiers sumcheck instance for the read-checking phase of [PrecompileSNARK].
+    /// Verifies polys from execution sum-checks were read correctly from memory.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F` - The field type implementing the `JoltField` trait
+    /// * `ProofTranscript` - The transcript type implementing the `Transcript` trait
+    /// * `PCS` - The polynomial commitment scheme type implementing `CommitmentScheme` with field type `F`
+    ///
+    /// # Parameters
+    ///
+    /// * `sm` - A reference to the state manager containing verification state and data
+    ///
+    /// # Returns
+    ///
+    /// A boxed sumcheck instance that implement the `SumcheckInstance<F>` trait
+    pub fn read_checking_verifier_instance<
+        F: JoltField,
+        ProofTranscript: Transcript,
+        PCS: CommitmentScheme<Field = F>,
+    >(
+        sm: &StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Box<dyn SumcheckInstance<F>> {
+        Box::new(ReadCheckingABCSumcheck::new_verifier(sm))
+    }
+
+    /// Gets the prover instance for the val_final sum-check.
+    ///
+    /// This method creates the prover sumcheck instance for the val_final phase of [PrecompileSNARK]. This instance is used to prove the
+    /// val_final eval claim, produced from the read-checking instance
+    ///
+    /// # Type Parameters
+    ///
+    /// * `ProofTranscript` - The transcript type implementing the `Transcript` trait
+    /// * `PCS` - The polynomial commitment scheme type implementing `CommitmentScheme` with field type `F`
+    ///
+    /// # Parameters
+    ///
+    /// * `sm` - A reference to the state manager containing verification state and data
+    ///
+    /// # Returns
+    ///
+    /// A boxed sumcheck instance that implement the `SumcheckInstance<F>` trait
+    pub fn val_final_prover_instance<
+        F: JoltField,
+        ProofTranscript: Transcript,
+        PCS: CommitmentScheme<Field = F>,
+    >(
+        sm: &StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Box<dyn SumcheckInstance<F>> {
+        Box::new(ValFinalSumcheck::new_prover(sm))
+    }
+
+    /// Gets the verifier instance for the val_final sum-check.
+    ///
+    /// This method creates the verifier sumcheck instance for the val_final phase of [PrecompileSNARK]. This instance is used to verify the
+    /// val_final eval claim, produced from the read-checking instance
+    ///
+    /// # Type Parameters
+    ///
+    /// * `ProofTranscript` - The transcript type implementing the `Transcript` trait
+    /// * `PCS` - The polynomial commitment scheme type implementing `CommitmentScheme` with field type `F`
+    ///
+    /// # Parameters
+    ///
+    /// * `sm` - A reference to the state manager containing verification state and data
+    ///
+    /// # Returns
+    ///
+    /// A boxed sumcheck instance that implement the `SumcheckInstance<F>` trait
+    pub fn val_final_verifier_instance<
+        F: JoltField,
+        ProofTranscript: Transcript,
+        PCS: CommitmentScheme<Field = F>,
+    >(
+        sm: &StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Box<dyn SumcheckInstance<F>> {
+        Box::new(ValFinalSumcheck::new_verifier(sm))
+    }
+}
+
+/// A SNARK attesting to the correctness of sum-check precompile operations.
+#[derive(Clone, Debug)]
+pub struct PrecompileSNARK<F: JoltField, FS: Transcript> {
+    execution_proof: SumcheckInstanceProof<F, FS>,
+    read_checking_proof: SumcheckInstanceProof<F, FS>,
+    val_final_proof: SumcheckInstanceProof<F, FS>,
+}
+
+impl<F: JoltField, FS: Transcript> PrecompileSNARK<F, FS> {
+    /// Create a new instance of PrecompileSNARK by proving all precompile operations.
+    /// This includes execution sum-checks, read-checking sum-checks, and the val_final sum-check
+    #[tracing::instrument(name = "PrecompileSNARK::prove", skip(sm))]
+    pub fn prove<'a, PCS: CommitmentScheme<Field = F>>(
+        sm: &mut StateManager<'a, F, FS, PCS>,
+    ) -> Self {
+        let execution_proof = Self::prove_execution(sm);
+        let read_checking_proof = Self::prove_read_checking(sm);
+        let val_final_proof = Self::prove_val_final(sm);
+        PrecompileSNARK {
+            execution_proof,
+            read_checking_proof,
+            val_final_proof,
+        }
+    }
+
+    /// Proves the execution phase of the precompiles.
+    /// This includes running execution sum-checks and collecting output claims.
+    fn prove_execution<'a, PCS: CommitmentScheme<Field = F>>(
+        sm: &mut StateManager<'a, F, FS, PCS>,
+    ) -> SumcheckInstanceProof<F, FS> {
+        Self::prove_batched_sumchecks(
+            &mut PrecompileDag::execution_prover_instances(sm).into_boxed_slice(),
+            sm,
+        )
+    }
+
+    /// Proves the read-checking phase for the precompiles.
+    fn prove_read_checking<'a, PCS: CommitmentScheme<Field = F>>(
+        sm: &StateManager<'a, F, FS, PCS>,
+    ) -> SumcheckInstanceProof<F, FS> {
+        let mut read_checking_instance = PrecompileDag::read_checking_prover_instance(sm);
+        let transcript = sm.get_transcript();
+        let accumulator = sm.get_prover_accumulator();
+        let (read_checking_proof, _) = SingleSumcheck::prove(
+            &mut *read_checking_instance,
+            Some(accumulator.clone()),
+            &mut *transcript.borrow_mut(),
+        );
+        read_checking_proof
+    }
+
+    /// At the end of read-checking we need to prove the val_final claim.
+    fn prove_val_final<'a, PCS: CommitmentScheme<Field = F>>(
+        sm: &StateManager<'a, F, FS, PCS>,
+    ) -> SumcheckInstanceProof<F, FS> {
+        let mut val_final_instance = PrecompileDag::val_final_prover_instance(sm);
+        let transcript = sm.get_transcript();
+        let accumulator = sm.get_prover_accumulator();
+        let (val_final_proof, _) = SingleSumcheck::prove(
+            &mut *val_final_instance,
+            Some(accumulator.clone()),
+            &mut *transcript.borrow_mut(),
+        );
+        val_final_proof
+    }
+
+    /// Helper function to batch prove execution or read-checking sum-checks
+    pub(crate) fn prove_batched_sumchecks<'a, PCS: CommitmentScheme<Field = F>>(
+        instances: &mut [Box<dyn SumcheckInstance<F>>],
+        sm: &StateManager<'a, F, FS, PCS>,
+    ) -> SumcheckInstanceProof<F, FS> {
+        let instances_mut: Vec<&mut dyn SumcheckInstance<F>> = instances
+            .iter_mut()
+            .map(|instance| &mut **instance as &mut dyn SumcheckInstance<F>)
+            .collect();
+        let transcript = sm.get_transcript();
+        let accumulator = sm.get_prover_accumulator();
+        let (proof, _r) = BatchedSumcheck::prove(
+            instances_mut,
+            Some(accumulator.clone()),
+            &mut *transcript.borrow_mut(),
+        );
+        proof
+    }
+
+    /// Verifies the PrecompileSNARK proof, ensuring all precompile operations were executed correctly.
+    #[tracing::instrument(name = "PrecompileSNARK::verify", skip(self, sm))]
+    pub fn verify<'a, PCS: CommitmentScheme<Field = F>>(
+        &self,
+        sm: &mut StateManager<'a, F, FS, PCS>,
     ) -> Result<(), ProofVerifyError> {
-        let vsumcheck_instances =
-            Self::initialize_verifier(pp, &self.init_claims, &self.final_claims, transcript);
-        let trait_objects: Vec<&dyn BatchableSumcheckInstance<F, ProofTranscript>> =
-            vsumcheck_instances
-                .iter()
-                .map(|p| p as &dyn BatchableSumcheckInstance<F, ProofTranscript>)
-                .collect();
-        let _ = BatchedSumcheck::verify(&self.sumcheck_proof, trait_objects, transcript)?;
+        // Verify execution sum-checks
+        Self::verify_batched_sumchecks(
+            &self.execution_proof,
+            PrecompileDag::execution_verifier_instances(sm),
+            sm,
+        )?;
+
+        // Verify read-checking sum-check
+        Self::verify_single_sumcheck(
+            &self.read_checking_proof,
+            PrecompileDag::read_checking_verifier_instance(sm),
+            sm,
+        )?;
+
+        // Verify val_final claim from read-checking sum-checks
+        Self::verify_single_sumcheck(
+            &self.val_final_proof,
+            PrecompileDag::val_final_verifier_instance(sm),
+            sm,
+        )
+    }
+
+    /// Verify val_final sum-check
+    fn verify_single_sumcheck<'a, PCS: CommitmentScheme<Field = F>>(
+        proof: &SumcheckInstanceProof<F, FS>,
+        instance: Box<dyn SumcheckInstance<F>>,
+        sm: &StateManager<'a, F, FS, PCS>,
+    ) -> Result<(), ProofVerifyError> {
+        let transcript = sm.get_transcript();
+        let accumulator = sm.get_verifier_accumulator();
+        SingleSumcheck::verify(
+            &*instance,
+            proof,
+            Some(accumulator.clone()),
+            &mut *transcript.borrow_mut(),
+        )?;
         Ok(())
     }
 
-    /// Initialize the verifier states for the precompile sum-check instances.
-    /// Updates the transcript to be in sync with the prover's transcript.
-    ///
-    /// # Panics
-    /// Panics if the length of `init_claims` and `final_claims` does not match the number of matrix multiplication precompile's
-    fn initialize_verifier(
-        pp: &PrecompilePreprocessing,
-        init_claims: &[F],
-        final_claims: &[MatMultClaims<F>],
-        transcript: &mut ProofTranscript,
-    ) -> Vec<MatMultSumcheck<F>> {
-        let dims = &pp.mat_mult_precompile_dims;
-        dims.iter()
-            .zip_eq(init_claims.iter())
-            .zip_eq(final_claims.iter())
-            .map(|((dim, init_claim), final_claim)| {
-                // Initialize verifier state. We update transcript state as well, generating the challenges rx & ry & appending init_claim
-                // for the matmult sum-check precompile proof.
-                let verifier_state =
-                    MatMultVerifierState::initialize(dim.0, dim.1, dim.2, *init_claim, transcript);
-
-                // Create a new `MatMultSumcheck` instance with the verifier state and final claims.
-                MatMultSumcheck::new(None, Some(verifier_state), Some(final_claim.clone()))
-            })
-            .collect_vec()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::jolt::{JoltProverPreprocessing, JoltSNARK, execution_trace::jolt_execution_trace};
-
-    use super::{PrecompilePreprocessing, PrecompileProof};
-    use ark_bn254::Fr;
-    use jolt_core::{
-        poly::commitment::dory::DoryCommitmentScheme,
-        utils::transcript::{KeccakTranscript, Transcript},
-    };
-    use onnx_tracer::{builder, decode_model, tensor::Tensor};
-    type PCS = DoryCommitmentScheme<KeccakTranscript>;
-
-    #[test]
-    fn test_precompile_proof() {
-        let matmult_model = builder::non_power_of_two_matmult_model();
-        let program = decode_model(matmult_model.clone());
-        let pp = PrecompilePreprocessing::preprocess(&program);
-        let input = vec![
-            1, 2, 3, 4, 5, // Row 0
-            6, 7, 8, 9, 10, // Row 1
-            11, 12, 13, 14, 15, // Row 2
-        ];
-
-        // Prover
-        let (raw_trace, _) = onnx_tracer::execution_trace(
-            matmult_model,
-            &Tensor::new(Some(&input), &[3, 5]).unwrap(),
-        );
-        let execution_trace = jolt_execution_trace(raw_trace.clone());
-
-        let mut prover_transcript = KeccakTranscript::new(b"test");
-        let proof =
-            PrecompileProof::<Fr, _>::prove(&pp, &execution_trace, &mut prover_transcript).unwrap();
-
-        // Verifier
-        let mut verifier_transcript = KeccakTranscript::new(b"test");
-        proof.verify(&pp, &mut verifier_transcript).unwrap();
-    }
-
-    #[test]
-    fn test_precompile_proof_rebase() {
-        let matmult_model = builder::non_power_of_two_matmult_rebase_model();
-        let program = decode_model(matmult_model.clone());
-        let pp: JoltProverPreprocessing<Fr, PCS, KeccakTranscript> =
-            JoltSNARK::prover_preprocess(program);
-        let pp = pp.shared.precompiles.clone();
-        let input = vec![
-            1, 2, 3, 4, 5, // Row 0
-            6, 7, 8, 9, 10, // Row 1
-            11, 12, 13, 14, 15, // Row 2
-        ];
-
-        // Prover
-        let (raw_trace, _) = onnx_tracer::execution_trace(
-            matmult_model,
-            &Tensor::new(Some(&input), &[3, 5]).unwrap(),
-        );
-        let execution_trace = jolt_execution_trace(raw_trace.clone());
-
-        let mut prover_transcript = KeccakTranscript::new(b"test");
-        let proof =
-            PrecompileProof::<Fr, _>::prove(&pp, &execution_trace, &mut prover_transcript).unwrap();
-
-        // Verifier
-        let mut verifier_transcript = KeccakTranscript::new(b"test");
-        proof.verify(&pp, &mut verifier_transcript).unwrap();
+    /// Helper function to verify batched sum-checks
+    pub(crate) fn verify_batched_sumchecks<'a, PCS: CommitmentScheme<Field = F>>(
+        proof: &SumcheckInstanceProof<F, FS>,
+        instances: Vec<Box<dyn SumcheckInstance<F>>>,
+        sm: &StateManager<'a, F, FS, PCS>,
+    ) -> Result<(), ProofVerifyError> {
+        let instances_ref: Vec<&dyn SumcheckInstance<F>> = instances
+            .iter()
+            .map(|instance| &**instance as &dyn SumcheckInstance<F>)
+            .collect();
+        let transcript = sm.get_transcript();
+        let accumulator = sm.get_verifier_accumulator();
+        BatchedSumcheck::verify(
+            proof,
+            instances_ref,
+            Some(accumulator.clone()),
+            &mut *transcript.borrow_mut(),
+        )?;
+        Ok(())
     }
 }

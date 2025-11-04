@@ -379,7 +379,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             K + index,
         ));
         index += DIV_VIRTUAL_REGISTERS;
-        vseq_counter.substract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
+        vseq_counter.subtract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
 
         // xd^2
         let xd_sq_ns = (0..num_outputs)
@@ -441,7 +441,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             K + index,
         ));
         index += DIV_VIRTUAL_REGISTERS;
-        vseq_counter.substract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
+        vseq_counter.subtract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
 
         // xd^2-1
         let xd_sq_minus1 = (0..num_outputs)
@@ -590,7 +590,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             K + index,
         ));
         index += DIV_VIRTUAL_REGISTERS;
-        vseq_counter.substract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
+        vseq_counter.subtract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
 
         // ad(xd^2-1)
         let axd_cub_minusd_ns = (0..num_outputs)
@@ -650,7 +650,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             },
             K + index,
         ));
-        vseq_counter.substract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
+        vseq_counter.subtract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
 
         // d + ad(xd^2-1)
         let approx: Vec<u64> = (0..num_outputs)

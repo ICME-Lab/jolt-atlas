@@ -55,7 +55,7 @@ impl VirtualSequenceCounter {
         self.counter
     }
 
-    pub fn substract(&mut self, value: usize) {
+    pub fn subtract(&mut self, value: usize) {
         assert!(
             self.counter >= value,
             "Virtual sequence counter underflow on subtract"

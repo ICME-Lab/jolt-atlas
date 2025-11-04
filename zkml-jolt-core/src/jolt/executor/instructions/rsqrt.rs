@@ -11,12 +11,13 @@ use crate::{
         VirtualInstructionSequence, add::AddInstruction, beq::BeqInstruction, div::DivInstruction,
         gte::GteInstruction, mul::MulInstruction, sub::SubInstruction,
     },
-    utils::u64_vec_to_i32_iter,
+    utils::{VirtualSequenceCounter, u64_vec_to_i32_iter},
 };
 
 // Scale factor
 const SF: u64 = 128;
 const SF_LOG: u64 = 7;
+const DIV_VIRTUAL_REGISTERS: usize = 6;
 
 /// Quantized Rsqrt producing `Q / sqrt(x)`
 ///
@@ -66,12 +67,26 @@ const SF_LOG: u64 = 7;
 /// - Designed for quantized circuits or proof backends where fractional values are approximated in integer space.
 pub struct RsqrtInstruction<const WORD_SIZE: usize>;
 impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WORD_SIZE> {
-    const SEQUENCE_LENGTH: usize = 20;
+    const SEQUENCE_LENGTH: usize = 16 + 4 * DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH;
 
     fn virtual_trace(cycle: ONNXCycle, K: usize) -> Vec<ONNXCycle> {
         assert_eq!(cycle.instr.opcode, ONNXOpcode::Rsqrt);
         let num_outputs = cycle.instr.active_output_elements;
-        // DIV source registers
+
+        // If RSQRT is part of a longer virtual sequence, recover the counter to continue decrementing it
+        let virtual_sequence_remaining =
+            if let Some(remaining) = cycle.instr.virtual_sequence_remaining {
+                assert!(
+                    remaining >= Self::SEQUENCE_LENGTH,
+                    "Not enough remaining virtual sequence steps"
+                );
+                remaining
+            } else {
+                Self::SEQUENCE_LENGTH
+            };
+        let mut vseq_counter = VirtualSequenceCounter::new(virtual_sequence_remaining);
+
+        // RSQRT source registers
         let r_x = cycle.instr.ts1;
 
         // TODO(AntoineF4C5): set to 0 (requires to change `virtual_tensor_index`: generates bug on model composed of just rsqrt)
@@ -118,7 +133,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: None,
                 td: v_one,
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&one))),
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: num_outputs,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -143,7 +158,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: None,
                 td: v_ulp,
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&ulp))),
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -169,7 +184,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: None,
                 td: v_xeq0,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -201,7 +216,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: r_x,
                 td: v_x,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -229,7 +244,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: None,
                 td: v_a_lt_0,
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&a_lt_0))),
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: num_outputs,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -255,7 +270,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: None,
                 td: v_a_gt_0,
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&a_gt_0))),
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: num_outputs,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -290,7 +305,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: None,
                 td: v_d,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: num_outputs,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -317,7 +332,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: None,
                 td: v_xd_ns,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -337,28 +352,34 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             vec![SF; num_outputs],
             None,
         );
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
-                address: cycle.instr.address,
-                opcode: ONNXOpcode::Div,
-                ts1: v_xd_ns,
-                ts2: None,
-                ts3: None,
-                td: v_xd,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
-                active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims.clone(),
+
+        virtual_trace.extend(DivInstruction::<WORD_SIZE>::virtual_trace(
+            ONNXCycle {
+                instr: ONNXInstr {
+                    address: cycle.instr.address,
+                    opcode: ONNXOpcode::Div,
+                    ts1: v_xd_ns,
+                    ts2: None,
+                    ts3: None,
+                    td: v_xd,
+                    imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
+                    virtual_sequence_remaining: Some(vseq_counter.get()),
+                    active_output_elements: cycle.instr.active_output_elements,
+                    output_dims: cycle.instr.output_dims.clone(),
+                },
+                memory_state: MemoryState {
+                    ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_ns))),
+                    ts2_val: None,
+                    ts3_val: None,
+                    td_pre_val: None,
+                    td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd))),
+                },
+                advice_value: None,
             },
-            memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_ns))),
-                ts2_val: None,
-                ts3_val: None,
-                td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd))),
-            },
-            advice_value: None,
-        });
+            K + index,
+        ));
+        index += DIV_VIRTUAL_REGISTERS;
+        vseq_counter.subtract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
 
         // xd^2
         let xd_sq_ns = (0..num_outputs)
@@ -373,7 +394,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: None,
                 td: v_xd_sq_ns,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -393,28 +414,34 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             vec![SF; num_outputs],
             None,
         );
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
-                address: cycle.instr.address,
-                opcode: ONNXOpcode::Div,
-                ts1: v_xd_sq_ns,
-                ts2: None,
-                ts3: None,
-                td: v_xd_sq,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
-                active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims.clone(),
+
+        virtual_trace.extend(DivInstruction::<WORD_SIZE>::virtual_trace(
+            ONNXCycle {
+                instr: ONNXInstr {
+                    address: cycle.instr.address,
+                    opcode: ONNXOpcode::Div,
+                    ts1: v_xd_sq_ns,
+                    ts2: None,
+                    ts3: None,
+                    td: v_xd_sq,
+                    imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
+                    virtual_sequence_remaining: Some(vseq_counter.get()),
+                    active_output_elements: cycle.instr.active_output_elements,
+                    output_dims: cycle.instr.output_dims.clone(),
+                },
+                memory_state: MemoryState {
+                    ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_sq_ns))),
+                    ts2_val: None,
+                    ts3_val: None,
+                    td_pre_val: None,
+                    td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_sq))),
+                },
+                advice_value: None,
             },
-            memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_sq_ns))),
-                ts2_val: None,
-                ts3_val: None,
-                td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_sq))),
-            },
-            advice_value: None,
-        });
+            K + index,
+        ));
+        index += DIV_VIRTUAL_REGISTERS;
+        vseq_counter.subtract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
 
         // xd^2-1
         let xd_sq_minus1 = (0..num_outputs)
@@ -429,7 +456,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: None,
                 td: v_xd_sq_minus1,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -456,7 +483,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: None,
                 td: v_gt0,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -490,7 +517,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: v_a_lt_0,
                 td: v_a,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -517,7 +544,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: None,
                 td: v_xd_cub_minusd_ns,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -537,28 +564,33 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             vec![SF; num_outputs],
             None,
         );
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
-                address: cycle.instr.address,
-                opcode: ONNXOpcode::Div,
-                ts1: v_xd_cub_minusd_ns,
-                ts2: None,
-                ts3: None,
-                td: v_xd_cub_minusd,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
-                active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims.clone(),
+        virtual_trace.extend(DivInstruction::<WORD_SIZE>::virtual_trace(
+            ONNXCycle {
+                instr: ONNXInstr {
+                    address: cycle.instr.address,
+                    opcode: ONNXOpcode::Div,
+                    ts1: v_xd_cub_minusd_ns,
+                    ts2: None,
+                    ts3: None,
+                    td: v_xd_cub_minusd,
+                    imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
+                    virtual_sequence_remaining: Some(vseq_counter.get()),
+                    active_output_elements: cycle.instr.active_output_elements,
+                    output_dims: cycle.instr.output_dims.clone(),
+                },
+                memory_state: MemoryState {
+                    ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_cub_minusd_ns))),
+                    ts2_val: None,
+                    ts3_val: None,
+                    td_pre_val: None,
+                    td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_cub_minusd))),
+                },
+                advice_value: None,
             },
-            memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_cub_minusd_ns))),
-                ts2_val: None,
-                ts3_val: None,
-                td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_cub_minusd))),
-            },
-            advice_value: None,
-        });
+            K + index,
+        ));
+        index += DIV_VIRTUAL_REGISTERS;
+        vseq_counter.subtract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
 
         // ad(xd^2-1)
         let axd_cub_minusd_ns = (0..num_outputs)
@@ -573,7 +605,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: None,
                 td: v_axd_cub_minusd_ns,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -593,28 +625,32 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             vec![SF; num_outputs],
             None,
         );
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
-                address: cycle.instr.address,
-                opcode: ONNXOpcode::Div,
-                ts1: v_axd_cub_minusd_ns,
-                ts2: None,
-                ts3: None,
-                td: v_axd_cub_minusd,
-                imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
-                active_output_elements: cycle.instr.active_output_elements,
-                output_dims: cycle.instr.output_dims.clone(),
+        virtual_trace.extend(DivInstruction::<WORD_SIZE>::virtual_trace(
+            ONNXCycle {
+                instr: ONNXInstr {
+                    address: cycle.instr.address,
+                    opcode: ONNXOpcode::Div,
+                    ts1: v_axd_cub_minusd_ns,
+                    ts2: None,
+                    ts3: None,
+                    td: v_axd_cub_minusd,
+                    imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
+                    virtual_sequence_remaining: Some(vseq_counter.get()),
+                    active_output_elements: cycle.instr.active_output_elements,
+                    output_dims: cycle.instr.output_dims.clone(),
+                },
+                memory_state: MemoryState {
+                    ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&axd_cub_minusd_ns))),
+                    ts2_val: None,
+                    ts3_val: None,
+                    td_pre_val: None,
+                    td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&axd_cub_minusd))),
+                },
+                advice_value: None,
             },
-            memory_state: MemoryState {
-                ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&axd_cub_minusd_ns))),
-                ts2_val: None,
-                ts3_val: None,
-                td_pre_val: None,
-                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&axd_cub_minusd))),
-            },
-            advice_value: None,
-        });
+            K + index,
+        ));
+        vseq_counter.subtract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
 
         // d + ad(xd^2-1)
         let approx: Vec<u64> = (0..num_outputs)
@@ -629,7 +665,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: None,
                 td: v_approx,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -653,7 +689,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3: None,
                 td: cycle.instr.td,
                 imm: None,
-                virtual_sequence_remaining: Some(Self::SEQUENCE_LENGTH - virtual_trace.len() - 1),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
                 active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
@@ -666,6 +702,12 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             },
             advice_value: None,
         });
+
+        assert_eq!(
+            virtual_trace.len(),
+            Self::SEQUENCE_LENGTH,
+            "Invalid virtual trace length"
+        );
 
         virtual_trace
     }

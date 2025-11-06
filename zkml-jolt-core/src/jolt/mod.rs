@@ -340,13 +340,13 @@ mod e2e_tests {
     #[serial]
     #[test]
     fn test_self_attention() {
-        let _rng = StdRng::seed_from_u64(123456);
+        let mut rng = StdRng::seed_from_u64(123456);
         let shape = [1, 64, 64];
-        let input_data = vec![0; shape.iter().product()];
+        let mut input_data = vec![0; shape.iter().product()];
         // Verifier exits with sumcheck stage 2 error if below line is uncommented
-        // for input in input_data.iter_mut() {
-        //     *input = rng.gen_range(-256..256)
-        // }
+        for input in input_data.iter_mut() {
+            *input = rng.gen_range(-256..256)
+        }
         run_snark_test(
             || {
                 model(&PathBuf::from(
@@ -363,7 +363,6 @@ mod e2e_tests {
     #[serial]
     // Runs the first ops of self-attention block, including a rsqrt op
     fn test_ML_block_self_attention() {
-        onnx_tracer::logger::init_logger();
         let mut rng = StdRng::seed_from_u64(123456);
         let shape = [1, 64, 64];
         let mut input_data = vec![0; shape.iter().product()];

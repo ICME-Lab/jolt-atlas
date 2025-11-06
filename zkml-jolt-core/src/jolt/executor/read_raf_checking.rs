@@ -804,8 +804,10 @@ mod tests {
             ONNXOpcode::Gte => SupportedOp::Hybrid(HybridOp::GreaterEqual),
             ONNXOpcode::Mul => SupportedOp::Linear(PolyOp::Mult),
             ONNXOpcode::Relu => SupportedOp::Nonlinear(LookupOp::ReLU),
+            ONNXOpcode::Reshape => SupportedOp::Linear(PolyOp::Reshape(vec![0])),
             ONNXOpcode::Sub => SupportedOp::Linear(PolyOp::Sub),
             ONNXOpcode::Rsqrt => SupportedOp::Nonlinear(LookupOp::Rsqrt { scale: F32(128.0) }),
+            ONNXOpcode::VirtualPow2 => SupportedOp::Nonlinear(LookupOp::VirtualPow2),
             _ => unimplemented!("Unsupported instruction"),
         }
     }
@@ -992,5 +994,20 @@ mod tests {
     #[test]
     fn test_rsqrt() {
         test_read_raf_sumcheck(Some(ONNXOpcode::Rsqrt));
+    }
+
+    #[test]
+    fn test_virtual_pow2() {
+        test_read_raf_sumcheck(Some(ONNXOpcode::VirtualPow2));
+    }
+
+    #[test]
+    fn test_gte() {
+        test_read_raf_sumcheck(Some(ONNXOpcode::Gte));
+    }
+
+    #[test]
+    fn test_reshape() {
+        test_read_raf_sumcheck(Some(ONNXOpcode::Reshape));
     }
 }

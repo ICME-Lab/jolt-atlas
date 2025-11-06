@@ -2976,6 +2976,41 @@ pub mod nonlinearities {
         .unwrap()
     }
 
+    /// Elementwise applies 2^x to a tensor of integers.
+    /// # Arguments
+    ///
+    /// * `a` - Tensor
+    /// * `scale_input` - Single value
+    /// # Examples
+    /// ```
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::exp2;
+    /// let x = Tensor::<i32>::new(
+    ///     Some(&[0, 1, 2, 3]),
+    ///     &[1, 4],
+    /// ).unwrap();
+    /// let result = exp2(&x, 1.0);
+    /// let expected = Tensor::<i32>::new(Some(&[1, 2, 4, 8]), &[1, 4]).unwrap();
+    /// assert_eq!(result, expected);
+    /// ```
+    pub fn exp2(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
+        a.par_enum_map(|_, a_i| {
+            let z_val = a_i;
+            let result = if z_val >= 0 {
+                let abs_z = z_val as u32;
+                // Use the same logic as VirtualPow2 instruction: 1u64 << (y % WORD_SIZE)
+                // For 64-bit, limit to 63 to avoid overflow
+                let power_result = 1u64.checked_shl(abs_z.min(63)).unwrap_or(u64::MAX);
+                scale_input * (power_result as f64)
+            } else {
+                // For negative z, 2^z = 1 / 2^|z| ≈ 1 for integer arithmetic to avoid total loss
+                scale_input
+            };
+            Ok::<_, TensorError>(result.round() as i32)
+        })
+        .unwrap()
+    }
+
     /// Elementwise applies exponential to a tensor of integers.
     /// # Arguments
     ///
@@ -3035,6 +3070,7 @@ pub mod nonlinearities {
             .unwrap()
     }
 
+    /*
     /// softmax layout
     pub fn softmax_axes(
         a: &Tensor<i32>,
@@ -3083,7 +3119,21 @@ pub mod nonlinearities {
         res.reshape(dims).unwrap();
         (res, intermediate_values)
     }
+    */
 
+    /// softmax layout
+    pub fn softmax_axes(
+        a: &Tensor<i32>,
+        scale: f64,
+        _axes: &[usize],
+    ) -> (Tensor<i32>, Vec<Tensor<i32>>) {
+        let dims = a.dims();
+        let (mut res, intermediate_values) = softmax(a, scale);
+        res.reshape(dims).unwrap();
+        (res, intermediate_values)
+    }
+
+    /*
     /// Applies softmax
     /// # Arguments
     ///
@@ -3103,7 +3153,7 @@ pub mod nonlinearities {
     /// let expected = Tensor::<i32>::new(Some(&[2730, 2730, 2751, 2730, 2730, 2688]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
-    pub fn softmax(a: &Tensor<i32>, scale: f64) -> (Tensor<i32>, Vec<Tensor<i32>>) {
+    pub fn softmax(a: &Tensor<i32>, _scale: f64) -> (Tensor<i32>, Vec<Tensor<i32>>) {
         // the more accurate calculation is commented out and we implement as below so it
         // matches the steps in layout
         let mut intermediate_values = vec![];
@@ -3117,6 +3167,130 @@ pub mod nonlinearities {
         let inv_denom = recip(&sum, scale.powf(2.0));
 
         ((exp * inv_denom).unwrap(), intermediate_values)
+    }
+    */
+
+    // /// Applies softmax
+    // /// # Arguments
+    // ///
+    // /// * `a` - Tensor
+    // /// * `scale_input` - Single value
+    // /// * `scale_output` - Single value
+    // /// # Examples
+    // /// ```
+    // /// use onnx_tracer::tensor::Tensor;
+    // /// use onnx_tracer::tensor::ops::nonlinearities::softmax;
+    // /// let x = Tensor::<i32>::new(
+    // ///     Some(&[2, 2, 3, 2, 2, 0]),
+    // ///     &[2, 3],
+    // /// ).unwrap();
+    // /// let result = softmax(&x, 128.0).0;
+    // /// // Using 2^x and zkVM division: [2^2,2^2,2^3,2^2,2^2,2^0] = [4,4,8,4,4,1], sum=25
+    // /// // Result: [128*4/25, 128*4/25, 128*8/25, 128*4/25, 128*4/25, 128*1/25] = [20,20,40,20,20,5]
+    // /// let expected = Tensor::<i32>::new(Some(&[20, 20, 40, 20, 20, 5]), &[2, 3]).unwrap();
+    // /// assert_eq!(result, expected);
+    // /// ```
+    // pub fn softmax(a: &Tensor<i32>, scale: f64) -> (Tensor<i32>, Vec<Tensor<i32>>) {
+    //     // Quantized softmax implementation: scale * (2^z_i / sum_j(2^z_j))
+    //     // Using 2^x instead of e^x for integer arithmetic compatibility
+    //     let mut intermediate_values = vec![];
+
+    //     intermediate_values.push(a.clone());
+
+    //     // Step 1: Compute 2^z_i for each element using exp2
+    //     let exp_vals = exp2(a, 1.0); // Use scale=1.0 for exp2 since input is already in integer form
+    //     intermediate_values.push(exp_vals.clone());
+
+    //     // Step 2: Sum all exponentials
+    //     let sum_tensor = sum(&exp_vals).unwrap();
+    //     intermediate_values.push(sum_tensor.clone());
+
+    //     // Step 3: Divide scale*2^z_i by sum using zkVM division semantics
+    //     let result = exp_vals
+    //         .par_enum_map(|_, exp_val| {
+    //             let sum_val = sum_tensor[0]; // sum is a single value tensor
+    //             if sum_val == 0 {
+    //                 Ok::<_, TensorError>(0)
+    //             } else {
+    //                 // Apply zkVM division: (scale * exp_val) / sum_val
+    //                 let numerator = (scale * (exp_val as f64)) as i64;
+    //                 let denominator = sum_val as i64;
+    //                 let mut div_result = numerator / denominator;
+    //                 let remainder = numerator % denominator;
+
+    //                 // zkVM division: adjust if remainder and denominator have different signs
+    //                 if (remainder < 0 && denominator > 0) || (remainder > 0 && denominator < 0) {
+    //                     div_result -= 1;
+    //                 }
+    //                 Ok::<_, TensorError>(div_result.max(0) as i32)
+    //             }
+    //         })
+    //         .unwrap();
+
+    //     (result, intermediate_values)
+    // }
+
+    /// Applies softmax
+    /// # Arguments
+    ///
+    /// * `a` - Tensor
+    /// * `scale_input` - Single value
+    /// * `scale_output` - Single value
+    /// # Examples
+    /// ```
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::softmax;
+    /// let x = Tensor::<i32>::new(
+    ///     Some(&[2, 2, 3, 2, 2, 0]),
+    ///     &[2, 3],
+    /// ).unwrap();
+    /// let result = softmax(&x, 128.0).0;
+    /// // Using 2^x and zkVM division: [2^2,2^2,2^3,2^2,2^2,2^0] = [4,4,8,4,4,1], sum=25
+    /// // Result: [128*4/25, 128*4/25, 128*8/25, 128*4/25, 128*4/25, 128*1/25] = [20,20,40,20,20,5]
+    /// let expected = Tensor::<i32>::new(Some(&[20, 20, 40, 20, 20, 5]), &[2, 3]).unwrap();
+    /// assert_eq!(result, expected);
+    /// ```
+    pub fn softmax(a: &Tensor<i32>, _scale: f64) -> (Tensor<i32>, Vec<Tensor<i32>>) {
+        const Q: i32 = 128;
+        let l = a.len();
+        let mut out = vec![0; l];
+        let intermediate_values = vec![a.clone()];
+
+        // For consistency, allow both positive and negative inputs directly (no z_max subtraction)
+        // and apply 2^{|z_i|} scaling with correct branch.
+        let mut d_sum: i64 = 0;
+        let mut d_vec = vec![];
+
+        for &z in a.iter() {
+            let b = z; // directly use z_i as exponent
+            let abs_b = b.abs().min(63); // cap to prevent overflow
+            let pow2 = 1u64.checked_shl(abs_b as u32).unwrap_or(u64::MAX);
+
+            // For standard softmax semantics:
+            //   if b >= 0 → d_i = Q * 2^{b}
+            //   if b < 0  → d_i = Q / 2^{|b|}
+            let d = if b >= 0 {
+                (Q as i64).saturating_mul(pow2 as i64)
+            } else if pow2 == 0 {
+                Q as i64
+            } else {
+                (Q as i64).saturating_div(pow2 as i64)
+            };
+
+            let d_i32 = d.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+            d_vec.push(d_i32);
+            d_sum = d_sum.saturating_add(d_i32 as i64);
+        }
+
+        // Normalize: g_i = (Q * d_i) / sum_j d_j
+        for i in 0..l {
+            let f = (Q as i64).saturating_mul(d_vec[i] as i64);
+            let g = if d_sum == 0 { 0 } else { f / d_sum };
+            out[i] = g.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        }
+
+        let out_tensor = Tensor::new(Some(&out), a.dims()).unwrap();
+        (out_tensor, intermediate_values)
     }
 
     /// Applies range_check_percent

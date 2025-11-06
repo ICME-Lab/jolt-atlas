@@ -5,7 +5,7 @@ pub use jolt_core::zkvm::lookup_table::suffixes::{
     and::AndSuffix, div_by_zero::DivByZeroSuffix, eq::EqSuffix, gt::GreaterThanSuffix,
     left_is_zero::LeftOperandIsZeroSuffix, left_shift::LeftShiftSuffix,
     lower_word::LowerWordSuffix, lsb::LsbSuffix, lt::LessThanSuffix, one::OneSuffix, or::OrSuffix,
-    right_is_zero::RightOperandIsZeroSuffix, right_shift::RightShiftSuffix,
+    pow2::Pow2Suffix, right_is_zero::RightOperandIsZeroSuffix, right_shift::RightShiftSuffix,
     right_shift_helper::RightShiftHelperSuffix, right_shift_padding::RightShiftPaddingSuffix,
     sign_extension::SignExtensionSuffix, upper_word::UpperWordSuffix, xor::XorSuffix,
 };
@@ -28,7 +28,7 @@ impl TryFrom<JoltSuffixes> for AtlasSuffixes {
             JoltSuffixes::Lsb => AtlasSuffixes::Lsb,
             JoltSuffixes::One => AtlasSuffixes::One,
             JoltSuffixes::Or => AtlasSuffixes::Or,
-            // JoltSuffixes::Pow2 => AtlasSuffixes::Pow2,
+            JoltSuffixes::Pow2 => AtlasSuffixes::Pow2,
             JoltSuffixes::RightOperandIsZero => AtlasSuffixes::RightOperandIsZero,
             JoltSuffixes::RightShift => AtlasSuffixes::RightShift,
             JoltSuffixes::RightShiftHelper => AtlasSuffixes::RightShiftHelper,
@@ -36,7 +36,6 @@ impl TryFrom<JoltSuffixes> for AtlasSuffixes {
             JoltSuffixes::SignExtension => AtlasSuffixes::SignExtension,
             JoltSuffixes::UpperWord => AtlasSuffixes::UpperWord,
             JoltSuffixes::Xor => AtlasSuffixes::Xor,
-            _ => return Err("Jolt suffix not used in Atlas"),
         };
         Ok(result)
     }

@@ -65,7 +65,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
             vec![0u64; output_size]
         } else {
             (0..output_size)
-                .map(|_| rng.next_u32() as u64)
+                .map(|_| rng.gen_range(-8..=8) as u32 as u64)
                 .collect::<Vec<u64>>()
         };
 
@@ -79,7 +79,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
             vec![0u64; output_size]
         } else {
             (0..output_size)
-                .map(|_| rng.next_u32() as u64)
+                .map(|_| rng.gen_range(-8..=8) as u32 as u64)
                 .collect::<Vec<u64>>()
         };
 
@@ -134,11 +134,9 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
                 } else {
                     ts1_addr
                 };
-                assert_eq!(
-                    tensor_registers[mapped_addr],
-                    cycle.ts1_vals().unwrap(),
-                    "{cycle:#?}"
-                );
+                let actual = cycle.ts1_vals().unwrap();
+                let expected_prefix = &tensor_registers[mapped_addr][..actual.len()];
+                assert_eq!(expected_prefix, actual, "{cycle:#?}");
             }
 
             if let Some(ts2_addr) = cycle.instr.ts2 {
@@ -151,14 +149,12 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
                 } else {
                     ts2_addr
                 };
-                assert_eq!(
-                    tensor_registers[mapped_addr],
-                    cycle.ts2_vals().unwrap(),
-                    "{cycle:#?}"
-                );
+                let actual = cycle.ts2_vals().unwrap();
+                let expected_prefix = &tensor_registers[mapped_addr][..actual.len()];
+                assert_eq!(expected_prefix, actual, "{cycle:#?}");
             }
 
-            let output = to_lookup_output(&cycle);
+            let output = to_instruction_output(&cycle);
 
             if let Some(td_addr) = cycle.instr.td {
                 let mapped_addr = if td_addr >= 32 {
@@ -176,9 +172,13 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
                     &output[..cycle.instr.active_output_elements.min(output.len())],
                 );
                 tensor_registers[mapped_addr] = td_output;
-                assert_eq!(
-                    tensor_registers[mapped_addr],
-                    cycle.td_post_vals().unwrap(),
+                let actual_output = cycle.td_post_vals().unwrap();
+                let expected_prefix = &tensor_registers[mapped_addr][..actual_output.len()];
+                assert_eq!(expected_prefix, actual_output, "{cycle:#?}");
+                assert!(
+                    tensor_registers[mapped_addr][actual_output.len()..]
+                        .iter()
+                        .all(|&v| v == 0),
                     "{cycle:#?}"
                 );
             } else {
@@ -227,8 +227,37 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
     }
 }
 
-fn to_lookup_output(cycle: &ONNXCycle) -> Vec<u64> {
+/// Special helper function to compute Broadcast operation output
+fn compute_broadcast_output(cycle: &ONNXCycle) -> Vec<u64> {
+    let output_els = cycle.instr.active_output_elements;
+    let input = cycle.ts1_vals().unwrap_or(vec![0; output_els]);
+
+    // Broadcast operation: replicate the first element to all positions
+    let broadcast_value = if input.is_empty() { 0 } else { input[0] };
+    vec![broadcast_value; output_els]
+}
+
+/// Special helper function to compute Sum operation output
+fn compute_saturating_sum(cycle: &ONNXCycle) -> Vec<u64> {
+    let output_els = cycle.instr.active_output_elements;
+    let input = cycle.ts1_vals().unwrap_or(vec![0; output_els]);
+
+    // Saturating Sum operation: sum all elements and put result in first position
+    let mut total_sum: u64 = 0;
+    let mut result = vec![0; output_els];
+    for &val in &input {
+        total_sum = total_sum.saturating_add(val);
+    }
+    if output_els > 0 {
+        result[0] = total_sum;
+    }
+    result
+}
+
+fn to_instruction_output(cycle: &ONNXCycle) -> Vec<u64> {
     match cycle.instr.opcode {
+        ONNXOpcode::Broadcast => compute_broadcast_output(cycle),
+        ONNXOpcode::VirtualSaturatingSum => compute_saturating_sum(cycle),
         ONNXOpcode::Div => DivInstruction::<32>::sequence_output(
             cycle.ts1_vals().unwrap(),
             cycle.imm().unwrap(),

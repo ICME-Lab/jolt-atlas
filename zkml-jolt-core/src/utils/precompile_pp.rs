@@ -79,6 +79,13 @@ pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
         },
     ),
     (
+        "amk,kn->amn",
+        EinsumConfig {
+            equation: "mk,kn->mn",
+            dims_extractor: extract_mk_kn_mn_dims,
+        },
+    ),
+    (
         "amk,kn->mn",
         EinsumConfig {
             equation: "mk,kn->mn",

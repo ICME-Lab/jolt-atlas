@@ -108,7 +108,7 @@ impl InstanceBuilder {
     }
 
     /// Specialized builder for sum operations
-    fn build_sum_instance(
+    fn build_sum_instance_axes_1(
         instr: &ONNXInstr,
         td_lookup: &HashMap<usize, ONNXInstr>,
         bytecode_preprocessing: &BytecodePreprocessing,
@@ -172,12 +172,13 @@ impl PreprocessingInstance {
                 )
             }
             ONNXOpcode::Sum(axes) => match (axes, instr.output_dims[0], instr.output_dims.len()) {
-                (1, _, 2) | (2, 1, 3) => InstanceBuilder::build_sum_instance(
+                (1, _, 2) | (2, 1, 3) => InstanceBuilder::build_sum_instance_axes_1(
                     instr,
                     td_lookup,
                     bytecode_preprocessing,
                     *axes as i32,
                 ),
+
                 _ => panic!("Sum operation not supported by precompile system"),
             },
             _ => panic!("Operation not supported by precompile system"),

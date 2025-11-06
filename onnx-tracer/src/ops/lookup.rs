@@ -50,6 +50,7 @@ pub enum LookupOp {
     Sign,
     KroneckerDelta,
     Pow { scale: utils::F32, a: utils::F32 },
+    VirtualPow2,
 }
 
 impl From<&LookupOp> for ONNXOpcode {
@@ -60,6 +61,7 @@ impl From<&LookupOp> for ONNXOpcode {
             LookupOp::Sqrt { .. } => ONNXOpcode::Sqrt,
             LookupOp::Rsqrt { .. } => ONNXOpcode::Rsqrt,
             LookupOp::Div { .. } => ONNXOpcode::Div,
+            LookupOp::VirtualPow2 => ONNXOpcode::VirtualPow2,
             _ => {
                 panic!("LookupOp {value:?} cannot be converted to ONNXOpcode",);
             }
@@ -163,6 +165,7 @@ where
             LookupOp::ATan { scale } => Ok(tensor::ops::nonlinearities::atan(&x, scale.into())),
             LookupOp::ATanh { scale } => Ok(tensor::ops::nonlinearities::atanh(&x, scale.into())),
             LookupOp::Tanh { scale } => Ok(tensor::ops::nonlinearities::tanh(&x, scale.into())),
+            LookupOp::VirtualPow2 => unimplemented!("This operation is handled virtually"),
         }?;
 
         let output = res.map(|x| F::from(x));
@@ -213,6 +216,7 @@ where
             LookupOp::ASin { scale } => format!("ASIN(scale={scale})"),
             LookupOp::Sinh { scale } => format!("SINH(scale={scale})"),
             LookupOp::ASinh { scale } => format!("ASINH(scale={scale})"),
+            LookupOp::VirtualPow2 => "VIRTUAL_POW2".into(),
         }
     }
 

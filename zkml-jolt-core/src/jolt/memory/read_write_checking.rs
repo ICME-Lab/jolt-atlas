@@ -240,7 +240,7 @@ pub struct ReadWriteValueClaims<F: JoltField> {
     pub td_wv_claim: F,
 }
 
-pub struct RegistersReadWriteChecking<F: JoltField> {
+pub struct MemoryReadWriteChecking<F: JoltField> {
     K: usize,
     T: usize,
     gamma: F,
@@ -252,12 +252,12 @@ pub struct RegistersReadWriteChecking<F: JoltField> {
 }
 
 #[derive(CanonicalSerialize, CanonicalDeserialize, Debug, Clone)]
-pub struct RegistersReadWriteCheckingProof<F: JoltField, ProofTranscript: Transcript> {
+pub struct MemoryReadWriteCheckingProof<F: JoltField, ProofTranscript: Transcript> {
     sumcheck_proof: SumcheckInstanceProof<F, ProofTranscript>,
     sumcheck_switch_index: usize,
 }
 
-impl<F: JoltField> RegistersReadWriteChecking<F> {
+impl<F: JoltField> MemoryReadWriteChecking<F> {
     pub fn new_prover<ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>>(
         state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
     ) -> Self {
@@ -995,7 +995,7 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
             // so we might as well materialize the full `ra`, `wa`, and `Val` polynomials and perform
             // standard sumcheck directly using those polynomials.
 
-            let span = tracing::span!(tracing::Level::INFO, "Materialize rs1_ra polynomial");
+            let span = tracing::span!(tracing::Level::INFO, "Materialize ts1_ra polynomial");
             let _guard = span.enter();
 
             let num_chunks = addresses.len() / *chunk_size;
@@ -1017,7 +1017,7 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
             drop(_guard);
             drop(span);
 
-            let span = tracing::span!(tracing::Level::INFO, "Materialize rs2_ra polynomial");
+            let span = tracing::span!(tracing::Level::INFO, "Materialize ts2_ra polynomial");
             let _guard = span.enter();
 
             let num_chunks = addresses.len() / *chunk_size;
@@ -1039,7 +1039,7 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
             drop(_guard);
             drop(span);
 
-            let span = tracing::span!(tracing::Level::INFO, "Materialize ts2_ra polynomial");
+            let span = tracing::span!(tracing::Level::INFO, "Materialize ts3_ra polynomial");
             let _guard = span.enter();
 
             let num_chunks = addresses.len() / *chunk_size;
@@ -1061,7 +1061,7 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
             drop(_guard);
             drop(span);
 
-            let span = tracing::span!(tracing::Level::INFO, "Materialize rd_wa polynomial");
+            let span = tracing::span!(tracing::Level::INFO, "Materialize td_wa polynomial");
             let _guard = span.enter();
 
             let num_chunks = addresses.len() / *chunk_size;
@@ -1160,7 +1160,7 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
     }
 }
 
-impl<F: JoltField> SumcheckInstance<F> for RegistersReadWriteChecking<F> {
+impl<F: JoltField> SumcheckInstance<F> for MemoryReadWriteChecking<F> {
     fn degree(&self) -> usize {
         3
     }
@@ -1351,6 +1351,216 @@ impl<F: JoltField> SumcheckInstance<F> for RegistersReadWriteChecking<F> {
             vec![CommittedPolynomial::TdInc],
             SumcheckId::RegistersReadWriteChecking,
             r_cycle.r,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    use crate::jolt::{
+        JoltProverPreprocessing, JoltSharedPreprocessing, JoltVerifierPreprocessing,
+        bytecode::BytecodePreprocessing,
+        dag::state_manager::StateManager,
+        pcs::SumcheckId,
+        precompiles::PrecompilePreprocessing,
+        sumcheck::{BatchedSumcheck, SumcheckInstance},
+        trace::trace,
+        witness::VirtualPolynomial,
+    };
+    use ark_bn254::Fr;
+    use ark_std::Zero;
+    use jolt_core::{
+        poly::{
+            commitment::mock::MockCommitScheme,
+            eq_poly::EqPolynomial,
+            opening_proof::{BIG_ENDIAN, OpeningPoint},
+        },
+        transcripts::{Blake2bTranscript, Transcript},
+        utils::math::Math,
+    };
+    use onnx_tracer::{ProgramIO, builder, graph::model::Model, model, tensor::Tensor};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+
+    pub fn test_read_write_sumcheck<ModelFunc>(model_fn: ModelFunc, input: Tensor<i32>)
+    where
+        ModelFunc: Fn() -> Model + Copy,
+    {
+        let _rng = StdRng::seed_from_u64(12345);
+
+        let bytecode_preprocessing = BytecodePreprocessing::preprocess(model_fn);
+        let shared_preprocessing = JoltSharedPreprocessing {
+            bytecode: bytecode_preprocessing,
+            precompiles: PrecompilePreprocessing::empty(),
+        };
+
+        let (trace, _) = trace(model_fn, &input, &shared_preprocessing.bytecode);
+
+        let log_T = trace.len().log_2();
+
+        let prover_preprocessing: JoltProverPreprocessing<Fr, MockCommitScheme<Fr>> =
+            JoltProverPreprocessing {
+                generators: (),
+                shared: shared_preprocessing.clone(),
+            };
+
+        let verifier_preprocessing: JoltVerifierPreprocessing<Fr, MockCommitScheme<Fr>> =
+            JoltVerifierPreprocessing {
+                generators: (),
+                shared: shared_preprocessing,
+            };
+        let program_io = ProgramIO {
+            input: Tensor::new(None, &[]).unwrap(),
+            output: Tensor::new(None, &[]).unwrap(),
+        };
+
+        let mut prover_sm = StateManager::<'_, Fr, Blake2bTranscript, _>::new_prover(
+            &prover_preprocessing,
+            trace.clone(),
+            program_io.clone(),
+        );
+        let mut verifier_sm = StateManager::<'_, Fr, Blake2bTranscript, _>::new_verifier(
+            &verifier_preprocessing,
+            program_io,
+            trace.len(),
+            verifier_preprocessing.shared.bytecode.memory_K,
+            prover_sm.twist_sumcheck_switch_index,
+        );
+
+        let r_cycle: Vec<Fr> = prover_sm.transcript.borrow_mut().challenge_vector(log_T);
+        let _r_cycle: Vec<Fr> = verifier_sm.transcript.borrow_mut().challenge_vector(log_T);
+        let eq_r_cycle = EqPolynomial::evals(&r_cycle);
+
+        let mut ts1_rv_claim = Fr::zero();
+        let mut ts2_rv_claim = Fr::zero();
+        let mut ts3_rv_claim = Fr::zero();
+        let mut td_wv_claim = Fr::zero();
+
+        for (i, cycle) in trace.iter().enumerate() {
+            ts1_rv_claim += eq_r_cycle[i].mul_u64(cycle.ts1_read());
+            ts2_rv_claim += eq_r_cycle[i].mul_u64(cycle.ts2_read());
+            ts3_rv_claim += eq_r_cycle[i].mul_u64(cycle.ts3_read());
+            td_wv_claim += eq_r_cycle[i].mul_u64(cycle.td_write().1);
+        }
+
+        let prover_accumulator = prover_sm.get_prover_accumulator();
+        prover_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::Ts1Value,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_cycle.clone()),
+            ts1_rv_claim,
+        );
+        prover_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::Ts2Value,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_cycle.clone()),
+            ts2_rv_claim,
+        );
+        prover_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::Ts3Value,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_cycle.clone()),
+            ts3_rv_claim,
+        );
+        prover_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::TdWriteValue,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_cycle.clone()),
+            td_wv_claim,
+        );
+
+        let mut prover_sumcheck = MemoryReadWriteChecking::new_prover(&mut prover_sm);
+
+        let mut prover_transcript_ref = prover_sm.transcript.borrow_mut();
+
+        let (proof, r_sumcheck) = BatchedSumcheck::prove(
+            vec![&mut prover_sumcheck],
+            Some(prover_accumulator.clone()),
+            &mut *prover_transcript_ref,
+        );
+        drop(prover_transcript_ref);
+
+        // Take claims
+        let prover_acc_borrow = prover_accumulator.borrow();
+        let verifier_accumulator = verifier_sm.get_verifier_accumulator();
+        let mut verifier_acc_borrow = verifier_accumulator.borrow_mut();
+
+        for (key, (_, value)) in prover_acc_borrow.evaluation_openings().iter() {
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
+            verifier_acc_borrow
+                .openings_mut()
+                .insert(*key, (empty_point, *value));
+        }
+        drop(prover_acc_borrow);
+        drop(verifier_acc_borrow);
+
+        verifier_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::Ts1Value,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_cycle.clone()),
+        );
+        verifier_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::Ts2Value,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_cycle.clone()),
+        );
+        verifier_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::Ts3Value,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_cycle.clone()),
+        );
+        verifier_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::TdWriteValue,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_cycle.clone()),
+        );
+
+        let mut verifier_sumcheck = MemoryReadWriteChecking::new_verifier(&mut verifier_sm);
+
+        println!("num_rounds: {}", verifier_sumcheck.num_rounds());
+        let r_sumcheck_verif = BatchedSumcheck::verify(
+            &proof,
+            vec![&mut verifier_sumcheck],
+            Some(verifier_accumulator.clone()),
+            &mut *verifier_sm.transcript.borrow_mut(),
+        )
+        .unwrap();
+
+        assert_eq!(r_sumcheck, r_sumcheck_verif);
+    }
+
+    #[test]
+    fn test_read_write_rsqrt() {
+        let input = Tensor::new(Some(&[1, 2, 3, 4]), &[1, 4]).unwrap();
+        test_read_write_sumcheck(builder::rsqrt_model, input);
+    }
+
+    #[test]
+    fn test_read_write_rsqrt_binary() {
+        let input = Tensor::new(Some(&[512]), &[1, 1]).unwrap();
+        test_read_write_sumcheck(
+            || model(&PathBuf::from("../onnx-tracer/models/rsqrt/network.onnx")),
+            input,
+        );
+    }
+
+    #[test]
+    fn test_read_write_self_attention() {
+        let mut rng = StdRng::seed_from_u64(123456);
+        let shape = [1, 64, 64];
+        let mut input_data = vec![0; shape.iter().product()];
+        for input in input_data.iter_mut() {
+            *input = rng.gen_range(-256..256)
+        }
+        test_read_write_sumcheck(
+            || {
+                model(&PathBuf::from(
+                    "../onnx-tracer/models/self_attention/network.onnx",
+                ))
+            },
+            Tensor::new(Some(&input_data), &shape).unwrap(),
         );
     }
 }

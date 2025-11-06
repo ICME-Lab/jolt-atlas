@@ -5,7 +5,8 @@ use crate::jolt::{
     },
     dag::{stage::SumcheckStages, state_manager::StateManager},
     executor::instructions::{
-        InstructionLookup, VirtualInstructionSequence, div::DivInstruction, rsqrt::RsqrtInstruction,
+        InstructionLookup, VirtualInstructionSequence, div::DivInstruction,
+        softmax::SoftmaxInstruction,
     },
     lookup_table::{LookupTables, RangeCheckTable, ReLUTable},
     pcs::SumcheckId,
@@ -20,8 +21,9 @@ use jolt_core::{
     utils::{math::Math, thread::unsafe_allocate_zero_vec},
     zkvm::{
         lookup_table::{
-            equal::EqualTable, signed_greater_than_equal::SignedGreaterThanEqualTable,
-            valid_div0::ValidDiv0Table, valid_signed_remainder::ValidSignedRemainderTable,
+            equal::EqualTable, pow2::Pow2Table,
+            signed_greater_than_equal::SignedGreaterThanEqualTable, valid_div0::ValidDiv0Table,
+            valid_signed_remainder::ValidSignedRemainderTable,
         },
         witness::{DTH_ROOT_OF_K, compute_d_parameter},
     },
@@ -228,11 +230,13 @@ impl JoltONNXBytecode {
             | ONNXOpcode::Mul
             | ONNXOpcode::Output
             | ONNXOpcode::Relu
+            | ONNXOpcode::Reshape
             | ONNXOpcode::Sub
             | ONNXOpcode::VirtualAssertEq
             | ONNXOpcode::VirtualAssertValidDiv0
             | ONNXOpcode::VirtualAssertValidSignedRemainder
             | ONNXOpcode::VirtualMove
+            | ONNXOpcode::VirtualPow2
         );
 
         flags[CircuitFlags::RightOperandIsTs2Value as usize] = matches!(
@@ -258,7 +262,9 @@ impl JoltONNXBytecode {
             | ONNXOpcode::Broadcast
             | ONNXOpcode::Output
             | ONNXOpcode::Relu
+            | ONNXOpcode::Reshape
             | ONNXOpcode::VirtualMove
+            | ONNXOpcode::VirtualPow2
         );
 
         flags[CircuitFlags::SubtractOperands as usize] = matches!(
@@ -280,10 +286,12 @@ impl JoltONNXBytecode {
             | ONNXOpcode::Output
             | ONNXOpcode::Mul
             | ONNXOpcode::Relu
+            | ONNXOpcode::Reshape
             | ONNXOpcode::Sub
             | ONNXOpcode::VirtualAdvice
             | ONNXOpcode::VirtualConst
             | ONNXOpcode::VirtualMove
+            | ONNXOpcode::VirtualPow2
         );
 
         flags[CircuitFlags::Advice as usize] = matches!(
@@ -334,6 +342,7 @@ impl InstructionLookup<WORD_SIZE> for JoltONNXBytecode {
             ONNXOpcode::Gte => Some(SignedGreaterThanEqualTable.into()),
             ONNXOpcode::Mul => Some(RangeCheckTable.into()),
             ONNXOpcode::Relu => Some(ReLUTable.into()),
+            ONNXOpcode::Reshape => Some(RangeCheckTable.into()),
             ONNXOpcode::Sub => Some(RangeCheckTable.into()),
             ONNXOpcode::VirtualAssertEq => Some(EqualTable.into()),
             ONNXOpcode::VirtualAssertValidDiv0 => Some(ValidDiv0Table.into()),
@@ -341,6 +350,7 @@ impl InstructionLookup<WORD_SIZE> for JoltONNXBytecode {
             ONNXOpcode::VirtualAdvice => Some(RangeCheckTable.into()),
             ONNXOpcode::VirtualConst => Some(RangeCheckTable.into()),
             ONNXOpcode::VirtualMove => Some(RangeCheckTable.into()),
+            ONNXOpcode::VirtualPow2 => Some(Pow2Table.into()),
             _ => None,
         }
     }
@@ -408,11 +418,6 @@ impl BytecodePreprocessing {
         ModelFunc: Fn() -> Model,
     {
         let raw_bytecode = onnx_tracer::decode_model(model());
-        // Build a lookup map for O(1) instruction lookups by td value
-        let td_lookup: HashMap<usize, ONNXInstr> = raw_bytecode
-            .iter()
-            .filter_map(|instr| instr.td.map(|td| (td, instr.clone())))
-            .collect();
         // Get largest td value
         let max_td = raw_bytecode
             .iter()
@@ -420,6 +425,11 @@ impl BytecodePreprocessing {
             .max()
             .unwrap_or(0);
         let raw_bytecode = Self::expand_raw_bytecode(raw_bytecode, max_td);
+        // Build a lookup map for O(1) instruction lookups by td value
+        let td_lookup: HashMap<usize, ONNXInstr> = raw_bytecode
+            .iter()
+            .filter_map(|instr| instr.td.map(|td| (td, instr.clone())))
+            .collect();
 
         let mut preprocessed_bytecode: Vec<JoltONNXBytecode> = Vec::new();
 
@@ -488,7 +498,9 @@ impl BytecodePreprocessing {
             .into_iter()
             .flat_map(|instr| match instr.opcode {
                 ONNXOpcode::Div => DivInstruction::<32>::virtual_sequence(instr, max_td),
-                ONNXOpcode::Rsqrt => RsqrtInstruction::<32>::virtual_sequence(instr, max_td),
+                // TODO(AntoineF4C5): Add back after stage 2 sum-check works
+                // ONNXOpcode::Rsqrt => RsqrtInstruction::<32>::virtual_sequence(instr, max_td),
+                ONNXOpcode::Softmax => SoftmaxInstruction::virtual_sequence(instr, max_td),
                 _ => vec![instr],
             })
             .collect()

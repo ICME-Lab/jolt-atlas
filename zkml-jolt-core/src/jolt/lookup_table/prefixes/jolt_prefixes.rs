@@ -76,14 +76,13 @@ impl TryFrom<&JoltPrefixes> for AtlasPrefixes {
             JoltPrefixes::PositiveRemainderLessThanDivisor => {
                 AtlasPrefixes::PositiveRemainderLessThanDivisor
             }
-            // JoltPrefixes::Pow2 => AtlasPrefixes::Pow2,
+            JoltPrefixes::Pow2 => AtlasPrefixes::Pow2,
             JoltPrefixes::RightOperandIsZero => AtlasPrefixes::RightOperandIsZero,
             JoltPrefixes::RightOperandMsb => AtlasPrefixes::RightOperandMsb,
             JoltPrefixes::RightShift => AtlasPrefixes::RightShift,
             JoltPrefixes::SignExtension => AtlasPrefixes::SignExtension,
             JoltPrefixes::UpperWord => AtlasPrefixes::UpperWord,
             JoltPrefixes::Xor => AtlasPrefixes::Xor,
-            _ => return Err("Jolt prefix not used in Atlas"),
         };
         Ok(result)
     }

@@ -46,10 +46,12 @@ use crate::{
             InstructionLookup, VirtualInstructionSequence, add::AddInstruction,
             beq::BeqInstruction, broadcast::BroadCastInstruction, div::DivInstruction,
             gte::GteInstruction, mul::MulInstruction, relu::ReluInstruction,
-            rsqrt::RsqrtInstruction, sub::SubInstruction, virtual_advice::AdviceInstruction,
+            reshape::ReshapeInstruction, softmax::SoftmaxInstruction, sub::SubInstruction,
+            virtual_advice::AdviceInstruction,
             virtual_assert_valid_div0::AssertValidDiv0Instruction,
             virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction,
             virtual_const::ConstInstruction, virtual_move::MoveInstruction,
+            virtual_pow2::Pow2Instruction,
         },
         lookup_table::LookupTables,
     },
@@ -118,7 +120,9 @@ pub fn expand_raw_trace(raw_trace: Vec<ONNXCycle>, max_td: usize) -> Vec<ONNXCyc
         .into_iter()
         .flat_map(|cycle| match cycle.instr.opcode {
             ONNXOpcode::Div => DivInstruction::<32>::virtual_trace(cycle, max_td),
-            ONNXOpcode::Rsqrt => RsqrtInstruction::<32>::virtual_trace(cycle, max_td),
+            ONNXOpcode::Softmax => SoftmaxInstruction::virtual_trace(cycle, max_td),
+            // TODO(AntoineF4C5): Add back after stage 2 sum-check works
+            // ONNXOpcode::Rsqrt => RsqrtInstruction::<32>::virtual_trace(cycle, max_td),
             _ => vec![cycle],
         })
         .collect()
@@ -413,6 +417,9 @@ impl JoltONNXCycle {
             ONNXOpcode::Relu => Some(LookupFunction::Relu(ReluInstruction::<WORD_SIZE>(
                 memory_ops.ts1_val,
             ))),
+            ONNXOpcode::Reshape => Some(LookupFunction::Reshape(ReshapeInstruction::<WORD_SIZE>(
+                memory_ops.ts1_val,
+            ))),
             ONNXOpcode::Sub => Some(LookupFunction::Sub(SubInstruction::<WORD_SIZE>(
                 memory_ops.ts1_val,
                 memory_ops.ts2_val,
@@ -440,6 +447,11 @@ impl JoltONNXCycle {
             ))),
             ONNXOpcode::VirtualMove => {
                 Some(LookupFunction::VirtualMove(MoveInstruction::<WORD_SIZE>(
+                    memory_ops.ts1_val,
+                )))
+            }
+            ONNXOpcode::VirtualPow2 => {
+                Some(LookupFunction::VirtualPow2(Pow2Instruction::<WORD_SIZE>(
                     memory_ops.ts1_val,
                 )))
             }
@@ -744,11 +756,13 @@ define_lookup_enum!(
     Gte: GteInstruction<WORD_SIZE>,
     Mul: MulInstruction<WORD_SIZE>,
     Relu: ReluInstruction<WORD_SIZE>,
+    Reshape: ReshapeInstruction<WORD_SIZE>,
     Sub: SubInstruction<WORD_SIZE>,
     VirtualAssertValidSignedRemainder: AssertValidSignedRemainderInstruction<WORD_SIZE>,
     VirtualAssertValidDiv0: AssertValidDiv0Instruction<WORD_SIZE>,
     VirtualConst: ConstInstruction<WORD_SIZE>,
     VirtualMove: MoveInstruction<WORD_SIZE>,
+    VirtualPow2: Pow2Instruction<WORD_SIZE>,
 );
 
 /// This function validates that the execution trace matches the expected memory

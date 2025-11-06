@@ -22,7 +22,7 @@ use crate::jolt::lookup_table::{
 };
 use jolt_core::zkvm::lookup_table::{
     JoltLookupTable, PrefixSuffixDecomposition as JoltPrefixSuffixDecomposition,
-    prefixes::PrefixEval as JoltPrefixEval, prefixes::Prefixes as JoltPrefixes,
+    prefixes::{PrefixEval as JoltPrefixEval, Prefixes as JoltPrefixes},
 };
 
 macro_rules! impl_atlas_traits {
@@ -61,7 +61,7 @@ impl_atlas_traits!(
     MovsignTable<WORD_SIZE>,
     NotEqualTable<WORD_SIZE>,
     OrTable<WORD_SIZE>,
-    // Pow2Table<WORD_SIZE>,
+    Pow2Table<WORD_SIZE>,
     RangeCheckTable<WORD_SIZE>,
     // ShiftRightBitmaskTable<WORD_SIZE>,
     SignedGreaterThanEqualTable<WORD_SIZE>,

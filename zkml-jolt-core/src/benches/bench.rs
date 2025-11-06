@@ -2,6 +2,7 @@ use crate::jolt::JoltSNARK;
 use ark_bn254::Fr;
 use jolt_core::{poly::commitment::dory::DoryCommitmentScheme, transcripts::KeccakTranscript};
 use onnx_tracer::{graph::model::Model, model, tensor::Tensor};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde_json::Value;
 use std::{collections::HashMap, fs::File, io::Read, path::PathBuf};
 
@@ -11,12 +12,14 @@ type PCS = DoryCommitmentScheme;
 pub enum BenchType {
     MLP,
     ArticleClassification,
+    SelfAttention,
 }
 
 pub fn benchmarks(bench_type: BenchType) -> Vec<(tracing::Span, Box<dyn FnOnce()>)> {
     match bench_type {
         BenchType::MLP => mlp(),
         BenchType::ArticleClassification => article_classification(),
+        BenchType::SelfAttention => self_attention(),
     }
 }
 
@@ -121,6 +124,36 @@ fn article_classification() -> Vec<(tracing::Span, Box<dyn FnOnce()>)> {
     };
     tasks.push((
         tracing::info_span!("ArticleClassification_E2E"),
+        Box::new(task) as Box<dyn FnOnce()>,
+    ));
+    tasks
+}
+
+fn self_attention() -> Vec<(tracing::Span, Box<dyn FnOnce()>)> {
+    let mut tasks = Vec::new();
+    let task = move || {
+        let model_func = || {
+            model(&PathBuf::from(
+                "../onnx-tracer/models/self_attention/network.onnx",
+            ))
+        };
+        let shape = [1, 64, 64];
+        let mut rng = StdRng::seed_from_u64(123456);
+        let mut input_data = vec![0i32; shape.iter().product()];
+        for input in input_data.iter_mut() {
+            *input = rng.gen_range(-256..256);
+        }
+        let input = Tensor::new(Some(&input_data), &shape).unwrap();
+        let preprocessing =
+            JoltSNARK::<Fr, PCS, KeccakTranscript>::prover_preprocess(model_func, 1 << 21);
+        let (snark, program_io, _debug_info) =
+            JoltSNARK::<Fr, PCS, KeccakTranscript>::prove(&preprocessing, model_func, &input);
+        snark
+            .verify(&(&preprocessing).into(), program_io, None)
+            .unwrap();
+    };
+    tasks.push((
+        tracing::info_span!("SelfAttention_E2E"),
         Box::new(task) as Box<dyn FnOnce()>,
     ));
     tasks

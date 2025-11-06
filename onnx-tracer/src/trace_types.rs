@@ -293,6 +293,8 @@ pub enum ONNXOpcode {
     VirtualMove,
     VirtualAssertEq,
     VirtualConst,
+    VirtualPow2,
+    VirtualSaturatingSum,
 }
 
 /// Helper function to format optional values for display

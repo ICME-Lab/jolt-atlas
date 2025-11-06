@@ -44,46 +44,49 @@ This example:
 
 ## Benchmarks
 
-We benchmarked a multi-classification model across different zkML projects:
+### Transformer (self-attention) profile
+
+Latest run (`cargo run -r -- profile --name self-attention --format default`):
+
+| Stage  | Wall clock |
+| ------ | ----------- |
+| Prove  | 20.8 s |
+| Verify | 143 ms |
+| End-to-end CLI run | 25.8 s |
+
+The prover hit a peak allocated footprint of roughly 5.6 GB during sumcheck round 10, which matches what we have seen in the integration test harness. Numbers were collected from this workstation; expect ±10% variance depending on CPU, memory bandwidth.
+
+### Cross-project snapshot
+
+Article-classification workload comparison
 
 | Project    | Latency | Notes                        |
 | ---------- | ------- | ---------------------------- |
-| zkml-jolt  | ~0.7s   |                              |
+| zkml-jolt  | ~0.7s   | in-tree article-classification bench |
 | mina-zkml  | ~2.0s   |                              |
 | ezkl       | 4–5s    |                              |
-| deep-prove | N/A     | doesn't support gather op    |
-| zk-torch   | N/A     | doesn't support reduceSum op |
+| deep-prove | N/A     | missing gather primitive     |
+| zk-torch   | N/A     | missing reduceSum primitive  |
 
-We also benchmarked an MLP model:
+Perceptron MLP baseline (easy sanity workload):
 
 | Project    | Latency | Notes                |
 | ---------- | ------- | -------------------- |
 | zkml-jolt  | ~800ms  |                      |
 | deep-prove | ~200ms  | lacks MCC            |
 
-### Running benchmarks
+### How to reproduce locally
 
 ```bash
-# enter zkml-jolt-core
+# from repo root
 cd zkml-jolt-core
 
-# multi-class benchmark
-cargo run -r -- profile --name multi-class --format chrome
-
-# sentiment benchmark
-cargo run -r -- profile --name sentiment --format chrome
-
-# mlp benchmark
-cargo run -r -- profile --name mlp --format chrome
+cargo run -r -- profile --name article-classification --format default
+cargo run -r -- profile --name self-attention --format default
+cargo run -r -- profile --name mlp --format default
 ```
 
-When using `--format chrome`, the benchmark generates trace files (trace-<timestamp>.json) viewable in Chrome's tracing tool:
-1. Open Chrome and go to `chrome://tracing`.
-2. Load the generated trace file to visualize performance.
-
-Alternatively, use `--format default` to view performance times directly in the terminal.
-
-Both models (preprocessing, proving, and verifying) take ~600ms–800ms.
+Add `--format chrome` if you want a tracing JSON for Chrome's `chrome://tracing` viewer instead of plain-text timings.
 
 ## Getting Started
 

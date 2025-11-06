@@ -360,21 +360,6 @@ mod e2e_tests {
     }
 
     #[test]
-    #[ignore]
-    fn run_self_attention() {
-        let transformer = model(&PathBuf::from(
-            "../onnx-tracer/models/self_attention/network.onnx",
-        ));
-        let mut rng = StdRng::seed_from_u64(123456);
-        let shape = [1, 64, 64];
-        let mut input_data = vec![0; shape.iter().product()];
-        for input in input_data.iter_mut() {
-            *input = rng.gen_range(-256..256)
-        }
-        let _res = transformer.forward(&[Tensor::new(Some(&input_data), &shape).unwrap()]);
-    }
-
-    #[test]
     #[serial]
     // Runs the first ops of self-attention block, including a rsqrt op
     fn test_ML_block_self_attention() {

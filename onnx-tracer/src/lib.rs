@@ -55,10 +55,10 @@ pub mod constants;
 pub mod graph;
 pub mod logger;
 pub mod ops;
-pub mod parallel_utils;
 /// An implementation of multi-dimensional tensors.
 pub mod tensor;
 pub mod trace_types;
+pub mod utils;
 
 /// The input and output of inference runs
 /// Used by the zkVM to check output and input node cycles
@@ -120,9 +120,8 @@ pub fn execution_trace(model: Model, input: &Tensor<i32>) -> (Vec<ONNXCycle>, Pr
     let forward_result = model
         .forward(&[input.clone()])
         .expect("Failed to run model");
-    let execution_trace = model.tracer.execution_trace.borrow().clone();
     (
-        execution_trace,
+        model.tracer.execution_trace.into_inner(),
         ProgramIO::new(input.clone(), forward_result),
     )
 }

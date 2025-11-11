@@ -37,20 +37,17 @@
 //! By abstracting the details of node construction, scale management, and operation decoding, this module enables robust and efficient handling of ONNX models in privacy-preserving and quantized computation settings.
 
 use crate::{
-    graph::{
-        model::NodeType,
-        utilities::{
-            multiplier_to_scale, new_op_from_onnx, node_output_shapes, quantize_tensor,
-            scale_to_multiplier,
-        },
-        vars::VarScales,
-    },
+    graph::{model::NodeType, vars::VarScales},
     ops::{
         hybrid::HybridOp, lookup::LookupOp, poly::PolyOp, Constant, ForwardResult, Input, Op,
         Unknown,
     },
     tensor::{Tensor, TensorError},
     trace_types::{ONNXInstr, ONNXOpcode},
+    utils::parsing::{
+        multiplier_to_scale, new_op_from_onnx, node_output_shapes, quantize_tensor,
+        scale_to_multiplier,
+    },
 };
 use log::{trace, warn};
 use std::{collections::BTreeMap, error::Error, fmt, fmt::Debug};
@@ -501,7 +498,6 @@ impl Node {
             td: Some(self.idx),
             imm: self.extract_immediate_value(),
             virtual_sequence_remaining: None,
-            active_output_elements: self.calculate_active_output_elements(),
             output_dims: self.out_dims.clone(),
         }
     }
@@ -520,11 +516,6 @@ impl Node {
         self.inputs.get(position).map(|(idx, _)| *idx)
     }
 
-    /// Calculates the total number of active elements in the output tensor
-    pub fn calculate_active_output_elements(&self) -> usize {
-        self.out_dims.iter().product()
-    }
-
     /// Extracts immediate values based on the operation type
     pub fn extract_immediate_value(&self) -> Option<Tensor<i32>> {
         match &self.opkind {
@@ -532,7 +523,7 @@ impl Node {
             SupportedOp::Nonlinear(LookupOp::Div { denom }) => {
                 Self::create_scalar_immediate_tensor(
                     denom.0 as i32,
-                    self.calculate_active_output_elements(),
+                    self.out_dims.iter().product::<usize>(),
                 )
             }
             _ => None,
@@ -642,7 +633,7 @@ impl SupportedOp {
         &self,
         in_scales: Vec<crate::Scale>,
     ) -> Result<Box<dyn Op<i32>>, Box<dyn Error>> {
-        use crate::graph::utilities::homogenize_input_scales;
+        use crate::utils::parsing::homogenize_input_scales;
 
         let inputs_to_scale = self.requires_homogenous_input_scales();
         // creates a rescaled op if the inputs are not homogenous
@@ -971,7 +962,7 @@ impl Op<i32> for RebaseScale {
     fn required_lookups(&self) -> Vec<LookupOp> {
         let mut lookups = self.inner.required_lookups();
         lookups.push(LookupOp::Div {
-            denom: crate::ops::utils::F32(self.multiplier as f32),
+            denom: crate::utils::f32::F32(self.multiplier as f32),
         });
         lookups
     }
@@ -1099,10 +1090,7 @@ fn display_opkind(v: &SupportedOp) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        graph::{model::NodeType, utilities::create_input_node},
-        ops::poly::PolyOp,
-    };
+    use crate::{graph::model::NodeType, ops::poly::PolyOp, utils::parsing::create_input_node};
     use std::collections::BTreeMap;
     use tract_onnx::prelude::OutletId;
 

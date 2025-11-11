@@ -5,12 +5,10 @@
 #[cfg(test)]
 mod refactored_components_tests {
     use onnx_tracer::{
-        graph::{
-            node::Node,
-            utilities::{create_const_node, create_input_node, create_polyop_node},
-        },
+        graph::node::Node,
         ops::poly::PolyOp,
         tensor::Tensor,
+        utils::parsing::{create_const_node, create_polyop_node},
     };
 
     /// Test the refactored extract_input_operand method
@@ -30,22 +28,6 @@ mod refactored_components_tests {
         assert_eq!(node.extract_input_operand(1), Some(1));
         assert_eq!(node.extract_input_operand(2), Some(2));
         assert_eq!(node.extract_input_operand(3), None); // Out of bounds
-    }
-
-    /// Test the refactored calculate_active_output_elements method
-    #[test]
-    fn test_calculate_active_output_elements() {
-        // Test 1D tensor
-        let node_1d = create_input_node(7, vec![5], 0, 1);
-        assert_eq!(node_1d.calculate_active_output_elements(), 5);
-
-        // Test 2D tensor
-        let node_2d = create_input_node(7, vec![3, 4], 1, 1);
-        assert_eq!(node_2d.calculate_active_output_elements(), 12);
-
-        // Test 3D tensor
-        let node_3d = create_input_node(7, vec![2, 3, 4], 2, 1);
-        assert_eq!(node_3d.calculate_active_output_elements(), 24);
     }
 
     /// Test the refactored extract_immediate_value method
@@ -91,7 +73,7 @@ mod refactored_components_tests {
         assert_eq!(instr.ts2, Some(1));
         assert_eq!(instr.ts3, None);
         assert_eq!(instr.td, Some(2));
-        assert_eq!(instr.active_output_elements, 4);
+        assert_eq!(instr.num_output_elements(), 4);
         assert_eq!(instr.output_dims, [2, 2]);
     }
 }

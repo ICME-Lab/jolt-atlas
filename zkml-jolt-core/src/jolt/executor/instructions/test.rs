@@ -103,7 +103,6 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
                 td: Some(td as usize),
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&y))),
                 virtual_sequence_remaining: None,
-                active_output_elements: output_size,
                 output_dims: vec![1, output_size],
             },
             memory_state: MemoryState {
@@ -168,8 +167,8 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
                 };
                 // Only write active output elements, rest should be zero
                 let mut td_output = vec![0u64; output_size];
-                td_output[..cycle.instr.active_output_elements.min(output.len())].copy_from_slice(
-                    &output[..cycle.instr.active_output_elements.min(output.len())],
+                td_output[..cycle.instr.num_output_elements().min(output.len())].copy_from_slice(
+                    &output[..cycle.instr.num_output_elements().min(output.len())],
                 );
                 tensor_registers[mapped_addr] = td_output;
                 let actual_output = cycle.td_post_vals().unwrap();
@@ -229,7 +228,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
 
 /// Special helper function to compute Broadcast operation output
 fn compute_broadcast_output(cycle: &ONNXCycle) -> Vec<u64> {
-    let output_els = cycle.instr.active_output_elements;
+    let output_els = cycle.instr.num_output_elements();
     let input = cycle.ts1_vals().unwrap_or(vec![0; output_els]);
 
     // Broadcast operation: replicate the first element to all positions
@@ -239,7 +238,7 @@ fn compute_broadcast_output(cycle: &ONNXCycle) -> Vec<u64> {
 
 /// Special helper function to compute Sum operation output
 fn compute_saturating_sum(cycle: &ONNXCycle) -> Vec<u64> {
-    let output_els = cycle.instr.active_output_elements;
+    let output_els = cycle.instr.num_output_elements();
     let input = cycle.ts1_vals().unwrap_or(vec![0; output_els]);
 
     // Saturating Sum operation: sum all elements and put result in first position
@@ -279,7 +278,7 @@ fn to_instruction_output(cycle: &ONNXCycle) -> Vec<u64> {
                 .collect()
         }
         _ => {
-            let output_els = cycle.instr.active_output_elements;
+            let output_els = cycle.instr.num_output_elements();
             let mut bytecode_line = JoltONNXBytecode::no_op();
             bytecode_line.opcode = cycle.instr.opcode.clone();
             let mut bytecode = vec![bytecode_line.clone(); output_els];

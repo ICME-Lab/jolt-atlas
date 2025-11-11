@@ -23,7 +23,7 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
 
         assert_eq!(cycle.instr.opcode, ONNXOpcode::Softmax);
 
-        let num_outputs = cycle.instr.active_output_elements;
+        let num_outputs = cycle.instr.num_output_elements();
         if num_outputs == 0 {
             return Vec::new();
         }
@@ -81,7 +81,6 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
                 td: v_zero,
                 imm: Some(zero_tensor.clone()),
                 virtual_sequence_remaining: Some(counter.dec()),
-                active_output_elements: num_outputs,
                 output_dims: output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -107,7 +106,6 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
                 td: v_ge0,
                 imm: None,
                 virtual_sequence_remaining: Some(counter.dec()),
-                active_output_elements: num_outputs,
                 output_dims: output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -133,7 +131,6 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
                 td: v_neg,
                 imm: None,
                 virtual_sequence_remaining: Some(counter.dec()),
-                active_output_elements: num_outputs,
                 output_dims: output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -163,7 +160,6 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
                 td: v_abs,
                 imm: None,
                 virtual_sequence_remaining: Some(counter.dec()),
-                active_output_elements: num_outputs,
                 output_dims: output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -192,7 +188,6 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
                 td: v_pow2,
                 imm: None,
                 virtual_sequence_remaining: Some(counter.dec()),
-                active_output_elements: num_outputs,
                 output_dims: output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -218,7 +213,6 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
                 td: v_q_const,
                 imm: Some(q_tensor.clone()),
                 virtual_sequence_remaining: Some(counter.dec()),
-                active_output_elements: num_outputs,
                 output_dims: output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -247,7 +241,6 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
                 td: v_q_div_c,
                 imm: Some(c_tensor.clone()),
                 virtual_sequence_remaining: Some(counter.dec()),
-                active_output_elements: num_outputs,
                 output_dims: output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -273,7 +266,6 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
                 td: v_q_mul_c,
                 imm: None,
                 virtual_sequence_remaining: Some(counter.dec()),
-                active_output_elements: num_outputs,
                 output_dims: output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -309,7 +301,6 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
                 td: v_d,
                 imm: None,
                 virtual_sequence_remaining: Some(counter.dec()),
-                active_output_elements: num_outputs,
                 output_dims: output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -343,7 +334,6 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
                 td: v_sum,
                 imm: None,
                 virtual_sequence_remaining: Some(counter.dec()),
-                active_output_elements: 1,
                 output_dims: sum_tensor_dims.clone(),
             },
             memory_state: MemoryState {
@@ -372,7 +362,6 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
                 td: v_broadcast_sum,
                 imm: None,
                 virtual_sequence_remaining: Some(counter.dec()),
-                active_output_elements: num_outputs,
                 output_dims: output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -398,7 +387,6 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
                 td: v_q_mul_d,
                 imm: None,
                 virtual_sequence_remaining: Some(counter.dec()),
-                active_output_elements: num_outputs,
                 output_dims: output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -427,7 +415,6 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
                 td: v_output,
                 imm: Some(broadcast_tensor.clone()),
                 virtual_sequence_remaining: Some(counter.dec()),
-                active_output_elements: num_outputs,
                 output_dims: output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -451,7 +438,6 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
                 td: cycle.instr.td,
                 imm: None,
                 virtual_sequence_remaining: Some(counter.dec()),
-                active_output_elements: num_outputs,
                 output_dims,
             },
             memory_state: MemoryState {
@@ -501,7 +487,6 @@ mod tests {
                 td: Some(2),
                 imm: None,
                 virtual_sequence_remaining: None,
-                active_output_elements: input.len(),
                 output_dims: vec![1, input.len()],
             },
             memory_state: MemoryState {

@@ -166,7 +166,9 @@ pub struct BytecodePreprocessing {
     /// Key: (opcode address, tensor sequence index, virtual sequence index or 0)
     pub tensor_virtual_pc_map: BTreeMap<(usize, usize, usize), usize>,
     /// Virtual tensor address map
-    /// Maps (raw tensor address, tensor sequence index or 0) to virtual memory address
+    /// Maps `(zkvm tensor address, remaining tensor sequence elements)` to unique virtual
+    /// memory locations, ensuring every scalar element produced during inlining has a stable
+    /// address once tensors are decomposed into per-element instructions.
     pub vt_address_map: BTreeMap<(usize, usize), usize>,
     /// Used to expand the virtual trace
     pub max_td: usize,
@@ -413,19 +415,21 @@ impl BytecodePreprocessing {
         &self.td_lookup
     }
 
+    #[tracing::instrument(skip_all, name = "BytecodePreprocessing::inline_tensor_instrs")]
     pub fn inline_tensor_instrs<ModelFunc>(model: ModelFunc) -> RawToJoltResult
     where
         ModelFunc: Fn() -> Model,
     {
         let raw_bytecode = onnx_tracer::decode_model(model());
-        // Get largest td value
+        // Get largest td value. We use this to assign unique virtual addresses in the virtual instructions
         let max_td = raw_bytecode
             .iter()
             .filter_map(|instr| instr.td)
             .max()
             .unwrap_or(0);
-        let raw_bytecode = Self::expand_raw_bytecode(raw_bytecode, max_td);
-        // Build a lookup map for O(1) instruction lookups by td value
+        let raw_bytecode = Self::expand_virtual_bytecode(raw_bytecode, max_td);
+        // Build a lookup map for O(1) instruction lookups by td value.
+        // Used in the precompiles to get the i/o addresses of the precompile operation.
         let td_lookup: HashMap<usize, ONNXInstr> = raw_bytecode
             .iter()
             .filter_map(|instr| instr.td.map(|td| (td, instr.clone())))
@@ -437,38 +441,26 @@ impl BytecodePreprocessing {
         // 1. Allocate virtual memory addresses for tensor operands and results
         // 2. Decompose tensor operations into scalar instructions with individual immediate values
         // 3. Map ONNX instruction operands to virtual register addresses for the Jolt VM
-
-        // virtual tensor address
-        let mut vt_address: usize = 0;
-        // virtual tensor address map
-        let mut vt_address_map: BTreeMap<(usize, usize), usize> = BTreeMap::new();
-        let max_active_output_elements = max_output_elements(&raw_bytecode);
-
-        // reserve address space for zero registers
-        for i in 0..max_active_output_elements {
-            vt_address_map.insert((0, max_active_output_elements - i - 1), vt_address);
-            vt_address += 1;
-        }
+        let max_output_elements = max_output_elements(&raw_bytecode);
+        let mut inliner = BytecodeInstructionInliner::new(max_output_elements, &td_lookup);
 
         // convert each ONNX instruction to one or more jolt bytecode lines
         // and allocate virtual memory addresses for their operands and results
         // also update the virtual tensor address map
         // to map ONNX tensor addresses to Jolt VM virtual addresses
-        // e.g., ONNX tensor address 0 (zero register) maps to virtual addresses 0..max_active_output_elements
-        // e.g., ONNX tensor address 1 maps to virtual addresses max_active_output_elements..(max_active_output_elements + its size)
+        // e.g., ONNX tensor address 0 (zero register) maps to virtual addresses 0..max_output_elements
+        // e.g., ONNX tensor address 1 maps to virtual addresses max_output_elements..(max_output_elements + its size)
         // etc.
         for instruction in raw_bytecode.iter() {
-            let jolt_instructions = raw_to_jolt_bytecode(
-                instruction,
-                &mut vt_address,
-                &mut vt_address_map,
-                &td_lookup,
-            );
+            let jolt_instructions = inliner.inline_instruction(instruction);
             preprocessed_bytecode.extend(jolt_instructions);
         }
+
+        let (vt_address_map, next_virtual_address) = inliner.finish();
+
         (
             preprocessed_bytecode,
-            vt_address.next_power_of_two(),
+            next_virtual_address.next_power_of_two(),
             vt_address_map,
             max_td,
             td_lookup,
@@ -493,7 +485,7 @@ impl BytecodePreprocessing {
     ///
     /// * `raw_bytecode` - The raw ONNX bytecode to be expanded
     /// * `max_td` - used to calculate a unique register address for virtual registers used in virtual instructions
-    fn expand_raw_bytecode(raw_bytecode: Vec<ONNXInstr>, max_td: usize) -> Vec<ONNXInstr> {
+    fn expand_virtual_bytecode(raw_bytecode: Vec<ONNXInstr>, max_td: usize) -> Vec<ONNXInstr> {
         raw_bytecode
             .into_iter()
             .flat_map(|instr| match instr.opcode {
@@ -525,11 +517,11 @@ impl BytecodePreprocessing {
     ///
     /// A vector of memory addresses for the instruction's active output elements
     pub fn collect_addresses(&self, instr: &ONNXInstr) -> Vec<usize> {
-        (0..instr.active_output_elements)
+        (0..instr.num_output_elements())
             .map(|i| {
                 self.vt_address_map[&(
                     zkvm_address(instr.td),
-                    tensor_sequence_remaining(instr.active_output_elements, i),
+                    tensor_sequence_remaining(instr.num_output_elements(), i),
                 )]
             })
             .collect()
@@ -609,127 +601,190 @@ pub type RawToJoltResult = (
     Vec<ONNXInstr>,
 );
 
-/// Convert a raw ONNX instruction to one or more Jolt bytecode instructions.
-/// This is done by decomposing tensor operations into scalar instructions
-/// and mapping tensor addresses to virtual memory addresses.
-pub fn raw_to_jolt_bytecode(
-    raw: &ONNXInstr,
-    vt_address: &mut usize,
-    vt_address_map: &mut BTreeMap<(usize, usize), usize>,
-    td_lookup: &HashMap<usize, ONNXInstr>,
-) -> Vec<JoltONNXBytecode> {
-    let mut jolt_instructions: Vec<JoltONNXBytecode> = vec![];
-    // Address allocation strategy:
-    // 1. Reserve memory slots for zero registers (max active output elements across all instructions)
-    // 2. For each scalar operation derived from tensor decomposition:
-    //    - ts1/ts2: Read from previously allocated addresses (from prior instruction outputs)
-    //    - td: Allocate new virtual memory address for this instruction's result
-    // 3. Map ONNX tensor addresses to virtual memory addresses for Jolt VM execution
+/// Helper responsible for converting raw ONNX instructions into
+/// scalar Jolt bytecode while maintaining the virtual tensor address map.
+struct BytecodeInstructionInliner<'a> {
+    td_lookup: &'a HashMap<usize, ONNXInstr>,
+    allocator: VirtualTensorAllocator,
+}
 
-    let active_output_elements = raw.active_output_elements;
-
-    // get ts1 and ts2 addresses
-    let (vts1, vts2, vts3) = match raw.opcode {
-        ONNXOpcode::Einsum(_) | ONNXOpcode::Sum(_) => {
-            // We need this because MatMults MCC do not follow the same pattern as other ops (it is handled separately) and we can safely store ts1 and ts2 as zero registers
-            (
-                vec![0; active_output_elements],
-                vec![0; active_output_elements],
-                vec![0; active_output_elements],
-            )
+impl<'a> BytecodeInstructionInliner<'a> {
+    fn new(max_zero_register_span: usize, td_lookup: &'a HashMap<usize, ONNXInstr>) -> Self {
+        Self {
+            td_lookup,
+            allocator: VirtualTensorAllocator::new(max_zero_register_span),
         }
-        ONNXOpcode::Broadcast => {
-            // Get the operand instruction
-            let operand_instr = td_lookup
-                .get(&raw.ts1.unwrap())
-                .unwrap_or_else(|| panic!("Missing instruction for td {}", raw.ts1.unwrap()));
-
-            // map the ts1 addresses to the broadcasted addresses
-            let vts1 = (0..operand_instr.active_output_elements)
-                .map(|i| {
-                    vt_address_map[&(
-                        zkvm_address(operand_instr.td),
-                        tensor_sequence_remaining(operand_instr.active_output_elements, i),
-                    )]
-                })
-                .collect::<Vec<usize>>();
-            // convert it to a tensor
-            let vts1_tensor = Tensor::new(
-                Some(&vts1.iter().map(|&x| x as i32).collect::<Vec<i32>>()),
-                &operand_instr.output_dims,
-            )
-            .unwrap();
-            // broadcast it to the new shape
-            let broadcasted_tensor = vts1_tensor.expand(&raw.output_dims).unwrap();
-            // flatten it back to a vector
-            let vts1 = broadcasted_tensor
-                .data()
-                .iter()
-                .map(|&x| x as usize)
-                .collect::<Vec<usize>>();
-            (
-                vts1,
-                vec![0; active_output_elements], // ts2 is unused in broadcast
-                vec![0; active_output_elements], // ts3 is unused in broadcast
-            )
-        }
-        _ => {
-            // Helper function to map tensor sequence addresses
-            let map_tensor_addresses = |ts_opt: Option<usize>| -> Vec<usize> {
-                (0..active_output_elements)
-                    .map(|i| {
-                        vt_address_map[&(
-                            zkvm_address(ts_opt),
-                            tensor_sequence_remaining(active_output_elements, i),
-                        )]
-                    })
-                    .collect()
-            };
-            let vts1 = map_tensor_addresses(raw.ts1);
-            let vts2 = map_tensor_addresses(raw.ts2);
-            let vts3 = map_tensor_addresses(raw.ts3);
-            (vts1, vts2, vts3)
-        }
-    };
-
-    // calculate td address
-    let vtd = (0..active_output_elements)
-        .map(|i| {
-            if raw.td.is_some() {
-                let addr = *vt_address;
-                assert_eq!(
-                    vt_address_map.insert(
-                        (
-                            zkvm_address(raw.td),
-                            tensor_sequence_remaining(active_output_elements, i)
-                        ),
-                        addr
-                    ),
-                    None,
-                );
-                *vt_address += 1;
-                addr
-            } else {
-                i
-            }
-        })
-        .collect::<Vec<usize>>();
-
-    let imm = raw.imm().unwrap_or(vec![0; active_output_elements]);
-    for i in 0..active_output_elements {
-        jolt_instructions.push(JoltONNXBytecode {
-            address: raw.address,
-            opcode: raw.opcode.clone(),
-            td: vtd[i] as u64,
-            ts1: vts1[i] as u64,
-            ts2: vts2[i] as u64,
-            ts3: vts3[i] as u64,
-            imm: imm[i],
-            tensor_sequence_remaining: Some(tensor_sequence_remaining(active_output_elements, i)),
-            virtual_sequence_remaining: raw.virtual_sequence_remaining,
-        });
     }
-    jolt_instructions
+
+    fn inline_instruction(&mut self, raw: &ONNXInstr) -> Vec<JoltONNXBytecode> {
+        let element_count = raw.num_output_elements();
+        let (ts1, ts2, ts3) = self.resolve_sources(raw, element_count);
+        let td = self.allocate_destinations(raw.td, element_count);
+        let immediates = raw.imm().unwrap_or_else(|| vec![0; element_count]);
+
+        (0..element_count)
+            .map(|index| JoltONNXBytecode {
+                address: raw.address,
+                opcode: raw.opcode.clone(),
+                td: td[index] as u64,
+                ts1: ts1[index] as u64,
+                ts2: ts2[index] as u64,
+                ts3: ts3[index] as u64,
+                imm: immediates[index],
+                tensor_sequence_remaining: Some(tensor_sequence_remaining(element_count, index)),
+                virtual_sequence_remaining: raw.virtual_sequence_remaining,
+            })
+            .collect()
+    }
+
+    fn finish(self) -> (BTreeMap<(usize, usize), usize>, usize) {
+        self.allocator.finalize()
+    }
+
+    fn resolve_sources(
+        &self,
+        raw: &ONNXInstr,
+        element_count: usize,
+    ) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+        match raw.opcode {
+            ONNXOpcode::Einsum(_) | ONNXOpcode::Sum(_) => (
+                vec![0; element_count],
+                vec![0; element_count],
+                vec![0; element_count],
+            ),
+            ONNXOpcode::Broadcast => (
+                self.broadcast_addresses(raw, element_count),
+                vec![0; element_count],
+                vec![0; element_count],
+            ),
+            _ => (
+                self.allocator.sequence_addresses(raw.ts1, element_count),
+                self.allocator.sequence_addresses(raw.ts2, element_count),
+                self.allocator.sequence_addresses(raw.ts3, element_count),
+            ),
+        }
+    }
+
+    fn allocate_destinations(&mut self, td: Option<usize>, element_count: usize) -> Vec<usize> {
+        (0..element_count)
+            .map(|index| {
+                self.allocator
+                    .allocate_destination(td, element_count, index)
+            })
+            .collect()
+    }
+
+    fn broadcast_addresses(&self, raw: &ONNXInstr, element_count: usize) -> Vec<usize> {
+        let source_td = raw
+            .ts1
+            .expect("Broadcast instructions must provide a ts1 operand");
+        let operand_instr = self
+            .td_lookup
+            .get(&source_td)
+            .unwrap_or_else(|| panic!("Missing broadcast operand instruction for td {source_td}"));
+
+        let operand_count = operand_instr.num_output_elements();
+        let operand_addresses = self
+            .allocator
+            .sequence_addresses(operand_instr.td, operand_count);
+
+        let operand_tensor = Tensor::new(
+            Some(
+                &operand_addresses
+                    .iter()
+                    .map(|&addr| addr as i32)
+                    .collect::<Vec<i32>>(),
+            ),
+            &operand_instr.output_dims,
+        )
+        .expect("Operand tensor shape should match recorded output dims");
+
+        let expanded = operand_tensor
+            .expand(&raw.output_dims)
+            .expect("Broadcast expansion should succeed");
+
+        let broadcasted = expanded
+            .data()
+            .iter()
+            .map(|&value| value as usize)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            broadcasted.len(),
+            element_count,
+            "Broadcast expansion must create one address per active output element",
+        );
+
+        broadcasted
+    }
+}
+
+/// Keeps track of the virtual tensor address space while the bytecode is
+/// unrolled into scalar instructions. Each `(tensor, sequence_remaining)` pair
+/// resolves to a unique virtual address in the Jolt VM memory model. The allocator
+/// reserves a contiguous block of addresses for the zero register so it can safely
+/// stand in for absent operands during tensor decomposition.
+struct VirtualTensorAllocator {
+    next_address: usize,
+    map: BTreeMap<(usize, usize), usize>,
+}
+
+impl VirtualTensorAllocator {
+    fn new(zero_register_span: usize) -> Self {
+        let mut map = BTreeMap::new();
+        let mut next_address = 0;
+
+        for sequence_remaining in (0..zero_register_span).rev() {
+            map.insert((0, sequence_remaining), next_address);
+            next_address += 1;
+        }
+
+        Self { next_address, map }
+    }
+
+    fn sequence_addresses(&self, tensor: Option<usize>, length: usize) -> Vec<usize> {
+        (0..length)
+            .map(|index| {
+                let key = (
+                    zkvm_address(tensor),
+                    tensor_sequence_remaining(length, index),
+                );
+                *self.map.get(&key).unwrap_or_else(|| {
+                    panic!(
+                        "Missing virtual address for tensor {key:?}; ensure instructions are ordered correctly"
+                    )
+                })
+            })
+            .collect()
+    }
+
+    fn allocate_destination(
+        &mut self,
+        tensor: Option<usize>,
+        length: usize,
+        index: usize,
+    ) -> usize {
+        if tensor.is_none() {
+            return index;
+        }
+
+        let key = (
+            zkvm_address(tensor),
+            tensor_sequence_remaining(length, index),
+        );
+        let assigned_address = self.next_address;
+        let previous = self.map.insert(key, assigned_address);
+        assert!(
+            previous.is_none(),
+            "Virtual tensor address reassigned for key {key:?}",
+        );
+        self.next_address += 1;
+        assigned_address
+    }
+
+    fn finalize(self) -> (BTreeMap<(usize, usize), usize>, usize) {
+        (self.map, self.next_address)
+    }
 }
 
 /// Returns the maximum number of active output elements across all instructions in the bytecode.
@@ -737,7 +792,7 @@ pub fn raw_to_jolt_bytecode(
 pub fn max_output_elements(bytecode: &[ONNXInstr]) -> usize {
     bytecode
         .iter()
-        .map(|instr| instr.active_output_elements)
+        .map(|instr| instr.num_output_elements())
         .max()
         .unwrap_or(1)
 }

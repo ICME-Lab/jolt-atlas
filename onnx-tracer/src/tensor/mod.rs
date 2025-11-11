@@ -1,7 +1,7 @@
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-use crate::parallel_utils::IndexedParallelIterator;
-use crate::{
-    ops::utils,
+use crate::utils::parallel_utils::IndexedParallelIterator;
+use crate::utils::{
+    self,
     parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelSliceMut},
 };
 use maybe_rayon::iter::ParallelIterator;
@@ -141,7 +141,12 @@ tensor_type!(u128, UInt128, 0, 1);
 tensor_type!(i32, Int32, 0, 1);
 tensor_type!(usize, USize, 0, 1);
 tensor_type!((), Empty, (), ());
-tensor_type!(utils::F32, F32, utils::F32(0.0), utils::F32(1.0));
+tensor_type!(
+    utils::f32::F32,
+    F32,
+    utils::f32::F32(0.0),
+    utils::f32::F32(1.0)
+);
 
 impl<T: TensorType> TensorType for Tensor<T> {
     fn zero() -> Option<Self> {
@@ -206,9 +211,9 @@ where
 }
 
 impl<T: Clone + TensorType + std::marker::Send + std::marker::Sync>
-    crate::parallel_utils::IntoParallelIterator for Tensor<T>
+    crate::utils::parallel_utils::IntoParallelIterator for Tensor<T>
 {
-    type Iter = crate::parallel_utils::vec::IntoIter<T>;
+    type Iter = crate::utils::parallel_utils::vec::IntoIter<T>;
     type Item = T;
     fn into_par_iter(self) -> Self::Iter {
         self.inner.into_par_iter()
@@ -216,9 +221,9 @@ impl<T: Clone + TensorType + std::marker::Send + std::marker::Sync>
 }
 
 impl<'data, T: Clone + TensorType + std::marker::Send + std::marker::Sync>
-    crate::parallel_utils::IntoParallelRefMutIterator<'data> for Tensor<T>
+    crate::utils::parallel_utils::IntoParallelRefMutIterator<'data> for Tensor<T>
 {
-    type Iter = crate::parallel_utils::slice::IterMut<'data, T>;
+    type Iter = crate::utils::parallel_utils::slice::IterMut<'data, T>;
     type Item = &'data mut T;
     fn par_iter_mut(&'data mut self) -> Self::Iter {
         self.inner.par_iter_mut()

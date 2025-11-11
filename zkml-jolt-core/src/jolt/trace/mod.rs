@@ -70,6 +70,7 @@ use serde::{Deserialize, Serialize};
 /// This constant defines the bit width for all arithmetic and memory operations.
 pub const WORD_SIZE: usize = 32;
 
+#[tracing::instrument(skip_all, name = "trace")]
 /// Generates an execution trace for an ONNX model with the given input.
 ///
 /// This is the main entry point for tracing ONNX model execution. It takes a model
@@ -96,7 +97,7 @@ pub const WORD_SIZE: usize = 32;
 /// # Example
 ///
 /// ```rust,ignore
-/// let (trace, io) = trace(|| create_model(), &input_tensor, &preprocessing);
+/// let (trace, io) = trace(model, &input_tensor, &preprocessing);
 /// ```
 pub fn trace<ModelFunc>(
     model: ModelFunc,
@@ -108,14 +109,14 @@ where
 {
     // Execute the ONNX model to get the raw execution trace
     let (raw_trace, program_io) = onnx_tracer::execution_trace(model(), input);
-    // println!("Raw trace: {raw_trace:#?}");
-    let raw_trace = expand_raw_trace(raw_trace, preprocessing.max_td);
+    let expanded_raw_trace = expand_virtual_traces(raw_trace, preprocessing.max_td);
     // Convert the raw ONNX trace to Jolt-compatible format
-    let trace = inline_tensor_trace(raw_trace, preprocessing);
+    let trace = inline_tensor_trace(expanded_raw_trace, preprocessing);
     (trace, program_io)
 }
 
-pub fn expand_raw_trace(raw_trace: Vec<ONNXCycle>, max_td: usize) -> Vec<ONNXCycle> {
+#[tracing::instrument(skip_all, name = "expand_virtual_traces")]
+pub fn expand_virtual_traces(raw_trace: Vec<ONNXCycle>, max_td: usize) -> Vec<ONNXCycle> {
     raw_trace
         .into_iter()
         .flat_map(|cycle| match cycle.instr.opcode {
@@ -128,6 +129,7 @@ pub fn expand_raw_trace(raw_trace: Vec<ONNXCycle>, max_td: usize) -> Vec<ONNXCyc
         .collect()
 }
 
+#[tracing::instrument(skip_all, name = "inline_tensor_trace")]
 /// Converts a raw ONNX execution trace into a Jolt-compatible instruction trace.
 ///
 /// This function processes the raw trace from ONNX execution and inlines tensor operations
@@ -161,106 +163,94 @@ pub fn inline_tensor_trace(
     raw_trace: Vec<ONNXCycle>,
     preprocessing: &BytecodePreprocessing,
 ) -> Vec<JoltONNXCycle> {
-    // Initialize trace with a no-op cycle at the beginning
-    let mut trace = vec![JoltONNXCycle::no_op()];
-    let mut current_pc = 1;
-
-    // Process each raw ONNX cycle
-    for raw_cycle in raw_trace.iter() {
-        let current_active_output_els = raw_cycle.instr.active_output_elements;
-
-        // Generate Jolt cycles for this ONNX operation
-        let sequence = inline_tensor_cycle(
-            raw_cycle,
-            &preprocessing.bytecode[current_pc..current_pc + current_active_output_els],
-        );
-
-        // Add the generated cycles to the trace
-        trace.extend(sequence);
-
-        // Advance program counter by the number of elements processed
-        current_pc += current_active_output_els;
-    }
-
-    // Pad the trace to the expected code size with no-op cycles
-    trace.resize(preprocessing.code_size, JoltONNXCycle::no_op());
-    trace
+    TraceInliner::new(preprocessing).inline(raw_trace)
 }
 
-/// Converts a single ONNX cycle into multiple Jolt execution cycles.
-///
-/// This function takes a raw ONNX cycle and creates individual Jolt cycles for each
-/// active output element. Each element gets its own cycle with appropriate memory
-/// operations and lookup queries.
-///
-/// # Arguments
-///
-/// * `raw_cycle` - The raw ONNX cycle containing tensor operations and values
-/// * `instrs` - A slice of Jolt bytecode instructions corresponding to this cycle
-///
-/// # Returns
-///
-/// A vector of `JoltONNXCycle` where each cycle corresponds to one active output element.
-///
-/// # Implementation Details
-///
-/// For each active output element:
-/// 1. Extracts tensor values (ts1, ts2, td_pre, td_post) at the corresponding index
-/// 2. Creates memory operations structure
-/// 3. Constructs a Jolt cycle with the memory operations
-/// 4. Builds the appropriate lookup query based on the instruction opcode
+/// Coordinates the conversion of raw ONNX cycles into scalar Jolt cycles.
+struct TraceInliner<'a> {
+    preprocessing: &'a BytecodePreprocessing,
+    next_pc: usize,
+    trace: Vec<JoltONNXCycle>,
+}
+
+impl<'a> TraceInliner<'a> {
+    fn new(preprocessing: &'a BytecodePreprocessing) -> Self {
+        Self {
+            preprocessing,
+            next_pc: 1,
+            trace: vec![JoltONNXCycle::no_op()],
+        }
+    }
+
+    fn inline(mut self, raw_trace: Vec<ONNXCycle>) -> Vec<JoltONNXCycle> {
+        for raw_cycle in raw_trace.iter() {
+            self.append_cycle(raw_cycle);
+        }
+        self.finish()
+    }
+
+    fn append_cycle(&mut self, raw_cycle: &ONNXCycle) {
+        let element_count = raw_cycle.num_output_elements();
+        let bytecode_slice =
+            &self.preprocessing.bytecode[self.next_pc..self.next_pc + element_count];
+        let assembler = CycleAssembler::new(raw_cycle, bytecode_slice);
+        self.trace.extend(assembler.assemble());
+        self.next_pc += element_count;
+    }
+
+    fn finish(mut self) -> Vec<JoltONNXCycle> {
+        self.trace
+            .resize(self.preprocessing.code_size, JoltONNXCycle::no_op());
+        self.trace
+    }
+}
+
+/// Builds the Jolt cycle sequence for a single ONNX cycle.
+struct CycleAssembler<'a> {
+    instructions: &'a [JoltONNXBytecode],
+    values: CycleValueCache,
+}
+
+impl<'a> CycleAssembler<'a> {
+    fn new(raw_cycle: &ONNXCycle, instructions: &'a [JoltONNXBytecode]) -> Self {
+        let element_count = raw_cycle.num_output_elements();
+        assert_eq!(
+            instructions.len(),
+            element_count,
+            "Bytecode slice should align with the number of output elements",
+        );
+        Self {
+            instructions,
+            values: CycleValueCache::from_cycle(raw_cycle, element_count),
+        }
+    }
+
+    fn assemble(&self) -> Vec<JoltONNXCycle> {
+        let mut cycles = Vec::with_capacity(self.instructions.len());
+        for index in 0..self.instructions.len() {
+            cycles.push(self.build_cycle(index));
+        }
+        cycles
+    }
+
+    fn build_cycle(&self, index: usize) -> JoltONNXCycle {
+        let memory_ops = self.values.memory_ops(index);
+        let advice_value = self.values.advice(index);
+        let lookup = JoltONNXCycle::create_lookup_function(
+            &self.instructions[index],
+            &memory_ops,
+            advice_value,
+        );
+        JoltONNXCycle::new(lookup, memory_ops)
+    }
+}
+
+/// Convenience wrapper retained for tests and tooling that operate on a single cycle at a time.
 pub fn inline_tensor_cycle(
     raw_cycle: &ONNXCycle,
     instrs: &[JoltONNXBytecode],
 ) -> Vec<JoltONNXCycle> {
-    let active_output_elements = raw_cycle.instr.active_output_elements;
-    assert_eq!(
-        instrs.len(),
-        active_output_elements,
-        "Instruction count must match active output elements"
-    );
-
-    // Extract tensor values for all active elements
-    let tensor_values = TensorValues::from_cycle(raw_cycle, active_output_elements);
-
-    // Create a Jolt cycle for each active output element
-    (0..active_output_elements)
-        .map(|i| create_jolt_cycle(&tensor_values, i, &instrs[i]))
-        .collect()
-}
-
-/// Creates a single Jolt cycle from tensor values and instruction.
-///
-/// # Arguments
-///
-/// * `tensor_values` - The extracted tensor values for all elements
-/// * `element_index` - The index of the element to create a cycle for
-/// * `instr` - The instruction for this element
-///
-/// # Returns
-///
-/// A `JoltONNXCycle` for the specified element.
-fn create_jolt_cycle(
-    tensor_values: &TensorValues,
-    element_index: usize,
-    instr: &JoltONNXBytecode,
-) -> JoltONNXCycle {
-    // Create memory operations for this element
-    let memory_ops = MemoryOps::new(
-        tensor_values.ts1_vals[element_index],
-        tensor_values.ts2_vals[element_index],
-        tensor_values.ts3_vals[element_index],
-        tensor_values.td_pre_vals[element_index],
-        tensor_values.td_post_vals[element_index],
-    );
-
-    // Create the cycle with the appropriate lookup function
-    let lookup = JoltONNXCycle::create_lookup_function(
-        instr,
-        &memory_ops,
-        tensor_values.advice_vals.as_ref().map(|v| v[element_index]),
-    );
-    JoltONNXCycle::new(lookup, memory_ops)
+    CycleAssembler::new(raw_cycle, instrs).assemble()
 }
 
 /// Helper structure for extracting and organizing tensor values from an ONNX cycle.
@@ -268,7 +258,7 @@ fn create_jolt_cycle(
 /// This struct provides a convenient way to extract tensor values from different
 /// sources within an ONNX cycle and organize them by element index for easy access
 /// during Jolt cycle generation.
-struct TensorValues {
+struct CycleValueCache {
     /// Source tensor 1 values for each active element
     ts1_vals: Vec<u64>,
     /// Source tensor 2 values for each active element  
@@ -283,7 +273,7 @@ struct TensorValues {
     advice_vals: Option<Vec<u64>>,
 }
 
-impl TensorValues {
+impl CycleValueCache {
     /// Extracts tensor values from an ONNX cycle with proper handling for different operation types.
     ///
     /// # Arguments
@@ -293,13 +283,12 @@ impl TensorValues {
     ///
     /// # Returns
     ///
-    /// A `TensorValues` struct with vectors of values for each tensor type.
+    /// A `CycleValueCache` with vectors of values for each tensor type.
     ///
     /// # Special Handling
     ///
-    /// For MatMult operations, ts1 and ts2 values are set to zero because MatMult
-    /// operations use a different memory consistency check (MCC) pattern and are
-    /// handled separately from other element-wise operations.
+    /// Einsum and Sum operations reuse the zero register because they are handled
+    /// by specialized sum-check precompiles rather than element-wise lookups.
     fn from_cycle(raw_cycle: &ONNXCycle, size: usize) -> Self {
         let (ts1_vals, ts2_vals, ts3_vals) = match raw_cycle.instr.opcode {
             ONNXOpcode::Einsum(_) | ONNXOpcode::Sum(_) => {
@@ -332,6 +321,20 @@ impl TensorValues {
             td_post_vals: raw_cycle.td_post_vals().unwrap_or_else(|| vec![0; size]),
             advice_vals: raw_cycle.advice_value(),
         }
+    }
+
+    fn memory_ops(&self, index: usize) -> MemoryOps {
+        MemoryOps::new(
+            self.ts1_vals[index],
+            self.ts2_vals[index],
+            self.ts3_vals[index],
+            self.td_pre_vals[index],
+            self.td_post_vals[index],
+        )
+    }
+
+    fn advice(&self, index: usize) -> Option<u64> {
+        self.advice_vals.as_ref().map(|values| values[index])
     }
 }
 
@@ -764,171 +767,3 @@ define_lookup_enum!(
     VirtualMove: MoveInstruction<WORD_SIZE>,
     VirtualPow2: Pow2Instruction<WORD_SIZE>,
 );
-
-/// This function validates that the execution trace matches the expected memory
-/// operations by simulating the execution and checking that reads and writes
-/// occur at the correct memory addresses with the expected values.
-///
-/// # Purpose
-///
-/// This validation is crucial because runtime sometimes converts operands to
-/// floating point for intermediate calculations, which can cause mismatches
-/// between expected outputs and actual trace values. This function helps catch
-/// such discrepancies during testing.
-///
-/// # Arguments
-///
-/// * `bytecode` - The sequence of Jolt ONNX bytecode instructions
-/// * `execution_trace` - The corresponding execution trace cycles
-/// * `memory_size` - The size of the memory space (number of memory addresses)
-///
-/// # Validation Process
-///
-/// For each instruction-cycle pair:
-/// 1. Validates that ts1 and ts2 reads match the current memory state
-/// 2. Validates that td pre-write value matches current memory at td address
-/// 3. Updates memory with the td post-write value
-///
-/// # Panics
-///
-/// This function will panic with detailed error information if any memory
-/// operation doesn't match the expected values, including:
-/// - The cycle number where the error occurred
-/// - The instruction and cycle details
-/// - Expected vs actual values
-/// - The memory address involved
-///
-/// # Example Error Output
-///
-/// ```text
-/// TS1 READ error at cycle_42: <instruction> <cycle>; Expected: 123, got: 456 at address 78
-/// ```
-#[cfg(test)]
-pub fn sanity_check_mcc(
-    bytecode: &[JoltONNXBytecode],
-    execution_trace: &[JoltONNXCycle],
-    memory_size: usize,
-) {
-    assert_eq!(
-        bytecode.len(),
-        execution_trace.len(),
-        "Bytecode and execution trace must have the same length"
-    );
-
-    // Initialize memory with all zeros
-    let mut memory = vec![0u64; memory_size];
-
-    // Validate each cycle against its corresponding instruction
-    for (cycle_index, (cycle, instr)) in execution_trace.iter().zip(bytecode.iter()).enumerate() {
-        validate_memory_operation(cycle_index, cycle, instr, &mut memory);
-    }
-}
-
-/// Validates a single memory operation against the current memory state.
-///
-/// # Arguments
-///
-/// * `cycle_index` - The index of the current cycle (for error reporting)
-/// * `cycle` - The execution cycle to validate
-/// * `instr` - The corresponding instruction
-/// * `memory` - The current memory state (will be updated with td post-write value)
-#[cfg(test)]
-fn validate_memory_operation(
-    cycle_index: usize,
-    cycle: &JoltONNXCycle,
-    instr: &JoltONNXBytecode,
-    memory: &mut [u64],
-) {
-    // Extract memory addresses from the instruction
-    let addresses = MemoryAddresses::from_instruction(instr);
-
-    // Validate reads from source registers
-    validate_read(
-        "TS1",
-        cycle_index,
-        addresses.ts1,
-        cycle.ts1_read(),
-        memory,
-        instr,
-        cycle,
-    );
-    validate_read(
-        "TS2",
-        cycle_index,
-        addresses.ts2,
-        cycle.ts2_read(),
-        memory,
-        instr,
-        cycle,
-    );
-
-    // Validate destination register pre-write state
-    let (td_pre, td_post) = cycle.td_write();
-    validate_read(
-        "TD",
-        cycle_index,
-        addresses.td,
-        td_pre,
-        memory,
-        instr,
-        cycle,
-    );
-
-    // Update memory with the post-write value
-    memory[addresses.td] = td_post;
-}
-
-/// Helper struct to hold memory addresses for cleaner code.
-#[cfg(test)]
-struct MemoryAddresses {
-    ts1: usize,
-    ts2: usize,
-    td: usize,
-}
-
-#[cfg(test)]
-impl MemoryAddresses {
-    fn from_instruction(instr: &JoltONNXBytecode) -> Self {
-        Self {
-            ts1: instr.ts1 as usize,
-            ts2: instr.ts2 as usize,
-            td: instr.td as usize,
-        }
-    }
-}
-
-/// Validates a single read operation.
-///
-/// # Arguments
-///
-/// * `register_name` - Name of the register being validated (for error messages)
-/// * `cycle_index` - The cycle index (for error reporting)
-/// * `address` - The memory address being read
-/// * `actual_value` - The value that was read according to the trace
-/// * `memory` - The current memory state
-/// * `instr` - The instruction (for error reporting)
-/// * `cycle` - The cycle (for error reporting)
-#[cfg(test)]
-fn validate_read(
-    register_name: &str,
-    cycle_index: usize,
-    address: usize,
-    actual_value: u64,
-    memory: &[u64],
-    instr: &JoltONNXBytecode,
-    cycle: &JoltONNXCycle,
-) {
-    let expected_value = memory[address];
-    assert_eq!(
-        expected_value,
-        actual_value,
-        "{} READ error at cycle_{}: {:#?} {:#?}; Expected: {}, got: {} at address {}",
-        register_name,
-        cycle_index,
-        instr,
-        cycle,
-        expected_value as u32 as i32,
-        actual_value as u32 as i32,
-        address
-    );
-}

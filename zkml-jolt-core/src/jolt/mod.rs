@@ -30,6 +30,7 @@ pub mod lookup_table;
 pub mod memory;
 pub mod pcs;
 pub mod precompiles;
+pub mod proof_serialization;
 pub mod r1cs;
 pub mod sumcheck;
 pub mod trace;

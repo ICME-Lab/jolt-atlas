@@ -10,7 +10,8 @@ mod nodes_from_graph_tests {
             model::NodeType,
             node::{Node, RebaseScale, SupportedOp},
         },
-        ops::{lookup::LookupOp, poly::PolyOp, utils::F32},
+        ops::{lookup::LookupOp, poly::PolyOp},
+        utils::f32::F32,
     };
     use std::collections::{BTreeMap, HashMap};
 

@@ -1,8 +1,8 @@
 use crate::{
-    graph::utilities::quantize_tensor,
     ops::lookup::LookupOp,
     tensor::{Tensor, TensorError, TensorType},
     trace_types::ONNXOpcode,
+    utils::parsing::quantize_tensor,
 };
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -16,8 +16,6 @@ pub mod hybrid;
 pub mod lookup;
 ///
 pub mod poly;
-///
-pub mod utils;
 
 /// A struct representing the result of a forward pass.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

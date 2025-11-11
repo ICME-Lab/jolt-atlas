@@ -2,9 +2,9 @@ use std::ops::{Add, Mul, Neg, Sub};
 
 use super::*;
 use crate::{
-    ops::{self, utils, utils::Tolerance},
     tensor::{self, Tensor, TensorError, TensorType},
     trace_types::ONNXOpcode,
+    utils::{self, f32::Tolerance},
 };
 use serde::{Deserialize, Serialize};
 use tract_onnx::prelude::tract_itertools::Itertools;
@@ -40,7 +40,7 @@ pub enum HybridOp {
         dim: usize,
     },
     Softmax {
-        scale: utils::F32,
+        scale: utils::f32::F32,
         axes: Vec<usize>,
     },
     RangeCheck(Tolerance),
@@ -395,7 +395,7 @@ where
                             scale: scale_squared.into(),
                         },
                         LookupOp::GreaterThan {
-                            a: ops::utils::F32((tol.val * scale_squared) / 100.0),
+                            a: utils::f32::F32((tol.val * scale_squared) / 100.0),
                         },
                     ]);
                 }
@@ -403,18 +403,18 @@ where
             }
             HybridOp::Greater | HybridOp::Less => {
                 vec![LookupOp::GreaterThan {
-                    a: ops::utils::F32(0.),
+                    a: utils::f32::F32(0.),
                 }]
             }
             HybridOp::GreaterEqual | HybridOp::LessEqual => {
                 vec![LookupOp::GreaterThanEqual {
-                    a: ops::utils::F32(0.),
+                    a: utils::f32::F32(0.),
                 }]
             }
             HybridOp::TopK { .. } => {
                 vec![
                     LookupOp::GreaterThan {
-                        a: ops::utils::F32(0.),
+                        a: utils::f32::F32(0.),
                     },
                     LookupOp::KroneckerDelta,
                 ]
@@ -441,7 +441,7 @@ where
                 ..
             } => {
                 vec![LookupOp::Div {
-                    denom: utils::F32((kernel_shape.0 * kernel_shape.1) as f32),
+                    denom: utils::f32::F32((kernel_shape.0 * kernel_shape.1) as f32),
                 }]
             }
             _ => vec![],

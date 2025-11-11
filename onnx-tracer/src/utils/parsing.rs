@@ -5,8 +5,9 @@ use crate::{
         vars::VarScales,
         GraphError,
     },
-    ops::{hybrid::HybridOp, lookup::LookupOp, poly::PolyOp, utils::F32, Input, InputType, Op},
+    ops::{hybrid::HybridOp, lookup::LookupOp, poly::PolyOp, Input, InputType, Op},
     tensor::{Tensor, TensorError},
+    utils::f32::F32,
 };
 use log::debug;
 use std::{error::Error, sync::Arc};
@@ -119,7 +120,7 @@ pub fn node_output_shapes(
 pub fn extract_tensor_value(
     input: Arc<tract_onnx::prelude::Tensor>,
 ) -> Result<Tensor<f32>, Box<dyn std::error::Error>> {
-    use crate::parallel_utils::{IntoParallelRefIterator, ParallelIterator};
+    use crate::utils::parallel_utils::{IntoParallelRefIterator, ParallelIterator};
 
     let dt = input.datum_type();
     let dims = input.shape().to_vec();
@@ -591,7 +592,7 @@ pub fn new_op_from_onnx(
                 } else {
                     SupportedOp::Nonlinear(LookupOp::Max {
                         scale: scale_to_multiplier(inputs[0].out_scales()[0]).into(),
-                        a: crate::ops::utils::F32(unit),
+                        a: crate::utils::f32::F32(unit),
                     })
                 }
             } else {
@@ -633,7 +634,7 @@ pub fn new_op_from_onnx(
 
                 SupportedOp::Nonlinear(LookupOp::Min {
                     scale: scale_to_multiplier(inputs[0].out_scales()[0]).into(),
-                    a: crate::ops::utils::F32(unit),
+                    a: crate::utils::f32::F32(unit),
                 })
             } else {
                 return Err(Box::new(GraphError::InvalidDims(idx, "min".to_string())));
@@ -668,7 +669,7 @@ pub fn new_op_from_onnx(
             };
 
             SupportedOp::Nonlinear(LookupOp::LeakyReLU {
-                slope: crate::ops::utils::F32(leaky_op.alpha),
+                slope: crate::utils::f32::F32(leaky_op.alpha),
             })
         }
         "Scan" => {
@@ -790,7 +791,7 @@ pub fn new_op_from_onnx(
                         replace_const(
                             0,
                             SupportedOp::Nonlinear(LookupOp::Cast {
-                                scale: crate::ops::utils::F32(
+                                scale: crate::utils::f32::F32(
                                     scale_to_multiplier(input_scales[0]) as f32
                                 ),
                             }),
@@ -829,7 +830,7 @@ pub fn new_op_from_onnx(
                         deleted_indices.push(const_idx);
                         op = SupportedOp::Nonlinear(LookupOp::Div {
                             // we invert the constant for division
-                            denom: crate::ops::utils::F32(1. / c.raw_values[0]),
+                            denom: crate::utils::f32::F32(1. / c.raw_values[0]),
                         })
                     }
                 }
@@ -993,7 +994,7 @@ pub fn new_op_from_onnx(
                 }
                 SupportedOp::Nonlinear(LookupOp::Pow {
                     scale: scale_to_multiplier(inputs[0].out_scales()[0]).into(),
-                    a: crate::ops::utils::F32(c.raw_values[0]),
+                    a: crate::utils::f32::F32(c.raw_values[0]),
                 })
             } else {
                 unimplemented!("only support constant pow for now")

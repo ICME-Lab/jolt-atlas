@@ -2,13 +2,12 @@
 //! This section is taken from the `eq_float` crate verbatim -- but we also implement
 //! deserialization methods
 
-use crate::ops::utils;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 use std::{
     cmp::Ordering,
     fmt,
     hash::{Hash, Hasher},
+    str::FromStr,
 };
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -141,7 +140,7 @@ impl FromStr for Tolerance {
         if let Ok(val) = s.parse::<f32>() {
             Ok(Tolerance {
                 val,
-                scale: utils::F32(1.0),
+                scale: F32(1.0),
             })
         } else {
             Err(
@@ -156,7 +155,7 @@ impl From<f32> for Tolerance {
     fn from(value: f32) -> Self {
         Tolerance {
             val: value,
-            scale: utils::F32(1.0),
+            scale: F32(1.0),
         }
     }
 }

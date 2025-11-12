@@ -97,6 +97,15 @@ fn validate_memory_operation(
         instr,
         cycle,
     );
+    validate_read(
+        "TS3",
+        cycle_index,
+        addresses.ts3,
+        cycle.ts3_read(),
+        memory,
+        instr,
+        cycle,
+    );
 
     // Validate destination register pre-write state
     let (td_pre, td_post) = cycle.td_write();
@@ -119,6 +128,7 @@ fn validate_memory_operation(
 struct MemoryAddresses {
     ts1: usize,
     ts2: usize,
+    ts3: usize,
     td: usize,
 }
 
@@ -128,6 +138,7 @@ impl MemoryAddresses {
         Self {
             ts1: instr.ts1 as usize,
             ts2: instr.ts2 as usize,
+            ts3: instr.ts3 as usize,
             td: instr.td as usize,
         }
     }

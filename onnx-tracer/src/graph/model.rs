@@ -1,12 +1,10 @@
 use super::node::*;
 use crate::{
     decode_node,
-    graph::{
-        input::GraphData, tracer::Tracer, utilities::node_output_shapes, vars::VarScales,
-        GraphError,
-    },
+    graph::{input::GraphData, tracer::Tracer, vars::VarScales, GraphError},
     ops::{poly::PolyOp, Input, Op, Unknown},
     tensor::Tensor,
+    utils::parsing::node_output_shapes,
     RunArgs,
 };
 use log::{debug, info, trace};
@@ -856,7 +854,7 @@ impl Model {
                 let rebase_div_node = Node {
                     idx: rebase_div_idx,
                     opkind: SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div {
-                        denom: crate::ops::utils::F32(rebase_scale.multiplier as f32),
+                        denom: crate::utils::f32::F32(rebase_scale.multiplier as f32),
                     }),
                     inputs: vec![(mos_final_idx, 0)], // Takes output from MeanOfSquares expansion
                     out_dims: node.out_dims.clone(),
@@ -920,7 +918,7 @@ impl Model {
         let div_node = Node {
             idx: div_node_idx,
             opkind: SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div {
-                denom: crate::ops::utils::F32(rebase_scale.multiplier as f32),
+                denom: crate::utils::f32::F32(rebase_scale.multiplier as f32),
             }),
             inputs: vec![(inner_node_idx, 0)], // Takes output from inner node
             out_dims: original_node.out_dims.clone(),
@@ -1009,7 +1007,7 @@ impl Model {
         let div1_node = Node {
             idx: div1_node_idx,
             opkind: SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div {
-                denom: crate::ops::utils::F32(denominator),
+                denom: crate::utils::f32::F32(denominator),
             }),
             inputs: vec![(sum_node_idx, 0)], // Takes output from sum node
             out_dims: sum_output_dims.clone(), // Division preserves sum output dimensions
@@ -1023,7 +1021,7 @@ impl Model {
         let div2_node = Node {
             idx: div2_node_idx,
             opkind: SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div {
-                denom: crate::ops::utils::F32(1.0), // Identity division for now
+                denom: crate::utils::f32::F32(1.0), // Identity division for now
             }),
             inputs: vec![(div1_node_idx, 0)], // Takes output from first div node
             out_dims: original_node.out_dims.clone(), // Final output dimensions should match original MeanOfSquares output
@@ -1068,7 +1066,7 @@ impl Model {
                 result
                     .into_iter()
                     .map(|t| {
-                        crate::graph::utilities::extract_tensor_value(t.into_arc_tensor()).unwrap()
+                        crate::utils::parsing::extract_tensor_value(t.into_arc_tensor()).unwrap()
                     })
                     .collect(),
             );
@@ -1620,11 +1618,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        graph::{
-            node::{map_outlet_indices, Node, SupportedOp},
-            utilities::{create_const_node, create_input_node, create_polyop_node},
-        },
+        graph::node::{map_outlet_indices, Node, SupportedOp},
         ops::poly::PolyOp,
+        utils::parsing::{create_const_node, create_input_node, create_polyop_node},
     };
     use tract_onnx::prelude::OutletId;
 

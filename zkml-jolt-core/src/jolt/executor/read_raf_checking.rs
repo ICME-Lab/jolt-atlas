@@ -769,9 +769,10 @@ mod tests {
             model::{Model, NodeType},
             node::{Node, SupportedOp},
         },
-        ops::{Constant, hybrid::HybridOp, lookup::LookupOp, poly::PolyOp, utils::F32},
+        ops::{Constant, hybrid::HybridOp, lookup::LookupOp, poly::PolyOp},
         tensor::Tensor,
         trace_types::ONNXOpcode,
+        utils::f32::F32,
     };
     use rand::{SeedableRng, rngs::StdRng};
 

@@ -1,9 +1,9 @@
 use super::TensorError;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-use crate::parallel_utils::IndexedParallelIterator;
+use crate::utils::parallel_utils::IndexedParallelIterator;
 use crate::{
-    parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator},
     tensor::{Tensor, TensorType},
+    utils::parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator},
 };
 use maybe_rayon::iter::ParallelIterator;
 use std::collections::{HashMap, HashSet};

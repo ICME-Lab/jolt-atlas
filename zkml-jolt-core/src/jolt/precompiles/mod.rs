@@ -20,7 +20,14 @@ use jolt_core::{
 use onnx_tracer::trace_types::{ONNXInstr, ONNXOpcode};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    io::{Read, Write},
+};
+
+use ark_serialize::{
+    CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
+};
 
 pub mod einsum;
 pub mod read_checking;
@@ -32,6 +39,7 @@ pub struct PrecompilePreprocessing {
 }
 
 impl PrecompilePreprocessing {
+    #[tracing::instrument(name = "PrecompilePreprocessing::preprocess", skip_all)]
     /// Create a new instance of PrecompilePreprocessing by scanning the bytecode for precompile operations.
     pub fn preprocess(bytecode_preprocessing: &BytecodePreprocessing) -> Self {
         let td_lookup = bytecode_preprocessing.td_lookup();
@@ -447,9 +455,60 @@ impl PrecompileDag {
 /// A SNARK attesting to the correctness of sum-check precompile operations.
 #[derive(Clone, Debug)]
 pub struct PrecompileSNARK<F: JoltField, FS: Transcript> {
-    execution_proof: SumcheckInstanceProof<F, FS>,
-    read_checking_proof: SumcheckInstanceProof<F, FS>,
-    val_final_proof: SumcheckInstanceProof<F, FS>,
+    pub(crate) execution_proof: SumcheckInstanceProof<F, FS>,
+    pub(crate) read_checking_proof: SumcheckInstanceProof<F, FS>,
+    pub(crate) val_final_proof: SumcheckInstanceProof<F, FS>,
+}
+
+impl<F: JoltField, FS: Transcript> CanonicalSerialize for PrecompileSNARK<F, FS> {
+    fn serialize_with_mode<W: Write>(
+        &self,
+        mut writer: W,
+        compress: Compress,
+    ) -> Result<(), SerializationError> {
+        self.execution_proof
+            .serialize_with_mode(&mut writer, compress)?;
+        self.read_checking_proof
+            .serialize_with_mode(&mut writer, compress)?;
+        self.val_final_proof
+            .serialize_with_mode(&mut writer, compress)?;
+        Ok(())
+    }
+
+    fn serialized_size(&self, compress: Compress) -> usize {
+        self.execution_proof.serialized_size(compress)
+            + self.read_checking_proof.serialized_size(compress)
+            + self.val_final_proof.serialized_size(compress)
+    }
+}
+
+impl<F: JoltField, FS: Transcript> Valid for PrecompileSNARK<F, FS> {
+    fn check(&self) -> Result<(), SerializationError> {
+        self.execution_proof.check()?;
+        self.read_checking_proof.check()?;
+        self.val_final_proof.check()?;
+        Ok(())
+    }
+}
+
+impl<F: JoltField, FS: Transcript> CanonicalDeserialize for PrecompileSNARK<F, FS> {
+    fn deserialize_with_mode<R: Read>(
+        mut reader: R,
+        compress: Compress,
+        validate: Validate,
+    ) -> Result<Self, SerializationError> {
+        let execution_proof =
+            SumcheckInstanceProof::deserialize_with_mode(&mut reader, compress, validate)?;
+        let read_checking_proof =
+            SumcheckInstanceProof::deserialize_with_mode(&mut reader, compress, validate)?;
+        let val_final_proof =
+            SumcheckInstanceProof::deserialize_with_mode(&mut reader, compress, validate)?;
+        Ok(Self {
+            execution_proof,
+            read_checking_proof,
+            val_final_proof,
+        })
+    }
 }
 
 impl<F: JoltField, FS: Transcript> PrecompileSNARK<F, FS> {
@@ -469,6 +528,7 @@ impl<F: JoltField, FS: Transcript> PrecompileSNARK<F, FS> {
         }
     }
 
+    #[tracing::instrument(name = "PrecompileSNARK::prove_execution", skip(sm))]
     /// Proves the execution phase of the precompiles.
     /// This includes running execution sum-checks and collecting output claims.
     fn prove_execution<'a, PCS: CommitmentScheme<Field = F>>(
@@ -480,6 +540,7 @@ impl<F: JoltField, FS: Transcript> PrecompileSNARK<F, FS> {
         )
     }
 
+    #[tracing::instrument(name = "PrecompileSNARK::prove_read_checking", skip(sm))]
     /// Proves the read-checking phase for the precompiles.
     fn prove_read_checking<'a, PCS: CommitmentScheme<Field = F>>(
         sm: &StateManager<'a, F, FS, PCS>,
@@ -495,6 +556,7 @@ impl<F: JoltField, FS: Transcript> PrecompileSNARK<F, FS> {
         read_checking_proof
     }
 
+    #[tracing::instrument(name = "PrecompileSNARK::prove_val_final", skip(sm))]
     /// At the end of read-checking we need to prove the val_final claim.
     fn prove_val_final<'a, PCS: CommitmentScheme<Field = F>>(
         sm: &StateManager<'a, F, FS, PCS>,

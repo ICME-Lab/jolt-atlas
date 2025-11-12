@@ -2,11 +2,11 @@ use onnx_tracer::{
     graph::{
         model::NodeType,
         node::{map_outlet_indices, Node, SupportedOp},
-        utilities::create_input_node,
         vars::VarScales,
     },
     ops::{poly::PolyOp, Constant, Input, InputType},
     tensor::Tensor,
+    utils::parsing::create_input_node,
     RunArgs,
 };
 use std::collections::BTreeMap;

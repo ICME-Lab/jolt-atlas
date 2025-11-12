@@ -23,7 +23,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
 
     fn virtual_trace(cycle: ONNXCycle, K: usize) -> Vec<ONNXCycle> {
         assert_eq!(cycle.instr.opcode, ONNXOpcode::Div);
-        let num_outputs = cycle.instr.active_output_elements;
+        let num_outputs = cycle.instr.num_output_elements();
 
         // If DIV is part of a longer virtual sequence, recover the counter to continue decrementing it
         let virtual_sequence_remaining =
@@ -110,7 +110,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 td: v_c,
                 imm: cycle.instr.imm.clone(),
                 virtual_sequence_remaining: Some(vseq_counter.dec()),
-                active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -136,7 +135,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 td: v_q,
                 imm: None,
                 virtual_sequence_remaining: Some(vseq_counter.dec()),
-                active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -162,7 +160,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 td: v_r,
                 imm: None,
                 virtual_sequence_remaining: Some(vseq_counter.dec()),
-                active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -193,7 +190,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 td: None,
                 imm: None,
                 virtual_sequence_remaining: Some(vseq_counter.dec()),
-                active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -222,7 +218,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 td: None,
                 imm: None,
                 virtual_sequence_remaining: Some(vseq_counter.dec()),
-                active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -248,7 +243,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 td: v_qy,
                 imm: None,
                 virtual_sequence_remaining: Some(vseq_counter.dec()),
-                active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -274,7 +268,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 td: v_0,
                 imm: None,
                 virtual_sequence_remaining: Some(vseq_counter.dec()),
-                active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -300,7 +293,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 td: None,
                 imm: None,
                 virtual_sequence_remaining: Some(vseq_counter.dec()),
-                active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -323,7 +315,6 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
                 td: cycle.instr.td,
                 imm: None,
                 virtual_sequence_remaining: Some(vseq_counter.dec()),
-                active_output_elements: cycle.instr.active_output_elements,
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {

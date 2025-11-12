@@ -1,5 +1,3 @@
-#[cfg(test)]
-use crate::jolt::trace::sanity_check_mcc;
 use crate::jolt::{
     JoltSNARK, ProverDebugInfo,
     bytecode::BytecodeDag,
@@ -14,6 +12,8 @@ use crate::jolt::{
     sumcheck::{BatchedSumcheck, SumcheckInstance},
     witness::{AllCommittedPolynomials, CommittedPolynomial},
 };
+#[cfg(test)]
+use crate::utils::mcc::sanity_check_mcc;
 use anyhow::Context;
 #[cfg(not(target_arch = "wasm32"))]
 use jolt_core::utils::profiling::print_current_memory_usage;

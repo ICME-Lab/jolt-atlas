@@ -1,5 +1,6 @@
 use onnx_tracer::tensor::Tensor;
 
+pub mod mcc;
 pub mod precompile_pp;
 
 /// Helper function to convert Vec<u64> to iterator of i32

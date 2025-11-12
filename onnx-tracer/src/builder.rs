@@ -39,14 +39,13 @@ use crate::{
     graph::{
         model::Model,
         node::{RebaseScale, SupportedOp},
-        utilities::{
-            create_const_node, create_div_node, create_einsum_node, create_iff_node,
-            create_input_node, create_node, create_polyop_node, create_relu_node,
-            create_rsqrt_node,
-        },
     },
     ops::{hybrid::HybridOp, poly::PolyOp},
     tensor::Tensor,
+    utils::parsing::{
+        create_const_node, create_div_node, create_einsum_node, create_iff_node, create_input_node,
+        create_node, create_polyop_node, create_relu_node, create_rsqrt_node,
+    },
 };
 
 type Wire = (usize, usize); // (node_id, output_idx)

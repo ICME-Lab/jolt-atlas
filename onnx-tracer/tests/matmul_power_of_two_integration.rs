@@ -1,6 +1,11 @@
 #[cfg(test)]
 mod integration_tests {
-    use onnx_tracer::{builder::simple_matmult_model, tensor::Tensor};
+    use onnx_tracer::{
+        builder::simple_matmult_model,
+        graph::model::Model,
+        tensor::Tensor,
+        utils::parsing::{create_einsum_node, create_input_node},
+    };
 
     #[test]
     fn test_simple_matmul_model_with_power_of_two_padding() {
@@ -45,7 +50,6 @@ mod integration_tests {
         // where M, N, K are not power-of-two
 
         // We'll create a custom model for this test
-        use onnx_tracer::graph::{model::Model, utilities::create_einsum_node};
 
         let mut model = Model::default();
 
@@ -53,8 +57,6 @@ mod integration_tests {
         // A: [3, 5] (m=3, k=5) - both non-power-of-two
         // B: [2, 5] (n=2, k=5) - n is power-of-two, k is not
         // Result should be [3, 2] (m=3, n=2)
-
-        use onnx_tracer::graph::utilities::create_input_node;
 
         let input_a = create_input_node(1, vec![3, 5], 0, 1);
         let input_b = create_input_node(1, vec![2, 5], 1, 1);

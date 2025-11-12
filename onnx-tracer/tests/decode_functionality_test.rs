@@ -9,16 +9,14 @@
 mod decode_tests {
     use onnx_tracer::{
         decode, decode_model, decode_node,
-        graph::{
-            model::{Model, NodeType},
-            utilities::{
-                create_const_node, create_div_node, create_einsum_node, create_input_node,
-                create_polyop_node, create_relu_node, create_sigmoid_node,
-            },
-        },
+        graph::model::{Model, NodeType},
         ops::poly::PolyOp,
         tensor::Tensor,
         trace_types::ONNXOpcode,
+        utils::parsing::{
+            create_const_node, create_div_node, create_einsum_node, create_input_node,
+            create_polyop_node, create_relu_node, create_sigmoid_node,
+        },
     };
     use std::path::PathBuf;
 
@@ -156,7 +154,7 @@ mod decode_tests {
         assert_eq!(instr.ts1, Some(0));
         assert_eq!(instr.ts2, Some(1));
         assert_eq!(instr.output_dims, [3, 4]);
-        assert_eq!(instr.active_output_elements, 12); // 3 * 4
+        assert_eq!(instr.num_output_elements(), 12); // 3 * 4
     }
 
     /// Test decode output dimensions handling
@@ -167,14 +165,14 @@ mod decode_tests {
         let (idx, node_type) = (0_usize, NodeType::Node(node_1d));
         let instr = decode_node((&idx, &node_type));
         assert_eq!(instr.output_dims, [5]);
-        assert_eq!(instr.active_output_elements, 5);
+        assert_eq!(instr.num_output_elements(), 5);
 
         // Test 2D output (should preserve [m, n])
         let node_2d = create_input_node(7, vec![3, 4], 1, 1);
         let (idx, node_type) = (1_usize, NodeType::Node(node_2d));
         let instr = decode_node((&idx, &node_type));
         assert_eq!(instr.output_dims, [3, 4]);
-        assert_eq!(instr.active_output_elements, 12);
+        assert_eq!(instr.num_output_elements(), 12);
     }
 
     /// Test address calculation with bytecode prepend
@@ -266,7 +264,8 @@ mod decode_tests {
 mod rebase_scale_tests {
     use onnx_tracer::{
         graph::node::{Node, RebaseScale, SupportedOp},
-        ops::{lookup::LookupOp, poly::PolyOp, utils::F32},
+        ops::{lookup::LookupOp, poly::PolyOp},
+        utils::f32::F32,
     };
 
     /// Test RebaseScale node expansion into inner + division nodes

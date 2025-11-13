@@ -191,37 +191,16 @@ impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
             JoltONNXR1CSInputs::TdWriteValue,
         );
 
-        // if NextIsNoop {
-        //     assert!(NextUnexpandedPC == 0)
-        // }
-        cs.constrain_eq_conditional(
-            JoltONNXR1CSInputs::NextIsNoop,
-            JoltONNXR1CSInputs::NextUnexpandedPC,
-            0,
-        );
-
-        // TODO: Rm no-op from bytecode-trace[0]
-        // // if !NextIsNoop {
-        // //     if DoNotUpdatePC {
-        // //         assert!(NextUnexpandedPC == UnexpandedPC)
-        // //     } else {
-        // //         assert!(NextUnexpandedPC == UnexpandedPC + 1)
-        // //     }
-        // // }
-        // cs.constrain_eq_conditional(
-        //     1 - JoltONNXR1CSInputs::NextIsNoop,
-        //     JoltONNXR1CSInputs::NextUnexpandedPC,
-        //     JoltONNXR1CSInputs::UnexpandedPC + 1
-        //         - JoltONNXR1CSInputs::OpFlags(CircuitFlags::DoNotUpdateUnexpandedPC),
-        // );
-
-        // if Inline {
+        // If Halt {
         //     assert!(NextPC == PC + 1)
+        // } else {
+        //    assert!(NextPC == 0)
         // }
-        cs.constrain_eq_conditional(
-            JoltONNXR1CSInputs::OpFlags(CircuitFlags::InlineSequenceInstruction),
-            JoltONNXR1CSInputs::NextPC,
+        cs.constrain_if_else(
+            JoltONNXR1CSInputs::OpFlags(CircuitFlags::Halt),
+            0,
             JoltONNXR1CSInputs::PC + 1,
+            JoltONNXR1CSInputs::NextPC,
         );
     }
 }

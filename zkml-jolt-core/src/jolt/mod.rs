@@ -47,7 +47,6 @@ pub struct JoltSNARK<F: JoltField, PCS: CommitmentScheme<Field = F>, FS: Transcr
     proofs: Proofs<F, PCS, FS>,
     pub trace_length: usize,
     memory_K: usize,
-    _bytecode_d: usize,
     twist_sumcheck_switch_index: usize,
 }
 
@@ -123,7 +122,6 @@ where
             proofs,
             trace_length,
             memory_K,
-            _bytecode_d: prover_state.preprocessing.shared.bytecode.d,
             twist_sumcheck_switch_index,
         }
     }
@@ -201,10 +199,6 @@ where
 {
     pub fn memory_K(&self) -> usize {
         self.shared.bytecode.memory_K
-    }
-
-    pub fn bytecode_d(&self) -> usize {
-        self.shared.bytecode.d
     }
 
     pub fn bytecode(&self) -> &[JoltONNXBytecode] {

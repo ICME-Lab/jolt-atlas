@@ -60,8 +60,6 @@ pub enum CommittedPolynomial {
     /// One-hot ra polynomial for the instruction lookups instance of Shout.
     /// There are d=8 of these polynomials, `InstructionRa(0) .. InstructionRa(7)`
     InstructionRa(usize),
-    /// One-hot ra polynomial for the bytecode instance of Shout
-    BytecodeRa(usize),
     /// Product of Ts1Value and OpFlags(CircuitFlags::Select)
     SelectCond,
     /// Product of TdWriteValue and OpFlags(CircuitFlags::Select)
@@ -83,14 +81,13 @@ struct WitnessData {
 
     // One-hot polynomial indices
     instruction_ra: [Vec<Option<usize>>; 8],
-    bytecode_ra: Vec<Vec<Option<usize>>>,
 }
 
 unsafe impl Send for WitnessData {}
 unsafe impl Sync for WitnessData {}
 
 impl WitnessData {
-    fn new(trace_len: usize, bytecode_d: usize) -> Self {
+    fn new(trace_len: usize) -> Self {
         Self {
             left_instruction_input: vec![0; trace_len],
             right_instruction_input: vec![0; trace_len],
@@ -110,15 +107,14 @@ impl WitnessData {
                 vec![None; trace_len],
                 vec![None; trace_len],
             ],
-            bytecode_ra: (0..bytecode_d).map(|_| vec![None; trace_len]).collect(),
         }
     }
 }
 
 pub struct AllCommittedPolynomials();
 impl AllCommittedPolynomials {
-    pub fn initialize(bytecode_d: usize) -> Self {
-        let mut polynomials = vec![
+    pub fn initialize() -> Self {
+        let polynomials = vec![
             CommittedPolynomial::LeftInstructionInput,
             CommittedPolynomial::RightInstructionInput,
             CommittedPolynomial::Product,
@@ -136,9 +132,6 @@ impl AllCommittedPolynomials {
             CommittedPolynomial::InstructionRa(6),
             CommittedPolynomial::InstructionRa(7),
         ];
-        for i in 0..bytecode_d {
-            polynomials.push(CommittedPolynomial::BytecodeRa(i));
-        }
 
         unsafe {
             ALL_COMMITTED_POLYNOMIALS
@@ -220,25 +213,7 @@ impl CommittedPolynomial {
         F: JoltField,
         PCS: CommitmentScheme<Field = F>,
     {
-        let mut bytecode_d = 0;
-
-        for poly in polynomials {
-            if let CommittedPolynomial::BytecodeRa(i) = poly {
-                bytecode_d = bytecode_d.max(*i + 1);
-            }
-        }
-        let batch = WitnessData::new(trace.len(), bytecode_d);
-
-        // Precompute constants per cycle
-        let bytecode_constants = if bytecode_d > 0 {
-            let d = preprocessing.shared.bytecode.d;
-            let log_K = preprocessing.shared.bytecode.code_size.log_2();
-            let log_K_chunk = log_K.div_ceil(d);
-            let K_chunk = 1 << log_K_chunk;
-            Some((d, log_K_chunk, K_chunk))
-        } else {
-            None
-        };
+        let batch = WitnessData::new(trace.len());
 
         let instruction_ra_shifts: [usize; 8] = std::array::from_fn(|i| {
             jolt_core::zkvm::instruction_lookups::LOG_K_CHUNK
@@ -279,16 +254,6 @@ impl CommittedPolynomial {
                 for j in 0..8 {
                     let k = (lookup_index >> instruction_ra_shifts[j]) % instruction_k_chunk;
                     batch_ref.instruction_ra[j][i] = Some(k as usize);
-                }
-
-                // BytecodeRa indices
-                if let Some((d, log_K_chunk, K_chunk)) = bytecode_constants {
-                    let pc = preprocessing.shared.bytecode.get_pc(i);
-
-                    for j in 0..bytecode_d {
-                        let index = (pc >> (log_K_chunk * (d - 1 - j))) % K_chunk;
-                        batch_ref.bytecode_ra[j][i] = Some(index);
-                    }
                 }
             }
         });
@@ -344,17 +309,6 @@ impl CommittedPolynomial {
                             indices,
                             jolt_core::zkvm::instruction_lookups::K_CHUNK,
                         );
-                        results.insert(*poly, MultilinearPolynomial::OneHot(one_hot));
-                    }
-                }
-                CommittedPolynomial::BytecodeRa(i) => {
-                    if *i < bytecode_d {
-                        let indices = std::mem::take(&mut batch.bytecode_ra[*i]);
-                        let d = preprocessing.shared.bytecode.d;
-                        let log_K = preprocessing.shared.bytecode.code_size.log_2();
-                        let log_K_chunk = log_K.div_ceil(d);
-                        let K_chunk = 1 << log_K_chunk;
-                        let one_hot = OneHotPolynomial::from_indices(indices, K_chunk);
                         results.insert(*poly, MultilinearPolynomial::OneHot(one_hot));
                     }
                 }
@@ -435,23 +389,6 @@ impl CommittedPolynomial {
                     .collect();
                 coeffs.into()
             }
-            CommittedPolynomial::BytecodeRa(i) => {
-                let d = preprocessing.shared.bytecode.d;
-                let log_K = preprocessing.shared.bytecode.code_size.log_2();
-                let log_K_chunk = log_K.div_ceil(d);
-                let K_chunk = 1 << log_K_chunk;
-                if *i > d {
-                    panic!("Invalid index for bytecode ra: {i}");
-                }
-                let addresses: Vec<_> = (0..preprocessing.bytecode().len())
-                    .into_par_iter()
-                    .map(|j| {
-                        let pc = preprocessing.shared.bytecode.get_pc(j);
-                        Some((pc >> (log_K_chunk * (d - 1 - i))) % K_chunk)
-                    })
-                    .collect();
-                MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(addresses, K_chunk))
-            }
             CommittedPolynomial::TdInc => {
                 let coeffs: Vec<i64> = trace
                     .par_iter()
@@ -502,10 +439,7 @@ pub enum VirtualPolynomial {
     SpartanBz,
     SpartanCz,
     PC,
-    UnexpandedPC,
     NextPC,
-    NextUnexpandedPC,
-    NextIsNoop,
     LeftLookupOperand,
     RightLookupOperand,
     Td,

@@ -58,10 +58,9 @@ impl JoltDAG {
         println!("trace length: {trace_length}");
 
         let _memory_K = state_manager.memory_K;
-        let bytecode_d = preprocessing.shared.bytecode.d;
         let _guard = (
             DoryGlobals::initialize(DTH_ROOT_OF_K, padded_trace_length),
-            AllCommittedPolynomials::initialize(bytecode_d),
+            AllCommittedPolynomials::initialize(),
         );
 
         // Generate and commit to all witness polynomials
@@ -267,8 +266,7 @@ impl JoltDAG {
         state_manager.fiat_shamir_preamble();
 
         let _memory_K = state_manager.memory_K;
-        let bytecode_d = state_manager.get_verifier_data().0.shared.bytecode.d;
-        let _guard = AllCommittedPolynomials::initialize(bytecode_d);
+        let _guard = AllCommittedPolynomials::initialize();
 
         // Append commitments to transcript
         let commitments = state_manager.get_commitments();

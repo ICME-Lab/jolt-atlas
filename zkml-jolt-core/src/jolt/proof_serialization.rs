@@ -36,9 +36,7 @@ where
         compress: Compress,
     ) -> Result<(), SerializationError> {
         self.memory_K.serialize_with_mode(&mut writer, compress)?;
-        self._bytecode_d
-            .serialize_with_mode(&mut writer, compress)?;
-        let guard = AllCommittedPolynomials::initialize(self._bytecode_d);
+        let guard = AllCommittedPolynomials::initialize();
         self.opening_claims
             .serialize_with_mode(&mut writer, compress)?;
         self.commitments
@@ -54,7 +52,6 @@ where
 
     fn serialized_size(&self, compress: Compress) -> usize {
         self.memory_K.serialized_size(compress)
-            + self._bytecode_d.serialized_size(compress)
             + self.opening_claims.serialized_size(compress)
             + self.commitments.serialized_size(compress)
             + self.proofs.serialized_size(compress)
@@ -75,7 +72,6 @@ where
         self.proofs.check()?;
         self.trace_length.check()?;
         self.memory_K.check()?;
-        self._bytecode_d.check()?;
         self.twist_sumcheck_switch_index.check()?;
         Ok(())
     }
@@ -93,8 +89,7 @@ where
         validate: Validate,
     ) -> Result<Self, SerializationError> {
         let memory_K = usize::deserialize_with_mode(&mut reader, compress, validate)?;
-        let bytecode_d = usize::deserialize_with_mode(&mut reader, compress, validate)?;
-        let guard = AllCommittedPolynomials::initialize(bytecode_d);
+        let guard = AllCommittedPolynomials::initialize();
         let opening_claims = Claims::deserialize_with_mode(&mut reader, compress, validate)?;
         let commitments =
             Vec::<PCS::Commitment>::deserialize_with_mode(&mut reader, compress, validate)?;
@@ -110,7 +105,6 @@ where
             proofs,
             trace_length,
             memory_K,
-            _bytecode_d: bytecode_d,
             twist_sumcheck_switch_index,
         })
     }
@@ -262,11 +256,10 @@ impl CanonicalSerialize for CommittedPolynomial {
             CommittedPolynomial::InstructionRa(index) => {
                 8u8.serialize_with_mode(&mut writer, compress)?;
                 index.serialize_with_mode(&mut writer, compress)?;
-            }
-            CommittedPolynomial::BytecodeRa(index) => {
-                9u8.serialize_with_mode(&mut writer, compress)?;
-                index.serialize_with_mode(&mut writer, compress)?;
-            }
+            } // CommittedPolynomial::BytecodeRa(index) => {
+              //     9u8.serialize_with_mode(&mut writer, compress)?;
+              //     index.serialize_with_mode(&mut writer, compress)?;
+              // }
         }
         Ok(())
     }
@@ -275,8 +268,7 @@ impl CanonicalSerialize for CommittedPolynomial {
         let tag_size = 1u8.serialized_size(compress);
         tag_size
             + match self {
-                CommittedPolynomial::InstructionRa(index)
-                | CommittedPolynomial::BytecodeRa(index) => index.serialized_size(compress),
+                CommittedPolynomial::InstructionRa(index) => index.serialized_size(compress),
                 _ => 0,
             }
     }
@@ -308,10 +300,6 @@ impl CanonicalDeserialize for CommittedPolynomial {
                 let index = usize::deserialize_with_mode(&mut reader, compress, validate)?;
                 CommittedPolynomial::InstructionRa(index)
             }
-            9 => {
-                let index = usize::deserialize_with_mode(&mut reader, compress, validate)?;
-                CommittedPolynomial::BytecodeRa(index)
-            }
             _ => return Err(SerializationError::InvalidData),
         };
         Ok(polynomial)
@@ -329,14 +317,7 @@ impl CanonicalSerialize for VirtualPolynomial {
             VirtualPolynomial::SpartanBz => 1u8.serialize_with_mode(&mut writer, compress)?,
             VirtualPolynomial::SpartanCz => 2u8.serialize_with_mode(&mut writer, compress)?,
             VirtualPolynomial::PC => 3u8.serialize_with_mode(&mut writer, compress)?,
-            VirtualPolynomial::UnexpandedPC => 4u8.serialize_with_mode(&mut writer, compress)?,
             VirtualPolynomial::NextPC => 5u8.serialize_with_mode(&mut writer, compress)?,
-            VirtualPolynomial::NextUnexpandedPC => {
-                6u8.serialize_with_mode(&mut writer, compress)?;
-            }
-            VirtualPolynomial::NextIsNoop => {
-                7u8.serialize_with_mode(&mut writer, compress)?;
-            }
             VirtualPolynomial::LeftLookupOperand => {
                 8u8.serialize_with_mode(&mut writer, compress)?;
             }
@@ -432,10 +413,7 @@ impl CanonicalDeserialize for VirtualPolynomial {
             1 => VirtualPolynomial::SpartanBz,
             2 => VirtualPolynomial::SpartanCz,
             3 => VirtualPolynomial::PC,
-            4 => VirtualPolynomial::UnexpandedPC,
             5 => VirtualPolynomial::NextPC,
-            6 => VirtualPolynomial::NextUnexpandedPC,
-            7 => VirtualPolynomial::NextIsNoop,
             8 => VirtualPolynomial::LeftLookupOperand,
             9 => VirtualPolynomial::RightLookupOperand,
             10 => VirtualPolynomial::Td,
@@ -501,12 +479,9 @@ fn circuit_flag_from_u8(value: u8) -> Result<CircuitFlags, SerializationError> {
         4 => CircuitFlags::SubtractOperands,
         5 => CircuitFlags::MultiplyOperands,
         6 => CircuitFlags::WriteLookupOutputToTD,
-        7 => CircuitFlags::InlineSequenceInstruction,
         8 => CircuitFlags::Assert,
-        9 => CircuitFlags::DoNotUpdateUnexpandedPC,
         10 => CircuitFlags::Advice,
         11 => CircuitFlags::Const,
-        12 => CircuitFlags::IsNoop,
         13 => CircuitFlags::Select,
         _ => return Err(SerializationError::InvalidData),
     };

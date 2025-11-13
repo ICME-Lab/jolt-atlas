@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 
 use crate::jolt::{
     JoltProverPreprocessing,
-    bytecode::{CircuitFlags, JoltONNXBytecode},
+    bytecode::CircuitFlags,
     pcs::{OpeningId, SumcheckId},
     r1cs::{key::UniformSpartanKey, spartan::UniformSpartanProof},
     trace::JoltONNXCycle,
@@ -26,8 +26,6 @@ use jolt_core::{
         r1cs::ops::{LC, Term, Variable},
     },
 };
-
-use onnx_tracer::trace_types::ONNXOpcode;
 use rayon::prelude::*;
 
 pub struct R1CSProof<F: JoltField, ProofTranscript: Transcript> {
@@ -39,7 +37,6 @@ pub struct R1CSProof<F: JoltField, ProofTranscript: Transcript> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum JoltONNXR1CSInputs {
     PC,                    // Virtual (bytecode raf)
-    UnexpandedPC,          // Virtual (bytecode rv)
     Td,                    // Virtual (bytecode rv)
     Imm,                   // Virtual (bytecode rv)
     Ts1Value,              // Virtual (registers rv)
@@ -52,12 +49,10 @@ pub enum JoltONNXR1CSInputs {
     RightLookupOperand,    // Virtual (instruction raf)
     Product,               // LeftInstructionOperand * RightInstructionOperand
     WriteLookupOutputToTD,
-    NextUnexpandedPC, // Virtual (spartan shift sumcheck)
-    NextPC,           // Virtual (spartan shift sumcheck)
-    LookupOutput,     // Virtual (instruction rv)
-    NextIsNoop,       // Virtual (spartan shift sumcheck)
-    SelectCond,       // Ts1Value * Select
-    SelectRes,        // TdWriteValue * Select
+    NextPC,       // Virtual (spartan shift sumcheck)
+    LookupOutput, // Virtual (instruction rv)
+    SelectCond,   // Ts1Value * Select
+    SelectRes,    // TdWriteValue * Select
     OpFlags(CircuitFlags),
 }
 
@@ -89,7 +84,6 @@ impl TryFrom<JoltONNXR1CSInputs> for VirtualPolynomial {
     fn try_from(value: JoltONNXR1CSInputs) -> Result<Self, Self::Error> {
         match value {
             JoltONNXR1CSInputs::PC => Ok(VirtualPolynomial::PC),
-            JoltONNXR1CSInputs::UnexpandedPC => Ok(VirtualPolynomial::UnexpandedPC),
             JoltONNXR1CSInputs::Td => Ok(VirtualPolynomial::Td),
             JoltONNXR1CSInputs::Imm => Ok(VirtualPolynomial::Imm),
             JoltONNXR1CSInputs::Ts1Value => Ok(VirtualPolynomial::Ts1Value),
@@ -98,11 +92,9 @@ impl TryFrom<JoltONNXR1CSInputs> for VirtualPolynomial {
             JoltONNXR1CSInputs::TdWriteValue => Ok(VirtualPolynomial::TdWriteValue),
             JoltONNXR1CSInputs::LeftLookupOperand => Ok(VirtualPolynomial::LeftLookupOperand),
             JoltONNXR1CSInputs::RightLookupOperand => Ok(VirtualPolynomial::RightLookupOperand),
-            JoltONNXR1CSInputs::NextUnexpandedPC => Ok(VirtualPolynomial::NextUnexpandedPC),
             JoltONNXR1CSInputs::NextPC => Ok(VirtualPolynomial::NextPC),
             JoltONNXR1CSInputs::LookupOutput => Ok(VirtualPolynomial::LookupOutput),
             JoltONNXR1CSInputs::OpFlags(flag) => Ok(VirtualPolynomial::OpFlags(flag)),
-            JoltONNXR1CSInputs::NextIsNoop => Ok(VirtualPolynomial::NextIsNoop),
             _ => Err("{value} is not a virtual polynomial"),
         }
     }
@@ -124,13 +116,12 @@ impl TryFrom<JoltONNXR1CSInputs> for OpeningId {
 
 /// This const serves to define a canonical ordering over inputs (and thus indices
 /// for each input). This is needed for sumcheck.
-pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs; 34] = [
+pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs; 29] = [
     JoltONNXR1CSInputs::LeftInstructionInput,
     JoltONNXR1CSInputs::RightInstructionInput,
     JoltONNXR1CSInputs::Product,
     JoltONNXR1CSInputs::WriteLookupOutputToTD,
     JoltONNXR1CSInputs::PC,
-    JoltONNXR1CSInputs::UnexpandedPC,
     JoltONNXR1CSInputs::Td,
     JoltONNXR1CSInputs::Imm,
     JoltONNXR1CSInputs::Ts1Value,
@@ -139,9 +130,7 @@ pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs; 34] = [
     JoltONNXR1CSInputs::TdWriteValue,
     JoltONNXR1CSInputs::LeftLookupOperand,
     JoltONNXR1CSInputs::RightLookupOperand,
-    JoltONNXR1CSInputs::NextUnexpandedPC,
     JoltONNXR1CSInputs::NextPC,
-    JoltONNXR1CSInputs::NextIsNoop,
     JoltONNXR1CSInputs::LookupOutput,
     JoltONNXR1CSInputs::SelectCond,
     JoltONNXR1CSInputs::SelectRes,
@@ -152,13 +141,11 @@ pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs; 34] = [
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::SubtractOperands),
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::MultiplyOperands),
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::WriteLookupOutputToTD),
-    JoltONNXR1CSInputs::OpFlags(CircuitFlags::InlineSequenceInstruction),
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::Assert),
-    JoltONNXR1CSInputs::OpFlags(CircuitFlags::DoNotUpdateUnexpandedPC),
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::Advice),
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::Const),
-    JoltONNXR1CSInputs::OpFlags(CircuitFlags::IsNoop),
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::Select),
+    JoltONNXR1CSInputs::OpFlags(CircuitFlags::Halt),
 ];
 
 /// The subset of `ALL_R1CS_INPUTS` that are committed. The rest of
@@ -215,14 +202,6 @@ impl JoltONNXR1CSInputs {
                     .skip(1)
                     .map(|i| preprocessing.shared.bytecode.get_pc(i) as u64)
                     .chain(rayon::iter::once(0))
-                    .collect();
-                coeffs.into()
-            }
-            JoltONNXR1CSInputs::UnexpandedPC => {
-                let coeffs: Vec<u64> = preprocessing
-                    .bytecode()
-                    .par_iter()
-                    .map(|instr| instr.address as u64)
                     .collect();
                 coeffs.into()
             }
@@ -297,48 +276,11 @@ impl JoltONNXR1CSInputs {
                     .collect();
                 coeffs.into()
             }
-            JoltONNXR1CSInputs::NextUnexpandedPC => {
-                let coeffs: Vec<u64> = preprocessing
-                    .bytecode()
-                    .par_iter()
-                    .zip(
-                        preprocessing
-                            .bytecode()
-                            .par_iter()
-                            .skip(1)
-                            .chain(rayon::iter::once(&JoltONNXBytecode::no_op())),
-                    )
-                    .map(|(instr, next_instr)| {
-                        let next_is_noop = next_instr.opcode == ONNXOpcode::Noop;
-                        let do_not_update_pc =
-                            instr.circuit_flags()[CircuitFlags::DoNotUpdateUnexpandedPC as usize];
-                        if next_is_noop {
-                            0
-                        } else if do_not_update_pc {
-                            instr.address as u64
-                        } else {
-                            instr.address as u64 + 1
-                        }
-                    })
-                    .collect();
-                coeffs.into()
-            }
             JoltONNXR1CSInputs::OpFlags(flag) => {
                 let coeffs: Vec<u8> = preprocessing
                     .bytecode()
                     .par_iter()
                     .map(|instr| instr.circuit_flags()[*flag as usize] as u8)
-                    .collect();
-                coeffs.into()
-            }
-            JoltONNXR1CSInputs::NextIsNoop => {
-                // TODO(moodlezoup): Boolean polynomial
-                let coeffs: Vec<u8> = preprocessing
-                    .bytecode()
-                    .par_iter()
-                    .skip(1)
-                    .map(|instr| instr.circuit_flags()[CircuitFlags::IsNoop] as u8)
-                    .chain(rayon::iter::once(0))
                     .collect();
                 coeffs.into()
             }

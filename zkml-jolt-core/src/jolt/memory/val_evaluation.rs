@@ -269,9 +269,7 @@ impl<F: JoltField> SumcheckInstance<F> for ValEvaluationSumcheck<F> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
+pub mod test {
     use super::*;
 
     use crate::jolt::{
@@ -291,7 +289,7 @@ mod tests {
         transcripts::{Blake2bTranscript, Transcript},
         utils::index_to_field_bitvector,
     };
-    use onnx_tracer::{ProgramIO, builder, graph::model::Model, model, tensor::Tensor};
+    use onnx_tracer::{ProgramIO, graph::model::Model, tensor::Tensor};
 
     fn evaluate_lt_mle<F: JoltField>(x: &[F], r: &[F]) -> F {
         assert_eq!(x.len(), r.len());
@@ -304,7 +302,7 @@ mod tests {
         lt
     }
 
-    pub fn test_val_evaluation_sumcheck<ModelFunc>(model_fn: ModelFunc, input: Tensor<i32>)
+    pub fn test_val_evaluation_sumcheck<ModelFunc>(model_fn: ModelFunc, input: &Tensor<i32>)
     where
         ModelFunc: Fn() -> Model + Copy,
     {
@@ -314,7 +312,7 @@ mod tests {
             precompiles: PrecompilePreprocessing::empty(),
         };
 
-        let (trace, _) = trace(model_fn, &input, &shared_preprocessing.bytecode);
+        let (trace, _) = trace(model_fn, input, &shared_preprocessing.bytecode);
 
         let log_T = trace.len().ilog2() as usize;
         let log_K = shared_preprocessing.bytecode.memory_K.ilog2() as usize;
@@ -429,20 +427,5 @@ mod tests {
         .unwrap();
 
         assert_eq!(r_sumcheck, r_sumcheck_verif);
-    }
-
-    #[test]
-    fn test_val_evaluation_rsqrt() {
-        let input = Tensor::new(Some(&[1, 1, 1, 1]), &[1, 4]).unwrap();
-        test_val_evaluation_sumcheck(builder::rsqrt_model, input);
-    }
-
-    #[test]
-    fn test_val_evaluation_rsqrt_binary() {
-        let input = Tensor::new(Some(&[512]), &[1, 1]).unwrap();
-        test_val_evaluation_sumcheck(
-            || model(&PathBuf::from("../onnx-tracer/models/rsqrt/network.onnx")),
-            input,
-        );
     }
 }

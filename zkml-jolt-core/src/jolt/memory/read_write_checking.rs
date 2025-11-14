@@ -1356,9 +1356,8 @@ impl<F: JoltField> SumcheckInstance<F> for MemoryReadWriteChecking<F> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod test {
     use super::*;
-    use std::path::PathBuf;
 
     use crate::jolt::{
         JoltProverPreprocessing, JoltSharedPreprocessing, JoltVerifierPreprocessing,
@@ -1377,9 +1376,9 @@ mod tests {
         transcripts::{AppendToTranscript, Blake2bTranscript, Transcript},
         utils::math::Math,
     };
-    use onnx_tracer::{ProgramIO, builder, graph::model::Model, model, tensor::Tensor};
-    use rand::prelude::*;
+    use onnx_tracer::{ProgramIO, graph::model::Model, tensor::Tensor};
 
+    #[cfg(feature = "assert_prover_claims")]
     // Allows to bind a polynomial by any chosen variable, which can be anywhere between first (HighToLow) and last (LowToHigh)
     fn bind_at_index(poly: &mut MultilinearPolynomial<Fr>, r_j: Fr, index: usize) {
         if let MultilinearPolynomial::LargeScalars(inner) = poly {
@@ -1400,7 +1399,8 @@ mod tests {
         }
     }
 
-    pub fn compute_expected_claims(
+    #[cfg(feature = "assert_prover_claims")]
+    fn compute_expected_claims(
         trace: &[JoltONNXCycle],
         prover_preprocessing: &JoltProverPreprocessing<Fr, MockCommitScheme<Fr>>,
         r_prime: &[Fr],
@@ -1408,8 +1408,6 @@ mod tests {
         r_sumcheck: &[Fr],
         sumcheck_switch_index: usize,
     ) -> Vec<Fr> {
-        println!("Claims recomputed from the polynomials");
-
         // Recover required register addresses and wrote value at each cycle of trace to help with building the sumcheck polynomials
         let mut read_writes = Vec::new();
         for (i, (cycle, bytecode)) in trace
@@ -1616,7 +1614,7 @@ mod tests {
         expected_claims
     }
 
-    pub fn test_read_write_sumcheck<ModelFunc>(model_fn: ModelFunc, input: Tensor<i32>)
+    pub fn test_read_write_sumcheck<ModelFunc>(model_fn: ModelFunc, input: &Tensor<i32>)
     where
         ModelFunc: Fn() -> Model + Copy,
     {
@@ -1626,7 +1624,7 @@ mod tests {
             precompiles: PrecompilePreprocessing::empty(),
         };
 
-        let (trace, _) = trace(model_fn, &input, &shared_preprocessing.bytecode);
+        let (trace, _) = trace(model_fn, input, &shared_preprocessing.bytecode);
 
         let log_T = trace.len().log_2();
 
@@ -1758,23 +1756,26 @@ mod tests {
         };
         drop(prover_transcript_ref);
 
-        // Compute Expected claims
-        let expected_claims = compute_expected_claims(
-            &trace,
-            &prover_preprocessing,
-            &r_prime,
-            prover_sumcheck,
-            &r_sumcheck,
-            prover_sm.twist_sumcheck_switch_index,
-        );
+        #[cfg(feature = "assert_prover_claims")]
+        {
+            // Compute Expected claims
+            let expected_claims = compute_expected_claims(
+                &trace,
+                &prover_preprocessing,
+                &r_prime,
+                prover_sumcheck,
+                &r_sumcheck,
+                prover_sm.twist_sumcheck_switch_index,
+            );
 
-        // initial claim + 1 per sumcheck round
-        assert_eq!(expected_claims.len(), r_sumcheck.len() + 1);
-        for i in 0..expected_claims.len() {
-            assert_eq!(
-                expected_claims[i], prover_sumcheck_claims[i],
-                "Non-matching claims at sumcheck round {i}"
-            )
+            // initial claim + 1 per sumcheck round
+            assert_eq!(expected_claims.len(), r_sumcheck.len() + 1);
+            for i in 0..expected_claims.len() {
+                assert_eq!(
+                    expected_claims[i], prover_sumcheck_claims[i],
+                    "Non-matching claims at sumcheck round {i}"
+                )
+            }
         }
 
         // Take claims
@@ -1867,40 +1868,5 @@ mod tests {
         };
 
         assert_eq!(r_sumcheck, r_sumcheck_verif);
-    }
-
-    #[test]
-    fn test_read_write_rsqrt() {
-        let input = Tensor::new(Some(&[1, 2, 3, 4]), &[1, 4]).unwrap();
-        test_read_write_sumcheck(builder::rsqrt_model, input);
-    }
-
-    #[test] // e2e test fails here
-    #[ignore]
-    fn test_read_write_rsqrt_binary() {
-        let input = Tensor::new(Some(&[512]), &[1, 1]).unwrap();
-        test_read_write_sumcheck(
-            || model(&PathBuf::from("../onnx-tracer/models/rsqrt/network.onnx")),
-            input,
-        );
-    }
-
-    #[test] // e2e test fails here
-    #[ignore]
-    fn test_read_write_self_attention() {
-        let mut rng = StdRng::seed_from_u64(123456);
-        let shape = [1, 64, 64];
-        let mut input_data = vec![0; shape.iter().product()];
-        for input in input_data.iter_mut() {
-            *input = rng.gen_range(-256..256)
-        }
-        test_read_write_sumcheck(
-            || {
-                model(&PathBuf::from(
-                    "../onnx-tracer/models/self_attention/network.onnx",
-                ))
-            },
-            Tensor::new(Some(&input_data), &shape).unwrap(),
-        );
     }
 }

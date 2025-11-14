@@ -5,9 +5,7 @@ use jolt_core::{
 
 use crate::jolt::{
     dag::{stage::SumcheckStages, state_manager::StateManager},
-    memory::{
-        read_write_checking::RegistersReadWriteChecking, val_evaluation::ValEvaluationSumcheck,
-    },
+    memory::{read_write_checking::MemoryReadWriteChecking, val_evaluation::ValEvaluationSumcheck},
     sumcheck::SumcheckInstance,
 };
 
@@ -24,7 +22,7 @@ impl<F: JoltField, ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>
         &mut self,
         state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
     ) -> Vec<Box<dyn SumcheckInstance<F>>> {
-        let read_write_checking = RegistersReadWriteChecking::new_prover(state_manager);
+        let read_write_checking = MemoryReadWriteChecking::new_prover(state_manager);
         vec![Box::new(read_write_checking)]
     }
 
@@ -32,7 +30,7 @@ impl<F: JoltField, ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>
         &mut self,
         state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
     ) -> Vec<Box<dyn SumcheckInstance<F>>> {
-        let read_write_checking = RegistersReadWriteChecking::new_verifier(state_manager);
+        let read_write_checking = MemoryReadWriteChecking::new_verifier(state_manager);
         vec![Box::new(read_write_checking)]
     }
 

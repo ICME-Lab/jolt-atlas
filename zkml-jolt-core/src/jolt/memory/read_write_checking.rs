@@ -240,7 +240,7 @@ pub struct ReadWriteValueClaims<F: JoltField> {
     pub td_wv_claim: F,
 }
 
-pub struct RegistersReadWriteChecking<F: JoltField> {
+pub struct MemoryReadWriteChecking<F: JoltField> {
     K: usize,
     T: usize,
     gamma: F,
@@ -252,12 +252,12 @@ pub struct RegistersReadWriteChecking<F: JoltField> {
 }
 
 #[derive(CanonicalSerialize, CanonicalDeserialize, Debug, Clone)]
-pub struct RegistersReadWriteCheckingProof<F: JoltField, ProofTranscript: Transcript> {
+pub struct MemoryReadWriteCheckingProof<F: JoltField, ProofTranscript: Transcript> {
     sumcheck_proof: SumcheckInstanceProof<F, ProofTranscript>,
     sumcheck_switch_index: usize,
 }
 
-impl<F: JoltField> RegistersReadWriteChecking<F> {
+impl<F: JoltField> MemoryReadWriteChecking<F> {
     pub fn new_prover<ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>>(
         state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
     ) -> Self {
@@ -995,7 +995,7 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
             // so we might as well materialize the full `ra`, `wa`, and `Val` polynomials and perform
             // standard sumcheck directly using those polynomials.
 
-            let span = tracing::span!(tracing::Level::INFO, "Materialize rs1_ra polynomial");
+            let span = tracing::span!(tracing::Level::INFO, "Materialize ts1_ra polynomial");
             let _guard = span.enter();
 
             let num_chunks = addresses.len() / *chunk_size;
@@ -1017,7 +1017,7 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
             drop(_guard);
             drop(span);
 
-            let span = tracing::span!(tracing::Level::INFO, "Materialize rs2_ra polynomial");
+            let span = tracing::span!(tracing::Level::INFO, "Materialize ts2_ra polynomial");
             let _guard = span.enter();
 
             let num_chunks = addresses.len() / *chunk_size;
@@ -1039,7 +1039,7 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
             drop(_guard);
             drop(span);
 
-            let span = tracing::span!(tracing::Level::INFO, "Materialize ts2_ra polynomial");
+            let span = tracing::span!(tracing::Level::INFO, "Materialize ts3_ra polynomial");
             let _guard = span.enter();
 
             let num_chunks = addresses.len() / *chunk_size;
@@ -1061,7 +1061,7 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
             drop(_guard);
             drop(span);
 
-            let span = tracing::span!(tracing::Level::INFO, "Materialize rd_wa polynomial");
+            let span = tracing::span!(tracing::Level::INFO, "Materialize td_wa polynomial");
             let _guard = span.enter();
 
             let num_chunks = addresses.len() / *chunk_size;
@@ -1160,7 +1160,7 @@ impl<F: JoltField> RegistersReadWriteChecking<F> {
     }
 }
 
-impl<F: JoltField> SumcheckInstance<F> for RegistersReadWriteChecking<F> {
+impl<F: JoltField> SumcheckInstance<F> for MemoryReadWriteChecking<F> {
     fn degree(&self) -> usize {
         3
     }
@@ -1352,5 +1352,521 @@ impl<F: JoltField> SumcheckInstance<F> for RegistersReadWriteChecking<F> {
             SumcheckId::RegistersReadWriteChecking,
             r_cycle.r,
         );
+    }
+}
+
+#[cfg(test)]
+pub mod test {
+    use super::*;
+
+    use crate::jolt::{
+        JoltProverPreprocessing, JoltSharedPreprocessing, JoltVerifierPreprocessing,
+        bytecode::BytecodePreprocessing, dag::state_manager::StateManager, pcs::SumcheckId,
+        precompiles::PrecompilePreprocessing, trace::trace, witness::VirtualPolynomial,
+    };
+    use ark_bn254::Fr;
+    use ark_std::Zero;
+    use jolt_core::{
+        poly::{
+            commitment::mock::MockCommitScheme,
+            eq_poly::EqPolynomial,
+            opening_proof::{BIG_ENDIAN, OpeningPoint},
+            unipoly::{CompressedUniPoly, UniPoly},
+        },
+        transcripts::{AppendToTranscript, Blake2bTranscript, Transcript},
+        utils::math::Math,
+    };
+    use onnx_tracer::{ProgramIO, graph::model::Model, tensor::Tensor};
+
+    #[cfg(feature = "assert_prover_claims")]
+    // Allows to bind a polynomial by any chosen variable, which can be anywhere between first (HighToLow) and last (LowToHigh)
+    fn bind_at_index(poly: &mut MultilinearPolynomial<Fr>, r_j: Fr, index: usize) {
+        if let MultilinearPolynomial::LargeScalars(inner) = poly {
+            let evals = inner.evals();
+            let len = evals.len();
+            assert!(len.is_power_of_two());
+            let bound: Vec<Fr> = evals
+                .chunks(len >> index)
+                .flat_map(|chunk| {
+                    let n = chunk.len() / 2;
+                    let (l, r) = chunk.split_at(n);
+                    l.iter().zip(r.iter()).map(|(&a, &b)| a + r_j * (b - a))
+                })
+                .collect();
+            *poly = MultilinearPolynomial::from(bound);
+        } else {
+            panic!("Expected polynomial over scalars");
+        }
+    }
+
+    #[cfg(feature = "assert_prover_claims")]
+    fn compute_expected_claims(
+        trace: &[JoltONNXCycle],
+        prover_preprocessing: &JoltProverPreprocessing<Fr, MockCommitScheme<Fr>>,
+        r_prime: &[Fr],
+        prover_sumcheck: MemoryReadWriteChecking<Fr>,
+        r_sumcheck: &[Fr],
+        sumcheck_switch_index: usize,
+    ) -> Vec<Fr> {
+        // Recover required register addresses and wrote value at each cycle of trace to help with building the sumcheck polynomials
+        let mut read_writes = Vec::new();
+        for (i, (cycle, bytecode)) in trace
+            .iter()
+            .zip(prover_preprocessing.bytecode())
+            .enumerate()
+        {
+            let ts1 = bytecode.ts1 as usize;
+            let ts2 = bytecode.ts2 as usize;
+            let ts3 = bytecode.ts3 as usize;
+            let td = bytecode.td as usize;
+            let write_op = cycle.td_write().1;
+
+            read_writes.push((i, ts1, ts2, ts3, td, write_op));
+        }
+        let log_T = trace.len().log_2();
+        let log_K = prover_preprocessing.shared.bytecode.memory_K.log_2();
+
+        // Create multilinear polynomials
+        let K = 2usize.pow(log_K as u32);
+        let T = 2usize.pow(log_T as u32);
+        let (
+            mut ra1_test,
+            mut ra2_test,
+            mut ra3_test,
+            mut wa_test,
+            mut val_test,
+            mut inc_test,
+            mut eq_test,
+        ) = {
+            let mut val_evals: Vec<Fr> = unsafe_allocate_zero_vec(K * T);
+            let mut ra1_evals: Vec<Fr> = unsafe_allocate_zero_vec(K * T);
+            let mut ra2_evals: Vec<Fr> = unsafe_allocate_zero_vec(K * T);
+            let mut ra3_evals: Vec<Fr> = unsafe_allocate_zero_vec(K * T);
+            let mut wa_evals: Vec<Fr> = unsafe_allocate_zero_vec(K * T);
+            let mut inc_evals: Vec<Fr> = unsafe_allocate_zero_vec(T);
+            let eq_evals = EqPolynomial::evals(r_prime);
+
+            for &(i, ts1, ts2, ts3, td, val) in read_writes.iter() {
+                for j in i + 1..T {
+                    val_evals[j * K + td] = Fr::from(val);
+                }
+                ra1_evals[i * K + ts1] = Fr::from(1);
+                ra2_evals[i * K + ts2] = Fr::from(1);
+                ra3_evals[i * K + ts3] = Fr::from(1);
+                wa_evals[i * K + td] = Fr::from(1);
+                inc_evals[i] = Fr::from(val);
+            }
+            (
+                MultilinearPolynomial::from(ra1_evals),
+                MultilinearPolynomial::from(ra2_evals),
+                MultilinearPolynomial::from(ra3_evals),
+                MultilinearPolynomial::from(wa_evals),
+                MultilinearPolynomial::from(val_evals),
+                MultilinearPolynomial::from(inc_evals),
+                MultilinearPolynomial::from(eq_evals),
+            )
+        };
+
+        let mut expected_claims = Vec::new();
+
+        for round in 0..r_sumcheck.len() {
+            let r_j = r_sumcheck[round];
+            let mut expected_claim = Fr::zero();
+
+            if round < sumcheck_switch_index {
+                // For first rounds, the claims are computed using complex structures built in `initialize`
+                // Also binding happens in LowToHigh order over cycle variables.
+
+                for i in 0..(T >> round) {
+                    let mut inner_sum = Fr::zero();
+                    let eq_value = eq_test.get_bound_coeff(i);
+                    let inc_value = inc_test.get_bound_coeff(i);
+                    for k in 0..K {
+                        let index = i * K + k;
+                        inner_sum += wa_test.get_bound_coeff(index)
+                            * (val_test.get_bound_coeff(index) + inc_value)
+                            + prover_sumcheck.gamma
+                                * ra1_test.get_bound_coeff(index)
+                                * val_test.get_bound_coeff(index)
+                            + prover_sumcheck.gamma_sqr
+                                * ra2_test.get_bound_coeff(index)
+                                * val_test.get_bound_coeff(index)
+                            + prover_sumcheck.gamma_cube
+                                * ra3_test.get_bound_coeff(index)
+                                * val_test.get_bound_coeff(index);
+                    }
+                    expected_claim += eq_value * inner_sum;
+                }
+
+                // Binding
+                // We are binding in LowToHigh order over cycle variables.
+                // The polynomial are constructed such that any evaluation point r takes the form r = (r_cycle, r_address) = (r[0..log_T], r[log_T..log_T + log_K])
+                // Hence binding in LowToHigh order over cycle means we need first to bind by variable log_T, log_T - 1 .. up to (log_T - sumcheck_switch_index)
+                // This is done by `bind_at_index` function
+                [
+                    &mut eq_test,
+                    &mut inc_test,
+                    &mut ra1_test,
+                    &mut ra2_test,
+                    &mut ra3_test,
+                    &mut wa_test,
+                    &mut val_test,
+                ]
+                .iter_mut()
+                .for_each(|poly| bind_at_index(poly, r_j, log_T - round - 1));
+            } else if round < log_T {
+                // We have now passed sumcheck_switch_index, from now polynomials are bound in HighToLow order.
+                // We still haven't completely bound over cycle variables, so we keep binding eq_test and inc_test.
+
+                for i in 0..(T >> round) {
+                    let mut inner_sum = Fr::zero();
+                    let eq_value = eq_test.get_bound_coeff(i);
+                    let inc_value = inc_test.get_bound_coeff(i);
+                    for k in 0..K {
+                        let index = i * K + k;
+                        inner_sum += wa_test.get_bound_coeff(index)
+                            * (val_test.get_bound_coeff(index) + inc_value)
+                            + prover_sumcheck.gamma
+                                * ra1_test.get_bound_coeff(index)
+                                * val_test.get_bound_coeff(index)
+                            + prover_sumcheck.gamma_sqr
+                                * ra2_test.get_bound_coeff(index)
+                                * val_test.get_bound_coeff(index)
+                            + prover_sumcheck.gamma_cube
+                                * ra3_test.get_bound_coeff(index)
+                                * val_test.get_bound_coeff(index);
+                    }
+                    expected_claim += eq_value * inner_sum;
+                }
+
+                // Binding
+                [
+                    &mut eq_test,
+                    &mut inc_test,
+                    &mut ra1_test,
+                    &mut ra2_test,
+                    &mut ra3_test,
+                    &mut wa_test,
+                    &mut val_test,
+                ]
+                .iter_mut()
+                .for_each(|poly| poly.bind(r_j, BindingOrder::HighToLow));
+            } else {
+                // Now the cycle variables are fully bound, so we use the final eq_test and inc_test claims and bind over address variables.
+
+                let mut inner_sum = Fr::zero();
+                let eq_claim = eq_test.final_sumcheck_claim();
+                let inc_claim = inc_test.final_sumcheck_claim();
+                for index in 0..(K >> (round - log_T)) {
+                    inner_sum += wa_test.get_bound_coeff(index)
+                        * (val_test.get_bound_coeff(index) + inc_claim)
+                        + prover_sumcheck.gamma
+                            * ra1_test.get_bound_coeff(index)
+                            * val_test.get_bound_coeff(index)
+                        + prover_sumcheck.gamma_sqr
+                            * ra2_test.get_bound_coeff(index)
+                            * val_test.get_bound_coeff(index)
+                        + prover_sumcheck.gamma_cube
+                            * ra3_test.get_bound_coeff(index)
+                            * val_test.get_bound_coeff(index);
+                }
+                expected_claim += eq_claim * inner_sum;
+
+                // Binding
+                [
+                    &mut ra1_test,
+                    &mut ra2_test,
+                    &mut ra3_test,
+                    &mut wa_test,
+                    &mut val_test,
+                ]
+                .iter_mut()
+                .for_each(|poly| poly.bind(r_j, BindingOrder::HighToLow));
+            }
+            expected_claims.push(expected_claim);
+        }
+
+        // Final claim
+        let [
+            eq_final,
+            inc_final,
+            ra1_final,
+            ra2_final,
+            ra3_final,
+            wa_final,
+            val_final,
+        ] = [
+            eq_test, inc_test, ra1_test, ra2_test, ra3_test, wa_test, val_test,
+        ]
+        .iter()
+        .map(|poly| poly.final_sumcheck_claim())
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
+
+        let final_claim = eq_final
+            * (wa_final * (val_final + inc_final)
+                + prover_sumcheck.gamma * ra1_final * val_final
+                + prover_sumcheck.gamma_sqr * ra2_final * val_final
+                + prover_sumcheck.gamma_cube * ra3_final * val_final);
+        expected_claims.push(final_claim);
+
+        expected_claims
+    }
+
+    pub fn test_read_write_sumcheck<ModelFunc>(model_fn: ModelFunc, input: &Tensor<i32>)
+    where
+        ModelFunc: Fn() -> Model + Copy,
+    {
+        let bytecode_preprocessing = BytecodePreprocessing::preprocess(model_fn);
+        let shared_preprocessing = JoltSharedPreprocessing {
+            bytecode: bytecode_preprocessing,
+            precompiles: PrecompilePreprocessing::empty(),
+        };
+
+        let (trace, _) = trace(model_fn, input, &shared_preprocessing.bytecode);
+
+        let log_T = trace.len().log_2();
+
+        let prover_preprocessing: JoltProverPreprocessing<Fr, MockCommitScheme<Fr>> =
+            JoltProverPreprocessing {
+                generators: (),
+                shared: shared_preprocessing.clone(),
+            };
+
+        let verifier_preprocessing: JoltVerifierPreprocessing<Fr, MockCommitScheme<Fr>> =
+            JoltVerifierPreprocessing {
+                generators: (),
+                shared: shared_preprocessing,
+            };
+        let program_io = ProgramIO {
+            input: Tensor::new(None, &[]).unwrap(),
+            output: Tensor::new(None, &[]).unwrap(),
+        };
+
+        let mut prover_sm = StateManager::<'_, Fr, Blake2bTranscript, _>::new_prover(
+            &prover_preprocessing,
+            trace.clone(),
+            program_io.clone(),
+        );
+        let mut verifier_sm = StateManager::<'_, Fr, Blake2bTranscript, _>::new_verifier(
+            &verifier_preprocessing,
+            program_io,
+            trace.len(),
+            verifier_preprocessing.shared.bytecode.memory_K,
+            prover_sm.twist_sumcheck_switch_index,
+        );
+
+        let r_prime: Vec<Fr> = prover_sm.transcript.borrow_mut().challenge_vector(log_T);
+        let _r_prime: Vec<Fr> = verifier_sm.transcript.borrow_mut().challenge_vector(log_T);
+        let eq_r_prime = EqPolynomial::evals(&r_prime);
+
+        let mut ts1_rv_claim = Fr::zero();
+        let mut ts2_rv_claim = Fr::zero();
+        let mut ts3_rv_claim = Fr::zero();
+        let mut td_wv_claim = Fr::zero();
+
+        for (i, cycle) in trace.iter().enumerate() {
+            ts1_rv_claim += eq_r_prime[i].mul_u64(cycle.ts1_read());
+            ts2_rv_claim += eq_r_prime[i].mul_u64(cycle.ts2_read());
+            ts3_rv_claim += eq_r_prime[i].mul_u64(cycle.ts3_read());
+            td_wv_claim += eq_r_prime[i].mul_u64(cycle.td_write().1);
+        }
+
+        let prover_accumulator = prover_sm.get_prover_accumulator();
+        prover_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::Ts1Value,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_prime.clone()),
+            ts1_rv_claim,
+        );
+        prover_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::Ts2Value,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_prime.clone()),
+            ts2_rv_claim,
+        );
+        prover_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::Ts3Value,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_prime.clone()),
+            ts3_rv_claim,
+        );
+        prover_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::TdWriteValue,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_prime.clone()),
+            td_wv_claim,
+        );
+
+        let mut prover_sumcheck = MemoryReadWriteChecking::new_prover(&mut prover_sm);
+
+        let mut prover_transcript_ref = prover_sm.transcript.borrow_mut();
+
+        // a vec to hold claims for each round
+        let mut prover_sumcheck_claims: Vec<Fr> = Vec::new();
+        prover_sumcheck_claims.push(prover_sumcheck.input_claim());
+
+        let (proof, r_sumcheck) = {
+            // Imported sumcheck workflow here
+            let sumcheck_instance = &mut prover_sumcheck;
+            let opening_accumulator = Some(prover_sm.get_prover_accumulator());
+            let transcript = &mut *prover_transcript_ref;
+
+            let num_rounds = sumcheck_instance.num_rounds();
+            let mut r_sumcheck: Vec<Fr> = Vec::with_capacity(num_rounds);
+            let mut compressed_polys: Vec<CompressedUniPoly<Fr>> = Vec::with_capacity(num_rounds);
+
+            let mut previous_claim = sumcheck_instance.input_claim();
+            for round in 0..num_rounds {
+                let mut univariate_poly_evals =
+                    sumcheck_instance.compute_prover_message(round, previous_claim);
+                univariate_poly_evals.insert(1, previous_claim - univariate_poly_evals[0]);
+                let univariate_poly = UniPoly::from_evals(&univariate_poly_evals);
+
+                // append the prover's message to the transcript
+                let compressed_poly = univariate_poly.compress();
+                compressed_poly.append_to_transcript(transcript);
+                compressed_polys.push(compressed_poly);
+
+                let r_j = transcript.challenge_scalar();
+                r_sumcheck.push(r_j);
+
+                // Cache claim for this round
+                previous_claim = univariate_poly.evaluate(&r_j);
+
+                prover_sumcheck_claims.push(previous_claim);
+
+                sumcheck_instance.bind(r_j, round);
+            }
+
+            if let Some(opening_accumulator) = opening_accumulator {
+                // Cache polynomial opening claims, to be proven using either an
+                // opening proof or sumcheck (in the case of virtual polynomials).
+                sumcheck_instance.cache_openings_prover(
+                    opening_accumulator,
+                    sumcheck_instance.normalize_opening_point(&r_sumcheck),
+                );
+            }
+
+            (
+                SumcheckInstanceProof::<Fr, Blake2bTranscript>::new(compressed_polys),
+                r_sumcheck,
+            )
+        };
+        drop(prover_transcript_ref);
+
+        #[cfg(feature = "assert_prover_claims")]
+        {
+            // Compute Expected claims
+            let expected_claims = compute_expected_claims(
+                &trace,
+                &prover_preprocessing,
+                &r_prime,
+                prover_sumcheck,
+                &r_sumcheck,
+                prover_sm.twist_sumcheck_switch_index,
+            );
+
+            // initial claim + 1 per sumcheck round
+            assert_eq!(expected_claims.len(), r_sumcheck.len() + 1);
+            for i in 0..expected_claims.len() {
+                assert_eq!(
+                    expected_claims[i], prover_sumcheck_claims[i],
+                    "Non-matching claims at sumcheck round {i}"
+                )
+            }
+        }
+
+        // Take claims
+        let prover_acc_borrow = prover_accumulator.borrow();
+        let verifier_accumulator = verifier_sm.get_verifier_accumulator();
+        let mut verifier_acc_borrow = verifier_accumulator.borrow_mut();
+
+        for (key, (_, value)) in prover_acc_borrow.evaluation_openings().iter() {
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
+            verifier_acc_borrow
+                .openings_mut()
+                .insert(*key, (empty_point, *value));
+        }
+        drop(prover_acc_borrow);
+        drop(verifier_acc_borrow);
+
+        verifier_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::Ts1Value,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_prime.clone()),
+        );
+        verifier_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::Ts2Value,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_prime.clone()),
+        );
+        verifier_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::Ts3Value,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_prime.clone()),
+        );
+        verifier_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::TdWriteValue,
+            SumcheckId::SpartanOuter,
+            OpeningPoint::new(r_prime.clone()),
+        );
+
+        let verifier_sumcheck = MemoryReadWriteChecking::new_verifier(&mut verifier_sm);
+
+        let r_sumcheck_verif = {
+            // Imported sumcheck workflow here
+            let sumcheck_instance = &verifier_sumcheck;
+            let opening_accumulator = verifier_sm.get_verifier_accumulator();
+            let transcript = &mut *verifier_sm.transcript.borrow_mut();
+
+            let (output_claim, r) = {
+                let num_rounds = sumcheck_instance.num_rounds();
+                let degree_bound = sumcheck_instance.degree();
+                let mut e = sumcheck_instance.input_claim();
+                let mut r: Vec<Fr> = Vec::new();
+
+                // verify that there is a univariate polynomial for each round
+                assert_eq!(proof.compressed_polys.len(), num_rounds);
+                for i in 0..proof.compressed_polys.len() {
+                    // verify degree bound
+                    assert!(
+                        proof.compressed_polys[i].degree() <= degree_bound,
+                        "Prover sent univariate polynomial of degree {} exceeding degree bound {} in round {}",
+                        proof.compressed_polys[i].degree(),
+                        degree_bound,
+                        i
+                    );
+
+                    // append the prover's message to the transcript
+                    proof.compressed_polys[i].append_to_transcript(transcript);
+
+                    //derive the verifier's challenge for the next round
+                    let r_i = transcript.challenge_scalar();
+                    r.push(r_i);
+
+                    // evaluate the claimed degree-ell polynomial at r_i using the hint
+                    e = proof.compressed_polys[i].eval_from_hint(&e, &r_i);
+                }
+
+                (e, r)
+            };
+
+            assert_eq!(
+                output_claim,
+                sumcheck_instance.expected_output_claim(Some(opening_accumulator.clone()), &r),
+                "Read-Write Checking sumcheck output claim does not match expected claim"
+            );
+
+            sumcheck_instance.cache_openings_verifier(
+                opening_accumulator,
+                sumcheck_instance.normalize_opening_point(&r),
+            );
+
+            r
+        };
+
+        assert_eq!(r_sumcheck, r_sumcheck_verif);
     }
 }

@@ -267,3 +267,165 @@ impl<F: JoltField> SumcheckInstance<F> for ValEvaluationSumcheck<F> {
         );
     }
 }
+
+#[cfg(test)]
+pub mod test {
+    use super::*;
+
+    use crate::jolt::{
+        JoltProverPreprocessing, JoltSharedPreprocessing, JoltVerifierPreprocessing,
+        bytecode::BytecodePreprocessing, dag::state_manager::StateManager, pcs::SumcheckId,
+        precompiles::PrecompilePreprocessing, sumcheck::SingleSumcheck, trace::trace,
+        witness::VirtualPolynomial,
+    };
+    use ark_bn254::Fr;
+    use ark_std::Zero;
+    use jolt_core::{
+        poly::{
+            commitment::mock::MockCommitScheme,
+            eq_poly::EqPolynomial,
+            opening_proof::{BIG_ENDIAN, OpeningPoint},
+        },
+        transcripts::{Blake2bTranscript, Transcript},
+        utils::index_to_field_bitvector,
+    };
+    use onnx_tracer::{ProgramIO, graph::model::Model, tensor::Tensor};
+
+    fn evaluate_lt_mle<F: JoltField>(x: &[F], r: &[F]) -> F {
+        assert_eq!(x.len(), r.len());
+        let mut lt = F::zero();
+        let mut eq = F::one();
+        for (&x, &r) in x.iter().zip(r.iter()) {
+            lt += (F::one() - x) * r * eq;
+            eq *= x * r + (F::one() - x) * (F::one() - r);
+        }
+        lt
+    }
+
+    pub fn test_val_evaluation_sumcheck<ModelFunc>(model_fn: ModelFunc, input: &Tensor<i32>)
+    where
+        ModelFunc: Fn() -> Model + Copy,
+    {
+        let bytecode_preprocessing = BytecodePreprocessing::preprocess(model_fn);
+        let shared_preprocessing = JoltSharedPreprocessing {
+            bytecode: bytecode_preprocessing,
+            precompiles: PrecompilePreprocessing::empty(),
+        };
+
+        let (trace, _) = trace(model_fn, input, &shared_preprocessing.bytecode);
+
+        let log_T = trace.len().ilog2() as usize;
+        let log_K = shared_preprocessing.bytecode.memory_K.ilog2() as usize;
+        let rounds = log_T + log_K;
+
+        let prover_preprocessing: JoltProverPreprocessing<Fr, MockCommitScheme<Fr>> =
+            JoltProverPreprocessing {
+                generators: (),
+                shared: shared_preprocessing.clone(),
+            };
+
+        let verifier_preprocessing: JoltVerifierPreprocessing<Fr, MockCommitScheme<Fr>> =
+            JoltVerifierPreprocessing {
+                generators: (),
+                shared: shared_preprocessing,
+            };
+        let program_io = ProgramIO {
+            input: Tensor::new(None, &[]).unwrap(),
+            output: Tensor::new(None, &[]).unwrap(),
+        };
+
+        let mut prover_sm = StateManager::<'_, Fr, Blake2bTranscript, _>::new_prover(
+            &prover_preprocessing,
+            trace.clone(),
+            program_io.clone(),
+        );
+        let mut verifier_sm = StateManager::<'_, Fr, Blake2bTranscript, _>::new_verifier(
+            &verifier_preprocessing,
+            program_io,
+            trace.len(),
+            verifier_preprocessing.shared.bytecode.memory_K,
+            prover_sm.twist_sumcheck_switch_index,
+        );
+
+        let r: Vec<Fr> = prover_sm.transcript.borrow_mut().challenge_vector(rounds);
+        let _r: Vec<Fr> = verifier_sm.transcript.borrow_mut().challenge_vector(rounds);
+        let (r_address, r_cycle) = r.split_at(log_K);
+        let eq_r_address = EqPolynomial::evals(r_address);
+        let mut lt_r_cycle: Vec<Fr> = Vec::new(); // Computes the table LT(j, r_cycle) for all j in {0,1}^log_T
+        for i in 0..(1 << log_T) {
+            let index = index_to_field_bitvector::<Fr>(i, log_T);
+            let lt_i_r = evaluate_lt_mle(&index, r_cycle);
+            lt_r_cycle.push(lt_i_r);
+        }
+
+        let mut increments = Vec::new();
+        for (i, (cycle, bytecode)) in trace
+            .iter()
+            .zip(prover_preprocessing.bytecode())
+            .enumerate()
+        {
+            let write_op = cycle.td_write().1;
+            let td = bytecode.td;
+            if write_op != 0 {
+                increments.push((i, td, write_op));
+            }
+        }
+
+        let mut val_claim = Fr::zero();
+        for (i, td, write_val) in increments.iter() {
+            val_claim += eq_r_address[*td as usize] * lt_r_cycle[*i] * Fr::from_u64(*write_val);
+        }
+
+        let prover_accumulator = prover_sm.get_prover_accumulator();
+        prover_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::RegistersVal,
+            SumcheckId::RegistersReadWriteChecking,
+            OpeningPoint::new(r.clone()),
+            val_claim,
+        );
+
+        let mut prover_sumcheck = ValEvaluationSumcheck::new_prover(&mut prover_sm);
+
+        let mut prover_transcript_ref = prover_sm.transcript.borrow_mut();
+
+        let (proof, r_sumcheck) = SingleSumcheck::prove(
+            &mut prover_sumcheck,
+            Some(prover_accumulator.clone()),
+            &mut *prover_transcript_ref,
+        );
+        drop(prover_transcript_ref);
+
+        // Take claims
+        let prover_acc_borrow = prover_accumulator.borrow();
+        let verifier_accumulator = verifier_sm.get_verifier_accumulator();
+        let mut verifier_acc_borrow = verifier_accumulator.borrow_mut();
+
+        for (key, (_, value)) in prover_acc_borrow.evaluation_openings().iter() {
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
+            verifier_acc_borrow
+                .openings_mut()
+                .insert(*key, (empty_point, *value));
+        }
+        drop(prover_acc_borrow);
+        drop(verifier_acc_borrow);
+
+        verifier_accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::RegistersVal,
+            SumcheckId::RegistersReadWriteChecking,
+            OpeningPoint::new(r.clone()),
+        );
+
+        let verifier_sumcheck = ValEvaluationSumcheck::new_verifier(&mut verifier_sm);
+
+        // For round-by-round sumcheck prover claim checking, see MemoryReadWriteChecking's `compute_expected_claims` test function
+        let r_sumcheck_verif = SingleSumcheck::verify(
+            &verifier_sumcheck,
+            &proof,
+            Some(verifier_accumulator.clone()),
+            &mut *verifier_sm.transcript.borrow_mut(),
+        )
+        .unwrap();
+
+        assert_eq!(r_sumcheck, r_sumcheck_verif);
+    }
+}

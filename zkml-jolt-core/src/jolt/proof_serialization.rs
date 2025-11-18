@@ -238,28 +238,25 @@ impl CanonicalSerialize for CommittedPolynomial {
             CommittedPolynomial::Product => {
                 2u8.serialize_with_mode(&mut writer, compress)?;
             }
-            CommittedPolynomial::SelectCond => {
+            CommittedPolynomial::WriteLookupOutputToTD => {
                 3u8.serialize_with_mode(&mut writer, compress)?;
             }
-            CommittedPolynomial::SelectRes => {
+            CommittedPolynomial::TdInc => {
                 4u8.serialize_with_mode(&mut writer, compress)?;
             }
-            CommittedPolynomial::WriteLookupOutputToTD => {
+            CommittedPolynomial::TdIncS => {
                 5u8.serialize_with_mode(&mut writer, compress)?;
             }
-            CommittedPolynomial::TdInc => {
+            CommittedPolynomial::InstructionRa(index) => {
                 6u8.serialize_with_mode(&mut writer, compress)?;
+                index.serialize_with_mode(&mut writer, compress)?;
             }
-            CommittedPolynomial::TdIncS => {
+            CommittedPolynomial::SelectCond => {
                 7u8.serialize_with_mode(&mut writer, compress)?;
             }
-            CommittedPolynomial::InstructionRa(index) => {
+            CommittedPolynomial::SelectRes => {
                 8u8.serialize_with_mode(&mut writer, compress)?;
-                index.serialize_with_mode(&mut writer, compress)?;
-            } // CommittedPolynomial::BytecodeRa(index) => {
-              //     9u8.serialize_with_mode(&mut writer, compress)?;
-              //     index.serialize_with_mode(&mut writer, compress)?;
-              // }
+            }
         }
         Ok(())
     }
@@ -291,15 +288,15 @@ impl CanonicalDeserialize for CommittedPolynomial {
             0 => CommittedPolynomial::LeftInstructionInput,
             1 => CommittedPolynomial::RightInstructionInput,
             2 => CommittedPolynomial::Product,
-            3 => CommittedPolynomial::SelectCond,
-            4 => CommittedPolynomial::SelectRes,
-            5 => CommittedPolynomial::WriteLookupOutputToTD,
-            6 => CommittedPolynomial::TdInc,
-            7 => CommittedPolynomial::TdIncS,
-            8 => {
+            3 => CommittedPolynomial::WriteLookupOutputToTD,
+            4 => CommittedPolynomial::TdInc,
+            5 => CommittedPolynomial::TdIncS,
+            6 => {
                 let index = usize::deserialize_with_mode(&mut reader, compress, validate)?;
                 CommittedPolynomial::InstructionRa(index)
             }
+            7 => CommittedPolynomial::SelectCond,
+            8 => CommittedPolynomial::SelectRes,
             _ => return Err(SerializationError::InvalidData),
         };
         Ok(polynomial)
@@ -317,63 +314,63 @@ impl CanonicalSerialize for VirtualPolynomial {
             VirtualPolynomial::SpartanBz => 1u8.serialize_with_mode(&mut writer, compress)?,
             VirtualPolynomial::SpartanCz => 2u8.serialize_with_mode(&mut writer, compress)?,
             VirtualPolynomial::PC => 3u8.serialize_with_mode(&mut writer, compress)?,
-            VirtualPolynomial::NextPC => 5u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::NextPC => 4u8.serialize_with_mode(&mut writer, compress)?,
             VirtualPolynomial::LeftLookupOperand => {
-                8u8.serialize_with_mode(&mut writer, compress)?;
+                5u8.serialize_with_mode(&mut writer, compress)?;
             }
             VirtualPolynomial::RightLookupOperand => {
-                9u8.serialize_with_mode(&mut writer, compress)?;
+                6u8.serialize_with_mode(&mut writer, compress)?;
             }
-            VirtualPolynomial::Td => 10u8.serialize_with_mode(&mut writer, compress)?,
-            VirtualPolynomial::Imm => 11u8.serialize_with_mode(&mut writer, compress)?,
-            VirtualPolynomial::Ts1Value => 12u8.serialize_with_mode(&mut writer, compress)?,
-            VirtualPolynomial::Ts2Value => 13u8.serialize_with_mode(&mut writer, compress)?,
-            VirtualPolynomial::Ts3Value => 14u8.serialize_with_mode(&mut writer, compress)?,
-            VirtualPolynomial::TdWriteValue => 15u8.serialize_with_mode(&mut writer, compress)?,
-            VirtualPolynomial::Ts1Ra => 16u8.serialize_with_mode(&mut writer, compress)?,
-            VirtualPolynomial::Ts2Ra => 17u8.serialize_with_mode(&mut writer, compress)?,
-            VirtualPolynomial::Ts3Ra => 18u8.serialize_with_mode(&mut writer, compress)?,
-            VirtualPolynomial::TdWa => 19u8.serialize_with_mode(&mut writer, compress)?,
-            VirtualPolynomial::LookupOutput => 20u8.serialize_with_mode(&mut writer, compress)?,
-            VirtualPolynomial::InstructionRaf => 21u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::Td => 7u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::Imm => 8u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::Ts1Value => 9u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::Ts2Value => 10u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::Ts3Value => 11u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::TdWriteValue => 12u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::Ts1Ra => 13u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::Ts2Ra => 14u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::Ts3Ra => 15u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::TdWa => 16u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::LookupOutput => 17u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::InstructionRaf => 18u8.serialize_with_mode(&mut writer, compress)?,
             VirtualPolynomial::InstructionRafFlag => {
-                22u8.serialize_with_mode(&mut writer, compress)?;
+                19u8.serialize_with_mode(&mut writer, compress)?;
             }
-            VirtualPolynomial::InstructionRa => 23u8.serialize_with_mode(&mut writer, compress)?,
-            VirtualPolynomial::RegistersVal => 24u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::InstructionRa => 20u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::RegistersVal => 21u8.serialize_with_mode(&mut writer, compress)?,
             VirtualPolynomial::OpFlags(flag) => {
-                25u8.serialize_with_mode(&mut writer, compress)?;
+                22u8.serialize_with_mode(&mut writer, compress)?;
                 (*flag as u8).serialize_with_mode(&mut writer, compress)?;
             }
             VirtualPolynomial::LookupTableFlag(index) => {
-                26u8.serialize_with_mode(&mut writer, compress)?;
+                23u8.serialize_with_mode(&mut writer, compress)?;
                 index.serialize_with_mode(&mut writer, compress)?;
             }
             VirtualPolynomial::PrecompileA(index) => {
-                27u8.serialize_with_mode(&mut writer, compress)?;
+                24u8.serialize_with_mode(&mut writer, compress)?;
                 index.serialize_with_mode(&mut writer, compress)?;
             }
             VirtualPolynomial::PrecompileB(index) => {
-                28u8.serialize_with_mode(&mut writer, compress)?;
+                25u8.serialize_with_mode(&mut writer, compress)?;
                 index.serialize_with_mode(&mut writer, compress)?;
             }
             VirtualPolynomial::PrecompileC(index) => {
-                29u8.serialize_with_mode(&mut writer, compress)?;
+                26u8.serialize_with_mode(&mut writer, compress)?;
                 index.serialize_with_mode(&mut writer, compress)?;
             }
             VirtualPolynomial::RaAPrecompile(index) => {
-                30u8.serialize_with_mode(&mut writer, compress)?;
+                27u8.serialize_with_mode(&mut writer, compress)?;
                 index.serialize_with_mode(&mut writer, compress)?;
             }
             VirtualPolynomial::RaBPrecompile(index) => {
-                31u8.serialize_with_mode(&mut writer, compress)?;
+                28u8.serialize_with_mode(&mut writer, compress)?;
                 index.serialize_with_mode(&mut writer, compress)?;
             }
             VirtualPolynomial::RaCPrecompile(index) => {
-                32u8.serialize_with_mode(&mut writer, compress)?;
+                29u8.serialize_with_mode(&mut writer, compress)?;
                 index.serialize_with_mode(&mut writer, compress)?;
             }
-            VirtualPolynomial::ValFinal => 33u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::ValFinal => 30u8.serialize_with_mode(&mut writer, compress)?,
         }
         Ok(())
     }
@@ -413,57 +410,57 @@ impl CanonicalDeserialize for VirtualPolynomial {
             1 => VirtualPolynomial::SpartanBz,
             2 => VirtualPolynomial::SpartanCz,
             3 => VirtualPolynomial::PC,
-            5 => VirtualPolynomial::NextPC,
-            8 => VirtualPolynomial::LeftLookupOperand,
-            9 => VirtualPolynomial::RightLookupOperand,
-            10 => VirtualPolynomial::Td,
-            11 => VirtualPolynomial::Imm,
-            12 => VirtualPolynomial::Ts1Value,
-            13 => VirtualPolynomial::Ts2Value,
-            14 => VirtualPolynomial::Ts3Value,
-            15 => VirtualPolynomial::TdWriteValue,
-            16 => VirtualPolynomial::Ts1Ra,
-            17 => VirtualPolynomial::Ts2Ra,
-            18 => VirtualPolynomial::Ts3Ra,
-            19 => VirtualPolynomial::TdWa,
-            20 => VirtualPolynomial::LookupOutput,
-            21 => VirtualPolynomial::InstructionRaf,
-            22 => VirtualPolynomial::InstructionRafFlag,
-            23 => VirtualPolynomial::InstructionRa,
-            24 => VirtualPolynomial::RegistersVal,
-            25 => {
+            4 => VirtualPolynomial::NextPC,
+            5 => VirtualPolynomial::LeftLookupOperand,
+            6 => VirtualPolynomial::RightLookupOperand,
+            7 => VirtualPolynomial::Td,
+            8 => VirtualPolynomial::Imm,
+            9 => VirtualPolynomial::Ts1Value,
+            10 => VirtualPolynomial::Ts2Value,
+            11 => VirtualPolynomial::Ts3Value,
+            12 => VirtualPolynomial::TdWriteValue,
+            13 => VirtualPolynomial::Ts1Ra,
+            14 => VirtualPolynomial::Ts2Ra,
+            15 => VirtualPolynomial::Ts3Ra,
+            16 => VirtualPolynomial::TdWa,
+            17 => VirtualPolynomial::LookupOutput,
+            18 => VirtualPolynomial::InstructionRaf,
+            19 => VirtualPolynomial::InstructionRafFlag,
+            20 => VirtualPolynomial::InstructionRa,
+            21 => VirtualPolynomial::RegistersVal,
+            22 => {
                 let flag = u8::deserialize_with_mode(&mut reader, compress, validate)?;
                 VirtualPolynomial::OpFlags(circuit_flag_from_u8(flag)?)
             }
-            26 => {
+            23 => {
                 let index = usize::deserialize_with_mode(&mut reader, compress, validate)?;
                 VirtualPolynomial::LookupTableFlag(index)
             }
-            27 => {
+            24 => {
                 let index = usize::deserialize_with_mode(&mut reader, compress, validate)?;
                 VirtualPolynomial::PrecompileA(index)
             }
-            28 => {
+            25 => {
                 let index = usize::deserialize_with_mode(&mut reader, compress, validate)?;
                 VirtualPolynomial::PrecompileB(index)
             }
-            29 => {
+            26 => {
                 let index = usize::deserialize_with_mode(&mut reader, compress, validate)?;
                 VirtualPolynomial::PrecompileC(index)
             }
-            30 => {
+            27 => {
                 let index = usize::deserialize_with_mode(&mut reader, compress, validate)?;
                 VirtualPolynomial::RaAPrecompile(index)
             }
-            31 => {
+            28 => {
                 let index = usize::deserialize_with_mode(&mut reader, compress, validate)?;
                 VirtualPolynomial::RaBPrecompile(index)
             }
-            32 => {
+            29 => {
                 let index = usize::deserialize_with_mode(&mut reader, compress, validate)?;
                 VirtualPolynomial::RaCPrecompile(index)
             }
-            33 => VirtualPolynomial::ValFinal,
+            30 => VirtualPolynomial::ValFinal,
             _ => return Err(SerializationError::InvalidData),
         };
         Ok(polynomial)
@@ -479,10 +476,11 @@ fn circuit_flag_from_u8(value: u8) -> Result<CircuitFlags, SerializationError> {
         4 => CircuitFlags::SubtractOperands,
         5 => CircuitFlags::MultiplyOperands,
         6 => CircuitFlags::WriteLookupOutputToTD,
-        8 => CircuitFlags::Assert,
-        10 => CircuitFlags::Advice,
-        11 => CircuitFlags::Const,
-        13 => CircuitFlags::Select,
+        7 => CircuitFlags::Assert,
+        8 => CircuitFlags::Advice,
+        9 => CircuitFlags::Const,
+        10 => CircuitFlags::Select,
+        11 => CircuitFlags::Halt,
         _ => return Err(SerializationError::InvalidData),
     };
     Ok(flag)

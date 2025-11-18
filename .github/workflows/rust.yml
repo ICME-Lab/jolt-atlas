@@ -57,6 +57,15 @@ jobs:
         working-directory: ./onnx-tracer
         run: cargo test
 
+  test-proof-serialization:
+    name: Test proof serialization
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Run proof_round_trip example
+        run: cargo run --release --example proof_round_trip
+
   build-wasm:
     name: Build Wasm
     runs-on: ubuntu-latest

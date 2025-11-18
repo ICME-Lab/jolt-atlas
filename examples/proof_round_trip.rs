@@ -1,7 +1,7 @@
 use ark_bn254::Fr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jolt_core::{poly::commitment::dory::DoryCommitmentScheme, transcripts::KeccakTranscript};
-use onnx_tracer::{builder, tensor::Tensor};
+use onnx_tracer::{builder, tensor::Tensor, ProgramIO};
 use zkml_jolt_core::jolt::{JoltSNARK, JoltVerifierPreprocessing};
 
 #[allow(clippy::upper_case_acronyms)]
@@ -38,23 +38,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✓ Original proof verified");
 
     // Serialize proof
-    let mut buffer = Vec::new();
+    let mut proof_buffer = Vec::new();
     snark
-        .serialize_compressed(&mut buffer)
-        .expect("serialization should succeed");
-    println!("✓ Proof serialized ({} bytes)", buffer.len());
+        .serialize_compressed(&mut proof_buffer)
+        .expect("proof serialization should succeed");
+    println!("✓ Proof serialized ({} bytes)", proof_buffer.len());
+
+    // Serialize ProgramIO
+    let program_io_json =
+        serde_json::to_string(&program_io).expect("program_io serialization should succeed");
+    println!("✓ ProgramIO serialized ({} bytes)", program_io_json.len());
 
     // Deserialize proof
     let deserialized_snark =
-        JoltSNARK::<Fr, PCS, KeccakTranscript>::deserialize_compressed(buffer.as_slice())
-            .expect("deserialization should succeed");
+        JoltSNARK::<Fr, PCS, KeccakTranscript>::deserialize_compressed(proof_buffer.as_slice())
+            .expect("proof deserialization should succeed");
     println!("✓ Proof deserialized");
 
-    // Verify deserialized proof
+    // Deserialize ProgramIO
+    let deserialized_program_io: ProgramIO =
+        serde_json::from_str(&program_io_json).expect("program_io deserialization should succeed");
+    println!("✓ ProgramIO deserialized");
+
+    // Verify deserialized proof with deserialized ProgramIO
     deserialized_snark
-        .verify(&verifier_preprocessing, program_io, None)
+        .verify(&verifier_preprocessing, deserialized_program_io, None)
         .expect("deserialized proof should verify");
-    println!("✓ Deserialized proof verified\n");
+    println!("✓ Deserialized proof verified with deserialized ProgramIO\n");
 
     println!("Round-trip serialization successful!");
     Ok(())

@@ -62,7 +62,7 @@ pub mod utils;
 
 /// The input and output of inference runs
 /// Used by the zkVM to check output and input node cycles
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgramIO {
     pub input: Tensor<i32>,
     pub output: Tensor<i32>,

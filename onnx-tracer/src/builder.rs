@@ -258,7 +258,7 @@ impl ModelBuilder {
 
     fn sra(&mut self, a: Wire, shift: Wire, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
         let id = self.alloc();
-        let argmax_node = create_node(
+        let sra_node = create_node(
             SupportedOp::Hybrid(HybridOp::Sra),
             0, // ArgMax output has scale 0 (returns indices)
             vec![a, shift],
@@ -266,7 +266,7 @@ impl ModelBuilder {
             id,
             fanout_hint,
         );
-        self.model.insert_node(argmax_node);
+        self.model.insert_node(sra_node);
         (id, O)
     }
 

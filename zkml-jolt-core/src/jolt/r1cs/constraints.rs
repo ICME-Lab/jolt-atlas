@@ -183,7 +183,7 @@ impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
         );
 
         // if CircuitFlag::Const {
-        //     assert!(TdWriteValue == Const)
+        //     assert!(TdWriteValue == Imm )
         // }
         cs.constrain_eq_conditional(
             JoltONNXR1CSInputs::OpFlags(CircuitFlags::Const),

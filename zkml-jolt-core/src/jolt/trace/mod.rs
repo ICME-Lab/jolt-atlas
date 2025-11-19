@@ -46,12 +46,14 @@ use crate::{
             InstructionLookup, VirtualInstructionSequence, add::AddInstruction,
             beq::BeqInstruction, broadcast::BroadCastInstruction, div::DivInstruction,
             gte::GteInstruction, mul::MulInstruction, relu::ReluInstruction,
-            reshape::ReshapeInstruction, softmax::SoftmaxInstruction, sub::SubInstruction,
-            virtual_advice::AdviceInstruction,
+            reshape::ReshapeInstruction, softmax::SoftmaxInstruction, sra::SraInstruction,
+            sub::SubInstruction, virtual_advice::AdviceInstruction,
             virtual_assert_valid_div0::AssertValidDiv0Instruction,
             virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction,
             virtual_const::ConstInstruction, virtual_move::MoveInstruction,
             virtual_pow2::Pow2Instruction,
+            virtual_shift_right_bitmask::VirtualShiftRightBitmaskInstruction,
+            virtual_sra::VirtualSraInstruction,
         },
         lookup_table::LookupTables,
     },
@@ -121,9 +123,11 @@ pub fn expand_virtual_traces(raw_trace: Vec<ONNXCycle>, max_td: usize) -> Vec<ON
         .into_iter()
         .flat_map(|cycle| match cycle.instr.opcode {
             ONNXOpcode::Div => DivInstruction::<32>::virtual_trace(cycle, max_td),
-            ONNXOpcode::Softmax => SoftmaxInstruction::virtual_trace(cycle, max_td),
             // TODO(AntoineF4C5): Add back after stage 2 sum-check works
             // ONNXOpcode::Rsqrt => RsqrtInstruction::<32>::virtual_trace(cycle, max_td),
+            ONNXOpcode::Softmax => SoftmaxInstruction::virtual_trace(cycle, max_td),
+            ONNXOpcode::Sra => SraInstruction::<32>::virtual_trace(cycle, max_td),
+
             _ => vec![cycle],
         })
         .collect()
@@ -458,6 +462,13 @@ impl JoltONNXCycle {
                     memory_ops.ts1_val,
                 )))
             }
+            ONNXOpcode::VirtualShiftRightBitmask => Some(LookupFunction::VirtualShiftRightBitmask(
+                VirtualShiftRightBitmaskInstruction(memory_ops.ts1_val),
+            )),
+            ONNXOpcode::VirtualSra => Some(LookupFunction::VirtualSra(VirtualSraInstruction(
+                memory_ops.ts1_val,
+                memory_ops.ts2_val,
+            ))),
             // Other opcodes (like MatMult) don't have lookup functions
             _ => None,
         }
@@ -766,4 +777,6 @@ define_lookup_enum!(
     VirtualConst: ConstInstruction<WORD_SIZE>,
     VirtualMove: MoveInstruction<WORD_SIZE>,
     VirtualPow2: Pow2Instruction<WORD_SIZE>,
+    VirtualShiftRightBitmask: VirtualShiftRightBitmaskInstruction<WORD_SIZE>,
+    VirtualSra: VirtualSraInstruction<WORD_SIZE>
 );

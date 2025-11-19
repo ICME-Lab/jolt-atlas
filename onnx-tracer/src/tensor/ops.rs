@@ -2726,6 +2726,35 @@ pub fn slice<T: TensorType + Send + Sync>(
     t.get_slice(&slice)
 }
 
+/// Elementwise applies x >> y to a tensor of integers
+/// # Arguments
+///
+/// * `a` - Input tensor
+/// * `b` - Shift tensor
+///
+/// # Examples
+/// ```
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::sra;
+/// let x = Tensor::<i32>::new(
+///     Some(&[2, 15, 4, -4, -16, 0]),
+///     &[2, 3],
+/// ).unwrap();
+///
+/// let shift = Tensor::<i32>::new(
+///     Some(&[2, 2, 2, 2, 2, 2]),
+///     &[2, 3],
+/// ).unwrap();
+///
+/// let result = sra(&x, &shift);
+/// let expected = Tensor::<i32>::new(Some(&[0, 3, 1, -1, -4, 0]), &[2, 3]).unwrap();
+/// assert_eq!(result, expected);
+/// ```
+pub fn sra(a: &Tensor<i32>, b: &Tensor<i32>) -> Tensor<i32> {
+    a.par_enum_map(|i, a_i| Ok::<_, TensorError>(a_i.wrapping_shr(b[i] as u32)))
+        .unwrap()
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // -- nonlinear Functions
 // ---------------------------------------------------------------------------------
@@ -3385,14 +3414,8 @@ pub mod nonlinearities {
     pub fn rsqrt(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
         let sf_log = scale_input as i32;
         let sf = 1 << sf_log;
-        // NOTE: implements div as in zkvm, this floors the result
-        let rescale_down = |q: i32| {
-            if q % sf < 0 {
-                q / sf - 1
-            } else {
-                q / sf
-            }
-        };
+        // NOTE: rescale uses SRA
+        let rescale_down = |q: i32| q >> sf_log;
         a.par_enum_map(|_, a_i| {
             let sqrt_2 = (2f32.sqrt() * sf as f32).round() as i32;
 

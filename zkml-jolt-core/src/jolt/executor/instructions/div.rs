@@ -336,7 +336,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
         virtual_trace
     }
 
-    fn sequence_output(x: Vec<u64>, y: Vec<u64>, _: Option<ONNXOpcode>) -> Vec<u64> {
+    fn sequence_output(x: Vec<u64>, y: Vec<u64>) -> Vec<u64> {
         let num_outputs = x.len();
         let mut output = vec![0; num_outputs];
         for i in 0..num_outputs {

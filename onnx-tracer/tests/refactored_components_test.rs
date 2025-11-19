@@ -86,7 +86,7 @@ mod model_refactor_tests {
             model::Model,
             node::{Node, RebaseScale, SupportedOp},
         },
-        ops::{lookup::LookupOp, poly::PolyOp, Input, InputType},
+        ops::{hybrid::HybridOp, poly::PolyOp, Constant, Input, InputType},
     };
     use std::collections::{BTreeMap, HashMap};
 
@@ -160,8 +160,10 @@ mod model_refactor_tests {
             num_uses: 2,
         };
 
-        let (inner_node, div_node) =
-            Model::expand_rebase_scale_node(&original_node, &rebase_scale, 10);
+        let [inner_node, const_node, div_node] =
+            Model::expand_rebase_scale_node(&original_node, &rebase_scale, 10)
+                .try_into()
+                .unwrap();
 
         // Verify inner node
         assert_eq!(inner_node.idx, 10);
@@ -173,16 +175,27 @@ mod model_refactor_tests {
         assert_eq!(inner_node.num_uses, 1);
         assert_eq!(inner_node.inputs, vec![(0, 0)]);
 
+        // Verify const node
+        assert_eq!(const_node.idx, 11);
+        if let SupportedOp::Constant(Constant {
+            quantized_values, ..
+        }) = const_node.opkind
+        {
+            assert_eq!(quantized_values[0], 1);
+        };
+        assert_eq!(const_node.out_scale, 0); // no scale
+        assert_eq!(const_node.num_uses, 1);
+        assert_eq!(const_node.inputs, vec![]);
+
         // Verify division node
-        assert_eq!(div_node.idx, 11);
-        if let SupportedOp::Nonlinear(LookupOp::Div { denom }) = &div_node.opkind {
-            assert_eq!(denom.0, 2.0);
-        } else {
-            panic!("Expected division operation");
-        }
+        assert_eq!(div_node.idx, 12);
+        assert!(matches!(
+            div_node.opkind,
+            SupportedOp::Hybrid(HybridOp::Sra)
+        ));
         assert_eq!(div_node.out_scale, 6); // target_scale
         assert_eq!(div_node.num_uses, 2); // inherited from original
-        assert_eq!(div_node.inputs, vec![(10, 0)]); // input from inner node
+        assert_eq!(div_node.inputs, vec![(10, 0), (11, 0)]); // input from inner node
     }
 
     /// Test that handle_node_insertion works correctly for normal nodes
@@ -203,7 +216,7 @@ mod model_refactor_tests {
         Model::handle_node_insertion(&mut nodes, &mut remappings, 0, node);
 
         // Verify normal node insertion
-        assert_eq!(remappings.get(&0), Some(&1));
+        assert_eq!(remappings.get(&0), Some(&0));
         assert!(nodes.contains_key(&1));
         assert_eq!(nodes.len(), 1);
     }
@@ -233,10 +246,49 @@ mod model_refactor_tests {
 
         Model::handle_node_insertion(&mut nodes, &mut remappings, 0, rebase_node);
 
-        // Verify RebaseScale expansion created two nodes
-        assert_eq!(nodes.len(), 2);
+        // Verify RebaseScale expansion created three nodes
+        assert_eq!(nodes.len(), 3);
         assert!(nodes.contains_key(&0)); // inner node
-        assert!(nodes.contains_key(&1)); // div node
-        assert_eq!(remappings.get(&0), Some(&1)); // remapping points to div node
+        assert!(nodes.contains_key(&1)); // const node
+        assert!(nodes.contains_key(&2)); // sra node
+        assert_eq!(remappings.get(&0), Some(&2)); // remapping points to sra node
+    }
+
+    // Test that handle_node_insertion correctly expands nested nodes
+    #[test]
+    fn test_handle_insertion_nested() {
+        let mut nodes = BTreeMap::new();
+        let mut remappings = BTreeMap::new();
+
+        let inner_op = SupportedOp::Linear(PolyOp::MeanOfSquares { axes: vec![0] });
+        let rebase_scale = RebaseScale {
+            inner: Box::new(inner_op),
+            multiplier: 2.0,
+            target_scale: 6,
+            original_scale: 7,
+        };
+
+        let rebase_node = Node {
+            idx: 1,
+            opkind: SupportedOp::RebaseScale(rebase_scale),
+            inputs: vec![(0, 0)],
+            out_dims: vec![2, 2],
+            out_scale: 6,
+            num_uses: 1,
+        };
+
+        Model::handle_node_insertion(&mut nodes, &mut remappings, 0, rebase_node);
+
+        // Verify RebaseScale(MeanOfSquares) created 6 nodes (4 for MeanOfSquare, 2 for rescaling)
+        assert_eq!(nodes.len(), 6);
+        for i in 0..nodes.len() {
+            assert!(nodes.contains_key(&i));
+        }
+        assert_eq!(
+            // Rescale input is correctly mapped to inner node idx
+            nodes.get(&5).unwrap().inputs()[0].0,
+            nodes.get(&3).unwrap().idx()
+        );
+        assert_eq!(remappings.get(&0), Some(&5));
     }
 }

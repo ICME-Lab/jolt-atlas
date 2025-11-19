@@ -572,7 +572,9 @@ impl From<&SupportedOp> for ONNXOpcode {
             SupportedOp::Hybrid(hybrid_op) => hybrid_op.into(),
             SupportedOp::Input(input_op) => input_op.into(),
             SupportedOp::Constant(constant) => constant.into(),
-            SupportedOp::RebaseScale(rebase_scale) => rebase_scale.into(),
+            SupportedOp::RebaseScale(_) => {
+                unimplemented!("Rebase scale should be mapped to an array of compatible opcodes.")
+            }
             SupportedOp::Unknown(unknown) => unknown.into(),
             SupportedOp::Rescaled(rescaled) => (&*rescaled.inner).into(),
         }
@@ -973,12 +975,6 @@ impl Op<i32> for RebaseScale {
 
     fn requires_shape_equality(&self) -> bool {
         self.inner.requires_shape_equality()
-    }
-}
-
-impl From<&RebaseScale> for ONNXOpcode {
-    fn from(value: &RebaseScale) -> Self {
-        ONNXOpcode::RebaseScale(Box::new((&*value.inner).into()))
     }
 }
 

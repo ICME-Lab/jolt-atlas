@@ -8,8 +8,8 @@ use onnx_tracer::{
 
 use crate::{
     jolt::executor::instructions::{
-        VirtualInstructionSequence, add::AddInstruction, beq::BeqInstruction, div::DivInstruction,
-        gte::GteInstruction, mul::MulInstruction, sub::SubInstruction,
+        VirtualInstructionSequence, add::AddInstruction, beq::BeqInstruction, gte::GteInstruction,
+        mul::MulInstruction, sra::SraInstruction, sub::SubInstruction,
     },
     utils::{VirtualSequenceCounter, u64_vec_to_i32_iter},
 };
@@ -17,7 +17,7 @@ use crate::{
 // Scale factor
 const SF: u64 = 128;
 const SF_LOG: u64 = 7;
-const DIV_VIRTUAL_REGISTERS: usize = 6;
+const SRA_VIRTUAL_REGISTERS: usize = 1;
 
 /// Quantized Rsqrt producing `Q / sqrt(x)`
 ///
@@ -31,34 +31,37 @@ const DIV_VIRTUAL_REGISTERS: usize = 6;
 /// if z_i == 0 → z_i += 1              | clamping 0 to 1
 /// if log(z_i) > 3 * log(Q) → d_i = 0  | if log(1/sqrt(x)) < 1/Q (ulp), set d = 0
 /// else d_i = 3*log(Q) - log(z_i)      | log(1/sqrt(x))
-/// g_i = d + d(xd^2-1)(sqrt(2)/2-1)    | Function to approximate 1/sqrt(x)
+/// if xd^2-1>=0 → a_i = sqrt(2)/2-1    | conditionally set a to the most appropriate value
+/// else a_i = 2 - 2 * sqrt(2)          | depending on whether xd^2 >= 1
+/// g_i = d + ad(xd^2-1)                | Function to approximate 1/sqrt(x)
 /// ```
 ///
 /// ### Virtual trace sequence
 /// The sequence performs 14 virtual steps:
 ///
-/// | Step  | Operation             | Description                                       | Expression                    |
-/// |-------|-----------------------|---------------------------------------------------|-------------------------------|
-/// | 1     | `VirtualConst(Q)`     | Initialize scale_factor tensor                    | `Q`                           |
-/// | 2     | `VirtualConst(1)`     | Initialize ulp tensor                             | `1`                           |
-/// | 3     | `Eq`                  | Returns `x == 0`                                  | `x == 0`                      |
-/// | 4     | `Select`              | Compute `x = select(x, x, ulp)`                   | `max(x, 1)`                   |
-/// | 5     | `VirtualConst(a_lt_0)`| Initialize a_lt_0 tensor, if `xd^2-1 < 0`         | `2 - 2 * sqrt(2)`             |
-/// | 6     | `VirtualConst(a)`     | Initialize a_gt_0 tensor, if `xd^2-1 >= 0`        | `sqrt(2)/2 - 1`               |
-/// | 7     | `VirtualAdvice(d)`    | Initialize d tensor                               | `2^((3log(Q) - log(x))/2)`    |
-/// | 8     | `Mul`                 | Compute `xd_ns = x * d`                           | `Q * xd`                      |
-/// | 9     | `Div`                 | Compute `xd = xd_ns / Q`                          | `xd`                          |
-/// | 10    | `Mul`                 | Compute `xd_sq_ns = d * xd`                       | `Q * xd^2`                    |
-/// | 11    | `Div`                 | Compute `xd_sq = xd_sq_ns / Q`                    | `xd^2`                        |
-/// | 12    | `Sub`                 | Compute `xd_sq_minus1 = xd_sq - 1`                | `xd^2-1`                      |
-/// | 13    | `Gte`                 | Returns `gt_0 = xd^2-1 >= 0`                      | `xd^2-1 >= 0`                 |
-/// | 14    | `Select`              | Compute `a = select(gt0, a_gt_0, a_lt_0)`         | `xd^2-1>=0 ? a_gt_0 : a_lt_0` |
-/// | 15    | `Mul`                 | Compute `xd_cub_minusd_ns = d * xd_sq_minus1`     | `Q * d(xd^2-1)`               |
-/// | 16    | `Div`                 | Compute `xd_cub_minusd = xd_cub_minusd_ns / Q`    | `d(xd^2-1)`                   |
-/// | 17    | `Mul`                 | Compute `axd_cub_minusd_ns = a * xd_cub_minusd`   | `Q * d(xd^2-1)(sqrt(2)/2-1)`  |
-/// | 18    | `Div`                 | Compute `axd_cub_minusd = axd_cub_minusd_ns / Q`  | `d(xd^2-1)(sqrt(2)/2-1)`      |
-/// | 19    | `Add`                 | Compute `approx = d + axd_cub_minusd`             | `d + d(xd^2-1)(sqrt(2)/2-1)`  |
-/// | 20    | `VirtualMove`         | Write final result to output tensor               | `d + d(xd^2-1)(sqrt(2)/2-1)`  |
+/// | Step  | Operation             | Description                                           | Expression                    |
+/// |-------|-----------------------|-------------------------------------------------------|-------------------------------|
+/// | 1     | `VirtualConst(sf)`    | Initialize scale_factor tensor                        | `sf`                          |
+/// | 2     | `VirtualConst(1)`     | Initialize ulp tensor                                 | `1`                           |
+/// | 3     | `VirtualConst(sf_log)`| Initialize scale_factor logarithm tensor              | `sf_log`                      |
+/// | 4     | `Eq`                  | Returns `x == 0`                                      | `x == 0`                      |
+/// | 5     | `Select`              | Compute `x = select(x, x, ulp)`                       | `max(x, 1)`                   |
+/// | 6     | `VirtualConst(a_lt_0)`| Initialize a_lt_0 tensor, if `xd^2-1 < 0`             | `2 - 2 * sqrt(2)`             |
+/// | 7     | `VirtualConst(a_gt_0)`| Initialize a_gt_0 tensor, if `xd^2-1 >= 0`            | `sqrt(2)/2 - 1`               |
+/// | 8     | `VirtualAdvice(d)`    | Initialize d tensor                                   | `2^((3log(sf) - log(x))/2)`   |
+/// | 9     | `Mul`                 | Compute `xd_ns = x * d`                               | `sf * xd`                     |
+/// | 10    | `Sra`                 | Compute `xd = xd_ns >> sf_log`                        | `xd`                          |
+/// | 11    | `Mul`                 | Compute `xd_sq_ns = d * xd`                           | `sf * xd^2`                   |
+/// | 12    | `Sra`                 | Compute `xd_sq = xd_sq_ns >> sf_log`                  | `xd^2`                        |
+/// | 13    | `Sub`                 | Compute `xd_sq_minus1 = xd_sq - 1`                    | `xd^2-1`                      |
+/// | 14    | `Gte`                 | Returns `gt_0 = xd^2-1 >= 0`                          | `xd^2-1 >= 0`                 |
+/// | 15    | `Select`              | Compute `a = select(gt0, a_gt_0, a_lt_0)`             | `xd^2-1>=0 ? a_gt_0 : a_lt_0` |
+/// | 16    | `Mul`                 | Compute `xd_cub_minusd_ns = d * xd_sq_minus1`         | `sf * d(xd^2-1)`              |
+/// | 17    | `Sra`                 | Compute `xd_cub_minusd = xd_cub_minusd_ns >> sf_log`  | `d(xd^2-1)`                   |
+/// | 18    | `Mul`                 | Compute `axd_cub_minusd_ns = a * xd_cub_minusd`       | `sf * d(xd^2-1)(sqrt(2)/2-1)` |
+/// | 19    | `Sra`                 | Compute `axd_cub_minusd = axd_cub_minusd_ns >> sf_log`| `d(xd^2-1)(sqrt(2)/2-1)`      |
+/// | 20    | `Add`                 | Compute `approx = d + axd_cub_minusd`                 | `d + d(xd^2-1)(sqrt(2)/2-1)`  |
+/// | 21    | `VirtualMove`         | Write final result to output tensor                   | `d + d(xd^2-1)(sqrt(2)/2-1)`  |
 ///
 /// Each `ONNXCycle` represents one of these steps in the virtualized trace.
 ///
@@ -67,7 +70,7 @@ const DIV_VIRTUAL_REGISTERS: usize = 6;
 /// - Designed for quantized circuits or proof backends where fractional values are approximated in integer space.
 pub struct RsqrtInstruction<const WORD_SIZE: usize>;
 impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WORD_SIZE> {
-    const SEQUENCE_LENGTH: usize = 16 + 4 * DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH;
+    const SEQUENCE_LENGTH: usize = 17 + 4 * SraInstruction::<WORD_SIZE>::SEQUENCE_LENGTH;
 
     fn virtual_trace(cycle: ONNXCycle, K: usize) -> Vec<ONNXCycle> {
         assert_eq!(cycle.instr.opcode, ONNXOpcode::Rsqrt);
@@ -100,6 +103,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         // Virtual registers used in sequence
         let v_one = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
         let v_ulp = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
+        let v_sf_log = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
         let v_xeq0 = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
         let v_x = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
         let v_a_lt_0 = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
@@ -166,6 +170,30 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 ts3_val: None,
                 td_pre_val: None,
                 td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&ulp))),
+            },
+            advice_value: None,
+        });
+
+        // scale factor logarithm, used to rescale down
+        let sf_log = vec![SF_LOG; num_outputs];
+        virtual_trace.push(ONNXCycle {
+            instr: ONNXInstr {
+                address: cycle.instr.address,
+                opcode: ONNXOpcode::VirtualConst,
+                ts1: None,
+                ts2: None,
+                ts3: None,
+                td: v_sf_log,
+                imm: Some(Tensor::from(u64_vec_to_i32_iter(&sf_log))),
+                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                output_dims: cycle.instr.output_dims.clone(),
+            },
+            memory_state: MemoryState {
+                ts1_val: None,
+                ts2_val: None,
+                ts3_val: None,
+                td_pre_val: None,
+                td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&sf_log))),
             },
             advice_value: None,
         });
@@ -339,28 +367,24 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         });
 
         // Rescale
-        let xd = DivInstruction::<WORD_SIZE>::sequence_output(
-            xd_ns.clone(),
-            vec![SF; num_outputs],
-            None,
-        );
-
-        virtual_trace.extend(DivInstruction::<WORD_SIZE>::virtual_trace(
+        let xd =
+            SraInstruction::<WORD_SIZE>::sequence_output(xd_ns.clone(), vec![SF_LOG; num_outputs]);
+        virtual_trace.extend(SraInstruction::<WORD_SIZE>::virtual_trace(
             ONNXCycle {
                 instr: ONNXInstr {
                     address: cycle.instr.address,
-                    opcode: ONNXOpcode::Div,
+                    opcode: ONNXOpcode::Sra,
                     ts1: v_xd_ns,
-                    ts2: None,
+                    ts2: v_sf_log,
                     ts3: None,
                     td: v_xd,
-                    imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
+                    imm: None,
                     virtual_sequence_remaining: Some(vseq_counter.get()),
                     output_dims: cycle.instr.output_dims.clone(),
                 },
                 memory_state: MemoryState {
                     ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_ns))),
-                    ts2_val: None,
+                    ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&sf_log))),
                     ts3_val: None,
                     td_pre_val: None,
                     td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd))),
@@ -369,8 +393,8 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             },
             K + index,
         ));
-        index += DIV_VIRTUAL_REGISTERS;
-        vseq_counter.subtract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
+        index += SRA_VIRTUAL_REGISTERS;
+        vseq_counter.subtract(SraInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
 
         // xd^2
         let xd_sq_ns = (0..num_outputs)
@@ -399,28 +423,26 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         });
 
         // Rescale
-        let xd_sq = DivInstruction::<WORD_SIZE>::sequence_output(
+        let xd_sq = SraInstruction::<WORD_SIZE>::sequence_output(
             xd_sq_ns.clone(),
-            vec![SF; num_outputs],
-            None,
+            vec![SF_LOG; num_outputs],
         );
-
-        virtual_trace.extend(DivInstruction::<WORD_SIZE>::virtual_trace(
+        virtual_trace.extend(SraInstruction::<WORD_SIZE>::virtual_trace(
             ONNXCycle {
                 instr: ONNXInstr {
                     address: cycle.instr.address,
-                    opcode: ONNXOpcode::Div,
+                    opcode: ONNXOpcode::Sra,
                     ts1: v_xd_sq_ns,
-                    ts2: None,
+                    ts2: v_sf_log,
                     ts3: None,
                     td: v_xd_sq,
-                    imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
+                    imm: None,
                     virtual_sequence_remaining: Some(vseq_counter.get()),
                     output_dims: cycle.instr.output_dims.clone(),
                 },
                 memory_state: MemoryState {
                     ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_sq_ns))),
-                    ts2_val: None,
+                    ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&sf_log))),
                     ts3_val: None,
                     td_pre_val: None,
                     td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_sq))),
@@ -429,8 +451,8 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             },
             K + index,
         ));
-        index += DIV_VIRTUAL_REGISTERS;
-        vseq_counter.subtract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
+        index += SRA_VIRTUAL_REGISTERS;
+        vseq_counter.subtract(SraInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
 
         // xd^2-1
         let xd_sq_minus1 = (0..num_outputs)
@@ -544,27 +566,26 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         });
 
         // Rescale
-        let xd_cub_minusd = DivInstruction::<WORD_SIZE>::sequence_output(
+        let xd_cub_minusd = SraInstruction::<WORD_SIZE>::sequence_output(
             xd_cub_minusd_ns.clone(),
-            vec![SF; num_outputs],
-            None,
+            vec![SF_LOG; num_outputs],
         );
-        virtual_trace.extend(DivInstruction::<WORD_SIZE>::virtual_trace(
+        virtual_trace.extend(SraInstruction::<WORD_SIZE>::virtual_trace(
             ONNXCycle {
                 instr: ONNXInstr {
                     address: cycle.instr.address,
-                    opcode: ONNXOpcode::Div,
+                    opcode: ONNXOpcode::Sra,
                     ts1: v_xd_cub_minusd_ns,
-                    ts2: None,
+                    ts2: v_sf_log,
                     ts3: None,
                     td: v_xd_cub_minusd,
-                    imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
+                    imm: None,
                     virtual_sequence_remaining: Some(vseq_counter.get()),
                     output_dims: cycle.instr.output_dims.clone(),
                 },
                 memory_state: MemoryState {
                     ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_cub_minusd_ns))),
-                    ts2_val: None,
+                    ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&sf_log))),
                     ts3_val: None,
                     td_pre_val: None,
                     td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&xd_cub_minusd))),
@@ -573,8 +594,8 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             },
             K + index,
         ));
-        index += DIV_VIRTUAL_REGISTERS;
-        vseq_counter.subtract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
+        index += SRA_VIRTUAL_REGISTERS;
+        vseq_counter.subtract(SraInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
 
         // ad(xd^2-1)
         let axd_cub_minusd_ns = (0..num_outputs)
@@ -603,27 +624,26 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         });
 
         // Rescale
-        let axd_cub_minusd = DivInstruction::<WORD_SIZE>::sequence_output(
+        let axd_cub_minusd = SraInstruction::<WORD_SIZE>::sequence_output(
             axd_cub_minusd_ns.clone(),
-            vec![SF; num_outputs],
-            None,
+            vec![SF_LOG; num_outputs],
         );
-        virtual_trace.extend(DivInstruction::<WORD_SIZE>::virtual_trace(
+        virtual_trace.extend(SraInstruction::<WORD_SIZE>::virtual_trace(
             ONNXCycle {
                 instr: ONNXInstr {
                     address: cycle.instr.address,
-                    opcode: ONNXOpcode::Div,
+                    opcode: ONNXOpcode::Sra,
                     ts1: v_axd_cub_minusd_ns,
-                    ts2: None,
+                    ts2: v_sf_log,
                     ts3: None,
                     td: v_axd_cub_minusd,
-                    imm: Some(Tensor::from(u64_vec_to_i32_iter(&vec![SF; num_outputs]))),
+                    imm: None,
                     virtual_sequence_remaining: Some(vseq_counter.get()),
                     output_dims: cycle.instr.output_dims.clone(),
                 },
                 memory_state: MemoryState {
                     ts1_val: Some(Tensor::from(u64_vec_to_i32_iter(&axd_cub_minusd_ns))),
-                    ts2_val: None,
+                    ts2_val: Some(Tensor::from(u64_vec_to_i32_iter(&sf_log))),
                     ts3_val: None,
                     td_pre_val: None,
                     td_post_val: Some(Tensor::from(u64_vec_to_i32_iter(&axd_cub_minusd))),
@@ -632,7 +652,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             },
             K + index,
         ));
-        vseq_counter.subtract(DivInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
+        vseq_counter.subtract(SraInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
 
         // d + ad(xd^2-1)
         let approx: Vec<u64> = (0..num_outputs)
@@ -692,13 +712,11 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         virtual_trace
     }
 
-    fn sequence_output(x: Vec<u64>, _: Vec<u64>, _: Option<ONNXOpcode>) -> Vec<u64> {
+    fn sequence_output(x: Vec<u64>, _: Vec<u64>) -> Vec<u64> {
         let sf_log = SF.ilog2() as i32;
         let sf = SF as i32;
-        // div instruction in zkvm is flooring, (ex: -4/3 = -2). This method allows to have consistent result with zkvm.
-        let rescale_down = |q: i32| {
-            if q % sf < 0 { q / sf - 1 } else { q / sf }
-        };
+        // NOTE: Rescale uses SRA
+        let rescale_down = |q: i32| q >> sf_log;
 
         let num_outputs = x.len();
         let mut output = vec![0; num_outputs];
@@ -729,11 +747,11 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             // TODO(AntoineF4C5): apply one or two rounds of Newton-Raphson method to get better results
             // Newton's method
             // let approximation = (approximation
-            //     * (3 * sf - ((approximation * q_x) / sf * approximation) / sf))
+            //     * (3 * sf - ((approximation * q_x) >> sf_log * approximation) >> sf_log))
             //     / (2 * sf);
 
             // output[i] = ((approximation
-            //     * (3 * sf - ((approximation * q_x) / sf * approximation) / sf))
+            //     * (3 * sf - ((approximation * q_x) >> sf_log * approximation) >> sf_log))
             //     / (2 * sf)) as u32 as u64;
             // approximation
 
@@ -772,7 +790,7 @@ mod test {
 
             // Input to the zkvm, this is quantized with a precision of 1/sf.
             let x = (input * sf) as i32 as u32 as u64; // cast to vm compatible type
-            let result = RsqrtInstruction::<32>::sequence_output(vec![x], vec![], None)[0];
+            let result = RsqrtInstruction::<32>::sequence_output(vec![x], vec![])[0];
             let dequantized = result as f32 / sf;
             let error = (dequantized - expected).abs() / expected;
             // If result == 0, we consider the offset between quantized expected result and 0.

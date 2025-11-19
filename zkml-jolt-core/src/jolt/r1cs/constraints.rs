@@ -22,7 +22,7 @@ pub trait R1CSConstraints<F: JoltField> {
 pub struct JoltONNXConstraints;
 impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
     fn uniform_constraints(cs: &mut R1CSBuilder) {
-        // if LeftOperandIsRs1Value { assert!(LeftInstructionInput == Ts1Value) }
+        // if LeftOperandIsTs1Value { assert!(LeftInstructionInput == Ts1Value) }
         cs.constrain_eq_conditional(
             JoltONNXR1CSInputs::OpFlags(CircuitFlags::LeftOperandIsTs1Value),
             JoltONNXR1CSInputs::LeftInstructionInput,

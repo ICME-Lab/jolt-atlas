@@ -46,8 +46,8 @@ use crate::{
             InstructionLookup, VirtualInstructionSequence, add::AddInstruction,
             beq::BeqInstruction, broadcast::BroadCastInstruction, div::DivInstruction,
             gte::GteInstruction, mul::MulInstruction, relu::ReluInstruction,
-            reshape::ReshapeInstruction, softmax::SoftmaxInstruction, sra::SraInstruction,
-            sub::SubInstruction, virtual_advice::AdviceInstruction,
+            reshape::ReshapeInstruction, rsqrt::RsqrtInstruction, softmax::SoftmaxInstruction,
+            sra::SraInstruction, sub::SubInstruction, virtual_advice::AdviceInstruction,
             virtual_assert_valid_div0::AssertValidDiv0Instruction,
             virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction,
             virtual_const::ConstInstruction, virtual_move::MoveInstruction,
@@ -123,8 +123,7 @@ pub fn expand_virtual_traces(raw_trace: Vec<ONNXCycle>, max_td: usize) -> Vec<ON
         .into_iter()
         .flat_map(|cycle| match cycle.instr.opcode {
             ONNXOpcode::Div => DivInstruction::<32>::virtual_trace(cycle, max_td),
-            // TODO(AntoineF4C5): Add back after stage 2 sum-check works
-            // ONNXOpcode::Rsqrt => RsqrtInstruction::<32>::virtual_trace(cycle, max_td),
+            ONNXOpcode::Rsqrt => RsqrtInstruction::<32>::virtual_trace(cycle, max_td),
             ONNXOpcode::Softmax => SoftmaxInstruction::virtual_trace(cycle, max_td),
             ONNXOpcode::Sra => SraInstruction::<32>::virtual_trace(cycle, max_td),
 

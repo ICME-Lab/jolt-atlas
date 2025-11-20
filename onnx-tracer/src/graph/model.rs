@@ -221,12 +221,7 @@ impl Model {
                             &mut min_lookup_inputs,
                         )?;
                     }
-                    debug!(
-                        "------------ output node int {}: {} \n  ------------ scale: {}",
-                        idx,
-                        res.output.show(),
-                        n.out_scale
-                    );
+                    debug!("output node int {}: {}", idx, res.output.show(),);
                     results.insert(idx, vec![res.output.clone()]);
                     self.tracer.capture_post_state(res.output);
                 }

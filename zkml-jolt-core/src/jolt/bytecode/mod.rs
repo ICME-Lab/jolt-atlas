@@ -3,7 +3,7 @@ use crate::jolt::{
     dag::{stage::SumcheckStages, state_manager::StateManager},
     executor::instructions::{
         InstructionLookup, VirtualInstructionSequence, div::DivInstruction,
-        softmax::SoftmaxInstruction, sra::SraInstruction,
+        rsqrt::RsqrtInstruction, softmax::SoftmaxInstruction, sra::SraInstruction,
     },
     lookup_table::{LookupTables, RangeCheckTable, ReLUTable},
     sumcheck::SumcheckInstance,
@@ -224,8 +224,7 @@ impl BytecodePreprocessing {
             .into_iter()
             .flat_map(|instr| match instr.opcode {
                 ONNXOpcode::Div => DivInstruction::<32>::virtual_sequence(instr, max_td),
-                // TODO(AntoineF4C5): Add back after stage 2 sum-check works
-                // ONNXOpcode::Rsqrt => RsqrtInstruction::<32>::virtual_sequence(instr, max_td),
+                ONNXOpcode::Rsqrt => RsqrtInstruction::<32>::virtual_sequence(instr, max_td),
                 ONNXOpcode::Softmax => SoftmaxInstruction::virtual_sequence(instr, max_td),
                 ONNXOpcode::Sra => SraInstruction::<32>::virtual_sequence(instr, max_td),
                 _ => vec![instr],

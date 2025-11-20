@@ -12,7 +12,7 @@ use crate::jolt::{
     pcs::{OpeningId, SumcheckId},
     r1cs::{key::UniformSpartanKey, spartan::UniformSpartanProof},
     trace::JoltONNXCycle,
-    witness::{CommittedPolynomial, VirtualPolynomial},
+    witness::VirtualPolynomial,
 };
 use jolt_core::{
     field::JoltField,
@@ -56,28 +56,6 @@ pub enum JoltONNXR1CSInputs {
     OpFlags(CircuitFlags),
 }
 
-impl TryFrom<JoltONNXR1CSInputs> for CommittedPolynomial {
-    type Error = &'static str;
-
-    fn try_from(value: JoltONNXR1CSInputs) -> Result<Self, Self::Error> {
-        match value {
-            JoltONNXR1CSInputs::LeftInstructionInput => {
-                Ok(CommittedPolynomial::LeftInstructionInput)
-            }
-            JoltONNXR1CSInputs::RightInstructionInput => {
-                Ok(CommittedPolynomial::RightInstructionInput)
-            }
-            JoltONNXR1CSInputs::Product => Ok(CommittedPolynomial::Product),
-            JoltONNXR1CSInputs::WriteLookupOutputToTD => {
-                Ok(CommittedPolynomial::WriteLookupOutputToTD)
-            }
-            JoltONNXR1CSInputs::SelectCond => Ok(CommittedPolynomial::SelectCond),
-            JoltONNXR1CSInputs::SelectRes => Ok(CommittedPolynomial::SelectRes),
-            _ => Err("{value} is not a committed polynomial"),
-        }
-    }
-}
-
 impl TryFrom<JoltONNXR1CSInputs> for VirtualPolynomial {
     type Error = &'static str;
 
@@ -95,7 +73,16 @@ impl TryFrom<JoltONNXR1CSInputs> for VirtualPolynomial {
             JoltONNXR1CSInputs::NextPC => Ok(VirtualPolynomial::NextPC),
             JoltONNXR1CSInputs::LookupOutput => Ok(VirtualPolynomial::LookupOutput),
             JoltONNXR1CSInputs::OpFlags(flag) => Ok(VirtualPolynomial::OpFlags(flag)),
-            _ => Err("{value} is not a virtual polynomial"),
+            JoltONNXR1CSInputs::LeftInstructionInput => Ok(VirtualPolynomial::LeftInstructionInput),
+            JoltONNXR1CSInputs::RightInstructionInput => {
+                Ok(VirtualPolynomial::RightInstructionInput)
+            }
+            JoltONNXR1CSInputs::Product => Ok(VirtualPolynomial::Product),
+            JoltONNXR1CSInputs::SelectCond => Ok(VirtualPolynomial::SelectCond),
+            JoltONNXR1CSInputs::SelectRes => Ok(VirtualPolynomial::SelectRes),
+            JoltONNXR1CSInputs::WriteLookupOutputToTD => {
+                Ok(VirtualPolynomial::WriteLookupOutputToTD)
+            }
         }
     }
 }
@@ -106,8 +93,6 @@ impl TryFrom<JoltONNXR1CSInputs> for OpeningId {
     fn try_from(value: JoltONNXR1CSInputs) -> Result<Self, Self::Error> {
         if let Ok(poly) = VirtualPolynomial::try_from(value) {
             Ok(OpeningId::Virtual(poly, SumcheckId::SpartanOuter))
-        } else if let Ok(poly) = CommittedPolynomial::try_from(value) {
-            Ok(OpeningId::Committed(poly, SumcheckId::SpartanOuter))
         } else {
             Err("Could not map {value} to an OpeningId")
         }
@@ -146,17 +131,6 @@ pub const ALL_R1CS_INPUTS: [JoltONNXR1CSInputs; 29] = [
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::Const),
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::Select),
     JoltONNXR1CSInputs::OpFlags(CircuitFlags::Halt),
-];
-
-/// The subset of `ALL_R1CS_INPUTS` that are committed. The rest of
-/// the inputs are virtual polynomials.
-pub const COMMITTED_R1CS_INPUTS: [JoltONNXR1CSInputs; 6] = [
-    JoltONNXR1CSInputs::LeftInstructionInput,
-    JoltONNXR1CSInputs::RightInstructionInput,
-    JoltONNXR1CSInputs::Product,
-    JoltONNXR1CSInputs::SelectCond,
-    JoltONNXR1CSInputs::SelectRes,
-    JoltONNXR1CSInputs::WriteLookupOutputToTD,
 ];
 
 impl JoltONNXR1CSInputs {
@@ -238,10 +212,18 @@ impl JoltONNXR1CSInputs {
                 coeffs.into()
             }
             JoltONNXR1CSInputs::LeftInstructionInput => {
-                CommittedPolynomial::LeftInstructionInput.generate_witness(preprocessing, trace)
+                let coeffs: Vec<u64> = trace
+                    .par_iter()
+                    .map(|cycle| LookupQuery::<32>::to_instruction_inputs(cycle).0)
+                    .collect();
+                coeffs.into()
             }
             JoltONNXR1CSInputs::RightInstructionInput => {
-                CommittedPolynomial::RightInstructionInput.generate_witness(preprocessing, trace)
+                let coeffs: Vec<i64> = trace
+                    .par_iter()
+                    .map(|cycle| LookupQuery::<32>::to_instruction_inputs(cycle).1)
+                    .collect();
+                coeffs.into()
             }
             JoltONNXR1CSInputs::LeftLookupOperand => {
                 let coeffs: Vec<u64> = trace
@@ -258,16 +240,51 @@ impl JoltONNXR1CSInputs {
                 coeffs.into()
             }
             JoltONNXR1CSInputs::Product => {
-                CommittedPolynomial::Product.generate_witness(preprocessing, trace)
+                let coeffs: Vec<u64> = trace
+                    .par_iter()
+                    .map(|cycle| {
+                        let (left_input, right_input) =
+                            LookupQuery::<32>::to_instruction_inputs(cycle);
+                        left_input * right_input as u64
+                    })
+                    .collect();
+                coeffs.into()
             }
             JoltONNXR1CSInputs::SelectCond => {
-                CommittedPolynomial::SelectCond.generate_witness(preprocessing, trace)
+                let coeffs: Vec<u8> = preprocessing
+                    .bytecode()
+                    .par_iter()
+                    .zip(trace.par_iter())
+                    .map(|(instr, cycle)| {
+                        let flag = instr.circuit_flags()[CircuitFlags::Select as usize];
+                        (cycle.ts1_read() as u8) * (flag as u8)
+                    })
+                    .collect();
+                coeffs.into()
             }
             JoltONNXR1CSInputs::SelectRes => {
-                CommittedPolynomial::SelectRes.generate_witness(preprocessing, trace)
+                let coeffs: Vec<u64> = preprocessing
+                    .bytecode()
+                    .par_iter()
+                    .zip(trace.par_iter())
+                    .map(|(instr, cycle)| {
+                        let flag = instr.circuit_flags()[CircuitFlags::Select as usize];
+                        (cycle.td_write().1) * (flag as u8 as u64)
+                    })
+                    .collect();
+                coeffs.into()
             }
             JoltONNXR1CSInputs::WriteLookupOutputToTD => {
-                CommittedPolynomial::WriteLookupOutputToTD.generate_witness(preprocessing, trace)
+                let coeffs: Vec<u64> = preprocessing
+                    .bytecode()
+                    .par_iter()
+                    .map(|instr| {
+                        let flag =
+                            instr.circuit_flags()[CircuitFlags::WriteLookupOutputToTD as usize];
+                        (instr.td) * (flag as u8 as u64)
+                    })
+                    .collect();
+                coeffs.into()
             }
             JoltONNXR1CSInputs::LookupOutput => {
                 let coeffs: Vec<u64> = trace

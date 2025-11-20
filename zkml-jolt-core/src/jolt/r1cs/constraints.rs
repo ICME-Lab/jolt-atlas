@@ -22,47 +22,6 @@ pub trait R1CSConstraints<F: JoltField> {
 pub struct JoltONNXConstraints;
 impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
     fn uniform_constraints(cs: &mut R1CSBuilder) {
-        // if LeftOperandIsRs1Value { assert!(LeftInstructionInput == Ts1Value) }
-        cs.constrain_eq_conditional(
-            JoltONNXR1CSInputs::OpFlags(CircuitFlags::LeftOperandIsTs1Value),
-            JoltONNXR1CSInputs::LeftInstructionInput,
-            JoltONNXR1CSInputs::Ts1Value,
-        );
-
-        // if !(LeftOperandIsTs1Value)  {
-        //     assert!(LeftInstructionInput == 0)
-        // }
-        cs.constrain_eq_conditional(
-            1 - JoltONNXR1CSInputs::OpFlags(CircuitFlags::LeftOperandIsTs1Value),
-            JoltONNXR1CSInputs::LeftInstructionInput,
-            0,
-        );
-
-        // if RightOperandIsTs2Value { assert!(RightInstructionInput == Ts2Value) }
-        cs.constrain_eq_conditional(
-            JoltONNXR1CSInputs::OpFlags(CircuitFlags::RightOperandIsTs2Value),
-            JoltONNXR1CSInputs::RightInstructionInput,
-            JoltONNXR1CSInputs::Ts2Value,
-        );
-
-        // if RightOperandIsImm { assert!(RightInstructionInput == Imm) }
-        cs.constrain_eq_conditional(
-            JoltONNXR1CSInputs::OpFlags(CircuitFlags::RightOperandIsImm),
-            JoltONNXR1CSInputs::RightInstructionInput,
-            JoltONNXR1CSInputs::Imm,
-        );
-
-        // if !(RightOperandIsTs2Value || RightOperandIsImm)  {
-        //     assert!(RightInstructionInput == 0)
-        // }
-        // Note that RightOperandIsTs2Value and RightOperandIsImm are mutually exclusive flags
-        cs.constrain_eq_conditional(
-            1 - JoltONNXR1CSInputs::OpFlags(CircuitFlags::RightOperandIsTs2Value)
-                - JoltONNXR1CSInputs::OpFlags(CircuitFlags::RightOperandIsImm),
-            JoltONNXR1CSInputs::RightInstructionInput,
-            0,
-        );
-
         // if AddOperands || SubtractOperands || MultiplyOperands {
         //     // Lookup query is just RightLookupOperand
         //     assert!(LeftLookupOperand == 0)
@@ -101,11 +60,6 @@ impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
         // if MultiplyOperands {
         //     assert!(RightLookupOperand == Rs1Value * Rs2Value)
         // }
-        cs.constrain_prod(
-            JoltONNXR1CSInputs::RightInstructionInput,
-            JoltONNXR1CSInputs::LeftInstructionInput,
-            JoltONNXR1CSInputs::Product,
-        );
         cs.constrain_eq_conditional(
             JoltONNXR1CSInputs::OpFlags(CircuitFlags::MultiplyOperands),
             JoltONNXR1CSInputs::RightLookupOperand,
@@ -142,16 +96,6 @@ impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
         // } else {
         //     assert!(TdWriteValue == /* Further assertions down below */)
         // }
-        cs.constrain_prod(
-            JoltONNXR1CSInputs::Ts1Value,
-            JoltONNXR1CSInputs::OpFlags(CircuitFlags::Select),
-            JoltONNXR1CSInputs::SelectCond,
-        );
-        cs.constrain_prod(
-            JoltONNXR1CSInputs::TdWriteValue,
-            JoltONNXR1CSInputs::OpFlags(CircuitFlags::Select),
-            JoltONNXR1CSInputs::SelectRes,
-        );
         cs.constrain_if_else(
             JoltONNXR1CSInputs::SelectCond,
             JoltONNXR1CSInputs::Ts2Value,
@@ -171,11 +115,6 @@ impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
         // if Td != 0 && WriteLookupOutputToTD {
         //     assert!(TdWriteValue == LookupOutput)
         // }
-        cs.constrain_prod(
-            JoltONNXR1CSInputs::Td,
-            JoltONNXR1CSInputs::OpFlags(CircuitFlags::WriteLookupOutputToTD),
-            JoltONNXR1CSInputs::WriteLookupOutputToTD,
-        );
         cs.constrain_eq_conditional(
             JoltONNXR1CSInputs::WriteLookupOutputToTD,
             JoltONNXR1CSInputs::TdWriteValue,
@@ -192,9 +131,9 @@ impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
         );
 
         // If Halt {
-        //     assert!(NextPC == PC + 1)
+        //     assert!(NextPC == 0)
         // } else {
-        //    assert!(NextPC == 0)
+        //    assert!(NextPC == PC + 1)
         // }
         cs.constrain_if_else(
             JoltONNXR1CSInputs::OpFlags(CircuitFlags::Halt),

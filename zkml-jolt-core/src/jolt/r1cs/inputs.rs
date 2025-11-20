@@ -4,13 +4,10 @@
     clippy::too_many_arguments
 )]
 
-use std::marker::PhantomData;
-
 use crate::jolt::{
     JoltProverPreprocessing,
     bytecode::CircuitFlags,
     pcs::{OpeningId, SumcheckId},
-    r1cs::{key::UniformSpartanKey, spartan::UniformSpartanProof},
     trace::JoltONNXCycle,
     witness::VirtualPolynomial,
 };
@@ -20,19 +17,12 @@ use jolt_core::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::MultilinearPolynomial,
     },
-    transcripts::Transcript,
     zkvm::{
         instruction::LookupQuery,
         r1cs::ops::{LC, Term, Variable},
     },
 };
 use rayon::prelude::*;
-
-pub struct R1CSProof<F: JoltField, ProofTranscript: Transcript> {
-    pub key: UniformSpartanKey<F>,
-    pub proof: UniformSpartanProof<F, ProofTranscript>,
-    pub _marker: PhantomData<ProofTranscript>,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum JoltONNXR1CSInputs {

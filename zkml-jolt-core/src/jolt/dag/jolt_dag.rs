@@ -8,7 +8,7 @@ use crate::jolt::{
     executor::LookupsDag,
     memory::MemoryDag,
     precompiles::PrecompileSNARK,
-    r1cs::spartan::SpartanDag,
+    spartan::SpartanDag,
     sumcheck::{BatchedSumcheck, SumcheckInstance},
     witness::{AllCommittedPolynomials, CommittedPolynomial},
 };

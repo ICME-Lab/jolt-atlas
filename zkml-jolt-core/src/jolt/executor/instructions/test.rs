@@ -83,11 +83,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
                 .collect::<Vec<u64>>()
         };
 
-        let inner: Option<ONNXOpcode> = match opcode {
-            ONNXOpcode::RebaseScale(ref inner) => Some(*inner.clone()),
-            _ => None,
-        };
-        let result = I::sequence_output(x.clone(), y.clone(), inner);
+        let result = I::sequence_output(x.clone(), y.clone());
 
         let mut tensor_registers = vec![vec![0u64; output_size]; 128];
         tensor_registers[t_x as usize] = x.clone();
@@ -257,11 +253,9 @@ fn to_instruction_output(cycle: &ONNXCycle) -> Vec<u64> {
     match cycle.instr.opcode {
         ONNXOpcode::Broadcast => compute_broadcast_output(cycle),
         ONNXOpcode::VirtualSaturatingSum => compute_saturating_sum(cycle),
-        ONNXOpcode::Div => DivInstruction::<32>::sequence_output(
-            cycle.ts1_vals().unwrap(),
-            cycle.imm().unwrap(),
-            None,
-        ),
+        ONNXOpcode::Div => {
+            DivInstruction::<32>::sequence_output(cycle.ts1_vals().unwrap(), cycle.imm().unwrap())
+        }
         ONNXOpcode::Select => {
             let cond = cycle.ts1_vals().unwrap();
             let x_true = cycle.ts2_vals().unwrap();

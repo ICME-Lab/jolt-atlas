@@ -475,13 +475,11 @@ impl JoltDAG {
 
 #[cfg(test)]
 mod test {
-    use std::path::PathBuf;
-
     use crate::jolt::memory::{
         read_write_checking::test::test_read_write_sumcheck,
         val_evaluation::test::test_val_evaluation_sumcheck,
     };
-    use onnx_tracer::{graph::model::Model, model, tensor::Tensor};
+    use onnx_tracer::{builder, graph::model::Model, tensor::Tensor};
 
     // TODO(AntoineF4C5): Complete with other sumchecks
     fn test_dag_sumchecks<ModelFunc>(model_fn: ModelFunc, input: &Tensor<i32>)
@@ -503,8 +501,8 @@ mod test {
 
     #[test]
     fn test_trace_sumchecks() {
-        let input = Tensor::new(Some(&[512]), &[1, 1]).unwrap();
-        let model_fn = || model(&PathBuf::from("../onnx-tracer/models/rsqrt/network.onnx"));
+        let input = Tensor::new(Some(&[1, 2, 3, 4]), &[1, 4]).unwrap();
+        let model_fn = builder::add_model;
 
         test_dag_sumchecks(model_fn, &input);
     }

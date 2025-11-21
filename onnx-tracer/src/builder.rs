@@ -36,10 +36,7 @@
 ///            [3, 6, 9, 12]]    // Third output neuron weights
 /// ```
 use crate::{
-    graph::{
-        model::Model,
-        node::{RebaseScale, SupportedOp},
-    },
+    graph::{model::Model, node::SupportedOp},
     ops::{hybrid::HybridOp, poly::PolyOp},
     tensor::Tensor,
     utils::parsing::{
@@ -259,6 +256,20 @@ impl ModelBuilder {
         (id, O)
     }
 
+    fn sra(&mut self, a: Wire, shift: Wire, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
+        let id = self.alloc();
+        let sra_node = create_node(
+            SupportedOp::Hybrid(HybridOp::Sra),
+            0, // ArgMax output has scale 0 (returns indices)
+            vec![a, shift],
+            out_dims,
+            id,
+            fanout_hint,
+        );
+        self.model.insert_node(sra_node);
+        (id, O)
+    }
+
     fn rebase_scale_mul(
         &mut self,
         a: Wire,
@@ -266,16 +277,11 @@ impl ModelBuilder {
         out_dims: Vec<usize>,
         fanout_hint: usize,
     ) -> Wire {
-        let id = self.alloc();
-        let opkind = SupportedOp::RebaseScale(RebaseScale {
-            inner: Box::new(SupportedOp::Linear(PolyOp::Mult)),
-            multiplier: 2f64.powi(self.scale),
-            target_scale: self.scale,
-            original_scale: self.scale * 2,
-        });
-        let rebase_node = create_node(opkind, self.scale, vec![a, b], out_dims, id, fanout_hint);
-        self.model.insert_node(rebase_node);
-        (id, O)
+        let mul = self.poly(PolyOp::Mult, a, b, out_dims.clone(), 1);
+        let num_elems = out_dims.clone().into_iter().product();
+        let const_tensor = Tensor::new(Some(&vec![self.scale; num_elems]), &out_dims).unwrap();
+        let const_scale = self.const_tensor(const_tensor, out_dims.clone(), 1);
+        self.sra(mul, const_scale, out_dims, fanout_hint)
     }
 
     /// Performs matrix multiplication wrapped in RebaseScale for ONNX binary compilation scenarios.
@@ -298,19 +304,11 @@ impl ModelBuilder {
         out_dims: Vec<usize>,
         fanout_hint: usize,
     ) -> Wire {
-        let id = self.alloc();
-        let matmul_op = SupportedOp::Linear(PolyOp::Einsum {
-            equation: "mk,nk->mn".to_string(),
-        });
-        let opkind = SupportedOp::RebaseScale(RebaseScale {
-            inner: Box::new(matmul_op),
-            multiplier: 2f64.powi(self.scale),
-            target_scale: self.scale,
-            original_scale: self.scale, // Keep same scale to avoid division
-        });
-        let rebase_node = create_node(opkind, self.scale, vec![a, b], out_dims, id, fanout_hint);
-        self.model.insert_node(rebase_node);
-        (id, O)
+        let matmul = self.matmult(a, b, out_dims.clone(), 1);
+        let num_elems = out_dims.clone().into_iter().product();
+        let const_tensor = Tensor::new(Some(&vec![self.scale; num_elems]), &out_dims).unwrap();
+        let const_scale = self.const_tensor(const_tensor, out_dims.clone(), 1);
+        self.sra(matmul, const_scale, out_dims, fanout_hint)
     }
 
     fn broadcast(

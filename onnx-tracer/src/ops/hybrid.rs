@@ -49,6 +49,7 @@ pub enum HybridOp {
     Less,
     LessEqual,
     Equals,
+    Sra,
     Gather {
         dim: usize,
         constant_idx: Option<Tensor<usize>>,
@@ -80,6 +81,7 @@ impl From<&HybridOp> for ONNXOpcode {
             HybridOp::GreaterEqual => ONNXOpcode::Gte,
             HybridOp::ReduceArgMax { .. } => ONNXOpcode::ArgMax,
             HybridOp::Softmax { .. } => ONNXOpcode::Softmax,
+            HybridOp::Sra => ONNXOpcode::Sra,
             _ => {
                 panic!("HybridOp {value:?} cannot be converted to ONNXOpcode",);
             }
@@ -305,6 +307,10 @@ where
                 let y = inputs[1].clone().map(|x| i32::from(x));
                 tensor::ops::equals(&x, &y)?
             }
+            HybridOp::Sra => {
+                let y = inputs[1].clone().map(|x| i32::from(x));
+                (tensor::ops::sra(&x, &y), vec![])
+            }
         };
 
         // convert back to felt
@@ -346,6 +352,7 @@ where
             HybridOp::Less => "LESS".into(),
             HybridOp::LessEqual => "LESSEQUAL".into(),
             HybridOp::Equals => "EQUALS".into(),
+            HybridOp::Sra => "SRA".into(),
             HybridOp::Gather { dim, .. } => format!("GATHER (dim={dim})"),
             HybridOp::TopK { k, dim, largest } => {
                 format!("TOPK (k={k}, dim={dim}, largest={largest})")

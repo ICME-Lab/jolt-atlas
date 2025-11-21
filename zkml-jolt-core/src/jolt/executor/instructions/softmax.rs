@@ -454,7 +454,7 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
         vt
     }
 
-    fn sequence_output(x: Vec<u64>, _y: Vec<u64>, _op: Option<ONNXOpcode>) -> Vec<u64> {
+    fn sequence_output(x: Vec<u64>, _y: Vec<u64>) -> Vec<u64> {
         if x.is_empty() {
             return Vec::new();
         }
@@ -502,7 +502,7 @@ mod tests {
         let trace = SoftmaxInstruction::virtual_trace(cycle, 32);
         assert_eq!(trace.len(), SoftmaxInstruction::SEQUENCE_LENGTH);
 
-        let expected = SoftmaxInstruction::sequence_output(input.clone(), vec![], None);
+        let expected = SoftmaxInstruction::sequence_output(input.clone(), vec![]);
         let actual = trace
             .last()
             .and_then(|cycle| cycle.td_post_vals())

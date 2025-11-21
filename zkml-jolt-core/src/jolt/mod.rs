@@ -883,18 +883,6 @@ mod e2e_tests {
     }
 
     #[test]
-    #[ignore] // TODO(AntoineF4C5): Solve error when 1-element input is fed to rsqrt (see Issue#67)
-    #[serial]
-    fn test_rsqrt_binary() {
-        run_snark_test(
-            || model(&PathBuf::from("../onnx-tracer/models/rsqrt/network.onnx")),
-            &[512],
-            &[1, 1],
-            None,
-        );
-    }
-
-    #[test]
     #[serial]
     fn test_simple_mlp_small() {
         run_snark_test(

@@ -274,13 +274,13 @@ pub enum ONNXOpcode {
     Gather,
     Transpose,
     Sqrt,
+    Sra,
     /// Used for the ReduceMean operator, which is internally converted to a
     /// combination of ReduceSum and Div operations.
     ReduceSum,
     MeanOfSquares,
     Sigmoid,
     Softmax,
-    RebaseScale(Box<ONNXOpcode>),
     Gte,
     Eq,
     Reshape,
@@ -299,4 +299,6 @@ pub enum ONNXOpcode {
     VirtualConst,
     VirtualPow2,
     VirtualSaturatingSum,
+    VirtualSra,
+    VirtualShiftRightBitmask,
 }

@@ -63,7 +63,7 @@ impl_atlas_traits!(
     OrTable<WORD_SIZE>,
     Pow2Table<WORD_SIZE>,
     RangeCheckTable<WORD_SIZE>,
-    // ShiftRightBitmaskTable<WORD_SIZE>,
+    ShiftRightBitmaskTable<WORD_SIZE>,
     SignedGreaterThanEqualTable<WORD_SIZE>,
     SignedLessThanTable<WORD_SIZE>,
     UnsignedGreaterThanEqualTable<WORD_SIZE>,

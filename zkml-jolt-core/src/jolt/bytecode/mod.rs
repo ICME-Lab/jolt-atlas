@@ -3,7 +3,7 @@ use crate::jolt::{
     dag::{stage::SumcheckStages, state_manager::StateManager},
     executor::instructions::{
         InstructionLookup, VirtualInstructionSequence, div::DivInstruction,
-        softmax::SoftmaxInstruction,
+        rsqrt::RsqrtInstruction, softmax::SoftmaxInstruction, sra::SraInstruction,
     },
     lookup_table::{LookupTables, RangeCheckTable, ReLUTable},
     sumcheck::SumcheckInstance,
@@ -14,8 +14,9 @@ use jolt_core::{
     poly::commitment::commitment_scheme::CommitmentScheme,
     transcripts::Transcript,
     zkvm::lookup_table::{
-        equal::EqualTable, pow2::Pow2Table, signed_greater_than_equal::SignedGreaterThanEqualTable,
-        valid_div0::ValidDiv0Table, valid_signed_remainder::ValidSignedRemainderTable,
+        equal::EqualTable, pow2::Pow2Table, shift_right_bitmask::ShiftRightBitmaskTable,
+        signed_greater_than_equal::SignedGreaterThanEqualTable, valid_div0::ValidDiv0Table,
+        valid_signed_remainder::ValidSignedRemainderTable, virtual_sra::VirtualSRATable,
     },
 };
 use onnx_tracer::{
@@ -223,9 +224,9 @@ impl BytecodePreprocessing {
             .into_iter()
             .flat_map(|instr| match instr.opcode {
                 ONNXOpcode::Div => DivInstruction::<32>::virtual_sequence(instr, max_td),
-                // TODO(AntoineF4C5): Add back after stage 2 sum-check works
-                // ONNXOpcode::Rsqrt => RsqrtInstruction::<32>::virtual_sequence(instr, max_td),
+                ONNXOpcode::Rsqrt => RsqrtInstruction::<32>::virtual_sequence(instr, max_td),
                 ONNXOpcode::Softmax => SoftmaxInstruction::virtual_sequence(instr, max_td),
+                ONNXOpcode::Sra => SraInstruction::<32>::virtual_sequence(instr, max_td),
                 _ => vec![instr],
             })
             .collect()
@@ -384,6 +385,8 @@ impl JoltONNXBytecode {
             | ONNXOpcode::VirtualAssertValidSignedRemainder
             | ONNXOpcode::VirtualMove
             | ONNXOpcode::VirtualPow2
+            | ONNXOpcode::VirtualShiftRightBitmask
+            | ONNXOpcode::VirtualSra
         );
 
         flags[CircuitFlags::RightOperandIsTs2Value as usize] = matches!(
@@ -396,6 +399,7 @@ impl JoltONNXBytecode {
             | ONNXOpcode::VirtualAssertEq
             | ONNXOpcode::VirtualAssertValidDiv0
             | ONNXOpcode::VirtualAssertValidSignedRemainder
+            | ONNXOpcode::VirtualSra
         );
 
         flags[CircuitFlags::RightOperandIsImm as usize] = matches!(
@@ -412,6 +416,7 @@ impl JoltONNXBytecode {
             | ONNXOpcode::Reshape
             | ONNXOpcode::VirtualMove
             | ONNXOpcode::VirtualPow2
+            | ONNXOpcode::VirtualShiftRightBitmask
         );
 
         flags[CircuitFlags::SubtractOperands as usize] = matches!(
@@ -439,6 +444,8 @@ impl JoltONNXBytecode {
             | ONNXOpcode::VirtualConst
             | ONNXOpcode::VirtualMove
             | ONNXOpcode::VirtualPow2
+            | ONNXOpcode::VirtualShiftRightBitmask
+            | ONNXOpcode::VirtualSra
         );
 
         flags[CircuitFlags::Advice as usize] = matches!(
@@ -489,6 +496,8 @@ impl InstructionLookup<WORD_SIZE> for JoltONNXBytecode {
             ONNXOpcode::VirtualConst => Some(RangeCheckTable.into()),
             ONNXOpcode::VirtualMove => Some(RangeCheckTable.into()),
             ONNXOpcode::VirtualPow2 => Some(Pow2Table.into()),
+            ONNXOpcode::VirtualSra => Some(VirtualSRATable.into()),
+            ONNXOpcode::VirtualShiftRightBitmask => Some(ShiftRightBitmaskTable.into()),
             _ => None,
         }
     }

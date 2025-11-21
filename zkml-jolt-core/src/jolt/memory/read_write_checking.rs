@@ -636,7 +636,7 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
 
                                 let k = addresses[j].2;
                                 dirty_indices.push(k as usize);
-                                ts2_ra[1][k as usize] += A[j_bound];
+                                ts3_ra[1][k as usize] += A[j_bound];
 
                                 let k = addresses[j].3;
                                 dirty_indices.push(k as usize);
@@ -1370,6 +1370,11 @@ impl<F: JoltField> SumcheckInstance<F> for MemoryReadWriteChecking<F> {
         );
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::Ts2Ra,
+            SumcheckId::RegistersReadWriteChecking,
+            opening_point.clone(),
+        );
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::Ts3Ra,
             SumcheckId::RegistersReadWriteChecking,
             opening_point.clone(),
         );

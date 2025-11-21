@@ -2,7 +2,7 @@ use super::node::*;
 use crate::{
     decode_node,
     graph::{input::GraphData, tracer::Tracer, vars::VarScales, GraphError},
-    ops::{poly::PolyOp, Input, Op, Unknown},
+    ops::{poly::PolyOp, Constant, Input, Op, Unknown},
     tensor::Tensor,
     utils::parsing::node_output_shapes,
     RunArgs,
@@ -221,12 +221,7 @@ impl Model {
                             &mut min_lookup_inputs,
                         )?;
                     }
-                    debug!(
-                        "------------ output node int {}: {} \n  ------------ scale: {}",
-                        idx,
-                        res.output.show(),
-                        n.out_scale
-                    );
+                    debug!("output node int {}: {}", idx, res.output.show(),);
                     results.insert(idx, vec![res.output.clone()]);
                     self.tracer.capture_post_state(res.output);
                 }
@@ -581,7 +576,7 @@ impl Model {
         override_output_scales: Option<HashMap<usize, crate::Scale>>,
     ) -> BTreeMap<usize, NodeType> {
         let mut nodes = BTreeMap::<usize, NodeType>::new();
-        // Insert dummy node at idx 0, which will be replaced with the actual Input node later.
+        // Insert placeholder node at idx 0, which will be replaced with the actual Input node later.
         nodes.insert(0, NodeType::Node(Node::default()));
 
         let mut input_idx = 0;
@@ -825,74 +820,115 @@ impl Model {
         }
     }
 
-    /// Handles the insertion of a node, expanding RebaseScale nodes if necessary
+    /// Handles the insertion of a node, expanding nodes if necessary
     pub fn handle_node_insertion(
         nodes: &mut BTreeMap<usize, NodeType>,
         remappings: &mut BTreeMap<usize, usize>,
-        original_index: usize,
+        idx: usize,
         node: Node,
     ) {
-        // Check if this node is a RebaseScale and expand it into two separate nodes
-        if let SupportedOp::RebaseScale(rebase_scale) = &node.opkind {
-            // Special case: if the inner operation is MeanOfSquares, expand it first
-            if let SupportedOp::Linear(PolyOp::MeanOfSquares { axes }) = rebase_scale.inner.as_ref()
-            {
-                // First, expand the MeanOfSquares (which is inside the RebaseScale)
-                let mos_expanded_nodes =
-                    Self::expand_mean_of_squares_node(&node, axes, nodes.len(), nodes);
+        let is_input = matches!(node.opkind, SupportedOp::Input(_));
+        let pre_count = nodes.len();
+        let added_nodes = Self::expand_node(vec![node], nodes);
+        let post_count = nodes.len();
 
-                // Insert all the MeanOfSquares expanded nodes
-                for expanded_node in &mos_expanded_nodes {
-                    nodes.insert(expanded_node.idx, NodeType::Node(expanded_node.clone()));
-                }
-
-                // The last node from MeanOfSquares expansion is the final DIV
-                let mos_final_idx = mos_expanded_nodes.last().unwrap().idx;
-
-                // Now create the RebaseScale's division node that takes the MeanOfSquares result as input
-                let rebase_div_idx = nodes.len();
-                let rebase_div_node = Node {
-                    idx: rebase_div_idx,
-                    opkind: SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div {
-                        denom: crate::utils::f32::F32(rebase_scale.multiplier as f32),
-                    }),
-                    inputs: vec![(mos_final_idx, 0)], // Takes output from MeanOfSquares expansion
-                    out_dims: node.out_dims.clone(),
-                    out_scale: rebase_scale.target_scale,
-                    num_uses: node.num_uses,
-                };
-                nodes.insert(rebase_div_idx, NodeType::Node(rebase_div_node));
-                remappings.insert(original_index, rebase_div_idx);
-            } else {
-                // Normal RebaseScale expansion (inner is not MeanOfSquares)
-                let (inner_node, div_node) =
-                    Self::expand_rebase_scale_node(&node, rebase_scale, nodes.len());
-
-                // Insert the inner node first
-                let inner_node_idx = inner_node.idx;
-                nodes.insert(inner_node_idx, NodeType::Node(inner_node));
-
-                // Insert the div node and set up remapping to point to the final div node
-                let div_node_idx = div_node.idx;
-                remappings.insert(original_index, div_node_idx);
-                nodes.insert(div_node_idx, NodeType::Node(div_node));
-            }
-        } else if let SupportedOp::Linear(PolyOp::MeanOfSquares { axes }) = &node.opkind {
-            // Expand MeanOfSquares into [POW, SUM, DIV, DIV] nodes
-            let expanded_nodes = Self::expand_mean_of_squares_node(&node, axes, nodes.len(), nodes);
-
-            // Insert all expanded nodes
-            for expanded_node in &expanded_nodes {
-                nodes.insert(expanded_node.idx, NodeType::Node(expanded_node.clone()));
-            }
-
-            // Set up remapping to point to the final div node (last in the expansion)
-            let final_node_idx = expanded_nodes.last().unwrap().idx;
-            remappings.insert(original_index, final_node_idx);
+        if is_input {
+            remappings.insert(idx, 0);
+            // Placeholder node was replaced at index 0, no node added to `nodes`
+            assert_eq!(pre_count, post_count);
         } else {
-            // For all other nodes, just insert them directly
-            remappings.insert(original_index, node.idx);
-            nodes.insert(node.idx, NodeType::Node(node));
+            remappings.insert(idx, nodes.len() - 1);
+            assert_eq!(pre_count + added_nodes, post_count);
+        }
+    }
+
+    /// Expands a node array to an array compatible with the vm.
+    /// Some nodes created by the parser are handled by an array of nodes by the virtual machine.
+    /// It can happen that a node holds in itself another node, and that both the outer and inner node need to be expanded.
+    /// This method recursively expands all nodes of `expanding_nodes` and inserts it to `nodes`.
+    /// Each iteration expands the first node of the array.
+    ///
+    /// # Arguments
+    /// * `node_array` - A list of nodes to be fully expanded
+    /// * `nodes` - A mutable reference to the map of processed nodes later fed to the vm
+    ///
+    /// # Returns
+    /// - The number of nodes added during the expansion
+    fn expand_node(mut node_array: Vec<Node>, nodes: &mut BTreeMap<usize, NodeType>) -> usize {
+        if node_array.is_empty() {
+            return 0;
+        }
+
+        let mut added_nodes = 0;
+        let next_idx = nodes.len();
+
+        // Split the node to be expanded this round from the remaining nodes, which will be expanded later
+        let (node, remaining) = (node_array[0].clone(), &mut node_array[1..]);
+        // Apply one round of expansion to the node, or insert it into `nodes` if it doesn't need expanding
+        let expanded_node = Self::expand_or_insert_node(node, nodes, next_idx);
+
+        if expanded_node.is_empty() {
+            // Node has been added to `nodes`
+            added_nodes += 1;
+        } else {
+            // Node has been expanded to an array, which is in turn recursively expanded
+            added_nodes += Self::expand_node(expanded_node, nodes);
+
+            // The remaining nodes from this round of expansion are remapped to match new output node
+            Self::reindex_nodes(remaining, next_idx, added_nodes);
+        }
+        // We now expand the remaining nodes of this round of expansion
+        added_nodes += Self::expand_node(remaining.to_vec(), nodes);
+
+        added_nodes
+    }
+
+    /// Applies expanding to the input node, or insert it to the `nodes` array if it doesn't need to be expanded
+    ///
+    /// # Arguments
+    /// * `node` - The node to be expanded
+    /// * `nodes` - A mutable reference to the map of processed nodes later fed to the vm
+    /// * `next_idx` - The next available index for the node
+    ///
+    /// # Returns
+    /// * The array of nodes resulting from `node` expansion, or an empty array if no expanding was needed
+    fn expand_or_insert_node(
+        node: Node,
+        nodes: &mut BTreeMap<usize, NodeType>,
+        next_idx: usize,
+    ) -> Vec<Node> {
+        match &node.opkind {
+            SupportedOp::RebaseScale(rebase_scale) => {
+                Self::expand_rebase_scale_node(&node, rebase_scale, next_idx)
+            }
+            SupportedOp::Linear(PolyOp::MeanOfSquares { axes }) => {
+                Self::expand_mean_of_squares_node(&node, axes, next_idx, nodes)
+            }
+            _ => {
+                // assert_eq!(next_idx, node.idx);
+                nodes.insert(node.idx, NodeType::Node(node));
+                vec![]
+            }
+        }
+    }
+
+    /// Updates the index and input mapping of `nodes`.
+    ///
+    /// # Arguments
+    /// * `nodes` - A mutable reference to the nodes to be reindexed
+    /// * `original_idx` - The original index of the node preceeding the nodes to be reindexed.
+    /// * `added_nodes` - The number of nodes added in place of the original node
+    fn reindex_nodes(nodes: &mut [Node], original_idx: usize, added_nodes: usize) {
+        assert!(added_nodes > 0);
+
+        let node_offset = added_nodes - 1;
+        for elem in nodes.iter_mut() {
+            elem.idx += node_offset;
+            for input in elem.inputs.iter_mut() {
+                if input.0 >= original_idx {
+                    input.0 += node_offset;
+                }
+            }
         }
     }
 
@@ -901,7 +937,9 @@ impl Model {
         original_node: &Node,
         rebase_scale: &RebaseScale,
         next_available_index: usize,
-    ) -> (Node, Node) {
+    ) -> Vec<Node> {
+        let shift = rebase_scale.multiplier.log2() as u32;
+
         // Create first node: the inner operation
         let inner_node_idx = next_available_index;
         let inner_node = Node {
@@ -913,20 +951,35 @@ impl Model {
             num_uses: 1, // Will be used by the div node
         };
 
-        // Create second node: the division operation
-        let div_node_idx = next_available_index + 1;
-        let div_node = Node {
-            idx: div_node_idx,
-            opkind: SupportedOp::Nonlinear(crate::ops::lookup::LookupOp::Div {
-                denom: crate::utils::f32::F32(rebase_scale.multiplier as f32),
+        let const_scale_node_idx = next_available_index + 1;
+        let const_scale_node = Node {
+            idx: const_scale_node_idx,
+            opkind: SupportedOp::Constant(Constant {
+                quantized_values: Tensor::new(
+                    Some(&vec![shift as i32; original_node.out_dims.iter().product()]),
+                    &original_node.out_dims,
+                )
+                .unwrap(),
+                raw_values: Tensor::new(None, &[0]).unwrap(),
             }),
-            inputs: vec![(inner_node_idx, 0)], // Takes output from inner node
+            inputs: vec![],
+            out_scale: 0,
+            num_uses: 1,
+            out_dims: original_node.out_dims.clone(),
+        };
+
+        // Create second node: the division operation
+        let sra_node_idx = next_available_index + 2;
+        let sra_node = Node {
+            idx: sra_node_idx,
+            opkind: SupportedOp::Hybrid(crate::ops::hybrid::HybridOp::Sra),
+            inputs: vec![(inner_node_idx, 0), (const_scale_node_idx, 0)], // Takes output from inner node
             out_dims: original_node.out_dims.clone(),
             out_scale: rebase_scale.target_scale,
             num_uses: original_node.num_uses, // Inherits the usage count from original node
         };
 
-        (inner_node, div_node)
+        vec![inner_node, const_scale_node, sra_node]
     }
 
     /// Expands a MeanOfSquares node into [Square, Sum, Div, Div] nodes
@@ -1820,25 +1873,25 @@ mod tests {
         let model = crate::model(&model_path.into());
         let bytecode = crate::decode_model(model);
 
-        // Should have Input, Constant, Add, Sub, Mul (inner), Div operations
+        // Should have Input, Constant, Add, Sub, Mul, Constant(scale), Sra operations
         assert_eq!(
             bytecode.len(),
-            6,
-            "Expected 6 instructions after RebaseScale expansion"
+            7,
+            "Expected 7 instructions after RebaseScale expansion"
         );
 
-        // Check specific sequence: last operation should be Mul followed by Div
+        // Check specific sequence: last operation should be Mul, (const) and Sra
         let mul_found = bytecode
             .iter()
             .any(|instr| matches!(instr.opcode, crate::trace_types::ONNXOpcode::Mul));
-        let div_found = bytecode
+        let sra_found = bytecode
             .iter()
-            .any(|instr| matches!(instr.opcode, crate::trace_types::ONNXOpcode::Div));
+            .any(|instr| matches!(instr.opcode, crate::trace_types::ONNXOpcode::Sra));
 
         assert!(mul_found, "Mul operation should be present");
         assert!(
-            div_found,
-            "Div operation should be present after RebaseScale expansion"
+            sra_found,
+            "Sra operation should be present after RebaseScale expansion"
         );
 
         // Check addresses are consecutive

@@ -229,33 +229,12 @@ impl CanonicalSerialize for CommittedPolynomial {
         compress: Compress,
     ) -> Result<(), SerializationError> {
         match self {
-            CommittedPolynomial::LeftInstructionInput => {
+            CommittedPolynomial::TdInc => {
                 0u8.serialize_with_mode(&mut writer, compress)?;
             }
-            CommittedPolynomial::RightInstructionInput => {
-                1u8.serialize_with_mode(&mut writer, compress)?;
-            }
-            CommittedPolynomial::Product => {
-                2u8.serialize_with_mode(&mut writer, compress)?;
-            }
-            CommittedPolynomial::WriteLookupOutputToTD => {
-                3u8.serialize_with_mode(&mut writer, compress)?;
-            }
-            CommittedPolynomial::TdInc => {
-                4u8.serialize_with_mode(&mut writer, compress)?;
-            }
-            CommittedPolynomial::TdIncS => {
-                5u8.serialize_with_mode(&mut writer, compress)?;
-            }
             CommittedPolynomial::InstructionRa(index) => {
-                6u8.serialize_with_mode(&mut writer, compress)?;
+                1u8.serialize_with_mode(&mut writer, compress)?;
                 index.serialize_with_mode(&mut writer, compress)?;
-            }
-            CommittedPolynomial::SelectCond => {
-                7u8.serialize_with_mode(&mut writer, compress)?;
-            }
-            CommittedPolynomial::SelectRes => {
-                8u8.serialize_with_mode(&mut writer, compress)?;
             }
         }
         Ok(())
@@ -285,18 +264,11 @@ impl CanonicalDeserialize for CommittedPolynomial {
     ) -> Result<Self, SerializationError> {
         let tag = u8::deserialize_with_mode(&mut reader, compress, validate)?;
         let polynomial = match tag {
-            0 => CommittedPolynomial::LeftInstructionInput,
-            1 => CommittedPolynomial::RightInstructionInput,
-            2 => CommittedPolynomial::Product,
-            3 => CommittedPolynomial::WriteLookupOutputToTD,
-            4 => CommittedPolynomial::TdInc,
-            5 => CommittedPolynomial::TdIncS,
-            6 => {
+            0 => CommittedPolynomial::TdInc,
+            1 => {
                 let index = usize::deserialize_with_mode(&mut reader, compress, validate)?;
                 CommittedPolynomial::InstructionRa(index)
             }
-            7 => CommittedPolynomial::SelectCond,
-            8 => CommittedPolynomial::SelectRes,
             _ => return Err(SerializationError::InvalidData),
         };
         Ok(polynomial)
@@ -371,6 +343,25 @@ impl CanonicalSerialize for VirtualPolynomial {
                 index.serialize_with_mode(&mut writer, compress)?;
             }
             VirtualPolynomial::ValFinal => 30u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::Product => 31u8.serialize_with_mode(&mut writer, compress)?,
+            VirtualPolynomial::WriteLookupOutputToTD => {
+                32u8.serialize_with_mode(&mut writer, compress)?;
+            }
+            VirtualPolynomial::SelectCond => {
+                33u8.serialize_with_mode(&mut writer, compress)?;
+            }
+            VirtualPolynomial::SelectRes => {
+                34u8.serialize_with_mode(&mut writer, compress)?;
+            }
+            VirtualPolynomial::LeftInstructionInput => {
+                35u8.serialize_with_mode(&mut writer, compress)?;
+            }
+            VirtualPolynomial::RightInstructionInput => {
+                36u8.serialize_with_mode(&mut writer, compress)?;
+            }
+            VirtualPolynomial::TdIncS => {
+                37u8.serialize_with_mode(&mut writer, compress)?;
+            }
         }
         Ok(())
     }
@@ -461,6 +452,13 @@ impl CanonicalDeserialize for VirtualPolynomial {
                 VirtualPolynomial::RaCPrecompile(index)
             }
             30 => VirtualPolynomial::ValFinal,
+            31 => VirtualPolynomial::Product,
+            32 => VirtualPolynomial::WriteLookupOutputToTD,
+            33 => VirtualPolynomial::SelectCond,
+            34 => VirtualPolynomial::SelectRes,
+            35 => VirtualPolynomial::LeftInstructionInput,
+            36 => VirtualPolynomial::RightInstructionInput,
+            37 => VirtualPolynomial::TdIncS,
             _ => return Err(SerializationError::InvalidData),
         };
         Ok(polynomial)

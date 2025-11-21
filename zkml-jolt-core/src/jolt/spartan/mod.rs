@@ -27,18 +27,26 @@ use crate::jolt::{
     pcs::{ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
     r1cs::{
         constraints::{JoltONNXConstraints, R1CSConstraints},
-        inputs::{ALL_R1CS_INPUTS, COMMITTED_R1CS_INPUTS, JoltONNXR1CSInputs},
+        inputs::{ALL_R1CS_INPUTS, JoltONNXR1CSInputs},
         key::UniformSpartanKey,
     },
+    spartan::{
+        instruction::InstructionInputSumcheck,
+        product::{ProductVirtualizationSumcheck, VirtualProductType},
+    },
     sumcheck::SumcheckInstance,
-    witness::{CommittedPolynomial, VirtualPolynomial},
+    witness::VirtualPolynomial,
 };
 use jolt_core::poly::opening_proof::BIG_ENDIAN;
 
-use super::builder::CombinedUniformBuilder;
+use crate::jolt::r1cs::builder::CombinedUniformBuilder;
 
 use jolt_core::field::JoltField;
 use rayon::prelude::*;
+
+pub mod instruction;
+pub mod product;
+pub mod spartan_interleaved_poly;
 
 #[derive(Clone, Debug)]
 pub struct OuterClaims<F: JoltField> {
@@ -566,8 +574,7 @@ where
 
         #[cfg(test)]
         {
-            use crate::jolt::r1cs::spartan_interleaved_poly::SpartanInterleavedPolynomial;
-
+            use crate::jolt::spartan::spartan_interleaved_poly::SpartanInterleavedPolynomial;
             SpartanInterleavedPolynomial::new(
                 &constraint_builder.uniform_builder.constraints,
                 &input_polys,
@@ -631,39 +638,17 @@ where
         let claimed_witness_evals =
             MultilinearPolynomial::batch_evaluate(&flattened_polys_ref, r_cycle);
 
-        // Only non-virtual (i.e. committed) polynomials' openings are
-        // proven using the PCS opening proof, which we add for future opening proof here
-        let committed_polys: Vec<_> = COMMITTED_R1CS_INPUTS
-            .iter()
-            .map(|input| CommittedPolynomial::try_from(*input).ok().unwrap())
-            .collect();
-        let committed_poly_claims: Vec<_> = COMMITTED_R1CS_INPUTS
-            .iter()
-            .map(|input| claimed_witness_evals[input.to_index()])
-            .collect();
-
-        let accumulator = state_manager.get_prover_accumulator();
-        accumulator.borrow_mut().append_dense(
-            committed_polys,
-            SumcheckId::SpartanOuter,
-            r_cycle.to_vec(),
-            &committed_poly_claims,
-        );
-
         // Add virtual polynomial evaluations to the accumulator
         // These are needed by the verifier for future sumchecks and are not part of the PCS opening proof
         for (input, eval) in ALL_R1CS_INPUTS.iter().zip(claimed_witness_evals.iter()) {
-            // Skip if it's a committed input (already added above)
-            if !COMMITTED_R1CS_INPUTS.contains(input) {
-                accumulator.borrow_mut().append_virtual(
-                    VirtualPolynomial::try_from(*input).ok().unwrap_or_else(|| {
-                        panic!("Failed to convert R1CS input {input:?} to virtual polynomial",)
-                    }),
-                    SumcheckId::SpartanOuter,
-                    OpeningPoint::new(r_cycle.to_vec()),
-                    *eval,
-                );
-            }
+            accumulator.borrow_mut().append_virtual(
+                VirtualPolynomial::try_from(*input).ok().unwrap_or_else(|| {
+                    panic!("Failed to convert R1CS input {input:?} to virtual polynomial",)
+                }),
+                SumcheckId::SpartanOuter,
+                OpeningPoint::new(r_cycle.to_vec()),
+                *eval,
+            );
         }
 
         Ok(())
@@ -758,27 +743,12 @@ where
 
         let accumulator = state_manager.get_verifier_accumulator();
 
-        // Only non-virtual (i.e. committed) polynomials' openings are
-        // proven using the PCS opening proof, which we add for future opening proof here
-        let committed_polys: Vec<_> = COMMITTED_R1CS_INPUTS
-            .iter()
-            .map(|input| CommittedPolynomial::try_from(*input).ok().unwrap())
-            .collect();
-        accumulator.borrow_mut().append_dense(
-            committed_polys,
-            SumcheckId::SpartanOuter,
-            r_cycle.to_vec(),
-        );
-
         ALL_R1CS_INPUTS.iter().for_each(|input| {
-            // Skip if it's a committed input (already added above)
-            if !COMMITTED_R1CS_INPUTS.contains(input) {
-                accumulator.borrow_mut().append_virtual(
-                    VirtualPolynomial::try_from(*input).ok().unwrap(),
-                    SumcheckId::SpartanOuter,
-                    OpeningPoint::new(r_cycle.to_vec()),
-                );
-            }
+            accumulator.borrow_mut().append_virtual(
+                VirtualPolynomial::try_from(*input).ok().unwrap(),
+                SumcheckId::SpartanOuter,
+                OpeningPoint::new(r_cycle.to_vec()),
+            );
         });
 
         Ok(())
@@ -825,7 +795,28 @@ where
         let inner_sumcheck =
             InnerSumcheck::new_prover(state_manager, key, &claims, &params, inner_sumcheck_RLC);
 
-        vec![Box::new(inner_sumcheck)]
+        let product_sumcheck = ProductVirtualizationSumcheck::new_prover(
+            VirtualProductType::Instruction,
+            state_manager,
+        );
+        let write_lookup_output_to_td = ProductVirtualizationSumcheck::new_prover(
+            VirtualProductType::WriteLookupOutputToTD,
+            state_manager,
+        );
+        let select_cond = ProductVirtualizationSumcheck::new_prover(
+            VirtualProductType::SelectCond,
+            state_manager,
+        );
+        let select_res =
+            ProductVirtualizationSumcheck::new_prover(VirtualProductType::SelectRes, state_manager);
+
+        vec![
+            Box::new(inner_sumcheck),
+            Box::new(product_sumcheck),
+            Box::new(write_lookup_output_to_td),
+            Box::new(select_cond),
+            Box::new(select_res),
+        ]
     }
 
     fn stage2_verifier_instances(
@@ -877,7 +868,30 @@ where
             inner_sumcheck_RLC,
         );
 
-        vec![Box::new(inner_sumcheck)]
+        let product_sumcheck = ProductVirtualizationSumcheck::new_verifier(
+            VirtualProductType::Instruction,
+            state_manager,
+        );
+        let write_lookup_output_to_td = ProductVirtualizationSumcheck::new_verifier(
+            VirtualProductType::WriteLookupOutputToTD,
+            state_manager,
+        );
+        let select_cond = ProductVirtualizationSumcheck::new_verifier(
+            VirtualProductType::SelectCond,
+            state_manager,
+        );
+        let select_res = ProductVirtualizationSumcheck::new_verifier(
+            VirtualProductType::SelectRes,
+            state_manager,
+        );
+
+        vec![
+            Box::new(inner_sumcheck),
+            Box::new(product_sumcheck),
+            Box::new(write_lookup_output_to_td),
+            Box::new(select_cond),
+            Box::new(select_res),
+        ]
     }
 
     fn stage3_prover_instances(
@@ -921,8 +935,9 @@ where
             }),
             verifier_state: None,
         };
+        let instruction_input_sumcheck = InstructionInputSumcheck::new_prover(state_manager);
 
-        vec![Box::new(pc_sumcheck)]
+        vec![Box::new(pc_sumcheck), Box::new(instruction_input_sumcheck)]
     }
 
     fn stage3_verifier_instances(
@@ -952,6 +967,7 @@ where
         let pc_sumcheck =
             PCSumcheck::<F>::new_verifier(next_pc_eval, r_cycle.into(), pc_eval_at_shift_r);
 
-        vec![Box::new(pc_sumcheck)]
+        let instruction_input_sumcheck = InstructionInputSumcheck::new_verifier(state_manager);
+        vec![Box::new(pc_sumcheck), Box::new(instruction_input_sumcheck)]
     }
 }

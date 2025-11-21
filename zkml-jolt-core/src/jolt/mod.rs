@@ -32,6 +32,7 @@ pub mod pcs;
 pub mod precompiles;
 pub mod proof_serialization;
 pub mod r1cs;
+pub mod spartan;
 pub mod sumcheck;
 pub mod trace;
 pub mod witness;

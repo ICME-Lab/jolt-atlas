@@ -2,7 +2,7 @@ use crate::jolt::{
     dag::state_manager::StateManager,
     pcs::{ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
     sumcheck::SumcheckInstance,
-    witness::{CommittedPolynomial, VirtualPolynomial},
+    witness::VirtualPolynomial,
 };
 use jolt_core::{
     field::JoltField,
@@ -68,7 +68,16 @@ impl<F: JoltField> ValFinalSumcheck<F> {
         drop(_guard);
         drop(span);
 
-        let inc = CommittedPolynomial::TdIncS.generate_witness(preprocessing, trace);
+        let inc = {
+            let coeffs: Vec<i64> = trace
+                .par_iter()
+                .map(|cycle| {
+                    let (pre_value, post_value) = cycle.td_write();
+                    post_value as i32 as i64 - pre_value as i32 as i64
+                })
+                .collect();
+            MultilinearPolynomial::from(coeffs)
+        };
 
         let val_final_claim = state_manager
             .get_virtual_polynomial_opening(
@@ -152,8 +161,8 @@ impl<F: JoltField> SumcheckInstance<F> for ValFinalSumcheck<F> {
     ) -> F {
         let accumulator = accumulator.as_ref().unwrap().borrow();
         let inc_claim = accumulator
-            .get_committed_polynomial_opening(
-                CommittedPolynomial::TdIncS,
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::TdIncS,
                 SumcheckId::PrecompileValFinal,
             )
             .1;
@@ -184,12 +193,11 @@ impl<F: JoltField> SumcheckInstance<F> for ValFinalSumcheck<F> {
             .0;
         let wa_opening_point =
             OpeningPoint::new([r_address.r.as_slice(), r_cycle_prime.r.as_slice()].concat());
-
-        accumulator.borrow_mut().append_dense(
-            vec![CommittedPolynomial::TdIncS],
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::TdIncS,
             SumcheckId::PrecompileValFinal,
-            r_cycle_prime.r,
-            &[inc.final_sumcheck_claim()],
+            r_cycle_prime,
+            inc.final_sumcheck_claim(),
         );
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::TdWa,
@@ -213,11 +221,10 @@ impl<F: JoltField> SumcheckInstance<F> for ValFinalSumcheck<F> {
             .0;
         let wa_opening_point =
             OpeningPoint::new([r_address.r.as_slice(), r_cycle_prime.r.as_slice()].concat());
-
-        accumulator.borrow_mut().append_dense(
-            vec![CommittedPolynomial::TdIncS],
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::TdIncS,
             SumcheckId::PrecompileValFinal,
-            r_cycle_prime.r,
+            r_cycle_prime,
         );
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::TdWa,

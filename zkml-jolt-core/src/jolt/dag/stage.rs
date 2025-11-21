@@ -82,4 +82,32 @@ pub trait SumcheckStages<
     ) -> Vec<Box<dyn SumcheckInstance<F>>> {
         vec![]
     }
+
+    fn stage6_prover_instances(
+        &mut self,
+        _state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Vec<Box<dyn SumcheckInstance<F>>> {
+        vec![]
+    }
+
+    fn stage6_verifier_instances(
+        &mut self,
+        _state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Vec<Box<dyn SumcheckInstance<F>>> {
+        vec![]
+    }
+
+    fn stage7_prover_instances(
+        &mut self,
+        _state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Vec<Box<dyn SumcheckInstance<F>>> {
+        vec![]
+    }
+
+    fn stage7_verifier_instances(
+        &mut self,
+        _state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Vec<Box<dyn SumcheckInstance<F>>> {
+        vec![]
+    }
 }

@@ -38,6 +38,7 @@ ark-bn254 = "0.5.0"
 ark-serialize = { workspace = true }
 jolt-core = { git = "https://github.com/ICME-Lab/zkml-jolt", branch = "dev", package = "jolt-core", default-features = true }
 
+
 [[example]]
 name = "article_classification"
 path = "examples/article_classification.rs"

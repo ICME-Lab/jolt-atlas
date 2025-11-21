@@ -18,7 +18,7 @@ pub struct MemoryDag {}
 impl<F: JoltField, ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>>
     SumcheckStages<F, ProofTranscript, PCS> for MemoryDag
 {
-    fn stage2_prover_instances(
+    fn stage4_prover_instances(
         &mut self,
         state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
     ) -> Vec<Box<dyn SumcheckInstance<F>>> {
@@ -26,7 +26,7 @@ impl<F: JoltField, ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>
         vec![Box::new(read_write_checking)]
     }
 
-    fn stage2_verifier_instances(
+    fn stage4_verifier_instances(
         &mut self,
         state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
     ) -> Vec<Box<dyn SumcheckInstance<F>>> {
@@ -34,7 +34,7 @@ impl<F: JoltField, ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>
         vec![Box::new(read_write_checking)]
     }
 
-    fn stage3_prover_instances(
+    fn stage5_prover_instances(
         &mut self,
         state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
     ) -> Vec<Box<dyn SumcheckInstance<F>>> {
@@ -42,7 +42,7 @@ impl<F: JoltField, ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>
         vec![Box::new(val_evaluation)]
     }
 
-    fn stage3_verifier_instances(
+    fn stage5_verifier_instances(
         &mut self,
         state_manager: &mut StateManager<'_, F, ProofTranscript, PCS>,
     ) -> Vec<Box<dyn SumcheckInstance<F>>> {

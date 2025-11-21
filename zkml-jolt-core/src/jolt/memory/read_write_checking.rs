@@ -7,6 +7,7 @@ use jolt_core::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{BIG_ENDIAN, LITTLE_ENDIAN, OpeningPoint},
         split_eq_poly::GruenSplitEqPolynomial,
+        unipoly::UniPoly,
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
@@ -64,10 +65,22 @@ struct ReadWriteCheckingProverState<F: JoltField> {
     I: Vec<Vec<(usize, u64, F, F)>>,
     A: Vec<F>,
     gruens_eq_r_prime: GruenSplitEqPolynomial<F>,
+    gruen_eq_r_cycle_stage_1: GruenSplitEqPolynomial<F>,
+    gruen_eq_r_cycle_stage_2: GruenSplitEqPolynomial<F>,
+    gruen_eq_r_cycle_stage_3: GruenSplitEqPolynomial<F>,
+    prev_claim_stage_1: F,
+    prev_claim_stage_2: F,
+    prev_claim_stage_3: F,
+    prev_round_poly_stage_1: Option<UniPoly<F>>,
+    prev_round_poly_stage_2: Option<UniPoly<F>>,
+    prev_round_poly_stage_3: Option<UniPoly<F>>,
     inc_cycle: MultilinearPolynomial<F>,
     // The following polynomials are instantiated after
     // the first phase
     eq_r_prime: Option<MultilinearPolynomial<F>>,
+    eq_r_cycle_stage_1: Option<MultilinearPolynomial<F>>,
+    eq_r_cycle_stage_2: Option<MultilinearPolynomial<F>>,
+    eq_r_cycle_stage_3: Option<MultilinearPolynomial<F>>,
     ts1_ra: Option<MultilinearPolynomial<F>>,
     ts2_ra: Option<MultilinearPolynomial<F>>,
     ts3_ra: Option<MultilinearPolynomial<F>>,
@@ -81,6 +94,9 @@ impl<F: JoltField> ReadWriteCheckingProverState<F> {
         preprocessing: &JoltProverPreprocessing<F, PCS>,
         trace: &[JoltONNXCycle],
         r_prime: &[F],
+        sample_stage_1: &(OpeningPoint<BIG_ENDIAN, F>, F),
+        sample_stage_2: &(OpeningPoint<BIG_ENDIAN, F>, F),
+        sample_stage_3: &(OpeningPoint<BIG_ENDIAN, F>, F),
     ) -> Self {
         let K = preprocessing.memory_K();
         let T = trace.len();
@@ -181,6 +197,12 @@ impl<F: JoltField> ReadWriteCheckingProverState<F> {
         drop(span);
 
         let gruens_eq_r_prime = GruenSplitEqPolynomial::new(r_prime, BindingOrder::LowToHigh);
+        let gruen_eq_r_cycle_stage_1 =
+            GruenSplitEqPolynomial::<F>::new(&sample_stage_1.0.r, BindingOrder::LowToHigh);
+        let gruen_eq_r_cycle_stage_2 =
+            GruenSplitEqPolynomial::<F>::new(&sample_stage_2.0.r, BindingOrder::LowToHigh);
+        let gruen_eq_r_cycle_stage_3 =
+            GruenSplitEqPolynomial::<F>::new(&sample_stage_3.0.r, BindingOrder::LowToHigh);
         let inc_cycle = CommittedPolynomial::TdInc.generate_witness(trace);
 
         let data_buffers: Vec<DataBuffers<F>> = (0..num_chunks)
@@ -210,13 +232,25 @@ impl<F: JoltField> ReadWriteCheckingProverState<F> {
             I,
             A,
             gruens_eq_r_prime,
+            gruen_eq_r_cycle_stage_1,
+            gruen_eq_r_cycle_stage_2,
+            gruen_eq_r_cycle_stage_3,
             inc_cycle,
             eq_r_prime: None,
+            eq_r_cycle_stage_1: None,
+            eq_r_cycle_stage_2: None,
+            eq_r_cycle_stage_3: None,
             ts1_ra: None,
             ts2_ra: None,
             ts3_ra: None,
             td_wa: None,
             val: None,
+            prev_claim_stage_1: sample_stage_1.1,
+            prev_claim_stage_2: sample_stage_2.1,
+            prev_claim_stage_3: sample_stage_3.1,
+            prev_round_poly_stage_1: None,
+            prev_round_poly_stage_2: None,
+            prev_round_poly_stage_3: None,
         }
     }
 }

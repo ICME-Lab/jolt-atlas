@@ -81,6 +81,41 @@ impl<F: JoltField> ReadRafCheck<F> {
                 sm.get_virtual_polynomial_opening(VirtualPolynomial::PC, SumcheckId::SpartanOuter);
             let _ =
                 sm.get_virtual_polynomial_opening(VirtualPolynomial::PC, SumcheckId::SpartanShift);
+
+            // TODO
+            let _ = sm.get_virtual_polynomial_opening(
+                VirtualPolynomial::Td,
+                SumcheckId::WriteLookupOutputToTDVirtualization,
+            );
+            let _ = sm.get_virtual_polynomial_opening(
+                VirtualPolynomial::OpFlags(CircuitFlags::WriteLookupOutputToTD),
+                SumcheckId::WriteLookupOutputToTDVirtualization,
+            );
+            let _ = sm.get_virtual_polynomial_opening(
+                VirtualPolynomial::OpFlags(CircuitFlags::Select),
+                SumcheckId::SelectCondVirtualization,
+            );
+            let _ = sm.get_virtual_polynomial_opening(
+                VirtualPolynomial::OpFlags(CircuitFlags::Select),
+                SumcheckId::SelectResVirtualization,
+            );
+
+            let _ = sm.get_virtual_polynomial_opening(
+                VirtualPolynomial::OpFlags(CircuitFlags::LeftOperandIsTs1Value),
+                SumcheckId::InstructionInputVirtualization,
+            );
+            let _ = sm.get_virtual_polynomial_opening(
+                VirtualPolynomial::OpFlags(CircuitFlags::RightOperandIsTs2Value),
+                SumcheckId::InstructionInputVirtualization,
+            );
+            let _ = sm.get_virtual_polynomial_opening(
+                VirtualPolynomial::OpFlags(CircuitFlags::RightOperandIsImm),
+                SumcheckId::InstructionInputVirtualization,
+            );
+            let _ = sm.get_virtual_polynomial_opening(
+                VirtualPolynomial::Imm,
+                SumcheckId::InstructionInputVirtualization,
+            );
         }
         let _gamma: F = sm.transcript.borrow_mut().challenge_scalar();
         let _gamma: F = sm.transcript.borrow_mut().challenge_scalar();

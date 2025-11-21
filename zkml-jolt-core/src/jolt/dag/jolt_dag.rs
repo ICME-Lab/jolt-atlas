@@ -237,6 +237,16 @@ impl JoltDAG {
         // );
 
         #[cfg(test)]
+        println!(
+            "Not all virtual openings have been proven, missing: {:#?}",
+            state_manager
+                .get_prover_accumulator()
+                .borrow()
+                .appended_virtual_openings
+                .borrow()
+        );
+
+        #[cfg(test)]
         let debug_info = {
             let transcript = state_manager.transcript.take();
             let opening_accumulator = state_manager.get_prover_accumulator().borrow().clone();

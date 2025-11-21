@@ -55,7 +55,7 @@ impl VirtualProductType {
             ),
             VirtualProductType::WriteLookupOutputToTD => FactorPolynomials(
                 VirtualPolynomial::Td,
-                VirtualPolynomial::WriteLookupOutputToTD,
+                VirtualPolynomial::OpFlags(CircuitFlags::WriteLookupOutputToTD),
             ),
             VirtualProductType::SelectCond => FactorPolynomials(
                 VirtualPolynomial::Ts1Value,

@@ -310,7 +310,7 @@ pub enum VirtualPolynomial {
     RaCPrecompile(usize),
     ValFinal,
 
-    // HACK(Forpee): Temporary virtual polynomial for testing
+    // HACK(Forpee): Temporary virtual polynomial for testing. Will remove once I get tdInc working for precompiles
     TdIncS,
 }
 

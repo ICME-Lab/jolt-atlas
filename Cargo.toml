@@ -36,8 +36,8 @@ regex = "1.10.6"
 serde_json = "1.0.108"
 ark-bn254 = "0.5.0"
 ark-serialize = { workspace = true }
-# jolt-core = { git = "https://github.com/ICME-Lab/zkml-jolt", branch = "dev", package = "jolt-core", default-features = true }
-jolt-core = { path = "../zkml-jolt/jolt-core", default-features = true }
+jolt-core = { git = "https://github.com/ICME-Lab/zkml-jolt", branch = "dev", package = "jolt-core", default-features = true }
+
 
 [[example]]
 name = "article_classification"

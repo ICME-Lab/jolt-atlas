@@ -295,12 +295,6 @@ pub enum VirtualPolynomial {
     RegistersVal,
     OpFlags(CircuitFlags),
     LookupTableFlag(usize),
-    Product,
-    WriteLookupOutputToTD,
-    SelectCond,
-    SelectRes,
-    LeftInstructionInput,
-    RightInstructionInput,
     // precompile polys
     PrecompileA(usize),
     PrecompileB(usize),
@@ -310,6 +304,13 @@ pub enum VirtualPolynomial {
     RaCPrecompile(usize),
     ValFinal,
 
+    // aux variables
+    Product,
+    WriteLookupOutputToTD,
+    SelectCond,
+    SelectRes,
+    LeftInstructionInput,
+    RightInstructionInput,
     // HACK(Forpee): Temporary virtual polynomial for testing. Will remove once I get tdInc working for precompiles
     TdIncS,
 }

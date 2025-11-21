@@ -452,6 +452,13 @@ impl CanonicalDeserialize for VirtualPolynomial {
                 VirtualPolynomial::RaCPrecompile(index)
             }
             30 => VirtualPolynomial::ValFinal,
+            31 => VirtualPolynomial::Product,
+            32 => VirtualPolynomial::WriteLookupOutputToTD,
+            33 => VirtualPolynomial::SelectCond,
+            34 => VirtualPolynomial::SelectRes,
+            35 => VirtualPolynomial::LeftInstructionInput,
+            36 => VirtualPolynomial::RightInstructionInput,
+            37 => VirtualPolynomial::TdIncS,
             _ => return Err(SerializationError::InvalidData),
         };
         Ok(polynomial)

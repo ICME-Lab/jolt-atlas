@@ -135,7 +135,6 @@ impl JoltDAG {
 
         let mut stage3_instances: Vec<_> = std::iter::empty()
             .chain(spartan_dag.stage3_prover_instances(&mut state_manager))
-            .chain(memory_dag.stage3_prover_instances(&mut state_manager))
             .chain(lookups_dag.stage3_prover_instances(&mut state_manager))
             .collect();
 
@@ -165,8 +164,8 @@ impl JoltDAG {
         let _guard = span.enter();
 
         let mut stage4_instances: Vec<_> = std::iter::empty()
-            .chain(bytecode_dag.stage4_prover_instances(&mut state_manager))
             .chain(lookups_dag.stage4_prover_instances(&mut state_manager))
+            .chain(memory_dag.stage4_prover_instances(&mut state_manager))
             .collect();
 
         let stage4_instances_mut: Vec<&mut dyn SumcheckInstance<F>> = stage4_instances
@@ -188,6 +187,38 @@ impl JoltDAG {
         drop_in_background_thread(stage4_instances);
         drop(_guard);
         drop(span);
+
+        // Stage 5:
+        #[cfg(not(target_arch = "wasm32"))]
+        print_current_memory_usage("Stage 5 baseline");
+        let span = tracing::span!(tracing::Level::INFO, "Stage 5 sumchecks");
+        let _guard = span.enter();
+
+        let mut stage5_instances: Vec<_> = std::iter::empty()
+            .chain(memory_dag.stage5_prover_instances(&mut state_manager))
+            .collect();
+
+        let stage5_instances_mut: Vec<&mut dyn SumcheckInstance<F>> = stage5_instances
+            .iter_mut()
+            .map(|instance| &mut **instance as &mut dyn SumcheckInstance<F>)
+            .collect();
+
+        let (stage5_proof, _r_stage5) = BatchedSumcheck::prove(
+            stage5_instances_mut,
+            Some(accumulator.clone()),
+            &mut *transcript.borrow_mut(),
+        );
+
+        state_manager.proofs.borrow_mut().insert(
+            ProofKeys::Stage5Sumcheck,
+            ProofData::SumcheckProof(stage5_proof),
+        );
+
+        drop_in_background_thread(stage5_instances);
+        drop(_guard);
+        drop(span);
+
+        bytecode_dag.stage6_prover_instances(&mut state_manager);
 
         if pp.is_precompiles_enabled() {
             let precompile_proof = PrecompileSNARK::prove(&mut state_manager);
@@ -329,7 +360,6 @@ impl JoltDAG {
         // Stage 3:
         let stage3_instances: Vec<_> = std::iter::empty()
             .chain(spartan_dag.stage3_verifier_instances(&mut state_manager))
-            .chain(memory_dag.stage3_verifier_instances(&mut state_manager))
             .chain(lookups_dag.stage3_verifier_instances(&mut state_manager))
             .collect();
         let stage3_instances_ref: Vec<&dyn SumcheckInstance<F>> = stage3_instances
@@ -358,8 +388,8 @@ impl JoltDAG {
 
         // Stage 4:
         let stage4_instances: Vec<_> = std::iter::empty()
-            .chain(bytecode_dag.stage4_verifier_instances(&mut state_manager))
             .chain(lookups_dag.stage4_verifier_instances(&mut state_manager))
+            .chain(memory_dag.stage4_verifier_instances(&mut state_manager))
             .collect();
         let stage4_instances_ref: Vec<&dyn SumcheckInstance<F>> = stage4_instances
             .iter()
@@ -383,6 +413,32 @@ impl JoltDAG {
         )
         .context("Stage 4")?;
         drop(proofs);
+
+        // Stage 5:
+        let stage5_instances: Vec<_> = std::iter::empty()
+            .chain(memory_dag.stage5_verifier_instances(&mut state_manager))
+            .collect();
+        let stage5_instances_ref: Vec<&dyn SumcheckInstance<F>> = stage5_instances
+            .iter()
+            .map(|instance| &**instance as &dyn SumcheckInstance<F>)
+            .collect();
+        let proofs = state_manager.proofs.borrow();
+        let stage5_proof_data = proofs
+            .get(&ProofKeys::Stage5Sumcheck)
+            .expect("Stage 5 sumcheck proof not found");
+        let stage5_proof = match stage5_proof_data {
+            ProofData::SumcheckProof(proof) => proof,
+            _ => panic!("Invalid proof type for stage 5"),
+        };
+        let _r_stage5 = BatchedSumcheck::verify(
+            stage5_proof,
+            stage5_instances_ref,
+            Some(opening_accumulator.clone()),
+            &mut *transcript.borrow_mut(),
+        )
+        .context("Stage 5")?;
+        drop(proofs);
+        bytecode_dag.stage6_verifier_instances(&mut state_manager);
 
         if preprocessing.is_precompiles_enabled() {
             // precompile proof

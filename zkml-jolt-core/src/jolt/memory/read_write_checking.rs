@@ -14,7 +14,7 @@ use jolt_core::{
     utils::{math::Math, thread::unsafe_allocate_zero_vec},
 };
 use rayon::prelude::*;
-use std::{cell::RefCell, rc::Rc};
+use std::{array, cell::RefCell, iter::zip, rc::Rc};
 
 use crate::jolt::{
     JoltProverPreprocessing,
@@ -64,7 +64,6 @@ struct ReadWriteCheckingProverState<F: JoltField> {
     data_buffers: Vec<DataBuffers<F>>,
     I: Vec<Vec<(usize, u64, F, F)>>,
     A: Vec<F>,
-    gruens_eq_r_prime: GruenSplitEqPolynomial<F>,
     gruen_eq_r_cycle_stage_1: GruenSplitEqPolynomial<F>,
     gruen_eq_r_cycle_stage_2: GruenSplitEqPolynomial<F>,
     gruen_eq_r_cycle_stage_3: GruenSplitEqPolynomial<F>,
@@ -77,7 +76,6 @@ struct ReadWriteCheckingProverState<F: JoltField> {
     inc_cycle: MultilinearPolynomial<F>,
     // The following polynomials are instantiated after
     // the first phase
-    eq_r_prime: Option<MultilinearPolynomial<F>>,
     eq_r_cycle_stage_1: Option<MultilinearPolynomial<F>>,
     eq_r_cycle_stage_2: Option<MultilinearPolynomial<F>>,
     eq_r_cycle_stage_3: Option<MultilinearPolynomial<F>>,
@@ -93,7 +91,6 @@ impl<F: JoltField> ReadWriteCheckingProverState<F> {
     fn initialize<PCS: CommitmentScheme<Field = F>>(
         preprocessing: &JoltProverPreprocessing<F, PCS>,
         trace: &[JoltONNXCycle],
-        r_prime: &[F],
         sample_stage_1: &(OpeningPoint<BIG_ENDIAN, F>, F),
         sample_stage_2: &(OpeningPoint<BIG_ENDIAN, F>, F),
         sample_stage_3: &(OpeningPoint<BIG_ENDIAN, F>, F),
@@ -196,7 +193,6 @@ impl<F: JoltField> ReadWriteCheckingProverState<F> {
         drop(_guard);
         drop(span);
 
-        let gruens_eq_r_prime = GruenSplitEqPolynomial::new(r_prime, BindingOrder::LowToHigh);
         let gruen_eq_r_cycle_stage_1 =
             GruenSplitEqPolynomial::<F>::new(&sample_stage_1.0.r, BindingOrder::LowToHigh);
         let gruen_eq_r_cycle_stage_2 =
@@ -231,12 +227,10 @@ impl<F: JoltField> ReadWriteCheckingProverState<F> {
             data_buffers,
             I,
             A,
-            gruens_eq_r_prime,
             gruen_eq_r_cycle_stage_1,
             gruen_eq_r_cycle_stage_2,
             gruen_eq_r_cycle_stage_3,
             inc_cycle,
-            eq_r_prime: None,
             eq_r_cycle_stage_1: None,
             eq_r_cycle_stage_2: None,
             eq_r_cycle_stage_3: None,
@@ -274,15 +268,37 @@ pub struct ReadWriteValueClaims<F: JoltField> {
     pub td_wv_claim: F,
 }
 
+/// A sumcheck instance for:
+///
+/// ```text
+/// sum_j eq(r_cycle_stage_1, j) * (RdWriteValue(x) + gamma * Rs1Value(j) + gamma^2 * Rs2Value(j)) +
+///       gamma^3 * eq(r_cycle_stage_2, j) * (RdWriteValue(j) + gamma * Rs1Value(j)) +
+///      gamma^4 * eq(r_cycle_stage_3, j) * (Rs1Value(j) + gamma * Rs2Value(j))
+/// ```
+///
+/// Where
+///
+/// ```text
+/// RdWriteValue(x) = RdWa(x) * (Inc(x) + Val(x))
+/// Rs1Value(x) = Rs1Ra(x) * Val(x)
+/// Rs2Value(x) = Rs2Ra(x) * Val(x)
+/// ```
+///
+/// Note:
+/// - `r_cycle_stage_1` is the randomness from the log(T) rounds of Spartan outer sumcheck (stage 1).
+/// - `r_cycle_stage_3` is the randomness from instruction input sumcheck (stage 3).
 pub struct MemoryReadWriteChecking<F: JoltField> {
     K: usize,
     T: usize,
     gamma: F,
     gamma_sqr: F,
-    gamma_cube: F,
+    gamma_4: F,
+    gamma_pow_5: F,
     sumcheck_switch_index: usize,
     prover_state: Option<ReadWriteCheckingProverState<F>>,
-    input_claim: F,
+    input_sample_stage_1: (OpeningPoint<BIG_ENDIAN, F>, F),
+    input_sample_stage_2: (OpeningPoint<BIG_ENDIAN, F>, F),
+    input_sample_stage_3: (OpeningPoint<BIG_ENDIAN, F>, F),
 }
 
 #[derive(CanonicalSerialize, CanonicalDeserialize, Debug, Clone)]
@@ -311,28 +327,68 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
             VirtualPolynomial::TdWriteValue,
             SumcheckId::SpartanOuter,
         );
+        let r_cycle_stage_1 = r_cycle.clone();
+
+        let (r_cycle_stage_2, ts1_rv_claim_stage_2) =
+            accumulator.borrow().get_virtual_polynomial_opening(
+                VirtualPolynomial::Ts1Value,
+                SumcheckId::SelectCondVirtualization,
+            );
+        let (_, td_rv_claim_stage_2) = accumulator.borrow().get_virtual_polynomial_opening(
+            VirtualPolynomial::TdWriteValue,
+            SumcheckId::SelectResVirtualization,
+        );
+
+        let (r_cycle_stage_3, rs1_rv_claim_stage_3) =
+            accumulator.borrow().get_virtual_polynomial_opening(
+                VirtualPolynomial::Ts1Value,
+                SumcheckId::InstructionInputVirtualization,
+            );
+        let (_, rs2_rv_claim_stage_3) = accumulator.borrow().get_virtual_polynomial_opening(
+            VirtualPolynomial::Ts2Value,
+            SumcheckId::InstructionInputVirtualization,
+        );
 
         let transcript = &mut *state_manager.transcript.borrow_mut();
         let gamma: F = transcript.challenge_scalar();
         let gamma_sqr = gamma.square();
         let gamma_cube = gamma_sqr * gamma;
-        let input_claim = td_wv_claim
+        let gamma_4 = gamma_cube * gamma;
+        let gamma_pow_5 = gamma_4 * gamma;
+
+        let claim_stage_1 = td_wv_claim
             + gamma * ts1_rv_claim
             + gamma_sqr * ts2_rv_claim
             + gamma_cube * ts3_rv_claim;
 
-        let prover_state =
-            ReadWriteCheckingProverState::initialize(preprocessing, trace, &r_cycle.r);
+        let claim_stage_2 = td_rv_claim_stage_2 + gamma * ts1_rv_claim_stage_2;
+
+        let claim_stage_3 = rs1_rv_claim_stage_3 + gamma * rs2_rv_claim_stage_3;
+
+        let input_sample_stage_1 = (r_cycle_stage_1, claim_stage_1);
+        let input_sample_stage_2 = (r_cycle_stage_2, claim_stage_2);
+        let input_sample_stage_3 = (r_cycle_stage_3, claim_stage_3);
+
+        let prover_state = ReadWriteCheckingProverState::initialize(
+            preprocessing,
+            trace,
+            &input_sample_stage_1,
+            &input_sample_stage_2,
+            &input_sample_stage_3,
+        );
 
         Self {
             K: preprocessing.memory_K(),
             T: trace.len(),
             gamma,
             gamma_sqr,
-            gamma_cube,
+            gamma_4,
+            gamma_pow_5,
             sumcheck_switch_index: state_manager.twist_sumcheck_switch_index,
             prover_state: Some(prover_state),
-            input_claim,
+            input_sample_stage_1,
+            input_sample_stage_2,
+            input_sample_stage_3,
         }
     }
 
@@ -342,7 +398,7 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
         let (_, _, trace_length) = state_manager.get_verifier_data();
         let accumulator = state_manager.get_verifier_accumulator();
 
-        let (_, ts1_rv_claim) = accumulator
+        let (r_cycle_stage_1, ts1_rv_claim) = accumulator
             .borrow()
             .get_virtual_polynomial_opening(VirtualPolynomial::Ts1Value, SumcheckId::SpartanOuter);
         let (_, ts2_rv_claim) = accumulator
@@ -360,24 +416,55 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
         let gamma: F = transcript.challenge_scalar();
         let gamma_sqr = gamma.square();
         let gamma_cube = gamma_sqr * gamma;
-        let input_claim = td_wv_claim
+        let gamma_4 = gamma_cube * gamma;
+        let gamma_pow_5 = gamma_4 * gamma;
+        let claim_stage_1 = td_wv_claim
             + gamma * ts1_rv_claim
             + gamma_sqr * ts2_rv_claim
             + gamma_cube * ts3_rv_claim;
+
+        let (r_cycle_stage_2, ts1_rv_claim_stage_2) =
+            accumulator.borrow().get_virtual_polynomial_opening(
+                VirtualPolynomial::Ts1Value,
+                SumcheckId::SelectCondVirtualization,
+            );
+        let (_, td_rv_claim_stage_2) = accumulator.borrow().get_virtual_polynomial_opening(
+            VirtualPolynomial::TdWriteValue,
+            SumcheckId::SelectResVirtualization,
+        );
+        let claim_stage_2 = td_rv_claim_stage_2 + gamma * ts1_rv_claim_stage_2;
+
+        let (r_cycle_stage_3, rs1_rv_claim_stage_3) =
+            accumulator.borrow().get_virtual_polynomial_opening(
+                VirtualPolynomial::Ts1Value,
+                SumcheckId::InstructionInputVirtualization,
+            );
+        let (_, rs2_rv_claim_stage_3) = accumulator.borrow().get_virtual_polynomial_opening(
+            VirtualPolynomial::Ts2Value,
+            SumcheckId::InstructionInputVirtualization,
+        );
+        let claim_stage_3 = rs1_rv_claim_stage_3 + gamma * rs2_rv_claim_stage_3;
+        let input_sample_stage_1 = (r_cycle_stage_1, claim_stage_1);
+        let input_sample_stage_2 = (r_cycle_stage_2, claim_stage_2);
+        let input_sample_stage_3 = (r_cycle_stage_3, claim_stage_3);
 
         Self {
             K: state_manager.get_memory_K(),
             T: trace_length,
             gamma,
             gamma_sqr,
-            gamma_cube,
+            gamma_4,
+            gamma_pow_5,
             sumcheck_switch_index: state_manager.twist_sumcheck_switch_index,
             prover_state: None,
-            input_claim,
+            input_sample_stage_1,
+            input_sample_stage_2,
+            input_sample_stage_3,
         }
     }
 
-    fn phase1_compute_prover_message(&mut self, round: usize, previous_claim: F) -> Vec<F> {
+    fn phase1_compute_prover_message(&mut self, round: usize, _previous_claim: F) -> Vec<F> {
+        const BATCH_SIZE: usize = 3;
         const DEGREE: usize = 3;
         let ReadWriteCheckingProverState {
             addresses,
@@ -386,18 +473,31 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
             A,
             val_checkpoints,
             inc_cycle,
-            gruens_eq_r_prime,
+            gruen_eq_r_cycle_stage_1,
+            gruen_eq_r_cycle_stage_2,
+            gruen_eq_r_cycle_stage_3,
+            prev_claim_stage_1,
+            prev_claim_stage_2,
+            prev_claim_stage_3,
+            prev_round_poly_stage_1,
+            prev_round_poly_stage_2,
+            prev_round_poly_stage_3,
             ..
         } = self.prover_state.as_mut().unwrap();
 
         // Compute quadratic coefficients for Gruen's interpolation
-        let quadratic_coeffs: [F; DEGREE - 1] = if gruens_eq_r_prime.E_in_current_len() == 1 {
+        let quadratic_coeffs = if gruen_eq_r_cycle_stage_1.E_in_current_len() == 1 {
             // E_in is fully bound, use E_out
             I.par_iter()
                 .zip(data_buffers.par_iter_mut())
                 .zip(val_checkpoints.par_chunks(self.K))
                 .map(|((I_chunk, buffers), checkpoint)| {
-                    let mut evals = [F::zero(), F::zero()];
+                    let mut eval_at_0_for_stage_1 = F::zero();
+                    let mut eval_at_inf_for_stage_1 = F::zero();
+                    let mut eval_at_0_for_stage_2 = F::zero();
+                    let mut eval_at_inf_for_stage_2 = F::zero();
+                    let mut eval_at_0_for_stage_3 = F::zero();
+                    let mut eval_at_inf_for_stage_3 = F::zero();
 
                     let DataBuffers {
                         val_j_0,
@@ -484,7 +584,12 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
                                 val_j_0[col as usize] += inc;
                             }
 
-                            let eq_r_prime_eval = gruens_eq_r_prime.E_out_current()[j_prime / 2];
+                            let eq_r_cycle_stage_1_eval =
+                                gruen_eq_r_cycle_stage_1.E_out_current()[j_prime / 2];
+                            let eq_r_cycle_stage_2_eval =
+                                gruen_eq_r_cycle_stage_2.E_out_current()[j_prime / 2];
+                            let eq_r_cycle_stage_3_eval =
+                                gruen_eq_r_cycle_stage_3.E_out_current()[j_prime / 2];
                             let inc_cycle_evals = {
                                 let inc_cycle_0 = inc_cycle.get_bound_coeff(j_prime);
                                 let inc_cycle_1 = inc_cycle.get_bound_coeff(j_prime + 1);
@@ -554,36 +659,70 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
                             }
                             dirty_indices.clear();
 
-                            evals[0] += eq_r_prime_eval
-                                * (td_inner_sum_evals[0]
-                                    + self.gamma * ts1_inner_sum_evals[0]
-                                    + self.gamma_sqr * ts2_inner_sum_evals[0]
-                                    + self.gamma_cube * ts3_inner_sum_evals[0]);
-                            evals[1] += eq_r_prime_eval
-                                * (td_inner_sum_evals[1]
-                                    + self.gamma * ts1_inner_sum_evals[1]
-                                    + self.gamma_sqr * ts2_inner_sum_evals[1]
-                                    + self.gamma_cube * ts3_inner_sum_evals[1]);
+                            let read_vals_evals_stage_1 = [
+                                ts1_inner_sum_evals[0]
+                                    + self.gamma * ts2_inner_sum_evals[0]
+                                    + self.gamma_sqr * ts3_inner_sum_evals[0],
+                                ts1_inner_sum_evals[1]
+                                    + self.gamma * ts2_inner_sum_evals[1]
+                                    + self.gamma_sqr * ts3_inner_sum_evals[1],
+                            ];
+                            let read_vals_evals_stage_3 = [
+                                ts1_inner_sum_evals[0] + self.gamma * ts2_inner_sum_evals[0],
+                                ts1_inner_sum_evals[1] + self.gamma * ts2_inner_sum_evals[1],
+                            ];
+
+                            eval_at_0_for_stage_1 += eq_r_cycle_stage_1_eval
+                                * (td_inner_sum_evals[0] + self.gamma * read_vals_evals_stage_1[0]);
+                            eval_at_inf_for_stage_1 += eq_r_cycle_stage_1_eval
+                                * (td_inner_sum_evals[1] + self.gamma * read_vals_evals_stage_1[1]);
+
+                            eval_at_0_for_stage_2 += eq_r_cycle_stage_2_eval
+                                * (td_inner_sum_evals[0] + self.gamma * ts1_inner_sum_evals[0]);
+                            eval_at_inf_for_stage_2 += eq_r_cycle_stage_2_eval
+                                * (td_inner_sum_evals[1] + self.gamma * ts1_inner_sum_evals[1]);
+
+                            eval_at_0_for_stage_3 +=
+                                eq_r_cycle_stage_3_eval * (read_vals_evals_stage_3[0]);
+                            eval_at_inf_for_stage_3 +=
+                                eq_r_cycle_stage_3_eval * (read_vals_evals_stage_3[1]);
                         });
 
-                    evals
+                    [
+                        eval_at_0_for_stage_1,
+                        eval_at_inf_for_stage_1,
+                        eval_at_0_for_stage_2,
+                        eval_at_inf_for_stage_2,
+                        eval_at_0_for_stage_3,
+                        eval_at_inf_for_stage_3,
+                    ]
                 })
                 .reduce(
-                    || [F::zero(); DEGREE - 1],
-                    |running, new| [running[0] + new[0], running[1] + new[1]],
+                    || [F::zero(); BATCH_SIZE * (DEGREE - 1)],
+                    |a, b| array::from_fn(|i| a[i] + b[i]),
                 )
         } else {
             // E_in is not fully bound, handle E_in and E_out
-            let num_x_in_bits = gruens_eq_r_prime.E_in_current_len().log_2();
+            let num_x_in_bits = gruen_eq_r_cycle_stage_1.E_in_current_len().log_2();
             let x_bitmask = (1 << num_x_in_bits) - 1;
 
             I.par_iter()
                 .zip(data_buffers.par_iter_mut())
                 .zip(val_checkpoints.par_chunks(self.K))
                 .map(|((I_chunk, buffers), checkpoint)| {
-                    let mut evals = [F::zero(), F::zero()];
+                    let mut eval_at_0_for_stage_1 = F::zero();
+                    let mut eval_at_inf_for_stage_1 = F::zero();
+                    let mut eval_at_0_for_stage_2 = F::zero();
+                    let mut eval_at_inf_for_stage_2 = F::zero();
+                    let mut eval_at_0_for_stage_3 = F::zero();
+                    let mut eval_at_inf_for_stage_3 = F::zero();
 
-                    let mut evals_for_current_E_out = [F::zero(), F::zero()];
+                    let mut eval_at_0_for_current_stage_1 = F::zero();
+                    let mut eval_at_inf_for_current_stage_1 = F::zero();
+                    let mut eval_at_0_for_current_stage_2 = F::zero();
+                    let mut eval_at_inf_for_current_stage_2 = F::zero();
+                    let mut eval_at_0_for_current_stage_3 = F::zero();
+                    let mut eval_at_inf_for_current_stage_3 = F::zero();
                     let mut x_out_prev: Option<usize> = None;
 
                     let DataBuffers {
@@ -672,7 +811,9 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
 
                             let x_in = (j_prime / 2) & x_bitmask;
                             let x_out = (j_prime / 2) >> num_x_in_bits;
-                            let E_in_eval = gruens_eq_r_prime.E_in_current()[x_in];
+                            let E_in_stage_1_eval = gruen_eq_r_cycle_stage_1.E_in_current()[x_in];
+                            let E_in_stage_2_eval = gruen_eq_r_cycle_stage_2.E_in_current()[x_in];
+                            let E_in_stage_3_eval = gruen_eq_r_cycle_stage_3.E_in_current()[x_in];
 
                             let inc_cycle_evals = {
                                 let inc_cycle_0 = inc_cycle.get_bound_coeff(j_prime);
@@ -690,11 +831,32 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
                                 Some(x) if x_out != x => {
                                     x_out_prev = Some(x_out);
 
-                                    let E_out_eval = gruens_eq_r_prime.E_out_current()[x];
-                                    evals[0] += E_out_eval * evals_for_current_E_out[0];
-                                    evals[1] += E_out_eval * evals_for_current_E_out[1];
+                                    let E_out_stage_1_eval =
+                                        gruen_eq_r_cycle_stage_1.E_out_current()[x];
+                                    let E_out_stage_2_eval =
+                                        gruen_eq_r_cycle_stage_2.E_out_current()[x];
+                                    let E_out_stage_3_eval =
+                                        gruen_eq_r_cycle_stage_3.E_out_current()[x];
 
-                                    evals_for_current_E_out = [F::zero(), F::zero()];
+                                    eval_at_0_for_stage_1 +=
+                                        eval_at_0_for_current_stage_1 * (E_out_stage_1_eval);
+                                    eval_at_inf_for_stage_1 +=
+                                        eval_at_inf_for_current_stage_1 * (E_out_stage_1_eval);
+                                    eval_at_0_for_stage_2 +=
+                                        eval_at_0_for_current_stage_2 * (E_out_stage_2_eval);
+                                    eval_at_inf_for_stage_2 +=
+                                        eval_at_inf_for_current_stage_2 * (E_out_stage_2_eval);
+                                    eval_at_0_for_stage_3 +=
+                                        eval_at_0_for_current_stage_3 * (E_out_stage_3_eval);
+                                    eval_at_inf_for_stage_3 +=
+                                        eval_at_inf_for_current_stage_3 * (E_out_stage_3_eval);
+
+                                    eval_at_0_for_current_stage_1 = F::zero();
+                                    eval_at_inf_for_current_stage_1 = F::zero();
+                                    eval_at_0_for_current_stage_2 = F::zero();
+                                    eval_at_inf_for_current_stage_2 = F::zero();
+                                    eval_at_0_for_current_stage_3 = F::zero();
+                                    eval_at_inf_for_current_stage_3 = F::zero();
                                 }
                                 _ => (),
                             }
@@ -761,45 +923,124 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
                             }
                             dirty_indices.clear();
 
-                            evals_for_current_E_out[0] += E_in_eval
-                                * (td_inner_sum_evals[0]
-                                    + self.gamma * ts1_inner_sum_evals[0]
-                                    + self.gamma_sqr * ts2_inner_sum_evals[0]
-                                    + self.gamma_cube * ts3_inner_sum_evals[0]);
-                            evals_for_current_E_out[1] += E_in_eval
-                                * (td_inner_sum_evals[1]
-                                    + self.gamma * ts1_inner_sum_evals[1]
-                                    + self.gamma_sqr * ts2_inner_sum_evals[1]
-                                    + self.gamma_cube * ts3_inner_sum_evals[1]);
+                            let read_vals_evals_stage_1 = [
+                                ts1_inner_sum_evals[0]
+                                    + self.gamma * ts2_inner_sum_evals[0]
+                                    + self.gamma_sqr * ts3_inner_sum_evals[0],
+                                ts1_inner_sum_evals[1]
+                                    + self.gamma * ts2_inner_sum_evals[1]
+                                    + self.gamma_sqr * ts3_inner_sum_evals[1],
+                            ];
+                            let read_vals_evals_stage_3 = [
+                                ts1_inner_sum_evals[0] + self.gamma * ts2_inner_sum_evals[0],
+                                ts1_inner_sum_evals[1] + self.gamma * ts2_inner_sum_evals[1],
+                            ];
+
+                            eval_at_0_for_current_stage_1 += E_in_stage_1_eval
+                                * (td_inner_sum_evals[0] + self.gamma * read_vals_evals_stage_1[0]);
+                            eval_at_inf_for_current_stage_1 += E_in_stage_1_eval
+                                * (td_inner_sum_evals[1] + self.gamma * read_vals_evals_stage_1[1]);
+
+                            eval_at_0_for_current_stage_2 += E_in_stage_2_eval
+                                * (td_inner_sum_evals[0] + self.gamma * ts1_inner_sum_evals[0]);
+                            eval_at_inf_for_current_stage_2 += E_in_stage_2_eval
+                                * (td_inner_sum_evals[1] + self.gamma * ts1_inner_sum_evals[1]);
+
+                            eval_at_0_for_current_stage_3 +=
+                                E_in_stage_3_eval * read_vals_evals_stage_3[0];
+                            eval_at_inf_for_current_stage_3 +=
+                                E_in_stage_3_eval * read_vals_evals_stage_3[1];
                         });
 
                     // Multiply the final running sum by the final value of E_out_eval and add the
                     // result to the total.
                     if let Some(x) = x_out_prev {
-                        let E_out_eval = gruens_eq_r_prime.E_out_current()[x];
-                        evals[0] += E_out_eval * evals_for_current_E_out[0];
-                        evals[1] += E_out_eval * evals_for_current_E_out[1];
+                        let E_out_stage_1_eval = gruen_eq_r_cycle_stage_1.E_out_current()[x];
+                        let E_out_stage_2_eval = gruen_eq_r_cycle_stage_2.E_out_current()[x];
+                        let E_out_stage_3_eval = gruen_eq_r_cycle_stage_3.E_out_current()[x];
+                        eval_at_0_for_stage_1 +=
+                            E_out_stage_1_eval * (eval_at_0_for_current_stage_1);
+                        eval_at_inf_for_stage_1 +=
+                            E_out_stage_1_eval * (eval_at_inf_for_current_stage_1);
+                        eval_at_0_for_stage_2 +=
+                            E_out_stage_2_eval * (eval_at_0_for_current_stage_2);
+                        eval_at_inf_for_stage_2 +=
+                            E_out_stage_2_eval * (eval_at_inf_for_current_stage_2);
+                        eval_at_0_for_stage_3 +=
+                            E_out_stage_3_eval * (eval_at_0_for_current_stage_3);
+                        eval_at_inf_for_stage_3 +=
+                            E_out_stage_3_eval * (eval_at_inf_for_current_stage_3);
                     }
-                    evals
+                    [
+                        eval_at_0_for_stage_1,
+                        eval_at_inf_for_stage_1,
+                        eval_at_0_for_stage_2,
+                        eval_at_inf_for_stage_2,
+                        eval_at_0_for_stage_3,
+                        eval_at_inf_for_stage_3,
+                    ]
                 })
                 .reduce(
-                    || [F::zero(); DEGREE - 1],
-                    |running, new| [running[0] + new[0], running[1] + new[1]],
+                    || [F::zero(); BATCH_SIZE * (DEGREE - 1)],
+                    |a, b| array::from_fn(|i| a[i] + b[i]),
                 )
         };
+        let [
+            eval_at_0_for_stage_1,
+            eval_at_inf_for_stage_1,
+            eval_at_0_for_stage_2,
+            eval_at_inf_for_stage_2,
+            eval_at_0_for_stage_3,
+            eval_at_inf_for_stage_3,
+        ] = quadratic_coeffs;
 
-        // Convert quadratic coefficients to cubic evaluations
-        gruens_eq_r_prime
-            .gruen_evals_deg_3(quadratic_coeffs[0], quadratic_coeffs[1], previous_claim)
-            .to_vec()
+        let univariate_evals_stage_1 = gruen_eq_r_cycle_stage_1.gruen_evals_deg_3(
+            eval_at_0_for_stage_1,
+            eval_at_inf_for_stage_1,
+            *prev_claim_stage_1,
+        );
+        let univariate_evals_stage_2 = gruen_eq_r_cycle_stage_2.gruen_evals_deg_3(
+            eval_at_0_for_stage_2,
+            eval_at_inf_for_stage_2,
+            *prev_claim_stage_2,
+        );
+        let univariate_evals_stage_3 = gruen_eq_r_cycle_stage_3.gruen_evals_deg_3(
+            eval_at_0_for_stage_3,
+            eval_at_inf_for_stage_3,
+            *prev_claim_stage_3,
+        );
+        *prev_round_poly_stage_1 = Some(UniPoly::from_even_evals_and_hint(
+            *prev_claim_stage_1,
+            &univariate_evals_stage_1,
+        ));
+        *prev_round_poly_stage_2 = Some(UniPoly::from_even_evals_and_hint(
+            *prev_claim_stage_2,
+            &univariate_evals_stage_2,
+        ));
+        *prev_round_poly_stage_3 = Some(UniPoly::from_even_evals_and_hint(
+            *prev_claim_stage_3,
+            &univariate_evals_stage_3,
+        ));
+        // zip(univariate_evals_stage_1, univariate_evals_stage_3)
+        //     .map(|(eval_stage_1, eval_stage_3)| eval_stage_1 + self.gamma_pow_5 * eval_stage_3)
+        //     .collect()
+        zip(univariate_evals_stage_1, univariate_evals_stage_2)
+            .zip(univariate_evals_stage_3)
+            .map(|((eval_stage_1, eval_stage_2), eval_stage_3)| {
+                eval_stage_1 + self.gamma_4 * eval_stage_2 + self.gamma_pow_5 * eval_stage_3
+            })
+            .collect()
     }
 
     fn phase2_compute_prover_message(&self) -> Vec<F> {
         const DEGREE: usize = 3;
+        const BATCH_SIZE: usize = 3;
 
         let ReadWriteCheckingProverState {
             inc_cycle,
-            eq_r_prime,
+            eq_r_cycle_stage_1,
+            eq_r_cycle_stage_2,
+            eq_r_cycle_stage_3,
             ts1_ra,
             ts2_ra,
             ts3_ra,
@@ -812,17 +1053,43 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
         let ts3_ra = ts3_ra.as_ref().unwrap();
         let td_wa = td_wa.as_ref().unwrap();
         let val = val.as_ref().unwrap();
-        let eq_r_prime = eq_r_prime.as_ref().unwrap();
+        let eq_r_cycle_stage_1 = eq_r_cycle_stage_1.as_ref().unwrap();
+        let eq_r_cycle_stage_2 = eq_r_cycle_stage_2.as_ref().unwrap();
+        let eq_r_cycle_stage_3 = eq_r_cycle_stage_3.as_ref().unwrap();
 
-        let univariate_poly_evals = (0..eq_r_prime.len() / 2)
+        let [
+            eval_at_0_for_stage_1,
+            eval_at_2_for_stage_1,
+            eval_at_3_for_stage_1,
+            eval_at_0_for_stage_2,
+            eval_at_2_for_stage_2,
+            eval_at_3_for_stage_2,
+            eval_at_0_for_stage_3,
+            eval_at_2_for_stage_3,
+            eval_at_3_for_stage_3,
+        ] = (0..eq_r_cycle_stage_1.len() / 2)
             .into_par_iter()
             .map(|j| {
-                let eq_r_prime_evals =
-                    eq_r_prime.sumcheck_evals_array::<DEGREE>(j, BindingOrder::HighToLow);
+                let eq_r_cycle_stage_1_evals =
+                    eq_r_cycle_stage_1.sumcheck_evals_array::<DEGREE>(j, BindingOrder::HighToLow);
+                let eq_r_cycle_stage_2_evals =
+                    eq_r_cycle_stage_2.sumcheck_evals_array::<DEGREE>(j, BindingOrder::HighToLow);
+                let eq_r_cycle_stage_3_evals =
+                    eq_r_cycle_stage_3.sumcheck_evals_array::<DEGREE>(j, BindingOrder::HighToLow);
                 let inc_evals =
                     inc_cycle.sumcheck_evals_array::<DEGREE>(j, BindingOrder::HighToLow);
 
-                let inner_sum_evals: [F; DEGREE] = (0..self.K)
+                let [
+                    eval_at_0_for_stage_1,
+                    eval_at_2_for_stage_1,
+                    eval_at_3_for_stage_1,
+                    eval_at_0_for_stage_2,
+                    eval_at_2_for_stage_2,
+                    eval_at_3_for_stage_2,
+                    eval_at_0_for_stage_3,
+                    eval_at_2_for_stage_3,
+                    eval_at_3_for_stage_3,
+                ] = (0..self.K)
                     .into_par_iter()
                     .map(|k| {
                         let index = j * self.K + k;
@@ -837,58 +1104,131 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
                         let val_evals =
                             val.sumcheck_evals_array::<DEGREE>(index, BindingOrder::HighToLow);
 
+                        // Eval RdWriteValue(x) at (r', {0, 2, 3}, j, k).
+                        let rd_write_value_at_0_j_k =
+                            wa_evals[0].mul_0_optimized(inc_evals[0] + val_evals[0]);
+                        let rd_write_value_at_2_j_k =
+                            wa_evals[1].mul_0_optimized(inc_evals[1] + val_evals[1]);
+                        let rd_write_value_at_3_j_k =
+                            wa_evals[2].mul_0_optimized(inc_evals[2] + val_evals[2]);
+
+                        // Eval Rs1Value(x) at (r', {0, 2, 3}, j, k).
+                        let rs1_value_at_0_j_k = ts1_ra_evals[0].mul_0_optimized(val_evals[0]);
+                        let rs1_value_at_2_j_k = ts1_ra_evals[1].mul_0_optimized(val_evals[1]);
+                        let rs1_value_at_3_j_k = ts1_ra_evals[2].mul_0_optimized(val_evals[2]);
+
+                        // Eval Rs2Value(x) at (r', {0, 2, 3}, j, k).
+                        let rs2_value_at_0_j_k = ts2_ra_evals[0].mul_0_optimized(val_evals[0]);
+                        let rs2_value_at_2_j_k = ts2_ra_evals[1].mul_0_optimized(val_evals[1]);
+                        let rs2_value_at_3_j_k = ts2_ra_evals[2].mul_0_optimized(val_evals[2]);
+
+                        // Eval Rs3Value(x) at (r', {0, 2, 3}, j, k).
+                        let rs3_value_at_0_j_k = ts3_ra_evals[0].mul_0_optimized(val_evals[0]);
+                        let rs3_value_at_2_j_k = ts3_ra_evals[1].mul_0_optimized(val_evals[1]);
+                        let rs3_value_at_3_j_k = ts3_ra_evals[2].mul_0_optimized(val_evals[2]);
+
+                        // Eval ReadVals(x) = Rs1Value(x) + gamma * Rs2Value(x) at (r', {0, 2, 3}, j, k).
+                        let read_vals_at_0_j_k = rs1_value_at_0_j_k
+                            + self.gamma * rs2_value_at_0_j_k
+                            + self.gamma_sqr * rs3_value_at_0_j_k;
+                        let read_vals_at_2_j_k = rs1_value_at_2_j_k
+                            + self.gamma * rs2_value_at_2_j_k
+                            + self.gamma_sqr * rs3_value_at_2_j_k;
+                        let read_vals_at_3_j_k = rs1_value_at_3_j_k
+                            + self.gamma * rs2_value_at_3_j_k
+                            + self.gamma_sqr * rs3_value_at_3_j_k;
+
+                        let eval_at_0_j_k_for_stage_1 =
+                            rd_write_value_at_0_j_k + self.gamma * read_vals_at_0_j_k;
+                        let eval_at_2_j_k_for_stage_1 =
+                            rd_write_value_at_2_j_k + self.gamma * read_vals_at_2_j_k;
+                        let eval_at_3_j_k_for_stage_1 =
+                            rd_write_value_at_3_j_k + self.gamma * read_vals_at_3_j_k;
+
+                        let eval_at_0_j_k_for_stage_2 =
+                            rd_write_value_at_0_j_k + self.gamma * rs1_value_at_0_j_k;
+                        let eval_at_2_j_k_for_stage_2 =
+                            rd_write_value_at_2_j_k + self.gamma * rs1_value_at_2_j_k;
+                        let eval_at_3_j_k_for_stage_2 =
+                            rd_write_value_at_3_j_k + self.gamma * rs1_value_at_3_j_k;
+
+                        let eval_at_0_j_k_for_stage_3 =
+                            rs1_value_at_0_j_k + self.gamma * rs2_value_at_0_j_k;
+                        let eval_at_2_j_k_for_stage_3 =
+                            rs1_value_at_2_j_k + self.gamma * rs2_value_at_2_j_k;
+                        let eval_at_3_j_k_for_stage_3 =
+                            rs1_value_at_3_j_k + self.gamma * rs2_value_at_3_j_k;
+
                         [
-                            wa_evals[0].mul_0_optimized(inc_evals[0] + val_evals[0])
-                                + self.gamma * ts1_ra_evals[0].mul_0_optimized(val_evals[0])
-                                + self.gamma_sqr * ts2_ra_evals[0].mul_0_optimized(val_evals[0])
-                                + self.gamma_cube * ts3_ra_evals[0].mul_0_optimized(val_evals[0]),
-                            wa_evals[1].mul_0_optimized(inc_evals[1] + val_evals[1])
-                                + self.gamma * ts1_ra_evals[1].mul_0_optimized(val_evals[1])
-                                + self.gamma_sqr * ts2_ra_evals[1].mul_0_optimized(val_evals[1])
-                                + self.gamma_cube * ts3_ra_evals[1].mul_0_optimized(val_evals[1]),
-                            wa_evals[2].mul_0_optimized(inc_evals[2] + val_evals[2])
-                                + self.gamma * ts1_ra_evals[2].mul_0_optimized(val_evals[2])
-                                + self.gamma_sqr * ts2_ra_evals[2].mul_0_optimized(val_evals[2])
-                                + self.gamma_cube * ts3_ra_evals[2].mul_0_optimized(val_evals[2]),
+                            eval_at_0_j_k_for_stage_1,
+                            eval_at_2_j_k_for_stage_1,
+                            eval_at_3_j_k_for_stage_1,
+                            eval_at_0_j_k_for_stage_2,
+                            eval_at_2_j_k_for_stage_2,
+                            eval_at_3_j_k_for_stage_2,
+                            eval_at_0_j_k_for_stage_3,
+                            eval_at_2_j_k_for_stage_3,
+                            eval_at_3_j_k_for_stage_3,
                         ]
                     })
+                    .fold_with([F::zero(); BATCH_SIZE * DEGREE], |running, new| {
+                        array::from_fn(|i| running[i] + new[i])
+                    })
                     .reduce(
-                        || [F::zero(); DEGREE],
-                        |running, new| {
-                            [
-                                running[0] + new[0],
-                                running[1] + new[1],
-                                running[2] + new[2],
-                            ]
-                        },
+                        || [F::zero(); BATCH_SIZE * DEGREE],
+                        |a, b| array::from_fn(|i| a[i] + b[i]),
                     );
+                let eq_at_0_for_stage_1 = eq_r_cycle_stage_1_evals[0];
+                let eq_at_2_for_stage_1 = eq_r_cycle_stage_1_evals[1];
+                let eq_at_3_for_stage_1 = eq_r_cycle_stage_1_evals[2];
+
+                let eq_at_0_for_stage_2 = eq_r_cycle_stage_2_evals[0];
+                let eq_at_2_for_stage_2 = eq_r_cycle_stage_2_evals[1];
+                let eq_at_3_for_stage_2 = eq_r_cycle_stage_2_evals[2];
+
+                let eq_at_0_for_stage_3 = eq_r_cycle_stage_3_evals[0];
+                let eq_at_2_for_stage_3 = eq_r_cycle_stage_3_evals[1];
+                let eq_at_3_for_stage_3 = eq_r_cycle_stage_3_evals[2];
 
                 [
-                    eq_r_prime_evals[0] * inner_sum_evals[0],
-                    eq_r_prime_evals[1] * inner_sum_evals[1],
-                    eq_r_prime_evals[2] * inner_sum_evals[2],
+                    eq_at_0_for_stage_1 * (eval_at_0_for_stage_1),
+                    eq_at_2_for_stage_1 * (eval_at_2_for_stage_1),
+                    eq_at_3_for_stage_1 * (eval_at_3_for_stage_1),
+                    eq_at_0_for_stage_2 * (eval_at_0_for_stage_2),
+                    eq_at_2_for_stage_2 * (eval_at_2_for_stage_2),
+                    eq_at_3_for_stage_2 * (eval_at_3_for_stage_2),
+                    eq_at_0_for_stage_3 * (eval_at_0_for_stage_3),
+                    eq_at_2_for_stage_3 * (eval_at_2_for_stage_3),
+                    eq_at_3_for_stage_3 * (eval_at_3_for_stage_3),
                 ]
             })
             .reduce(
-                || [F::zero(); DEGREE],
-                |running, new| {
-                    [
-                        running[0] + new[0],
-                        running[1] + new[1],
-                        running[2] + new[2],
-                    ]
-                },
+                || [F::zero(); BATCH_SIZE * DEGREE],
+                |a, b| array::from_fn(|i| a[i] + b[i]),
             );
 
-        univariate_poly_evals.into()
+        let eval_at_0 = eval_at_0_for_stage_1
+            + self.gamma_4 * eval_at_0_for_stage_2
+            + self.gamma_pow_5 * eval_at_0_for_stage_3;
+        let eval_at_2 = eval_at_2_for_stage_1
+            + self.gamma_4 * eval_at_2_for_stage_2
+            + self.gamma_pow_5 * eval_at_2_for_stage_3;
+        let eval_at_3 = eval_at_3_for_stage_1
+            + self.gamma_4 * eval_at_3_for_stage_2
+            + self.gamma_pow_5 * eval_at_3_for_stage_3;
+
+        vec![eval_at_0, eval_at_2, eval_at_3]
     }
 
     fn phase3_compute_prover_message(&self) -> Vec<F> {
         const DEGREE: usize = 3;
+        const BATCH_SIZE: usize = 3;
 
         let ReadWriteCheckingProverState {
             inc_cycle,
-            eq_r_prime,
+            eq_r_cycle_stage_1,
+            eq_r_cycle_stage_2,
+            eq_r_cycle_stage_3,
             ts1_ra,
             ts2_ra,
             ts3_ra,
@@ -904,7 +1244,10 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
 
         // Cycle variables are fully bound, so:
         // eq(r', r_cycle) is a constant
-        let eq_r_prime_eval = eq_r_prime.as_ref().unwrap().final_sumcheck_claim();
+        // eq(r', r_cycle_stage_i) is a constant
+        let eq_r_cycle_stage_1_eval = eq_r_cycle_stage_1.as_ref().unwrap().final_sumcheck_claim();
+        let eq_r_cycle_stage_2_eval = eq_r_cycle_stage_2.as_ref().unwrap().final_sumcheck_claim();
+        let eq_r_cycle_stage_3_eval = eq_r_cycle_stage_3.as_ref().unwrap().final_sumcheck_claim();
         // ...and Inc(r_cycle) is a constant
         let inc_eval = inc_cycle.final_sumcheck_claim();
 
@@ -920,37 +1263,92 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
                 let wa_evals = td_wa.sumcheck_evals_array::<DEGREE>(k, BindingOrder::HighToLow);
                 let val_evals = val.sumcheck_evals_array::<DEGREE>(k, BindingOrder::HighToLow);
 
+                // Eval RdWriteValue(x) at (r', {0, 2, 3}, k).
+                let rd_write_value_at_0_k = wa_evals[0] * (inc_eval + val_evals[0]);
+                let rd_write_value_at_2_k = wa_evals[1] * (inc_eval + val_evals[1]);
+                let rd_write_value_at_3_k = wa_evals[2] * (inc_eval + val_evals[2]);
+
+                // Eval Rs1Value(x) at (r', {0, 2, 3}, k).
+                let rs1_value_at_0_k = ts1_ra_evals[0] * val_evals[0];
+                let rs1_value_at_2_k = ts1_ra_evals[1] * val_evals[1];
+                let rs1_value_at_3_k = ts1_ra_evals[2] * val_evals[2];
+
+                // Eval Rs2Value(x) at (r', {0, 2, 3}, k).
+                let rs2_value_at_0_k = ts2_ra_evals[0] * val_evals[0];
+                let rs2_value_at_2_k = ts2_ra_evals[1] * val_evals[1];
+                let rs2_value_at_3_k = ts2_ra_evals[2] * val_evals[2];
+
+                // Eval Rs3Value(x) at (r', {0, 2, 3}, k).
+                let rs3_value_at_0_k = ts3_ra_evals[0] * val_evals[0];
+                let rs3_value_at_2_k = ts3_ra_evals[1] * val_evals[1];
+                let rs3_value_at_3_k = ts3_ra_evals[2] * val_evals[2];
+
+                // Eval ReadVals(x) = Rs1Value(x) + gamma * Rs2Value(x) at (r', {0, 2, 3}, k).
+                let read_vals_at_0_k = rs1_value_at_0_k
+                    + self.gamma * rs2_value_at_0_k
+                    + self.gamma_sqr * rs3_value_at_0_k;
+                let read_vals_at_2_k = rs1_value_at_2_k
+                    + self.gamma * rs2_value_at_2_k
+                    + self.gamma_sqr * rs3_value_at_2_k;
+                let read_vals_at_3_k = rs1_value_at_3_k
+                    + self.gamma * rs2_value_at_3_k
+                    + self.gamma_sqr * rs3_value_at_3_k;
+
+                let eval_at_0_k_for_stage_1 = rd_write_value_at_0_k + self.gamma * read_vals_at_0_k;
+                let eval_at_2_k_for_stage_1 = rd_write_value_at_2_k + self.gamma * read_vals_at_2_k;
+                let eval_at_3_k_for_stage_1 = rd_write_value_at_3_k + self.gamma * read_vals_at_3_k;
+
+                let eval_at_0_k_for_stage_2 = rd_write_value_at_0_k + self.gamma * rs1_value_at_0_k;
+                let eval_at_2_k_for_stage_2 = rd_write_value_at_2_k + self.gamma * rs1_value_at_2_k;
+                let eval_at_3_k_for_stage_2 = rd_write_value_at_3_k + self.gamma * rs1_value_at_3_k;
+
+                let eval_at_0_k_for_stage_3 = rs1_value_at_0_k + self.gamma * rs2_value_at_0_k;
+                let eval_at_2_k_for_stage_3 = rs1_value_at_2_k + self.gamma * rs2_value_at_2_k;
+                let eval_at_3_k_for_stage_3 = rs1_value_at_3_k + self.gamma * rs2_value_at_3_k;
+
                 [
-                    wa_evals[0] * (inc_eval + val_evals[0])
-                        + self.gamma * ts1_ra_evals[0] * val_evals[0]
-                        + self.gamma_sqr * ts2_ra_evals[0] * val_evals[0]
-                        + self.gamma_cube * ts3_ra_evals[0] * val_evals[0],
-                    wa_evals[1] * (inc_eval + val_evals[1])
-                        + self.gamma * ts1_ra_evals[1] * val_evals[1]
-                        + self.gamma_sqr * ts2_ra_evals[1] * val_evals[1]
-                        + self.gamma_cube * ts3_ra_evals[1] * val_evals[1],
-                    wa_evals[2] * (inc_eval + val_evals[2])
-                        + self.gamma * ts1_ra_evals[2] * val_evals[2]
-                        + self.gamma_sqr * ts2_ra_evals[2] * val_evals[2]
-                        + self.gamma_cube * ts3_ra_evals[2] * val_evals[2],
+                    eval_at_0_k_for_stage_1,
+                    eval_at_2_k_for_stage_1,
+                    eval_at_3_k_for_stage_1,
+                    eval_at_0_k_for_stage_2,
+                    eval_at_2_k_for_stage_2,
+                    eval_at_3_k_for_stage_2,
+                    eval_at_0_k_for_stage_3,
+                    eval_at_2_k_for_stage_3,
+                    eval_at_3_k_for_stage_3,
                 ]
             })
+            .fold_with([F::zero(); BATCH_SIZE * DEGREE], |a, b| {
+                array::from_fn(|i| a[i] + b[i])
+            })
             .reduce(
-                || [F::zero(); DEGREE],
-                |running, new| {
-                    [
-                        running[0] + new[0],
-                        running[1] + new[1],
-                        running[2] + new[2],
-                    ]
-                },
+                || [F::zero(); BATCH_SIZE * DEGREE],
+                |a, b| array::from_fn(|i| a[i] + b[i]),
             );
 
-        vec![
-            eq_r_prime_eval * evals[0],
-            eq_r_prime_eval * evals[1],
-            eq_r_prime_eval * evals[2],
-        ]
+        let [
+            eval_at_0_for_stage_1,
+            eval_at_2_for_stage_1,
+            eval_at_3_for_stage_1,
+            eval_at_0_for_stage_2,
+            eval_at_2_for_stage_2,
+            eval_at_3_for_stage_2,
+            eval_at_0_for_stage_3,
+            eval_at_2_for_stage_3,
+            eval_at_3_for_stage_3,
+        ] = evals;
+
+        let eval_at_0 = eq_r_cycle_stage_1_eval * eval_at_0_for_stage_1
+            + self.gamma_4 * eq_r_cycle_stage_2_eval * eval_at_0_for_stage_2
+            + self.gamma_pow_5 * eq_r_cycle_stage_3_eval * eval_at_0_for_stage_3;
+        let eval_at_2 = eq_r_cycle_stage_1_eval * eval_at_2_for_stage_1
+            + self.gamma_4 * eq_r_cycle_stage_2_eval * eval_at_2_for_stage_2
+            + self.gamma_pow_5 * eq_r_cycle_stage_3_eval * eval_at_2_for_stage_3;
+        let eval_at_3 = eq_r_cycle_stage_1_eval * eval_at_3_for_stage_1
+            + self.gamma_4 * eq_r_cycle_stage_2_eval * eval_at_3_for_stage_2
+            + self.gamma_pow_5 * eq_r_cycle_stage_3_eval * eval_at_3_for_stage_3;
+
+        vec![eval_at_0, eval_at_2, eval_at_3]
     }
 
     fn phase1_bind(&mut self, r_j: F, round: usize) {
@@ -959,8 +1357,6 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
             I,
             A,
             inc_cycle,
-            gruens_eq_r_prime,
-            eq_r_prime,
             chunk_size,
             val_checkpoints,
             ts1_ra,
@@ -968,6 +1364,18 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
             ts3_ra,
             td_wa,
             val,
+            gruen_eq_r_cycle_stage_1,
+            gruen_eq_r_cycle_stage_2,
+            gruen_eq_r_cycle_stage_3,
+            prev_claim_stage_1,
+            prev_claim_stage_2,
+            prev_claim_stage_3,
+            prev_round_poly_stage_1,
+            prev_round_poly_stage_2,
+            prev_round_poly_stage_3,
+            eq_r_cycle_stage_1,
+            eq_r_cycle_stage_2,
+            eq_r_cycle_stage_3,
             ..
         } = self.prover_state.as_mut().unwrap();
 
@@ -1008,8 +1416,13 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
         drop(_inner_guard);
         drop(inner_span);
 
-        gruens_eq_r_prime.bind(r_j);
+        gruen_eq_r_cycle_stage_1.bind(r_j);
+        gruen_eq_r_cycle_stage_2.bind(r_j);
+        gruen_eq_r_cycle_stage_3.bind(r_j);
         inc_cycle.bind_parallel(r_j, BindingOrder::LowToHigh);
+        *prev_claim_stage_1 = prev_round_poly_stage_1.take().unwrap().evaluate(&r_j);
+        *prev_claim_stage_2 = prev_round_poly_stage_2.take().unwrap().evaluate(&r_j);
+        *prev_claim_stage_3 = prev_round_poly_stage_3.take().unwrap().evaluate(&r_j);
 
         let inner_span = tracing::span!(tracing::Level::INFO, "Update A");
         let _inner_guard = inner_span.enter();
@@ -1139,12 +1552,29 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
             let span = tracing::span!(tracing::Level::INFO, "Materialize eq polynomial");
             let _guard = span.enter();
 
-            let eq_evals: Vec<F> =
-                EqPolynomial::evals(&gruens_eq_r_prime.w[..gruens_eq_r_prime.current_index])
-                    .par_iter()
-                    .map(|x| *x * gruens_eq_r_prime.current_scalar)
-                    .collect();
-            *eq_r_prime = Some(MultilinearPolynomial::from(eq_evals))
+            let eq_evals_stage_1: Vec<F> = EqPolynomial::<F>::evals(
+                &gruen_eq_r_cycle_stage_1.w[..gruen_eq_r_cycle_stage_1.current_index],
+            )
+            .par_iter()
+            .map(|x| *x * gruen_eq_r_cycle_stage_1.current_scalar)
+            .collect();
+            *eq_r_cycle_stage_1 = Some(eq_evals_stage_1.into());
+
+            let eq_evals_stage_2: Vec<F> = EqPolynomial::<F>::evals(
+                &gruen_eq_r_cycle_stage_2.w[..gruen_eq_r_cycle_stage_2.current_index],
+            )
+            .par_iter()
+            .map(|x| *x * gruen_eq_r_cycle_stage_2.current_scalar)
+            .collect();
+            *eq_r_cycle_stage_2 = Some(eq_evals_stage_2.into());
+
+            let eq_evals_stage_3: Vec<F> = EqPolynomial::<F>::evals(
+                &gruen_eq_r_cycle_stage_3.w[..gruen_eq_r_cycle_stage_3.current_index],
+            )
+            .par_iter()
+            .map(|x| *x * gruen_eq_r_cycle_stage_3.current_scalar)
+            .collect();
+            *eq_r_cycle_stage_3 = Some(eq_evals_stage_3.into());
         }
     }
 
@@ -1156,7 +1586,9 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
             td_wa,
             val,
             inc_cycle,
-            eq_r_prime,
+            eq_r_cycle_stage_1,
+            eq_r_cycle_stage_2,
+            eq_r_cycle_stage_3,
             ..
         } = self.prover_state.as_mut().unwrap();
         let ts1_ra = ts1_ra.as_mut().unwrap();
@@ -1164,11 +1596,23 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
         let ts3_ra = ts3_ra.as_mut().unwrap();
         let td_wa = td_wa.as_mut().unwrap();
         let val = val.as_mut().unwrap();
-        let eq_r_prime = eq_r_prime.as_mut().unwrap();
+        let eq_r_cycle_stage_1 = eq_r_cycle_stage_1.as_mut().unwrap();
+        let eq_r_cycle_stage_2 = eq_r_cycle_stage_2.as_mut().unwrap();
+        let eq_r_cycle_stage_3 = eq_r_cycle_stage_3.as_mut().unwrap();
 
-        [ts1_ra, ts2_ra, ts3_ra, td_wa, val, inc_cycle, eq_r_prime]
-            .into_par_iter()
-            .for_each(|poly| poly.bind_parallel(r_j, BindingOrder::HighToLow));
+        [
+            ts1_ra,
+            ts2_ra,
+            ts3_ra,
+            td_wa,
+            val,
+            inc_cycle,
+            eq_r_cycle_stage_1,
+            eq_r_cycle_stage_2,
+            eq_r_cycle_stage_3,
+        ]
+        .into_par_iter()
+        .for_each(|poly| poly.bind_parallel(r_j, BindingOrder::HighToLow));
     }
 
     fn phase3_bind(&mut self, r_j: F) {
@@ -1204,7 +1648,9 @@ impl<F: JoltField> SumcheckInstance<F> for MemoryReadWriteChecking<F> {
     }
 
     fn input_claim(&self) -> F {
-        self.input_claim
+        self.input_sample_stage_1.1
+            + self.gamma_4 * self.input_sample_stage_2.1
+            + self.gamma_pow_5 * self.input_sample_stage_3.1
     }
 
     #[tracing::instrument(skip_all, name = "RegistersReadWriteChecking::compute_prover_message")]
@@ -1244,12 +1690,11 @@ impl<F: JoltField> SumcheckInstance<F> for MemoryReadWriteChecking<F> {
         // The high-order cycle variables are bound after the switch
         r_cycle.extend(r[self.sumcheck_switch_index..self.T.log_2()].iter().rev());
         let r_cycle = OpeningPoint::<LITTLE_ENDIAN, F>::new(r_cycle);
-        let (r_prime, _) = accumulator
-            .borrow()
-            .get_virtual_polynomial_opening(VirtualPolynomial::Ts1Value, SumcheckId::SpartanOuter);
 
         // eq(r', r_cycle)
-        let eq_eval_cycle = EqPolynomial::mle_endian(&r_prime, &r_cycle);
+        let eq_eval_stage_1 = EqPolynomial::mle_endian(&r_cycle, &self.input_sample_stage_1.0);
+        let eq_eval_stage_2 = EqPolynomial::mle_endian(&r_cycle, &self.input_sample_stage_2.0);
+        let eq_eval_stage_3 = EqPolynomial::mle_endian(&r_cycle, &self.input_sample_stage_3.0);
 
         let (_, val_claim) = accumulator.borrow().get_virtual_polynomial_opening(
             VirtualPolynomial::RegistersVal,
@@ -1275,12 +1720,19 @@ impl<F: JoltField> SumcheckInstance<F> for MemoryReadWriteChecking<F> {
             CommittedPolynomial::TdInc,
             SumcheckId::RegistersReadWriteChecking,
         );
+        let rd_write_value_claim = td_wa_claim * (inc_claim + val_claim);
+        let rs1_value_claim = ts1_ra_claim * val_claim;
+        let rs2_value_claim = ts2_ra_claim * val_claim;
+        let rs3_value_claim = ts3_ra_claim * val_claim;
+        let read_values_claim =
+            rs1_value_claim + self.gamma * rs2_value_claim + self.gamma_sqr * rs3_value_claim;
 
-        eq_eval_cycle
-            * (td_wa_claim * (inc_claim + val_claim)
-                + self.gamma * ts1_ra_claim * val_claim
-                + self.gamma_sqr * ts2_ra_claim * val_claim
-                + self.gamma_cube * ts3_ra_claim * val_claim)
+        let stage_1_claim =
+            eq_eval_stage_1 * (rd_write_value_claim + self.gamma * read_values_claim);
+        let stage_2_claim = eq_eval_stage_2 * (rd_write_value_claim + self.gamma * rs1_value_claim);
+        let stage_3_claim = eq_eval_stage_3 * (rs1_value_claim + self.gamma * rs2_value_claim);
+
+        stage_1_claim + self.gamma_4 * stage_2_claim + self.gamma_pow_5 * stage_3_claim
     }
 
     fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {

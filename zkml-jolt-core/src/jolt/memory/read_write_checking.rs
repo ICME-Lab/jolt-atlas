@@ -271,17 +271,17 @@ pub struct ReadWriteValueClaims<F: JoltField> {
 /// A sumcheck instance for:
 ///
 /// ```text
-/// sum_j eq(r_cycle_stage_1, j) * (RdWriteValue(x) + gamma * Rs1Value(j) + gamma^2 * Rs2Value(j)) +
-///       gamma^3 * eq(r_cycle_stage_2, j) * (RdWriteValue(j) + gamma * Rs1Value(j)) +
-///      gamma^4 * eq(r_cycle_stage_3, j) * (Rs1Value(j) + gamma * Rs2Value(j))
+/// sum_j eq(r_cycle_stage_1, j) * (TdWriteValue(x) + gamma * Ts1Value(j) + gamma^2 * Ts2Value(j)) +
+///       gamma^3 * eq(r_cycle_stage_2, j) * (TdWriteValue(j) + gamma * Ts1Value(j)) +
+///      gamma^4 * eq(r_cycle_stage_3, j) * (Ts1Value(j) + gamma * Ts2Value(j))
 /// ```
 ///
 /// Where
 ///
 /// ```text
-/// RdWriteValue(x) = RdWa(x) * (Inc(x) + Val(x))
-/// Rs1Value(x) = Rs1Ra(x) * Val(x)
-/// Rs2Value(x) = Rs2Ra(x) * Val(x)
+/// TdWriteValue(x) = TdWa(x) * (Inc(x) + Val(x))
+/// Ts1Value(x) = Ts1Ra(x) * Val(x)
+/// Ts2Value(x) = Ts2Ra(x) * Val(x)
 /// ```
 ///
 /// Note:
@@ -339,12 +339,12 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
             SumcheckId::SelectResVirtualization,
         );
 
-        let (r_cycle_stage_3, rs1_rv_claim_stage_3) =
+        let (r_cycle_stage_3, ts1_rv_claim_stage_3) =
             accumulator.borrow().get_virtual_polynomial_opening(
                 VirtualPolynomial::Ts1Value,
                 SumcheckId::InstructionInputVirtualization,
             );
-        let (_, rs2_rv_claim_stage_3) = accumulator.borrow().get_virtual_polynomial_opening(
+        let (_, ts2_rv_claim_stage_3) = accumulator.borrow().get_virtual_polynomial_opening(
             VirtualPolynomial::Ts2Value,
             SumcheckId::InstructionInputVirtualization,
         );
@@ -363,7 +363,7 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
 
         let claim_stage_2 = td_rv_claim_stage_2 + gamma * ts1_rv_claim_stage_2;
 
-        let claim_stage_3 = rs1_rv_claim_stage_3 + gamma * rs2_rv_claim_stage_3;
+        let claim_stage_3 = ts1_rv_claim_stage_3 + gamma * ts2_rv_claim_stage_3;
 
         let input_sample_stage_1 = (r_cycle_stage_1, claim_stage_1);
         let input_sample_stage_2 = (r_cycle_stage_2, claim_stage_2);
@@ -434,16 +434,16 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
         );
         let claim_stage_2 = td_rv_claim_stage_2 + gamma * ts1_rv_claim_stage_2;
 
-        let (r_cycle_stage_3, rs1_rv_claim_stage_3) =
+        let (r_cycle_stage_3, ts1_rv_claim_stage_3) =
             accumulator.borrow().get_virtual_polynomial_opening(
                 VirtualPolynomial::Ts1Value,
                 SumcheckId::InstructionInputVirtualization,
             );
-        let (_, rs2_rv_claim_stage_3) = accumulator.borrow().get_virtual_polynomial_opening(
+        let (_, ts2_rv_claim_stage_3) = accumulator.borrow().get_virtual_polynomial_opening(
             VirtualPolynomial::Ts2Value,
             SumcheckId::InstructionInputVirtualization,
         );
-        let claim_stage_3 = rs1_rv_claim_stage_3 + gamma * rs2_rv_claim_stage_3;
+        let claim_stage_3 = ts1_rv_claim_stage_3 + gamma * ts2_rv_claim_stage_3;
         let input_sample_stage_1 = (r_cycle_stage_1, claim_stage_1);
         let input_sample_stage_2 = (r_cycle_stage_2, claim_stage_2);
         let input_sample_stage_3 = (r_cycle_stage_3, claim_stage_3);
@@ -1104,60 +1104,60 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
                         let val_evals =
                             val.sumcheck_evals_array::<DEGREE>(index, BindingOrder::HighToLow);
 
-                        // Eval RdWriteValue(x) at (r', {0, 2, 3}, j, k).
-                        let rd_write_value_at_0_j_k =
+                        // Eval TdWriteValue(x) at (r', {0, 2, 3}, j, k).
+                        let td_write_value_at_0_j_k =
                             wa_evals[0].mul_0_optimized(inc_evals[0] + val_evals[0]);
-                        let rd_write_value_at_2_j_k =
+                        let td_write_value_at_2_j_k =
                             wa_evals[1].mul_0_optimized(inc_evals[1] + val_evals[1]);
-                        let rd_write_value_at_3_j_k =
+                        let td_write_value_at_3_j_k =
                             wa_evals[2].mul_0_optimized(inc_evals[2] + val_evals[2]);
 
-                        // Eval Rs1Value(x) at (r', {0, 2, 3}, j, k).
-                        let rs1_value_at_0_j_k = ts1_ra_evals[0].mul_0_optimized(val_evals[0]);
-                        let rs1_value_at_2_j_k = ts1_ra_evals[1].mul_0_optimized(val_evals[1]);
-                        let rs1_value_at_3_j_k = ts1_ra_evals[2].mul_0_optimized(val_evals[2]);
+                        // Eval Ts1Value(x) at (r', {0, 2, 3}, j, k).
+                        let ts1_value_at_0_j_k = ts1_ra_evals[0].mul_0_optimized(val_evals[0]);
+                        let ts1_value_at_2_j_k = ts1_ra_evals[1].mul_0_optimized(val_evals[1]);
+                        let ts1_value_at_3_j_k = ts1_ra_evals[2].mul_0_optimized(val_evals[2]);
 
-                        // Eval Rs2Value(x) at (r', {0, 2, 3}, j, k).
-                        let rs2_value_at_0_j_k = ts2_ra_evals[0].mul_0_optimized(val_evals[0]);
-                        let rs2_value_at_2_j_k = ts2_ra_evals[1].mul_0_optimized(val_evals[1]);
-                        let rs2_value_at_3_j_k = ts2_ra_evals[2].mul_0_optimized(val_evals[2]);
+                        // Eval Ts2Value(x) at (r', {0, 2, 3}, j, k).
+                        let ts2_value_at_0_j_k = ts2_ra_evals[0].mul_0_optimized(val_evals[0]);
+                        let ts2_value_at_2_j_k = ts2_ra_evals[1].mul_0_optimized(val_evals[1]);
+                        let ts2_value_at_3_j_k = ts2_ra_evals[2].mul_0_optimized(val_evals[2]);
 
-                        // Eval Rs3Value(x) at (r', {0, 2, 3}, j, k).
-                        let rs3_value_at_0_j_k = ts3_ra_evals[0].mul_0_optimized(val_evals[0]);
-                        let rs3_value_at_2_j_k = ts3_ra_evals[1].mul_0_optimized(val_evals[1]);
-                        let rs3_value_at_3_j_k = ts3_ra_evals[2].mul_0_optimized(val_evals[2]);
+                        // Eval Ts3Value(x) at (r', {0, 2, 3}, j, k).
+                        let ts3_value_at_0_j_k = ts3_ra_evals[0].mul_0_optimized(val_evals[0]);
+                        let ts3_value_at_2_j_k = ts3_ra_evals[1].mul_0_optimized(val_evals[1]);
+                        let ts3_value_at_3_j_k = ts3_ra_evals[2].mul_0_optimized(val_evals[2]);
 
-                        // Eval ReadVals(x) = Rs1Value(x) + gamma * Rs2Value(x) at (r', {0, 2, 3}, j, k).
-                        let read_vals_at_0_j_k = rs1_value_at_0_j_k
-                            + self.gamma * rs2_value_at_0_j_k
-                            + self.gamma_sqr * rs3_value_at_0_j_k;
-                        let read_vals_at_2_j_k = rs1_value_at_2_j_k
-                            + self.gamma * rs2_value_at_2_j_k
-                            + self.gamma_sqr * rs3_value_at_2_j_k;
-                        let read_vals_at_3_j_k = rs1_value_at_3_j_k
-                            + self.gamma * rs2_value_at_3_j_k
-                            + self.gamma_sqr * rs3_value_at_3_j_k;
+                        // Eval ReadVals(x) = Ts1Value(x) + gamma * Ts2Value(x) at (r', {0, 2, 3}, j, k).
+                        let read_vals_at_0_j_k = ts1_value_at_0_j_k
+                            + self.gamma * ts2_value_at_0_j_k
+                            + self.gamma_sqr * ts3_value_at_0_j_k;
+                        let read_vals_at_2_j_k = ts1_value_at_2_j_k
+                            + self.gamma * ts2_value_at_2_j_k
+                            + self.gamma_sqr * ts3_value_at_2_j_k;
+                        let read_vals_at_3_j_k = ts1_value_at_3_j_k
+                            + self.gamma * ts2_value_at_3_j_k
+                            + self.gamma_sqr * ts3_value_at_3_j_k;
 
                         let eval_at_0_j_k_for_stage_1 =
-                            rd_write_value_at_0_j_k + self.gamma * read_vals_at_0_j_k;
+                            td_write_value_at_0_j_k + self.gamma * read_vals_at_0_j_k;
                         let eval_at_2_j_k_for_stage_1 =
-                            rd_write_value_at_2_j_k + self.gamma * read_vals_at_2_j_k;
+                            td_write_value_at_2_j_k + self.gamma * read_vals_at_2_j_k;
                         let eval_at_3_j_k_for_stage_1 =
-                            rd_write_value_at_3_j_k + self.gamma * read_vals_at_3_j_k;
+                            td_write_value_at_3_j_k + self.gamma * read_vals_at_3_j_k;
 
                         let eval_at_0_j_k_for_stage_2 =
-                            rd_write_value_at_0_j_k + self.gamma * rs1_value_at_0_j_k;
+                            td_write_value_at_0_j_k + self.gamma * ts1_value_at_0_j_k;
                         let eval_at_2_j_k_for_stage_2 =
-                            rd_write_value_at_2_j_k + self.gamma * rs1_value_at_2_j_k;
+                            td_write_value_at_2_j_k + self.gamma * ts1_value_at_2_j_k;
                         let eval_at_3_j_k_for_stage_2 =
-                            rd_write_value_at_3_j_k + self.gamma * rs1_value_at_3_j_k;
+                            td_write_value_at_3_j_k + self.gamma * ts1_value_at_3_j_k;
 
                         let eval_at_0_j_k_for_stage_3 =
-                            rs1_value_at_0_j_k + self.gamma * rs2_value_at_0_j_k;
+                            ts1_value_at_0_j_k + self.gamma * ts2_value_at_0_j_k;
                         let eval_at_2_j_k_for_stage_3 =
-                            rs1_value_at_2_j_k + self.gamma * rs2_value_at_2_j_k;
+                            ts1_value_at_2_j_k + self.gamma * ts2_value_at_2_j_k;
                         let eval_at_3_j_k_for_stage_3 =
-                            rs1_value_at_3_j_k + self.gamma * rs2_value_at_3_j_k;
+                            ts1_value_at_3_j_k + self.gamma * ts2_value_at_3_j_k;
 
                         [
                             eval_at_0_j_k_for_stage_1,
@@ -1263,48 +1263,48 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
                 let wa_evals = td_wa.sumcheck_evals_array::<DEGREE>(k, BindingOrder::HighToLow);
                 let val_evals = val.sumcheck_evals_array::<DEGREE>(k, BindingOrder::HighToLow);
 
-                // Eval RdWriteValue(x) at (r', {0, 2, 3}, k).
-                let rd_write_value_at_0_k = wa_evals[0] * (inc_eval + val_evals[0]);
-                let rd_write_value_at_2_k = wa_evals[1] * (inc_eval + val_evals[1]);
-                let rd_write_value_at_3_k = wa_evals[2] * (inc_eval + val_evals[2]);
+                // Eval TdWriteValue(x) at (r', {0, 2, 3}, k).
+                let td_write_value_at_0_k = wa_evals[0] * (inc_eval + val_evals[0]);
+                let td_write_value_at_2_k = wa_evals[1] * (inc_eval + val_evals[1]);
+                let td_write_value_at_3_k = wa_evals[2] * (inc_eval + val_evals[2]);
 
-                // Eval Rs1Value(x) at (r', {0, 2, 3}, k).
-                let rs1_value_at_0_k = ts1_ra_evals[0] * val_evals[0];
-                let rs1_value_at_2_k = ts1_ra_evals[1] * val_evals[1];
-                let rs1_value_at_3_k = ts1_ra_evals[2] * val_evals[2];
+                // Eval Ts1Value(x) at (r', {0, 2, 3}, k).
+                let ts1_value_at_0_k = ts1_ra_evals[0] * val_evals[0];
+                let ts1_value_at_2_k = ts1_ra_evals[1] * val_evals[1];
+                let ts1_value_at_3_k = ts1_ra_evals[2] * val_evals[2];
 
-                // Eval Rs2Value(x) at (r', {0, 2, 3}, k).
-                let rs2_value_at_0_k = ts2_ra_evals[0] * val_evals[0];
-                let rs2_value_at_2_k = ts2_ra_evals[1] * val_evals[1];
-                let rs2_value_at_3_k = ts2_ra_evals[2] * val_evals[2];
+                // Eval Ts2Value(x) at (r', {0, 2, 3}, k).
+                let ts2_value_at_0_k = ts2_ra_evals[0] * val_evals[0];
+                let ts2_value_at_2_k = ts2_ra_evals[1] * val_evals[1];
+                let ts2_value_at_3_k = ts2_ra_evals[2] * val_evals[2];
 
-                // Eval Rs3Value(x) at (r', {0, 2, 3}, k).
-                let rs3_value_at_0_k = ts3_ra_evals[0] * val_evals[0];
-                let rs3_value_at_2_k = ts3_ra_evals[1] * val_evals[1];
-                let rs3_value_at_3_k = ts3_ra_evals[2] * val_evals[2];
+                // Eval Ts3Value(x) at (r', {0, 2, 3}, k).
+                let ts3_value_at_0_k = ts3_ra_evals[0] * val_evals[0];
+                let ts3_value_at_2_k = ts3_ra_evals[1] * val_evals[1];
+                let ts3_value_at_3_k = ts3_ra_evals[2] * val_evals[2];
 
-                // Eval ReadVals(x) = Rs1Value(x) + gamma * Rs2Value(x) at (r', {0, 2, 3}, k).
-                let read_vals_at_0_k = rs1_value_at_0_k
-                    + self.gamma * rs2_value_at_0_k
-                    + self.gamma_sqr * rs3_value_at_0_k;
-                let read_vals_at_2_k = rs1_value_at_2_k
-                    + self.gamma * rs2_value_at_2_k
-                    + self.gamma_sqr * rs3_value_at_2_k;
-                let read_vals_at_3_k = rs1_value_at_3_k
-                    + self.gamma * rs2_value_at_3_k
-                    + self.gamma_sqr * rs3_value_at_3_k;
+                // Eval ReadVals(x) = Ts1Value(x) + gamma * Ts2Value(x) at (r', {0, 2, 3}, k).
+                let read_vals_at_0_k = ts1_value_at_0_k
+                    + self.gamma * ts2_value_at_0_k
+                    + self.gamma_sqr * ts3_value_at_0_k;
+                let read_vals_at_2_k = ts1_value_at_2_k
+                    + self.gamma * ts2_value_at_2_k
+                    + self.gamma_sqr * ts3_value_at_2_k;
+                let read_vals_at_3_k = ts1_value_at_3_k
+                    + self.gamma * ts2_value_at_3_k
+                    + self.gamma_sqr * ts3_value_at_3_k;
 
-                let eval_at_0_k_for_stage_1 = rd_write_value_at_0_k + self.gamma * read_vals_at_0_k;
-                let eval_at_2_k_for_stage_1 = rd_write_value_at_2_k + self.gamma * read_vals_at_2_k;
-                let eval_at_3_k_for_stage_1 = rd_write_value_at_3_k + self.gamma * read_vals_at_3_k;
+                let eval_at_0_k_for_stage_1 = td_write_value_at_0_k + self.gamma * read_vals_at_0_k;
+                let eval_at_2_k_for_stage_1 = td_write_value_at_2_k + self.gamma * read_vals_at_2_k;
+                let eval_at_3_k_for_stage_1 = td_write_value_at_3_k + self.gamma * read_vals_at_3_k;
 
-                let eval_at_0_k_for_stage_2 = rd_write_value_at_0_k + self.gamma * rs1_value_at_0_k;
-                let eval_at_2_k_for_stage_2 = rd_write_value_at_2_k + self.gamma * rs1_value_at_2_k;
-                let eval_at_3_k_for_stage_2 = rd_write_value_at_3_k + self.gamma * rs1_value_at_3_k;
+                let eval_at_0_k_for_stage_2 = td_write_value_at_0_k + self.gamma * ts1_value_at_0_k;
+                let eval_at_2_k_for_stage_2 = td_write_value_at_2_k + self.gamma * ts1_value_at_2_k;
+                let eval_at_3_k_for_stage_2 = td_write_value_at_3_k + self.gamma * ts1_value_at_3_k;
 
-                let eval_at_0_k_for_stage_3 = rs1_value_at_0_k + self.gamma * rs2_value_at_0_k;
-                let eval_at_2_k_for_stage_3 = rs1_value_at_2_k + self.gamma * rs2_value_at_2_k;
-                let eval_at_3_k_for_stage_3 = rs1_value_at_3_k + self.gamma * rs2_value_at_3_k;
+                let eval_at_0_k_for_stage_3 = ts1_value_at_0_k + self.gamma * ts2_value_at_0_k;
+                let eval_at_2_k_for_stage_3 = ts1_value_at_2_k + self.gamma * ts2_value_at_2_k;
+                let eval_at_3_k_for_stage_3 = ts1_value_at_3_k + self.gamma * ts2_value_at_3_k;
 
                 [
                     eval_at_0_k_for_stage_1,
@@ -1720,17 +1720,17 @@ impl<F: JoltField> SumcheckInstance<F> for MemoryReadWriteChecking<F> {
             CommittedPolynomial::TdInc,
             SumcheckId::RegistersReadWriteChecking,
         );
-        let rd_write_value_claim = td_wa_claim * (inc_claim + val_claim);
-        let rs1_value_claim = ts1_ra_claim * val_claim;
-        let rs2_value_claim = ts2_ra_claim * val_claim;
-        let rs3_value_claim = ts3_ra_claim * val_claim;
+        let td_write_value_claim = td_wa_claim * (inc_claim + val_claim);
+        let ts1_value_claim = ts1_ra_claim * val_claim;
+        let ts2_value_claim = ts2_ra_claim * val_claim;
+        let ts3_value_claim = ts3_ra_claim * val_claim;
         let read_values_claim =
-            rs1_value_claim + self.gamma * rs2_value_claim + self.gamma_sqr * rs3_value_claim;
+            ts1_value_claim + self.gamma * ts2_value_claim + self.gamma_sqr * ts3_value_claim;
 
         let stage_1_claim =
-            eq_eval_stage_1 * (rd_write_value_claim + self.gamma * read_values_claim);
-        let stage_2_claim = eq_eval_stage_2 * (rd_write_value_claim + self.gamma * rs1_value_claim);
-        let stage_3_claim = eq_eval_stage_3 * (rs1_value_claim + self.gamma * rs2_value_claim);
+            eq_eval_stage_1 * (td_write_value_claim + self.gamma * read_values_claim);
+        let stage_2_claim = eq_eval_stage_2 * (td_write_value_claim + self.gamma * ts1_value_claim);
+        let stage_3_claim = eq_eval_stage_3 * (ts1_value_claim + self.gamma * ts2_value_claim);
 
         stage_1_claim + self.gamma_4 * stage_2_claim + self.gamma_pow_5 * stage_3_claim
     }
@@ -1921,19 +1921,19 @@ pub mod test {
         let K = 2usize.pow(log_K as u32);
         let T = 2usize.pow(log_T as u32);
         let (
-            mut ra1_test,
-            mut ra2_test,
-            mut ra3_test,
-            mut wa_test,
+            mut ts1_ra_test,
+            mut ts2_ra_test,
+            mut ts3_ra_test,
+            mut td_wa_test,
             mut val_test,
             mut inc_test,
             mut eq_test,
         ) = {
             let mut val_evals: Vec<Fr> = unsafe_allocate_zero_vec(K * T);
-            let mut ra1_evals: Vec<Fr> = unsafe_allocate_zero_vec(K * T);
-            let mut ra2_evals: Vec<Fr> = unsafe_allocate_zero_vec(K * T);
-            let mut ra3_evals: Vec<Fr> = unsafe_allocate_zero_vec(K * T);
-            let mut wa_evals: Vec<Fr> = unsafe_allocate_zero_vec(K * T);
+            let mut ts1_ra_evals: Vec<Fr> = unsafe_allocate_zero_vec(K * T);
+            let mut ts2_ra_evals: Vec<Fr> = unsafe_allocate_zero_vec(K * T);
+            let mut ts3_ra_evals: Vec<Fr> = unsafe_allocate_zero_vec(K * T);
+            let mut td_wa_evals: Vec<Fr> = unsafe_allocate_zero_vec(K * T);
             let mut inc_evals: Vec<Fr> = unsafe_allocate_zero_vec(T);
             let eq_evals = EqPolynomial::evals(r_prime);
 
@@ -1941,17 +1941,17 @@ pub mod test {
                 for j in i + 1..T {
                     val_evals[j * K + td] = Fr::from(val);
                 }
-                ra1_evals[i * K + ts1] = Fr::from(1);
-                ra2_evals[i * K + ts2] = Fr::from(1);
-                ra3_evals[i * K + ts3] = Fr::from(1);
-                wa_evals[i * K + td] = Fr::from(1);
+                ts1_ra_evals[i * K + ts1] = Fr::from(1);
+                ts2_ra_evals[i * K + ts2] = Fr::from(1);
+                ts3_ra_evals[i * K + ts3] = Fr::from(1);
+                td_wa_evals[i * K + td] = Fr::from(1);
                 inc_evals[i] = Fr::from(val);
             }
             (
-                MultilinearPolynomial::from(ra1_evals),
-                MultilinearPolynomial::from(ra2_evals),
-                MultilinearPolynomial::from(ra3_evals),
-                MultilinearPolynomial::from(wa_evals),
+                MultilinearPolynomial::from(ts1_ra_evals),
+                MultilinearPolynomial::from(ts2_ra_evals),
+                MultilinearPolynomial::from(ts3_ra_evals),
+                MultilinearPolynomial::from(td_wa_evals),
                 MultilinearPolynomial::from(val_evals),
                 MultilinearPolynomial::from(inc_evals),
                 MultilinearPolynomial::from(eq_evals),
@@ -1974,16 +1974,16 @@ pub mod test {
                     let inc_value = inc_test.get_bound_coeff(i);
                     for k in 0..K {
                         let index = i * K + k;
-                        inner_sum += wa_test.get_bound_coeff(index)
+                        inner_sum += td_wa_test.get_bound_coeff(index)
                             * (val_test.get_bound_coeff(index) + inc_value)
                             + prover_sumcheck.gamma
-                                * ra1_test.get_bound_coeff(index)
+                                * ts1_ra_test.get_bound_coeff(index)
                                 * val_test.get_bound_coeff(index)
                             + prover_sumcheck.gamma_sqr
-                                * ra2_test.get_bound_coeff(index)
+                                * ts2_ra_test.get_bound_coeff(index)
                                 * val_test.get_bound_coeff(index)
                             + prover_sumcheck.gamma_cube
-                                * ra3_test.get_bound_coeff(index)
+                                * ts3_ra_test.get_bound_coeff(index)
                                 * val_test.get_bound_coeff(index);
                     }
                     expected_claim += eq_value * inner_sum;
@@ -1997,10 +1997,10 @@ pub mod test {
                 [
                     &mut eq_test,
                     &mut inc_test,
-                    &mut ra1_test,
-                    &mut ra2_test,
-                    &mut ra3_test,
-                    &mut wa_test,
+                    &mut ts1_ra_test,
+                    &mut ts2_ra_test,
+                    &mut ts3_ra_test,
+                    &mut td_wa_test,
                     &mut val_test,
                 ]
                 .iter_mut()
@@ -2015,16 +2015,16 @@ pub mod test {
                     let inc_value = inc_test.get_bound_coeff(i);
                     for k in 0..K {
                         let index = i * K + k;
-                        inner_sum += wa_test.get_bound_coeff(index)
+                        inner_sum += td_wa_test.get_bound_coeff(index)
                             * (val_test.get_bound_coeff(index) + inc_value)
                             + prover_sumcheck.gamma
-                                * ra1_test.get_bound_coeff(index)
+                                * ts1_ra_test.get_bound_coeff(index)
                                 * val_test.get_bound_coeff(index)
                             + prover_sumcheck.gamma_sqr
-                                * ra2_test.get_bound_coeff(index)
+                                * ts2_ra_test.get_bound_coeff(index)
                                 * val_test.get_bound_coeff(index)
                             + prover_sumcheck.gamma_cube
-                                * ra3_test.get_bound_coeff(index)
+                                * ts3_ra_test.get_bound_coeff(index)
                                 * val_test.get_bound_coeff(index);
                     }
                     expected_claim += eq_value * inner_sum;
@@ -2034,10 +2034,10 @@ pub mod test {
                 [
                     &mut eq_test,
                     &mut inc_test,
-                    &mut ra1_test,
-                    &mut ra2_test,
-                    &mut ra3_test,
-                    &mut wa_test,
+                    &mut ts1_ra_test,
+                    &mut ts2_ra_test,
+                    &mut ts3_ra_test,
+                    &mut td_wa_test,
                     &mut val_test,
                 ]
                 .iter_mut()
@@ -2049,26 +2049,26 @@ pub mod test {
                 let eq_claim = eq_test.final_sumcheck_claim();
                 let inc_claim = inc_test.final_sumcheck_claim();
                 for index in 0..(K >> (round - log_T)) {
-                    inner_sum += wa_test.get_bound_coeff(index)
+                    inner_sum += td_wa_test.get_bound_coeff(index)
                         * (val_test.get_bound_coeff(index) + inc_claim)
                         + prover_sumcheck.gamma
-                            * ra1_test.get_bound_coeff(index)
+                            * ts1_ra_test.get_bound_coeff(index)
                             * val_test.get_bound_coeff(index)
                         + prover_sumcheck.gamma_sqr
-                            * ra2_test.get_bound_coeff(index)
+                            * ts2_ra_test.get_bound_coeff(index)
                             * val_test.get_bound_coeff(index)
                         + prover_sumcheck.gamma_cube
-                            * ra3_test.get_bound_coeff(index)
+                            * ts3_ra_test.get_bound_coeff(index)
                             * val_test.get_bound_coeff(index);
                 }
                 expected_claim += eq_claim * inner_sum;
 
                 // Binding
                 [
-                    &mut ra1_test,
-                    &mut ra2_test,
-                    &mut ra3_test,
-                    &mut wa_test,
+                    &mut ts1_ra_test,
+                    &mut ts2_ra_test,
+                    &mut ts3_ra_test,
+                    &mut td_wa_test,
                     &mut val_test,
                 ]
                 .iter_mut()
@@ -2081,13 +2081,19 @@ pub mod test {
         let [
             eq_final,
             inc_final,
-            ra1_final,
-            ra2_final,
-            ra3_final,
-            wa_final,
+            ts1_ra_final,
+            ts2_ra_final,
+            ts3_ra_final,
+            td_wa_final,
             val_final,
         ] = [
-            eq_test, inc_test, ra1_test, ra2_test, ra3_test, wa_test, val_test,
+            eq_test,
+            inc_test,
+            ts1_ra_test,
+            ts2_ra_test,
+            ts3_ra_test,
+            td_wa_test,
+            val_test,
         ]
         .iter()
         .map(|poly| poly.final_sumcheck_claim())
@@ -2096,10 +2102,10 @@ pub mod test {
         .unwrap();
 
         let final_claim = eq_final
-            * (wa_final * (val_final + inc_final)
-                + prover_sumcheck.gamma * ra1_final * val_final
-                + prover_sumcheck.gamma_sqr * ra2_final * val_final
-                + prover_sumcheck.gamma_cube * ra3_final * val_final);
+            * (td_wa_final * (val_final + inc_final)
+                + prover_sumcheck.gamma * ts1_ra_final * val_final
+                + prover_sumcheck.gamma_sqr * ts2_ra_final * val_final
+                + prover_sumcheck.gamma_cube * ts3_ra_final * val_final);
         expected_claims.push(final_claim);
 
         expected_claims

@@ -178,7 +178,6 @@ impl<F: JoltField> ReadRafCheck<F> {
             let (_, r_cycle) = r.split_at((sm.get_memory_K()).log_2());
             assert_eq!(claim, poly.evaluate(&r_cycle.r));
         }
-        // TODO: check stage 2 and 3
 
         // Check the raf openings
         let (raf_point_1, raf_claim) =

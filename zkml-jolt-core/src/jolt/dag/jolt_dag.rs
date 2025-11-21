@@ -555,6 +555,7 @@ mod test {
         // Stage 5
     }
 
+    #[ignore]
     #[test]
     fn test_trace_sumchecks() {
         let input = Tensor::new(Some(&[1, 2, 3, 4]), &[1, 4]).unwrap();

@@ -218,6 +218,7 @@ impl JoltDAG {
         drop(_guard);
         drop(span);
 
+        // stage 6:
         bytecode_dag.stage6_prover_instances(&mut state_manager);
 
         if pp.is_precompiles_enabled() {
@@ -266,16 +267,6 @@ impl JoltDAG {
         //         .appended_virtual_openings
         //         .borrow()
         // );
-
-        #[cfg(test)]
-        println!(
-            "Not all virtual openings have been proven, missing: {:#?}",
-            state_manager
-                .get_prover_accumulator()
-                .borrow()
-                .appended_virtual_openings
-                .borrow()
-        );
 
         #[cfg(test)]
         let debug_info = {
@@ -438,6 +429,8 @@ impl JoltDAG {
         )
         .context("Stage 5")?;
         drop(proofs);
+
+        // stage 6:
         bytecode_dag.stage6_verifier_instances(&mut state_manager);
 
         if preprocessing.is_precompiles_enabled() {

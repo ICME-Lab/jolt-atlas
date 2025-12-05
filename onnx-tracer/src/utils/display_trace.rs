@@ -2,7 +2,7 @@ use core::fmt;
 
 use tabled::Tabled;
 
-use crate::{tensor::Tensor, trace_types::ONNXInstr};
+use crate::{tensor::Tensor, trace_types::Instr};
 
 /// Helper function to format optional values for display
 fn display_option<T: fmt::Display>(opt: &Option<T>) -> String {
@@ -62,7 +62,7 @@ fn display_inputs(ts1: &Option<usize>, ts2: &Option<usize>, ts3: &Option<usize>)
     }
 }
 
-impl fmt::Debug for ONNXInstr {
+impl<T: fmt::Debug + Default> fmt::Debug for Instr<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ONNXInstr")
             .field("address", &self.address)
@@ -78,7 +78,7 @@ impl fmt::Debug for ONNXInstr {
     }
 }
 
-impl Tabled for ONNXInstr {
+impl<T: fmt::Debug + Default> Tabled for Instr<T> {
     const LENGTH: usize = 7;
 
     fn headers() -> Vec<std::borrow::Cow<'static, str>> {

@@ -16,7 +16,7 @@ use std::error::Error;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
 pub enum LookupOp {
     Abs,
-    Div { denom: F32 },
+    Div { denom: F32 }, // Divides a tensor by a constant
     Cast { scale: F32 },
     ReLU,
     Max { scale: F32, a: F32 },
@@ -52,18 +52,16 @@ pub enum LookupOp {
     Sign,
     KroneckerDelta,
     Pow { scale: F32, a: F32 },
-    VirtualPow2,
 }
 
 impl From<&LookupOp> for ONNXOpcode {
     fn from(value: &LookupOp) -> Self {
         match value {
             LookupOp::ReLU => ONNXOpcode::Relu,
-            LookupOp::Sigmoid { .. } => ONNXOpcode::Sigmoid,
-            LookupOp::Sqrt { .. } => ONNXOpcode::Sqrt,
+            // LookupOp::Sigmoid { .. } => ONNXOpcode::Sigmoid,
+            // LookupOp::Sqrt { .. } => ONNXOpcode::Sqrt,
             LookupOp::Rsqrt { .. } => ONNXOpcode::Rsqrt,
-            LookupOp::Div { .. } => ONNXOpcode::Div,
-            LookupOp::VirtualPow2 => ONNXOpcode::VirtualPow2,
+            LookupOp::Div { .. } => ONNXOpcode::DivI,
             _ => {
                 panic!("LookupOp {value:?} cannot be converted to ONNXOpcode",);
             }
@@ -167,7 +165,6 @@ where
             LookupOp::ATan { scale } => Ok(tensor::ops::nonlinearities::atan(&x, scale.into())),
             LookupOp::ATanh { scale } => Ok(tensor::ops::nonlinearities::atanh(&x, scale.into())),
             LookupOp::Tanh { scale } => Ok(tensor::ops::nonlinearities::tanh(&x, scale.into())),
-            LookupOp::VirtualPow2 => unimplemented!("This operation is handled virtually"),
         }?;
 
         let output = res.map(|x| F::from(x));
@@ -218,7 +215,6 @@ where
             LookupOp::ASin { scale } => format!("ASIN(scale={scale})"),
             LookupOp::Sinh { scale } => format!("SINH(scale={scale})"),
             LookupOp::ASinh { scale } => format!("ASINH(scale={scale})"),
-            LookupOp::VirtualPow2 => "VIRTUAL_POW2".into(),
         }
     }
 

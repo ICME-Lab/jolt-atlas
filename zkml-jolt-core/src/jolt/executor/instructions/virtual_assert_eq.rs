@@ -1,20 +1,16 @@
 use crate::jolt::{
-    executor::instructions::InstructionLookup,
+    executor::instructions::{InstructionLookup, LookupQuery},
     lookup_table::{EqualTable, LookupTables},
 };
-use jolt_core::zkvm::instruction::LookupQuery;
-use serde::{Deserialize, Serialize};
+use onnx_tracer::instructions::virtuals::VirtualAssertEq;
 
-#[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
-pub struct BeqInstruction<const WORD_SIZE: usize>(pub u64, pub u64);
-
-impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for BeqInstruction<WORD_SIZE> {
+impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for VirtualAssertEq {
     fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
         Some(EqualTable.into())
     }
 }
 
-impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for BeqInstruction<WORD_SIZE> {
+impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for VirtualAssertEq {
     fn to_instruction_inputs(&self) -> (u64, i64) {
         match WORD_SIZE {
             #[cfg(test)]
@@ -28,5 +24,16 @@ impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for BeqInstruction<WORD_SIZE
     fn to_lookup_output(&self) -> u64 {
         let (x, y) = LookupQuery::<WORD_SIZE>::to_instruction_inputs(self);
         (x == y as u64).into()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::jolt::executor::instructions::test::materialize_entry_test;
+    use onnx_tracer::trace_types::AtlasOpcode;
+
+    #[test]
+    fn materialize_entry() {
+        materialize_entry_test(AtlasOpcode::VirtualAssertEq);
     }
 }

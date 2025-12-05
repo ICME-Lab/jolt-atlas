@@ -1,25 +1,16 @@
 use crate::jolt::{
-    executor::instructions::InstructionLookup,
+    executor::instructions::{InstructionLookup, LookupQuery},
     lookup_table::{LookupTables, ValidSignedRemainderTable},
 };
-use jolt_core::zkvm::instruction::LookupQuery;
-use serde::{Deserialize, Serialize};
+use onnx_tracer::instructions::virtuals::VirtualAssertValidSignedRemainder;
 
-#[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
-/// (remainder, divisor)
-pub struct AssertValidSignedRemainderInstruction<const WORD_SIZE: usize>(pub u64, pub u64);
-
-impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE>
-    for AssertValidSignedRemainderInstruction<WORD_SIZE>
-{
+impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for VirtualAssertValidSignedRemainder {
     fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
         Some(ValidSignedRemainderTable.into())
     }
 }
 
-impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE>
-    for AssertValidSignedRemainderInstruction<WORD_SIZE>
-{
+impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for VirtualAssertValidSignedRemainder {
     fn to_instruction_inputs(&self) -> (u64, i64) {
         match WORD_SIZE {
             #[cfg(test)]

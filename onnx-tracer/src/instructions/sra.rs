@@ -1,26 +1,41 @@
-use jolt_core::zkvm::instruction::LookupQuery;
-use onnx_tracer::{
-    constants::virtual_tensor_index,
+use crate::{
+    instructions::{
+        declare_onnx_instr,
+        virtuals::{VirtualShiftRightBitmask, VirtualSra},
+        ElementWise, VirtualInstructionSequence, WORD_SIZE,
+    },
     tensor::Tensor,
-    trace_types::{MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode},
+    trace_types::{AtlasCycle, AtlasInstr, AtlasOpcode, MemoryState, ONNXCycle, ONNXOpcode},
+    utils::{u64_vec_to_i32_iter, VirtualSequenceCounter, VirtualSlotCounter},
 };
 
-use crate::{
-    jolt::executor::instructions::{
-        VirtualInstructionSequence,
-        virtual_shift_right_bitmask::VirtualShiftRightBitmaskInstruction,
-        virtual_sra::VirtualSraInstruction,
-    },
-    utils::{VirtualSequenceCounter, u64_vec_to_i32_iter},
-};
+// Expandable
+declare_onnx_instr!(name = Sra);
+
+impl ElementWise for Sra {
+    fn exec(x: u64, y: u64) -> u64 {
+        match WORD_SIZE {
+            32 => {
+                let mask = 0x1f;
+                let shift_amount = y & mask;
+                (x as i32 >> shift_amount) as u32 as u64
+            }
+            64 => {
+                let mask = 0x3f;
+                let shift_amount = y & mask;
+                (x as i64 >> shift_amount) as u64
+            }
+            _ => unimplemented!("Unsupported word size."),
+        }
+    }
+}
 
 /// Perform shift right arithmetical and return the result
-pub struct SraInstruction<const WORD_SIZE: usize>;
-
-impl<const WORD_SIZE: usize> VirtualInstructionSequence for SraInstruction<WORD_SIZE> {
+// pub struct SraInstruction<const WORD_SIZE: usize>;
+impl VirtualInstructionSequence for Sra {
     const SEQUENCE_LENGTH: usize = 2;
 
-    fn virtual_trace(cycle: ONNXCycle, K: usize) -> Vec<ONNXCycle> {
+    fn virtual_trace(cycle: ONNXCycle, virtual_slot: &mut VirtualSlotCounter) -> Vec<AtlasCycle> {
         assert_eq!(cycle.instr.opcode, ONNXOpcode::Sra);
         let num_outputs = cycle.instr.num_output_elements();
 
@@ -44,20 +59,18 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SraInstruction<WORD_
         let td = cycle.instr.td;
 
         // Virtual registers used in sequence
-        let v_bitmask = Some(virtual_tensor_index(0, K, cycle.instr.td.unwrap()));
+        let v_bitmask = Some(virtual_slot.inc());
 
         // SRA operands
         let x = cycle.ts1_vals().unwrap_or(vec![0; num_outputs]);
         let y = cycle.ts2_vals().unwrap_or(vec![0; num_outputs]);
         let mut virtual_trace = vec![];
 
-        let bitmask = (0..num_outputs)
-            .map(|i| VirtualShiftRightBitmaskInstruction::<WORD_SIZE>(y[i]).to_lookup_output())
-            .collect::<Vec<_>>();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let bitmask = VirtualShiftRightBitmask::sequence_output(&y, &[]);
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualShiftRightBitmask,
+                opcode: AtlasOpcode::VirtualShiftRightBitmask,
                 ts1: ts2,
                 ts2: None,
                 ts3: None,
@@ -76,13 +89,11 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SraInstruction<WORD_
             advice_value: None,
         });
 
-        let result = (0..num_outputs)
-            .map(|i| VirtualSraInstruction::<WORD_SIZE>(x[i], bitmask[i]).to_lookup_output())
-            .collect::<Vec<_>>();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let result = VirtualSra::sequence_output(&x, &bitmask);
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualSra,
+                opcode: AtlasOpcode::VirtualSra,
                 ts1,
                 ts2: v_bitmask,
                 ts3: None,
@@ -110,32 +121,23 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for SraInstruction<WORD_
         virtual_trace
     }
 
-    fn sequence_output(x: Vec<u64>, y: Vec<u64>) -> Vec<u64> {
-        let mask = match WORD_SIZE {
-            32 => 0x1f,
-            64 => 0x3f,
-            _ => unimplemented!("Unsupported word size."),
-        };
-        let num_outputs = x.len();
-        let mut output = vec![0; num_outputs];
-        for i in 0..num_outputs {
-            let x = x[i] as i32;
-            let y = y[i] as i32;
-            output[i] = (x >> (y & mask)) as u32 as u64;
-        }
-        output
+    fn sequence_output(x: &[u64], y: &[u64]) -> Vec<u64> {
+        x.iter()
+            .zip(y.iter())
+            .map(|(&x, &y)| Self::exec(x, y))
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::jolt::executor::instructions::test::jolt_virtual_sequence_test;
+    use crate::instructions::test::jolt_virtual_sequence_test;
 
     use super::*;
 
     #[test]
-    fn sra_virtual_sequence_32() {
-        jolt_virtual_sequence_test::<SraInstruction<32>>(ONNXOpcode::Sra, 16);
+    fn virtual_sequence_32() {
+        jolt_virtual_sequence_test::<Sra>(ONNXOpcode::Sra, 16);
     }
 
     #[test]
@@ -162,7 +164,7 @@ mod test {
             exp.push(map.2 as u32 as u64);
         }
 
-        let output = SraInstruction::<32>::sequence_output(x, y);
+        let output = Sra::sequence_output(&x, &y);
         assert_eq!(output, exp);
     }
 }

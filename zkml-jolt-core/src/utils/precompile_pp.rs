@@ -1,7 +1,7 @@
 //! Utility functions for preprocessing precompile operands
 
 use crate::jolt::bytecode::BytecodePreprocessing;
-use onnx_tracer::{tensor::Tensor, trace_types::ONNXInstr};
+use onnx_tracer::{tensor::Tensor, trace_types::AtlasInstr};
 use std::collections::HashMap;
 
 /// Helper functions for common precompile preprocessing operations
@@ -27,10 +27,10 @@ impl PreprocessingHelper {
 
     /// Extract operand instruction from td_lookup
     pub fn get_operand_instruction<'a>(
-        td_lookup: &'a HashMap<usize, ONNXInstr>,
+        td_lookup: &'a HashMap<usize, AtlasInstr>,
         ts: Option<usize>,
         operation_name: &str,
-    ) -> &'a ONNXInstr {
+    ) -> &'a AtlasInstr {
         let ts = ts.unwrap_or_else(|| panic!("{operation_name} instruction missing operand"));
         td_lookup
             .get(&ts)
@@ -39,7 +39,7 @@ impl PreprocessingHelper {
 
     /// Collect and pad addresses for a matrix operand
     pub fn collect_and_pad(
-        instr: &ONNXInstr,
+        instr: &AtlasInstr,
         bytecode_preprocessing: &BytecodePreprocessing,
         original_dims: &[usize],
     ) -> Vec<usize> {
@@ -60,7 +60,7 @@ impl PreprocessingHelper {
 }
 
 pub type DimExtractor =
-    fn(&ONNXInstr, &HashMap<usize, ONNXInstr>) -> (Vec<usize>, Vec<usize>, Vec<usize>);
+    fn(&AtlasInstr, &HashMap<usize, AtlasInstr>) -> (Vec<usize>, Vec<usize>, Vec<usize>);
 
 /// Configuration for different einsum equation types
 #[derive(Debug, Clone)]
@@ -159,8 +159,8 @@ pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
 
 /// Dimension extraction functions for different einsum patterns
 fn extract_mk_kn_mn_dims(
-    instr: &ONNXInstr,
-    td_lookup: &HashMap<usize, ONNXInstr>,
+    instr: &AtlasInstr,
+    td_lookup: &HashMap<usize, AtlasInstr>,
 ) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
     let _a_instr = PreprocessingHelper::get_operand_instruction(td_lookup, instr.ts1, "MatMult");
     let b_instr = PreprocessingHelper::get_operand_instruction(td_lookup, instr.ts2, "MatMult");
@@ -177,8 +177,8 @@ fn extract_mk_kn_mn_dims(
 }
 
 fn extract_k_nk_n_dims(
-    instr: &ONNXInstr,
-    td_lookup: &HashMap<usize, ONNXInstr>,
+    instr: &AtlasInstr,
+    td_lookup: &HashMap<usize, AtlasInstr>,
 ) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
     let _a_instr = PreprocessingHelper::get_operand_instruction(td_lookup, instr.ts1, "k,nk->n");
     let b_instr = PreprocessingHelper::get_operand_instruction(td_lookup, instr.ts2, "k,nk->n");
@@ -190,8 +190,8 @@ fn extract_k_nk_n_dims(
 }
 
 fn extract_mbk_nbk_bmn_dims(
-    instr: &ONNXInstr,
-    td_lookup: &HashMap<usize, ONNXInstr>,
+    instr: &AtlasInstr,
+    td_lookup: &HashMap<usize, AtlasInstr>,
 ) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
     let a_instr =
         PreprocessingHelper::get_operand_instruction(td_lookup, instr.ts1, "mbk,nbk->bmn");
@@ -207,8 +207,8 @@ fn extract_mbk_nbk_bmn_dims(
 }
 
 fn extract_bmk_kbn_mbn_dims(
-    instr: &ONNXInstr,
-    td_lookup: &HashMap<usize, ONNXInstr>,
+    instr: &AtlasInstr,
+    td_lookup: &HashMap<usize, AtlasInstr>,
 ) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
     let _a_instr =
         PreprocessingHelper::get_operand_instruction(td_lookup, instr.ts1, "bmk,kbn->mbn");

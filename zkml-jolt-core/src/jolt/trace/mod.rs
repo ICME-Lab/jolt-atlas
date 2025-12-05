@@ -40,33 +40,16 @@
 //! ```
 
 use crate::{
-    jolt::{
-        bytecode::{BytecodePreprocessing, JoltONNXBytecode},
-        executor::instructions::{
-            InstructionLookup, VirtualInstructionSequence, add::AddInstruction,
-            beq::BeqInstruction, broadcast::BroadCastInstruction, div::DivInstruction,
-            gte::GteInstruction, mul::MulInstruction, relu::ReluInstruction,
-            reshape::ReshapeInstruction, rsqrt::RsqrtInstruction, softmax::SoftmaxInstruction,
-            sra::SraInstruction, sub::SubInstruction, virtual_advice::AdviceInstruction,
-            virtual_assert_valid_div0::AssertValidDiv0Instruction,
-            virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction,
-            virtual_const::ConstInstruction, virtual_move::MoveInstruction,
-            virtual_pow2::Pow2Instruction,
-            virtual_shift_right_bitmask::VirtualShiftRightBitmaskInstruction,
-            virtual_sra::VirtualSraInstruction,
-        },
-        lookup_table::LookupTables,
-    },
+    jolt::bytecode::{BytecodePreprocessing, JoltONNXBytecode},
     utils::tensor_to_u64s,
 };
-use jolt_core::zkvm::instruction::LookupQuery;
 use onnx_tracer::{
     ProgramIO,
     graph::model::Model,
     tensor::Tensor,
-    trace_types::{ONNXCycle, ONNXOpcode},
+    trace_types::{AtlasCycle, AtlasOpcode, ONNXCycle},
+    utils::VirtualSlotCounter,
 };
-use serde::{Deserialize, Serialize};
 
 /// The word size used for all instruction operations in the Jolt zkVM.
 /// This constant defines the bit width for all arithmetic and memory operations.
@@ -118,17 +101,11 @@ where
 }
 
 #[tracing::instrument(skip_all, name = "expand_virtual_traces")]
-pub fn expand_virtual_traces(raw_trace: Vec<ONNXCycle>, max_td: usize) -> Vec<ONNXCycle> {
+pub fn expand_virtual_traces(raw_trace: Vec<ONNXCycle>, max_td: usize) -> Vec<AtlasCycle> {
+    let mut virtual_slot_counter = VirtualSlotCounter::new(max_td + 1);
     raw_trace
         .into_iter()
-        .flat_map(|cycle| match cycle.instr.opcode {
-            ONNXOpcode::Div => DivInstruction::<32>::virtual_trace(cycle, max_td),
-            ONNXOpcode::Rsqrt => RsqrtInstruction::<32>::virtual_trace(cycle, max_td),
-            ONNXOpcode::Softmax => SoftmaxInstruction::virtual_trace(cycle, max_td),
-            ONNXOpcode::Sra => SraInstruction::<32>::virtual_trace(cycle, max_td),
-
-            _ => vec![cycle],
-        })
+        .flat_map(|cycle| cycle.virtual_trace(&mut virtual_slot_counter))
         .collect()
 }
 
@@ -163,7 +140,7 @@ pub fn expand_virtual_traces(raw_trace: Vec<ONNXCycle>, max_td: usize) -> Vec<ON
 /// The bytecode preprocessing specifies the bytecode trace since we don't prove sub-graphs.
 /// This allows for deterministic trace generation that matches the expected program structure.
 pub fn inline_tensor_trace(
-    raw_trace: Vec<ONNXCycle>,
+    raw_trace: Vec<AtlasCycle>,
     preprocessing: &BytecodePreprocessing,
 ) -> Vec<JoltONNXCycle> {
     TraceInliner::new(preprocessing).inline(raw_trace)
@@ -185,14 +162,14 @@ impl<'a> TraceInliner<'a> {
         }
     }
 
-    fn inline(mut self, raw_trace: Vec<ONNXCycle>) -> Vec<JoltONNXCycle> {
+    fn inline(mut self, raw_trace: Vec<AtlasCycle>) -> Vec<JoltONNXCycle> {
         for raw_cycle in raw_trace.iter() {
             self.append_cycle(raw_cycle);
         }
         self.finish()
     }
 
-    fn append_cycle(&mut self, raw_cycle: &ONNXCycle) {
+    fn append_cycle(&mut self, raw_cycle: &AtlasCycle) {
         let element_count = raw_cycle.num_output_elements();
         let bytecode_slice =
             &self.preprocessing.bytecode[self.next_pc..self.next_pc + element_count];
@@ -215,7 +192,7 @@ struct CycleAssembler<'a> {
 }
 
 impl<'a> CycleAssembler<'a> {
-    fn new(raw_cycle: &ONNXCycle, instructions: &'a [JoltONNXBytecode]) -> Self {
+    fn new(raw_cycle: &AtlasCycle, instructions: &'a [JoltONNXBytecode]) -> Self {
         let element_count = raw_cycle.num_output_elements();
         assert_eq!(
             instructions.len(),
@@ -239,18 +216,14 @@ impl<'a> CycleAssembler<'a> {
     fn build_cycle(&self, index: usize) -> JoltONNXCycle {
         let memory_ops = self.values.memory_ops(index);
         let advice_value = self.values.advice(index);
-        let lookup = JoltONNXCycle::create_lookup_function(
-            &self.instructions[index],
-            &memory_ops,
-            advice_value,
-        );
-        JoltONNXCycle::new(lookup, memory_ops)
+
+        JoltONNXCycle::new(self.instructions[index].clone(), memory_ops, advice_value)
     }
 }
 
 /// Convenience wrapper retained for tests and tooling that operate on a single cycle at a time.
 pub fn inline_tensor_cycle(
-    raw_cycle: &ONNXCycle,
+    raw_cycle: &AtlasCycle,
     instrs: &[JoltONNXBytecode],
 ) -> Vec<JoltONNXCycle> {
     CycleAssembler::new(raw_cycle, instrs).assemble()
@@ -277,6 +250,7 @@ struct CycleValueCache {
 }
 
 impl CycleValueCache {
+    // TODO(AntoineF4C5): Refactor so that the cycle values extraction logic is defined in each instruction
     /// Extracts tensor values from an ONNX cycle with proper handling for different operation types.
     ///
     /// # Arguments
@@ -292,12 +266,12 @@ impl CycleValueCache {
     ///
     /// Einsum and Sum operations reuse the zero register because they are handled
     /// by specialized sum-check precompiles rather than element-wise lookups.
-    fn from_cycle(raw_cycle: &ONNXCycle, size: usize) -> Self {
+    fn from_cycle(raw_cycle: &AtlasCycle, size: usize) -> Self {
         let (ts1_vals, ts2_vals, ts3_vals) = match raw_cycle.instr.opcode {
-            ONNXOpcode::Einsum(_) | ONNXOpcode::Sum(_) => {
+            AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) => {
                 (vec![0; size], vec![0; size], vec![0; size])
             }
-            ONNXOpcode::Broadcast => {
+            AtlasOpcode::Broadcast => {
                 // broadcast ts1
                 let mut ts1 = raw_cycle
                     .memory_state
@@ -351,11 +325,13 @@ impl CycleValueCache {
 /// deterministic execution
 #[derive(Debug, Clone)]
 pub struct JoltONNXCycle {
+    // TODO(AntoineF4C5): Might just retrieve few information from the instr such as maybe just the Add(x, y) fed with relevant values)
     /// The lookup function specifying the operation to perform.
     /// None indicates we do not constrain the operation via lookup.
-    pub lookup: Option<LookupFunction>,
+    pub instr: JoltONNXBytecode,
     /// Memory operations including register reads and writes
     pub memory_ops: MemoryOps,
+    pub advice_value: Option<u64>,
 }
 
 impl JoltONNXCycle {
@@ -365,8 +341,16 @@ impl JoltONNXCycle {
     ///
     /// * `lookup` - Optional lookup function specifying the operation to perform
     /// * `memory_ops` - Memory operations including register values
-    pub fn new(lookup: Option<LookupFunction>, memory_ops: MemoryOps) -> Self {
-        Self { lookup, memory_ops }
+    pub fn new(
+        instruction: JoltONNXBytecode,
+        memory_ops: MemoryOps,
+        advice_value: Option<u64>,
+    ) -> Self {
+        Self {
+            instr: instruction,
+            memory_ops,
+            advice_value,
+        }
     }
 
     /// Creates a no-op cycle with default memory operations.
@@ -375,101 +359,9 @@ impl JoltONNXCycle {
     /// and represent instructions that don't perform any meaningful computation.
     pub fn no_op() -> Self {
         Self {
-            lookup: None,
+            instr: JoltONNXBytecode::no_op(),
             memory_ops: MemoryOps::default(),
-        }
-    }
-
-    /// Creates the appropriate lookup function for the given instruction and memory operations.
-    ///
-    /// # Arguments
-    ///
-    /// * `instr` - The instruction containing the opcode and immediate value
-    /// * `memory_ops` - The memory operations containing operand values
-    ///
-    /// # Returns
-    ///
-    /// An optional `LookupFunction` that corresponds to the instruction's operation.
-    pub fn create_lookup_function(
-        instr: &JoltONNXBytecode,
-        memory_ops: &MemoryOps,
-        advice_value: Option<u64>,
-    ) -> Option<LookupFunction> {
-        match instr.opcode {
-            ONNXOpcode::Add => Some(LookupFunction::Add(AddInstruction::<WORD_SIZE>(
-                memory_ops.ts1_val,
-                memory_ops.ts2_val,
-            ))),
-            ONNXOpcode::Broadcast => {
-                Some(LookupFunction::BroadCast(
-                    BroadCastInstruction::<WORD_SIZE>(memory_ops.ts1_val),
-                ))
-            }
-            ONNXOpcode::Constant => Some(LookupFunction::Const(ConstInstruction::<WORD_SIZE>(
-                instr.imm,
-            ))),
-            ONNXOpcode::Eq => Some(LookupFunction::Eq(BeqInstruction(
-                memory_ops.ts1_val,
-                memory_ops.ts2_val,
-            ))),
-            ONNXOpcode::Gte => Some(LookupFunction::Gte(GteInstruction(
-                memory_ops.ts1_val,
-                memory_ops.ts2_val,
-            ))),
-            ONNXOpcode::Mul => Some(LookupFunction::Mul(MulInstruction::<WORD_SIZE>(
-                memory_ops.ts1_val,
-                memory_ops.ts2_val,
-            ))),
-            ONNXOpcode::Relu => Some(LookupFunction::Relu(ReluInstruction::<WORD_SIZE>(
-                memory_ops.ts1_val,
-            ))),
-            ONNXOpcode::Reshape => Some(LookupFunction::Reshape(ReshapeInstruction::<WORD_SIZE>(
-                memory_ops.ts1_val,
-            ))),
-            ONNXOpcode::Sub => Some(LookupFunction::Sub(SubInstruction::<WORD_SIZE>(
-                memory_ops.ts1_val,
-                memory_ops.ts2_val,
-            ))),
-            ONNXOpcode::VirtualAdvice => Some(LookupFunction::Advice(
-                AdviceInstruction::<WORD_SIZE>(advice_value.expect("Advice value should be set")),
-            )),
-            ONNXOpcode::VirtualAssertEq => Some(LookupFunction::Eq(BeqInstruction::<WORD_SIZE>(
-                memory_ops.ts1_val,
-                memory_ops.ts2_val,
-            ))),
-            ONNXOpcode::VirtualAssertValidDiv0 => Some(LookupFunction::VirtualAssertValidDiv0(
-                AssertValidDiv0Instruction::<WORD_SIZE>(memory_ops.ts1_val, memory_ops.ts2_val),
-            )),
-            ONNXOpcode::VirtualAssertValidSignedRemainder => {
-                Some(LookupFunction::VirtualAssertValidSignedRemainder(
-                    AssertValidSignedRemainderInstruction::<WORD_SIZE>(
-                        memory_ops.ts1_val,
-                        memory_ops.ts2_val,
-                    ),
-                ))
-            }
-            ONNXOpcode::VirtualConst => Some(LookupFunction::Const(ConstInstruction::<WORD_SIZE>(
-                instr.imm,
-            ))),
-            ONNXOpcode::VirtualMove => {
-                Some(LookupFunction::VirtualMove(MoveInstruction::<WORD_SIZE>(
-                    memory_ops.ts1_val,
-                )))
-            }
-            ONNXOpcode::VirtualPow2 => {
-                Some(LookupFunction::VirtualPow2(Pow2Instruction::<WORD_SIZE>(
-                    memory_ops.ts1_val,
-                )))
-            }
-            ONNXOpcode::VirtualShiftRightBitmask => Some(LookupFunction::VirtualShiftRightBitmask(
-                VirtualShiftRightBitmaskInstruction(memory_ops.ts1_val),
-            )),
-            ONNXOpcode::VirtualSra => Some(LookupFunction::VirtualSra(VirtualSraInstruction(
-                memory_ops.ts1_val,
-                memory_ops.ts2_val,
-            ))),
-            // Other opcodes (like MatMult) don't have lookup functions
-            _ => None,
+            advice_value: None,
         }
     }
 
@@ -486,7 +378,7 @@ impl JoltONNXCycle {
     /// # Returns
     ///
     /// A randomly generated `JoltONNXCycle` with the specified opcode.
-    pub fn random(opcode: ONNXOpcode, rng: &mut rand::rngs::StdRng) -> Self {
+    pub fn random(opcode: AtlasOpcode, rng: &mut rand::rngs::StdRng) -> Self {
         use rand::RngCore;
 
         // Generate random memory operation values
@@ -500,8 +392,7 @@ impl JoltONNXCycle {
         };
 
         // Create the cycle with the appropriate lookup function
-        let lookup = Self::create_lookup_function(&jolt_onnx_bytecode, &memory_ops, None);
-        Self::new(lookup, memory_ops)
+        Self::new(jolt_onnx_bytecode, memory_ops, None)
     }
 
     /// Returns the value read from the first source tensor register (ts1).
@@ -528,79 +419,6 @@ impl JoltONNXCycle {
     /// - `post_val`: The value in the destination register after the operation
     pub fn td_write(&self) -> (u64, u64) {
         (self.memory_ops.td_pre_val, self.memory_ops.td_post_val)
-    }
-}
-
-/// Implementation of `LookupQuery` trait for `JoltONNXCycle`.
-///
-/// This implementation allows JoltONNXCycle to participate in the Jolt zkVM's
-/// lookup argument system, which is used to prove the correctness of instruction
-/// executions through cryptographic lookup tables.
-impl LookupQuery<WORD_SIZE> for JoltONNXCycle {
-    /// Converts the cycle's lookup function to instruction inputs.
-    ///
-    /// # Returns
-    ///
-    /// A tuple of (u64, i64) representing the instruction inputs,
-    /// or (0, 0) if no lookup function is present.
-    fn to_instruction_inputs(&self) -> (u64, i64) {
-        self.lookup.as_ref().map_or((0, 0), |lookup_function| {
-            lookup_function.to_instruction_inputs()
-        })
-    }
-
-    /// Returns the lookup table index for this cycle's operation.
-    ///
-    /// The index identifies which lookup table should be used for
-    /// proving this instruction's correctness.
-    fn to_lookup_index(&self) -> u64 {
-        self.lookup
-            .as_ref()
-            .map_or(0, |lookup_function| lookup_function.to_lookup_index())
-    }
-
-    /// Returns the operands used for the lookup table query.
-    ///
-    /// # Returns
-    ///
-    /// A tuple of (u64, u64) representing the lookup operands,
-    /// or (0, 0) if no lookup function is present.
-    fn to_lookup_operands(&self) -> (u64, u64) {
-        self.lookup.as_ref().map_or((0, 0), |lookup_function| {
-            lookup_function.to_lookup_operands()
-        })
-    }
-
-    /// Returns the expected output from the lookup table query.
-    ///
-    /// This value is used to verify that the instruction was executed correctly.
-    fn to_lookup_output(&self) -> u64 {
-        self.lookup
-            .as_ref()
-            .map_or(0, |lookup_function| lookup_function.to_lookup_output())
-    }
-}
-
-/// Implementation of `InstructionLookup` trait for `JoltONNXCycle`.
-///
-/// This implementation provides access to the lookup tables required for
-/// proving instruction correctness in the Jolt zkVM.
-///
-/// # Note
-///
-/// TODO: This implementation may be redundant since `JoltONNXBytecode` already
-/// implements this trait. Consider refactoring to eliminate duplication.
-impl InstructionLookup<WORD_SIZE> for JoltONNXCycle {
-    /// Returns the lookup table associated with this cycle's operation.
-    ///
-    /// # Returns
-    ///
-    /// An optional `LookupTables` instance containing the cryptographic
-    /// lookup table for this instruction, or `None` if no lookup is required.
-    fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
-        self.lookup
-            .as_ref()
-            .and_then(|lookup_function| lookup_function.lookup_table())
     }
 }
 
@@ -678,104 +496,3 @@ impl MemoryOps {
         )
     }
 }
-
-/// Macro for defining the LookupFunction enum and its trait implementations.
-///
-/// This macro generates a comprehensive enum that encapsulates all supported
-/// instruction types and automatically implements the required traits for
-/// lookup table operations.
-///
-/// # Generated Implementations
-///
-/// The macro generates implementations for:
-/// - `LookupQuery<WORD_SIZE>`: Enables participation in lookup arguments
-/// - `InstructionLookup<WORD_SIZE>`: Provides access to lookup tables
-/// - `Clone`, `Debug`: Standard Rust traits
-/// - `Serialize`, `Deserialize`: For serialization support
-///
-/// # Parameters
-///
-/// - `enum_name`: Name of the generated enum
-/// - `word_size`: Constant representing the word size for instructions
-/// - `variant: type` pairs: Each supported instruction variant and its type
-macro_rules! define_lookup_enum {
-    (
-        enum $enum_name:ident,
-        const $word_size:ident,
-        $($variant:ident : $inner:ty),+ $(,)?
-    ) => {
-        #[derive(Clone, Debug, Serialize, Deserialize)]
-        pub enum $enum_name {
-            $(
-                $variant($inner),
-            )+
-        }
-
-        impl LookupQuery<$word_size> for $enum_name {
-            fn to_instruction_inputs(&self) -> (u64, i64) {
-                match self {
-                    $(
-                        $enum_name::$variant(inner) => inner.to_instruction_inputs(),
-                    )+
-                }
-            }
-
-            fn to_lookup_index(&self) -> u64 {
-                match self {
-                    $(
-                        $enum_name::$variant(inner) => inner.to_lookup_index(),
-                    )+
-                }
-            }
-
-            fn to_lookup_operands(&self) -> (u64, u64) {
-                match self {
-                    $(
-                        $enum_name::$variant(inner) => inner.to_lookup_operands(),
-                    )+
-                }
-            }
-
-            fn to_lookup_output(&self) -> u64 {
-                match self {
-                    $(
-                        $enum_name::$variant(inner) => inner.to_lookup_output(),
-                    )+
-                }
-            }
-        }
-
-        impl InstructionLookup<$word_size> for $enum_name {
-            fn lookup_table(&self) -> Option<LookupTables<$word_size>> {
-                match self {
-                    $(
-                        $enum_name::$variant(inner) => inner.lookup_table(),
-                    )+
-                }
-            }
-        }
-    };
-}
-
-// Generate the LookupFunction enum with all supported instruction types
-define_lookup_enum!(
-    enum LookupFunction,
-    const WORD_SIZE,
-    Add: AddInstruction<WORD_SIZE>,
-    Advice: AdviceInstruction<WORD_SIZE>,
-    BroadCast: BroadCastInstruction<WORD_SIZE>,
-    Const: ConstInstruction<WORD_SIZE>,
-    Eq: BeqInstruction<WORD_SIZE>,
-    Gte: GteInstruction<WORD_SIZE>,
-    Mul: MulInstruction<WORD_SIZE>,
-    Relu: ReluInstruction<WORD_SIZE>,
-    Reshape: ReshapeInstruction<WORD_SIZE>,
-    Sub: SubInstruction<WORD_SIZE>,
-    VirtualAssertValidSignedRemainder: AssertValidSignedRemainderInstruction<WORD_SIZE>,
-    VirtualAssertValidDiv0: AssertValidDiv0Instruction<WORD_SIZE>,
-    VirtualConst: ConstInstruction<WORD_SIZE>,
-    VirtualMove: MoveInstruction<WORD_SIZE>,
-    VirtualPow2: Pow2Instruction<WORD_SIZE>,
-    VirtualShiftRightBitmask: VirtualShiftRightBitmaskInstruction<WORD_SIZE>,
-    VirtualSra: VirtualSraInstruction<WORD_SIZE>
-);

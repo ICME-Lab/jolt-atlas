@@ -53,6 +53,7 @@ pub mod builder;
 pub mod constants;
 /// Methods for loading onnx format models
 pub mod graph;
+pub mod instructions;
 pub mod logger;
 pub mod ops;
 /// An implementation of multi-dimensional tensors.

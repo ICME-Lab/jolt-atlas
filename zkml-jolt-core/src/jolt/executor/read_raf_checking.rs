@@ -2,7 +2,7 @@
 use crate::jolt::{
     bytecode::InterleavedBitsMarker,
     dag::state_manager::StateManager,
-    executor::instructions::InstructionLookup,
+    executor::instructions::{InstructionLookup, LookupQuery},
     lookup_table::{
         LookupTables,
         prefixes::{PrefixCheckpoint, PrefixEval, Prefixes},
@@ -32,10 +32,7 @@ use jolt_core::{
         math::Math,
         thread::{unsafe_allocate_zero_vec, unsafe_zero_slice},
     },
-    zkvm::{
-        instruction::LookupQuery,
-        instruction_lookups::{LOG_K, LOG_M, M, PHASES},
-    },
+    zkvm::instruction_lookups::{LOG_K, LOG_M, M, PHASES},
 };
 use rayon::prelude::*;
 use std::{cell::RefCell, rc::Rc};
@@ -771,15 +768,14 @@ mod tests {
         },
         ops::{Constant, hybrid::HybridOp, lookup::LookupOp, poly::PolyOp},
         tensor::Tensor,
-        trace_types::ONNXOpcode,
-        utils::f32::F32,
+        trace_types::AtlasOpcode,
     };
     use rand::{SeedableRng, rngs::StdRng};
 
     const LOG_T: usize = 8;
     const T: usize = 1 << LOG_T;
 
-    fn random_instruction(rng: &mut StdRng, instruction: &Option<ONNXOpcode>) -> JoltONNXCycle {
+    fn random_instruction(rng: &mut StdRng, instruction: &Option<AtlasOpcode>) -> JoltONNXCycle {
         let instruction = instruction.clone().unwrap_or_else(|| {
             unimplemented!("Random instruction generation not implemented");
             /*             let index = rng.next_u64() as usize % ONNXOpcode::COUNT;
@@ -794,26 +790,24 @@ mod tests {
         JoltONNXCycle::random(instruction, rng)
     }
 
-    fn opkind_from_instruction(instruction: &ONNXOpcode) -> SupportedOp {
+    fn opkind_from_instruction(instruction: &AtlasOpcode) -> SupportedOp {
         match instruction {
-            ONNXOpcode::Add => SupportedOp::Linear(PolyOp::Add),
-            ONNXOpcode::Constant => SupportedOp::Constant(Constant::new(
+            AtlasOpcode::Add => SupportedOp::Linear(PolyOp::Add),
+            AtlasOpcode::Constant => SupportedOp::Constant(Constant::new(
                 Tensor::new(Some(&[1]), &[]).unwrap(),
                 Tensor::new(Some(&[1.0]), &[]).unwrap(),
             )),
-            ONNXOpcode::Eq => SupportedOp::Hybrid(HybridOp::Equals),
-            ONNXOpcode::Gte => SupportedOp::Hybrid(HybridOp::GreaterEqual),
-            ONNXOpcode::Mul => SupportedOp::Linear(PolyOp::Mult),
-            ONNXOpcode::Relu => SupportedOp::Nonlinear(LookupOp::ReLU),
-            ONNXOpcode::Reshape => SupportedOp::Linear(PolyOp::Reshape(vec![0])),
-            ONNXOpcode::Sub => SupportedOp::Linear(PolyOp::Sub),
-            ONNXOpcode::Rsqrt => SupportedOp::Nonlinear(LookupOp::Rsqrt { scale: F32(128.0) }),
-            ONNXOpcode::VirtualPow2 => SupportedOp::Nonlinear(LookupOp::VirtualPow2),
+            AtlasOpcode::Eq => SupportedOp::Hybrid(HybridOp::Equals),
+            AtlasOpcode::Gte => SupportedOp::Hybrid(HybridOp::GreaterEqual),
+            AtlasOpcode::Mul => SupportedOp::Linear(PolyOp::Mult),
+            AtlasOpcode::Relu => SupportedOp::Nonlinear(LookupOp::ReLU),
+            AtlasOpcode::Reshape => SupportedOp::Linear(PolyOp::Reshape(vec![0])),
+            AtlasOpcode::Sub => SupportedOp::Linear(PolyOp::Sub),
             _ => unimplemented!("Unsupported instruction"),
         }
     }
 
-    fn model_function(instruction: &Option<ONNXOpcode>) -> impl Fn() -> Model {
+    fn model_function(instruction: &Option<AtlasOpcode>) -> impl Fn() -> Model {
         let opkind = opkind_from_instruction(instruction.as_ref().unwrap());
         move || {
             let mut model = Model::default();
@@ -832,7 +826,7 @@ mod tests {
         }
     }
 
-    fn test_read_raf_sumcheck(instruction: Option<ONNXOpcode>) {
+    fn test_read_raf_sumcheck(instruction: Option<AtlasOpcode>) {
         let mut rng = StdRng::seed_from_u64(12345);
 
         let mut trace: Vec<_> = (0..T)
@@ -969,46 +963,36 @@ mod tests {
 
     #[test]
     fn test_add() {
-        test_read_raf_sumcheck(Some(ONNXOpcode::Add));
+        test_read_raf_sumcheck(Some(AtlasOpcode::Add));
     }
 
     #[test]
     fn test_sub() {
-        test_read_raf_sumcheck(Some(ONNXOpcode::Sub));
+        test_read_raf_sumcheck(Some(AtlasOpcode::Sub));
     }
 
     #[test]
     fn test_mul() {
-        test_read_raf_sumcheck(Some(ONNXOpcode::Mul));
+        test_read_raf_sumcheck(Some(AtlasOpcode::Mul));
     }
 
     #[test]
     fn test_constant() {
-        test_read_raf_sumcheck(Some(ONNXOpcode::Constant));
+        test_read_raf_sumcheck(Some(AtlasOpcode::Constant));
     }
 
     #[test]
     fn test_relu() {
-        test_read_raf_sumcheck(Some(ONNXOpcode::Relu));
-    }
-
-    #[test]
-    fn test_rsqrt() {
-        test_read_raf_sumcheck(Some(ONNXOpcode::Rsqrt));
-    }
-
-    #[test]
-    fn test_virtual_pow2() {
-        test_read_raf_sumcheck(Some(ONNXOpcode::VirtualPow2));
+        test_read_raf_sumcheck(Some(AtlasOpcode::Relu));
     }
 
     #[test]
     fn test_gte() {
-        test_read_raf_sumcheck(Some(ONNXOpcode::Gte));
+        test_read_raf_sumcheck(Some(AtlasOpcode::Gte));
     }
 
     #[test]
     fn test_reshape() {
-        test_read_raf_sumcheck(Some(ONNXOpcode::Reshape));
+        test_read_raf_sumcheck(Some(AtlasOpcode::Reshape));
     }
 }

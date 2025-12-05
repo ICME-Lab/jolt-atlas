@@ -40,8 +40,9 @@ use crate::{
     ops::{hybrid::HybridOp, poly::PolyOp},
     tensor::Tensor,
     utils::parsing::{
-        create_const_node, create_div_node, create_einsum_node, create_iff_node, create_input_node,
-        create_node, create_polyop_node, create_relu_node, create_rsqrt_node,
+        create_const_div_node, create_const_node, create_einsum_node, create_iff_node,
+        create_input_node, create_node, create_polyop_node, create_relu_node, create_rsqrt_node,
+        create_softmax_node,
     },
 };
 
@@ -110,9 +111,10 @@ impl ModelBuilder {
         (id, O)
     }
 
+    // Divides all elements by a unique constant `divisor`
     fn div(&mut self, divisor: i32, x: Wire, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
         let id = self.alloc();
-        let n = create_div_node(divisor, self.scale, vec![x], out_dims, id, fanout_hint);
+        let n = create_const_div_node(divisor, self.scale, vec![x], out_dims, id, fanout_hint);
         self.model.insert_node(n);
         (id, O)
     }
@@ -424,6 +426,20 @@ impl ModelBuilder {
         (id, O)
     }
 
+    fn softmax(
+        &mut self,
+        input: Wire,
+        axes: Vec<usize>,
+        out_dims: Vec<usize>,
+        fanout_hint: usize,
+    ) -> Wire {
+        let id = self.alloc();
+        let softmax_node =
+            create_softmax_node(self.scale, vec![input], axes, out_dims, id, fanout_hint);
+        self.model.insert_node(softmax_node);
+        (id, O)
+    }
+
     fn pow(&mut self, a: Wire, pow: u32, out_dims: Vec<usize>, fanout_hint: usize) -> Wire {
         let id = self.alloc();
         let n = create_polyop_node(
@@ -684,6 +700,17 @@ pub fn rsqrt_model() -> Model {
 
     let x = b.input(dims.clone(), 1);
     let r = b.rsqrt(x, dims.clone(), 1);
+
+    b.take(vec![x.0], vec![r])
+}
+
+pub fn softmax_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+    let dims = vec![1, 64, 64];
+
+    let x = b.input(dims.clone(), 1);
+    let r = b.softmax(x, vec![1], dims.clone(), 1);
 
     b.take(vec![x.0], vec![r])
 }

@@ -17,7 +17,7 @@ use jolt_core::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, thread::unsafe_allocate_zero_vec},
 };
-use onnx_tracer::trace_types::{ONNXInstr, ONNXOpcode};
+use onnx_tracer::trace_types::{AtlasInstr, AtlasOpcode};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -44,17 +44,16 @@ impl PrecompilePreprocessing {
     pub fn preprocess(bytecode_preprocessing: &BytecodePreprocessing) -> Self {
         let td_lookup = bytecode_preprocessing.td_lookup();
         let instances = bytecode_preprocessing
-            .raw_bytecode()
-            .iter()
-            .filter_map(|instr| match &instr.opcode {
-                ONNXOpcode::Einsum(_) | ONNXOpcode::Sum(_) => Some(PreprocessingInstance::new(
-                    instr,
-                    td_lookup,
-                    bytecode_preprocessing,
-                )),
-                _ => None,
-            })
-            .collect();
+        .raw_bytecode()
+        .iter()
+        // TODO(AntoineF4C5): Set a method for each instruction, that only returns a preprocessing instance if required
+        .filter_map(|instr| match &instr.opcode {
+                    AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) => Some(
+                        PreprocessingInstance::new(instr, td_lookup, bytecode_preprocessing),
+                    ),
+                    _ => None,
+                })
+                .collect();
 
         PrecompilePreprocessing { instances }
     }
@@ -89,8 +88,8 @@ struct InstanceBuilder;
 impl InstanceBuilder {
     /// Generic instance builder for einsum operations
     fn build_einsum_instance(
-        instr: &ONNXInstr,
-        td_lookup: &HashMap<usize, ONNXInstr>,
+        instr: &AtlasInstr,
+        td_lookup: &HashMap<usize, AtlasInstr>,
         bytecode_preprocessing: &BytecodePreprocessing,
         equation: &str,
         dims_extractor: DimExtractor,
@@ -117,8 +116,8 @@ impl InstanceBuilder {
 
     /// Specialized builder for sum operations
     fn build_sum_instance_axes_1(
-        instr: &ONNXInstr,
-        td_lookup: &HashMap<usize, ONNXInstr>,
+        instr: &AtlasInstr,
+        td_lookup: &HashMap<usize, AtlasInstr>,
         bytecode_preprocessing: &BytecodePreprocessing,
         _axes: i32,
     ) -> PreprocessingInstance {
@@ -151,12 +150,12 @@ impl InstanceBuilder {
 impl PreprocessingInstance {
     /// Create a new PreprocessingInstance based on the instruction opcode
     pub fn new(
-        instr: &ONNXInstr,
-        td_lookup: &HashMap<usize, ONNXInstr>,
+        instr: &AtlasInstr,
+        td_lookup: &HashMap<usize, AtlasInstr>,
         bytecode_preprocessing: &BytecodePreprocessing,
     ) -> Self {
         match &instr.opcode {
-            ONNXOpcode::Einsum(equation) => {
+            AtlasOpcode::Einsum(equation) => {
                 // Look up configuration for this equation pattern
                 let config = EINSUM_REGISTRY
                     .iter()
@@ -179,7 +178,7 @@ impl PreprocessingInstance {
                     config.dims_extractor,
                 )
             }
-            ONNXOpcode::Sum(axes) => match (axes, instr.output_dims[0], instr.output_dims.len()) {
+            AtlasOpcode::Sum(axes) => match (axes, instr.output_dims[0], instr.output_dims.len()) {
                 (1, _, 2) | (2, 1, 3) => InstanceBuilder::build_sum_instance_axes_1(
                     instr,
                     td_lookup,

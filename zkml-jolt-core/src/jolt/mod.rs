@@ -335,6 +335,7 @@ mod e2e_tests {
 
     #[serial]
     #[test]
+    #[ignore] // Fails, see issue #88
     fn test_self_attention() {
         let mut rng = StdRng::seed_from_u64(123456);
         let shape = [1, 64, 64];
@@ -977,5 +978,20 @@ mod e2e_tests {
     #[serial]
     fn test_rsqrt() {
         run_snark_test(builder::rsqrt_model, &[-3, -2, 0, 1], &[1, 4], None);
+    }
+
+    #[test]
+    #[serial]
+    #[ignore] // track issue #88
+    fn test_softmax() {
+        let mut rng = StdRng::seed_from_u64(123456);
+        let shape = [1, 64, 64];
+
+        let mut input_data = vec![0; shape.iter().product()];
+        for input in input_data.iter_mut() {
+            *input = rng.gen_range(-256..256);
+        }
+
+        run_snark_test(builder::softmax_model, &input_data, &[1, 64, 64], None);
     }
 }

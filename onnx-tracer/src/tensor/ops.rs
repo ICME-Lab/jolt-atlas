@@ -3946,6 +3946,40 @@ pub mod nonlinearities {
         .unwrap()
     }
 
+    /// Elementwise divides a tensor with an other tensor.
+    /// # Arguments
+    ///
+    /// * `a` - Dividend tensor
+    /// * `b` - Divisor tensor
+    /// # Examples
+    /// ```
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::div;
+    /// let x = Tensor::<i32>::new(
+    ///     Some(&[2, 1, 2, 7, 1, 1]),
+    ///     &[2, 3],
+    /// ).unwrap();
+    /// let y = Tensor::<i32>::new(
+    ///     Some(&[1, 1, 2, 2, 1, 2]),
+    ///     &[2, 3],
+    /// ).unwrap();
+    /// let result = div(&x, &y);
+    /// let expected = Tensor::<i32>::new(Some(&[2, 1, 1, 3, 1, 0]), &[2, 3]).unwrap();
+    /// assert_eq!(result, expected);
+    /// ```
+    pub fn div(a: &Tensor<i32>, b: &Tensor<i32>) -> Tensor<i32> {
+        a.par_enum_map(|i, a_i| {
+            let denom = b[i];
+            let mut d_inv_x = a_i / (denom);
+            let remainder = a_i % denom;
+            if (remainder < 0 && denom > 0) || (remainder > 0 && denom < 0) {
+                d_inv_x -= 1;
+            }
+            Ok::<_, TensorError>(d_inv_x)
+        })
+        .unwrap()
+    }
+
     /// # Note
     /// Modified to match the semantics of zkVM division.
     ///

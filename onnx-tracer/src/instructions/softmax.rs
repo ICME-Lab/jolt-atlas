@@ -1,24 +1,34 @@
-use onnx_tracer::{
-    constants::virtual_tensor_index,
-    tensor::{Tensor, ops::nonlinearities},
-    trace_types::{MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode},
+use crate::{
+    instructions::{
+        declare_onnx_instr, div::Div, gte::Gte, sub::Sub, virtuals::VirtualPow2,
+        VirtualInstructionSequence,
+    },
+    tensor::{ops::nonlinearities, Tensor},
+    trace_types::{
+        AtlasCycle, AtlasInstr, AtlasOpcode, MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode,
+    },
+    utils::{u64_vec_to_i32_iter, VirtualSequenceCounter, VirtualSlotCounter},
 };
 
-use crate::{
-    jolt::executor::instructions::{VirtualInstructionSequence, virtual_pow2::Pow2Instruction},
-    utils::{VirtualSequenceCounter, u64_vec_to_i32_iter},
-};
-use jolt_core::zkvm::instruction::LookupQuery;
+// Expandable
+declare_onnx_instr!(name = Softmax);
+
+impl Softmax {
+    #[allow(unused)]
+    fn exec(input: &Tensor<i32>, _axes: &[usize]) -> Tensor<i32> {
+        nonlinearities::softmax(input, 128f64).0
+    }
+}
+
+// TODO: fix usage of saturating add/mul/div, which doesn't fit implementation for Add, Mul, Div instructions.
+// OR: Implement SaturatingAdd/Mul/Div instructions.
 
 /// Quantized Softmax virtual instruction.
 /// Implements a stable base-2 softmax with manual quantization factor `Q = 128`.
-pub struct SoftmaxInstruction;
+impl VirtualInstructionSequence for Softmax {
+    const SEQUENCE_LENGTH: usize = 12 + 2 * Div::SEQUENCE_LENGTH;
 
-impl VirtualInstructionSequence for SoftmaxInstruction {
-    const SEQUENCE_LENGTH: usize = 14;
-
-    fn virtual_trace(cycle: ONNXCycle, k: usize) -> Vec<ONNXCycle> {
-        const WORD_SIZE: usize = 32;
+    fn virtual_trace(cycle: ONNXCycle, virtual_slot: &mut VirtualSlotCounter) -> Vec<AtlasCycle> {
         const Q: u64 = 128;
 
         assert_eq!(cycle.instr.opcode, ONNXOpcode::Softmax);
@@ -38,43 +48,46 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
         );
         let mut counter = VirtualSequenceCounter::new(remaining);
 
-        let td = cycle.instr.td.unwrap_or(0);
+        let td = cycle.instr.td;
         let output_dims = cycle.instr.output_dims.clone();
 
-        let z_tensor = cycle.memory_state.ts1_val.clone().unwrap_or_else(|| {
-            Tensor::from(u64_vec_to_i32_iter(
-                &cycle.ts1_vals().unwrap_or_else(|| vec![0u64; num_outputs]),
-            ))
-        });
-        let mut z_vals = vec![0i32; num_outputs];
-        for (i, value) in z_tensor.inner.iter().take(num_outputs).enumerate() {
-            z_vals[i] = *value;
-        }
+        let z_vals = cycle.ts1_vals().unwrap_or_else(|| vec![0u64; num_outputs]);
+
+        let z_tensor = Tensor::new(
+            Some(
+                &z_vals
+                    .iter()
+                    .map(|&x| x as u32 as i32)
+                    .collect::<Vec<i32>>(),
+            ),
+            &output_dims,
+        )
+        .unwrap();
 
         // Virtual tensor register mapping
-        let v_zero = Some(virtual_tensor_index(0, k, td));
-        let v_ge0 = Some(virtual_tensor_index(1, k, td));
-        let v_neg = Some(virtual_tensor_index(2, k, td));
-        let v_abs = Some(virtual_tensor_index(3, k, td));
-        let v_pow2 = Some(virtual_tensor_index(4, k, td));
-        let v_q_const = Some(virtual_tensor_index(5, k, td));
-        let v_q_div_c = Some(virtual_tensor_index(6, k, td));
-        let v_q_mul_c = Some(virtual_tensor_index(7, k, td));
-        let v_d = Some(virtual_tensor_index(8, k, td));
-        let v_sum = Some(virtual_tensor_index(9, k, td));
-        let v_broadcast_sum = Some(virtual_tensor_index(10, k, td));
-        let v_q_mul_d = Some(virtual_tensor_index(11, k, td));
-        let v_output = Some(virtual_tensor_index(12, k, td));
+        let v_zero = Some(virtual_slot.inc());
+        let v_ge0 = Some(virtual_slot.inc());
+        let v_neg = Some(virtual_slot.inc());
+        let v_abs = Some(virtual_slot.inc());
+        let v_pow2 = Some(virtual_slot.inc());
+        let v_q_const = Some(virtual_slot.inc());
+        let v_q_div_c = Some(virtual_slot.inc());
+        let v_q_mul_c = Some(virtual_slot.inc());
+        let v_d = Some(virtual_slot.inc());
+        let v_sum = Some(virtual_slot.inc());
+        let v_broadcast_sum = Some(virtual_slot.inc());
+        let v_q_mul_d = Some(virtual_slot.inc());
+        let v_output = Some(virtual_slot.inc());
 
         let mut vt = Vec::with_capacity(Self::SEQUENCE_LENGTH);
 
         // (1) zero constant
         let zero_vals = vec![0u64; num_outputs];
         let zero_tensor = Tensor::from(u64_vec_to_i32_iter(&zero_vals));
-        vt.push(ONNXCycle {
-            instr: ONNXInstr {
+        vt.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualConst,
+                opcode: AtlasOpcode::Constant,
                 ts1: None,
                 ts2: None,
                 ts3: None,
@@ -94,12 +107,12 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
         });
 
         // (2) ge0 = (z >= 0)
-        let ge0_vals: Vec<u64> = z_vals.iter().map(|&v| u64::from(v >= 0)).collect();
+        let ge0_vals: Vec<u64> = Gte::sequence_output(&z_vals, &vec![0; num_outputs]);
         let ge0_tensor = Tensor::from(u64_vec_to_i32_iter(&ge0_vals));
-        vt.push(ONNXCycle {
-            instr: ONNXInstr {
+        vt.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Gte,
+                opcode: AtlasOpcode::Gte,
                 ts1: cycle.instr.ts1,
                 ts2: None,
                 ts3: None,
@@ -119,12 +132,12 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
         });
 
         // (3) neg = -z
-        let neg_vals: Vec<i32> = z_vals.iter().map(|&v| -v).collect();
-        let neg_tensor = Tensor::from(neg_vals.clone().into_iter());
-        vt.push(ONNXCycle {
-            instr: ONNXInstr {
+        let neg_vals: Vec<u64> = Sub::sequence_output(&vec![0; num_outputs], &z_vals);
+        let neg_tensor = Tensor::from(neg_vals.clone().into_iter().map(|v| v as u32 as i32));
+        vt.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Sub,
+                opcode: AtlasOpcode::Sub,
                 ts1: v_zero,
                 ts2: cycle.instr.ts1,
                 ts3: None,
@@ -144,16 +157,17 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
         });
 
         // (4) abs = select(ge0, z, -z)
-        let abs_vals: Vec<i32> = z_vals
+        let abs_vals: Vec<u64> = ge0_vals
             .iter()
-            .zip(ge0_vals.iter())
-            .map(|(&z, &cond)| if cond != 0 { z } else { -z })
+            .zip(z_vals.iter())
+            .zip(neg_vals.iter())
+            .map(|((&cond, &z), &neg_z)| if cond != 0 { z } else { neg_z })
             .collect();
-        let abs_tensor = Tensor::from(abs_vals.clone().into_iter());
-        vt.push(ONNXCycle {
-            instr: ONNXInstr {
+        let abs_tensor = Tensor::from(abs_vals.clone().into_iter().map(|v| v as u32 as i32));
+        vt.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Select,
+                opcode: AtlasOpcode::Select,
                 ts1: v_ge0,
                 ts2: cycle.instr.ts1,
                 ts3: v_neg,
@@ -173,15 +187,12 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
         });
 
         // (5) c = 2^{|z|}
-        let c_vals: Vec<u64> = abs_vals
-            .iter()
-            .map(|&abs| Pow2Instruction::<WORD_SIZE>(abs as u32 as u64).to_lookup_output())
-            .collect();
+        let c_vals: Vec<u64> = VirtualPow2::sequence_output(&abs_vals, &[]);
         let c_tensor = Tensor::from(u64_vec_to_i32_iter(&c_vals));
-        vt.push(ONNXCycle {
-            instr: ONNXInstr {
+        vt.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualPow2,
+                opcode: AtlasOpcode::VirtualPow2,
                 ts1: v_abs,
                 ts2: None,
                 ts3: None,
@@ -203,10 +214,10 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
         // (6) Q constant
         let q_vals = vec![Q; num_outputs];
         let q_tensor = Tensor::from(u64_vec_to_i32_iter(&q_vals));
-        vt.push(ONNXCycle {
-            instr: ONNXInstr {
+        vt.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualConst,
+                opcode: AtlasOpcode::Constant,
                 ts1: None,
                 ts2: None,
                 ts3: None,
@@ -230,36 +241,41 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
             .iter()
             .map(|&c| if c == 0 { 0 } else { Q.saturating_div(c) })
             .collect();
+        // let d_q_over_c_vals = Div::sequence_output(&q_vals, &c_vals);
         let d_q_over_c_tensor = Tensor::from(u64_vec_to_i32_iter(&d_q_over_c_vals));
-        vt.push(ONNXCycle {
-            instr: ONNXInstr {
-                address: cycle.instr.address,
-                opcode: ONNXOpcode::Div,
-                ts1: v_q_const,
-                ts2: None,
-                ts3: None,
-                td: v_q_div_c,
-                imm: Some(c_tensor.clone()),
-                virtual_sequence_remaining: Some(counter.dec()),
-                output_dims: output_dims.clone(),
+        vt.extend(Div::virtual_trace(
+            ONNXCycle {
+                instr: ONNXInstr {
+                    address: cycle.instr.address,
+                    opcode: ONNXOpcode::Div,
+                    ts1: v_q_const,
+                    ts2: v_pow2,
+                    ts3: None,
+                    td: v_q_div_c,
+                    imm: None,
+                    virtual_sequence_remaining: Some(counter.get()),
+                    output_dims: output_dims.clone(),
+                },
+                memory_state: MemoryState {
+                    ts1_val: Some(q_tensor.clone()),
+                    ts2_val: Some(c_tensor.clone()),
+                    ts3_val: None,
+                    td_pre_val: None,
+                    td_post_val: Some(d_q_over_c_tensor.clone()),
+                },
+                advice_value: None,
             },
-            memory_state: MemoryState {
-                ts1_val: Some(q_tensor.clone()),
-                ts2_val: None,
-                ts3_val: None,
-                td_pre_val: None,
-                td_post_val: Some(d_q_over_c_tensor.clone()),
-            },
-            advice_value: None,
-        });
+            virtual_slot,
+        ));
+        counter.subtract(Div::SEQUENCE_LENGTH);
 
         // (8) d_q_mul_c = Q * c
         let d_q_mul_c_vals: Vec<u64> = c_vals.iter().map(|&c| Q.saturating_mul(c)).collect();
         let d_q_mul_c_tensor = Tensor::from(u64_vec_to_i32_iter(&d_q_mul_c_vals));
-        vt.push(ONNXCycle {
-            instr: ONNXInstr {
+        vt.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Mul,
+                opcode: AtlasOpcode::Mul,
                 ts1: v_q_const,
                 ts2: v_pow2,
                 ts3: None,
@@ -291,10 +307,10 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
             })
             .collect();
         let d_tensor = Tensor::from(u64_vec_to_i32_iter(&d_vals));
-        vt.push(ONNXCycle {
-            instr: ONNXInstr {
+        vt.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Select,
+                opcode: AtlasOpcode::Select,
                 ts1: v_ge0,
                 ts2: v_q_mul_c,
                 ts3: v_q_div_c,
@@ -324,10 +340,10 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
             vec![1; output_dims.len()]
         };
         sum_tensor.reshape(&sum_tensor_dims).unwrap();
-        vt.push(ONNXCycle {
-            instr: ONNXInstr {
+        vt.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualSaturatingSum,
+                opcode: AtlasOpcode::VirtualSaturatingSum,
                 ts1: v_d,
                 ts2: None,
                 ts3: None,
@@ -352,10 +368,10 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
         if !output_dims.is_empty() {
             broadcast_tensor.reshape(&output_dims).unwrap();
         }
-        vt.push(ONNXCycle {
-            instr: ONNXInstr {
+        vt.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Broadcast,
+                opcode: AtlasOpcode::Broadcast,
                 ts1: v_sum,
                 ts2: None,
                 ts3: None,
@@ -377,10 +393,10 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
         // (12) f = Q * d
         let f_vals: Vec<u64> = d_vals.iter().map(|&d| Q.saturating_mul(d)).collect();
         let f_tensor = Tensor::from(u64_vec_to_i32_iter(&f_vals));
-        vt.push(ONNXCycle {
-            instr: ONNXInstr {
+        vt.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Mul,
+                opcode: AtlasOpcode::Mul,
                 ts1: v_d,
                 ts2: v_q_const,
                 ts3: None,
@@ -405,40 +421,43 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
             .map(|&f| if d_sum == 0 { 0 } else { f / d_sum })
             .collect();
         let g_tensor = Tensor::from(u64_vec_to_i32_iter(&g_vals));
-        vt.push(ONNXCycle {
-            instr: ONNXInstr {
-                address: cycle.instr.address,
-                opcode: ONNXOpcode::Div,
-                ts1: v_q_mul_d,
-                ts2: None,
-                ts3: None,
-                td: v_output,
-                imm: Some(broadcast_tensor.clone()),
-                virtual_sequence_remaining: Some(counter.dec()),
-                output_dims: output_dims.clone(),
+        vt.extend(Div::virtual_trace(
+            ONNXCycle {
+                instr: ONNXInstr {
+                    address: cycle.instr.address,
+                    opcode: ONNXOpcode::Div,
+                    ts1: v_q_mul_d,
+                    ts2: v_broadcast_sum,
+                    ts3: None,
+                    td: v_output,
+                    imm: None,
+                    virtual_sequence_remaining: Some(counter.get()),
+                    output_dims: output_dims.clone(),
+                },
+                memory_state: MemoryState {
+                    ts1_val: Some(f_tensor.clone()),
+                    ts2_val: Some(broadcast_tensor.clone()),
+                    ts3_val: None,
+                    td_pre_val: None,
+                    td_post_val: Some(g_tensor.clone()),
+                },
+                advice_value: None,
             },
-            memory_state: MemoryState {
-                ts1_val: Some(f_tensor.clone()),
-                ts2_val: None,
-                ts3_val: None,
-                td_pre_val: None,
-                td_post_val: Some(g_tensor.clone()),
-            },
-            advice_value: None,
-        });
+            virtual_slot,
+        ));
+        counter.subtract(Div::SEQUENCE_LENGTH);
 
-        // (14) move final result to td
-        vt.push(ONNXCycle {
-            instr: ONNXInstr {
+        vt.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualMove,
+                opcode: AtlasOpcode::VirtualMove,
                 ts1: v_output,
                 ts2: None,
                 ts3: None,
-                td: cycle.instr.td,
+                td,
                 imm: None,
                 virtual_sequence_remaining: Some(counter.dec()),
-                output_dims,
+                output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
                 ts1_val: Some(g_tensor.clone()),
@@ -454,12 +473,12 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
         vt
     }
 
-    fn sequence_output(x: Vec<u64>, _y: Vec<u64>) -> Vec<u64> {
+    fn sequence_output(x: &[u64], _y: &[u64]) -> Vec<u64> {
         if x.is_empty() {
             return Vec::new();
         }
 
-        let input_tensor = Tensor::from(u64_vec_to_i32_iter(&x));
+        let input_tensor = Tensor::from(u64_vec_to_i32_iter(x));
         let (softmax_tensor, _) = nonlinearities::softmax(&input_tensor, 128.0);
 
         softmax_tensor
@@ -472,7 +491,7 @@ impl VirtualInstructionSequence for SoftmaxInstruction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jolt::executor::instructions::test::jolt_virtual_sequence_test;
+    use crate::instructions::test::jolt_virtual_sequence_test;
 
     #[test]
     fn virtual_trace_matches_sequence_output() {
@@ -499,10 +518,10 @@ mod tests {
             advice_value: None,
         };
 
-        let trace = SoftmaxInstruction::virtual_trace(cycle, 32);
-        assert_eq!(trace.len(), SoftmaxInstruction::SEQUENCE_LENGTH);
+        let trace = Softmax::virtual_trace(cycle, &mut VirtualSlotCounter::new(32));
+        assert_eq!(trace.len(), Softmax::SEQUENCE_LENGTH);
 
-        let expected = SoftmaxInstruction::sequence_output(input.clone(), vec![]);
+        let expected = Softmax::sequence_output(&input, &[]);
         let actual = trace
             .last()
             .and_then(|cycle| cycle.td_post_vals())
@@ -512,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn fuzz_virtual_sequence() {
-        jolt_virtual_sequence_test::<SoftmaxInstruction>(ONNXOpcode::Softmax, 8);
+    fn virtual_sequence() {
+        jolt_virtual_sequence_test::<Softmax>(ONNXOpcode::Softmax, 8);
     }
 }

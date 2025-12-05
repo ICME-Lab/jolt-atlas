@@ -9,12 +9,11 @@ use std::{
     sync::Arc,
 };
 
-use crate::jolt::bytecode::CircuitFlags;
+use crate::jolt::{bytecode::CircuitFlags, executor::instructions::LookupQuery};
 use jolt_core::{
     field::JoltField,
     poly::{multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial},
     utils::math::Math,
-    zkvm::instruction::LookupQuery,
 };
 use rayon::iter::ParallelIterator;
 

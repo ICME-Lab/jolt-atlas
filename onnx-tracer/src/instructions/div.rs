@@ -1,57 +1,84 @@
-use itertools::Itertools;
-use jolt_core::zkvm::instruction::LookupQuery;
-use onnx_tracer::{
-    constants::virtual_tensor_index,
-    tensor::Tensor,
-    trace_types::{MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode},
-};
-
 use crate::{
-    jolt::executor::instructions::{
-        VirtualInstructionSequence, add::AddInstruction, beq::BeqInstruction, mul::MulInstruction,
-        virtual_advice::AdviceInstruction, virtual_assert_valid_div0::AssertValidDiv0Instruction,
-        virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction,
-    },
-    utils::{VirtualSequenceCounter, u64_vec_to_i32_iter},
+    instructions::{declare_onnx_instr, ElementWise, WORD_SIZE},
+    tensor::Tensor,
+    trace_types::{AtlasCycle, AtlasInstr, AtlasOpcode, MemoryState, ONNXCycle, ONNXOpcode},
+    utils::{u64_vec_to_i32_iter, VirtualSequenceCounter, VirtualSlotCounter},
 };
 
-/// Perform signed division and return the result
-pub struct DivInstruction<const WORD_SIZE: usize>;
+use super::{
+    add::Add, eq::Eq, mul::Mul, virtuals::VirtualAdvice, virtuals::VirtualAssertValidDiv0,
+    virtuals::VirtualAssertValidSignedRemainder, VirtualInstructionSequence,
+};
 
-impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_SIZE> {
-    const SEQUENCE_LENGTH: usize = 9;
+// Expandable
+declare_onnx_instr!(name = Div);
 
-    fn virtual_trace(cycle: ONNXCycle, K: usize) -> Vec<ONNXCycle> {
+impl ElementWise for Div {
+    fn exec(x: u64, y: u64) -> u64 {
+        match WORD_SIZE {
+            32 => {
+                let x = x as i32;
+                let y = y as i32;
+                if y == 0 {
+                    return -1i32 as u32 as u64;
+                }
+                let mut quotient = x / y;
+                let remainder = x % y;
+                if (remainder < 0 && y > 0) || (remainder > 0 && y < 0) {
+                    quotient -= 1;
+                }
+                quotient as u32 as u64
+            }
+            64 => {
+                let x = x as i64;
+                let y = y as i64;
+                if y == 0 {
+                    return -1i64 as u64;
+                }
+                let mut quotient = x / y;
+                let remainder = x % y;
+                if (remainder < 0 && y > 0) || (remainder > 0 && y < 0) {
+                    quotient -= 1;
+                }
+                quotient as u64
+            }
+            _ => panic!("Unsupported WORD_SIZE: {WORD_SIZE}"),
+        }
+    }
+}
+
+impl VirtualInstructionSequence for Div {
+    const SEQUENCE_LENGTH: usize = 8;
+
+    fn virtual_trace(cycle: ONNXCycle, virtual_slot: &mut VirtualSlotCounter) -> Vec<AtlasCycle> {
         assert_eq!(cycle.instr.opcode, ONNXOpcode::Div);
         let num_outputs = cycle.instr.num_output_elements();
 
         // If DIV is part of a longer virtual sequence, recover the counter to continue decrementing it
-        let virtual_sequence_remaining =
-            if let Some(remaining) = cycle.instr.virtual_sequence_remaining {
-                assert!(
-                    remaining >= Self::SEQUENCE_LENGTH,
-                    "Not enough remaining virtual sequence steps"
-                );
-                remaining
-            } else {
-                Self::SEQUENCE_LENGTH
-            };
+        let remaining = cycle
+            .instr
+            .virtual_sequence_remaining
+            .unwrap_or(Self::SEQUENCE_LENGTH);
+        assert!(
+            remaining >= Self::SEQUENCE_LENGTH,
+            "Not enough remaining virtual sequence steps"
+        );
 
-        let mut vseq_counter = VirtualSequenceCounter::new(virtual_sequence_remaining);
+        let mut counter = VirtualSequenceCounter::new(remaining);
 
         // DIV source registers
         let r_x = cycle.instr.ts1;
+        let r_y = cycle.instr.ts2;
+        let td = cycle.instr.td;
 
-        // Virtual registers used in sequence
-        let v_c = Some(virtual_tensor_index(0, K, cycle.instr.td.unwrap()));
-        let v_q = Some(virtual_tensor_index(1, K, cycle.instr.td.unwrap()));
-        let v_r = Some(virtual_tensor_index(2, K, cycle.instr.td.unwrap()));
-        let v_qy = Some(virtual_tensor_index(3, K, cycle.instr.td.unwrap()));
-        let v_0 = Some(virtual_tensor_index(4, K, cycle.instr.td.unwrap()));
+        let v_q = Some(virtual_slot.inc());
+        let v_r = Some(virtual_slot.inc());
+        let v_qy = Some(virtual_slot.inc());
+        let v_0 = Some(virtual_slot.inc());
 
         // DIV operands
         let x = cycle.ts1_vals().unwrap_or(vec![0; num_outputs]);
-        let y = cycle.imm().unwrap_or(vec![0; num_outputs]);
+        let y = cycle.ts2_vals().unwrap_or(vec![0; num_outputs]);
         let mut virtual_trace = vec![];
 
         let (quotient, remainder) = {
@@ -99,42 +126,17 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
             (quotient_tensor, remainder_tensor)
         };
 
-        // const
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let q = VirtualAdvice::sequence_output(&quotient, &[]);
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualConst,
-                ts1: None,
-                ts2: None,
-                ts3: None,
-                td: v_c,
-                imm: cycle.instr.imm.clone(),
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
-                output_dims: cycle.instr.output_dims.clone(),
-            },
-            memory_state: MemoryState {
-                ts1_val: None,
-                ts2_val: None,
-                ts3_val: None,
-                td_pre_val: None,
-                td_post_val: cycle.instr.imm.clone(),
-            },
-            advice_value: None,
-        });
-
-        let q = (0..num_outputs)
-            .map(|i| AdviceInstruction::<WORD_SIZE>(quotient[i]).to_lookup_output())
-            .collect_vec();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
-                address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualAdvice,
+                opcode: AtlasOpcode::VirtualAdvice,
                 ts1: None,
                 ts2: None,
                 ts3: None,
                 td: v_q,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -147,19 +149,17 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
             advice_value: Some(Tensor::from(u64_vec_to_i32_iter(&quotient))),
         });
 
-        let r = (0..num_outputs)
-            .map(|i| AdviceInstruction::<WORD_SIZE>(remainder[i]).to_lookup_output())
-            .collect_vec();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let r = VirtualAdvice::sequence_output(&remainder, &[]);
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualAdvice,
+                opcode: AtlasOpcode::VirtualAdvice,
                 ts1: None,
                 ts2: None,
                 ts3: None,
                 td: v_r,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -172,24 +172,20 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
             advice_value: Some(Tensor::from(u64_vec_to_i32_iter(&remainder))),
         });
 
-        let is_valid: Vec<u64> = (0..num_outputs)
-            .map(|i| {
-                AssertValidSignedRemainderInstruction::<WORD_SIZE>(r[i], y[i]).to_lookup_output()
-            })
-            .collect_vec();
+        let is_valid: Vec<u64> = VirtualAssertValidSignedRemainder::sequence_output(&r, &y);
         is_valid.iter().for_each(|&valid| {
             assert_eq!(valid, 1, "Invalid signed remainder detected");
         });
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualAssertValidSignedRemainder,
+                opcode: AtlasOpcode::VirtualAssertValidSignedRemainder,
                 ts1: v_r,
-                ts2: v_c,
+                ts2: r_y,
                 ts3: None,
                 td: None,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -202,22 +198,20 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
             advice_value: None,
         });
 
-        let is_valid: Vec<u64> = (0..num_outputs)
-            .map(|i| AssertValidDiv0Instruction::<WORD_SIZE>(y[i], q[i]).to_lookup_output())
-            .collect_vec();
+        let is_valid: Vec<u64> = VirtualAssertValidDiv0::sequence_output(&y, &q);
         is_valid.iter().for_each(|&valid| {
             assert_eq!(valid, 1, "Invalid division by zero detected");
         });
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualAssertValidDiv0,
-                ts1: v_c,
+                opcode: AtlasOpcode::VirtualAssertValidDiv0,
+                ts1: r_y,
                 ts2: v_q,
                 ts3: None,
                 td: None,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -230,19 +224,17 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
             advice_value: None,
         });
 
-        let q_y = (0..num_outputs)
-            .map(|i| MulInstruction::<WORD_SIZE>(q[i], y[i]).to_lookup_output())
-            .collect_vec();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let q_y = Mul::sequence_output(&q, &y);
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Mul,
+                opcode: AtlasOpcode::Mul,
                 ts1: v_q,
-                ts2: v_c,
+                ts2: r_y,
                 ts3: None,
                 td: v_qy,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -255,19 +247,17 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
             advice_value: None,
         });
 
-        let add_0 = (0..num_outputs)
-            .map(|i| AddInstruction::<WORD_SIZE>(q_y[i], r[i]).to_lookup_output())
-            .collect_vec();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let add_0 = Add::sequence_output(&q_y, &r);
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Add,
+                opcode: AtlasOpcode::Add,
                 ts1: v_qy,
                 ts2: v_r,
                 ts3: None,
                 td: v_0,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -280,19 +270,17 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
             advice_value: None,
         });
 
-        let _assert_eq = (0..num_outputs)
-            .map(|i| BeqInstruction::<WORD_SIZE>(add_0[i], x[i]).to_lookup_output())
-            .collect_vec();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let _assert_eq = Eq::sequence_output(&add_0, &x);
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualAssertEq,
+                opcode: AtlasOpcode::VirtualAssertEq,
                 ts1: v_0,
                 ts2: r_x,
                 ts3: None,
                 td: None,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -305,16 +293,16 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
             advice_value: None,
         });
 
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualMove,
+                opcode: AtlasOpcode::VirtualMove,
                 ts1: v_q,
                 ts2: None,
                 ts3: None,
-                td: cycle.instr.td,
+                td,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -336,37 +324,22 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for DivInstruction<WORD_
         virtual_trace
     }
 
-    fn sequence_output(x: Vec<u64>, y: Vec<u64>) -> Vec<u64> {
-        let num_outputs = x.len();
-        let mut output = vec![0; num_outputs];
-        for i in 0..num_outputs {
-            let x = x[i];
-            let y = y[i];
-            let x = x as i32;
-            let y = y as i32;
-            if y == 0 {
-                output[i] = (1 << WORD_SIZE) - 1;
-                continue;
-            }
-            let mut quotient = x / y;
-            let remainder = x % y;
-            if (remainder < 0 && y > 0) || (remainder > 0 && y < 0) {
-                quotient -= 1;
-            }
-            output[i] = quotient as u32 as u64
-        }
-        output
+    fn sequence_output(x: &[u64], y: &[u64]) -> Vec<u64> {
+        x.iter()
+            .zip(y.iter())
+            .map(|(&x, &y)| Self::exec(x, y))
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::jolt::executor::instructions::test::jolt_virtual_sequence_test;
+    use crate::instructions::test::jolt_virtual_sequence_test;
 
     use super::*;
 
     #[test]
-    fn div_virtual_sequence_32() {
-        jolt_virtual_sequence_test::<DivInstruction<32>>(ONNXOpcode::Div, 16);
+    fn virtual_sequence_32() {
+        jolt_virtual_sequence_test::<Div>(ONNXOpcode::Div, 16);
     }
 }

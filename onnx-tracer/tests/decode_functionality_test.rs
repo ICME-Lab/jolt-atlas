@@ -14,8 +14,8 @@ mod decode_tests {
         tensor::Tensor,
         trace_types::ONNXOpcode,
         utils::parsing::{
-            create_const_node, create_div_node, create_einsum_node, create_input_node,
-            create_polyop_node, create_relu_node, create_sigmoid_node,
+            create_const_div_node, create_const_node, create_einsum_node, create_input_node,
+            create_polyop_node, create_relu_node,
         },
     };
     use std::path::PathBuf;
@@ -65,7 +65,7 @@ mod decode_tests {
             assert!(instr.address > 0, "Address should be positive");
             // Basic opcode validation - should be one of the known types
             match instr.opcode {
-                ONNXOpcode::Input | ONNXOpcode::Add | ONNXOpcode::Relu | ONNXOpcode::MatMult => {}
+                ONNXOpcode::Input | ONNXOpcode::Add | ONNXOpcode::Relu => {}
                 _ => {} // Allow other opcodes
             }
         }
@@ -123,12 +123,12 @@ mod decode_tests {
     /// Test decode with division (RebaseScale expansion)
     #[test]
     fn test_decode_division_node() {
-        let div_node = create_div_node(2, 7, vec![(0, 0)], vec![2, 2], 1, 1);
+        let div_node = create_const_div_node(2, 7, vec![(0, 0)], vec![2, 2], 1, 1);
         let (idx, node_type) = (1_usize, NodeType::Node(div_node));
         let instr = decode_node((&idx, &node_type));
 
         assert_eq!(instr.address, 2);
-        assert_eq!(instr.opcode, ONNXOpcode::Div);
+        assert_eq!(instr.opcode, ONNXOpcode::DivI);
         assert_eq!(instr.td, Some(1));
         assert_eq!(instr.ts1, Some(0));
         assert!(instr.imm.is_some()); // Division should have immediate value (denominator)
@@ -246,11 +246,11 @@ mod decode_tests {
         // Create a chain: input -> relu -> sigmoid
         let input = create_input_node(7, vec![1, 4], 0, 1);
         let relu = create_relu_node(7, vec![(0, 0)], vec![1, 4], 1, 1);
-        let sigmoid = create_sigmoid_node(7, vec![(1, 0)], vec![1, 4], 2, 1);
+        let einsum = create_einsum_node("mk,nk->mn".to_string(), 7, vec![(1, 0)], vec![1, 4], 2, 1);
 
         model.insert_node(input);
         model.insert_node(relu);
-        model.insert_node(sigmoid);
+        model.insert_node(einsum);
 
         model.set_inputs(vec![0]);
         model.set_outputs(vec![(2, 0)]);

@@ -7,6 +7,7 @@
 use crate::jolt::{
     JoltProverPreprocessing,
     bytecode::CircuitFlags,
+    executor::instructions::LookupQuery,
     pcs::{OpeningId, SumcheckId},
     trace::JoltONNXCycle,
     witness::VirtualPolynomial,
@@ -17,10 +18,7 @@ use jolt_core::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::MultilinearPolynomial,
     },
-    zkvm::{
-        instruction::LookupQuery,
-        r1cs::ops::{LC, Term, Variable},
-    },
+    zkvm::r1cs::ops::{LC, Term, Variable},
 };
 use rayon::prelude::*;
 

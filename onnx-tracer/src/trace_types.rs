@@ -2,33 +2,33 @@
 //! Used to format the bytecode and define each instr flags and memory access patterns.
 //! Used by the runtime to generate an execution trace for ONNX runtime execution.
 
-use crate::tensor::Tensor;
+use crate::{tensor::Tensor, utils::normalize};
 use rand::{rngs::StdRng, RngCore};
 use serde::{Deserialize, Serialize};
 
 /// Represents a step in the execution trace, where an execution trace is a `Vec<ONNXCycle>`.
 /// Records what the VM did at a cycle of execution.
 /// Constructed at each step in the VM execution cycle, documenting instr, reads & state changes (writes).
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct ONNXCycle {
-    pub instr: ONNXInstr,
+// TODO(AntoineF4C5): Rename AtlasCycle, a cycle should be a single vm operation (hence on 1-element entries)
+pub struct Cycle<T: Default> {
+    pub instr: Instr<T>,
     pub memory_state: MemoryState,
     pub advice_value: Option<Tensor<i32>>,
 }
 
-impl ONNXCycle {
+impl<T: Default> Cycle<T> {
     pub fn no_op() -> Self {
-        ONNXCycle {
-            instr: ONNXInstr::no_op(),
+        Cycle {
+            instr: Instr::<T>::no_op(),
             memory_state: MemoryState::default(),
             advice_value: None,
         }
     }
 
-    pub fn random(opcode: ONNXOpcode, rng: &mut StdRng) -> Self {
-        ONNXCycle {
-            instr: ONNXInstr::dummy(opcode),
+    pub fn random(opcode: T, rng: &mut StdRng) -> Self {
+        Cycle {
+            instr: Instr::dummy(opcode),
             memory_state: MemoryState::random(rng),
             advice_value: Some(Tensor::from((0..1).map(|_| rng.next_u64() as u32 as i32))),
         }
@@ -93,11 +93,11 @@ impl MemoryState {
 ///
 /// The ONNX model is converted into a sequence of [`ONNXInstr`]s, forming the program code.
 /// During runtime, the program counter (PC) is used to fetch the next instruction from this read-only memory storing the program bytecode.
-pub struct ONNXInstr {
+pub struct Instr<T: Default> {
     /// The program counter (PC) address of this instruction in the bytecode.
     pub address: usize,
     /// The operation code (opcode) that defines the instruction's function.
-    pub opcode: ONNXOpcode,
+    pub opcode: T,
     /// The first input tensor operand, specified as the index of a node in the computation graph.
     /// This index (`node_idx`) identifies which node's output tensor will be used as input for this instruction.
     /// Since each node produces only one output tensor in this simplified ISA, the index is sufficient.
@@ -150,8 +150,7 @@ impl MemoryOp {
         }
     }
 }
-
-impl ONNXCycle {
+impl<T: Default> Cycle<T> {
     pub fn ts1_vals(&self) -> Option<Vec<u64>> {
         self.build_vals(self.memory_state.ts1_val.as_ref())
     }
@@ -213,28 +212,22 @@ impl ONNXCycle {
     }
 }
 
-// converts a i32 to a u64 preserving sign-bit
-// Used in the zkVM to convert raw trace values into the zkVM's 64 bit container type
-pub fn normalize(value: &i32) -> u64 {
-    *value as u32 as u64
-}
-
-impl ONNXInstr {
+impl<T: Default> Instr<T> {
     pub fn no_op() -> Self {
         Self::default()
     }
 
-    pub fn output_node(last_node: &ONNXInstr) -> Self {
-        ONNXInstr {
-            address: last_node.address + 1,
-            opcode: ONNXOpcode::Output,
-            ts1: last_node.td,
-            ..ONNXInstr::no_op()
-        }
-    }
+    // pub fn output_node(last_node: &AtlasInstr) -> Self {
+    //     AtlasInstr {
+    //         address: last_node.address + 1,
+    //         opcode: AtlasOpcode::Output,
+    //         ts1: last_node.td,
+    //         ..AtlasInstr::no_op()
+    //     }
+    // }
 
-    pub fn dummy(opcode: ONNXOpcode) -> Self {
-        ONNXInstr {
+    pub fn dummy(opcode: T) -> Self {
+        Instr {
             opcode,
             ..Self::no_op()
         }
@@ -258,47 +251,129 @@ pub enum ONNXOpcode {
     Noop,
     Constant,
     Input,
-    Output,
+    // Output,
     Add,
     Sub,
     Mul,
     Div,
-    Pow,
+    DivI,
     Relu,
     Rsqrt,
-    MatVec,
-    MatMult,
-    BatchedMatMult,
     Einsum(String),
     Sum(usize),
-    Gather,
-    Transpose,
-    Sqrt,
     Sra,
     /// Used for the ReduceMean operator, which is internally converted to a
     /// combination of ReduceSum and Div operations.
-    ReduceSum,
-    MeanOfSquares,
-    Sigmoid,
+    // MeanOfSquares,
+    // Sigmoid,
     Softmax,
     Gte,
     Eq,
     Reshape,
-    ArgMax,
-    ReduceMax,
+    Select,
+    Broadcast,
+    AddressedNoop,
+}
+
+#[derive(Clone, Hash, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
+/// Operation code uniquely identifying each VM instruction's function
+pub enum AtlasOpcode {
+    #[default]
+    Noop,
+    Constant,
+    Input,
+    // Output,
+    Add,
+    Sub,
+    Mul,
+    Relu,
+    Einsum(String),
+    Sum(usize),
+    Gte,
+    Eq,
+    Reshape,
     Select,
     Broadcast,
     AddressedNoop,
 
     // Virtual instructions
     VirtualAdvice,
-    VirtualAssertValidSignedRemainder,
-    VirtualAssertValidDiv0,
-    VirtualMove,
     VirtualAssertEq,
-    VirtualConst,
+    VirtualAssertValidDiv0,
+    VirtualAssertValidSignedRemainder,
+    VirtualMove,
     VirtualPow2,
     VirtualSaturatingSum,
-    VirtualSra,
     VirtualShiftRightBitmask,
+    VirtualSra,
+}
+
+// Aliases for structures holding information for instructions from ONNX
+pub type ONNXCycle = Cycle<ONNXOpcode>;
+pub type ONNXInstr = Instr<ONNXOpcode>;
+
+// Aliases for structures holding information for instructions in the Atlas VM
+pub type AtlasCycle = Cycle<AtlasOpcode>;
+pub type AtlasInstr = Instr<AtlasOpcode>;
+
+// Default mapping for ONNX opcodes that are directly supported by the zkVM
+impl TryFrom<ONNXOpcode> for AtlasOpcode {
+    type Error = &'static str;
+
+    fn try_from(value: ONNXOpcode) -> Result<Self, Self::Error> {
+        let atlas_opcode = match value {
+            ONNXOpcode::Noop => AtlasOpcode::Noop,
+            ONNXOpcode::Add => AtlasOpcode::Add,
+            ONNXOpcode::Broadcast => AtlasOpcode::Broadcast,
+            ONNXOpcode::Constant => AtlasOpcode::Constant,
+            ONNXOpcode::Eq => AtlasOpcode::Eq,
+            ONNXOpcode::Gte => AtlasOpcode::Gte,
+            ONNXOpcode::Input => AtlasOpcode::Input,
+            ONNXOpcode::Mul => AtlasOpcode::Mul,
+            ONNXOpcode::Relu => AtlasOpcode::Relu,
+            ONNXOpcode::Reshape => AtlasOpcode::Reshape,
+            ONNXOpcode::Sub => AtlasOpcode::Sub,
+            // Those are treated by specialized sum_check precompiles
+            ONNXOpcode::Einsum(subscripts) => AtlasOpcode::Einsum(subscripts),
+            ONNXOpcode::Sum(axis) => AtlasOpcode::Sum(axis),
+            // Those are treated with circuit flags
+            ONNXOpcode::Select => AtlasOpcode::Select,
+            _ => return Err("Opcode is not directly supported by the zkvm and should be virtualized with a sequence of vm-compatible opcodes.")
+        };
+        Ok(atlas_opcode)
+    }
+}
+
+// Default mapping for ONNX instructions that are directly supported by the zkVM
+impl TryFrom<Instr<ONNXOpcode>> for Instr<AtlasOpcode> {
+    type Error = &'static str;
+
+    fn try_from(value: Instr<ONNXOpcode>) -> Result<Self, Self::Error> {
+        let atlas_opcode: AtlasOpcode = value.opcode.try_into()?;
+        Ok(Instr {
+            opcode: atlas_opcode,
+            address: value.address,
+            ts1: value.ts1,
+            ts2: value.ts2,
+            ts3: value.ts3,
+            td: value.td,
+            imm: value.imm,
+            virtual_sequence_remaining: value.virtual_sequence_remaining,
+            output_dims: value.output_dims,
+        })
+    }
+}
+
+// Default mapping for ONNX cycles that are directly supported by the zkVM
+impl TryFrom<Cycle<ONNXOpcode>> for Cycle<AtlasOpcode> {
+    type Error = &'static str;
+
+    fn try_from(value: Cycle<ONNXOpcode>) -> Result<Self, Self::Error> {
+        let atlas_instr: Instr<AtlasOpcode> = value.instr.try_into()?;
+        Ok(Cycle {
+            instr: atlas_instr,
+            memory_state: value.memory_state,
+            advice_value: None, // value.advice_value,
+        })
+    }
 }

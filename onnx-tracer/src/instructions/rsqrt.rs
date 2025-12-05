@@ -1,23 +1,65 @@
-use itertools::Itertools;
-use jolt_core::zkvm::instruction::LookupQuery;
-use onnx_tracer::{
-    constants::virtual_tensor_index,
-    tensor::Tensor,
-    trace_types::{MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode},
-};
-
 use crate::{
-    jolt::executor::instructions::{
-        VirtualInstructionSequence, add::AddInstruction, beq::BeqInstruction, gte::GteInstruction,
-        mul::MulInstruction, sra::SraInstruction, sub::SubInstruction,
+    instructions::{
+        add::Add, declare_onnx_instr, eq::Eq, gte::Gte, mul::Mul, sra::Sra, sub::Sub, ElementWise,
+        VirtualInstructionSequence, WORD_SIZE,
     },
-    utils::{VirtualSequenceCounter, u64_vec_to_i32_iter},
+    tensor::Tensor,
+    trace_types::{
+        AtlasCycle, AtlasInstr, AtlasOpcode, MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode,
+    },
+    utils::{u64_vec_to_i32_iter, VirtualSequenceCounter, VirtualSlotCounter},
 };
 
 // Scale factor
-const SF: u64 = 128;
-const SF_LOG: u64 = 7;
-const SRA_VIRTUAL_REGISTERS: usize = 1;
+const SF: i32 = 128;
+const SF_LOG: i32 = 7;
+
+// Expandable
+declare_onnx_instr!(name = Rsqrt);
+
+impl ElementWise for Rsqrt {
+    fn exec(x: u64, _y: u64) -> u64 {
+        match WORD_SIZE {
+            32 => {
+                let sqrt_2 = (2f32.sqrt() * SF as f32).round() as i32;
+
+                let x = if x != 0 { x } else { 1 };
+                let d = {
+                    let exp = 3 * SF_LOG - x.ilog2() as i32;
+                    if exp < 0 {
+                        0
+                    } else {
+                        2_i32.pow(exp as u32 / 2)
+                    }
+                };
+                let xd = rescale_down(x as i32 * d);
+                let xd_sq = rescale_down(d * xd);
+                let xd_sq_minus1 = xd_sq - SF;
+                let xd_cub_minusd = rescale_down(d * xd_sq_minus1);
+                let a = if xd_sq_minus1 >= 0 {
+                    sqrt_2 / 2 - SF
+                } else {
+                    2 * SF - 2 * sqrt_2
+                };
+                let axd_cub_minusd = rescale_down(a * xd_cub_minusd);
+                (d + axd_cub_minusd) as u32 as u64
+
+                // TODO(AntoineF4C5): apply one or two rounds of Newton-Raphson method to get better results
+                // Newton's method
+                // let approximation = (approximation
+                //     * (3 * sf - ((approximation * q_x) >> sf_log * approximation) >> sf_log))
+                //     / (2 * sf);
+
+                // let approximation = ((approximation
+                //     * (3 * sf - ((approximation * q_x) >> sf_log * approximation) >> sf_log))
+                //     / (2 * sf)) as u32 as u64;
+
+                // approximation
+            }
+            _ => panic!("Unsupported WORD_SIZE: {WORD_SIZE}"),
+        }
+    }
+}
 
 /// Quantized Rsqrt producing `Q / sqrt(x)`
 ///
@@ -41,13 +83,13 @@ const SRA_VIRTUAL_REGISTERS: usize = 1;
 ///
 /// | Step  | Operation             | Description                                           | Expression                    |
 /// |-------|-----------------------|-------------------------------------------------------|-------------------------------|
-/// | 1     | `VirtualConst(sf)`    | Initialize scale_factor tensor                        | `sf`                          |
-/// | 2     | `VirtualConst(1)`     | Initialize ulp tensor                                 | `1`                           |
-/// | 3     | `VirtualConst(sf_log)`| Initialize scale_factor logarithm tensor              | `sf_log`                      |
+/// | 1     | `Constant(sf)`        | Initialize scale_factor tensor                        | `sf`                          |
+/// | 2     | `Constant(1)`         | Initialize ulp tensor                                 | `1`                           |
+/// | 3     | `Constant(sf_log)`    | Initialize scale_factor logarithm tensor              | `sf_log`                      |
 /// | 4     | `Eq`                  | Returns `x == 0`                                      | `x == 0`                      |
 /// | 5     | `Select`              | Compute `x = select(x, x, ulp)`                       | `max(x, 1)`                   |
-/// | 6     | `VirtualConst(a_lt_0)`| Initialize a_lt_0 tensor, if `xd^2-1 < 0`             | `2 - 2 * sqrt(2)`             |
-/// | 7     | `VirtualConst(a_gt_0)`| Initialize a_gt_0 tensor, if `xd^2-1 >= 0`            | `sqrt(2)/2 - 1`               |
+/// | 6     | `Constant(a_lt_0)`    | Initialize a_lt_0 tensor, if `xd^2-1 < 0`             | `2 - 2 * sqrt(2)`             |
+/// | 7     | `Constant(a_gt_0)`    | Initialize a_gt_0 tensor, if `xd^2-1 >= 0`            | `sqrt(2)/2 - 1`               |
 /// | 8     | `VirtualAdvice(d)`    | Initialize d tensor                                   | `2^((3log(sf) - log(x))/2)`   |
 /// | 9     | `Mul`                 | Compute `xd_ns = x * d`                               | `sf * xd`                     |
 /// | 10    | `Sra`                 | Compute `xd = xd_ns >> sf_log`                        | `xd`                          |
@@ -68,76 +110,66 @@ const SRA_VIRTUAL_REGISTERS: usize = 1;
 /// ### Notes
 /// - x is clamped to a minimal value of 1, since we can't divide by 0.
 /// - Designed for quantized circuits or proof backends where fractional values are approximated in integer space.
-pub struct RsqrtInstruction<const WORD_SIZE: usize>;
-impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WORD_SIZE> {
-    const SEQUENCE_LENGTH: usize = 17 + 4 * SraInstruction::<WORD_SIZE>::SEQUENCE_LENGTH;
+impl VirtualInstructionSequence for Rsqrt {
+    const SEQUENCE_LENGTH: usize = 17 + 4 * Sra::SEQUENCE_LENGTH;
 
-    fn virtual_trace(cycle: ONNXCycle, K: usize) -> Vec<ONNXCycle> {
+    fn virtual_trace(cycle: ONNXCycle, virtual_slot: &mut VirtualSlotCounter) -> Vec<AtlasCycle> {
         assert_eq!(cycle.instr.opcode, ONNXOpcode::Rsqrt);
         let num_outputs = cycle.instr.num_output_elements();
 
         // If RSQRT is part of a longer virtual sequence, recover the counter to continue decrementing it
-        let virtual_sequence_remaining =
-            if let Some(remaining) = cycle.instr.virtual_sequence_remaining {
-                assert!(
-                    remaining >= Self::SEQUENCE_LENGTH,
-                    "Not enough remaining virtual sequence steps"
-                );
-                remaining
-            } else {
-                Self::SEQUENCE_LENGTH
-            };
-        let mut vseq_counter = VirtualSequenceCounter::new(virtual_sequence_remaining);
+        let remaining = cycle
+            .instr
+            .virtual_sequence_remaining
+            .unwrap_or(Self::SEQUENCE_LENGTH);
+        assert!(
+            remaining >= Self::SEQUENCE_LENGTH,
+            "Not enough remaining virtual sequence steps"
+        );
+        let mut counter = VirtualSequenceCounter::new(remaining);
 
         // RSQRT source registers
         let r_x = cycle.instr.ts1;
+        let td = cycle.instr.td;
 
-        // TODO(AntoineF4C5): set to 0 (requires to change `virtual_tensor_index`: generates bug on model composed of just rsqrt)
-        let mut index = 1;
-        // i++
-        let mut ixx = || {
-            let tmp = index;
-            index += 1;
-            tmp
-        };
         // Virtual registers used in sequence
-        let v_one = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_ulp = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_sf_log = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_xeq0 = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_x = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_a_lt_0 = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_a_gt_0 = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_d = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_xd_ns = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_xd = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_xd_sq_ns = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_xd_sq = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_xd_sq_minus1 = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_gt0 = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_a = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_xd_cub_minusd_ns = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_xd_cub_minusd = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_axd_cub_minusd_ns = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_axd_cub_minusd = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
-        let v_approx = Some(virtual_tensor_index(ixx(), K, cycle.instr.td.unwrap()));
+        let v_one = Some(virtual_slot.inc());
+        let v_ulp = Some(virtual_slot.inc());
+        let v_sf_log = Some(virtual_slot.inc());
+        let v_xeq0 = Some(virtual_slot.inc());
+        let v_x = Some(virtual_slot.inc());
+        let v_a_lt_0 = Some(virtual_slot.inc());
+        let v_a_gt_0 = Some(virtual_slot.inc());
+        let v_d = Some(virtual_slot.inc());
+        let v_xd_ns = Some(virtual_slot.inc());
+        let v_xd = Some(virtual_slot.inc());
+        let v_xd_sq_ns = Some(virtual_slot.inc());
+        let v_xd_sq = Some(virtual_slot.inc());
+        let v_xd_sq_minus1 = Some(virtual_slot.inc());
+        let v_gt0 = Some(virtual_slot.inc());
+        let v_a = Some(virtual_slot.inc());
+        let v_xd_cub_minusd_ns = Some(virtual_slot.inc());
+        let v_xd_cub_minusd = Some(virtual_slot.inc());
+        let v_axd_cub_minusd_ns = Some(virtual_slot.inc());
+        let v_axd_cub_minusd = Some(virtual_slot.inc());
+        let v_approx = Some(virtual_slot.inc());
 
         // RSQRT operand
         let x = cycle.ts1_vals().unwrap_or(vec![0; num_outputs]);
         let mut virtual_trace = vec![];
 
         // const one (scaled)
-        let one = vec![SF; num_outputs];
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let one = vec![SF as u64; num_outputs];
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualConst,
+                opcode: AtlasOpcode::Constant,
                 ts1: None,
                 ts2: None,
                 ts3: None,
                 td: v_one,
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&one))),
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -152,16 +184,16 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
 
         // Lowest precision unit, 1/sf (quantized to 1 in zkvm)
         let ulp = vec![1; num_outputs];
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualConst,
+                opcode: AtlasOpcode::Constant,
                 ts1: None,
                 ts2: None,
                 ts3: None,
                 td: v_ulp,
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&ulp))),
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -175,17 +207,17 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         });
 
         // scale factor logarithm, used to rescale down
-        let sf_log = vec![SF_LOG; num_outputs];
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let sf_log = vec![SF_LOG as u64; num_outputs];
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualConst,
+                opcode: AtlasOpcode::Constant,
                 ts1: None,
                 ts2: None,
                 ts3: None,
                 td: v_sf_log,
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&sf_log))),
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -198,19 +230,17 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             advice_value: None,
         });
 
-        let xeq0 = (0..num_outputs)
-            .map(|i| BeqInstruction::<WORD_SIZE>(x[i], 0).to_lookup_output())
-            .collect_vec();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let xeq0 = Eq::sequence_output(&x, &vec![0; num_outputs]);
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Eq,
+                opcode: AtlasOpcode::Eq,
                 ts1: r_x,
                 ts2: None,
                 ts3: None,
                 td: v_xeq0,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -232,16 +262,16 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             .zip(&x)
             .map(|((&cond, &x), &nx)| if cond != 0 { x } else { nx })
             .collect();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Select,
+                opcode: AtlasOpcode::Select,
                 ts1: v_xeq0,
                 ts2: v_ulp,
                 ts3: r_x,
                 td: v_x,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -256,19 +286,19 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         let x = clamped_x;
 
         // Constant 2 - 2 * sqrt(2), factor conditionally used to calculate approximation
-        let sqrt_2 = (2f32.sqrt() * SF as f32).round() as u64;
-        let a_lt_0 = (2 * SF as i32 - 2 * sqrt_2 as i32) as u32 as u64;
+        let sqrt_2 = (2f32.sqrt() * SF as f32).round() as u32 as i32;
+        let a_lt_0 = (2 * SF - 2 * sqrt_2) as u32 as u64;
         let a_lt_0 = vec![a_lt_0; num_outputs];
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualConst,
+                opcode: AtlasOpcode::Constant,
                 ts1: None,
                 ts2: None,
                 ts3: None,
                 td: v_a_lt_0,
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&a_lt_0))),
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -282,18 +312,18 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         });
 
         // Constant sqrt(2)/2-1, factor conditionally used to calculate approximation
-        let a_gt_0 = (sqrt_2 as i32 / 2 - SF as i32) as u32 as u64;
+        let a_gt_0 = (sqrt_2 / 2 - SF) as u32 as u64;
         let a_gt_0 = vec![a_gt_0; num_outputs];
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualConst,
+                opcode: AtlasOpcode::Constant,
                 ts1: None,
                 ts2: None,
                 ts3: None,
                 td: v_a_gt_0,
                 imm: Some(Tensor::from(u64_vec_to_i32_iter(&a_gt_0))),
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -308,26 +338,26 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
 
         // TODO(AntoineF4C5): Use log opcode
         // First approximation: d = log(1/sqrt(x)) = -log(x)/2
-        let d = (0..num_outputs)
+        let d: Vec<u64> = (0..num_outputs)
             .map(|i| {
-                let exp = 3 * SF_LOG as i32 - x[i].ilog2() as i32;
+                let exp = 3 * SF_LOG - x[i].ilog2() as i32;
                 if exp < 0 {
                     0
                 } else {
                     2_u64.pow(exp as u32 / 2)
                 }
             })
-            .collect_vec();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+            .collect();
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualAdvice,
+                opcode: AtlasOpcode::VirtualAdvice,
                 ts1: None,
                 ts2: None,
                 ts3: None,
                 td: v_d,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -341,19 +371,17 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         });
 
         // d*x
-        let xd_ns = (0..num_outputs)
-            .map(|i| MulInstruction::<WORD_SIZE>(x[i], d[i]).to_lookup_output())
-            .collect_vec();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let xd_ns = Mul::sequence_output(&x, &d);
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Mul,
+                opcode: AtlasOpcode::Mul,
                 ts1: v_x,
                 ts2: v_d,
                 ts3: None,
                 td: v_xd_ns,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -367,9 +395,8 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         });
 
         // Rescale
-        let xd =
-            SraInstruction::<WORD_SIZE>::sequence_output(xd_ns.clone(), vec![SF_LOG; num_outputs]);
-        virtual_trace.extend(SraInstruction::<WORD_SIZE>::virtual_trace(
+        let xd = Sra::sequence_output(&xd_ns, &vec![SF_LOG as u64; num_outputs]);
+        virtual_trace.extend(Sra::virtual_trace(
             ONNXCycle {
                 instr: ONNXInstr {
                     address: cycle.instr.address,
@@ -379,7 +406,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                     ts3: None,
                     td: v_xd,
                     imm: None,
-                    virtual_sequence_remaining: Some(vseq_counter.get()),
+                    virtual_sequence_remaining: Some(counter.get()),
                     output_dims: cycle.instr.output_dims.clone(),
                 },
                 memory_state: MemoryState {
@@ -391,25 +418,22 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 },
                 advice_value: None,
             },
-            K + index,
+            virtual_slot,
         ));
-        index += SRA_VIRTUAL_REGISTERS;
-        vseq_counter.subtract(SraInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
+        counter.subtract(Sra::SEQUENCE_LENGTH);
 
         // xd^2
-        let xd_sq_ns = (0..num_outputs)
-            .map(|i| MulInstruction::<WORD_SIZE>(d[i], xd[i]).to_lookup_output())
-            .collect_vec();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let xd_sq_ns = Mul::sequence_output(&d, &xd);
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Mul,
+                opcode: AtlasOpcode::Mul,
                 ts1: v_d,
                 ts2: v_xd,
                 ts3: None,
                 td: v_xd_sq_ns,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -423,11 +447,8 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         });
 
         // Rescale
-        let xd_sq = SraInstruction::<WORD_SIZE>::sequence_output(
-            xd_sq_ns.clone(),
-            vec![SF_LOG; num_outputs],
-        );
-        virtual_trace.extend(SraInstruction::<WORD_SIZE>::virtual_trace(
+        let xd_sq = Sra::sequence_output(&xd_sq_ns, &vec![SF_LOG as u64; num_outputs]);
+        virtual_trace.extend(Sra::virtual_trace(
             ONNXCycle {
                 instr: ONNXInstr {
                     address: cycle.instr.address,
@@ -437,7 +458,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                     ts3: None,
                     td: v_xd_sq,
                     imm: None,
-                    virtual_sequence_remaining: Some(vseq_counter.get()),
+                    virtual_sequence_remaining: Some(counter.get()),
                     output_dims: cycle.instr.output_dims.clone(),
                 },
                 memory_state: MemoryState {
@@ -449,25 +470,22 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 },
                 advice_value: None,
             },
-            K + index,
+            virtual_slot,
         ));
-        index += SRA_VIRTUAL_REGISTERS;
-        vseq_counter.subtract(SraInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
+        counter.subtract(Sra::SEQUENCE_LENGTH);
 
         // xd^2-1
-        let xd_sq_minus1 = (0..num_outputs)
-            .map(|i| SubInstruction::<WORD_SIZE>(xd_sq[i], one[i]).to_lookup_output())
-            .collect_vec();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let xd_sq_minus1 = Sub::sequence_output(&xd_sq, &one);
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Sub,
+                opcode: AtlasOpcode::Sub,
                 ts1: v_xd_sq,
                 ts2: v_one,
                 ts3: None,
                 td: v_xd_sq_minus1,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -481,19 +499,17 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         });
 
         // xd^2-1 >= 0
-        let gt_0: Vec<u64> = (0..num_outputs)
-            .map(|i| GteInstruction::<WORD_SIZE>(xd_sq_minus1[i], 0).to_lookup_output())
-            .collect_vec();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let gt_0: Vec<u64> = Gte::sequence_output(&xd_sq_minus1, &vec![0; num_outputs]);
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Gte,
+                opcode: AtlasOpcode::Gte,
                 ts1: v_xd_sq_minus1,
                 ts2: None,
                 ts3: None,
                 td: v_gt0,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -513,20 +529,24 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
             .zip(a_lt_0.iter())
             .map(
                 |((&gt0, &a_gt0), &a_lt0)| {
-                    if gt0 != 0 { a_gt0 } else { a_lt0 }
+                    if gt0 != 0 {
+                        a_gt0
+                    } else {
+                        a_lt0
+                    }
                 },
             )
-            .collect_vec();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+            .collect();
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Select,
+                opcode: AtlasOpcode::Select,
                 ts1: v_gt0,
                 ts2: v_a_gt_0,
                 ts3: v_a_lt_0,
                 td: v_a,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -540,19 +560,17 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         });
 
         // d(xd^2-1)
-        let xd_cub_minusd_ns = (0..num_outputs)
-            .map(|i| MulInstruction::<WORD_SIZE>(xd_sq_minus1[i], d[i]).to_lookup_output())
-            .collect_vec();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let xd_cub_minusd_ns = Mul::sequence_output(&xd_sq_minus1, &d);
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Mul,
+                opcode: AtlasOpcode::Mul,
                 ts1: v_xd_sq_minus1,
                 ts2: v_d,
                 ts3: None,
                 td: v_xd_cub_minusd_ns,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -566,11 +584,9 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         });
 
         // Rescale
-        let xd_cub_minusd = SraInstruction::<WORD_SIZE>::sequence_output(
-            xd_cub_minusd_ns.clone(),
-            vec![SF_LOG; num_outputs],
-        );
-        virtual_trace.extend(SraInstruction::<WORD_SIZE>::virtual_trace(
+        let xd_cub_minusd =
+            Sra::sequence_output(&xd_cub_minusd_ns, &vec![SF_LOG as u64; num_outputs]);
+        virtual_trace.extend(Sra::virtual_trace(
             ONNXCycle {
                 instr: ONNXInstr {
                     address: cycle.instr.address,
@@ -580,7 +596,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                     ts3: None,
                     td: v_xd_cub_minusd,
                     imm: None,
-                    virtual_sequence_remaining: Some(vseq_counter.get()),
+                    virtual_sequence_remaining: Some(counter.get()),
                     output_dims: cycle.instr.output_dims.clone(),
                 },
                 memory_state: MemoryState {
@@ -592,25 +608,22 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 },
                 advice_value: None,
             },
-            K + index,
+            virtual_slot,
         ));
-        index += SRA_VIRTUAL_REGISTERS;
-        vseq_counter.subtract(SraInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
+        counter.subtract(Sra::SEQUENCE_LENGTH);
 
         // ad(xd^2-1)
-        let axd_cub_minusd_ns = (0..num_outputs)
-            .map(|i| MulInstruction::<WORD_SIZE>(xd_cub_minusd[i], a[i]).to_lookup_output())
-            .collect_vec();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let axd_cub_minusd_ns = Mul::sequence_output(&xd_cub_minusd, &a);
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Mul,
+                opcode: AtlasOpcode::Mul,
                 ts1: v_xd_cub_minusd,
                 ts2: v_a,
                 ts3: None,
                 td: v_axd_cub_minusd_ns,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -624,11 +637,9 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         });
 
         // Rescale
-        let axd_cub_minusd = SraInstruction::<WORD_SIZE>::sequence_output(
-            axd_cub_minusd_ns.clone(),
-            vec![SF_LOG; num_outputs],
-        );
-        virtual_trace.extend(SraInstruction::<WORD_SIZE>::virtual_trace(
+        let axd_cub_minusd =
+            Sra::sequence_output(&axd_cub_minusd_ns, &vec![SF_LOG as u64; num_outputs]);
+        virtual_trace.extend(Sra::virtual_trace(
             ONNXCycle {
                 instr: ONNXInstr {
                     address: cycle.instr.address,
@@ -638,7 +649,7 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                     ts3: None,
                     td: v_axd_cub_minusd,
                     imm: None,
-                    virtual_sequence_remaining: Some(vseq_counter.get()),
+                    virtual_sequence_remaining: Some(counter.get()),
                     output_dims: cycle.instr.output_dims.clone(),
                 },
                 memory_state: MemoryState {
@@ -650,24 +661,22 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
                 },
                 advice_value: None,
             },
-            K + index,
+            virtual_slot,
         ));
-        vseq_counter.subtract(SraInstruction::<WORD_SIZE>::SEQUENCE_LENGTH);
+        counter.subtract(Sra::SEQUENCE_LENGTH);
 
         // d + ad(xd^2-1)
-        let approx: Vec<u64> = (0..num_outputs)
-            .map(|i| AddInstruction::<WORD_SIZE>(d[i], axd_cub_minusd[i]).to_lookup_output())
-            .collect_vec();
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        let approx: Vec<u64> = Add::sequence_output(&d, &axd_cub_minusd);
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::Add,
+                opcode: AtlasOpcode::Add,
                 ts1: v_d,
                 ts2: v_axd_cub_minusd,
                 ts3: None,
                 td: v_approx,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -681,16 +690,16 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         });
 
         // Write to td
-        virtual_trace.push(ONNXCycle {
-            instr: ONNXInstr {
+        virtual_trace.push(AtlasCycle {
+            instr: AtlasInstr {
                 address: cycle.instr.address,
-                opcode: ONNXOpcode::VirtualMove,
+                opcode: AtlasOpcode::VirtualMove,
                 ts1: v_approx,
                 ts2: None,
                 ts3: None,
-                td: cycle.instr.td,
+                td,
                 imm: None,
-                virtual_sequence_remaining: Some(vseq_counter.dec()),
+                virtual_sequence_remaining: Some(counter.dec()),
                 output_dims: cycle.instr.output_dims.clone(),
             },
             memory_state: MemoryState {
@@ -712,66 +721,26 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for RsqrtInstruction<WOR
         virtual_trace
     }
 
-    fn sequence_output(x: Vec<u64>, _: Vec<u64>) -> Vec<u64> {
-        let sf_log = SF.ilog2() as i32;
-        let sf = SF as i32;
-        // NOTE: Rescale uses SRA
-        let rescale_down = |q: i32| q >> sf_log;
-
-        let num_outputs = x.len();
-        let mut output = vec![0; num_outputs];
-        for i in 0..num_outputs {
-            let sqrt_2 = (2f32.sqrt() * SF as f32).round() as i32;
-
-            let x = if x[i] != 0 { x[i] } else { 1 };
-            let d = {
-                let exp = 3 * sf_log - x.ilog2() as i32;
-                if exp < 0 {
-                    0
-                } else {
-                    2_i32.pow(exp as u32 / 2)
-                }
-            };
-            let xd = rescale_down(x as u32 as i32 * d);
-            let xd_sq = rescale_down(d * xd);
-            let xd_sq_minus1 = xd_sq - sf;
-            let xd_cub_minusd = rescale_down(d * xd_sq_minus1);
-            let a = if xd_sq_minus1 >= 0 {
-                sqrt_2 / 2 - sf
-            } else {
-                2 * sf - 2 * sqrt_2
-            };
-            let axd_cub_minusd = rescale_down(a * xd_cub_minusd);
-            let approximation = d + axd_cub_minusd;
-
-            // TODO(AntoineF4C5): apply one or two rounds of Newton-Raphson method to get better results
-            // Newton's method
-            // let approximation = (approximation
-            //     * (3 * sf - ((approximation * q_x) >> sf_log * approximation) >> sf_log))
-            //     / (2 * sf);
-
-            // output[i] = ((approximation
-            //     * (3 * sf - ((approximation * q_x) >> sf_log * approximation) >> sf_log))
-            //     / (2 * sf)) as u32 as u64;
-            // approximation
-
-            output[i] = approximation as u32 as u64;
-        }
-        output
+    fn sequence_output(x: &[u64], _y: &[u64]) -> Vec<u64> {
+        x.iter().map(|&x| Self::exec(x, 0)).collect()
     }
+}
+
+fn rescale_down(q: i32) -> i32 {
+    q >> SF_LOG
 }
 
 #[cfg(test)]
 mod test {
-    use crate::jolt::executor::instructions::test::jolt_virtual_sequence_test;
+    use crate::instructions::test::jolt_virtual_sequence_test;
 
     use super::*;
-    use num_traits::Pow;
+    use num::pow::Pow;
     use rand::prelude::*;
 
     #[test]
-    fn rsqrt_virtual_sequence_32() {
-        jolt_virtual_sequence_test::<RsqrtInstruction<32>>(ONNXOpcode::Rsqrt, 1);
+    fn virtual_sequence_32() {
+        jolt_virtual_sequence_test::<Rsqrt>(ONNXOpcode::Rsqrt, 1);
     }
 
     #[test]
@@ -790,7 +759,7 @@ mod test {
 
             // Input to the zkvm, this is quantized with a precision of 1/sf.
             let x = (input * sf) as i32 as u32 as u64; // cast to vm compatible type
-            let result = RsqrtInstruction::<32>::sequence_output(vec![x], vec![])[0];
+            let result = Rsqrt::sequence_output(&[x], &[])[0];
             let dequantized = result as f32 / sf;
             let error = (dequantized - expected).abs() / expected;
             // If result == 0, we consider the offset between quantized expected result and 0.

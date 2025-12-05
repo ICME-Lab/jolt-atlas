@@ -1,19 +1,17 @@
-use crate::jolt::{executor::instructions::InstructionLookup, lookup_table::LookupTables};
-use jolt_core::zkvm::{
-    instruction::LookupQuery, lookup_table::signed_greater_than_equal::SignedGreaterThanEqualTable,
+use crate::jolt::{
+    executor::instructions::{InstructionLookup, LookupQuery},
+    lookup_table::LookupTables,
 };
-use serde::{Deserialize, Serialize};
+use jolt_core::zkvm::lookup_table::signed_greater_than_equal::SignedGreaterThanEqualTable;
+use onnx_tracer::instructions::gte::Gte;
 
-#[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
-pub struct GteInstruction<const WORD_SIZE: usize>(pub u64, pub u64);
-
-impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for GteInstruction<WORD_SIZE> {
+impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for Gte {
     fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
         Some(SignedGreaterThanEqualTable.into())
     }
 }
 
-impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for GteInstruction<WORD_SIZE> {
+impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for Gte {
     fn to_instruction_inputs(&self) -> (u64, i64) {
         match WORD_SIZE {
             #[cfg(test)]
@@ -27,5 +25,16 @@ impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for GteInstruction<WORD_SIZE
     fn to_lookup_output(&self) -> u64 {
         let (x, y) = LookupQuery::<WORD_SIZE>::to_instruction_inputs(self);
         (x as u32 as i32 >= y as u64 as u32 as i32).into()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::jolt::executor::instructions::test::materialize_entry_test;
+    use onnx_tracer::trace_types::AtlasOpcode;
+
+    #[test]
+    fn materialize_entry() {
+        materialize_entry_test(AtlasOpcode::Gte);
     }
 }

@@ -1,20 +1,16 @@
 use crate::jolt::{
-    executor::instructions::InstructionLookup,
+    executor::instructions::{InstructionLookup, LookupQuery},
     lookup_table::{LookupTables, Pow2Table},
 };
-use jolt_core::zkvm::instruction::LookupQuery;
-use serde::{Deserialize, Serialize};
+use onnx_tracer::instructions::virtuals::VirtualPow2;
 
-#[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
-pub struct Pow2Instruction<const WORD_SIZE: usize>(pub u64);
-
-impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for Pow2Instruction<WORD_SIZE> {
+impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for VirtualPow2 {
     fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
         Some(Pow2Table.into())
     }
 }
 
-impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for Pow2Instruction<WORD_SIZE> {
+impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for VirtualPow2 {
     fn to_lookup_operands(&self) -> (u64, u64) {
         let (x, y) = LookupQuery::<WORD_SIZE>::to_instruction_inputs(self);
         (0, x + y as u64)
@@ -49,10 +45,10 @@ impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for Pow2Instruction<WORD_SIZ
 #[cfg(test)]
 mod test {
     use crate::jolt::executor::instructions::test::materialize_entry_test;
-    use onnx_tracer::trace_types::ONNXOpcode;
+    use onnx_tracer::trace_types::AtlasOpcode;
 
     #[test]
     fn materialize_entry() {
-        materialize_entry_test(ONNXOpcode::VirtualPow2);
+        materialize_entry_test(AtlasOpcode::VirtualPow2);
     }
 }

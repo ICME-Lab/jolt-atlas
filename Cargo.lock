@@ -1960,6 +1960,7 @@ name = "onnx-tracer"
 version = "0.0.0"
 dependencies = [
  "ark-serialize",
+ "ark-std",
  "bincode",
  "chrono",
  "clap",

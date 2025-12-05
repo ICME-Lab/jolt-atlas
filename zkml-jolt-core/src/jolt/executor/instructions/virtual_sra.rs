@@ -1,20 +1,17 @@
 use crate::jolt::{
-    executor::instructions::InstructionLookup,
+    executor::instructions::{InstructionLookup, LookupQuery},
     lookup_table::{LookupTables, VirtualSRATable},
 };
-use jolt_core::{utils::lookup_bits::LookupBits, zkvm::instruction::LookupQuery};
-use serde::{Deserialize, Serialize};
+use jolt_core::utils::lookup_bits::LookupBits;
+use onnx_tracer::instructions::virtuals::VirtualSra;
 
-#[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
-pub struct VirtualSraInstruction<const WORD_SIZE: usize>(pub u64, pub u64);
-
-impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for VirtualSraInstruction<WORD_SIZE> {
+impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for VirtualSra {
     fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
         Some(VirtualSRATable.into())
     }
 }
 
-impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for VirtualSraInstruction<WORD_SIZE> {
+impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for VirtualSra {
     fn to_instruction_inputs(&self) -> (u64, i64) {
         match WORD_SIZE {
             #[cfg(test)]
@@ -49,10 +46,10 @@ impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for VirtualSraInstruction<WO
 #[cfg(test)]
 mod test {
     use crate::jolt::executor::instructions::test::materialize_entry_test;
-    use onnx_tracer::trace_types::ONNXOpcode;
+    use onnx_tracer::trace_types::AtlasOpcode;
 
     #[test]
     fn materialize_entry() {
-        materialize_entry_test(ONNXOpcode::VirtualSra);
+        materialize_entry_test(AtlasOpcode::VirtualSra);
     }
 }

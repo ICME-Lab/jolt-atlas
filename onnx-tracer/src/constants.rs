@@ -13,11 +13,6 @@ pub const TEST_TENSOR_REGISTER_COUNT: u64 = 32;
 pub const VIRTUAL_TENSOR_REGISTER_COUNT: u64 = 32; //  see Section 6.1 of Jolt paper
 pub const TENSOR_REGISTER_COUNT: u64 = TEST_TENSOR_REGISTER_COUNT + VIRTUAL_TENSOR_REGISTER_COUNT;
 
-/// Computes a unique index for a virtual tensor given its base index, k (size of memory) and td the non-virtual td address,
-pub const fn virtual_tensor_index(index: usize, k: usize, td: usize) -> usize {
-    index + k * td
-}
-
 /// 3 registers (td, ts1, ts2)
 pub const MEMORY_OPS_PER_INSTRUCTION: usize = 3;
 

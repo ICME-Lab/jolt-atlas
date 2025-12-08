@@ -20,6 +20,8 @@ impl Softmax {
     }
 }
 
+const SF: u64 = 128;
+
 // TODO: fix usage of saturating add/mul/div, which doesn't fit implementation for Add, Mul, Div instructions.
 // OR: Implement SaturatingAdd/Mul/Div instructions.
 
@@ -29,9 +31,7 @@ impl VirtualInstructionSequence for Softmax {
     const SEQUENCE_LENGTH: usize = 12 + 2 * Div::SEQUENCE_LENGTH;
 
     fn virtual_trace(cycle: ONNXCycle, virtual_slot: &mut VirtualSlotCounter) -> Vec<AtlasCycle> {
-        const Q: u64 = 128;
-
-        assert_eq!(cycle.instr.opcode, ONNXOpcode::Softmax);
+        debug_assert_eq!(cycle.instr.opcode, ONNXOpcode::Softmax);
 
         let num_outputs = cycle.instr.num_output_elements();
         if num_outputs == 0 {
@@ -212,7 +212,7 @@ impl VirtualInstructionSequence for Softmax {
         });
 
         // (6) Q constant
-        let q_vals = vec![Q; num_outputs];
+        let q_vals = vec![SF; num_outputs];
         let q_tensor = Tensor::from(u64_vec_to_i32_iter(&q_vals));
         vt.push(AtlasCycle {
             instr: AtlasInstr {
@@ -239,7 +239,7 @@ impl VirtualInstructionSequence for Softmax {
         // (7) d_q_over_c = Q / c
         let d_q_over_c_vals: Vec<u64> = c_vals
             .iter()
-            .map(|&c| if c == 0 { 0 } else { Q.saturating_div(c) })
+            .map(|&c| if c == 0 { 0 } else { SF.saturating_div(c) })
             .collect();
         // let d_q_over_c_vals = Div::sequence_output(&q_vals, &c_vals);
         let d_q_over_c_tensor = Tensor::from(u64_vec_to_i32_iter(&d_q_over_c_vals));
@@ -270,7 +270,7 @@ impl VirtualInstructionSequence for Softmax {
         counter.subtract(Div::SEQUENCE_LENGTH);
 
         // (8) d_q_mul_c = Q * c
-        let d_q_mul_c_vals: Vec<u64> = c_vals.iter().map(|&c| Q.saturating_mul(c)).collect();
+        let d_q_mul_c_vals: Vec<u64> = c_vals.iter().map(|&c| SF.saturating_mul(c)).collect();
         let d_q_mul_c_tensor = Tensor::from(u64_vec_to_i32_iter(&d_q_mul_c_vals));
         vt.push(AtlasCycle {
             instr: AtlasInstr {
@@ -391,7 +391,7 @@ impl VirtualInstructionSequence for Softmax {
         });
 
         // (12) f = Q * d
-        let f_vals: Vec<u64> = d_vals.iter().map(|&d| Q.saturating_mul(d)).collect();
+        let f_vals: Vec<u64> = d_vals.iter().map(|&d| SF.saturating_mul(d)).collect();
         let f_tensor = Tensor::from(u64_vec_to_i32_iter(&f_vals));
         vt.push(AtlasCycle {
             instr: AtlasInstr {

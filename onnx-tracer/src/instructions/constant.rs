@@ -16,7 +16,7 @@ impl ElementWise for Constant {
 
 impl VirtualInstructionSequence for Constant {
     fn virtual_trace(cycle: ONNXCycle, _K: &mut VirtualSlotCounter) -> Vec<AtlasCycle> {
-        assert_eq!(cycle.instr.opcode, ONNXOpcode::Constant);
+        debug_assert_eq!(cycle.instr.opcode, ONNXOpcode::Constant);
         vec![cycle.try_into().unwrap()]
     }
 

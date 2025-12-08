@@ -19,7 +19,7 @@ impl VirtualInstructionSequence for Input {
         cycle: crate::trace_types::ONNXCycle,
         _K: &mut VirtualSlotCounter,
     ) -> Vec<AtlasCycle> {
-        assert_eq!(cycle.instr.opcode, ONNXOpcode::Input);
+        debug_assert_eq!(cycle.instr.opcode, ONNXOpcode::Input);
         vec![cycle.try_into().unwrap()]
     }
 

@@ -20,7 +20,7 @@ impl VirtualInstructionSequence for DivI {
     const SEQUENCE_LENGTH: usize = 1 + Div::SEQUENCE_LENGTH;
 
     fn virtual_trace(cycle: ONNXCycle, virtual_slot: &mut VirtualSlotCounter) -> Vec<AtlasCycle> {
-        assert_eq!(cycle.instr.opcode, ONNXOpcode::DivI);
+        debug_assert_eq!(cycle.instr.opcode, ONNXOpcode::DivI);
         let num_outputs = cycle.instr.num_output_elements();
 
         // If DIVI is part of a longer virtual sequence, recover the counter to continue decrementing it

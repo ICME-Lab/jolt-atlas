@@ -21,7 +21,7 @@ impl VirtualInstructionSequence for Reshape {
         cycle: crate::trace_types::ONNXCycle,
         _K: &mut VirtualSlotCounter,
     ) -> Vec<AtlasCycle> {
-        assert_eq!(cycle.instr.opcode, ONNXOpcode::Reshape);
+        debug_assert_eq!(cycle.instr.opcode, ONNXOpcode::Reshape);
         vec![cycle.try_into().unwrap()]
     }
 

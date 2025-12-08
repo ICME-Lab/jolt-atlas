@@ -20,7 +20,7 @@ impl ElementWise for Add {
 // TODO(AntoineF4C5): Could build a macro to impl the trait the same way on all ElementWise instructions
 impl VirtualInstructionSequence for Add {
     fn virtual_trace(cycle: ONNXCycle, _K: &mut VirtualSequenceCounter) -> Vec<AtlasCycle> {
-        assert_eq!(cycle.instr.opcode, ONNXOpcode::Add);
+        debug_assert_eq!(cycle.instr.opcode, ONNXOpcode::Add);
         vec![cycle.try_into().unwrap()]
     }
 

@@ -114,7 +114,7 @@ impl VirtualInstructionSequence for Rsqrt {
     const SEQUENCE_LENGTH: usize = 17 + 4 * Sra::SEQUENCE_LENGTH;
 
     fn virtual_trace(cycle: ONNXCycle, virtual_slot: &mut VirtualSlotCounter) -> Vec<AtlasCycle> {
-        assert_eq!(cycle.instr.opcode, ONNXOpcode::Rsqrt);
+        debug_assert_eq!(cycle.instr.opcode, ONNXOpcode::Rsqrt);
         let num_outputs = cycle.instr.num_output_elements();
 
         // If RSQRT is part of a longer virtual sequence, recover the counter to continue decrementing it

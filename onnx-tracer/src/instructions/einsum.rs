@@ -21,7 +21,7 @@ impl VirtualInstructionSequence for Einsum {
         cycle: crate::trace_types::ONNXCycle,
         _K: &mut VirtualSlotCounter,
     ) -> Vec<AtlasCycle> {
-        matches!(cycle.instr.opcode, ONNXOpcode::Einsum(_));
+        debug_assert!(matches!(cycle.instr.opcode, ONNXOpcode::Einsum(_)));
         vec![cycle.try_into().unwrap()]
     }
 

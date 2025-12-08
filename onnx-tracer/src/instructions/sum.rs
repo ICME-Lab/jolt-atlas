@@ -22,7 +22,7 @@ impl VirtualInstructionSequence for Sum {
         cycle: crate::trace_types::ONNXCycle,
         _K: &mut VirtualSlotCounter,
     ) -> Vec<AtlasCycle> {
-        matches!(cycle.instr.opcode, ONNXOpcode::Sum(_));
+        debug_assert!(matches!(cycle.instr.opcode, ONNXOpcode::Sum(_)));
         vec![cycle.try_into().unwrap()]
     }
 

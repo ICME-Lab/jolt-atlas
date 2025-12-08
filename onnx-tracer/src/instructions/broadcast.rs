@@ -17,7 +17,7 @@ impl Broadcast {
 
 impl VirtualInstructionSequence for Broadcast {
     fn virtual_trace(cycle: ONNXCycle, _K: &mut VirtualSequenceCounter) -> Vec<AtlasCycle> {
-        assert_eq!(cycle.instr.opcode, ONNXOpcode::Broadcast);
+        debug_assert_eq!(cycle.instr.opcode, ONNXOpcode::Broadcast);
         vec![cycle.try_into().unwrap()]
     }
 

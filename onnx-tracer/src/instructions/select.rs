@@ -23,7 +23,7 @@ impl VirtualInstructionSequence for Select {
         cycle: crate::trace_types::ONNXCycle,
         _K: &mut VirtualSlotCounter,
     ) -> Vec<AtlasCycle> {
-        matches!(cycle.instr.opcode, ONNXOpcode::Select);
+        debug_assert!(matches!(cycle.instr.opcode, ONNXOpcode::Select));
         vec![cycle.try_into().unwrap()]
     }
 

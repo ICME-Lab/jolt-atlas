@@ -51,7 +51,7 @@ impl VirtualInstructionSequence for Div {
     const SEQUENCE_LENGTH: usize = 8;
 
     fn virtual_trace(cycle: ONNXCycle, virtual_slot: &mut VirtualSlotCounter) -> Vec<AtlasCycle> {
-        assert_eq!(cycle.instr.opcode, ONNXOpcode::Div);
+        debug_assert_eq!(cycle.instr.opcode, ONNXOpcode::Div);
         let num_outputs = cycle.instr.num_output_elements();
 
         // If DIV is part of a longer virtual sequence, recover the counter to continue decrementing it

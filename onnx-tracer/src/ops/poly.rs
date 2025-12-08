@@ -89,7 +89,7 @@ impl<F: TensorType + PartialOrd> From<&PolyOp<F>> for ONNXOpcode {
             PolyOp::Pow(_) => ONNXOpcode::Mul,
             PolyOp::Einsum { equation } => ONNXOpcode::Einsum(equation.clone()),
             PolyOp::Sum { axes } => ONNXOpcode::Sum(axes[0]), // we only accept single axis sum for now
-            PolyOp::MeanOfSquares { .. } => ONNXOpcode::MeanOfSquares,
+            // PolyOp::MeanOfSquares { .. } => ONNXOpcode::MeanOfSquares,
             PolyOp::Reshape(..) => ONNXOpcode::Reshape,
             PolyOp::Iff => ONNXOpcode::Select,
             PolyOp::MultiBroadcastTo { .. } => ONNXOpcode::Broadcast,

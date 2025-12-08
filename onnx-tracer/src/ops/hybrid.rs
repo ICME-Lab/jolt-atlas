@@ -44,6 +44,7 @@ pub enum HybridOp {
         axes: Vec<usize>,
     },
     RangeCheck(Tolerance),
+    Div,
     Greater,
     GreaterEqual,
     Less,
@@ -77,9 +78,9 @@ impl From<&HybridOp> for ONNXOpcode {
     fn from(value: &HybridOp) -> Self {
         match value {
             HybridOp::Equals => ONNXOpcode::Eq,
-            HybridOp::Gather { .. } => ONNXOpcode::Gather,
+            // HybridOp::Gather { .. } => ONNXOpcode::Gather,
             HybridOp::GreaterEqual => ONNXOpcode::Gte,
-            HybridOp::ReduceArgMax { .. } => ONNXOpcode::ArgMax,
+            // HybridOp::ReduceArgMax { .. } => ONNXOpcode::ArgMax,
             HybridOp::Softmax { .. } => ONNXOpcode::Softmax,
             HybridOp::Sra => ONNXOpcode::Sra,
             _ => {
@@ -287,6 +288,10 @@ where
                     vec![],
                 )
             }
+            HybridOp::Div => {
+                let y = inputs[1].clone().map(|y| i32::from(y));
+                (tensor::ops::nonlinearities::div(&x, &y), vec![])
+            }
             HybridOp::Greater => {
                 let y = inputs[1].clone().map(|x| i32::from(x));
                 tensor::ops::greater(&x, &y)?
@@ -347,6 +352,7 @@ where
                 format!("SOFTMAX (scale={scale}, axes={axes:?})")
             }
             HybridOp::RangeCheck(p) => format!("RANGECHECK (tol={p:?})"),
+            HybridOp::Div => "DIV".into(),
             HybridOp::Greater => "GREATER".into(),
             HybridOp::GreaterEqual => "GREATEREQUAL".into(),
             HybridOp::Less => "LESS".into(),

@@ -9,6 +9,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::jolt::{
     dag::state_manager::StateManager,
+    executor::instructions::LookupQuery,
     pcs::{ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
     sumcheck::SumcheckInstance,
     trace::{JoltONNXCycle, WORD_SIZE},
@@ -28,7 +29,6 @@ use jolt_core::{
     transcripts::Transcript,
     utils::{lookup_bits::LookupBits, math::Math},
     zkvm::{
-        instruction::LookupQuery,
         instruction_lookups::{K_CHUNK, LOG_K, LOG_K_CHUNK, LOG_M, M, PHASES, RA_PER_LOG_M},
         witness::{DTH_ROOT_OF_K, compute_d_parameter_from_log_K},
     },

@@ -2,7 +2,7 @@ use crate::jolt::{
     dag::{stage::SumcheckStages, state_manager::StateManager},
     executor::{
         booleanity::BooleanitySumcheck, hamming_weight::HammingWeightSumcheck,
-        ra_virtual::RASumCheck, read_raf_checking::ReadRafSumcheck,
+        instructions::LookupQuery, ra_virtual::RASumCheck, read_raf_checking::ReadRafSumcheck,
     },
     pcs::SumcheckId,
     sumcheck::SumcheckInstance,
@@ -14,10 +14,7 @@ use jolt_core::{
     poly::{commitment::commitment_scheme::CommitmentScheme, eq_poly::EqPolynomial},
     transcripts::Transcript,
     utils::thread::unsafe_allocate_zero_vec,
-    zkvm::{
-        instruction::LookupQuery,
-        instruction_lookups::{D, K_CHUNK, LOG_K, LOG_K_CHUNK},
-    },
+    zkvm::instruction_lookups::{D, K_CHUNK, LOG_K, LOG_K_CHUNK},
 };
 use rayon::prelude::*;
 

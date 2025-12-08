@@ -1415,6 +1415,27 @@ pub fn create_rsqrt_node(
     )
 }
 
+pub fn create_softmax_node(
+    out_scale: i32,
+    inputs: Vec<(usize, usize)>,
+    axes: Vec<usize>,
+    out_dims: Vec<usize>,
+    idx: usize,
+    num_uses: usize,
+) -> Node {
+    create_node(
+        SupportedOp::Hybrid(HybridOp::Softmax {
+            scale: F32(out_scale as f32),
+            axes,
+        }),
+        out_scale,
+        inputs,
+        out_dims,
+        idx,
+        num_uses,
+    )
+}
+
 pub fn create_einsum_node(
     equation: String,
     out_scale: i32,
@@ -1452,7 +1473,7 @@ pub fn create_sigmoid_node(
     )
 }
 
-pub fn create_div_node(
+pub fn create_const_div_node(
     denom: i32,
     out_scale: i32,
     inputs: Vec<(usize, usize)>,

@@ -11,7 +11,7 @@ use jolt_core::{
     utils::math::Math,
 };
 use num_derive::FromPrimitive;
-use onnx_tracer::{ProgramIO, trace_types::normalize};
+use onnx_tracer::{ProgramIO, utils::normalize};
 
 use crate::jolt::{
     JoltProverPreprocessing, JoltVerifierPreprocessing,
@@ -107,6 +107,7 @@ where
             .iter()
             .zip(preprocessing.bytecode())
             .for_each(|(cycle, instr)| {
+                // TODO(AntoineF4C5): total memory is built anyway, may use earlier create a memory, and allow ts1 .. td values to be read from there
                 val_final[instr.td as usize] = cycle.td_write().1 as u32 as i32 as i64
             });
         Self {

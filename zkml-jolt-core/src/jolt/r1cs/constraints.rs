@@ -66,7 +66,7 @@ impl<F: JoltField> R1CSConstraints<F> for JoltONNXConstraints {
             JoltONNXR1CSInputs::Product,
         );
 
-        // if !(AddOperands || SubtractOperands || MultiplyOperands || Advice) {
+        // if !(AddOperands || SubtractOperands || MultiplyOperands || Const || Advice) {
         //     assert!(RightLookupOperand == RightInstructionInput)
         // }
         cs.constrain_eq_conditional(

@@ -894,7 +894,8 @@ impl<T: Clone + TensorType> Tensor<T> {
     /// use onnx_tracer::tensor::Tensor;
     /// let mut a = Tensor::<i32>::new(Some(&[1, 2, 3]), &[3, 1]).unwrap();
     ///
-    /// let mut expected = Tensor::<i32>::new(Some(&[1, 1, 1, 2, 2, 2, 3, 3, 3]), &[3, 3]).unwrap();     /// assert_eq!(a.expand(&[3, 3]).unwrap(), expected);
+    /// let mut expected = Tensor::<i32>::new(Some(&[1, 1, 1, 2, 2, 2, 3, 3, 3]), &[3, 3]).unwrap();
+    /// assert_eq!(a.expand(&[3, 3]).unwrap(), expected);
     /// ```
     pub fn expand(&self, shape: &[usize]) -> Result<Self, TensorError> {
         if self.dims().len() > shape.len() {

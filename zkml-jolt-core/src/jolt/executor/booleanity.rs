@@ -12,16 +12,14 @@ use jolt_core::{
         math::Math,
         thread::{drop_in_background_thread, unsafe_allocate_zero_vec},
     },
-    zkvm::{
-        instruction::LookupQuery,
-        instruction_lookups::{D, K_CHUNK, LOG_K_CHUNK},
-    },
+    zkvm::instruction_lookups::{D, K_CHUNK, LOG_K_CHUNK},
 };
 use rayon::prelude::*;
 use std::{cell::RefCell, rc::Rc};
 
 use crate::jolt::{
     dag::state_manager::StateManager,
+    executor::instructions::LookupQuery,
     pcs::{ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
     sumcheck::SumcheckInstance,
     trace::JoltONNXCycle,

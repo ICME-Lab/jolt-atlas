@@ -1,10 +1,7 @@
 use crate::jolt::{
     bytecode::read_raf_checking::ReadRafCheck,
     dag::{stage::SumcheckStages, state_manager::StateManager},
-    executor::instructions::{
-        InstructionLookup, VirtualInstructionSequence, div::DivInstruction,
-        rsqrt::RsqrtInstruction, softmax::SoftmaxInstruction, sra::SraInstruction,
-    },
+    executor::instructions::InstructionLookup,
     lookup_table::{LookupTables, RangeCheckTable, ReLUTable},
     sumcheck::SumcheckInstance,
     trace::WORD_SIZE,
@@ -22,7 +19,8 @@ use jolt_core::{
 use onnx_tracer::{
     graph::model::Model,
     tensor::Tensor,
-    trace_types::{ONNXInstr, ONNXOpcode},
+    trace_types::{AtlasInstr, AtlasOpcode, ONNXInstr},
+    utils::VirtualSlotCounter,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -73,9 +71,9 @@ pub struct BytecodePreprocessing {
     /// Used to expand the virtual trace
     pub max_td: usize,
     /// Get info of the bytecode from its td address
-    pub td_lookup: HashMap<usize, ONNXInstr>,
+    pub td_lookup: HashMap<usize, AtlasInstr>,
     /// raw bytecode (used in precompiles)
-    pub raw_bytecode: Vec<ONNXInstr>,
+    pub raw_bytecode: Vec<AtlasInstr>,
 }
 
 impl BytecodePreprocessing {
@@ -146,7 +144,7 @@ impl BytecodePreprocessing {
     }
 
     /// Getter for td_lookup
-    pub fn td_lookup(&self) -> &HashMap<usize, ONNXInstr> {
+    pub fn td_lookup(&self) -> &HashMap<usize, AtlasInstr> {
         &self.td_lookup
     }
 
@@ -186,7 +184,7 @@ impl BytecodePreprocessing {
     /// Decodes the model into ONNX instructions, expands virtual instructions, and returns the
     /// expanded trace along with the maximum td encountered. The max_td value is computed on the
     /// unexpanded trace so virtual instructions can reserve unique register addresses deterministically.
-    fn decode_and_expand_model<ModelFunc>(model: ModelFunc) -> (Vec<ONNXInstr>, usize)
+    fn decode_and_expand_model<ModelFunc>(model: ModelFunc) -> (Vec<AtlasInstr>, usize)
     where
         ModelFunc: Fn() -> Model,
     {
@@ -202,7 +200,7 @@ impl BytecodePreprocessing {
 
     /// Build a lookup map for O(1) instruction lookups by td value. Used in the precompiles to
     /// get the i/o addresses of the precompile operation.
-    fn build_td_lookup(bytecode: &[ONNXInstr]) -> HashMap<usize, ONNXInstr> {
+    fn build_td_lookup(bytecode: &[AtlasInstr]) -> HashMap<usize, AtlasInstr> {
         bytecode
             .iter()
             .filter_map(|instr| instr.td.map(|td| (td, instr.clone())))
@@ -219,21 +217,16 @@ impl BytecodePreprocessing {
     ///
     /// * `raw_bytecode` - The raw ONNX bytecode to be expanded
     /// * `max_td` - used to calculate a unique register address for virtual registers used in virtual instructions
-    fn expand_virtual_bytecode(raw_bytecode: Vec<ONNXInstr>, max_td: usize) -> Vec<ONNXInstr> {
+    fn expand_virtual_bytecode(raw_bytecode: Vec<ONNXInstr>, max_td: usize) -> Vec<AtlasInstr> {
+        let mut virtual_slot_counter = VirtualSlotCounter::new(max_td + 1);
         raw_bytecode
             .into_iter()
-            .flat_map(|instr| match instr.opcode {
-                ONNXOpcode::Div => DivInstruction::<32>::virtual_sequence(instr, max_td),
-                ONNXOpcode::Rsqrt => RsqrtInstruction::<32>::virtual_sequence(instr, max_td),
-                ONNXOpcode::Softmax => SoftmaxInstruction::virtual_sequence(instr, max_td),
-                ONNXOpcode::Sra => SraInstruction::<32>::virtual_sequence(instr, max_td),
-                _ => vec![instr],
-            })
+            .flat_map(|instr| instr.virtual_sequence(&mut virtual_slot_counter))
             .collect()
     }
 
     /// Getter for raw bytecode
-    pub fn raw_bytecode(&self) -> &[ONNXInstr] {
+    pub fn raw_bytecode(&self) -> &[AtlasInstr] {
         &self.raw_bytecode
     }
 
@@ -250,7 +243,7 @@ impl BytecodePreprocessing {
     /// # Returns
     ///
     /// A vector of memory addresses for the instruction's active output elements
-    pub fn collect_addresses(&self, instr: &ONNXInstr) -> Vec<usize> {
+    pub fn collect_addresses(&self, instr: &AtlasInstr) -> Vec<usize> {
         (0..instr.num_output_elements())
             .map(|i| {
                 self.vt_address_map[&(
@@ -328,7 +321,7 @@ pub struct JoltONNXBytecode {
     /// The unexpanded program counter (PC) address of this instruction in the ONNX binary bytecode.
     pub address: usize,
     /// The operation code (opcode) that defines the instruction's function.
-    pub opcode: ONNXOpcode,
+    pub opcode: AtlasOpcode,
     /// Index of the destination register for this instruction (0 if register is unused).
     pub td: u64,
     /// Index of the first source register for this instruction (0 if register is unused).
@@ -351,7 +344,7 @@ impl JoltONNXBytecode {
     /// Used for padding
     pub fn no_op() -> Self {
         Self {
-            opcode: ONNXOpcode::Noop,
+            opcode: AtlasOpcode::Noop,
             ..Default::default()
         }
     }
@@ -360,7 +353,7 @@ impl JoltONNXBytecode {
     pub fn addressed_no_op(address: usize) -> Self {
         Self {
             address,
-            opcode: ONNXOpcode::AddressedNoop,
+            opcode: AtlasOpcode::AddressedNoop,
             ..Self::no_op()
         }
     }
@@ -371,104 +364,102 @@ impl JoltONNXBytecode {
 
         flags[CircuitFlags::LeftOperandIsTs1Value as usize] = matches!(
             self.opcode,
-            ONNXOpcode::Add
-            | ONNXOpcode::Broadcast
-            | ONNXOpcode::Eq
-            | ONNXOpcode::Gte
-            | ONNXOpcode::Mul
-            | ONNXOpcode::Output
-            | ONNXOpcode::Relu
-            | ONNXOpcode::Reshape
-            | ONNXOpcode::Sub
-            | ONNXOpcode::VirtualAssertEq
-            | ONNXOpcode::VirtualAssertValidDiv0
-            | ONNXOpcode::VirtualAssertValidSignedRemainder
-            | ONNXOpcode::VirtualMove
-            | ONNXOpcode::VirtualPow2
-            | ONNXOpcode::VirtualShiftRightBitmask
-            | ONNXOpcode::VirtualSra
+            AtlasOpcode::Add
+            | AtlasOpcode::Broadcast
+            | AtlasOpcode::Eq
+            | AtlasOpcode::Gte
+            | AtlasOpcode::Mul
+            // | AtlasOpcode::Output
+            | AtlasOpcode::Relu
+            | AtlasOpcode::Reshape
+            | AtlasOpcode::Sub
+            | AtlasOpcode::VirtualAssertEq
+            | AtlasOpcode::VirtualAssertValidDiv0
+            | AtlasOpcode::VirtualAssertValidSignedRemainder
+            | AtlasOpcode::VirtualMove
+            | AtlasOpcode::VirtualPow2
+            | AtlasOpcode::VirtualShiftRightBitmask
+            | AtlasOpcode::VirtualSra
         );
 
         flags[CircuitFlags::RightOperandIsTs2Value as usize] = matches!(
             self.opcode,
-            ONNXOpcode::Add
-            | ONNXOpcode::Eq
-            | ONNXOpcode::Gte
-            | ONNXOpcode::Mul
-            | ONNXOpcode::Sub
-            | ONNXOpcode::VirtualAssertEq
-            | ONNXOpcode::VirtualAssertValidDiv0
-            | ONNXOpcode::VirtualAssertValidSignedRemainder
-            | ONNXOpcode::VirtualSra
+            AtlasOpcode::Add
+            | AtlasOpcode::Eq
+            | AtlasOpcode::Gte
+            | AtlasOpcode::Mul
+            | AtlasOpcode::Sub
+            | AtlasOpcode::VirtualAssertEq
+            | AtlasOpcode::VirtualAssertValidDiv0
+            | AtlasOpcode::VirtualAssertValidSignedRemainder
+            | AtlasOpcode::VirtualSra
         );
 
         flags[CircuitFlags::RightOperandIsImm as usize] = matches!(
             self.opcode,
-            | ONNXOpcode::VirtualMove
+            | AtlasOpcode::VirtualMove
         );
 
         flags[CircuitFlags::AddOperands as usize] = matches!(
             self.opcode,
-            ONNXOpcode::Add
-            | ONNXOpcode::Broadcast
-            | ONNXOpcode::Output
-            | ONNXOpcode::Relu
-            | ONNXOpcode::Reshape
-            | ONNXOpcode::VirtualMove
-            | ONNXOpcode::VirtualPow2
-            | ONNXOpcode::VirtualShiftRightBitmask
+            AtlasOpcode::Add
+            | AtlasOpcode::Broadcast
+            // | AtlasOpcode::Output
+            | AtlasOpcode::Relu
+            | AtlasOpcode::Reshape
+            | AtlasOpcode::VirtualMove
+            | AtlasOpcode::VirtualPow2
+            | AtlasOpcode::VirtualShiftRightBitmask
         );
 
         flags[CircuitFlags::SubtractOperands as usize] = matches!(
             self.opcode,
-            ONNXOpcode::Sub,
+            AtlasOpcode::Sub,
         );
 
         flags[CircuitFlags::MultiplyOperands as usize] = matches!(
             self.opcode,
-            ONNXOpcode::Mul,
+            AtlasOpcode::Mul,
         );
 
         flags[CircuitFlags::WriteLookupOutputToTD as usize] = matches!(
             self.opcode,
-            ONNXOpcode::Add
-            | ONNXOpcode::Broadcast
-            | ONNXOpcode::Eq
-            | ONNXOpcode::Gte
-            | ONNXOpcode::Output
-            | ONNXOpcode::Mul
-            | ONNXOpcode::Relu
-            | ONNXOpcode::Reshape
-            | ONNXOpcode::Sub
-            | ONNXOpcode::VirtualAdvice
-            | ONNXOpcode::VirtualConst
-            | ONNXOpcode::VirtualMove
-            | ONNXOpcode::VirtualPow2
-            | ONNXOpcode::VirtualShiftRightBitmask
-            | ONNXOpcode::VirtualSra
+            AtlasOpcode::Add
+            | AtlasOpcode::Broadcast
+            | AtlasOpcode::Eq
+            | AtlasOpcode::Gte
+            // | AtlasOpcode::Output
+            | AtlasOpcode::Mul
+            | AtlasOpcode::Relu
+            | AtlasOpcode::Reshape
+            | AtlasOpcode::Sub
+            | AtlasOpcode::VirtualAdvice
+            | AtlasOpcode::VirtualMove
+            | AtlasOpcode::VirtualPow2
+            | AtlasOpcode::VirtualShiftRightBitmask
+            | AtlasOpcode::VirtualSra
         );
 
         flags[CircuitFlags::Advice as usize] = matches!(
             self.opcode,
-            ONNXOpcode::VirtualAdvice
+            AtlasOpcode::VirtualAdvice
         );
 
         flags[CircuitFlags::Const as usize] = matches!(
             self.opcode,
-            ONNXOpcode::Constant
-            | ONNXOpcode::VirtualConst
+            AtlasOpcode::Constant
         );
 
         flags[CircuitFlags::Assert as usize] = matches!(
             self.opcode,
-            ONNXOpcode::VirtualAssertEq
-            | ONNXOpcode::VirtualAssertValidDiv0
-            | ONNXOpcode::VirtualAssertValidSignedRemainder
+            AtlasOpcode::VirtualAssertEq
+            | AtlasOpcode::VirtualAssertValidDiv0
+            | AtlasOpcode::VirtualAssertValidSignedRemainder
         );
 
         flags[CircuitFlags::Select as usize] = matches!(
             self.opcode,
-            ONNXOpcode::Select
+            AtlasOpcode::Select
         );
 
         flags[CircuitFlags::Halt as usize] = self.halt;
@@ -477,27 +468,29 @@ impl JoltONNXBytecode {
     }
 }
 
+// TODO(AntoineF4C5): Get rid of this helper
 impl InstructionLookup<WORD_SIZE> for JoltONNXBytecode {
     fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
         match self.opcode {
-            ONNXOpcode::Add => Some(RangeCheckTable.into()),
-            ONNXOpcode::Broadcast => Some(RangeCheckTable.into()),
-            ONNXOpcode::Constant => Some(RangeCheckTable.into()),
-            ONNXOpcode::Eq => Some(EqualTable.into()),
-            ONNXOpcode::Gte => Some(SignedGreaterThanEqualTable.into()),
-            ONNXOpcode::Mul => Some(RangeCheckTable.into()),
-            ONNXOpcode::Relu => Some(ReLUTable.into()),
-            ONNXOpcode::Reshape => Some(RangeCheckTable.into()),
-            ONNXOpcode::Sub => Some(RangeCheckTable.into()),
-            ONNXOpcode::VirtualAssertEq => Some(EqualTable.into()),
-            ONNXOpcode::VirtualAssertValidDiv0 => Some(ValidDiv0Table.into()),
-            ONNXOpcode::VirtualAssertValidSignedRemainder => Some(ValidSignedRemainderTable.into()),
-            ONNXOpcode::VirtualAdvice => Some(RangeCheckTable.into()),
-            ONNXOpcode::VirtualConst => Some(RangeCheckTable.into()),
-            ONNXOpcode::VirtualMove => Some(RangeCheckTable.into()),
-            ONNXOpcode::VirtualPow2 => Some(Pow2Table.into()),
-            ONNXOpcode::VirtualSra => Some(VirtualSRATable.into()),
-            ONNXOpcode::VirtualShiftRightBitmask => Some(ShiftRightBitmaskTable.into()),
+            AtlasOpcode::Add => Some(RangeCheckTable.into()),
+            AtlasOpcode::Broadcast => Some(RangeCheckTable.into()),
+            AtlasOpcode::Constant => Some(RangeCheckTable.into()),
+            AtlasOpcode::Eq => Some(EqualTable.into()),
+            AtlasOpcode::Gte => Some(SignedGreaterThanEqualTable.into()),
+            AtlasOpcode::Mul => Some(RangeCheckTable.into()),
+            AtlasOpcode::Relu => Some(ReLUTable.into()),
+            AtlasOpcode::Reshape => Some(RangeCheckTable.into()),
+            AtlasOpcode::Sub => Some(RangeCheckTable.into()),
+            AtlasOpcode::VirtualAssertEq => Some(EqualTable.into()),
+            AtlasOpcode::VirtualAssertValidDiv0 => Some(ValidDiv0Table.into()),
+            AtlasOpcode::VirtualAssertValidSignedRemainder => {
+                Some(ValidSignedRemainderTable.into())
+            }
+            AtlasOpcode::VirtualAdvice => Some(RangeCheckTable.into()),
+            AtlasOpcode::VirtualMove => Some(RangeCheckTable.into()),
+            AtlasOpcode::VirtualPow2 => Some(Pow2Table.into()),
+            AtlasOpcode::VirtualSra => Some(VirtualSRATable.into()),
+            AtlasOpcode::VirtualShiftRightBitmask => Some(ShiftRightBitmaskTable.into()),
             _ => None,
         }
     }
@@ -508,26 +501,26 @@ pub type RawToJoltResult = (
     usize,
     BTreeMap<(usize, usize), usize>,
     usize,
-    HashMap<usize, ONNXInstr>,
-    Vec<ONNXInstr>,
+    HashMap<usize, AtlasInstr>,
+    Vec<AtlasInstr>,
 );
 
 /// Helper responsible for converting raw ONNX instructions into
 /// scalar Jolt bytecode while maintaining the virtual tensor address map.
 struct BytecodeInstructionInliner<'a> {
-    td_lookup: &'a HashMap<usize, ONNXInstr>,
+    td_lookup: &'a HashMap<usize, AtlasInstr>,
     allocator: VirtualTensorAllocator,
 }
 
 impl<'a> BytecodeInstructionInliner<'a> {
-    fn new(max_zero_register_span: usize, td_lookup: &'a HashMap<usize, ONNXInstr>) -> Self {
+    fn new(max_zero_register_span: usize, td_lookup: &'a HashMap<usize, AtlasInstr>) -> Self {
         Self {
             td_lookup,
             allocator: VirtualTensorAllocator::new(max_zero_register_span),
         }
     }
 
-    fn inline_instruction(&mut self, raw: &ONNXInstr) -> Vec<JoltONNXBytecode> {
+    fn inline_instruction(&mut self, raw: &AtlasInstr) -> Vec<JoltONNXBytecode> {
         let element_count = raw.num_output_elements();
         let (ts1, ts2, ts3) = self.resolve_sources(raw, element_count);
         let td = self.allocate_destinations(raw.td, element_count);
@@ -553,18 +546,19 @@ impl<'a> BytecodeInstructionInliner<'a> {
         self.allocator.finalize()
     }
 
+    // TODO(AntoineF4C5): Have behavior defined in each instruction definition
     fn resolve_sources(
         &self,
-        raw: &ONNXInstr,
+        raw: &AtlasInstr,
         element_count: usize,
     ) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
         match raw.opcode {
-            ONNXOpcode::Einsum(_) | ONNXOpcode::Sum(_) => (
+            AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) => (
                 vec![0; element_count],
                 vec![0; element_count],
                 vec![0; element_count],
             ),
-            ONNXOpcode::Broadcast => (
+            AtlasOpcode::Broadcast => (
                 self.broadcast_addresses(raw, element_count),
                 vec![0; element_count],
                 vec![0; element_count],
@@ -586,7 +580,7 @@ impl<'a> BytecodeInstructionInliner<'a> {
             .collect()
     }
 
-    fn broadcast_addresses(&self, raw: &ONNXInstr, element_count: usize) -> Vec<usize> {
+    fn broadcast_addresses(&self, raw: &AtlasInstr, element_count: usize) -> Vec<usize> {
         let source_td = raw
             .ts1
             .expect("Broadcast instructions must provide a ts1 operand");
@@ -701,7 +695,7 @@ impl VirtualTensorAllocator {
 
 /// Returns the maximum number of active output elements across all instructions in the bytecode.
 /// This is used to determine the size of the zero register space that needs to be reserved in memory.
-pub fn max_output_elements(bytecode: &[ONNXInstr]) -> usize {
+pub fn max_output_elements(bytecode: &[AtlasInstr]) -> usize {
     bytecode
         .iter()
         .map(|instr| instr.num_output_elements())

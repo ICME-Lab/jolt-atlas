@@ -1,23 +1,16 @@
 use crate::jolt::{
-    executor::instructions::InstructionLookup,
+    executor::instructions::{InstructionLookup, LookupQuery},
     lookup_table::{LookupTables, ValidDiv0Table},
 };
-use jolt_core::zkvm::instruction::LookupQuery;
-use serde::{Deserialize, Serialize};
+use onnx_tracer::instructions::virtuals::VirtualAssertValidDiv0;
 
-#[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
-/// (divisor, quotient)
-pub struct AssertValidDiv0Instruction<const WORD_SIZE: usize>(pub u64, pub u64);
-
-impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE>
-    for AssertValidDiv0Instruction<WORD_SIZE>
-{
+impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for VirtualAssertValidDiv0 {
     fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
         Some(ValidDiv0Table.into())
     }
 }
 
-impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for AssertValidDiv0Instruction<WORD_SIZE> {
+impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for VirtualAssertValidDiv0 {
     fn to_instruction_inputs(&self) -> (u64, i64) {
         match WORD_SIZE {
             #[cfg(test)]

@@ -1,20 +1,16 @@
 use crate::jolt::{
-    executor::instructions::InstructionLookup,
+    executor::instructions::{InstructionLookup, LookupQuery},
     lookup_table::{LookupTables, RangeCheckTable},
 };
-use jolt_core::zkvm::instruction::LookupQuery;
-use serde::{Deserialize, Serialize};
+use onnx_tracer::instructions::reshape::Reshape;
 
-#[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ReshapeInstruction<const WORD_SIZE: usize>(pub u64);
-
-impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for ReshapeInstruction<WORD_SIZE> {
+impl<const WORD_SIZE: usize> InstructionLookup<WORD_SIZE> for Reshape {
     fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
         Some(RangeCheckTable.into())
     }
 }
 
-impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for ReshapeInstruction<WORD_SIZE> {
+impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for Reshape {
     fn to_instruction_inputs(&self) -> (u64, i64) {
         match WORD_SIZE {
             #[cfg(test)]
@@ -48,9 +44,9 @@ impl<const WORD_SIZE: usize> LookupQuery<WORD_SIZE> for ReshapeInstruction<WORD_
 #[cfg(test)]
 mod test {
     use crate::jolt::executor::instructions::test::materialize_entry_test;
-    use onnx_tracer::trace_types::ONNXOpcode;
+    use onnx_tracer::trace_types::AtlasOpcode;
     #[test]
     fn materialize_entry() {
-        materialize_entry_test(ONNXOpcode::Reshape);
+        materialize_entry_test(AtlasOpcode::Reshape);
     }
 }

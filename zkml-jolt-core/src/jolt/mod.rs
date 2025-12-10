@@ -520,6 +520,16 @@ mod e2e_tests {
         model(&PathBuf::from("../onnx-tracer/models/nanoGPT/network.onnx"));
     }
 
+    // TODO: Replace with real test once all bge-m3 ops are supported, see issue #91
+    #[test]
+    #[ignore]
+    fn print_bge_m3_bytecode() {
+        onnx_tracer::logger::init_logger();
+        model(&PathBuf::from(
+            "../onnx-tracer/models/bge-m3/bge-small-sim.onnx",
+        ));
+    }
+
     #[serial]
     #[test]
     #[ignore] // Fails, see issue #88

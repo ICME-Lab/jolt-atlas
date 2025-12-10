@@ -30,6 +30,7 @@ use ark_serialize::{
 };
 
 pub mod einsum;
+pub mod gather;
 pub mod read_checking;
 pub mod reduce_sum;
 pub mod val_final;

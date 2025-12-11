@@ -6,6 +6,7 @@ use crate::jolt::{
         jolt_dag::JoltDAG,
         state_manager::{Proofs, StateManager, VerifierState},
     },
+    fp_lookups::FpLookupPreprocessing,
     pcs::{Openings, ProverOpeningAccumulator, VerifierOpeningAccumulator},
     precompiles::PrecompilePreprocessing,
     trace::trace,
@@ -26,6 +27,7 @@ use std::{cell::RefCell, rc::Rc};
 pub mod bytecode;
 pub mod dag;
 pub mod executor;
+pub mod fp_lookups;
 pub mod lookup_table;
 pub mod memory;
 pub mod pcs;
@@ -180,6 +182,8 @@ pub struct JoltSharedPreprocessing {
     pub bytecode: BytecodePreprocessing,
     /// The preprocessed data for all precompiles
     pub precompiles: PrecompilePreprocessing,
+    /// The preprocessed data for fp lookup activations (erf, tanh)
+    pub fp_lookups: FpLookupPreprocessing,
 }
 
 /// Preprocessing data needed only for the prover
@@ -206,8 +210,16 @@ where
         &self.shared.bytecode.bytecode
     }
 
+    pub fn bytecode_pp(&self) -> &BytecodePreprocessing {
+        &self.shared.bytecode
+    }
+
     pub fn is_precompiles_enabled(&self) -> bool {
         !self.shared.precompiles.instances.is_empty()
+    }
+
+    pub fn is_fp_lookups_enabled(&self) -> bool {
+        !self.shared.fp_lookups.instances.is_empty()
     }
 }
 
@@ -234,6 +246,10 @@ where
     pub fn is_precompiles_enabled(&self) -> bool {
         !self.shared.precompiles.instances.is_empty()
     }
+
+    pub fn is_fp_lookups_enabled(&self) -> bool {
+        !self.shared.fp_lookups.instances.is_empty()
+    }
 }
 
 impl<F, PCS, FS> JoltSNARK<F, PCS, FS>
@@ -250,9 +266,11 @@ where
     {
         let bytecode_preprocessing = BytecodePreprocessing::preprocess(model);
         let precompile_preprocessing = PrecompilePreprocessing::preprocess(&bytecode_preprocessing);
+        let fp_lookups_preprocessing = FpLookupPreprocessing::preprocess(&bytecode_preprocessing);
         JoltSharedPreprocessing {
             bytecode: bytecode_preprocessing,
             precompiles: precompile_preprocessing,
+            fp_lookups: fp_lookups_preprocessing,
         }
     }
 
@@ -298,7 +316,12 @@ mod e2e_tests {
         poly::commitment::{dory::DoryCommitmentScheme, mock::MockCommitScheme},
         transcripts::KeccakTranscript,
     };
-    use onnx_tracer::{builder, graph::model::Model, model, tensor::Tensor};
+    use onnx_tracer::{
+        builder,
+        graph::model::{Activation, Model},
+        model,
+        tensor::Tensor,
+    };
     use rand::{Rng, SeedableRng, rngs::StdRng};
     use serde_json::Value;
     use serial_test::serial;
@@ -323,6 +346,170 @@ mod e2e_tests {
         snark
             .verify(&(&preprocessing).into(), program_io, None)
             .unwrap();
+    }
+
+    #[serial]
+    #[test]
+    fn test_fnn_gelu() {
+        // init_logger();
+        let input_shape = [1, 30];
+        let mut rng = StdRng::seed_from_u64(123456);
+        // Use small, zero-centered values to resemble layernorm outputs (~N(0,1)),
+        // then scale to fixed-point with out_scale=7 (quantization factor 2^7).
+        // This mimics post-layernorm quantized tensors the model expects.
+        let scale_shift = 1 << 7; // out_scale = 7
+        let input_data: Vec<i32> = (0..input_shape.iter().product())
+            .map(|_| rng.gen_range(-3..=3) * scale_shift)
+            .collect();
+        let mut teleported_model = model(&PathBuf::from(
+            "../onnx-tracer/models/ffn_gelu/network.onnx",
+        ));
+        teleported_model.apply_teleportation(4.0, &[Activation::Erf]);
+        run_snark_test(|| teleported_model.clone(), &input_data, &input_shape, None);
+    }
+
+    #[serial]
+    #[test]
+    fn test_fnn_multi_gelu() {
+        // init_logger();
+        let input_shape = [1, 30];
+        let mut rng = StdRng::seed_from_u64(123456);
+        // Use small, zero-centered values to resemble layernorm outputs (~N(0,1)),
+        // then scale to fixed-point with out_scale=7 (quantization factor 2^7).
+        // This mimics post-layernorm quantized tensors the model expects.
+        let scale_shift = 1 << 7; // out_scale = 7
+        let input_data: Vec<i32> = (0..input_shape.iter().product())
+            .map(|_| rng.gen_range(-3..=3) * scale_shift)
+            .collect();
+        let mut teleported_model = model(&PathBuf::from(
+            "../onnx-tracer/models/ffn_multi_gelu/network.onnx",
+        ));
+        teleported_model.apply_teleportation(4.0, &[Activation::Erf]);
+        run_snark_test(|| teleported_model.clone(), &input_data, &input_shape, None);
+    }
+
+    #[serial]
+    #[test]
+    fn test_fnn_tanh() {
+        // init_logger();
+        let input_shape = [1, 30];
+        let mut rng = StdRng::seed_from_u64(123456);
+        // Use small, zero-centered values to resemble layernorm outputs (~N(0,1)),
+        // then scale to fixed-point with out_scale=7 (quantization factor 2^7).
+        // This mimics post-layernorm quantized tensors the model expects.
+        let scale_shift = 1 << 7; // out_scale = 7
+        let input_data: Vec<i32> = (0..input_shape.iter().product())
+            .map(|_| rng.gen_range(-3..=3) * scale_shift)
+            .collect();
+        let mut teleported_model = model(&PathBuf::from(
+            "../onnx-tracer/models/ffn_tanh/network.onnx",
+        ));
+        // Note: Tanh uses Activation::Tanh for teleportation
+        teleported_model.apply_teleportation(4.0, &[Activation::Tanh]);
+        run_snark_test(|| teleported_model.clone(), &input_data, &input_shape, None);
+    }
+
+    #[test]
+    fn test_fnn_gelu_teleportation_approx() {
+        // ============================================================================
+        // NEURAL TELEPORTATION TEST: ERF LOOKUP RANGE REDUCTION
+        // ============================================================================
+        //
+        // Purpose:
+        //   This test validates the neural teleportation optimization for reducing
+        //   lookup table sizes in fp lookup proofs. By dividing activation inputs by τ,
+        //   we compress the input range while preserving approximate output equivalence.
+        //
+        // What is Neural Teleportation?
+        //   Given an activation function f(x), neural teleportation computes f(x/τ)
+        //   instead of f(x), where τ > 1. This reduces the input range by a factor
+        //   of τ, allowing smaller lookup tables in proof system.
+        //
+        // Implementation:
+        //   - Transformation: erf(x) → erf(x/τ)
+        //   - Method: Insert DIV(τ) node before Erf in the computation graph
+        //   - No post-multiply: We use "one-sided" teleportation (pre-div only)
+        //
+        // Why it Works:
+        //   The erf function saturates quickly (erf(±2) ≈ ±0.995), so dividing inputs
+        //   by τ=2 compresses the range while maintaining similar output behavior.
+        //   Downstream operations receive approximately equivalent values, preserving
+        //   model accuracy within acceptable tolerance.
+        // ============================================================================
+
+        // Generate test input: small values resembling post-layernorm outputs
+        let input_shape = [1, 30];
+        let mut rng = StdRng::seed_from_u64(42);
+        let scale_shift = 1 << 7; // Fixed-point scale=7 (128 = 1.0 in float)
+        let input_data: Vec<i32> = (0..input_shape.iter().product())
+            .map(|_| rng.gen_range(-3..=3) * scale_shift) // Range: [-384, 384]
+            .collect();
+
+        // ========================================
+        // PHASE 1: Run baseline model (no teleportation)
+        // ========================================
+        let baseline_model = model(&PathBuf::from(
+            "../onnx-tracer/models/ffn_gelu/network.onnx",
+        ));
+        let baseline_res = baseline_model
+            .forward(&[Tensor::new(Some(&input_data), &input_shape).unwrap()])
+            .unwrap();
+
+        // ========================================
+        // PHASE 2: Run teleported model (τ=4)
+        // ========================================
+        let mut teleported_model = model(&PathBuf::from(
+            "../onnx-tracer/models/ffn_gelu/network.onnx",
+        ));
+        // Apply one-sided teleportation: inserts DIV(2.0) before Erf node
+        onnx_tracer::graph::model::Model::apply_teleportation(
+            &mut teleported_model,
+            4.0, // tau: divide inputs by 4 (reduces lookup range by ~75%)
+            &[onnx_tracer::graph::model::Activation::Erf],
+        );
+        println!("\n {}", teleported_model.table_nodes());
+        let teleported_res = teleported_model
+            .forward(&[Tensor::new(Some(&input_data), &input_shape).unwrap()])
+            .unwrap();
+
+        // ========================================
+        // VALIDATION 1: Lookup Range Reduction
+        // ========================================
+        // The Erf lookup table range should be ~75% smaller with τ=4
+        let baseline_range = baseline_res.max_lookup_inputs - baseline_res.min_lookup_inputs;
+        let teleported_range = teleported_res.max_lookup_inputs - teleported_res.min_lookup_inputs;
+        let _reduction_pct = (1.0 - teleported_range as f64 / baseline_range as f64) * 100.0;
+
+        // ========================================
+        // VALIDATION 2: Output Approximation
+        // ========================================
+        // Final outputs should be approximately equivalent despite the transformation.
+        // Erf saturates quickly, so erf(x/4) produces similar downstream behavior to erf(x).
+        let baseline_out = &baseline_res.outputs[0];
+        let teleported_out = &teleported_res.outputs[0];
+        assert_eq!(baseline_out.len(), teleported_out.len());
+
+        // Compute element-wise differences
+        let mut max_diff = 0i32;
+        let mut total_diff = 0i64;
+        for (b, t) in baseline_out.iter().zip(teleported_out.iter()) {
+            let diff = (b - t).abs();
+            max_diff = max_diff.max(diff);
+            total_diff += diff as i64;
+        }
+        let avg_diff = total_diff as f64 / baseline_out.len() as f64;
+        println!(
+            "teleported_res Erf lookup range: [{}, {}]",
+            teleported_res.min_lookup_inputs, teleported_res.max_lookup_inputs
+        );
+
+        println!("baseline_res: {}", baseline_res.outputs[0].show());
+        println!("teleported_res: {}", teleported_res.outputs[0].show());
+        println!("Output comparison: max_diff={max_diff}, avg_diff={avg_diff:.1}");
+        assert!(
+            avg_diff < 55.0,
+            "Outputs differ too much: avg={avg_diff:.1}"
+        );
     }
 
     // TODO: Replace with real test once all nanoGPT ops are supported

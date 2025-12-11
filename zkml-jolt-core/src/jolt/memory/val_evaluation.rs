@@ -310,6 +310,7 @@ pub mod test {
         let shared_preprocessing = JoltSharedPreprocessing {
             bytecode: bytecode_preprocessing,
             precompiles: PrecompilePreprocessing::empty(),
+            fp_lookups: Default::default(),
         };
 
         let (trace, _) = trace(model_fn, input, &shared_preprocessing.bytecode);
@@ -332,6 +333,8 @@ pub mod test {
         let program_io = ProgramIO {
             input: Tensor::new(None, &[]).unwrap(),
             output: Tensor::new(None, &[]).unwrap(),
+            min_lookup_input: 0,
+            max_lookup_input: 0,
         };
 
         let mut prover_sm = StateManager::<'_, Fr, Blake2bTranscript, _>::new_prover(

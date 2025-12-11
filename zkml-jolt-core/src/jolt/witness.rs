@@ -312,6 +312,11 @@ pub enum VirtualPolynomial {
     RightInstructionInput,
     // HACK(Forpee): Temporary virtual polynomial for testing. Will remove once I get tdInc working for precompiles
     TdIncS,
+
+    /// Read address accumulator for fp lookup sumcheck. Index identifies the activation instance.
+    FpLookupRa(usize),
+    /// Claimed lookup value for fp lookup sumcheck. Index identifies the activation instance.
+    FpLookupRv(usize),
 }
 
 // pub static ALL_VIRTUAL_POLYNOMIALS: LazyLock<Vec<VirtualPolynomial>> = LazyLock::new(|| {

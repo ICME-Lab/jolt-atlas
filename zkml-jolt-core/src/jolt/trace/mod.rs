@@ -221,7 +221,14 @@ impl<'a> CycleAssembler<'a> {
     }
 }
 
-/// Convenience wrapper retained for tests and tooling that operate on a single cycle at a time.
+/// Generates Jolt cycles by inlining tensor operations from a raw ONNX cycle.
+///
+/// # Arguments
+/// * `raw_cycle` - The ONNX cycle containing tensor operation data
+/// * `instrs` - The Jolt bytecode instructions corresponding to the ONNX cycle
+///
+/// # Returns
+/// A vector of `JoltONNXCycle` representing the inlined execution trace.
 pub fn inline_tensor_cycle(
     raw_cycle: &AtlasCycle,
     instrs: &[JoltONNXBytecode],

@@ -3,8 +3,8 @@
 use crate::{
     instructions::{
         add::Add, broadcast::Broadcast, constant::Constant, div::Div, divi::DivI, einsum::Einsum,
-        eq::Eq, gte::Gte, input::Input, mul::Mul, relu::Relu, reshape::Reshape, rsqrt::Rsqrt,
-        select::Select, softmax::Softmax, sra::Sra, sub::Sub, sum::Sum,
+        eq::Eq, erf::Erf, gte::Gte, input::Input, mul::Mul, relu::Relu, reshape::Reshape,
+        rsqrt::Rsqrt, select::Select, softmax::Softmax, sra::Sra, sub::Sub, sum::Sum, tanh::Tanh,
     },
     trace_types::{AtlasCycle, AtlasInstr, MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode},
     utils::VirtualSlotCounter,
@@ -17,6 +17,7 @@ pub mod div;
 pub mod divi;
 pub mod einsum;
 pub mod eq;
+pub mod erf;
 pub mod gte;
 pub mod input;
 pub mod mul;
@@ -28,6 +29,7 @@ pub mod softmax;
 pub mod sra;
 pub mod sub;
 pub mod sum;
+pub mod tanh;
 pub mod virtuals;
 
 #[cfg(test)]
@@ -130,6 +132,7 @@ define_onnx_structs!(
     Div,
     DivI,
     Einsum(String),
+    Erf,
     Eq,
     Gte,
     Input,
@@ -141,7 +144,8 @@ define_onnx_structs!(
     Softmax,
     Sra,
     Sub,
-    Sum(usize)
+    Sum(usize),
+    Tanh
 );
 
 pub trait ElementWise {

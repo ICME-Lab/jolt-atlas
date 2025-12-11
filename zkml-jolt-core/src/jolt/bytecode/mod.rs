@@ -6,6 +6,7 @@ use crate::jolt::{
     sumcheck::SumcheckInstance,
     trace::WORD_SIZE,
 };
+use itertools::Itertools;
 use jolt_core::{
     field::JoltField,
     poly::commitment::commitment_scheme::CommitmentScheme,
@@ -252,6 +253,14 @@ impl BytecodePreprocessing {
                 )]
             })
             .collect()
+    }
+
+    /// For a given instruction, retrieves the runtime values from memory.
+    pub fn get_rv(&self, instr: &AtlasInstr, val: &[i64]) -> Vec<i64> {
+        self.collect_addresses(instr)
+            .iter()
+            .map(|&k| val[k])
+            .collect_vec()
     }
 }
 

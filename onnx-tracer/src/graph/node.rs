@@ -585,6 +585,7 @@ impl SupportedOp {
     ///
     pub fn is_lookup(&self) -> bool {
         match self {
+            SupportedOp::Nonlinear(LookupOp::Div { .. }) => false,
             SupportedOp::Nonlinear(_) => true,
             SupportedOp::RebaseScale(op) => op.inner.is_lookup(),
             _ => false,

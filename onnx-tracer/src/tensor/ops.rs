@@ -3742,6 +3742,37 @@ pub mod nonlinearities {
         .unwrap()
     }
 
+    /// Elementwise applies GELU (Gaussian Error Linear Unit) activation to a tensor of integers.
+    /// # Arguments
+    ///
+    /// * `a` - Tensor
+    /// * `scale_input` - Single value
+    /// # Examples
+    /// ```
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::gelu;
+    /// let x = Tensor::<i32>::new(
+    ///     Some(&[4, 25, 8, 1, 1, 0]),
+    ///     &[2, 3],
+    /// ).unwrap();
+    /// let result = gelu(&x, 128.0);
+    /// let expected = Tensor::<i32>::new(Some(&[2, 14, 4, 1, 1, 0]), &[2, 3]).unwrap();
+    /// assert_eq!(result, expected);
+    /// ```
+    pub fn gelu(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
+        a.par_enum_map(|_, a_i| {
+            let x = (a_i as f64) / scale_input;
+            // GELU approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+            let sqrt_2_over_pi = (2.0 / std::f64::consts::PI).sqrt();
+            let inner = sqrt_2_over_pi * (x + 0.044715 * x.powi(3));
+            let fout = 0.5 * x * (1.0 + inner.tanh());
+            let scaled_out = scale_input * fout;
+            let rounded = scaled_out.round();
+            Ok::<_, TensorError>(rounded as i32)
+        })
+        .unwrap()
+    }
+
     /// Elementwise applies arctanh activation to a tensor of integers.
     /// # Arguments
     ///

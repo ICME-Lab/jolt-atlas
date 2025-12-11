@@ -1,3 +1,5 @@
+use std::{cell::RefCell, rc::Rc};
+
 use jolt_core::{
     field::JoltField,
     poly::{
@@ -6,6 +8,7 @@ use jolt_core::{
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
+        opening_proof::{BIG_ENDIAN, OpeningPoint},
         unipoly::{CompressedUniPoly, UniPoly},
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
@@ -13,6 +16,8 @@ use jolt_core::{
     utils::{errors::ProofVerifyError, math::Math, thread::unsafe_allocate_zero_vec},
 };
 use rayon::prelude::*;
+
+use crate::jolt::{pcs::ProverOpeningAccumulator, sumcheck::SumcheckInstance};
 
 /// Implements the sumcheck prover for the core Shout PIOP when d = 1. See
 /// Figure 5 from the Twist+Shout paper.
@@ -32,20 +37,28 @@ use rayon::prelude::*;
 /// val: dictionnary of words for each index
 /// rv: output of gather for index in raf
 pub struct ShoutProof<F: JoltField, ProofTranscript: Transcript> {
-    core_piop_sumcheck: SumcheckInstanceProof<F, ProofTranscript>,
-    booleanity_sumcheck: SumcheckInstanceProof<F, ProofTranscript>,
-    ra_claim: F,
+    sumcheck_proof: SumcheckInstanceProof<F, ProofTranscript>,
+    core_piop_claims: ShoutSumcheckClaims<F>,
+    // ra_claim: F,
     ra_claim_prime: F,
-    rv_claim: F,
+    // rv_claim: F,
 }
 
-impl<F: JoltField, ProofTranscript: Transcript> ShoutProof<F, ProofTranscript> {
-    pub fn prove(
+struct ShoutProverState<F: JoltField> {
+    K: usize,
+    rv_claim: F,
+    z: F,
+    ra: MultilinearPolynomial<F>,
+    val: MultilinearPolynomial<F>,
+}
+
+impl<F: JoltField> ShoutProverState<F> {
+    fn initialize<ProofTranscript: Transcript>(
         lookup_table: Vec<F>,
-        read_addresses: Vec<usize>,
+        read_addresses: &[usize],
         r_cycle: &[F],
         transcript: &mut ProofTranscript,
-    ) -> Self {
+    ) -> (Self, Vec<F>, Vec<F>) {
         let K = lookup_table.len();
         let T = read_addresses.len();
         debug_assert_eq!(r_cycle.len(), T.log_2());
@@ -53,10 +66,7 @@ impl<F: JoltField, ProofTranscript: Transcript> ShoutProof<F, ProofTranscript> {
         // (see Section 4.2.1)
         let z: F = transcript.challenge_scalar();
 
-        let num_rounds = K.log_2();
-        let mut r_address: Vec<F> = Vec::with_capacity(num_rounds);
-
-        let E: Vec<F> = EqPolynomial::evals(&r_cycle);
+        let E: Vec<F> = EqPolynomial::evals(r_cycle);
         let F: Vec<F> = (0..K)
             .into_par_iter()
             .map(|k| {
@@ -79,68 +89,173 @@ impl<F: JoltField, ProofTranscript: Transcript> ShoutProof<F, ProofTranscript> {
         // Linear combination of the core PIOP claim and the Hamming weight claim (which is 1)
         let mut previous_claim = rv_claim + z;
 
-        let mut ra = MultilinearPolynomial::from(F.clone());
-        let mut val = MultilinearPolynomial::from(lookup_table);
+        let ra = MultilinearPolynomial::from(F.clone());
+        let val = MultilinearPolynomial::from(lookup_table);
 
-        const DEGREE: usize = 2;
+        let prover_state = Self {
+            K,
+            z,
+            rv_claim,
+            ra,
+            val,
+        };
+        (prover_state, E, F)
+    }
+}
 
-        // Prove the core PIOP and Hamming weight sumchecks in parallel
-        let mut compressed_polys: Vec<CompressedUniPoly<F>> = Vec::with_capacity(num_rounds);
-        for _ in 0..num_rounds {
-            let univariate_poly_evals: [F; 2] = (0..ra.len() / 2)
-                .into_par_iter()
-                .map(|i| {
-                    let ra_evals = ra.sumcheck_evals(i, DEGREE, BindingOrder::LowToHigh);
-                    let val_evals = val.sumcheck_evals(i, DEGREE, BindingOrder::LowToHigh);
+#[derive(Clone)]
+struct ShoutSumcheckClaims<F: JoltField> {
+    ra_claim: F,
+    rv_claim: F,
+}
 
-                    [
-                        ra_evals[0] * (z + val_evals[0]),
-                        ra_evals[1] * (z + val_evals[1]),
-                    ]
-                })
-                .reduce(
-                    || [F::zero(); 2],
-                    |running, new| [running[0] + new[0], running[1] + new[1]],
-                );
+struct ShoutVerifierState<F: JoltField> {
+    K: usize,
+    z: F,
+    val: MultilinearPolynomial<F>,
+}
 
-            let univariate_poly = UniPoly::from_evals(&[
-                univariate_poly_evals[0],
-                previous_claim - univariate_poly_evals[0],
-                univariate_poly_evals[1],
-            ]);
+impl<F: JoltField> ShoutVerifierState<F> {
+    fn initialize<ProofTranscript: Transcript>(
+        lookup_table: Vec<F>,
+        transcript: &mut ProofTranscript,
+    ) -> Self {
+        let K = lookup_table.len();
+        let z: F = transcript.challenge_scalar();
+        let val = MultilinearPolynomial::from(lookup_table);
+        Self { K, z, val }
+    }
+}
 
-            let compressed_poly = univariate_poly.compress();
-            compressed_poly.append_to_transcript(transcript);
-            compressed_polys.push(compressed_poly);
+struct ShoutSumcheck<F: JoltField> {
+    prover_state: Option<ShoutProverState<F>>,
+    verifier_state: Option<ShoutVerifierState<F>>,
+    claims: Option<ShoutSumcheckClaims<F>>,
+}
 
-            let r_j: F = transcript.challenge_scalar();
-            r_address.push(r_j);
-
-            previous_claim = univariate_poly.evaluate(&r_j);
-
-            // Bind polynomials
-            rayon::join(
-                || ra.bind_parallel(r_j, BindingOrder::LowToHigh),
-                || val.bind_parallel(r_j, BindingOrder::LowToHigh),
-            );
+impl<F: JoltField, ProofTranscript: Transcript> BatchableSumcheckInstance<F, ProofTranscript>
+    for ShoutSumcheck<F>
+{
+    fn num_rounds(&self) -> usize {
+        if self.prover_state.is_some() {
+            self.prover_state.as_ref().unwrap().K.log_2()
+        } else if self.verifier_state.is_some() {
+            self.verifier_state.as_ref().unwrap().K.log_2()
+        } else {
+            panic!("Neither prover state nor verifier state is initialized");
         }
+    }
 
-        let ra_claim = ra.final_sumcheck_claim();
+    #[inline(always)]
+    fn degree(&self) -> usize {
+        2
+    }
 
-        let core_piop_sumcheck_proof = SumcheckInstanceProof::new(compressed_polys);
+    fn input_claim(&self) -> F {
+        if self.prover_state.is_some() {
+            let ShoutProverState { rv_claim, z, .. } = self.prover_state.as_ref().unwrap();
+            // Linear combination of the core PIOP claim and the Hamming weight claim (which is 1)
+            *rv_claim + z
+        } else if self.verifier_state.is_some() {
+            let ShoutVerifierState { z, .. } = self.verifier_state.as_ref().unwrap();
+            let ShoutSumcheckClaims { rv_claim, .. } = self.claims.as_ref().unwrap();
+            // Linear combination of the core PIOP claim and the Hamming weight claim (which is 1)
+            *rv_claim + z
+        } else {
+            panic!("Neither prover state nor verifier state is initialized");
+        }
+    }
 
-        let (booleanity_sumcheck_proof, _r_address, _r_cycle, ra_claim_prime) =
-            prove_booleanity(read_addresses, &r_address, E, F, transcript);
+    #[tracing::instrument(skip_all)]
+    fn compute_prover_message(&self, _: usize) -> Vec<F> {
+        let ShoutProverState { ra, val, z, .. } = self.prover_state.as_ref().unwrap();
+
+        let degree = <Self as BatchableSumcheckInstance<F, ProofTranscript>>::degree(self);
+
+        let univariate_poly_evals: [F; 2] = (0..ra.len() / 2)
+            .into_par_iter()
+            .map(|i| {
+                let ra_evals = ra.sumcheck_evals(i, degree, BindingOrder::LowToHigh);
+                let val_evals = val.sumcheck_evals(i, degree, BindingOrder::LowToHigh);
+
+                [
+                    ra_evals[0] * (*z + val_evals[0]),
+                    ra_evals[1] * (*z + val_evals[1]),
+                ]
+            })
+            .reduce(
+                || [F::zero(); 2],
+                |running, new| [running[0] + new[0], running[1] + new[1]],
+            );
+        univariate_poly_evals.to_vec()
+    }
+
+    #[tracing::instrument(skip_all)]
+    fn bind(&mut self, r_j: F, _: usize) {
+        let ShoutProverState { ra, val, .. } = self.prover_state.as_mut().unwrap();
+        rayon::join(
+            || ra.bind_parallel(r_j, BindingOrder::LowToHigh),
+            || val.bind_parallel(r_j, BindingOrder::LowToHigh),
+        );
+    }
+
+    fn cache_openings(&mut self) {
+        debug_assert!(self.claims.is_none());
+        let ShoutProverState { rv_claim, ra, .. } = self.prover_state.as_ref().unwrap();
+        self.claims = Some(ShoutSumcheckClaims {
+            ra_claim: ra.final_sumcheck_claim(),
+            rv_claim: *rv_claim,
+        });
+    }
+
+    fn expected_output_claim(&self, r: &[F]) -> F {
+        let ShoutVerifierState { z, val, .. } = self.verifier_state.as_ref().unwrap();
+        let ShoutSumcheckClaims { ra_claim, .. } = self.claims.as_ref().unwrap();
+
+        let r_address: Vec<F> = r.into_iter().rev().copied().collect();
+        *ra_claim * (*z + val.evaluate(&r_address))
+    }
+}
+
+impl<F: JoltField, ProofTranscript: Transcript> ShoutProof<F, ProofTranscript> {
+    #[tracing::instrument(skip_all, name = "ShoutProof::prove")]
+    pub fn prove(
+        lookup_table: Vec<F>,
+        read_addresses: Vec<usize>,
+        r_cycle: &[F],
+        transcript: &mut ProofTranscript,
+    ) -> Self {
+        let (core_piop_prover_state, E, F) =
+            ShoutProverState::initialize(lookup_table, &read_addresses, r_cycle, transcript);
+        let booleanity_prover_state =
+            BooleanityProverState::initialize(read_addresses, E, F, transcript);
+
+        let mut core_piop_sumcheck = ShoutSumcheck {
+            prover_state: Some(core_piop_prover_state),
+            verifier_state: None,
+            claims: None,
+        };
+
+        let mut booleanity_sumcheck = BooleanitySumcheck {
+            prover_state: Some(booleanity_prover_state),
+            verifier_state: None,
+            ra_claim: None,
+        };
+
+        let (sumcheck_proof, _r_sumcheck) = BatchedSumcheck::prove(
+            vec![&mut core_piop_sumcheck, &mut booleanity_sumcheck],
+            transcript,
+        );
+
+        let core_piop_claims = core_piop_sumcheck.claims.unwrap();
 
         // TODO: Reduce 2 ra claims to 1 (Section 4.5.2 of Proofs, Arguments, and Zero-Knowledge)
         // TODO: Append to opening proof accumulator
 
         Self {
-            core_piop_sumcheck: core_piop_sumcheck_proof,
-            booleanity_sumcheck: booleanity_sumcheck_proof,
-            ra_claim,
-            ra_claim_prime,
-            rv_claim,
+            sumcheck_proof,
+            core_piop_claims,
+            ra_claim_prime: booleanity_sumcheck.ra_claim.unwrap(),
         }
     }
 
@@ -151,34 +266,27 @@ impl<F: JoltField, ProofTranscript: Transcript> ShoutProof<F, ProofTranscript> {
         transcript: &mut ProofTranscript,
     ) -> Result<(), ProofVerifyError> {
         let K = lookup_table.len();
-        let T = r_cycle.len().pow2();
-        let z: F = transcript.challenge_scalar();
 
-        let (sumcheck_claim, mut r_address) =
-            self.core_piop_sumcheck
-                .verify(self.rv_claim + z, K.log_2(), 2, transcript)?;
-        r_address = r_address.into_iter().rev().collect();
-        let val = MultilinearPolynomial::from(lookup_table);
+        let core_piop_verifier_state = ShoutVerifierState::initialize(lookup_table, transcript);
+        let booleanity_verifier_state = BooleanityVerifierState::initialize(r_cycle, K, transcript);
 
-        assert_eq!(
-            self.ra_claim * (z + val.evaluate(&r_address)),
-            sumcheck_claim,
-            "Core PIOP + Hamming weight sumcheck failed"
-        );
+        let core_piop_sumcheck = ShoutSumcheck {
+            prover_state: None,
+            verifier_state: Some(core_piop_verifier_state),
+            claims: Some(self.core_piop_claims.clone()),
+        };
 
-        let (sumcheck_claim, r_bouleanity) =
-            self.booleanity_sumcheck
-                .verify(F::zero(), K.log_2() + T.log_2(), 3, transcript)?;
-        let (r_address_prime, r_cycle_prime) = r_bouleanity.split_at(K.log_2());
-        let eq_eval_address = EqPolynomial::mle(&r_address, r_address_prime);
-        let r_cycle: Vec<F> = r_cycle.to_vec().into_iter().rev().collect();
-        let eq_eval_cycle = EqPolynomial::mle(&r_cycle, r_cycle_prime);
+        let booleanity_sumcheck = BooleanitySumcheck {
+            prover_state: None,
+            verifier_state: Some(booleanity_verifier_state),
+            ra_claim: Some(self.ra_claim_prime),
+        };
 
-        assert_eq!(
-            eq_eval_address * eq_eval_cycle * (self.ra_claim_prime.square() - self.ra_claim_prime),
-            sumcheck_claim,
-            "Booleanity sumcheck failed"
-        );
+        let _r_sumcheck = BatchedSumcheck::verify(
+            &self.sumcheck_proof,
+            vec![&core_piop_sumcheck, &booleanity_sumcheck],
+            transcript,
+        )?;
 
         // TODO: Reduce 2 ra claims to 1 (Section 4.5.2 of Proofs, Arguments, and Zero-Knowledge)
         // TODO: Append to opening proof accumulator
@@ -268,6 +376,311 @@ pub fn prove_core_shout_piop<F: JoltField, ProofTranscript: Transcript>(
         sumcheck_claim,
         ra_claim,
     )
+}
+
+struct BooleanityProverState<F: JoltField> {
+    read_addresses: Vec<usize>,
+    K: usize,
+    T: usize,
+    B: MultilinearPolynomial<F>,
+    F: Vec<F>,
+    G: Vec<F>,
+    D: MultilinearPolynomial<F>,
+    /// Initialized after first log(K) rounds of sumcheck
+    H: Option<MultilinearPolynomial<F>>,
+    /// EQ(k_m, c) for k_m \in {0, 1} and c \in {0, 2, 3}
+    eq_km_c: [[F; 3]; 2],
+    /// EQ(k_m, c)^2 for k_m \in {0, 1} and c \in {0, 2, 3}
+    eq_km_c_squared: [[F; 3]; 2],
+}
+
+impl<F: JoltField> BooleanityProverState<F> {
+    #[tracing::instrument(skip_all)]
+    fn initialize<ProofTranscript: Transcript>(
+        read_addresses: Vec<usize>,
+        D: Vec<F>,
+        G: Vec<F>,
+        transcript: &mut ProofTranscript,
+    ) -> Self {
+        let K = G.len();
+        let r: Vec<F> = transcript.challenge_vector(K.log_2());
+        const DEGREE: usize = 3;
+        let T = read_addresses.len();
+
+        let D = MultilinearPolynomial::from(D);
+        let B = MultilinearPolynomial::from(EqPolynomial::evals(&r)); // (53)
+        let mut F: Vec<F> = unsafe_allocate_zero_vec(K);
+        F[0] = F::one();
+
+        // EQ(k_m, c) for k_m \in {0, 1} and c \in {0, 2, 3}
+        let eq_km_c: [[F; DEGREE]; 2] = [
+            [
+                F::one(),        // eq(0, 0) = 0 * 0 + (1 - 0) * (1 - 0)
+                F::from_i64(-1), // eq(0, 2) = 0 * 2 + (1 - 0) * (1 - 2)
+                F::from_i64(-2), // eq(0, 3) = 0 * 3 + (1 - 0) * (1 - 3)
+            ],
+            [
+                F::zero(),     // eq(1, 0) = 1 * 0 + (1 - 1) * (1 - 0)
+                F::from_u8(2), // eq(1, 2) = 1 * 2 + (1 - 1) * (1 - 2)
+                F::from_u8(3), // eq(1, 3) = 1 * 3 + (1 - 1) * (1 - 3)
+            ],
+        ];
+        // EQ(k_m, c)^2 for k_m \in {0, 1} and c \in {0, 2, 3}
+        let eq_km_c_squared: [[F; DEGREE]; 2] = [
+            [F::one(), F::one(), F::from_u8(4)],
+            [F::zero(), F::from_u8(4), F::from_u8(9)],
+        ];
+
+        Self {
+            read_addresses,
+            K,
+            T,
+            B,
+            F,
+            G,
+            D,
+            H: None,
+            eq_km_c,
+            eq_km_c_squared,
+        }
+    }
+}
+
+struct BooleanityVerifierState<F: JoltField> {
+    eq_r_address: Vec<F>,
+    eq_r_cycle: Vec<F>,
+}
+
+impl<F: JoltField> BooleanityVerifierState<F> {
+    fn initialize<ProofTranscript: Transcript>(
+        r_cycle: &[F],
+        K: usize,
+        transcript: &mut ProofTranscript,
+    ) -> Self {
+        let r_cycle: Vec<_> = r_cycle.iter().copied().rev().collect();
+        let r_address: Vec<F> = transcript
+            .challenge_vector(K.log_2())
+            .into_iter()
+            .rev()
+            .collect();
+
+        Self {
+            eq_r_cycle: EqPolynomial::evals(&r_cycle),
+            eq_r_address: EqPolynomial::evals(&r_address),
+        }
+    }
+}
+
+struct BooleanitySumcheck<F: JoltField> {
+    verifier_state: Option<BooleanityVerifierState<F>>,
+    prover_state: Option<BooleanityProverState<F>>,
+    ra_claim: Option<F>,
+}
+
+impl<F: JoltField, ProofTranscript: Transcript> BatchableSumcheckInstance<F, ProofTranscript>
+    for BooleanitySumcheck<F>
+{
+    fn degree(&self) -> usize {
+        3
+    }
+
+    fn num_rounds(&self) -> usize {
+        if self.prover_state.is_some() {
+            let BooleanityProverState { K, T, .. } = self.prover_state.as_ref().unwrap();
+            K.log_2() + T.log_2()
+        } else if self.verifier_state.is_some() {
+            let BooleanityVerifierState {
+                eq_r_cycle,
+                eq_r_address,
+            } = self.verifier_state.as_ref().unwrap();
+            let K = eq_r_address.len();
+            let T = eq_r_cycle.len();
+            K.log_2() + T.log_2()
+        } else {
+            panic!("Neither prover state nor verifier state is initialized");
+        }
+    }
+
+    fn input_claim(&self) -> F {
+        F::zero()
+    }
+
+    fn compute_prover_message(&self, round: usize) -> Vec<F> {
+        const DEGREE: usize = 3;
+        let BooleanityProverState {
+            K,
+            B,
+            F,
+            G,
+            D,
+            H,
+            eq_km_c,
+            eq_km_c_squared,
+            ..
+        } = self.prover_state.as_ref().unwrap();
+
+        if round < K.log_2() {
+            // First log(K) rounds of sumcheck
+            let m = round + 1;
+
+            let univariate_poly_evals: [F; DEGREE] = (0..B.len() / 2)
+                .into_par_iter()
+                .map(|k_prime| {
+                    let B_evals = B.sumcheck_evals(k_prime, DEGREE, BindingOrder::LowToHigh);
+                    let inner_sum = G[k_prime << m..(k_prime + 1) << m]
+                        .par_iter()
+                        .enumerate()
+                        .map(|(k, &G_k)| {
+                            // Since we're binding variables from low to high, k_m is the high bit
+                            let k_m = k >> (m - 1);
+                            // We then index into F using (k_{m-1}, ..., k_1)
+                            let F_k = F[k % (1 << (m - 1))];
+                            // G_times_F := G[k] * F[k_1, ...., k_{m-1}]
+                            let G_times_F = G_k * F_k;
+                            // For c \in {0, 2, 3} compute:
+                            //    G[k] * (F[k_1, ...., k_{m-1}, c]^2 - F[k_1, ...., k_{m-1}, c])
+                            //    = G_times_F * (eq(k_m, c)^2 * F[k_1, ...., k_{m-1}] - eq(k_m, c))
+                            [
+                                G_times_F * (eq_km_c_squared[k_m][0] * F_k - eq_km_c[k_m][0]),
+                                G_times_F * (eq_km_c_squared[k_m][1] * F_k - eq_km_c[k_m][1]),
+                                G_times_F * (eq_km_c_squared[k_m][2] * F_k - eq_km_c[k_m][2]),
+                            ]
+                        })
+                        .reduce(
+                            || [F::zero(); DEGREE],
+                            |running, new| {
+                                [
+                                    running[0] + new[0],
+                                    running[1] + new[1],
+                                    running[2] + new[2],
+                                ]
+                            },
+                        );
+
+                    [
+                        B_evals[0] * inner_sum[0],
+                        B_evals[1] * inner_sum[1],
+                        B_evals[2] * inner_sum[2],
+                    ]
+                })
+                .reduce(
+                    || [F::zero(); DEGREE],
+                    |running, new| {
+                        [
+                            running[0] + new[0],
+                            running[1] + new[1],
+                            running[2] + new[2],
+                        ]
+                    },
+                );
+
+            univariate_poly_evals.to_vec()
+        } else {
+            // Last log(T) rounds of sumcheck
+
+            let mut univariate_poly_evals: [F; 3] = (0..D.len() / 2)
+                .into_par_iter()
+                .map(|i| {
+                    let D_evals = D.sumcheck_evals(i, DEGREE, BindingOrder::LowToHigh);
+                    let H_evals =
+                        H.as_ref()
+                            .unwrap()
+                            .sumcheck_evals(i, DEGREE, BindingOrder::LowToHigh);
+
+                    [
+                        D_evals[0] * (H_evals[0] * H_evals[0] - H_evals[0]),
+                        D_evals[1] * (H_evals[1] * H_evals[1] - H_evals[1]),
+                        D_evals[2] * (H_evals[2] * H_evals[2] - H_evals[2]),
+                    ]
+                })
+                .reduce(
+                    || [F::zero(); 3],
+                    |running, new| {
+                        [
+                            running[0] + new[0],
+                            running[1] + new[1],
+                            running[2] + new[2],
+                        ]
+                    },
+                );
+
+            let eq_r_r = B.final_sumcheck_claim();
+            univariate_poly_evals = [
+                eq_r_r * univariate_poly_evals[0],
+                eq_r_r * univariate_poly_evals[1],
+                eq_r_r * univariate_poly_evals[2],
+            ];
+
+            univariate_poly_evals.to_vec()
+        }
+    }
+
+    fn bind(&mut self, r_j: F, round: usize) {
+        let BooleanityProverState {
+            K,
+            B,
+            F,
+            D,
+            H,
+            read_addresses,
+            ..
+        } = self.prover_state.as_mut().unwrap();
+        if round < K.log_2() {
+            // First log(K) rounds of sumcheck
+            B.bind_parallel(r_j, BindingOrder::LowToHigh);
+
+            let inner_span = tracing::span!(tracing::Level::INFO, "Update F");
+            let _inner_guard = inner_span.enter();
+
+            // Update F for this round (see Equation 55)
+            let (F_left, F_right) = F.split_at_mut(1 << round);
+            F_left
+                .par_iter_mut()
+                .zip(F_right.par_iter_mut())
+                .for_each(|(x, y)| {
+                    *y = *x * r_j;
+                    *x -= *y;
+                });
+
+            if round == K.log_2() - 1 {
+                // Transition point; initialize H
+                *H = Some(MultilinearPolynomial::from(
+                    read_addresses.par_iter().map(|&k| F[k]).collect::<Vec<_>>(),
+                ));
+            }
+        } else {
+            // Last log(T) rounds of sumcheck
+            rayon::join(
+                || D.bind_parallel(r_j, BindingOrder::LowToHigh),
+                || {
+                    H.as_mut()
+                        .unwrap()
+                        .bind_parallel(r_j, BindingOrder::LowToHigh)
+                },
+            );
+        }
+    }
+
+    fn cache_openings(&mut self) {
+        debug_assert!(self.ra_claim.is_none());
+        let BooleanityProverState { H, .. } = self.prover_state.as_ref().unwrap();
+        let ra_claim = H.as_ref().unwrap().final_sumcheck_claim();
+        self.ra_claim = Some(ra_claim);
+    }
+
+    fn expected_output_claim(&self, r: &[F]) -> F {
+        let BooleanityVerifierState {
+            eq_r_address,
+            eq_r_cycle,
+        } = self.verifier_state.as_ref().unwrap();
+        let K = eq_r_address.len();
+        let (r_address_prime, r_cycle_prime) = r.split_at(K.log_2());
+        let ra_claim = self.ra_claim.unwrap();
+
+        MultilinearPolynomial::from(eq_r_address.clone()).evaluate(r_address_prime)
+            * MultilinearPolynomial::from(eq_r_cycle.clone()).evaluate(r_cycle_prime)
+            * (ra_claim.square() - ra_claim)
+    }
 }
 
 /// Implements the sumcheck prover for the Booleanity check in step 3 of
@@ -625,6 +1038,241 @@ pub fn prove_raf_evaluation<F: JoltField, ProofTranscript: Transcript>(
     (SumcheckInstanceProof::new(compressed_polys), ra_claim)
 }
 
+/// Trait for a sumcheck instance that can be batched with other instances.
+///
+/// This trait defines the interface needed to participate in the `BatchedSumcheck` protocol,
+/// which reduces verifier cost and proof size by batching multiple sumcheck protocols.
+pub trait BatchableSumcheckInstance<F: JoltField, ProofTranscript: Transcript> {
+    /// Returns the maximum degree of the sumcheck polynomial.
+    fn degree(&self) -> usize;
+
+    /// Returns the number of rounds/variables in this sumcheck instance.
+    fn num_rounds(&self) -> usize;
+
+    /// Returns the initial claim of this sumcheck instance, i.e.
+    /// input_claim = \sum_{x \in \{0, 1}^N} P(x)
+    fn input_claim(&self) -> F;
+
+    /// Computes the prover's message for a specific round of the sumcheck protocol.
+    /// Returns the evaluations of the sumcheck polynomial at 0, 2, 3, ..., degree.
+    /// The point evaluation at 1 can be interpolated using the previous round's claim.
+    fn compute_prover_message(&self, round: usize) -> Vec<F>;
+
+    /// Binds this sumcheck instance to the verifier's challenge from a specific round.
+    /// This updates the internal state to prepare for the next round.
+    fn bind(&mut self, r_j: F, round: usize);
+
+    /// Caches polynomial opening claims needed after the sumcheck protocol completes.
+    /// These openings will later be proven using either an opening proof or another sumcheck.
+    fn cache_openings(&mut self);
+
+    /// Computes the expected output claim given the verifier's challenges.
+    /// This is used to verify the final result of the sumcheck protocol.
+    fn expected_output_claim(&self, r: &[F]) -> F;
+}
+
+/// Implements the standard technique for batching parallel sumchecks to reduce
+/// verifier cost and proof size.
+///
+/// For details, refer to Jim Posen's ["Perspectives on Sumcheck Batching"](https://hackmd.io/s/HyxaupAAA).
+/// We do what they describe as "front-loaded" batch sumcheck.
+pub enum BatchedSumcheck {}
+impl BatchedSumcheck {
+    pub fn prove<F: JoltField, ProofTranscript: Transcript>(
+        mut sumcheck_instances: Vec<&mut dyn BatchableSumcheckInstance<F, ProofTranscript>>,
+        transcript: &mut ProofTranscript,
+    ) -> (SumcheckInstanceProof<F, ProofTranscript>, Vec<F>) {
+        let max_num_rounds = sumcheck_instances
+            .iter()
+            .map(|sumcheck| sumcheck.num_rounds())
+            .max()
+            .unwrap();
+
+        let batching_coeffs: Vec<F> = transcript.challenge_vector(sumcheck_instances.len());
+
+        // To see why we may need to scale by a power of two, consider a batch of
+        // two sumchecks:
+        //   claim_a = \sum_x P(x)             where x \in {0, 1}^M
+        //   claim_b = \sum_{x, y} Q(x, y)     where x \in {0, 1}^M, y \in {0, 1}^N
+        // Then the batched sumcheck is:
+        //   \sum_{x, y} A * P(x) + B * Q(x, y)  where A and B are batching coefficients
+        //   = A * \sum_y \sum_x P(x) + B * \sum_{x, y} Q(x, y)
+        //   = A * \sum_y claim_a + B * claim_b
+        //   = A * 2^N * claim_a + B * claim_b
+        let mut individual_claims: Vec<F> = sumcheck_instances
+            .iter()
+            .map(|sumcheck| {
+                let num_rounds = sumcheck.num_rounds();
+                sumcheck
+                    .input_claim()
+                    .mul_u64(1 << (max_num_rounds - num_rounds))
+            })
+            .collect();
+
+        #[cfg(test)]
+        let mut batched_claim: F = individual_claims
+            .iter()
+            .zip(batching_coeffs.iter())
+            .map(|(claim, coeff)| *claim * coeff)
+            .sum();
+
+        let mut r: Vec<F> = Vec::with_capacity(max_num_rounds);
+        let mut compressed_polys: Vec<CompressedUniPoly<F>> = Vec::with_capacity(max_num_rounds);
+
+        for round in 0..max_num_rounds {
+            let remaining_rounds = max_num_rounds - round;
+
+            let univariate_polys: Vec<UniPoly<F>> = sumcheck_instances
+                .iter()
+                .zip(individual_claims.iter())
+                .map(|(sumcheck, previous_claim)| {
+                    let num_rounds = sumcheck.num_rounds();
+                    if remaining_rounds > num_rounds {
+                        // We haven't gotten to this sumcheck's variables yet, so
+                        // the univariate polynomial is just a constant equal to
+                        // the input claim, scaled by a power of 2.
+                        let num_rounds = sumcheck.num_rounds();
+                        let scaled_input_claim = sumcheck
+                            .input_claim()
+                            .mul_u64(1 << (remaining_rounds - num_rounds - 1));
+                        // Constant polynomial
+                        UniPoly::from_coeff(vec![scaled_input_claim])
+                    } else {
+                        let offset = max_num_rounds - sumcheck.num_rounds();
+                        let mut univariate_poly_evals =
+                            sumcheck.compute_prover_message(round - offset);
+                        univariate_poly_evals.insert(1, *previous_claim - univariate_poly_evals[0]);
+                        UniPoly::from_evals(&univariate_poly_evals)
+                    }
+                })
+                .collect();
+
+            // Linear combination of individual univariate polynomials
+            let batched_univariate_poly: UniPoly<F> =
+                univariate_polys.iter().zip(batching_coeffs.iter()).fold(
+                    UniPoly::from_coeff(vec![]),
+                    |mut batched_poly, (poly, coeff)| {
+                        batched_poly += &(poly * coeff);
+                        batched_poly
+                    },
+                );
+
+            let compressed_poly = batched_univariate_poly.compress();
+
+            // append the prover's message to the transcript
+            compressed_poly.append_to_transcript(transcript);
+            let r_j = transcript.challenge_scalar();
+            r.push(r_j);
+
+            // Cache individual claims for this round
+            individual_claims
+                .iter_mut()
+                .zip(univariate_polys.into_iter())
+                .for_each(|(claim, poly)| *claim = poly.evaluate(&r_j));
+
+            #[cfg(test)]
+            {
+                // Sanity check
+                let h0 = batched_univariate_poly.evaluate(&F::zero());
+                let h1 = batched_univariate_poly.evaluate(&F::one());
+                assert_eq!(
+                    h0 + h1,
+                    batched_claim,
+                    "round {}: H(0) + H(1) = {} + {} != {}",
+                    round,
+                    h0,
+                    h1,
+                    batched_claim
+                );
+                batched_claim = batched_univariate_poly.evaluate(&r_j);
+            }
+
+            for sumcheck in sumcheck_instances.iter_mut() {
+                // If a sumcheck instance has fewer than `max_num_rounds`,
+                // we wait until there are <= `sumcheck.num_rounds()` left
+                // before binding its variables.
+                if remaining_rounds <= sumcheck.num_rounds() {
+                    let offset = max_num_rounds - sumcheck.num_rounds();
+                    sumcheck.bind(r_j, round - offset);
+                }
+            }
+
+            compressed_polys.push(compressed_poly);
+        }
+
+        for sumcheck in sumcheck_instances.iter_mut() {
+            // Cache polynomial opening claims, to be proven using either an
+            // opening proof or sumcheck (in the case of virtual polynomials).
+            sumcheck.cache_openings();
+        }
+
+        (SumcheckInstanceProof::new(compressed_polys), r)
+    }
+
+    pub fn verify<F: JoltField, ProofTranscript: Transcript>(
+        proof: &SumcheckInstanceProof<F, ProofTranscript>,
+        sumcheck_instances: Vec<&dyn BatchableSumcheckInstance<F, ProofTranscript>>,
+        transcript: &mut ProofTranscript,
+    ) -> Result<Vec<F>, ProofVerifyError> {
+        let max_degree = sumcheck_instances
+            .iter()
+            .map(|sumcheck| sumcheck.degree())
+            .max()
+            .unwrap();
+        let max_num_rounds = sumcheck_instances
+            .iter()
+            .map(|sumcheck| sumcheck.num_rounds())
+            .max()
+            .unwrap();
+
+        let batching_coeffs: Vec<F> = transcript.challenge_vector(sumcheck_instances.len());
+
+        // To see why we may need to scale by a power of two, consider a batch of
+        // two sumchecks:
+        //   claim_a = \sum_x P(x)             where x \in {0, 1}^M
+        //   claim_b = \sum_{x, y} Q(x, y)     where x \in {0, 1}^M, y \in {0, 1}^N
+        // Then the batched sumcheck is:
+        //   \sum_{x, y} A * P(x) + B * Q(x, y)  where A and B are batching coefficients
+        //   = A * \sum_y \sum_x P(x) + B * \sum_{x, y} Q(x, y)
+        //   = A * \sum_y claim_a + B * claim_b
+        //   = A * 2^N * claim_a + B * claim_b
+        let claim: F = sumcheck_instances
+            .iter()
+            .zip(batching_coeffs.iter())
+            .map(|(sumcheck, coeff)| {
+                let num_rounds = sumcheck.num_rounds();
+                sumcheck
+                    .input_claim()
+                    .mul_u64(1 << (max_num_rounds - num_rounds))
+                    * coeff
+            })
+            .sum();
+
+        let (output_claim, r_sumcheck) =
+            proof.verify(claim, max_num_rounds, max_degree, transcript)?;
+
+        let expected_output_claim = sumcheck_instances
+            .iter()
+            .zip(batching_coeffs.iter())
+            .map(|(sumcheck, coeff)| {
+                // If a sumcheck instance has fewer than `max_num_rounds`,
+                // we wait until there are <= `sumcheck.num_rounds()` left
+                // before binding its variables.
+                // So, the sumcheck *actually* uses just the last `sumcheck.num_rounds()`
+                // values of `r_sumcheck`.
+                let r_slice = &r_sumcheck[max_num_rounds - sumcheck.num_rounds()..];
+                sumcheck.expected_output_claim(r_slice) * coeff
+            })
+            .sum();
+
+        if output_claim != expected_output_claim {
+            return Err(ProofVerifyError::InternalError);
+        }
+
+        Ok(r_sumcheck)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,22 +1295,24 @@ mod tests {
 
         let mut prover_transcript = KeccakTranscript::new(b"test_transcript");
         let r_cycle: Vec<Fr> = prover_transcript.challenge_vector(NUM_LOOKUPS.log_2());
-        let proof = ShoutProof::prove(
+
+        let shout_proof = ShoutProof::prove(
             lookup_table.clone(),
-            read_addresses.clone(),
+            read_addresses,
             &r_cycle,
             &mut prover_transcript,
         );
 
         let mut verifier_transcript = KeccakTranscript::new(b"test_transcript");
-        verifier_transcript.compare_to(prover_transcript);
         let _r_cycle: Vec<Fr> = verifier_transcript.challenge_vector(NUM_LOOKUPS.log_2());
-        let verification_result = proof.verify(lookup_table, &r_cycle, &mut verifier_transcript);
+        let verification_result =
+            shout_proof.verify(lookup_table, &r_cycle, &mut verifier_transcript);
+
         assert!(
             verification_result.is_ok(),
             "Verification failed with error: {:?}",
             verification_result.err()
-        );
+        )
     }
 
     #[test]

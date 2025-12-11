@@ -5,6 +5,7 @@
 
 use super::{ActivationTable, ActivationType, usize_to_n_bits};
 use onnx_tracer::tensor::Tensor;
+use serde::{Deserialize, Serialize};
 
 /// Error function lookup table implementation.
 ///
@@ -13,7 +14,7 @@ use onnx_tracer::tensor::Tensor;
 /// - erf(∞) = 1
 /// - erf(-∞) = -1
 /// - erf(-x) = -erf(x) (odd function)
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct ErfTable;
 
 impl ErfTable {

@@ -63,6 +63,7 @@ pub enum SumcheckId {
     PrecompileReadChecking,
     PrecompileValFinal,
     FpLookup,
+    FpLookupBooleanity,
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord)]

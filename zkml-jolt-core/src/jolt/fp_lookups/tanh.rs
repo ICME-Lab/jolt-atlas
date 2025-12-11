@@ -5,6 +5,7 @@
 
 use super::{ActivationTable, ActivationType, usize_to_n_bits};
 use onnx_tracer::tensor::Tensor;
+use serde::{Deserialize, Serialize};
 
 /// Hyperbolic tangent lookup table implementation.
 ///
@@ -17,7 +18,7 @@ use onnx_tracer::tensor::Tensor;
 /// Tanh is similar to erf but has different curvature:
 /// - tanh saturates faster than erf
 /// - tanh(x) ≈ erf(x * sqrt(π) / 2) for small x
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct TanhTable;
 
 impl TanhTable {

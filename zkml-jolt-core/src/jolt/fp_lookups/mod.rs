@@ -23,6 +23,7 @@ use jolt_core::{
     field::JoltField,
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
+        compact_polynomial::SmallScalar,
         eq_poly::EqPolynomial,
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
@@ -31,7 +32,11 @@ use jolt_core::{
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math, thread::unsafe_allocate_zero_vec},
+    utils::{
+        errors::ProofVerifyError,
+        math::Math,
+        thread::{drop_in_background_thread, unsafe_allocate_zero_vec},
+    },
 };
 use onnx_tracer::{tensor::Tensor, trace_types::AtlasOpcode};
 use rayon::prelude::*;
@@ -43,6 +48,9 @@ pub mod tanh;
 
 // Maximum allowed LUT size exponent (2^16 = 65536 entries)
 pub const MAX_LOG_FP_LOOKUP_TABLE_SIZE: usize = 16;
+
+// Default scale factor for activation outputs (maps [-1, 1] to [-128, 128])
+pub const DEFAULT_ACTIVATION_SCALE: f64 = 128.0;
 
 /// Types of activation functions supported by the fp_lookups module
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -67,6 +75,54 @@ impl ActivationType {
             AtlasOpcode::Tanh => Some(ActivationType::Tanh),
             _ => None,
         }
+    }
+}
+
+/// Enum wrapper for activation lookup tables.
+/// This allows us to use trait methods on concrete types while maintaining extensibility.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ActivationLookupTable {
+    Erf(erf::ErfTable),
+    Tanh(tanh::TanhTable),
+}
+
+/// Macro to delegate method calls to the appropriate variant in ActivationLookupTable
+macro_rules! delegate_activation_method {
+    ($self:expr, $method:ident $(, $arg:expr)*) => {
+        match $self {
+            ActivationLookupTable::Erf(table) => table.$method($($arg),*),
+            ActivationLookupTable::Tanh(table) => table.$method($($arg),*),
+        }
+    };
+}
+
+impl ActivationLookupTable {
+    /// Create an ActivationLookupTable from an ActivationType
+    pub fn from_type(activation_type: ActivationType) -> Self {
+        match activation_type {
+            ActivationType::Erf => ActivationLookupTable::Erf(erf::ErfTable),
+            ActivationType::Tanh => ActivationLookupTable::Tanh(tanh::TanhTable),
+        }
+    }
+
+    /// Get the activation type for this table
+    pub fn activation_type(&self) -> ActivationType {
+        delegate_activation_method!(self, activation_type)
+    }
+
+    /// Materialize the lookup table
+    pub fn materialize(&self, log_table_size: usize, scale: f64) -> Vec<i32> {
+        delegate_activation_method!(self, materialize, log_table_size, scale)
+    }
+
+    /// Materialize as tensor
+    pub fn materialize_tensor(&self, log_table_size: usize, scale: f64) -> Tensor<i32> {
+        delegate_activation_method!(self, materialize_tensor, log_table_size, scale)
+    }
+
+    /// Evaluate the MLE at a given point
+    pub fn evaluate_mle<F: JoltField>(&self, r: &[F], log_table_size: usize, scale: f64) -> F {
+        delegate_activation_method!(self, evaluate_mle, r, log_table_size, scale)
     }
 }
 
@@ -209,10 +265,11 @@ pub struct FpLookupSumcheck<F: JoltField> {
     input_claim: F,
     num_rounds: usize,
     tau: Vec<F>,
+    z: F,
     /// Index of this instance in the batch (used for VirtualPolynomial addressing)
     instance_index: usize,
-    /// The activation type for this instance
-    activation_type: ActivationType,
+    /// The activation lookup table for this instance
+    activation_table: ActivationLookupTable,
     /// Log size of the LUT table
     log_table_size: usize,
 }
@@ -239,15 +296,15 @@ impl<F: JoltField> SumcheckInstance<F> for FpLookupSumcheck<F> {
         let univariate_poly_evals: [F; DEGREE] = (0..prover_state.F.len() / 2)
             .into_par_iter()
             .map(|i| {
-                let a_evals = prover_state
+                let ra = prover_state
                     .F
                     .sumcheck_evals_array::<DEGREE>(i, BindingOrder::HighToLow);
-                let b_evals = prover_state
+                let val = prover_state
                     .val
                     .sumcheck_evals_array::<DEGREE>(i, BindingOrder::HighToLow);
                 [
-                    a_evals[0] * b_evals[0], // eval at 0
-                    a_evals[1] * b_evals[1], // eval at 2
+                    ra[0] * (val[0] + self.z), // eval at 0
+                    ra[1] * (val[1] + self.z), // eval at 2
                 ]
             })
             .reduce(
@@ -297,7 +354,7 @@ impl<F: JoltField> SumcheckInstance<F> for FpLookupSumcheck<F> {
             VirtualPolynomial::FpLookupRv(self.instance_index),
             SumcheckId::FpLookup,
             self.tau.clone().into(),
-            self.input_claim,
+            self.input_claim - self.z,
         );
     }
 
@@ -330,11 +387,11 @@ impl<F: JoltField> SumcheckInstance<F> for FpLookupSumcheck<F> {
             VirtualPolynomial::FpLookupRa(self.instance_index),
             SumcheckId::FpLookup,
         );
-        // Evaluate the LUT MLE using the ActivationTable trait
-        let activation_table = get_activation_table(self.activation_type);
-        let val_tensor = activation_table.materialize_tensor(self.log_table_size, 128.0);
-        let val_poly: MultilinearPolynomial<F> = generate_lut_polynomial(&val_tensor);
-        ra_claim * val_poly.evaluate(r)
+        // Evaluate the LUT MLE using the ActivationLookupTable
+        let val_r =
+            self.activation_table
+                .evaluate_mle(r, self.log_table_size, DEFAULT_ACTIVATION_SCALE);
+        ra_claim * (val_r + self.z)
     }
 }
 
@@ -344,17 +401,18 @@ impl<F: JoltField> SumcheckInstance<F> for FpLookupSumcheck<F> {
 pub struct FpLookupProver<F: JoltField> {
     F: MultilinearPolynomial<F>,
     val: MultilinearPolynomial<F>,
-    rv_claim: F,
+    input_claim: F,
     tau: Vec<F>,
+    z: F,
 }
 
 impl<F: JoltField> FpLookupProver<F> {
     /// Generate prover state for a single fp lookup instance
-    pub fn generate_for_instance<'a, PCS: CommitmentScheme<Field = F>, FS: Transcript>(
+    pub fn generate<'a, PCS: CommitmentScheme<Field = F>, FS: Transcript>(
         sm: &mut StateManager<'a, F, FS, PCS>,
         instance: &FpLookupInstance,
         log_table_size: usize,
-    ) -> Self {
+    ) -> (Self, Vec<usize>, Vec<F>) {
         let val_hashmap = sm.get_val_final();
         let transcript = sm.get_transcript();
         let bytecode_pp = sm.get_bytecode_pp();
@@ -368,7 +426,11 @@ impl<F: JoltField> FpLookupProver<F> {
             .expect("Activation instruction not found for instance");
 
         // Generate LUT based on activation type
-        let val_tensor = generate_lut_tensor(instance.activation_type, log_table_size, 128.0);
+        let val_tensor = generate_lut_tensor(
+            instance.activation_type,
+            log_table_size,
+            DEFAULT_ACTIVATION_SCALE,
+        );
         let val: MultilinearPolynomial<F> = generate_lut_polynomial(&val_tensor);
 
         // Compute rv(tau)
@@ -378,6 +440,7 @@ impl<F: JoltField> FpLookupProver<F> {
         let T = rv.len();
         let n = T.log_2();
         let tau: Vec<F> = transcript.borrow_mut().challenge_vector(n);
+        let z: F = transcript.borrow_mut().challenge_scalar();
         let rv_claim = rv.evaluate(&tau);
 
         let a_instr = PreprocessingHelper::get_operand_instruction(
@@ -420,7 +483,7 @@ impl<F: JoltField> FpLookupProver<F> {
         }
 
         let E = EqPolynomial::evals(&tau);
-        let F: Vec<F> = read_addresses
+        let F_coeffs: Vec<F> = read_addresses
             .iter()
             .enumerate()
             .collect::<Vec<_>>()
@@ -441,7 +504,7 @@ impl<F: JoltField> FpLookupProver<F> {
                     a
                 },
             );
-        let F = MultilinearPolynomial::from(F);
+        let F = MultilinearPolynomial::from(F_coeffs.clone());
 
         #[cfg(test)]
         {
@@ -450,20 +513,26 @@ impl<F: JoltField> FpLookupProver<F> {
                 .sum();
             assert_eq!(expected_claim, rv_claim)
         }
-        FpLookupProver::new(F, val, rv_claim, tau)
+        (
+            FpLookupProver::new(F, val, rv_claim + z, tau, z),
+            read_addresses,
+            F_coeffs,
+        )
     }
 
     pub fn new(
         F: MultilinearPolynomial<F>,
         val: MultilinearPolynomial<F>,
-        rv_claim: F,
+        input_claim: F,
         tau: Vec<F>,
+        z: F,
     ) -> Self {
         FpLookupProver {
             F,
             val,
-            rv_claim,
+            input_claim,
             tau,
+            z,
         }
     }
 }
@@ -494,19 +563,35 @@ impl<F: JoltField, FS: Transcript> FpLookupProof<F, FS> {
         let mut instances: Vec<Box<dyn SumcheckInstance<F>>> = fp_lookup_instances
             .iter()
             .enumerate()
-            .map(|(idx, instance)| {
-                let prover = FpLookupProver::generate_for_instance(sm, instance, log_table_size);
-                let input_claim = prover.rv_claim;
+            .flat_map(|(idx, instance)| {
+                let (prover, read_addresses, F) =
+                    FpLookupProver::generate(sm, instance, log_table_size);
+                let input_claim = prover.input_claim;
                 let tau = prover.tau.clone();
-                Box::new(FpLookupSumcheck {
-                    prover_state: Some(prover),
-                    input_claim,
-                    num_rounds: log_table_size,
-                    tau,
-                    instance_index: idx,
-                    activation_type: instance.activation_type,
-                    log_table_size,
-                }) as Box<dyn SumcheckInstance<F>>
+                let z = prover.z;
+                let booleanity = BooleanitySumcheck::new_prover(
+                    sm,
+                    read_addresses,
+                    tau.clone(),
+                    F,
+                    tau.len(),
+                    idx,
+                );
+                [
+                    Box::new(FpLookupSumcheck {
+                        prover_state: Some(prover),
+                        input_claim,
+                        num_rounds: log_table_size,
+                        tau,
+                        z,
+                        instance_index: idx,
+                        activation_table: ActivationLookupTable::from_type(
+                            instance.activation_type,
+                        ),
+                        log_table_size,
+                    }) as Box<dyn SumcheckInstance<F>>,
+                    Box::new(booleanity) as Box<dyn SumcheckInstance<F>>,
+                ]
             })
             .collect();
 
@@ -544,15 +629,16 @@ impl<F: JoltField, FS: Transcript> FpLookupProof<F, FS> {
         let instances: Vec<Box<dyn SumcheckInstance<F>>> = fp_lookup_instances
             .iter()
             .enumerate()
-            .map(|(idx, instance)| {
+            .flat_map(|(idx, instance)| {
                 // Generate tau from transcript
-                let n = instance
+                let T = instance
                     .output_dims
                     .iter()
                     .product::<usize>()
-                    .next_power_of_two()
-                    .log_2();
-                let tau: Vec<F> = sm.get_transcript().borrow_mut().challenge_vector(n);
+                    .next_power_of_two();
+                let log_T = T.log_2();
+                let tau: Vec<F> = sm.get_transcript().borrow_mut().challenge_vector(log_T);
+                let z: F = sm.get_transcript().borrow_mut().challenge_scalar();
 
                 // Register the claim for this instance
                 let verifier_accumulator = sm.get_verifier_accumulator();
@@ -563,22 +649,30 @@ impl<F: JoltField, FS: Transcript> FpLookupProof<F, FS> {
                 );
 
                 // Get the input claim
-                let input_claim = sm
-                    .get_virtual_polynomial_opening(
+                let input_claim =
+                    sm.get_virtual_polynomial_opening(
                         VirtualPolynomial::FpLookupRv(idx),
                         SumcheckId::FpLookup,
                     )
-                    .1;
+                    .1 + z;
 
-                Box::new(FpLookupSumcheck {
-                    prover_state: None,
-                    input_claim,
-                    num_rounds: log_table_size,
-                    tau,
-                    instance_index: idx,
-                    activation_type: instance.activation_type,
-                    log_table_size,
-                }) as Box<dyn SumcheckInstance<F>>
+                let booleanity = BooleanitySumcheck::new_verifier(sm, tau.clone(), log_T, idx);
+
+                [
+                    Box::new(FpLookupSumcheck {
+                        prover_state: None,
+                        input_claim,
+                        num_rounds: log_table_size,
+                        tau,
+                        z,
+                        instance_index: idx,
+                        activation_table: ActivationLookupTable::from_type(
+                            instance.activation_type,
+                        ),
+                        log_table_size,
+                    }) as Box<dyn SumcheckInstance<F>>,
+                    Box::new(booleanity) as Box<dyn SumcheckInstance<F>>,
+                ]
             })
             .collect();
 
@@ -631,7 +725,34 @@ impl<F: JoltField, FS: Transcript> CanonicalDeserialize for FpLookupProof<F, FS>
     }
 }
 
-/// Converts a usize to an n-bit signed integer represented as i32
+/// Converts a usize index to an n-bit signed integer (two's complement).
+///
+/// This function interprets a usize in the range [0, 2^n) as a signed n-bit integer
+/// using two's complement representation. Values in [0, 2^(n-1)) map to positive
+/// integers, while values in [2^(n-1), 2^n) map to negative integers.
+///
+/// # Arguments
+/// * `i` - The unsigned index to convert (must be < 2^n)
+/// * `n` - The bit width for the signed representation
+///
+/// # Returns
+/// An i32 representing the signed value in the range [-2^(n-1), 2^(n-1))
+///
+/// # Examples
+/// ```
+/// use zkml_jolt_core::jolt::fp_lookups::usize_to_n_bits;
+///
+/// // 4-bit signed integers range from -8 to 7
+/// assert_eq!(usize_to_n_bits(0, 4), 0);    // 0000 -> 0
+/// assert_eq!(usize_to_n_bits(7, 4), 7);    // 0111 -> 7
+/// assert_eq!(usize_to_n_bits(8, 4), -8);   // 1000 -> -8
+/// assert_eq!(usize_to_n_bits(15, 4), -1);  // 1111 -> -1
+///
+/// // 8-bit example
+/// assert_eq!(usize_to_n_bits(127, 8), 127);   // 01111111 -> 127
+/// assert_eq!(usize_to_n_bits(128, 8), -128);  // 10000000 -> -128
+/// assert_eq!(usize_to_n_bits(255, 8), -1);    // 11111111 -> -1
+/// ```
 pub fn usize_to_n_bits(i: usize, n: usize) -> i32 {
     if i >= 1 << (n - 1) {
         i as i32 - (1 << n)
@@ -640,6 +761,50 @@ pub fn usize_to_n_bits(i: usize, n: usize) -> i32 {
     }
 }
 
+/// Converts an n-bit signed integer to its usize index representation.
+///
+/// This is the inverse of `usize_to_n_bits`. It converts a signed n-bit integer
+/// in two's complement representation to its corresponding unsigned index in [0, 2^n).
+/// Negative values are mapped to indices in [2^(n-1), 2^n), and positive values
+/// to indices in [0, 2^(n-1)).
+///
+/// # Arguments
+/// * `i` - The signed integer to convert (must be in range [-2^(n-1), 2^(n-1)))
+/// * `n` - The bit width for the representation
+///
+/// # Returns
+/// A usize index in the range [0, 2^n)
+///
+/// # Examples
+/// ```
+/// use zkml_jolt_core::jolt::fp_lookups::n_bits_to_usize;
+///
+/// // 4-bit signed integers
+/// assert_eq!(n_bits_to_usize(0, 4), 0);    // 0 -> 0000
+/// assert_eq!(n_bits_to_usize(7, 4), 7);    // 7 -> 0111
+/// assert_eq!(n_bits_to_usize(-8, 4), 8);   // -8 -> 1000
+/// assert_eq!(n_bits_to_usize(-1, 4), 15);  // -1 -> 1111
+///
+/// // 8-bit example
+/// assert_eq!(n_bits_to_usize(127, 8), 127);   // 127 -> 01111111
+/// assert_eq!(n_bits_to_usize(-128, 8), 128);  // -128 -> 10000000
+/// assert_eq!(n_bits_to_usize(-1, 8), 255);    // -1 -> 11111111
+/// ```
+///
+/// # Round-trip property
+/// ```
+/// use zkml_jolt_core::jolt::fp_lookups::{usize_to_n_bits, n_bits_to_usize};
+///
+/// // For any valid n-bit index, converting to signed and back yields the original
+/// for i in 0..16 {
+///     assert_eq!(n_bits_to_usize(usize_to_n_bits(i, 4), 4), i);
+/// }
+///
+/// // For any valid n-bit signed value, converting to index and back yields the original
+/// for i in -8..8 {
+///     assert_eq!(usize_to_n_bits(n_bits_to_usize(i, 4), 4), i);
+/// }
+/// ```
 pub fn n_bits_to_usize(i: i32, n: usize) -> usize {
     if i < 0 {
         (i + (1 << n)) as usize
@@ -686,23 +851,26 @@ pub trait ActivationTable: Send + Sync {
     }
 }
 
-/// Extension trait for ActivationTable that provides polynomial operations.
-/// This is separate from ActivationTable to allow ActivationTable to be object-safe.
+/// Extension trait for ActivationTable that provides MLE evaluation.
+/// This is separate from ActivationTable to keep ActivationTable object-safe.
 pub trait ActivationTableExt: ActivationTable {
-    /// Generate the multilinear polynomial representation of the lookup table.
-    fn materialize_polynomial<F: JoltField>(
-        &self,
-        log_table_size: usize,
-        scale: f64,
-    ) -> MultilinearPolynomial<F> {
+    /// Evaluate the multilinear extension (MLE) of the lookup table at a given point.
+    ///
+    /// This method computes the MLE of the lookup table and evaluates it at the point `r`.
+    /// The default implementation materializes the full table and converts it to a polynomial,
+    /// but implementations may override this for more efficient evaluation.
+    ///
+    /// # Arguments
+    /// * `r` - The evaluation point (must have length equal to `log_table_size`)
+    /// * `log_table_size` - Log2 of the table size
+    /// * `scale` - Scale factor for the activation output
+    ///
+    /// # Returns
+    /// The MLE evaluation at point `r`
+    fn evaluate_mle<F: JoltField>(&self, r: &[F], log_table_size: usize, scale: f64) -> F {
         let table = self.materialize(log_table_size, scale);
         let table_i64: Vec<i64> = table.into_iter().map(|v| v as i64).collect();
-        MultilinearPolynomial::from(table_i64)
-    }
-
-    /// Evaluate the multilinear extension of the LUT at a given point.
-    fn evaluate_mle<F: JoltField>(&self, r: &[F], log_table_size: usize, scale: f64) -> F {
-        let poly: MultilinearPolynomial<F> = self.materialize_polynomial(log_table_size, scale);
+        let poly: MultilinearPolynomial<F> = MultilinearPolynomial::from(table_i64);
         poly.evaluate(r)
     }
 }
@@ -715,5 +883,357 @@ pub fn get_activation_table(activation_type: ActivationType) -> Box<dyn Activati
     match activation_type {
         ActivationType::Erf => Box::new(erf::ErfTable),
         ActivationType::Tanh => Box::new(tanh::TanhTable),
+    }
+}
+
+struct BooleanityProverState<F: JoltField> {
+    read_addresses: Vec<usize>,
+    B: MultilinearPolynomial<F>,
+    D: MultilinearPolynomial<F>,
+    G: Vec<F>,
+    H: Option<MultilinearPolynomial<F>>,
+    F: Vec<F>,
+    eq_r_r: F,
+}
+
+pub struct BooleanitySumcheck<F: JoltField> {
+    log_T: usize,
+    log_K: usize,
+    prover_state: Option<BooleanityProverState<F>>,
+    tau: Vec<F>,
+    alpha: Vec<F>,
+    instance_index: usize,
+}
+
+impl<F: JoltField> BooleanitySumcheck<F> {
+    #[tracing::instrument(skip_all, name = "BytecodeBooleanitySumcheck::new_prover")]
+    pub fn new_prover(
+        sm: &mut StateManager<F, impl Transcript, impl CommitmentScheme<Field = F>>,
+        read_addresses: Vec<usize>,
+        tau: Vec<F>,
+        G: Vec<F>,
+        log_T: usize,
+        instance_index: usize,
+    ) -> Self {
+        let log_K = sm.program_io.log_lookup_table_size();
+        let alpha: Vec<F> = sm.transcript.borrow_mut().challenge_vector(log_K);
+        Self {
+            prover_state: Some(BooleanityProverState::new(
+                read_addresses,
+                EqPolynomial::evals(&tau),
+                G,
+                &alpha,
+                log_K,
+            )),
+            log_T,
+            log_K,
+            alpha,
+            tau,
+            instance_index,
+        }
+    }
+
+    pub fn new_verifier(
+        sm: &mut StateManager<F, impl Transcript, impl CommitmentScheme<Field = F>>,
+        tau: Vec<F>,
+        log_T: usize,
+        instance_index: usize,
+    ) -> Self {
+        let log_K = sm.program_io.log_lookup_table_size();
+        let alpha: Vec<F> = sm.transcript.borrow_mut().challenge_vector(log_K);
+        Self {
+            prover_state: None,
+            log_T,
+            log_K,
+            alpha,
+            tau,
+            instance_index,
+        }
+    }
+}
+
+impl<F: JoltField> BooleanityProverState<F> {
+    fn new(
+        read_addresses: Vec<usize>,
+        eq_tau: Vec<F>,
+        G: Vec<F>,
+        alpha: &[F],
+        log_K: usize,
+    ) -> Self {
+        let B = MultilinearPolynomial::from(EqPolynomial::evals(alpha));
+
+        let mut F_vec: Vec<F> = unsafe_allocate_zero_vec(log_K.pow2());
+        F_vec[0] = F::one();
+
+        let D = MultilinearPolynomial::from(eq_tau);
+
+        BooleanityProverState {
+            read_addresses,
+            B,
+            D,
+            H: None,
+            G,
+            F: F_vec,
+            eq_r_r: F::zero(),
+        }
+    }
+}
+
+impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
+    fn degree(&self) -> usize {
+        3
+    }
+
+    fn num_rounds(&self) -> usize {
+        self.log_K + self.log_T
+    }
+
+    fn input_claim(&self) -> F {
+        F::zero()
+    }
+
+    #[tracing::instrument(skip_all, name = "BytecodeBooleanitySumcheck::compute_prover_message")]
+    fn compute_prover_message(&mut self, round: usize, _previous_claim: F) -> Vec<F> {
+        if round < self.log_K {
+            // Phase 1: First log(K_chunk) rounds
+            self.compute_phase1_message(round)
+        } else {
+            // Phase 2: Last log(T) rounds
+            self.compute_phase2_message()
+        }
+    }
+
+    #[tracing::instrument(skip_all, name = "BytecodeBooleanitySumcheck::bind")]
+    fn bind(&mut self, r_j: F, round: usize) {
+        let ps = self.prover_state.as_mut().unwrap();
+
+        if round < self.log_K {
+            // Phase 1: Bind B and update F
+            ps.B.bind_parallel(r_j, BindingOrder::LowToHigh);
+
+            // Update F for this round (see Equation 55)
+            let (F_left, F_right) = ps.F.split_at_mut(1 << round);
+            F_left
+                .par_iter_mut()
+                .zip(F_right.par_iter_mut())
+                .for_each(|(x, y)| {
+                    *y = *x * r_j;
+                    *x -= *y;
+                });
+
+            // If transitioning to phase 2, prepare H
+            if round == self.log_K - 1 {
+                let mut read_addresses = std::mem::take(&mut ps.read_addresses);
+                let f_ref = &ps.F;
+                ps.H = Some({
+                    let coeffs: Vec<F> = std::mem::take(&mut read_addresses)
+                        .into_par_iter()
+                        .map(|j| f_ref[j])
+                        .collect();
+                    MultilinearPolynomial::from(coeffs)
+                });
+                ps.eq_r_r = ps.B.final_sumcheck_claim();
+
+                // Drop G arrays, F array, and read_addresses as they're no longer needed in phase 2
+                let g = std::mem::take(&mut ps.G);
+                drop_in_background_thread(g);
+
+                let f = std::mem::take(&mut ps.F);
+                drop_in_background_thread(f);
+
+                drop_in_background_thread(read_addresses);
+            }
+        } else {
+            let H = ps.H.as_mut().unwrap();
+            rayon::join(
+                || H.bind_parallel(r_j, BindingOrder::LowToHigh),
+                || ps.D.bind_parallel(r_j, BindingOrder::LowToHigh),
+            );
+        }
+    }
+
+    fn expected_output_claim(
+        &self,
+        accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
+        r: &[F],
+    ) -> F {
+        let accumulator = accumulator.as_ref().unwrap();
+        let (_, ra_claim) = accumulator.borrow().get_virtual_polynomial_opening(
+            VirtualPolynomial::FpLookupRa(self.instance_index),
+            SumcheckId::FpLookupBooleanity,
+        );
+
+        EqPolynomial::mle(
+            r,
+            &self
+                .alpha
+                .iter()
+                .cloned()
+                .rev()
+                .chain(self.tau.iter().cloned().rev())
+                .collect::<Vec<F>>(),
+        ) * (ra_claim.square() - ra_claim)
+    }
+
+    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+        let mut opening_point = opening_point.to_vec();
+        opening_point[..self.log_K].reverse();
+        opening_point[self.log_K..].reverse();
+        opening_point.into()
+    }
+
+    fn cache_openings_prover(
+        &self,
+        accumulator: Rc<RefCell<ProverOpeningAccumulator<F>>>,
+        opening_point: OpeningPoint<BIG_ENDIAN, F>,
+    ) {
+        let ps = self.prover_state.as_ref().unwrap();
+        let ra_claim = ps.H.as_ref().unwrap().final_sumcheck_claim();
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::FpLookupRa(self.instance_index),
+            SumcheckId::FpLookupBooleanity,
+            opening_point,
+            ra_claim,
+        );
+    }
+
+    fn cache_openings_verifier(
+        &self,
+        accumulator: Rc<RefCell<VerifierOpeningAccumulator<F>>>,
+        opening_point: OpeningPoint<BIG_ENDIAN, F>,
+    ) {
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::FpLookupRa(self.instance_index),
+            SumcheckId::FpLookupBooleanity,
+            opening_point,
+        );
+    }
+}
+
+impl<F: JoltField> BooleanitySumcheck<F> {
+    fn compute_phase1_message(&self, round: usize) -> Vec<F> {
+        let p = self.prover_state.as_ref().unwrap();
+        let m = round + 1;
+        const DEGREE: usize = 3;
+
+        // EQ(k_m, c) for k_m \in {0, 1} and c \in {0, 2, 3}
+        const EQ_KM_C: [[i8; 3]; 2] = [
+            [
+                1,  // eq(0, 0) = 0 * 0 + (1 - 0) * (1 - 0)
+                -1, // eq(0, 2) = 0 * 2 + (1 - 0) * (1 - 2)
+                -2, // eq(0, 3) = 0 * 3 + (1 - 0) * (1 - 3)
+            ],
+            [
+                0, // eq(1, 0) = 1 * 0 + (1 - 1) * (1 - 0)
+                2, // eq(1, 2) = 1 * 2 + (1 - 1) * (1 - 2)
+                3, // eq(1, 3) = 1 * 3 + (1 - 1) * (1 - 3)
+            ],
+        ];
+
+        // EQ(k_m, c)^2 for k_m \in {0, 1} and c \in {0, 2, 3}
+        const EQ_KM_C_SQUARED: [[u8; 3]; 2] = [[1, 1, 4], [0, 4, 9]];
+
+        let univariate_poly_evals: [F; 3] = (0..p.B.len() / 2)
+            .into_par_iter()
+            .map(|k_prime| {
+                // Get B evaluations at points 0, 2, 3
+                let B_evals =
+                    p.B.sumcheck_evals_array::<DEGREE>(k_prime, BindingOrder::LowToHigh);
+
+                let inner_sum = (0..1 << m)
+                    .into_par_iter()
+                    .map(|k| {
+                        // Since we're binding variables from low to high, k_m is the high bit
+                        let k_m = k >> (m - 1);
+                        // We then index into F using (k_{m-1}, ..., k_1)
+                        let F_k = p.F[k % (1 << (m - 1))];
+                        // G_times_F := G[k] * F[k_1, ...., k_{m-1}]
+                        let k_G = (k_prime << m) + k;
+                        let G_times_F = p.G[k_G] * F_k;
+                        // For c \in {0, 2, 3} compute:
+                        //    G[k] * (F[k_1, ...., k_{m-1}, c]^2 - F[k_1, ...., k_{m-1}, c])
+                        //    = G_times_F * (eq(k_m, c)^2 * F[k_1, ...., k_{m-1}] - eq(k_m, c))
+                        [
+                            G_times_F
+                                * (EQ_KM_C_SQUARED[k_m][0].field_mul(F_k)
+                                    - F::from_i64(EQ_KM_C[k_m][0] as i64)),
+                            G_times_F
+                                * (EQ_KM_C_SQUARED[k_m][1].field_mul(F_k)
+                                    - F::from_i64(EQ_KM_C[k_m][1] as i64)),
+                            G_times_F
+                                * (EQ_KM_C_SQUARED[k_m][2].field_mul(F_k)
+                                    - F::from_i64(EQ_KM_C[k_m][2] as i64)),
+                        ]
+                    })
+                    .reduce(
+                        || [F::zero(); 3],
+                        |running, new| {
+                            [
+                                running[0] + new[0],
+                                running[1] + new[1],
+                                running[2] + new[2],
+                            ]
+                        },
+                    );
+
+                [
+                    B_evals[0] * inner_sum[0],
+                    B_evals[1] * inner_sum[1],
+                    B_evals[2] * inner_sum[2],
+                ]
+            })
+            .reduce(
+                || [F::zero(); 3],
+                |running, new| {
+                    [
+                        running[0] + new[0],
+                        running[1] + new[1],
+                        running[2] + new[2],
+                    ]
+                },
+            );
+
+        univariate_poly_evals.to_vec()
+    }
+
+    fn compute_phase2_message(&self) -> Vec<F> {
+        let p = self.prover_state.as_ref().unwrap();
+        const DEGREE: usize = 3;
+
+        let univariate_poly_evals: [F; 3] = (0..p.D.len() / 2)
+            .into_par_iter()
+            .map(|i| {
+                // Get D and H evaluations at points 0, 2, 3
+                let D_evals =
+                    p.D.sumcheck_evals_array::<DEGREE>(i, BindingOrder::LowToHigh);
+                let H = p.H.as_ref().unwrap();
+                let H_evals = H.sumcheck_evals_array::<DEGREE>(i, BindingOrder::LowToHigh);
+                let evals = [
+                    H_evals[0].square() - H_evals[0],
+                    H_evals[1].square() - H_evals[1],
+                    H_evals[2].square() - H_evals[2],
+                ];
+                [
+                    D_evals[0] * evals[0],
+                    D_evals[1] * evals[1],
+                    D_evals[2] * evals[2],
+                ]
+            })
+            .reduce(
+                || [F::zero(); 3],
+                |running, new| {
+                    [
+                        running[0] + new[0],
+                        running[1] + new[1],
+                        running[2] + new[2],
+                    ]
+                },
+            );
+
+        vec![
+            p.eq_r_r * univariate_poly_evals[0],
+            p.eq_r_r * univariate_poly_evals[1],
+            p.eq_r_r * univariate_poly_evals[2],
+        ]
     }
 }

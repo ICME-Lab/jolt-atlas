@@ -405,10 +405,7 @@ impl<F: JoltField> FpLookupProver<F> {
                     i, rv_int[i] as i32, val_tensor[read_addresses[i]],
                 )
             }
-        }
 
-        #[cfg(test)]
-        {
             // Check poly version of rv(i) = Val(raf(i))
             for i in 0..rv.len() {
                 assert_eq!(
@@ -423,11 +420,27 @@ impl<F: JoltField> FpLookupProver<F> {
         }
 
         let E = EqPolynomial::evals(&tau);
-        let mut F: Vec<F> = unsafe_allocate_zero_vec(table_size);
-        read_addresses
+        let F: Vec<F> = read_addresses
             .iter()
             .enumerate()
-            .for_each(|(j, &k)| F[k] += E[j]);
+            .collect::<Vec<_>>()
+            .par_iter()
+            .fold(
+                || unsafe_allocate_zero_vec(table_size),
+                |mut local_F, &(j, &k)| {
+                    local_F[k] += E[j];
+                    local_F
+                },
+            )
+            .reduce(
+                || unsafe_allocate_zero_vec(table_size),
+                |mut a, b| {
+                    for i in 0..table_size {
+                        a[i] += b[i];
+                    }
+                    a
+                },
+            );
         let F = MultilinearPolynomial::from(F);
 
         #[cfg(test)]

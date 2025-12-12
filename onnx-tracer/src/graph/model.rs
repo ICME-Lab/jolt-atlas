@@ -1370,7 +1370,6 @@ impl Model {
                 let mut shifted_act = act_node.clone();
                 shifted_act.idx = new_act_idx;
                 shifted_act.inputs = vec![(pre_idx, 0)];
-                shifted_act.num_uses = 1;
                 new_nodes.insert(new_act_idx, NodeType::Node(shifted_act));
             }
 
@@ -1382,11 +1381,8 @@ impl Model {
                         shifted.idx = n.idx + 1;
                         // Update inputs: anything referencing >= act_idx needs adjustment
                         for inp in shifted.inputs.iter_mut() {
-                            if inp.0 > act_idx {
+                            if inp.0 >= act_idx {
                                 inp.0 += 1;
-                            } else if inp.0 == act_idx {
-                                // Was referencing the activation output, now reference new_act_idx
-                                inp.0 = new_act_idx;
                             }
                         }
                         new_nodes.insert(shifted.idx, NodeType::Node(shifted));
@@ -1398,16 +1394,14 @@ impl Model {
 
             // Patch graph outputs: shift indices and redirect activation references
             for (out_idx, _outlet) in self.graph.outputs.iter_mut() {
-                if *out_idx > act_idx {
+                if *out_idx >= act_idx {
                     *out_idx += 1;
-                } else if *out_idx == act_idx {
-                    *out_idx = new_act_idx;
                 }
             }
 
-            // Patch graph inputs if any reference nodes > act_idx (shift by +1)
+            // Patch graph inputs if any reference nodes >= act_idx (shift by +1)
             for inp_idx in self.graph.inputs.iter_mut() {
-                if *inp_idx > act_idx {
+                if *inp_idx >= act_idx {
                     *inp_idx += 1;
                 }
             }

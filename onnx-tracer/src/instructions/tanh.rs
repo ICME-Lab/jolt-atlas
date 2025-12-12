@@ -5,7 +5,7 @@ use crate::{
     utils::VirtualSlotCounter,
 };
 
-// Tensor-spanning (lookup-based activation function)
+// Element-wise (lookup-based activation function)
 
 declare_onnx_instr!(name = Tanh);
 

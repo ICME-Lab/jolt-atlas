@@ -359,7 +359,7 @@ mod e2e_tests {
         // This mimics post-layernorm quantized tensors the model expects.
         let scale_shift = 1 << 7; // out_scale = 7
         let input_data: Vec<i32> = (0..input_shape.iter().product())
-            .map(|_| rng.gen_range(-3..=3) * scale_shift)
+            .map(|_| rng.gen_range(-3 * scale_shift..=3 * scale_shift))
             .collect();
         let mut teleported_model = model(&PathBuf::from(
             "../onnx-tracer/models/ffn_gelu/network.onnx",
@@ -379,7 +379,7 @@ mod e2e_tests {
         // This mimics post-layernorm quantized tensors the model expects.
         let scale_shift = 1 << 7; // out_scale = 7
         let input_data: Vec<i32> = (0..input_shape.iter().product())
-            .map(|_| rng.gen_range(-3..=3) * scale_shift)
+            .map(|_| rng.gen_range(-3 * scale_shift..=3 * scale_shift))
             .collect();
         let mut teleported_model = model(&PathBuf::from(
             "../onnx-tracer/models/ffn_multi_gelu/network.onnx",
@@ -399,7 +399,7 @@ mod e2e_tests {
         // This mimics post-layernorm quantized tensors the model expects.
         let scale_shift = 1 << 7; // out_scale = 7
         let input_data: Vec<i32> = (0..input_shape.iter().product())
-            .map(|_| rng.gen_range(-3..=3) * scale_shift)
+            .map(|_| rng.gen_range(-3 * scale_shift..=3 * scale_shift))
             .collect();
         let mut teleported_model = model(&PathBuf::from(
             "../onnx-tracer/models/ffn_tanh/network.onnx",

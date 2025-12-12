@@ -201,7 +201,7 @@ impl FpLookupInstance {
         let input_addr = PreprocessingHelper::collect_and_pad(
             input_instr,
             bytecode_preprocessing,
-            &instr.output_dims,
+            &input_instr.output_dims,
         );
         let output_addr =
             PreprocessingHelper::collect_and_pad(instr, bytecode_preprocessing, &instr.output_dims);
@@ -264,7 +264,7 @@ pub struct FpLookupSumcheck<F: JoltField> {
     prover_state: Option<FpLookupProver<F>>,
     input_claim: F,
     num_rounds: usize,
-    tau: Vec<F>,
+    r_cycle: Vec<F>,
     z: F,
     /// Index of this instance in the batch (used for VirtualPolynomial addressing)
     instance_index: usize,
@@ -340,7 +340,7 @@ impl<F: JoltField> SumcheckInstance<F> for FpLookupSumcheck<F> {
             .prover_state
             .as_ref()
             .expect("Prover state not initialized");
-        let r = [self.tau.clone(), opening_point.r.clone()].concat();
+        let r = [self.r_cycle.clone(), opening_point.r.clone()].concat();
         // Use indexed VirtualPolynomial for batched execution
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::FpLookupRa(self.instance_index),
@@ -353,7 +353,7 @@ impl<F: JoltField> SumcheckInstance<F> for FpLookupSumcheck<F> {
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::FpLookupRv(self.instance_index),
             SumcheckId::FpLookup,
-            self.tau.clone().into(),
+            self.r_cycle.clone().into(),
             self.input_claim - self.z,
         );
     }
@@ -367,7 +367,7 @@ impl<F: JoltField> SumcheckInstance<F> for FpLookupSumcheck<F> {
         accumulator: Rc<RefCell<VerifierOpeningAccumulator<F>>>,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
     ) {
-        let r = [self.tau.clone(), opening_point.r.clone()].concat();
+        let r = [self.r_cycle.clone(), opening_point.r.clone()].concat();
         // Use indexed VirtualPolynomial for batched verification
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::FpLookupRa(self.instance_index),
@@ -402,7 +402,7 @@ pub struct FpLookupProver<F: JoltField> {
     F: MultilinearPolynomial<F>,
     val: MultilinearPolynomial<F>,
     input_claim: F,
-    tau: Vec<F>,
+    r_cycle: Vec<F>,
     z: F,
 }
 
@@ -439,9 +439,9 @@ impl<F: JoltField> FpLookupProver<F> {
         let rv: MultilinearPolynomial<F> = MultilinearPolynomial::from(rv);
         let T = rv.len();
         let n = T.log_2();
-        let tau: Vec<F> = transcript.borrow_mut().challenge_vector(n);
+        let r_cycle: Vec<F> = transcript.borrow_mut().challenge_vector(n);
         let z: F = transcript.borrow_mut().challenge_scalar();
-        let rv_claim = rv.evaluate(&tau);
+        let rv_claim = rv.evaluate(&r_cycle);
 
         let a_instr = PreprocessingHelper::get_operand_instruction(
             bytecode_pp.td_lookup(),
@@ -482,7 +482,7 @@ impl<F: JoltField> FpLookupProver<F> {
             }
         }
 
-        let E = EqPolynomial::evals(&tau);
+        let E = EqPolynomial::evals(&r_cycle);
         let F_coeffs: Vec<F> = read_addresses
             .iter()
             .enumerate()
@@ -514,7 +514,7 @@ impl<F: JoltField> FpLookupProver<F> {
             assert_eq!(expected_claim, rv_claim)
         }
         (
-            FpLookupProver::new(F, val, rv_claim + z, tau, z),
+            FpLookupProver::new(F, val, rv_claim + z, r_cycle, z),
             read_addresses,
             F_coeffs,
         )
@@ -524,14 +524,14 @@ impl<F: JoltField> FpLookupProver<F> {
         F: MultilinearPolynomial<F>,
         val: MultilinearPolynomial<F>,
         input_claim: F,
-        tau: Vec<F>,
+        r_cycle: Vec<F>,
         z: F,
     ) -> Self {
         FpLookupProver {
             F,
             val,
             input_claim,
-            tau,
+            r_cycle,
             z,
         }
     }
@@ -567,14 +567,14 @@ impl<F: JoltField, FS: Transcript> FpLookupProof<F, FS> {
                 let (prover, read_addresses, F) =
                     FpLookupProver::generate(sm, instance, log_table_size);
                 let input_claim = prover.input_claim;
-                let tau = prover.tau.clone();
+                let r_cycle = prover.r_cycle.clone();
                 let z = prover.z;
                 let booleanity = BooleanitySumcheck::new_prover(
                     sm,
                     read_addresses,
-                    tau.clone(),
+                    r_cycle.clone(),
                     F,
-                    tau.len(),
+                    r_cycle.len(),
                     idx,
                 );
                 [
@@ -582,7 +582,7 @@ impl<F: JoltField, FS: Transcript> FpLookupProof<F, FS> {
                         prover_state: Some(prover),
                         input_claim,
                         num_rounds: log_table_size,
-                        tau,
+                        r_cycle,
                         z,
                         instance_index: idx,
                         activation_table: ActivationLookupTable::from_type(
@@ -637,7 +637,7 @@ impl<F: JoltField, FS: Transcript> FpLookupProof<F, FS> {
                     .product::<usize>()
                     .next_power_of_two();
                 let log_T = T.log_2();
-                let tau: Vec<F> = sm.get_transcript().borrow_mut().challenge_vector(log_T);
+                let r_cycle: Vec<F> = sm.get_transcript().borrow_mut().challenge_vector(log_T);
                 let z: F = sm.get_transcript().borrow_mut().challenge_scalar();
 
                 // Register the claim for this instance
@@ -645,7 +645,7 @@ impl<F: JoltField, FS: Transcript> FpLookupProof<F, FS> {
                 verifier_accumulator.borrow_mut().append_virtual(
                     VirtualPolynomial::FpLookupRv(idx),
                     SumcheckId::FpLookup,
-                    tau.clone().into(),
+                    r_cycle.clone().into(),
                 );
 
                 // Get the input claim
@@ -656,14 +656,14 @@ impl<F: JoltField, FS: Transcript> FpLookupProof<F, FS> {
                     )
                     .1 + z;
 
-                let booleanity = BooleanitySumcheck::new_verifier(sm, tau.clone(), log_T, idx);
+                let booleanity = BooleanitySumcheck::new_verifier(sm, r_cycle.clone(), log_T, idx);
 
                 [
                     Box::new(FpLookupSumcheck {
                         prover_state: None,
                         input_claim,
                         num_rounds: log_table_size,
-                        tau,
+                        r_cycle,
                         z,
                         instance_index: idx,
                         activation_table: ActivationLookupTable::from_type(
@@ -900,8 +900,8 @@ pub struct BooleanitySumcheck<F: JoltField> {
     log_T: usize,
     log_K: usize,
     prover_state: Option<BooleanityProverState<F>>,
-    tau: Vec<F>,
-    alpha: Vec<F>,
+    r_cycle: Vec<F>,
+    r_address: Vec<F>,
     instance_index: usize,
 }
 
@@ -910,43 +910,43 @@ impl<F: JoltField> BooleanitySumcheck<F> {
     pub fn new_prover(
         sm: &mut StateManager<F, impl Transcript, impl CommitmentScheme<Field = F>>,
         read_addresses: Vec<usize>,
-        tau: Vec<F>,
+        r_cycle: Vec<F>,
         G: Vec<F>,
         log_T: usize,
         instance_index: usize,
     ) -> Self {
         let log_K = sm.program_io.log_lookup_table_size();
-        let alpha: Vec<F> = sm.transcript.borrow_mut().challenge_vector(log_K);
+        let r_address: Vec<F> = sm.transcript.borrow_mut().challenge_vector(log_K);
         Self {
             prover_state: Some(BooleanityProverState::new(
                 read_addresses,
-                EqPolynomial::evals(&tau),
+                EqPolynomial::evals(&r_cycle),
                 G,
-                &alpha,
+                &r_address,
                 log_K,
             )),
             log_T,
             log_K,
-            alpha,
-            tau,
+            r_address,
+            r_cycle,
             instance_index,
         }
     }
 
     pub fn new_verifier(
         sm: &mut StateManager<F, impl Transcript, impl CommitmentScheme<Field = F>>,
-        tau: Vec<F>,
+        r_cycle: Vec<F>,
         log_T: usize,
         instance_index: usize,
     ) -> Self {
         let log_K = sm.program_io.log_lookup_table_size();
-        let alpha: Vec<F> = sm.transcript.borrow_mut().challenge_vector(log_K);
+        let r_address: Vec<F> = sm.transcript.borrow_mut().challenge_vector(log_K);
         Self {
             prover_state: None,
             log_T,
             log_K,
-            alpha,
-            tau,
+            r_address,
+            r_cycle,
             instance_index,
         }
     }
@@ -955,17 +955,17 @@ impl<F: JoltField> BooleanitySumcheck<F> {
 impl<F: JoltField> BooleanityProverState<F> {
     fn new(
         read_addresses: Vec<usize>,
-        eq_tau: Vec<F>,
+        eq_r_cycle: Vec<F>,
         G: Vec<F>,
-        alpha: &[F],
+        r_address: &[F],
         log_K: usize,
     ) -> Self {
-        let B = MultilinearPolynomial::from(EqPolynomial::evals(alpha));
+        let B = MultilinearPolynomial::from(EqPolynomial::evals(r_address));
 
         let mut F_vec: Vec<F> = unsafe_allocate_zero_vec(log_K.pow2());
         F_vec[0] = F::one();
 
-        let D = MultilinearPolynomial::from(eq_tau);
+        let D = MultilinearPolynomial::from(eq_r_cycle);
 
         BooleanityProverState {
             read_addresses,
@@ -1066,11 +1066,11 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
         EqPolynomial::mle(
             r,
             &self
-                .alpha
+                .r_address
                 .iter()
                 .cloned()
                 .rev()
-                .chain(self.tau.iter().cloned().rev())
+                .chain(self.r_cycle.iter().cloned().rev())
                 .collect::<Vec<F>>(),
         ) * (ra_claim.square() - ra_claim)
     }

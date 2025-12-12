@@ -442,7 +442,7 @@ mod e2e_tests {
         let mut rng = StdRng::seed_from_u64(42);
         let scale_shift = 1 << 7; // Fixed-point scale=7 (128 = 1.0 in float)
         let input_data: Vec<i32> = (0..input_shape.iter().product())
-            .map(|_| rng.gen_range(-3..=3) * scale_shift) // Range: [-384, 384]
+            .map(|_| rng.gen_range(-3*scale_shift..=3*scale_shift) ) // Range: [-384, 384]
             .collect();
 
         // ========================================

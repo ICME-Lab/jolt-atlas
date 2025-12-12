@@ -8,6 +8,7 @@ use onnx_tracer::instructions::{
     constant::Constant,
     einsum::Einsum,
     eq::Eq,
+    erf::Erf,
     gte::Gte,
     input::Input,
     mul::Mul,
@@ -16,6 +17,7 @@ use onnx_tracer::instructions::{
     select::Select,
     sub::Sub,
     sum::Sum,
+    tanh::Tanh,
     virtuals::{
         VirtualAdvice, VirtualAssertEq, VirtualAssertValidDiv0, VirtualAssertValidSignedRemainder,
         VirtualMove, VirtualPow2, VirtualSaturatingSum, VirtualShiftRightBitmask, VirtualSra,
@@ -27,6 +29,7 @@ pub mod broadcast;
 pub mod constant;
 pub mod einsum;
 pub mod eq;
+pub mod erf;
 pub mod gte;
 pub mod input;
 pub mod mul;
@@ -35,6 +38,7 @@ pub mod reshape;
 pub mod select;
 pub mod sub;
 pub mod sum;
+pub mod tanh;
 pub mod virtual_advice;
 pub mod virtual_assert_eq;
 pub mod virtual_assert_valid_div0;
@@ -180,6 +184,7 @@ define_onnx_trait_impls!(
     Constant,
     Einsum(String),
     Eq,
+    Erf,
     Gte,
     Input,
     Mul,
@@ -188,6 +193,7 @@ define_onnx_trait_impls!(
     Select,
     Sub,
     Sum(usize),
+    Tanh,
     VirtualAdvice,
     VirtualAssertEq,
     VirtualAssertValidDiv0,

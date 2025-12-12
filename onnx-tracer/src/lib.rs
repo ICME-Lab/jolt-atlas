@@ -67,6 +67,10 @@ pub mod utils;
 pub struct ProgramIO {
     pub input: Tensor<i32>,
     pub output: Tensor<i32>,
+    /// Maximum value seen in lookup activation inputs (erf, tanh)
+    pub max_lookup_input: i32,
+    /// Minimum value seen in lookup activation inputs (erf, tanh)
+    pub min_lookup_input: i32,
 }
 
 impl ProgramIO {
@@ -77,7 +81,28 @@ impl ProgramIO {
         let outputs = res.outputs;
         assert!(outputs.len() == 1);
         let output = outputs[0].clone();
-        ProgramIO { input, output }
+        ProgramIO {
+            input,
+            output,
+            max_lookup_input: res.max_lookup_inputs,
+            min_lookup_input: res.min_lookup_inputs,
+        }
+    }
+
+    /// Compute the log2 of the LUT size needed to cover the observed lookup range
+    /// The table covers signed integers from -2^(n-1) to 2^(n-1)-1
+    pub fn log_lookup_table_size(&self) -> usize {
+        let abs_max = self.min_lookup_input.abs().max(self.max_lookup_input.abs()) as usize;
+        if abs_max == 0 {
+            1
+        } else {
+            (abs_max.next_power_of_two().trailing_zeros() as usize) + 1
+        }
+    }
+
+    /// Get the lookup table size as a power of 2
+    pub fn lookup_table_size(&self) -> usize {
+        1 << self.log_lookup_table_size()
     }
 }
 

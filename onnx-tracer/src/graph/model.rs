@@ -45,7 +45,16 @@ impl Model {
         info!("\n {}", om.table_nodes());
         om
     }
+}
 
+/// Activation kinds supported for teleportation wrapping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Activation {
+    Erf,
+    Tanh,
+}
+
+impl Model {
     /// Executes a forward pass through the parsed ONNX model using provided input tensors.
     ///
     /// # Purpose
@@ -206,6 +215,7 @@ impl Model {
                 self.tracer.capture_pre_state(instr.clone(), tracer_inputs);
             }
             if n.is_lookup() {
+                debug!("node lookup: {n:#?}");
                 Self::lookup_check(&inputs, &mut max_lookup_inputs, &mut min_lookup_inputs)?;
             }
             match n {
@@ -213,14 +223,7 @@ impl Model {
                     // Execute
                     let mut res = Op::<i32>::f(&n.opkind, &inputs)?;
                     res.output.reshape(&n.out_dims)?;
-                    // see if any of the intermediate lookup calcs are the max
-                    if !res.intermediate_lookups.is_empty() {
-                        Self::lookup_check(
-                            &res.intermediate_lookups,
-                            &mut max_lookup_inputs,
-                            &mut min_lookup_inputs,
-                        )?;
-                    }
+
                     debug!("output node int {}: {}", idx, res.output.show(),);
                     results.insert(idx, vec![res.output.clone()]);
                     self.tracer.capture_post_state(res.output);
@@ -1251,6 +1254,161 @@ impl Model {
 
     pub fn set_outputs(&mut self, outputs: Vec<Outlet>) {
         self.graph.outputs = outputs;
+    }
+
+    /// Applies one-sided neural teleportation by inserting a pre-scaling division before
+    /// selected activation functions.
+    ///
+    /// For activation functions like erf that saturate quickly, dividing the input by tau:
+    ///   1. Reduces the required lookup table range by factor of tau
+    ///   2. Preserves approximate output equivalence because erf saturates to ±1 anyway
+    ///
+    /// This is a "one-sided" approximation: we don't multiply back by tau because:
+    ///   - For small inputs: erf(x/tau) ≈ erf(x)/tau (linear region)
+    ///   - For large inputs: erf(x/tau) = ±1 = erf(x) (saturation region)
+    ///   - The error is acceptable for downstream operations like GeLU
+    ///
+    /// Trade-off: ~50% smaller lookup tables with τ=2, small accuracy loss.
+    pub fn apply_teleportation(&mut self, tau: f32, activations: &[Activation]) {
+        use crate::{ops::lookup::LookupOp, utils::f32::F32};
+
+        // Keep applying teleportation until no more matching activations are found
+        loop {
+            // Find the first matching activation node in the graph that doesn't already
+            // have a DIV(tau) node directly before it
+            let act_idx_opt = self.graph.nodes.iter().find_map(|(idx, nt)| match nt {
+                NodeType::Node(n) => {
+                    let is_target_activation = match &n.opkind {
+                        SupportedOp::Nonlinear(LookupOp::Erf { .. }) => {
+                            activations.contains(&Activation::Erf)
+                        }
+                        SupportedOp::Nonlinear(LookupOp::Tanh { .. }) => {
+                            activations.contains(&Activation::Tanh)
+                        }
+                        _ => false,
+                    };
+
+                    if !is_target_activation {
+                        return None;
+                    }
+
+                    // Check if the input to this activation is already a DIV by tau
+                    // (meaning teleportation was already applied)
+                    let input_node_idx = n.inputs.first().map(|(i, _)| *i);
+                    if let Some(input_idx) = input_node_idx {
+                        if let Some(NodeType::Node(input_node)) = self.graph.nodes.get(&input_idx) {
+                            if let SupportedOp::Nonlinear(LookupOp::Div { denom }) =
+                                &input_node.opkind
+                            {
+                                if (denom.0 - tau).abs() < 1e-6 {
+                                    // Already teleported, skip this one
+                                    return None;
+                                }
+                            }
+                        }
+                    }
+
+                    Some(*idx)
+                }
+                _ => None,
+            });
+
+            let Some(act_idx) = act_idx_opt else {
+                // No more activations to teleport
+                return;
+            };
+
+            // Clone info we need from the activation node
+            let (input_outlet, act_out_dims, act_out_scale) = match self.graph.nodes.get(&act_idx) {
+                Some(NodeType::Node(n)) => {
+                    let in_outlet = n
+                        .inputs
+                        .first()
+                        .cloned()
+                        .expect("Erf node must have an input");
+                    (in_outlet, n.out_dims.clone(), n.out_scale)
+                }
+                _ => return,
+            };
+
+            // Determine input dimensions and scale from the upstream node
+            let (input_dims, input_scale) = match self.graph.nodes.get(&input_outlet.0) {
+                Some(NodeType::Node(up)) => (up.out_dims.clone(), up.out_scale),
+                _ => (act_out_dims.clone(), act_out_scale),
+            };
+
+            // We insert 1 node (pre_div) and shift the activation:
+            //   pre_div at act_idx:     divides input by tau
+            //   activation at act_idx+1: Erf (shifted)
+            //
+            // All original nodes after act_idx shift by +1
+
+            let mut new_nodes: BTreeMap<usize, NodeType> = BTreeMap::new();
+
+            // Phase 1: Copy nodes before act_idx unchanged
+            for (idx, nt) in self.graph.nodes.iter() {
+                if *idx < act_idx {
+                    new_nodes.insert(*idx, nt.clone());
+                }
+            }
+
+            // Phase 2: Create pre-div node at act_idx
+            let pre_idx = act_idx;
+            let pre_div = Node {
+                idx: pre_idx,
+                opkind: SupportedOp::Nonlinear(LookupOp::Div { denom: F32(tau) }),
+                inputs: vec![input_outlet],
+                out_dims: input_dims.clone(),
+                out_scale: input_scale,
+                num_uses: 1,
+            };
+            new_nodes.insert(pre_idx, NodeType::Node(pre_div));
+
+            // Phase 3: Shift activation to act_idx+1, taking input from pre_idx
+            let new_act_idx = act_idx + 1;
+            if let Some(NodeType::Node(act_node)) = self.graph.nodes.get(&act_idx) {
+                let mut shifted_act = act_node.clone();
+                shifted_act.idx = new_act_idx;
+                shifted_act.inputs = vec![(pre_idx, 0)];
+                new_nodes.insert(new_act_idx, NodeType::Node(shifted_act));
+            }
+
+            // Phase 4: Shift all nodes after act_idx by +1, and update their inputs
+            for (idx, nt) in self.graph.nodes.iter() {
+                if *idx > act_idx {
+                    if let NodeType::Node(n) = nt {
+                        let mut shifted = n.clone();
+                        shifted.idx = n.idx + 1;
+                        // Update inputs: anything referencing >= act_idx needs adjustment
+                        for inp in shifted.inputs.iter_mut() {
+                            if inp.0 >= act_idx {
+                                inp.0 += 1;
+                            }
+                        }
+                        new_nodes.insert(shifted.idx, NodeType::Node(shifted));
+                    }
+                }
+            }
+
+            self.graph.nodes = new_nodes;
+
+            // Patch graph outputs: shift indices and redirect activation references
+            for (out_idx, _outlet) in self.graph.outputs.iter_mut() {
+                if *out_idx >= act_idx {
+                    *out_idx += 1;
+                }
+            }
+
+            // Patch graph inputs if any reference nodes >= act_idx (shift by +1)
+            for inp_idx in self.graph.inputs.iter_mut() {
+                if *inp_idx >= act_idx {
+                    *inp_idx += 1;
+                }
+            }
+            trace!(
+                "Applied one-sided teleportation with tau={tau}: pre_div at {pre_idx}, activation at {new_act_idx}"
+            );
+        }
     }
 }
 

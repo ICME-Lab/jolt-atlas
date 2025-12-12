@@ -62,6 +62,8 @@ impl From<&LookupOp> for ONNXOpcode {
             // LookupOp::Sqrt { .. } => ONNXOpcode::Sqrt,
             LookupOp::Rsqrt { .. } => ONNXOpcode::Rsqrt,
             LookupOp::Div { .. } => ONNXOpcode::DivI,
+            LookupOp::Erf { .. } => ONNXOpcode::Erf,
+            LookupOp::Tanh { .. } => ONNXOpcode::Tanh,
             _ => {
                 panic!("LookupOp {value:?} cannot be converted to ONNXOpcode",);
             }
@@ -217,20 +219,6 @@ where
             LookupOp::ASinh { scale } => format!("ASINH(scale={scale})"),
         }
     }
-
-    // fn layout(
-    //     &self,
-    //     config: &mut crate::circuit::BaseConfig<F>,
-    //     region: &mut RegionCtx<F>,
-    //     values: &[ValTensor<F>],
-    // ) -> Result<Option<ValTensor<F>>, Box<dyn Error>> {
-    //     Ok(Some(layouts::nonlinearity(
-    //         config,
-    //         region,
-    //         values[..].try_into()?,
-    //         self,
-    //     )?))
-    // }
 
     /// Returns the scale of the output of the operation.
     fn out_scale(&self, inputs_scale: Vec<crate::Scale>) -> Result<crate::Scale, Box<dyn Error>> {

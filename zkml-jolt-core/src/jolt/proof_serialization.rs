@@ -362,6 +362,14 @@ impl CanonicalSerialize for VirtualPolynomial {
             VirtualPolynomial::TdIncS => {
                 37u8.serialize_with_mode(&mut writer, compress)?;
             }
+            VirtualPolynomial::FpLookupRa(index) => {
+                38u8.serialize_with_mode(&mut writer, compress)?;
+                index.serialize_with_mode(&mut writer, compress)?;
+            }
+            VirtualPolynomial::FpLookupRv(index) => {
+                39u8.serialize_with_mode(&mut writer, compress)?;
+                index.serialize_with_mode(&mut writer, compress)?;
+            }
         }
         Ok(())
     }
@@ -377,7 +385,9 @@ impl CanonicalSerialize for VirtualPolynomial {
                 | VirtualPolynomial::PrecompileC(index)
                 | VirtualPolynomial::RaAPrecompile(index)
                 | VirtualPolynomial::RaBPrecompile(index)
-                | VirtualPolynomial::RaCPrecompile(index) => index.serialized_size(compress),
+                | VirtualPolynomial::RaCPrecompile(index)
+                | VirtualPolynomial::FpLookupRa(index)
+                | VirtualPolynomial::FpLookupRv(index) => index.serialized_size(compress),
                 _ => 0,
             }
     }
@@ -459,6 +469,14 @@ impl CanonicalDeserialize for VirtualPolynomial {
             35 => VirtualPolynomial::LeftInstructionInput,
             36 => VirtualPolynomial::RightInstructionInput,
             37 => VirtualPolynomial::TdIncS,
+            38 => {
+                let index = usize::deserialize_with_mode(&mut reader, compress, validate)?;
+                VirtualPolynomial::FpLookupRa(index)
+            }
+            39 => {
+                let index = usize::deserialize_with_mode(&mut reader, compress, validate)?;
+                VirtualPolynomial::FpLookupRv(index)
+            }
             _ => return Err(SerializationError::InvalidData),
         };
         Ok(polynomial)
@@ -539,6 +557,10 @@ where
                 2u8.serialize_with_mode(&mut writer, compress)?;
                 proof.serialize_with_mode(&mut writer, compress)
             }
+            ProofData::FpLookupProof(proof) => {
+                3u8.serialize_with_mode(&mut writer, compress)?;
+                proof.serialize_with_mode(&mut writer, compress)
+            }
         }
     }
 
@@ -547,6 +569,7 @@ where
             ProofData::SumcheckProof(proof) => proof.serialized_size(compress),
             ProofData::ReducedOpeningProof(proof) => proof.serialized_size(compress),
             ProofData::PrecompileProof(proof) => proof.serialized_size(compress),
+            ProofData::FpLookupProof(proof) => proof.serialized_size(compress),
         }
     }
 }
@@ -562,6 +585,7 @@ where
             ProofData::SumcheckProof(proof) => proof.check(),
             ProofData::ReducedOpeningProof(proof) => proof.check(),
             ProofData::PrecompileProof(proof) => proof.check(),
+            ProofData::FpLookupProof(proof) => proof.check(),
         }
     }
 }
@@ -599,6 +623,14 @@ where
                     validate,
                 )?;
                 Ok(ProofData::PrecompileProof(proof))
+            }
+            3 => {
+                let proof = super::fp_lookups::FpLookupProof::<F, FS>::deserialize_with_mode(
+                    &mut reader,
+                    compress,
+                    validate,
+                )?;
+                Ok(ProofData::FpLookupProof(proof))
             }
             _ => Err(SerializationError::InvalidData),
         }

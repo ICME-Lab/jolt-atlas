@@ -269,6 +269,8 @@ pub enum ONNXOpcode {
     Softmax,
     Gte,
     Eq,
+    Erf,
+    Tanh,
     Reshape,
     Select,
     Broadcast,
@@ -295,6 +297,8 @@ pub enum AtlasOpcode {
     Select,
     Broadcast,
     AddressedNoop,
+    Erf,
+    Tanh,
 
     // Virtual instructions
     VirtualAdvice,
@@ -327,6 +331,8 @@ impl TryFrom<ONNXOpcode> for AtlasOpcode {
             ONNXOpcode::Broadcast => AtlasOpcode::Broadcast,
             ONNXOpcode::Constant => AtlasOpcode::Constant,
             ONNXOpcode::Eq => AtlasOpcode::Eq,
+            ONNXOpcode::Erf => AtlasOpcode::Erf,
+            ONNXOpcode::Tanh => AtlasOpcode::Tanh,
             ONNXOpcode::Gte => AtlasOpcode::Gte,
             ONNXOpcode::Input => AtlasOpcode::Input,
             ONNXOpcode::Mul => AtlasOpcode::Mul,

@@ -6,6 +6,7 @@ use crate::jolt::{
         state_manager::{ProofData, ProofKeys, StateManager},
     },
     executor::LookupsDag,
+    fp_lookups::FpLookupProof,
     memory::MemoryDag,
     precompiles::PrecompileSNARK,
     spartan::SpartanDag,
@@ -226,6 +227,14 @@ impl JoltDAG {
             state_manager.proofs.borrow_mut().insert(
                 ProofKeys::PrecompileProof,
                 ProofData::PrecompileProof(precompile_proof),
+            );
+        }
+
+        if pp.is_fp_lookups_enabled() {
+            let fp_lookup_proof = FpLookupProof::prove(&mut state_manager);
+            state_manager.proofs.borrow_mut().insert(
+                ProofKeys::FpLookupProof,
+                ProofData::FpLookupProof(fp_lookup_proof),
             );
         }
 
@@ -451,6 +460,26 @@ impl JoltDAG {
             precompile_proof
                 .verify(&mut state_manager)
                 .context("Precompile")?;
+        }
+
+        if preprocessing.is_fp_lookups_enabled() {
+            // fp lookup proof
+            // Extract and clone fp lookup proof
+            let fp_lookup_proof = {
+                let proofs = state_manager.proofs.borrow();
+                let fp_lookup_proof_data = proofs
+                    .get(&ProofKeys::FpLookupProof)
+                    .expect("FP Lookup proof not found");
+                match fp_lookup_proof_data {
+                    ProofData::FpLookupProof(proof) => proof.clone(), // Clone to avoid borrow issues
+                    _ => panic!("Invalid proof type for FP Lookup"),
+                }
+            };
+
+            // Verify with mutable reference to state_manager
+            fp_lookup_proof
+                .verify(&mut state_manager)
+                .context("FP Lookup")?;
         }
 
         // Batch-prove all openings - get fresh borrow after verify

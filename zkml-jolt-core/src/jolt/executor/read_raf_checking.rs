@@ -838,6 +838,7 @@ mod tests {
         let shared_preprocessing = JoltSharedPreprocessing {
             bytecode: bytecode_preprocessing,
             precompiles: PrecompilePreprocessing::empty(),
+            fp_lookups: Default::default(),
         };
         let prover_preprocessing: JoltProverPreprocessing<Fr, MockCommitScheme<Fr>> =
             JoltProverPreprocessing {
@@ -853,6 +854,8 @@ mod tests {
         let program_io = ProgramIO {
             input: Tensor::new(None, &[]).unwrap(),
             output: Tensor::new(None, &[]).unwrap(),
+            min_lookup_input: 0,
+            max_lookup_input: 0,
         };
 
         let mut prover_sm = StateManager::<'_, Fr, Blake2bTranscript, _>::new_prover(

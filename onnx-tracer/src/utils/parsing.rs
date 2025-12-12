@@ -67,7 +67,6 @@ pub fn quantize_float(elem: &f64, shift: f64, scale: crate::Scale) -> Result<i32
         *elem
     };
 
-    // we parallelize the quantization process as it seems to be quite slow at times
     let scaled = (mult * clamped_elem + shift).round() as i32;
 
     Ok(scaled)

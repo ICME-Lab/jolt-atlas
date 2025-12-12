@@ -42,6 +42,7 @@ pub fn test_einsum_instances(
     let shared_preprocessing = JoltSharedPreprocessing {
         bytecode: bytecode_preprocessing,
         precompiles: PrecompilePreprocessing::empty(),
+        fp_lookups: Default::default(),
     };
 
     let prover_preprocessing: JoltProverPreprocessing<Fr, MockCommitScheme<Fr>> =
@@ -59,6 +60,8 @@ pub fn test_einsum_instances(
     let program_io = ProgramIO {
         input: Tensor::new(None, &[]).unwrap(),
         output: Tensor::new(None, &[]).unwrap(),
+        min_lookup_input: 0,
+        max_lookup_input: 0,
     };
 
     let trace = vec![JoltONNXCycle::no_op(); 16];

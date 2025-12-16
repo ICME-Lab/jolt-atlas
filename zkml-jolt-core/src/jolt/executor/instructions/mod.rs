@@ -9,6 +9,7 @@ use onnx_tracer::instructions::{
     einsum::Einsum,
     eq::Eq,
     erf::Erf,
+    gather::Gather,
     gte::Gte,
     input::Input,
     mul::Mul,
@@ -30,6 +31,7 @@ pub mod constant;
 pub mod einsum;
 pub mod eq;
 pub mod erf;
+pub mod gather;
 pub mod gte;
 pub mod input;
 pub mod mul;
@@ -185,6 +187,7 @@ define_onnx_trait_impls!(
     Einsum(String),
     Eq,
     Erf,
+    Gather,
     Gte,
     Input,
     Mul,

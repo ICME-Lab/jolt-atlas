@@ -261,6 +261,7 @@ pub enum ONNXOpcode {
     Rsqrt,
     Einsum(String),
     Sum(usize),
+    Gather,
     Sra,
     /// Used for the ReduceMean operator, which is internally converted to a
     /// combination of ReduceSum and Div operations.
@@ -291,6 +292,7 @@ pub enum AtlasOpcode {
     Relu,
     Einsum(String),
     Sum(usize),
+    Gather,
     Gte,
     Eq,
     Reshape,
@@ -332,15 +334,16 @@ impl TryFrom<ONNXOpcode> for AtlasOpcode {
             ONNXOpcode::Constant => AtlasOpcode::Constant,
             ONNXOpcode::Eq => AtlasOpcode::Eq,
             ONNXOpcode::Erf => AtlasOpcode::Erf,
-            ONNXOpcode::Tanh => AtlasOpcode::Tanh,
             ONNXOpcode::Gte => AtlasOpcode::Gte,
             ONNXOpcode::Input => AtlasOpcode::Input,
             ONNXOpcode::Mul => AtlasOpcode::Mul,
             ONNXOpcode::Relu => AtlasOpcode::Relu,
             ONNXOpcode::Reshape => AtlasOpcode::Reshape,
             ONNXOpcode::Sub => AtlasOpcode::Sub,
+            ONNXOpcode::Tanh => AtlasOpcode::Tanh,
             // Those are treated by specialized sum_check precompiles
             ONNXOpcode::Einsum(subscripts) => AtlasOpcode::Einsum(subscripts),
+            ONNXOpcode::Gather => AtlasOpcode::Gather,
             ONNXOpcode::Sum(axis) => AtlasOpcode::Sum(axis),
             // Those are treated with circuit flags
             ONNXOpcode::Select => AtlasOpcode::Select,

@@ -19,27 +19,22 @@ use rayon::prelude::*;
 
 /// Computes gather(x, W)
 /// where:  
-///
 ///         x is a m-dim vector
 ///         W is a k x n matrix
 ///         gather(x, W) is a m x n matrix
 ///
 /// Each value of x corresponds to an index in [0; k) and gather outputs the n-dim vector stored in W at this index
 ///
-/// Example:
-///
+/// ex:
 ///             x =  [2, 0],        2-dim
-///
 ///             W = [[1, 1, 1, 1],  3 x 4 dim
 ///                  [2, 2, 2, 2],
 ///                  [3, 3, 3, 3]]
-///
 ///  gather(x, W) = [[3, 3, 3, 3],  2 x 4 dim
 ///                  [1, 1, 1, 1]]
 ///
 ///
 /// To compute this, we first construct X, a m x k dim matrix holding the one-hot encoding of value stored in x
-///
 ///             X = [[0, 0, 1],     2 x 3 dim
 ///                  [1, 0, 0]]
 ///

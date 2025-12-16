@@ -20,7 +20,7 @@ use jolt_core::{
     utils::{errors::ProofVerifyError, math::Math},
     zkvm::witness::DTH_ROOT_OF_K,
 };
-use onnx_tracer::{ProgramIO, graph::model::Model, tensor::Tensor};
+use onnx_tracer::{ProgramIO, graph::model::Model, tensor::Tensor, trace_types::ONNXInstr};
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, rc::Rc};
 
@@ -260,11 +260,8 @@ where
 {
     /// Preprocesses the ONNX model to produce shared preprocessing data
     #[tracing::instrument(skip_all, name = "Jolt::preprocess")]
-    pub fn shared_preprocess<ModelFunc>(model: ModelFunc) -> JoltSharedPreprocessing
-    where
-        ModelFunc: Fn() -> Model + Copy,
-    {
-        let bytecode_preprocessing = BytecodePreprocessing::preprocess(model);
+    pub fn shared_preprocess(onnx_bytecode: Vec<ONNXInstr>) -> JoltSharedPreprocessing {
+        let bytecode_preprocessing = BytecodePreprocessing::preprocess(onnx_bytecode);
         let precompile_preprocessing = PrecompilePreprocessing::preprocess(&bytecode_preprocessing);
         let fp_lookups_preprocessing = FpLookupPreprocessing::preprocess(&bytecode_preprocessing);
         JoltSharedPreprocessing {
@@ -285,7 +282,8 @@ where
     where
         ModelFunc: Fn() -> Model + Copy,
     {
-        let shared = Self::shared_preprocess(model);
+        let onnx_bytecode = onnx_tracer::decode_model(model());
+        let shared = Self::shared_preprocess(onnx_bytecode);
         let max_T: usize = max_trace_length.next_power_of_two();
         let generators = PCS::setup_prover(DTH_ROOT_OF_K.log_2() + max_T.log_2());
         JoltProverPreprocessing { shared, generators }

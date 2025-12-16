@@ -18,7 +18,6 @@ use jolt_core::{
     },
 };
 use onnx_tracer::{
-    graph::model::Model,
     tensor::Tensor,
     trace_types::{AtlasInstr, AtlasOpcode, ONNXInstr},
     utils::VirtualSlotCounter,
@@ -79,12 +78,9 @@ pub struct BytecodePreprocessing {
 
 impl BytecodePreprocessing {
     #[tracing::instrument(skip_all, name = "BytecodePreprocessing::preprocess")]
-    pub fn preprocess<ModelFunc>(model: ModelFunc) -> Self
-    where
-        ModelFunc: Fn() -> Model,
-    {
+    pub fn preprocess(onnx_bytecode: Vec<ONNXInstr>) -> Self {
         let (mut bytecode, memory_K, vt_address_map, max_td, td_lookup, raw_bytecode) =
-            Self::inline_tensor_instrs(model);
+            Self::inline_tensor_instrs(onnx_bytecode);
         Self::finalize_bytecode(&mut bytecode);
         let code_size = Self::compute_code_size(bytecode.len());
         Self {
@@ -150,11 +146,8 @@ impl BytecodePreprocessing {
     }
 
     #[tracing::instrument(skip_all, name = "BytecodePreprocessing::inline_tensor_instrs")]
-    pub fn inline_tensor_instrs<ModelFunc>(model: ModelFunc) -> RawToJoltResult
-    where
-        ModelFunc: Fn() -> Model,
-    {
-        let (expanded_bytecode, max_td) = Self::decode_and_expand_model(model);
+    pub fn inline_tensor_instrs(onnx_bytecode: Vec<ONNXInstr>) -> RawToJoltResult {
+        let (expanded_bytecode, max_td) = Self::expand_model(onnx_bytecode);
         let td_lookup = Self::build_td_lookup(&expanded_bytecode);
 
         // Memory management and instruction preprocessing:
@@ -185,17 +178,13 @@ impl BytecodePreprocessing {
     /// Decodes the model into ONNX instructions, expands virtual instructions, and returns the
     /// expanded trace along with the maximum td encountered. The max_td value is computed on the
     /// unexpanded trace so virtual instructions can reserve unique register addresses deterministically.
-    fn decode_and_expand_model<ModelFunc>(model: ModelFunc) -> (Vec<AtlasInstr>, usize)
-    where
-        ModelFunc: Fn() -> Model,
-    {
-        let decoded_bytecode = onnx_tracer::decode_model(model());
-        let max_td = decoded_bytecode
+    fn expand_model(onnx_bytecode: Vec<ONNXInstr>) -> (Vec<AtlasInstr>, usize) {
+        let max_td = onnx_bytecode
             .iter()
             .filter_map(|instr| instr.td)
             .max()
             .unwrap_or(0);
-        let expanded_bytecode = Self::expand_virtual_bytecode(decoded_bytecode, max_td);
+        let expanded_bytecode = Self::expand_virtual_bytecode(onnx_bytecode, max_td);
         (expanded_bytecode, max_td)
     }
 

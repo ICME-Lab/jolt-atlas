@@ -4,6 +4,7 @@ use crate::jolt::{
     JoltProverPreprocessing, JoltSharedPreprocessing, JoltVerifierPreprocessing,
     bytecode::BytecodePreprocessing,
     dag::state_manager::StateManager,
+    fp_lookups::FpLookupPreprocessing,
     pcs::SumcheckId,
     precompiles::{PrecompilePreprocessing, PrecompileSNARK},
     sumcheck::SumcheckInstance,
@@ -45,6 +46,7 @@ pub fn test_gather_instances(
     let shared_preprocessing = JoltSharedPreprocessing {
         bytecode: bytecode_preprocessing,
         precompiles: PrecompilePreprocessing::empty(),
+        fp_lookups: FpLookupPreprocessing::empty(),
     };
 
     let prover_preprocessing: JoltProverPreprocessing<Fr, MockCommitScheme<Fr>> =
@@ -62,6 +64,8 @@ pub fn test_gather_instances(
     let program_io = ProgramIO {
         input: Tensor::new(None, &[]).unwrap(),
         output: Tensor::new(None, &[]).unwrap(),
+        max_lookup_input: 0,
+        min_lookup_input: 0,
     };
 
     let trace = vec![JoltONNXCycle::no_op(); 16];

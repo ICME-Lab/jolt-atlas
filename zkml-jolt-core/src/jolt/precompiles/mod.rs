@@ -189,6 +189,7 @@ impl PreprocessingInstance {
 
                 _ => panic!("Sum operation not supported by precompile system"),
             },
+            AtlasOpcode::Gather => todo!(),
             _ => panic!("Operation not supported by precompile system"),
         }
     }

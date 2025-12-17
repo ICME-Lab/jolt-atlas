@@ -119,16 +119,17 @@ impl SingleSumcheck {
             sumcheck_instance.degree(),
             transcript,
         )?;
+        if let Some(opening_accumulator) = &opening_accumulator {
+            sumcheck_instance.cache_openings_verifier(
+                opening_accumulator.clone(),
+                sumcheck_instance.normalize_opening_point(&r),
+            );
+        }
 
         if output_claim != sumcheck_instance.expected_output_claim(opening_accumulator.clone(), &r)
         {
             return Err(ProofVerifyError::SumcheckVerificationError);
         }
-
-        sumcheck_instance.cache_openings_verifier(
-            opening_accumulator.unwrap(),
-            sumcheck_instance.normalize_opening_point(&r),
-        );
 
         Ok(r)
     }

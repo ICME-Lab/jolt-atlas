@@ -299,6 +299,7 @@ pub enum VirtualPolynomial {
     PrecompileB(usize),
     PrecompileC(usize),
     GatherRa(usize),
+    BooleanityRa(usize),
     RaAPrecompile(usize),
     RaBPrecompile(usize),
     RaCPrecompile(usize),

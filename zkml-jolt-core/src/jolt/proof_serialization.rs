@@ -374,6 +374,10 @@ impl CanonicalSerialize for VirtualPolynomial {
                 40u8.serialize_with_mode(&mut writer, compress)?;
                 index.serialize_with_mode(&mut writer, compress)?;
             }
+            VirtualPolynomial::BooleanityRa(index) => {
+                40u8.serialize_with_mode(&mut writer, compress)?;
+                index.serialize_with_mode(&mut writer, compress)?;
+            }
         }
         Ok(())
     }

@@ -332,7 +332,7 @@ pub struct ExecutionProverState<F: JoltField> {
 mod tests {
     use super::*;
     use crate::jolt::precompiles::{
-        gather::test::TestInstances, gather::test::test_gather_instances,
+        gather::test::TestInstances, gather::test::test_sumcheck_instances,
     };
     use ark_bn254::Fr;
     use itertools::Itertools;
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn test_random_gather_instances() {
-        test_gather_instances(
+        test_sumcheck_instances(
             random_instances,
             (32, 32, 32, 0), // (m, k, n, unused)
             0xDEAD,

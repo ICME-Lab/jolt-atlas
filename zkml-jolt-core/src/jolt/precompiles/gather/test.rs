@@ -13,6 +13,7 @@ use crate::jolt::{
 };
 use ark_bn254::Fr;
 use ark_std::One;
+use itertools::Itertools;
 use jolt_core::{
     poly::{
         commitment::mock::MockCommitScheme,
@@ -136,7 +137,10 @@ pub fn test_gather_sumcheck(
         &mut StateManager<'_, Fr, Blake2bTranscript, MockCommitScheme<Fr>>,
         &mut StateManager<'_, Fr, Blake2bTranscript, MockCommitScheme<Fr>>,
         (Vec<Fr>, Vec<Fr>, Vec<Fr>), // TODO(AntoineF4C5): Temporary, this information should be held in state_manager
-    ) -> (Box<dyn SumcheckInstance<Fr>>, Box<dyn SumcheckInstance<Fr>>),
+    ) -> (
+        Vec<Box<dyn SumcheckInstance<Fr>>>,
+        Vec<Box<dyn SumcheckInstance<Fr>>>,
+    ),
     (read_addresses, dictionnary, output): (Vec<Fr>, Vec<Fr>, Vec<Fr>),
 ) -> BTreeMap<OpeningId, (OpeningPoint<BIG_ENDIAN, Fr>, Fr)> {
     let bytecode_pp = BytecodePreprocessing::default();
@@ -186,8 +190,24 @@ pub fn test_gather_sumcheck(
         (read_addresses, dictionnary, output),
     );
 
+    let (prover_sumcheck, verifier_sumcheck): (
+        Vec<&mut dyn SumcheckInstance<Fr>>,
+        Vec<&dyn SumcheckInstance<Fr>>,
+    ) = prover_sumcheck
+        .iter_mut()
+        .zip_eq(verifier_sumcheck.iter())
+        .map(|(psc, vsc)| {
+            (
+                &mut **psc as &mut dyn SumcheckInstance<Fr>,
+                &**vsc as &dyn SumcheckInstance<Fr>,
+            )
+        })
+        .collect::<Vec<(&mut dyn SumcheckInstance<Fr>, &dyn SumcheckInstance<Fr>)>>()
+        .into_iter()
+        .unzip();
+
     let (proof, _r_sumcheck) = BatchedSumcheck::prove(
-        vec![&mut *prover_sumcheck],
+        prover_sumcheck,
         Some(prover_sm.get_prover_accumulator()),
         &mut *prover_sm.get_transcript().borrow_mut(),
     );
@@ -208,7 +228,7 @@ pub fn test_gather_sumcheck(
 
     let res = BatchedSumcheck::verify(
         &proof,
-        vec![&*verifier_sumcheck],
+        verifier_sumcheck,
         Some(verifier_sm.get_verifier_accumulator()),
         &mut *verifier_sm.get_transcript().borrow_mut(),
     );

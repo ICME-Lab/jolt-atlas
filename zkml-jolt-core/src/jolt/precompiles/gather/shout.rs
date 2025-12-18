@@ -12,12 +12,9 @@ use jolt_core::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
         opening_proof::{BIG_ENDIAN, OpeningPoint},
-        unipoly::{CompressedUniPoly, UniPoly},
     },
-    subprotocols::sumcheck::SumcheckInstanceProof,
-    transcripts::{AppendToTranscript, Transcript},
+    transcripts::Transcript,
     utils::{
-        errors::ProofVerifyError,
         math::Math,
         thread::{drop_in_background_thread, unsafe_allocate_zero_vec},
     },
@@ -27,47 +24,55 @@ use rayon::prelude::*;
 use crate::jolt::{
     dag::state_manager::StateManager,
     pcs::{ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
-    sumcheck::{BatchedSumcheck, SumcheckInstance},
+    sumcheck::SumcheckInstance,
     witness::VirtualPolynomial,
 };
 
-/// Implements the sumcheck prover for the core Shout PIOP when d = 1. See
-/// Figure 5 from the Twist+Shout paper.
-/// Proves that rv = sum(ra * val) by proving equality at given r_cycle.
-/// Might use in our case by committing to rv and ra, then open rv(r_cycle) and prove it equals sum( ra(r_cycle, k) * val(k) )
-/// the above, with aditionnal boolean and hamming weight check, should prove that ra is one-hot encoding for rv.
-/// Now two choices: or I try to modify it so that we can prove a given C is gather(rv, val).
-/// PS: Need to make sure ra encodes the right value with a raf-eval: raf(r_cycle) = sum( ra(r_cycle, k) * Int(k) )
-///
-/// I think of an additional variable in val and rv, let n the number of words for each dictionnary entry
-/// prove for all n, rv(r_cycle, n) = sum( ra(r_cycle, k) * val(k, n) ).
-/// Each entry in raf maps to n words of dictionnary
-///
-/// Allegories:
-/// raf: vector of indexes to gather
-/// ra: one-hot encoding of raf
-/// val: dictionnary of words for each index
-/// rv: output of gather for index in raf
-pub struct ShoutProof<F: JoltField, ProofTranscript: Transcript> {
-    sumcheck_proof: SumcheckInstanceProof<F, ProofTranscript>,
-}
+// Implementation of various sumchecks used to prove execution of a gather instruction
+//
+// RvHwSumcheck proves: C(r_x, r_y) = Sum_k( ra(r_x, k) * (B(k, r_y) + z) )
+//  - Read Value ensures that the output of this instruction is indeed equal to the matrix-multiplication of ra and b,
+//      where ra is claimed to be the one-hot encoding matrix of input vector A. (row `i` of ra is one-hot encoding of `A[i]`)
+//  - Hamming Weight ensures that the sum of all entries at all rows of ra equals 1 (part of proving one-hot encoding).
+//
+// BooleanitySumcheck proves:  0 = Sum_k,t( eq(r_x, t) * eq(r_y, k) * (ra(t, k)² - ra(t, k)) )
+//  - Booleanity ensures that each value in ra is in the set {0, 1}.
+//  This and Hamming Weight assert that each row in ra is a one-hot encoded vector.
+//
+// RafSumcheck proves: a(r_x) = Sum_k( ra(r_x, k) * Id(k) )
+//  - Raf Evaluation computes dot product of each row of ra with the identity polynomial.
+//  This and Hamming Weight, Booleanity ensures that ra's row `i` is the one-hot encoding of `A[i]`
+//
+// Putting it in the context of the Gather instructions:
+// id   | dims                      | description                                                                                   | name in sumchecks
+// A    | [num_lookups]             | first input vector, where `A[i]` is the index of the values to retrieve from the second input | read_addresses
+// B    | [num_words * word_dim]    | second input, a matrix where each row holds the values to be retrieved                        | dictionnary
+// C    | [num_lookups * word_dim]  | output, a matrix where each row holds the retrieved values from B at index given in A         | output
+// ra   | [num_lookups * num_words] | used by all sumchecks, each row holds the one-hot encoding of value held in A                 | ra
 
-impl<F: JoltField, ProofTranscript: Transcript> ShoutProof<F, ProofTranscript> {
+pub struct GatherProof {}
+
+impl GatherProof {
     #[tracing::instrument(skip_all, name = "ShoutProof::prove")]
-    pub fn prove<'a, PCS: CommitmentScheme<Field = F>>(
-        sm: &mut StateManager<'a, F, ProofTranscript, PCS>,
+    pub fn gather_prover_instances<
+        'a,
+        F: JoltField,
+        PT: Transcript,
+        PCS: CommitmentScheme<Field = F>,
+    >(
+        sm: &mut StateManager<'a, F, PT, PCS>,
         read_addresses: Vec<usize>,
         dictionnary: Vec<F>,
         // Number of dimension in a word embedding
         word_dim: usize,
-    ) -> Self {
+    ) -> Vec<Box<dyn SumcheckInstance<F>>> {
         let num_lookups = read_addresses.len();
         let num_words = dictionnary.len() / word_dim; // dictionnary is a num_words * word_dim matrix
 
         // Recover challenge built during previous sumcheck
         let r_c = sm
             .get_prover_accumulator()
-            .borrow_mut()
+            .borrow()
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::PrecompileC(0),
                 SumcheckId::PrecompileExecution,
@@ -106,107 +111,107 @@ impl<F: JoltField, ProofTranscript: Transcript> ShoutProof<F, ProofTranscript> {
             .collect();
         assert_eq!(folded_dict.len(), num_words);
 
-        let mut rv_hw_sumcheck =
-            ShoutSumcheck::new_prover(sm, read_addresses.clone(), folded_dict, F.clone());
+        let rv_hw_sumcheck =
+            RvHwSumcheck::new_prover(sm, read_addresses.clone(), folded_dict, F.clone());
 
-        let mut booleanity_sumcheck = BooleanitySumcheck::new_prover(sm, read_addresses, F);
+        let booleanity_sumcheck =
+            BooleanitySumcheck::new_prover(sm, read_addresses.clone(), F.clone());
 
-        let accumulator = sm.get_prover_accumulator();
-        let (sumcheck_proof, _r_sumcheck) = BatchedSumcheck::prove(
-            vec![&mut rv_hw_sumcheck, &mut booleanity_sumcheck],
-            Some(accumulator),
-            &mut *sm.get_transcript().borrow_mut(),
-        );
+        let raf_sumcheck = RafSumcheck::new_prover(sm, read_addresses, F);
 
         // TODO: Reduce 2 ra claims to 1 (Section 4.5.2 of Proofs, Arguments, and Zero-Knowledge)
         // TODO: Append to opening proof accumulator
 
-        Self { sumcheck_proof }
+        vec![
+            Box::new(rv_hw_sumcheck),
+            Box::new(booleanity_sumcheck),
+            Box::new(raf_sumcheck),
+        ]
     }
 
-    pub fn verify<'a, PCS: CommitmentScheme<Field = F>>(
-        &self,
-        sm: &mut StateManager<'a, F, ProofTranscript, PCS>,
+    pub fn gather_verifier_instances<
+        'a,
+        F: JoltField,
+        PT: Transcript,
+        PCS: CommitmentScheme<Field = F>,
+    >(
+        sm: &mut StateManager<'a, F, PT, PCS>,
         num_lookups: usize,
         dictionnary_length: usize,
         word_dim: usize,
-    ) -> Result<Vec<F>, ProofVerifyError> {
+    ) -> Vec<Box<dyn SumcheckInstance<F>>> {
         let num_words = dictionnary_length / word_dim;
 
-        let rv_hw_sumcheck = ShoutSumcheck::new_verifier(sm, num_lookups, num_words);
+        let rv_hw_sumcheck = RvHwSumcheck::new_verifier(sm, num_lookups, num_words);
 
-        let booleanity_sumcheck =
-            BooleanitySumcheck::new_verifier(sm, num_lookups.log_2(), num_words.log_2());
+        let booleanity_sumcheck = BooleanitySumcheck::new_verifier(sm, num_lookups, num_words);
 
-        let accumulator = sm.get_verifier_accumulator();
-        let r_sumcheck = BatchedSumcheck::verify(
-            &self.sumcheck_proof,
-            vec![&rv_hw_sumcheck, &booleanity_sumcheck],
-            Some(accumulator),
-            &mut *sm.get_transcript().borrow_mut(),
-        )?;
+        let raf_sumcheck = RafSumcheck::new_verifier(sm, num_lookups, num_words);
 
-        // TODO: Reduce 2 ra claims to 1 (Section 4.5.2 of Proofs, Arguments, and Zero-Knowledge)
-        // TODO: Append to opening proof accumulator
-
-        Ok(r_sumcheck)
+        vec![
+            Box::new(rv_hw_sumcheck),
+            Box::new(booleanity_sumcheck),
+            Box::new(raf_sumcheck),
+        ]
     }
 }
 
-struct ShoutProverState<F: JoltField> {
+struct RvHwProverState<F: JoltField> {
     ra: MultilinearPolynomial<F>,
-    val: MultilinearPolynomial<F>,
+    dict_folded: MultilinearPolynomial<F>,
 }
 
-impl<F: JoltField> ShoutProverState<F> {
+impl<F: JoltField> RvHwProverState<F> {
     fn initialize(
         // <'a, ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>>
         // TODO(AntoineF4C5): Use prover state to recover values for a/Ra and B
         // state_manager: StateManager<'a, F, ProofTranscript, PCS>,
-        lookup_table: Vec<F>,
+        dict_folded: Vec<F>,
         F: Vec<F>,
     ) -> Self {
         assert_eq!(F.iter().sum::<F>(), F::one());
 
         let ra = MultilinearPolynomial::from(F.clone());
-        let val = MultilinearPolynomial::from(lookup_table);
+        let dict_folded = MultilinearPolynomial::from(dict_folded);
 
-        Self { ra, val }
+        Self { ra, dict_folded }
     }
 }
-
-struct ShoutSumcheck<F: JoltField> {
-    prover_state: Option<ShoutProverState<F>>,
+// RvHwSumcheck proves: C(r_x, r_y) = Sum_k( ra(r_x, k) * (B(k, r_y) + z) )
+// r_x and r_y are challenges produced in a sumcheck executed in previous steps
+struct RvHwSumcheck<F: JoltField> {
+    prover_state: Option<RvHwProverState<F>>,
+    // Dimension over which sumcheck is ran
+    num_words: usize,
     rv_claim_c: F,
-    K: usize,
     // random challenge to batch rv and Hamming Weight sumchecks
     z: F,
-    // Index of the gather instance
-    index: usize,
     r_x: Vec<F>,
     r_y: Vec<F>,
+    // Index of the gather instance
+    index: usize,
 }
 
-impl<F: JoltField> ShoutSumcheck<F> {
+impl<F: JoltField> RvHwSumcheck<F> {
     pub fn new_prover<'a>(
         sm: &mut StateManager<'a, F, impl Transcript, impl CommitmentScheme<Field = F>>,
         read_addresses: Vec<usize>,
-        folded_dictionnary: Vec<F>,
+        dictionnary_folded: Vec<F>,
         F: Vec<F>,
     ) -> Self {
-        let T = read_addresses.len();
-        let K = folded_dictionnary.len();
+        let num_lookups = read_addresses.len();
+        let num_words = dictionnary_folded.len();
 
         let (r_c, rv_claim) = sm
             .get_prover_accumulator()
-            .borrow_mut()
+            .borrow()
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::PrecompileC(0),
                 SumcheckId::PrecompileExecution,
             );
-        let (r_x, r_y) = r_c.r.split_at(T.log_2());
+        let (r_x, r_y) = r_c.r.split_at(num_lookups.log_2());
 
-        let rv_hw_prover_state = ShoutProverState::initialize(folded_dictionnary.clone(), F);
+        let rv_hw_prover_state = RvHwProverState::initialize(dictionnary_folded.clone(), F);
 
         // Random challenge used to batch rv-check with hamming-weight check
         let z = sm.get_transcript().borrow_mut().challenge_scalar();
@@ -216,7 +221,7 @@ impl<F: JoltField> ShoutSumcheck<F> {
             // TODO(AntoineF4C5): populate
             index: 0,
             rv_claim_c: rv_claim,
-            K,
+            num_words,
             z,
             r_x: r_x.to_vec(),
             r_y: r_y.to_vec(),
@@ -230,7 +235,7 @@ impl<F: JoltField> ShoutSumcheck<F> {
     ) -> Self {
         let (r_c, rv_claim) = sm
             .get_verifier_accumulator()
-            .borrow_mut()
+            .borrow()
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::PrecompileC(0),
                 SumcheckId::PrecompileExecution,
@@ -242,19 +247,19 @@ impl<F: JoltField> ShoutSumcheck<F> {
 
         Self {
             prover_state: None,
+            num_words,
             rv_claim_c: rv_claim,
-            K: num_words,
             z,
-            index: 0,
             r_x: r_x.to_vec(),
             r_y: r_y.to_vec(),
+            index: 0,
         }
     }
 }
 
-impl<F: JoltField> SumcheckInstance<F> for ShoutSumcheck<F> {
+impl<F: JoltField> SumcheckInstance<F> for RvHwSumcheck<F> {
     fn num_rounds(&self) -> usize {
-        self.K.log_2()
+        self.num_words.log_2()
     }
 
     #[inline(always)]
@@ -269,7 +274,7 @@ impl<F: JoltField> SumcheckInstance<F> for ShoutSumcheck<F> {
 
     #[tracing::instrument(skip_all)]
     fn compute_prover_message(&mut self, _round: usize, _previous_claim: F) -> Vec<F> {
-        let ShoutProverState { ra, val, .. } = self.prover_state.as_ref().unwrap();
+        let RvHwProverState { ra, dict_folded } = self.prover_state.as_ref().unwrap();
 
         let degree = <Self as SumcheckInstance<F>>::degree(self);
 
@@ -277,11 +282,11 @@ impl<F: JoltField> SumcheckInstance<F> for ShoutSumcheck<F> {
             .into_par_iter()
             .map(|i| {
                 let ra_evals = ra.sumcheck_evals(i, degree, BindingOrder::LowToHigh);
-                let val_evals = val.sumcheck_evals(i, degree, BindingOrder::LowToHigh);
+                let dict_evals = dict_folded.sumcheck_evals(i, degree, BindingOrder::LowToHigh);
 
                 [
-                    ra_evals[0] * (self.z + val_evals[0]),
-                    ra_evals[1] * (self.z + val_evals[1]),
+                    ra_evals[0] * (self.z + dict_evals[0]),
+                    ra_evals[1] * (self.z + dict_evals[1]),
                 ]
             })
             .reduce(
@@ -293,10 +298,10 @@ impl<F: JoltField> SumcheckInstance<F> for ShoutSumcheck<F> {
 
     #[tracing::instrument(skip_all)]
     fn bind(&mut self, r_j: F, _: usize) {
-        let ShoutProverState { ra, val, .. } = self.prover_state.as_mut().unwrap();
+        let RvHwProverState { ra, dict_folded } = self.prover_state.as_mut().unwrap();
         rayon::join(
             || ra.bind_parallel(r_j, BindingOrder::LowToHigh),
-            || val.bind_parallel(r_j, BindingOrder::LowToHigh),
+            || dict_folded.bind_parallel(r_j, BindingOrder::LowToHigh),
         );
     }
 
@@ -307,22 +312,16 @@ impl<F: JoltField> SumcheckInstance<F> for ShoutSumcheck<F> {
     ) -> F {
         let accumulator = accumulator.as_ref().unwrap();
 
-        // This check should be the final claim of sumcheck: C(r_x, r_y) = Sum_k( ra(r_x, k) * (b(k, r_y) + z) )
-        // This proves that the output of this instruction is indeed equal to the matrix-multiplication of ra and b,
-        // where ra is claimed to be the one-hot encoding of input a.
-        // This sumcheck also proves (Hamming Weight) that the sum of all entries at all rows of ra equals 1 (part of proving one-hot encoding).
-        // It is also required to prove (Booleanity) that each value in ra is in the set {0, 1}. This and Hamming Weight assert that ra is a one-hot encoded vector.
-        // We also need to prove (raf-evaluation) that for each row of ra, the index of the unique 1 equals the value of corresponding entry in input a. (a(r_x) = Sum_k( ra(r_x, k) * Id(k) )
         let (_, ra_claim) = accumulator.borrow().get_virtual_polynomial_opening(
             VirtualPolynomial::GatherRa(self.index),
-            SumcheckId::PrecompileExecution,
+            SumcheckId::GatherRvHw,
         );
-        let (_, b_claim) = accumulator.borrow().get_virtual_polynomial_opening(
+        let (_, dict_claim) = accumulator.borrow().get_virtual_polynomial_opening(
             VirtualPolynomial::PrecompileB(self.index),
-            SumcheckId::PrecompileExecution,
+            SumcheckId::GatherRvHw,
         );
 
-        ra_claim * (self.z + b_claim)
+        ra_claim * (self.z + dict_claim)
     }
 
     fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -340,12 +339,12 @@ impl<F: JoltField> SumcheckInstance<F> for ShoutSumcheck<F> {
 
         let ra_claim = prover_state.ra.final_sumcheck_claim();
 
-        let val_claim = prover_state.val.final_sumcheck_claim();
+        let dict_claim = prover_state.dict_folded.final_sumcheck_claim();
 
         let r_a = [self.r_x.clone(), opening_point.r.clone()].concat();
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::GatherRa(self.index),
-            SumcheckId::PrecompileExecution,
+            SumcheckId::GatherRvHw,
             r_a.into(),
             ra_claim,
         );
@@ -353,9 +352,9 @@ impl<F: JoltField> SumcheckInstance<F> for ShoutSumcheck<F> {
         let r_b = [opening_point.r, self.r_y.clone()].concat();
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::PrecompileB(self.index),
-            SumcheckId::PrecompileExecution,
+            SumcheckId::GatherRvHw,
             r_b.into(),
-            val_claim,
+            dict_claim,
         );
     }
 
@@ -367,14 +366,14 @@ impl<F: JoltField> SumcheckInstance<F> for ShoutSumcheck<F> {
         let r_a = [self.r_x.clone(), opening_point.r.clone()].concat();
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::GatherRa(self.index),
-            SumcheckId::PrecompileExecution,
+            SumcheckId::GatherRvHw,
             r_a.into(),
         );
 
         let r_b = [opening_point.r, self.r_y.clone()].concat();
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::PrecompileB(self.index),
-            SumcheckId::PrecompileExecution,
+            SumcheckId::GatherRvHw,
             r_b.into(),
         );
     }
@@ -396,11 +395,11 @@ impl<F: JoltField> BooleanityProverState<F> {
         eq_r_x: Vec<F>,
         G: Vec<F>,
         r_words: &[F],
-        log_K: usize,
+        num_words: usize,
     ) -> Self {
         let B = MultilinearPolynomial::from(EqPolynomial::evals(r_words));
 
-        let mut F_vec: Vec<F> = unsafe_allocate_zero_vec(log_K.pow2());
+        let mut F_vec: Vec<F> = unsafe_allocate_zero_vec(num_words);
         F_vec[0] = F::one();
 
         let D = MultilinearPolynomial::from(eq_r_x);
@@ -417,10 +416,13 @@ impl<F: JoltField> BooleanityProverState<F> {
     }
 }
 
+// BooleanitySumcheck proves:  0 = Sum_k,t( eq(r_x, t) * eq(r_words, k) * (ra(t, k)² - ra(t, k)) )
+// r_x is a challenge vector produced in sumchecks executed in previous steps,
+// r_words is (for now) a challenge vector produced (for now) at the beginning of the sumcheck
 pub struct BooleanitySumcheck<F: JoltField> {
-    log_T: usize,
-    log_K: usize,
     prover_state: Option<BooleanityProverState<F>>,
+    num_lookups: usize,
+    num_words: usize,
     r_x: Vec<F>,
     r_words: Vec<F>,
     index: usize,
@@ -433,46 +435,49 @@ impl<F: JoltField> BooleanitySumcheck<F> {
         read_addresses: Vec<usize>,
         G: Vec<F>,
     ) -> Self {
-        let log_K = G.len().log_2();
-        let log_T = read_addresses.len().log_2();
+        let num_lookups = read_addresses.len();
+        let num_words = G.len();
 
         let r_c = sm
             .get_prover_accumulator()
-            .borrow_mut()
+            .borrow()
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::PrecompileC(0),
                 SumcheckId::PrecompileExecution,
             )
             .0;
-        let r_x = r_c.r.split_at(log_T).0;
+        let r_x = r_c.r.split_at(num_lookups.log_2()).0;
 
         // Generate a random challenge to complete with r_x for RA booleanity sumcheck:
         // r_x spans over the input length (column-length of RA matrix),
         // this random challenge will span over the number of words (row-length of RA matrix)
-        let r_words = sm.get_transcript().borrow_mut().challenge_vector(log_K);
+        let r_words = sm
+            .get_transcript()
+            .borrow_mut()
+            .challenge_vector(num_words.log_2());
 
         let booleanity_prover_state = BooleanityProverState::new(
             read_addresses,
-            EqPolynomial::evals(&r_x),
+            EqPolynomial::evals(r_x),
             G,
             &r_words,
-            log_K,
+            num_words,
         );
 
         Self {
             prover_state: Some(booleanity_prover_state),
-            index: 0,
-            log_T,
-            log_K,
+            num_lookups,
+            num_words,
             r_x: r_x.to_vec(),
             r_words,
+            index: 0,
         }
     }
 
     pub fn new_verifier(
         sm: &mut StateManager<F, impl Transcript, impl CommitmentScheme<Field = F>>,
-        log_T: usize,
-        log_K: usize,
+        num_lookups: usize,
+        num_words: usize,
     ) -> Self {
         let r_c = sm
             .get_verifier_accumulator()
@@ -482,17 +487,20 @@ impl<F: JoltField> BooleanitySumcheck<F> {
                 SumcheckId::PrecompileExecution,
             )
             .0;
-        let r_x = r_c.r.split_at(log_T).0;
+        let r_x = r_c.r.split_at(num_lookups.log_2()).0;
 
-        let r_words = sm.get_transcript().borrow_mut().challenge_vector(log_K);
+        let r_words = sm
+            .get_transcript()
+            .borrow_mut()
+            .challenge_vector(num_words.log_2());
 
         Self {
             prover_state: None,
-            index: 0,
-            log_T,
-            log_K,
+            num_lookups,
+            num_words,
             r_x: r_x.to_vec(),
             r_words,
+            index: 0,
         }
     }
 }
@@ -503,7 +511,7 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
     }
 
     fn num_rounds(&self) -> usize {
-        self.log_K + self.log_T
+        self.num_words.log_2() + self.num_lookups.log_2()
     }
 
     fn input_claim(&self) -> F {
@@ -512,11 +520,11 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
 
     #[tracing::instrument(skip_all, name = "BytecodeBooleanitySumcheck::compute_prover_message")]
     fn compute_prover_message(&mut self, round: usize, _previous_claim: F) -> Vec<F> {
-        if round < self.log_K {
-            // Phase 1: First log(K_chunk) rounds
+        if round < self.num_words.log_2() {
+            // Phase 1: First log(num_words) rounds
             self.compute_phase1_message(round)
         } else {
-            // Phase 2: Last log(T) rounds
+            // Phase 2: Last log(num_lookups) rounds
             self.compute_phase2_message()
         }
     }
@@ -525,7 +533,7 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
     fn bind(&mut self, r_j: F, round: usize) {
         let ps = self.prover_state.as_mut().unwrap();
 
-        if round < self.log_K {
+        if round < self.num_words.log_2() {
             // Phase 1: Bind B and update F
             ps.B.bind_parallel(r_j, BindingOrder::LowToHigh);
 
@@ -540,7 +548,7 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
                 });
 
             // If transitioning to phase 2, prepare H
-            if round == self.log_K - 1 {
+            if round == self.num_words.log_2() - 1 {
                 let mut read_addresses = std::mem::take(&mut ps.read_addresses);
                 let f_ref = &ps.F;
                 ps.H = Some({
@@ -577,8 +585,8 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
     ) -> F {
         let accumulator = accumulator.as_ref().unwrap();
         let (_, ra_claim) = accumulator.borrow().get_virtual_polynomial_opening(
-            VirtualPolynomial::BooleanityRa(self.index),
-            SumcheckId::PrecompileExecution,
+            VirtualPolynomial::GatherRa(self.index),
+            SumcheckId::GatherBooleanity,
         );
 
         EqPolynomial::mle(
@@ -607,8 +615,8 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
         let ps = self.prover_state.as_ref().unwrap();
         let ra_claim = ps.H.as_ref().unwrap().final_sumcheck_claim();
         accumulator.borrow_mut().append_virtual(
-            VirtualPolynomial::BooleanityRa(self.index),
-            SumcheckId::PrecompileExecution,
+            VirtualPolynomial::GatherRa(self.index),
+            SumcheckId::GatherBooleanity,
             opening_point,
             ra_claim,
         );
@@ -620,8 +628,8 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
     ) {
         accumulator.borrow_mut().append_virtual(
-            VirtualPolynomial::BooleanityRa(self.index),
-            SumcheckId::PrecompileExecution,
+            VirtualPolynomial::GatherRa(self.index),
+            SumcheckId::GatherBooleanity,
             opening_point,
         );
     }
@@ -755,48 +763,121 @@ impl<F: JoltField> BooleanitySumcheck<F> {
     }
 }
 
-/// Implements the sumcheck prover for the raf-evaluation sumcheck in step 6 of
-/// Figure 6 in the Twist+Shout paper.
-pub fn prove_raf_evaluation<F: JoltField, ProofTranscript: Transcript>(
-    lookup_table: Vec<F>,
-    read_addresses: Vec<usize>,
-    r_cycle: Vec<F>,
-    claimed_evaluation: F,
-    transcript: &mut ProofTranscript,
-) -> (SumcheckInstanceProof<F, ProofTranscript>, F) {
-    let K = lookup_table.len();
-    let T = read_addresses.len();
-    debug_assert_eq!(T.log_2(), r_cycle.len());
+struct RafProverState<F: JoltField> {
+    ra: MultilinearPolynomial<F>,
+}
 
-    let E: Vec<F> = EqPolynomial::evals(&r_cycle);
-    let F: Vec<_> = (0..K)
-        .into_par_iter()
-        .map(|k| {
-            read_addresses
-                .iter()
-                .enumerate()
-                .filter_map(|(cycle, address)| if *address == k { Some(E[cycle]) } else { None })
-                .sum::<F>()
-        })
-        .collect();
+impl<F: JoltField> RafProverState<F> {
+    fn initialize(
+        // <'a, ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>>
+        // TODO(AntoineF4C5): Use prover state to recover values for a/Ra and B
+        // state_manager: StateManager<'a, F, ProofTranscript, PCS>,
+        F: Vec<F>,
+    ) -> Self {
+        assert_eq!(F.iter().sum::<F>(), F::one());
 
-    let num_rounds = K.log_2();
-    let mut r_address_double_prime: Vec<F> = Vec::with_capacity(num_rounds);
+        let ra = MultilinearPolynomial::from(F.clone());
 
-    let mut ra = MultilinearPolynomial::from(F);
-    let mut int = IdentityPolynomial::new(num_rounds);
+        Self { ra }
+    }
+}
 
-    let mut previous_claim = claimed_evaluation;
+// RafSumcheck proves: a(r_x) = Sum_k( ra(r_x, k) * Id(k) )
+// r_x is a challenge vector produced in a sumcheck executed in previous steps
+struct RafSumcheck<F: JoltField> {
+    prover_state: Option<RafProverState<F>>,
+    num_words: usize,
+    rv_claim_a: F,
+    int: IdentityPolynomial<F>,
+    r_x: Vec<F>,
+    // Index of the gather instance
+    index: usize,
+}
 
-    const DEGREE: usize = 2;
+impl<F: JoltField> RafSumcheck<F> {
+    pub fn new_prover<'a>(
+        sm: &mut StateManager<'a, F, impl Transcript, impl CommitmentScheme<Field = F>>,
+        read_addresses: Vec<usize>,
+        F: Vec<F>,
+    ) -> Self {
+        let num_lookups = read_addresses.len();
+        let num_words = F.len();
 
-    let mut compressed_polys: Vec<CompressedUniPoly<F>> = Vec::with_capacity(num_rounds);
-    for _ in 0..num_rounds {
+        let (r_x, rv_claim) = sm
+            .get_prover_accumulator()
+            .borrow()
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::PrecompileA(0),
+                SumcheckId::PrecompileExecution,
+            );
+        assert_eq!(r_x.r.len(), num_lookups.log_2());
+
+        let raf_prover_state = RafProverState::initialize(F);
+        let int = IdentityPolynomial::new(num_words.log_2());
+
+        Self {
+            prover_state: Some(raf_prover_state),
+            num_words,
+            rv_claim_a: rv_claim,
+            int,
+            r_x: r_x.r.to_vec(),
+            index: 0,
+        }
+    }
+
+    pub fn new_verifier<'a>(
+        sm: &mut StateManager<'a, F, impl Transcript, impl CommitmentScheme<Field = F>>,
+        num_lookups: usize,
+        num_words: usize,
+    ) -> Self {
+        let (r_x, rv_claim) = sm
+            .get_verifier_accumulator()
+            .borrow_mut()
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::PrecompileA(0),
+                SumcheckId::PrecompileExecution,
+            );
+        assert_eq!(r_x.r.len(), num_lookups.log_2());
+        let int = IdentityPolynomial::new(num_words.log_2());
+
+        Self {
+            prover_state: None,
+            num_words,
+            rv_claim_a: rv_claim,
+            int,
+            r_x: r_x.r.to_vec(),
+            index: 0,
+        }
+    }
+}
+
+impl<F: JoltField> SumcheckInstance<F> for RafSumcheck<F> {
+    fn num_rounds(&self) -> usize {
+        self.num_words.log_2()
+    }
+
+    #[inline(always)]
+    fn degree(&self) -> usize {
+        2
+    }
+
+    fn input_claim(&self) -> F {
+        // Linear combination of the core PIOP claim and the Hamming weight claim (which is 1)
+        self.rv_claim_a
+    }
+
+    #[tracing::instrument(skip_all)]
+    fn compute_prover_message(&mut self, _round: usize, _previous_claim: F) -> Vec<F> {
+        let degree = <Self as SumcheckInstance<F>>::degree(self);
+
+        let RafProverState { ra } = self.prover_state.as_ref().unwrap();
+        let int = &self.int;
+
         let univariate_poly_evals: [F; 2] = (0..ra.len() / 2)
             .into_par_iter()
             .map(|i| {
-                let ra_evals = ra.sumcheck_evals(i, DEGREE, BindingOrder::LowToHigh);
-                let int_evals: Vec<F> = int.sumcheck_evals(i, DEGREE, BindingOrder::LowToHigh);
+                let ra_evals = ra.sumcheck_evals(i, degree, BindingOrder::LowToHigh);
+                let int_evals = int.sumcheck_evals(i, degree, BindingOrder::LowToHigh);
 
                 [ra_evals[0] * int_evals[0], ra_evals[1] * int_evals[1]]
             })
@@ -804,48 +885,84 @@ pub fn prove_raf_evaluation<F: JoltField, ProofTranscript: Transcript>(
                 || [F::zero(); 2],
                 |running, new| [running[0] + new[0], running[1] + new[1]],
             );
+        univariate_poly_evals.to_vec()
+    }
 
-        let univariate_poly = UniPoly::from_evals(&[
-            univariate_poly_evals[0],
-            previous_claim - univariate_poly_evals[0],
-            univariate_poly_evals[1],
-        ]);
-
-        let compressed_poly = univariate_poly.compress();
-        compressed_poly.append_to_transcript(transcript);
-        compressed_polys.push(compressed_poly);
-
-        let r_j = transcript.challenge_scalar::<F>();
-        r_address_double_prime.push(r_j);
-
-        previous_claim = univariate_poly.evaluate(&r_j);
-
-        // Bind polynomials
+    #[tracing::instrument(skip_all)]
+    fn bind(&mut self, r_j: F, _: usize) {
+        let RafProverState { ra } = self.prover_state.as_mut().unwrap();
+        let int = &mut self.int;
         rayon::join(
             || ra.bind_parallel(r_j, BindingOrder::LowToHigh),
             || int.bind_parallel(r_j, BindingOrder::LowToHigh),
         );
     }
 
-    let ra_claim = ra.final_sumcheck_claim();
-    (SumcheckInstanceProof::new(compressed_polys), ra_claim)
+    fn expected_output_claim(
+        &self,
+        accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
+        r: &[F],
+    ) -> F {
+        let accumulator = accumulator.as_ref().unwrap();
+
+        let (_, ra_claim) = accumulator.borrow().get_virtual_polynomial_opening(
+            VirtualPolynomial::GatherRa(self.index),
+            SumcheckId::GatherRaf,
+        );
+        let int_claim = self
+            .int
+            .evaluate(&r.to_vec().into_iter().rev().collect::<Vec<F>>());
+
+        ra_claim * int_claim
+    }
+
+    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+        let mut opening_point = opening_point.to_vec();
+        opening_point.reverse();
+        opening_point.into()
+    }
+
+    fn cache_openings_prover(
+        &self,
+        accumulator: Rc<RefCell<ProverOpeningAccumulator<F>>>,
+        opening_point: OpeningPoint<BIG_ENDIAN, F>,
+    ) {
+        let prover_state = self.prover_state.as_ref().unwrap();
+
+        let ra_claim = prover_state.ra.final_sumcheck_claim();
+
+        let r_a = [self.r_x.clone(), opening_point.r.clone()].concat();
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::GatherRa(self.index),
+            SumcheckId::GatherRaf,
+            r_a.into(),
+            ra_claim,
+        );
+    }
+
+    fn cache_openings_verifier(
+        &self,
+        accumulator: Rc<RefCell<VerifierOpeningAccumulator<F>>>,
+        opening_point: OpeningPoint<BIG_ENDIAN, F>,
+    ) {
+        let r_a = [self.r_x.clone(), opening_point.r.clone()].concat();
+        accumulator.borrow_mut().append_virtual(
+            VirtualPolynomial::GatherRa(self.index),
+            SumcheckId::GatherRaf,
+            r_a.into(),
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
 
-    use crate::jolt::{
-        JoltProverPreprocessing, JoltSharedPreprocessing, JoltVerifierPreprocessing,
-        bytecode::BytecodePreprocessing, pcs::OpeningId, precompiles::PrecompilePreprocessing,
-        precompiles::gather::test::test_gather_sumcheck, trace::JoltONNXCycle,
-    };
+    use crate::jolt::{pcs::OpeningId, precompiles::gather::test::test_gather_sumcheck};
 
     use super::*;
     use ark_bn254::Fr;
     use ark_std::{One, Zero, test_rng};
     use itertools::Itertools;
-    use jolt_core::{poly::commitment::mock::MockCommitScheme, transcripts::Blake2bTranscript};
-    use onnx_tracer::{ProgramIO, tensor::Tensor};
     use rand_core::RngCore;
 
     // Creates a random `Gather` instance, and outputs a tuple of (a, B, output)
@@ -862,6 +979,7 @@ mod tests {
         let read_addresses: Vec<Fr> = (0..num_lookups)
             .map(|_| Fr::from_u32(rng.next_u32() % num_words as u32))
             .collect();
+
         let dictionnary: Vec<Fr> = (0..num_words * word_dim)
             .map(|_| Fr::random(&mut rng))
             .collect();
@@ -920,150 +1038,79 @@ mod tests {
         }
     }
 
-    #[test]
-    fn shout_e2e() {
-        let bytecode_pp = BytecodePreprocessing::default();
-        // let precompile_pp = PrecompilePreprocessing::preprocess(&bytecode_pp);
-        let shared_pp = JoltSharedPreprocessing {
-            bytecode: bytecode_pp,
-            precompiles: PrecompilePreprocessing::empty(),
-            fp_lookups: Default::default(),
-        };
+    fn gather_instances<ProofTranscript, CS>(
+        prover_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
+        verifier_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
+        (read_addresses, dictionnary, output): (Vec<Fr>, Vec<Fr>, Vec<Fr>),
+    ) -> (
+        Vec<Box<dyn SumcheckInstance<Fr>>>, // Prover instance
+        Vec<Box<dyn SumcheckInstance<Fr>>>, // Verifier instance
+    )
+    where
+        ProofTranscript: Transcript,
+        CS: CommitmentScheme<Field = Fr>,
+    {
+        let num_lookups = read_addresses.len();
+        let word_dim = output.len() / num_lookups;
+        let _num_words = dictionnary.len() / word_dim;
 
-        let prover_preprocessing: JoltProverPreprocessing<Fr, MockCommitScheme<Fr>> =
-            JoltProverPreprocessing {
-                generators: (),
-                shared: shared_pp.clone(),
-            };
-
-        let verifier_preprocessing: JoltVerifierPreprocessing<Fr, MockCommitScheme<Fr>> =
-            JoltVerifierPreprocessing {
-                generators: (),
-                shared: shared_pp,
-            };
-        let program_io = ProgramIO {
-            input: Tensor::new(None, &[]).unwrap(),
-            output: Tensor::new(None, &[]).unwrap(),
-            min_lookup_input: 0,
-            max_lookup_input: 0,
-        };
-
-        let trace = vec![JoltONNXCycle::no_op(); 32];
-        let mut prover_sm = StateManager::<'_, Fr, Blake2bTranscript, _>::new_prover(
-            &prover_preprocessing,
-            trace.clone(),
-            program_io.clone(),
-        );
-
-        // Number of lines that we want to gather from the dictionnary
-        const NUM_LOOKUPS: usize = 16;
-        // Number of words in the dictionnary
-        const NUM_WORDS: usize = 32;
-        // The dimension of a dictionnary line
-        const WORD_DIM: usize = 8;
-
-        let mut rng = test_rng();
-
-        // Random a vector a, with values in 0..K, index of different possible words in the dictionnary
-        let read_indexes: Vec<usize> = (0..NUM_LOOKUPS)
-            .map(|_| rng.next_u32() as usize % NUM_WORDS)
-            .collect();
-
-        // // Gen A, the one-hot encoding of vector a.
-        // // TODO(AntoineF4C5): Prover should commit to this tensor, this is for now read as a virtual polynomial, i.e VirtualPolynomial::GatherRa(usize) variant
-        // let _A: Vec<usize> = read_indexes
-        //     .iter()
-        //     .flat_map(|&address| {
-        //         let mut line = vec![0; NUM_WORDS];
-        //         line[address] = 1;
-        //         line
-        //     })
-        //     .collect();
-
-        // Dictionnary; gather's matrix from which desired inputs are gathered
-        let B: Vec<Fr> = (0..NUM_WORDS * WORD_DIM)
-            .map(|_| Fr::random(&mut rng))
+        let read_addresses_usize: Vec<usize> = read_addresses
+            .iter()
+            .map(|e| e.to_u64().unwrap() as usize)
             .collect();
 
         //------------------- Simulate challenges from previous stages of jolt-dag ----------------------
-        // Expected output of the gather node: a matrix where each row `i` corresponds to the row at index `a[i]` in B
-        let output: Vec<Fr> = read_indexes
-            .iter()
-            .flat_map(|index| B[index * WORD_DIM..(index + 1) * WORD_DIM].to_vec())
-            .collect();
-        let prover_transcript = prover_sm.get_transcript();
-        let mut prover_transcript_ref = prover_transcript.borrow_mut();
-        // Reduces to a single evaluation over dimension of `read_indexes`
-        let r_x: Vec<Fr> = prover_transcript_ref.challenge_vector(NUM_LOOKUPS.log_2());
-        // Reduces over a single evaluation over a dictionnary word's embedding size
-        let r_y: Vec<Fr> = prover_transcript_ref.challenge_vector(WORD_DIM.log_2());
-        drop(prover_transcript_ref);
-
-        // Insert claim from previous stage of jolt-dag
-        let r_c = [r_x.clone(), r_y.clone()].concat();
-        let rv_claim = MultilinearPolynomial::from(output).evaluate(&r_c);
-        prover_sm
-            .get_prover_accumulator()
+        // Reduce output matrix to a single evaluation
+        let r_c: Vec<Fr> = prover_sm
+            .get_transcript()
             .borrow_mut()
-            .append_virtual(
-                VirtualPolynomial::PrecompileC(0),
-                SumcheckId::PrecompileExecution,
-                r_c.clone().into(),
-                rv_claim,
-            );
-        //-------------------------------------------------------------------------------------------------
+            .challenge_vector(num_lookups.log_2() + word_dim.log_2());
+        assert_eq!(
+            r_c,
+            verifier_sm
+                .get_transcript()
+                .borrow_mut()
+                .challenge_vector::<Fr>(num_lookups.log_2() + word_dim.log_2())
+        );
+        let (r_x, _r_y) = r_c.split_at(num_lookups.log_2());
 
-        let shout_proof = ShoutProof::prove(&mut prover_sm, read_indexes, B.clone(), WORD_DIM);
+        // Create openings that are inserted in the state manager before creating instances
+        let rv_claim_c = MultilinearPolynomial::from(output).evaluate(&r_c);
+        let mut virtual_openings = Vec::new();
+        virtual_openings.push(VirtualOpening {
+            poly: VirtualPolynomial::PrecompileC(0),
+            sumcheck: SumcheckId::PrecompileExecution,
+            point: r_c.clone(),
+            claim: rv_claim_c,
+        });
 
-        let mut verifier_sm = StateManager::<'_, Fr, Blake2bTranscript, _>::new_verifier(
-            &verifier_preprocessing,
-            program_io,
-            trace.len(),
-            1 << 8,
-            prover_sm.twist_sumcheck_switch_index,
+        let rv_claim_a = MultilinearPolynomial::from(read_addresses).evaluate(r_x);
+        virtual_openings.push(VirtualOpening {
+            poly: VirtualPolynomial::PrecompileA(0),
+            sumcheck: SumcheckId::PrecompileExecution,
+            point: r_x.to_vec(),
+            claim: rv_claim_a,
+        });
+
+        virtual_openings.iter().for_each(|opening| {
+            opening.insert_in_prover_sm(prover_sm);
+            opening.insert_in_verifier_sm(verifier_sm);
+        });
+
+        let prover_instances = GatherProof::gather_prover_instances(
+            prover_sm,
+            read_addresses_usize,
+            dictionnary.clone(),
+            word_dim,
+        );
+        let verifier_instances = GatherProof::gather_verifier_instances(
+            verifier_sm,
+            num_lookups,
+            dictionnary.len(),
+            word_dim,
         );
 
-        // Take claims
-        let prover_acc = prover_sm.get_prover_accumulator();
-        let prover_acc_borrow = prover_acc.borrow();
-        let verifier_accumulator = verifier_sm.get_verifier_accumulator();
-        let mut verifier_acc_borrow = verifier_accumulator.borrow_mut();
-
-        for (key, (_, value)) in prover_acc_borrow.evaluation_openings().iter() {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
-            verifier_acc_borrow
-                .openings_mut()
-                .insert(*key, (empty_point, *value));
-        }
-        drop((prover_acc_borrow, verifier_acc_borrow));
-
-        //--------------------- Simulate challenges from previous stages of jolt-dag ---------------------
-        let verifier_transcript = verifier_sm.get_transcript();
-        let mut verifier_transcript_ref = verifier_transcript.borrow_mut();
-        let _r_x: Vec<Fr> = verifier_transcript_ref.challenge_vector(NUM_LOOKUPS.log_2());
-        let _r_y: Vec<Fr> = verifier_transcript_ref.challenge_vector(WORD_DIM.log_2());
-        assert_eq!((r_x, r_y), (_r_x, _r_y));
-        drop(verifier_transcript_ref);
-
-        // Insert opening point for the simulated claim from previous jolt-dag stage
-        verifier_sm
-            .get_verifier_accumulator()
-            .borrow_mut()
-            .append_virtual(
-                VirtualPolynomial::PrecompileC(0),
-                SumcheckId::PrecompileExecution,
-                r_c.into(),
-            );
-        //-------------------------------------------------------------------------------------------------
-
-        let verification_result =
-            shout_proof.verify(&mut verifier_sm, NUM_LOOKUPS, B.len(), WORD_DIM);
-
-        assert!(
-            verification_result.is_ok(),
-            "Verification failed with error: {:?}",
-            verification_result.err()
-        );
+        (prover_instances, verifier_instances)
     }
 
     fn booleanity_instances<ProofTranscript, CS>(
@@ -1071,8 +1118,8 @@ mod tests {
         verifier_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
         (read_addresses, dictionnary, output): (Vec<Fr>, Vec<Fr>, Vec<Fr>),
     ) -> (
-        Box<dyn SumcheckInstance<Fr>>, // Prover instance
-        Box<dyn SumcheckInstance<Fr>>, // Verifier instance
+        Vec<Box<dyn SumcheckInstance<Fr>>>, // Prover instance
+        Vec<Box<dyn SumcheckInstance<Fr>>>, // Verifier instance
     )
     where
         ProofTranscript: Transcript,
@@ -1101,12 +1148,12 @@ mod tests {
         assert_eq!(r_c, _r_c);
 
         // Create an opening that is inserted in the state manager before
-        let rv_claim = MultilinearPolynomial::from(output).evaluate(&r_c);
+        let rv_claim_c = MultilinearPolynomial::from(output).evaluate(&r_c);
         let virtual_opening = VirtualOpening {
             poly: VirtualPolynomial::PrecompileC(0),
             sumcheck: SumcheckId::PrecompileExecution,
             point: r_c.clone(),
-            claim: rv_claim,
+            claim: rv_claim_c,
         };
         virtual_opening.insert_in_prover_sm(prover_sm);
         virtual_opening.insert_in_verifier_sm(verifier_sm);
@@ -1133,11 +1180,11 @@ mod tests {
             BooleanitySumcheck::new_prover(prover_sm, read_addresses, F);
 
         let verifier_booleanity_sumcheck =
-            BooleanitySumcheck::new_verifier(verifier_sm, num_lookups.log_2(), num_words.log_2());
+            BooleanitySumcheck::new_verifier(verifier_sm, num_lookups, num_words);
 
         (
-            Box::new(prover_booleanity_sumcheck),
-            Box::new(verifier_booleanity_sumcheck),
+            vec![Box::new(prover_booleanity_sumcheck)],
+            vec![Box::new(verifier_booleanity_sumcheck)],
         )
     }
 
@@ -1147,8 +1194,8 @@ mod tests {
         verifier_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
         (read_addresses, dictionnary, output): (Vec<Fr>, Vec<Fr>, Vec<Fr>),
     ) -> (
-        Box<dyn SumcheckInstance<Fr>>, // Prover instance
-        Box<dyn SumcheckInstance<Fr>>, // Verifier instance
+        Vec<Box<dyn SumcheckInstance<Fr>>>, // Prover instance
+        Vec<Box<dyn SumcheckInstance<Fr>>>, // Verifier instance
     )
     where
         ProofTranscript: Transcript,
@@ -1224,15 +1271,107 @@ mod tests {
         assert_eq!(folded_dict.len(), num_words);
 
         let rv_hw_prover_sumcheck =
-            ShoutSumcheck::new_prover(prover_sm, read_addresses, folded_dict, F);
+            RvHwSumcheck::new_prover(prover_sm, read_addresses, folded_dict, F);
 
         let rv_hw_verifier_sumcheck =
-            ShoutSumcheck::new_verifier(verifier_sm, num_lookups, num_words);
+            RvHwSumcheck::new_verifier(verifier_sm, num_lookups, num_words);
 
         (
-            Box::new(rv_hw_prover_sumcheck),
-            Box::new(rv_hw_verifier_sumcheck),
+            vec![Box::new(rv_hw_prover_sumcheck)],
+            vec![Box::new(rv_hw_verifier_sumcheck)],
         )
+    }
+
+    // returns instances for the raf-evaluation proving sumcheck
+    fn raf_instances<ProofTranscript, CS>(
+        prover_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
+        verifier_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
+        (read_addresses, dictionnary, output): (Vec<Fr>, Vec<Fr>, Vec<Fr>),
+    ) -> (
+        Vec<Box<dyn SumcheckInstance<Fr>>>, // Prover instance
+        Vec<Box<dyn SumcheckInstance<Fr>>>, // Verifier instance
+    )
+    where
+        ProofTranscript: Transcript,
+        CS: CommitmentScheme<Field = Fr>,
+    {
+        // Number of dictionnary entries to recover
+        let num_lookups = read_addresses.len();
+        // Number of dimensions per word of dictionnary
+        let word_dim = output.len() / num_lookups;
+        // Number of words in the dictionnary to gather from
+        let num_words = dictionnary.len() / word_dim;
+
+        let (read_addresses, _dictionnary, _output) =
+            random_gather(num_lookups, num_words, word_dim);
+
+        let read_addresses_usize: Vec<usize> = read_addresses
+            .iter()
+            .map(|e| e.to_u64().unwrap() as usize)
+            .collect();
+
+        //------------------- Simulate challenges from previous stages of jolt-dag ----------------------
+        // Reduces to a single evaluation over output dimensions
+        let r_x: Vec<Fr> = prover_sm
+            .get_transcript()
+            .borrow_mut()
+            .challenge_vector(num_lookups.log_2());
+        let _r_x: Vec<Fr> = verifier_sm
+            .get_transcript()
+            .borrow_mut()
+            .challenge_vector(num_lookups.log_2());
+        assert_eq!(r_x, _r_x);
+
+        let rv_claim_a = MultilinearPolynomial::from(read_addresses).evaluate(&r_x);
+
+        // Create an opening that is inserted in the state manager before
+        let virtual_opening = VirtualOpening {
+            poly: VirtualPolynomial::PrecompileA(0),
+            sumcheck: SumcheckId::PrecompileExecution,
+            point: r_x.clone(),
+            claim: rv_claim_a,
+        };
+        virtual_opening.insert_in_prover_sm(prover_sm);
+        virtual_opening.insert_in_verifier_sm(verifier_sm);
+
+        let E: Vec<Fr> = EqPolynomial::evals(&r_x);
+        let F: Vec<Fr> = (0..num_words)
+            .into_par_iter()
+            .map(|k| {
+                read_addresses_usize
+                    .iter()
+                    .enumerate()
+                    .filter_map(
+                        |(cycle, address)| if *address == k { Some(E[cycle]) } else { None },
+                    )
+                    .sum()
+            })
+            .collect();
+        assert_eq!(E.len(), num_lookups);
+        assert_eq!(F.len(), num_words);
+
+        let raf_prover_sumcheck = RafSumcheck::new_prover(prover_sm, read_addresses_usize, F);
+
+        let raf_verifier_sumcheck = RafSumcheck::new_verifier(verifier_sm, num_lookups, num_words);
+
+        (
+            vec![Box::new(raf_prover_sumcheck)],
+            vec![Box::new(raf_verifier_sumcheck)],
+        )
+    }
+
+    #[test]
+    fn test_gather_proof() {
+        // Number of words to recover from the dictionnary
+        const NUM_LOOKUPS: usize = 1 << 10;
+        // Number of words in the dictionnary
+        const NUM_WORDS: usize = 64;
+        // Number of dimensions per word of dictionnary
+        const WORD_DIM: usize = 1 << 3;
+
+        let tensors = random_gather(NUM_LOOKUPS, NUM_WORDS, WORD_DIM);
+
+        let _ = test_gather_sumcheck(gather_instances, tensors.clone());
     }
 
     #[test]
@@ -1249,19 +1388,19 @@ mod tests {
         let openings = test_gather_sumcheck(booleanity_instances, tensors.clone());
         let (r, claim) = openings
             .get(&OpeningId::Virtual(
-                VirtualPolynomial::BooleanityRa(0),
-                SumcheckId::PrecompileExecution,
+                VirtualPolynomial::GatherRa(0),
+                SumcheckId::GatherBooleanity,
             ))
-            .expect("BooleanityRa(0) should be set");
+            .expect("GatherRa(0) should be set");
 
         let (read_addresses, _dictionnary, _output) = tensors;
 
-        let read_addresses: Vec<usize> = read_addresses
+        let read_addresses_usize: Vec<usize> = read_addresses
             .iter()
             .map(|e| e.to_u64().unwrap() as usize)
             .collect();
 
-        let ra: Vec<Fr> = read_addresses
+        let ra: Vec<Fr> = read_addresses_usize
             .iter()
             .flat_map(|&address| {
                 let mut one_hot = vec![Fr::zero(); NUM_WORDS];
@@ -1289,12 +1428,12 @@ mod tests {
 
         let (read_addresses, dictionnary, _output) = tensors;
 
-        let read_addresses: Vec<usize> = read_addresses
+        let read_addresses_usize: Vec<usize> = read_addresses
             .iter()
             .map(|e| e.to_u64().unwrap() as usize)
             .collect();
 
-        let ra: Vec<Fr> = read_addresses
+        let ra: Vec<Fr> = read_addresses_usize
             .iter()
             .flat_map(|&address| {
                 let mut one_hot = vec![Fr::zero(); NUM_WORDS];
@@ -1306,7 +1445,7 @@ mod tests {
         let (r, claim) = openings
             .get(&OpeningId::Virtual(
                 VirtualPolynomial::GatherRa(0),
-                SumcheckId::PrecompileExecution,
+                SumcheckId::GatherRvHw,
             ))
             .expect("GatherRa(0) should be set");
 
@@ -1316,7 +1455,7 @@ mod tests {
         let (r, claim) = openings
             .get(&OpeningId::Virtual(
                 VirtualPolynomial::PrecompileB(0),
-                SumcheckId::PrecompileExecution,
+                SumcheckId::GatherRvHw,
             ))
             .expect("PrecompileB(0) should be set");
 
@@ -1325,41 +1464,42 @@ mod tests {
     }
 
     #[test]
-    fn raf_evaluation_sumcheck() {
-        const TABLE_SIZE: usize = 64;
+    fn test_raf_eval() {
+        // Number of words to recover from the dictionnary
         const NUM_LOOKUPS: usize = 1 << 10;
+        // Number of words in the dictionnary
+        const NUM_WORDS: usize = 64;
+        // Number of dimensions per word of dictionnary
+        const WORD_DIM: usize = 1 << 3;
 
-        let mut rng = test_rng();
+        let tensors = random_gather(NUM_LOOKUPS, NUM_WORDS, WORD_DIM);
 
-        let lookup_table: Vec<Fr> = (0..TABLE_SIZE).map(|_| Fr::random(&mut rng)).collect();
-        let read_addresses: Vec<usize> = (0..NUM_LOOKUPS)
-            .map(|_| rng.next_u32() as usize % TABLE_SIZE)
+        let openings = test_gather_sumcheck(raf_instances, tensors.clone());
+
+        let (read_addresses, _dictionnary, _output) = tensors;
+
+        let read_addresses_usize: Vec<usize> = read_addresses
+            .iter()
+            .map(|e| e.to_u64().unwrap() as usize)
             .collect();
-        let raf = MultilinearPolynomial::from(
-            read_addresses.iter().map(|a| *a as u32).collect::<Vec<_>>(),
-        );
 
-        let mut prover_transcript = Blake2bTranscript::new(b"test_transcript");
-        let r_cycle: Vec<Fr> = prover_transcript.challenge_vector(NUM_LOOKUPS.log_2());
-        let raf_eval = raf.evaluate(&r_cycle);
-        let (sumcheck_proof, _) = prove_raf_evaluation(
-            lookup_table,
-            read_addresses,
-            r_cycle,
-            raf_eval,
-            &mut prover_transcript,
-        );
+        let ra: Vec<Fr> = read_addresses_usize
+            .iter()
+            .flat_map(|&address| {
+                let mut one_hot = vec![Fr::zero(); NUM_WORDS];
+                one_hot[address] = Fr::one();
+                one_hot
+            })
+            .collect();
 
-        let mut verifier_transcript = Blake2bTranscript::new(b"test_transcript");
-        verifier_transcript.compare_to(prover_transcript);
-        let _: Vec<Fr> = verifier_transcript.challenge_vector(NUM_LOOKUPS.log_2());
+        let (r, claim) = openings
+            .get(&OpeningId::Virtual(
+                VirtualPolynomial::GatherRa(0),
+                SumcheckId::GatherRaf,
+            ))
+            .expect("GatherRa(0) should be set");
 
-        let verification_result =
-            sumcheck_proof.verify(raf_eval, TABLE_SIZE.log_2(), 2, &mut verifier_transcript);
-        assert!(
-            verification_result.is_ok(),
-            "Verification failed with error: {:?}",
-            verification_result.err()
-        );
+        let exp_claim = MultilinearPolynomial::from(ra).evaluate(&r.r);
+        assert_eq!(*claim, exp_claim);
     }
 }

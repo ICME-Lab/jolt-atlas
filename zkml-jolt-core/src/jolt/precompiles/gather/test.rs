@@ -15,16 +15,17 @@ use ark_bn254::Fr;
 use ark_std::One;
 use itertools::Itertools;
 use jolt_core::{
+    field::JoltField,
     poly::{
-        commitment::mock::MockCommitScheme,
+        commitment::{commitment_scheme::CommitmentScheme, mock::MockCommitScheme},
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
         opening_proof::{BIG_ENDIAN, OpeningPoint},
     },
-    transcripts::Blake2bTranscript,
+    transcripts::{Blake2bTranscript, Transcript},
     utils::thread::unsafe_allocate_zero_vec,
 };
 use onnx_tracer::{ProgramIO, tensor::Tensor};
-use rand::{SeedableRng, rngs::StdRng};
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use std::collections::BTreeMap;
 
 pub type TestInstances = (
@@ -36,6 +37,86 @@ pub type TestInstances = (
     ),
     Vec<Box<dyn SumcheckInstance<Fr>>>,
 );
+
+// Creates a random `Gather` instance, and outputs a tuple of (a, B, output)
+pub fn random_gather(
+    rng: &mut StdRng,
+    // Number of dictionnary entries to recover
+    num_lookups: usize,
+    // Number of words in the dictionnary to gather from
+    num_words: usize,
+    // Number of dimensions per word of dictionnary
+    word_dim: usize,
+) -> (Vec<Fr>, Vec<Fr>, Vec<Fr>) {
+    let read_addresses: Vec<Fr> = (0..num_lookups)
+        .map(|_| Fr::from_u32(rng.next_u32() % num_words as u32))
+        .collect();
+
+    let dictionnary: Vec<Fr> = (0..num_words * word_dim).map(|_| Fr::random(rng)).collect();
+
+    // Expected output of the gather node: a matrix where each row `i` corresponds to the row at index `a[i]` in B
+    let output: Vec<Fr> = read_addresses
+        .iter()
+        .flat_map(|&index| {
+            let index = index.to_u64().unwrap() as usize;
+            dictionnary[index * word_dim..(index + 1) * word_dim].to_vec()
+        })
+        .collect();
+
+    (read_addresses, dictionnary, output)
+}
+
+pub struct VirtualOpening {
+    poly: VirtualPolynomial,
+    sumcheck: SumcheckId,
+    point: Vec<Fr>,
+    claim: Fr,
+}
+
+// TODO(AntoineF4C5): Hope is to remove this and have cleaner implementation
+impl VirtualOpening {
+    pub fn new(poly: VirtualPolynomial, sumcheck: SumcheckId, point: Vec<Fr>, claim: Fr) -> Self {
+        Self {
+            poly,
+            sumcheck,
+            point,
+            claim,
+        }
+    }
+
+    pub fn insert_in_prover_sm<'a, PT, CS>(&self, sm: &mut StateManager<'a, Fr, PT, CS>)
+    where
+        PT: Transcript,
+        CS: CommitmentScheme<Field = Fr>,
+    {
+        sm.get_prover_accumulator().borrow_mut().append_virtual(
+            self.poly,
+            self.sumcheck,
+            self.point.clone().into(),
+            self.claim,
+        );
+    }
+
+    pub fn insert_in_verifier_sm<'a, PT, CS>(&self, sm: &mut StateManager<'a, Fr, PT, CS>)
+    where
+        PT: Transcript,
+        CS: CommitmentScheme<Field = Fr>,
+    {
+        sm.get_verifier_accumulator()
+            .borrow_mut()
+            .openings_mut()
+            .insert(
+                OpeningId::Virtual(self.poly, self.sumcheck),
+                (OpeningPoint::default(), self.claim.clone()),
+            );
+
+        sm.get_verifier_accumulator().borrow_mut().append_virtual(
+            self.poly,
+            self.sumcheck,
+            self.point.clone().into(),
+        );
+    }
+}
 
 /// Generic test harness for gather operations
 pub fn test_sumcheck_instances(
@@ -132,17 +213,44 @@ pub fn test_sumcheck_instances(
     PrecompileSNARK::verify_batched_sumchecks(&proof, verifier_instances, &verifier_sm).unwrap();
 }
 
+pub struct TestInstance {
+    a: Vec<Fr>,
+    b: Vec<Fr>,
+    c: Vec<Fr>,
+}
+
+impl TestInstance {
+    pub fn new(a: &[Fr], b: &[Fr], c: &[Fr]) -> Self {
+        Self {
+            a: a.to_vec(),
+            b: b.to_vec(),
+            c: c.to_vec(),
+        }
+    }
+    pub fn get(self) -> (Vec<Fr>, Vec<Fr>, Vec<Fr>) {
+        (self.a, self.b, self.c)
+    }
+}
+
 pub fn test_gather_sumcheck(
     instance_generator: impl Fn(
+        &mut StdRng,
         &mut StateManager<'_, Fr, Blake2bTranscript, MockCommitScheme<Fr>>,
         &mut StateManager<'_, Fr, Blake2bTranscript, MockCommitScheme<Fr>>,
-        (Vec<Fr>, Vec<Fr>, Vec<Fr>), // TODO(AntoineF4C5): Temporary, this information should be held in state_manager
+        (usize, usize, usize), // TODO(AntoineF4C5): Temporary, this information should be held in state_manager
+        usize,                 // num_instances
     ) -> (
-        Vec<Box<dyn SumcheckInstance<Fr>>>,
-        Vec<Box<dyn SumcheckInstance<Fr>>>,
+        TestInstance,
+        Box<dyn SumcheckInstance<Fr>>,
+        Box<dyn SumcheckInstance<Fr>>,
     ),
-    (read_addresses, dictionnary, output): (Vec<Fr>, Vec<Fr>, Vec<Fr>),
-) -> BTreeMap<OpeningId, (OpeningPoint<BIG_ENDIAN, Fr>, Fr)> {
+    (num_lookups, num_words, word_dim): (usize, usize, usize),
+    seed: u64,
+    num_instances: usize,
+) -> (
+    Vec<TestInstance>,
+    BTreeMap<OpeningId, (OpeningPoint<BIG_ENDIAN, Fr>, Fr)>,
+) {
     let bytecode_pp = BytecodePreprocessing::default();
     let shared_pp = JoltSharedPreprocessing {
         bytecode: bytecode_pp,
@@ -184,18 +292,31 @@ pub fn test_gather_sumcheck(
         prover_sm.twist_sumcheck_switch_index,
     );
 
-    let (mut prover_sumcheck, verifier_sumcheck) = instance_generator(
-        &mut prover_sm,
-        &mut verifier_sm,
-        (read_addresses, dictionnary, output),
-    );
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    let mut test_instances: Vec<TestInstance> = Vec::new();
+    let mut prover_instances: Vec<Box<dyn SumcheckInstance<Fr>>> = Vec::new();
+    let mut verifier_instances: Vec<Box<dyn SumcheckInstance<Fr>>> = Vec::new();
+    for i in 0..num_instances {
+        let (test_instance, prover_instance, verifier_instance) = instance_generator(
+            &mut rng,
+            &mut prover_sm,
+            &mut verifier_sm,
+            (num_lookups, num_words, word_dim),
+            i,
+        );
+
+        test_instances.push(test_instance);
+        prover_instances.push(prover_instance);
+        verifier_instances.push(verifier_instance);
+    }
 
     let (prover_sumcheck, verifier_sumcheck): (
         Vec<&mut dyn SumcheckInstance<Fr>>,
         Vec<&dyn SumcheckInstance<Fr>>,
-    ) = prover_sumcheck
+    ) = prover_instances
         .iter_mut()
-        .zip_eq(verifier_sumcheck.iter())
+        .zip_eq(verifier_instances.iter())
         .map(|(psc, vsc)| {
             (
                 &mut **psc as &mut dyn SumcheckInstance<Fr>,
@@ -239,9 +360,12 @@ pub fn test_gather_sumcheck(
         res.err()
     );
 
-    prover_sm
-        .get_prover_accumulator()
-        .borrow()
-        .evaluation_openings()
-        .clone()
+    (
+        test_instances,
+        prover_sm
+            .get_prover_accumulator()
+            .borrow()
+            .evaluation_openings()
+            .clone(),
+    )
 }

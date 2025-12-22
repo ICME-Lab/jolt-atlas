@@ -63,8 +63,10 @@ pub enum SumcheckId {
     PrecompileReadChecking,
     PrecompileValFinal,
     GatherRvHw,
+    GatherHB,
     GatherBooleanity,
     GatherRaf,
+    GatherHW,
     FpLookup,
     FpLookupBooleanity,
 }

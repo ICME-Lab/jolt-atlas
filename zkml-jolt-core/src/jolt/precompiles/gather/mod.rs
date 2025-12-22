@@ -656,7 +656,7 @@ mod tests {
             let (r, claim) = openings
                 .get(&OpeningId::Virtual(
                     VirtualPolynomial::PrecompileB(i),
-                    SumcheckId::GatherRvHw,
+                    SumcheckId::PrecompileExecution,
                 ))
                 .expect("PrecompileB(index) should be set");
 

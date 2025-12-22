@@ -78,7 +78,7 @@ impl From<&HybridOp> for ONNXOpcode {
     fn from(value: &HybridOp) -> Self {
         match value {
             HybridOp::Equals => ONNXOpcode::Eq,
-            // HybridOp::Gather { .. } => ONNXOpcode::Gather,
+            HybridOp::Gather { .. } => ONNXOpcode::Gather,
             HybridOp::GreaterEqual => ONNXOpcode::Gte,
             // HybridOp::ReduceArgMax { .. } => ONNXOpcode::ArgMax,
             HybridOp::Softmax { .. } => ONNXOpcode::Softmax,

@@ -551,7 +551,8 @@ impl<'a> BytecodeInstructionInliner<'a> {
         element_count: usize,
     ) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
         match raw.opcode {
-            AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) => (
+            // Handled in precompiles
+            AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) | AtlasOpcode::Gather => (
                 vec![0; element_count],
                 vec![0; element_count],
                 vec![0; element_count],

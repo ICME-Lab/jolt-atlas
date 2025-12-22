@@ -49,7 +49,7 @@ impl PrecompilePreprocessing {
         .iter()
         // TODO(AntoineF4C5): Set a method for each instruction, that only returns a preprocessing instance if required
         .filter_map(|instr| match &instr.opcode {
-                    AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) => Some(
+                    AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) | AtlasOpcode::Gather => Some(
                         PreprocessingInstance::new(instr, td_lookup, bytecode_preprocessing),
                     ),
                     _ => None,
@@ -146,6 +146,64 @@ impl InstanceBuilder {
             equation: "sum(1)".to_string(),
         }
     }
+
+    /// Specialized instance builder for Gather operations
+    fn build_gather_instance(
+        instr: &AtlasInstr,
+        td_lookup: &HashMap<usize, AtlasInstr>,
+        bytecode_preprocessing: &BytecodePreprocessing,
+    ) -> PreprocessingInstance {
+        // We set the first input in b, and the second in a.
+        // Since in the precompile, it is more straightforward to multiply with the indices-based input on the left. (Avoids transposition)
+        let a_instr = PreprocessingHelper::get_operand_instruction(td_lookup, instr.ts2, "Gather");
+        let b_instr = PreprocessingHelper::get_operand_instruction(td_lookup, instr.ts1, "Gather");
+
+        let a_dims = get_dimensions(a_instr, 1);
+        let b_dims = get_dimensions(b_instr, 2);
+        let c_dims = get_dimensions(instr, 2);
+
+        // Dimension compability check
+        assert_eq!(a_dims[0], c_dims[0]);
+        assert_eq!(b_dims[1], c_dims[1]);
+
+        let a_addr = PreprocessingHelper::collect_and_pad(a_instr, bytecode_preprocessing, &a_dims);
+        let b_addr = PreprocessingHelper::collect_and_pad(b_instr, bytecode_preprocessing, &b_dims);
+        let c_addr = PreprocessingHelper::collect_and_pad(instr, bytecode_preprocessing, &c_dims);
+
+        PreprocessingInstance {
+            a_addr,
+            b_addr,
+            c_addr,
+            a_dims: PreprocessingHelper::calculate_padded_dims(&a_dims),
+            b_dims: PreprocessingHelper::calculate_padded_dims(&b_dims),
+            c_dims: PreprocessingHelper::calculate_padded_dims(&c_dims),
+            equation: "Gather".to_string(),
+        }
+    }
+}
+
+/// Gets the required dimensions from an instructions, and panics if the instructions output has less or more dimensions.
+/// Why:
+/// Sometimes in the tracer, 1-dimension tensors are cast to 2-dimension, with a leading "1" dimension.
+/// Ex: [n] tensor get cast to [1, n]
+fn get_dimensions(instruction: &AtlasInstr, num_dimensions: usize) -> Vec<usize> {
+    let raw_dims = instruction.output_dims.clone();
+    assert!(raw_dims.len() >= num_dimensions);
+    let mut outdims = Vec::new();
+
+    let mut raw_dims = raw_dims.into_iter().rev();
+
+    // Push dimension to output
+    for _ in 0..num_dimensions {
+        outdims.insert(0, raw_dims.next().unwrap());
+    }
+
+    // Assert all subsequent dims are equal to 1
+    for dims in raw_dims {
+        assert_eq!(dims, 1, "Dimension mismatch");
+    }
+
+    outdims
 }
 
 impl PreprocessingInstance {
@@ -189,7 +247,9 @@ impl PreprocessingInstance {
 
                 _ => panic!("Sum operation not supported by precompile system"),
             },
-            AtlasOpcode::Gather => todo!(),
+            AtlasOpcode::Gather => {
+                InstanceBuilder::build_gather_instance(instr, td_lookup, bytecode_preprocessing)
+            }
             _ => panic!("Operation not supported by precompile system"),
         }
     }
@@ -315,6 +375,13 @@ impl PrecompileDag {
                         Box::new(reduce_sum::axes_1::ExecutionSumcheck::new_verifier(
                             index, sm,
                         ))
+                    }) as Box<dyn SumcheckInstance<F>>
+                }
+                "Gather" => {
+                    (if is_prover {
+                        Box::new(gather::ExecutionSumcheck::new_prover(sm, index))
+                    } else {
+                        Box::new(gather::ExecutionSumcheck::new_verifier(sm, index))
                     }) as Box<dyn SumcheckInstance<F>>
                 }
                 _ => panic!("equation {equation} not supported"),

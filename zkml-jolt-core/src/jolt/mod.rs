@@ -1189,4 +1189,35 @@ mod e2e_tests {
 
         run_snark_test(builder::softmax_model, &input_data, &[1, 64, 64], None);
     }
+
+    #[test]
+    #[serial]
+    fn test_gather() {
+        let mut rng = StdRng::seed_from_u64(123456);
+        let num_lookups = 2;
+        let num_words = 8;
+
+        let mut input_data = vec![0; num_lookups];
+        for input in input_data.iter_mut() {
+            *input = rng.gen_range(0..num_words);
+        }
+
+        run_snark_test(builder::gather_model, &input_data, &[num_lookups], None);
+    }
+
+    #[test]
+    #[ignore] // Need to solve padding
+    #[serial]
+    fn test_gather_non_pow2() {
+        let mut rng = StdRng::seed_from_u64(123456);
+        let num_lookups = 3;
+        let num_words = 7;
+
+        let mut input_data = vec![0; num_lookups];
+        for input in input_data.iter_mut() {
+            *input = rng.gen_range(0..num_words);
+        }
+
+        run_snark_test(builder::gather_non_pow2, &input_data, &[num_lookups], None);
+    }
 }

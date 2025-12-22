@@ -209,7 +209,7 @@ impl<F: JoltField> SumcheckInstance<F> for RvHwSumcheck<F> {
         );
         let (_, dict_claim) = accumulator.borrow().get_virtual_polynomial_opening(
             VirtualPolynomial::PrecompileB(self.index),
-            SumcheckId::GatherRvHw,
+            SumcheckId::PrecompileExecution,
         );
 
         ra_claim * (self.z + dict_claim)
@@ -243,7 +243,7 @@ impl<F: JoltField> SumcheckInstance<F> for RvHwSumcheck<F> {
         let r_b = [opening_point.r, self.r_y.clone()].concat();
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::PrecompileB(self.index),
-            SumcheckId::GatherRvHw,
+            SumcheckId::PrecompileExecution,
             r_b.into(),
             dict_claim,
         );
@@ -264,7 +264,7 @@ impl<F: JoltField> SumcheckInstance<F> for RvHwSumcheck<F> {
         let r_b = [opening_point.r, self.r_y.clone()].concat();
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::PrecompileB(self.index),
-            SumcheckId::GatherRvHw,
+            SumcheckId::PrecompileExecution,
             r_b.into(),
         );
     }
@@ -1152,7 +1152,7 @@ mod tests {
             let (r, claim) = openings
                 .get(&OpeningId::Virtual(
                     VirtualPolynomial::PrecompileB(i),
-                    SumcheckId::GatherRvHw,
+                    SumcheckId::PrecompileExecution,
                 ))
                 .expect("PrecompileB(index) should be set");
 

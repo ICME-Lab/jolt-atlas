@@ -27,22 +27,26 @@ use crate::jolt::{
     witness::VirtualPolynomial,
 };
 
-// TODO(AntoineF4C5): Execution Sumcheck is actually the first to be run: this sumcheck should commit to the openings of PrecompileA,B,C it uses, since it'll be proven by readchecking sumcheck
-
 // Implementation of various sumchecks used to prove execution of a gather instruction
 //
-// RvHwSumcheck proves: C(r_x, r_y) = Sum_k( ra(r_x, k) * (B(k, r_y) + z) )
+// ReadValueSumcheck proves: C(r_x, r_y) = Sum_k( ra(r_x, k) * B(k, r_y) )
 //  - Read Value ensures that the output of this instruction is indeed equal to the matrix-multiplication of ra and b,
 //      where ra is claimed to be the one-hot encoding matrix of input vector A. (row `i` of ra is one-hot encoding of `A[i]`)
-//  - Hamming Weight ensures that the sum of all entries at all rows of ra equals 1 (part of proving one-hot encoding).
 //
 // BooleanitySumcheck proves:  0 = Sum_k,t( eq(r_x, t) * eq(r_y, k) * (ra(t, k)² - ra(t, k)) )
 //  - Booleanity ensures that each value in ra is in the set {0, 1}.
-//  This and Hamming Weight assert that each row in ra is a one-hot encoded vector.
 //
 // RafSumcheck proves: a(r_x) = Sum_k( ra(r_x, k) * Id(k) )
 //  - Raf Evaluation computes dot product of each row of ra with the identity polynomial.
 //  This and Hamming Weight, Booleanity ensures that ra's row `i` is the one-hot encoding of `A[i]`
+//
+// HammingBooleanitySumcheck proves: 0 = Sum_k( eq(r, k) * (hw(k)² - hw(k)) )
+// - Hamming Booleanity ensures that the hamming weight of ra is comprise in {0, 1} for each row (i.e. that each row either encodes a lookup, or no lookup (padding))
+//
+// HwSumcheck proves: hw(r_h) = Sum_k( ra(r_h, k) )
+//  - Hamming Weight verifies the evaluation on hw claimed in HammingBooleanity sumcheck
+//  - Since HwSumcheck's input claim is the evaluation of hw at r_h, computed in HammingBooleanitySumcheck, this sumcheck cannot be batched with the others
+//
 //
 // Putting it in the context of the Gather instructions:
 // id   | dims                      | description                                                                                   | name in sumchecks
@@ -51,43 +55,35 @@ use crate::jolt::{
 // C    | [num_lookups * word_dim]  | output, a matrix where each row holds the retrieved values from B at index given in A         | output
 // ra   | [num_lookups * num_words] | used by all sumchecks, each row holds the one-hot encoding of value held in A                 | ra
 
-struct RvHwProverState<F: JoltField> {
+struct ReadValueProverState<F: JoltField> {
     ra: MultilinearPolynomial<F>,
     dict_folded: MultilinearPolynomial<F>,
 }
 
-impl<F: JoltField> RvHwProverState<F> {
-    fn new(
-        // <'a, ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>>
-        // TODO(AntoineF4C5): Use prover state to recover values for a/Ra and B
-        // state_manager: StateManager<'a, F, ProofTranscript, PCS>,
-        dict_folded: Vec<F>,
-        F: Vec<F>,
-    ) -> Self {
-        assert_eq!(F.iter().sum::<F>(), F::one());
-
+impl<F: JoltField> ReadValueProverState<F> {
+    fn new(dict_folded: Vec<F>, F: Vec<F>) -> Self {
         let ra = MultilinearPolynomial::from(F.clone());
         let dict_folded = MultilinearPolynomial::from(dict_folded);
 
         Self { ra, dict_folded }
     }
 }
-// RvHwSumcheck proves: C(r_x, r_y) = Sum_k( ra(r_x, k) * (B(k, r_y) + z) )
-// r_x and r_y are challenges produced in a sumcheck executed in previous steps
-pub struct RvHwSumcheck<F: JoltField> {
-    prover_state: Option<RvHwProverState<F>>,
+
+// ReadValueSumcheck proves: C(r_x, r_y) = Sum_k( ra(r_x, k) * B(k, r_y) )
+//  - Read Value ensures that the output of this instruction is indeed equal to the matrix-multiplication of ra and b,
+//      where ra is claimed to be the one-hot encoding matrix of input vector A. (row `i` of ra is one-hot encoding of `A[i]`)
+pub struct ReadValueSumcheck<F: JoltField> {
+    prover_state: Option<ReadValueProverState<F>>,
     // Dimension over which sumcheck is ran
     num_words: usize,
-    rv_claim_c: F,
-    // random challenge to batch rv and Hamming Weight sumchecks
-    z: F,
+    rv_claim: F,
     r_x: Vec<F>,
     r_y: Vec<F>,
     // Index of the gather instance
     index: usize,
 }
 
-impl<F: JoltField> RvHwSumcheck<F> {
+impl<F: JoltField> ReadValueSumcheck<F> {
     pub fn new_prover<'a>(
         sm: &mut StateManager<'a, F, impl Transcript, impl CommitmentScheme<Field = F>>,
         read_addresses: Vec<usize>,
@@ -98,23 +94,18 @@ impl<F: JoltField> RvHwSumcheck<F> {
         let num_lookups = read_addresses.len();
         let num_words = dictionnary_folded.len();
 
-        let (r_c, rv_claim) = sm.get_virtual_polynomial_opening(
+        let (r_c, rv_claim_c) = sm.get_virtual_polynomial_opening(
             VirtualPolynomial::PrecompileC(index),
             SumcheckId::PrecompileExecution,
         );
         let (r_x, r_y) = r_c.r.split_at(num_lookups.log_2());
 
-        let rv_hw_prover_state = RvHwProverState::new(dictionnary_folded.clone(), F);
-
-        // Random challenge used to batch rv-check with hamming-weight check
-        let z = sm.get_transcript().borrow_mut().challenge_scalar();
+        let rv_prover_state = ReadValueProverState::new(dictionnary_folded.clone(), F);
 
         Self {
-            prover_state: Some(rv_hw_prover_state),
-            // TODO(AntoineF4C5): populate
-            rv_claim_c: rv_claim,
+            prover_state: Some(rv_prover_state),
+            rv_claim: rv_claim_c,
             num_words,
-            z,
             r_x: r_x.to_vec(),
             r_y: r_y.to_vec(),
             index,
@@ -133,14 +124,10 @@ impl<F: JoltField> RvHwSumcheck<F> {
         );
         let (r_x, r_y) = r_c.r.split_at(num_lookups.log_2());
 
-        // Random challenge used to batch rv-check with hamming-weight check
-        let z = sm.get_transcript().borrow_mut().challenge_scalar();
-
         Self {
             prover_state: None,
             num_words,
-            rv_claim_c: rv_claim,
-            z,
+            rv_claim,
             r_x: r_x.to_vec(),
             r_y: r_y.to_vec(),
             index,
@@ -148,7 +135,7 @@ impl<F: JoltField> RvHwSumcheck<F> {
     }
 }
 
-impl<F: JoltField> SumcheckInstance<F> for RvHwSumcheck<F> {
+impl<F: JoltField> SumcheckInstance<F> for ReadValueSumcheck<F> {
     #[inline(always)]
     fn degree(&self) -> usize {
         2
@@ -159,13 +146,12 @@ impl<F: JoltField> SumcheckInstance<F> for RvHwSumcheck<F> {
     }
 
     fn input_claim(&self) -> F {
-        // Linear combination of the core PIOP claim and the Hamming weight claim (which is 1)
-        self.rv_claim_c + self.z
+        self.rv_claim
     }
 
     #[tracing::instrument(skip_all)]
     fn compute_prover_message(&mut self, _round: usize, _previous_claim: F) -> Vec<F> {
-        let RvHwProverState { ra, dict_folded } = self.prover_state.as_ref().unwrap();
+        let ReadValueProverState { ra, dict_folded } = self.prover_state.as_ref().unwrap();
 
         let degree = <Self as SumcheckInstance<F>>::degree(self);
 
@@ -175,10 +161,7 @@ impl<F: JoltField> SumcheckInstance<F> for RvHwSumcheck<F> {
                 let ra_evals = ra.sumcheck_evals(i, degree, BindingOrder::LowToHigh);
                 let dict_evals = dict_folded.sumcheck_evals(i, degree, BindingOrder::LowToHigh);
 
-                [
-                    ra_evals[0] * (self.z + dict_evals[0]),
-                    ra_evals[1] * (self.z + dict_evals[1]),
-                ]
+                [ra_evals[0] * dict_evals[0], ra_evals[1] * dict_evals[1]]
             })
             .reduce(
                 || [F::zero(); 2],
@@ -189,7 +172,7 @@ impl<F: JoltField> SumcheckInstance<F> for RvHwSumcheck<F> {
 
     #[tracing::instrument(skip_all)]
     fn bind(&mut self, r_j: F, _: usize) {
-        let RvHwProverState { ra, dict_folded } = self.prover_state.as_mut().unwrap();
+        let ReadValueProverState { ra, dict_folded } = self.prover_state.as_mut().unwrap();
         rayon::join(
             || ra.bind_parallel(r_j, BindingOrder::LowToHigh),
             || dict_folded.bind_parallel(r_j, BindingOrder::LowToHigh),
@@ -205,14 +188,14 @@ impl<F: JoltField> SumcheckInstance<F> for RvHwSumcheck<F> {
 
         let (_, ra_claim) = accumulator.borrow().get_virtual_polynomial_opening(
             VirtualPolynomial::GatherRa(self.index),
-            SumcheckId::GatherRvHw,
+            SumcheckId::GatherRv,
         );
         let (_, dict_claim) = accumulator.borrow().get_virtual_polynomial_opening(
             VirtualPolynomial::PrecompileB(self.index),
             SumcheckId::PrecompileExecution,
         );
 
-        ra_claim * (self.z + dict_claim)
+        ra_claim * dict_claim
     }
 
     fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -235,7 +218,7 @@ impl<F: JoltField> SumcheckInstance<F> for RvHwSumcheck<F> {
         let r_a = [self.r_x.clone(), opening_point.r.clone()].concat();
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::GatherRa(self.index),
-            SumcheckId::GatherRvHw,
+            SumcheckId::GatherRv,
             r_a.into(),
             ra_claim,
         );
@@ -257,7 +240,7 @@ impl<F: JoltField> SumcheckInstance<F> for RvHwSumcheck<F> {
         let r_a = [self.r_x.clone(), opening_point.r.clone()].concat();
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::GatherRa(self.index),
-            SumcheckId::GatherRvHw,
+            SumcheckId::GatherRv,
             r_a.into(),
         );
 
@@ -276,23 +259,16 @@ struct HammingBooleanityProverState<F: JoltField> {
 }
 
 impl<F: JoltField> HammingBooleanityProverState<F> {
-    fn new(
-        // <'a, ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>>
-        // TODO(AntoineF4C5): Use prover state to recover values for a/Ra and B
-        // state_manager: StateManager<'a, F, ProofTranscript, PCS>,
-        hw: Vec<F>,
-        eq_r_x: Vec<F>,
-    ) -> Self {
-        // assert_eq!(hw.iter().sum::<F>(), F::one());
-
+    fn new(hw: Vec<F>, eq_r_x: Vec<F>) -> Self {
         let hw = MultilinearPolynomial::from(hw.clone());
         let eq_r_x = MultilinearPolynomial::from(eq_r_x);
 
         Self { hw, eq_r_x }
     }
 }
-// RvHwSumcheck proves: C(r_x, r_y) = Sum_k( ra(r_x, k) * (B(k, r_y) + z) )
-// r_x and r_y are challenges produced in a sumcheck executed in previous steps
+
+// HammingBooleanitySumcheck proves: 0 = Sum_k( eq(r, k) * (hw(k)² - hw(k)) )
+// - Hamming Booleanity ensures that the hamming weight of ra is comprise in {0, 1} for each row (i.e. that each row either encodes a lookup, or no lookup (padding))
 pub struct HammingBooleanitySumcheck<F: JoltField> {
     prover_state: Option<HammingBooleanityProverState<F>>,
     // Dimension over which sumcheck is ran
@@ -322,7 +298,6 @@ impl<F: JoltField> HammingBooleanitySumcheck<F> {
 
         Self {
             prover_state: Some(hw_boolean_prover_state),
-            // TODO(AntoineF4C5): populate
             num_lookups,
             r_x: r_x.r,
             index,
@@ -359,7 +334,6 @@ impl<F: JoltField> SumcheckInstance<F> for HammingBooleanitySumcheck<F> {
     }
 
     fn input_claim(&self) -> F {
-        // Linear combination of the core PIOP claim and the Hamming weight claim (which is 1)
         F::zero()
     }
 
@@ -493,9 +467,8 @@ impl<F: JoltField> BooleanityProverState<F> {
     }
 }
 
-// BooleanitySumcheck proves:  0 = Sum_k,t( eq(r_x, t) * eq(r_words, k) * (ra(t, k)² - ra(t, k)) )
-// r_x is a challenge vector produced in sumchecks executed in previous steps,
-// r_words is (for now) a challenge vector produced (for now) at the beginning of the sumcheck
+// BooleanitySumcheck proves:  0 = Sum_k,t( eq(r_x, t) * eq(r_y, k) * (ra(t, k)² - ra(t, k)) )
+//  - Booleanity ensures that each value in ra is in the set {0, 1}.
 pub struct BooleanitySumcheck<F: JoltField> {
     prover_state: Option<BooleanityProverState<F>>,
     num_lookups: usize,
@@ -506,7 +479,6 @@ pub struct BooleanitySumcheck<F: JoltField> {
 }
 
 impl<F: JoltField> BooleanitySumcheck<F> {
-    #[tracing::instrument(skip_all, name = "BytecodeBooleanitySumcheck::new_prover")]
     pub fn new_prover(
         sm: &mut StateManager<F, impl Transcript, impl CommitmentScheme<Field = F>>,
         read_addresses: Vec<usize>,
@@ -516,11 +488,10 @@ impl<F: JoltField> BooleanitySumcheck<F> {
         let num_lookups = read_addresses.len();
         let num_words = G.len();
 
-        let (r_c, _) = sm.get_virtual_polynomial_opening(
-            VirtualPolynomial::PrecompileC(index),
+        let (r_x, _) = sm.get_virtual_polynomial_opening(
+            VirtualPolynomial::PrecompileA(index),
             SumcheckId::PrecompileExecution,
         );
-        let r_x = r_c.r.split_at(num_lookups.log_2()).0;
 
         // Generate a random challenge to complete with r_x for RA booleanity sumcheck:
         // r_x spans over the input length (column-length of RA matrix),
@@ -532,7 +503,7 @@ impl<F: JoltField> BooleanitySumcheck<F> {
 
         let booleanity_prover_state = BooleanityProverState::new(
             read_addresses,
-            EqPolynomial::evals(r_x),
+            EqPolynomial::evals(&r_x.r),
             G,
             &r_words,
             num_words,
@@ -542,7 +513,7 @@ impl<F: JoltField> BooleanitySumcheck<F> {
             prover_state: Some(booleanity_prover_state),
             num_lookups,
             num_words,
-            r_x: r_x.to_vec(),
+            r_x: r_x.r.to_vec(),
             r_words,
             index,
         }
@@ -554,11 +525,10 @@ impl<F: JoltField> BooleanitySumcheck<F> {
         num_words: usize,
         index: usize,
     ) -> Self {
-        let (r_c, _) = sm.get_virtual_polynomial_opening(
-            VirtualPolynomial::PrecompileC(index),
+        let (r_x, _) = sm.get_virtual_polynomial_opening(
+            VirtualPolynomial::PrecompileA(index),
             SumcheckId::PrecompileExecution,
         );
-        let r_x = r_c.r.split_at(num_lookups.log_2()).0;
 
         let r_words = sm
             .get_transcript()
@@ -569,7 +539,7 @@ impl<F: JoltField> BooleanitySumcheck<F> {
             prover_state: None,
             num_lookups,
             num_words,
-            r_x: r_x.to_vec(),
+            r_x: r_x.r.to_vec(),
             r_words,
             index,
         }
@@ -589,7 +559,7 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
         F::zero()
     }
 
-    #[tracing::instrument(skip_all, name = "BytecodeBooleanitySumcheck::compute_prover_message")]
+    #[tracing::instrument(skip_all)]
     fn compute_prover_message(&mut self, round: usize, _previous_claim: F) -> Vec<F> {
         if round < self.num_words.log_2() {
             // Phase 1: First log(num_words) rounds
@@ -600,7 +570,7 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
         }
     }
 
-    #[tracing::instrument(skip_all, name = "BytecodeBooleanitySumcheck::bind")]
+    #[tracing::instrument(skip_all)]
     fn bind(&mut self, r_j: F, round: usize) {
         let ps = self.prover_state.as_mut().unwrap();
 
@@ -623,10 +593,11 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
                 let mut read_addresses = std::mem::take(&mut ps.read_addresses);
                 let f_ref = &ps.F;
                 ps.H = Some({
-                    let coeffs: Vec<F> = std::mem::take(&mut read_addresses)
+                    let mut coeffs: Vec<F> = std::mem::take(&mut read_addresses)
                         .into_par_iter()
                         .map(|j| f_ref[j])
                         .collect();
+                    coeffs.resize(coeffs.len().next_power_of_two(), F::zero());
                     MultilinearPolynomial::from(coeffs)
                 });
                 ps.eq_r_r = ps.B.final_sumcheck_claim();
@@ -839,14 +810,7 @@ struct RafProverState<F: JoltField> {
 }
 
 impl<F: JoltField> RafProverState<F> {
-    fn new(
-        // <'a, ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>>
-        // TODO(AntoineF4C5): Use prover state to recover values for a/Ra and B
-        // state_manager: StateManager<'a, F, ProofTranscript, PCS>,
-        F: Vec<F>,
-    ) -> Self {
-        assert_eq!(F.iter().sum::<F>(), F::one());
-
+    fn new(F: Vec<F>) -> Self {
         let ra = MultilinearPolynomial::from(F.clone());
 
         Self { ra }
@@ -854,7 +818,8 @@ impl<F: JoltField> RafProverState<F> {
 }
 
 // RafSumcheck proves: a(r_x) = Sum_k( ra(r_x, k) * Id(k) )
-// r_x is a challenge vector produced in a sumcheck executed in previous steps
+//  - Raf Evaluation computes dot product of each row of ra with the identity polynomial.
+//  This and Hamming Weight, Booleanity ensures that ra's row `i` is the one-hot encoding of `A[i]`
 pub struct RafSumcheck<F: JoltField> {
     prover_state: Option<RafProverState<F>>,
     num_words: usize,
@@ -929,7 +894,6 @@ impl<F: JoltField> SumcheckInstance<F> for RafSumcheck<F> {
     }
 
     fn input_claim(&self) -> F {
-        // Linear combination of the core PIOP claim and the Hamming weight claim (which is 1)
         self.rv_claim_a
     }
 
@@ -1026,19 +990,13 @@ struct HwProverState<F: JoltField> {
 }
 
 impl<F: JoltField> HwProverState<F> {
-    fn new(
-        // <'a, ProofTranscript: Transcript, PCS: CommitmentScheme<Field = F>>
-        // TODO(AntoineF4C5): Use prover state to recover values for a/Ra and B
-        // state_manager: StateManager<'a, F, ProofTranscript, PCS>,
-        F: Vec<F>,
-    ) -> Self {
-        assert_eq!(F.iter().sum::<F>(), F::one());
-
+    fn new(F: Vec<F>) -> Self {
         let ra = MultilinearPolynomial::from(F.clone());
 
         Self { ra }
     }
 }
+
 // HwSumcheck proves: HW(r_x) = Sum_k( ra(r_x, k) )
 // r_x is a challenge produced in a sumcheck executed in previous steps
 pub struct HwSumcheck<F: JoltField> {
@@ -1046,7 +1004,6 @@ pub struct HwSumcheck<F: JoltField> {
     // Dimension over which sumcheck is ran
     num_words: usize,
     hw_claim: F,
-    // random challenge to batch rv and Hamming Weight sumchecks
     r_x: Vec<F>,
     // Index of the gather instance
     index: usize,
@@ -1068,7 +1025,6 @@ impl<F: JoltField> HwSumcheck<F> {
 
         Self {
             prover_state: Some(rv_hw_prover_state),
-            // TODO(AntoineF4C5): populate
             hw_claim,
             num_words,
             r_x: r_x.r.to_vec(),
@@ -1107,7 +1063,6 @@ impl<F: JoltField> SumcheckInstance<F> for HwSumcheck<F> {
     }
 
     fn input_claim(&self) -> F {
-        // Linear combination of the core PIOP claim and the Hamming weight claim (which is 1)
         self.hw_claim
     }
 
@@ -1209,123 +1164,99 @@ mod tests {
         rng: &mut StdRng,
         prover_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
         verifier_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
-        (num_lookups, num_words, word_dim): (usize, usize, usize),
+        (max_num_lookups, max_num_words, max_word_dim): (usize, usize, usize),
         index: usize,
-    ) -> (
-        TestInstance,
-        Box<dyn SumcheckInstance<Fr>>, // Prover instance
-        Box<dyn SumcheckInstance<Fr>>, // Verifier instance
-    )
+    ) -> TestInstance<Fr>
     where
         ProofTranscript: Transcript,
         CS: CommitmentScheme<Field = Fr>,
     {
-        let (read_addresses, dictionnary, output) =
-            random_gather(rng, num_lookups, num_words, word_dim);
-        let test_instance = TestInstance::new(&read_addresses, &dictionnary, &output);
+        let test_io = random_gather(rng, max_num_lookups, max_num_words, max_word_dim);
+
+        let (num_lookups, num_words, _) = test_io.dims();
+        let (read_addresses, _, _) = test_io.values();
 
         let read_addresses_usize: Vec<usize> = read_addresses
             .iter()
             .map(|e| e.to_u64().unwrap() as usize)
+            .take(num_lookups)
             .collect();
 
         //------------------- Simulate challenges from previous stages of jolt-dag ----------------------
-        // Reduces to a single evaluation over output dimensions
-        let r_c: Vec<Fr> = prover_sm
-            .get_transcript()
-            .borrow_mut()
-            .challenge_vector(num_lookups.log_2() + word_dim.log_2());
-
-        let _r_c: Vec<Fr> = verifier_sm
-            .get_transcript()
-            .borrow_mut()
-            .challenge_vector(num_lookups.log_2() + word_dim.log_2());
-        assert_eq!(r_c, _r_c);
-
-        // Create an opening that is inserted in the state manager before
-        let rv_claim_c = MultilinearPolynomial::from(output).evaluate(&r_c);
-        let virtual_opening = VirtualOpening::new(
-            VirtualPolynomial::PrecompileC(index),
+        let virtual_opening = VirtualOpening::initial_claim(
+            prover_sm,
+            verifier_sm,
+            VirtualPolynomial::PrecompileA(index),
             SumcheckId::PrecompileExecution,
-            r_c.clone(),
-            rv_claim_c,
+            MultilinearPolynomial::from(read_addresses.clone()),
+            None,
         );
-        virtual_opening.insert_in_prover_sm(prover_sm);
-        virtual_opening.insert_in_verifier_sm(verifier_sm);
 
-        let (r_x, _) = r_c.split_at(num_lookups.log_2());
-
-        let F = compute_ra_evals(r_x, &read_addresses_usize, num_words);
+        let F = compute_ra_evals(
+            &virtual_opening.r,
+            &read_addresses_usize,
+            num_words.next_power_of_two(),
+        );
 
         let prover_booleanity_sumcheck =
             BooleanitySumcheck::new_prover(prover_sm, read_addresses_usize, F, index);
 
-        let verifier_booleanity_sumcheck =
-            BooleanitySumcheck::new_verifier(verifier_sm, num_lookups, num_words, index);
+        let verifier_booleanity_sumcheck = BooleanitySumcheck::new_verifier(
+            verifier_sm,
+            num_lookups.next_power_of_two(),
+            num_words.next_power_of_two(),
+            index,
+        );
 
-        (
-            test_instance,
+        TestInstance::new(
             Box::new(prover_booleanity_sumcheck),
             Box::new(verifier_booleanity_sumcheck),
+            vec![virtual_opening],
+            test_io,
         )
     }
 
     // returns instances for the rv and hamming-weight proving sumcheck
-    fn rv_hw_instances<ProofTranscript, CS>(
+    fn rv_instances<ProofTranscript, CS>(
         rng: &mut StdRng,
         prover_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
         verifier_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
-        (num_lookups, num_words, word_dim): (usize, usize, usize),
+        (max_num_lookups, max_num_words, max_word_dim): (usize, usize, usize),
         index: usize,
-    ) -> (
-        TestInstance,
-        Box<dyn SumcheckInstance<Fr>>, // Prover instance
-        Box<dyn SumcheckInstance<Fr>>, // Verifier instance
-    )
+    ) -> TestInstance<Fr>
     where
         ProofTranscript: Transcript,
         CS: CommitmentScheme<Field = Fr>,
     {
-        let (read_addresses, dictionnary, output) =
-            random_gather(rng, num_lookups, num_words, word_dim);
-        let test_instance = TestInstance::new(&read_addresses, &dictionnary, &output);
+        let test_io = random_gather(rng, max_num_lookups, max_num_words, max_word_dim);
 
-        let read_addresses: Vec<usize> = read_addresses
+        let (num_lookups, num_words, word_dim) = test_io.dims();
+        let (read_addresses, dictionnary, output) = test_io.values();
+
+        let read_addresses_usize: Vec<usize> = read_addresses
             .iter()
             .map(|e| e.to_u64().unwrap() as usize)
+            .take(num_lookups)
             .collect();
 
         //------------------- Simulate challenges from previous stages of jolt-dag ----------------------
         // Reduces to a single evaluation over output dimensions
-        let r_c: Vec<Fr> = prover_sm
-            .get_transcript()
-            .borrow_mut()
-            .challenge_vector(num_lookups.log_2() + word_dim.log_2());
-        let _r_c: Vec<Fr> = verifier_sm
-            .get_transcript()
-            .borrow_mut()
-            .challenge_vector(num_lookups.log_2() + word_dim.log_2());
-        assert_eq!(r_c, _r_c);
-
-        let rv_claim = MultilinearPolynomial::from(output).evaluate(&r_c);
-
-        // Create an opening that is inserted in the state manager before
-        let virtual_opening = VirtualOpening::new(
+        let virtual_opening = VirtualOpening::initial_claim(
+            prover_sm,
+            verifier_sm,
             VirtualPolynomial::PrecompileC(index),
             SumcheckId::PrecompileExecution,
-            r_c.clone(),
-            rv_claim,
+            MultilinearPolynomial::from(output.clone()),
+            None,
         );
-        virtual_opening.insert_in_prover_sm(prover_sm);
-        virtual_opening.insert_in_verifier_sm(verifier_sm);
 
-        let (r_x, r_y) = r_c.split_at(num_lookups.log_2());
+        let (r_x, r_y) = virtual_opening.r.split_at(num_lookups.log_2());
 
-        let F = compute_ra_evals(r_x, &read_addresses, num_words);
+        let F = compute_ra_evals(r_x, &read_addresses_usize, num_words.next_power_of_two());
 
         let eq_r_y = EqPolynomial::evals(r_y);
         let folded_dict: Vec<Fr> = dictionnary
-            .chunks(word_dim)
+            .chunks(word_dim.next_power_of_two())
             .map(|word_vector| {
                 word_vector
                     .iter()
@@ -1334,18 +1265,23 @@ mod tests {
                     .sum()
             })
             .collect();
-        assert_eq!(folded_dict.len(), num_words);
+        assert_eq!(folded_dict.len(), num_words.next_power_of_two());
 
-        let rv_hw_prover_sumcheck =
-            RvHwSumcheck::new_prover(prover_sm, read_addresses, folded_dict, F, index);
+        let rv_prover_sumcheck =
+            ReadValueSumcheck::new_prover(prover_sm, read_addresses_usize, folded_dict, F, index);
 
-        let rv_hw_verifier_sumcheck =
-            RvHwSumcheck::new_verifier(verifier_sm, num_lookups, num_words, index);
+        let rv_verifier_sumcheck = ReadValueSumcheck::new_verifier(
+            verifier_sm,
+            num_lookups.next_power_of_two(),
+            num_words.next_power_of_two(),
+            index,
+        );
 
-        (
-            test_instance,
-            Box::new(rv_hw_prover_sumcheck),
-            Box::new(rv_hw_verifier_sumcheck),
+        TestInstance::new(
+            Box::new(rv_prover_sumcheck),
+            Box::new(rv_verifier_sumcheck),
+            vec![virtual_opening],
+            test_io,
         )
     }
 
@@ -1354,127 +1290,49 @@ mod tests {
         rng: &mut StdRng,
         prover_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
         verifier_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
-        (num_lookups, num_words, word_dim): (usize, usize, usize),
+        (max_num_lookups, max_num_words, max_word_dim): (usize, usize, usize),
         index: usize,
-    ) -> (
-        TestInstance,
-        Box<dyn SumcheckInstance<Fr>>, // Prover instance
-        Box<dyn SumcheckInstance<Fr>>, // Verifier instance
-    )
+    ) -> TestInstance<Fr>
     where
         ProofTranscript: Transcript,
         CS: CommitmentScheme<Field = Fr>,
     {
-        let (read_addresses, dictionnary, output) =
-            random_gather(rng, num_lookups, num_words, word_dim);
-        let test_instance = TestInstance::new(&read_addresses, &dictionnary, &output);
+        let test_io = random_gather(rng, max_num_lookups, max_num_words, max_word_dim);
+
+        let (num_lookups, _, _) = test_io.dims();
+        let (read_addresses, _, _) = test_io.values();
 
         let read_addresses_usize: Vec<usize> = read_addresses
             .iter()
             .map(|e| e.to_u64().unwrap() as usize)
+            .take(num_lookups)
             .collect();
 
         //------------------- Simulate challenges from previous stages of jolt-dag ----------------------
         // Reduces to a single evaluation over output dimensions
-        let r_x: Vec<Fr> = prover_sm
-            .get_transcript()
-            .borrow_mut()
-            .challenge_vector(num_lookups.log_2());
-        let _r_x: Vec<Fr> = verifier_sm
-            .get_transcript()
-            .borrow_mut()
-            .challenge_vector(num_lookups.log_2());
-        assert_eq!(r_x, _r_x);
-
-        let hw_claim = MultilinearPolynomial::from(read_addresses).evaluate(&r_x);
-
-        // Create an opening that is inserted in the state manager before
-        let virtual_opening = VirtualOpening::new(
+        let virtual_opening = VirtualOpening::initial_claim(
+            prover_sm,
+            verifier_sm,
             VirtualPolynomial::PrecompileA(index),
             SumcheckId::PrecompileExecution,
-            r_x.clone(),
-            hw_claim,
+            MultilinearPolynomial::from(read_addresses.clone()),
+            None,
         );
-        virtual_opening.insert_in_prover_sm(prover_sm);
-        virtual_opening.insert_in_verifier_sm(verifier_sm);
 
-        let rv_hw_prover_sumcheck =
+        let hb_prover_sumcheck =
             HammingBooleanitySumcheck::new_prover(prover_sm, read_addresses_usize, index);
 
-        let rv_hw_verifier_sumcheck =
-            HammingBooleanitySumcheck::new_verifier(verifier_sm, num_lookups, index);
-
-        (
-            test_instance,
-            Box::new(rv_hw_prover_sumcheck),
-            Box::new(rv_hw_verifier_sumcheck),
-        )
-    }
-
-    // returns instances for the hamming-weight proving sumcheck
-    fn hw_instances<ProofTranscript, CS>(
-        rng: &mut StdRng,
-        prover_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
-        verifier_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
-        (num_lookups, num_words, word_dim): (usize, usize, usize),
-        index: usize,
-    ) -> (
-        TestInstance,
-        Box<dyn SumcheckInstance<Fr>>, // Prover instance
-        Box<dyn SumcheckInstance<Fr>>, // Verifier instance
-    )
-    where
-        ProofTranscript: Transcript,
-        CS: CommitmentScheme<Field = Fr>,
-    {
-        let (mut read_addresses, dictionnary, output) =
-            random_gather(rng, num_lookups, num_words, word_dim);
-        let test_instance = TestInstance::new(&read_addresses, &dictionnary, &output);
-
-        let mut hw = vec![Fr::one(); read_addresses.len()];
-        hw.resize(read_addresses.len().next_power_of_two(), Fr::zero());
-
-        read_addresses.resize(read_addresses.len().next_power_of_two(), Fr::zero());
-
-        let read_addresses_usize: Vec<usize> = read_addresses
-            .iter()
-            .map(|e| e.to_u64().unwrap() as usize)
-            .collect();
-
-        //------------------- Simulate challenges from previous stages of jolt-dag ----------------------
-        // Reduces to a single evaluation over output dimensions
-        let r_x: Vec<Fr> = prover_sm
-            .get_transcript()
-            .borrow_mut()
-            .challenge_vector(num_lookups.log_2());
-        let _r_x: Vec<Fr> = verifier_sm
-            .get_transcript()
-            .borrow_mut()
-            .challenge_vector(num_lookups.log_2());
-        assert_eq!(r_x, _r_x);
-
-        let hw_claim = MultilinearPolynomial::from(hw).evaluate(&r_x);
-
-        // Create an opening that is inserted in the state manager before
-        let virtual_opening = VirtualOpening::new(
-            VirtualPolynomial::GatherHammingWeight(index),
-            SumcheckId::GatherHB,
-            r_x.clone(),
-            hw_claim,
+        let hb_verifier_sumcheck = HammingBooleanitySumcheck::new_verifier(
+            verifier_sm,
+            num_lookups.next_power_of_two(),
+            index,
         );
-        virtual_opening.insert_in_prover_sm(prover_sm);
-        virtual_opening.insert_in_verifier_sm(verifier_sm);
 
-        let F = compute_ra_evals(&r_x, &read_addresses_usize, num_words);
-
-        let rv_hw_prover_sumcheck = HwSumcheck::new_prover(prover_sm, num_words, F, index);
-
-        let rv_hw_verifier_sumcheck = HwSumcheck::new_verifier(verifier_sm, num_words, index);
-
-        (
-            test_instance,
-            Box::new(rv_hw_prover_sumcheck),
-            Box::new(rv_hw_verifier_sumcheck),
+        TestInstance::new(
+            Box::new(hb_prover_sumcheck),
+            Box::new(hb_verifier_sumcheck),
+            vec![virtual_opening],
+            test_io,
         )
     }
 
@@ -1483,62 +1341,113 @@ mod tests {
         rng: &mut StdRng,
         prover_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
         verifier_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
-        (num_lookups, num_words, word_dim): (usize, usize, usize),
+        (max_num_lookups, max_num_words, max_word_dim): (usize, usize, usize),
         index: usize,
-    ) -> (
-        TestInstance,
-        Box<dyn SumcheckInstance<Fr>>, // Prover instance
-        Box<dyn SumcheckInstance<Fr>>, // Verifier instance
-    )
+    ) -> TestInstance<Fr>
     where
         ProofTranscript: Transcript,
         CS: CommitmentScheme<Field = Fr>,
     {
-        let (read_addresses, dictionnary, output) =
-            random_gather(rng, num_lookups, num_words, word_dim);
-        let test_instance = TestInstance::new(&read_addresses, &dictionnary, &output);
+        let test_io = random_gather(rng, max_num_lookups, max_num_words, max_word_dim);
+
+        let (num_lookups, num_words, _) = test_io.dims();
+        let (read_addresses, _, _) = test_io.values();
 
         let read_addresses_usize: Vec<usize> = read_addresses
             .iter()
             .map(|e| e.to_u64().unwrap() as usize)
+            .take(num_lookups)
             .collect();
 
         //------------------- Simulate challenges from previous stages of jolt-dag ----------------------
         // Reduces to a single evaluation over output dimensions
-        let r_x: Vec<Fr> = prover_sm
-            .get_transcript()
-            .borrow_mut()
-            .challenge_vector(num_lookups.log_2());
-        let _r_x: Vec<Fr> = verifier_sm
-            .get_transcript()
-            .borrow_mut()
-            .challenge_vector(num_lookups.log_2());
-        assert_eq!(r_x, _r_x);
-
-        let rv_claim_a = MultilinearPolynomial::from(read_addresses).evaluate(&r_x);
-
-        // Create an opening that is inserted in the state manager before
-        let virtual_opening = VirtualOpening::new(
+        let virtual_opening = VirtualOpening::initial_claim(
+            prover_sm,
+            verifier_sm,
             VirtualPolynomial::PrecompileA(index),
             SumcheckId::PrecompileExecution,
-            r_x.clone(),
-            rv_claim_a,
+            MultilinearPolynomial::from(read_addresses.clone()),
+            None,
         );
-        virtual_opening.insert_in_prover_sm(prover_sm);
-        virtual_opening.insert_in_verifier_sm(verifier_sm);
 
-        let F = compute_ra_evals(&r_x, &read_addresses_usize, num_words);
+        let F = compute_ra_evals(
+            &virtual_opening.r,
+            &read_addresses_usize,
+            num_words.next_power_of_two(),
+        );
 
         let raf_prover_sumcheck =
             RafSumcheck::new_prover(prover_sm, read_addresses_usize, F, index);
 
-        let raf_verifier_sumcheck =
-            RafSumcheck::new_verifier(verifier_sm, num_lookups, num_words, index);
+        let raf_verifier_sumcheck = RafSumcheck::new_verifier(
+            verifier_sm,
+            num_lookups.next_power_of_two(),
+            num_words.next_power_of_two(),
+            index,
+        );
 
-        (
-            test_instance,
+        TestInstance::new(
             Box::new(raf_prover_sumcheck),
             Box::new(raf_verifier_sumcheck),
+            vec![virtual_opening],
+            test_io,
+        )
+    }
+
+    // returns instances for the hamming-weight proving sumcheck
+    fn hw_instances<ProofTranscript, CS>(
+        rng: &mut StdRng,
+        prover_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
+        verifier_sm: &mut StateManager<'_, Fr, ProofTranscript, CS>,
+        (max_num_lookups, max_num_words, max_word_dim): (usize, usize, usize),
+        index: usize,
+    ) -> TestInstance<Fr>
+    where
+        ProofTranscript: Transcript,
+        CS: CommitmentScheme<Field = Fr>,
+    {
+        let test_io = random_gather(rng, max_num_lookups, max_num_words, max_word_dim);
+
+        let (num_lookups, num_words, _) = test_io.dims();
+        let (read_addresses, _, _) = test_io.values();
+
+        let read_addresses_usize: Vec<usize> = read_addresses
+            .iter()
+            .map(|e| e.to_u64().unwrap() as usize)
+            .take(num_lookups)
+            .collect();
+
+        let mut hw = vec![Fr::one(); num_lookups];
+        hw.resize(num_lookups.next_power_of_two(), Fr::zero());
+
+        //------------------- Simulate challenges from previous stages of jolt-dag ----------------------
+        // Reduces to a single evaluation over output dimensions
+        let virtual_opening = VirtualOpening::initial_claim(
+            prover_sm,
+            verifier_sm,
+            VirtualPolynomial::GatherHammingWeight(index),
+            SumcheckId::GatherHB,
+            MultilinearPolynomial::from(hw),
+            None,
+        );
+
+        let F = compute_ra_evals(
+            &virtual_opening.r,
+            &read_addresses_usize,
+            num_words.next_power_of_two(),
+        );
+
+        let hw_prover_sumcheck =
+            HwSumcheck::new_prover(prover_sm, num_words.next_power_of_two(), F, index);
+
+        let hw_verifier_sumcheck =
+            HwSumcheck::new_verifier(verifier_sm, num_words.next_power_of_two(), index);
+
+        TestInstance::new(
+            Box::new(hw_prover_sumcheck),
+            Box::new(hw_verifier_sumcheck),
+            vec![virtual_opening],
+            test_io,
         )
     }
 
@@ -1560,21 +1469,24 @@ mod tests {
 
         // Verify openings
         for (i, instance) in instances.into_iter().enumerate() {
-            let (read_addresses, _dictionnary, _output) = instance.get();
+            let (read_addresses, _, _) = instance.values();
+            let (num_lookups, num_words, _) = instance.dims();
 
             let read_addresses_usize: Vec<usize> = read_addresses
                 .iter()
                 .map(|e| e.to_u64().unwrap() as usize)
+                .take(num_lookups)
                 .collect();
 
-            let ra: Vec<Fr> = read_addresses_usize
+            let mut ra: Vec<Fr> = read_addresses_usize
                 .iter()
                 .flat_map(|&address| {
-                    let mut one_hot = vec![Fr::zero(); NUM_WORDS];
+                    let mut one_hot = vec![Fr::zero(); num_words.next_power_of_two()];
                     one_hot[address] = Fr::one();
                     one_hot
                 })
                 .collect();
+            ra.resize(ra.len().next_power_of_two(), Fr::zero());
 
             let (r, claim) = openings
                 .get(&OpeningId::Virtual(
@@ -1589,7 +1501,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rv_hw() {
+    fn test_rv() {
         // Number of words to recover from the dictionnary
         const NUM_LOOKUPS: usize = 1 << 10;
         // Number of words in the dictionnary
@@ -1597,34 +1509,33 @@ mod tests {
         // Number of dimensions per word of dictionnary
         const WORD_DIM: usize = 1 << 3;
 
-        let (instances, openings) = test_gather_sumcheck(
-            rv_hw_instances,
-            (NUM_LOOKUPS, NUM_WORDS, WORD_DIM),
-            123456,
-            10,
-        );
+        let (instances, openings) =
+            test_gather_sumcheck(rv_instances, (NUM_LOOKUPS, NUM_WORDS, WORD_DIM), 123456, 10);
 
         for (i, instance) in instances.into_iter().enumerate() {
-            let (read_addresses, dictionnary, _output) = instance.get();
+            let (read_addresses, dictionnary, _) = instance.values();
+            let (num_lookups, num_words, _) = instance.dims();
 
             let read_addresses_usize: Vec<usize> = read_addresses
                 .iter()
                 .map(|e| e.to_u64().unwrap() as usize)
+                .take(num_lookups)
                 .collect();
 
-            let ra: Vec<Fr> = read_addresses_usize
+            let mut ra: Vec<Fr> = read_addresses_usize // get to pow2 size
                 .iter()
                 .flat_map(|&address| {
-                    let mut one_hot = vec![Fr::zero(); NUM_WORDS];
+                    let mut one_hot = vec![Fr::zero(); num_words.next_power_of_two()];
                     one_hot[address] = Fr::one();
                     one_hot
                 })
                 .collect();
+            ra.resize(ra.len().next_power_of_two(), Fr::zero());
 
             let (r, claim) = openings
                 .get(&OpeningId::Virtual(
                     VirtualPolynomial::GatherRa(i),
-                    SumcheckId::GatherRvHw,
+                    SumcheckId::GatherRv,
                 ))
                 .expect("GatherRa(index) should be set");
 
@@ -1638,7 +1549,7 @@ mod tests {
                 ))
                 .expect("PrecompileB(index) should be set");
 
-            let exp_claim = MultilinearPolynomial::from(dictionnary).evaluate(&r.r);
+            let exp_claim = MultilinearPolynomial::from(dictionnary.clone()).evaluate(&r.r);
             assert_eq!(*claim, exp_claim);
         }
     }
@@ -1656,10 +1567,10 @@ mod tests {
             test_gather_sumcheck(hb_instances, (NUM_LOOKUPS, NUM_WORDS, WORD_DIM), 123456, 10);
 
         for (i, instance) in instances.into_iter().enumerate() {
-            let (read_addresses, _dictionnary, _output) = instance.get();
+            let (num_lookups, _, _) = instance.dims();
 
-            let mut hw: Vec<Fr> = vec![Fr::one(); read_addresses.len()];
-            hw.resize(NUM_LOOKUPS.next_power_of_two(), Fr::zero());
+            let mut hw: Vec<Fr> = vec![Fr::one(); num_lookups];
+            hw.resize(num_lookups.next_power_of_two(), Fr::zero());
 
             let (r, claim) = openings
                 .get(&OpeningId::Virtual(
@@ -1669,47 +1580,6 @@ mod tests {
                 .expect("GatherHammingBooleanity(index) should be set");
 
             let exp_claim = MultilinearPolynomial::from(hw).evaluate(&r.r);
-            assert_eq!(*claim, exp_claim);
-        }
-    }
-
-    #[test]
-    fn test_hw() {
-        // Number of words to recover from the dictionnary
-        const NUM_LOOKUPS: usize = 1 << 10;
-        // Number of words in the dictionnary
-        const NUM_WORDS: usize = 64;
-        // Number of dimensions per word of dictionnary
-        const WORD_DIM: usize = 1 << 3;
-
-        let (instances, openings) =
-            test_gather_sumcheck(hw_instances, (NUM_LOOKUPS, NUM_WORDS, WORD_DIM), 123456, 10);
-
-        for (i, instance) in instances.into_iter().enumerate() {
-            let (read_addresses, _dictionnary, _output) = instance.get();
-
-            let read_addresses_usize: Vec<usize> = read_addresses
-                .iter()
-                .map(|e| e.to_u64().unwrap() as usize)
-                .collect();
-
-            let ra: Vec<Fr> = read_addresses_usize
-                .iter()
-                .flat_map(|&address| {
-                    let mut one_hot = vec![Fr::zero(); NUM_WORDS];
-                    one_hot[address] = Fr::one();
-                    one_hot
-                })
-                .collect();
-
-            let (r, claim) = openings
-                .get(&OpeningId::Virtual(
-                    VirtualPolynomial::GatherRa(i),
-                    SumcheckId::GatherHW,
-                ))
-                .expect("GatherRa(index) should be set");
-
-            let exp_claim = MultilinearPolynomial::from(ra).evaluate(&r.r);
             assert_eq!(*claim, exp_claim);
         }
     }
@@ -1731,26 +1601,72 @@ mod tests {
         );
 
         for (i, instance) in instances.into_iter().enumerate() {
-            let (read_addresses, _dictionnary, _output) = instance.get();
+            let (read_addresses, _, _) = instance.values();
+            let (num_lookups, num_words, _) = instance.dims();
 
             let read_addresses_usize: Vec<usize> = read_addresses
                 .iter()
                 .map(|e| e.to_u64().unwrap() as usize)
+                .take(num_lookups)
                 .collect();
 
-            let ra: Vec<Fr> = read_addresses_usize
+            let mut ra: Vec<Fr> = read_addresses_usize
                 .iter()
                 .flat_map(|&address| {
-                    let mut one_hot = vec![Fr::zero(); NUM_WORDS];
+                    let mut one_hot = vec![Fr::zero(); num_words.next_power_of_two()];
                     one_hot[address] = Fr::one();
                     one_hot
                 })
                 .collect();
+            ra.resize(ra.len().next_power_of_two(), Fr::zero());
 
             let (r, claim) = openings
                 .get(&OpeningId::Virtual(
                     VirtualPolynomial::GatherRa(i),
                     SumcheckId::GatherRaf,
+                ))
+                .expect("GatherRa(index) should be set");
+
+            let exp_claim = MultilinearPolynomial::from(ra).evaluate(&r.r);
+            assert_eq!(*claim, exp_claim);
+        }
+    }
+
+    #[test]
+    fn test_hw() {
+        // Number of words to recover from the dictionnary
+        const NUM_LOOKUPS: usize = 1 << 10;
+        // Number of words in the dictionnary
+        const NUM_WORDS: usize = 64;
+        // Number of dimensions per word of dictionnary
+        const WORD_DIM: usize = 1 << 3;
+
+        let (instances, openings) =
+            test_gather_sumcheck(hw_instances, (NUM_LOOKUPS, NUM_WORDS, WORD_DIM), 123456, 10);
+
+        for (i, instance) in instances.into_iter().enumerate() {
+            let (read_addresses, _, _) = instance.values();
+            let (num_lookups, num_words, _) = instance.dims();
+            let read_addresses_usize: Vec<usize> = read_addresses
+                .iter()
+                .map(|e| e.to_u64().unwrap() as usize)
+                .take(num_lookups)
+                .collect();
+
+            let mut ra: Vec<Fr> = read_addresses_usize
+                .iter()
+                .flat_map(|&address| {
+                    let mut one_hot = vec![Fr::zero(); num_words.next_power_of_two()];
+                    one_hot[address] = Fr::one();
+                    one_hot
+                })
+                .collect();
+            ra.resize(ra.len().next_power_of_two(), Fr::zero());
+
+            let (r, claim) = openings
+                .get(&OpeningId::Virtual(
+                    VirtualPolynomial::GatherRa(i),
+                    SumcheckId::GatherHW,
                 ))
                 .expect("GatherRa(index) should be set");
 

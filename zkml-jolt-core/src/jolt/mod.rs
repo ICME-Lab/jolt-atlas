@@ -1206,7 +1206,6 @@ mod e2e_tests {
     }
 
     #[test]
-    #[ignore] // Need to solve padding
     #[serial]
     fn test_gather_non_pow2() {
         let mut rng = StdRng::seed_from_u64(123456);

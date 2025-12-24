@@ -363,6 +363,25 @@ impl<T: Clone + TensorType> Tensor<T> {
         Tensor::new(Some(&inner), &[inner.len()])
     }
 
+    ///Pads the tensor to power of 2 dimensions
+    pub fn pad_next_power_of_two(&mut self)
+    where
+        T: Send + Sync,
+    {
+        let padded_dims: Vec<usize> = self
+            .dims()
+            .iter()
+            .map(|dim| dim.next_power_of_two())
+            .collect();
+
+        let result = self.pad_to_dims(&padded_dims);
+        assert!(
+            result.is_ok(),
+            "Unexpected internal error: {:?}",
+            result.err()
+        );
+    }
+
     /// Pads the tensor to specific target dimensions with zeros.
     /// Only supports growing dimensions (target must be >= current for each dimension).
     ///

@@ -1,7 +1,7 @@
 use jolt_core::utils::interleave_bits;
 use onnx_tracer::trace_types::AtlasOpcode;
 
-use crate::jolt::{lookup_table::LookupTables, trace::JoltONNXCycle};
+use crate::jolt::{bytecode::JoltONNXBytecode, lookup_table::LookupTables, trace::JoltONNXCycle};
 use onnx_tracer::instructions::{
     add::Add,
     broadcast::Broadcast,
@@ -104,6 +104,18 @@ impl JoltONNXCycle {
     }
 }
 
+impl JoltONNXCycle {
+    pub fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
+        self.instr.opcode.lookup_table()
+    }
+}
+
+impl JoltONNXBytecode {
+    pub fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
+        self.opcode.lookup_table()
+    }
+}
+
 // Helper to treat both variants of ONNXOpcode with and without inner type
 macro_rules! expand_op_var {
     ($instr:ident) => {
@@ -116,9 +128,9 @@ macro_rules! expand_op_var {
 
 macro_rules! define_onnx_trait_impls {
     ($($instr:ident$(($type:ty))?),* $(,)?) => {
-        impl InstructionLookup<WORD_SIZE> for JoltONNXCycle {
+        impl InstructionLookup<WORD_SIZE> for AtlasOpcode {
             fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
-                match self.instr.opcode {
+                match self {
                     AtlasOpcode::Noop => None,
                     AtlasOpcode::AddressedNoop => None,
                     $(

@@ -2,7 +2,7 @@
 use crate::jolt::{
     bytecode::InterleavedBitsMarker,
     dag::state_manager::StateManager,
-    executor::instructions::{InstructionLookup, LookupQuery},
+    executor::instructions::LookupQuery,
     lookup_table::{
         LookupTables,
         prefixes::{PrefixCheckpoint, PrefixEval, Prefixes},

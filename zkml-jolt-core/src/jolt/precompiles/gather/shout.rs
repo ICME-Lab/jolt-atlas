@@ -53,7 +53,7 @@ use crate::jolt::{
 // A    | [num_lookups]             | first input vector, where `A[i]` is the index of the values to retrieve from the second input | read_addresses
 // B    | [num_words * word_dim]    | second input, a matrix where each row holds the values to be retrieved                        | dictionnary
 // C    | [num_lookups * word_dim]  | output, a matrix where each row holds the retrieved values from B at index given in A         | output
-// ra   | [num_lookups * num_words] | used by all sumchecks, each row holds the one-hot encoding of value held in A                 | ra
+// ra   | [num_lookups * num_words] | used by sumchecks, each row holds the one-hot encoding of value held in A                     | ra
 
 struct ReadValueProverState<F: JoltField> {
     ra: MultilinearPolynomial<F>,
@@ -62,7 +62,7 @@ struct ReadValueProverState<F: JoltField> {
 
 impl<F: JoltField> ReadValueProverState<F> {
     fn new(dict_folded: Vec<F>, F: Vec<F>) -> Self {
-        let ra = MultilinearPolynomial::from(F.clone());
+        let ra = MultilinearPolynomial::from(F);
         let dict_folded = MultilinearPolynomial::from(dict_folded);
 
         Self { ra, dict_folded }
@@ -100,7 +100,7 @@ impl<F: JoltField> ReadValueSumcheck<F> {
         );
         let (r_x, r_y) = r_c.r.split_at(num_lookups.log_2());
 
-        let rv_prover_state = ReadValueProverState::new(dictionnary_folded.clone(), F);
+        let rv_prover_state = ReadValueProverState::new(dictionnary_folded, F);
 
         Self {
             prover_state: Some(rv_prover_state),
@@ -260,7 +260,7 @@ struct HammingBooleanityProverState<F: JoltField> {
 
 impl<F: JoltField> HammingBooleanityProverState<F> {
     fn new(hw: Vec<F>, eq_r_x: Vec<F>) -> Self {
-        let hw = MultilinearPolynomial::from(hw.clone());
+        let hw = MultilinearPolynomial::from(hw);
         let eq_r_x = MultilinearPolynomial::from(eq_r_x);
 
         Self { hw, eq_r_x }
@@ -811,7 +811,7 @@ struct RafProverState<F: JoltField> {
 
 impl<F: JoltField> RafProverState<F> {
     fn new(F: Vec<F>) -> Self {
-        let ra = MultilinearPolynomial::from(F.clone());
+        let ra = MultilinearPolynomial::from(F);
 
         Self { ra }
     }
@@ -962,7 +962,7 @@ impl<F: JoltField> SumcheckInstance<F> for RafSumcheck<F> {
 
         let ra_claim = prover_state.ra.final_sumcheck_claim();
 
-        let r_a = [self.r_x.clone(), opening_point.r.clone()].concat();
+        let r_a = [self.r_x.clone(), opening_point.r].concat();
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::GatherRa(self.index),
             SumcheckId::GatherRaf,
@@ -976,7 +976,7 @@ impl<F: JoltField> SumcheckInstance<F> for RafSumcheck<F> {
         accumulator: Rc<RefCell<VerifierOpeningAccumulator<F>>>,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
     ) {
-        let r_a = [self.r_x.clone(), opening_point.r.clone()].concat();
+        let r_a = [self.r_x.clone(), opening_point.r].concat();
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::GatherRa(self.index),
             SumcheckId::GatherRaf,
@@ -991,7 +991,7 @@ struct HwProverState<F: JoltField> {
 
 impl<F: JoltField> HwProverState<F> {
     fn new(F: Vec<F>) -> Self {
-        let ra = MultilinearPolynomial::from(F.clone());
+        let ra = MultilinearPolynomial::from(F);
 
         Self { ra }
     }

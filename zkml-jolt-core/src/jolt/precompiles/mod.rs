@@ -781,10 +781,7 @@ impl<F: JoltField, FS: Transcript> PrecompileSNARK<F, FS> {
             .get_precompile_preprocessing()
             .instances
             .iter()
-            .any(|instance| match instance.equation.as_str() {
-                "Gather" => true,
-                _ => false,
-            });
+            .any(|instance| matches!(instance.equation.as_str(), "Gather"));
 
         Self::verify_batched_sumchecks(
             &self.execution_proof,
@@ -794,8 +791,7 @@ impl<F: JoltField, FS: Transcript> PrecompileSNARK<F, FS> {
 
         if has_gather {
             Self::verify_batched_sumchecks(
-                &self
-                    .hamming_weight_proof
+                self.hamming_weight_proof
                     .as_ref()
                     .expect("Should hold a proof"),
                 PrecompileDag::hamming_weight_verifier_instances(sm),

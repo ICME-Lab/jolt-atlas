@@ -1,7 +1,6 @@
 use crate::jolt::{
     bytecode::{CircuitFlags, InterleavedBitsMarker, NUM_CIRCUIT_FLAGS},
     dag::state_manager::StateManager,
-    executor::instructions::InstructionLookup,
     lookup_table::{LookupTables, NUM_LOOKUP_TABLES},
     pcs::SumcheckId,
     trace::WORD_SIZE,

@@ -1,21 +1,12 @@
 use crate::jolt::{
     bytecode::read_raf_checking::ReadRafCheck,
     dag::{stage::SumcheckStages, state_manager::StateManager},
-    executor::instructions::InstructionLookup,
-    lookup_table::{LookupTables, RangeCheckTable, ReLUTable},
     sumcheck::SumcheckInstance,
-    trace::WORD_SIZE,
 };
 use itertools::Itertools;
 use jolt_core::{
-    field::JoltField,
-    poly::commitment::commitment_scheme::CommitmentScheme,
+    field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme,
     transcripts::Transcript,
-    zkvm::lookup_table::{
-        equal::EqualTable, pow2::Pow2Table, shift_right_bitmask::ShiftRightBitmaskTable,
-        signed_greater_than_equal::SignedGreaterThanEqualTable, valid_div0::ValidDiv0Table,
-        valid_signed_remainder::ValidSignedRemainderTable, virtual_sra::VirtualSRATable,
-    },
 };
 use onnx_tracer::{
     tensor::Tensor,
@@ -463,34 +454,6 @@ impl JoltONNXBytecode {
         flags[CircuitFlags::Halt as usize] = self.halt;
 
         flags
-    }
-}
-
-// TODO(AntoineF4C5): Get rid of this helper
-impl InstructionLookup<WORD_SIZE> for JoltONNXBytecode {
-    fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
-        match self.opcode {
-            AtlasOpcode::Add => Some(RangeCheckTable.into()),
-            AtlasOpcode::Broadcast => Some(RangeCheckTable.into()),
-            AtlasOpcode::Constant => Some(RangeCheckTable.into()),
-            AtlasOpcode::Eq => Some(EqualTable.into()),
-            AtlasOpcode::Gte => Some(SignedGreaterThanEqualTable.into()),
-            AtlasOpcode::Mul => Some(RangeCheckTable.into()),
-            AtlasOpcode::Relu => Some(ReLUTable.into()),
-            AtlasOpcode::Reshape => Some(RangeCheckTable.into()),
-            AtlasOpcode::Sub => Some(RangeCheckTable.into()),
-            AtlasOpcode::VirtualAssertEq => Some(EqualTable.into()),
-            AtlasOpcode::VirtualAssertValidDiv0 => Some(ValidDiv0Table.into()),
-            AtlasOpcode::VirtualAssertValidSignedRemainder => {
-                Some(ValidSignedRemainderTable.into())
-            }
-            AtlasOpcode::VirtualAdvice => Some(RangeCheckTable.into()),
-            AtlasOpcode::VirtualMove => Some(RangeCheckTable.into()),
-            AtlasOpcode::VirtualPow2 => Some(Pow2Table.into()),
-            AtlasOpcode::VirtualSra => Some(VirtualSRATable.into()),
-            AtlasOpcode::VirtualShiftRightBitmask => Some(ShiftRightBitmaskTable.into()),
-            _ => None,
-        }
     }
 }
 

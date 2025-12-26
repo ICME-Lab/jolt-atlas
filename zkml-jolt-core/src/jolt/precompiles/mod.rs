@@ -674,10 +674,7 @@ impl<F: JoltField, FS: Transcript> PrecompileSNARK<F, FS> {
             .get_precompile_preprocessing()
             .instances
             .iter()
-            .any(|instance| match instance.equation.as_str() {
-                "Gather" => true,
-                _ => false,
-            });
+            .any(|instance| matches!(instance.equation.as_str(), "Gather"));
 
         let execution_proof = Self::prove_execution(sm);
         let hamming_weight_proof = if has_gather {

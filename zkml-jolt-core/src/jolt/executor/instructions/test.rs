@@ -1,7 +1,4 @@
-use crate::jolt::{
-    executor::instructions::{InstructionLookup, LookupQuery},
-    trace::JoltONNXCycle,
-};
+use crate::jolt::{executor::instructions::LookupQuery, trace::JoltONNXCycle};
 use onnx_tracer::trace_types::AtlasOpcode;
 use rand::prelude::*;
 

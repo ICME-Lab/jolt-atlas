@@ -30,6 +30,7 @@ use ark_serialize::{
 };
 
 pub mod einsum;
+pub mod gather;
 pub mod read_checking;
 pub mod reduce_sum;
 pub mod val_final;
@@ -48,7 +49,7 @@ impl PrecompilePreprocessing {
         .iter()
         // TODO(AntoineF4C5): Set a method for each instruction, that only returns a preprocessing instance if required
         .filter_map(|instr| match &instr.opcode {
-                    AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) => Some(
+                    AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) | AtlasOpcode::Gather => Some(
                         PreprocessingInstance::new(instr, td_lookup, bytecode_preprocessing),
                     ),
                     _ => None,
@@ -145,6 +146,64 @@ impl InstanceBuilder {
             equation: "sum(1)".to_string(),
         }
     }
+
+    /// Specialized instance builder for Gather operations
+    fn build_gather_instance(
+        instr: &AtlasInstr,
+        td_lookup: &HashMap<usize, AtlasInstr>,
+        bytecode_preprocessing: &BytecodePreprocessing,
+    ) -> PreprocessingInstance {
+        // We set the first input in b, and the second in a.
+        // Since in the precompile, it is more straightforward to multiply with the indices-based input on the left. (Avoids transposition)
+        let a_instr = PreprocessingHelper::get_operand_instruction(td_lookup, instr.ts2, "Gather");
+        let b_instr = PreprocessingHelper::get_operand_instruction(td_lookup, instr.ts1, "Gather");
+
+        let a_dims = get_dimensions(a_instr, 1);
+        let b_dims = get_dimensions(b_instr, 2);
+        let c_dims = get_dimensions(instr, 2);
+
+        // Dimension compability check
+        assert_eq!(a_dims[0], c_dims[0]);
+        assert_eq!(b_dims[1], c_dims[1]);
+
+        let a_addr = PreprocessingHelper::collect_and_pad(a_instr, bytecode_preprocessing, &a_dims);
+        let b_addr = PreprocessingHelper::collect_and_pad(b_instr, bytecode_preprocessing, &b_dims);
+        let c_addr = PreprocessingHelper::collect_and_pad(instr, bytecode_preprocessing, &c_dims);
+
+        PreprocessingInstance {
+            a_addr,
+            b_addr,
+            c_addr,
+            a_dims, // We send the unpadded dims for a, since we need it to construct the one-hot encoding
+            b_dims: PreprocessingHelper::calculate_padded_dims(&b_dims),
+            c_dims: PreprocessingHelper::calculate_padded_dims(&c_dims),
+            equation: "Gather".to_string(),
+        }
+    }
+}
+
+/// Gets the required dimensions from an instructions, and panics if the instructions output has less or more dimensions.
+/// Why:
+/// Sometimes in the tracer, 1-dimension tensors are cast to 2-dimension, with a leading "1" dimension.
+/// Ex: [n] tensor get cast to [1, n]
+fn get_dimensions(instruction: &AtlasInstr, num_dimensions: usize) -> Vec<usize> {
+    let raw_dims = instruction.output_dims.clone();
+    assert!(raw_dims.len() >= num_dimensions);
+    let mut outdims = Vec::new();
+
+    let mut raw_dims = raw_dims.into_iter().rev();
+
+    // Push dimension to output
+    for _ in 0..num_dimensions {
+        outdims.insert(0, raw_dims.next().unwrap());
+    }
+
+    // Assert all subsequent dims are equal to 1
+    for dims in raw_dims {
+        assert_eq!(dims, 1, "Dimension mismatch");
+    }
+
+    outdims
 }
 
 impl PreprocessingInstance {
@@ -188,6 +247,9 @@ impl PreprocessingInstance {
 
                 _ => panic!("Sum operation not supported by precompile system"),
             },
+            AtlasOpcode::Gather => {
+                InstanceBuilder::build_gather_instance(instr, td_lookup, bytecode_preprocessing)
+            }
             _ => panic!("Operation not supported by precompile system"),
         }
     }
@@ -315,6 +377,13 @@ impl PrecompileDag {
                         ))
                     }) as Box<dyn SumcheckInstance<F>>
                 }
+                "Gather" => {
+                    (if is_prover {
+                        Box::new(gather::ExecutionSumcheck::new_prover(sm, index))
+                    } else {
+                        Box::new(gather::ExecutionSumcheck::new_verifier(sm, index))
+                    }) as Box<dyn SumcheckInstance<F>>
+                }
                 _ => panic!("equation {equation} not supported"),
             })
             .collect()
@@ -338,6 +407,79 @@ impl PrecompileDag {
         sm: &mut StateManager<'_, F, ProofTranscript, PCS>,
     ) -> Vec<Box<dyn SumcheckInstance<F>>> {
         Self::create_instances(sm, false)
+    }
+
+    /// Gets the prover instance for the precompile Hamming Booleanity sum-check.
+    ///
+    /// This method creates the sumcheck instance for the `optional` Hamming Weight phase of [PrecompileSNARK].
+    /// Proves the correct construction of claimed `hw`, which is used to prove Hamming Booleanity in `Gather` instances
+    /// This allows to assert correctness of padding for one-hot encoded vectors
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F` - The field type implementing the `JoltField` trait
+    /// * `ProofTranscript` - The transcript type implementing the `Transcript` trait
+    /// * `PCS` - The polynomial commitment scheme type implementing `CommitmentScheme` with field type `F`
+    ///
+    /// # Parameters
+    ///
+    /// * `sm` - A reference to the state manager containing verification state and data
+    ///
+    /// # Returns
+    ///
+    /// A vec of boxed sumcheck instance that implement the `SumcheckInstance<F>` trait
+    pub fn hamming_weight_prover_instances<
+        F: JoltField,
+        ProofTranscript: Transcript,
+        PCS: CommitmentScheme<Field = F>,
+    >(
+        sm: &mut StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Vec<Box<dyn SumcheckInstance<F>>> {
+        let equations: Vec<String> = sm
+            .get_precompile_preprocessing()
+            .instances
+            .iter()
+            .map(|pp| pp.equation.clone())
+            .collect();
+
+        equations
+            .iter()
+            .enumerate()
+            .filter_map(|(index, equation)| match equation.as_str() {
+                "Gather" => Some(
+                    Box::new(gather::HammingWeightSumcheck::new_prover(sm, index))
+                        as Box<dyn SumcheckInstance<F>>,
+                ),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn hamming_weight_verifier_instances<
+        F: JoltField,
+        ProofTranscript: Transcript,
+        PCS: CommitmentScheme<Field = F>,
+    >(
+        sm: &mut StateManager<'_, F, ProofTranscript, PCS>,
+    ) -> Vec<Box<dyn SumcheckInstance<F>>> {
+        let equations: Vec<String> = sm
+            .get_precompile_preprocessing()
+            .instances
+            .iter()
+            .map(|pp| pp.equation.clone())
+            .collect();
+
+        equations
+            .iter()
+            .enumerate()
+            .filter_map(|(index, equation)| match equation.as_str() {
+                "Gather" => Some(
+                    Box::new(gather::HammingWeightSumcheck::new_verifier(sm, index))
+                        as Box<dyn SumcheckInstance<F>>,
+                ),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Gets the prover instance for the precompile read-checking sum-check.
@@ -455,6 +597,7 @@ impl PrecompileDag {
 #[derive(Clone, Debug)]
 pub struct PrecompileSNARK<F: JoltField, FS: Transcript> {
     pub(crate) execution_proof: SumcheckInstanceProof<F, FS>,
+    pub(crate) hamming_weight_proof: Option<SumcheckInstanceProof<F, FS>>,
     pub(crate) read_checking_proof: SumcheckInstanceProof<F, FS>,
     pub(crate) val_final_proof: SumcheckInstanceProof<F, FS>,
 }
@@ -467,6 +610,8 @@ impl<F: JoltField, FS: Transcript> CanonicalSerialize for PrecompileSNARK<F, FS>
     ) -> Result<(), SerializationError> {
         self.execution_proof
             .serialize_with_mode(&mut writer, compress)?;
+        self.hamming_weight_proof
+            .serialize_with_mode(&mut writer, compress)?;
         self.read_checking_proof
             .serialize_with_mode(&mut writer, compress)?;
         self.val_final_proof
@@ -476,6 +621,7 @@ impl<F: JoltField, FS: Transcript> CanonicalSerialize for PrecompileSNARK<F, FS>
 
     fn serialized_size(&self, compress: Compress) -> usize {
         self.execution_proof.serialized_size(compress)
+            + self.hamming_weight_proof.serialized_size(compress)
             + self.read_checking_proof.serialized_size(compress)
             + self.val_final_proof.serialized_size(compress)
     }
@@ -484,6 +630,7 @@ impl<F: JoltField, FS: Transcript> CanonicalSerialize for PrecompileSNARK<F, FS>
 impl<F: JoltField, FS: Transcript> Valid for PrecompileSNARK<F, FS> {
     fn check(&self) -> Result<(), SerializationError> {
         self.execution_proof.check()?;
+        self.hamming_weight_proof.check()?;
         self.read_checking_proof.check()?;
         self.val_final_proof.check()?;
         Ok(())
@@ -498,12 +645,18 @@ impl<F: JoltField, FS: Transcript> CanonicalDeserialize for PrecompileSNARK<F, F
     ) -> Result<Self, SerializationError> {
         let execution_proof =
             SumcheckInstanceProof::deserialize_with_mode(&mut reader, compress, validate)?;
+        let hamming_weight_proof = Option::<SumcheckInstanceProof<F, FS>>::deserialize_with_mode(
+            &mut reader,
+            compress,
+            validate,
+        )?;
         let read_checking_proof =
             SumcheckInstanceProof::deserialize_with_mode(&mut reader, compress, validate)?;
         let val_final_proof =
             SumcheckInstanceProof::deserialize_with_mode(&mut reader, compress, validate)?;
         Ok(Self {
             execution_proof,
+            hamming_weight_proof,
             read_checking_proof,
             val_final_proof,
         })
@@ -517,11 +670,23 @@ impl<F: JoltField, FS: Transcript> PrecompileSNARK<F, FS> {
     pub fn prove<'a, PCS: CommitmentScheme<Field = F>>(
         sm: &mut StateManager<'a, F, FS, PCS>,
     ) -> Self {
+        let has_gather = sm
+            .get_precompile_preprocessing()
+            .instances
+            .iter()
+            .any(|instance| matches!(instance.equation.as_str(), "Gather"));
+
         let execution_proof = Self::prove_execution(sm);
+        let hamming_weight_proof = if has_gather {
+            Some(Self::prove_hamming_weight(sm))
+        } else {
+            None
+        };
         let read_checking_proof = Self::prove_read_checking(sm);
         let val_final_proof = Self::prove_val_final(sm);
         PrecompileSNARK {
             execution_proof,
+            hamming_weight_proof,
             read_checking_proof,
             val_final_proof,
         }
@@ -535,6 +700,18 @@ impl<F: JoltField, FS: Transcript> PrecompileSNARK<F, FS> {
     ) -> SumcheckInstanceProof<F, FS> {
         Self::prove_batched_sumchecks(
             &mut PrecompileDag::execution_prover_instances(sm).into_boxed_slice(),
+            sm,
+        )
+    }
+
+    #[tracing::instrument(name = "PrecompileSNARK::prove_hamming_weight", skip(sm))]
+    /// Proves the execution phase of the precompiles.
+    /// This includes running execution sum-checks and collecting output claims.
+    fn prove_hamming_weight<'a, PCS: CommitmentScheme<Field = F>>(
+        sm: &mut StateManager<'a, F, FS, PCS>,
+    ) -> SumcheckInstanceProof<F, FS> {
+        Self::prove_batched_sumchecks(
+            &mut PrecompileDag::hamming_weight_prover_instances(sm).into_boxed_slice(),
             sm,
         )
     }
@@ -597,11 +774,27 @@ impl<F: JoltField, FS: Transcript> PrecompileSNARK<F, FS> {
         sm: &mut StateManager<'a, F, FS, PCS>,
     ) -> Result<(), ProofVerifyError> {
         // Verify execution sum-checks
+        let has_gather = sm
+            .get_precompile_preprocessing()
+            .instances
+            .iter()
+            .any(|instance| matches!(instance.equation.as_str(), "Gather"));
+
         Self::verify_batched_sumchecks(
             &self.execution_proof,
             PrecompileDag::execution_verifier_instances(sm),
             sm,
         )?;
+
+        if has_gather {
+            Self::verify_batched_sumchecks(
+                self.hamming_weight_proof
+                    .as_ref()
+                    .expect("Should hold a proof"),
+                PrecompileDag::hamming_weight_verifier_instances(sm),
+                sm,
+            )?;
+        }
 
         // Verify read-checking sum-check
         Self::verify_single_sumcheck(

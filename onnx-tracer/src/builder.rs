@@ -715,6 +715,43 @@ pub fn softmax_model() -> Model {
     b.take(vec![x.0], vec![r])
 }
 
+pub fn gather_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+    let num_lookups = 2;
+    let num_words = 8;
+    let word_dim = 4;
+
+    let data: Vec<i32> = (0..num_words * word_dim).map(|i| i as i32).collect();
+    let mut c: Tensor<i32> = Tensor::new(Some(&data), &[num_words, word_dim]).unwrap();
+    c.set_scale(SCALE);
+    let data = b.const_tensor(c, vec![num_words, word_dim], 2);
+
+    let indices = b.input(vec![num_lookups], 1);
+    let r = b.gather(data, indices, 0, vec![num_lookups, word_dim], 1);
+
+    b.take(vec![indices.0], vec![r])
+}
+
+// Tests running a Gather instruction with non-power of 2 dimensions
+pub fn gather_non_pow2() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+    let num_lookups = 3;
+    let num_words = 7;
+    let word_dim = 3;
+
+    let data: Vec<i32> = (0..num_words * word_dim).map(|i| i as i32).collect();
+    let mut c: Tensor<i32> = Tensor::new(Some(&data), &[num_words, word_dim]).unwrap();
+    c.set_scale(SCALE);
+    let data = b.const_tensor(c, vec![num_words, word_dim], 2);
+
+    let indices = b.input(vec![num_lookups], 1);
+    let r = b.gather(data, indices, 0, vec![num_lookups, word_dim], 1);
+
+    b.take(vec![indices.0], vec![r])
+}
+
 /// Implements a building block of the nanoGPT's self attention that includes a rsqrt instruction
 pub fn self_attention_block() -> Model {
     const SCALE: i32 = 7;

@@ -275,7 +275,7 @@ impl CycleValueCache {
     /// by specialized sum-check precompiles rather than element-wise lookups.
     fn from_cycle(raw_cycle: &AtlasCycle, size: usize) -> Self {
         let (ts1_vals, ts2_vals, ts3_vals) = match raw_cycle.instr.opcode {
-            AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) => {
+            AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) | AtlasOpcode::Gather => {
                 (vec![0; size], vec![0; size], vec![0; size])
             }
             AtlasOpcode::Broadcast => {

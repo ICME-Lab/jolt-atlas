@@ -1,0 +1,2050 @@
+{
+  "000": {
+    "index": 0,
+    "idf": 1.0
+  },
+  "10": {
+    "index": 1,
+    "idf": 1.0
+  },
+  "100": {
+    "index": 2,
+    "idf": 1.0
+  },
+  "11": {
+    "index": 3,
+    "idf": 1.0
+  },
+  "12": {
+    "index": 4,
+    "idf": 1.0
+  },
+  "15": {
+    "index": 5,
+    "idf": 1.0
+  },
+  "17": {
+    "index": 6,
+    "idf": 1.0
+  },
+  "18": {
+    "index": 7,
+    "idf": 1.0
+  },
+  "20": {
+    "index": 8,
+    "idf": 1.0
+  },
+  "2001": {
+    "index": 9,
+    "idf": 1.0
+  },
+  "2003": {
+    "index": 10,
+    "idf": 1.0
+  },
+  "2004": {
+    "index": 11,
+    "idf": 1.0
+  },
+  "2005": {
+    "index": 12,
+    "idf": 1.0
+  },
+  "25": {
+    "index": 13,
+    "idf": 1.0
+  },
+  "30": {
+    "index": 14,
+    "idf": 1.0
+  },
+  "50": {
+    "index": 15,
+    "idf": 1.0
+  },
+  "able": {
+    "index": 16,
+    "idf": 1.0
+  },
+  "access": {
+    "index": 17,
+    "idf": 1.0
+  },
+  "according": {
+    "index": 18,
+    "idf": 1.0
+  },
+  "act": {
+    "index": 19,
+    "idf": 1.0
+  },
+  "action": {
+    "index": 20,
+    "idf": 1.0
+  },
+  "actor": {
+    "index": 21,
+    "idf": 1.0
+  },
+  "added": {
+    "index": 22,
+    "idf": 1.0
+  },
+  "age": {
+    "index": 23,
+    "idf": 1.0
+  },
+  "ago": {
+    "index": 24,
+    "idf": 1.0
+  },
+  "agreed": {
+    "index": 25,
+    "idf": 1.0
+  },
+  "ahead": {
+    "index": 26,
+    "idf": 1.0
+  },
+  "aid": {
+    "index": 27,
+    "idf": 1.0
+  },
+  "album": {
+    "index": 28,
+    "idf": 1.0
+  },
+  "allow": {
+    "index": 29,
+    "idf": 1.0
+  },
+  "american": {
+    "index": 30,
+    "idf": 1.0
+  },
+  "analysts": {
+    "index": 31,
+    "idf": 1.0
+  },
+  "announced": {
+    "index": 32,
+    "idf": 1.0
+  },
+  "annual": {
+    "index": 33,
+    "idf": 1.0
+  },
+  "anti": {
+    "index": 34,
+    "idf": 1.0
+  },
+  "apple": {
+    "index": 35,
+    "idf": 1.0
+  },
+  "asked": {
+    "index": 36,
+    "idf": 1.0
+  },
+  "available": {
+    "index": 37,
+    "idf": 1.0
+  },
+  "award": {
+    "index": 38,
+    "idf": 1.0
+  },
+  "awards": {
+    "index": 39,
+    "idf": 1.0
+  },
+  "away": {
+    "index": 40,
+    "idf": 1.0
+  },
+  "band": {
+    "index": 41,
+    "idf": 1.0
+  },
+  "bank": {
+    "index": 42,
+    "idf": 1.0
+  },
+  "based": {
+    "index": 43,
+    "idf": 1.0
+  },
+  "bbc": {
+    "index": 44,
+    "idf": 1.0
+  },
+  "bbc news": {
+    "index": 45,
+    "idf": 1.0
+  },
+  "beat": {
+    "index": 46,
+    "idf": 1.0
+  },
+  "believe": {
+    "index": 47,
+    "idf": 1.0
+  },
+  "best": {
+    "index": 48,
+    "idf": 1.0
+  },
+  "better": {
+    "index": 49,
+    "idf": 1.0
+  },
+  "bid": {
+    "index": 50,
+    "idf": 1.0
+  },
+  "big": {
+    "index": 51,
+    "idf": 1.0
+  },
+  "biggest": {
+    "index": 52,
+    "idf": 1.0
+  },
+  "blair": {
+    "index": 53,
+    "idf": 1.0
+  },
+  "book": {
+    "index": 54,
+    "idf": 1.0
+  },
+  "box": {
+    "index": 55,
+    "idf": 1.0
+  },
+  "break": {
+    "index": 56,
+    "idf": 1.0
+  },
+  "britain": {
+    "index": 57,
+    "idf": 1.0
+  },
+  "british": {
+    "index": 58,
+    "idf": 1.0
+  },
+  "broadband": {
+    "index": 59,
+    "idf": 1.0
+  },
+  "brown": {
+    "index": 60,
+    "idf": 1.0
+  },
+  "budget": {
+    "index": 61,
+    "idf": 1.0
+  },
+  "business": {
+    "index": 62,
+    "idf": 1.0
+  },
+  "buy": {
+    "index": 63,
+    "idf": 1.0
+  },
+  "called": {
+    "index": 64,
+    "idf": 1.0
+  },
+  "calls": {
+    "index": 65,
+    "idf": 1.0
+  },
+  "came": {
+    "index": 66,
+    "idf": 1.0
+  },
+  "campaign": {
+    "index": 67,
+    "idf": 1.0
+  },
+  "career": {
+    "index": 68,
+    "idf": 1.0
+  },
+  "case": {
+    "index": 69,
+    "idf": 1.0
+  },
+  "cash": {
+    "index": 70,
+    "idf": 1.0
+  },
+  "centre": {
+    "index": 71,
+    "idf": 1.0
+  },
+  "chairman": {
+    "index": 72,
+    "idf": 1.0
+  },
+  "champion": {
+    "index": 73,
+    "idf": 1.0
+  },
+  "chance": {
+    "index": 74,
+    "idf": 1.0
+  },
+  "chancellor": {
+    "index": 75,
+    "idf": 1.0
+  },
+  "change": {
+    "index": 76,
+    "idf": 1.0
+  },
+  "charles": {
+    "index": 77,
+    "idf": 1.0
+  },
+  "chelsea": {
+    "index": 78,
+    "idf": 1.0
+  },
+  "chief": {
+    "index": 79,
+    "idf": 1.0
+  },
+  "chief executive": {
+    "index": 80,
+    "idf": 1.0
+  },
+  "children": {
+    "index": 81,
+    "idf": 1.0
+  },
+  "china": {
+    "index": 82,
+    "idf": 1.0
+  },
+  "choice": {
+    "index": 83,
+    "idf": 1.0
+  },
+  "christmas": {
+    "index": 84,
+    "idf": 1.0
+  },
+  "city": {
+    "index": 85,
+    "idf": 1.0
+  },
+  "claim": {
+    "index": 86,
+    "idf": 1.0
+  },
+  "claims": {
+    "index": 87,
+    "idf": 1.0
+  },
+  "clear": {
+    "index": 88,
+    "idf": 1.0
+  },
+  "close": {
+    "index": 89,
+    "idf": 1.0
+  },
+  "club": {
+    "index": 90,
+    "idf": 1.0
+  },
+  "coach": {
+    "index": 91,
+    "idf": 1.0
+  },
+  "come": {
+    "index": 92,
+    "idf": 1.0
+  },
+  "comes": {
+    "index": 93,
+    "idf": 1.0
+  },
+  "coming": {
+    "index": 94,
+    "idf": 1.0
+  },
+  "commission": {
+    "index": 95,
+    "idf": 1.0
+  },
+  "committee": {
+    "index": 96,
+    "idf": 1.0
+  },
+  "companies": {
+    "index": 97,
+    "idf": 1.0
+  },
+  "company": {
+    "index": 98,
+    "idf": 1.0
+  },
+  "competition": {
+    "index": 99,
+    "idf": 1.0
+  },
+  "computer": {
+    "index": 100,
+    "idf": 1.0
+  },
+  "consumer": {
+    "index": 101,
+    "idf": 1.0
+  },
+  "consumers": {
+    "index": 102,
+    "idf": 1.0
+  },
+  "content": {
+    "index": 103,
+    "idf": 1.0
+  },
+  "continue": {
+    "index": 104,
+    "idf": 1.0
+  },
+  "control": {
+    "index": 105,
+    "idf": 1.0
+  },
+  "cost": {
+    "index": 106,
+    "idf": 1.0
+  },
+  "costs": {
+    "index": 107,
+    "idf": 1.0
+  },
+  "council": {
+    "index": 108,
+    "idf": 1.0
+  },
+  "countries": {
+    "index": 109,
+    "idf": 1.0
+  },
+  "country": {
+    "index": 110,
+    "idf": 1.0
+  },
+  "court": {
+    "index": 111,
+    "idf": 1.0
+  },
+  "cup": {
+    "index": 112,
+    "idf": 1.0
+  },
+  "current": {
+    "index": 113,
+    "idf": 1.0
+  },
+  "currently": {
+    "index": 114,
+    "idf": 1.0
+  },
+  "customers": {
+    "index": 115,
+    "idf": 1.0
+  },
+  "cut": {
+    "index": 116,
+    "idf": 1.0
+  },
+  "data": {
+    "index": 117,
+    "idf": 1.0
+  },
+  "david": {
+    "index": 118,
+    "idf": 1.0
+  },
+  "day": {
+    "index": 119,
+    "idf": 1.0
+  },
+  "days": {
+    "index": 120,
+    "idf": 1.0
+  },
+  "deal": {
+    "index": 121,
+    "idf": 1.0
+  },
+  "december": {
+    "index": 122,
+    "idf": 1.0
+  },
+  "decision": {
+    "index": 123,
+    "idf": 1.0
+  },
+  "demand": {
+    "index": 124,
+    "idf": 1.0
+  },
+  "despite": {
+    "index": 125,
+    "idf": 1.0
+  },
+  "development": {
+    "index": 126,
+    "idf": 1.0
+  },
+  "did": {
+    "index": 127,
+    "idf": 1.0
+  },
+  "didnt": {
+    "index": 128,
+    "idf": 1.0
+  },
+  "different": {
+    "index": 129,
+    "idf": 1.0
+  },
+  "difficult": {
+    "index": 130,
+    "idf": 1.0
+  },
+  "digital": {
+    "index": 131,
+    "idf": 1.0
+  },
+  "director": {
+    "index": 132,
+    "idf": 1.0
+  },
+  "does": {
+    "index": 133,
+    "idf": 1.0
+  },
+  "doing": {
+    "index": 134,
+    "idf": 1.0
+  },
+  "dollar": {
+    "index": 135,
+    "idf": 1.0
+  },
+  "dont": {
+    "index": 136,
+    "idf": 1.0
+  },
+  "dvd": {
+    "index": 137,
+    "idf": 1.0
+  },
+  "earlier": {
+    "index": 138,
+    "idf": 1.0
+  },
+  "early": {
+    "index": 139,
+    "idf": 1.0
+  },
+  "economic": {
+    "index": 140,
+    "idf": 1.0
+  },
+  "economy": {
+    "index": 141,
+    "idf": 1.0
+  },
+  "election": {
+    "index": 142,
+    "idf": 1.0
+  },
+  "end": {
+    "index": 143,
+    "idf": 1.0
+  },
+  "england": {
+    "index": 144,
+    "idf": 1.0
+  },
+  "eu": {
+    "index": 145,
+    "idf": 1.0
+  },
+  "europe": {
+    "index": 146,
+    "idf": 1.0
+  },
+  "european": {
+    "index": 147,
+    "idf": 1.0
+  },
+  "event": {
+    "index": 148,
+    "idf": 1.0
+  },
+  "evidence": {
+    "index": 149,
+    "idf": 1.0
+  },
+  "executive": {
+    "index": 150,
+    "idf": 1.0
+  },
+  "expected": {
+    "index": 151,
+    "idf": 1.0
+  },
+  "face": {
+    "index": 152,
+    "idf": 1.0
+  },
+  "fact": {
+    "index": 153,
+    "idf": 1.0
+  },
+  "failed": {
+    "index": 154,
+    "idf": 1.0
+  },
+  "family": {
+    "index": 155,
+    "idf": 1.0
+  },
+  "fans": {
+    "index": 156,
+    "idf": 1.0
+  },
+  "far": {
+    "index": 157,
+    "idf": 1.0
+  },
+  "february": {
+    "index": 158,
+    "idf": 1.0
+  },
+  "feel": {
+    "index": 159,
+    "idf": 1.0
+  },
+  "figures": {
+    "index": 160,
+    "idf": 1.0
+  },
+  "film": {
+    "index": 161,
+    "idf": 1.0
+  },
+  "films": {
+    "index": 162,
+    "idf": 1.0
+  },
+  "final": {
+    "index": 163,
+    "idf": 1.0
+  },
+  "financial": {
+    "index": 164,
+    "idf": 1.0
+  },
+  "firm": {
+    "index": 165,
+    "idf": 1.0
+  },
+  "firms": {
+    "index": 166,
+    "idf": 1.0
+  },
+  "following": {
+    "index": 167,
+    "idf": 1.0
+  },
+  "football": {
+    "index": 168,
+    "idf": 1.0
+  },
+  "foreign": {
+    "index": 169,
+    "idf": 1.0
+  },
+  "form": {
+    "index": 170,
+    "idf": 1.0
+  },
+  "forward": {
+    "index": 171,
+    "idf": 1.0
+  },
+  "fourth": {
+    "index": 172,
+    "idf": 1.0
+  },
+  "france": {
+    "index": 173,
+    "idf": 1.0
+  },
+  "free": {
+    "index": 174,
+    "idf": 1.0
+  },
+  "french": {
+    "index": 175,
+    "idf": 1.0
+  },
+  "friday": {
+    "index": 176,
+    "idf": 1.0
+  },
+  "future": {
+    "index": 177,
+    "idf": 1.0
+  },
+  "game": {
+    "index": 178,
+    "idf": 1.0
+  },
+  "games": {
+    "index": 179,
+    "idf": 1.0
+  },
+  "gaming": {
+    "index": 180,
+    "idf": 1.0
+  },
+  "general": {
+    "index": 181,
+    "idf": 1.0
+  },
+  "general election": {
+    "index": 182,
+    "idf": 1.0
+  },
+  "getting": {
+    "index": 183,
+    "idf": 1.0
+  },
+  "given": {
+    "index": 184,
+    "idf": 1.0
+  },
+  "global": {
+    "index": 185,
+    "idf": 1.0
+  },
+  "goal": {
+    "index": 186,
+    "idf": 1.0
+  },
+  "going": {
+    "index": 187,
+    "idf": 1.0
+  },
+  "good": {
+    "index": 188,
+    "idf": 1.0
+  },
+  "got": {
+    "index": 189,
+    "idf": 1.0
+  },
+  "government": {
+    "index": 190,
+    "idf": 1.0
+  },
+  "governments": {
+    "index": 191,
+    "idf": 1.0
+  },
+  "great": {
+    "index": 192,
+    "idf": 1.0
+  },
+  "group": {
+    "index": 193,
+    "idf": 1.0
+  },
+  "growing": {
+    "index": 194,
+    "idf": 1.0
+  },
+  "growth": {
+    "index": 195,
+    "idf": 1.0
+  },
+  "half": {
+    "index": 196,
+    "idf": 1.0
+  },
+  "hard": {
+    "index": 197,
+    "idf": 1.0
+  },
+  "having": {
+    "index": 198,
+    "idf": 1.0
+  },
+  "head": {
+    "index": 199,
+    "idf": 1.0
+  },
+  "health": {
+    "index": 200,
+    "idf": 1.0
+  },
+  "held": {
+    "index": 201,
+    "idf": 1.0
+  },
+  "help": {
+    "index": 202,
+    "idf": 1.0
+  },
+  "high": {
+    "index": 203,
+    "idf": 1.0
+  },
+  "higher": {
+    "index": 204,
+    "idf": 1.0
+  },
+  "hit": {
+    "index": 205,
+    "idf": 1.0
+  },
+  "hold": {
+    "index": 206,
+    "idf": 1.0
+  },
+  "home": {
+    "index": 207,
+    "idf": 1.0
+  },
+  "hope": {
+    "index": 208,
+    "idf": 1.0
+  },
+  "house": {
+    "index": 209,
+    "idf": 1.0
+  },
+  "howard": {
+    "index": 210,
+    "idf": 1.0
+  },
+  "huge": {
+    "index": 211,
+    "idf": 1.0
+  },
+  "human": {
+    "index": 212,
+    "idf": 1.0
+  },
+  "im": {
+    "index": 213,
+    "idf": 1.0
+  },
+  "important": {
+    "index": 214,
+    "idf": 1.0
+  },
+  "include": {
+    "index": 215,
+    "idf": 1.0
+  },
+  "including": {
+    "index": 216,
+    "idf": 1.0
+  },
+  "increase": {
+    "index": 217,
+    "idf": 1.0
+  },
+  "industry": {
+    "index": 218,
+    "idf": 1.0
+  },
+  "information": {
+    "index": 219,
+    "idf": 1.0
+  },
+  "injury": {
+    "index": 220,
+    "idf": 1.0
+  },
+  "instead": {
+    "index": 221,
+    "idf": 1.0
+  },
+  "international": {
+    "index": 222,
+    "idf": 1.0
+  },
+  "internet": {
+    "index": 223,
+    "idf": 1.0
+  },
+  "investment": {
+    "index": 224,
+    "idf": 1.0
+  },
+  "iraq": {
+    "index": 225,
+    "idf": 1.0
+  },
+  "ireland": {
+    "index": 226,
+    "idf": 1.0
+  },
+  "issue": {
+    "index": 227,
+    "idf": 1.0
+  },
+  "issues": {
+    "index": 228,
+    "idf": 1.0
+  },
+  "ive": {
+    "index": 229,
+    "idf": 1.0
+  },
+  "january": {
+    "index": 230,
+    "idf": 1.0
+  },
+  "job": {
+    "index": 231,
+    "idf": 1.0
+  },
+  "jobs": {
+    "index": 232,
+    "idf": 1.0
+  },
+  "john": {
+    "index": 233,
+    "idf": 1.0
+  },
+  "jones": {
+    "index": 234,
+    "idf": 1.0
+  },
+  "just": {
+    "index": 235,
+    "idf": 1.0
+  },
+  "key": {
+    "index": 236,
+    "idf": 1.0
+  },
+  "know": {
+    "index": 237,
+    "idf": 1.0
+  },
+  "known": {
+    "index": 238,
+    "idf": 1.0
+  },
+  "labour": {
+    "index": 239,
+    "idf": 1.0
+  },
+  "late": {
+    "index": 240,
+    "idf": 1.0
+  },
+  "later": {
+    "index": 241,
+    "idf": 1.0
+  },
+  "latest": {
+    "index": 242,
+    "idf": 1.0
+  },
+  "law": {
+    "index": 243,
+    "idf": 1.0
+  },
+  "lead": {
+    "index": 244,
+    "idf": 1.0
+  },
+  "leader": {
+    "index": 245,
+    "idf": 1.0
+  },
+  "league": {
+    "index": 246,
+    "idf": 1.0
+  },
+  "led": {
+    "index": 247,
+    "idf": 1.0
+  },
+  "left": {
+    "index": 248,
+    "idf": 1.0
+  },
+  "legal": {
+    "index": 249,
+    "idf": 1.0
+  },
+  "let": {
+    "index": 250,
+    "idf": 1.0
+  },
+  "level": {
+    "index": 251,
+    "idf": 1.0
+  },
+  "lib": {
+    "index": 252,
+    "idf": 1.0
+  },
+  "liberal": {
+    "index": 253,
+    "idf": 1.0
+  },
+  "life": {
+    "index": 254,
+    "idf": 1.0
+  },
+  "like": {
+    "index": 255,
+    "idf": 1.0
+  },
+  "likely": {
+    "index": 256,
+    "idf": 1.0
+  },
+  "line": {
+    "index": 257,
+    "idf": 1.0
+  },
+  "list": {
+    "index": 258,
+    "idf": 1.0
+  },
+  "little": {
+    "index": 259,
+    "idf": 1.0
+  },
+  "live": {
+    "index": 260,
+    "idf": 1.0
+  },
+  "local": {
+    "index": 261,
+    "idf": 1.0
+  },
+  "london": {
+    "index": 262,
+    "idf": 1.0
+  },
+  "long": {
+    "index": 263,
+    "idf": 1.0
+  },
+  "look": {
+    "index": 264,
+    "idf": 1.0
+  },
+  "looking": {
+    "index": 265,
+    "idf": 1.0
+  },
+  "lord": {
+    "index": 266,
+    "idf": 1.0
+  },
+  "lost": {
+    "index": 267,
+    "idf": 1.0
+  },
+  "lot": {
+    "index": 268,
+    "idf": 1.0
+  },
+  "low": {
+    "index": 269,
+    "idf": 1.0
+  },
+  "mail": {
+    "index": 270,
+    "idf": 1.0
+  },
+  "main": {
+    "index": 271,
+    "idf": 1.0
+  },
+  "major": {
+    "index": 272,
+    "idf": 1.0
+  },
+  "make": {
+    "index": 273,
+    "idf": 1.0
+  },
+  "making": {
+    "index": 274,
+    "idf": 1.0
+  },
+  "man": {
+    "index": 275,
+    "idf": 1.0
+  },
+  "manager": {
+    "index": 276,
+    "idf": 1.0
+  },
+  "march": {
+    "index": 277,
+    "idf": 1.0
+  },
+  "mark": {
+    "index": 278,
+    "idf": 1.0
+  },
+  "market": {
+    "index": 279,
+    "idf": 1.0
+  },
+  "match": {
+    "index": 280,
+    "idf": 1.0
+  },
+  "mean": {
+    "index": 281,
+    "idf": 1.0
+  },
+  "means": {
+    "index": 282,
+    "idf": 1.0
+  },
+  "media": {
+    "index": 283,
+    "idf": 1.0
+  },
+  "meet": {
+    "index": 284,
+    "idf": 1.0
+  },
+  "meeting": {
+    "index": 285,
+    "idf": 1.0
+  },
+  "members": {
+    "index": 286,
+    "idf": 1.0
+  },
+  "men": {
+    "index": 287,
+    "idf": 1.0
+  },
+  "michael": {
+    "index": 288,
+    "idf": 1.0
+  },
+  "microsoft": {
+    "index": 289,
+    "idf": 1.0
+  },
+  "million": {
+    "index": 290,
+    "idf": 1.0
+  },
+  "minister": {
+    "index": 291,
+    "idf": 1.0
+  },
+  "ministers": {
+    "index": 292,
+    "idf": 1.0
+  },
+  "minutes": {
+    "index": 293,
+    "idf": 1.0
+  },
+  "mobile": {
+    "index": 294,
+    "idf": 1.0
+  },
+  "monday": {
+    "index": 295,
+    "idf": 1.0
+  },
+  "money": {
+    "index": 296,
+    "idf": 1.0
+  },
+  "month": {
+    "index": 297,
+    "idf": 1.0
+  },
+  "months": {
+    "index": 298,
+    "idf": 1.0
+  },
+  "movie": {
+    "index": 299,
+    "idf": 1.0
+  },
+  "mps": {
+    "index": 300,
+    "idf": 1.0
+  },
+  "mr": {
+    "index": 301,
+    "idf": 1.0
+  },
+  "mr blair": {
+    "index": 302,
+    "idf": 1.0
+  },
+  "mr brown": {
+    "index": 303,
+    "idf": 1.0
+  },
+  "ms": {
+    "index": 304,
+    "idf": 1.0
+  },
+  "music": {
+    "index": 305,
+    "idf": 1.0
+  },
+  "national": {
+    "index": 306,
+    "idf": 1.0
+  },
+  "nations": {
+    "index": 307,
+    "idf": 1.0
+  },
+  "need": {
+    "index": 308,
+    "idf": 1.0
+  },
+  "needed": {
+    "index": 309,
+    "idf": 1.0
+  },
+  "net": {
+    "index": 310,
+    "idf": 1.0
+  },
+  "network": {
+    "index": 311,
+    "idf": 1.0
+  },
+  "networks": {
+    "index": 312,
+    "idf": 1.0
+  },
+  "new": {
+    "index": 313,
+    "idf": 1.0
+  },
+  "news": {
+    "index": 314,
+    "idf": 1.0
+  },
+  "november": {
+    "index": 315,
+    "idf": 1.0
+  },
+  "number": {
+    "index": 316,
+    "idf": 1.0
+  },
+  "offer": {
+    "index": 317,
+    "idf": 1.0
+  },
+  "office": {
+    "index": 318,
+    "idf": 1.0
+  },
+  "oil": {
+    "index": 319,
+    "idf": 1.0
+  },
+  "old": {
+    "index": 320,
+    "idf": 1.0
+  },
+  "online": {
+    "index": 321,
+    "idf": 1.0
+  },
+  "open": {
+    "index": 322,
+    "idf": 1.0
+  },
+  "parties": {
+    "index": 323,
+    "idf": 1.0
+  },
+  "party": {
+    "index": 324,
+    "idf": 1.0
+  },
+  "past": {
+    "index": 325,
+    "idf": 1.0
+  },
+  "pay": {
+    "index": 326,
+    "idf": 1.0
+  },
+  "pc": {
+    "index": 327,
+    "idf": 1.0
+  },
+  "people": {
+    "index": 328,
+    "idf": 1.0
+  },
+  "performance": {
+    "index": 329,
+    "idf": 1.0
+  },
+  "personal": {
+    "index": 330,
+    "idf": 1.0
+  },
+  "phone": {
+    "index": 331,
+    "idf": 1.0
+  },
+  "phones": {
+    "index": 332,
+    "idf": 1.0
+  },
+  "place": {
+    "index": 333,
+    "idf": 1.0
+  },
+  "plan": {
+    "index": 334,
+    "idf": 1.0
+  },
+  "plans": {
+    "index": 335,
+    "idf": 1.0
+  },
+  "play": {
+    "index": 336,
+    "idf": 1.0
+  },
+  "played": {
+    "index": 337,
+    "idf": 1.0
+  },
+  "player": {
+    "index": 338,
+    "idf": 1.0
+  },
+  "players": {
+    "index": 339,
+    "idf": 1.0
+  },
+  "playing": {
+    "index": 340,
+    "idf": 1.0
+  },
+  "point": {
+    "index": 341,
+    "idf": 1.0
+  },
+  "points": {
+    "index": 342,
+    "idf": 1.0
+  },
+  "police": {
+    "index": 343,
+    "idf": 1.0
+  },
+  "policy": {
+    "index": 344,
+    "idf": 1.0
+  },
+  "political": {
+    "index": 345,
+    "idf": 1.0
+  },
+  "popular": {
+    "index": 346,
+    "idf": 1.0
+  },
+  "possible": {
+    "index": 347,
+    "idf": 1.0
+  },
+  "power": {
+    "index": 348,
+    "idf": 1.0
+  },
+  "president": {
+    "index": 349,
+    "idf": 1.0
+  },
+  "previous": {
+    "index": 350,
+    "idf": 1.0
+  },
+  "price": {
+    "index": 351,
+    "idf": 1.0
+  },
+  "prices": {
+    "index": 352,
+    "idf": 1.0
+  },
+  "prime": {
+    "index": 353,
+    "idf": 1.0
+  },
+  "prime minister": {
+    "index": 354,
+    "idf": 1.0
+  },
+  "prize": {
+    "index": 355,
+    "idf": 1.0
+  },
+  "problem": {
+    "index": 356,
+    "idf": 1.0
+  },
+  "problems": {
+    "index": 357,
+    "idf": 1.0
+  },
+  "production": {
+    "index": 358,
+    "idf": 1.0
+  },
+  "profits": {
+    "index": 359,
+    "idf": 1.0
+  },
+  "programme": {
+    "index": 360,
+    "idf": 1.0
+  },
+  "project": {
+    "index": 361,
+    "idf": 1.0
+  },
+  "public": {
+    "index": 362,
+    "idf": 1.0
+  },
+  "quarter": {
+    "index": 363,
+    "idf": 1.0
+  },
+  "race": {
+    "index": 364,
+    "idf": 1.0
+  },
+  "radio": {
+    "index": 365,
+    "idf": 1.0
+  },
+  "rate": {
+    "index": 366,
+    "idf": 1.0
+  },
+  "rates": {
+    "index": 367,
+    "idf": 1.0
+  },
+  "real": {
+    "index": 368,
+    "idf": 1.0
+  },
+  "really": {
+    "index": 369,
+    "idf": 1.0
+  },
+  "received": {
+    "index": 370,
+    "idf": 1.0
+  },
+  "recent": {
+    "index": 371,
+    "idf": 1.0
+  },
+  "recently": {
+    "index": 372,
+    "idf": 1.0
+  },
+  "record": {
+    "index": 373,
+    "idf": 1.0
+  },
+  "release": {
+    "index": 374,
+    "idf": 1.0
+  },
+  "released": {
+    "index": 375,
+    "idf": 1.0
+  },
+  "report": {
+    "index": 376,
+    "idf": 1.0
+  },
+  "reported": {
+    "index": 377,
+    "idf": 1.0
+  },
+  "reports": {
+    "index": 378,
+    "idf": 1.0
+  },
+  "research": {
+    "index": 379,
+    "idf": 1.0
+  },
+  "result": {
+    "index": 380,
+    "idf": 1.0
+  },
+  "return": {
+    "index": 381,
+    "idf": 1.0
+  },
+  "right": {
+    "index": 382,
+    "idf": 1.0
+  },
+  "rights": {
+    "index": 383,
+    "idf": 1.0
+  },
+  "rise": {
+    "index": 384,
+    "idf": 1.0
+  },
+  "role": {
+    "index": 385,
+    "idf": 1.0
+  },
+  "rose": {
+    "index": 386,
+    "idf": 1.0
+  },
+  "rugby": {
+    "index": 387,
+    "idf": 1.0
+  },
+  "rules": {
+    "index": 388,
+    "idf": 1.0
+  },
+  "run": {
+    "index": 389,
+    "idf": 1.0
+  },
+  "running": {
+    "index": 390,
+    "idf": 1.0
+  },
+  "russian": {
+    "index": 391,
+    "idf": 1.0
+  },
+  "said": {
+    "index": 392,
+    "idf": 1.0
+  },
+  "said mr": {
+    "index": 393,
+    "idf": 1.0
+  },
+  "sale": {
+    "index": 394,
+    "idf": 1.0
+  },
+  "sales": {
+    "index": 395,
+    "idf": 1.0
+  },
+  "saw": {
+    "index": 396,
+    "idf": 1.0
+  },
+  "say": {
+    "index": 397,
+    "idf": 1.0
+  },
+  "saying": {
+    "index": 398,
+    "idf": 1.0
+  },
+  "says": {
+    "index": 399,
+    "idf": 1.0
+  },
+  "scotland": {
+    "index": 400,
+    "idf": 1.0
+  },
+  "search": {
+    "index": 401,
+    "idf": 1.0
+  },
+  "season": {
+    "index": 402,
+    "idf": 1.0
+  },
+  "second": {
+    "index": 403,
+    "idf": 1.0
+  },
+  "secretary": {
+    "index": 404,
+    "idf": 1.0
+  },
+  "security": {
+    "index": 405,
+    "idf": 1.0
+  },
+  "seen": {
+    "index": 406,
+    "idf": 1.0
+  },
+  "september": {
+    "index": 407,
+    "idf": 1.0
+  },
+  "series": {
+    "index": 408,
+    "idf": 1.0
+  },
+  "service": {
+    "index": 409,
+    "idf": 1.0
+  },
+  "services": {
+    "index": 410,
+    "idf": 1.0
+  },
+  "set": {
+    "index": 411,
+    "idf": 1.0
+  },
+  "share": {
+    "index": 412,
+    "idf": 1.0
+  },
+  "shares": {
+    "index": 413,
+    "idf": 1.0
+  },
+  "short": {
+    "index": 414,
+    "idf": 1.0
+  },
+  "showed": {
+    "index": 415,
+    "idf": 1.0
+  },
+  "shows": {
+    "index": 416,
+    "idf": 1.0
+  },
+  "single": {
+    "index": 417,
+    "idf": 1.0
+  },
+  "sir": {
+    "index": 418,
+    "idf": 1.0
+  },
+  "site": {
+    "index": 419,
+    "idf": 1.0
+  },
+  "sites": {
+    "index": 420,
+    "idf": 1.0
+  },
+  "small": {
+    "index": 421,
+    "idf": 1.0
+  },
+  "software": {
+    "index": 422,
+    "idf": 1.0
+  },
+  "sold": {
+    "index": 423,
+    "idf": 1.0
+  },
+  "song": {
+    "index": 424,
+    "idf": 1.0
+  },
+  "south": {
+    "index": 425,
+    "idf": 1.0
+  },
+  "spending": {
+    "index": 426,
+    "idf": 1.0
+  },
+  "spokesman": {
+    "index": 427,
+    "idf": 1.0
+  },
+  "sport": {
+    "index": 428,
+    "idf": 1.0
+  },
+  "star": {
+    "index": 429,
+    "idf": 1.0
+  },
+  "start": {
+    "index": 430,
+    "idf": 1.0
+  },
+  "state": {
+    "index": 431,
+    "idf": 1.0
+  },
+  "statement": {
+    "index": 432,
+    "idf": 1.0
+  },
+  "stock": {
+    "index": 433,
+    "idf": 1.0
+  },
+  "stop": {
+    "index": 434,
+    "idf": 1.0
+  },
+  "strong": {
+    "index": 435,
+    "idf": 1.0
+  },
+  "success": {
+    "index": 436,
+    "idf": 1.0
+  },
+  "sunday": {
+    "index": 437,
+    "idf": 1.0
+  },
+  "support": {
+    "index": 438,
+    "idf": 1.0
+  },
+  "sure": {
+    "index": 439,
+    "idf": 1.0
+  },
+  "taken": {
+    "index": 440,
+    "idf": 1.0
+  },
+  "taking": {
+    "index": 441,
+    "idf": 1.0
+  },
+  "tax": {
+    "index": 442,
+    "idf": 1.0
+  },
+  "team": {
+    "index": 443,
+    "idf": 1.0
+  },
+  "technology": {
+    "index": 444,
+    "idf": 1.0
+  },
+  "television": {
+    "index": 445,
+    "idf": 1.0
+  },
+  "term": {
+    "index": 446,
+    "idf": 1.0
+  },
+  "test": {
+    "index": 447,
+    "idf": 1.0
+  },
+  "thats": {
+    "index": 448,
+    "idf": 1.0
+  },
+  "thing": {
+    "index": 449,
+    "idf": 1.0
+  },
+  "things": {
+    "index": 450,
+    "idf": 1.0
+  },
+  "think": {
+    "index": 451,
+    "idf": 1.0
+  },
+  "thought": {
+    "index": 452,
+    "idf": 1.0
+  },
+  "time": {
+    "index": 453,
+    "idf": 1.0
+  },
+  "times": {
+    "index": 454,
+    "idf": 1.0
+  },
+  "title": {
+    "index": 455,
+    "idf": 1.0
+  },
+  "today": {
+    "index": 456,
+    "idf": 1.0
+  },
+  "told": {
+    "index": 457,
+    "idf": 1.0
+  },
+  "told bbc": {
+    "index": 458,
+    "idf": 1.0
+  },
+  "tony": {
+    "index": 459,
+    "idf": 1.0
+  },
+  "tony blair": {
+    "index": 460,
+    "idf": 1.0
+  },
+  "took": {
+    "index": 461,
+    "idf": 1.0
+  },
+  "tories": {
+    "index": 462,
+    "idf": 1.0
+  },
+  "tory": {
+    "index": 463,
+    "idf": 1.0
+  },
+  "total": {
+    "index": 464,
+    "idf": 1.0
+  },
+  "tour": {
+    "index": 465,
+    "idf": 1.0
+  },
+  "trade": {
+    "index": 466,
+    "idf": 1.0
+  },
+  "trial": {
+    "index": 467,
+    "idf": 1.0
+  },
+  "try": {
+    "index": 468,
+    "idf": 1.0
+  },
+  "trying": {
+    "index": 469,
+    "idf": 1.0
+  },
+  "tuesday": {
+    "index": 470,
+    "idf": 1.0
+  },
+  "tv": {
+    "index": 471,
+    "idf": 1.0
+  },
+  "uk": {
+    "index": 472,
+    "idf": 1.0
+  },
+  "union": {
+    "index": 473,
+    "idf": 1.0
+  },
+  "united": {
+    "index": 474,
+    "idf": 1.0
+  },
+  "use": {
+    "index": 475,
+    "idf": 1.0
+  },
+  "used": {
+    "index": 476,
+    "idf": 1.0
+  },
+  "users": {
+    "index": 477,
+    "idf": 1.0
+  },
+  "using": {
+    "index": 478,
+    "idf": 1.0
+  },
+  "version": {
+    "index": 479,
+    "idf": 1.0
+  },
+  "victory": {
+    "index": 480,
+    "idf": 1.0
+  },
+  "video": {
+    "index": 481,
+    "idf": 1.0
+  },
+  "virus": {
+    "index": 482,
+    "idf": 1.0
+  },
+  "vote": {
+    "index": 483,
+    "idf": 1.0
+  },
+  "wales": {
+    "index": 484,
+    "idf": 1.0
+  },
+  "want": {
+    "index": 485,
+    "idf": 1.0
+  },
+  "wanted": {
+    "index": 486,
+    "idf": 1.0
+  },
+  "wants": {
+    "index": 487,
+    "idf": 1.0
+  },
+  "war": {
+    "index": 488,
+    "idf": 1.0
+  },
+  "warned": {
+    "index": 489,
+    "idf": 1.0
+  },
+  "way": {
+    "index": 490,
+    "idf": 1.0
+  },
+  "web": {
+    "index": 491,
+    "idf": 1.0
+  },
+  "website": {
+    "index": 492,
+    "idf": 1.0
+  },
+  "wednesday": {
+    "index": 493,
+    "idf": 1.0
+  },
+  "week": {
+    "index": 494,
+    "idf": 1.0
+  },
+  "weeks": {
+    "index": 495,
+    "idf": 1.0
+  },
+  "went": {
+    "index": 496,
+    "idf": 1.0
+  },
+  "williams": {
+    "index": 497,
+    "idf": 1.0
+  },
+  "win": {
+    "index": 498,
+    "idf": 1.0
+  },
+  "winning": {
+    "index": 499,
+    "idf": 1.0
+  },
+  "women": {
+    "index": 500,
+    "idf": 1.0
+  },
+  "won": {
+    "index": 501,
+    "idf": 1.0
+  },
+  "work": {
+    "index": 502,
+    "idf": 1.0
+  },
+  "working": {
+    "index": 503,
+    "idf": 1.0
+  },
+  "world": {
+    "index": 504,
+    "idf": 1.0
+  },
+  "worlds": {
+    "index": 505,
+    "idf": 1.0
+  },
+  "year": {
+    "index": 506,
+    "idf": 1.0
+  },
+  "year old": {
+    "index": 507,
+    "idf": 1.0
+  },
+  "years": {
+    "index": 508,
+    "idf": 1.0
+  },
+  "york": {
+    "index": 509,
+    "idf": 1.0
+  },
+  "young": {
+    "index": 510,
+    "idf": 1.0
+  },
+  "yukos": {
+    "index": 511,
+    "idf": 1.0
+  }
+}

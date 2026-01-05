@@ -16,7 +16,7 @@ keywords = ["SNARK", "cryptography", "proofs", "zkML"]
 
 [workspace]
 members = ["onnx-tracer", "zkml-jolt-core"]
-exclude = ["atlas-onnx-tracer"]
+exclude = ["atlas-onnx-tracer", "joltworks", "jolt-atlas-core"]
 
 [lib]
 path = "./src/lib.rs"

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::{
     node::ComputationNode,
-    ops::{Constant, Operator, Rsqrt, Softmax, Tanh},
+    ops::{Constant, Erf, Operator, Rsqrt, Softmax, Tanh},
     utils::{
         parser::{DecompositionBuilder, load_op},
         quantize::scale_to_multiplier,
@@ -19,6 +19,7 @@ pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
         ("Tanh", handle_tanh as OpHandlerFn),
         ("Softmax", handle_softmax as OpHandlerFn),
         ("Rsqrt", handle_rsqrt as OpHandlerFn),
+        ("Erf", handle_erf as OpHandlerFn),
     ])
 }
 
@@ -59,6 +60,19 @@ fn handle_tanh(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     builder.add_node(ComputationNode {
         idx: builder.idx(0),
         operator: Operator::Tanh(Tanh {
+            scale: scale_to_multiplier(hctx.run_args.scale).into(),
+        }),
+        inputs: hctx.internal_input_indices.clone(),
+        output_dims: hctx.output_dims.clone(),
+    });
+    builder.finish()
+}
+
+fn handle_erf(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
+    let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
+    builder.add_node(ComputationNode {
+        idx: builder.idx(0),
+        operator: Operator::Erf(Erf {
             scale: scale_to_multiplier(hctx.run_args.scale).into(),
         }),
         inputs: hctx.internal_input_indices.clone(),

@@ -5,8 +5,8 @@
 //! can use a sumcheck to reduce multiple opening proofs (multiple polynomials, not
 //! necessarily of the same size, each opened at a different point) into a single opening.
 
-use crate::witness::{CommittedPolynomial, VirtualPolynomial};
 use allocative::Allocative;
+use common::{CommittedPolynomial, VirtualPolynomial};
 use num_derive::FromPrimitive;
 #[cfg(test)]
 use std::cell::RefCell;
@@ -123,28 +123,7 @@ where
 )]
 #[repr(u8)]
 pub enum SumcheckId {
-    SpartanOuter,
-    SpartanProductVirtualization,
-    SpartanShift,
-    InstructionClaimReduction,
-    InstructionInputVirtualization,
-    InstructionReadRaf,
-    InstructionRaVirtualization,
-    RamReadWriteChecking,
-    RamRafEvaluation,
-    RamOutputCheck,
-    RamValEvaluation,
-    RamValFinalEvaluation,
-    RamRaClaimReduction,
-    RamHammingBooleanity,
-    RamRaVirtualization,
-    RegistersClaimReduction,
-    RegistersReadWriteChecking,
-    RegistersValEvaluation,
-    BytecodeReadRaf,
-    Booleanity,
-    IncClaimReduction,
-    HammingWeightClaimReduction,
+    Execution,
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
@@ -405,6 +384,29 @@ where
             OpeningId::TrustedAdvice(sumcheck_id),
             (opening_point, claim),
         );
+    }
+
+    /// Take the openings, removing the points to reduce proof size
+    ///
+    /// # Returns:
+    /// `Openings<F>` - The openings with points removed
+    pub fn take(&mut self) -> Openings<F> {
+        // to reduce proof size, remove all the opening points from accumulator.openings and just leave the claims
+        for (_, opening) in self.openings.iter_mut() {
+            opening.0.r.clear();
+        }
+        std::mem::take(&mut self.openings)
+    }
+
+    pub fn assert_virtual_polynomial_opening_exists(
+        &self,
+        polynomial: VirtualPolynomial,
+        sumcheck: SumcheckId,
+    ) {
+        let _ = self
+            .openings
+            .get(&OpeningId::Virtual(polynomial, sumcheck))
+            .unwrap_or_else(|| panic!("opening for {sumcheck:?} {polynomial:?} not found"));
     }
 }
 

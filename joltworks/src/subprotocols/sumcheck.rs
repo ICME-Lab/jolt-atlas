@@ -1,15 +1,20 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::type_complexity)]
 
-use crate::field::JoltField;
-use crate::poly::opening_proof::{ProverOpeningAccumulator, VerifierOpeningAccumulator};
-use crate::poly::unipoly::{CompressedUniPoly, UniPoly};
-use crate::subprotocols::sumcheck_prover::SumcheckInstanceProver;
-use crate::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier;
-use crate::transcripts::{AppendToTranscript, Transcript};
-use crate::utils::errors::ProofVerifyError;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::utils::profiling::print_current_memory_usage;
+use crate::{
+    field::JoltField,
+    poly::{
+        opening_proof::{ProverOpeningAccumulator, VerifierOpeningAccumulator},
+        unipoly::{CompressedUniPoly, UniPoly},
+    },
+    subprotocols::{
+        sumcheck_prover::SumcheckInstanceProver, sumcheck_verifier::SumcheckInstanceVerifier,
+    },
+    transcripts::{AppendToTranscript, Transcript},
+    utils::errors::ProofVerifyError,
+};
 
 use ark_serialize::*;
 use std::marker::PhantomData;
@@ -248,6 +253,67 @@ impl BatchedSumcheck {
             return Err(ProofVerifyError::SumcheckVerificationError);
         }
 
+        Ok(r_sumcheck)
+    }
+}
+
+pub struct Sumcheck;
+
+impl Sumcheck {
+    pub fn prove<F: JoltField, ProofTranscript: Transcript>(
+        sumcheck_instance: &mut dyn SumcheckInstanceProver<F, ProofTranscript>,
+        opening_accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut ProofTranscript,
+    ) -> (SumcheckInstanceProof<F, ProofTranscript>, Vec<F::Challenge>) {
+        let num_rounds = sumcheck_instance.num_rounds();
+
+        // Append input claims to transcript
+        let input_claim = sumcheck_instance.input_claim(opening_accumulator);
+        transcript.append_scalar(&input_claim);
+        let mut previous_claim = input_claim;
+        let mut r_sumcheck: Vec<F::Challenge> = Vec::with_capacity(num_rounds);
+        let mut compressed_polys: Vec<CompressedUniPoly<F>> = Vec::with_capacity(num_rounds);
+        for round in 0..num_rounds {
+            let univariate_poly = sumcheck_instance.compute_message(round, previous_claim);
+            // append the prover's message to the transcript
+            let compressed_poly = univariate_poly.compress();
+            compressed_poly.append_to_transcript(transcript);
+            let r_j = transcript.challenge_scalar_optimized::<F>();
+            r_sumcheck.push(r_j);
+
+            // Cache claim for this round
+            previous_claim = univariate_poly.evaluate(&r_j);
+            sumcheck_instance.ingest_challenge(r_j, round);
+            compressed_polys.push(compressed_poly);
+        }
+
+        // Allow the sumcheck instance to perform any end-of-protocol work (e.g. flushing
+        // delayed bindings) after the final challenge has been ingested and before we cache
+        // openings.
+        sumcheck_instance.finalize();
+
+        sumcheck_instance.cache_openings(opening_accumulator, transcript, &r_sumcheck);
+        (SumcheckInstanceProof::new(compressed_polys), r_sumcheck)
+    }
+
+    pub fn verify<F: JoltField, ProofTranscript: Transcript>(
+        proof: &SumcheckInstanceProof<F, ProofTranscript>,
+        sumcheck_instance: &dyn SumcheckInstanceVerifier<F, ProofTranscript>,
+        opening_accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut ProofTranscript,
+    ) -> Result<Vec<F::Challenge>, ProofVerifyError> {
+        let num_rounds = sumcheck_instance.num_rounds();
+        let input_claim = sumcheck_instance.input_claim(opening_accumulator);
+        transcript.append_scalar(&input_claim);
+        let degree_bound = sumcheck_instance.degree();
+        let (final_claim, r_sumcheck) =
+            proof.verify(input_claim, num_rounds, degree_bound, transcript)?;
+        sumcheck_instance.cache_openings(opening_accumulator, transcript, &r_sumcheck);
+        let expected_final_claim =
+            sumcheck_instance.expected_output_claim(opening_accumulator, &r_sumcheck);
+        if final_claim != expected_final_claim {
+            return Err(ProofVerifyError::SumcheckVerificationError);
+        }
         Ok(r_sumcheck)
     }
 }

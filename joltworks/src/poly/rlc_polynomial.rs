@@ -3,11 +3,11 @@ use crate::{
     msm::VariableBaseMSM,
     poly::{commitment::dory::DoryGlobals, multilinear_polynomial::MultilinearPolynomial},
     utils::thread::unsafe_allocate_zero_vec,
-    witness::CommittedPolynomial,
 };
 use allocative::Allocative;
 use ark_bn254::{Fr, G1Projective};
 use ark_ec::CurveGroup;
+use common::CommittedPolynomial;
 use rayon::prelude::*;
 use std::sync::Arc;
 use tracing::trace_span;

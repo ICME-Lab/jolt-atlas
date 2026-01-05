@@ -29,6 +29,8 @@ pub static FROM_U16_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static FROM_U32_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Count of `from_u64` conversions.
 pub static FROM_U64_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Count of `from_i32` conversions.
+pub static FROM_I32_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Count of `from_i64` conversions.
 pub static FROM_I64_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Count of `from_i128` conversions.
@@ -86,6 +88,7 @@ pub fn reset_from_counts() {
     FROM_U16_COUNT.store(0, Ordering::Relaxed);
     FROM_U32_COUNT.store(0, Ordering::Relaxed);
     FROM_U64_COUNT.store(0, Ordering::Relaxed);
+    FROM_I32_COUNT.store(0, Ordering::Relaxed);
     FROM_I64_COUNT.store(0, Ordering::Relaxed);
     FROM_I128_COUNT.store(0, Ordering::Relaxed);
     FROM_U128_COUNT.store(0, Ordering::Relaxed);
@@ -111,6 +114,10 @@ pub fn get_from_u32_count() -> usize {
 /// Read `from_u64` count.
 pub fn get_from_u64_count() -> usize {
     FROM_U64_COUNT.load(Ordering::Relaxed)
+}
+/// Read `from_i32` count.
+pub fn get_from_i32_count() -> usize {
+    FROM_I32_COUNT.load(Ordering::Relaxed)
 }
 /// Read `from_i64` count.
 pub fn get_from_i64_count() -> usize {
@@ -263,6 +270,7 @@ pub struct FieldOpCounts {
     pub from_u16: usize,
     pub from_u32: usize,
     pub from_u64: usize,
+    pub from_i32: usize,
     pub from_i64: usize,
     pub from_i128: usize,
     pub from_u128: usize,
@@ -291,6 +299,7 @@ pub fn get_field_op_counts() -> FieldOpCounts {
         from_u16: get_from_u16_count(),
         from_u32: get_from_u32_count(),
         from_u64: get_from_u64_count(),
+        from_i32: get_from_i32_count(),
         from_i64: get_from_i64_count(),
         from_i128: get_from_i128_count(),
         from_u128: get_from_u128_count(),

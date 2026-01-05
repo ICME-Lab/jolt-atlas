@@ -30,4 +30,6 @@ pub enum ProofVerifyError {
     SumcheckVerificationError,
     #[error("Univariate-skip round verification failed")]
     UniSkipVerificationError,
+    #[error("Missing proof for node {0}")]
+    MissingProof(usize),
 }

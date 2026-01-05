@@ -158,6 +158,9 @@ impl MultilinearLagrange<ArkFr> for MultilinearPolynomial<Fr> {
             MultilinearPolynomial::U64Scalars(poly) => {
                 compute_vector_matrix_product!(&poly.coeffs, field_mul)
             }
+            MultilinearPolynomial::I32Scalars(poly) => {
+                compute_vector_matrix_product!(&poly.coeffs, field_mul)
+            }
             MultilinearPolynomial::I64Scalars(poly) => {
                 compute_vector_matrix_product!(&poly.coeffs, field_mul)
             }
@@ -226,6 +229,7 @@ where
         MultilinearPolynomial::U16Scalars(poly) => compute_msm!(&poly.coeffs, msm_u16),
         MultilinearPolynomial::U32Scalars(poly) => compute_msm!(&poly.coeffs, msm_u32),
         MultilinearPolynomial::U64Scalars(poly) => compute_msm!(&poly.coeffs, msm_u64),
+        MultilinearPolynomial::I32Scalars(poly) => compute_msm!(&poly.coeffs, msm_i32),
         MultilinearPolynomial::I64Scalars(poly) => compute_msm!(&poly.coeffs, msm_i64),
         MultilinearPolynomial::I128Scalars(poly) => compute_msm!(&poly.coeffs, msm_i128),
         MultilinearPolynomial::U128Scalars(poly) => compute_msm!(&poly.coeffs, msm_u128),

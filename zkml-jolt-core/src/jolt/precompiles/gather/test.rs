@@ -29,11 +29,11 @@ use std::collections::BTreeMap;
 // Creates a random `Gather` instance.
 pub fn random_gather(
     rng: &mut StdRng,
-    // Number of dictionnary entries to recover
+    // Number of dictionary entries to recover
     max_num_lookups: usize,
-    // Number of words in the dictionnary to gather from
+    // Number of words in the dictionary to gather from
     max_num_words: usize,
-    // Number of dimensions per word of dictionnary
+    // Number of dimensions per word of dictionary
     max_word_dim: usize,
 ) -> TestIO {
     let num_lookups = rng.gen_range(1..max_num_lookups);
@@ -44,7 +44,7 @@ pub fn random_gather(
         .map(|_| rng.gen_range(0..num_words) as i32)
         .collect();
 
-    let dictionnary_vals: Vec<i32> = (0..num_words * word_dim)
+    let dictionary_vals: Vec<i32> = (0..num_words * word_dim)
         .map(|_| rng.next_u32() as i32)
         .collect();
 
@@ -53,12 +53,12 @@ pub fn random_gather(
         .iter()
         .flat_map(|&index| {
             let index = index as usize;
-            dictionnary_vals[index * word_dim..(index + 1) * word_dim].to_vec()
+            dictionary_vals[index * word_dim..(index + 1) * word_dim].to_vec()
         })
         .collect();
 
     let mut ra_tensor = Tensor::new(Some(&read_addresses_vals), &[num_lookups]).unwrap();
-    let mut dict_tensor = Tensor::new(Some(&dictionnary_vals), &[num_words, word_dim]).unwrap();
+    let mut dict_tensor = Tensor::new(Some(&dictionary_vals), &[num_words, word_dim]).unwrap();
     let mut out_tensor = Tensor::new(Some(&output_vals), &[num_lookups, word_dim]).unwrap();
 
     ra_tensor.pad_next_power_of_two();
@@ -66,7 +66,7 @@ pub fn random_gather(
     out_tensor.pad_next_power_of_two();
 
     let read_addresses: Vec<Fr> = ra_tensor.iter().map(|&e| Fr::from_u32(e as u32)).collect();
-    let dictionnary: Vec<Fr> = dict_tensor
+    let dictionary: Vec<Fr> = dict_tensor
         .iter()
         .map(|&e| Fr::from_u32(e as u32))
         .collect();
@@ -74,7 +74,7 @@ pub fn random_gather(
 
     TestIO::new(
         read_addresses,
-        dictionnary,
+        dictionary,
         output,
         (num_lookups, num_words, word_dim),
     )

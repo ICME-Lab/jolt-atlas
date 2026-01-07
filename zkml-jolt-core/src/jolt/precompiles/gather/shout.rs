@@ -51,7 +51,7 @@ use crate::jolt::{
 // Putting it in the context of the Gather instructions:
 // id   | dims                      | description                                                                                   | name in sumchecks
 // A    | [num_lookups]             | first input vector, where `A[i]` is the index of the values to retrieve from the second input | read_addresses
-// B    | [num_words * word_dim]    | second input, a matrix where each row holds the values to be retrieved                        | dictionnary
+// B    | [num_words * word_dim]    | second input, a matrix where each row holds the values to be retrieved                        | dictionary
 // C    | [num_lookups * word_dim]  | output, a matrix where each row holds the retrieved values from B at index given in A         | output
 // ra   | [num_lookups * num_words] | used by sumchecks, each row holds the one-hot encoding of value held in A                     | ra
 
@@ -61,8 +61,8 @@ struct ReadValueProverState<F: JoltField> {
 }
 
 impl<F: JoltField> ReadValueProverState<F> {
-    fn new(dict_folded: Vec<F>, F: Vec<F>) -> Self {
-        let ra = MultilinearPolynomial::from(F);
+    fn new(dict_folded: Vec<F>, ra_folded: Vec<F>) -> Self {
+        let ra = MultilinearPolynomial::from(ra_folded);
         let dict_folded = MultilinearPolynomial::from(dict_folded);
 
         Self { ra, dict_folded }
@@ -87,12 +87,12 @@ impl<F: JoltField> ReadValueSumcheck<F> {
     pub fn new_prover<'a>(
         sm: &mut StateManager<'a, F, impl Transcript, impl CommitmentScheme<Field = F>>,
         read_addresses: Vec<usize>,
-        dictionnary_folded: Vec<F>,
-        F: Vec<F>,
+        dictionary_folded: Vec<F>,
+        ra_folded: Vec<F>,
         index: usize,
     ) -> Self {
         let num_lookups = read_addresses.len();
-        let num_words = dictionnary_folded.len();
+        let num_words = dictionary_folded.len();
 
         let (r_c, rv_claim_c) = sm.get_virtual_polynomial_opening(
             VirtualPolynomial::PrecompileC(index),
@@ -100,7 +100,7 @@ impl<F: JoltField> ReadValueSumcheck<F> {
         );
         let (r_x, r_y) = r_c.r.split_at(num_lookups.log_2());
 
-        let rv_prover_state = ReadValueProverState::new(dictionnary_folded, F);
+        let rv_prover_state = ReadValueProverState::new(dictionary_folded, ra_folded);
 
         Self {
             prover_state: Some(rv_prover_state),
@@ -810,8 +810,8 @@ struct RafProverState<F: JoltField> {
 }
 
 impl<F: JoltField> RafProverState<F> {
-    fn new(F: Vec<F>) -> Self {
-        let ra = MultilinearPolynomial::from(F);
+    fn new(ra_folded: Vec<F>) -> Self {
+        let ra = MultilinearPolynomial::from(ra_folded);
 
         Self { ra }
     }
@@ -834,11 +834,11 @@ impl<F: JoltField> RafSumcheck<F> {
     pub fn new_prover<'a>(
         sm: &mut StateManager<'a, F, impl Transcript, impl CommitmentScheme<Field = F>>,
         read_addresses: Vec<usize>,
-        F: Vec<F>,
+        ra_folded: Vec<F>,
         index: usize,
     ) -> Self {
         let num_lookups = read_addresses.len();
-        let num_words = F.len();
+        let num_words = ra_folded.len();
 
         let (r_x, rv_claim) = sm.get_virtual_polynomial_opening(
             VirtualPolynomial::PrecompileA(index),
@@ -846,7 +846,7 @@ impl<F: JoltField> RafSumcheck<F> {
         );
         assert_eq!(r_x.r.len(), num_lookups.log_2());
 
-        let raf_prover_state = RafProverState::new(F);
+        let raf_prover_state = RafProverState::new(ra_folded);
         let int = IdentityPolynomial::new(num_words.log_2());
 
         Self {
@@ -990,8 +990,8 @@ struct HwProverState<F: JoltField> {
 }
 
 impl<F: JoltField> HwProverState<F> {
-    fn new(F: Vec<F>) -> Self {
-        let ra = MultilinearPolynomial::from(F);
+    fn new(ra_folded: Vec<F>) -> Self {
+        let ra = MultilinearPolynomial::from(ra_folded);
 
         Self { ra }
     }
@@ -1013,7 +1013,7 @@ impl<F: JoltField> HwSumcheck<F> {
     pub fn new_prover<'a>(
         sm: &mut StateManager<'a, F, impl Transcript, impl CommitmentScheme<Field = F>>,
         num_words: usize,
-        F: Vec<F>,
+        ra_folded: Vec<F>,
         index: usize,
     ) -> Self {
         let (r_x, hw_claim) = sm.get_virtual_polynomial_opening(
@@ -1021,7 +1021,7 @@ impl<F: JoltField> HwSumcheck<F> {
             SumcheckId::GatherHB,
         );
 
-        let rv_hw_prover_state = HwProverState::new(F);
+        let rv_hw_prover_state = HwProverState::new(ra_folded);
 
         Self {
             prover_state: Some(rv_hw_prover_state),
@@ -1192,14 +1192,14 @@ mod tests {
             None,
         );
 
-        let F = compute_ra_evals(
+        let ra_folded = compute_ra_evals(
             &virtual_opening.r,
             &read_addresses_usize,
             num_words.next_power_of_two(),
         );
 
         let prover_booleanity_sumcheck =
-            BooleanitySumcheck::new_prover(prover_sm, read_addresses_usize, F, index);
+            BooleanitySumcheck::new_prover(prover_sm, read_addresses_usize, ra_folded, index);
 
         let verifier_booleanity_sumcheck = BooleanitySumcheck::new_verifier(
             verifier_sm,
@@ -1231,7 +1231,7 @@ mod tests {
         let test_io = random_gather(rng, max_num_lookups, max_num_words, max_word_dim);
 
         let (num_lookups, num_words, word_dim) = test_io.dims();
-        let (read_addresses, dictionnary, output) = test_io.values();
+        let (read_addresses, dictionary, output) = test_io.values();
 
         let read_addresses_usize: Vec<usize> = read_addresses
             .iter()
@@ -1252,10 +1252,10 @@ mod tests {
 
         let (r_x, r_y) = virtual_opening.r.split_at(num_lookups.log_2());
 
-        let F = compute_ra_evals(r_x, &read_addresses_usize, num_words.next_power_of_two());
+        let ra_folded = compute_ra_evals(r_x, &read_addresses_usize, num_words.next_power_of_two());
 
         let eq_r_y = EqPolynomial::evals(r_y);
-        let folded_dict: Vec<Fr> = dictionnary
+        let folded_dict: Vec<Fr> = dictionary
             .chunks(word_dim.next_power_of_two())
             .map(|word_vector| {
                 word_vector
@@ -1267,8 +1267,13 @@ mod tests {
             .collect();
         assert_eq!(folded_dict.len(), num_words.next_power_of_two());
 
-        let rv_prover_sumcheck =
-            ReadValueSumcheck::new_prover(prover_sm, read_addresses_usize, folded_dict, F, index);
+        let rv_prover_sumcheck = ReadValueSumcheck::new_prover(
+            prover_sm,
+            read_addresses_usize,
+            folded_dict,
+            ra_folded,
+            index,
+        );
 
         let rv_verifier_sumcheck = ReadValueSumcheck::new_verifier(
             verifier_sm,
@@ -1370,14 +1375,14 @@ mod tests {
             None,
         );
 
-        let F = compute_ra_evals(
+        let ra_folded = compute_ra_evals(
             &virtual_opening.r,
             &read_addresses_usize,
             num_words.next_power_of_two(),
         );
 
         let raf_prover_sumcheck =
-            RafSumcheck::new_prover(prover_sm, read_addresses_usize, F, index);
+            RafSumcheck::new_prover(prover_sm, read_addresses_usize, ra_folded, index);
 
         let raf_verifier_sumcheck = RafSumcheck::new_verifier(
             verifier_sm,
@@ -1431,14 +1436,14 @@ mod tests {
             None,
         );
 
-        let F = compute_ra_evals(
+        let ra_folded = compute_ra_evals(
             &virtual_opening.r,
             &read_addresses_usize,
             num_words.next_power_of_two(),
         );
 
         let hw_prover_sumcheck =
-            HwSumcheck::new_prover(prover_sm, num_words.next_power_of_two(), F, index);
+            HwSumcheck::new_prover(prover_sm, num_words.next_power_of_two(), ra_folded, index);
 
         let hw_verifier_sumcheck =
             HwSumcheck::new_verifier(verifier_sm, num_words.next_power_of_two(), index);
@@ -1453,11 +1458,11 @@ mod tests {
 
     #[test]
     fn test_booleanity() {
-        // Number of words to recover from the dictionnary
+        // Number of words to recover from the dictionary
         const NUM_LOOKUPS: usize = 1 << 10;
-        // Number of words in the dictionnary
+        // Number of words in the dictionary
         const NUM_WORDS: usize = 64;
-        // Number of dimensions per word of dictionnary
+        // Number of dimensions per word of dictionary
         const WORD_DIM: usize = 1 << 3;
 
         let (instances, openings) = test_gather_sumcheck(
@@ -1502,18 +1507,18 @@ mod tests {
 
     #[test]
     fn test_rv() {
-        // Number of words to recover from the dictionnary
+        // Number of words to recover from the dictionary
         const NUM_LOOKUPS: usize = 1 << 10;
-        // Number of words in the dictionnary
+        // Number of words in the dictionary
         const NUM_WORDS: usize = 64;
-        // Number of dimensions per word of dictionnary
+        // Number of dimensions per word of dictionary
         const WORD_DIM: usize = 1 << 3;
 
         let (instances, openings) =
             test_gather_sumcheck(rv_instances, (NUM_LOOKUPS, NUM_WORDS, WORD_DIM), 123456, 10);
 
         for (i, instance) in instances.into_iter().enumerate() {
-            let (read_addresses, dictionnary, _) = instance.values();
+            let (read_addresses, dictionary, _) = instance.values();
             let (num_lookups, num_words, _) = instance.dims();
 
             let read_addresses_usize: Vec<usize> = read_addresses
@@ -1549,18 +1554,18 @@ mod tests {
                 ))
                 .expect("PrecompileB(index) should be set");
 
-            let exp_claim = MultilinearPolynomial::from(dictionnary.clone()).evaluate(&r.r);
+            let exp_claim = MultilinearPolynomial::from(dictionary.clone()).evaluate(&r.r);
             assert_eq!(*claim, exp_claim);
         }
     }
 
     #[test]
     fn test_hb() {
-        // Number of words to recover from the dictionnary
+        // Number of words to recover from the dictionary
         const NUM_LOOKUPS: usize = 1 << 10;
-        // Number of words in the dictionnary
+        // Number of words in the dictionary
         const NUM_WORDS: usize = 64;
-        // Number of dimensions per word of dictionnary
+        // Number of dimensions per word of dictionary
         const WORD_DIM: usize = 1 << 3;
 
         let (instances, openings) =
@@ -1586,11 +1591,11 @@ mod tests {
 
     #[test]
     fn test_raf_eval() {
-        // Number of words to recover from the dictionnary
+        // Number of words to recover from the dictionary
         const NUM_LOOKUPS: usize = 1 << 10;
-        // Number of words in the dictionnary
+        // Number of words in the dictionary
         const NUM_WORDS: usize = 64;
-        // Number of dimensions per word of dictionnary
+        // Number of dimensions per word of dictionary
         const WORD_DIM: usize = 1 << 3;
 
         let (instances, openings) = test_gather_sumcheck(
@@ -1634,11 +1639,11 @@ mod tests {
 
     #[test]
     fn test_hw() {
-        // Number of words to recover from the dictionnary
+        // Number of words to recover from the dictionary
         const NUM_LOOKUPS: usize = 1 << 10;
-        // Number of words in the dictionnary
+        // Number of words in the dictionary
         const NUM_WORDS: usize = 64;
-        // Number of dimensions per word of dictionnary
+        // Number of dimensions per word of dictionary
         const WORD_DIM: usize = 1 << 3;
 
         let (instances, openings) =

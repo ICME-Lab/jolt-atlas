@@ -46,80 +46,6 @@ pub mod test;
 //
 // NOTE: For now this looks messy, but I am pretty sure if we iterate on this we could actually create a new way to batch sumchecks,
 // while keeping simple individual sumchecks to audit/test
-pub struct ExecutionProof {}
-
-impl ExecutionProof {
-    #[tracing::instrument(skip_all, name = "ShoutProof::prove")]
-    pub fn gather_prover_instance<
-        'a,
-        F: JoltField,
-        PT: Transcript,
-        PCS: CommitmentScheme<Field = F>,
-    >(
-        sm: &mut StateManager<'a, F, PT, PCS>,
-        read_addresses: Vec<usize>,
-        dictionnary: Vec<F>,
-        word_dim: usize,
-        index: usize,
-    ) -> Box<dyn SumcheckInstance<F>> {
-        let num_lookups = read_addresses.len();
-        let num_lookups_padded = num_lookups.next_power_of_two();
-        let num_words_padded = dictionnary.len() / word_dim; // dictionnary is a num_words * word_dim matrix
-        assert!(num_words_padded.is_power_of_two());
-
-        // Recover challenge built during previous sumcheck
-        let (r_c, _) = sm.get_virtual_polynomial_opening(
-            VirtualPolynomial::PrecompileC(index),
-            SumcheckId::PrecompileExecution,
-        );
-
-        let (r_x, r_y) = r_c.split_at(num_lookups_padded.log_2());
-        assert_eq!(r_y.len(), word_dim.log_2());
-
-        let F = compute_ra_evals(&r_x.r, &read_addresses, num_words_padded);
-
-        let eq_r_y = EqPolynomial::evals(&r_y.r);
-        // dictionnary, folded to a single column
-        let dictionnary_folded: Vec<F> = dictionnary
-            .chunks(word_dim)
-            .map(|B_chunk| {
-                B_chunk
-                    .iter()
-                    .zip_eq(eq_r_y.iter())
-                    .map(|(&b, &e)| b * e)
-                    .sum()
-            })
-            .collect();
-        assert_eq!(dictionnary_folded.len(), num_words_padded);
-
-        let execution_instance =
-            ExecutionSumcheck::init_prover(sm, read_addresses, dictionnary_folded, F, index);
-
-        Box::new(execution_instance)
-    }
-
-    pub fn gather_verifier_instance<
-        'a,
-        F: JoltField,
-        PT: Transcript,
-        PCS: CommitmentScheme<Field = F>,
-    >(
-        sm: &mut StateManager<'a, F, PT, PCS>,
-        num_lookups: usize,
-        dictionnary_length_padded: usize,
-        word_dim_padded: usize,
-        index: usize,
-    ) -> Box<dyn SumcheckInstance<F>> {
-        let num_words_padded = dictionnary_length_padded / word_dim_padded;
-        assert!(num_words_padded.is_power_of_two());
-
-        let execution_instance =
-            ExecutionSumcheck::init_verifier(sm, num_lookups, num_words_padded, index);
-
-        Box::new(execution_instance)
-    }
-}
-
 pub struct ExecutionSumcheck<F: JoltField> {
     booleanity: BooleanitySumcheck<F>,
     hb: HammingBooleanitySumcheck<F>,
@@ -127,9 +53,10 @@ pub struct ExecutionSumcheck<F: JoltField> {
     rv: ReadValueSumcheck<F>,
     // folding challenge for different sumchecks
     claims: [F; 4],
+    // Univariate polynomials built from last round for each sumcheck
     unipolys: [UniPoly<F>; 4],
     gamma_powers: Vec<F>,
-    // Number of variables for resp, lookups and words dimensions of sumcheck
+    // Number of variables for lookups and words dimensions of sumcheck
     lookups_vars: usize,
     words_vars: usize,
 }
@@ -154,7 +81,7 @@ impl<F: JoltField> ExecutionSumcheck<F> {
             .map(|&x| x as usize)
             .take(num_lookups)
             .collect();
-        let dictionnary = pp.extract_rv(final_memory_state, |m| &m.b_addr);
+        let dictionary = pp.extract_rv(final_memory_state, |m| &m.b_addr);
         let output = pp.extract_rv(final_memory_state, |m| &m.c_addr);
 
         let r_c: Vec<F> = sm
@@ -182,11 +109,11 @@ impl<F: JoltField> ExecutionSumcheck<F> {
         );
         assert_eq!(r_y.len(), word_dim_padded.log_2());
 
-        let F = compute_ra_evals(r_x, &read_addresses_usize, num_words_padded);
+        let ra_folded = compute_ra_evals(r_x, &read_addresses_usize, num_words_padded);
 
         let eq_r_y = EqPolynomial::evals(r_y);
-        // dictionnary, folded to a single column
-        let dictionnary_folded: Vec<F> = dictionnary
+        // dictionary, folded to a single column
+        let dictionary_folded: Vec<F> = dictionary
             .chunks(word_dim_padded)
             .map(|B_chunk| {
                 B_chunk
@@ -196,26 +123,33 @@ impl<F: JoltField> ExecutionSumcheck<F> {
                     .sum()
             })
             .collect();
-        assert_eq!(dictionnary_folded.len(), num_words_padded);
+        assert_eq!(dictionary_folded.len(), num_words_padded);
 
-        Self::init_prover(sm, read_addresses_usize, dictionnary_folded, F, index)
+        Self::init_prover(
+            sm,
+            read_addresses_usize,
+            dictionary_folded,
+            ra_folded,
+            index,
+        )
     }
 
     pub fn init_prover<'a>(
         sm: &mut StateManager<'a, F, impl Transcript, impl CommitmentScheme<Field = F>>,
         read_addresses: Vec<usize>,
-        dictionnary_folded: Vec<F>,
-        F: Vec<F>,
+        dictionary_folded: Vec<F>,
+        ra_folded: Vec<F>,
         index: usize,
     ) -> Self {
         let lookups_vars = read_addresses.len().log_2();
-        let words_vars = dictionnary_folded.len().log_2();
+        let words_vars = dictionary_folded.len().log_2();
 
         let booleanity =
-            BooleanitySumcheck::new_prover(sm, read_addresses.clone(), F.clone(), index);
+            BooleanitySumcheck::new_prover(sm, read_addresses.clone(), ra_folded.clone(), index);
         let hb = HammingBooleanitySumcheck::new_prover(sm, read_addresses.clone(), index);
-        let raf = RafSumcheck::new_prover(sm, read_addresses.clone(), F.clone(), index);
-        let rv = ReadValueSumcheck::new_prover(sm, read_addresses, dictionnary_folded, F, index);
+        let raf = RafSumcheck::new_prover(sm, read_addresses.clone(), ra_folded.clone(), index);
+        let rv =
+            ReadValueSumcheck::new_prover(sm, read_addresses, dictionary_folded, ra_folded, index);
         let claims = [
             booleanity.input_claim(),
             hb.input_claim(),
@@ -604,12 +538,10 @@ where
 
 #[cfg(test)]
 mod tests {
-
     use crate::jolt::{
         pcs::OpeningId,
-        precompiles::gather::{
-            ExecutionProof,
-            test::{TestInstance, VirtualOpening, random_gather, test_gather_sumcheck},
+        precompiles::gather::test::{
+            TestInstance, VirtualOpening, random_gather, test_gather_sumcheck,
         },
     };
 
@@ -633,8 +565,8 @@ mod tests {
     {
         let test_io = random_gather(rng, max_num_lookups, max_num_words, max_word_dim);
 
-        let (num_lookups, _, word_dim) = test_io.dims();
-        let (read_addresses, dictionnary, output) = test_io.values();
+        let (num_lookups, num_words, word_dim) = test_io.dims();
+        let (read_addresses, dictionary, output) = test_io.values();
 
         let read_addresses_usize: Vec<usize> = read_addresses
             .iter()
@@ -655,7 +587,9 @@ mod tests {
             None,
         );
 
-        let (r_x, _) = opening_c.r.split_at(num_lookups.log_2());
+        let (r_x, r_y) = opening_c.r.split_at(num_lookups.log_2());
+        let r_x = r_x.to_vec();
+        let r_y = r_y.to_vec();
 
         let opening_a = VirtualOpening::initial_claim(
             prover_sm,
@@ -669,24 +603,43 @@ mod tests {
         virtual_openings.push(opening_c);
         virtual_openings.push(opening_a);
 
-        let prover_instance = ExecutionProof::gather_prover_instance(
+        assert_eq!(r_y.len(), word_dim.log_2());
+
+        let ra_folded =
+            compute_ra_evals(&r_x, &read_addresses_usize, num_words.next_power_of_two());
+
+        let eq_r_y = EqPolynomial::evals(&r_y);
+        // dictionary, folded to a single column
+        let dictionary_folded: Vec<Fr> = dictionary
+            .chunks(word_dim)
+            .map(|B_chunk| {
+                B_chunk
+                    .iter()
+                    .zip_eq(eq_r_y.iter())
+                    .map(|(&b, &e)| b * e)
+                    .sum()
+            })
+            .collect();
+        assert_eq!(dictionary_folded.len(), num_words.next_power_of_two());
+
+        let prover_instance = ExecutionSumcheck::init_prover(
             prover_sm,
             read_addresses_usize,
-            dictionnary.clone(),
-            word_dim.next_power_of_two(),
+            dictionary_folded,
+            ra_folded,
             index,
         );
-        let verifier_instance = ExecutionProof::gather_verifier_instance(
+
+        let verifier_instance = ExecutionSumcheck::init_verifier(
             verifier_sm,
             num_lookups,
-            dictionnary.len(),
-            word_dim.next_power_of_two(),
+            num_words.next_power_of_two(),
             index,
         );
 
         TestInstance::new(
-            prover_instance,
-            verifier_instance,
+            Box::new(prover_instance),
+            Box::new(verifier_instance),
             virtual_openings,
             test_io,
         )
@@ -694,11 +647,11 @@ mod tests {
 
     #[test]
     fn test_execution_proof() {
-        // Number of words to recover from the dictionnary
+        // Number of words to recover from the dictionary
         const NUM_LOOKUPS: usize = 1 << 10;
-        // Number of words in the dictionnary
+        // Number of words in the dictionary
         const NUM_WORDS: usize = 64;
-        // Number of dimensions per word of dictionnary
+        // Number of dimensions per word of dictionary
         const WORD_DIM: usize = 1 << 3;
 
         let (instances, openings) = test_gather_sumcheck(
@@ -709,7 +662,7 @@ mod tests {
         );
 
         for (i, instance) in instances.into_iter().enumerate() {
-            let (read_addresses, dictionnary, _) = instance.values();
+            let (read_addresses, dictionary, _) = instance.values();
             let (num_lookups, num_words, _) = instance.dims();
 
             let read_addresses_usize: Vec<usize> = read_addresses
@@ -787,7 +740,7 @@ mod tests {
                 ))
                 .expect("PrecompileB(index) should be set");
 
-            let exp_claim = MultilinearPolynomial::from(dictionnary.clone()).evaluate(&r.r);
+            let exp_claim = MultilinearPolynomial::from(dictionary.clone()).evaluate(&r.r);
             assert_eq!(*claim, exp_claim);
         }
     }

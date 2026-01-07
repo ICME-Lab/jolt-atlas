@@ -1,5 +1,7 @@
 //! Helpers for tracing model execution and inspecting per-node tensors.
 
+use serde::{Deserialize, Serialize};
+
 use crate::{model::Model, node::ComputationNode, tensor::Tensor};
 use std::{collections::BTreeMap, ops::Index};
 
@@ -10,6 +12,7 @@ impl Model {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// Captures intermediate node outputs from a model run.
 pub struct Trace {
     pub node_outputs: BTreeMap<usize, Tensor<i32>>,
@@ -21,25 +24,35 @@ impl Trace {
         Self { node_outputs }
     }
 
-    /// Build a view of a specific node, including its inputs and output.
-    pub fn layer_data<'a>(&'a self, model: &'a Model, node_index: usize) -> LayerData<'a> {
-        let computation_node = &model[node_index];
-        let layer_output = &self[node_index];
-        let input_tensors = self.input_tensors(computation_node);
-        LayerData {
-            computation_node,
-            layer_output,
-            input_tensors,
-        }
+    /// Build a trace view of a specific node/layer -> its inputs and output.
+    pub fn layer_data<'a>(&'a self, computation_node: &ComputationNode) -> LayerData<'a> {
+        let output = &self[computation_node.idx];
+        let operands = self.operand_tensors(computation_node);
+        LayerData { output, operands }
     }
 
     /// Return all input tensors feeding the provided computation node.
-    pub fn input_tensors(&self, computation_node: &ComputationNode) -> Vec<&Tensor<i32>> {
+    pub fn operand_tensors(&self, computation_node: &ComputationNode) -> Vec<&Tensor<i32>> {
         computation_node
             .inputs
             .iter()
             .map(|&input_node_idx| self.node_outputs.get(&input_node_idx).unwrap())
             .collect()
+    }
+
+    /// Construct an [ModelExecutionIO] instance
+    pub fn io(&self, model: &Model) -> ModelExecutionIO {
+        let inputs = model
+            .inputs()
+            .iter()
+            .map(|&idx| self.node_outputs[&idx].clone())
+            .collect();
+        let outputs = model
+            .outputs()
+            .iter()
+            .map(|&idx| self.node_outputs[&idx].clone())
+            .collect();
+        ModelExecutionIO { inputs, outputs }
     }
 }
 
@@ -59,9 +72,13 @@ impl Index<usize> for Model {
     }
 }
 
-/// Metadata, inputs, and output for a single computation node.
+/// Metadata, operands, and output for a single computation node.
 pub struct LayerData<'a> {
-    pub computation_node: &'a ComputationNode,
-    pub layer_output: &'a Tensor<i32>,
-    pub input_tensors: Vec<&'a Tensor<i32>>,
+    pub output: &'a Tensor<i32>,
+    pub operands: Vec<&'a Tensor<i32>>,
+}
+
+pub struct ModelExecutionIO {
+    pub inputs: Vec<Tensor<i32>>,
+    pub outputs: Vec<Tensor<i32>>,
 }

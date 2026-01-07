@@ -24,11 +24,11 @@ use crate::{
     },
     transcripts::{AppendToTranscript, Transcript},
     utils::{errors::ProofVerifyError, small_scalar::SmallScalar},
-    witness::CommittedPolynomial,
 };
 use ark_ec::{pairing::Pairing, AffineRepr, CurveGroup};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{One, Zero};
+use common::CommittedPolynomial;
 use rand_chacha::ChaCha20Rng;
 use rand_core::{CryptoRng, RngCore, SeedableRng};
 use rayon::iter::{
@@ -173,7 +173,7 @@ where
 
     let B = if has_one_hot {
         // Use RLCPolynomial::linear_combination for mixed dense + one-hot polynomials
-        let dummy_poly_ids = vec![CommittedPolynomial::RdInc; f_arc.len()];
+        let dummy_poly_ids = vec![CommittedPolynomial::NodeOutputRa(0); f_arc.len()];
         let rlc_result = RLCPolynomial::linear_combination(dummy_poly_ids, f_arc, &q_powers);
         MultilinearPolynomial::RLC(rlc_result)
     } else {

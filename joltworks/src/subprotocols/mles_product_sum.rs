@@ -1,6 +1,9 @@
 use crate::{
     field::{BarrettReduce, FMAdd, JoltField},
-    poly::{ra_poly::RaPolynomial, split_eq_poly::GruenSplitEqPolynomial, unipoly::UniPoly},
+    poly::{
+        multilinear_polynomial::MultilinearPolynomial, ra_poly::RaPolynomial,
+        split_eq_poly::GruenSplitEqPolynomial, unipoly::UniPoly,
+    },
     utils::accumulation::Acc5S,
 };
 use core::{mem::MaybeUninit, ptr};
@@ -28,6 +31,25 @@ pub fn compute_mles_product_sum<F: JoltField>(
         // Generic split-eq fold for all other arities.
         _ => compute_mles_product_sum_evals_generic(mles, eq_poly),
     };
+
+    finish_mles_product_sum_from_evals(&sum_evals, claim, eq_poly)
+}
+
+/// Computes the univariate polynomial `g(X) = sum_j eq((r', X, j), r) * prod_i mle_i(X, j)`.
+///
+/// Note `claim` should equal `g(0) + g(1)`.
+pub fn compute_mle_product_sum<F: JoltField>(
+    d: usize,
+    mle: &MultilinearPolynomial<F>,
+    claim: F,
+    eq_poly: &GruenSplitEqPolynomial<F>,
+) -> UniPoly<F> {
+    // Evaluate g(X) / eq(X, r[round]) at [1, 2, ..., |mles| - 1, ∞] using split-eq fold.
+    //
+    // We dispatch on `d` to allow specialized fast paths (e.g., the fully
+    // stack-allocated `d = 16` implementation) while keeping the final
+    // interpolation logic centralized.
+    let sum_evals: Vec<F> = compute_mle_product_sum_evals_generic(d, mle, eq_poly);
 
     finish_mles_product_sum_from_evals(&sum_evals, claim, eq_poly)
 }
@@ -69,6 +91,79 @@ fn compute_mles_product_sum_evals_generic<F: JoltField>(
             |inner, g, _x_in, e_in| {
                 // Build per-g pairs [(p0, p1); D] in-place, reusing `inner.pairs`.
                 for (idx, mle) in mles.iter().enumerate() {
+                    let p0 = mle.get_bound_coeff(2 * g);
+                    let p1 = mle.get_bound_coeff(2 * g + 1);
+                    inner.pairs[idx] = (p0, p1);
+                }
+
+                // Compute endpoints on the evaluation grid into the scratch
+                // `endpoints` buffer. All entries are overwritten, so no need
+                // to zero between uses.
+                eval_linear_prod_assign(&inner.pairs, &mut inner.endpoints);
+
+                // Accumulate with unreduced arithmetic
+                for k in 0..d {
+                    inner.lanes[k] += e_in.mul_unreduced::<9>(inner.endpoints[k]);
+                }
+            },
+            |_x_out, e_out, mut inner| {
+                // Reduce inner lanes, scale by e_out (unreduced), and reuse the
+                // existing `lanes` allocation as the outer accumulator
+                // `Vec<F::Unreduced<9>>`, avoiding an extra allocation.
+                for k in 0..d {
+                    let reduced_k = F::from_montgomery_reduce::<9>(inner.lanes[k]);
+                    inner.lanes[k] = e_out.mul_unreduced::<9>(reduced_k);
+                }
+                inner.lanes
+            },
+            |mut a, b| {
+                for k in 0..d {
+                    a[k] += b[k];
+                }
+                a
+            },
+        )
+        .into_iter()
+        .map(|x| F::from_montgomery_reduce::<9>(x) * current_scalar)
+        .collect()
+}
+
+/// Generic implementation of the split-eq fold that computes the evaluations
+/// of `g(X) / eq(X, r[round])` on the grid `[1, 2, ..., d - 1, ∞]` for
+/// arbitrary `d`.
+#[inline]
+fn compute_mle_product_sum_evals_generic<F: JoltField>(
+    d: usize,
+    mle: &MultilinearPolynomial<F>,
+    eq_poly: &GruenSplitEqPolynomial<F>,
+) -> Vec<F> {
+    /// Per-`x_out` accumulator used inside `par_fold_out_in`.
+    ///
+    /// - `lanes[k]` accumulates the unreduced contribution for output lane `k`.
+    /// - `pairs` and `endpoints` are scratch buffers reused across all `g`
+    ///   values for a given `x_out`, to avoid repeated heap allocations.
+    struct InnerAcc<F: JoltField> {
+        lanes: Vec<F::Unreduced<9>>,
+        pairs: Vec<(F, F)>,
+        endpoints: Vec<F>,
+    }
+
+    let current_scalar = eq_poly.get_current_scalar();
+    eq_poly
+        .par_fold_out_in(
+            // Allocate one InnerAcc per `x_out` lane; its scratch buffers are
+            // reused across all inner `g` contributions for that lane.
+            //
+            // Note: `pairs` and `endpoints` are pre-sized to length `d` so that
+            // we can update them by index without changing their length.
+            || InnerAcc {
+                lanes: vec![F::Unreduced::<9>::zero(); d],
+                pairs: vec![(F::zero(), F::zero()); d],
+                endpoints: vec![F::zero(); d],
+            },
+            |inner, g, _x_in, e_in| {
+                // Build per-g pairs [(p0, p1); D] in-place, reusing `inner.pairs`.
+                for idx in 0..d {
                     let p0 = mle.get_bound_coeff(2 * g);
                     let p1 = mle.get_bound_coeff(2 * g + 1);
                     inner.pairs[idx] = (p0, p1);

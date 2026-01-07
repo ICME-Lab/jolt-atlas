@@ -6,6 +6,7 @@ use crate::utils::{
     quantize,
 };
 use maybe_rayon::iter::ParallelIterator;
+use rand::{RngCore, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::max,
@@ -140,6 +141,7 @@ tensor_type!(bool, Bool, false, true);
 tensor_type!(i128, Int128, 0, 1);
 tensor_type!(u128, UInt128, 0, 1);
 tensor_type!(i32, Int32, 0, 1);
+tensor_type!(u32, UInt32, 0, 1);
 tensor_type!(i64, Int64, 0, 1);
 tensor_type!(usize, USize, 0, 1);
 tensor_type!((), Empty, (), ());
@@ -149,6 +151,37 @@ tensor_type!(
     utils::f32::F32(0.0),
     utils::f32::F32(1.0)
 );
+
+impl Tensor<i32> {
+    /// Create a random tensor give the dims
+    pub fn random(rng: &mut StdRng, dims: &[usize]) -> Self {
+        let data: Vec<i32> = (0..dims.iter().product())
+            .map(|_| rng.next_u32() as i32)
+            .collect();
+        Tensor::new(Some(&data), dims).unwrap()
+    }
+
+    /// Create a random tensor give the dims
+    pub fn random_small(rng: &mut StdRng, dims: &[usize]) -> Self {
+        let data: Vec<i32> = (0..dims.iter().product())
+            .map(|_| rng.next_u32() as i8 as i32)
+            .collect();
+        Tensor::new(Some(&data), dims).unwrap()
+    }
+
+    /// Create a random boolean tensor give the dims
+    pub fn random_boolean(rng: &mut StdRng, dims: &[usize]) -> Self {
+        let data: Vec<i32> = (0..dims.iter().product())
+            .map(|_| (rng.next_u32() % 2) as i32)
+            .collect();
+        Tensor::new(Some(&data), dims).unwrap()
+    }
+
+    pub fn into_container_data(&self) -> Tensor<u32> {
+        let data: Vec<u32> = self.data().iter().map(|d| *d as u32).collect();
+        Tensor::construct(data, self.dims().to_vec())
+    }
+}
 
 impl<T: TensorType> TensorType for Tensor<T> {
     fn zero() -> Option<Self> {

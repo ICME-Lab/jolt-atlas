@@ -5,7 +5,7 @@ use std::borrow::Borrow;
 
 pub trait Transcript: Default + Clone + Sync + Send + 'static {
     fn new(label: &'static [u8]) -> Self;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-transcript"))]
     fn compare_to(&mut self, other: Self);
     fn append_message(&mut self, msg: &'static [u8]);
     fn append_bytes(&mut self, bytes: &[u8]);

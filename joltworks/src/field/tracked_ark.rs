@@ -12,6 +12,7 @@ use crate::utils::counters::{
     FROM_BOOL_COUNT,
     FROM_BYTES_COUNT,
     FROM_I128_COUNT,
+    FROM_I32_COUNT,
     FROM_I64_COUNT,
     FROM_U128_COUNT,
     FROM_U16_COUNT,
@@ -34,17 +35,16 @@ use crate::utils::counters::{
 };
 use allocative::Allocative;
 use ark_bn254::Fr;
-use ark_ff::BigInt;
-use ark_ff::UniformRand;
-use ark_ff::{One, Zero};
+use ark_ff::{BigInt, One, UniformRand, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::rand::Rng;
-use std::default::Default;
-use std::fmt;
-use std::iter::{Product, Sum};
-use std::ops::{Add, Deref, DerefMut, Div, Mul, Sub};
-use std::ops::{AddAssign, MulAssign, Neg, SubAssign};
-use std::sync::atomic::Ordering;
+use std::{
+    default::Default,
+    fmt,
+    iter::{Product, Sum},
+    ops::{Add, AddAssign, Deref, DerefMut, Div, Mul, MulAssign, Neg, Sub, SubAssign},
+    sync::atomic::Ordering,
+};
 
 #[derive(
     Clone, Default, Copy, PartialEq, Eq, Hash, Debug, CanonicalSerialize, CanonicalDeserialize,
@@ -363,6 +363,11 @@ impl JoltField for TrackedFr {
         TrackedFr(<ark_bn254::Fr as JoltField>::from_u64(n))
     }
 
+    fn from_i32(n: i32) -> Self {
+        FROM_I32_COUNT.fetch_add(1, Ordering::Relaxed);
+        TrackedFr(<ark_bn254::Fr as JoltField>::from_i32(n))
+    }
+
     fn from_i64(n: i64) -> Self {
         FROM_I64_COUNT.fetch_add(1, Ordering::Relaxed);
         TrackedFr(<ark_bn254::Fr as JoltField>::from_i64(n))
@@ -462,10 +467,11 @@ impl TrackedFr {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::op_ref)]
-    use crate::field::tracked_ark::TrackedFr as Fr;
-    use crate::field::{JoltField, OptimizedMul};
-    use crate::utils::counters::{
-        get_inverse_count, get_mult_count, reset_inverse_count, reset_mult_count,
+    use crate::{
+        field::{tracked_ark::TrackedFr as Fr, JoltField, OptimizedMul},
+        utils::counters::{
+            get_inverse_count, get_mult_count, reset_inverse_count, reset_mult_count,
+        },
     };
     use std::ops::MulAssign;
 

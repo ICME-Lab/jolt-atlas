@@ -7,6 +7,21 @@ edition = "2021"
 monitor = ["dep:sysinfo"]
 allocative = ["dep:inferno"]
 challenge-254-bit = []
+test-transcript = []
+
+[profile.test]
+opt-level = 3
+lto = "off"
+
+[profile.release]
+debug = 1
+lto = "fat"
+
+[profile.build-fast]
+inherits = "release"
+incremental = true
+lto = "off"
+overflow-checks = true
 
 [patch.crates-io]
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
@@ -16,6 +31,10 @@ ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "de
 allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
 
 [dependencies]
+# Internal dependencies
+common = { path = "../common" }
+atlas-onnx-tracer = { path = "../atlas-onnx-tracer" }
+
 # Cryptography and Math
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }
 ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }

@@ -1,3 +1,39 @@
+//! Graph parser for converting tract-onnx representations to internal computation nodes.
+//!
+//! This module provides the core parsing infrastructure for transforming ONNX models
+//! (via tract-onnx) into the internal computation graph representation used by the tracer.
+//!
+//! # Overview
+//!
+//! The parsing process involves:
+//! - Converting tract nodes to internal `ComputationNode`s
+//! - Handling node decomposition (e.g., complex ops split into multiple nodes)
+//! - Managing index mappings between ONNX and internal representations
+//! - Resolving symbolic dimensions and dynamic shapes
+//!
+//! # Key Components
+//!
+//! - [`GraphParser`]: Main parser orchestrating the transformation process
+//! - [`NodeIndexMapper`]: Tracks mappings between ONNX and internal node indices
+//! - [`DecompositionBuilder`]: Helper for building multi-node decompositions
+//! - [`ParsingContext`]: Mutable state accumulating nodes during parsing
+//!
+//! # Example Flow
+//!
+//! ```text
+//! ONNX Graph (tract-onnx)
+//!     ↓
+//! GraphParser::parse()
+//!     ↓
+//! For each node:
+//!   - Resolve inputs via NodeIndexMapper
+//!   - Invoke operator handler
+//!   - Handler may use DecompositionBuilder for multi-node ops
+//!   - Register mapping in ParsingContext
+//!     ↓
+//! Internal Computation Graph
+//! ```
+
 use crate::{
     model::RunArgs,
     node::{
@@ -13,13 +49,28 @@ use tract_onnx::{
     tract_hir::ops::scan::Scan,
 };
 
+/// Parser for converting tract ONNX graphs into internal computation nodes.
+///
+/// This parser orchestrates the transformation of a tract-onnx graph representation
+/// into our internal graph structure, handling node decomposition, index mapping,
+/// and operator-specific transformations.
 pub struct GraphParser<'a> {
+    /// The tract-onnx graph being parsed
     graph: &'a Graph<TypedFact, Box<dyn TypedOp>>,
+    /// Runtime arguments for the model execution
     run_args: &'a RunArgs,
+    /// Resolved symbol values for dynamic shapes
     symbol_values: &'a SymbolValues,
 }
 
 impl<'a> GraphParser<'a> {
+    /// Creates a new graph parser.
+    ///
+    /// # Arguments
+    ///
+    /// * `graph` - The tract-onnx graph to parse
+    /// * `run_args` - Runtime arguments for model execution
+    /// * `symbol_values` - Resolved values for symbolic dimensions
     pub fn new(
         graph: &'a Graph<TypedFact, Box<dyn TypedOp>>,
         run_args: &'a RunArgs,
@@ -32,7 +83,16 @@ impl<'a> GraphParser<'a> {
         }
     }
 
-    /// Main entry point - orchestrates the entire parsing process
+    /// Main entry point - orchestrates the entire parsing process.
+    ///
+    /// Iterates through all nodes in the tract graph, transforms them into
+    /// computation nodes, and builds the index mapping.
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing:
+    /// * A map of internal node indices to computation nodes
+    /// * A mapper tracking the relationship between original and internal indices
     pub fn parse(self) -> (BTreeMap<usize, ComputationNode>, NodeIndexMapper) {
         // nodes
         let mut context = ParsingContext::new();
@@ -45,6 +105,12 @@ impl<'a> GraphParser<'a> {
         (context.nodes, context.mapper)
     }
 
+    /// Visits a single node and processes it.
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The tract node to visit
+    /// * `context` - Mutable parsing context for accumulating results
     fn visit_node(
         &self,
         node: TractNode<TypedFact, Box<dyn TypedOp>>,
@@ -53,6 +119,15 @@ impl<'a> GraphParser<'a> {
         self.update_graph(context, node);
     }
 
+    /// Updates the internal graph with a tract node.
+    ///
+    /// Determines whether the node contains a subgraph (Scan operation) or is
+    /// a regular node, and routes to the appropriate handler.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - Mutable parsing context
+    /// * `node` - The tract node to process
     pub fn update_graph(
         &self,
         ctx: &mut ParsingContext,
@@ -69,6 +144,15 @@ impl<'a> GraphParser<'a> {
         }
     }
 
+    /// Updates the graph with a regular (non-subgraph) node.
+    ///
+    /// Converts the tract node into one or more computation nodes and registers
+    /// the mapping in the context.
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The tract node to process
+    /// * `ctx` - Mutable parsing context
     pub fn update_graph_with_node(
         &self,
         node: TractNode<TypedFact, Box<dyn TypedOp>>,
@@ -81,6 +165,20 @@ impl<'a> GraphParser<'a> {
         ctx.mapper.register_direct(onnx_node_idx, last_idx);
     }
 
+    /// Converts a tract node into a vector of computation nodes.
+    ///
+    /// This method resolves input dependencies, fetches input nodes, determines
+    /// output shapes, and invokes the appropriate operator handler to generate
+    /// the computation node(s).
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The tract node to convert
+    /// * `ctx` - Mutable parsing context
+    ///
+    /// # Returns
+    ///
+    /// A vector of computation nodes (may be multiple if the operator decomposes)
     fn tract_node_to_computation_nodes(
         &self,
         node: TractNode<TypedFact, Box<dyn TypedOp>>,
@@ -105,7 +203,16 @@ impl<'a> GraphParser<'a> {
         handler(&mut handler_ctx)
     }
 
-    /// Resolves the internal indices for all input nodes of the given tract node
+    /// Resolves the internal indices for all input nodes of the given tract node.
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The tract node whose inputs to resolve
+    /// * `ctx` - Parsing context containing the index mapper
+    ///
+    /// # Returns
+    ///
+    /// A vector of internal node indices corresponding to the node's inputs
     fn resolve_input_indices(
         &self,
         node: &TractNode<TypedFact, Box<dyn TypedOp>>,
@@ -122,7 +229,16 @@ impl<'a> GraphParser<'a> {
             .collect()
     }
 
-    /// Fetches the computation nodes corresponding to the given internal indices
+    /// Fetches the computation nodes corresponding to the given internal indices.
+    ///
+    /// # Arguments
+    ///
+    /// * `indices` - The internal node indices to fetch
+    /// * `ctx` - Parsing context containing the node map
+    ///
+    /// # Returns
+    ///
+    /// A vector of cloned computation nodes
     fn fetch_input_nodes(&self, indices: &[usize], ctx: &ParsingContext) -> Vec<ComputationNode> {
         indices
             .iter()
@@ -130,7 +246,22 @@ impl<'a> GraphParser<'a> {
             .collect()
     }
 
-    /// Retrieves the handler function for the node's operator
+    /// Retrieves the handler function for the node's operator.
+    ///
+    /// Looks up the operator name in the global HANDLERS registry and returns
+    /// the corresponding handler function.
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The tract node whose operator handler to retrieve
+    ///
+    /// # Returns
+    ///
+    /// A reference to the handler function
+    ///
+    /// # Panics
+    ///
+    /// Panics if the operator is not implemented
     fn get_operator_handler(
         &self,
         node: &TractNode<TypedFact, Box<dyn TypedOp>>,
@@ -138,15 +269,37 @@ impl<'a> GraphParser<'a> {
         let op_name = node.op().name();
         HANDLERS
             .get(op_name.as_ref())
-            .unwrap_or_else(|| panic!("Unsupported ONNX operator: {op_name}"))
+            .unwrap_or_else(|| unimplemented!("Unimplemented ONNX operator: {op_name}"))
     }
 
+    /// Updates the graph with a subgraph (Scan operation).
+    ///
+    /// # Arguments
+    ///
+    /// * `_scan_op` - The Scan operation containing the subgraph
+    /// * `_context` - Mutable parsing context
+    ///
+    /// # Panics
+    ///
+    /// Currently unimplemented and will panic if called
     fn update_graph_with_subgraph(&self, _scan_op: &Scan, _context: &mut ParsingContext) {
         unimplemented!("Sub-graphs (Scan) are not yet supported");
     }
 
-    /// Panics
-    /// Panics if more than one output, for now we only support single-output nodes
+    /// Extracts the output shape of a tract node.
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The tract node to extract the shape from
+    /// * `symbol_values` - Resolved symbol values for evaluating dynamic shapes
+    ///
+    /// # Returns
+    ///
+    /// The output shape as a vector of dimensions
+    ///
+    /// # Panics
+    ///
+    /// Panics if the node has more than one output (currently unsupported)
     pub fn node_output_shape(
         node: &TractNode<TypedFact, Box<dyn TypedOp>>,
         symbol_values: &SymbolValues,
@@ -156,6 +309,16 @@ impl<'a> GraphParser<'a> {
         output_shapes[0].clone()
     }
 
+    /// Extracts all output shapes of a tract node.
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The tract node to extract shapes from
+    /// * `symbol_values` - Resolved symbol values for evaluating dynamic shapes
+    ///
+    /// # Returns
+    ///
+    /// A vector of output shapes, where each shape is a vector of dimensions
     pub fn node_output_shapes(
         node: &TractNode<TypedFact, Box<dyn TypedOp>>,
         symbol_values: &SymbolValues,
@@ -172,7 +335,20 @@ impl<'a> GraphParser<'a> {
     }
 }
 
-/// Maps tract output indices to internal node indices using the node mapper
+/// Maps tract output indices to internal node indices using the node mapper.
+///
+/// # Arguments
+///
+/// * `tract_outputs` - The tract output outlets to map
+/// * `mapper` - The node index mapper containing the mappings
+///
+/// # Returns
+///
+/// A vector of internal node indices
+///
+/// # Panics
+///
+/// Panics if any output node is not found in the mapper
 pub fn map_outputs(tract_outputs: &[OutletId], mapper: &NodeIndexMapper) -> Vec<usize> {
     tract_outputs
         .iter()
@@ -194,17 +370,30 @@ pub struct NodeIndexMapper {
 }
 
 impl NodeIndexMapper {
+    /// Creates a new empty node index mapper.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Register a direct 1:1 mapping (no expansion occurred)
+    /// Registers a direct 1:1 mapping (no expansion occurred).
+    ///
+    /// # Arguments
+    ///
+    /// * `onnx_idx` - The original ONNX node index
+    /// * `internal_idx` - The corresponding internal node index
     pub fn register_direct(&mut self, onnx_idx: usize, internal_idx: usize) {
         self.mappings.insert(onnx_idx, internal_idx);
     }
 
-    /// Register an expansion: onnx_idx -> [start_idx..=end_idx]
-    /// The final node (end_idx) becomes the "output" of this expansion
+    /// Registers an expansion where one ONNX node maps to multiple internal nodes.
+    ///
+    /// The final node (end_idx) becomes the "output" of this expansion and is
+    /// used as the anchor for subsequent node connections.
+    ///
+    /// # Arguments
+    ///
+    /// * `onnx_idx` - The original ONNX node index
+    /// * `expansion_range` - The range of internal node indices this node expands to
     pub fn register_expansion(
         &mut self,
         onnx_idx: usize,
@@ -214,29 +403,64 @@ impl NodeIndexMapper {
         self.mappings.insert(onnx_idx, end_idx);
     }
 
-    /// Get the final internal index for an ONNX node
+    /// Gets the final internal index for an ONNX node.
+    ///
+    /// # Arguments
+    ///
+    /// * `onnx_idx` - The original ONNX node index
+    ///
+    /// # Returns
+    ///
+    /// The corresponding internal node index, or None if not found
     pub fn get(&self, onnx_idx: usize) -> Option<usize> {
         self.mappings.get(&onnx_idx).copied()
     }
 
-    /// Get all mapped internal indices (the "anchors")
+    /// Gets all mapped internal indices (the "anchors").
+    ///
+    /// Returns an iterator over all internal node indices that serve as
+    /// outputs/anchors for ONNX nodes.
+    ///
+    /// # Returns
+    ///
+    /// An iterator over internal node indices
     pub fn internal_indices(&self) -> impl Iterator<Item = usize> + '_ {
         self.mappings.values().copied()
     }
 
-    /// Check if an internal index is an anchor (final node of an expansion)
+    /// Checks if an internal index is an anchor (final node of an expansion).
+    ///
+    /// # Arguments
+    ///
+    /// * `internal_idx` - The internal node index to check
+    ///
+    /// # Returns
+    ///
+    /// `true` if the index is an anchor, `false` otherwise
     pub fn is_anchor(&self, internal_idx: usize) -> bool {
         self.mappings.values().any(|&idx| idx == internal_idx)
     }
 }
 
-/// Builder for multi-node decompositions with explicit index reservation
+/// Builder for multi-node decompositions with explicit index reservation.
+///
+/// This builder is used by operator handlers to construct multi-node decompositions
+/// (e.g., RebaseScale -> [inner_op, const, sra]). It pre-reserves a block of indices
+/// to ensure stable references during construction.
 pub struct DecompositionBuilder {
     base_idx: usize,
     nodes: Vec<ComputationNode>,
 }
 
 impl DecompositionBuilder {
+    /// Creates a new decomposition builder.
+    ///
+    /// Reserves a block of `count` indices from the parsing context.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - Mutable parsing context to reserve indices from
+    /// * `count` - Number of indices to reserve
     pub fn new(ctx: &mut ParsingContext, count: usize) -> Self {
         Self {
             base_idx: ctx.reserve_indices(count),
@@ -244,24 +468,45 @@ impl DecompositionBuilder {
         }
     }
 
-    /// Get the index for a node at the given offset from base
+    /// Gets the index for a node at the given offset from base.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - The offset from the base index (0-based)
+    ///
+    /// # Returns
+    ///
+    /// The absolute internal node index
     pub fn idx(&self, offset: usize) -> usize {
         self.base_idx + offset
     }
 
-    /// Add a node to the decomposition
+    /// Adds a node to the decomposition.
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The computation node to add
     pub fn add_node(&mut self, node: ComputationNode) {
         self.nodes.push(node);
     }
 
-    /// Finish building and return the nodes
+    /// Finishes building and returns the nodes.
+    ///
+    /// Consumes the builder and returns all accumulated computation nodes.
+    ///
+    /// # Returns
+    ///
+    /// A vector of all computation nodes added to the builder
     pub fn finish(self) -> Vec<ComputationNode> {
         self.nodes
     }
 }
 
+/// Mutable state that accumulates during parsing.
+///
+/// This context tracks the accumulated computation nodes, maintains the mapping
+/// between ONNX and internal indices, and manages index allocation.
 #[derive(Debug, Default)]
-/// Mutable state that accumulates during parsing
 pub struct ParsingContext {
     /// The accumulated computation nodes
     pub nodes: BTreeMap<usize, ComputationNode>,
@@ -272,25 +517,45 @@ pub struct ParsingContext {
 }
 
 impl ParsingContext {
+    /// Creates a new empty parsing context.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Reserve a block of indices for multi-node decomposition
-    /// Returns the starting index
+    /// Reserves a block of indices for multi-node decomposition.
     ///
     /// This is an internal method used by DecompositionBuilder.
     /// Handlers should use DecompositionBuilder instead of calling this directly.
+    ///
+    /// # Arguments
+    ///
+    /// * `count` - Number of indices to reserve
+    ///
+    /// # Returns
+    ///
+    /// The starting index of the reserved block
     pub(crate) fn reserve_indices(&mut self, count: usize) -> usize {
         let start_idx = self.next_idx;
         self.next_idx += count;
         start_idx
     }
 
-    /// Add nodes that already have their indices assigned (from reserve_indices)
+    /// Adds nodes that already have their indices assigned (from reserve_indices).
     ///
     /// This is an internal method used by the parser.
     /// Handlers should use DecompositionBuilder instead of calling this directly.
+    ///
+    /// # Arguments
+    ///
+    /// * `nodes` - Vector of computation nodes with pre-assigned indices
+    ///
+    /// # Returns
+    ///
+    /// The index of the last node added
+    ///
+    /// # Panics
+    ///
+    /// Panics if the nodes vector is empty or if node indices were not properly reserved
     pub(crate) fn add_reserved_nodes(&mut self, nodes: Vec<ComputationNode>) -> usize {
         assert!(!nodes.is_empty());
         let mut last_idx = nodes[0].idx;
@@ -308,6 +573,24 @@ impl ParsingContext {
     }
 }
 
+/// Loads and downcasts a tract operator to a specific type.
+///
+/// # Type Parameters
+///
+/// * `C` - The target operator type to downcast to
+///
+/// # Arguments
+///
+/// * `op` - The operator to downcast
+/// * `name` - Name of the operator (for error messages)
+///
+/// # Returns
+///
+/// A clone of the downcasted operator
+///
+/// # Panics
+///
+/// Panics if the operator cannot be downcasted to the target type
 pub fn load_op<C: tract_onnx::prelude::Op + Clone>(
     op: &dyn tract_onnx::prelude::Op,
     name: String,
@@ -323,7 +606,22 @@ pub fn load_op<C: tract_onnx::prelude::Op + Clone>(
     op.clone()
 }
 
-/// Extracts the raw values from a tensor.
+/// Extracts the raw values from a tract tensor and converts them to f32.
+///
+/// Handles various data types (F16, F32, F64, integer types, Bool, TDim) and
+/// converts them all to f32 representation.
+///
+/// # Arguments
+///
+/// * `input` - The tract tensor to extract values from
+///
+/// # Returns
+///
+/// A `Tensor<f32>` containing the converted values, or an error if conversion fails
+///
+/// # Errors
+///
+/// Returns an error if the data type is unsupported or if tensor evaluation fails
 pub fn extract_tensor_value(
     input: Arc<tract_onnx::prelude::Tensor>,
 ) -> Result<Tensor<f32>, Box<dyn std::error::Error>> {

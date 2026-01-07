@@ -230,6 +230,49 @@ pub fn and<
     a.clone() * b.clone()
 }
 
+/// Elementwise applies bitwise AND to two tensors.
+/// # Arguments
+/// * `tensor1` - Tensor
+/// * `tensor2` - Tensor
+/// # Examples
+/// ```
+/// use atlas_onnx_tracer::tensor::Tensor;
+/// use atlas_onnx_tracer::tensor::ops::add2;
+/// let tensor1 = Tensor::<i32>::new(
+///  Some(&[5, 3, 7, 15, 12, 8]),
+/// &[2, 3],
+/// ).unwrap();
+/// let tensor2 = Tensor::<i32>::new(
+/// Some(&[3, 5, 6, 10, 9, 7]),
+/// &[2, 3],
+/// ).unwrap();
+/// let result = add2(&tensor1, &tensor2).unwrap();
+/// let expected = Tensor::<i32>::new(Some(&[1, 1, 6, 10, 8, 0]), &[2, 3]).unwrap();
+/// assert_eq!(result, expected);
+/// ```
+pub fn and2<
+    T: TensorType + std::ops::BitAnd<Output = T> + Copy + std::marker::Send + std::marker::Sync,
+>(
+    tensor1: &Tensor<T>,
+    tensor2: &Tensor<T>,
+) -> Result<Tensor<T>, TensorError> {
+    if tensor1.dims() != tensor2.dims() {
+        return Err(TensorError::DimMismatch(format!(
+            "add2, t1.dims: {:?}, t2.dims: {:?}",
+            tensor1.dims().to_vec(),
+            tensor2.dims().to_vec(),
+        )));
+    }
+
+    let result: Vec<T> = tensor1
+        .par_iter()
+        .zip(tensor2.par_iter())
+        .map(|(a, b)| *a & *b)
+        .collect();
+
+    Tensor::new(Some(&result), tensor1.dims())
+}
+
 /// Elementwise applies equals to two tensors of integers.
 /// # Arguments
 /// * `a` - Tensor

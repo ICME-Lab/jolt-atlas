@@ -3,10 +3,12 @@ use serde::{Deserialize, Serialize};
 
 pub mod add;
 pub mod and;
+pub mod and2;
 pub mod constant;
 pub mod cube;
 pub mod div;
 pub mod einsum;
+pub mod erf;
 pub mod gather;
 pub mod identity;
 pub mod iff;
@@ -70,11 +72,12 @@ macro_rules! define_operators {
 
 define_operators! {
     operators: [
-        Add, And, Constant(Tensor<i32>), Cube, Div, Einsum { equation: String },
-        Gather { dim: usize }, Identity, Iff, Input, IsNan { out_dims: Vec<usize> },
-        MoveAxis { source: usize, destination: usize }, Mul, MultiBroadcast { shape: Vec<usize> }, Noop,
-        ReLU, Reshape(Vec<usize>), Rsqrt { scale: F32 },
-        Shr, Softmax { axes: usize, scale: F32 }, Square, Sub, Sum { axes: Vec<usize> }, Tanh { scale: F32 }
+        Add, And, And2, Constant(Tensor<i32>), Cube, Div, Einsum { equation: String },
+        Erf { scale: F32 }, Gather { dim: usize }, Identity, Iff, Input,
+        IsNan { out_dims: Vec<usize> }, MoveAxis { source: usize, destination: usize },
+        Mul, MultiBroadcast { shape: Vec<usize> }, Noop, ReLU, Reshape(Vec<usize>),
+        Rsqrt { scale: F32 }, Shr, Softmax { axes: usize, scale: F32 }, Square,
+        Sub, Sum { axes: Vec<usize> }, Tanh { scale: F32 }
     ]
 }
 

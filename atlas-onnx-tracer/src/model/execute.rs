@@ -43,7 +43,7 @@ impl Model {
     /// # Returns
     ///
     /// A vector of references to the input tensors for the specified node
-    pub fn get_node_inputs<'model>(
+    fn get_node_inputs<'model>(
         &'model self,
         node_idx: usize,
         node_outputs: &'model BTreeMap<usize, Tensor<i32>>,
@@ -63,7 +63,7 @@ impl Model {
     ///
     /// * `inputs` - A slice of input tensors to store
     /// * `node_outputs` - A mutable map to store the input tensors, indexed by node ID
-    pub fn store_inputs(
+    fn store_inputs(
         &self,
         inputs: &[Tensor<i32>],
         node_outputs: &mut BTreeMap<usize, Tensor<i32>>,
@@ -83,7 +83,10 @@ impl Model {
     /// # Returns
     ///
     /// A vector of output tensors corresponding to the graph's output nodes
-    pub fn outputs(&self, node_outputs: &BTreeMap<usize, Tensor<i32>>) -> Vec<Tensor<i32>> {
+    pub(crate) fn extract_graph_outputs(
+        &self,
+        node_outputs: &BTreeMap<usize, Tensor<i32>>,
+    ) -> Vec<Tensor<i32>> {
         self.graph
             .outputs
             .iter()

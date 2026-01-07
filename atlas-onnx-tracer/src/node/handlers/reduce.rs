@@ -90,7 +90,7 @@ fn handle_reduce_mean_of_squares(hctx: &mut HandlerContext) -> Vec<ComputationNo
     builder.add_node(ComputationNode {
         idx: builder.idx(4),
         operator: Operator::Constant(Constant(Tensor::construct(
-            vec![scale; output_dims.iter().product()],
+            vec![1 << scale; output_dims.iter().product()],
             output_dims.clone(),
         ))),
         inputs: vec![],
@@ -99,7 +99,7 @@ fn handle_reduce_mean_of_squares(hctx: &mut HandlerContext) -> Vec<ComputationNo
 
     builder.add_node(ComputationNode {
         idx: builder.idx(5),
-        operator: Operator::Shr(Default::default()),
+        operator: Operator::Div(Default::default()),
         inputs: vec![builder.idx(3), builder.idx(4)],
         output_dims,
     });

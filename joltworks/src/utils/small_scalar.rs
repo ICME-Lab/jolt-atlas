@@ -1,6 +1,4 @@
-use crate::field::JoltField;
-use crate::msm::VariableBaseMSM;
-use crate::utils::errors::ProofVerifyError;
+use crate::{field::JoltField, msm::VariableBaseMSM, utils::errors::ProofVerifyError};
 use allocative::Allocative;
 use ark_ff::biginteger::{S128, S64};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -167,6 +165,34 @@ impl SmallScalar for u64 {
         G::ScalarField: JoltField,
     {
         <G as crate::msm::VariableBaseMSM>::msm_u64(bases, scalars)
+    }
+}
+impl SmallScalar for i32 {
+    #[inline]
+    fn field_mul<F: JoltField>(&self, n: F) -> F {
+        if self.is_negative() {
+            -n.mul_u64(self.unsigned_abs() as u64)
+        } else {
+            n.mul_u64(*self as u64)
+        }
+    }
+    #[inline]
+    fn to_field<F: JoltField>(self) -> F {
+        F::from_i32(self)
+    }
+    #[inline]
+    fn diff_mul_field<F: JoltField>(self, other: Self, r: F) -> F {
+        r.mul_u64(self.abs_diff(other) as u64)
+    }
+    #[inline]
+    fn msm<G: VariableBaseMSM>(
+        bases: &[G::MulBase],
+        scalars: &[Self],
+    ) -> Result<G, ProofVerifyError>
+    where
+        G::ScalarField: JoltField,
+    {
+        <G as crate::msm::VariableBaseMSM>::msm_i32(bases, scalars)
     }
 }
 impl SmallScalar for i64 {

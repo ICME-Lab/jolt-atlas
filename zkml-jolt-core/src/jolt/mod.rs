@@ -20,7 +20,7 @@ use jolt_core::{
     utils::{errors::ProofVerifyError, math::Math},
     zkvm::witness::DTH_ROOT_OF_K,
 };
-use onnx_tracer::{ProgramIO, graph::model::Model, tensor::Tensor};
+use onnx_tracer::{ProgramIO, graph::model::Model, tensor::Tensor, trace_types::ONNXInstr};
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, rc::Rc};
 
@@ -260,11 +260,8 @@ where
 {
     /// Preprocesses the ONNX model to produce shared preprocessing data
     #[tracing::instrument(skip_all, name = "Jolt::preprocess")]
-    pub fn shared_preprocess<ModelFunc>(model: ModelFunc) -> JoltSharedPreprocessing
-    where
-        ModelFunc: Fn() -> Model + Copy,
-    {
-        let bytecode_preprocessing = BytecodePreprocessing::preprocess(model);
+    pub fn shared_preprocess(onnx_bytecode: Vec<ONNXInstr>) -> JoltSharedPreprocessing {
+        let bytecode_preprocessing = BytecodePreprocessing::preprocess(onnx_bytecode);
         let precompile_preprocessing = PrecompilePreprocessing::preprocess(&bytecode_preprocessing);
         let fp_lookups_preprocessing = FpLookupPreprocessing::preprocess(&bytecode_preprocessing);
         JoltSharedPreprocessing {
@@ -285,7 +282,8 @@ where
     where
         ModelFunc: Fn() -> Model + Copy,
     {
-        let shared = Self::shared_preprocess(model);
+        let onnx_bytecode = onnx_tracer::decode_model(model());
+        let shared = Self::shared_preprocess(onnx_bytecode);
         let max_T: usize = max_trace_length.next_power_of_two();
         let generators = PCS::setup_prover(DTH_ROOT_OF_K.log_2() + max_T.log_2());
         JoltProverPreprocessing { shared, generators }
@@ -518,6 +516,16 @@ mod e2e_tests {
     fn print_nanoGPT_bytecode() {
         onnx_tracer::logger::init_logger();
         model(&PathBuf::from("../onnx-tracer/models/nanoGPT/network.onnx"));
+    }
+
+    // TODO: Replace with real test once all bge-m3 ops are supported, see issue #91
+    #[test]
+    #[ignore]
+    fn print_bge_m3_bytecode() {
+        onnx_tracer::logger::init_logger();
+        model(&PathBuf::from(
+            "../onnx-tracer/models/bge-m3/bge-small-sim.onnx",
+        ));
     }
 
     #[serial]
@@ -1180,5 +1188,35 @@ mod e2e_tests {
         }
 
         run_snark_test(builder::softmax_model, &input_data, &[1, 64, 64], None);
+    }
+
+    #[test]
+    #[serial]
+    fn test_gather() {
+        let mut rng = StdRng::seed_from_u64(123456);
+        let num_lookups = 2;
+        let num_words = 8;
+
+        let mut input_data = vec![0; num_lookups];
+        for input in input_data.iter_mut() {
+            *input = rng.gen_range(0..num_words);
+        }
+
+        run_snark_test(builder::gather_model, &input_data, &[num_lookups], None);
+    }
+
+    #[test]
+    #[serial]
+    fn test_gather_non_pow2() {
+        let mut rng = StdRng::seed_from_u64(123456);
+        let num_lookups = 3;
+        let num_words = 7;
+
+        let mut input_data = vec![0; num_lookups];
+        for input in input_data.iter_mut() {
+            *input = rng.gen_range(0..num_words);
+        }
+
+        run_snark_test(builder::gather_non_pow2, &input_data, &[num_lookups], None);
     }
 }

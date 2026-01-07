@@ -370,6 +370,14 @@ impl CanonicalSerialize for VirtualPolynomial {
                 39u8.serialize_with_mode(&mut writer, compress)?;
                 index.serialize_with_mode(&mut writer, compress)?;
             }
+            VirtualPolynomial::GatherRa(index) => {
+                40u8.serialize_with_mode(&mut writer, compress)?;
+                index.serialize_with_mode(&mut writer, compress)?;
+            }
+            VirtualPolynomial::GatherHammingWeight(index) => {
+                41u8.serialize_with_mode(&mut writer, compress)?;
+                index.serialize_with_mode(&mut writer, compress)?;
+            }
         }
         Ok(())
     }

@@ -2115,7 +2115,8 @@ pub mod test {
     where
         ModelFunc: Fn() -> Model + Copy,
     {
-        let bytecode_preprocessing = BytecodePreprocessing::preprocess(model_fn);
+        let onnx_bytecode = onnx_tracer::decode_model(model_fn());
+        let bytecode_preprocessing = BytecodePreprocessing::preprocess(onnx_bytecode);
         let shared_preprocessing = JoltSharedPreprocessing {
             bytecode: bytecode_preprocessing,
             precompiles: PrecompilePreprocessing::empty(),

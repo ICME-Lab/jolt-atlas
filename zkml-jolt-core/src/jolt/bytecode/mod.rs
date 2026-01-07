@@ -1,24 +1,14 @@
 use crate::jolt::{
     bytecode::read_raf_checking::ReadRafCheck,
     dag::{stage::SumcheckStages, state_manager::StateManager},
-    executor::instructions::InstructionLookup,
-    lookup_table::{LookupTables, RangeCheckTable, ReLUTable},
     sumcheck::SumcheckInstance,
-    trace::WORD_SIZE,
 };
 use itertools::Itertools;
 use jolt_core::{
-    field::JoltField,
-    poly::commitment::commitment_scheme::CommitmentScheme,
+    field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme,
     transcripts::Transcript,
-    zkvm::lookup_table::{
-        equal::EqualTable, pow2::Pow2Table, shift_right_bitmask::ShiftRightBitmaskTable,
-        signed_greater_than_equal::SignedGreaterThanEqualTable, valid_div0::ValidDiv0Table,
-        valid_signed_remainder::ValidSignedRemainderTable, virtual_sra::VirtualSRATable,
-    },
 };
 use onnx_tracer::{
-    graph::model::Model,
     tensor::Tensor,
     trace_types::{AtlasInstr, AtlasOpcode, ONNXInstr},
     utils::VirtualSlotCounter,
@@ -79,12 +69,9 @@ pub struct BytecodePreprocessing {
 
 impl BytecodePreprocessing {
     #[tracing::instrument(skip_all, name = "BytecodePreprocessing::preprocess")]
-    pub fn preprocess<ModelFunc>(model: ModelFunc) -> Self
-    where
-        ModelFunc: Fn() -> Model,
-    {
+    pub fn preprocess(onnx_bytecode: Vec<ONNXInstr>) -> Self {
         let (mut bytecode, memory_K, vt_address_map, max_td, td_lookup, raw_bytecode) =
-            Self::inline_tensor_instrs(model);
+            Self::inline_tensor_instrs(onnx_bytecode);
         Self::finalize_bytecode(&mut bytecode);
         let code_size = Self::compute_code_size(bytecode.len());
         Self {
@@ -150,11 +137,8 @@ impl BytecodePreprocessing {
     }
 
     #[tracing::instrument(skip_all, name = "BytecodePreprocessing::inline_tensor_instrs")]
-    pub fn inline_tensor_instrs<ModelFunc>(model: ModelFunc) -> RawToJoltResult
-    where
-        ModelFunc: Fn() -> Model,
-    {
-        let (expanded_bytecode, max_td) = Self::decode_and_expand_model(model);
+    pub fn inline_tensor_instrs(onnx_bytecode: Vec<ONNXInstr>) -> RawToJoltResult {
+        let (expanded_bytecode, max_td) = Self::expand_model(onnx_bytecode);
         let td_lookup = Self::build_td_lookup(&expanded_bytecode);
 
         // Memory management and instruction preprocessing:
@@ -185,17 +169,13 @@ impl BytecodePreprocessing {
     /// Decodes the model into ONNX instructions, expands virtual instructions, and returns the
     /// expanded trace along with the maximum td encountered. The max_td value is computed on the
     /// unexpanded trace so virtual instructions can reserve unique register addresses deterministically.
-    fn decode_and_expand_model<ModelFunc>(model: ModelFunc) -> (Vec<AtlasInstr>, usize)
-    where
-        ModelFunc: Fn() -> Model,
-    {
-        let decoded_bytecode = onnx_tracer::decode_model(model());
-        let max_td = decoded_bytecode
+    fn expand_model(onnx_bytecode: Vec<ONNXInstr>) -> (Vec<AtlasInstr>, usize) {
+        let max_td = onnx_bytecode
             .iter()
             .filter_map(|instr| instr.td)
             .max()
             .unwrap_or(0);
-        let expanded_bytecode = Self::expand_virtual_bytecode(decoded_bytecode, max_td);
+        let expanded_bytecode = Self::expand_virtual_bytecode(onnx_bytecode, max_td);
         (expanded_bytecode, max_td)
     }
 
@@ -477,34 +457,6 @@ impl JoltONNXBytecode {
     }
 }
 
-// TODO(AntoineF4C5): Get rid of this helper
-impl InstructionLookup<WORD_SIZE> for JoltONNXBytecode {
-    fn lookup_table(&self) -> Option<LookupTables<WORD_SIZE>> {
-        match self.opcode {
-            AtlasOpcode::Add => Some(RangeCheckTable.into()),
-            AtlasOpcode::Broadcast => Some(RangeCheckTable.into()),
-            AtlasOpcode::Constant => Some(RangeCheckTable.into()),
-            AtlasOpcode::Eq => Some(EqualTable.into()),
-            AtlasOpcode::Gte => Some(SignedGreaterThanEqualTable.into()),
-            AtlasOpcode::Mul => Some(RangeCheckTable.into()),
-            AtlasOpcode::Relu => Some(ReLUTable.into()),
-            AtlasOpcode::Reshape => Some(RangeCheckTable.into()),
-            AtlasOpcode::Sub => Some(RangeCheckTable.into()),
-            AtlasOpcode::VirtualAssertEq => Some(EqualTable.into()),
-            AtlasOpcode::VirtualAssertValidDiv0 => Some(ValidDiv0Table.into()),
-            AtlasOpcode::VirtualAssertValidSignedRemainder => {
-                Some(ValidSignedRemainderTable.into())
-            }
-            AtlasOpcode::VirtualAdvice => Some(RangeCheckTable.into()),
-            AtlasOpcode::VirtualMove => Some(RangeCheckTable.into()),
-            AtlasOpcode::VirtualPow2 => Some(Pow2Table.into()),
-            AtlasOpcode::VirtualSra => Some(VirtualSRATable.into()),
-            AtlasOpcode::VirtualShiftRightBitmask => Some(ShiftRightBitmaskTable.into()),
-            _ => None,
-        }
-    }
-}
-
 pub type RawToJoltResult = (
     Vec<JoltONNXBytecode>,
     usize,
@@ -562,7 +514,8 @@ impl<'a> BytecodeInstructionInliner<'a> {
         element_count: usize,
     ) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
         match raw.opcode {
-            AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) => (
+            // Handled in precompiles
+            AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) | AtlasOpcode::Gather => (
                 vec![0; element_count],
                 vec![0; element_count],
                 vec![0; element_count],

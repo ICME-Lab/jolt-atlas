@@ -2,7 +2,7 @@
 use crate::jolt::{
     bytecode::InterleavedBitsMarker,
     dag::state_manager::StateManager,
-    executor::instructions::{InstructionLookup, LookupQuery},
+    executor::instructions::LookupQuery,
     lookup_table::{
         LookupTables,
         prefixes::{PrefixCheckpoint, PrefixEval, Prefixes},
@@ -834,7 +834,8 @@ mod tests {
             .collect();
         trace[0] = JoltONNXCycle::no_op(); // First instruction is always NoOp
         let model_fn = model_function(&instruction);
-        let bytecode_preprocessing = BytecodePreprocessing::preprocess(model_fn);
+        let onnx_bytecode = onnx_tracer::decode_model(model_fn());
+        let bytecode_preprocessing = BytecodePreprocessing::preprocess(onnx_bytecode);
         let shared_preprocessing = JoltSharedPreprocessing {
             bytecode: bytecode_preprocessing,
             precompiles: PrecompilePreprocessing::empty(),

@@ -145,7 +145,7 @@ impl BytecodePreprocessing {
         // 2. Decompose tensor operations into scalar instructions with individual immediate values
         // 3. Map ONNX instruction operands to virtual register addresses for the Jolt VM
         let max_output_elements = max_output_elements(&expanded_bytecode);
-        let mut inliner = BytecodeInstructionInliner::new(max_output_elements, &td_lookup);
+        let mut inliner = BytecodeInstructionInliner::new(max_output_elements);
 
         // Inline every instruction while recording the virtual tensor map.
         let preprocessed_bytecode: Vec<JoltONNXBytecode> = expanded_bytecode
@@ -464,15 +464,13 @@ pub type RawToJoltResult = (
 
 /// Helper responsible for converting raw ONNX instructions into
 /// scalar Jolt bytecode while maintaining the virtual tensor address map.
-struct BytecodeInstructionInliner<'a> {
-    td_lookup: &'a HashMap<usize, AtlasInstr>,
+struct BytecodeInstructionInliner {
     allocator: VirtualTensorAllocator,
 }
 
-impl<'a> BytecodeInstructionInliner<'a> {
-    fn new(max_zero_register_span: usize, td_lookup: &'a HashMap<usize, AtlasInstr>) -> Self {
+impl BytecodeInstructionInliner {
+    fn new(max_zero_register_span: usize) -> Self {
         Self {
-            td_lookup,
             allocator: VirtualTensorAllocator::new(max_zero_register_span),
         }
     }

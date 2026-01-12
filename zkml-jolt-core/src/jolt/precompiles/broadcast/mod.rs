@@ -41,8 +41,8 @@ use crate::jolt::{
 pub struct ExecutionSumcheck {}
 
 impl ExecutionSumcheck {
-    pub fn new_prover<'a, F: JoltField>(
-        sm: &mut StateManager<'a, F, impl Transcript, impl CommitmentScheme<Field = F>>,
+    pub fn new_prover<F: JoltField>(
+        sm: &mut StateManager<F, impl Transcript, impl CommitmentScheme<Field = F>>,
         index: usize,
     ) -> Self {
         let final_memory_state = sm.get_val_final();
@@ -61,8 +61,8 @@ impl ExecutionSumcheck {
         Self::init_prover(sm, broadcast_dims, target_dims, input, output, index)
     }
 
-    pub fn init_prover<'a, F: JoltField>(
-        sm: &mut StateManager<'a, F, impl Transcript, impl CommitmentScheme<Field = F>>,
+    pub fn init_prover<F: JoltField>(
+        sm: &mut StateManager<F, impl Transcript, impl CommitmentScheme<Field = F>>,
         broadcast_dims: Vec<usize>,
         target_dims: Vec<usize>,
         input: Vec<i64>,
@@ -135,8 +135,8 @@ impl ExecutionSumcheck {
         Self {}
     }
 
-    pub fn new_verifier<'a, F: JoltField>(
-        sm: &mut StateManager<'a, F, impl Transcript, impl CommitmentScheme<Field = F>>,
+    pub fn new_verifier<F: JoltField>(
+        sm: &mut StateManager<F, impl Transcript, impl CommitmentScheme<Field = F>>,
         index: usize,
     ) -> Self {
         let (pp, ..) = sm.get_verifier_data();
@@ -148,7 +148,7 @@ impl ExecutionSumcheck {
         Self::init_verifier(sm, broadcast_dims, target_dims, index)
     }
 
-    pub fn init_verifier<'a, F: JoltField>(
+    pub fn init_verifier<F: JoltField>(
         sm: &mut StateManager<'_, F, impl Transcript, impl CommitmentScheme<Field = F>>,
         broadcast_dims: Vec<usize>,
         target_dims: Vec<usize>,

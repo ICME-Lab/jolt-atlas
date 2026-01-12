@@ -47,7 +47,7 @@ impl Model {
         self.graph
             .nodes
             .values()
-            .map(|node| node.num_output_elements())
+            .map(|node| node.num_output_elements().next_power_of_two())
             .max()
             .unwrap_or(0)
     }

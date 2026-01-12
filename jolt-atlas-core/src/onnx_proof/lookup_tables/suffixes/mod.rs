@@ -3,12 +3,15 @@ use num_derive::FromPrimitive;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 use crate::onnx_proof::lookup_tables::suffixes::{
-    and::AndSuffix, one::OneSuffix, or::OrSuffix, xor::XorSuffix,
+    and::AndSuffix, lower_word_no_msb::LowerWordNoMsbSuffix, one::OneSuffix, or::OrSuffix,
+    relu::ReluSuffix, xor::XorSuffix,
 };
 
 pub mod and;
+pub mod lower_word_no_msb;
 pub mod one;
 pub mod or;
+pub mod relu;
 pub mod xor;
 
 pub trait SparseDenseSuffix: 'static + Sync {
@@ -25,6 +28,8 @@ pub enum Suffixes {
     And,
     Xor,
     Or,
+    Relu,
+    LowerWordNoMSB,
 }
 
 pub type SuffixEval<F: JoltField> = F;
@@ -38,6 +43,8 @@ impl Suffixes {
             Suffixes::And => AndSuffix::suffix_mle(b),
             Suffixes::Or => OrSuffix::suffix_mle(b),
             Suffixes::Xor => XorSuffix::suffix_mle(b),
+            Suffixes::Relu => ReluSuffix::<XLEN>::suffix_mle(b),
+            Suffixes::LowerWordNoMSB => LowerWordNoMsbSuffix::<XLEN>::suffix_mle(b),
         }
     }
 }

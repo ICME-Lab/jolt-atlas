@@ -20,6 +20,7 @@ impl<const XLEN: usize> JoltLookupTable for OrTable<XLEN> {
         let (x, y) = uninterleave_bits(index);
         (x | y).into()
     }
+
     fn evaluate_mle<F, C>(&self, r: &[C]) -> F
     where
         C: ChallengeFieldOps<F>,

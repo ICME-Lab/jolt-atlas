@@ -1,4 +1,7 @@
-use crate::onnx_proof::lookup_tables::prefixes::{and::AndPrefix, or::OrPrefix, xor::XorPrefix};
+use crate::onnx_proof::lookup_tables::prefixes::{
+    and::AndPrefix, lower_word_no_msb::LowerWordNoMsbPrefix, not_msb::NotMsbPrefix, or::OrPrefix,
+    xor::XorPrefix,
+};
 use joltworks::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     utils::lookup_bits::LookupBits,
@@ -11,6 +14,8 @@ use strum::EnumCount;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 pub mod and;
+pub mod lower_word_no_msb;
+pub mod not_msb;
 pub mod or;
 pub mod xor;
 
@@ -64,6 +69,8 @@ pub enum Prefixes {
     And,
     Or,
     Xor,
+    LowerWordNoMsb,
+    NotMsb,
 }
 
 #[derive(Clone, Copy)]
@@ -77,6 +84,13 @@ impl<F: JoltField> std::ops::Mul<F> for PrefixEval<F> {
 
     fn mul(self, rhs: F) -> Self::Output {
         self.0 * rhs
+    }
+}
+impl<F: JoltField> std::ops::Mul<PrefixEval<F>> for PrefixEval<F> {
+    type Output = F;
+
+    fn mul(self, rhs: PrefixEval<F>) -> Self::Output {
+        self.0 * rhs.0
     }
 }
 
@@ -138,6 +152,10 @@ impl Prefixes {
             Prefixes::And => AndPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::Or => OrPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::Xor => XorPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::LowerWordNoMsb => {
+                LowerWordNoMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
+            }
+            Prefixes::NotMsb => NotMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
         };
         PrefixEval(eval)
     }
@@ -201,6 +219,16 @@ impl Prefixes {
             }
             Prefixes::Xor => {
                 XorPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
+            }
+            Prefixes::LowerWordNoMsb => LowerWordNoMsbPrefix::<XLEN>::update_prefix_checkpoint(
+                checkpoints,
+                r_x,
+                r_y,
+                j,
+                suffix_len,
+            ),
+            Prefixes::NotMsb => {
+                NotMsbPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
             }
         }
     }

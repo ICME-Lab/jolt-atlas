@@ -304,6 +304,14 @@ pub fn square_model(T: usize) -> Model {
     b.build()
 }
 
+pub fn relu_model(T: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![T]);
+    let res = b.relu(i);
+    b.mark_output(res);
+    b.build()
+}
+
 pub fn cube_model(T: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![T]);

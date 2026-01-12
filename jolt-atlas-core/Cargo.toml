@@ -28,6 +28,7 @@ tracing = { version = "0.1.37", default-features = false }
 
 # Serialization
 serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0.108", default-features = false }
 
 # Parallel Processing
 rayon = { version = "^1.8.0" }
@@ -39,6 +40,7 @@ derive_more = { version = "2.0.1", features = [
     "from",
 ], default-features = false }
 itertools = "0.10.0"
+regex = "1.10.6"
 
 # Randomness
 rand = { version = "0.8.5", default-features = false }
@@ -55,6 +57,9 @@ ark-std = { version = "0.5.0", default-features = false }
 ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false, features = [
     "derive",
 ] }
+
+# Testing
+serial_test = "3.2.0"
 
 [patch.crates-io]
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }

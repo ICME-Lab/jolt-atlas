@@ -173,7 +173,7 @@ where
 
     let B = if has_one_hot {
         // Use RLCPolynomial::linear_combination for mixed dense + one-hot polynomials
-        let dummy_poly_ids = vec![CommittedPolynomial::NodeOutputRa(0); f_arc.len()];
+        let dummy_poly_ids = vec![CommittedPolynomial::NodeOutputRaD(0, 0); f_arc.len()];
         let rlc_result = RLCPolynomial::linear_combination(dummy_poly_ids, f_arc, &q_powers);
         MultilinearPolynomial::RLC(rlc_result)
     } else {

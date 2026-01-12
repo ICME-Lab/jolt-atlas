@@ -46,7 +46,7 @@ fn handle_max(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         builder.add_node(ComputationNode {
             idx: builder.idx(0),
             operator: Operator::ReLU(Default::default()),
-            inputs: hctx.internal_input_indices.clone(),
+            inputs: vec![hctx.internal_input_indices[0]],
             output_dims: hctx.output_dims.clone(),
         });
         builder.finish()

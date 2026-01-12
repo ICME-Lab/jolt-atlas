@@ -75,6 +75,11 @@ allocative = { git = "https://github.com/facebookexperimental/allocative", rev =
 thiserror = "1.0.58"
 strum = { version = "0.26.3", default-features = false }
 strum_macros = "0.26.4"
+fixedbitset = "0.5.0"
+derive_more = { version = "2.0.1", features = [
+    "from",
+], default-features = false }
+itertools = "0.10.0"
 
 # System and Platform
 sysinfo = { version = "0.30.8", optional = true }

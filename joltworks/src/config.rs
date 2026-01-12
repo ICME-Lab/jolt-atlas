@@ -164,8 +164,8 @@ impl OneHotParams {
         }
     }
 
-    pub fn lookup_index_chunk(&self, index: u128, idx: usize) -> u8 {
-        ((index >> self.instruction_shifts[idx]) & (self.k_chunk - 1) as u128) as u8
+    pub fn lookup_index_chunk(&self, index: u64, idx: usize) -> u8 {
+        ((index >> self.instruction_shifts[idx]) & (self.k_chunk - 1) as u64) as u8
     }
 
     pub fn compute_r_address_chunks<F: JoltField>(

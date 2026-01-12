@@ -1097,6 +1097,18 @@ mod e2e_tests {
 
     #[test]
     #[serial]
+    fn test_broadcast() {
+        run_snark_test(builder::broadcast_model, &[10, 20, 30, 40], &[4, 1], None);
+    }
+
+    #[test]
+    #[serial]
+    fn test_model_with_broadcasts() {
+        run_snark_test(builder::model_with_broadcasts, &[0], &[1, 1], None);
+    }
+
+    #[test]
+    #[serial]
     fn test_relu() {
         run_snark_test(builder::relu_model, &[-3, -2, 0, 1], &[1, 4], None);
     }

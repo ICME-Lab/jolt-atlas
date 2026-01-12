@@ -29,6 +29,7 @@ use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
 };
 
+pub mod broadcast;
 pub mod einsum;
 pub mod gather;
 pub mod read_checking;
@@ -49,7 +50,7 @@ impl PrecompilePreprocessing {
         .iter()
         // TODO(AntoineF4C5): Set a method for each instruction, that only returns a preprocessing instance if required
         .filter_map(|instr| match &instr.opcode {
-                    AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) | AtlasOpcode::Gather => Some(
+                    AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) | AtlasOpcode::Gather | AtlasOpcode::Broadcast => Some(
                         PreprocessingInstance::new(instr, td_lookup, bytecode_preprocessing),
                     ),
                     _ => None,
@@ -180,6 +181,57 @@ impl InstanceBuilder {
             equation: "Gather".to_string(),
         }
     }
+
+    /// Specialized instance builder for Broadcast operations
+    ///
+    /// We treat broadcasting as a tensor product with an identity tensor, with custom equation depending on the number of dimensions, and the dimensions to broadcast.
+    /// ```text
+    /// Example:
+    /// A - [2, 1, 4]               | A_{ij}, (i, j) in [0,2)x[0,4)
+    /// Broadcast to O - [2, 3, 4]  | O_{ikj}, (i, k, j) in [0,2)x[0,3)x[0,4)
+    ///
+    /// We use I - [3]              | I_{k}, (k) in [0,3)
+    /// Equation: "ij,k->ikj"
+    /// O_{ikj} = A{ij} * I_{k}
+    /// ```
+    ///
+    /// For proving.
+    /// We start with claim about output: O(r)
+    /// where r = (r_0, r_1, r_2) are the random evaluation points for each dimension i, k and j.
+    ///
+    /// We want to prove that:
+    /// O((r_0, r_1, r_2)) = A((r_0, r_2)) * I((r_1)) = A((r_0, r_2))
+    ///
+    /// Hence the claim about output evaluation at r is just reduced into a claim about A and computing an evaluation of I, with no sumcheck involved
+    fn build_broadcast_instance(
+        instr: &AtlasInstr,
+        td_lookup: &HashMap<usize, AtlasInstr>,
+        bytecode_preprocessing: &BytecodePreprocessing,
+    ) -> PreprocessingInstance {
+        let a_instr =
+            PreprocessingHelper::get_operand_instruction(td_lookup, instr.ts1, "Broadcast");
+        let in_shape = a_instr.output_dims.clone();
+        let target_shape = instr.output_dims.clone();
+
+        // Get broadcast dimensions
+        let broadcast_dims = get_broadcast_dims(&in_shape, &target_shape)
+            .expect("Input shape not broadcastable to target shape");
+
+        let a_addr =
+            PreprocessingHelper::collect_and_pad(a_instr, bytecode_preprocessing, &in_shape);
+        let c_addr =
+            PreprocessingHelper::collect_and_pad(instr, bytecode_preprocessing, &target_shape);
+
+        PreprocessingInstance {
+            a_addr,
+            b_addr: vec![0, 0], // Broadcast has only one operand, this dummy value is used in read checking
+            c_addr,
+            a_dims: PreprocessingHelper::calculate_padded_dims(&in_shape),
+            b_dims: broadcast_dims, // Not padded, we need raw values to build broadcasting multilinear poly `I`
+            c_dims: PreprocessingHelper::calculate_padded_dims(&target_shape),
+            equation: "Broadcast".to_string(),
+        }
+    }
 }
 
 /// Gets the required dimensions from an instructions, and panics if the instructions output has less or more dimensions.
@@ -204,6 +256,30 @@ fn get_dimensions(instruction: &AtlasInstr, num_dimensions: usize) -> Vec<usize>
     }
 
     outdims
+}
+
+/// Computes the broadcast dimensions
+/// # Returns
+/// An array of dimensions, where each dimensions is either 1 if no broadcast is needed in that dimension, or the target dimension otherwise.
+///
+/// Returns None if the input shape is not broadcastable to the target shape.
+fn get_broadcast_dims(input_dims: &[usize], target_dims: &[usize]) -> Option<Vec<usize>> {
+    assert!(input_dims.len() <= target_dims.len());
+
+    let mut broadcast_dims = target_dims.to_vec();
+    for ((i, &target_dim), &input_dim) in target_dims
+        .iter()
+        .enumerate()
+        .rev()
+        .zip(input_dims.iter().rev())
+    {
+        if input_dim == target_dim {
+            broadcast_dims[i] = 1;
+        } else if input_dim != 1 {
+            return None;
+        }
+    }
+    Some(broadcast_dims)
 }
 
 impl PreprocessingInstance {
@@ -249,6 +325,9 @@ impl PreprocessingInstance {
             },
             AtlasOpcode::Gather => {
                 InstanceBuilder::build_gather_instance(instr, td_lookup, bytecode_preprocessing)
+            }
+            AtlasOpcode::Broadcast => {
+                InstanceBuilder::build_broadcast_instance(instr, td_lookup, bytecode_preprocessing)
             }
             _ => panic!("Operation not supported by precompile system"),
         }
@@ -382,6 +461,13 @@ impl PrecompileDag {
                         Box::new(gather::ExecutionSumcheck::new_prover(sm, index))
                     } else {
                         Box::new(gather::ExecutionSumcheck::new_verifier(sm, index))
+                    }) as Box<dyn SumcheckInstance<F>>
+                }
+                "Broadcast" => {
+                    (if is_prover {
+                        Box::new(broadcast::ExecutionSumcheck::new_prover(sm, index))
+                    } else {
+                        Box::new(broadcast::ExecutionSumcheck::new_verifier(sm, index))
                     }) as Box<dyn SumcheckInstance<F>>
                 }
                 _ => panic!("equation {equation} not supported"),
@@ -847,5 +933,33 @@ impl<F: JoltField, FS: Transcript> PrecompileSNARK<F, FS> {
             &mut *transcript.borrow_mut(),
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_broadcast_dims() {
+        let in_shape = vec![1, 4]; //   [1, 4]
+        let target = vec![3, 4]; //     [3, 4] Compatible shapes
+        assert_eq!(get_broadcast_dims(&in_shape, &target), Some(vec![3, 1]));
+
+        let in_shape = vec![3, 4]; //   [   3, 4]
+        let target = vec![2, 3, 4]; //  [2, 3, 4] Compatible shapes
+        assert_eq!(get_broadcast_dims(&in_shape, &target), Some(vec![2, 1, 1]));
+
+        let in_shape = vec![2, 1, 4]; //    [2, 1, 4]
+        let target = vec![2, 3, 4]; //      [2, 3, 4] Compatible shapes
+        assert_eq!(get_broadcast_dims(&in_shape, &target), Some(vec![1, 3, 1]));
+
+        let in_shape = vec![2, 3]; //   [2, 3]
+        let target = vec![2, 4]; //     [2, 4] Not compatible shapes
+        assert!(get_broadcast_dims(&in_shape, &target).is_none());
+
+        let in_shape = vec![3, 4]; //   [   3, 4]
+        let target = vec![3, 4, 2]; //  [3, 4, 2] Not compatible shapes
+        assert!(get_broadcast_dims(&in_shape, &target).is_none());
     }
 }

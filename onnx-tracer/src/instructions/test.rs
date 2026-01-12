@@ -1,22 +1,25 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
-use crate::instructions::{
-    add::Add,
-    eq::Eq,
-    gte::Gte,
-    input::Input,
-    mul::Mul,
-    relu::Relu,
-    reshape::Reshape,
-    sub::Sub,
-    virtuals::{
-        VirtualAssertEq, VirtualAssertValidDiv0, VirtualAssertValidSignedRemainder, VirtualMove,
-        VirtualPow2, VirtualShiftRightBitmask, VirtualSra,
-    },
-    VirtualInstructionSequence,
-};
 use crate::trace_types::{AtlasCycle, AtlasOpcode};
 use crate::utils::{u64_vec_to_i32_iter, VirtualSlotCounter};
+use crate::{
+    instructions::{
+        add::Add,
+        eq::Eq,
+        gte::Gte,
+        input::Input,
+        mul::Mul,
+        relu::Relu,
+        reshape::Reshape,
+        sub::Sub,
+        virtuals::{
+            VirtualAssertEq, VirtualAssertValidDiv0, VirtualAssertValidSignedRemainder,
+            VirtualMove, VirtualPow2, VirtualShiftRightBitmask, VirtualSra,
+        },
+        VirtualInstructionSequence,
+    },
+    trace_types::AtlasInstr,
+};
 use crate::{
     tensor::Tensor,
     trace_types::{MemoryState, ONNXCycle, ONNXInstr, ONNXOpcode},
@@ -106,6 +109,11 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
         let virtual_sequence = I::virtual_trace(cycle, &mut VirtualSlotCounter::new(32));
         assert_eq!(virtual_sequence.len(), I::SEQUENCE_LENGTH);
 
+        let td_lookups: HashMap<usize, AtlasInstr> = virtual_sequence
+            .iter()
+            .filter_map(|cycle| cycle.instr.td.map(|td| (td, cycle.instr.clone())))
+            .collect();
+
         // Create a mapping for virtual registers (>= 32) to available register slots
         let mut virtual_register_map = BTreeMap::new();
         let mut next_virtual_slot = 33;
@@ -141,7 +149,7 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
                 assert_eq!(expected_prefix, actual, "{cycle:#?}");
             }
 
-            let output = to_instruction_output(&cycle);
+            let output = to_instruction_output(&cycle, &td_lookups);
 
             if let Some(td_addr) = cycle.instr.td {
                 let mapped_addr = if td_addr >= 32 {
@@ -215,13 +223,27 @@ pub fn jolt_virtual_sequence_test<I: VirtualInstructionSequence>(
 }
 
 /// Special helper function to compute Broadcast operation output
-fn compute_broadcast_output(cycle: &AtlasCycle) -> Vec<u64> {
-    let output_els = cycle.instr.num_output_elements();
-    let input = cycle.ts1_vals().unwrap_or(vec![0; output_els]);
+fn compute_broadcast_output(
+    cycle: &AtlasCycle,
+    td_lookups: &HashMap<usize, AtlasInstr>,
+) -> Vec<u64> {
+    let input: Vec<i128> = cycle
+        .ts1_vals()
+        .expect("Broadcast should have ts1 set")
+        .iter()
+        .map(|&x| x as i128)
+        .collect();
 
-    // Broadcast operation: replicate the first element to all positions
-    let broadcast_value = if input.is_empty() { 0 } else { input[0] };
-    vec![broadcast_value; output_els]
+    let input_dims = td_lookups
+        .get(&cycle.instr.ts1.expect("Broadcast should have ts1 set"))
+        .expect("Broadcast ts1 lookup missing")
+        .output_dims
+        .clone();
+    let input_tensor = Tensor::new(Some(&input), &input_dims).unwrap();
+
+    let output_tensor = input_tensor.expand(&cycle.instr.output_dims).unwrap();
+
+    output_tensor.iter().map(|&x| x as u64).collect()
 }
 
 /// Special helper function to compute Sum operation output
@@ -242,13 +264,13 @@ fn compute_saturating_sum(cycle: &AtlasCycle) -> Vec<u64> {
 }
 
 // TODO(AntoineF4C5): Use instruction's trait impl sequence_output
-fn to_instruction_output(cycle: &AtlasCycle) -> Vec<u64> {
+fn to_instruction_output(cycle: &AtlasCycle, td_lookups: &HashMap<usize, AtlasInstr>) -> Vec<u64> {
     let num_elems = cycle.instr.num_output_elements();
     let x = cycle.ts1_vals().unwrap_or(vec![0; num_elems]);
     let y = cycle.ts2_vals().unwrap_or(vec![0; num_elems]);
     match cycle.instr.opcode {
         AtlasOpcode::Add => Add::sequence_output(&x, &y),
-        AtlasOpcode::Broadcast => compute_broadcast_output(cycle),
+        AtlasOpcode::Broadcast => compute_broadcast_output(cycle, td_lookups),
         AtlasOpcode::Constant => cycle.instr.imm().unwrap(),
         AtlasOpcode::Eq => Eq::sequence_output(&x, &y),
         AtlasOpcode::Gte => Gte::sequence_output(&x, &y),

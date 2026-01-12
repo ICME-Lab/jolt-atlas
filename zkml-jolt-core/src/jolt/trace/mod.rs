@@ -39,10 +39,7 @@
 //! let (trace, program_io) = trace(|| model, &input, &preprocessing);
 //! ```
 
-use crate::{
-    jolt::bytecode::{BytecodePreprocessing, JoltONNXBytecode},
-    utils::tensor_to_u64s,
-};
+use crate::jolt::bytecode::{BytecodePreprocessing, JoltONNXBytecode};
 use onnx_tracer::{
     ProgramIO,
     graph::model::Model,
@@ -275,21 +272,10 @@ impl CycleValueCache {
     /// by specialized sum-check precompiles rather than element-wise lookups.
     fn from_cycle(raw_cycle: &AtlasCycle, size: usize) -> Self {
         let (ts1_vals, ts2_vals, ts3_vals) = match raw_cycle.instr.opcode {
-            AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) | AtlasOpcode::Gather => {
-                (vec![0; size], vec![0; size], vec![0; size])
-            }
-            AtlasOpcode::Broadcast => {
-                // broadcast ts1
-                let mut ts1 = raw_cycle
-                    .memory_state
-                    .ts1_val
-                    .clone()
-                    .expect("Broadcast ts1 should be set");
-                ts1 = ts1
-                    .expand(&raw_cycle.instr.output_dims)
-                    .expect("Expand should always work for broadcast cycles");
-                (tensor_to_u64s(&ts1), vec![0; size], vec![0; size])
-            }
+            AtlasOpcode::Einsum(_)
+            | AtlasOpcode::Sum(_)
+            | AtlasOpcode::Gather
+            | AtlasOpcode::Broadcast => (vec![0; size], vec![0; size], vec![0; size]),
             _ => (
                 raw_cycle.ts1_vals().unwrap_or_else(|| vec![0; size]),
                 raw_cycle.ts2_vals().unwrap_or_else(|| vec![0; size]),

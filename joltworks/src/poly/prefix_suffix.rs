@@ -1,20 +1,22 @@
-use std::ops::{Index, IndexMut};
-use std::sync::{Arc, OnceLock, RwLock};
-
+use crate::{
+    field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
+    poly::{
+        dense_mlpoly::DensePolynomial,
+        multilinear_polynomial::{
+            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+        },
+    },
+    utils::{lookup_bits::LookupBits, math::Math, thread::unsafe_allocate_zero_vec},
+};
 use allocative::Allocative;
 use num_traits::Zero;
 use rayon::prelude::*;
+use std::{
+    ops::{Index, IndexMut},
+    sync::{Arc, OnceLock, RwLock},
+};
 use strum::{EnumCount, IntoEnumIterator};
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter as EnumIterMacro};
-
-use crate::field::{ChallengeFieldOps, FieldChallengeOps, JoltField};
-use crate::poly::dense_mlpoly::DensePolynomial;
-use crate::poly::multilinear_polynomial::{
-    BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
-};
-use crate::utils::lookup_bits::LookupBits;
-use crate::utils::math::Math;
-use crate::utils::thread::unsafe_allocate_zero_vec;
 
 #[repr(u8)]
 #[derive(Clone, Copy, EnumIterMacro, EnumCountMacro)]
@@ -184,7 +186,7 @@ pub trait PrefixPolynomial<F: JoltField> {
 }
 
 pub trait SuffixPolynomial<F: JoltField> {
-    fn suffix_mle(&self, b: LookupBits) -> u128;
+    fn suffix_mle(&self, b: LookupBits) -> u64;
 }
 
 pub trait PrefixSuffixPolynomial<F: JoltField, const ORDER: usize> {
@@ -289,12 +291,12 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
                     for j in chunk {
                         let k = lookup_bits[*j];
                         let (prefix_bits, suffix_bits) = k.split(suffix_len);
-                        let r_index: usize = (u128::from(&prefix_bits) as usize) & (poly_len - 1);
+                        let r_index: usize = (u64::from(&prefix_bits) as usize) & (poly_len - 1);
                         if let Some(u) = u_evals.get(*j) {
                             for (s_idx, suffix) in suffixes.iter().enumerate() {
                                 let t = suffix.suffix_mle(suffix_bits);
                                 if t != 0 {
-                                    acc[r_index][s_idx] += u.mul_u128_unreduced(t);
+                                    acc[r_index][s_idx] += u.mul_u64_unreduced(t);
                                 }
                             }
                         }
@@ -367,20 +369,20 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
                     for j in chunk {
                         let k = lookup_bits[*j];
                         let (prefix_bits, suffix_bits) = k.split(suffix_len);
-                        let r_index: usize = (u128::from(&prefix_bits) as usize) & (poly_len - 1);
+                        let r_index: usize = (u64::from(&prefix_bits) as usize) & (poly_len - 1);
                         if let Some(u) = u_evals.get(*j) {
                             // Left
                             for (s_idx, suffix) in suffixes_left.iter().enumerate() {
                                 let t = suffix.suffix_mle(suffix_bits);
                                 if t != 0 {
-                                    acc_l[r_index][s_idx] += u.mul_u128_unreduced(t);
+                                    acc_l[r_index][s_idx] += u.mul_u64_unreduced(t);
                                 }
                             }
                             // Right
                             for (s_idx, suffix) in suffixes_right.iter().enumerate() {
                                 let t = suffix.suffix_mle(suffix_bits);
                                 if t != 0 {
-                                    acc_r[r_index][s_idx] += u.mul_u128_unreduced(t);
+                                    acc_r[r_index][s_idx] += u.mul_u64_unreduced(t);
                                 }
                             }
                         }
@@ -500,9 +502,9 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
                 }
                 if let Some(p) = p {
                     let p = p.read().unwrap();
-                    p.final_sumcheck_claim().mul_u128(suff)
+                    p.final_sumcheck_claim().mul_u64(suff)
                 } else {
-                    F::from_u128(suff)
+                    F::from_u64(suff)
                 }
             })
             .sum()

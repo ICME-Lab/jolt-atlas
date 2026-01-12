@@ -1,5 +1,7 @@
-// pub mod booleanity;
+pub mod booleanity;
+pub mod hamming_weight;
 pub mod mles_product_sum;
+pub mod opening_reduction;
 pub mod sumcheck;
 pub mod sumcheck_prover;
 pub mod sumcheck_verifier;

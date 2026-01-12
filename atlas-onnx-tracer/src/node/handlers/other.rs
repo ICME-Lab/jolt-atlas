@@ -78,10 +78,12 @@ fn handle_einsum(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
     let mut builder = DecompositionBuilder::new(hctx.ctx, 3);
 
+    // Map tract's einsum string to our simplified internal representation
+    let tract_string = axes.to_string();
     builder.add_node(ComputationNode {
         idx: builder.idx(0),
         operator: Operator::Einsum(Einsum {
-            equation: axes.to_string(),
+            equation: tract_string,
         }),
         inputs: hctx.internal_input_indices.clone(),
         output_dims: output_dims.clone(),
@@ -90,7 +92,7 @@ fn handle_einsum(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     builder.add_node(ComputationNode {
         idx: builder.idx(1),
         operator: Operator::Constant(Constant(Tensor::construct(
-            vec![scale; output_dims.iter().product()],
+            vec![1 << scale; output_dims.iter().product()],
             output_dims.clone(),
         ))),
         inputs: vec![],
@@ -99,7 +101,7 @@ fn handle_einsum(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
     builder.add_node(ComputationNode {
         idx: builder.idx(2),
-        operator: Operator::Shr(Default::default()),
+        operator: Operator::Div(Default::default()),
         inputs: vec![builder.idx(0), builder.idx(1)],
         output_dims,
     });

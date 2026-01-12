@@ -54,4 +54,8 @@ impl ComputationNode {
             output_dims,
         }
     }
+
+    pub fn num_output_elements(&self) -> usize {
+        self.output_dims.iter().product()
+    }
 }

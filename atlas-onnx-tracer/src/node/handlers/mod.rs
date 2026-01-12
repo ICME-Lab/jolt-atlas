@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use crate::{model::RunArgs, node::ComputationNode, utils::parser::ParsingContext};
 use tract_onnx::prelude::{Node as TractNode, *};
 
+// TODO: Mark operators that require rebasing and add the rebase nodes automatically (instead of manually implementing them with the builder)
+
 /// Context passed to each operator handler containing all necessary information
 /// to transform a Tract node into ComputationNode(s)
 pub struct HandlerContext<'a> {

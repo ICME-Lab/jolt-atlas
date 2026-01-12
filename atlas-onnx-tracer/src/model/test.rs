@@ -1,0 +1,392 @@
+//! Test utilities for building `Model` instances programmatically.
+//!
+//! This module provides a builder pattern for constructing computation graphs
+//! without needing to load from ONNX files.
+
+use rand::rngs::StdRng;
+
+use crate::{node::ComputationNode, ops::*, tensor::Tensor};
+use std::collections::BTreeMap;
+
+use super::{ComputationGraph, Model};
+
+/// A wire represents a connection to a node's output in the computation graph.
+pub type Wire = usize;
+
+/// Builder for constructing `Model` instances programmatically.
+///
+/// This is useful for testing and creating simple computation graphs
+/// without loading from ONNX files.
+pub struct ModelBuilder {
+    nodes: BTreeMap<usize, ComputationNode>,
+    inputs: Vec<usize>,
+    outputs: Vec<usize>,
+    next_id: usize,
+}
+
+impl Default for ModelBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ModelBuilder {
+    /// Create a new empty model builder.
+    pub fn new() -> Self {
+        Self {
+            nodes: BTreeMap::new(),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            next_id: 0,
+        }
+    }
+
+    /// Allocate a new node ID.
+    fn alloc(&mut self) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    /// Insert a node into the graph and return its wire.
+    fn insert_node(&mut self, node: ComputationNode) -> Wire {
+        let id = node.idx;
+        self.nodes.insert(id, node);
+        id
+    }
+
+    /// Add an input node with the given output dimensions.
+    pub fn input(&mut self, dims: Vec<usize>) -> Wire {
+        let id = self.alloc();
+        let node = ComputationNode::new(id, Operator::Input(Input), vec![], dims);
+        self.inputs.push(id);
+        self.insert_node(node)
+    }
+
+    /// Add a constant tensor node.
+    pub fn constant(&mut self, tensor: Tensor<i32>) -> Wire {
+        let id = self.alloc();
+        let dims = tensor.dims().to_vec();
+        let node = ComputationNode::new(id, Operator::Constant(Constant(tensor)), vec![], dims);
+        self.insert_node(node)
+    }
+
+    /// Add an identity (passthrough) node.
+    pub fn identity(&mut self, input: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&input].output_dims.clone();
+        let node = ComputationNode::new(id, Operator::Identity(Identity), vec![input], output_dims);
+        self.insert_node(node)
+    }
+
+    /// Add a ReLU activation node.
+    pub fn relu(&mut self, input: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&input].output_dims.clone();
+        let node = ComputationNode::new(id, Operator::ReLU(ReLU), vec![input], output_dims);
+        self.insert_node(node)
+    }
+
+    /// Add an addition node.
+    pub fn add(&mut self, a: Wire, b: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&a].output_dims.clone();
+        let node = ComputationNode::new(id, Operator::Add(Add), vec![a, b], output_dims);
+        self.insert_node(node)
+    }
+
+    /// Add a subtraction node.
+    pub fn sub(&mut self, a: Wire, b: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&a].output_dims.clone();
+        let node = ComputationNode::new(id, Operator::Sub(Sub), vec![a, b], output_dims);
+        self.insert_node(node)
+    }
+
+    /// Add a multiplication node.
+    pub fn mul(&mut self, a: Wire, b: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&a].output_dims.clone();
+        let node = ComputationNode::new(id, Operator::Mul(Mul), vec![a, b], output_dims);
+        self.insert_node(node)
+    }
+
+    /// Add a division node.
+    pub fn div(&mut self, a: Wire, b: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&a].output_dims.clone();
+        let node = ComputationNode::new(id, Operator::Div(Div), vec![a, b], output_dims);
+        self.insert_node(node)
+    }
+
+    /// Add a Iff node.
+    pub fn iff(&mut self, condition: Wire, true_branch: Wire, false_branch: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&true_branch].output_dims.clone();
+        let node = ComputationNode::new(
+            id,
+            Operator::Iff(Iff),
+            vec![condition, true_branch, false_branch],
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
+    /// Add a AND node.
+    pub fn and2(&mut self, a: Wire, b: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&a].output_dims.clone();
+        let node = ComputationNode::new(id, Operator::And2(And2), vec![a, b], output_dims);
+        self.insert_node(node)
+    }
+
+    /// Add an einsum node (general tensor contraction).
+    pub fn einsum(&mut self, equation: &str, inputs: Vec<Wire>, output_dims: Vec<usize>) -> Wire {
+        let id = self.alloc();
+        let node = ComputationNode::new(
+            id,
+            Operator::Einsum(Einsum {
+                equation: equation.to_string(),
+            }),
+            inputs,
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
+    /// Add a reshape node.
+    pub fn reshape(&mut self, input: Wire, new_shape: Vec<usize>) -> Wire {
+        let id = self.alloc();
+        let node = ComputationNode::new(
+            id,
+            Operator::Reshape(Reshape(new_shape.clone())),
+            vec![input],
+            new_shape,
+        );
+        self.insert_node(node)
+    }
+
+    /// Add a sum reduction node.
+    pub fn sum(&mut self, input: Wire, axes: Vec<usize>, output_dims: Vec<usize>) -> Wire {
+        let id = self.alloc();
+        let node = ComputationNode::new(id, Operator::Sum(Sum { axes }), vec![input], output_dims);
+        self.insert_node(node)
+    }
+
+    /// Add a square node.
+    pub fn square(&mut self, input: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&input].output_dims.clone();
+        let node = ComputationNode::new(id, Operator::Square(Square), vec![input], output_dims);
+        self.insert_node(node)
+    }
+
+    /// Add a cube node.
+    pub fn cube(&mut self, input: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&input].output_dims.clone();
+        let node = ComputationNode::new(id, Operator::Cube(Cube), vec![input], output_dims);
+        self.insert_node(node)
+    }
+
+    /// Add a gather node.
+    pub fn gather(
+        &mut self,
+        data: Wire,
+        indices: Wire,
+        dim: usize,
+        output_dims: Vec<usize>,
+    ) -> Wire {
+        let id = self.alloc();
+        let node = ComputationNode::new(
+            id,
+            Operator::Gather(Gather { dim }),
+            vec![data, indices],
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
+    /// Mark a wire as an output of the model.
+    pub fn mark_output(&mut self, wire: Wire) {
+        self.outputs.push(wire);
+    }
+
+    /// Build and consume the builder, returning the constructed `Model`.
+    pub fn build(self) -> Model {
+        Model {
+            graph: ComputationGraph {
+                nodes: self.nodes,
+                inputs: self.inputs,
+                outputs: self.outputs,
+            },
+        }
+    }
+}
+
+pub fn and2(rng: &mut StdRng, T: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![T]);
+    let c = b.constant(Tensor::random(rng, &[T]));
+    let res = b.and2(i, c);
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn mul_model(rng: &mut StdRng, T: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![T]);
+    let c = b.constant(Tensor::random_small(rng, &[T]));
+    let res = b.mul(i, c);
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn matmul_model(rng: &mut StdRng, m: usize, k: usize, n: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![m, k]);
+    let c = b.constant(Tensor::random_small(rng, &[k, n]));
+    let res = b.einsum("mk,kn->mn", vec![i, c], vec![m, n]);
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn matvec_model(rng: &mut StdRng, k: usize, n: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![k]);
+    let c = b.constant(Tensor::random_small(rng, &[n, k]));
+    let res = b.einsum("k,nk->n", vec![i, c], vec![n]);
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn mbk_nbk_bmn_model(rng: &mut StdRng, m: usize, b: usize, k: usize, n: usize) -> Model {
+    let mut builder = ModelBuilder::new();
+    let i = builder.input(vec![m, b, k]);
+    let c = builder.constant(Tensor::random_small(rng, &[n, b, k]));
+    let res = builder.einsum("mbk,nbk->bmn", vec![i, c], vec![b, m, n]);
+    builder.mark_output(res);
+    builder.build()
+}
+
+pub fn bmk_kbn_mbn_model(rng: &mut StdRng, b: usize, m: usize, k: usize, n: usize) -> Model {
+    let mut builder = ModelBuilder::new();
+    let i = builder.input(vec![b, m, k]);
+    let c = builder.constant(Tensor::random_small(rng, &[k, b, n]));
+    let res = builder.einsum("bmk,kbn->mbn", vec![i, c], vec![m, b, n]);
+    builder.mark_output(res);
+    builder.build()
+}
+
+pub fn sub_model(rng: &mut StdRng, T: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![T]);
+    let c = b.constant(Tensor::random_small(rng, &[T]));
+    let res = b.sub(i, c);
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn add_model(rng: &mut StdRng, T: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![T]);
+    let c = b.constant(Tensor::random_small(rng, &[T]));
+    let res = b.add(i, c);
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn square_model(T: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![T]);
+    let res = b.square(i);
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn relu_model(T: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![T]);
+    let res = b.relu(i);
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn cube_model(T: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![T]);
+    let res = b.cube(i);
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn div_model(T: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![T]);
+    let c = b.constant(Tensor::construct(vec![128; T], vec![T]));
+    let res = b.div(i, c);
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn iff_model(rng: &mut StdRng, T: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![T]);
+    let mask = b.constant(Tensor::random_boolean(rng, &[T]));
+    let c0 = b.constant(Tensor::random(rng, &[T]));
+    let res = b.iff(mask, i, c0);
+    b.mark_output(res);
+    b.build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_add() {
+        let mut b = ModelBuilder::new();
+
+        let x = b.input(vec![2, 3]);
+        let y = b.input(vec![2, 3]);
+        let z = b.add(x, y);
+        b.mark_output(z);
+
+        let model = b.build();
+
+        assert_eq!(model.graph.inputs.len(), 2);
+        assert_eq!(model.graph.outputs.len(), 1);
+        assert_eq!(model.graph.nodes.len(), 3);
+    }
+
+    #[test]
+    fn test_mlp_like() {
+        let mut b = ModelBuilder::new();
+
+        // Input: [1, 4]
+        let input = b.input(vec![1, 4]);
+
+        // Weights: [4, 8]
+        let w1 = b.constant(Tensor::new(None, &[4, 8]).unwrap());
+
+        // MatMul via einsum: [1,4] x [4,8] -> [1,8]
+        let h1 = b.einsum("mk,kn->mn", vec![input, w1], vec![1, 8]);
+
+        // ReLU
+        let h1_relu = b.relu(h1);
+
+        // Weights: [8, 2]
+        let w2 = b.constant(Tensor::new(None, &[8, 2]).unwrap());
+
+        // MatMul via einsum: [1,8] x [8,2] -> [1,2]
+        let output = b.einsum("mk,kn->mn", vec![h1_relu, w2], vec![1, 2]);
+
+        b.mark_output(output);
+
+        let model = b.build();
+
+        assert_eq!(model.graph.inputs.len(), 1);
+        assert_eq!(model.graph.outputs.len(), 1);
+        assert_eq!(model.graph.nodes.len(), 6);
+    }
+}

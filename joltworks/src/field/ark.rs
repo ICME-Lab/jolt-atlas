@@ -1,9 +1,10 @@
 use super::{FieldOps, JoltField, MulU64WithCarry};
 #[cfg(feature = "challenge-254-bit")]
 use crate::field::challenge::Mont254BitChallenge;
-use crate::field::challenge::MontU128Challenge;
-use crate::field::MulTrunc;
-use crate::utils::thread::unsafe_allocate_zero_vec;
+use crate::{
+    field::{challenge::MontU128Challenge, MulTrunc},
+    utils::thread::unsafe_allocate_zero_vec,
+};
 use ark_ff::{prelude::*, BigInt, PrimeField, UniformRand};
 use rayon::prelude::*;
 
@@ -93,6 +94,20 @@ impl JoltField for ark_bn254::Fr {
             <Self as JoltField>::from_u32(n as u32)
         } else {
             <Self as ark_ff::PrimeField>::from_u64::<5>(n).unwrap()
+        }
+    }
+
+    #[inline]
+    fn from_i32(val: i32) -> Self {
+        if val.is_negative() {
+            let val = val.unsigned_abs();
+            if val <= u16::MAX as u32 {
+                -<Self as JoltField>::from_u16(val as u16)
+            } else {
+                -<Self as JoltField>::from_u32(val)
+            }
+        } else {
+            <Self as JoltField>::from_u32(val as u32)
         }
     }
 
@@ -281,8 +296,7 @@ impl<const N: usize> MulU64WithCarry for BigInt<N> {
 mod tests {
     use crate::field::JoltField;
     use ark_bn254::Fr;
-    use ark_std::test_rng;
-    use ark_std::One;
+    use ark_std::{test_rng, One};
     use rand_chacha::rand_core::RngCore;
 
     #[test]

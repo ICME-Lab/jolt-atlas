@@ -4,10 +4,8 @@ use std::collections::{BTreeMap, HashMap};
 
 pub mod execute;
 pub mod load;
+pub mod test;
 pub mod trace;
-
-/// Represents a node output connection as (node_index, output_slot)
-pub type Outlet = (usize, usize);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Model {
@@ -24,7 +22,34 @@ impl Model {
     /// Forward pass through the model given the input tensors
     pub fn forward(&self, inputs: &[Tensor<i32>]) -> Vec<Tensor<i32>> {
         let node_outputs = self.execute_graph(inputs);
-        self.outputs(&node_outputs)
+        self.extract_graph_outputs(&node_outputs)
+    }
+}
+
+impl Model {
+    pub fn graph(&self) -> &ComputationGraph {
+        &self.graph
+    }
+
+    pub fn nodes(&self) -> &BTreeMap<usize, ComputationNode> {
+        &self.graph.nodes
+    }
+
+    pub fn inputs(&self) -> &[usize] {
+        &self.graph.inputs
+    }
+
+    pub fn outputs(&self) -> &[usize] {
+        &self.graph.outputs
+    }
+
+    pub fn max_T(&self) -> usize {
+        self.graph
+            .nodes
+            .values()
+            .map(|node| node.num_output_elements().next_power_of_two())
+            .max()
+            .unwrap_or(0)
     }
 }
 

@@ -3,8 +3,63 @@ name = "jolt-atlas-core"
 version = "0.1.0"
 edition = "2021"
 
+[profile.test]
+opt-level = 3
+lto = "off"
+
+[profile.release]
+debug = 1
+lto = "fat"
+
+[profile.build-fast]
+inherits = "release"
+incremental = true
+lto = "off"
+overflow-checks = true
+
 [dependencies]
-joltworks = { path = "../joltworks" }
+# Internal dependencies
+atlas-onnx-tracer = { path = "../atlas-onnx-tracer" }
+common = { path = "../common" }
+joltworks = { path = "../joltworks", features = ["test-transcript"] }
+
+# Tracing and Profiling
+tracing = { version = "0.1.37", default-features = false }
+
+# Serialization
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0.108", default-features = false }
+
+# Parallel Processing
+rayon = { version = "^1.8.0" }
+
+# Core Utilities
+strum = { version = "0.26.3", default-features = false }
+strum_macros = "0.26.4"
+derive_more = { version = "2.0.1", features = [
+    "from",
+], default-features = false }
+itertools = "0.10.0"
+regex = "1.10.6"
+
+# Randomness
+rand = { version = "0.8.5", default-features = false }
+rand_core = { version = "0.6.4", default-features = false }
+
+# Numeric
+num = "0.4.3"
+num-derive = "0.4.2"
+num-traits = "0.2.19"
+
+# Cryptography and Math
+ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }
+ark-std = { version = "0.5.0", default-features = false }
+ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false, features = [
+    "derive",
+] }
+
+# Testing
+serial_test = "3.2.0"
 
 [patch.crates-io]
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }

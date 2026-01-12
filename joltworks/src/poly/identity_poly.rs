@@ -3,15 +3,17 @@ use std::sync::{Arc, RwLock};
 use allocative::Allocative;
 use num::Integer;
 
-use crate::field::{ChallengeFieldOps, FieldChallengeOps, JoltField};
-use crate::poly::multilinear_polynomial::MultilinearPolynomial;
-use crate::poly::prefix_suffix::{
-    CachedPolynomial, Prefix, PrefixCheckpoints, PrefixPolynomial, PrefixRegistry,
-    PrefixSuffixPolynomial, SuffixPolynomial,
+use crate::{
+    field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
+    poly::{
+        multilinear_polynomial::MultilinearPolynomial,
+        prefix_suffix::{
+            CachedPolynomial, Prefix, PrefixCheckpoints, PrefixPolynomial, PrefixRegistry,
+            PrefixSuffixPolynomial, SuffixPolynomial,
+        },
+    },
+    utils::{lookup_bits::LookupBits, math::Math, uninterleave_bits},
 };
-use crate::utils::lookup_bits::LookupBits;
-use crate::utils::math::Math;
-use crate::utils::uninterleave_bits;
 
 use super::multilinear_polynomial::{BindingOrder, PolynomialBinding, PolynomialEvaluation};
 
@@ -149,25 +151,25 @@ impl<F: JoltField> PrefixPolynomial<F> for IdentityPolynomial<F> {
 }
 
 impl<F: JoltField> SuffixPolynomial<F> for IdentityPolynomial<F> {
-    fn suffix_mle(&self, b: LookupBits) -> u128 {
+    fn suffix_mle(&self, b: LookupBits) -> u64 {
         debug_assert!(b.len().is_even());
-        u128::from(b)
+        u64::from(b)
     }
 }
 
 pub struct ShiftSuffixPolynomial;
 impl<F: JoltField> SuffixPolynomial<F> for ShiftSuffixPolynomial {
-    fn suffix_mle(&self, b: LookupBits) -> u128 {
+    fn suffix_mle(&self, b: LookupBits) -> u64 {
         debug_assert!(b.len().is_even());
-        1u128 << b.len()
+        1u64 << b.len()
     }
 }
 
 pub struct ShiftHalfSuffixPolynomial;
 impl<F: JoltField> SuffixPolynomial<F> for ShiftHalfSuffixPolynomial {
-    fn suffix_mle(&self, b: LookupBits) -> u128 {
+    fn suffix_mle(&self, b: LookupBits) -> u64 {
         debug_assert!(b.len().is_even());
-        1u128 << (b.len() / 2)
+        1u64 << (b.len() / 2)
     }
 }
 
@@ -273,11 +275,11 @@ impl<F: JoltField> PolynomialEvaluation<F> for OperandPolynomial<F> {
         );
 
         let mut evals = vec![F::zero(); degree];
-        let (left, right) = uninterleave_bits(index as u128);
+        let (left, right) = uninterleave_bits(index as u64);
 
         let index = match self.side {
-            OperandSide::Left => F::from_u64(left),
-            OperandSide::Right => F::from_u64(right),
+            OperandSide::Left => F::from_u32(left),
+            OperandSide::Right => F::from_u32(right),
         };
 
         if self.num_bound_vars.is_even() {
@@ -354,13 +356,13 @@ impl<F: JoltField> PrefixSuffixPolynomial<F, 2> for OperandPolynomial<F> {
 }
 
 impl<F: JoltField> SuffixPolynomial<F> for OperandPolynomial<F> {
-    fn suffix_mle(&self, b: LookupBits) -> u128 {
+    fn suffix_mle(&self, b: LookupBits) -> u64 {
         debug_assert!(b.len().is_even());
         debug_assert!(self.num_bound_vars.is_even());
         let (left, right) = b.uninterleave();
         match self.side {
-            OperandSide::Left => u128::from(left),
-            OperandSide::Right => u128::from(right),
+            OperandSide::Left => u64::from(left),
+            OperandSide::Right => u64::from(right),
         }
     }
 }
@@ -382,11 +384,11 @@ impl<F: JoltField> PrefixPolynomial<F> for OperandPolynomial<F> {
 
         let evals: Vec<F> = (0..chunk_len.pow2())
             .map(|i| {
-                let bits = LookupBits::new(i as u128, chunk_len);
+                let bits = LookupBits::new(i as u64, chunk_len);
                 let (left, right) = bits.uninterleave();
                 let operand_value = match self.side {
-                    OperandSide::Left => F::from_u64(u64::from(left)),
-                    OperandSide::Right => F::from_u64(u64::from(right)),
+                    OperandSide::Left => F::from_u32(u32::from(left)),
+                    OperandSide::Right => F::from_u32(u32::from(right)),
                 };
                 bound_value.mul_u128(1 << (chunk_len / 2)) + operand_value
             })
@@ -460,8 +462,10 @@ impl<F: JoltField> PolynomialEvaluation<F> for UnmapRamAddressPolynomial<F> {
 
 #[cfg(test)]
 mod tests {
-    use crate::poly::multilinear_polynomial::MultilinearPolynomial;
-    use crate::poly::prefix_suffix::tests::prefix_suffix_decomposition_test;
+    use crate::poly::{
+        multilinear_polynomial::MultilinearPolynomial,
+        prefix_suffix::tests::prefix_suffix_decomposition_test,
+    };
 
     use super::*;
     use ark_bn254::Fr;
@@ -574,9 +578,9 @@ mod tests {
             eval_point.reverse();
 
             // Use uninterleave_bits to match the polynomial's implementation
-            let (left, right) = uninterleave_bits(i as u128);
-            let expected_r = Fr::from_u64(right);
-            let expected_l = Fr::from_u64(left);
+            let (left, right) = uninterleave_bits(i as u64);
+            let expected_r = Fr::from_u32(right);
+            let expected_l = Fr::from_u32(left);
 
             assert_eq!(
                 ro_poly.evaluate(&eval_point),
@@ -600,10 +604,10 @@ mod tests {
         let mut lo_poly = OperandPolynomial::<Fr>::new(NUM_VARS, OperandSide::Left);
 
         // Create reference polynomial with evaluations
-        let (reference_evals_l, reference_evals_r): (Vec<Fr>, Vec<Fr>) = (0u128..(1 << NUM_VARS))
+        let (reference_evals_l, reference_evals_r): (Vec<Fr>, Vec<Fr>) = (0u64..(1 << NUM_VARS))
             .map(|i| {
                 let (left, right) = uninterleave_bits(i);
-                (Fr::from_u64(left), Fr::from_u64(right))
+                (Fr::from_u32(left), Fr::from_u32(right))
             })
             .collect();
         let mut reference_poly_r = MultilinearPolynomial::from(reference_evals_r);

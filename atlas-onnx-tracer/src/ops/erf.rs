@@ -1,0 +1,10 @@
+use crate::{
+    ops::{Erf, Op},
+    tensor::{self, Tensor},
+};
+
+impl Op for Erf {
+    fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
+        tensor::ops::nonlinearities::erffunc(inputs[0], self.scale.into())
+    }
+}

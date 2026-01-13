@@ -17,6 +17,7 @@ pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
         ("Sub", handle_sub as OpHandlerFn),
         ("Mul", handle_mul as OpHandlerFn),
         ("Pow", handle_pow as OpHandlerFn),
+        ("Square", handle_square as OpHandlerFn),
         ("And", handle_and as OpHandlerFn),
     ])
 }
@@ -60,7 +61,7 @@ fn handle_mul(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     builder.add_node(ComputationNode {
         idx: builder.idx(1),
         operator: Operator::Constant(Constant(Tensor::construct(
-            vec![scale; output_dims.iter().product()],
+            vec![1 << scale; output_dims.iter().product()],
             output_dims.clone(),
         ))),
         inputs: vec![],
@@ -69,7 +70,7 @@ fn handle_mul(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
     builder.add_node(ComputationNode {
         idx: builder.idx(2),
-        operator: Operator::Shr(Default::default()),
+        operator: Operator::Div(Default::default()),
         inputs: vec![builder.idx(0), builder.idx(1)],
         output_dims,
     });
@@ -102,7 +103,7 @@ fn handle_pow(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
             builder.add_node(ComputationNode {
                 idx: builder.idx(1),
                 operator: Operator::Constant(Constant(Tensor::construct(
-                    vec![scale; output_dims.iter().product()],
+                    vec![1 << scale; output_dims.iter().product()],
                     output_dims.clone(),
                 ))),
                 inputs: vec![],
@@ -111,7 +112,7 @@ fn handle_pow(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
             builder.add_node(ComputationNode {
                 idx: builder.idx(2),
-                operator: Operator::Shr(Default::default()),
+                operator: Operator::Div(Default::default()),
                 inputs: vec![builder.idx(0), builder.idx(1)],
                 output_dims,
             });
@@ -132,7 +133,7 @@ fn handle_pow(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
             builder.add_node(ComputationNode {
                 idx: builder.idx(1),
                 operator: Operator::Constant(Constant(Tensor::construct(
-                    vec![scale * 2; output_dims.iter().product()],
+                    vec![1 << (scale * 2); output_dims.iter().product()],
                     output_dims.clone(),
                 ))),
                 inputs: vec![],
@@ -141,7 +142,7 @@ fn handle_pow(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
             builder.add_node(ComputationNode {
                 idx: builder.idx(2),
-                operator: Operator::Shr(Default::default()),
+                operator: Operator::Div(Default::default()),
                 inputs: vec![builder.idx(0), builder.idx(1)],
                 output_dims,
             });
@@ -163,5 +164,41 @@ fn handle_and(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         inputs: hctx.internal_input_indices.clone(),
         output_dims: hctx.output_dims.clone(),
     });
+    builder.finish()
+}
+
+fn handle_square(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
+    // Square operation: x^2
+    // Decompose into: Square -> Div by (1 << scale) to maintain fixed-point scale
+    let scale = hctx.run_args.scale;
+    let output_dims = hctx.output_dims.clone();
+    let internal_input_indices = hctx.internal_input_indices.clone();
+
+    let mut builder = DecompositionBuilder::new(hctx.ctx, 3);
+
+    builder.add_node(ComputationNode {
+        idx: builder.idx(0),
+        operator: Operator::Square(Default::default()),
+        inputs: internal_input_indices,
+        output_dims: output_dims.clone(),
+    });
+
+    builder.add_node(ComputationNode {
+        idx: builder.idx(1),
+        operator: Operator::Constant(Constant(Tensor::construct(
+            vec![1 << scale; output_dims.iter().product()],
+            output_dims.clone(),
+        ))),
+        inputs: vec![],
+        output_dims: output_dims.clone(),
+    });
+
+    builder.add_node(ComputationNode {
+        idx: builder.idx(2),
+        operator: Operator::Div(Default::default()),
+        inputs: vec![builder.idx(0), builder.idx(1)],
+        output_dims,
+    });
+
     builder.finish()
 }

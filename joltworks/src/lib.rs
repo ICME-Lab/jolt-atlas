@@ -17,6 +17,5 @@ pub mod poly;
 pub mod subprotocols;
 pub mod transcripts;
 pub mod utils;
-pub mod witness;
 
 pub use ark_bn254;

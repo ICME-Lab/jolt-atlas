@@ -16,10 +16,11 @@ keywords = ["SNARK", "cryptography", "proofs", "zkML"]
 
 [workspace]
 members = ["onnx-tracer", "zkml-jolt-core"]
-exclude = ["atlas-onnx-tracer", "joltworks", "jolt-atlas-core"]
+exclude = ["atlas-onnx-tracer", "joltworks", "jolt-atlas-core", "common"]
 
 [lib]
 path = "./src/lib.rs"
+
 
 [dependencies]
 clap = { version = "4.5.4", features = ["derive"] }

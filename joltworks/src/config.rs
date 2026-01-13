@@ -1,131 +1,171 @@
-use crate::{field::JoltField, utils::math::Math};
+use crate::field::JoltField;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use common::consts::{INSTRUCTION_PHASES_THRESHOLD_LOG_T, ONEHOT_CHUNK_THRESHOLD_LOG_T, XLEN};
 
-pub const XLEN: usize = 32;
-pub const LOG_K: usize = XLEN * 2;
+const LOG_K: usize = XLEN * 2;
 
-/// Helper to get log_k_chunk based on log_T
-#[inline]
-pub const fn get_log_k_chunk(log_T: usize) -> usize {
-    // TODO: Determine best point to switch based on empirical data.
-    if log_T < 25 {
-        4
-    } else {
-        8
-    }
-}
-
-pub const fn get_lookups_ra_virtual_log_k_chunk(log_T: usize) -> usize {
-    // TODO: Determine best point to switch based on empirical data.
-    if log_T < 25 {
-        LOG_K / 8
-    } else {
-        LOG_K / 4
-    }
-}
-
-/// Compute the number of phases for instruction lookups based on trace length.
-/// For traces below 2^23 cycles we want to use 16 phases, otherwise 8.
-/// TODO: explore using other number of phases
-/// NOTE: currently only divisors of 128 are supported
-#[inline]
-pub const fn instruction_sumcheck_phases(log_T: usize) -> usize {
-    if log_T < 23 {
+/// Returns the number of phases for instruction sumcheck based on trace length.
+///
+/// For shorter traces (log_T < threshold), uses 16 phases for better parallelism.
+/// For longer traces, uses 8 phases to reduce overhead.
+pub fn get_instruction_sumcheck_phases(log_t: usize) -> usize {
+    if log_t < INSTRUCTION_PHASES_THRESHOLD_LOG_T {
         16
     } else {
         8
     }
 }
 
-/// Helper to compute d (number of chunks) from log_k and log_k_chunk.
-#[inline]
-fn compute_d(log_k: usize, log_chunk: usize) -> usize {
-    log_k.div_ceil(log_chunk)
+/// Minimal configuration for one-hot encoding that gets serialized in the proof.
+///
+/// Contains only the prover's choices. All fields are `u8` to minimize proof size.
+/// The verifier validates these choices and reconstructs the full `OneHotParams`.
+#[derive(Clone, Debug, PartialEq, Eq, CanonicalSerialize, CanonicalDeserialize)]
+pub struct OneHotConfig {
+    /// Log₂ of chunk size for one-hot encoding of address variables.
+    ///
+    /// This determines how the address space is decomposed into committed RA polynomials.
+    /// Each committed RA polynomial handles 2^log_k_chunk addresses. The total number
+    /// of committed RA polynomials is LOG_K / log_k_chunk (e.g., 128/8 = 16 for RV64).
+    ///
+    /// Must be either 4 or 8 currently
+    pub log_k_chunk: u8,
+
+    /// Log₂ of chunk size for virtual RA polynomials in instruction lookups.
+    ///
+    /// In the instruction lookups Read+RAF sumcheck, the RA polynomial over LOG_K address
+    /// bits is decomposed into virtual RA polynomials, each covering `lookups_ra_virtual_log_k_chunk`
+    /// address bits. Each virtual RA poly is the product of `lookups_ra_virtual_log_k_chunk / log_k_chunk`
+    /// committed RA polynomials.
+    ///
+    /// Must be a multiple of `log_k_chunk` and divide LOG_K evenly.
+    /// Valid range: [log_k_chunk, LOG_K] (e.g., 4-128 or 8-128 depending on log_k_chunk).
+    pub lookups_ra_virtual_log_k_chunk: u8,
 }
 
+impl OneHotConfig {
+    /// Create a OneHotConfig with default values based on trace length.
+    pub fn new(log_T: usize) -> Self {
+        let log_k_chunk = if log_T < ONEHOT_CHUNK_THRESHOLD_LOG_T {
+            4
+        } else {
+            8
+        };
+        let lookups_ra_virtual_log_k_chunk = if log_T < ONEHOT_CHUNK_THRESHOLD_LOG_T {
+            LOG_K / 8
+        } else {
+            LOG_K / 4
+        };
+
+        Self {
+            log_k_chunk: log_k_chunk as u8,
+            lookups_ra_virtual_log_k_chunk: lookups_ra_virtual_log_k_chunk as u8,
+        }
+    }
+
+    /// Validates that the one-hot configuration is valid.
+    ///
+    /// This is called by the verifier to ensure the prover hasn't provided
+    /// an invalid configuration that would break soundness.
+    pub fn validate(&self) -> Result<(), String> {
+        // log_k_chunk must be either 4 or 8
+        if self.log_k_chunk != 4 && self.log_k_chunk != 8 {
+            return Err(format!(
+                "log_k_chunk ({}) must be either 4 or 8",
+                self.log_k_chunk
+            ));
+        }
+
+        let log_k_chunk = self.log_k_chunk as usize;
+        let lookups_chunk = self.lookups_ra_virtual_log_k_chunk as usize;
+
+        // lookups_ra_virtual_log_k_chunk must be at least log_k_chunk
+        if lookups_chunk < log_k_chunk {
+            return Err(format!(
+                "lookups_ra_virtual_log_k_chunk ({lookups_chunk}) must be >= log_k_chunk ({log_k_chunk})"
+            ));
+        }
+
+        // lookups_ra_virtual_log_k_chunk must be at most LOG_K (128 for RV64)
+        if lookups_chunk > LOG_K {
+            return Err(format!(
+                "lookups_ra_virtual_log_k_chunk ({lookups_chunk}) must be <= LOG_K ({LOG_K})"
+            ));
+        }
+
+        // lookups_ra_virtual_log_k_chunk must be a multiple of log_k_chunk
+        if lookups_chunk % log_k_chunk != 0 {
+            return Err(format!(
+                "lookups_ra_virtual_log_k_chunk ({lookups_chunk}) must be a multiple of log_k_chunk ({log_k_chunk})"
+            ));
+        }
+
+        // LOG_K must be divisible by lookups_ra_virtual_log_k_chunk
+        if LOG_K % lookups_chunk != 0 {
+            return Err(format!(
+                "LOG_K ({LOG_K}) must be divisible by lookups_ra_virtual_log_k_chunk ({lookups_chunk})"
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+/// Full one-hot parameters with cached derived values.
+///
+/// This struct is NOT serialized in the proof. It is constructed by the prover
+/// and verifier from `OneHotConfig` plus the proof parameters (bytecode_K, ram_K).
 #[derive(Clone, Debug, Default)]
 pub struct OneHotParams {
     pub log_k_chunk: usize,
     pub lookups_ra_virtual_log_k_chunk: usize,
     pub k_chunk: usize,
-
-    pub bytecode_k: usize,
-    pub ram_k: usize,
-
     pub instruction_d: usize,
-    pub bytecode_d: usize,
-    pub ram_d: usize,
-
     instruction_shifts: Vec<usize>,
-    ram_shifts: Vec<usize>,
-    bytecode_shifts: Vec<usize>,
 }
 
 impl OneHotParams {
-    // TODO: Should check the params are valid. Return a Result.
-    pub fn new(log_T: usize, bytecode_k: usize, ram_k: usize) -> Self {
-        let log_k_chunk = get_log_k_chunk(log_T);
-        let lookups_ra_virtual_log_k_chunk = get_lookups_ra_virtual_log_k_chunk(log_T);
-        Self::new_with_log_k_chunk(
-            log_k_chunk,
-            lookups_ra_virtual_log_k_chunk,
-            bytecode_k,
-            ram_k,
-        )
-    }
+    /// Construct full OneHotParams from a config and proof parameters.
+    ///
+    /// This is used by the verifier to reconstruct the full params from
+    /// the minimal config stored in the proof.
+    pub fn from_config(config: &OneHotConfig) -> Self {
+        let log_k_chunk = config.log_k_chunk as usize;
+        let lookups_ra_virtual_log_k_chunk = config.lookups_ra_virtual_log_k_chunk as usize;
 
-    // TODO: Should check the params are valid. Return a Result.
-    pub fn new_with_log_k_chunk(
-        log_k_chunk: usize,
-        lookups_ra_virtual_log_k_chunk: usize,
-        bytecode_k: usize,
-        ram_k: usize,
-    ) -> Self {
-        // log_k_chunk must be at most 8 so that chunk indices fit in u8
-        assert!(
-            log_k_chunk <= 8,
-            "log_k_chunk must be <= 8 to fit in u8, got {log_k_chunk}",
-        );
-        let instruction_d = compute_d(LOG_K, log_k_chunk);
-        let bytecode_d = compute_d(bytecode_k.log_2(), log_k_chunk);
-        let ram_d = compute_d(ram_k.log_2(), log_k_chunk);
+        let instruction_d = LOG_K.div_ceil(log_k_chunk);
 
         let instruction_shifts = (0..instruction_d)
             .map(|i| log_k_chunk * (instruction_d - 1 - i))
             .collect();
-        let ram_shifts = (0..ram_d).map(|i| log_k_chunk * (ram_d - 1 - i)).collect();
-        let bytecode_shifts = (0..bytecode_d)
-            .map(|i| log_k_chunk * (bytecode_d - 1 - i))
-            .collect();
 
-        let k_chunk = 1 << log_k_chunk;
         Self {
             log_k_chunk,
             lookups_ra_virtual_log_k_chunk,
-            k_chunk,
-            bytecode_k,
-            ram_k,
+            k_chunk: 1 << log_k_chunk,
             instruction_d,
-            bytecode_d,
-            ram_d,
             instruction_shifts,
-            ram_shifts,
-            bytecode_shifts,
         }
     }
 
-    #[inline(always)]
-    pub fn ram_address_chunk(&self, address: u64, idx: usize) -> u8 {
-        ((address >> self.ram_shifts[idx]) & (self.k_chunk - 1) as u64) as u8
+    /// Create OneHotParams for the given trace parameters using default config.
+    ///
+    /// This is a convenience constructor for the prover.
+    pub fn new(log_T: usize) -> Self {
+        let config = OneHotConfig::new(log_T);
+        Self::from_config(&config)
     }
 
-    #[inline(always)]
-    pub fn bytecode_pc_chunk(&self, pc: usize, idx: usize) -> u8 {
-        ((pc >> self.bytecode_shifts[idx]) & (self.k_chunk - 1)) as u8
+    /// Extract the minimal config for serialization in the proof.
+    pub fn to_config(&self) -> OneHotConfig {
+        OneHotConfig {
+            log_k_chunk: self.log_k_chunk as u8,
+            lookups_ra_virtual_log_k_chunk: self.lookups_ra_virtual_log_k_chunk as u8,
+        }
     }
 
-    #[inline(always)]
-    pub fn lookup_index_chunk(&self, index: u128, idx: usize) -> u8 {
-        ((index >> self.instruction_shifts[idx]) & (self.k_chunk - 1) as u128) as u8
+    pub fn lookup_index_chunk(&self, index: u64, idx: usize) -> u8 {
+        ((index >> self.instruction_shifts[idx]) & (self.k_chunk - 1) as u64) as u8
     }
 
     pub fn compute_r_address_chunks<F: JoltField>(

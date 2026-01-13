@@ -22,6 +22,8 @@ use atlas_onnx_tracer::model::{Model, RunArgs};
 /// [1] https://openai.com/research/better-language-models
 /// [2] https://huggingface.co/docs/optimum/index
 fn main() {
+    // TODO: handle multiple inputs
+
     let run_args = RunArgs::new([
         ("batch_size", 1),
         ("sequence_length", 512),

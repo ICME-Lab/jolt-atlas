@@ -1,9 +1,11 @@
 use allocative::Allocative;
 use ark_ff::{BigInt, UniformRand};
 use num_traits::{One, Zero};
-use std::fmt::{Debug, Display};
-use std::hash::Hash;
-use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use std::{
+    fmt::{Debug, Display},
+    hash::Hash,
+    ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign},
+};
 
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
@@ -190,6 +192,8 @@ pub trait JoltField:
     fn from_u32(n: u32) -> Self;
     /// Conversion from a 64-bit unsigned integer to a field element.
     fn from_u64(n: u64) -> Self;
+    /// Conversion from a 64-bit signed integer to a field element.
+    fn from_i32(val: i32) -> Self;
     /// Conversion from a 64-bit signed integer to a field element.
     fn from_i64(val: i64) -> Self;
     /// Conversion from a 128-bit signed integer to a field element.

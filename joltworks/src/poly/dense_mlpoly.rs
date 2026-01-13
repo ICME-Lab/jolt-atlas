@@ -1,18 +1,23 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::uninlined_format_args)]
-use crate::poly::multilinear_polynomial::PolynomialEvaluation;
-use crate::utils::thread::unsafe_allocate_zero_vec;
-use crate::utils::{compute_dotproduct, compute_dotproduct_low_optimized};
-use crate::{field::ChallengeFieldOps, poly::eq_poly::EqPolynomial};
+use crate::{
+    field::ChallengeFieldOps,
+    poly::{eq_poly::EqPolynomial, multilinear_polynomial::PolynomialEvaluation},
+    utils::{
+        compute_dotproduct, compute_dotproduct_low_optimized, thread::unsafe_allocate_zero_vec,
+    },
+};
 
-use crate::field::{FieldChallengeOps, JoltField, OptimizedMul};
-use crate::utils::math::Math;
-use crate::utils::small_scalar::SmallScalar;
+use crate::{
+    field::{FieldChallengeOps, JoltField, OptimizedMul},
+    utils::{math::Math, small_scalar::SmallScalar},
+};
 use allocative::Allocative;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use core::ops::Index;
 use rand_core::{CryptoRng, RngCore};
 use rayon::prelude::*;
+use std::ops::IndexMut;
 
 use super::multilinear_polynomial::{BindingOrder, MultilinearPolynomial};
 
@@ -496,6 +501,13 @@ impl<F: JoltField> Index<usize> for DensePolynomial<F> {
     #[inline(always)]
     fn index(&self, _index: usize) -> &F {
         &(self.Z[_index])
+    }
+}
+
+impl<F: JoltField> IndexMut<usize> for DensePolynomial<F> {
+    #[inline(always)]
+    fn index_mut(&mut self, _index: usize) -> &mut F {
+        &mut (self.Z[_index])
     }
 }
 

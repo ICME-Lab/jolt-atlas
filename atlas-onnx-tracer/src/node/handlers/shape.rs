@@ -9,8 +9,8 @@ use tract_onnx::{
 
 use crate::{
     node::ComputationNode,
-    ops::{MoveAxis, MultiBroadcast, Operator, Reshape},
-    utils::parser::{DecompositionBuilder, load_op},
+    ops::{Broadcast, MoveAxis, Operator, Reshape},
+    utils::parser::{load_op, DecompositionBuilder},
 };
 
 use super::{HandlerContext, OpHandlerFn};
@@ -21,7 +21,7 @@ pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
         ("RmAxis", handle_reshape as OpHandlerFn),
         ("AddAxis", handle_reshape as OpHandlerFn),
         ("MoveAxis", handle_move_axis as OpHandlerFn),
-        ("MultiBroadcastTo", handle_multi_broadcast as OpHandlerFn),
+        ("MultiBroadcastTo", handle_broadcast as OpHandlerFn),
     ])
 }
 
@@ -58,7 +58,7 @@ fn handle_move_axis(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     }
 }
 
-fn handle_multi_broadcast(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
+fn handle_broadcast(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let op = load_op::<MultiBroadcastTo>(hctx.node.op(), hctx.node.op().name().to_string());
     let shape = op.shape.clone();
     let shape = shape
@@ -70,7 +70,7 @@ fn handle_multi_broadcast(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
     builder.add_node(ComputationNode {
         idx: builder.idx(0),
-        operator: Operator::MultiBroadcast(MultiBroadcast { shape }),
+        operator: Operator::Broadcast(Broadcast { shape }),
         inputs: hctx.internal_input_indices.clone(),
         output_dims: hctx.output_dims.clone(),
     });

@@ -35,7 +35,7 @@ impl From<&ComputationNode> for NodeRow {
             Operator::Sum(op) => format!("axes: {:?}", op.axes),
             Operator::MoveAxis(op) => format!("src: {} → dst: {}", op.source, op.destination),
             Operator::Reshape(shape) => format!("shape: {shape:?}"),
-            Operator::MultiBroadcast(op) => format!("shape: {:?}", op.shape),
+            Operator::Broadcast(op) => format!("shape: {:?}", op.shape),
             Operator::Rsqrt(op) => format!("scale: {}", op.scale),
             Operator::Tanh(op) => format!("scale: {}", op.scale),
             _ => "-".to_string(),

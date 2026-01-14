@@ -406,6 +406,25 @@ impl<T: Clone + TensorType> Tensor<T> {
         Tensor::new(Some(&inner), &[inner.len()])
     }
 
+    /// Pads the tensor to power of 2 dimensions
+    pub fn pad_next_power_of_two(&mut self)
+    where
+        T: Send + Sync,
+    {
+        let padded_dims: Vec<usize> = self
+            .dims()
+            .iter()
+            .map(|dim| dim.next_power_of_two())
+            .collect();
+
+        let result = self.pad_to_dims(&padded_dims);
+        assert!(
+            result.is_ok(),
+            "Unexpected internal error: {:?}",
+            result.err()
+        );
+    }
+
     /// Pads the tensor to specific target dimensions with zeros.
     /// Only supports growing dimensions (target must be >= current for each dimension).
     ///
@@ -953,14 +972,19 @@ impl<T: Clone + TensorType> Tensor<T> {
             return Ok(self.clone());
         }
 
-        for d in self.dims() {
-            if !(shape.contains(d) || *d == 1) {
-                return Err(TensorError::DimError(format!(
-                    "The current dimension {d} must be contained in the new shape
-  {shape:?} or be 1",
-                )));
-            }
-        }
+        if self
+            .dims()
+            .iter()
+            .rev()
+            .zip(shape.iter().rev())
+            .any(|(&in_dim, &target_dim)| in_dim != target_dim && in_dim != 1)
+        {
+            return Err(TensorError::DimError(format!(
+                "Cannot expand {:?} to incompatible shape {:?}",
+                self.dims(),
+                shape
+            )));
+        };
 
         let cartesian_coords = shape
             .iter()
@@ -970,13 +994,16 @@ impl<T: Clone + TensorType> Tensor<T> {
 
         let mut output = Tensor::new(None, shape)?;
 
+        let dims_offset = shape.len() - self.dims().len();
         for coord in cartesian_coords {
             let mut new_coord = Vec::with_capacity(self.dims().len());
             for (i, c) in coord.iter().enumerate() {
-                if i < self.dims().len() && self.dims()[i] == 1 {
-                    new_coord.push(0);
-                } else if i >= self.dims().len() {
+                if i < dims_offset {
                     // do nothing at this point does not exist in the original tensor
+                    continue;
+                }
+                if self.dims()[i - dims_offset] == 1 {
+                    new_coord.push(0);
                 } else {
                     new_coord.push(*c);
                 }

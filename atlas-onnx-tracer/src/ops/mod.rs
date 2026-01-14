@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub mod add;
 pub mod and;
 pub mod and2;
+pub mod broadcast;
 pub mod constant;
 pub mod cube;
 pub mod div;
@@ -16,7 +17,6 @@ pub mod input;
 pub mod is_nan;
 pub mod move_axis;
 pub mod mul;
-pub mod multi_broadcast;
 pub mod noop;
 pub mod relu;
 pub mod reshape;
@@ -75,7 +75,7 @@ define_operators! {
         Add, And, And2, Constant(Tensor<i32>), Cube, Div, Einsum { equation: String },
         Erf { scale: F32 }, Gather { dim: usize }, Identity, Iff, Input,
         IsNan { out_dims: Vec<usize> }, MoveAxis { source: usize, destination: usize },
-        Mul, MultiBroadcast { shape: Vec<usize> }, Noop, ReLU, Reshape(Vec<usize>),
+        Mul, Broadcast { shape: Vec<usize> }, Noop, ReLU, Reshape(Vec<usize>),
         Rsqrt { scale: F32 }, Shr, Softmax { axes: usize, scale: F32 }, Square,
         Sub, Sum { axes: Vec<usize> }, Tanh { scale: F32 }
     ]

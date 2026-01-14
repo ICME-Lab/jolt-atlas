@@ -40,6 +40,7 @@ use crate::{
         ComputationNode,
         handlers::{HANDLERS, HandlerContext},
     },
+    ops::{Op, Operator},
     tensor::Tensor,
 };
 
@@ -200,7 +201,10 @@ impl<'a> GraphParser<'a> {
             output_dims,
         };
 
-        handler(&mut handler_ctx)
+        let nodes = handler(&mut handler_ctx);
+        let nodes = GraphParser::insert_broadcast_nodes(nodes, ctx);
+
+        nodes
     }
 
     /// Resolves the internal indices for all input nodes of the given tract node.
@@ -332,6 +336,47 @@ impl<'a> GraphParser<'a> {
             shapes.push(mv)
         }
         shapes
+    }
+
+    pub fn insert_broadcast_nodes(
+        computation_nodes: Vec<ComputationNode>,
+        ctx: &mut ParsingContext,
+    ) -> Vec<ComputationNode> {
+        let mut new_nodes = Vec::new();
+        let mut remappings = BTreeMap::new();
+        let mut added_nodes = 0;
+
+        for mut node in computation_nodes {
+            if node.operator.requires_shape_equality() {
+                for input_idx in node.inputs.iter_mut() {
+                    if let Some(input_node) = ctx.nodes.get(input_idx) {
+                        if input_node.output_dims != node.output_dims {
+                            // Insert a broadcast node
+                            let broadcast_idx = node.idx + added_nodes;
+                            let broadcast_node = ComputationNode {
+                                idx: broadcast_idx,
+                                operator: Operator::Broadcast(crate::ops::Broadcast {
+                                    shape: node.output_dims.clone(),
+                                }),
+                                inputs: vec![*input_idx],
+                                output_dims: node.output_dims.clone(),
+                            };
+                            new_nodes.push(broadcast_node);
+                            *input_idx = broadcast_idx;
+                            added_nodes += 1;
+                            ctx.next_idx += 1;
+                        }
+                    }
+                    *input_idx = *remappings.get(input_idx).unwrap_or(input_idx);
+                }
+            }
+
+            remappings.insert(node.idx, node.idx + added_nodes);
+            node.idx += added_nodes;
+            new_nodes.push(node);
+        }
+
+        new_nodes
     }
 }
 
@@ -727,4 +772,123 @@ pub fn extract_tensor_value(
     const_value.reshape(&dims)?;
 
     Ok(const_value)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::{Add, Noop, Operator};
+
+    #[test]
+    fn test_insert_broadcast_nodes_no_shape_equality() {
+        let mut ctx = ParsingContext::new();
+        let nodes = vec![
+            ComputationNode::new(0, Operator::Noop(Noop), vec![], vec![2, 3]),
+            ComputationNode::new(1, Operator::Noop(Noop), vec![0], vec![2, 3]),
+        ];
+        ctx.next_idx = 2;
+
+        let result = GraphParser::insert_broadcast_nodes(nodes, &mut ctx);
+
+        // Noop doesn't require shape equality, so no broadcasts should be inserted
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].inputs.len(), 0);
+        assert_eq!(result[1].inputs, vec![0]);
+    }
+
+    /// Test when input shapes already match - no broadcasting needed
+    #[test]
+    fn test_insert_broadcast_nodes_no_broadcast_needed() {
+        let mut ctx = ParsingContext::new();
+        // Create input node with dimensions [2, 3] in ctx (already processed)
+        ctx.nodes.insert(
+            0,
+            ComputationNode::new(0, Operator::Noop(Noop), vec![], vec![2, 3]),
+        );
+        ctx.next_idx = 1;
+
+        // Create an Add node that expects [2, 3] input - no broadcasting needed
+        let nodes = vec![ComputationNode::new(
+            1,
+            Operator::Add(Add),
+            vec![0],
+            vec![2, 3],
+        )];
+
+        let result = GraphParser::insert_broadcast_nodes(nodes, &mut ctx);
+
+        // No broadcast should be needed since dimensions match
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].inputs, vec![0]); // Input unchanged
+        assert_eq!(result[0].idx, 1); // Node index unchanged
+    }
+
+    /// Test when broadcasting is needed due to shape mismatch
+    #[test]
+    fn test_insert_broadcast_nodes_broadcast_needed() {
+        let mut ctx = ParsingContext::new();
+        // Create input node with dimensions [5] (smaller shape)
+        ctx.nodes.insert(
+            0,
+            ComputationNode::new(0, Operator::Noop(Noop), vec![], vec![5]),
+        );
+        ctx.next_idx = 1;
+
+        // Create an Add node that expects [3, 4, 5] input - broadcasting needed
+        let nodes = vec![ComputationNode::new(
+            1,
+            Operator::Add(Add),
+            vec![0],
+            vec![3, 4, 5],
+        )];
+
+        let result = GraphParser::insert_broadcast_nodes(nodes, &mut ctx);
+
+        // Broadcast should be needed since [5] needs to become [3, 4, 5]
+        assert_eq!(
+            result.len(),
+            2,
+            "Should have broadcast node + original node"
+        );
+
+        // Check the broadcast node was created correctly
+        assert_eq!(result[0].inputs, vec![0]); // Points to original input
+        assert_eq!(result[0].output_dims, vec![3, 4, 5]); // Broadcasted dimensions
+
+        // Check the Add node's input points to the broadcast node
+        assert_eq!(result[1].inputs.len(), 1);
+        assert_eq!(result[1].inputs[0], result[0].idx); // Points to broadcast node
+    }
+
+    /// Test multiple inputs with mixed broadcasting requirements
+    #[test]
+    fn test_insert_broadcast_nodes_multiple_inputs_mixed() {
+        let mut ctx = ParsingContext::new();
+        // Create two input nodes with different dimensions
+        ctx.nodes.insert(
+            0,
+            ComputationNode::new(0, Operator::Noop(Noop), vec![], vec![5]), // [5] needs broadcast
+        );
+        ctx.nodes.insert(
+            1,
+            ComputationNode::new(1, Operator::Noop(Noop), vec![], vec![3, 4, 5]), // [3, 4, 5] matches
+        );
+        ctx.next_idx = 2;
+
+        // Create an Add node that expects [3, 4, 5] for both inputs
+        let nodes = vec![ComputationNode::new(
+            2,
+            Operator::Add(Add),
+            vec![0, 1],
+            vec![3, 4, 5],
+        )];
+
+        let result = GraphParser::insert_broadcast_nodes(nodes, &mut ctx);
+
+        // Only first input should need broadcasting
+        assert_eq!(result.len(), 2, "Should have one broadcast node + add node");
+
+        // First input should point to broadcast, second should remain unchanged
+        assert!(result[1].inputs.contains(&result[0].idx));
+        assert!(result[1].inputs.contains(&1)); // Second input unchanged
+    }
 }

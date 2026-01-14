@@ -5,4 +5,8 @@ impl Op for And2 {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         tensor::ops::and2(inputs[0], inputs[1]).unwrap()
     }
+
+    fn requires_shape_equality(&self) -> bool {
+        true
+    }
 }

@@ -10,7 +10,7 @@ use tract_onnx::{
 use crate::{
     node::ComputationNode,
     ops::{Broadcast, MoveAxis, Operator, Reshape},
-    utils::parser::{load_op, DecompositionBuilder},
+    utils::parser::{DecompositionBuilder, load_op},
 };
 
 use super::{HandlerContext, OpHandlerFn};
@@ -29,7 +29,9 @@ fn handle_reshape(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
     builder.add_node(ComputationNode {
         idx: builder.idx(0),
-        operator: Operator::Reshape(Reshape(hctx.output_dims.clone())),
+        operator: Operator::Reshape(Reshape {
+            shape: hctx.output_dims.clone(),
+        }),
         inputs: hctx.internal_input_indices.clone(),
         output_dims: hctx.output_dims.clone(),
     });

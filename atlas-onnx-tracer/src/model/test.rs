@@ -172,7 +172,9 @@ impl ModelBuilder {
         let id = self.alloc();
         let node = ComputationNode::new(
             id,
-            Operator::Reshape(Reshape(new_shape.clone())),
+            Operator::Reshape(Reshape {
+                shape: new_shape.clone(),
+            }),
             vec![input],
             new_shape,
         );

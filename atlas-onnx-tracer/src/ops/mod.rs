@@ -75,7 +75,7 @@ define_operators! {
         Add, And, And2, Constant(Tensor<i32>), Cube, Div, Einsum { equation: String },
         Erf { scale: F32 }, Gather { dim: usize }, Identity, Iff, Input,
         IsNan { out_dims: Vec<usize> }, MoveAxis { source: usize, destination: usize },
-        Mul, Broadcast { shape: Vec<usize> }, Noop, ReLU, Reshape(Vec<usize>),
+        Mul, Broadcast { shape: Vec<usize> }, Noop, ReLU, Reshape { shape:Vec<usize> },
         Rsqrt { scale: F32 }, Shr, Softmax { axes: usize, scale: F32 }, Square,
         Sub, Sum { axes: Vec<usize> }, Tanh { scale: F32 }
     ]
@@ -96,5 +96,9 @@ pub trait Op {
 impl Op for Operator {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         self.inner().f(inputs)
+    }
+
+    fn requires_shape_equality(&self) -> bool {
+        self.inner().requires_shape_equality()
     }
 }

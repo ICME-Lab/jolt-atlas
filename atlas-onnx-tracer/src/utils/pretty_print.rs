@@ -34,7 +34,7 @@ impl From<&ComputationNode> for NodeRow {
             Operator::Softmax(op) => format!("axes: {}", op.axes),
             Operator::Sum(op) => format!("axes: {:?}", op.axes),
             Operator::MoveAxis(op) => format!("src: {} → dst: {}", op.source, op.destination),
-            Operator::Reshape(shape) => format!("shape: {shape:?}"),
+            Operator::Reshape(op) => format!("shape: {:?}", op.shape),
             Operator::Broadcast(op) => format!("shape: {:?}", op.shape),
             Operator::Rsqrt(op) => format!("scale: {}", op.scale),
             Operator::Tanh(op) => format!("scale: {}", op.scale),

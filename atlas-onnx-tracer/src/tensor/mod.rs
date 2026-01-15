@@ -420,15 +420,15 @@ impl<T: Clone + TensorType> Tensor<T> {
             .map(|dim| dim.next_power_of_two())
             .collect();
 
-        // Check if this is a broadcast constant (all values are the same)
-        let is_broadcast = if !self.inner.is_empty() {
+        // Check if this is a constant from a const div(all values are the same)
+        let is_const_div = if !self.inner.is_empty() {
             let first_val = &self.inner[0];
             self.inner.iter().all(|v| v == first_val)
         } else {
             false
         };
 
-        let result = if is_broadcast {
+        let result = if is_const_div {
             self.pad_to_dims_with_value(&padded_dims, self.inner[0].clone())
         } else {
             self.pad_to_dims(&padded_dims)

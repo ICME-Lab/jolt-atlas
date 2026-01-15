@@ -230,17 +230,6 @@ impl Model {
             .collect()
     }
 
-    /// Calculates the next power of 2 for a given dimension.
-    ///
-    /// # Arguments
-    /// * `n` - The dimension to round up
-    ///
-    /// # Returns
-    /// The next power of 2 >= n
-    fn next_power_of_2(n: usize) -> usize {
-        n.next_power_of_two()
-    }
-
     /// Pads all dimensions in a shape to their next power of 2.
     ///
     /// # Arguments
@@ -256,7 +245,7 @@ impl Model {
     /// assert_eq!(padded, vec![4, 8, 16, 8]);
     /// ```
     fn pad_dims_to_power_of_2(dims: &[usize]) -> Vec<usize> {
-        dims.iter().map(|&d| Self::next_power_of_2(d)).collect()
+        dims.iter().map(|&d| d.next_power_of_two()).collect()
     }
 }
 

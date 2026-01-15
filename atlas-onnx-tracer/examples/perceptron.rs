@@ -14,13 +14,11 @@ fn main() {
     let input_data = vec![1, 2, 3, 4];
     let input = Tensor::new(Some(&input_data), &[1, 4]).unwrap();
 
-    println!("\nInput tensor: {:?}", input);
-
     // Execute the model
     let outputs = model.forward(&[input]);
 
     println!("\nOutput tensors:");
     for (i, output) in outputs.iter().enumerate() {
-        println!("  Output {}: {:?}", i, output);
+        println!("  Output {i}: {output:?}");
     }
 }

@@ -163,6 +163,16 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                         Sumcheck::prove(&mut prover_sumcheck, &mut opening_accumulator, transcript);
                     proofs.insert(ProofId(node_idx, ProofType::Execution), proof);
                 }
+                Operator::Reshape(_) => {
+                    let params = ops::reshape::ReshapeParams::<F>::new(
+                        computation_node.clone(),
+                        &opening_accumulator,
+                    );
+                    let mut prover_sumcheck = ops::reshape::ReshapeProver::new(params);
+                    let (proof, _) =
+                        Sumcheck::prove(&mut prover_sumcheck, &mut opening_accumulator, transcript);
+                    proofs.insert(ProofId(node_idx, ProofType::Execution), proof);
+                }
                 Operator::Einsum(_) => {
                     let mut prover_sumcheck = EinsumProver::sumcheck(
                         &pp.model,
@@ -455,6 +465,24 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                         .get(&ProofId(node_idx, ProofType::Execution))
                         .ok_or(ProofVerifyError::MissingProof(node_idx))?;
                     let verifier_sumcheck = BroadcastVerifier::new(
+                        computation_node.clone(),
+                        &opening_accumulator,
+                        &pp.model.graph,
+                    );
+                    let _ = Sumcheck::verify(
+                        proof,
+                        &verifier_sumcheck,
+                        &mut opening_accumulator,
+                        transcript,
+                    )?;
+                    Ok(())
+                }
+                Operator::Reshape(_) => {
+                    let proof = self
+                        .proofs
+                        .get(&ProofId(node_idx, ProofType::Execution))
+                        .ok_or(ProofVerifyError::MissingProof(node_idx))?;
+                    let verifier_sumcheck = ops::reshape::ReshapeVerifier::new(
                         computation_node.clone(),
                         &opening_accumulator,
                         &pp.model.graph,
@@ -779,6 +807,33 @@ mod tests {
         // Print output for verification
         println!("Output shape: {:?}", io.outputs[0].dims());
         println!("Expected: input [4] broadcasted through operations to shape [2, 5, 4]");
+    }
+
+    #[test]
+    fn test_reshape() {
+        let working_dir = "../atlas-onnx-tracer/models/reshape/";
+
+        // Create test input vector of size [4]
+        // Using simple values to test reshaping
+        let input_vector = vec![1, 2, 3, 4];
+
+        let input = Tensor::construct(input_vector, vec![4]);
+
+        // Load the model
+        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
+        println!("model: {}", model.pretty_print());
+
+        let pp = AtlasSharedPreprocessing::preprocess(model);
+        let timing = Instant::now();
+        let (proof, io) =
+            ONNXProof::<Fr, Blake2bTranscript, DoryCommitmentScheme>::prove(&pp, &input);
+        println!("Proof generation took {:?}", timing.elapsed());
+
+        // verify proof
+        proof.verify(&pp, &io).unwrap();
+
+        // Print output for verification
+        println!("Output shape: {:?}", io.outputs[0].dims());
     }
 
     #[test]

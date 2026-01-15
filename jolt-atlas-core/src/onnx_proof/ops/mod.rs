@@ -6,5 +6,6 @@ pub mod div;
 pub mod einsum;
 pub mod iff;
 pub mod mul;
+pub mod reshape;
 pub mod square;
 pub mod sub;

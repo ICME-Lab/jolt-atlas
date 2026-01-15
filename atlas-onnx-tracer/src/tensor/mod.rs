@@ -1180,7 +1180,7 @@ impl<T: TensorType + Add<Output = T> + std::marker::Send + std::marker::Sync> Ad
     /// ).unwrap();
     /// let k = Tensor::<i32>::new(
     ///     Some(&[2, 3]),
-    ///     &[2]).unwrap();
+    ///     &[2, 1]).unwrap();
     /// let result = x.add(k).unwrap();
     /// let expected = Tensor::<i32>::new(Some(&[4, 3, 4, 4, 4, 4]), &[2, 3]).unwrap();     /// assert_eq!(result, expected);
     /// ```
@@ -1263,7 +1263,7 @@ impl<T: TensorType + Sub<Output = T> + std::marker::Send + std::marker::Sync> Su
     /// ).unwrap();
     /// let k = Tensor::<i32>::new(
     ///     Some(&[2, 3]),
-    ///     &[2],
+    ///     &[2, 1],
     /// ).unwrap();
     /// let result = x.sub(k).unwrap();
     /// let expected = Tensor::<i32>::new(Some(&[0, -1, 0, -2, -2, -2]), &[2, 3]).unwrap();     /// assert_eq!(result, expected);
@@ -1321,7 +1321,7 @@ impl<T: TensorType + Mul<Output = T> + std::marker::Send + std::marker::Sync> Mu
     /// ).unwrap();
     /// let k = Tensor::<i32>::new(
     ///     Some(&[2, 2]),
-    ///     &[2]).unwrap();
+    ///     &[2, 1]).unwrap();
     /// let result = x.mul(k).unwrap();
     /// let expected = Tensor::<i32>::new(Some(&[4, 2, 4, 2, 2, 2]), &[2,3]).unwrap();     /// assert_eq!(result, expected);
     /// ```

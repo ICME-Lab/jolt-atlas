@@ -150,3 +150,22 @@ impl RunArgs {
 }
 
 pub const DEFAULT_SCALE: i32 = 7;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    // Run with `-- --nocapture`
+    // Allows to assert the model builds as expected
+    fn test_load_reshape_model() {
+        let run_args = RunArgs::default();
+        let model = Model::load("models/reshape/network.onnx", &run_args);
+
+        println!("{}", model.pretty_print());
+
+        assert!(!model.graph.nodes.is_empty());
+        assert!(!model.graph.inputs.is_empty());
+        assert!(!model.graph.outputs.is_empty());
+    }
+}

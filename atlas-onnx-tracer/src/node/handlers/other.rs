@@ -9,7 +9,7 @@ use crate::{
     ops::{Constant, Einsum, IsNan, Operator},
     tensor::Tensor,
     utils::{
-        parser::{DecompositionBuilder, extract_tensor_value, load_op},
+        parser::{DecompositionBuilder, GraphParser, extract_tensor_value, load_op},
         quantize::quantize_tensor,
     },
 };
@@ -32,7 +32,13 @@ fn handle_const(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let raw_tensor = extract_tensor_value(op.val().clone()).unwrap();
     let quantized_tensor = quantize_tensor(raw_tensor, hctx.run_args.scale);
 
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
+    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+    let bc_nodes = broadcast_nodes.len();
+
+    let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
+    for node in broadcast_nodes {
+        builder.add_node(node);
+    }
     builder.add_node(ComputationNode {
         idx: builder.idx(0),
         operator: Operator::Constant(Constant(quantized_tensor)),
@@ -44,9 +50,15 @@ fn handle_const(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
 fn handle_source(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     // TODO: might need to maintain tract datum type info
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
+    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+    let bc_nodes = broadcast_nodes.len();
+
+    let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
+    for node in broadcast_nodes {
+        builder.add_node(node);
+    }
     builder.add_node(ComputationNode {
-        idx: builder.idx(0),
+        idx: builder.idx(bc_nodes),
         operator: Operator::Input(Default::default()),
         inputs: hctx.internal_input_indices.clone(),
         output_dims: hctx.output_dims.clone(),
@@ -55,9 +67,15 @@ fn handle_source(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 }
 
 fn handle_is_nan(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
+    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+    let bc_nodes = broadcast_nodes.len();
+
+    let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
+    for node in broadcast_nodes {
+        builder.add_node(node);
+    }
     builder.add_node(ComputationNode {
-        idx: builder.idx(0),
+        idx: builder.idx(bc_nodes),
         operator: Operator::IsNan(IsNan {
             out_dims: hctx.output_dims.clone(),
         }),
@@ -110,9 +128,15 @@ fn handle_einsum(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 }
 
 fn handle_iff(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
+    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+    let bc_nodes = broadcast_nodes.len();
+
+    let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
+    for node in broadcast_nodes {
+        builder.add_node(node);
+    }
     builder.add_node(ComputationNode {
-        idx: builder.idx(0),
+        idx: builder.idx(bc_nodes),
         operator: Operator::Iff(Default::default()),
         inputs: hctx.internal_input_indices.clone(),
         output_dims: hctx.output_dims.clone(),
@@ -126,6 +150,13 @@ fn handle_cast(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         hctx.node.op().name().to_string(),
     );
     let dt = op.to;
+
+    let input_node = hctx
+        .ctx
+        .nodes
+        .get(&hctx.internal_input_indices[0])
+        .expect("Input node not found");
+    assert_eq!(input_node.output_dims, hctx.output_dims);
 
     match dt {
         DatumType::Bool

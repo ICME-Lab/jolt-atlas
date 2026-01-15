@@ -362,6 +362,14 @@ pub fn broadcast_model(input_shape: &[usize], output_shape: &[usize]) -> Model {
     b.build()
 }
 
+pub fn reshape_model(input_shape: &[usize], output_shape: &[usize]) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(input_shape.to_vec());
+    let res = b.reshape(i, output_shape.to_vec());
+    b.mark_output(res);
+    b.build()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

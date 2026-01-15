@@ -6,7 +6,7 @@ use crate::{
     node::ComputationNode,
     ops::{Constant, Erf, Operator, Rsqrt, Softmax, Tanh},
     utils::{
-        parser::{DecompositionBuilder, load_op},
+        parser::{DecompositionBuilder, GraphParser, load_op},
         quantize::scale_to_multiplier,
     },
 };
@@ -40,11 +40,19 @@ fn handle_max(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         })
         .expect("Max operator must have a constant input");
 
+    // If max is 0, this is a ReLU operation
     if max_value == 0 {
-        // If max is 0, this is a ReLU operation
-        let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
+        // Remove the constant input from the internal inputs
+        hctx.internal_input_indices.remove(1);
+        let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+        let bc_nodes = broadcast_nodes.len();
+
+        let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
+        for node in broadcast_nodes {
+            builder.add_node(node);
+        }
         builder.add_node(ComputationNode {
-            idx: builder.idx(0),
+            idx: builder.idx(bc_nodes),
             operator: Operator::ReLU(Default::default()),
             inputs: vec![hctx.internal_input_indices[0]],
             output_dims: hctx.output_dims.clone(),
@@ -56,9 +64,15 @@ fn handle_max(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 }
 
 fn handle_tanh(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
+    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+    let bc_nodes = broadcast_nodes.len();
+    let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
+
+    for node in broadcast_nodes {
+        builder.add_node(node);
+    }
     builder.add_node(ComputationNode {
-        idx: builder.idx(0),
+        idx: builder.idx(bc_nodes),
         operator: Operator::Tanh(Tanh {
             scale: scale_to_multiplier(hctx.run_args.scale).into(),
         }),
@@ -69,9 +83,15 @@ fn handle_tanh(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 }
 
 fn handle_erf(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
+    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+    let bc_nodes = broadcast_nodes.len();
+
+    let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
+    for node in broadcast_nodes {
+        builder.add_node(node);
+    }
     builder.add_node(ComputationNode {
-        idx: builder.idx(0),
+        idx: builder.idx(bc_nodes),
         operator: Operator::Erf(Erf {
             scale: scale_to_multiplier(hctx.run_args.scale).into(),
         }),
@@ -89,9 +109,15 @@ fn handle_softmax(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let axes = op.axes.to_vec();
     assert!(axes.len() == 1);
 
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
+    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+    let bc_nodes = broadcast_nodes.len();
+
+    let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
+    for node in broadcast_nodes {
+        builder.add_node(node);
+    }
     builder.add_node(ComputationNode {
-        idx: builder.idx(0),
+        idx: builder.idx(bc_nodes),
         operator: Operator::Softmax(Softmax {
             axes: axes[0],
             scale: scale_to_multiplier(hctx.run_args.scale).into(),
@@ -104,9 +130,15 @@ fn handle_softmax(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
 fn handle_rsqrt(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     // TODO: implement Rsqrt decomposition
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
+    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+    let bc_nodes = broadcast_nodes.len();
+
+    let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
+    for node in broadcast_nodes {
+        builder.add_node(node);
+    }
     builder.add_node(ComputationNode {
-        idx: builder.idx(0),
+        idx: builder.idx(bc_nodes),
         operator: Operator::Rsqrt(Rsqrt {
             scale: scale_to_multiplier(hctx.run_args.scale).into(),
         }),

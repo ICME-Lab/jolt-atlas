@@ -158,20 +158,16 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                 Operator::Broadcast(_) => {
                     let params =
                         BroadcastParams::new(computation_node.clone(), &opening_accumulator);
-                    let mut prover_sumcheck = BroadcastProver::initialize(&trace, params);
-                    let (proof, _) =
-                        Sumcheck::prove(&mut prover_sumcheck, &mut opening_accumulator, transcript);
-                    proofs.insert(ProofId(node_idx, ProofType::Execution), proof);
+                    let broadcast_prover = BroadcastProver::initialize(&trace, params);
+                    broadcast_prover.prove(&mut opening_accumulator, transcript);
                 }
                 Operator::Reshape(_) => {
                     let params = ops::reshape::ReshapeParams::<F>::new(
                         computation_node.clone(),
                         &opening_accumulator,
                     );
-                    let mut prover_sumcheck = ops::reshape::ReshapeProver::new(params);
-                    let (proof, _) =
-                        Sumcheck::prove(&mut prover_sumcheck, &mut opening_accumulator, transcript);
-                    proofs.insert(ProofId(node_idx, ProofType::Execution), proof);
+                    let reshape_prover = ops::reshape::ReshapeProver::initialize(params);
+                    reshape_prover.prove(&mut opening_accumulator, transcript);
                 }
                 Operator::Einsum(_) => {
                     let mut prover_sumcheck = EinsumProver::sumcheck(
@@ -460,39 +456,20 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                     Ok(())
                 }
                 Operator::Broadcast(_) => {
-                    let proof = self
-                        .proofs
-                        .get(&ProofId(node_idx, ProofType::Execution))
-                        .ok_or(ProofVerifyError::MissingProof(node_idx))?;
-                    let verifier_sumcheck = BroadcastVerifier::new(
+                    let broadcast_verifier = BroadcastVerifier::new(
                         computation_node.clone(),
                         &opening_accumulator,
                         &pp.model.graph,
                     );
-                    let _ = Sumcheck::verify(
-                        proof,
-                        &verifier_sumcheck,
-                        &mut opening_accumulator,
-                        transcript,
-                    )?;
+                    broadcast_verifier.verify(&mut opening_accumulator, transcript)?;
                     Ok(())
                 }
                 Operator::Reshape(_) => {
-                    let proof = self
-                        .proofs
-                        .get(&ProofId(node_idx, ProofType::Execution))
-                        .ok_or(ProofVerifyError::MissingProof(node_idx))?;
-                    let verifier_sumcheck = ops::reshape::ReshapeVerifier::new(
+                    let reshape_verifier = ops::reshape::ReshapeVerifier::new(
                         computation_node.clone(),
                         &opening_accumulator,
-                        &pp.model.graph,
                     );
-                    let _ = Sumcheck::verify(
-                        proof,
-                        &verifier_sumcheck,
-                        &mut opening_accumulator,
-                        transcript,
-                    )?;
+                    reshape_verifier.verify(&mut opening_accumulator, transcript)?;
                     Ok(())
                 }
                 Operator::Einsum(_) => {

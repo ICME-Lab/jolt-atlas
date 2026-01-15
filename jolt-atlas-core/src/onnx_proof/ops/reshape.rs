@@ -1,57 +1,33 @@
-use atlas_onnx_tracer::{model::ComputationGraph, node::ComputationNode};
+use atlas_onnx_tracer::node::ComputationNode;
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
-    poly::{
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN,
-        },
-        unipoly::UniPoly,
-    },
-    subprotocols::{
-        sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+    poly::opening_proof::{
+        OpeningAccumulator, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
     },
     transcripts::Transcript,
+    utils::errors::ProofVerifyError,
 };
 
 #[derive(Clone)]
 pub struct ReshapeParams<F: JoltField> {
-    claim_A: F,
-    r_node_output: Vec<F::Challenge>,
+    r_output: Vec<F::Challenge>,
     computation_node: ComputationNode,
 }
 
 impl<F: JoltField> ReshapeParams<F> {
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let (r_output, claim_A) = accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(computation_node.idx),
-            SumcheckId::Execution,
-        );
+        let r_output = accumulator
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::NodeOutput(computation_node.idx),
+                SumcheckId::Execution,
+            )
+            .0
+            .r;
         Self {
-            claim_A,
-            r_node_output: r_output.r,
+            r_output,
             computation_node,
         }
-    }
-}
-
-impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeParams<F> {
-    fn degree(&self) -> usize {
-        0
-    }
-
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
-        self.claim_A
-    }
-
-    fn normalize_opening_point(&self, _challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::default()
-    }
-
-    fn num_rounds(&self) -> usize {
-        0
     }
 }
 
@@ -60,39 +36,31 @@ pub struct ReshapeProver<F: JoltField> {
 }
 
 impl<F: JoltField> ReshapeProver<F> {
-    pub fn new(params: ReshapeParams<F>) -> Self {
+    pub fn initialize(params: ReshapeParams<F>) -> Self {
         Self { params }
     }
-}
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReshapeProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn compute_message(&mut self, _round: usize, _previous_claim: F) -> UniPoly<F> {
-        // This dummy sumcheck has no rounds, hence this method should never be called
-        unimplemented!()
-    }
-
-    fn ingest_challenge(&mut self, _r_j: F::Challenge, _round: usize) {
-        unimplemented!()
-    }
-
-    fn cache_openings(
+    pub fn prove(
         &self,
         accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        _sumcheck_challenges: &[F::Challenge],
+        transcript: &mut impl Transcript,
     ) {
         // For reshape, the opening point is identical to the output's opening point
-        // since the multilinear polynomial representation is the same
+        // since the multilinear polynomial representation is the same.
+        // Also, claim_A == claim_O since reshape doesn't change the data.
+        let claim_O = accumulator
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
+                SumcheckId::Execution,
+            )
+            .1;
+
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
             SumcheckId::Execution,
-            self.params.r_node_output.clone().into(),
-            self.params.claim_A,
+            self.params.r_output.clone().into(),
+            claim_O,
         );
     }
 }
@@ -105,45 +73,46 @@ impl<F: JoltField> ReshapeVerifier<F> {
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
-        _graph: &ComputationGraph,
     ) -> Self {
         let params = ReshapeParams::new(computation_node, accumulator);
         Self { params }
     }
-}
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        _sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        // For reshape, the input claim equals the output claim
-        accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                SumcheckId::Execution,
-            )
-            .1
-    }
-
-    fn cache_openings(
+    pub fn verify(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        _sumcheck_challenges: &[F::Challenge],
-    ) {
-        // Same opening point as the output
+        transcript: &mut impl Transcript,
+    ) -> Result<(), ProofVerifyError> {
+        // Cache the opening point for the input node
+        // For reshape, the opening point is identical to the output's opening point
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
             SumcheckId::Execution,
-            self.params.r_node_output.clone().into(),
+            self.params.r_output.clone().into(),
         );
+
+        // Retrieve the claim for the input node
+        let claim_A = accumulator
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
+                SumcheckId::Execution,
+            )
+            .1;
+
+        // For reshape, the input claim should equal the output claim
+        let claim_O = accumulator
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
+                SumcheckId::Execution,
+            )
+            .1;
+
+        if claim_A != claim_O {
+            return Err(ProofVerifyError::InvalidOpeningProof);
+        }
+
+        Ok(())
     }
 }
 
@@ -162,7 +131,6 @@ mod tests {
                 BIG_ENDIAN,
             },
         },
-        subprotocols::sumcheck::Sumcheck,
         transcripts::{Blake2bTranscript, Transcript},
     };
     use rand::{rngs::StdRng, SeedableRng};
@@ -217,15 +185,11 @@ mod tests {
 
             let params: ReshapeParams<Fr> =
                 ReshapeParams::new(computation_node.clone(), &prover_opening_accumulator);
-            let mut prover_sumcheck = ReshapeProver::new(params);
+            let reshape_prover = ReshapeProver::initialize(params);
 
-            let (proof, r_sumcheck) = Sumcheck::prove(
-                &mut prover_sumcheck,
-                &mut prover_opening_accumulator,
-                prover_transcript,
-            );
+            reshape_prover.prove(&mut prover_opening_accumulator, prover_transcript);
 
-            // Transfer claims to verifier
+            // Take claims
             for (key, (_, value)) in &prover_opening_accumulator.openings {
                 let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
                 verifier_opening_accumulator
@@ -240,20 +204,14 @@ mod tests {
                 r_node_output.into(),
             );
 
-            let verifier_sumcheck = ReshapeVerifier::new(
-                computation_node.clone(),
-                &verifier_opening_accumulator,
-                &model.graph,
-            );
-            let res = Sumcheck::verify(
-                &proof,
-                &verifier_sumcheck,
-                &mut verifier_opening_accumulator,
-                verifier_transcript,
-            );
+            let reshape_verifier =
+                ReshapeVerifier::new(computation_node.clone(), &verifier_opening_accumulator);
+
+            let res =
+                reshape_verifier.verify(&mut verifier_opening_accumulator, verifier_transcript);
+
             prover_transcript.compare_to(verifier_transcript.clone());
-            let r_sumcheck_verif = res.unwrap();
-            assert_eq!(r_sumcheck, r_sumcheck_verif);
+            assert!(res.is_ok(), "Reshape verification failed");
         }
     }
 }

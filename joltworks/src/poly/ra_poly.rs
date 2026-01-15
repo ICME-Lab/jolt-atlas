@@ -1,5 +1,5 @@
 use rayon::prelude::*;
-use std::{iter::zip, mem, sync::Arc};
+use std::{fmt::Debug, iter::zip, mem, sync::Arc};
 
 use allocative::Allocative;
 
@@ -56,8 +56,8 @@ impl<I: Into<usize> + Copy + Default + Send + Sync + 'static, F: JoltField> RaPo
     }
 }
 
-impl<I: Into<usize> + Copy + Default + Send + Sync + 'static, F: JoltField> PolynomialBinding<F>
-    for RaPolynomial<I, F>
+impl<I: Into<usize> + Copy + Default + Send + Sync + Debug + 'static, F: JoltField>
+    PolynomialBinding<F> for RaPolynomial<I, F>
 {
     fn is_bound(&self) -> bool {
         !matches!(self, Self::Round1(_))
@@ -80,7 +80,7 @@ impl<I: Into<usize> + Copy + Default + Send + Sync + 'static, F: JoltField> Poly
     fn final_sumcheck_claim(&self) -> F {
         match self {
             Self::RoundN(mle) => mle.final_sumcheck_claim(),
-            _ => panic!(),
+            _ => panic!("RaPolynomial::final_sumcheck_claim called on non-RoundN variant {self:?}"),
         }
     }
 }

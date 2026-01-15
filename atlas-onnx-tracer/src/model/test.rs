@@ -145,6 +145,25 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    pub fn moveaxis(&mut self, input: Wire, source: usize, destination: usize) -> Wire {
+        let id = self.alloc();
+        let input_dims = self.nodes[&input].output_dims.clone();
+        let mut output_dims = input_dims.clone();
+
+        let dim = output_dims.remove(source);
+        output_dims.insert(destination, dim);
+        let node = ComputationNode::new(
+            id,
+            Operator::MoveAxis(MoveAxis {
+                source,
+                destination,
+            }),
+            vec![input],
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
     /// Add a AND node.
     pub fn and2(&mut self, a: Wire, b: Wire) -> Wire {
         let id = self.alloc();
@@ -358,6 +377,14 @@ pub fn broadcast_model(input_shape: &[usize], output_shape: &[usize]) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(input_shape.to_vec());
     let res = b.broadcast(i, output_shape.to_vec());
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn moveaxis_model(input_shape: &[usize], source: usize, destination: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(input_shape.to_vec());
+    let res = b.moveaxis(i, source, destination);
     b.mark_output(res);
     b.build()
 }

@@ -6,7 +6,7 @@ use crate::utils::{
     quantize,
 };
 use maybe_rayon::iter::ParallelIterator;
-use rand::{RngCore, rngs::StdRng};
+use rand::{rngs::StdRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::max,
@@ -841,11 +841,12 @@ impl<T: Clone + TensorType> Tensor<T> {
 
         // now reconfigure the elements appropriately in the new array
         //  eg. if we have a 3x3x3 array and we want to move the 0th axis to the 2nd position
-        // //  we need to move the elements at 0, 1, 2, 3, 4, 5, 6, 7, 8 to 0, 3, 6, 1, 4, 7,
-        // 2, 5, 8         //  so we need to move the elements at 0, 1, 2 to 0, 3, 6
-        // //  and the elements at 3, 4, 5 to 1, 4, 7  and the elements at 6, 7, 8 to 2,
-        // 5, 8
-        let cartesian_coords = new_dims
+        // we need to move the elements at 0, 1, 2, 3, 4, 5, 6, 7, 8
+        // to 0, 3, 6, 1, 4, 7, 2, 5, 8
+        //  so we need to move the elements at 0, 1, 2 to 0, 3, 6
+        // and the elements at 3, 4, 5 to 1, 4, 7  and the elements at 6, 7, 8 to 2, 5, 8
+        let cartesian_coords = self
+            .dims
             .iter()
             .map(|d| 0..*d)
             .multi_cartesian_product()
@@ -853,34 +854,19 @@ impl<T: Clone + TensorType> Tensor<T> {
 
         let mut output = Tensor::new(None, &new_dims)?;
 
-        for coord in cartesian_coords {
-            let mut old_coord = vec![0; self.dims.len()];
+        // Build position map: old_position -> new_position
+        let mut old_to_new: Vec<usize> = (0..self.dims.len()).collect();
+        old_to_new.remove(source);
+        old_to_new.insert(destination, source);
 
-            // now fetch the old index
-            for (i, c) in coord.iter().enumerate() {
-                if i == destination {
-                    old_coord[source] = *c;
-                } else if i == source && source < destination {
-                    old_coord[source + 1] = *c;
-                } else if i == source && source > destination {
-                    old_coord[source - 1] = *c;
-                } else if (i < source && source < destination)
-                    || (i < destination && source > destination)
-                {
-                    old_coord[i] = *c;
-                } else if i > source && source < destination {
-                    old_coord[i + 1] = *c;
-                } else if i > destination && source > destination {
-                    old_coord[i - 1] = *c;
-                } else {
-                    return Err(TensorError::DimError(
-                        "Unknown condition for moving the axis".to_string(),
-                    ));
-                }
-            }
-            output.set(&coord, self.get(&old_coord));
+        for old_coord in cartesian_coords {
+            // Map old coordinate to new coordinate using position map
+            let new_coord: Vec<usize> = old_to_new
+                .iter()
+                .map(|&new_idx| old_coord[new_idx])
+                .collect();
+            output.set(&new_coord, self.get(&old_coord));
         }
-
         Ok(output)
     }
 

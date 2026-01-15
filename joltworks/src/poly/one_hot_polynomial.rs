@@ -709,6 +709,7 @@ mod tests {
     use serial_test::serial;
 
     fn dense_polynomial_equivalence<const LOG_K: usize, const LOG_T: usize>() {
+        DoryGlobals::reset();
         let K: usize = 1 << LOG_K;
         let T: usize = 1 << LOG_T;
         let _guard = DoryGlobals::initialize(K, T);
@@ -834,6 +835,7 @@ mod tests {
     }
 
     fn evaluate_test<const LOG_K: usize, const LOG_T: usize>() {
+        DoryGlobals::reset();
         let K: usize = 1 << LOG_K;
         let T: usize = 1 << LOG_T;
         let _guard = DoryGlobals::initialize(K, T);

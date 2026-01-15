@@ -1,15 +1,19 @@
 //! Dory polynomial commitment scheme implementation
 
-use super::dory_globals::DoryGlobals;
-use super::jolt_dory_routines::{JoltG1Routines, JoltG2Routines};
-use super::wrappers::{
-    jolt_to_ark, ArkDoryProof, ArkFr, ArkG1, ArkGT, ArkworksProverSetup, ArkworksVerifierSetup,
-    JoltToDoryTranscript, BN254,
+use super::{
+    dory_globals::DoryGlobals,
+    jolt_dory_routines::{JoltG1Routines, JoltG2Routines},
+    wrappers::{
+        jolt_to_ark, ArkDoryProof, ArkFr, ArkG1, ArkGT, ArkworksProverSetup, ArkworksVerifierSetup,
+        JoltToDoryTranscript, BN254,
+    },
 };
 use crate::{
     field::JoltField,
-    poly::commitment::commitment_scheme::{CommitmentScheme, StreamingCommitmentScheme},
-    poly::multilinear_polynomial::MultilinearPolynomial,
+    poly::{
+        commitment::commitment_scheme::{CommitmentScheme, StreamingCommitmentScheme},
+        multilinear_polynomial::MultilinearPolynomial,
+    },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math, small_scalar::SmallScalar},
 };
@@ -48,6 +52,11 @@ impl CommitmentScheme for DoryCommitmentScheme {
         let mut rng = ChaCha20Rng::from_seed(seed);
         let setup = ArkworksProverSetup::new_from_urs(&mut rng, max_num_vars);
 
+        // The prepared-point cache in dory-pcs is global and can only be initialized once.
+        // In unit tests, multiple setups with different sizes are created, so initializing the
+        // cache with a small setup can break later tests that need more generators.
+        // We therefore disable cache initialization in `cfg(test)` builds.
+        #[cfg(not(test))]
         DoryGlobals::init_prepared_cache(&setup.g1_vec, &setup.g2_vec);
 
         setup

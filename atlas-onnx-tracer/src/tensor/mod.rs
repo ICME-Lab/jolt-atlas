@@ -6,7 +6,7 @@ use crate::utils::{
     quantize,
 };
 use maybe_rayon::iter::ParallelIterator;
-use rand::{rngs::StdRng, RngCore};
+use rand::{RngCore, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::max,

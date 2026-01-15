@@ -1237,4 +1237,26 @@ mod tests {
             computation_node,
         );
     }
+
+    #[serial]
+    #[test]
+    fn test_relu_small_T() {
+        let log_T = 2;
+        let T = 1 << log_T;
+        let mut rng = StdRng::seed_from_u64(0x188);
+        let input = Tensor::<i32>::random(&mut rng, &[T]);
+        let model = model::test::relu_model(T);
+        let trace = model.trace(&[input]);
+
+        let output_index = model.outputs()[0];
+        let computation_node = &model[output_index];
+
+        run_read_raf_sumcheck_test::<ReluTable<XLEN>, DoryCommitmentScheme>(
+            model.clone(),
+            &trace,
+            log_T,
+            output_index,
+            computation_node,
+        );
+    }
 }

@@ -17,7 +17,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  fmt:
+  fmt-jolt-atlas-core:
+    name: Format check - jolt-atlas-core
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -25,9 +26,35 @@ jobs:
         with:
           components: rustfmt
       - name: cargo fmt
+        working-directory: ./jolt-atlas-core
         run: cargo fmt --all --check
 
-  clippy:
+  fmt-joltworks:
+    name: Format check - joltworks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt
+      - name: cargo fmt
+        working-directory: ./joltworks
+        run: cargo fmt --all --check
+
+  fmt-atlas-onnx-tracer:
+    name: Format check - atlas-onnx-tracer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt
+      - name: cargo fmt
+        working-directory: ./atlas-onnx-tracer
+        run: cargo fmt --all --check
+
+  clippy-jolt-atlas-core:
+    name: Clippy - jolt-atlas-core
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -35,39 +62,65 @@ jobs:
         with:
           components: clippy
       - name: cargo clippy
+        working-directory: ./jolt-atlas-core
         run: cargo clippy --all
 
-  test:
+  clippy-joltworks:
+    name: Clippy - joltworks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-      - name: Run zkml-jolt-core tests
-        run: cargo nextest run --release -p zkml-jolt-core
+        with:
+          components: clippy
+      - name: cargo clippy
+        working-directory: ./joltworks
+        run: cargo clippy --all
 
-  test-onnx-tracer:
-    name: Test onnx-tracer
+  clippy-atlas-onnx-tracer:
+    name: Clippy - atlas-onnx-tracer
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Run onnx-tracer tests
-        working-directory: ./onnx-tracer
-        run: cargo test
+        with:
+          components: clippy
+      - name: cargo clippy
+        working-directory: ./atlas-onnx-tracer
+        run: cargo clippy --all
 
-  test-proof-serialization:
-    name: Test proof serialization
+  test-jolt-atlas-core:
+    name: Test - jolt-atlas-core
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Run proof_round_trip example
-        run: cargo run --release --example proof_round_trip
+      - name: Run tests
+        working-directory: ./jolt-atlas-core
+        run: cargo test --release
 
-  build-wasm:
-    name: Build Wasm
+  test-joltworks:
+    name: Test - joltworks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Run tests
+        working-directory: ./joltworks
+        run: cargo test --release
+
+  test-atlas-onnx-tracer:
+    name: Test - atlas-onnx-tracer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Run tests
+        working-directory: ./atlas-onnx-tracer
+        run: cargo test --release
+
+  build-wasm-atlas-onnx-tracer:
+    name: Build Wasm - atlas-onnx-tracer
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-Adead_code -Aunused_imports -Aunused_variables -Aunused_mut" # Override global RUSTFLAGS to suppress WASM-specific warnings
@@ -77,5 +130,5 @@ jobs:
       - name: Install wasm32 target
         run: rustup target add wasm32-unknown-unknown
       - name: Build Wasm
-        working-directory: ./onnx-tracer
+        working-directory: ./atlas-onnx-tracer
         run: cargo build --release --target wasm32-unknown-unknown

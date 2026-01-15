@@ -237,7 +237,7 @@ pub fn and<
 /// # Examples
 /// ```
 /// use atlas_onnx_tracer::tensor::Tensor;
-/// use atlas_onnx_tracer::tensor::ops::add2;
+/// use atlas_onnx_tracer::tensor::ops::and2;
 /// let tensor1 = Tensor::<i32>::new(
 ///  Some(&[5, 3, 7, 15, 12, 8]),
 /// &[2, 3],
@@ -246,7 +246,7 @@ pub fn and<
 /// Some(&[3, 5, 6, 10, 9, 7]),
 /// &[2, 3],
 /// ).unwrap();
-/// let result = add2(&tensor1, &tensor2).unwrap();
+/// let result = and2(&tensor1, &tensor2).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[1, 1, 6, 10, 8, 0]), &[2, 3]).unwrap();
 /// assert_eq!(result, expected);
 /// ```
@@ -258,7 +258,7 @@ pub fn and2<
 ) -> Result<Tensor<T>, TensorError> {
     if tensor1.dims() != tensor2.dims() {
         return Err(TensorError::DimMismatch(format!(
-            "add2, t1.dims: {:?}, t2.dims: {:?}",
+            "and2, t1.dims: {:?}, t2.dims: {:?}",
             tensor1.dims().to_vec(),
             tensor2.dims().to_vec(),
         )));

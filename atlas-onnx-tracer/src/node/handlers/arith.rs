@@ -6,7 +6,7 @@ use crate::{
     node::ComputationNode,
     ops::{Constant, Operator},
     tensor::Tensor,
-    utils::parser::DecompositionBuilder,
+    utils::parser::{DecompositionBuilder, GraphParser},
 };
 
 use super::{HandlerContext, OpHandlerFn};
@@ -23,9 +23,15 @@ pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
 }
 
 fn handle_add(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
+    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+    let bc_nodes = broadcast_nodes.len();
+
+    let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
+    for node in broadcast_nodes {
+        builder.add_node(node);
+    }
     builder.add_node(ComputationNode {
-        idx: builder.idx(0),
+        idx: builder.idx(bc_nodes),
         operator: Operator::Add(Default::default()),
         inputs: hctx.internal_input_indices.clone(),
         output_dims: hctx.output_dims.clone(),
@@ -34,9 +40,15 @@ fn handle_add(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 }
 
 fn handle_sub(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
+    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+    let bc_nodes = broadcast_nodes.len();
+
+    let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
+    for node in broadcast_nodes {
+        builder.add_node(node);
+    }
     builder.add_node(ComputationNode {
-        idx: builder.idx(0),
+        idx: builder.idx(bc_nodes),
         operator: Operator::Sub(Default::default()),
         inputs: hctx.internal_input_indices.clone(),
         output_dims: hctx.output_dims.clone(),
@@ -46,20 +58,25 @@ fn handle_sub(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
 fn handle_mul(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let output_dims = hctx.output_dims.clone();
-    let internal_input_indices = hctx.internal_input_indices.clone();
     let scale = hctx.run_args.scale;
 
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 3);
+    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+    let bc_nodes = broadcast_nodes.len();
+
+    let mut builder = DecompositionBuilder::new(hctx.ctx, 3 + bc_nodes);
+    for node in broadcast_nodes {
+        builder.add_node(node);
+    }
 
     builder.add_node(ComputationNode {
-        idx: builder.idx(0),
+        idx: builder.idx(bc_nodes),
         operator: Operator::Mul(Default::default()),
-        inputs: internal_input_indices,
+        inputs: hctx.internal_input_indices.clone(),
         output_dims: output_dims.clone(),
     });
 
     builder.add_node(ComputationNode {
-        idx: builder.idx(1),
+        idx: builder.idx(bc_nodes + 1),
         operator: Operator::Constant(Constant(Tensor::construct(
             vec![1 << scale; output_dims.iter().product()],
             output_dims.clone(),
@@ -69,9 +86,9 @@ fn handle_mul(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     });
 
     builder.add_node(ComputationNode {
-        idx: builder.idx(2),
+        idx: builder.idx(bc_nodes + 2),
         operator: Operator::Div(Default::default()),
-        inputs: vec![builder.idx(0), builder.idx(1)],
+        inputs: vec![builder.idx(bc_nodes), builder.idx(bc_nodes + 1)],
         output_dims,
     });
 
@@ -86,22 +103,27 @@ fn handle_pow(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     };
 
     let output_dims = hctx.output_dims.clone();
-    let internal_input_indices = hctx.internal_input_indices.clone();
 
     match exponent {
         2 => {
             // Special case for square operation
-            let mut builder = DecompositionBuilder::new(hctx.ctx, 3);
+            let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+            let bc_nodes = broadcast_nodes.len();
+
+            let mut builder = DecompositionBuilder::new(hctx.ctx, 3 + bc_nodes);
+            for node in broadcast_nodes {
+                builder.add_node(node);
+            }
 
             builder.add_node(ComputationNode {
-                idx: builder.idx(0),
+                idx: builder.idx(bc_nodes),
                 operator: Operator::Square(Default::default()),
-                inputs: internal_input_indices,
+                inputs: hctx.internal_input_indices.clone(),
                 output_dims: output_dims.clone(),
             });
 
             builder.add_node(ComputationNode {
-                idx: builder.idx(1),
+                idx: builder.idx(bc_nodes + 1),
                 operator: Operator::Constant(Constant(Tensor::construct(
                     vec![1 << scale; output_dims.iter().product()],
                     output_dims.clone(),
@@ -111,9 +133,9 @@ fn handle_pow(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
             });
 
             builder.add_node(ComputationNode {
-                idx: builder.idx(2),
+                idx: builder.idx(bc_nodes + 2),
                 operator: Operator::Div(Default::default()),
-                inputs: vec![builder.idx(0), builder.idx(1)],
+                inputs: vec![builder.idx(bc_nodes), builder.idx(bc_nodes + 1)],
                 output_dims,
             });
 
@@ -121,17 +143,23 @@ fn handle_pow(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         }
         3 => {
             // Special case for cube operation
-            let mut builder = DecompositionBuilder::new(hctx.ctx, 3);
+            let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+            let bc_nodes = broadcast_nodes.len();
+
+            let mut builder = DecompositionBuilder::new(hctx.ctx, 3 + bc_nodes);
+            for node in broadcast_nodes {
+                builder.add_node(node);
+            }
 
             builder.add_node(ComputationNode {
-                idx: builder.idx(0),
+                idx: builder.idx(bc_nodes),
                 operator: Operator::Cube(Default::default()),
-                inputs: internal_input_indices,
+                inputs: hctx.internal_input_indices.clone(),
                 output_dims: output_dims.clone(),
             });
 
             builder.add_node(ComputationNode {
-                idx: builder.idx(1),
+                idx: builder.idx(bc_nodes + 1),
                 operator: Operator::Constant(Constant(Tensor::construct(
                     vec![1 << (scale * 2); output_dims.iter().product()],
                     output_dims.clone(),
@@ -141,9 +169,9 @@ fn handle_pow(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
             });
 
             builder.add_node(ComputationNode {
-                idx: builder.idx(2),
+                idx: builder.idx(bc_nodes + 2),
                 operator: Operator::Div(Default::default()),
-                inputs: vec![builder.idx(0), builder.idx(1)],
+                inputs: vec![builder.idx(bc_nodes), builder.idx(bc_nodes + 1)],
                 output_dims,
             });
 
@@ -157,9 +185,16 @@ fn handle_pow(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 }
 
 fn handle_and(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
+    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+    let bc_nodes = broadcast_nodes.len();
+
+    let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
+    for node in broadcast_nodes {
+        builder.add_node(node);
+    }
+
     builder.add_node(ComputationNode {
-        idx: builder.idx(0),
+        idx: builder.idx(bc_nodes),
         operator: Operator::And(Default::default()),
         inputs: hctx.internal_input_indices.clone(),
         output_dims: hctx.output_dims.clone(),
@@ -172,19 +207,24 @@ fn handle_square(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     // Decompose into: Square -> Div by (1 << scale) to maintain fixed-point scale
     let scale = hctx.run_args.scale;
     let output_dims = hctx.output_dims.clone();
-    let internal_input_indices = hctx.internal_input_indices.clone();
 
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 3);
+    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
+    let bc_nodes = broadcast_nodes.len();
+
+    let mut builder = DecompositionBuilder::new(hctx.ctx, 3 + bc_nodes);
+    for node in broadcast_nodes {
+        builder.add_node(node);
+    }
 
     builder.add_node(ComputationNode {
-        idx: builder.idx(0),
+        idx: builder.idx(bc_nodes),
         operator: Operator::Square(Default::default()),
-        inputs: internal_input_indices,
+        inputs: hctx.internal_input_indices.clone(),
         output_dims: output_dims.clone(),
     });
 
     builder.add_node(ComputationNode {
-        idx: builder.idx(1),
+        idx: builder.idx(bc_nodes + 1),
         operator: Operator::Constant(Constant(Tensor::construct(
             vec![1 << scale; output_dims.iter().product()],
             output_dims.clone(),
@@ -194,9 +234,9 @@ fn handle_square(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     });
 
     builder.add_node(ComputationNode {
-        idx: builder.idx(2),
+        idx: builder.idx(bc_nodes + 2),
         operator: Operator::Div(Default::default()),
-        inputs: vec![builder.idx(0), builder.idx(1)],
+        inputs: vec![builder.idx(bc_nodes), builder.idx(bc_nodes + 1)],
         output_dims,
     });
 

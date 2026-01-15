@@ -7,4 +7,8 @@ impl Op for Square {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         inputs[0].pow(2).unwrap()
     }
+
+    fn requires_shape_equality(&self) -> bool {
+        true
+    }
 }

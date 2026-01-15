@@ -37,9 +37,10 @@
 use crate::{
     model::RunArgs,
     node::{
+        handlers::{HandlerContext, HANDLERS},
         ComputationNode,
-        handlers::{HANDLERS, HandlerContext},
     },
+    ops::Operator,
     tensor::Tensor,
 };
 
@@ -332,6 +333,60 @@ impl<'a> GraphParser<'a> {
             shapes.push(mv)
         }
         shapes
+    }
+
+    /// Inserts broadcast nodes to ensure input shapes match output dimensions.
+    pub fn insert_broadcast_nodes(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
+        Self::process_broadcast_inputs(
+            hctx.ctx,
+            &mut hctx.internal_input_indices,
+            &hctx.output_dims,
+            hctx.ctx.next_idx,
+        )
+    }
+
+    /// Inner method to process broadcast insertions.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - The parsing context containing input nodes
+    /// * `input_indices` - Mutable indices of input nodes, will be updated to point to broadcast nodes if created
+    /// * `output_dims` - Target output dimensions
+    /// * `node_idx` - The ID of the current node (used to generate broadcast node indices)
+    ///
+    /// # Returns
+    ///
+    /// A vector of newly created broadcast nodes
+    pub fn process_broadcast_inputs(
+        ctx: &ParsingContext,
+        input_indices: &mut [usize],
+        output_dims: &[usize],
+        node_idx: usize,
+    ) -> Vec<ComputationNode> {
+        let mut new_nodes = Vec::new();
+        let mut added_nodes = 0;
+
+        for input_idx in input_indices.iter_mut() {
+            let input_node = ctx.nodes.get(input_idx).expect("Input node must exist");
+
+            if input_node.output_dims != output_dims {
+                // Insert a broadcast node
+                let broadcast_idx = node_idx + added_nodes;
+                let broadcast_node = ComputationNode {
+                    idx: broadcast_idx,
+                    operator: Operator::Broadcast(crate::ops::Broadcast {
+                        shape: output_dims.to_vec(),
+                    }),
+                    inputs: vec![*input_idx],
+                    output_dims: output_dims.to_vec(),
+                };
+                new_nodes.push(broadcast_node);
+                *input_idx = broadcast_idx;
+                added_nodes += 1;
+            }
+        }
+
+        new_nodes
     }
 }
 
@@ -727,4 +782,121 @@ pub fn extract_tensor_value(
     const_value.reshape(&dims)?;
 
     Ok(const_value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node::ComputationNode;
+    use crate::ops::Noop;
+
+    /// Test when input shapes already match output shape - no broadcasting needed
+    #[test]
+    fn test_process_broadcast_inputs_matching_shapes() {
+        let mut ctx = ParsingContext::new();
+        ctx.nodes.insert(
+            0,
+            ComputationNode::new(0, Operator::Noop(Noop), vec![], vec![2, 3]),
+        );
+        ctx.next_idx = 1;
+
+        let mut internal_input_indices = vec![0];
+        let output_dims = vec![2, 3];
+
+        let broadcast_nodes = GraphParser::process_broadcast_inputs(
+            &ctx,
+            &mut internal_input_indices,
+            &output_dims,
+            1,
+        );
+
+        assert_eq!(broadcast_nodes.len(), 0);
+        assert_eq!(internal_input_indices, vec![0]);
+    }
+
+    /// Test when broadcasting is needed due to shape mismatch
+    #[test]
+    fn test_process_broadcast_inputs_shape_mismatch() {
+        let mut ctx = ParsingContext::new();
+        ctx.nodes.insert(
+            0,
+            ComputationNode::new(0, Operator::Noop(Noop), vec![], vec![5]),
+        );
+        ctx.next_idx = 1;
+
+        let mut internal_input_indices = vec![0];
+        let output_dims = vec![3, 4, 5];
+
+        let broadcast_nodes = GraphParser::process_broadcast_inputs(
+            &ctx,
+            &mut internal_input_indices,
+            &output_dims,
+            1,
+        );
+
+        assert_eq!(broadcast_nodes.len(), 1);
+        assert_eq!(broadcast_nodes[0].inputs, vec![0]);
+        assert_eq!(broadcast_nodes[0].output_dims, vec![3, 4, 5]);
+        assert_eq!(internal_input_indices[0], broadcast_nodes[0].idx);
+    }
+
+    /// Test multiple inputs with mixed broadcasting requirements
+    #[test]
+    fn test_process_broadcast_inputs_multiple_inputs_mixed() {
+        let mut ctx = ParsingContext::new();
+        ctx.nodes.insert(
+            0,
+            ComputationNode::new(0, Operator::Noop(Noop), vec![], vec![5]),
+        );
+        ctx.nodes.insert(
+            1,
+            ComputationNode::new(1, Operator::Noop(Noop), vec![], vec![3, 4, 5]),
+        );
+        ctx.next_idx = 2;
+
+        let mut internal_input_indices = vec![0, 1];
+        let output_dims = vec![3, 4, 5];
+
+        let broadcast_nodes = GraphParser::process_broadcast_inputs(
+            &ctx,
+            &mut internal_input_indices,
+            &output_dims,
+            2,
+        );
+
+        assert_eq!(broadcast_nodes.len(), 1);
+        assert_eq!(internal_input_indices[0], broadcast_nodes[0].idx);
+        assert_eq!(internal_input_indices[1], 1);
+    }
+
+    /// Test when all inputs need broadcasting
+    #[test]
+    fn test_process_broadcast_inputs_all_inputs_mismatch() {
+        let mut ctx = ParsingContext::new();
+        ctx.nodes.insert(
+            0,
+            ComputationNode::new(0, Operator::Noop(Noop), vec![], vec![2]),
+        );
+        ctx.nodes.insert(
+            1,
+            ComputationNode::new(1, Operator::Noop(Noop), vec![], vec![3]),
+        );
+        ctx.next_idx = 2;
+
+        let mut internal_input_indices = vec![0, 1];
+        let output_dims = vec![2, 3];
+
+        let broadcast_nodes = GraphParser::process_broadcast_inputs(
+            &ctx,
+            &mut internal_input_indices,
+            &output_dims,
+            2,
+        );
+
+        assert_eq!(broadcast_nodes.len(), 2);
+        assert_eq!(internal_input_indices[0], broadcast_nodes[0].idx);
+        assert_eq!(internal_input_indices[1], broadcast_nodes[1].idx);
+        assert_eq!(broadcast_nodes[0].inputs[0], 0);
+        assert_eq!(broadcast_nodes[1].inputs[0], 1);
+    }
 }

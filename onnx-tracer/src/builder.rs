@@ -313,21 +313,15 @@ impl ModelBuilder {
         self.sra(matmul, const_scale, out_dims, fanout_hint)
     }
 
-    fn broadcast(
-        &mut self,
-        input: Wire,
-        target_shape: Vec<usize>,
-        out_dims: Vec<usize>,
-        fanout_hint: usize,
-    ) -> Wire {
+    fn broadcast(&mut self, input: Wire, target_shape: Vec<usize>, fanout_hint: usize) -> Wire {
         let id = self.alloc();
         let broadcast_node = create_node(
             SupportedOp::Linear(PolyOp::MultiBroadcastTo {
-                shape: target_shape,
+                shape: target_shape.clone(),
             }),
             self.scale,
             vec![input],
-            out_dims,
+            target_shape,
             id,
             fanout_hint,
         );
@@ -682,6 +676,49 @@ pub fn rank_0_addsubmul_model() -> Model {
     b.take(vec![x.0], vec![y])
 }
 
+pub fn broadcast_model() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+    let dims = vec![4, 4];
+
+    let x = b.input(vec![4, 1], 1);
+    let r = b.broadcast(x, dims.clone(), 1);
+
+    b.take(vec![x.0], vec![r])
+}
+
+pub fn model_with_broadcasts() -> Model {
+    const SCALE: i32 = 7;
+    let mut b = ModelBuilder::new(SCALE);
+
+    let const1 = Tensor::new(Some(&[1, 2, 3, 4]), &[4, 1]).unwrap();
+    let const1 = b.const_tensor(const1, vec![1, 4], 1);
+
+    let const2 = Tensor::new(
+        Some(&[1, 2, 3, 4, 10, 20, 30, 40, 100, 200, 300, 400]),
+        &[3, 1, 4],
+    )
+    .unwrap();
+    let const2 = b.const_tensor(const2, vec![3, 1, 4], 1);
+
+    let const3 = Tensor::new(Some(&[-1]), &[1, 1]).unwrap();
+    let const3 = b.const_tensor(const3, vec![1, 1], 1);
+
+    let x = b.input(vec![1], 1);
+
+    let b1 = b.broadcast(x, vec![1, 4], 1);
+    let a1 = b.poly(PolyOp::Add, b1, const1, vec![1, 4], 1);
+
+    let b2 = b.broadcast(a1, vec![3, 1, 4], 1);
+    let a2 = b.poly(PolyOp::Mult, b2, const2, vec![3, 1, 4], 1);
+
+    let bconst3 = b.broadcast(const3, vec![3, 5, 4], 1);
+    let b3 = b.broadcast(a2, vec![3, 5, 4], 1);
+    let a3 = b.poly(PolyOp::Add, b3, bconst3, vec![3, 5, 4], 1);
+
+    b.take(vec![x.0], vec![a3])
+}
+
 pub fn relu_model() -> Model {
     const SCALE: i32 = 7;
     let mut b = ModelBuilder::new(SCALE);
@@ -767,10 +804,10 @@ pub fn self_attention_block() -> Model {
     let sum = b.sum(pow2, vec![2], vec![1, rows, 1], 1);
     let mean = b.div(64, sum, vec![1, rows, 1], 1);
     let add_const_node = b.const_tensor(add_const, vec![1, 1, 1], 1);
-    let broadcast = b.broadcast(add_const_node, vec![1, rows, 1], vec![1, rows, 1], 1);
+    let broadcast = b.broadcast(add_const_node, vec![1, rows, 1], 1);
     let add = b.poly(PolyOp::Add, mean, broadcast, vec![1, rows, 1], 1);
     let rsqrt = b.rsqrt(add, vec![1, rows, 1], 1);
-    let b_rsqrt = b.broadcast(rsqrt, dims.clone(), dims.clone(), 1);
+    let b_rsqrt = b.broadcast(rsqrt, dims.clone(), 1);
     let mul = b.poly(PolyOp::Mult, input, b_rsqrt, dims.clone(), 1);
 
     b.take(vec![input.0], vec![mul])
@@ -1019,7 +1056,7 @@ pub fn multiclass0() -> Model {
     let weights_const = b.const_tensor_with_scale(weights, SCALE, vec![1, 10], 1);
 
     // Node 5.5: Broadcast the scalar [1, 1] to [1, 10] shape
-    let scalar_broadcasted = b.broadcast(reshaped, vec![1, 10], vec![1, 10], 1);
+    let scalar_broadcasted = b.broadcast(reshaped, vec![1, 10], 1);
 
     // Node 6: Multiply the broadcasted scalar by the weight vector (replacing RebaseScale)
     let multiplied = b.poly(
@@ -1827,7 +1864,7 @@ pub fn layernorm_prefix_model() -> Model {
     let mean = b.div(4, summed, vec![4, 1], 1); // divide by 4 to get mean
 
     // Node 3: BROADCAST - broadcast mean from [4, 1] to [4, 4]
-    let mean_broadcasted = b.broadcast(mean, vec![4, 4], vec![4, 4], 1);
+    let mean_broadcasted = b.broadcast(mean, vec![4, 4], 1);
 
     // Node 4: SUB - subtract broadcasted mean from original input (mean centering)
     let mean_centered = b.poly(PolyOp::Sub, input, mean_broadcasted, vec![4, 4], 1);

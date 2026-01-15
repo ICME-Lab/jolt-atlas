@@ -10,6 +10,7 @@ use crate::onnx_proof::{
     },
     ops::{
         add::{AddParams, AddProver, AddVerifier},
+        broadcast::{BroadcastParams, BroadcastProver, BroadcastVerifier},
         cube::{CubeParams, CubeProver, CubeVerifier},
         div::{DivParams, DivProver, DivVerifier},
         einsum::{EinsumProver, EinsumVerifier},
@@ -154,6 +155,20 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                         Sumcheck::prove(&mut prover_sumcheck, &mut opening_accumulator, transcript);
                     proofs.insert(ProofId(node_idx, ProofType::Execution), proof);
                 }
+                Operator::Broadcast(_) => {
+                    let params =
+                        BroadcastParams::new(computation_node.clone(), &opening_accumulator);
+                    let broadcast_prover = BroadcastProver::initialize(&trace, params);
+                    broadcast_prover.prove(&mut opening_accumulator, transcript);
+                }
+                Operator::Reshape(_) => {
+                    let params = ops::reshape::ReshapeParams::<F>::new(
+                        computation_node.clone(),
+                        &opening_accumulator,
+                    );
+                    let reshape_prover = ops::reshape::ReshapeProver::initialize(params);
+                    reshape_prover.prove(&mut opening_accumulator, transcript);
+                }
                 Operator::Einsum(_) => {
                     let mut prover_sumcheck = EinsumProver::sumcheck(
                         &pp.model,
@@ -263,6 +278,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                         );
                     }
                 }
+
                 _ => println!("Unhandled operator in graph: {computation_node:#?}"),
             }
         }
@@ -437,6 +453,23 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                         &mut opening_accumulator,
                         transcript,
                     )?;
+                    Ok(())
+                }
+                Operator::Broadcast(_) => {
+                    let broadcast_verifier = BroadcastVerifier::new(
+                        computation_node.clone(),
+                        &opening_accumulator,
+                        &pp.model.graph,
+                    );
+                    broadcast_verifier.verify(&mut opening_accumulator, transcript)?;
+                    Ok(())
+                }
+                Operator::Reshape(_) => {
+                    let reshape_verifier = ops::reshape::ReshapeVerifier::new(
+                        computation_node.clone(),
+                        &opening_accumulator,
+                    );
+                    reshape_verifier.verify(&mut opening_accumulator, transcript)?;
                     Ok(())
                 }
                 Operator::Einsum(_) => {
@@ -723,6 +756,61 @@ mod tests {
 
         // verify proof
         proof.verify(&pp, &io).unwrap();
+    }
+
+    #[test]
+    fn test_broadcast() {
+        let working_dir = "../atlas-onnx-tracer/models/broadcast/";
+
+        // Create test input vector of size [4]
+        // Using simple values to test broadcasting
+        let input_vector = vec![1, 2, 3, 4];
+
+        let input = Tensor::construct(input_vector, vec![4]);
+
+        // Load the model
+        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
+        println!("model: {}", model.pretty_print());
+
+        let pp = AtlasSharedPreprocessing::preprocess(model);
+        let timing = Instant::now();
+        let (proof, io) =
+            ONNXProof::<Fr, Blake2bTranscript, DoryCommitmentScheme>::prove(&pp, &input);
+        println!("Proof generation took {:?}", timing.elapsed());
+
+        // verify proof
+        proof.verify(&pp, &io).unwrap();
+
+        // Print output for verification
+        println!("Output shape: {:?}", io.outputs[0].dims());
+        println!("Expected: input [4] broadcasted through operations to shape [2, 5, 4]");
+    }
+
+    #[test]
+    fn test_reshape() {
+        let working_dir = "../atlas-onnx-tracer/models/reshape/";
+
+        // Create test input vector of size [4]
+        // Using simple values to test reshaping
+        let input_vector = vec![1, 2, 3, 4];
+
+        let input = Tensor::construct(input_vector, vec![4]);
+
+        // Load the model
+        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
+        println!("model: {}", model.pretty_print());
+
+        let pp = AtlasSharedPreprocessing::preprocess(model);
+        let timing = Instant::now();
+        let (proof, io) =
+            ONNXProof::<Fr, Blake2bTranscript, DoryCommitmentScheme>::prove(&pp, &input);
+        println!("Proof generation took {:?}", timing.elapsed());
+
+        // verify proof
+        proof.verify(&pp, &io).unwrap();
+
+        // Print output for verification
+        println!("Output shape: {:?}", io.outputs[0].dims());
     }
 
     #[test]

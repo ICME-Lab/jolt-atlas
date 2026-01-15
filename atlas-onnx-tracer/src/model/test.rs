@@ -132,6 +132,19 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    pub fn broadcast(&mut self, input: Wire, target_dims: Vec<usize>) -> Wire {
+        let id = self.alloc();
+        let node = ComputationNode::new(
+            id,
+            Operator::Broadcast(Broadcast {
+                shape: target_dims.clone(),
+            }),
+            vec![input],
+            target_dims,
+        );
+        self.insert_node(node)
+    }
+
     /// Add a AND node.
     pub fn and2(&mut self, a: Wire, b: Wire) -> Wire {
         let id = self.alloc();
@@ -159,7 +172,9 @@ impl ModelBuilder {
         let id = self.alloc();
         let node = ComputationNode::new(
             id,
-            Operator::Reshape(Reshape(new_shape.clone())),
+            Operator::Reshape(Reshape {
+                shape: new_shape.clone(),
+            }),
             vec![input],
             new_shape,
         );
@@ -335,6 +350,22 @@ pub fn iff_model(rng: &mut StdRng, T: usize) -> Model {
     let mask = b.constant(Tensor::random_boolean(rng, &[T]));
     let c0 = b.constant(Tensor::random(rng, &[T]));
     let res = b.iff(mask, i, c0);
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn broadcast_model(input_shape: &[usize], output_shape: &[usize]) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(input_shape.to_vec());
+    let res = b.broadcast(i, output_shape.to_vec());
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn reshape_model(input_shape: &[usize], output_shape: &[usize]) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(input_shape.to_vec());
+    let res = b.reshape(i, output_shape.to_vec());
     b.mark_output(res);
     b.build()
 }

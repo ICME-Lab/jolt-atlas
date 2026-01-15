@@ -21,4 +21,8 @@ impl Op for Div {
             .collect();
         Tensor::new(Some(&data), a.dims()).unwrap()
     }
+
+    fn requires_shape_equality(&self) -> bool {
+        true
+    }
 }

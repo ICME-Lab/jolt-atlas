@@ -15,4 +15,8 @@ impl Op for IsNan {
         )
         .unwrap()
     }
+
+    fn requires_shape_equality(&self) -> bool {
+        true
+    }
 }

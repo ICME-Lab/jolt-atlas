@@ -9,4 +9,8 @@ impl Op for Rsqrt {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         tensor::ops::nonlinearities::rsqrt(inputs[0], self.scale.into())
     }
+
+    fn requires_shape_equality(&self) -> bool {
+        true
+    }
 }

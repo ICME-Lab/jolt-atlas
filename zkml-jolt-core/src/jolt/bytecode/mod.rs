@@ -9,7 +9,6 @@ use jolt_core::{
     transcripts::Transcript,
 };
 use onnx_tracer::{
-    tensor::Tensor,
     trace_types::{AtlasInstr, AtlasOpcode, ONNXInstr},
     utils::VirtualSlotCounter,
 };
@@ -146,7 +145,7 @@ impl BytecodePreprocessing {
         // 2. Decompose tensor operations into scalar instructions with individual immediate values
         // 3. Map ONNX instruction operands to virtual register addresses for the Jolt VM
         let max_output_elements = max_output_elements(&expanded_bytecode);
-        let mut inliner = BytecodeInstructionInliner::new(max_output_elements, &td_lookup);
+        let mut inliner = BytecodeInstructionInliner::new(max_output_elements);
 
         // Inline every instruction while recording the virtual tensor map.
         let preprocessed_bytecode: Vec<JoltONNXBytecode> = expanded_bytecode
@@ -354,7 +353,6 @@ impl JoltONNXBytecode {
         flags[CircuitFlags::LeftOperandIsTs1Value as usize] = matches!(
             self.opcode,
             AtlasOpcode::Add
-            | AtlasOpcode::Broadcast
             | AtlasOpcode::Eq
             | AtlasOpcode::Gte
             | AtlasOpcode::Mul
@@ -392,7 +390,6 @@ impl JoltONNXBytecode {
         flags[CircuitFlags::AddOperands as usize] = matches!(
             self.opcode,
             AtlasOpcode::Add
-            | AtlasOpcode::Broadcast
             // | AtlasOpcode::Output
             | AtlasOpcode::Relu
             | AtlasOpcode::Reshape
@@ -414,7 +411,6 @@ impl JoltONNXBytecode {
         flags[CircuitFlags::WriteLookupOutputToTD as usize] = matches!(
             self.opcode,
             AtlasOpcode::Add
-            | AtlasOpcode::Broadcast
             | AtlasOpcode::Eq
             | AtlasOpcode::Gte
             // | AtlasOpcode::Output
@@ -468,15 +464,13 @@ pub type RawToJoltResult = (
 
 /// Helper responsible for converting raw ONNX instructions into
 /// scalar Jolt bytecode while maintaining the virtual tensor address map.
-struct BytecodeInstructionInliner<'a> {
-    td_lookup: &'a HashMap<usize, AtlasInstr>,
+struct BytecodeInstructionInliner {
     allocator: VirtualTensorAllocator,
 }
 
-impl<'a> BytecodeInstructionInliner<'a> {
-    fn new(max_zero_register_span: usize, td_lookup: &'a HashMap<usize, AtlasInstr>) -> Self {
+impl BytecodeInstructionInliner {
+    fn new(max_zero_register_span: usize) -> Self {
         Self {
-            td_lookup,
             allocator: VirtualTensorAllocator::new(max_zero_register_span),
         }
     }
@@ -515,13 +509,11 @@ impl<'a> BytecodeInstructionInliner<'a> {
     ) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
         match raw.opcode {
             // Handled in precompiles
-            AtlasOpcode::Einsum(_) | AtlasOpcode::Sum(_) | AtlasOpcode::Gather => (
+            AtlasOpcode::Einsum(_)
+            | AtlasOpcode::Sum(_)
+            | AtlasOpcode::Gather
+            | AtlasOpcode::Broadcast => (
                 vec![0; element_count],
-                vec![0; element_count],
-                vec![0; element_count],
-            ),
-            AtlasOpcode::Broadcast => (
-                self.broadcast_addresses(raw, element_count),
                 vec![0; element_count],
                 vec![0; element_count],
             ),
@@ -540,50 +532,6 @@ impl<'a> BytecodeInstructionInliner<'a> {
                     .allocate_destination(td, element_count, index)
             })
             .collect()
-    }
-
-    fn broadcast_addresses(&self, raw: &AtlasInstr, element_count: usize) -> Vec<usize> {
-        let source_td = raw
-            .ts1
-            .expect("Broadcast instructions must provide a ts1 operand");
-        let operand_instr = self
-            .td_lookup
-            .get(&source_td)
-            .unwrap_or_else(|| panic!("Missing broadcast operand instruction for td {source_td}"));
-
-        let operand_count = operand_instr.num_output_elements();
-        let operand_addresses = self
-            .allocator
-            .sequence_addresses(operand_instr.td, operand_count);
-
-        let operand_tensor = Tensor::new(
-            Some(
-                &operand_addresses
-                    .iter()
-                    .map(|&addr| addr as i32)
-                    .collect::<Vec<i32>>(),
-            ),
-            &operand_instr.output_dims,
-        )
-        .expect("Operand tensor shape should match recorded output dims");
-
-        let expanded = operand_tensor
-            .expand(&raw.output_dims)
-            .expect("Broadcast expansion should succeed");
-
-        let broadcasted = expanded
-            .data()
-            .iter()
-            .map(|&value| value as usize)
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            broadcasted.len(),
-            element_count,
-            "Broadcast expansion must create one address per active output element",
-        );
-
-        broadcasted
     }
 }
 

@@ -6,7 +6,7 @@ use crate::{
 impl Op for Reshape {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         let mut t = inputs[0].clone();
-        t.reshape(&self.0).unwrap();
+        t.reshape(&self.shape).unwrap();
         t
     }
 }

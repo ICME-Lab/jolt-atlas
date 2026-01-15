@@ -406,10 +406,13 @@ impl<T: Clone + TensorType> Tensor<T> {
         Tensor::new(Some(&inner), &[inner.len()])
     }
 
-    /// Pads the tensor to power of 2 dimensions
+    /// Pads the tensor to power of 2 dimensions.
+    ///
+    /// For tensors where all values are identical (broadcast constants),
+    /// fills padding with the same value. Otherwise, pads with zeros.
     pub fn pad_next_power_of_two(&mut self)
     where
-        T: Send + Sync,
+        T: Send + Sync + PartialEq,
     {
         let padded_dims: Vec<usize> = self
             .dims()
@@ -417,7 +420,20 @@ impl<T: Clone + TensorType> Tensor<T> {
             .map(|dim| dim.next_power_of_two())
             .collect();
 
-        let result = self.pad_to_dims(&padded_dims);
+        // Check if this is a constant that comes from a scalar(all values are the same)
+        let is_scalar_const_tensor = if !self.inner.is_empty() {
+            let first_val = &self.inner[0];
+            self.inner.iter().all(|v| v == first_val)
+        } else {
+            false
+        };
+
+        let result = if is_scalar_const_tensor {
+            self.pad_to_dims_with_value(&padded_dims, self.inner[0].clone())
+        } else {
+            self.pad_to_dims(&padded_dims)
+        };
+
         assert!(
             result.is_ok(),
             "Unexpected internal error: {:?}",
@@ -502,6 +518,100 @@ impl<T: Clone + TensorType> Tensor<T> {
 
         // Replace our data with the padded tensor
         self.inner = new_tensor.inner;
+        self.dims = target_dims.to_vec();
+
+        Ok(())
+    }
+
+    /// Pads the tensor to specific target dimensions with a specific fill value.
+    /// Only supports growing dimensions (target must be >= current for each dimension).
+    ///
+    /// This is useful for padding broadcast constants where zeros would cause issues
+    /// (e.g., division by zero). The original values are preserved, and new cells are
+    /// filled with the specified value.
+    ///
+    /// # Arguments
+    /// * `target_dims` - The target dimensions to pad to
+    /// * `fill_value` - The value to use for padding (instead of zero)
+    ///
+    /// # Returns
+    /// * `Ok(())` if successful
+    /// * `Err(TensorError)` if target dimensions are smaller than current dimensions
+    pub fn pad_to_dims_with_value(
+        &mut self,
+        target_dims: &[usize],
+        fill_value: T,
+    ) -> Result<(), TensorError>
+    where
+        T: Send + Sync,
+    {
+        if target_dims.len() != self.dims.len() {
+            return Err(TensorError::DimMismatch(
+                "Target dimensions must have same rank as current tensor".to_string(),
+            ));
+        }
+
+        // Check that all target dimensions are >= current dimensions
+        for (i, (&current, &target)) in self.dims.iter().zip(target_dims.iter()).enumerate() {
+            if target < current {
+                return Err(TensorError::DimError(format!(
+                    "Target dimension {i} ({target}) is smaller than current dimension {i} ({current})"
+                )));
+            }
+        }
+
+        // If already the right size, nothing to do
+        if self.dims == target_dims {
+            return Ok(());
+        }
+
+        // Create a new tensor with the target dimensions, filled with the fill_value
+        let target_len = target_dims.iter().product();
+        let mut new_inner = vec![fill_value; target_len];
+
+        // Copy existing data to the new tensor preserving the multi-dimensional layout
+        let old_dims = self.dims.clone();
+
+        // Generate all valid coordinates in the old tensor
+        fn generate_coords(dims: &[usize]) -> Vec<Vec<usize>> {
+            if dims.is_empty() {
+                return vec![vec![]];
+            }
+            let mut result = vec![];
+            let first_dim = dims[0];
+            let rest_coords = generate_coords(&dims[1..]);
+
+            for i in 0..first_dim {
+                for rest in &rest_coords {
+                    let mut coord = vec![i];
+                    coord.extend(rest);
+                    result.push(coord);
+                }
+            }
+            result
+        }
+
+        let all_coords = generate_coords(&old_dims);
+
+        // Helper to convert coordinates to flat index
+        fn coord_to_index(coord: &[usize], dims: &[usize]) -> usize {
+            let mut index = 0;
+            let mut stride = 1;
+            for i in (0..coord.len()).rev() {
+                index += coord[i] * stride;
+                stride *= dims[i];
+            }
+            index
+        }
+
+        for coord in all_coords {
+            let old_idx = coord_to_index(&coord, &old_dims);
+            let new_idx = coord_to_index(&coord, target_dims);
+            new_inner[new_idx] = self.inner[old_idx].clone();
+        }
+
+        // Replace our data with the padded tensor
+        self.inner = new_inner;
         self.dims = target_dims.to_vec();
 
         Ok(())

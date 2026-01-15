@@ -7,7 +7,7 @@ edition = "2021"
 monitor = ["dep:sysinfo"]
 allocative = ["dep:inferno"]
 challenge-254-bit = []
-test-transcript = []
+test-feature = []
 
 [profile.test]
 opt-level = 3

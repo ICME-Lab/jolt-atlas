@@ -226,7 +226,7 @@ impl DoryGlobals {
     }
 
     /// Reset global state
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-feature"))]
     pub fn reset() {
         #[allow(static_mut_refs)]
         unsafe {

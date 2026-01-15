@@ -56,7 +56,7 @@ impl CommitmentScheme for DoryCommitmentScheme {
         // In unit tests, multiple setups with different sizes are created, so initializing the
         // cache with a small setup can break later tests that need more generators.
         // We therefore disable cache initialization in `cfg(test)` builds.
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-feature")))]
         DoryGlobals::init_prepared_cache(&setup.g1_vec, &setup.g2_vec);
 
         setup

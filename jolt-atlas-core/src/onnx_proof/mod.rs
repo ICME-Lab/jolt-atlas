@@ -759,6 +759,30 @@ mod tests {
     }
 
     #[test]
+    fn test_perceptron() {
+        let working_dir = "../atlas-onnx-tracer/models/perceptron/";
+
+        // Create test input vector of size [4]
+        // Using simple values to test broadcasting
+        let input_vector = vec![1, 2, 3, 4];
+
+        let input = Tensor::construct(input_vector, vec![1, 4]);
+
+        // Load the model
+        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
+        println!("model: {}", model.pretty_print());
+
+        let pp = AtlasSharedPreprocessing::preprocess(model);
+        let timing = Instant::now();
+        let (proof, io) =
+            ONNXProof::<Fr, Blake2bTranscript, DoryCommitmentScheme>::prove(&pp, &input);
+        println!("Proof generation took {:?}", timing.elapsed());
+
+        // verify proof
+        proof.verify(&pp, &io).unwrap();
+    }
+
+    #[test]
     fn test_broadcast() {
         let working_dir = "../atlas-onnx-tracer/models/broadcast/";
 

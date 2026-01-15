@@ -420,7 +420,7 @@ impl<T: Clone + TensorType> Tensor<T> {
             .map(|dim| dim.next_power_of_two())
             .collect();
 
-        // Check if this is a constant from a const div(all values are the same)
+        // Check if this is a constant that comes from a scalar(all values are the same)
         let is_scalar_const_tensor = if !self.inner.is_empty() {
             let first_val = &self.inner[0];
             self.inner.iter().all(|v| v == first_val)

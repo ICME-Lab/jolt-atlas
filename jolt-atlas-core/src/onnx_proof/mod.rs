@@ -15,7 +15,9 @@ use crate::onnx_proof::{
         div::{DivParams, DivProver, DivVerifier},
         einsum::{EinsumProver, EinsumVerifier},
         iff::{IffParams, IffProver, IffVerifier},
+        moveaxis::{MoveAxisParams, MoveAxisProver, MoveAxisVerifier},
         mul::{MulParams, MulProver, MulVerifier},
+        reshape::{ReshapeParams, ReshapeProver, ReshapeVerifier},
         square::{SquareParams, SquareProver, SquareVerifier},
         sub::{SubParams, SubProver, SubVerifier},
     },
@@ -162,12 +164,16 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                     broadcast_prover.prove(&mut opening_accumulator, transcript);
                 }
                 Operator::Reshape(_) => {
-                    let params = ops::reshape::ReshapeParams::<F>::new(
-                        computation_node.clone(),
-                        &opening_accumulator,
-                    );
-                    let reshape_prover = ops::reshape::ReshapeProver::initialize(params);
+                    let params =
+                        ReshapeParams::<F>::new(computation_node.clone(), &opening_accumulator);
+                    let reshape_prover = ReshapeProver::initialize(params);
                     reshape_prover.prove(&mut opening_accumulator, transcript);
+                }
+                Operator::MoveAxis(_) => {
+                    let params =
+                        MoveAxisParams::<F>::new(computation_node.clone(), &opening_accumulator);
+                    let moveaxis_prover = MoveAxisProver::initialize(params);
+                    moveaxis_prover.prove(&mut opening_accumulator, transcript);
                 }
                 Operator::Einsum(_) => {
                     let mut prover_sumcheck = EinsumProver::sumcheck(
@@ -465,11 +471,15 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                     Ok(())
                 }
                 Operator::Reshape(_) => {
-                    let reshape_verifier = ops::reshape::ReshapeVerifier::new(
-                        computation_node.clone(),
-                        &opening_accumulator,
-                    );
+                    let reshape_verifier =
+                        ReshapeVerifier::new(computation_node.clone(), &opening_accumulator);
                     reshape_verifier.verify(&mut opening_accumulator, transcript)?;
+                    Ok(())
+                }
+                Operator::MoveAxis(_) => {
+                    let moveaxis_verifier =
+                        MoveAxisVerifier::new(computation_node.clone(), &opening_accumulator);
+                    moveaxis_verifier.verify(&mut opening_accumulator, transcript)?;
                     Ok(())
                 }
                 Operator::Einsum(_) => {
@@ -820,6 +830,32 @@ mod tests {
 
         let input = Tensor::construct(input_vector, vec![4]);
 
+        // Load the model
+        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
+        println!("model: {}", model.pretty_print());
+
+        let pp = AtlasSharedPreprocessing::preprocess(model);
+        let timing = Instant::now();
+        let (proof, io) =
+            ONNXProof::<Fr, Blake2bTranscript, DoryCommitmentScheme>::prove(&pp, &input);
+        println!("Proof generation took {:?}", timing.elapsed());
+
+        // verify proof
+        proof.verify(&pp, &io).unwrap();
+
+        // Print output for verification
+        println!("Output shape: {:?}", io.outputs[0].dims());
+    }
+
+    #[test]
+    fn test_moveaxis() {
+        let working_dir = "../atlas-onnx-tracer/models/moveaxis/";
+
+        // Create test input vector of size [2, 4, 8]
+        // Using simple values to test moveaxis
+        let input_vector: Vec<i32> = (1..=64).collect();
+
+        let input = Tensor::construct(input_vector, vec![2, 4, 8]);
         // Load the model
         let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
         println!("model: {}", model.pretty_print());

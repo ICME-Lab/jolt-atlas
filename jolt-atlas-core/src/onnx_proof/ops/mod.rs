@@ -5,6 +5,7 @@ pub mod cube;
 pub mod div;
 pub mod einsum;
 pub mod iff;
+pub mod moveaxis;
 pub mod mul;
 pub mod reshape;
 pub mod square;

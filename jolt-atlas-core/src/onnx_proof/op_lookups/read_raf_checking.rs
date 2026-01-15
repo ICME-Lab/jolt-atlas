@@ -965,6 +965,7 @@ mod tests {
         T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
         PCS: CommitmentScheme<Field = Fr>,
     {
+        DoryGlobals::reset();
         let one_hot_params = OneHotParams::new(log_T);
         let shared_pp = AtlasSharedPreprocessing::preprocess(model);
         let prover_pp = AtlasProverPreprocessing::<Fr, PCS>::new(shared_pp);

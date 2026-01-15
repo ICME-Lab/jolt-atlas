@@ -270,11 +270,11 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x888);
         let test_IO = vec![
             //------Input Shape | Output Shape
-            /*-------*/ (vec![4], vec![3, 4]),
-            /*----*/ (vec![1, 4], vec![3, 4]),
-            /*----*/ (vec![4, 1], vec![4, 6]),
-            /*-*/ (vec![1, 1, 4], vec![2, 3, 4]),
-            /*-*/ (vec![1, 4, 1], vec![2, 4, 5]),
+            /*-------*/ (vec![4], vec![8, 4]),
+            /*----*/ (vec![1, 4], vec![4, 4]),
+            /*----*/ (vec![4, 1], vec![4, 8]),
+            /*-*/ (vec![1, 1, 4], vec![2, 4, 4]),
+            /*-*/ (vec![1, 4, 1], vec![2, 4, 8]),
         ];
 
         for (input_shape, output_shape) in test_IO {

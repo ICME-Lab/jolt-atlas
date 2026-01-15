@@ -21,7 +21,7 @@ overflow-checks = true
 # Internal dependencies
 atlas-onnx-tracer = { path = "../atlas-onnx-tracer" }
 common = { path = "../common" }
-joltworks = { path = "../joltworks", features = ["test-transcript"] }
+joltworks = { path = "../joltworks", features = ["test-feature"] }
 
 # Tracing and Profiling
 tracing = { version = "0.1.37", default-features = false }

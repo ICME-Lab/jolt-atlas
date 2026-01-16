@@ -84,12 +84,21 @@ define_operators! {
 pub trait Op {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32>;
 
+    /// Returns true if this operator requires all inputs to have matching shapes.
+    /// When true, broadcast nodes will be automatically inserted before this operator.
     fn requires_shape_equality(&self) -> bool {
         false
     }
 
-    fn requires_rebase(&self) -> bool {
-        false
+    /// Returns the scale multiplier for rebasing after this operation.
+    /// - `None` means no rebase is needed (e.g., Add, Sub)
+    /// - `Some(1)` means divide by `1 << scale` (e.g., Mul, Square)
+    /// - `Some(2)` means divide by `1 << (scale * 2)` (e.g., Cube)
+    ///
+    /// This is used to maintain fixed-point representation after operations
+    /// that increase the scale factor.
+    fn rebase_scale_factor(&self) -> Option<usize> {
+        None
     }
 }
 

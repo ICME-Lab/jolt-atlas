@@ -1,4 +1,7 @@
 //! Reduction operator handlers: Sum, MeanOfSquares
+//!
+//! This module provides handlers for reduction operations, using the
+//! `HandlerBuilder` for clean, declarative decomposition patterns.
 
 use std::collections::HashMap;
 
@@ -6,9 +9,8 @@ use tract_onnx::tract_core::ops::nn::Reduce;
 
 use crate::{
     node::ComputationNode,
-    ops::{Constant, Operator, Sum},
-    tensor::Tensor,
-    utils::parser::{DecompositionBuilder, load_op},
+    ops::{Operator, Sum},
+    utils::{handler_builder::HandlerBuilder, parser::load_op},
 };
 
 use super::{HandlerContext, OpHandlerFn};
@@ -23,86 +25,37 @@ pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
     ])
 }
 
+/// Reduce<Sum>: Sum reduction along specified axes.
 fn handle_reduce_sum(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     assert_eq!(hctx.internal_input_indices.len(), 1);
     let op = load_op::<Reduce>(hctx.node.op(), hctx.node.op().name().to_string());
     let axes = op.axes.into_iter().collect();
 
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
-    builder.add_node(ComputationNode {
-        idx: builder.idx(0),
-        operator: Operator::Sum(Sum { axes }),
-        inputs: hctx.internal_input_indices.clone(),
-        output_dims: hctx.output_dims.clone(),
-    });
-    builder.finish()
+    HandlerBuilder::new(hctx)
+        .simple_op(Operator::Sum(Sum { axes }))
+        .build()
 }
 
+/// Reduce<MeanOfSquares>: Decomposed into Square -> Sum -> Div(count) -> Div(scale).
+///
+/// Pipeline: input -> Square(input_dims) -> Sum(output_dims) -> Div by count -> Div by scale
 fn handle_reduce_mean_of_squares(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     assert!(hctx.internal_input_indices.len() == 1);
-    // Decompose MeanOfSquares into
-    // square, sum, div, div (and then rebase)
-    let op = load_op::<Reduce>(hctx.node.op(), hctx.node.op().name().to_string());
-    let axes = op.axes.into_iter().collect();
 
-    // Clone data we need before creating builder (to avoid borrow issues)
+    let op = load_op::<Reduce>(hctx.node.op(), hctx.node.op().name().to_string());
+    let axes: Vec<usize> = op.axes.into_iter().collect();
+
+    // Calculate the dividend (number of elements being averaged)
     let input_dims = hctx.internal_input_nodes[0].output_dims.clone();
     let output_dims = hctx.output_dims.clone();
-    let internal_input_indices = hctx.internal_input_indices.clone();
-    let scale = hctx.run_args.scale;
-
     let dividend_value =
         (input_dims.iter().product::<usize>() / output_dims.iter().product::<usize>()) as i32;
 
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 6);
-
-    builder.add_node(ComputationNode {
-        idx: builder.idx(0),
-        operator: Operator::Square(Default::default()),
-        inputs: internal_input_indices,
-        output_dims: input_dims,
-    });
-
-    builder.add_node(ComputationNode {
-        idx: builder.idx(1),
-        operator: Operator::Sum(Sum { axes }),
-        inputs: vec![builder.idx(0)],
-        output_dims: output_dims.clone(),
-    });
-
-    builder.add_node(ComputationNode {
-        idx: builder.idx(2),
-        operator: Operator::Constant(Constant(Tensor::construct(
-            vec![dividend_value; output_dims.iter().product::<usize>()],
-            output_dims.clone(),
-        ))),
-        inputs: vec![],
-        output_dims: output_dims.clone(),
-    });
-
-    builder.add_node(ComputationNode {
-        idx: builder.idx(3),
-        operator: Operator::Div(Default::default()),
-        inputs: vec![builder.idx(1), builder.idx(2)],
-        output_dims: output_dims.clone(),
-    });
-
-    builder.add_node(ComputationNode {
-        idx: builder.idx(4),
-        operator: Operator::Constant(Constant(Tensor::construct(
-            vec![1 << scale; output_dims.iter().product()],
-            output_dims.clone(),
-        ))),
-        inputs: vec![],
-        output_dims: output_dims.clone(),
-    });
-
-    builder.add_node(ComputationNode {
-        idx: builder.idx(5),
-        operator: Operator::Div(Default::default()),
-        inputs: vec![builder.idx(3), builder.idx(4)],
-        output_dims,
-    });
-
-    builder.finish()
+    // Pipeline: Square -> Sum -> Div by count -> Div by scale (rebase)
+    HandlerBuilder::new(hctx)
+        .pipe_with_dims(Operator::Square(Default::default()), input_dims)
+        .pipe(Operator::Sum(Sum { axes }))
+        .div_by_constant(dividend_value)
+        .with_auto_rebase() // Square needs rebase
+        .build()
 }

@@ -11,4 +11,8 @@ impl Op for Mul {
     fn requires_shape_equality(&self) -> bool {
         true
     }
+
+    fn rebase_scale_factor(&self) -> Option<usize> {
+        Some(1) // Mul: x * y produces result at scale^2, needs div by (1 << scale)
+    }
 }

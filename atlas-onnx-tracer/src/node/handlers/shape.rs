@@ -1,4 +1,7 @@
 //! Shape manipulation operator handlers: Reshape, MoveAxis, MultiBroadcast
+//!
+//! This module provides handlers for shape manipulation operations, using the
+//! `HandlerBuilder` for clean, declarative decomposition patterns.
 
 use std::collections::HashMap;
 
@@ -10,7 +13,7 @@ use tract_onnx::{
 use crate::{
     node::ComputationNode,
     ops::{Broadcast, MoveAxis, Operator, Reshape},
-    utils::parser::{DecompositionBuilder, load_op},
+    utils::{handler_builder::HandlerBuilder, parser::load_op},
 };
 
 use super::{HandlerContext, OpHandlerFn};
@@ -25,56 +28,45 @@ pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
     ])
 }
 
+/// Reshape: Changes tensor dimensions without changing data.
 fn handle_reshape(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
-    builder.add_node(ComputationNode {
-        idx: builder.idx(0),
-        operator: Operator::Reshape(Reshape {
-            shape: hctx.output_dims.clone(),
-        }),
-        inputs: hctx.internal_input_indices.clone(),
-        output_dims: hctx.output_dims.clone(),
-    });
-    builder.finish()
+    let shape = hctx.output_dims.clone();
+
+    HandlerBuilder::new(hctx)
+        .simple_op(Operator::Reshape(Reshape { shape }))
+        .build()
 }
 
+/// MoveAxis: Moves an axis from source position to destination position.
 fn handle_move_axis(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let op = load_op::<AxisOp>(hctx.node.op(), hctx.node.op().name().to_string());
     match op {
         AxisOp::Move(from, to) => {
             let source = from.to_usize().unwrap();
             let destination = to.to_usize().unwrap();
-            let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
-            builder.add_node(ComputationNode {
-                idx: builder.idx(0),
-                operator: Operator::MoveAxis(MoveAxis {
+
+            HandlerBuilder::new(hctx)
+                .simple_op(Operator::MoveAxis(MoveAxis {
                     source,
                     destination,
-                }),
-                inputs: hctx.internal_input_indices.clone(),
-                output_dims: hctx.output_dims.clone(),
-            });
-            builder.finish()
+                }))
+                .build()
         }
         _ => panic!("Expected MoveAxis operator"),
     }
 }
 
+/// MultiBroadcastTo: Broadcasts tensor to target shape.
 fn handle_broadcast(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let op = load_op::<MultiBroadcastTo>(hctx.node.op(), hctx.node.op().name().to_string());
-    let shape = op.shape.clone();
-    let shape = shape
+    let shape = op
+        .shape
         .iter()
         .map(|x| x.to_usize())
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
 
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
-    builder.add_node(ComputationNode {
-        idx: builder.idx(0),
-        operator: Operator::Broadcast(Broadcast { shape }),
-        inputs: hctx.internal_input_indices.clone(),
-        output_dims: hctx.output_dims.clone(),
-    });
-    builder.finish()
+    HandlerBuilder::new(hctx)
+        .simple_op(Operator::Broadcast(Broadcast { shape }))
+        .build()
 }

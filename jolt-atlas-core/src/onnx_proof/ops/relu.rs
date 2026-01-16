@@ -1,11 +1,11 @@
-use crate::onnx_proof::{ops::OperatorHandler, ProofId, ProofType, Prover, Verifier};
+use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
 use atlas_onnx_tracer::{node::ComputationNode, ops::ReLU};
 use joltworks::{
     self, field::JoltField, subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
 
-impl<F: JoltField, T: Transcript> OperatorHandler<F, T> for ReLU {
+impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
     fn prove(
         &self,
         node: &ComputationNode,

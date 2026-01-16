@@ -1,4 +1,4 @@
-use crate::onnx_proof::{ops::OperatorHandler, ProofId, Prover, Verifier};
+use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier};
 use atlas_onnx_tracer::{node::ComputationNode, ops::Input};
 use joltworks::{
     field::JoltField,
@@ -11,7 +11,7 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 
-impl<F: JoltField, T: Transcript> OperatorHandler<F, T> for Input {
+impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Input {
     fn prove(
         &self,
         node: &ComputationNode,

@@ -23,7 +23,7 @@ use crate::{
                 mbk_nbk_bmn::{MbkNbkBmnParams, MbkNbkBmnProver, MbkNbkBmnVerifier},
                 mk_kn_mn::{MkKnMnParams, MkKnMnProver, MkKnMnVerifier},
             },
-            OperatorHandler, Prover, Verifier,
+            OperatorProofTrait, Prover, Verifier,
         },
         ProofId, ProofType,
     },
@@ -35,7 +35,7 @@ pub mod k_nk_n;
 pub mod mbk_nbk_bmn;
 pub mod mk_kn_mn;
 
-impl<F: JoltField, T: Transcript> OperatorHandler<F, T> for Einsum {
+impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
     fn prove(
         &self,
         node: &ComputationNode,

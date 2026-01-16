@@ -1,5 +1,5 @@
 use crate::onnx_proof::{
-    ops::{OperatorHandler, Prover, Verifier},
+    ops::{OperatorProofTrait, Prover, Verifier},
     ProofId,
 };
 use atlas_onnx_tracer::{node::ComputationNode, ops::Reshape};
@@ -14,7 +14,7 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 
-impl<F: JoltField, T: Transcript> OperatorHandler<F, T> for Reshape {
+impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
     fn prove(
         &self,
         node: &ComputationNode,

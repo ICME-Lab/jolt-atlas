@@ -1,6 +1,6 @@
 use crate::{
-    impl_standard_sumcheck_handler,
-    onnx_proof::{ops::OperatorHandler, ProofId, ProofType, Prover, Verifier},
+    impl_standard_sumcheck_proof_api,
+    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
 };
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
@@ -29,7 +29,7 @@ use joltworks::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 
-impl_standard_sumcheck_handler!(Add, AddParams, AddProver, AddVerifier);
+impl_standard_sumcheck_proof_api!(Add, AddParams, AddProver, AddVerifier);
 
 const DEGREE_BOUND: usize = 2;
 

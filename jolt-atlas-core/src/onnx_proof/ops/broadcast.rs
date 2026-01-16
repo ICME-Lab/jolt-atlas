@@ -24,11 +24,11 @@ use joltworks::{
 };
 
 use crate::onnx_proof::{
-    ops::{OperatorHandler, Prover, Verifier},
+    ops::{OperatorProofTrait, Prover, Verifier},
     ProofId,
 };
 
-impl<F: JoltField, T: Transcript> OperatorHandler<F, T> for Broadcast {
+impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
     fn prove(
         &self,
         node: &ComputationNode,

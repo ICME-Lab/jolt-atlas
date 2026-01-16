@@ -37,7 +37,7 @@ use crate::onnx_proof::{ProofId, Prover, Verifier};
 /// Each operator type implements this trait to encapsulate its specific
 /// proving and verification logic, which is then dispatched from the main
 /// proof module.
-pub trait OperatorHandler<F: JoltField, T: Transcript> {
+pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
     /// Prove the operation for the given computation node.
     ///
     /// Returns a vector of (ProofId, Proof) pairs. Most operators return a single
@@ -124,16 +124,16 @@ impl OperatorVerifier {
     }
 }
 
-/// Macro to implement OperatorHandler for standard sumcheck-based operators.
+/// Macro to implement OperatorProofTrait for standard sumcheck-based operators.
 ///
 /// These operators all follow the same pattern:
 /// 1. Create params from computation node and accumulator
 /// 2. Initialize prover with trace and params
 /// 3. Run sumcheck and store proof
 #[macro_export]
-macro_rules! impl_standard_sumcheck_handler {
+macro_rules! impl_standard_sumcheck_proof_api {
     ($inner_ty:ty, $params_ty:ident, $prover_ty:ident, $verifier_ty:ident) => {
-        impl<F: JoltField, T: Transcript> OperatorHandler<F, T> for $inner_ty {
+        impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for $inner_ty {
             fn prove(
                 &self,
                 node: &ComputationNode,
@@ -177,4 +177,4 @@ macro_rules! impl_standard_sumcheck_handler {
     };
 }
 
-pub use impl_standard_sumcheck_handler;
+pub use impl_standard_sumcheck_proof_api;

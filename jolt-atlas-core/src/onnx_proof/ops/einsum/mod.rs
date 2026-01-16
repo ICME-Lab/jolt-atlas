@@ -7,17 +7,25 @@ use joltworks::{
     field::JoltField,
     poly::opening_proof::{OpeningAccumulator, VerifierOpeningAccumulator},
     subprotocols::{
-        sumcheck_prover::SumcheckInstanceProver, sumcheck_verifier::SumcheckInstanceVerifier,
+        sumcheck::SumcheckInstanceProof, sumcheck_prover::SumcheckInstanceProver,
+        sumcheck_verifier::SumcheckInstanceVerifier,
     },
     transcripts::Transcript,
+    utils::errors::ProofVerifyError,
 };
 
 use crate::{
-    onnx_proof::ops::einsum::{
-        bmk_kbn_mbn::{BmkKbnMbnParams, BmkKbnMbnProver, BmkKbnMbnVerifier},
-        k_nk_n::{KNkNParams, KNkNProver, KNkNVerifier},
-        mbk_nbk_bmn::{MbkNbkBmnParams, MbkNbkBmnProver, MbkNbkBmnVerifier},
-        mk_kn_mn::{MkKnMnParams, MkKnMnProver, MkKnMnVerifier},
+    onnx_proof::{
+        ops::{
+            einsum::{
+                bmk_kbn_mbn::{BmkKbnMbnParams, BmkKbnMbnProver, BmkKbnMbnVerifier},
+                k_nk_n::{KNkNParams, KNkNProver, KNkNVerifier},
+                mbk_nbk_bmn::{MbkNbkBmnParams, MbkNbkBmnProver, MbkNbkBmnVerifier},
+                mk_kn_mn::{MkKnMnParams, MkKnMnProver, MkKnMnVerifier},
+            },
+            OperatorProofTrait, Prover, Verifier,
+        },
+        ProofId, ProofType,
     },
     utils::einsum::EINSUM_REGISTRY,
 };
@@ -26,6 +34,56 @@ pub mod bmk_kbn_mbn;
 pub mod k_nk_n;
 pub mod mbk_nbk_bmn;
 pub mod mk_kn_mn;
+
+impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
+    fn prove(
+        &self,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+        use crate::onnx_proof::ops::einsum::EinsumProver;
+        use joltworks::subprotocols::sumcheck::Sumcheck;
+
+        let mut prover_sumcheck = EinsumProver::sumcheck(
+            &prover.preprocessing.model,
+            &prover.trace,
+            node.clone(),
+            &prover.accumulator,
+        );
+        let (proof, _) = Sumcheck::prove(
+            &mut *prover_sumcheck,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+        vec![(ProofId(node.idx, ProofType::Execution), proof)]
+    }
+
+    fn verify(
+        &self,
+        node: &ComputationNode,
+        verifier: &mut Verifier<'_, F, T>,
+    ) -> Result<(), ProofVerifyError> {
+        use crate::onnx_proof::ops::einsum::EinsumVerifier;
+        use joltworks::subprotocols::sumcheck::Sumcheck;
+
+        let proof = verifier
+            .proofs
+            .get(&ProofId(node.idx, ProofType::Execution))
+            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        let verifier_sumcheck = EinsumVerifier::sumcheck(
+            &verifier.preprocessing.model,
+            node.clone(),
+            &verifier.accumulator,
+        );
+        Sumcheck::verify(
+            proof,
+            &*verifier_sumcheck,
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        )?;
+        Ok(())
+    }
+}
 
 pub struct EinsumProver;
 

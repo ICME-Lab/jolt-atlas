@@ -1,14 +1,14 @@
-//! Activation operator handlers: ReLU (Max), Tanh, Softmax, Rsqrt
+//! Activation operator handlers: ReLU (Max), Tanh, Softmax, Rsqrt, Erf
+//!
+//! This module provides handlers for activation functions, using the
+//! `HandlerBuilder` for clean, declarative decomposition patterns.
 
 use std::collections::HashMap;
 
 use crate::{
     node::ComputationNode,
     ops::{Constant, Erf, Operator, Rsqrt, Softmax, Tanh},
-    utils::{
-        parser::{DecompositionBuilder, GraphParser, load_op},
-        quantize::scale_to_multiplier,
-    },
+    utils::{handler_builder::HandlerBuilder, parser::load_op, quantize::scale_to_multiplier},
 };
 
 use super::{HandlerContext, OpHandlerFn};
@@ -23,11 +23,9 @@ pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
     ])
 }
 
+/// Max: Special-cased to ReLU when comparing with 0.
 fn handle_max(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    // --- Special case for relu ---
-    // Extract the max value
-    // first find the input that is a constant
-    // and then extract the value
+    // Extract the max value from constant input
     let max_value = hctx
         .internal_input_nodes
         .iter()
@@ -44,63 +42,37 @@ fn handle_max(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     if max_value == 0 {
         // Remove the constant input from the internal inputs
         hctx.internal_input_indices.remove(1);
-        let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
-        let bc_nodes = broadcast_nodes.len();
 
-        let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
-        for node in broadcast_nodes {
-            builder.add_node(node);
-        }
-        builder.add_node(ComputationNode {
-            idx: builder.idx(bc_nodes),
-            operator: Operator::ReLU(Default::default()),
-            inputs: vec![hctx.internal_input_indices[0]],
-            output_dims: hctx.output_dims.clone(),
-        });
-        builder.finish()
+        HandlerBuilder::new(hctx)
+            .with_broadcast()
+            .simple_op(Operator::ReLU(Default::default()))
+            .build()
     } else {
         unimplemented!("Max operator with non-zero constant is not implemented");
     }
 }
 
+/// Tanh: Hyperbolic tangent activation.
 fn handle_tanh(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
-    let bc_nodes = broadcast_nodes.len();
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
+    let scale = scale_to_multiplier(hctx.run_args.scale).into();
 
-    for node in broadcast_nodes {
-        builder.add_node(node);
-    }
-    builder.add_node(ComputationNode {
-        idx: builder.idx(bc_nodes),
-        operator: Operator::Tanh(Tanh {
-            scale: scale_to_multiplier(hctx.run_args.scale).into(),
-        }),
-        inputs: hctx.internal_input_indices.clone(),
-        output_dims: hctx.output_dims.clone(),
-    });
-    builder.finish()
+    HandlerBuilder::new(hctx)
+        .with_broadcast()
+        .simple_op(Operator::Tanh(Tanh { scale }))
+        .build()
 }
 
+/// Erf: Error function activation.
 fn handle_erf(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
-    let bc_nodes = broadcast_nodes.len();
+    let scale = scale_to_multiplier(hctx.run_args.scale).into();
 
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
-    for node in broadcast_nodes {
-        builder.add_node(node);
-    }
-    builder.add_node(ComputationNode {
-        idx: builder.idx(bc_nodes),
-        operator: Operator::Erf(Erf {
-            scale: scale_to_multiplier(hctx.run_args.scale).into(),
-        }),
-        inputs: hctx.internal_input_indices.clone(),
-        output_dims: hctx.output_dims.clone(),
-    });
-    builder.finish()
+    HandlerBuilder::new(hctx)
+        .with_broadcast()
+        .simple_op(Operator::Erf(Erf { scale }))
+        .build()
 }
 
+/// Softmax: Softmax activation along specified axis.
 fn handle_softmax(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let op = load_op::<tract_onnx::tract_core::ops::nn::Softmax>(
         hctx.node.op(),
@@ -109,41 +81,23 @@ fn handle_softmax(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let axes = op.axes.to_vec();
     assert!(axes.len() == 1);
 
-    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
-    let bc_nodes = broadcast_nodes.len();
+    let scale = scale_to_multiplier(hctx.run_args.scale).into();
 
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
-    for node in broadcast_nodes {
-        builder.add_node(node);
-    }
-    builder.add_node(ComputationNode {
-        idx: builder.idx(bc_nodes),
-        operator: Operator::Softmax(Softmax {
+    HandlerBuilder::new(hctx)
+        .with_broadcast()
+        .simple_op(Operator::Softmax(Softmax {
             axes: axes[0],
-            scale: scale_to_multiplier(hctx.run_args.scale).into(),
-        }),
-        inputs: hctx.internal_input_indices.clone(),
-        output_dims: hctx.output_dims.clone(),
-    });
-    builder.finish()
+            scale,
+        }))
+        .build()
 }
 
+/// Rsqrt: Reciprocal square root.
 fn handle_rsqrt(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    // TODO: implement Rsqrt decomposition
-    let broadcast_nodes = GraphParser::insert_broadcast_nodes(hctx);
-    let bc_nodes = broadcast_nodes.len();
+    let scale = scale_to_multiplier(hctx.run_args.scale).into();
 
-    let mut builder = DecompositionBuilder::new(hctx.ctx, 1 + bc_nodes);
-    for node in broadcast_nodes {
-        builder.add_node(node);
-    }
-    builder.add_node(ComputationNode {
-        idx: builder.idx(bc_nodes),
-        operator: Operator::Rsqrt(Rsqrt {
-            scale: scale_to_multiplier(hctx.run_args.scale).into(),
-        }),
-        inputs: hctx.internal_input_indices.clone(),
-        output_dims: hctx.output_dims.clone(),
-    });
-    builder.finish()
+    HandlerBuilder::new(hctx)
+        .with_broadcast()
+        .simple_op(Operator::Rsqrt(Rsqrt { scale }))
+        .build()
 }

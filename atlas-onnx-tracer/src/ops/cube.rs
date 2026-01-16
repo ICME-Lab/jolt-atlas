@@ -11,4 +11,8 @@ impl Op for Cube {
     fn requires_shape_equality(&self) -> bool {
         true
     }
+
+    fn rebase_scale_factor(&self) -> Option<usize> {
+        Some(2) // Cube: x^3 produces result at scale^3, needs div by (1 << (scale * 2))
+    }
 }

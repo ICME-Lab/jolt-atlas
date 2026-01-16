@@ -1,13 +1,45 @@
-use atlas_onnx_tracer::node::ComputationNode;
+use atlas_onnx_tracer::{node::ComputationNode, ops::MoveAxis};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
     poly::opening_proof::{
         OpeningAccumulator, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
     },
+    subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
+
+use crate::onnx_proof::{
+    ops::{OperatorHandler, Prover, Verifier},
+    ProofId,
+};
+
+impl<F: JoltField, T: Transcript> OperatorHandler<F, T> for MoveAxis {
+    fn prove(
+        &self,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+        use crate::onnx_proof::ops::moveaxis::{MoveAxisParams, MoveAxisProver};
+
+        let params = MoveAxisParams::<F>::new(node.clone(), &prover.accumulator);
+        let moveaxis_prover = MoveAxisProver::initialize(params);
+        moveaxis_prover.prove(&mut prover.accumulator, &mut prover.transcript);
+        vec![]
+    }
+
+    fn verify(
+        &self,
+        node: &ComputationNode,
+        verifier: &mut Verifier<'_, F, T>,
+    ) -> Result<(), ProofVerifyError> {
+        use crate::onnx_proof::ops::moveaxis::MoveAxisVerifier;
+
+        let moveaxis_verifier = MoveAxisVerifier::new(node.clone(), &verifier.accumulator);
+        moveaxis_verifier.verify(&mut verifier.accumulator, &mut verifier.transcript)
+    }
+}
 
 #[derive(Clone)]
 pub struct MoveAxisParams<F: JoltField> {

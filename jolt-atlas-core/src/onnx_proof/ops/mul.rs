@@ -1,6 +1,8 @@
+use crate::onnx_proof::{ops::OperatorHandler, ProofId, ProofType, Prover, Verifier};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
+    ops::Mul,
 };
 use common::VirtualPolynomial;
 use joltworks::{
@@ -16,12 +18,17 @@ use joltworks::{
         unipoly::UniPoly,
     },
     subprotocols::{
+        sumcheck::SumcheckInstanceProof,
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::math::Math,
+    utils::{errors::ProofVerifyError, math::Math},
 };
+
+use crate::impl_standard_sumcheck_handler;
+
+impl_standard_sumcheck_handler!(Mul, MulParams, MulProver, MulVerifier);
 
 const DEGREE_BOUND: usize = 3;
 

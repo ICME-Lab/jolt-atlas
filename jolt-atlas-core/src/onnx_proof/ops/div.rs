@@ -1,6 +1,8 @@
+use crate::onnx_proof::{ops::OperatorHandler, ProofId, ProofType, Prover, Verifier};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
+    ops::Div,
     tensor::Tensor,
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
@@ -17,12 +19,17 @@ use joltworks::{
         unipoly::UniPoly,
     },
     subprotocols::{
+        sumcheck::SumcheckInstanceProof,
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::math::Math,
+    utils::{errors::ProofVerifyError, math::Math},
 };
+
+use crate::impl_standard_sumcheck_handler;
+
+impl_standard_sumcheck_handler!(Div, DivParams, DivProver, DivVerifier);
 
 // TODO: Reduce two claims to 1 via 4.5.2 PAZK for Quotient polynomial openings
 // TODO: Commit to polynomials q and R

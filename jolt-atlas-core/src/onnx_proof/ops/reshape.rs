@@ -1,13 +1,44 @@
-use atlas_onnx_tracer::node::ComputationNode;
+use crate::onnx_proof::{
+    ops::{OperatorHandler, Prover, Verifier},
+    ProofId,
+};
+use atlas_onnx_tracer::{node::ComputationNode, ops::Reshape};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
     poly::opening_proof::{
         OpeningAccumulator, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
     },
+    subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
+
+impl<F: JoltField, T: Transcript> OperatorHandler<F, T> for Reshape {
+    fn prove(
+        &self,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+        use crate::onnx_proof::ops::reshape::{ReshapeParams, ReshapeProver};
+
+        let params = ReshapeParams::<F>::new(node.clone(), &prover.accumulator);
+        let reshape_prover = ReshapeProver::initialize(params);
+        reshape_prover.prove(&mut prover.accumulator, &mut prover.transcript);
+        vec![]
+    }
+
+    fn verify(
+        &self,
+        node: &ComputationNode,
+        verifier: &mut Verifier<'_, F, T>,
+    ) -> Result<(), ProofVerifyError> {
+        use crate::onnx_proof::ops::reshape::ReshapeVerifier;
+
+        let reshape_verifier = ReshapeVerifier::new(node.clone(), &verifier.accumulator);
+        reshape_verifier.verify(&mut verifier.accumulator, &mut verifier.transcript)
+    }
+}
 
 #[derive(Clone)]
 pub struct ReshapeParams<F: JoltField> {

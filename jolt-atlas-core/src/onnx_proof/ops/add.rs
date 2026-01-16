@@ -1,6 +1,11 @@
+use crate::{
+    impl_standard_sumcheck_handler,
+    onnx_proof::{ops::OperatorHandler, ProofId, ProofType, Prover, Verifier},
+};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
+    ops::Add,
 };
 use common::VirtualPolynomial;
 use joltworks::{
@@ -16,12 +21,15 @@ use joltworks::{
         unipoly::UniPoly,
     },
     subprotocols::{
+        sumcheck::SumcheckInstanceProof,
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::math::Math,
+    utils::{errors::ProofVerifyError, math::Math},
 };
+
+impl_standard_sumcheck_handler!(Add, AddParams, AddProver, AddVerifier);
 
 const DEGREE_BOUND: usize = 2;
 

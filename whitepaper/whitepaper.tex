@@ -1,0 +1,640 @@
+% Jolt Atlas Whitepaper
+\documentclass[runningheads]{llncs}
+%
+\usepackage{graphicx}
+\let\proof\relax
+\let\endproof\relax
+\usepackage[utf8]{inputenc}
+\usepackage{csquotes}
+\usepackage{appendix}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsfonts}
+\usepackage{hyperref}
+\usepackage{tikz-cd}
+\usepackage{amsthm}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage[ruled,vlined]{algorithm2e}
+\usepackage{tabu}
+\usepackage{float}
+\theoremstyle{definition}
+\usepackage{mathtools}
+\newcommand{\defeq}{\vcentcolon=}
+\newcommand{\eqdef}{=\vcentcolon}
+\newtheorem{defn}{Definition}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator{\Log}{Log}
+\newcommand{\sign}{\text{sign}}
+\newcommand{\vol}{\text{Vol}}
+\newcommand{\norm}{\text{Norm}}
+\newcommand{\nrd}{\text{nrd}}
+\newcommand{\trace}{\text{Trace}}
+\newcommand{\antitrace}{\text{Antitrace}}
+\newcommand{\rat}{\text{Rat}}
+\newcommand{\irrat}{\text{Irrat}}
+
+\theoremstyle{plain}
+\newtheorem*{observation}{Observation}
+\theoremstyle{definition}
+\newtheorem{exmp}[theorem]{Example}
+\newtheorem{protocol}{Protocol}
+
+\newcommand{\thistheoremname}{}
+\newtheorem*{genericthm*}{\thistheoremname}
+\newenvironment{namedthm*}[1]
+  {\renewcommand{\thistheoremname}{#1}%
+   \begin{genericthm*}}
+  {\end{genericthm*}}
+
+\newcommand{\verticalsubset}{\mathbin{\rotatebox[origin=c]{90}{$\subset$}}}
+\newcommand{\verticalinjection}{\mathbin{\rotatebox[origin=c]{270}{$\hookrightarrow$}}}
+\newcommand{\verticalisomorphism}{\mathbin{\rotatebox[origin=c]{270}{$\tilde{\to}$}}}
+\newcommand{\verticalsurjection}{\mathbin{\rotatebox[origin=c]{270}{$\twoheadrightarrow$}}}
+\usepackage[backend=bibtex, maxbibnames = 20]{biblatex}
+\addbibresource{bibliography.bib}
+\addbibresource{crypto.bib}
+\addbibresource{abbrev3.bib}
+
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{amsmath, enumerate, amssymb, bbm, mathtools}
+\usepackage{booktabs}
+\usepackage{amsthm}
+\usepackage{bbm}
+\usepackage{multirow}
+\usepackage{tikz-cd}
+\usepackage[english]{babel}
+\usepackage{todonotes}
+
+\input{commands}
+
+\titlerunning{Jolt Atlas: zkML via Lookup Arguments}
+\begin{document}
+%
+\title{Jolt Atlas: Verifiable Machine Learning Inference via Lookup Arguments in Zero Knowledge}
+%
+\author{Wyatt Benno, Alberto Centelles, Antoine Douchet, \\ Khalil Gibran, Houman Shadab}
+%
+\authorrunning{W. Benno, A. Centelles, A. Douchet, K. Gibran, H. Shadab}
+%
+\institute{ICME Labs}
+%
+\maketitle
+%
+
+\begin{abstract}
+We present Jolt Atlas, a zero-knowledge machine learning (zkML) framework that extends the Jolt proving system to verify model inference. Unlike zkVMs that emulate RISC-V instruction execution, we adapt the Jolt lookup-centric approach to ONNX operations on tensors. The ONNX computational model eliminates the need for CPU registers and simplifies memory consistency verification. Lookup arguments based on the sumcheck protocol, as used in Twist and Shout, prove to be suitable for non-linear functions, which are building blocks in ML models. We apply optimizations such as neural teleportation to reduce the size of lookup tables while preserving model accuracy, as well as other tensor-level verification optimisations explained in this paper, and show that we can prove ML models in memory-constrained environments (a property of a prover known streaming). Furthermore, Jolt Atlas achieves zero-knowledge through the BlindFold technique as described in Vega. In contrast to other zkML frameworks, we demonstrate practical proving times for article classification models and for transformer self-attention layers, and outline the many applications of this work.
+\end{abstract}
+
+\keywords{zkML, Jolt, sumcheck, ONNX, verifiable AI, zero-knowledge, lookup arguments, teleportation}
+
+\section{Introduction}
+
+The intersection of machine learning and cryptography has given rise to zero-knowledge machine learning (zkML), enabling verifiable inference without revealing model weights or input data. Traditional approaches to zkML suffer from prohibitive computational costs when proving non-linear operations such as ReLU and softmax through arithmetic circuits~\cite{ezkl}. Jolt Atlas addresses this challenge by adapting the lookup-based proving paradigm from Jolt~\cite{jolt} to the domain of ONNX model inference.
+
+Jolt is a zkVM that achieves state-of-the-art proving performance for RISC-V programs through a novel combination of lookup arguments and the sumcheck protocol which, by treating interactivity as a computational resource, enables the verifier to delegate $O(n)$ computation to the prover while performing only $O(\log n)$ work itself. Exploiting the structure of computation when applying the sum-check protocol is central to Jolt's efficiency~\cite{sumcheckisallyouneed}.
+
+Jolt Atlas extends this paradigm to machine learning by replacing the RISC-V instruction set architecture with ONNX computational graphs. This substitution yields several architectural differences from zkVMs:
+
+\begin{enumerate}
+    \item \textbf{DAG-structured computation}: ONNX models are directed acyclic graphs with deterministic data flow, enabling optimizations not available in general-purpose computation. Additionally, ONNX graphs don't use CPU registers or RAM.
+    \item \textbf{Tensor operations}: Jolt Atlas operates on tensors (i.e., multi-dimensional vectors of scalars), rather than scalars. Each ONNX operation reads from specific input tensors and writes to a designated output tensor in a pattern known at preprocessing time. Instead of naively decomposing tensor operations into scalar computations and verifying each element independently, we verify tensor relations directly at the multilinear polynomial level.
+\end{enumerate}
+
+
+\subsection{Space-Efficient Proving via Sumcheck}
+
+A key advantage of sumcheck-based proofs, as emphasized in~\cite{sumcheckisallyouneed}, is their amenability to \emph{streaming} and \emph{space-efficient} implementations. This enables proving AI model inference on resource-constrained devices such as smartphones or edge hardware.
+
+Most SNARK provers require storing the entire witness in memory---for a model with $N$ parameters and activations, this means $O(N)$ space. For even small language models (SLM) or transformers, this can exceed available RAM on consumer devices.
+
+The sumcheck protocol processes data in $O(\log N)$ passes rather than requiring simultaneous access to all values. In each round, the prover:
+\begin{enumerate}
+    \item Streams through the relevant polynomial evaluations
+    \item Computes the round polynomial coefficients incrementally
+    \item Discards intermediate values no longer needed
+\end{enumerate}
+
+This reduces peak memory from $O(N)$ to $O(N^{1/C})$ with appropriate parameterization, at the cost of additional passes over the data (which can be stored on disk or recomputed).
+
+As explained in section~\ref{sec:lookups}, the prefix-suffix decomposition directly enables space-efficient lookup proving:
+\begin{itemize}
+    \item Instead of materializing a $2^{N}$-entry lookup table in memory, the prover evaluates prefix and suffix tables of size $2^{N/C}$ each, where $C$ is a free parameter
+    \item The decomposition $\tilde{\mathcal{T}}(x) = \sum_i p_i(x_{\text{hi}}) \cdot s_i(x_{\text{lo}})$ allows streaming evaluation: process high-order bits, accumulate partial results, then combine with low-order contributions
+    \item Memory usage scales with $O(|\mathcal{T}|^{1/C})$ rather than $O(|\mathcal{T}|)$
+\end{itemize}
+
+These techniques enable Jolt Atlas to prove inference for models with millions of parameters on devices with limited RAM. The prover can trade time for space: more passes over the data in exchange for dramatically reduced memory footprint. This is particularly relevant for on-device ML verification where privacy requires keeping data local rather than sending it to powerful cloud servers.
+
+\subsection{Related Work}
+
+\textbf{EZKL}~\cite{ezkl} is a zkML framework built on the Halo2 proof system. It converts ONNX models to ZK-SNARK circuits, enabling privacy-preserving inference proofs. However, EZKL relies on circuit-based arithmetic constraint systems, which incur high costs for non-linear operations like ReLU.
+
+\textbf{DeepProve}~\cite{deepprove} uses a GKR-style sumcheck-based proof system. As described in~\cite{thaler2022proofs}, the GKR protocol is considered a general-purpose technique and "general-purpose techniques should sometimes be viewed as heavy hammers that are capable of pounding arbitrary nails, but are not necessarily the most efficient way of hammering any particular nail". In particular, for matrix multiplication, a primitive operation in ML models, "the GKR protocol introduces at least a constant factor overhead for the prover. In practice, this is the difference between a prover that runs many times slower than an (unverifiable) MATMULT algorithm, and a prover that runs a fraction of a percent slower". Furthermore, operations such as Gather require reading the tensor on which they operate, so we need to prove that those reads were correct. The most recent open-source implementation of DeepProve lacks these lookup arguments. % The Lagrange Labs implementation~\cite{deepprovelabs} benchmarks inference verification on a CNN with 264k parameters (CIFAR-10) and dense layers with 4M parameters, reporting 158$\times$ and 54$\times$ speedups respectively over EZKL.
+
+Other zkML approaches include zkCNN~\cite{zkcnn} for convolutional networks and various circuit-based systems. Most suffer from the fundamental limitation that arithmetic circuits are inefficient for non-linear operations, motivating our lookup-based approach.
+
+
+\section{Lookup Arguments for Non-Linear Operations in Small Space}
+\label{sec:lookups}
+
+Non-linear operations like Softmax cannot be efficiently expressed as low-degree polynomial relations. Jolt Atlas uses lookup arguments to verify these operations: the prover demonstrates that each input-output pair appears in a precomputed lookup table.
+
+In a nutshell, a lookup table $\mathcal{T}: \{0,1\}^w \to \mathbb{F}$ maps $w$-bit inputs to field elements. Its multilinear extension $\tilde{\mathcal{T}}$ can be evaluated at any point $r \in \mathbb{F}^w$.
+
+To verify a lookup $(q, v)$ where $v = \mathcal{T}[q]$, the prover commits to the query vector and demonstrates that:
+\[
+\tilde{\mathcal{T}}(r) = v \quad \text{at random } r
+\]
+using the sumcheck protocol.
+
+\subsection{Prefix-Suffix Decomposition of Large Lookup Tables}
+
+A naive lookup table for operations of two 64-bit inputs would have $2^{128}$ entries---infeasible in practice. Following Jolt~\cite{jolt}, we exploit the algebraic structure of lookup tables through \emph{prefix-suffix decomposition}.
+
+For many tables $\mathcal{T}$, the multilinear extension decomposes as:
+\[
+\tilde{\mathcal{T}}(x) = \sum_i p_i(x_{\text{hi}}) \cdot s_i(x_{\text{lo}})
+\]
+where $x_{\text{hi}}, x_{\text{lo}}$ partition the input bits into high-order (prefix) and low-order (suffix) components. The prefix functions $p_i$ and suffix functions $s_i$ operate on smaller inputs, reducing table sizes exponentially. The generalisation of the decomposition above is known as the prefix-suffix decomposition and allows the prover to minimise its memory usage. For a more comprehensive study of this protocol, see appendix A in~\cite{smallspace}.
+
+\textbf{Example: ReLU.} The ReLU function $\text{ReLU}(x) = \max(0, x)$ for signed integers decomposes as:
+\[
+\widetilde{\text{ReLU}}(r) = p_{\text{Relu}}(r_{\text{hi}}) \cdot s_{\text{One}}(r_{\text{lo}}) + p_{\text{NotMSB}}(r_{\text{hi}}) \cdot s_{\text{Relu}}(r_{\text{lo}})
+\]
+where:
+\begin{itemize}
+    \item $p_{\text{Relu}}$ computes the high-order bits contribution when the input is non-negative
+    \item $p_{\text{NotMSB}}$ evaluates to 1 when the sign bit is 0 (non-negative input)
+    \item $s_{\text{Relu}}$ returns the low-order bits when the sign bit is 0
+    \item $s_{\text{One}}$ returns constant 1
+\end{itemize}
+
+The implementation defines these decompositions declaratively:
+\begin{verbatim}
+fn suffixes(&self) -> Vec<Suffixes> {
+    vec![Suffixes::One, Suffixes::Relu]
+}
+
+fn combine<F>(&self, prefixes: &[PrefixEval<F>],
+              suffixes: &[SuffixEval<F>]) -> F {
+    prefixes[Prefixes::Relu] * suffixes[0] +
+    prefixes[Prefixes::NotUnaryMsb] * suffixes[1]
+}
+\end{verbatim}
+
+
+\subsection{Tensor Lookups Optimisation}
+
+Conceptually, an ONNX operation on an $n$-element tensor performs $n$ lookups. However, instead of naively decomposing tensor operations into scalar computations and verifying each element independently, we verify tensor relations directly at the multilinear polynomial level. By applying the Schwartz-Zippel lemma, we can probabilistically check that the tensor operation is correct without inspecting every individual element.
+
+% \subsection{Multilinear Polynomials as Tensor Representations}
+
+% A tensor $A \in \mathbb{F}^{n_1 \times n_2 \times \cdots \times n_k}$ can be represented as a multilinear polynomial $\tilde{A}: \mathbb{F}^{\log |A|} \to \mathbb{F}$ where $|A| = \prod_i n_i$ is the number of elements. The polynomial $\tilde{A}$ is the unique multilinear extension satisfying $\tilde{A}(b) = A[b]$ for all binary vectors $b \in \{0,1\}^{\log |A|}$, where $b$ is interpreted as an index into $A$.
+
+% This representation enables algebraic verification of tensor operations. For instance, if $C = A + B$ (elementwise addition), then for all $x$:
+% \[
+% \tilde{C}(x) = \tilde{A}(x) + \tilde{B}(x)
+% \]
+
+% \subsection{Verification via Schwartz-Zippel}
+
+% The Schwartz-Zippel lemma states that for distinct polynomials $p, q$ of degree at most $d$ over a field $\mathbb{F}$, and a random $r \in \mathbb{F}$:
+% \[
+% \Pr[p(r) = q(r)] \leq \frac{d}{|\mathbb{F}|}
+% \]
+
+% This enables probabilistic verification: to check that $C = A \circ B$ (where $\circ$ is some operation), the verifier samples random $r$ and checks:
+% \[
+% \tilde{C}(r) \stackrel{?}{=} f(\tilde{A}(r), \tilde{B}(r))
+% \]
+% where $f$ is the scalar version of operation $\circ$. If this holds with high probability, the tensor relation is correct.
+
+
+\subsection{Neural Teleportation for Lookup Table Compression}
+
+Activation functions like \texttt{erf} (used in GELU) and \texttt{tanh} present a challenge: they require lookup tables spanning the full input range, which increases the computational costs of both prover and verifier. To mitigate this, Jolt Atlas employs \emph{neural teleportation}~\cite{telesparse} to compress these tables while preserving model accuracy.
+
+The key observation is that many activation functions \emph{saturate}---for large inputs, the output approaches a constant (e.g., $\text{erf}(x) \to \pm 1$ as $x \to \pm\infty$). This saturation behavior enables a trade-off: dividing inputs by a teleportation factor $\tau > 1$ reduces the effective input range while preserving approximate output equivalence.
+
+\textbf{Teleportation Transform.} Given an activation function $\sigma$ and factor $\tau$, the teleported computation replaces:
+\[
+y = \sigma(x) \quad \text{with} \quad y' = \sigma(x / \tau)
+\]
+
+For saturating functions, this approximation is accurate:
+\begin{itemize}
+    \item \textbf{Small inputs} (linear region): $\sigma(x/\tau) \approx \sigma(x)/\tau$, introducing bounded error
+    \item \textbf{Large inputs} (saturation region): $\sigma(x/\tau) = \sigma(x) = \pm 1$, exact equivalence
+\end{itemize}
+
+\textbf{Implementation.} Jolt Atlas transforms the ONNX graph by inserting a division node before selected activations:
+\begin{verbatim}
+model.apply_teleportation(tau=4.0, activations=[Erf, Tanh])
+\end{verbatim}
+
+With $\tau = 4$, the lookup table range reduces by 75\%, from $[-R, R]$ to $[-R/4, R/4]$. The maximum table size is bounded by $2^{16}$ entries, sufficient for 16-bit fixed-point activations.
+
+\textbf{Accuracy Trade-off.} Empirical evaluation shows that $\tau = 4$ introduces output differences of less than 55 units on a 128-scale fixed-point representation (approximately 0.4\% relative error), acceptable for most inference tasks. The trade-off between table size and accuracy can be tuned per-model.
+
+\section{Zero Knowledge via BlindFold}
+\label{sec:zk}
+
+Jolt Atlas achieves zero-knowledge through the BlindFold technique~\cite{vega}, which converts sumcheck-based proofs into zero-knowledge proofs without significant overhead. The key insight, is to run the standard (non-ZK) prover with hiding commitments, then apply BlindFold to a \emph{succinct verifier circuit} that encodes only the verifier's $O(\log n)$ checks.
+
+\subsection{The BlindFold Approach}
+
+Standard sumcheck proofs reveal intermediate values through the prover's round polynomial coefficients. BlindFold addresses this by:
+
+\begin{enumerate}
+    \item \textbf{Hiding sumcheck messages}: All prover messages (round polynomial coefficients, claimed evaluations) are sent as Pedersen commitments rather than plaintext values.
+
+    \item \textbf{Succinct verifier R1CS}: Instead of applying ZK to the full computation, we construct a small R1CS circuit encoding only the verifier's algebraic checks. Since sumcheck verification requires only $O(\log n)$ operations, this circuit is exponentially smaller than the original computation.
+
+    \item \textbf{Nova-style folding}: The real instance is folded with a random satisfying instance, producing a folded witness $w_{\text{folded}} = w + r \cdot w_{\text{rand}}$ that reveals nothing about the original witness.
+\end{enumerate}
+
+\subsection{Succinct Verifier Circuit}
+
+The verifier R1CS takes as \emph{witness} (not public inputs) the round polynomial coefficients and claimed evaluations. The circuit encodes:
+
+\begin{itemize}
+    \item \textbf{Round consistency}: For each sumcheck round $i$, verify $g_i(0) + g_i(1) = \text{claimed\_sum}_{i-1}$
+    \item \textbf{Challenge application}: Verify $\text{claimed\_sum}_i = g_i(c_i)$ where $c_i$ is the Fiat-Shamir challenge
+    \item \textbf{Final identity}: The algebraic relation combining all evaluation claims
+\end{itemize}
+
+Commitment consistency is handled by the split-committed R1CS framework: the instance contains commitments $\bar{W}_i = \text{Com}(W_i, \rho_i)$, and satisfaction requires these commitments to open correctly.
+
+\subsection{The Complete ZK Protocol}
+
+\begin{enumerate}
+    \item \textbf{Prover runs sumchecks with hiding commitments}: For each round, compute the round polynomial and send its commitment (not the coefficients themselves).
+
+    \item \textbf{Prover commits to evaluations}: For each polynomial evaluation claim $y = P(r)$, send $C_y = \text{Com}(y, \rho)$ rather than $y$ directly.
+
+    \item \textbf{Prover constructs split-committed R1CS}: The instance contains all commitments and Fiat-Shamir challenges; the witness contains the actual values and randomness.
+
+    \item \textbf{Prover runs BlindFold}: Sample a random satisfying pair $(u_{\text{rand}}, w_{\text{rand}})$, fold with the real instance, and send the folded witness.
+
+    \item \textbf{Prover sends ZK-Dory evaluation proofs}: For each committed evaluation $C_y$, prove that it commits to the correct evaluation of the corresponding polynomial.
+
+    \item \textbf{Verifier checks}: Verify the folded witness satisfies the folded instance, and verify all ZK-Dory proofs.
+\end{enumerate}
+
+The verifier learns \emph{nothing} about actual values---only that the committed values satisfy the required algebraic relations.
+
+\section{Jolt Atlas Architecture}
+\label{sec:architecture}
+
+Having established the BlindFold approach to zero-knowledge, we now describe how Jolt Atlas organizes its proof as a DAG of sumcheck instances that feed into the succinct verifier R1CS.
+
+\subsection{Execution Trace}
+
+An ONNX model execution produces a \emph{trace}: a sequence of computational steps where each step corresponds to one ONNX operation applied to specific tensor elements. Each trace entry contains:
+\begin{itemize}
+    \item The operation type (Add, Mul, ReLU, etc.)
+    \item Source tensor addresses and values
+    \item Destination tensor address and value
+    \item For non-deterministic operations (e.g., division), an advice value
+\end{itemize}
+
+The trace length $T$ determines the constraint system size. Traces are padded to the next power of two for efficient polynomial representation.
+
+\subsection{Proof DAG Structure}
+
+The proof is organized as a DAG where nodes represent sumcheck instances and edges represent polynomial evaluation claims passed between stages. Two sumchecks cannot be batched together if one depends on the other's output---this dependency structure defines the staging.
+
+The prover maintains a \texttt{StateManager} coordinating:
+\begin{itemize}
+    \item Witness polynomials and their (hiding) commitments
+    \item An opening accumulator collecting evaluation claims for batch verification
+    \item The Fiat-Shamir transcript binding all messages
+    \item The split-committed R1CS witness accumulating round coefficients
+\end{itemize}
+
+\subsection{Proof Stages and BlindFold Integration}
+
+Following Jolt's architecture~\cite{joltdocs}, proving proceeds through multiple stages. Each stage produces sumcheck proofs with hiding commitments, and the round polynomial coefficients become witness elements in the succinct verifier R1CS.
+
+\textbf{Stage 1: Outer Sumcheck.} The \texttt{SpartanDag} proves the outer R1CS constraint:
+\[
+\sum_x \widetilde{eq}(\tau, x) \cdot (\tilde{A}z(x) \cdot \tilde{B}z(x) - \tilde{C}z(x)) = 0
+\]
+The round polynomial coefficients are committed (not revealed), and the claims $\tilde{A}z(r), \tilde{B}z(r), \tilde{C}z(r)$ are also committed.
+
+\textbf{Stage 2: Inner Sumcheck and Virtualization.} Batches the inner sumcheck (binding witness polynomials to the random point from Stage 1) with product virtualization sumchecks. All round coefficients feed into the verifier R1CS witness.
+
+\textbf{Stage 3: Lookups and Instruction Verification.} Batches:
+\begin{itemize}
+    \item \texttt{ReadRafSumcheck}: Verifies read-only access for lookup tables
+    \item \texttt{BooleanitySumcheck}: Ensures lookup indices are in valid ranges
+    \item \texttt{InstructionInputSumcheck}: Verifies instruction inputs match claimed values
+\end{itemize}
+
+\textbf{Stage 4: Memory Checking.} The \texttt{MemoryDag} verifies read-write consistency, ensuring tensor values read during execution match previously written values.
+
+\textbf{Stage 5: Final Validation.} Verifies the final tensor states are correctly computed from the execution trace.
+
+\textbf{Stage 6: Bytecode Verification.} Verifies that executed operations match the committed ONNX graph structure.
+
+\section{Polynomial Commitment Scheme}
+
+All cryptographic assumptions in sumcheck-based SNARKs derive entirely from the polynomial commitment scheme (PCS). The sumcheck-based PIOP (Polynomial Interactive Oracle Proof) is \emph{information-theoretically secure}---it requires no cryptographic assumptions. This clean separation means that replacing the PCS immediately yields different security properties: pairing-based schemes like Dory provide security under discrete logarithm assumptions, while lattice-based schemes like Greyhound or Hachi would provide post-quantum security.
+
+The choice of PCS significantly impacts prover efficiency, proof size, and verification cost. This section explains the constraints, our current choice and where Jolt Atlas is going.
+
+\subsection{PCS Requirements}
+
+A PCS for Jolt Atlas must support:
+
+\begin{enumerate}
+    \item \textbf{Multilinear polynomials}: ML workloads involve high-dimensional tensors represented as multilinear polynomials with many variables.
+
+    \item \textbf{Batch opening}: Verifying a DAG of sumchecks produces many evaluation claims that should be batched efficiently.
+
+    \item \textbf{Transparent or universal setup}: Avoiding trusted setup simplifies deployment.
+
+    \item \textbf{Small proofs and succint verifier}: On-chain verification requires compact proofs and an efficient verifier.
+\end{enumerate}
+
+\subsection{Dory}
+
+Jolt Atlas uses Dory~\cite{dory}, which provides:
+
+\begin{itemize}
+    \item $O(\sqrt{N})$ prover time for $N$-coefficient polynomials
+    \item $O(\log N)$ proof size
+    \item $O(\log N)$ verifier time (in $\mathbb{G}_T$ operations)
+    \item Transparent setup from random beacons
+\end{itemize}
+
+Dory commitments use inner-pairing-products over structured reference strings in $\mathbb{G}_1 \times \mathbb{G}_2$, enabling efficient batch verification.
+
+The main limitation is verifier cost: each opening requires $O(\log N)$ operations in the pairing target group $\mathbb{G}_T$, which is a degree-12 field extension. This affects both recursive verification and on-chain deployment.
+
+\subsection{Tradeoffs}
+
+Alternative PCS choices present different tradeoffs:
+
+\begin{itemize}
+    \item \textbf{KZG}: Faster verification but quotient polynomials destroy sparsity, losing Jolt's main efficiency advantage.
+
+    \item \textbf{Lattice-based (Labrador, Greyhound, Hachi)}: Post-quantum secure with faster provers (no pairings), but larger proofs. Recent work on commitment size reduction (ABBA\cite{abba}) improves this trade-off. See Section~\ref{sec:future} for details.
+\end{itemize}
+
+\section{ONNX: The Bridge to Machine Learning}
+\label{sec:onnx-details}
+
+ONNX (Open Neural Network Exchange) serves as the standardized interface between machine learning frameworks and Jolt Atlas's verification system. This section describes ONNX's role and how Jolt Atlas handles its computational model.
+
+\subsection{Why ONNX}
+
+ONNX provides a framework-agnostic representation of neural network computations. Models trained in PyTorch, TensorFlow, or JAX can be exported to ONNX format and verified by Jolt Atlas without modification to the training workflow. This separation of concerns---train anywhere, verify universally---is essential for practical adoption.
+
+The ONNX format represents computations as directed acyclic graphs where:
+\begin{itemize}
+    \item \textbf{Nodes} represent operations (Add, MatMul, ReLU, etc.)
+    \item \textbf{Edges} represent tensors flowing between operations
+    \item \textbf{Attributes} parameterize operations (kernel sizes, axis specifications)
+    \item \textbf{Initializers} store model weights and biases
+\end{itemize}
+
+This graph structure aligns naturally with Jolt Atlas's DAG-based proof architecture, where each ONNX node becomes a verification target.
+
+\subsection{Operator Support}
+
+ONNX defines over 180 operators across 19 domains. Jolt Atlas currently supports a subset focused on inference workloads:
+
+\textbf{Elementwise Operations:}
+\begin{itemize}
+    \item Arithmetic: \texttt{Add}, \texttt{Sub}, \texttt{Mul}, \texttt{Div}
+    \item Activations: \texttt{Relu}, \texttt{Sigmoid} (via lookup), \texttt{Tanh} (via lookup)
+    \item Comparisons: \texttt{Greater}, \texttt{Less}, \texttt{Equal}
+\end{itemize}
+
+\textbf{Tensor Operations:}
+\begin{itemize}
+    \item Shape manipulation: \texttt{Reshape}, \texttt{Transpose}, \texttt{Squeeze}, \texttt{Unsqueeze}
+    \item Data movement: \texttt{Gather}, \texttt{Scatter}, \texttt{Concat}, \texttt{Split}
+    \item Broadcasting: Automatic broadcasting following NumPy semantics
+\end{itemize}
+
+\textbf{Reduction Operations:}
+\begin{itemize}
+    \item \texttt{ReduceSum}, \texttt{ReduceMean}, \texttt{ReduceMax}
+    \item Supports arbitrary axis specifications
+\end{itemize}
+
+\textbf{Matrix Operations:}
+\begin{itemize}
+    \item \texttt{MatMul}: Standard matrix multiplication
+    \item \texttt{Einsum}: Generalized tensor contraction supporting patterns like \texttt{``mk,kn->mn''} (matrix multiply), \texttt{``bmk,bkn->bmn''} (batched multiply), and attention patterns
+\end{itemize}
+
+\subsection{From ONNX Graph to Proof}
+
+The verification pipeline proceeds as follows:
+
+\begin{enumerate}
+    \item \textbf{Graph parsing}: The ONNX protobuf is parsed into an internal representation, resolving tensor shapes and operator attributes.
+
+    \item \textbf{Preprocessing}: Static analysis determines memory layout, identifies which operations require lookups versus polynomial verification, and generates the bytecode specification.
+
+    \item \textbf{Trace generation}: The model executes on the input, recording all intermediate tensor values. Each scalar operation becomes a trace entry.
+
+    \item \textbf{Proof generation}: The trace feeds into the Jolt Atlas prover, which generates sumcheck proofs for each operation according to its type.
+\end{enumerate}
+
+\subsection{Handling Unsupported Operators}
+
+When an ONNX model contains unsupported operators, several strategies apply:
+
+\begin{itemize}
+    \item \textbf{Decomposition}: Complex operators are decomposed into supported primitives (e.g., \texttt{LayerNorm} becomes \texttt{ReduceMean} + \texttt{Sub} + \texttt{Mul})
+    \item \textbf{Custom precompiles}: Frequently-used patterns can be added as optimized precompiles
+    \item \textbf{Model modification}: In some cases, model architectures can be adjusted to use supported operators without accuracy loss
+\end{itemize}
+
+Our initial focus is to support the operators required for common inference workloads---classification, embedding generation, and transformer attention---rather than the full ONNX specification.
+
+\section{Applications}
+\label{sec:applications}
+
+Zero-knowledge machine learning enables new applications where computational integrity and privacy are essential. This section describes key use cases, with particular focus on autonomous AI agents.
+
+\subsection{Trustless AI Agents}
+
+The emergence of autonomous AI agents---software systems that perceive, decide, and act without human intervention---creates new requirements for computational verification~\cite{icmetrustagents}. When agents make consequential decisions (financial trades, resource allocation, access control), stakeholders need assurance that the agent executed its claimed model correctly.
+
+\textbf{The Verification Gap.} Current agent architectures rely on trust assumptions:
+\begin{itemize}
+    \item \emph{Reputation-based}: Trust agents based on past behavior; vulnerable to gaming and provides no guarantees for novel situations
+    \item \emph{Crypto-economic}: Validators stake capital and re-execute computations; prohibitively expensive for complex ML inference
+    \item \emph{Hardware attestation}: TEEs (Trusted Execution Environments) provide isolation but depend on hardware manufacturers and have documented vulnerabilities (Spectre, Meltdown)
+\end{itemize}
+
+\textbf{zkML Solution.} Jolt Atlas enables a fourth approach: \emph{cryptographic verification}. The agent produces a proof alongside its output, demonstrating that the output resulted from executing a specific model on specific inputs. Verification requires only the proof and public commitments---no re-execution, no hardware trust assumptions, no economic bonds.
+
+This proof can be verified by:
+\begin{itemize}
+    \item Other agents in a multi-agent system
+    \item Smart contracts for on-chain settlement
+    \item Auditors reviewing agent decisions post-hoc
+    \item Users seeking assurance about AI-driven recommendations
+\end{itemize}
+
+\subsection{Trustless Agentic Memory}
+
+A critical but often overlooked component of AI agents is memory: the stored context, embeddings, and retrieved information that inform decisions~\cite{icmeagenticmemory}. Current memory systems present a verification gap---even if inference is verified, corrupted or manipulated memories can compromise agent behavior.
+
+\textbf{The Memory Problem.} Agent memories typically reside in vector databases (Pinecone, Weaviate, Chroma) controlled by third parties. This creates vulnerabilities:
+\begin{itemize}
+    \item No proof that retrieved memories are authentic
+    \item No verification that embeddings were computed correctly
+    \item Memories are not portable across infrastructure providers
+    \item Changing embedding models invalidates the entire memory store
+\end{itemize}
+
+\textbf{Verifiable Embeddings.} Jolt Atlas enables \emph{trustless agentic memory} by proving correct embedding computation. When an agent stores a memory:
+\begin{enumerate}
+    \item The text (or other data) is processed by an embedding model
+    \item Jolt Atlas generates a proof that the embedding was computed correctly
+    \item The embedding and proof are stored together
+    \item Retrieval includes verification that the embedding matches the claimed computation
+\end{enumerate}
+
+This ensures that memories cannot be silently corrupted or substituted. Combined with decentralized storage, agents gain portable, verifiable memory that is not dependent on any single provider.
+
+\subsection{Agent-to-Agent Transactions}
+
+As AI agents increasingly interact with each other---negotiating, trading, collaborating---verification becomes essential for establishing trust between autonomous systems~\cite{icmetrustagents}.
+
+\textbf{Example: Market-Making Agents.} Consider two agents negotiating a trade:
+\begin{itemize}
+    \item Agent A claims its pricing model values an asset at \$X
+    \item Agent B needs assurance this valuation is legitimate, not manipulated
+    \item With zkML, Agent A provides a proof that \$X resulted from executing its committed model on current market data
+    \item Agent B verifies the proof (milliseconds) without accessing A's proprietary model
+\end{itemize}
+
+\textbf{Example: Collaborative Inference.} Multiple agents can collaborate on inference tasks:
+\begin{itemize}
+    \item Agent A computes embeddings for a query
+    \item Agent B performs retrieval using those embeddings
+    \item Agent C generates a response based on retrieved context
+    \item Each step produces a proof; the chain of proofs establishes end-to-end correctness
+\end{itemize}
+
+\subsection{Decentralized Finance Applications}
+
+DeFi protocols can leverage zkML for:
+
+\textbf{Verifiable Oracles.} Price feeds derived from ML models (sentiment analysis, volatility prediction) can include proofs of correct computation, eliminating trust in oracle operators.
+
+\textbf{Credit Scoring.} Lending protocols can verify that credit decisions followed the stated model without accessing sensitive borrower data.
+
+\textbf{Trading Bot Verification.} Automated trading strategies can prove they executed as specified, providing accountability for delegated capital management.
+
+\subsection{Privacy-Preserving Inference}
+
+The zero-knowledge property enables inference where sensitive data remains hidden:
+
+\textbf{Medical Diagnosis.} A diagnostic model proves its output was computed correctly without revealing patient data to the verifier.
+
+\textbf{Document Classification.} PII detection can classify documents (e.g., ``contains SSN'') without exposing document contents.
+
+\textbf{Model Protection.} Inference can be verified without revealing model weights, protecting proprietary models while proving they were used correctly.
+
+\subsection{Compliance and Auditability}
+
+Regulated industries require audit trails for AI-driven decisions:
+
+\textbf{Financial Services.} Regulators can verify that ML-based decisions (loan approvals, fraud detection) followed approved models without accessing customer data.
+
+\textbf{Healthcare.} Proofs can demonstrate that diagnostic assistance used FDA-approved model versions.
+
+\textbf{Content Moderation.} Platforms can prove content decisions followed stated policies, providing accountability without exposing proprietary moderation systems.
+
+\section{Benchmarks}
+
+Jolt Atlas demonstrates practical proving times across a range of ML workloads. All benchmarks were collected on a workstation with a multi-core CPU; expect $\pm 10\%$ variance depending on hardware.
+
+\subsection{Transformer Self-Attention}
+
+The self-attention mechanism is a core component of transformer models:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Stage} & \textbf{Time} \\
+\midrule
+Prove & 20.8 s \\
+Verify & 143 ms \\
+End-to-end CLI & 25.8 s \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Peak memory usage reached approximately 5.6 GB during sumcheck round 10.
+
+\subsection{Article Classification}
+
+A text classification model categorizing articles into business, tech, sport, entertainment, and politics:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Project} & \textbf{Latency} & \textbf{Notes} \\
+\midrule
+Jolt Atlas & $\sim$0.7 s & \\
+mina-zkml & $\sim$2.0 s & \\
+ezkl & 4--5 s & \\
+deep-prove & N/A & Missing gather primitive \\
+zk-torch & N/A & Missing reduceSum primitive \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Perceptron MLP}
+
+A basic multi-layer perceptron for sanity testing:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Project} & \textbf{Latency} & \textbf{Notes} \\
+\midrule
+Jolt Atlas & $\sim$800 ms & Full memory consistency \\
+deep-prove & $\sim$200 ms & Lacks memory consistency checking \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Future Work}
+\label{sec:future}
+
+Several directions for future development include:
+
+\textbf{Lattice-Based Polynomial Commitment Schemes:} A promising direction is replacing Dory with lattice-based PCS constructions to achieve post-quantum security. Several recent schemes offer compelling trade-offs:
+
+\emph{Hachi}~\cite{hachi} is a lattice-based multilinear PCS currently in development. Compared to Dory, Hachi offers several advantages: (1) post-quantum security under Module-SIS assumptions, (2) faster prover time due to the absence of expensive pairing operations, and (3) $O(\sqrt{2^\ell} \cdot \lambda)$ verifier time for $\ell$-variate polynomials, approximately 35\% faster than Greyhound~\cite{greyhound}. The main trade-off is larger proof sizes compared to pairing-based schemes.
+
+A key consideration for lattice-based schemes is commitment size. While proof sizes are larger than pairing-based alternatives, recent work on \emph{ABBA}~\cite{abba} (also in preparation) explores techniques for reducing commitment sizes through improved lattice-based commitment constructions. Smaller commitments directly benefit both proof size and verifier efficiency.
+
+Neither Hachi nor ABBA are currently published; integration would proceed as these schemes mature and undergo community review.
+
+\textbf{On-Chain Verification:} Deploying proofs on Ethereum is challenging due to Dory's $\mathbb{G}_T$ operations, which lack precompiles. Replacing Dory with a lattice-based PCS may also mitigate this limitation.
+
+\textbf{Extended ONNX Support:} Adding support for additional operators including softmax, layer normalization, and convolutions.
+
+\vspace{1em}
+The rapid development of research in both cryptography and artificial intelligence continues to provide new techniques and optimizations to integrate into Jolt Atlas. Advances in polynomial commitment schemes, folding techniques, and hardware acceleration on the cryptographic side, combined with new model architectures, quantization methods, and inference optimizations on the AI side, ensure that verifiable machine learning will remain an active and evolving field. 
+
+\printbibliography
+
+\appendix
+
+\end{document}

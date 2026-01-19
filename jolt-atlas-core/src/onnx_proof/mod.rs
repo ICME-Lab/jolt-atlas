@@ -1,38 +1,13 @@
-use crate::onnx_proof::{
-    lookup_tables::relu::ReluTable,
-    op_lookups::{
-        ra_virtual::{
-            InstructionRaSumcheckParams, InstructionRaSumcheckProver, RaSumcheckVerifier,
-        },
-        read_raf_checking::{
-            ReadRafSumcheckParams, ReadRafSumcheckProver, ReadRafSumcheckVerifier,
-        },
-    },
-    ops::{
-        add::{AddParams, AddProver, AddVerifier},
-        broadcast::{BroadcastParams, BroadcastProver, BroadcastVerifier},
-        cube::{CubeParams, CubeProver, CubeVerifier},
-        div::{DivParams, DivProver, DivVerifier},
-        einsum::{EinsumProver, EinsumVerifier},
-        iff::{IffParams, IffProver, IffVerifier},
-        moveaxis::{MoveAxisParams, MoveAxisProver, MoveAxisVerifier},
-        mul::{MulParams, MulProver, MulVerifier},
-        reshape::{ReshapeParams, ReshapeProver, ReshapeVerifier},
-        square::{SquareParams, SquareProver, SquareVerifier},
-        sub::{SubParams, SubProver, SubVerifier},
-    },
-};
+use crate::onnx_proof::ops::{OperatorProver, OperatorVerifier};
 use atlas_onnx_tracer::{
     model::{
         trace::{LayerData, ModelExecutionIO, Trace},
         Model,
     },
-    ops::Operator,
     tensor::Tensor,
 };
-use common::{consts::XLEN, VirtualPolynomial};
+use common::VirtualPolynomial;
 use joltworks::{
-    config::OneHotParams,
     field::JoltField,
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
@@ -42,10 +17,7 @@ use joltworks::{
             VerifierOpeningAccumulator,
         },
     },
-    subprotocols::{
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
-        sumcheck_prover::SumcheckInstanceProver,
-    },
+    subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
@@ -56,6 +28,56 @@ pub mod lookup_tables;
 pub mod op_lookups;
 pub mod ops;
 pub mod witness;
+
+/// Prover state that owns all data needed during proving.
+/// Created once before the proving loop and passed to operator handlers.
+pub struct Prover<F: JoltField, T: Transcript> {
+    pub trace: Trace,
+    pub preprocessing: AtlasSharedPreprocessing,
+    pub accumulator: ProverOpeningAccumulator<F>,
+    pub transcript: T,
+}
+
+impl<F: JoltField, T: Transcript> Prover<F, T> {
+    /// Create a new prover with the given preprocessing and trace
+    pub fn new(preprocessing: AtlasSharedPreprocessing, trace: Trace) -> Self {
+        let max_T = preprocessing.model.max_T();
+        Self {
+            trace,
+            preprocessing,
+            accumulator: ProverOpeningAccumulator::new(max_T),
+            transcript: T::new(b"ONNXProof"),
+        }
+    }
+}
+
+/// Verifier state that owns all data needed during verification.
+/// Created once before the verification loop and passed to operator handlers.
+pub struct Verifier<'a, F: JoltField, T: Transcript> {
+    pub preprocessing: &'a AtlasSharedPreprocessing,
+    pub accumulator: VerifierOpeningAccumulator<F>,
+    pub transcript: T,
+    pub proofs: &'a BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+    pub io: &'a ModelExecutionIO,
+}
+
+impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
+    /// Create a new verifier with the given preprocessing, proofs, and IO
+    pub fn new(
+        preprocessing: &'a AtlasSharedPreprocessing,
+        proofs: &'a BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+        io: &'a ModelExecutionIO,
+    ) -> Self {
+        let max_T = preprocessing.model.max_T();
+        Self {
+            preprocessing,
+            accumulator: VerifierOpeningAccumulator::new(max_T),
+            transcript: T::new(b"ONNXProof"),
+            proofs,
+            io,
+        }
+    }
+}
 
 /* ---------- Prover Logic ---------- */
 
@@ -68,14 +90,13 @@ pub struct ONNXProof<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = 
 
 impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F, T, PCS> {
     pub fn prove(pp: &AtlasSharedPreprocessing, input: &Tensor<i32>) -> (Self, ModelExecutionIO) {
-        // Initialize prover state
-        let transcript = &mut T::new(b"ONNXProof");
-        let mut opening_accumulator = ProverOpeningAccumulator::new(pp.model.max_T());
-        let mut proofs = BTreeMap::new();
-
         // Generate trace and io
         let trace = pp.model.trace(&[input.clone()]); // TODO: Allow for multiple inputs
         let io = Trace::io(&trace, &pp.model);
+
+        // Initialize prover state
+        let mut prover: Prover<F, T> = Prover::new(pp.clone(), trace);
+        let mut proofs = BTreeMap::new();
 
         // Evaluate output MLE at random point τ
         let output_index = pp.model.outputs()[0];
@@ -83,11 +104,13 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         let LayerData {
             operands: _,
             output,
-        } = Trace::layer_data(&trace, output_computation_node);
-        let r_node_output = transcript.challenge_vector_optimized::<F>(output.len().log_2());
+        } = Trace::layer_data(&prover.trace, output_computation_node);
+        let r_node_output = prover
+            .transcript
+            .challenge_vector_optimized::<F>(output.len().log_2());
         let output_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
-        opening_accumulator.append_virtual(
-            transcript,
+        prover.accumulator.append_virtual(
+            &mut prover.transcript,
             VirtualPolynomial::NodeOutput(output_computation_node.idx),
             SumcheckId::Execution,
             r_node_output.clone().into(),
@@ -96,203 +119,17 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
 
         // Iterate over computation graph in reverse topological order
         // Prove each operation using sum-check and virtual polynomials
-        for (&node_idx, computation_node) in pp.model.graph.nodes.iter().rev() {
-            let node_poly = VirtualPolynomial::NodeOutput(node_idx);
-            match &computation_node.operator {
-                // TODO: attatch this operation processing logic i.e. create parameters, initialize prover, run sumcheck, and store proof,
-                //       onto the inner operators struct & move to dedicated operator module. Also refactor duplicate logic
-                Operator::Add(_) => {
-                    let params: AddParams<F> =
-                        AddParams::new(computation_node.clone(), &opening_accumulator);
-                    let mut prover_sumcheck = AddProver::initialize(&trace, params);
-                    let (proof, _) =
-                        Sumcheck::prove(&mut prover_sumcheck, &mut opening_accumulator, transcript);
-                    proofs.insert(ProofId(node_idx, ProofType::Execution), proof);
-                }
-                Operator::Sub(_) => {
-                    let params: SubParams<F> =
-                        SubParams::new(computation_node.clone(), &opening_accumulator);
-                    let mut prover_sumcheck = SubProver::initialize(&trace, params);
-                    let (proof, _) =
-                        Sumcheck::prove(&mut prover_sumcheck, &mut opening_accumulator, transcript);
-                    proofs.insert(ProofId(node_idx, ProofType::Execution), proof);
-                }
-                Operator::Mul(_) => {
-                    let params: MulParams<F> =
-                        MulParams::new(computation_node.clone(), &opening_accumulator);
-                    let mut prover_sumcheck = MulProver::initialize(&trace, params);
-                    let (proof, _) =
-                        Sumcheck::prove(&mut prover_sumcheck, &mut opening_accumulator, transcript);
-                    proofs.insert(ProofId(node_idx, ProofType::Execution), proof);
-                }
-                Operator::Div(_) => {
-                    let params: DivParams<F> =
-                        DivParams::new(computation_node.clone(), &opening_accumulator);
-                    let mut prover_sumcheck = DivProver::initialize(&trace, params);
-                    let (proof, _) =
-                        Sumcheck::prove(&mut prover_sumcheck, &mut opening_accumulator, transcript);
-                    proofs.insert(ProofId(node_idx, ProofType::Execution), proof);
-                }
-                Operator::Square(_) => {
-                    let params: SquareParams<F> =
-                        SquareParams::new(computation_node.clone(), &opening_accumulator);
-                    let mut prover_sumcheck = SquareProver::initialize(&trace, params);
-                    let (proof, _) =
-                        Sumcheck::prove(&mut prover_sumcheck, &mut opening_accumulator, transcript);
-                    proofs.insert(ProofId(node_idx, ProofType::Execution), proof);
-                }
-                Operator::Cube(_) => {
-                    let params: CubeParams<F> =
-                        CubeParams::new(computation_node.clone(), &opening_accumulator);
-                    let mut prover_sumcheck = CubeProver::initialize(&trace, params);
-                    let (proof, _) =
-                        Sumcheck::prove(&mut prover_sumcheck, &mut opening_accumulator, transcript);
-                    proofs.insert(ProofId(node_idx, ProofType::Execution), proof);
-                }
-                Operator::Iff(_) => {
-                    let params: IffParams<F> =
-                        IffParams::new(computation_node.clone(), &opening_accumulator);
-                    let mut prover_sumcheck = IffProver::initialize(&trace, params);
-                    let (proof, _) =
-                        Sumcheck::prove(&mut prover_sumcheck, &mut opening_accumulator, transcript);
-                    proofs.insert(ProofId(node_idx, ProofType::Execution), proof);
-                }
-                Operator::Broadcast(_) => {
-                    let params =
-                        BroadcastParams::new(computation_node.clone(), &opening_accumulator);
-                    let broadcast_prover = BroadcastProver::initialize(&trace, params);
-                    broadcast_prover.prove(&mut opening_accumulator, transcript);
-                }
-                Operator::Reshape(_) => {
-                    let params =
-                        ReshapeParams::<F>::new(computation_node.clone(), &opening_accumulator);
-                    let reshape_prover = ReshapeProver::initialize(params);
-                    reshape_prover.prove(&mut opening_accumulator, transcript);
-                }
-                Operator::MoveAxis(_) => {
-                    let params =
-                        MoveAxisParams::<F>::new(computation_node.clone(), &opening_accumulator);
-                    let moveaxis_prover = MoveAxisProver::initialize(params);
-                    moveaxis_prover.prove(&mut opening_accumulator, transcript);
-                }
-                Operator::Einsum(_) => {
-                    let mut prover_sumcheck = EinsumProver::sumcheck(
-                        &pp.model,
-                        &trace,
-                        computation_node.clone(),
-                        &opening_accumulator,
-                    );
-                    let (proof, _) = Sumcheck::prove(
-                        &mut *prover_sumcheck,
-                        &mut opening_accumulator,
-                        transcript,
-                    );
-                    proofs.insert(ProofId(node_idx, ProofType::Execution), proof);
-                }
-                Operator::Input(_) => {
-                    // Noop
-
-                    // Assert! claim is already cached
-                    let opening = opening_accumulator
-                        .assert_virtual_polynomial_opening_exists(node_poly, SumcheckId::Execution);
-                    assert!(opening.is_some())
-                }
-                Operator::ReLU(_) => {
-                    let params = ReadRafSumcheckParams::<F, ReluTable<XLEN>>::new(
-                        computation_node.clone(),
-                        &opening_accumulator,
-                        transcript,
-                    );
-                    let mut execution_sumcheck = ReadRafSumcheckProver::initialize(
-                        params,
-                        &trace,
-                        &mut opening_accumulator,
-                        transcript,
-                    );
-                    let (execution_proof, _) = Sumcheck::prove(
-                        &mut execution_sumcheck,
-                        &mut opening_accumulator,
-                        transcript,
-                    );
-                    proofs.insert(ProofId(node_idx, ProofType::Execution), execution_proof);
-
-                    let log_T = computation_node.num_output_elements().log_2();
-                    let one_hot_params = OneHotParams::new(log_T);
-                    let ra_params = InstructionRaSumcheckParams::new(
-                        computation_node.clone(),
-                        &OneHotParams::new(log_T),
-                        &opening_accumulator,
-                    );
-                    let ra_prover_sumcheck =
-                        InstructionRaSumcheckProver::initialize(ra_params, &trace);
-
-                    let lookups_hamming_weight_params = op_lookups::ra_hamming_weight_params(
-                        computation_node,
-                        &one_hot_params,
-                        &opening_accumulator,
-                        transcript,
-                    );
-                    let lookups_booleanity_params = op_lookups::ra_booleanity_params(
-                        computation_node,
-                        &one_hot_params,
-                        &opening_accumulator,
-                        transcript,
-                    );
-
-                    let (lookups_ra_booleanity, lookups_ra_hamming_weight) =
-                        op_lookups::gen_ra_one_hot_provers(
-                            lookups_hamming_weight_params,
-                            lookups_booleanity_params,
-                            &trace,
-                            computation_node,
-                            &one_hot_params,
-                        );
-
-                    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
-                        Box::new(ra_prover_sumcheck),
-                        Box::new(lookups_ra_booleanity),
-                        Box::new(lookups_ra_hamming_weight),
-                    ];
-                    let (ra_one_hot_proof, _r_stage6) = BatchedSumcheck::prove(
-                        instances.iter_mut().map(|v| &mut **v as _).collect(),
-                        &mut opening_accumulator,
-                        transcript,
-                    );
-                    proofs.insert(
-                        ProofId(node_idx, ProofType::RaOneHotChecks),
-                        ra_one_hot_proof,
-                    );
-                }
-                Operator::Constant(c) => {
-                    // 1. v send `r`
-                    // 2. p sends π := virtual_const(r)
-                    // 3. v assert_eq!(π, const(r))
-
-                    // Assert! claim is already cached
-                    let opening = opening_accumulator
-                        .assert_virtual_polynomial_opening_exists(node_poly, SumcheckId::Execution);
-
-                    if opening.is_none() {
-                        // Handle un-needed Relu operand const
-                        assert!(c.0.len() == 1);
-                        opening_accumulator.append_virtual(
-                            transcript,
-                            node_poly,
-                            SumcheckId::Execution,
-                            OpeningPoint::new(vec![F::Challenge::default()]),
-                            F::zero(),
-                        );
-                    }
-                }
-
-                _ => println!("Unhandled operator in graph: {computation_node:#?}"),
+        for (_, computation_node) in pp.model.graph.nodes.iter().rev() {
+            let new_proofs = OperatorProver::prove(computation_node, &mut prover);
+            for (proof_id, proof) in new_proofs {
+                proofs.insert(proof_id, proof);
             }
         }
 
         (
             Self {
                 proofs,
-                opening_claims: Claims(opening_accumulator.take()),
+                opening_claims: Claims(prover.accumulator.take()),
                 commitments: vec![],
             },
             io,
@@ -321,11 +158,11 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         io: &ModelExecutionIO,
     ) -> Result<(), ProofVerifyError> {
         // Initialize verifier state
-        let transcript = &mut T::new(b"ONNXProof");
-        let mut opening_accumulator = VerifierOpeningAccumulator::<F>::new(pp.model.max_T());
+        let mut verifier: Verifier<F, T> = Verifier::new(pp, &self.proofs, io);
         // Populate claims in the verifier accumulator
         for (key, (_, claim)) in &self.opening_claims.0 {
-            opening_accumulator
+            verifier
+                .accumulator
                 .openings
                 .insert(*key, (OpeningPoint::default(), *claim));
         }
@@ -333,17 +170,19 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         // Evaluate output MLE at random point τ
         let output_index = pp.model.outputs()[0];
         let output_computation_node = &pp.model[output_index];
-        let r_node_output = transcript
+        let r_node_output = verifier
+            .transcript
             .challenge_vector_optimized::<F>(output_computation_node.num_output_elements().log_2());
         let expected_output_claim =
             MultilinearPolynomial::from(io.outputs[0].clone()).evaluate(&r_node_output);
-        opening_accumulator.append_virtual(
-            transcript,
+        verifier.accumulator.append_virtual(
+            &mut verifier.transcript,
             VirtualPolynomial::NodeOutput(output_computation_node.idx),
             SumcheckId::Execution,
             r_node_output.clone().into(),
         );
-        let output_claim = opening_accumulator
+        let output_claim = verifier
+            .accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::NodeOutput(output_computation_node.idx),
                 SumcheckId::Execution,
@@ -353,250 +192,10 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             return Err(ProofVerifyError::InvalidOpeningProof);
         }
 
-        for (&node_idx, computation_node) in pp.model.graph.nodes.iter().rev() {
-            match &computation_node.operator {
-                Operator::Add(_) => {
-                    let proof = self
-                        .proofs
-                        .get(&ProofId(node_idx, ProofType::Execution))
-                        .ok_or(ProofVerifyError::MissingProof(node_idx))?;
-                    let verifier_sumcheck =
-                        AddVerifier::new(computation_node.clone(), &opening_accumulator);
-                    let _ = Sumcheck::verify(
-                        proof,
-                        &verifier_sumcheck,
-                        &mut opening_accumulator,
-                        transcript,
-                    )
-                    .unwrap();
-                    Ok(())
-                }
-                Operator::Sub(_) => {
-                    let proof = self
-                        .proofs
-                        .get(&ProofId(node_idx, ProofType::Execution))
-                        .ok_or(ProofVerifyError::MissingProof(node_idx))?;
-                    let verifier_sumcheck =
-                        SubVerifier::new(computation_node.clone(), &opening_accumulator);
-                    let _ = Sumcheck::verify(
-                        proof,
-                        &verifier_sumcheck,
-                        &mut opening_accumulator,
-                        transcript,
-                    )?;
-                    Ok(())
-                }
-                Operator::Mul(_) => {
-                    let proof = self
-                        .proofs
-                        .get(&ProofId(node_idx, ProofType::Execution))
-                        .ok_or(ProofVerifyError::MissingProof(node_idx))?;
-                    let verifier_sumcheck =
-                        MulVerifier::new(computation_node.clone(), &opening_accumulator);
-                    let _ = Sumcheck::verify(
-                        proof,
-                        &verifier_sumcheck,
-                        &mut opening_accumulator,
-                        transcript,
-                    )?;
-                    Ok(())
-                }
-                Operator::Div(_) => {
-                    let proof = self
-                        .proofs
-                        .get(&ProofId(node_idx, ProofType::Execution))
-                        .ok_or(ProofVerifyError::MissingProof(node_idx))?;
-                    let verifier_sumcheck =
-                        DivVerifier::new(computation_node.clone(), &opening_accumulator);
-                    let _ = Sumcheck::verify(
-                        proof,
-                        &verifier_sumcheck,
-                        &mut opening_accumulator,
-                        transcript,
-                    )?;
-                    Ok(())
-                }
-                Operator::Square(_) => {
-                    let proof = self
-                        .proofs
-                        .get(&ProofId(node_idx, ProofType::Execution))
-                        .ok_or(ProofVerifyError::MissingProof(node_idx))?;
-                    let verifier_sumcheck =
-                        SquareVerifier::new(computation_node.clone(), &opening_accumulator);
-                    let _ = Sumcheck::verify(
-                        proof,
-                        &verifier_sumcheck,
-                        &mut opening_accumulator,
-                        transcript,
-                    )?;
-                    Ok(())
-                }
-                Operator::Cube(_) => {
-                    let proof = self
-                        .proofs
-                        .get(&ProofId(node_idx, ProofType::Execution))
-                        .ok_or(ProofVerifyError::MissingProof(node_idx))?;
-                    let verifier_sumcheck =
-                        CubeVerifier::new(computation_node.clone(), &opening_accumulator);
-                    let _ = Sumcheck::verify(
-                        proof,
-                        &verifier_sumcheck,
-                        &mut opening_accumulator,
-                        transcript,
-                    )?;
-                    Ok(())
-                }
-                Operator::Iff(_) => {
-                    let proof = self
-                        .proofs
-                        .get(&ProofId(node_idx, ProofType::Execution))
-                        .ok_or(ProofVerifyError::MissingProof(node_idx))?;
-                    let verifier_sumcheck =
-                        IffVerifier::new(computation_node.clone(), &opening_accumulator);
-                    let _ = Sumcheck::verify(
-                        proof,
-                        &verifier_sumcheck,
-                        &mut opening_accumulator,
-                        transcript,
-                    )?;
-                    Ok(())
-                }
-                Operator::Broadcast(_) => {
-                    let broadcast_verifier = BroadcastVerifier::new(
-                        computation_node.clone(),
-                        &opening_accumulator,
-                        &pp.model.graph,
-                    );
-                    broadcast_verifier.verify(&mut opening_accumulator, transcript)?;
-                    Ok(())
-                }
-                Operator::Reshape(_) => {
-                    let reshape_verifier =
-                        ReshapeVerifier::new(computation_node.clone(), &opening_accumulator);
-                    reshape_verifier.verify(&mut opening_accumulator, transcript)?;
-                    Ok(())
-                }
-                Operator::MoveAxis(_) => {
-                    let moveaxis_verifier =
-                        MoveAxisVerifier::new(computation_node.clone(), &opening_accumulator);
-                    moveaxis_verifier.verify(&mut opening_accumulator, transcript)?;
-                    Ok(())
-                }
-                Operator::Einsum(_) => {
-                    let proof = self
-                        .proofs
-                        .get(&ProofId(node_idx, ProofType::Execution))
-                        .ok_or(ProofVerifyError::MissingProof(node_idx))?;
-                    let verifier_sumcheck = EinsumVerifier::sumcheck(
-                        &pp.model,
-                        computation_node.clone(),
-                        &opening_accumulator,
-                    );
-                    let _ = Sumcheck::verify(
-                        proof,
-                        &*verifier_sumcheck,
-                        &mut opening_accumulator,
-                        transcript,
-                    )?;
-
-                    Ok(())
-                }
-                Operator::ReLU(_) => {
-                    let verifier_sumcheck = ReadRafSumcheckVerifier::<F, ReluTable<XLEN>>::new(
-                        computation_node.clone(),
-                        &mut opening_accumulator,
-                        transcript,
-                    );
-                    let execution_proof = self
-                        .proofs
-                        .get(&ProofId(node_idx, ProofType::Execution))
-                        .ok_or(ProofVerifyError::MissingProof(node_idx))?;
-                    let _ = Sumcheck::verify(
-                        execution_proof,
-                        &verifier_sumcheck,
-                        &mut opening_accumulator,
-                        transcript,
-                    )?;
-
-                    let log_T = computation_node.num_output_elements().log_2();
-                    let one_hot_params = OneHotParams::new(log_T);
-                    let ra_verifier_sumcheck = RaSumcheckVerifier::new(
-                        computation_node.clone(),
-                        &one_hot_params,
-                        &opening_accumulator,
-                    );
-                    let (lookups_ra_booleanity, lookups_rs_hamming_weight) =
-                        op_lookups::new_ra_one_hot_verifiers(
-                            computation_node,
-                            &one_hot_params,
-                            &opening_accumulator,
-                            transcript,
-                        );
-                    let ra_one_hot_proof = self
-                        .proofs
-                        .get(&ProofId(node_idx, ProofType::RaOneHotChecks))
-                        .ok_or(ProofVerifyError::MissingProof(node_idx))?;
-                    let _ = BatchedSumcheck::verify(
-                        ra_one_hot_proof,
-                        vec![
-                            &ra_verifier_sumcheck,
-                            &lookups_ra_booleanity,
-                            &lookups_rs_hamming_weight,
-                        ],
-                        &mut opening_accumulator,
-                        transcript,
-                    )?;
-                    Ok(())
-                }
-                Operator::Input(_) => {
-                    // Check input_claim == IO.evaluate_input(r_input)
-                    let (r_node_input, input_claim) = opening_accumulator
-                        .get_virtual_polynomial_opening(
-                            VirtualPolynomial::NodeOutput(computation_node.idx),
-                            SumcheckId::Execution,
-                        );
-                    let expected_claim =
-                        MultilinearPolynomial::from(io.inputs[0].clone()).evaluate(&r_node_input.r);
-                    if expected_claim != input_claim {
-                        return Err(ProofVerifyError::InvalidOpeningProof);
-                    }
-                    Ok(())
-                }
-                Operator::Constant(inner) => {
-                    if inner.0.len() == 1 {
-                        // Handle un-needed Relu operand const
-                        opening_accumulator.append_virtual(
-                            transcript,
-                            VirtualPolynomial::NodeOutput(computation_node.idx),
-                            SumcheckId::Execution,
-                            OpeningPoint::new(vec![F::Challenge::default()]),
-                        );
-                        let (_, const_claim) = opening_accumulator.get_virtual_polynomial_opening(
-                            VirtualPolynomial::NodeOutput(computation_node.idx),
-                            SumcheckId::Execution,
-                        );
-                        if F::zero() != const_claim {
-                            return Err(ProofVerifyError::InvalidOpeningProof);
-                        }
-                    } else {
-                        let (r_node_const, const_claim) = opening_accumulator
-                            .get_virtual_polynomial_opening(
-                                VirtualPolynomial::NodeOutput(computation_node.idx),
-                                SumcheckId::Execution,
-                            );
-                        let expected_claim =
-                            MultilinearPolynomial::from(inner.0.clone()).evaluate(&r_node_const.r);
-                        if expected_claim != const_claim {
-                            return Err(ProofVerifyError::InvalidOpeningProof);
-                        }
-                    }
-                    Ok(())
-                }
-                _ => {
-                    tracing::warn!("Unhandled operator in graph: {computation_node:#?}"); // TODO: return error
-                    Ok(())
-                }
-            }?;
+        // Iterate over computation graph in reverse topological order
+        // Verify each operation using dispatch
+        for (_, computation_node) in pp.model.graph.nodes.iter().rev() {
+            OperatorVerifier::verify(computation_node, &mut verifier)?;
         }
         Ok(())
     }

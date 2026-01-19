@@ -6,6 +6,7 @@ use atlas_onnx_tracer::{
         ComputationGraph,
     },
     node::ComputationNode,
+    ops::Broadcast,
     tensor::Tensor,
 };
 use common::VirtualPolynomial;
@@ -17,9 +18,42 @@ use joltworks::{
             OpeningAccumulator, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
         },
     },
+    subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
+
+use crate::onnx_proof::{
+    ops::{OperatorProofTrait, Prover, Verifier},
+    ProofId,
+};
+
+impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
+    fn prove(
+        &self,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+        let params = BroadcastParams::new(node.clone(), &prover.accumulator);
+        let broadcast_prover = BroadcastProver::initialize(&prover.trace, params);
+        broadcast_prover.prove(&mut prover.accumulator, &mut prover.transcript);
+        // Broadcast doesn't produce a sumcheck proof
+        vec![]
+    }
+
+    fn verify(
+        &self,
+        node: &ComputationNode,
+        verifier: &mut Verifier<'_, F, T>,
+    ) -> Result<(), ProofVerifyError> {
+        let broadcast_verifier = BroadcastVerifier::new(
+            node.clone(),
+            &verifier.accumulator,
+            &verifier.preprocessing.model.graph,
+        );
+        broadcast_verifier.verify(&mut verifier.accumulator, &mut verifier.transcript)
+    }
+}
 
 #[derive(Clone)]
 pub struct BroadcastParams<F: JoltField> {

@@ -1,8 +1,30 @@
-use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
+use crate::onnx_proof::{
+    op_lookups::{ra_virtual::RaSumcheckVerifier, read_raf_checking::ReadRafSumcheckVerifier},
+    ops::OperatorProofTrait,
+    ProofId, ProofType, Prover, Verifier,
+};
 use atlas_onnx_tracer::{node::ComputationNode, ops::ReLU};
 use joltworks::{
     self, field::JoltField, subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
     utils::errors::ProofVerifyError,
+};
+
+use crate::onnx_proof::{
+    lookup_tables::relu::ReluTable,
+    op_lookups::{
+        self,
+        ra_virtual::{InstructionRaSumcheckParams, InstructionRaSumcheckProver},
+        read_raf_checking::{ReadRafSumcheckParams, ReadRafSumcheckProver},
+    },
+};
+use common::consts::XLEN;
+use joltworks::{
+    config::OneHotParams,
+    subprotocols::{
+        sumcheck::{BatchedSumcheck, Sumcheck},
+        sumcheck_prover::SumcheckInstanceProver,
+    },
+    utils::math::Math,
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
@@ -11,24 +33,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        use crate::onnx_proof::{
-            lookup_tables::relu::ReluTable,
-            op_lookups::{
-                self,
-                ra_virtual::{InstructionRaSumcheckParams, InstructionRaSumcheckProver},
-                read_raf_checking::{ReadRafSumcheckParams, ReadRafSumcheckProver},
-            },
-        };
-        use common::consts::XLEN;
-        use joltworks::{
-            config::OneHotParams,
-            subprotocols::{
-                sumcheck::{BatchedSumcheck, Sumcheck},
-                sumcheck_prover::SumcheckInstanceProver,
-            },
-            utils::math::Math,
-        };
-
         let mut results = Vec::new();
 
         // Execution proof
@@ -53,11 +57,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
         // RaOneHotChecks proof
         let log_T = node.num_output_elements().log_2();
         let one_hot_params = OneHotParams::new(log_T);
-        let ra_params = InstructionRaSumcheckParams::new(
-            node.clone(),
-            &OneHotParams::new(log_T),
-            &prover.accumulator,
-        );
+        let ra_params =
+            InstructionRaSumcheckParams::new(node.clone(), &one_hot_params, &prover.accumulator);
         let ra_prover_sumcheck = InstructionRaSumcheckProver::initialize(ra_params, &prover.trace);
 
         let lookups_hamming_weight_params = op_lookups::ra_hamming_weight_params(
@@ -104,19 +105,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        use crate::onnx_proof::{
-            lookup_tables::relu::ReluTable,
-            op_lookups::{
-                self, ra_virtual::RaSumcheckVerifier, read_raf_checking::ReadRafSumcheckVerifier,
-            },
-        };
-        use common::consts::XLEN;
-        use joltworks::{
-            config::OneHotParams,
-            subprotocols::sumcheck::{BatchedSumcheck, Sumcheck},
-            utils::math::Math,
-        };
-
         // Verify execution proof
         let verifier_sumcheck = ReadRafSumcheckVerifier::<F, ReluTable<XLEN>>::new(
             node.clone(),

@@ -20,8 +20,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        use crate::onnx_proof::ops::reshape::{ReshapeParams, ReshapeProver};
-
         let params = ReshapeParams::<F>::new(node.clone(), &prover.accumulator);
         let reshape_prover = ReshapeProver::initialize(params);
         reshape_prover.prove(&mut prover.accumulator, &mut prover.transcript);
@@ -33,8 +31,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        use crate::onnx_proof::ops::reshape::ReshapeVerifier;
-
         let reshape_verifier = ReshapeVerifier::new(node.clone(), &verifier.accumulator);
         reshape_verifier.verify(&mut verifier.accumulator, &mut verifier.transcript)
     }

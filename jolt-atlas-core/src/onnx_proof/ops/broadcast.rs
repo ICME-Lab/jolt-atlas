@@ -34,8 +34,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        use crate::onnx_proof::ops::broadcast::{BroadcastParams, BroadcastProver};
-
         let params = BroadcastParams::new(node.clone(), &prover.accumulator);
         let broadcast_prover = BroadcastProver::initialize(&prover.trace, params);
         broadcast_prover.prove(&mut prover.accumulator, &mut prover.transcript);
@@ -48,8 +46,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        use crate::onnx_proof::ops::broadcast::BroadcastVerifier;
-
         let broadcast_verifier = BroadcastVerifier::new(
             node.clone(),
             &verifier.accumulator,

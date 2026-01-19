@@ -21,8 +21,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MoveAxis {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        use crate::onnx_proof::ops::moveaxis::{MoveAxisParams, MoveAxisProver};
-
         let params = MoveAxisParams::<F>::new(node.clone(), &prover.accumulator);
         let moveaxis_prover = MoveAxisProver::initialize(params);
         moveaxis_prover.prove(&mut prover.accumulator, &mut prover.transcript);
@@ -34,8 +32,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MoveAxis {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        use crate::onnx_proof::ops::moveaxis::MoveAxisVerifier;
-
         let moveaxis_verifier = MoveAxisVerifier::new(node.clone(), &verifier.accumulator);
         moveaxis_verifier.verify(&mut verifier.accumulator, &mut verifier.transcript)
     }

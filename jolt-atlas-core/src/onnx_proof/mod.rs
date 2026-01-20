@@ -278,7 +278,6 @@ mod tests {
     // Fixed-point scale factor: 2^7 = 128
     const SCALE: i32 = 128;
 
-    // #[ignore = "reason: wip"]
     #[test]
     fn test_self_attention_layer() {
         let working_dir = "../atlas-onnx-tracer/models/self_attention_layer/";

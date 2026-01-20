@@ -136,7 +136,9 @@ impl<F: JoltField> ReshapeVerifier<F> {
             .1;
 
         if claim_A != claim_O {
-            return Err(ProofVerifyError::InvalidOpeningProof);
+            return Err(ProofVerifyError::InvalidOpeningProof(
+                "Reshape claim does not match expected claim".to_string(),
+            ));
         }
 
         Ok(())

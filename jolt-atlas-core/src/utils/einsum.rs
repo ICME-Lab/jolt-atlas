@@ -95,6 +95,18 @@ pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
             dims_extractor: extract_bmk_kbn_mbn_dims,
         },
     ),
+    // Note: The equation "mbk,bkn->amn" contains two contraction dimensions (b and k).
+    // However, since these dimensions appear consecutively in both operands (as "bk"),
+    // we can flatten them into a single dimension and treat this as the simpler
+    // "mk,kn->mn" pattern. This optimization reduces duplicate prover logic while
+    // maintaining mathematical correctness.
+    (
+        "mbk,bkn->amn",
+        EinsumConfig {
+            equation: "mk,kn->mn",
+            dims_extractor: extract_mbk_bkn_amn_dims,
+        },
+    ),
 ];
 
 fn extract_mk_kn_mn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
@@ -147,6 +159,22 @@ fn extract_bmk_kbn_mbn_dims(computation_node: &ComputationNode, model: &Model) -
     let n = computation_node.output_dims[2];
     let k = b_node.output_dims[0];
     EinsumDims::new(vec![b, m, k], vec![k, b, n], vec![m, b, n])
+}
+
+fn extract_mbk_bkn_amn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
+    let [a_idx, b_idx] = computation_node.inputs[..] else {
+        panic!("Expected exactly two inputs for mbk,bkn->amn operation")
+    };
+    let a_node = &model[a_idx];
+    let b_node = &model[b_idx];
+    let m = a_node.output_dims[0];
+    let b = a_node.output_dims[1];
+    let k = a_node.output_dims[2];
+    let n = b_node.output_dims[2];
+
+    let bk = b * k;
+
+    EinsumDims::new(vec![m, bk], vec![bk, n], vec![m, n])
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

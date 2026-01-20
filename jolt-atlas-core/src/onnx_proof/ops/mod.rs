@@ -11,6 +11,7 @@ pub mod moveaxis;
 pub mod mul;
 pub mod relu;
 pub mod reshape;
+pub mod softmax;
 pub mod square;
 pub mod sub;
 
@@ -82,6 +83,7 @@ impl OperatorProver {
             Operator::Input(inner) => inner.prove(node, prover),
             Operator::ReLU(inner) => inner.prove(node, prover),
             Operator::Constant(inner) => inner.prove(node, prover),
+            Operator::Softmax(inner) => inner.prove(node, prover),
             _ => {
                 println!("Unhandled operator in graph: {node:#?}");
                 vec![]
@@ -116,6 +118,7 @@ impl OperatorVerifier {
             Operator::Input(inner) => inner.verify(node, verifier),
             Operator::Constant(inner) => inner.verify(node, verifier),
             Operator::ReLU(inner) => inner.verify(node, verifier),
+            Operator::Softmax(inner) => inner.verify(node, verifier),
             _ => {
                 tracing::warn!("Unhandled operator in graph: {node:#?}");
                 Ok(())

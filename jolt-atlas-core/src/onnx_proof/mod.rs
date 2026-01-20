@@ -189,7 +189,9 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             )
             .1;
         if expected_output_claim != output_claim {
-            return Err(ProofVerifyError::InvalidOpeningProof);
+            return Err(ProofVerifyError::InvalidOpeningProof(
+                "Expected output claim does not match actual output claim".to_string(),
+            ));
         }
 
         // Iterate over computation graph in reverse topological order
@@ -265,6 +267,7 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> From<&AtlasProverPreprocess
 
 #[cfg(test)]
 mod tests {
+    use crate::onnx_proof::{AtlasSharedPreprocessing, ONNXProof};
     use ark_bn254::Fr;
     use atlas_onnx_tracer::{model::Model, tensor::Tensor};
     use joltworks::{poly::commitment::dory::DoryCommitmentScheme, transcripts::Blake2bTranscript};
@@ -272,7 +275,26 @@ mod tests {
     use serde_json::Value;
     use std::{collections::HashMap, fs::File, io::Read, time::Instant};
 
-    use crate::onnx_proof::{AtlasSharedPreprocessing, ONNXProof};
+    // Fixed-point scale factor: 2^7 = 128
+    const SCALE: i32 = 128;
+
+    // #[ignore = "reason: wip"]
+    #[test]
+    fn test_self_attention_layer() {
+        let working_dir = "../atlas-onnx-tracer/models/self_attention_layer/";
+        let input_data = vec![SCALE; 64 * 64];
+        let input = Tensor::construct(input_data, vec![1, 64, 64]);
+
+        // Load the model
+        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
+
+        let pp = AtlasSharedPreprocessing::preprocess(model);
+        let (proof, io) =
+            ONNXProof::<Fr, Blake2bTranscript, DoryCommitmentScheme>::prove(&pp, &input);
+
+        // verify proof
+        proof.verify(&pp, &io).unwrap();
+    }
 
     #[test]
     fn test_article_classification() {
@@ -474,9 +496,6 @@ mod tests {
 
     #[test]
     fn test_mlp_square() {
-        // Fixed-point scale factor: 2^7 = 128
-        const SCALE: i32 = 128;
-
         // Create test input vector [1, 4]
         // Using simple values for testing
         let input_vector = vec![
@@ -502,9 +521,6 @@ mod tests {
 
     #[test]
     fn test_mlp_square_4layer() {
-        // Fixed-point scale factor: 2^7 = 128
-        const SCALE: i32 = 128;
-
         // Create test input vector [1, 4]
         // Using simple values for testing
         let input_vector = vec![

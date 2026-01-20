@@ -40,7 +40,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Input {
         let expected_claim =
             MultilinearPolynomial::from(verifier.io.inputs[0].clone()).evaluate(&r_node_input.r);
         if expected_claim != input_claim {
-            return Err(ProofVerifyError::InvalidOpeningProof);
+            return Err(ProofVerifyError::InvalidOpeningProof(
+                "Input claim does not match expected claim".to_string(),
+            ));
         }
         Ok(())
     }

@@ -28,7 +28,8 @@ impl Model {
             .load_onnx_using_tract()
             .parse_nodes()
             .collect_input_nodes()
-            .collect_outputs();
+            .collect_outputs()
+            .prune();
 
         if run_args.pad_to_power_of_2 {
             loader = loader.pad();
@@ -247,6 +248,103 @@ impl Model {
     fn pad_dims_to_power_of_2(dims: &[usize]) -> Vec<usize> {
         dims.iter().map(|&d| d.next_power_of_two()).collect()
     }
+
+    /// Prunes unused nodes from the computation graph and remaps indices.
+    ///
+    /// A node is considered "used" if it is reachable from any output node
+    /// by traversing the graph backwards through input connections.
+    /// This is useful for removing dead code, such as constant nodes that
+    /// were part of operations that got fused (e.g., max(0, x) → ReLU).
+    ///
+    /// # Algorithm
+    /// 1. Start from output nodes and traverse backwards to mark all reachable nodes
+    /// 2. Remove nodes that are not reachable
+    /// 3. Create a mapping from old indices to new contiguous indices
+    /// 4. Update all node indices and input references
+    /// 5. Update input/output node lists
+    ///
+    /// # Arguments
+    /// * `nodes` - The nodes to prune (modified in place)
+    /// * `inputs` - Input node indices (modified in place)
+    /// * `outputs` - Output node indices (modified in place)
+    ///
+    /// # Returns
+    /// A mapping from old node indices to new node indices (only for retained nodes)
+    pub fn prune_unused_nodes(
+        nodes: &mut BTreeMap<usize, ComputationNode>,
+        inputs: &mut Vec<usize>,
+        outputs: &mut Vec<usize>,
+    ) -> HashMap<usize, usize> {
+        use std::collections::HashSet;
+
+        // Step 1: Find all reachable nodes from outputs using BFS/DFS
+        let mut reachable: HashSet<usize> = HashSet::new();
+        let mut stack: Vec<usize> = outputs.clone();
+
+        while let Some(node_idx) = stack.pop() {
+            if reachable.contains(&node_idx) {
+                continue;
+            }
+            reachable.insert(node_idx);
+
+            // Add all inputs of this node to the stack
+            if let Some(node) = nodes.get(&node_idx) {
+                for &input_idx in &node.inputs {
+                    if !reachable.contains(&input_idx) {
+                        stack.push(input_idx);
+                    }
+                }
+            }
+        }
+
+        // Step 2: Remove unreachable nodes
+        let unreachable_nodes: Vec<usize> = nodes
+            .keys()
+            .filter(|idx| !reachable.contains(idx))
+            .copied()
+            .collect();
+
+        for idx in unreachable_nodes {
+            nodes.remove(&idx);
+        }
+
+        // Step 3: Create old->new index mapping for contiguous indices
+        // Sort remaining indices and assign new contiguous indices
+        let mut old_to_new: HashMap<usize, usize> = HashMap::new();
+        let sorted_old_indices: Vec<usize> = nodes.keys().copied().collect();
+
+        for (new_idx, &old_idx) in sorted_old_indices.iter().enumerate() {
+            old_to_new.insert(old_idx, new_idx);
+        }
+
+        // Step 4: Rebuild nodes with new indices
+        let mut new_nodes: BTreeMap<usize, ComputationNode> = BTreeMap::new();
+
+        for old_idx in sorted_old_indices {
+            let mut node = nodes.remove(&old_idx).unwrap();
+            let new_idx = old_to_new[&old_idx];
+
+            // Update the node's own index
+            node.idx = new_idx;
+
+            // Update input references
+            node.inputs = node
+                .inputs
+                .iter()
+                .map(|&input_idx| old_to_new[&input_idx])
+                .collect();
+
+            new_nodes.insert(new_idx, node);
+        }
+
+        *nodes = new_nodes;
+
+        // Step 5: Update input and output node lists
+        *inputs = inputs.iter().map(|&idx| old_to_new[&idx]).collect();
+        *outputs = outputs.iter().map(|&idx| old_to_new[&idx]).collect();
+
+        old_to_new
+    }
 }
 
 /// Builder for constructing a Model from an ONNX file.
@@ -350,6 +448,31 @@ impl<'a> ModelLoader<'a> {
             .expect("parse_nodes must be called first");
         let outputs = Model::collect_outputs(tract_graph, mapper);
         self.outputs = Some(outputs);
+        self
+    }
+
+    /// Prunes unused nodes from the computation graph and remaps indices.
+    ///
+    /// This step removes nodes that are not reachable from any output node
+    /// and reassigns contiguous indices to the remaining nodes.
+    ///
+    /// # Panics
+    /// Panics if parse_nodes, collect_input_nodes, or collect_outputs have not been called.
+    pub fn prune(mut self) -> Self {
+        let nodes = self
+            .nodes
+            .as_mut()
+            .expect("parse_nodes must be called first");
+        let inputs = self
+            .inputs
+            .as_mut()
+            .expect("collect_input_nodes must be called first");
+        let outputs = self
+            .outputs
+            .as_mut()
+            .expect("collect_outputs must be called first");
+
+        Model::prune_unused_nodes(nodes, inputs, outputs);
         self
     }
 
@@ -525,8 +648,7 @@ impl<P: AsRef<Path>> TractModelLoader<P> {
 
     /// Loads the ONNX file into a Tract inference model.
     fn load_onnx_file(&self) -> InferenceModel {
-        let mut reader = std::fs::File::open(&self.path).unwrap();
-        tract_onnx::onnx().model_for_read(&mut reader).unwrap()
+        tract_onnx::onnx().model_for_path(&self.path).unwrap()
     }
 
     /// Concretizes dynamic input dimensions using provided variables.

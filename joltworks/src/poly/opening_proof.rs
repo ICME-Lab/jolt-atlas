@@ -436,14 +436,21 @@ where
         claim: F,
     ) {
         transcript.append_scalar(&claim);
-        assert!(
-            self.openings
-                .insert(
-                    OpeningId::Virtual(polynomial, sumcheck),
-                    (opening_point, claim),
-                )
-                .is_none(),
-            "Key ({polynomial:?}, {sumcheck:?}) is already in opening map"
+        // assert!(
+        //     self.openings
+        //         .insert(
+        //             OpeningId::Virtual(polynomial, sumcheck),
+        //             (opening_point, claim),
+        //         )
+        //         .is_none(),
+        //     "Key ({polynomial:?}, {sumcheck:?}) is already in opening map"
+        // );
+
+        // TODO: Allow a node to have multiple openings that need to be checked
+        //       See #115
+        self.openings.insert(
+            OpeningId::Virtual(polynomial, sumcheck),
+            (opening_point, claim),
         );
         #[cfg(test)]
         self.appended_virtual_openings

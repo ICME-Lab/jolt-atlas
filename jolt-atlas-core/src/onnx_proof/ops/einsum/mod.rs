@@ -114,7 +114,7 @@ impl EinsumProver {
                 let params = KNkNParams::new(computation_node, einsum_dims, accumulator);
                 Box::new(KNkNProver::initialize(trace, params))
             }
-            "bmk,kbn->bmn" => {
+            "bmk,kbn->mbn" => {
                 let params = BmkKbnMbnParams::new(computation_node, einsum_dims, accumulator);
                 Box::new(BmkKbnMbnProver::initialize(trace, params))
             }
@@ -122,7 +122,7 @@ impl EinsumProver {
                 let params = MbkNbkBmnParams::new(computation_node, einsum_dims, accumulator);
                 Box::new(MbkNbkBmnProver::initialize(trace, params))
             }
-            _ => panic!("unexpected equation"),
+            _ => panic!("unexpected equation: {}", config.equation),
         }
     }
 }
@@ -162,7 +162,7 @@ impl EinsumVerifier {
                 einsum_dims,
                 accumulator,
             )),
-            "bmk,kbn->bmn" => Box::new(BmkKbnMbnVerifier::new(
+            "bmk,kbn->mbn" => Box::new(BmkKbnMbnVerifier::new(
                 computation_node,
                 einsum_dims,
                 accumulator,

@@ -202,7 +202,9 @@ impl<F: JoltField> BroadcastVerifier<F> {
             .1;
 
         if expected_claim_O != claim_O {
-            return Err(ProofVerifyError::InvalidOpeningProof);
+            return Err(ProofVerifyError::InvalidOpeningProof(
+                "Broadcast claim does not match expected claim".to_string(),
+            ));
         }
 
         Ok(())

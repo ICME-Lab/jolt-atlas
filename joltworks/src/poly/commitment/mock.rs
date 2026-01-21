@@ -2,6 +2,7 @@ use std::borrow::Borrow;
 use std::marker::PhantomData;
 
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use rand_core::{CryptoRng, RngCore};
 
 use crate::{
     field::JoltField,
@@ -10,7 +11,7 @@ use crate::{
     utils::{errors::ProofVerifyError, small_scalar::SmallScalar},
 };
 
-use super::commitment_scheme::CommitmentScheme;
+use super::commitment_scheme::{CommitmentScheme, HidingCommitmentScheme};
 
 #[derive(Clone)]
 pub struct MockCommitScheme<F: JoltField> {
@@ -133,5 +134,54 @@ where
         _tier1_commitments: &[Self::ChunkState],
     ) -> (Self::Commitment, Self::OpeningProofHint) {
         (MockCommitment::default(), ())
+    }
+}
+
+/// Mock blinding factor for testing HidingCommitmentScheme
+#[derive(Clone, Debug, Default)]
+pub struct MockBlindingFactor<F: JoltField> {
+    _marker: PhantomData<F>,
+}
+
+impl<F> HidingCommitmentScheme for MockCommitScheme<F>
+where
+    F: JoltField,
+{
+    type BlindingFactor = MockBlindingFactor<F>;
+
+    fn commit_hiding(
+        poly: &MultilinearPolynomial<Self::Field>,
+        _blinding: &Self::BlindingFactor,
+        setup: &Self::ProverSetup,
+    ) -> (Self::Commitment, Self::OpeningProofHint) {
+        // Mock: just delegate to regular commit
+        Self::commit(poly, setup)
+    }
+
+    fn sample_blinding<R: RngCore + CryptoRng>(_rng: &mut R) -> Self::BlindingFactor {
+        MockBlindingFactor {
+            _marker: PhantomData,
+        }
+    }
+
+    fn combine_blindings(
+        _blindings: &[Self::BlindingFactor],
+        _coeffs: &[Self::Field],
+    ) -> Self::BlindingFactor {
+        MockBlindingFactor {
+            _marker: PhantomData,
+        }
+    }
+
+    fn prove_hiding<ProofTranscript: Transcript>(
+        setup: &Self::ProverSetup,
+        poly: &MultilinearPolynomial<Self::Field>,
+        _blinding: &Self::BlindingFactor,
+        opening_point: &[<Self::Field as JoltField>::Challenge],
+        hint: Option<Self::OpeningProofHint>,
+        transcript: &mut ProofTranscript,
+    ) -> Self::Proof {
+        // Mock: delegate to regular prove
+        Self::prove(setup, poly, opening_point, hint, transcript)
     }
 }

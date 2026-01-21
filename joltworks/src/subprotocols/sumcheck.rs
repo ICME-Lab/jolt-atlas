@@ -6,11 +6,13 @@ use crate::utils::profiling::print_current_memory_usage;
 use crate::{
     field::JoltField,
     poly::{
+        commitment::commitment_scheme::HidingCommitmentScheme,
         opening_proof::{ProverOpeningAccumulator, VerifierOpeningAccumulator},
         unipoly::{CompressedUniPoly, UniPoly},
     },
     subprotocols::{
         sumcheck_prover::SumcheckInstanceProver, sumcheck_verifier::SumcheckInstanceVerifier,
+        zk_sumcheck::{ZKBatchedSumcheck, ZKSumcheckProof},
     },
     transcripts::{AppendToTranscript, Transcript},
     utils::errors::ProofVerifyError,
@@ -18,6 +20,25 @@ use crate::{
 
 use ark_serialize::*;
 use std::marker::PhantomData;
+
+/// Configuration for sumcheck ZK mode.
+#[derive(Clone, Debug, Default)]
+pub struct SumcheckZKConfig {
+    /// Whether to use zero-knowledge sumcheck.
+    pub zk_enabled: bool,
+}
+
+impl SumcheckZKConfig {
+    /// Creates a config with ZK enabled.
+    pub fn zk() -> Self {
+        Self { zk_enabled: true }
+    }
+
+    /// Creates a config with ZK disabled (default).
+    pub fn non_zk() -> Self {
+        Self { zk_enabled: false }
+    }
+}
 
 /// Implements the standard technique for batching parallel sumchecks to reduce
 /// verifier cost and proof size.
@@ -254,6 +275,51 @@ impl BatchedSumcheck {
         }
 
         Ok(r_sumcheck)
+    }
+
+    /// Proves a batch of sumcheck instances with optional ZK mode.
+    ///
+    /// When `zk_config.zk_enabled` is true, this dispatches to the ZK sumcheck
+    /// protocol which commits to round polynomials instead of sending them plaintext.
+    ///
+    /// # Arguments
+    /// * `sumcheck_instances` - The sumcheck instances to prove
+    /// * `opening_accumulator` - Accumulator for polynomial openings
+    /// * `pcs_setup` - The PCS prover setup (only needed for ZK mode)
+    /// * `transcript` - The Fiat-Shamir transcript
+    /// * `zk_config` - Configuration for ZK mode
+    ///
+    /// # Returns
+    /// A tuple containing the proof and challenges. In ZK mode, the proof contains
+    /// commitments instead of plaintext coefficients.
+    pub fn prove_with_zk_config<F, PCS, ProofTranscript>(
+        sumcheck_instances: Vec<&mut dyn SumcheckInstanceProver<F, ProofTranscript>>,
+        opening_accumulator: &mut ProverOpeningAccumulator<F>,
+        pcs_setup: &PCS::ProverSetup,
+        transcript: &mut ProofTranscript,
+        zk_config: &SumcheckZKConfig,
+    ) -> (SumcheckInstanceProof<F, ProofTranscript>, Vec<F::Challenge>, Option<ZKSumcheckProof<F, PCS>>)
+    where
+        F: JoltField,
+        PCS: HidingCommitmentScheme<Field = F>,
+        ProofTranscript: Transcript,
+    {
+        if zk_config.zk_enabled {
+            // ZK mode: use hiding commitments
+            let (zk_proof, challenges) = ZKBatchedSumcheck::prove_zk::<F, PCS, ProofTranscript>(
+                sumcheck_instances,
+                opening_accumulator,
+                pcs_setup,
+                transcript,
+            );
+            // Convert ZK proof to standard proof for compatibility
+            let standard_proof = SumcheckInstanceProof::new(zk_proof.compressed_polys.clone());
+            (standard_proof, challenges, Some(zk_proof))
+        } else {
+            // Non-ZK mode: use standard sumcheck
+            let (proof, challenges) = Self::prove(sumcheck_instances, opening_accumulator, transcript);
+            (proof, challenges, None)
+        }
     }
 }
 

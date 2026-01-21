@@ -1,4 +1,5 @@
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use rand_core::{CryptoRng, RngCore};
 use std::borrow::Borrow;
 use std::fmt::Debug;
 
@@ -147,4 +148,91 @@ pub trait StreamingCommitmentScheme: CommitmentScheme {
         onehot_k: Option<usize>,
         tier1_commitments: &[Self::ChunkState],
     ) -> (Self::Commitment, Self::OpeningProofHint);
+}
+
+/// A commitment scheme that supports hiding (zero-knowledge) commitments.
+///
+/// This trait extends the base `CommitmentScheme` with hiding properties,
+/// allowing polynomial commitments that reveal nothing about the committed polynomial.
+/// This is achieved through Pedersen-style blinding using a secondary generator.
+///
+/// # Zero-Knowledge Sumcheck (BlindFold Approach)
+///
+/// In the BlindFold approach for ZK sumcheck:
+/// 1. Instead of sending plaintext coefficients, the prover sends commitments to round polynomials
+/// 2. The blinding factors must be tracked and properly combined across rounds
+/// 3. At the end, a batch opening proof reveals evaluations without leaking polynomial coefficients
+pub trait HidingCommitmentScheme: CommitmentScheme {
+    /// The type representing the blinding factor used to hide commitments.
+    /// For Pedersen-style blinding, this is typically a scalar field element.
+    type BlindingFactor: Clone + Send + Sync + Debug + Default;
+
+    /// Commits to a multilinear polynomial with hiding (zero-knowledge) properties.
+    ///
+    /// # Arguments
+    /// * `poly` - The multilinear polynomial to commit to
+    /// * `blinding` - The blinding factor to use for hiding
+    /// * `setup` - The prover setup (must include hiding generators)
+    ///
+    /// # Returns
+    /// A tuple containing:
+    /// - The hiding commitment (C = Commit(poly) + blinding * H)
+    /// - The opening proof hint for efficient proof generation
+    fn commit_hiding(
+        poly: &MultilinearPolynomial<Self::Field>,
+        blinding: &Self::BlindingFactor,
+        setup: &Self::ProverSetup,
+    ) -> (Self::Commitment, Self::OpeningProofHint);
+
+    /// Samples a random blinding factor from the provided RNG.
+    fn sample_blinding<R: RngCore + CryptoRng>(rng: &mut R) -> Self::BlindingFactor;
+
+    /// Combines multiple blinding factors using a linear combination.
+    ///
+    /// Given blindings [b_1, ..., b_n] and coefficients [c_1, ..., c_n],
+    /// computes sum_i(c_i * b_i).
+    ///
+    /// This is used when combining multiple hiding commitments (e.g., in batch proofs).
+    fn combine_blindings(
+        blindings: &[Self::BlindingFactor],
+        coeffs: &[Self::Field],
+    ) -> Self::BlindingFactor;
+
+    /// Opens a hiding commitment, proving the committed value and blinding factor.
+    ///
+    /// # Arguments
+    /// * `setup` - The prover setup
+    /// * `poly` - The multilinear polynomial that was committed
+    /// * `blinding` - The blinding factor used in the hiding commitment
+    /// * `opening_point` - The point at which to evaluate the polynomial
+    /// * `hint` - Optional opening proof hint
+    /// * `transcript` - The Fiat-Shamir transcript
+    ///
+    /// # Returns
+    /// A proof that the commitment opens to the claimed evaluation
+    fn prove_hiding<ProofTranscript: Transcript>(
+        setup: &Self::ProverSetup,
+        poly: &MultilinearPolynomial<Self::Field>,
+        blinding: &Self::BlindingFactor,
+        opening_point: &[<Self::Field as JoltField>::Challenge],
+        hint: Option<Self::OpeningProofHint>,
+        transcript: &mut ProofTranscript,
+    ) -> Self::Proof;
+
+    /// Verifies a hiding commitment opening.
+    ///
+    /// The verifier doesn't need to know the blinding factor - they only verify
+    /// that the commitment opens to the claimed evaluation value.
+    fn verify_hiding<ProofTranscript: Transcript>(
+        proof: &Self::Proof,
+        setup: &Self::VerifierSetup,
+        transcript: &mut ProofTranscript,
+        opening_point: &[<Self::Field as JoltField>::Challenge],
+        opening: &Self::Field,
+        commitment: &Self::Commitment,
+    ) -> Result<(), ProofVerifyError> {
+        // Default implementation: verification is the same as non-hiding
+        // since the verifier doesn't see the blinding factor
+        Self::verify(proof, setup, transcript, opening_point, opening, commitment)
+    }
 }

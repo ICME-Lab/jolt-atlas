@@ -569,6 +569,51 @@ where
                 3u8.serialize_with_mode(&mut writer, compress)?;
                 proof.serialize_with_mode(&mut writer, compress)
             }
+            ProofData::ZKSumcheckProof(proof) => {
+                4u8.serialize_with_mode(&mut writer, compress)?;
+                // Serialize round_commitments
+                (proof.round_commitments.len() as u32).serialize_with_mode(&mut writer, compress)?;
+                for commitment in &proof.round_commitments {
+                    commitment.serialize_with_mode(&mut writer, compress)?;
+                }
+                // Serialize compressed_polys
+                (proof.compressed_polys.len() as u32).serialize_with_mode(&mut writer, compress)?;
+                for poly in &proof.compressed_polys {
+                    poly.serialize_with_mode(&mut writer, compress)?;
+                }
+                Ok(())
+            }
+            ProofData::ZKBatchOpeningProof(proof) => {
+                5u8.serialize_with_mode(&mut writer, compress)?;
+                // Serialize combined_commitment
+                proof.combined_commitment.serialize_with_mode(&mut writer, compress)?;
+                // Serialize evals_at_zero
+                (proof.evals_at_zero.len() as u32).serialize_with_mode(&mut writer, compress)?;
+                for eval in &proof.evals_at_zero {
+                    eval.serialize_with_mode(&mut writer, compress)?;
+                }
+                // Serialize evals_at_one
+                (proof.evals_at_one.len() as u32).serialize_with_mode(&mut writer, compress)?;
+                for eval in &proof.evals_at_one {
+                    eval.serialize_with_mode(&mut writer, compress)?;
+                }
+                // Serialize evals_at_challenge
+                (proof.evals_at_challenge.len() as u32).serialize_with_mode(&mut writer, compress)?;
+                for eval in &proof.evals_at_challenge {
+                    eval.serialize_with_mode(&mut writer, compress)?;
+                }
+                // Serialize batch_proof (optional)
+                match &proof.batch_proof {
+                    Some(bp) => {
+                        true.serialize_with_mode(&mut writer, compress)?;
+                        bp.serialize_with_mode(&mut writer, compress)?;
+                    }
+                    None => {
+                        false.serialize_with_mode(&mut writer, compress)?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 
@@ -578,6 +623,37 @@ where
             ProofData::ReducedOpeningProof(proof) => proof.serialized_size(compress),
             ProofData::PrecompileProof(proof) => proof.serialized_size(compress),
             ProofData::FpLookupProof(proof) => proof.serialized_size(compress),
+            ProofData::ZKSumcheckProof(proof) => {
+                let mut size = 4; // round_commitments length
+                for commitment in &proof.round_commitments {
+                    size += commitment.serialized_size(compress);
+                }
+                size += 4; // compressed_polys length
+                for poly in &proof.compressed_polys {
+                    size += poly.serialized_size(compress);
+                }
+                size
+            }
+            ProofData::ZKBatchOpeningProof(proof) => {
+                let mut size = proof.combined_commitment.serialized_size(compress);
+                size += 4; // evals_at_zero length
+                for eval in &proof.evals_at_zero {
+                    size += eval.serialized_size(compress);
+                }
+                size += 4; // evals_at_one length
+                for eval in &proof.evals_at_one {
+                    size += eval.serialized_size(compress);
+                }
+                size += 4; // evals_at_challenge length
+                for eval in &proof.evals_at_challenge {
+                    size += eval.serialized_size(compress);
+                }
+                size += 1; // bool for Option presence
+                if let Some(bp) = &proof.batch_proof {
+                    size += bp.serialized_size(compress);
+                }
+                size
+            }
         }
     }
 }
@@ -594,6 +670,31 @@ where
             ProofData::ReducedOpeningProof(proof) => proof.check(),
             ProofData::PrecompileProof(proof) => proof.check(),
             ProofData::FpLookupProof(proof) => proof.check(),
+            ProofData::ZKSumcheckProof(proof) => {
+                for commitment in &proof.round_commitments {
+                    commitment.check()?;
+                }
+                for poly in &proof.compressed_polys {
+                    poly.check()?;
+                }
+                Ok(())
+            }
+            ProofData::ZKBatchOpeningProof(proof) => {
+                proof.combined_commitment.check()?;
+                for eval in &proof.evals_at_zero {
+                    eval.check()?;
+                }
+                for eval in &proof.evals_at_one {
+                    eval.check()?;
+                }
+                for eval in &proof.evals_at_challenge {
+                    eval.check()?;
+                }
+                if let Some(bp) = &proof.batch_proof {
+                    bp.check()?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -639,6 +740,57 @@ where
                     validate,
                 )?;
                 Ok(ProofData::FpLookupProof(proof))
+            }
+            4 => {
+                // Deserialize ZKSumcheckProof
+                let num_commitments = u32::deserialize_with_mode(&mut reader, compress, validate)? as usize;
+                let mut round_commitments = Vec::with_capacity(num_commitments);
+                for _ in 0..num_commitments {
+                    round_commitments.push(PCS::Commitment::deserialize_with_mode(&mut reader, compress, validate)?);
+                }
+                let num_polys = u32::deserialize_with_mode(&mut reader, compress, validate)? as usize;
+                let mut compressed_polys = Vec::with_capacity(num_polys);
+                for _ in 0..num_polys {
+                    compressed_polys.push(jolt_core::poly::unipoly::CompressedUniPoly::<F>::deserialize_with_mode(&mut reader, compress, validate)?);
+                }
+                Ok(ProofData::ZKSumcheckProof(crate::jolt::sumcheck::ZKSumcheckProof {
+                    round_commitments,
+                    compressed_polys,
+                    opening_hints: Vec::new(), // Hints are not serialized
+                }))
+            }
+            5 => {
+                // Deserialize ZKBatchOpeningProof
+                let combined_commitment = PCS::Commitment::deserialize_with_mode(&mut reader, compress, validate)?;
+                let num_evals_at_zero = u32::deserialize_with_mode(&mut reader, compress, validate)? as usize;
+                let mut evals_at_zero = Vec::with_capacity(num_evals_at_zero);
+                for _ in 0..num_evals_at_zero {
+                    evals_at_zero.push(F::deserialize_with_mode(&mut reader, compress, validate)?);
+                }
+                let num_evals_at_one = u32::deserialize_with_mode(&mut reader, compress, validate)? as usize;
+                let mut evals_at_one = Vec::with_capacity(num_evals_at_one);
+                for _ in 0..num_evals_at_one {
+                    evals_at_one.push(F::deserialize_with_mode(&mut reader, compress, validate)?);
+                }
+                let num_evals_at_challenge = u32::deserialize_with_mode(&mut reader, compress, validate)? as usize;
+                let mut evals_at_challenge = Vec::with_capacity(num_evals_at_challenge);
+                for _ in 0..num_evals_at_challenge {
+                    evals_at_challenge.push(F::deserialize_with_mode(&mut reader, compress, validate)?);
+                }
+                // Deserialize optional batch_proof
+                let has_batch_proof = bool::deserialize_with_mode(&mut reader, compress, validate)?;
+                let batch_proof = if has_batch_proof {
+                    Some(PCS::Proof::deserialize_with_mode(&mut reader, compress, validate)?)
+                } else {
+                    None
+                };
+                Ok(ProofData::ZKBatchOpeningProof(crate::jolt::sumcheck::ZKSumcheckBatchOpeningProof {
+                    combined_commitment,
+                    evals_at_zero,
+                    evals_at_one,
+                    evals_at_challenge,
+                    batch_proof,
+                }))
             }
             _ => Err(SerializationError::InvalidData),
         }

@@ -203,7 +203,7 @@ dependencies = [
 [[package]]
 name = "ark-ff-asm"
 version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#5ebdb1789edafdb0e8e43f82089ec6eed9e8b38c"
+source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a4518928f1ff7f15875f940d614bb9845e6"
 dependencies = [
  "quote",
  "syn 2.0.106",
@@ -212,7 +212,7 @@ dependencies = [
 [[package]]
 name = "ark-ff-macros"
 version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#5ebdb1789edafdb0e8e43f82089ec6eed9e8b38c"
+source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a4518928f1ff7f15875f940d614bb9845e6"
 dependencies = [
  "num-bigint",
  "num-traits",
@@ -224,7 +224,7 @@ dependencies = [
 [[package]]
 name = "ark-poly"
 version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#5ebdb1789edafdb0e8e43f82089ec6eed9e8b38c"
+source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a4518928f1ff7f15875f940d614bb9845e6"
 dependencies = [
  "ahash",
  "ark-ff",
@@ -262,7 +262,7 @@ dependencies = [
 [[package]]
 name = "ark-serialize-derive"
 version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#5ebdb1789edafdb0e8e43f82089ec6eed9e8b38c"
+source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a4518928f1ff7f15875f940d614bb9845e6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -484,6 +484,19 @@ checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "common"
+version = "0.2.0"
+dependencies = [
+ "ark-serialize",
+ "derive_more",
+ "serde",
+ "serde_json",
+ "strum",
+ "strum_macros",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -1448,7 +1461,7 @@ dependencies = [
  "ark-serialize",
  "clap",
  "eyre",
- "jolt-core",
+ "jolt-core 0.1.0 (git+https://github.com/ICME-Lab/zkml-jolt?branch=dev)",
  "onnx-tracer",
  "rand",
  "regex",
@@ -1464,7 +1477,6 @@ dependencies = [
 [[package]]
 name = "jolt-core"
 version = "0.1.0"
-source = "git+https://github.com/ICME-Lab/zkml-jolt?branch=dev#e8700816a212b2b199df9cc72ef2b633d8b8a6e4"
 dependencies = [
  "allocative",
  "anyhow",
@@ -1477,7 +1489,7 @@ dependencies = [
  "bincode",
  "blake2",
  "clap",
- "common",
+ "common 0.2.0",
  "derive_more",
  "dirs",
  "dory",
@@ -1487,7 +1499,7 @@ dependencies = [
  "indicatif",
  "itertools 0.10.5",
  "jolt-optimizations",
- "jolt-platform",
+ "jolt-platform 0.1.0",
  "lazy_static",
  "memory-stats",
  "num",
@@ -1510,7 +1522,62 @@ dependencies = [
  "target-lexicon",
  "thiserror 1.0.69",
  "tokio",
- "tracer",
+ "tracer 0.2.0",
+ "tracing",
+ "tracing-chrome",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "jolt-core"
+version = "0.1.0"
+source = "git+https://github.com/ICME-Lab/zkml-jolt?branch=dev#e8700816a212b2b199df9cc72ef2b633d8b8a6e4"
+dependencies = [
+ "allocative",
+ "anyhow",
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "ark-serialize",
+ "ark-serialize-derive 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ark-std",
+ "bincode",
+ "blake2",
+ "clap",
+ "common 0.2.0 (git+https://github.com/ICME-Lab/zkml-jolt?branch=dev)",
+ "derive_more",
+ "dirs",
+ "dory",
+ "eyre",
+ "fixedbitset",
+ "getrandom 0.2.16",
+ "indicatif",
+ "itertools 0.10.5",
+ "jolt-optimizations",
+ "jolt-platform 0.1.0 (git+https://github.com/ICME-Lab/zkml-jolt?branch=dev)",
+ "lazy_static",
+ "memory-stats",
+ "num",
+ "num-derive",
+ "num-integer",
+ "num-traits",
+ "once_cell",
+ "paste",
+ "postcard",
+ "rand",
+ "rand_chacha",
+ "rand_core",
+ "rand_distr",
+ "rayon",
+ "reqwest",
+ "serde",
+ "sha3",
+ "strum",
+ "strum_macros",
+ "target-lexicon",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracer 0.2.0 (git+https://github.com/ICME-Lab/zkml-jolt?branch=dev)",
  "tracing",
  "tracing-chrome",
  "tracing-subscriber",
@@ -1531,6 +1598,14 @@ dependencies = [
  "num-rational",
  "num-traits",
  "rayon",
+]
+
+[[package]]
+name = "jolt-platform"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.2.16",
+ "rand",
 ]
 
 [[package]]
@@ -3158,15 +3233,39 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 [[package]]
 name = "tracer"
 version = "0.2.0"
+dependencies = [
+ "ark-serialize",
+ "clap",
+ "common 0.2.0",
+ "derive_more",
+ "fnv",
+ "itertools 0.10.5",
+ "jolt-platform 0.1.0",
+ "lazy_static",
+ "object",
+ "paste",
+ "postcard",
+ "rand",
+ "serde",
+ "serde_json",
+ "strum",
+ "strum_macros",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "tracer"
+version = "0.2.0"
 source = "git+https://github.com/ICME-Lab/zkml-jolt?branch=dev#e8700816a212b2b199df9cc72ef2b633d8b8a6e4"
 dependencies = [
  "ark-serialize",
  "clap",
- "common",
+ "common 0.2.0 (git+https://github.com/ICME-Lab/zkml-jolt?branch=dev)",
  "derive_more",
  "fnv",
  "itertools 0.10.5",
- "jolt-platform",
+ "jolt-platform 0.1.0 (git+https://github.com/ICME-Lab/zkml-jolt?branch=dev)",
  "lazy_static",
  "object",
  "paste",
@@ -4135,7 +4234,7 @@ dependencies = [
  "derive_more",
  "fixedbitset",
  "itertools 0.10.5",
- "jolt-core",
+ "jolt-core 0.1.0",
  "log",
  "num",
  "num-derive",

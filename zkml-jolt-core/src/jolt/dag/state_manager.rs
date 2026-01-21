@@ -3,6 +3,11 @@
 //! This module provides unified state handling for both proving and verification,
 //! managing transcripts, accumulators, commitments, and proof data throughout
 //! the protocol execution.
+//!
+//! # Zero-Knowledge Support
+//!
+//! When `ZKConfig::enabled` is true, the proving process uses hiding commitments
+//! and ZK sumcheck protocols to ensure zero-knowledge properties.
 
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
@@ -29,6 +34,34 @@ use crate::jolt::{
     witness::{CommittedPolynomial, VirtualPolynomial},
 };
 
+/// Configuration for zero-knowledge proof generation.
+///
+/// When ZK mode is enabled, the prover uses hiding commitments and
+/// ZK sumcheck protocols to ensure the proof reveals nothing about
+/// the polynomial coefficients or intermediate values.
+#[derive(Clone, Debug, Default)]
+pub struct ZKConfig {
+    /// Whether zero-knowledge mode is enabled.
+    ///
+    /// When true:
+    /// - Sumcheck proofs use hiding commitments instead of plaintext coefficients
+    /// - The BlindFold approach with NIFS folding is used for ZK
+    /// - Blinding factors are tracked throughout the protocol
+    pub enabled: bool,
+}
+
+impl ZKConfig {
+    /// Creates a new ZK config with ZK mode enabled.
+    pub fn enabled() -> Self {
+        Self { enabled: true }
+    }
+
+    /// Creates a new ZK config with ZK mode disabled (default).
+    pub fn disabled() -> Self {
+        Self { enabled: false }
+    }
+}
+
 /// Keys identifying different proof components in the proof map.
 #[derive(PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, FromPrimitive)]
 #[repr(u8)]
@@ -41,16 +74,39 @@ pub enum ProofKeys {
     PrecompileProof,
     FpLookupProof,
     ReducedOpeningProof,
+    /// ZK sumcheck proof for Stage 2 (when ZK mode is enabled)
+    ZKStage2Sumcheck,
+    /// ZK sumcheck proof for Stage 3 (when ZK mode is enabled)
+    ZKStage3Sumcheck,
+    /// ZK sumcheck proof for Stage 4 (when ZK mode is enabled)
+    ZKStage4Sumcheck,
+    /// ZK sumcheck proof for Stage 5 (when ZK mode is enabled)
+    ZKStage5Sumcheck,
+    /// Batch opening proof for Stage 2 ZK sumcheck
+    ZKStage2BatchOpening,
+    /// Batch opening proof for Stage 3 ZK sumcheck
+    ZKStage3BatchOpening,
+    /// Batch opening proof for Stage 4 ZK sumcheck
+    ZKStage4BatchOpening,
+    /// Batch opening proof for Stage 5 ZK sumcheck
+    ZKStage5BatchOpening,
 }
 
 /// Wrapper enum for different proof types stored in the proof map.
-
 #[derive(Clone, Debug)]
 pub enum ProofData<F: JoltField, PCS: CommitmentScheme<Field = F>, ProofTranscript: Transcript> {
+    /// Standard sumcheck proof with plaintext round polynomials
     SumcheckProof(SumcheckInstanceProof<F, ProofTranscript>),
+    /// Zero-knowledge sumcheck proof with committed round polynomials
+    ZKSumcheckProof(crate::jolt::sumcheck::ZKSumcheckProof<F, PCS>),
+    /// Reduced opening proof for batch polynomial openings
     ReducedOpeningProof(ReducedOpeningProof<F, PCS, ProofTranscript>),
+    /// Proof for precompile operations
     PrecompileProof(PrecompileSNARK<F, ProofTranscript>),
+    /// Proof for floating-point lookup activations
     FpLookupProof(FpLookupProof<F, ProofTranscript>),
+    /// Batch opening proof for ZK sumcheck (full ZK mode)
+    ZKBatchOpeningProof(crate::jolt::sumcheck::ZKSumcheckBatchOpeningProof<F, PCS>),
 }
 
 pub type Proofs<F, PCS, ProofTranscript> = BTreeMap<ProofKeys, ProofData<F, PCS, ProofTranscript>>;
@@ -99,6 +155,8 @@ pub struct StateManager<
     pub twist_sumcheck_switch_index: usize,
     /// Public inputs and outputs of the program.
     pub program_io: ProgramIO,
+    /// Zero-knowledge configuration.
+    pub zk_config: ZKConfig,
     pub prover_state: Option<ProverState<'a, F, PCS>>,
     pub verifier_state: Option<VerifierState<'a, F, PCS>>,
 }
@@ -146,6 +204,7 @@ where
             program_io,
             memory_K,
             twist_sumcheck_switch_index,
+            zk_config: ZKConfig::disabled(),
             prover_state: Some(ProverState {
                 preprocessing,
                 trace,
@@ -154,6 +213,20 @@ where
             }),
             verifier_state: None,
         }
+    }
+
+    /// Creates a new state manager configured for proving with ZK mode.
+    ///
+    /// Initializes the opening accumulator, transcript, and computes `val_final`
+    /// (the final memory state) from the execution trace, with ZK mode enabled.
+    pub fn new_prover_zk(
+        preprocessing: &'a JoltProverPreprocessing<F, PCS>,
+        trace: Vec<JoltONNXCycle>,
+        program_io: ProgramIO,
+    ) -> Self {
+        let mut state_manager = Self::new_prover(preprocessing, trace, program_io);
+        state_manager.zk_config = ZKConfig::enabled();
+        state_manager
     }
 
     /// Creates a new state manager configured for verification.
@@ -180,6 +253,7 @@ where
             program_io,
             memory_K,
             twist_sumcheck_switch_index,
+            zk_config: ZKConfig::disabled(),
             prover_state: None,
             verifier_state: Some(VerifierState {
                 preprocessing,
@@ -187,6 +261,11 @@ where
                 accumulator: opening_accumulator,
             }),
         }
+    }
+
+    /// Returns true if ZK mode is enabled.
+    pub fn is_zk_enabled(&self) -> bool {
+        self.zk_config.enabled
     }
 
     /// Returns prover preprocessing, trace, and program I/O.

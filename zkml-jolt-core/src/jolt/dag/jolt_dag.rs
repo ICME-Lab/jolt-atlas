@@ -10,7 +10,7 @@ use crate::jolt::{
     memory::MemoryDag,
     precompiles::PrecompileSNARK,
     spartan::SpartanDag,
-    sumcheck::{BatchedSumcheck, SumcheckInstance},
+    sumcheck::{BatchedSumcheck, SumcheckInstance, ZKAwareBatchedSumcheck},
     witness::{AllCommittedPolynomials, CommittedPolynomial},
 };
 #[cfg(test)]
@@ -20,7 +20,7 @@ use anyhow::Context;
 use jolt_core::utils::profiling::print_current_memory_usage;
 use jolt_core::{
     field::JoltField,
-    poly::commitment::{commitment_scheme::CommitmentScheme, dory::DoryGlobals},
+    poly::commitment::{commitment_scheme::CommitmentScheme, dory::DoryGlobals, HidingCommitmentScheme},
     transcripts::Transcript,
     utils::thread::drop_in_background_thread,
     zkvm::witness::DTH_ROOT_OF_K,
@@ -112,16 +112,39 @@ impl JoltDAG {
 
         let transcript = state_manager.get_transcript();
         let accumulator = state_manager.get_prover_accumulator();
-        let (stage2_proof, _r_stage2) = BatchedSumcheck::prove(
-            stage2_instances_mut,
-            Some(accumulator.clone()),
-            &mut *transcript.borrow_mut(),
-        );
 
-        state_manager.proofs.borrow_mut().insert(
-            ProofKeys::Stage2Sumcheck,
-            ProofData::SumcheckProof(stage2_proof),
-        );
+        // Dispatch to ZK or non-ZK sumcheck based on config
+        if state_manager.is_zk_enabled() {
+            // ZK mode: use ZK-aware sumcheck (hybrid mode)
+            let (proof, _r_stage2, zk_proof) =
+                crate::jolt::sumcheck::ZKAwareBatchedSumcheck::prove::<F, PCS, ProofTranscript>(
+                    stage2_instances_mut,
+                    Some(accumulator.clone()),
+                    &mut *transcript.borrow_mut(),
+                    true,
+                );
+            state_manager.proofs.borrow_mut().insert(
+                ProofKeys::Stage2Sumcheck,
+                ProofData::SumcheckProof(proof),
+            );
+            if let Some(zk_proof) = zk_proof {
+                state_manager.proofs.borrow_mut().insert(
+                    ProofKeys::ZKStage2Sumcheck,
+                    ProofData::ZKSumcheckProof(zk_proof),
+                );
+            }
+        } else {
+            // Non-ZK mode: use standard sumcheck
+            let (stage2_proof, _r_stage2) = BatchedSumcheck::prove(
+                stage2_instances_mut,
+                Some(accumulator.clone()),
+                &mut *transcript.borrow_mut(),
+            );
+            state_manager.proofs.borrow_mut().insert(
+                ProofKeys::Stage2Sumcheck,
+                ProofData::SumcheckProof(stage2_proof),
+            );
+        }
 
         drop_in_background_thread(stage2_instances);
 
@@ -144,16 +167,36 @@ impl JoltDAG {
             .map(|instance| &mut **instance as &mut dyn SumcheckInstance<F>)
             .collect();
 
-        let (stage3_proof, _r_stage3) = BatchedSumcheck::prove(
-            stage3_instances_mut,
-            Some(accumulator.clone()),
-            &mut *transcript.borrow_mut(),
-        );
-
-        state_manager.proofs.borrow_mut().insert(
-            ProofKeys::Stage3Sumcheck,
-            ProofData::SumcheckProof(stage3_proof),
-        );
+        // Dispatch to ZK or non-ZK sumcheck based on config
+        if state_manager.is_zk_enabled() {
+            let (proof, _r_stage3, zk_proof) =
+                crate::jolt::sumcheck::ZKAwareBatchedSumcheck::prove::<F, PCS, ProofTranscript>(
+                    stage3_instances_mut,
+                    Some(accumulator.clone()),
+                    &mut *transcript.borrow_mut(),
+                    true,
+                );
+            state_manager.proofs.borrow_mut().insert(
+                ProofKeys::Stage3Sumcheck,
+                ProofData::SumcheckProof(proof),
+            );
+            if let Some(zk_proof) = zk_proof {
+                state_manager.proofs.borrow_mut().insert(
+                    ProofKeys::ZKStage3Sumcheck,
+                    ProofData::ZKSumcheckProof(zk_proof),
+                );
+            }
+        } else {
+            let (stage3_proof, _r_stage3) = BatchedSumcheck::prove(
+                stage3_instances_mut,
+                Some(accumulator.clone()),
+                &mut *transcript.borrow_mut(),
+            );
+            state_manager.proofs.borrow_mut().insert(
+                ProofKeys::Stage3Sumcheck,
+                ProofData::SumcheckProof(stage3_proof),
+            );
+        }
         drop_in_background_thread(stage3_instances);
         drop(_guard);
         drop(span);
@@ -174,16 +217,36 @@ impl JoltDAG {
             .map(|instance| &mut **instance as &mut dyn SumcheckInstance<F>)
             .collect();
 
-        let (stage4_proof, _r_stage4) = BatchedSumcheck::prove(
-            stage4_instances_mut,
-            Some(accumulator.clone()),
-            &mut *transcript.borrow_mut(),
-        );
-
-        state_manager.proofs.borrow_mut().insert(
-            ProofKeys::Stage4Sumcheck,
-            ProofData::SumcheckProof(stage4_proof),
-        );
+        // Dispatch to ZK or non-ZK sumcheck based on config
+        if state_manager.is_zk_enabled() {
+            let (proof, _r_stage4, zk_proof) =
+                crate::jolt::sumcheck::ZKAwareBatchedSumcheck::prove::<F, PCS, ProofTranscript>(
+                    stage4_instances_mut,
+                    Some(accumulator.clone()),
+                    &mut *transcript.borrow_mut(),
+                    true,
+                );
+            state_manager.proofs.borrow_mut().insert(
+                ProofKeys::Stage4Sumcheck,
+                ProofData::SumcheckProof(proof),
+            );
+            if let Some(zk_proof) = zk_proof {
+                state_manager.proofs.borrow_mut().insert(
+                    ProofKeys::ZKStage4Sumcheck,
+                    ProofData::ZKSumcheckProof(zk_proof),
+                );
+            }
+        } else {
+            let (stage4_proof, _r_stage4) = BatchedSumcheck::prove(
+                stage4_instances_mut,
+                Some(accumulator.clone()),
+                &mut *transcript.borrow_mut(),
+            );
+            state_manager.proofs.borrow_mut().insert(
+                ProofKeys::Stage4Sumcheck,
+                ProofData::SumcheckProof(stage4_proof),
+            );
+        }
 
         drop_in_background_thread(stage4_instances);
         drop(_guard);
@@ -204,16 +267,36 @@ impl JoltDAG {
             .map(|instance| &mut **instance as &mut dyn SumcheckInstance<F>)
             .collect();
 
-        let (stage5_proof, _r_stage5) = BatchedSumcheck::prove(
-            stage5_instances_mut,
-            Some(accumulator.clone()),
-            &mut *transcript.borrow_mut(),
-        );
-
-        state_manager.proofs.borrow_mut().insert(
-            ProofKeys::Stage5Sumcheck,
-            ProofData::SumcheckProof(stage5_proof),
-        );
+        // Dispatch to ZK or non-ZK sumcheck based on config
+        if state_manager.is_zk_enabled() {
+            let (proof, _r_stage5, zk_proof) =
+                crate::jolt::sumcheck::ZKAwareBatchedSumcheck::prove::<F, PCS, ProofTranscript>(
+                    stage5_instances_mut,
+                    Some(accumulator.clone()),
+                    &mut *transcript.borrow_mut(),
+                    true,
+                );
+            state_manager.proofs.borrow_mut().insert(
+                ProofKeys::Stage5Sumcheck,
+                ProofData::SumcheckProof(proof),
+            );
+            if let Some(zk_proof) = zk_proof {
+                state_manager.proofs.borrow_mut().insert(
+                    ProofKeys::ZKStage5Sumcheck,
+                    ProofData::ZKSumcheckProof(zk_proof),
+                );
+            }
+        } else {
+            let (stage5_proof, _r_stage5) = BatchedSumcheck::prove(
+                stage5_instances_mut,
+                Some(accumulator.clone()),
+                &mut *transcript.borrow_mut(),
+            );
+            state_manager.proofs.borrow_mut().insert(
+                ProofKeys::Stage5Sumcheck,
+                ProofData::SumcheckProof(stage5_proof),
+            );
+        }
 
         drop_in_background_thread(stage5_instances);
         drop(_guard);
@@ -295,6 +378,310 @@ impl JoltDAG {
         Ok((proof, debug_info))
     }
 
+    /// Proves the Jolt SNARK with full zero-knowledge using hiding commitments and batch opening proofs.
+    ///
+    /// This function provides stronger ZK guarantees than the hybrid mode by:
+    /// 1. Using hiding commitments for all sumcheck round polynomials
+    /// 2. Generating batch opening proofs for each sumcheck stage
+    ///
+    /// # Requirements
+    /// - The PCS must implement `HidingCommitmentScheme`
+    /// - The state manager must be created with `new_prover_zk`
+    #[allow(clippy::type_complexity)]
+    pub fn prove_full_zk<
+        'a,
+        F: JoltField,
+        ProofTranscript: Transcript,
+        PCS: HidingCommitmentScheme<Field = F>,
+    >(
+        mut state_manager: StateManager<'a, F, ProofTranscript, PCS>,
+    ) -> Result<
+        (
+            JoltSNARK<F, PCS, ProofTranscript>,
+            Option<ProverDebugInfo<F, ProofTranscript, PCS>>,
+        ),
+        anyhow::Error,
+    > {
+        // Ensure ZK mode is enabled
+        assert!(
+            state_manager.is_zk_enabled(),
+            "prove_full_zk requires ZK mode to be enabled"
+        );
+
+        state_manager.fiat_shamir_preamble();
+
+        // Initialize DoryGlobals at the beginning to keep it alive for the entire proof
+        let (preprocessing, trace, _) = state_manager.get_prover_data();
+        let trace_length = trace.len();
+        let padded_trace_length = trace_length.next_power_of_two();
+        #[cfg(test)]
+        sanity_check_mcc(preprocessing.bytecode(), trace, preprocessing.memory_K());
+
+        println!("bytecode size: {}", preprocessing.shared.bytecode.code_size);
+        println!("trace length: {trace_length}");
+
+        let _memory_K = state_manager.memory_K;
+        let _guard = (
+            DoryGlobals::initialize(DTH_ROOT_OF_K, padded_trace_length),
+            AllCommittedPolynomials::initialize(),
+        );
+
+        // Generate and commit to all witness polynomials
+        let opening_proof_hints = Self::generate_and_commit_polynomials(&mut state_manager)?;
+
+        // Append commitments to transcript
+        let commitments = state_manager.get_commitments();
+        let transcript = state_manager.get_transcript();
+        for commitment in commitments.borrow().iter() {
+            transcript.borrow_mut().append_serializable(commitment);
+        }
+        drop(commitments);
+
+        // Get PCS setup for full ZK proving
+        let (preprocessing, _, _) = state_manager.get_prover_data();
+        let pcs_setup = &preprocessing.generators;
+
+        // Stage 1 (Spartan - no ZK sumcheck needed for stage 1)
+        #[cfg(not(target_arch = "wasm32"))]
+        print_current_memory_usage("Stage 1 baseline");
+        let span = tracing::span!(tracing::Level::INFO, "Stage 1 sumchecks (full ZK)");
+        let _guard = span.enter();
+
+        let (pp, trace, _) = state_manager.get_prover_data();
+        let padded_trace_length = trace.len().next_power_of_two();
+        let mut spartan_dag = SpartanDag::<F>::new::<ProofTranscript>(padded_trace_length);
+        let mut lookups_dag = LookupsDag::default();
+        let mut memory_dag = MemoryDag::default();
+        let mut bytecode_dag = BytecodeDag::default();
+        spartan_dag
+            .stage1_prove(&mut state_manager)
+            .context("Stage 1")?;
+
+        drop(_guard);
+        drop(span);
+
+        // Stage 2: Full ZK with batch opening
+        #[cfg(not(target_arch = "wasm32"))]
+        print_current_memory_usage("Stage 2 baseline (full ZK)");
+        let span = tracing::span!(tracing::Level::INFO, "Stage 2 sumchecks (full ZK)");
+        let _guard = span.enter();
+
+        let mut stage2_instances: Vec<_> = std::iter::empty()
+            .chain(spartan_dag.stage2_prover_instances(&mut state_manager))
+            .chain(memory_dag.stage2_prover_instances(&mut state_manager))
+            .collect();
+
+        let stage2_instances_mut: Vec<&mut dyn SumcheckInstance<F>> = stage2_instances
+            .iter_mut()
+            .map(|instance| &mut **instance as &mut dyn SumcheckInstance<F>)
+            .collect();
+
+        let transcript = state_manager.get_transcript();
+        let accumulator = state_manager.get_prover_accumulator();
+
+        // Full ZK mode: use full ZK sumcheck with batch opening
+        let (proof, _r_stage2, zk_proof, batch_opening_proof) =
+            ZKAwareBatchedSumcheck::prove_full_zk_with_batch_opening::<F, PCS, ProofTranscript>(
+                stage2_instances_mut,
+                Some(accumulator.clone()),
+                pcs_setup,
+                &mut *transcript.borrow_mut(),
+            );
+        state_manager.proofs.borrow_mut().insert(
+            ProofKeys::Stage2Sumcheck,
+            ProofData::SumcheckProof(proof),
+        );
+        state_manager.proofs.borrow_mut().insert(
+            ProofKeys::ZKStage2Sumcheck,
+            ProofData::ZKSumcheckProof(zk_proof),
+        );
+        state_manager.proofs.borrow_mut().insert(
+            ProofKeys::ZKStage2BatchOpening,
+            ProofData::ZKBatchOpeningProof(batch_opening_proof),
+        );
+
+        drop_in_background_thread(stage2_instances);
+        drop(_guard);
+        drop(span);
+
+        // Stage 3: Full ZK with batch opening
+        #[cfg(not(target_arch = "wasm32"))]
+        print_current_memory_usage("Stage 3 baseline (full ZK)");
+        let span = tracing::span!(tracing::Level::INFO, "Stage 3 sumchecks (full ZK)");
+        let _guard = span.enter();
+
+        let mut stage3_instances: Vec<_> = std::iter::empty()
+            .chain(spartan_dag.stage3_prover_instances(&mut state_manager))
+            .chain(lookups_dag.stage3_prover_instances(&mut state_manager))
+            .collect();
+
+        let stage3_instances_mut: Vec<&mut dyn SumcheckInstance<F>> = stage3_instances
+            .iter_mut()
+            .map(|instance| &mut **instance as &mut dyn SumcheckInstance<F>)
+            .collect();
+
+        let (proof, _r_stage3, zk_proof, batch_opening_proof) =
+            ZKAwareBatchedSumcheck::prove_full_zk_with_batch_opening::<F, PCS, ProofTranscript>(
+                stage3_instances_mut,
+                Some(accumulator.clone()),
+                pcs_setup,
+                &mut *transcript.borrow_mut(),
+            );
+        state_manager.proofs.borrow_mut().insert(
+            ProofKeys::Stage3Sumcheck,
+            ProofData::SumcheckProof(proof),
+        );
+        state_manager.proofs.borrow_mut().insert(
+            ProofKeys::ZKStage3Sumcheck,
+            ProofData::ZKSumcheckProof(zk_proof),
+        );
+        state_manager.proofs.borrow_mut().insert(
+            ProofKeys::ZKStage3BatchOpening,
+            ProofData::ZKBatchOpeningProof(batch_opening_proof),
+        );
+
+        drop_in_background_thread(stage3_instances);
+        drop(_guard);
+        drop(span);
+
+        // Stage 4: Full ZK with batch opening
+        #[cfg(not(target_arch = "wasm32"))]
+        print_current_memory_usage("Stage 4 baseline (full ZK)");
+        let span = tracing::span!(tracing::Level::INFO, "Stage 4 sumchecks (full ZK)");
+        let _guard = span.enter();
+
+        let mut stage4_instances: Vec<_> = std::iter::empty()
+            .chain(lookups_dag.stage4_prover_instances(&mut state_manager))
+            .chain(memory_dag.stage4_prover_instances(&mut state_manager))
+            .collect();
+
+        let stage4_instances_mut: Vec<&mut dyn SumcheckInstance<F>> = stage4_instances
+            .iter_mut()
+            .map(|instance| &mut **instance as &mut dyn SumcheckInstance<F>)
+            .collect();
+
+        let (proof, _r_stage4, zk_proof, batch_opening_proof) =
+            ZKAwareBatchedSumcheck::prove_full_zk_with_batch_opening::<F, PCS, ProofTranscript>(
+                stage4_instances_mut,
+                Some(accumulator.clone()),
+                pcs_setup,
+                &mut *transcript.borrow_mut(),
+            );
+        state_manager.proofs.borrow_mut().insert(
+            ProofKeys::Stage4Sumcheck,
+            ProofData::SumcheckProof(proof),
+        );
+        state_manager.proofs.borrow_mut().insert(
+            ProofKeys::ZKStage4Sumcheck,
+            ProofData::ZKSumcheckProof(zk_proof),
+        );
+        state_manager.proofs.borrow_mut().insert(
+            ProofKeys::ZKStage4BatchOpening,
+            ProofData::ZKBatchOpeningProof(batch_opening_proof),
+        );
+
+        drop_in_background_thread(stage4_instances);
+        drop(_guard);
+        drop(span);
+
+        // Stage 5: Full ZK with batch opening
+        #[cfg(not(target_arch = "wasm32"))]
+        print_current_memory_usage("Stage 5 baseline (full ZK)");
+        let span = tracing::span!(tracing::Level::INFO, "Stage 5 sumchecks (full ZK)");
+        let _guard = span.enter();
+
+        let mut stage5_instances: Vec<_> = std::iter::empty()
+            .chain(memory_dag.stage5_prover_instances(&mut state_manager))
+            .collect();
+
+        let stage5_instances_mut: Vec<&mut dyn SumcheckInstance<F>> = stage5_instances
+            .iter_mut()
+            .map(|instance| &mut **instance as &mut dyn SumcheckInstance<F>)
+            .collect();
+
+        let (proof, _r_stage5, zk_proof, batch_opening_proof) =
+            ZKAwareBatchedSumcheck::prove_full_zk_with_batch_opening::<F, PCS, ProofTranscript>(
+                stage5_instances_mut,
+                Some(accumulator.clone()),
+                pcs_setup,
+                &mut *transcript.borrow_mut(),
+            );
+        state_manager.proofs.borrow_mut().insert(
+            ProofKeys::Stage5Sumcheck,
+            ProofData::SumcheckProof(proof),
+        );
+        state_manager.proofs.borrow_mut().insert(
+            ProofKeys::ZKStage5Sumcheck,
+            ProofData::ZKSumcheckProof(zk_proof),
+        );
+        state_manager.proofs.borrow_mut().insert(
+            ProofKeys::ZKStage5BatchOpening,
+            ProofData::ZKBatchOpeningProof(batch_opening_proof),
+        );
+
+        drop_in_background_thread(stage5_instances);
+        drop(_guard);
+        drop(span);
+
+        // Stage 6: Bytecode (same as non-ZK)
+        bytecode_dag.stage6_prover_instances(&mut state_manager);
+
+        if pp.is_precompiles_enabled() {
+            let precompile_proof = PrecompileSNARK::prove(&mut state_manager);
+            state_manager.proofs.borrow_mut().insert(
+                ProofKeys::PrecompileProof,
+                ProofData::PrecompileProof(precompile_proof),
+            );
+        }
+
+        if pp.is_fp_lookups_enabled() {
+            let fp_lookup_proof = FpLookupProof::prove(&mut state_manager);
+            state_manager.proofs.borrow_mut().insert(
+                ProofKeys::FpLookupProof,
+                ProofData::FpLookupProof(fp_lookup_proof),
+            );
+        }
+
+        // Batch-prove all openings
+        let (_, trace, _) = state_manager.get_prover_data();
+
+        let all_polys: Vec<CommittedPolynomial> =
+            AllCommittedPolynomials::iter().copied().collect();
+        let polynomials_map = CommittedPolynomial::generate_witness_batch(&all_polys, trace);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        print_current_memory_usage("Opening proof baseline (full ZK)");
+
+        let opening_proof = accumulator.borrow_mut().reduce_and_prove(
+            polynomials_map,
+            opening_proof_hints,
+            &preprocessing.generators,
+            &mut *transcript.borrow_mut(),
+        );
+
+        state_manager.proofs.borrow_mut().insert(
+            ProofKeys::ReducedOpeningProof,
+            ProofData::ReducedOpeningProof(opening_proof),
+        );
+
+        #[cfg(test)]
+        let debug_info = {
+            let transcript = state_manager.transcript.take();
+            let opening_accumulator = state_manager.get_prover_accumulator().borrow().clone();
+            Some(ProverDebugInfo {
+                transcript,
+                opening_accumulator,
+                prover_setup: preprocessing.generators.clone(),
+            })
+        };
+        #[cfg(not(test))]
+        let debug_info = None;
+
+        let proof = JoltSNARK::from_prover_state_manager(state_manager);
+
+        Ok((proof, debug_info))
+    }
+
     pub fn verify<
         'a,
         F: JoltField,
@@ -345,13 +732,27 @@ impl JoltDAG {
             _ => panic!("Invalid proof type for stage 2"),
         };
 
+        // Get ZK proof if ZK mode is enabled
+        let stage2_zk_proof = if state_manager.is_zk_enabled() {
+            proofs.get(&ProofKeys::ZKStage2Sumcheck).and_then(|p| {
+                match p {
+                    ProofData::ZKSumcheckProof(zk_proof) => Some(zk_proof),
+                    _ => None,
+                }
+            })
+        } else {
+            None
+        };
+
         let transcript = state_manager.get_transcript();
         let opening_accumulator = state_manager.get_verifier_accumulator();
-        let _r_stage2 = BatchedSumcheck::verify(
+        let _r_stage2 = ZKAwareBatchedSumcheck::verify::<F, PCS, ProofTranscript>(
             stage2_proof,
+            stage2_zk_proof,
             stage2_instances_ref,
             Some(opening_accumulator.clone()),
             &mut *transcript.borrow_mut(),
+            state_manager.is_zk_enabled(),
         )
         .context("Stage 2")?;
 
@@ -376,11 +777,25 @@ impl JoltDAG {
             _ => panic!("Invalid proof type for stage 3"),
         };
 
-        let _r_stage3 = BatchedSumcheck::verify(
+        // Get ZK proof if ZK mode is enabled
+        let stage3_zk_proof = if state_manager.is_zk_enabled() {
+            proofs.get(&ProofKeys::ZKStage3Sumcheck).and_then(|p| {
+                match p {
+                    ProofData::ZKSumcheckProof(zk_proof) => Some(zk_proof),
+                    _ => None,
+                }
+            })
+        } else {
+            None
+        };
+
+        let _r_stage3 = ZKAwareBatchedSumcheck::verify::<F, PCS, ProofTranscript>(
             stage3_proof,
+            stage3_zk_proof,
             stage3_instances_ref,
             Some(opening_accumulator.clone()),
             &mut *transcript.borrow_mut(),
+            state_manager.is_zk_enabled(),
         )
         .context("Stage 3")?;
 
@@ -405,11 +820,25 @@ impl JoltDAG {
             _ => panic!("Invalid proof type for stage 4"),
         };
 
-        let _r_stage4 = BatchedSumcheck::verify(
+        // Get ZK proof if ZK mode is enabled
+        let stage4_zk_proof = if state_manager.is_zk_enabled() {
+            proofs.get(&ProofKeys::ZKStage4Sumcheck).and_then(|p| {
+                match p {
+                    ProofData::ZKSumcheckProof(zk_proof) => Some(zk_proof),
+                    _ => None,
+                }
+            })
+        } else {
+            None
+        };
+
+        let _r_stage4 = ZKAwareBatchedSumcheck::verify::<F, PCS, ProofTranscript>(
             stage4_proof,
+            stage4_zk_proof,
             stage4_instances_ref,
             Some(opening_accumulator.clone()),
             &mut *transcript.borrow_mut(),
+            state_manager.is_zk_enabled(),
         )
         .context("Stage 4")?;
         drop(proofs);
@@ -430,11 +859,26 @@ impl JoltDAG {
             ProofData::SumcheckProof(proof) => proof,
             _ => panic!("Invalid proof type for stage 5"),
         };
-        let _r_stage5 = BatchedSumcheck::verify(
+
+        // Get ZK proof if ZK mode is enabled
+        let stage5_zk_proof = if state_manager.is_zk_enabled() {
+            proofs.get(&ProofKeys::ZKStage5Sumcheck).and_then(|p| {
+                match p {
+                    ProofData::ZKSumcheckProof(zk_proof) => Some(zk_proof),
+                    _ => None,
+                }
+            })
+        } else {
+            None
+        };
+
+        let _r_stage5 = ZKAwareBatchedSumcheck::verify::<F, PCS, ProofTranscript>(
             stage5_proof,
+            stage5_zk_proof,
             stage5_instances_ref,
             Some(opening_accumulator.clone()),
             &mut *transcript.borrow_mut(),
+            state_manager.is_zk_enabled(),
         )
         .context("Stage 5")?;
         drop(proofs);
@@ -509,6 +953,304 @@ impl JoltDAG {
                 &mut *transcript.borrow_mut(),
             )
             .context("Stage 5")?;
+
+        Ok(())
+    }
+
+    /// Verifies the Jolt SNARK with full zero-knowledge using hiding commitments and batch opening proofs.
+    ///
+    /// This function verifies proofs generated by `prove_full_zk` by:
+    /// 1. Verifying sumcheck relations using commitments in the transcript
+    /// 2. Verifying the batch opening proofs for each sumcheck stage
+    ///
+    /// # Requirements
+    /// - The PCS must implement `HidingCommitmentScheme`
+    /// - The state manager must have ZK mode enabled
+    pub fn verify_full_zk<
+        'a,
+        F: JoltField,
+        ProofTranscript: Transcript,
+        PCS: HidingCommitmentScheme<Field = F>,
+    >(
+        mut state_manager: StateManager<'a, F, ProofTranscript, PCS>,
+    ) -> Result<(), anyhow::Error> {
+        // Ensure ZK mode is enabled
+        assert!(
+            state_manager.is_zk_enabled(),
+            "verify_full_zk requires ZK mode to be enabled"
+        );
+
+        state_manager.fiat_shamir_preamble();
+
+        let _memory_K = state_manager.memory_K;
+        let _guard = AllCommittedPolynomials::initialize();
+
+        // Append commitments to transcript
+        let commitments = state_manager.get_commitments();
+        let transcript = state_manager.get_transcript();
+        for commitment in commitments.borrow().iter() {
+            transcript.borrow_mut().append_serializable(commitment);
+        }
+
+        // Stage 1
+        let (preprocessing, _, trace_length) = state_manager.get_verifier_data();
+        let padded_trace_length = trace_length.next_power_of_two();
+        let mut spartan_dag = SpartanDag::<F>::new::<ProofTranscript>(padded_trace_length);
+        let mut lookups_dag = LookupsDag::default();
+        let mut memory_dag = MemoryDag::default();
+        let mut bytecode_dag = BytecodeDag::default();
+        spartan_dag
+            .stage1_verify(&mut state_manager)
+            .context("Stage 1")?;
+
+        // Stage 2: Full ZK verification with batch opening
+        let stage2_instances: Vec<_> = std::iter::empty()
+            .chain(spartan_dag.stage2_verifier_instances(&mut state_manager))
+            .chain(memory_dag.stage2_verifier_instances(&mut state_manager))
+            .collect();
+        let stage2_instances_ref: Vec<&dyn SumcheckInstance<F>> = stage2_instances
+            .iter()
+            .map(|instance| &**instance as &dyn SumcheckInstance<F>)
+            .collect();
+
+        let proofs = state_manager.proofs.borrow();
+        let stage2_proof_data = proofs
+            .get(&ProofKeys::Stage2Sumcheck)
+            .expect("Stage 2 sumcheck proof not found");
+        let stage2_proof = match stage2_proof_data {
+            ProofData::SumcheckProof(proof) => proof,
+            _ => panic!("Invalid proof type for stage 2"),
+        };
+        let stage2_zk_proof = proofs
+            .get(&ProofKeys::ZKStage2Sumcheck)
+            .expect("Stage 2 ZK proof not found (full ZK mode)");
+        let stage2_zk_proof = match stage2_zk_proof {
+            ProofData::ZKSumcheckProof(proof) => proof,
+            _ => panic!("Invalid proof type for stage 2 ZK"),
+        };
+        let stage2_batch_opening = proofs
+            .get(&ProofKeys::ZKStage2BatchOpening)
+            .expect("Stage 2 batch opening proof not found (full ZK mode)");
+        let stage2_batch_opening = match stage2_batch_opening {
+            ProofData::ZKBatchOpeningProof(proof) => proof,
+            _ => panic!("Invalid proof type for stage 2 batch opening"),
+        };
+
+        let opening_accumulator = state_manager.get_verifier_accumulator();
+        let _r_stage2 = ZKAwareBatchedSumcheck::verify_full_zk_with_batch_opening_instances::<F, PCS, ProofTranscript>(
+            stage2_proof,
+            stage2_zk_proof,
+            stage2_batch_opening,
+            stage2_instances_ref,
+            Some(opening_accumulator.clone()),
+            &preprocessing.generators,
+            &mut *transcript.borrow_mut(),
+        )
+        .context("Stage 2 (full ZK with batch opening)")?;
+
+        drop(proofs);
+
+        // Stage 3: Full ZK verification with batch opening
+        let stage3_instances: Vec<_> = std::iter::empty()
+            .chain(spartan_dag.stage3_verifier_instances(&mut state_manager))
+            .chain(lookups_dag.stage3_verifier_instances(&mut state_manager))
+            .collect();
+        let stage3_instances_ref: Vec<&dyn SumcheckInstance<F>> = stage3_instances
+            .iter()
+            .map(|instance| &**instance as &dyn SumcheckInstance<F>)
+            .collect();
+
+        let proofs = state_manager.proofs.borrow();
+        let stage3_proof_data = proofs
+            .get(&ProofKeys::Stage3Sumcheck)
+            .expect("Stage 3 sumcheck proof not found");
+        let stage3_proof = match stage3_proof_data {
+            ProofData::SumcheckProof(proof) => proof,
+            _ => panic!("Invalid proof type for stage 3"),
+        };
+        let stage3_zk_proof = proofs
+            .get(&ProofKeys::ZKStage3Sumcheck)
+            .expect("Stage 3 ZK proof not found (full ZK mode)");
+        let stage3_zk_proof = match stage3_zk_proof {
+            ProofData::ZKSumcheckProof(proof) => proof,
+            _ => panic!("Invalid proof type for stage 3 ZK"),
+        };
+        let stage3_batch_opening = proofs
+            .get(&ProofKeys::ZKStage3BatchOpening)
+            .expect("Stage 3 batch opening proof not found (full ZK mode)");
+        let stage3_batch_opening = match stage3_batch_opening {
+            ProofData::ZKBatchOpeningProof(proof) => proof,
+            _ => panic!("Invalid proof type for stage 3 batch opening"),
+        };
+
+        let _r_stage3 = ZKAwareBatchedSumcheck::verify_full_zk_with_batch_opening_instances::<F, PCS, ProofTranscript>(
+            stage3_proof,
+            stage3_zk_proof,
+            stage3_batch_opening,
+            stage3_instances_ref,
+            Some(opening_accumulator.clone()),
+            &preprocessing.generators,
+            &mut *transcript.borrow_mut(),
+        )
+        .context("Stage 3 (full ZK with batch opening)")?;
+
+        drop(proofs);
+
+        // Stage 4: Full ZK verification with batch opening
+        let stage4_instances: Vec<_> = std::iter::empty()
+            .chain(lookups_dag.stage4_verifier_instances(&mut state_manager))
+            .chain(memory_dag.stage4_verifier_instances(&mut state_manager))
+            .collect();
+        let stage4_instances_ref: Vec<&dyn SumcheckInstance<F>> = stage4_instances
+            .iter()
+            .map(|instance| &**instance as &dyn SumcheckInstance<F>)
+            .collect();
+
+        let proofs = state_manager.proofs.borrow();
+        let stage4_proof_data = proofs
+            .get(&ProofKeys::Stage4Sumcheck)
+            .expect("Stage 4 sumcheck proof not found");
+        let stage4_proof = match stage4_proof_data {
+            ProofData::SumcheckProof(proof) => proof,
+            _ => panic!("Invalid proof type for stage 4"),
+        };
+        let stage4_zk_proof = proofs
+            .get(&ProofKeys::ZKStage4Sumcheck)
+            .expect("Stage 4 ZK proof not found (full ZK mode)");
+        let stage4_zk_proof = match stage4_zk_proof {
+            ProofData::ZKSumcheckProof(proof) => proof,
+            _ => panic!("Invalid proof type for stage 4 ZK"),
+        };
+        let stage4_batch_opening = proofs
+            .get(&ProofKeys::ZKStage4BatchOpening)
+            .expect("Stage 4 batch opening proof not found (full ZK mode)");
+        let stage4_batch_opening = match stage4_batch_opening {
+            ProofData::ZKBatchOpeningProof(proof) => proof,
+            _ => panic!("Invalid proof type for stage 4 batch opening"),
+        };
+
+        let _r_stage4 = ZKAwareBatchedSumcheck::verify_full_zk_with_batch_opening_instances::<F, PCS, ProofTranscript>(
+            stage4_proof,
+            stage4_zk_proof,
+            stage4_batch_opening,
+            stage4_instances_ref,
+            Some(opening_accumulator.clone()),
+            &preprocessing.generators,
+            &mut *transcript.borrow_mut(),
+        )
+        .context("Stage 4 (full ZK with batch opening)")?;
+
+        drop(proofs);
+
+        // Stage 5: Full ZK verification with batch opening
+        let stage5_instances: Vec<_> = std::iter::empty()
+            .chain(memory_dag.stage5_verifier_instances(&mut state_manager))
+            .collect();
+        let stage5_instances_ref: Vec<&dyn SumcheckInstance<F>> = stage5_instances
+            .iter()
+            .map(|instance| &**instance as &dyn SumcheckInstance<F>)
+            .collect();
+
+        let proofs = state_manager.proofs.borrow();
+        let stage5_proof_data = proofs
+            .get(&ProofKeys::Stage5Sumcheck)
+            .expect("Stage 5 sumcheck proof not found");
+        let stage5_proof = match stage5_proof_data {
+            ProofData::SumcheckProof(proof) => proof,
+            _ => panic!("Invalid proof type for stage 5"),
+        };
+        let stage5_zk_proof = proofs
+            .get(&ProofKeys::ZKStage5Sumcheck)
+            .expect("Stage 5 ZK proof not found (full ZK mode)");
+        let stage5_zk_proof = match stage5_zk_proof {
+            ProofData::ZKSumcheckProof(proof) => proof,
+            _ => panic!("Invalid proof type for stage 5 ZK"),
+        };
+        let stage5_batch_opening = proofs
+            .get(&ProofKeys::ZKStage5BatchOpening)
+            .expect("Stage 5 batch opening proof not found (full ZK mode)");
+        let stage5_batch_opening = match stage5_batch_opening {
+            ProofData::ZKBatchOpeningProof(proof) => proof,
+            _ => panic!("Invalid proof type for stage 5 batch opening"),
+        };
+
+        let _r_stage5 = ZKAwareBatchedSumcheck::verify_full_zk_with_batch_opening_instances::<F, PCS, ProofTranscript>(
+            stage5_proof,
+            stage5_zk_proof,
+            stage5_batch_opening,
+            stage5_instances_ref,
+            Some(opening_accumulator.clone()),
+            &preprocessing.generators,
+            &mut *transcript.borrow_mut(),
+        )
+        .context("Stage 5 (full ZK with batch opening)")?;
+
+        drop(proofs);
+
+        // Stage 6: Bytecode (same as non-ZK)
+        bytecode_dag.stage6_verifier_instances(&mut state_manager);
+
+        if preprocessing.is_precompiles_enabled() {
+            let precompile_proof = {
+                let proofs = state_manager.proofs.borrow();
+                let precompile_proof_data = proofs
+                    .get(&ProofKeys::PrecompileProof)
+                    .expect("Precompile proof not found");
+                match precompile_proof_data {
+                    ProofData::PrecompileProof(proof) => proof.clone(),
+                    _ => panic!("Invalid proof type for precompile"),
+                }
+            };
+
+            precompile_proof
+                .verify(&mut state_manager)
+                .context("Precompile")?;
+        }
+
+        if preprocessing.is_fp_lookups_enabled() {
+            let fp_lookup_proof = {
+                let proofs = state_manager.proofs.borrow();
+                let fp_lookup_proof_data = proofs
+                    .get(&ProofKeys::FpLookupProof)
+                    .expect("FP Lookup proof not found");
+                match fp_lookup_proof_data {
+                    ProofData::FpLookupProof(proof) => proof.clone(),
+                    _ => panic!("Invalid proof type for FP Lookup"),
+                }
+            };
+
+            fp_lookup_proof
+                .verify(&mut state_manager)
+                .context("FP Lookup")?;
+        }
+
+        // Batch-prove all openings
+        let proofs = state_manager.proofs.borrow();
+        let batched_opening_proof = proofs
+            .get(&ProofKeys::ReducedOpeningProof)
+            .expect("Reduced opening proof not found");
+        let batched_opening_proof = match batched_opening_proof {
+            ProofData::ReducedOpeningProof(proof) => proof,
+            _ => panic!("Invalid proof type for reduced opening"),
+        };
+
+        let mut commitments_map = HashMap::new();
+        for polynomial in AllCommittedPolynomials::iter() {
+            commitments_map.insert(
+                *polynomial,
+                commitments.borrow()[polynomial.to_index()].clone(),
+            );
+        }
+        let accumulator = state_manager.get_verifier_accumulator();
+        accumulator
+            .borrow_mut()
+            .reduce_and_verify(
+                &preprocessing.generators,
+                &mut commitments_map,
+                batched_opening_proof,
+                &mut *transcript.borrow_mut(),
+            )
+            .context("Reduced opening (full ZK)")?;
 
         Ok(())
     }

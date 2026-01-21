@@ -5,13 +5,16 @@
 
 use rand::rngs::StdRng;
 
-use crate::{node::ComputationNode, ops::*, tensor::Tensor};
+use crate::{node::ComputationNode, ops::*, tensor::Tensor, utils::f32::F32};
 use std::collections::{BTreeMap, HashMap};
 
 use super::{ComputationGraph, Model};
 
 /// A wire represents a connection to a node's output in the computation graph.
 pub type Wire = usize;
+
+// number of bits dedicated to the fractional part in fixed-point representation
+const SCALE: u32 = 7;
 
 /// Builder for constructing `Model` instances programmatically.
 ///
@@ -116,6 +119,20 @@ impl ModelBuilder {
         let id = self.alloc();
         let output_dims = self.nodes[&a].output_dims.clone();
         let node = ComputationNode::new(id, Operator::Div(Div), vec![a, b], output_dims);
+        self.insert_node(node)
+    }
+
+    pub fn rsqrt(&mut self, input: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&input].output_dims.clone();
+        let node = ComputationNode::new(
+            id,
+            Operator::Rsqrt(Rsqrt {
+                scale: F32(SCALE as f32),
+            }),
+            vec![input],
+            output_dims,
+        );
         self.insert_node(node)
     }
 
@@ -361,6 +378,14 @@ pub fn div_model(T: usize) -> Model {
     let i = b.input(vec![T]);
     let c = b.constant(Tensor::construct(vec![128; T], vec![T]));
     let res = b.div(i, c);
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn rsqrt_model(T: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let input = b.input(vec![T]);
+    let res = b.rsqrt(input);
     b.mark_output(res);
     b.build()
 }

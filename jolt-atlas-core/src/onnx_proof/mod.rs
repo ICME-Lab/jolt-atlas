@@ -271,7 +271,7 @@ mod tests {
     use ark_bn254::Fr;
     use atlas_onnx_tracer::{model::Model, tensor::Tensor};
     use joltworks::{poly::commitment::dory::DoryCommitmentScheme, transcripts::Blake2bTranscript};
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{rngs::StdRng, Rng, SeedableRng};
     use serde_json::Value;
     use std::{collections::HashMap, fs::File, io::Read, time::Instant};
 
@@ -383,6 +383,35 @@ mod tests {
         let pp = AtlasSharedPreprocessing::preprocess(model);
         let (proof, io) =
             ONNXProof::<Fr, Blake2bTranscript, DoryCommitmentScheme>::prove(&pp, &input);
+
+        // verify proof
+        proof.verify(&pp, &io).unwrap();
+    }
+
+    #[test]
+    fn test_rsqrt() {
+        let working_dir = "../atlas-onnx-tracer/models/rsqrt/";
+
+        // Create test input vector of size 4
+        let mut rng = StdRng::seed_from_u64(0x100);
+        let input_vec = (0..4)
+            .map(|_| {
+                // Generate random positive non-zero values
+                rng.gen_range(1..i32::MAX)
+            })
+            .collect::<Vec<i32>>();
+
+        let input = Tensor::construct(input_vec, vec![4]);
+
+        // Load the model
+        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
+        println!("model: {}", model.pretty_print());
+
+        let pp = AtlasSharedPreprocessing::preprocess(model);
+        let timing = Instant::now();
+        let (proof, io) =
+            ONNXProof::<Fr, Blake2bTranscript, DoryCommitmentScheme>::prove(&pp, &input);
+        println!("Proof generation took {:?}", timing.elapsed());
 
         // verify proof
         proof.verify(&pp, &io).unwrap();

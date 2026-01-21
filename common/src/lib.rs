@@ -12,6 +12,10 @@ pub enum CommittedPolynomial {
     NodeOutputRaD(usize, usize),
     DivNodeQuotient(usize),
     DivNodeRemainder(usize),
+    RsqrtNodeInv(usize),
+    RsqrtNodeRsqrt(usize),
+    RsqrtNodeRi(usize),
+    RsqrtNodeRs(usize),
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]

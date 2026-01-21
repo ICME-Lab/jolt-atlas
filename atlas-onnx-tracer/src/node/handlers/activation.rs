@@ -94,10 +94,12 @@ fn handle_softmax(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
 /// Rsqrt: Reciprocal square root.
 fn handle_rsqrt(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let scale = scale_to_multiplier(hctx.run_args.scale).into();
+    let scale = hctx.run_args.scale as f32;
 
     HandlerBuilder::new(hctx)
         .with_broadcast()
-        .simple_op(Operator::Rsqrt(Rsqrt { scale }))
+        .simple_op(Operator::Rsqrt(Rsqrt {
+            scale: scale.into(),
+        }))
         .build()
 }

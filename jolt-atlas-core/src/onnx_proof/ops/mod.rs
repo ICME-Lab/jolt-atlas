@@ -11,6 +11,7 @@ pub mod moveaxis;
 pub mod mul;
 pub mod relu;
 pub mod reshape;
+pub mod rsqrt;
 pub mod softmax;
 pub mod square;
 pub mod sub;
@@ -28,6 +29,7 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 pub use mul::{MulParams, MulProver, MulVerifier};
+pub use rsqrt::{RsqrtParams, RsqrtProver, RsqrtVerifier};
 pub use square::{SquareParams, SquareProver, SquareVerifier};
 pub use sub::{SubParams, SubProver, SubVerifier};
 
@@ -70,20 +72,21 @@ impl OperatorProver {
     {
         match &node.operator {
             Operator::Add(inner) => inner.prove(node, prover),
-            Operator::Sub(inner) => inner.prove(node, prover),
-            Operator::Mul(inner) => inner.prove(node, prover),
-            Operator::Div(inner) => inner.prove(node, prover),
-            Operator::Square(inner) => inner.prove(node, prover),
-            Operator::Cube(inner) => inner.prove(node, prover),
-            Operator::Iff(inner) => inner.prove(node, prover),
             Operator::Broadcast(inner) => inner.prove(node, prover),
-            Operator::Reshape(inner) => inner.prove(node, prover),
-            Operator::MoveAxis(inner) => inner.prove(node, prover),
-            Operator::Einsum(inner) => inner.prove(node, prover),
-            Operator::Input(inner) => inner.prove(node, prover),
-            Operator::ReLU(inner) => inner.prove(node, prover),
             Operator::Constant(inner) => inner.prove(node, prover),
+            Operator::Cube(inner) => inner.prove(node, prover),
+            Operator::Div(inner) => inner.prove(node, prover),
+            Operator::Einsum(inner) => inner.prove(node, prover),
+            Operator::Iff(inner) => inner.prove(node, prover),
+            Operator::Input(inner) => inner.prove(node, prover),
+            Operator::MoveAxis(inner) => inner.prove(node, prover),
+            Operator::Mul(inner) => inner.prove(node, prover),
+            Operator::ReLU(inner) => inner.prove(node, prover),
+            Operator::Reshape(inner) => inner.prove(node, prover),
+            Operator::Rsqrt(inner) => inner.prove(node, prover),
+            Operator::Square(inner) => inner.prove(node, prover),
             Operator::Softmax(inner) => inner.prove(node, prover),
+            Operator::Sub(inner) => inner.prove(node, prover),
             _ => {
                 println!("Unhandled operator in graph: {node:#?}");
                 vec![]
@@ -105,20 +108,21 @@ impl OperatorVerifier {
     {
         match &node.operator {
             Operator::Add(inner) => inner.verify(node, verifier),
-            Operator::Sub(inner) => inner.verify(node, verifier),
-            Operator::Mul(inner) => inner.verify(node, verifier),
-            Operator::Div(inner) => inner.verify(node, verifier),
-            Operator::Square(inner) => inner.verify(node, verifier),
-            Operator::Cube(inner) => inner.verify(node, verifier),
-            Operator::Iff(inner) => inner.verify(node, verifier),
             Operator::Broadcast(inner) => inner.verify(node, verifier),
-            Operator::Reshape(inner) => inner.verify(node, verifier),
-            Operator::MoveAxis(inner) => inner.verify(node, verifier),
-            Operator::Einsum(inner) => inner.verify(node, verifier),
-            Operator::Input(inner) => inner.verify(node, verifier),
             Operator::Constant(inner) => inner.verify(node, verifier),
+            Operator::Cube(inner) => inner.verify(node, verifier),
+            Operator::Div(inner) => inner.verify(node, verifier),
+            Operator::Einsum(inner) => inner.verify(node, verifier),
+            Operator::Iff(inner) => inner.verify(node, verifier),
+            Operator::Input(inner) => inner.verify(node, verifier),
+            Operator::MoveAxis(inner) => inner.verify(node, verifier),
+            Operator::Mul(inner) => inner.verify(node, verifier),
+            Operator::Reshape(inner) => inner.verify(node, verifier),
             Operator::ReLU(inner) => inner.verify(node, verifier),
+            Operator::Rsqrt(inner) => inner.verify(node, verifier),
+            Operator::Square(inner) => inner.verify(node, verifier),
             Operator::Softmax(inner) => inner.verify(node, verifier),
+            Operator::Sub(inner) => inner.verify(node, verifier),
             _ => {
                 tracing::warn!("Unhandled operator in graph: {node:#?}");
                 Ok(())

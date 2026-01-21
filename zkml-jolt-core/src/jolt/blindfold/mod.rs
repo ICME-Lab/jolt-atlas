@@ -16,7 +16,7 @@
 //! - `nifs`: Non-Interactive Folding Scheme for combining instances
 //! - `verifier_circuit`: Succinct verifier R1CS circuit encoding sumcheck checks
 //! - `random_instance`: Generator for random satisfying instances
-//! - `hiding_commitment`: Hiding (zero-knowledge) commitment scheme
+//! - `hiding_commitment`: NIFS helper functions for commitment folding
 //!
 //! # References
 //!
@@ -33,10 +33,7 @@ pub mod verifier_circuit;
 #[cfg(test)]
 mod tests;
 
-pub use hiding_commitment::{
-    HidingWrapper, MockHidingCommitment, MockHidingScheme, ScalarBlindingFactor,
-    WrapperBlindingFactor,
-};
+pub use hiding_commitment::ScalarBlindingFactor;
 pub use nifs::{HidingNIFS, HidingNIFSProof, InstanceBlindingFactors, NIFSProof, NIFS};
 pub use random_instance::RandomInstanceGenerator;
 pub use relaxed_r1cs::{RelaxedR1CSInstance, RelaxedR1CSWitness};

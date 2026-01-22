@@ -1716,14 +1716,16 @@ pub fn argmax_axes<T: TensorType + Add<Output = T> + std::cmp::Ord + From<i32> +
     dim: usize,
 ) -> Result<Tensor<T>, TensorError> {
     let argmax_fn = |a: &Tensor<T>| -> Result<Tensor<T>, TensorError> {
-        Ok(vec![a
+        Ok(vec![
+            a
         .clone()
         .into_iter()
         .enumerate()
         // we value the last index in the case of a tie
         .max_by_key(|(idx, value)| (value.clone(), *idx as i32))
         .map(|(idx, _)| T::from(idx as i32))
-        .unwrap()]
+        .unwrap(),
+        ]
         .into_iter()
         .into())
     };
@@ -1757,14 +1759,16 @@ pub fn argmin_axes<T: TensorType + Add<Output = T> + std::cmp::Ord + From<i32> +
     dim: usize,
 ) -> Result<Tensor<T>, TensorError> {
     let argmax_fn = |a: &Tensor<T>| -> Result<Tensor<T>, TensorError> {
-        Ok(vec![a
+        Ok(vec![
+            a
         .clone()
         .into_iter()
         .enumerate()
         // we value the first index in the case of a tie
         .min_by_key(|(idx, value)| (value.clone(), (*idx as i32)))
         .map(|(idx, _)| T::from(idx as i32))
-        .unwrap()]
+        .unwrap(),
+        ]
         .into_iter()
         .into())
     };

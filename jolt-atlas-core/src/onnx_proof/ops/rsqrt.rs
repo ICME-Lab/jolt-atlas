@@ -30,32 +30,73 @@ use joltworks::{
 const Q: i32 = 128;
 const Q_SQUARE: i32 = Q * Q;
 
-use crate::impl_standard_sumcheck_proof_api;
+impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
+    fn prove(
+        &self,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+        use crate::onnx_proof::ops::{RsqrtParams, RsqrtProver};
+        use joltworks::subprotocols::sumcheck::Sumcheck;
 
-impl_standard_sumcheck_proof_api!(Rsqrt, RsqrtParams, RsqrtProver, RsqrtVerifier);
+        let params = RsqrtParams::new(node.clone(), &prover.accumulator);
+        let mut prover_sumcheck =
+            RsqrtProver::initialize(&prover.trace, &mut prover.transcript, params);
+        let (proof, _) = Sumcheck::prove(
+            &mut prover_sumcheck,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+        vec![(ProofId(node.idx, ProofType::Execution), proof)]
+    }
 
-// Decomposes rsqrt into an inverse and a square root where the inverse `i` of x is such that:
-// 1 = x * i + r_i  where 0 <= r_i < x
-// and the square root `s` of i is such that:
-// i = s * s + r_s  where 0 <= r_s < 2 * s + 1
+    fn verify(
+        &self,
+        node: &ComputationNode,
+        verifier: &mut Verifier<'_, F, T>,
+    ) -> Result<(), ProofVerifyError> {
+        use crate::onnx_proof::ops::RsqrtVerifier;
+        use joltworks::subprotocols::sumcheck::Sumcheck;
+
+        let proof = verifier
+            .proofs
+            .get(&ProofId(node.idx, ProofType::Execution))
+            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        let verifier_sumcheck = RsqrtVerifier::new(
+            node.clone(),
+            &verifier.accumulator,
+            &mut verifier.transcript,
+        );
+        Sumcheck::verify(
+            proof,
+            &verifier_sumcheck,
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        )?;
+        Ok(())
+    }
+}
+
+// Decomposes rsqrt into an inverse and a square root where the inverse `inv` of x is such that:
+// 1 = x * inv + r_i  where 0 <= r_i < x
+// and the square root `sqrt` of inv is such that:
+// inv = sqrt * sqrt + r_s  where 0 <= r_s < 2 * sqrt + 1
 
 // HANDLING SCALE:
 // Any input to the model is quantized by a scale factor of Q
 // Therefore, for an input x_real, the quantized representation is x = x_real * Q
-// The inverse i_real of x_real is given by:
-// i_real = 1 / x_real = Q / x
-// Therefore, the quantized representation of i_real is:
-// i = Q * i_real = Q^2 / x
-
-// Similarly, for the square root s_real of i_real:
-// s_real = sqrt(i_real) = sqrt(Q / x)
-// Therefore, the quantized representation of s_real is:
-// s = Q * s_real = Q * sqrt(Q / x) = sqrt(Q^3 / x) = sqrt(Q * i)
+// The inverse inv_real of x_real is given by:
+// inv_real = 1 / x_real = Q / x
+// Therefore, the quantized representation of inv_real is:
+// inv = Q * inv_real = Q^2 / x
+// Similarly, for the square root sqrt_real of inv_real:
+// sqrt_real = sqrt(inv_real) = sqrt(Q / x)
+// Therefore, the quantized representation of sqrt_real is:
+// sqrt = Q * sqrt_real = Q * sqrt(Q / x) = sqrt(Q^3 / x) = sqrt(Q * inv)
 
 // The two relations that we will batck together in a sumcheck instance are:
-// - 0 = x * i + r_i - Q^2
-// - 0 = Q * i - s * s - r_s
-
+// - 0 = x * inv + r_i - Q^2
+// - 0 = Q * inv - sqrt * sqrt - r_s
 // TODO: Reduce two claims to 1 via 4.5.2 PAZK for Quotient polynomial openings
 // TODO: Commit to polynomials i, s, r_i, r_s
 // TODO: Prove r_i and r_s are well formed via range checks
@@ -118,7 +159,11 @@ pub struct RsqrtProver<F: JoltField> {
 }
 
 impl<F: JoltField> RsqrtProver<F> {
-    pub fn initialize(trace: &Trace, params: RsqrtParams<F>) -> Self {
+    pub fn initialize<T: Transcript>(
+        trace: &Trace,
+        transcript: &mut T,
+        params: RsqrtParams<F>,
+    ) -> Self {
         let eq_r_node_output =
             GruenSplitEqPolynomial::new(&params.r_node_output, BindingOrder::LowToHigh);
         let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
@@ -168,8 +213,7 @@ impl<F: JoltField> RsqrtProver<F> {
             assert_eq!(F::zero(), claim_sqrt)
         }
 
-        // TODO: Use a random challenge from the transcript
-        let gamma = F::one();
+        let gamma = transcript.challenge_scalar();
         Self {
             params,
             eq_r_node_output,
@@ -206,16 +250,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RsqrtProver<F
             let r_i0 = r_i.get_bound_coeff(2 * g);
             let r_i1 = r_i.get_bound_coeff(2 * g + 1);
 
-            let rs0 = rsqrt.get_bound_coeff(2 * g);
-            let rs1 = rsqrt.get_bound_coeff(2 * g + 1);
+            let rsqrt0 = rsqrt.get_bound_coeff(2 * g);
+            let rsqrt1 = rsqrt.get_bound_coeff(2 * g + 1);
             let r_s0 = r_s.get_bound_coeff(2 * g);
             let r_s1 = r_s.get_bound_coeff(2 * g + 1);
 
             let c0 = lo0 * inv0 + r_i0 - F::from_i32(Q_SQUARE);
             let m1 = lo1 * inv1 + r_i1 - F::from_i32(Q_SQUARE);
 
-            let c1 = rs0 * rs0 + r_s0 - F::from_i32(Q) * inv0;
-            let m2 = rs1 * rs1 + r_s1 - F::from_i32(Q) * inv1;
+            let c1 = rsqrt0 * rsqrt0 + r_s0 - F::from_i32(Q) * inv0;
+            let m2 = rsqrt1 * rsqrt1 + r_s1 - F::from_i32(Q) * inv1;
 
             let e = m1 - c0 + self.gamma * (m2 - c1);
             [c0 + self.gamma * c1, e]
@@ -284,12 +328,13 @@ pub struct RsqrtVerifier<F: JoltField> {
 }
 
 impl<F: JoltField> RsqrtVerifier<F> {
-    pub fn new(
+    pub fn new<T: Transcript>(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
     ) -> Self {
         let params = RsqrtParams::new(computation_node, accumulator);
-        let gamma = F::one(); // TODO: Use a random challenge from the transcript
+        let gamma = transcript.challenge_scalar();
         Self { params, gamma }
     }
 }
@@ -457,7 +502,7 @@ mod tests {
 
         let params: RsqrtParams<Fr> =
             RsqrtParams::new(computation_node.clone(), &prover_opening_accumulator);
-        let mut prover_sumcheck = RsqrtProver::initialize(&trace, params);
+        let mut prover_sumcheck = RsqrtProver::initialize(&trace, prover_transcript, params);
 
         let (proof, r_sumcheck) = Sumcheck::prove(
             &mut prover_sumcheck,
@@ -480,8 +525,11 @@ mod tests {
             r_node_output.into(),
         );
 
-        let verifier_sumcheck =
-            RsqrtVerifier::new(computation_node.clone(), &verifier_opening_accumulator);
+        let verifier_sumcheck = RsqrtVerifier::new(
+            computation_node.clone(),
+            &verifier_opening_accumulator,
+            verifier_transcript,
+        );
         let res = Sumcheck::verify(
             &proof,
             &verifier_sumcheck,

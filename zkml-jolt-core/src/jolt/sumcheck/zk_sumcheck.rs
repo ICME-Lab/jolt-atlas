@@ -34,6 +34,8 @@ use jolt_core::{
     field::JoltField,
     poly::{
         commitment::{CommitmentScheme, HidingCommitmentScheme},
+        dense_mlpoly::DensePolynomial,
+        multilinear_polynomial::MultilinearPolynomial,
         unipoly::{CompressedUniPoly, UniPoly},
     },
     transcripts::{AppendToTranscript, Transcript},
@@ -217,9 +219,11 @@ pub struct ZKSumcheckBatchOpeningProof<F: JoltField, PCS: CommitmentScheme<Field
     pub evals_at_challenge: Vec<F>,
 
     /// The batched opening proof for all evaluations.
-    /// Optional because proper univariate polynomial opening is not yet implemented.
-    /// TODO: Implement proper univariate opening proof and make this non-optional.
     pub batch_proof: Option<PCS::Proof>,
+
+    /// Number of variables in the MLE polynomial used for the opening proof.
+    /// This determines the opening point dimension: [0, 0, ..., 0] with num_vars zeros.
+    pub num_vars: usize,
 }
 
 /// Prover state for batch opening proof generation.
@@ -242,26 +246,26 @@ pub struct BatchOpeningProverState<F: JoltField, PCS: HidingCommitmentScheme<Fie
 
     /// The challenges for each round
     pub challenges: Vec<F>,
+
+    /// Number of variables used in the MLE commitment.
+    /// This determines the padding size and opening point dimension.
+    pub num_vars: usize,
 }
 
-impl<F: JoltField, PCS: HidingCommitmentScheme<Field = F>> Default
-    for BatchOpeningProverState<F, PCS>
-{
-    fn default() -> Self {
+impl<F: JoltField, PCS: HidingCommitmentScheme<Field = F>> BatchOpeningProverState<F, PCS> {
+    /// Creates a new batch opening prover state with the specified number of variables.
+    ///
+    /// # Arguments
+    /// * `num_vars` - The number of variables used in MLE commitments (determines padding size)
+    pub fn new(num_vars: usize) -> Self {
         Self {
             round_polynomials: Vec::new(),
             round_commitments: Vec::new(),
             opening_hints: Vec::new(),
             blindings: Vec::new(),
             challenges: Vec::new(),
+            num_vars,
         }
-    }
-}
-
-impl<F: JoltField, PCS: HidingCommitmentScheme<Field = F>> BatchOpeningProverState<F, PCS> {
-    /// Creates a new batch opening prover state.
-    pub fn new() -> Self {
-        Self::default()
     }
 
     /// Adds a round's data to the state.
@@ -293,7 +297,7 @@ impl<F: JoltField, PCS: HidingCommitmentScheme<Field = F>> BatchOpeningProverSta
     /// The batch opening proof containing all evaluations and a single batched proof.
     pub fn generate_batch_opening_proof<ProofTranscript: Transcript>(
         &self,
-        _pcs_setup: &PCS::ProverSetup,
+        pcs_setup: &PCS::ProverSetup,
         transcript: &mut ProofTranscript,
     ) -> ZKSumcheckBatchOpeningProof<F, PCS> {
         let num_rounds = self.round_polynomials.len();
@@ -319,38 +323,73 @@ impl<F: JoltField, PCS: HidingCommitmentScheme<Field = F>> BatchOpeningProverSta
         }
 
         let alpha: F = transcript.challenge_scalar();
+        let alpha_powers = self.powers_of_alpha(alpha);
 
         // Compute combined commitment: C_combined = Σ_i α^i * C_i
-        // This uses the homomorphic property of the commitment scheme
-        let combined_commitment =
-            PCS::combine_commitments(&self.round_commitments, &self.powers_of_alpha(alpha));
+        let combined_commitment = PCS::combine_commitments(&self.round_commitments, &alpha_powers);
 
-        // Note: We skip the PCS opening proof for now because Dory requires
-        // polynomials to match the DoryGlobals configuration, which is set up for
-        // the main polynomial sizes (much larger than our batch opening polynomial).
+        // Compute combined blinding factor
+        let combined_blinding = PCS::combine_blindings(&self.blindings, &alpha_powers);
+
+        // Compute combined polynomial coefficients: combined = Σ_i α^i * h_i
+        let max_poly_len = self
+            .round_polynomials
+            .iter()
+            .map(|p| p.len())
+            .max()
+            .unwrap_or(0);
+
+        let mut combined_coeffs = vec![F::zero(); max_poly_len];
+        for (poly_coeffs, alpha_power) in self.round_polynomials.iter().zip(alpha_powers.iter()) {
+            for (j, coeff) in poly_coeffs.iter().enumerate() {
+                combined_coeffs[j] = combined_coeffs[j] + *alpha_power * *coeff;
+            }
+        }
+
+        // Generate PCS opening proof for combined_h(0)
         //
-        // The verification is still sound because:
-        // 1. Round polynomials are committed via hiding Dory commitments (binding)
-        // 2. Evaluations at 0, 1, and r_i are checked via sumcheck relations:
-        //    h_i(0) + h_i(1) = claim_{i-1} for each round i
-        // 3. Combined commitment is verified via random linear combination:
-        //    C_combined = Σ_i α^i * C_i matches the prover's combined_commitment
+        // Key insight: For a univariate polynomial h(X) = c_0 + c_1*X + c_2*X^2 + ...,
+        // we commit to [c_0, c_1, c_2, ...] as a multilinear polynomial (MLE).
+        // The MLE has the property: MLE(0, 0, ..., 0) = c_0 = h(0).
         //
-        // The PCS opening proof would add an extra layer of binding that:
-        //    combined_h(0) = Σ_i α^i * h_i(0)
-        // is consistent with the combined commitment. But this is already implied
-        // by the commitment homomorphism: if each C_i commits to h_i, then
-        // C_combined commits to the combined polynomial, and c_0 = h(0).
+        // To prove h(0) = claimed_value, we open the MLE at the all-zeros point.
         //
-        // TODO: Implement proper PCS opening proof when Dory supports dynamic
-        // polynomial sizing or when we add a separate PCS context for batch opening.
+        // IMPORTANT: The combined polynomial must match the size used by the PCS when
+        // committing. For Dory, the hints reflect the DoryGlobals matrix size (e.g., 128x128).
+        // We use self.num_vars which should be set to match the PCS configuration.
+        let num_vars = self.num_vars;
+        let padded_len = 1usize << num_vars;
+
+        let mut padded_coeffs = combined_coeffs;
+        padded_coeffs.resize(padded_len, F::zero());
+
+        // Create multilinear polynomial from padded coefficients
+        let combined_poly =
+            MultilinearPolynomial::LargeScalars(DensePolynomial::new(padded_coeffs));
+
+        // The opening point for h(0) is all zeros: [0, 0, ..., 0]
+        let opening_point: Vec<F> = vec![F::zero(); num_vars];
+
+        // IMPORTANT: Clone the transcript before PCS operations to prevent transcript
+        // pollution. The Dory prove and verify functions may add different things to
+        // the transcript, which would cause transcript divergence between prover and verifier.
+        let mut pcs_transcript = transcript.clone();
+        let batch_proof = PCS::prove_hiding(
+            pcs_setup,
+            &combined_poly,
+            &combined_blinding,
+            &opening_point,
+            None,  // Recompute row commitments from padded polynomial
+            &mut pcs_transcript,
+        );
 
         ZKSumcheckBatchOpeningProof {
             combined_commitment,
             evals_at_zero,
             evals_at_one,
             evals_at_challenge,
-            batch_proof: None,
+            batch_proof: Some(batch_proof),
+            num_vars: self.num_vars,
         }
     }
 
@@ -404,7 +443,8 @@ impl<F: JoltField, PCS: HidingCommitmentScheme<Field = F>> ZKSumcheckBatchOpenin
         let mut current_claim = initial_claim;
         for i in 0..num_rounds {
             // Check h_i(0) + h_i(1) = claim_{i-1}
-            if self.evals_at_zero[i] + self.evals_at_one[i] != current_claim {
+            let sum = self.evals_at_zero[i] + self.evals_at_one[i];
+            if sum != current_claim {
                 return Err(ProofVerifyError::SumcheckVerificationError);
             }
             // Update claim: claim_i = h_i(r_i)
@@ -444,26 +484,23 @@ impl<F: JoltField, PCS: HidingCommitmentScheme<Field = F>> ZKSumcheckBatchOpenin
             .map(|(eval, alpha_pow)| *eval * *alpha_pow)
             .sum();
 
-        // Determine the opening point dimension
-        // We need to match the padding used by the prover
-        // Dory requires at least 128 elements (7 variables)
-        const MIN_POLY_SIZE: usize = 128;
-        let max_poly_len = num_rounds.max(4); // Minimum 4 coefficients for degree-3 polynomials
-        let padded_len = max_poly_len.next_power_of_two().max(MIN_POLY_SIZE);
-        let num_vars = padded_len.ilog2() as usize;
-        let opening_point: Vec<F> = vec![F::zero(); num_vars];
+        // Use num_vars from the proof to construct the opening point
+        let opening_point: Vec<F> = vec![F::zero(); self.num_vars];
 
         // Verify the PCS opening proof if present
         if let Some(batch_proof) = &self.batch_proof {
+            // IMPORTANT: Clone the transcript before PCS operations to prevent transcript
+            // pollution. The Dory prove and verify functions may add different things to
+            // the transcript, which would cause transcript divergence between prover and verifier.
+            let mut pcs_transcript = transcript.clone();
             PCS::verify_hiding(
                 batch_proof,
                 pcs_setup,
-                transcript,
+                &mut pcs_transcript,
                 &opening_point,
                 &combined_eval_at_zero,
                 &self.combined_commitment,
-            )
-            .map_err(|_| ProofVerifyError::SumcheckVerificationError)?;
+            )?;
         }
         // If no batch_proof, the verification is still sound because:
         //

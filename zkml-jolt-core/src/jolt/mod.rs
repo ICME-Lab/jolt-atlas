@@ -301,6 +301,9 @@ where
 {
     pub generators: PCS::ProverSetup,
     pub shared: JoltSharedPreprocessing,
+    /// Maximum number of variables for multilinear polynomials in the PCS.
+    /// This determines the padding size for batch opening proofs.
+    pub max_num_vars: usize,
 }
 
 impl<F, PCS> JoltProverPreprocessing<F, PCS>
@@ -391,8 +394,13 @@ where
         let onnx_bytecode = onnx_tracer::decode_model(model());
         let shared = Self::shared_preprocess(onnx_bytecode);
         let max_T: usize = max_trace_length.next_power_of_two();
-        let generators = PCS::setup_prover(DTH_ROOT_OF_K.log_2() + max_T.log_2());
-        JoltProverPreprocessing { shared, generators }
+        let max_num_vars = DTH_ROOT_OF_K.log_2() + max_T.log_2();
+        let generators = PCS::setup_prover(max_num_vars);
+        JoltProverPreprocessing {
+            shared,
+            generators,
+            max_num_vars,
+        }
     }
 }
 
@@ -414,7 +422,7 @@ where
 mod e2e_tests {
     use std::{collections::HashMap, fs::File, io::Read, path::PathBuf};
 
-    use crate::jolt::JoltSNARK;
+    use crate::jolt::{JoltSNARK, JoltVerifierPreprocessing};
     use ark_bn254::Fr;
     use jolt_core::{
         poly::commitment::{dory::DoryCommitmentScheme, mock::MockCommitScheme},
@@ -1408,5 +1416,167 @@ mod e2e_tests {
         }
 
         run_snark_test(builder::gather_non_pow2, &input_data, &[num_lookups], None);
+    }
+
+    // ========================================================================================
+    // ZK OVERHEAD BENCHMARKS
+    // ========================================================================================
+
+    /// Benchmark comparing ZK vs non-ZK proof generation and verification.
+    /// This test measures the overhead of the BlindFold approach.
+    #[test]
+    #[serial]
+    #[ignore] // Run with: cargo test bench_zk_overhead --release -- --ignored --nocapture
+    fn bench_zk_overhead() {
+        use std::time::Instant;
+
+        println!("\n");
+        println!("╔══════════════════════════════════════════════════════════════════════════════╗");
+        println!("║                        ZK OVERHEAD BENCHMARK                                  ║");
+        println!("╠══════════════════════════════════════════════════════════════════════════════╣");
+
+        let input_data = &[3, 4, 5, 0];
+        let shape = &[1, 4];
+        let max_trace_length = 1 << 20;
+        let input = Tensor::new(Some(input_data), shape).unwrap();
+
+        // Preprocessing (same for all modes)
+        println!("║ Preprocessing...                                                              ║");
+        let preprocessing =
+            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prover_preprocess(builder::add_model, max_trace_length);
+        let verifier_preprocessing: JoltVerifierPreprocessing<Fr, PCS0> = (&preprocessing).into();
+
+        // ========================
+        // Non-ZK Proof Generation
+        // ========================
+        println!("║                                                                                ║");
+        println!("║ [1/6] Non-ZK Proof Generation...                                               ║");
+        let start = Instant::now();
+        let (snark_non_zk, program_io_non_zk, _) =
+            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prove(&preprocessing, builder::add_model, &input);
+        let non_zk_prove_time = start.elapsed();
+
+        // ========================
+        // Non-ZK Verification
+        // ========================
+        println!("║ [2/6] Non-ZK Verification...                                                   ║");
+        let start = Instant::now();
+        snark_non_zk
+            .verify(&verifier_preprocessing, program_io_non_zk.clone(), None)
+            .unwrap();
+        let non_zk_verify_time = start.elapsed();
+
+        // ========================
+        // ZK (Hybrid) Proof Generation
+        // ========================
+        println!("║ [3/6] ZK (Hybrid) Proof Generation...                                          ║");
+        let start = Instant::now();
+        let (snark_zk, program_io_zk, _) =
+            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prove_zk(&preprocessing, builder::add_model, &input);
+        let zk_prove_time = start.elapsed();
+
+        // ========================
+        // ZK (Hybrid) Verification
+        // ========================
+        println!("║ [4/6] ZK (Hybrid) Verification...                                              ║");
+        let start = Instant::now();
+        snark_zk
+            .verify(&verifier_preprocessing, program_io_zk.clone(), None)
+            .unwrap();
+        let zk_verify_time = start.elapsed();
+
+        // ========================
+        // Full ZK Proof Generation
+        // ========================
+        println!("║ [5/6] Full ZK Proof Generation...                                              ║");
+        let start = Instant::now();
+        let (snark_full_zk, program_io_full_zk, _) =
+            JoltSNARK::<Fr, PCS0, KeccakTranscript>::prove_full_zk(&preprocessing, builder::add_model, &input);
+        let full_zk_prove_time = start.elapsed();
+
+        // ========================
+        // Full ZK Verification
+        // ========================
+        println!("║ [6/6] Full ZK Verification...                                                  ║");
+        let start = Instant::now();
+        snark_full_zk
+            .verify_full_zk(&verifier_preprocessing, program_io_full_zk.clone(), None)
+            .unwrap();
+        let full_zk_verify_time = start.elapsed();
+
+        // ========================
+        // Results
+        // ========================
+        println!("║                                                                                ║");
+        println!("╠══════════════════════════════════════════════════════════════════════════════╣");
+        println!("║                              RESULTS                                          ║");
+        println!("╠══════════════════════════════════════════════════════════════════════════════╣");
+        println!("║                                                                                ║");
+        println!("║  Mode             │  Prove Time   │  Verify Time  │  Prove OH  │  Verify OH   ║");
+        println!("║  ─────────────────┼───────────────┼───────────────┼────────────┼────────────  ║");
+
+        let non_zk_prove_ms = non_zk_prove_time.as_millis();
+        let non_zk_verify_ms = non_zk_verify_time.as_millis();
+        let zk_prove_ms = zk_prove_time.as_millis();
+        let zk_verify_ms = zk_verify_time.as_millis();
+        let full_zk_prove_ms = full_zk_prove_time.as_millis();
+        let full_zk_verify_ms = full_zk_verify_time.as_millis();
+
+        let zk_prove_overhead = if non_zk_prove_ms > 0 {
+            (zk_prove_ms as f64 / non_zk_prove_ms as f64 - 1.0) * 100.0
+        } else {
+            0.0
+        };
+        let zk_verify_overhead = if non_zk_verify_ms > 0 {
+            (zk_verify_ms as f64 / non_zk_verify_ms as f64 - 1.0) * 100.0
+        } else {
+            0.0
+        };
+        let full_zk_prove_overhead = if non_zk_prove_ms > 0 {
+            (full_zk_prove_ms as f64 / non_zk_prove_ms as f64 - 1.0) * 100.0
+        } else {
+            0.0
+        };
+        let full_zk_verify_overhead = if non_zk_verify_ms > 0 {
+            (full_zk_verify_ms as f64 / non_zk_verify_ms as f64 - 1.0) * 100.0
+        } else {
+            0.0
+        };
+
+        println!(
+            "║  Non-ZK           │  {:>8} ms  │  {:>8} ms  │     -      │     -        ║",
+            non_zk_prove_ms, non_zk_verify_ms
+        );
+        println!(
+            "║  ZK (Hybrid)      │  {:>8} ms  │  {:>8} ms  │  {:>+6.1}%  │  {:>+6.1}%    ║",
+            zk_prove_ms, zk_verify_ms, zk_prove_overhead, zk_verify_overhead
+        );
+        println!(
+            "║  Full ZK          │  {:>8} ms  │  {:>8} ms  │  {:>+6.1}%  │  {:>+6.1}%    ║",
+            full_zk_prove_ms, full_zk_verify_ms, full_zk_prove_overhead, full_zk_verify_overhead
+        );
+        println!("║                                                                                ║");
+        println!("╠══════════════════════════════════════════════════════════════════════════════╣");
+        println!("║                           OVERHEAD ANALYSIS                                   ║");
+        println!("╠══════════════════════════════════════════════════════════════════════════════╣");
+        println!("║                                                                                ║");
+        println!(
+            "║  ZK Hybrid Prover Overhead:   {:>6} ms ({:>+.1}%)                               ║",
+            zk_prove_ms.saturating_sub(non_zk_prove_ms),
+            zk_prove_overhead
+        );
+        println!(
+            "║  Full ZK Prover Overhead:     {:>6} ms ({:>+.1}%)                               ║",
+            full_zk_prove_ms.saturating_sub(non_zk_prove_ms),
+            full_zk_prove_overhead
+        );
+        println!(
+            "║  Full ZK Verifier Overhead:   {:>6} ms ({:>+.1}%)                               ║",
+            full_zk_verify_ms.saturating_sub(non_zk_verify_ms),
+            full_zk_verify_overhead
+        );
+        println!("║                                                                                ║");
+        println!("╚══════════════════════════════════════════════════════════════════════════════╝");
+        println!();
     }
 }

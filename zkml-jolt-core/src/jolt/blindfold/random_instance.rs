@@ -24,7 +24,10 @@
 
 use jolt_core::{
     field::JoltField,
-    poly::commitment::commitment_scheme::CommitmentScheme,
+    poly::{
+        commitment::commitment_scheme::CommitmentScheme,
+        multilinear_polynomial::MultilinearPolynomial,
+    },
 };
 use rand_core::{CryptoRng, RngCore};
 
@@ -46,6 +49,16 @@ impl<F: JoltField> RandomInstanceGenerator<F> {
         }
     }
 
+    /// Pads a vector to the next power of 2 length.
+    fn pad_to_power_of_2(mut vec: Vec<F>) -> Vec<F> {
+        if vec.is_empty() {
+            return vec![F::zero()];
+        }
+        let next_pow2 = vec.len().next_power_of_two();
+        vec.resize(next_pow2, F::zero());
+        vec
+    }
+
     /// Generates a random satisfying instance for the given R1CS.
     ///
     /// The generated instance satisfies: Az ∘ Bz = u·Cz + E
@@ -61,13 +74,12 @@ impl<F: JoltField> RandomInstanceGenerator<F> {
     pub fn generate_random_satisfying<PCS, R>(
         matrices: &R1CSMatrices<F>,
         rng: &mut R,
-        _pcs_setup: &PCS::ProverSetup,
+        pcs_setup: &PCS::ProverSetup,
     ) -> (RelaxedR1CSInstance<F, PCS>, RelaxedR1CSWitness<F>)
     where
         PCS: CommitmentScheme<Field = F>,
         R: RngCore + CryptoRng,
     {
-        let num_constraints = matrices.A.num_rows;
         let num_vars = matrices.A.num_cols;
         let num_public = matrices.num_public_inputs;
         let num_private = num_vars - 1 - num_public; // -1 for the leading 1
@@ -97,15 +109,31 @@ impl<F: JoltField> RandomInstanceGenerator<F> {
             .map(|((a, b), c)| *a * *b - *c)
             .collect();
 
-        // Create the relaxed witness with computed error
-        let relaxed_witness = RelaxedR1CSWitness::new(witness, error);
+        // Pad vectors to power of 2 for polynomial commitment
+        let W_padded = Self::pad_to_power_of_2(witness.clone());
+        let E_padded = Self::pad_to_power_of_2(error.clone());
 
-        // Create the instance
-        // Note: In a real implementation, we would compute actual commitments
+        // Compute actual commitments to W and E
+        let W_poly: MultilinearPolynomial<F> = W_padded.into();
+        let E_poly: MultilinearPolynomial<F> = E_padded.into();
+
+        let (W_commitment, _W_hint) = PCS::commit(&W_poly, pcs_setup);
+        let (E_commitment, _E_hint) = PCS::commit(&E_poly, pcs_setup);
+
+        // Create the relaxed witness with computed error
+        // For non-hiding version, use zero blinding factors
+        let relaxed_witness = RelaxedR1CSWitness::new_simple(
+            witness,
+            F::zero(), // r_W = 0 for non-hiding
+            error,
+            F::zero(), // r_E = 0 for non-hiding
+        );
+
+        // Create the instance with actual commitments
         let instance = RelaxedR1CSInstance::new(
-            PCS::Commitment::default(), // W_commitment (placeholder)
-            PCS::Commitment::default(), // E_commitment (placeholder)
-            F::one(),                   // u = 1
+            W_commitment,
+            E_commitment,
+            F::one(), // u = 1
             public_inputs,
         );
 

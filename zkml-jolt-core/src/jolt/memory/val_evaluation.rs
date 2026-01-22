@@ -324,6 +324,7 @@ pub mod test {
             JoltProverPreprocessing {
                 generators: (),
                 shared: shared_preprocessing.clone(),
+                max_num_vars: 16, // Reasonable default for tests
             };
 
         let verifier_preprocessing: JoltVerifierPreprocessing<Fr, MockCommitScheme<Fr>> =

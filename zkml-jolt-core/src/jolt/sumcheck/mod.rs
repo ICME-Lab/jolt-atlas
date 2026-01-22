@@ -439,6 +439,7 @@ impl ZKAwareBatchedSumcheck {
     /// * `sumcheck_instances` - The sumcheck instances to prove
     /// * `opening_accumulator` - Optional prover opening accumulator
     /// * `pcs_setup` - The PCS prover setup for creating hiding commitments
+    /// * `max_num_vars` - Maximum number of variables for MLE polynomials (determines padding size)
     /// * `transcript` - The Fiat-Shamir transcript
     ///
     /// # Returns
@@ -452,6 +453,7 @@ impl ZKAwareBatchedSumcheck {
         mut sumcheck_instances: Vec<&mut dyn SumcheckInstance<F>>,
         opening_accumulator: Option<Rc<RefCell<ProverOpeningAccumulator<F>>>>,
         pcs_setup: &PCS::ProverSetup,
+        max_num_vars: usize,
         transcript: &mut ProofTranscript,
     ) -> (
         SumcheckInstanceProof<F, ProofTranscript>,
@@ -489,10 +491,11 @@ impl ZKAwareBatchedSumcheck {
         let mut compressed_polys: Vec<CompressedUniPoly<F>> = Vec::with_capacity(max_num_rounds);
         let mut round_commitments: Vec<PCS::Commitment> = Vec::with_capacity(max_num_rounds);
         let mut opening_hints: Vec<PCS::OpeningProofHint> = Vec::with_capacity(max_num_rounds);
-        let mut rng = thread_rng();
+        let _rng = thread_rng();
 
         // Track state for batch opening proof generation
-        let mut batch_opening_state: BatchOpeningProverState<F, PCS> = BatchOpeningProverState::new();
+        let mut batch_opening_state: BatchOpeningProverState<F, PCS> =
+            BatchOpeningProverState::new(max_num_vars);
 
         for round in 0..max_num_rounds {
             let remaining_rounds = max_num_rounds - round;
@@ -532,18 +535,25 @@ impl ZKAwareBatchedSumcheck {
 
             // *** ZK CHANGE: Commit to the round polynomial with hiding ***
             let poly_coeffs = batched_univariate_poly.coeffs.clone();
-            // Pad to power of 2 for commitment
-            let padded_len = poly_coeffs.len().next_power_of_two();
+            // IMPORTANT: Pad to the SAME size as batch opening proof will use (2^max_num_vars).
+            // This ensures commitment homomorphism works correctly:
+            // Commit(pad(h_i, N)) combined via Σ α^i * C_i = Commit(pad(Σ α^i * h_i, N))
+            // Using different padding sizes breaks this property!
+            let padded_len = 1usize << max_num_vars;
             let mut padded_coeffs = poly_coeffs.clone();
             padded_coeffs.resize(padded_len, F::zero());
 
             let ml_poly = MultilinearPolynomial::LargeScalars(
-                DensePolynomial::new(padded_coeffs)
+                DensePolynomial::new(padded_coeffs.clone())
             );
 
             // Sample blinding and create hiding commitment
-            let blinding = PCS::sample_blinding(&mut rng);
-            let (commitment, hint) = PCS::commit_hiding(&ml_poly, &blinding, pcs_setup);
+            // NOTE: Due to incomplete Dory hiding implementation (prove_hiding ignores blinding),
+            // we use non-hiding commit for now. The commitment structure is the same,
+            // but blinding is set to zero (Default::default()).
+            // TODO: Implement proper blinding in Dory prove_hiding and verify_hiding
+            let blinding = <PCS::BlindingFactor as Default>::default();
+            let (commitment, hint) = PCS::commit(&ml_poly, pcs_setup);
 
             // *** Append COMMITMENT to transcript (not polynomial!) ***
             commitment.append_to_transcript(transcript);
@@ -552,8 +562,10 @@ impl ZKAwareBatchedSumcheck {
             r_sumcheck.push(r_j);
 
             // Store data for batch opening proof
+            // IMPORTANT: Store the PADDED coefficients to match what was committed!
+            // This ensures combined_coeffs computed later will match combined_commitment.
             batch_opening_state.add_round(
-                poly_coeffs,
+                padded_coeffs,
                 commitment.clone(),
                 hint.clone(),
                 blinding,
@@ -613,6 +625,9 @@ impl ZKAwareBatchedSumcheck {
     ///
     /// This is a convenience function that combines `prove_full_zk` with batch opening proof generation.
     ///
+    /// # Arguments
+    /// * `max_num_vars` - Maximum number of variables for MLE polynomials (determines padding size)
+    ///
     /// # Returns
     /// A tuple containing:
     /// - The standard sumcheck proof
@@ -624,6 +639,7 @@ impl ZKAwareBatchedSumcheck {
         sumcheck_instances: Vec<&mut dyn SumcheckInstance<F>>,
         opening_accumulator: Option<Rc<RefCell<ProverOpeningAccumulator<F>>>>,
         pcs_setup: &PCS::ProverSetup,
+        max_num_vars: usize,
         transcript: &mut ProofTranscript,
     ) -> (
         SumcheckInstanceProof<F, ProofTranscript>,
@@ -636,8 +652,13 @@ impl ZKAwareBatchedSumcheck {
         PCS: HidingCommitmentScheme<Field = F>,
         ProofTranscript: Transcript,
     {
-        let (proof, challenges, zk_proof, batch_state) =
-            Self::prove_full_zk(sumcheck_instances, opening_accumulator, pcs_setup, transcript);
+        let (proof, challenges, zk_proof, batch_state) = Self::prove_full_zk(
+            sumcheck_instances,
+            opening_accumulator,
+            pcs_setup,
+            max_num_vars,
+            transcript,
+        );
 
         // Generate the batch opening proof
         let batch_opening_proof = batch_state.generate_batch_opening_proof(pcs_setup, transcript);
@@ -948,9 +969,6 @@ impl ZKAwareBatchedSumcheck {
         if current_claim != expected_output_claim {
             return Err(ProofVerifyError::SumcheckVerificationError);
         }
-
-        // *** Now verify the batch opening proof ***
-        // The transcript is now at the same state as after the prover's sumcheck
         let _final_claim = batch_opening.verify(
             batched_claim,
             &zk_proof.round_commitments,

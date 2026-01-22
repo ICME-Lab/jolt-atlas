@@ -9,12 +9,12 @@
 #[cfg(test)]
 mod tests {
     use super::super::{
-        nifs::NIFS,
         random_instance::{sample_random_field_elements, sample_random_nonzero, RandomInstanceGenerator},
         relaxed_r1cs::{R1CSMatrices, RelaxedR1CSInstance, RelaxedR1CSWitness, SparseMatrix},
-        verifier_circuit::{VerifierR1CSCircuit, VerifierWitness},
+        verifier_circuit::VerifierR1CSCircuit,
     };
     use ark_bn254::Fr;
+    use ark_std::Zero;
     use jolt_core::field::JoltField;
     use jolt_core::poly::commitment::mock::MockCommitScheme;
     use rand::SeedableRng;
@@ -22,6 +22,12 @@ mod tests {
     use rand::RngCore;
 
     type TestPCS = MockCommitScheme<Fr>;
+
+    /// Helper to create a test witness from W and E vectors.
+    /// Uses zero blinding factors since tests don't need hiding.
+    fn create_test_witness(w: Vec<Fr>, e: Vec<Fr>) -> RelaxedR1CSWitness<Fr> {
+        RelaxedR1CSWitness::new_simple(w, Fr::zero(), e, Fr::zero())
+    }
 
     // ============================================
     // Relaxed R1CS Tests
@@ -61,7 +67,7 @@ mod tests {
         let w = vec![Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)];
         let e = vec![Fr::from(0u64), Fr::from(0u64)];
 
-        let witness = RelaxedR1CSWitness::new(w.clone(), e.clone());
+        let witness = create_test_witness(w.clone(), e.clone());
 
         assert_eq!(witness.W, w);
         assert_eq!(witness.E, e);
@@ -99,11 +105,11 @@ mod tests {
     fn test_nifs_fold_witnesses_simple() {
         // Test that folding two zero-error witnesses produces a zero-error witness
         // when the cross-term is also zero
-        let _w1 = RelaxedR1CSWitness::new(
+        let _w1 = create_test_witness(
             vec![Fr::from(1u64), Fr::from(2u64)],
             vec![Fr::from(0u64)], // zero error
         );
-        let _w2 = RelaxedR1CSWitness::new(
+        let _w2 = create_test_witness(
             vec![Fr::from(3u64), Fr::from(4u64)],
             vec![Fr::from(0u64)], // zero error
         );
@@ -384,7 +390,6 @@ mod tests {
     #[test]
     fn bench_nifs_fold_scalars() {
         use std::time::Instant;
-        use super::super::nifs::NIFS;
 
         let test_cases = [
             (Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)),
@@ -584,11 +589,11 @@ mod tests {
         let witness_size = 10;
         let num_constraints = 5;
 
-        let w1 = RelaxedR1CSWitness::new(
+        let w1 = create_test_witness(
             sample_random_field_elements(witness_size, &mut rng),
             vec![Fr::from(0u64); num_constraints], // Zero error (satisfying)
         );
-        let w2 = RelaxedR1CSWitness::new(
+        let w2 = create_test_witness(
             sample_random_field_elements(witness_size, &mut rng),
             vec![Fr::from(0u64); num_constraints], // Zero error (satisfying)
         );
@@ -611,7 +616,7 @@ mod tests {
         // Folded scalar: u' = u1 + r * u2 = 1 + r
         let folded_u = u1 + r * u2;
 
-        let folded_witness = RelaxedR1CSWitness::new(folded_w, folded_e);
+        let folded_witness = create_test_witness(folded_w, folded_e);
 
         // The folded witness should have the expected dimensions
         assert_eq!(folded_witness.witness_len(), witness_size);
@@ -681,7 +686,7 @@ mod tests {
 
         // With wrong z=16 (should be 15), we need E[0] = 15 - 16 = -1 to satisfy
         // But we provide E[0] = 0
-        let witness = RelaxedR1CSWitness::new(
+        let witness = create_test_witness(
             vec![Fr::from(16u64)], // Wrong answer
             vec![Fr::from(0u64)],  // Zero error (doesn't compensate)
         );
@@ -1017,11 +1022,11 @@ mod tests {
         let num_constraints = 50;
 
         // REAL PROTOCOL: Prover with actual witness
-        let real_witness = RelaxedR1CSWitness::new(
+        let real_witness = create_test_witness(
             sample_random_field_elements(witness_size, &mut rng),
             vec![Fr::from(0u64); num_constraints], // Zero error for satisfying instance
         );
-        let random_witness = RelaxedR1CSWitness::new(
+        let random_witness = create_test_witness(
             sample_random_field_elements(witness_size, &mut rng),
             vec![Fr::from(0u64); num_constraints],
         );

@@ -612,6 +612,8 @@ where
                         false.serialize_with_mode(&mut writer, compress)?;
                     }
                 }
+                // Serialize num_vars
+                (proof.num_vars as u32).serialize_with_mode(&mut writer, compress)?;
                 Ok(())
             }
         }
@@ -652,6 +654,7 @@ where
                 if let Some(bp) = &proof.batch_proof {
                     size += bp.serialized_size(compress);
                 }
+                size += 4; // num_vars
                 size
             }
         }
@@ -784,12 +787,15 @@ where
                 } else {
                     None
                 };
+                // Deserialize num_vars
+                let num_vars = u32::deserialize_with_mode(&mut reader, compress, validate)? as usize;
                 Ok(ProofData::ZKBatchOpeningProof(crate::jolt::sumcheck::ZKSumcheckBatchOpeningProof {
                     combined_commitment,
                     evals_at_zero,
                     evals_at_one,
                     evals_at_challenge,
                     batch_proof,
+                    num_vars,
                 }))
             }
             _ => Err(SerializationError::InvalidData),

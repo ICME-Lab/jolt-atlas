@@ -480,11 +480,19 @@ impl JoltDAG {
         let accumulator = state_manager.get_prover_accumulator();
 
         // Full ZK mode: use full ZK sumcheck with batch opening
+        // Use num_vars based on DoryGlobals dimensions. DoryGlobals::initialize computes:
+        // matrix_size = K * T
+        // side = sqrt(matrix_size).next_power_of_two()  (always square matrix)
+        // num_vars = log2(side * side) = 2 * log2(side)
+        let matrix_size = DTH_ROOT_OF_K * padded_trace_length;
+        let side = ((matrix_size as f64).sqrt() as usize).next_power_of_two();
+        let dory_num_vars = 2 * side.ilog2() as usize;
         let (proof, _r_stage2, zk_proof, batch_opening_proof) =
             ZKAwareBatchedSumcheck::prove_full_zk_with_batch_opening::<F, PCS, ProofTranscript>(
                 stage2_instances_mut,
                 Some(accumulator.clone()),
                 pcs_setup,
+                dory_num_vars,
                 &mut *transcript.borrow_mut(),
             );
         state_manager.proofs.borrow_mut().insert(
@@ -525,6 +533,7 @@ impl JoltDAG {
                 stage3_instances_mut,
                 Some(accumulator.clone()),
                 pcs_setup,
+                dory_num_vars,
                 &mut *transcript.borrow_mut(),
             );
         state_manager.proofs.borrow_mut().insert(
@@ -565,6 +574,7 @@ impl JoltDAG {
                 stage4_instances_mut,
                 Some(accumulator.clone()),
                 pcs_setup,
+                dory_num_vars,
                 &mut *transcript.borrow_mut(),
             );
         state_manager.proofs.borrow_mut().insert(
@@ -604,6 +614,7 @@ impl JoltDAG {
                 stage5_instances_mut,
                 Some(accumulator.clone()),
                 pcs_setup,
+                dory_num_vars,
                 &mut *transcript.borrow_mut(),
             );
         state_manager.proofs.borrow_mut().insert(

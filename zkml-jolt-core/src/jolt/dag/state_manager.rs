@@ -359,6 +359,16 @@ where
         }
     }
 
+    /// Returns the maximum number of variables for multilinear polynomials (prover only).
+    /// This determines the padding size for batch opening proofs.
+    pub fn get_max_num_vars(&self) -> usize {
+        if let Some(ref prover_state) = self.prover_state {
+            prover_state.preprocessing.max_num_vars
+        } else {
+            panic!("Prover state not initialized");
+        }
+    }
+
     /// Gets the opening for a given virtual polynomial from whichever accumulator is available.
     pub fn get_virtual_polynomial_opening(
         &self,

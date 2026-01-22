@@ -24,6 +24,7 @@
 //! - Spartan2: NIFS-based folding
 //! - Jolt PR #1205: BlindFold implementation
 
+pub mod blindfold_protocol;
 pub mod hiding_commitment;
 pub mod nifs;
 pub mod random_instance;
@@ -33,8 +34,23 @@ pub mod verifier_circuit;
 #[cfg(test)]
 mod tests;
 
+// Core BlindFold protocol
+pub use blindfold_protocol::{
+    create_committed_instance, verify_commitment_opening, BlindFoldProof, BlindFoldProtocol,
+    HidingBlindFoldProof, HidingBlindFoldProtocol, SumcheckBlindFold,
+};
+
+// Hiding commitment helpers
 pub use hiding_commitment::ScalarBlindingFactor;
+
+// NIFS folding
 pub use nifs::{HidingNIFS, HidingNIFSProof, InstanceBlindingFactors, NIFSProof, NIFS};
+
+// Random instance generation
 pub use random_instance::RandomInstanceGenerator;
-pub use relaxed_r1cs::{RelaxedR1CSInstance, RelaxedR1CSWitness};
-pub use verifier_circuit::VerifierR1CSCircuit;
+
+// Relaxed R1CS types
+pub use relaxed_r1cs::{R1CSMatrices, RelaxedR1CSInstance, RelaxedR1CSWitness, SparseMatrix};
+
+// Verifier circuit
+pub use verifier_circuit::{VariableIndices, VerifierR1CSCircuit, VerifierWitness};

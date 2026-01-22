@@ -122,6 +122,16 @@ impl<F: JoltField> InstanceBlindingFactors<F> {
 pub struct NIFS;
 
 impl NIFS {
+    /// Pads a vector to the next power of 2 length.
+    fn pad_to_power_of_2<F: JoltField>(mut vec: Vec<F>) -> Vec<F> {
+        if vec.is_empty() {
+            return vec![F::zero()];
+        }
+        let next_pow2 = vec.len().next_power_of_two();
+        vec.resize(next_pow2, F::zero());
+        vec
+    }
+
     /// Folds two relaxed R1CS instances.
     ///
     /// This is the core of the BlindFold zero-knowledge approach: by folding a real
@@ -150,7 +160,7 @@ impl NIFS {
         instance_rand: &RelaxedR1CSInstance<F, PCS>,
         witness_rand: &RelaxedR1CSWitness<F>,
         transcript: &mut ProofTranscript,
-        _pcs_setup: &PCS::ProverSetup,
+        pcs_setup: &PCS::ProverSetup,
     ) -> (
         NIFSProof<F, PCS>,
         RelaxedR1CSInstance<F, PCS>,
@@ -159,6 +169,7 @@ impl NIFS {
     where
         F: JoltField,
         PCS: CommitmentScheme<Field = F>,
+        PCS::Commitment: Clone,
         ProofTranscript: Transcript,
     {
         // Step 1: Compute the cross-term T
@@ -173,20 +184,23 @@ impl NIFS {
             &instance_rand.x,
         );
 
-        // Step 2: Commit to T
-        // For simplicity, we use a default commitment here
-        // In a real implementation, this would use the PCS
-        let T_commitment = PCS::Commitment::default();
+        // Step 2: Commit to T (pad to power of 2 for polynomial commitment)
+        // Note: For non-hiding NIFS, we use zero blinding (r_T = 0)
+        let T_padded = Self::pad_to_power_of_2(cross_term.clone());
+        let T_poly: MultilinearPolynomial<F> = T_padded.into();
+        let (T_commitment, _T_hint) = PCS::commit(&T_poly, pcs_setup);
+        let r_T = F::zero(); // Non-hiding version uses zero blinding
 
         // Step 3: Get folding challenge from transcript
         transcript.append_serializable(&T_commitment);
         let r: F = transcript.challenge_scalar();
 
-        // Step 4: Fold instances
-        let folded_instance = Self::fold_instances(instance_real, instance_rand, r);
+        // Step 4: Fold instances (with proper commitment folding)
+        let folded_instance =
+            Self::fold_instances_with_t(instance_real, instance_rand, &T_commitment, r);
 
-        // Step 5: Fold witnesses
-        let folded_witness = Self::fold_witnesses(witness_real, witness_rand, &cross_term, r);
+        // Step 5: Fold witnesses (now includes blinding factor folding)
+        let folded_witness = Self::fold_witnesses(witness_real, witness_rand, &cross_term, r_T, r);
 
         let proof = NIFSProof { T_commitment };
 
@@ -215,14 +229,15 @@ impl NIFS {
     where
         F: JoltField,
         PCS: CommitmentScheme<Field = F>,
+        PCS::Commitment: Clone,
         ProofTranscript: Transcript,
     {
         // Get the same folding challenge as the prover
         transcript.append_serializable(&proof.T_commitment);
         let r: F = transcript.challenge_scalar();
 
-        // Fold instances (same computation as prover)
-        Self::fold_instances(instance_real, instance_rand, r)
+        // Fold instances with proper commitment folding
+        Self::fold_instances_with_t(instance_real, instance_rand, &proof.T_commitment, r)
     }
 
     /// Computes the cross-term T for NIFS folding.
@@ -267,15 +282,21 @@ impl NIFS {
         cross_term
     }
 
-    /// Folds two instances using folding challenge r.
-    fn fold_instances<F, PCS>(
+    /// Folds two instances using folding challenge r and T commitment.
+    ///
+    /// Computes commitments homomorphically:
+    /// - W' = W_1 + r·W_2  =>  Commit(W') = Commit(W_1) + r·Commit(W_2)
+    /// - E' = E_1 + r·T + r²·E_2  =>  Commit(E') = Commit(E_1) + r·Commit(T) + r²·Commit(E_2)
+    fn fold_instances_with_t<F, PCS>(
         instance_1: &RelaxedR1CSInstance<F, PCS>,
         instance_2: &RelaxedR1CSInstance<F, PCS>,
+        T_commitment: &PCS::Commitment,
         r: F,
     ) -> RelaxedR1CSInstance<F, PCS>
     where
         F: JoltField,
         PCS: CommitmentScheme<Field = F>,
+        PCS::Commitment: Clone,
     {
         // u' = u_1 + r·u_2
         let folded_u = instance_1.u + r * instance_2.u;
@@ -288,46 +309,45 @@ impl NIFS {
             .map(|(x1, x2)| *x1 + r * x2)
             .collect();
 
-        // Commitment folding would be done homomorphically:
-        // W' = W_1 + r·W_2  =>  Commit(W') = Commit(W_1) + r·Commit(W_2)
-        // E' = E_1 + r·T + r²·E_2  =>  Commit(E') = Commit(E_1) + r·Commit(T) + r²·Commit(E_2)
+        // Fold commitments homomorphically:
+        // W' = W_1 + r·W_2
+        let folded_W_commitment =
+            fold_commitments::<F, PCS>(&instance_1.W_commitment, &instance_2.W_commitment, &r);
 
-        // For now, we use default commitments (placeholder)
-        RelaxedR1CSInstance::new(
-            PCS::Commitment::default(), // W_commitment would be computed homomorphically
-            PCS::Commitment::default(), // E_commitment would be computed homomorphically
-            folded_u,
-            folded_x,
-        )
+        // E' = E_1 + r·T + r²·E_2
+        let folded_E_commitment = fold_error_commitments::<F, PCS>(
+            &instance_1.E_commitment,
+            T_commitment,
+            &instance_2.E_commitment,
+            &r,
+        );
+
+        RelaxedR1CSInstance::new(folded_W_commitment, folded_E_commitment, folded_u, folded_x)
     }
 
     /// Folds two witnesses using folding challenge r and cross-term T.
+    ///
+    /// This now delegates to RelaxedR1CSWitness::fold which handles all
+    /// blinding factors internally.
     pub fn fold_witnesses<F: JoltField>(
+        witness_1: &RelaxedR1CSWitness<F>,
+        witness_2: &RelaxedR1CSWitness<F>,
+        cross_term: &[F],
+        r_T: F,
+        r: F,
+    ) -> RelaxedR1CSWitness<F> {
+        RelaxedR1CSWitness::fold(witness_1, witness_2, cross_term, r_T, r)
+    }
+
+    /// Legacy fold_witnesses without blinding factor for T (uses zero).
+    /// Kept for backwards compatibility with tests.
+    pub fn fold_witnesses_simple<F: JoltField>(
         witness_1: &RelaxedR1CSWitness<F>,
         witness_2: &RelaxedR1CSWitness<F>,
         cross_term: &[F],
         r: F,
     ) -> RelaxedR1CSWitness<F> {
-        let r_squared = r * r;
-
-        // W' = W_1 + r·W_2
-        let folded_W: Vec<F> = witness_1
-            .W
-            .iter()
-            .zip(witness_2.W.iter())
-            .map(|(w1, w2)| *w1 + r * w2)
-            .collect();
-
-        // E' = E_1 + r·T + r²·E_2
-        let folded_E: Vec<F> = witness_1
-            .E
-            .iter()
-            .zip(cross_term.iter())
-            .zip(witness_2.E.iter())
-            .map(|((e1, t), e2)| *e1 + r * t + r_squared * e2)
-            .collect();
-
-        RelaxedR1CSWitness::new(folded_W, folded_E)
+        RelaxedR1CSWitness::fold(witness_1, witness_2, cross_term, F::zero(), r)
     }
 }
 
@@ -342,14 +362,15 @@ impl HidingNIFS {
     /// This version uses the `HidingCommitmentScheme` trait for proper
     /// homomorphic commitment folding with blinding factors.
     ///
+    /// The blinding factors are now integrated into `RelaxedR1CSWitness`, so
+    /// this function no longer takes separate blinding factor parameters.
+    ///
     /// # Arguments
     /// * `matrices` - The R1CS constraint matrices
     /// * `instance_real` - The real instance to fold
-    /// * `witness_real` - The witness for the real instance
-    /// * `blindings_real` - Blinding factors for the real instance
+    /// * `witness_real` - The witness for the real instance (includes blinding factors)
     /// * `instance_rand` - The random satisfying instance
-    /// * `witness_rand` - The witness for the random instance
-    /// * `blindings_rand` - Blinding factors for the random instance
+    /// * `witness_rand` - The witness for the random instance (includes blinding factors)
     /// * `transcript` - The Fiat-Shamir transcript
     /// * `pcs_setup` - The PCS prover setup
     /// * `rng` - Cryptographic random number generator for blinding
@@ -358,18 +379,15 @@ impl HidingNIFS {
     /// A tuple containing:
     /// - The folding proof (with cross-term commitment and blinding)
     /// - The folded instance
-    /// - The folded witness
-    /// - The folded blinding factors
+    /// - The folded witness (with folded blinding factors)
     #[allow(clippy::type_complexity)]
     #[allow(clippy::too_many_arguments)]
     pub fn prove_hiding<F, PCS, ProofTranscript, R>(
         matrices: &R1CSMatrices<F>,
         instance_real: &RelaxedR1CSInstance<F, PCS>,
         witness_real: &RelaxedR1CSWitness<F>,
-        blindings_real: &InstanceBlindingFactors<F>,
         instance_rand: &RelaxedR1CSInstance<F, PCS>,
         witness_rand: &RelaxedR1CSWitness<F>,
-        blindings_rand: &InstanceBlindingFactors<F>,
         transcript: &mut ProofTranscript,
         pcs_setup: &PCS::ProverSetup,
         rng: &mut R,
@@ -377,7 +395,6 @@ impl HidingNIFS {
         HidingNIFSProof<F, PCS>,
         RelaxedR1CSInstance<F, PCS>,
         RelaxedR1CSWitness<F>,
-        InstanceBlindingFactors<F>,
     )
     where
         F: JoltField,
@@ -401,14 +418,14 @@ impl HidingNIFS {
         let T_blinding_pcs = PCS::sample_blinding(rng);
 
         // Convert cross-term to multilinear polynomial for hiding commitment
-        let cross_term_poly: MultilinearPolynomial<F> = cross_term.clone().into();
+        let cross_term_padded = NIFS::pad_to_power_of_2(cross_term.clone());
+        let cross_term_poly: MultilinearPolynomial<F> = cross_term_padded.into();
         let (T_commitment, _hint) =
             PCS::commit_hiding(&cross_term_poly, &T_blinding_pcs, pcs_setup);
 
-        // Convert PCS blinding to ScalarBlindingFactor for tracking
-        // Note: This assumes the PCS blinding can be represented as a scalar
-        // For more complex blinding types, this would need adaptation
-        let T_blinding = ScalarBlindingFactor::new(F::random(rng));
+        // Sample scalar blinding factor for T (for witness folding)
+        let r_T = F::random(rng);
+        let T_blinding = ScalarBlindingFactor::new(r_T);
 
         // Step 3: Get folding challenge from transcript
         transcript.append_serializable(&T_commitment);
@@ -418,19 +435,16 @@ impl HidingNIFS {
         let folded_instance =
             Self::fold_instances_hiding::<F, PCS>(instance_real, instance_rand, &T_commitment, r);
 
-        // Step 5: Fold witnesses
-        let folded_witness = NIFS::fold_witnesses(witness_real, witness_rand, &cross_term, r);
-
-        // Step 6: Fold blinding factors
-        let folded_blindings =
-            InstanceBlindingFactors::fold(blindings_real, blindings_rand, &T_blinding, r);
+        // Step 5: Fold witnesses (including blinding factors)
+        // The new RelaxedR1CSWitness::fold handles all blinding factor folding internally
+        let folded_witness = NIFS::fold_witnesses(witness_real, witness_rand, &cross_term, r_T, r);
 
         let proof = HidingNIFSProof {
             T_commitment,
             T_blinding,
         };
 
-        (proof, folded_instance, folded_witness, folded_blindings)
+        (proof, folded_instance, folded_witness)
     }
 
     /// Verifies a hiding NIFS folding and computes the folded instance.
@@ -504,22 +518,30 @@ mod tests {
 
     #[test]
     fn test_fold_witnesses() {
-        let witness_1 = RelaxedR1CSWitness::new(
-            vec![Fr::from(1u64), Fr::from(2u64)],
-            vec![Fr::from(0u64), Fr::from(0u64)],
+        let witness_1 = RelaxedR1CSWitness::new_simple(
+            vec![Fr::from(1u64), Fr::from(2u64)],  // W
+            Fr::from(10u64),                        // r_W
+            vec![Fr::from(0u64), Fr::from(0u64)],  // E
+            Fr::from(0u64),                         // r_E
         );
-        let witness_2 = RelaxedR1CSWitness::new(
-            vec![Fr::from(3u64), Fr::from(4u64)],
-            vec![Fr::from(0u64), Fr::from(0u64)],
+        let witness_2 = RelaxedR1CSWitness::new_simple(
+            vec![Fr::from(3u64), Fr::from(4u64)],  // W
+            Fr::from(30u64),                        // r_W
+            vec![Fr::from(0u64), Fr::from(0u64)],  // E
+            Fr::from(0u64),                         // r_E
         );
         let cross_term = vec![Fr::from(0u64), Fr::from(0u64)];
+        let r_T = Fr::from(0u64);
         let r = Fr::from(2u64);
 
-        let folded = NIFS::fold_witnesses(&witness_1, &witness_2, &cross_term, r);
+        let folded = NIFS::fold_witnesses(&witness_1, &witness_2, &cross_term, r_T, r);
 
         // W' = W_1 + r·W_2 = [1, 2] + 2·[3, 4] = [7, 10]
         assert_eq!(folded.W[0], Fr::from(7u64));
         assert_eq!(folded.W[1], Fr::from(10u64));
+
+        // r_W' = r_W_1 + r·r_W_2 = 10 + 2*30 = 70
+        assert_eq!(folded.r_W, Fr::from(70u64));
     }
 
     #[test]
@@ -575,18 +597,23 @@ mod tests {
 
     #[test]
     fn test_witness_folding_with_nonzero_cross_term() {
-        let witness_1 = RelaxedR1CSWitness::new(
-            vec![Fr::from(1u64)],
-            vec![Fr::from(5u64)], // E_1 = 5
+        let witness_1 = RelaxedR1CSWitness::new_simple(
+            vec![Fr::from(1u64)],   // W
+            Fr::from(10u64),         // r_W
+            vec![Fr::from(5u64)],   // E_1 = 5
+            Fr::from(20u64),         // r_E
         );
-        let witness_2 = RelaxedR1CSWitness::new(
-            vec![Fr::from(2u64)],
-            vec![Fr::from(3u64)], // E_2 = 3
+        let witness_2 = RelaxedR1CSWitness::new_simple(
+            vec![Fr::from(2u64)],   // W
+            Fr::from(30u64),         // r_W
+            vec![Fr::from(3u64)],   // E_2 = 3
+            Fr::from(40u64),         // r_E
         );
         let cross_term = vec![Fr::from(7u64)]; // T = 7
+        let r_T = Fr::from(50u64);
         let r = Fr::from(2u64);
 
-        let folded = NIFS::fold_witnesses(&witness_1, &witness_2, &cross_term, r);
+        let folded = NIFS::fold_witnesses(&witness_1, &witness_2, &cross_term, r_T, r);
 
         // W' = W_1 + r·W_2 = 1 + 2*2 = 5
         assert_eq!(folded.W[0], Fr::from(5u64));
@@ -596,6 +623,9 @@ mod tests {
         //    = 5 + 14 + 12
         //    = 31
         assert_eq!(folded.E[0], Fr::from(31u64));
+
+        // r_E' = r_E_1 + r·r_T + r²·r_E_2 = 20 + 2*50 + 4*40 = 280
+        assert_eq!(folded.r_E, Fr::from(280u64));
     }
 
     #[test]
@@ -638,15 +668,24 @@ mod tests {
     fn test_multiple_sequential_folds() {
         // Test that multiple sequential folds work correctly
 
-        // Initial witnesses
-        let witness_1 = RelaxedR1CSWitness::new(vec![Fr::from(1u64)], vec![Fr::from(0u64)]);
-        let witness_2 = RelaxedR1CSWitness::new(vec![Fr::from(2u64)], vec![Fr::from(0u64)]);
-        let witness_3 = RelaxedR1CSWitness::new(vec![Fr::from(3u64)], vec![Fr::from(0u64)]);
+        // Initial witnesses (using new_simple for convenience)
+        let witness_1 = RelaxedR1CSWitness::new_simple(
+            vec![Fr::from(1u64)], Fr::from(1u64),
+            vec![Fr::from(0u64)], Fr::from(0u64),
+        );
+        let witness_2 = RelaxedR1CSWitness::new_simple(
+            vec![Fr::from(2u64)], Fr::from(2u64),
+            vec![Fr::from(0u64)], Fr::from(0u64),
+        );
+        let witness_3 = RelaxedR1CSWitness::new_simple(
+            vec![Fr::from(3u64)], Fr::from(3u64),
+            vec![Fr::from(0u64)], Fr::from(0u64),
+        );
 
         // Fold 1 and 2
         let cross_term_12 = vec![Fr::from(0u64)];
         let r1 = Fr::from(2u64);
-        let folded_12 = NIFS::fold_witnesses(&witness_1, &witness_2, &cross_term_12, r1);
+        let folded_12 = NIFS::fold_witnesses_simple(&witness_1, &witness_2, &cross_term_12, r1);
 
         // W' = 1 + 2*2 = 5
         assert_eq!(folded_12.W[0], Fr::from(5u64));
@@ -654,7 +693,7 @@ mod tests {
         // Fold (1+2) and 3
         let cross_term_123 = vec![Fr::from(0u64)];
         let r2 = Fr::from(3u64);
-        let folded_123 = NIFS::fold_witnesses(&folded_12, &witness_3, &cross_term_123, r2);
+        let folded_123 = NIFS::fold_witnesses_simple(&folded_12, &witness_3, &cross_term_123, r2);
 
         // W'' = 5 + 3*3 = 14
         assert_eq!(folded_123.W[0], Fr::from(14u64));

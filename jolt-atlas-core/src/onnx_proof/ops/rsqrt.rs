@@ -18,7 +18,7 @@ use joltworks::{
         unipoly::UniPoly,
     },
     subprotocols::{
-        sumcheck::SumcheckInstanceProof,
+        sumcheck::{Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -36,9 +36,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        use crate::onnx_proof::ops::{RsqrtParams, RsqrtProver};
-        use joltworks::subprotocols::sumcheck::Sumcheck;
-
         let params = RsqrtParams::new(node.clone(), &prover.accumulator);
         let mut prover_sumcheck =
             RsqrtProver::initialize(&prover.trace, &mut prover.transcript, params);
@@ -55,9 +52,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        use crate::onnx_proof::ops::RsqrtVerifier;
-        use joltworks::subprotocols::sumcheck::Sumcheck;
-
         let proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))

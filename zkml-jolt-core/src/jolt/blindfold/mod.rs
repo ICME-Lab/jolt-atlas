@@ -12,23 +12,33 @@
 //!
 //! # Module Structure
 //!
-//! - `relaxed_r1cs`: Relaxed R1CS representation (Az ∘ Bz = u·Cz + E)
+//! - `relaxed_r1cs`: Simple relaxed R1CS representation (Az ∘ Bz = u·Cz + E)
+//! - `split_committed_r1cs`: Split-committed relaxed R1CS with multiple witness segments
 //! - `nifs`: Non-Interactive Folding Scheme for combining instances
 //! - `verifier_circuit`: Succinct verifier R1CS circuit encoding sumcheck checks
 //! - `random_instance`: Generator for random satisfying instances
 //! - `hiding_commitment`: NIFS helper functions for commitment folding
+//!
+//! # Split-Committed R1CS
+//!
+//! The split-committed R1CS is the key structure for full zero-knowledge:
+//! - Instance contains multiple witness segment commitments W̄₁, ..., W̄ₗ
+//! - Each segment has its own blinding factor for fine-grained hiding
+//! - Supports round polynomial coefficients + evaluation commitments
 //!
 //! # References
 //!
 //! - Nova: Recursive SNARKs without trusted setup
 //! - Spartan2: NIFS-based folding
 //! - Jolt PR #1205: BlindFold implementation
+//! - Vega: Low-Latency Zero-Knowledge Proofs
 
 pub mod blindfold_protocol;
 pub mod hiding_commitment;
 pub mod nifs;
 pub mod random_instance;
 pub mod relaxed_r1cs;
+pub mod split_committed_r1cs;
 pub mod verifier_circuit;
 
 #[cfg(test)]
@@ -51,6 +61,13 @@ pub use random_instance::RandomInstanceGenerator;
 
 // Relaxed R1CS types
 pub use relaxed_r1cs::{R1CSMatrices, RelaxedR1CSInstance, RelaxedR1CSWitness, SparseMatrix};
+
+// Split-committed R1CS types
+pub use split_committed_r1cs::{
+    compute_cross_term, fold_instances, fold_witnesses, is_satisfied,
+    SplitCommittedInstance, SplitCommittedNIFS, SplitCommittedNIFSProof,
+    SplitCommittedWitness, WitnessSegment,
+};
 
 // Verifier circuit
 pub use verifier_circuit::{VariableIndices, VerifierR1CSCircuit, VerifierWitness};

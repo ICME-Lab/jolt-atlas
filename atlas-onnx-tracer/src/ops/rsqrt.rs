@@ -1,5 +1,3 @@
-// TODO: Remove this file when we have the Rsqrt opcode decomposition in parser
-
 use crate::{
     ops::{Op, Rsqrt},
     tensor::{self, Tensor},

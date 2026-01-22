@@ -3275,31 +3275,12 @@ pub mod nonlinearities {
         let sf_log = scale_input as i32;
         let sf = 1 << sf_log;
         // NOTE: rescale uses SRA
-        let rescale_down = |q: i32| q >> sf_log;
+        // let rescale_down = |q: i32| q >> sf_log;f
         a.par_enum_map(|_, a_i| {
-            let sqrt_2 = (2f32.sqrt() * sf as f32).round() as i32;
+            let inv = sf * sf / a_i;
+            let rsqrt = (sf * inv).isqrt();
 
-            let x = if a_i != 0 { a_i as u32 } else { 1 };
-            let d = {
-                let exp = 3 * sf_log - x.ilog2() as i32;
-                if exp < 0 {
-                    0
-                } else {
-                    2_i32.pow(exp as u32 / 2)
-                }
-            };
-            let xd = rescale_down(x as i32 * d);
-            let xd_sq_minus1 = rescale_down(d * xd) - sf;
-            let xd_cub_minusd = rescale_down(d * xd_sq_minus1);
-            let a = if xd_sq_minus1 >= 0 {
-                sqrt_2 / 2 - sf
-            } else {
-                2 * sf - 2 * sqrt_2
-            };
-            let axd_cub_minusd = rescale_down(a * xd_cub_minusd);
-            let approximation = d + axd_cub_minusd;
-
-            Ok::<_, TensorError>(approximation)
+            Ok::<_, TensorError>(rsqrt)
         })
         .unwrap()
     }

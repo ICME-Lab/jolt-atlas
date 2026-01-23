@@ -3,6 +3,7 @@ use std::array;
 use crate::onnx_proof::{
     lookup_tables::{
         prefixes::{PrefixCheckpoint, PrefixEval, Prefixes},
+        unsigned_less_than::UnsignedLessThanTable,
         JoltLookupTable, PrefixSuffixDecompositionTrait,
     },
     op_lookups::{InterleavedBitsMarker, LOG_K},
@@ -50,10 +51,9 @@ use strum::EnumCount;
 
 const DEGREE_BOUND: usize = 2;
 
-pub struct ReadRafSumcheckParams<F, T>
+pub struct RangecheckRafSumcheckParams<F>
 where
     F: JoltField,
-    T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
     /// γ and its square (γ^2) used for batching rv/branch/raf components.
     pub gamma: F,
@@ -63,13 +63,12 @@ where
     pub r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
     /// Table for this node
-    table: T,
+    table: UnsignedLessThanTable<XLEN>,
 }
 
-impl<F, T> ReadRafSumcheckParams<F, T>
+impl<F> RangecheckRafSumcheckParams<F>
 where
     F: JoltField,
-    T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
     pub fn new(
         computation_node: ComputationNode,
@@ -79,7 +78,7 @@ where
         let gamma = transcript.challenge_scalar::<F>();
         let gamma_sqr = gamma.square();
         let (r_node_output, _) = opening_accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(computation_node.idx),
+            VirtualPolynomial::DivNodeRemainder(computation_node.idx),
             SumcheckId::Execution,
         );
         let log_T = computation_node.num_output_elements().log_2();
@@ -89,45 +88,31 @@ where
             log_T,
             r_node_output,
             computation_node,
-            table: T::default(),
+            table: UnsignedLessThanTable::<XLEN>,
         }
     }
 }
 
-impl<F, T> SumcheckInstanceParams<F> for ReadRafSumcheckParams<F, T>
+impl<F> SumcheckInstanceParams<F> for RangecheckRafSumcheckParams<F>
 where
     F: JoltField,
-    T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
     fn num_rounds(&self) -> usize {
         LOG_K + self.log_T
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, rv_claim) = accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(self.computation_node.idx),
+        let (_, left_operand_claim) = accumulator.get_virtual_polynomial_opening(
+            VirtualPolynomial::DivNodeRemainder(self.computation_node.idx),
             SumcheckId::Execution,
         );
-        let (left_operand_claim, right_operand_claim) =
-            if self.computation_node.is_interleaved_operands() {
-                let (_, left_operand_claim) = accumulator.get_virtual_polynomial_opening(
-                    VirtualPolynomial::NodeOutput(self.computation_node.inputs[0]),
-                    SumcheckId::Raf,
-                );
-                let (_, right_operand_claim) = accumulator.get_virtual_polynomial_opening(
-                    VirtualPolynomial::NodeOutput(self.computation_node.inputs[1]),
-                    SumcheckId::Raf,
-                );
-                (left_operand_claim, right_operand_claim)
-            } else {
-                let (_, right_operand_claim) = accumulator.get_virtual_polynomial_opening(
-                    VirtualPolynomial::NodeOutput(self.computation_node.inputs[0]),
-                    SumcheckId::Raf,
-                );
-                (F::zero(), right_operand_claim)
-            };
+        let (_, right_operand_claim) = accumulator.get_virtual_polynomial_opening(
+            VirtualPolynomial::NodeOutput(self.computation_node.inputs[1]),
+            SumcheckId::Execution,
+        );
 
-        rv_claim + self.gamma * left_operand_claim + self.gamma_sqr * right_operand_claim
+        // rv is the 1-polynomial: we expect the LowerThan lookup to always return true (1)
+        F::one() + self.gamma * left_operand_claim + self.gamma_sqr * right_operand_claim
     }
 
     fn degree(&self) -> usize {
@@ -149,12 +134,11 @@ where
     }
 }
 
-pub struct ReadRafSumcheckProver<F, T>
+pub struct RangecheckRafSumcheckProver<F>
 where
     F: JoltField,
-    T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
-    params: ReadRafSumcheckParams<F, T>,
+    params: RangecheckRafSumcheckParams<F>,
     /// Materialized `ra(k, j)` MLE over (address, cycle) after the first log(K) rounds.
     /// Present only in the last log(T) rounds.
     ra: Option<MultilinearPolynomial<F>>,
@@ -194,16 +178,15 @@ where
     identity_ps: PrefixSuffixDecomposition<F, 2>,
 }
 
-impl<F, T> ReadRafSumcheckProver<F, T>
+impl<F> RangecheckRafSumcheckProver<F>
 where
     F: JoltField,
-    T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
     pub fn initialize(
-        params: ReadRafSumcheckParams<F, T>,
+        params: RangecheckRafSumcheckParams<F>,
         trace: &Trace,
-        opening_accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
+        _opening_accumulator: &mut ProverOpeningAccumulator<F>,
+        _transcript: &mut impl Transcript,
     ) -> Self {
         let T = 1 << params.log_T;
         let phases = 8;
@@ -222,55 +205,34 @@ where
             output: _,
             operands,
         } = Trace::layer_data(trace, &params.computation_node);
-        let is_interleaved_operands = params.computation_node.is_interleaved_operands();
-        if is_interleaved_operands {
-            let [left_operand_tensor, right_operand_tensor] = operands[..] else {
-                panic!("Expected exactly two input tensors")
-            };
+        let is_interleaved_operands = true; // The lookup table we use is LowerThan, which requires interleaved operands.
 
-            // Cache left/right operand claims.
-            let left_operand_claim =
-                MultilinearPolynomial::from(left_operand_tensor.into_container_data()) // TODO: make this work with from_i32
-                    .evaluate(&params.r_node_output.r); // TODO: rm these clones
-            opening_accumulator.append_virtual(
-                transcript,
-                VirtualPolynomial::NodeOutput(params.computation_node.inputs[0]),
-                SumcheckId::Raf,
-                params.r_node_output.clone(),
-                left_operand_claim,
-            );
-            let right_operand_claim =
-                MultilinearPolynomial::from(right_operand_tensor.into_container_data())
-                    .evaluate(&params.r_node_output.r);
-            opening_accumulator.append_virtual(
-                transcript,
-                VirtualPolynomial::NodeOutput(params.computation_node.inputs[1]),
-                SumcheckId::Raf,
-                params.r_node_output.clone(),
-                right_operand_claim,
-            );
-        } else {
-            let right_operand_tensor = operands[0];
-            let right_operand_claim =
-                MultilinearPolynomial::from(right_operand_tensor.into_container_data())
-                    .evaluate(&params.r_node_output.r);
-            opening_accumulator.append_virtual(
-                transcript,
-                VirtualPolynomial::NodeOutput(params.computation_node.inputs[0]),
-                SumcheckId::Raf,
-                params.r_node_output.clone(),
-                right_operand_claim,
-            );
-            let right_operand_claim = MultilinearPolynomial::from(right_operand_tensor.clone())
-                .evaluate(&params.r_node_output.r);
-            opening_accumulator.append_virtual(
-                transcript,
-                VirtualPolynomial::NodeOutput(params.computation_node.inputs[0]),
-                SumcheckId::Execution, // TODO: Add specialized sumcheck that relates raf and execution claims (signed vs unsigned claims)
-                params.r_node_output.clone(),
-                right_operand_claim,
-            );
-        };
+        // let [left_operand_tensor, right_operand_tensor] = operands[..] else {
+        //     panic!("Expected exactly two input tensors")
+        // };
+
+        // Cache left/right operand claims. ( In our case they have been cached in Execution sumcheck)
+        // let left_operand_claim =
+        //     MultilinearPolynomial::from(left_operand_tensor.into_container_data()) // TODO: make this work with from_i32
+        //         .evaluate(&params.r_node_output.r); // TODO: rm these clones
+        // opening_accumulator.append_virtual(
+        //     transcript,
+        //     VirtualPolynomial::DivNodeRemainder(params.computation_node.idx),
+        //     SumcheckId::Raf,
+        //     params.r_node_output.clone(),
+        //     left_operand_claim,
+        // );
+        // let right_operand_claim =
+        //     MultilinearPolynomial::from(right_operand_tensor.into_container_data())
+        //         .evaluate(&params.r_node_output.r);
+        // opening_accumulator.append_virtual(
+        //     transcript,
+        //     VirtualPolynomial::NodeOutput(params.computation_node.inputs[1]),
+        //     SumcheckId::Raf,
+        //     params.r_node_output.clone(),
+        //     right_operand_claim,
+        // );
+
         let lookup_indices =
             compute_lookup_indices_from_operands(&operands, is_interleaved_operands);
         let right_operand_poly = OperandPolynomial::new(LOG_K, OperandSide::Right);
@@ -288,11 +250,8 @@ where
         let eq_r_node_output =
             GruenSplitEqPolynomial::<F>::new(&params.r_node_output.r, BindingOrder::LowToHigh);
         // TODO: Adjust [PrefixSuffixDecomposition::init_Q_dual] and [PrefixSuffixDecomposition::init_Q] to be compatible with jolt-atlas usage
-        let (lookup_indices_uninterleave, lookup_indices_identity) = if is_interleaved_operands {
-            ((0..T).collect(), vec![])
-        } else {
-            (vec![], (0..T).collect())
-        };
+        let (lookup_indices_uninterleave, lookup_indices_identity) = ((0..T).collect(), vec![]);
+
         let mut res = Self {
             r: Vec::with_capacity(params.log_T + LOG_K),
             params,
@@ -585,9 +544,8 @@ where
     }
 }
 
-impl<F: JoltField, FS: Transcript, T> SumcheckInstanceProver<F, FS> for ReadRafSumcheckProver<F, T>
-where
-    T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
+impl<F: JoltField, FS: Transcript> SumcheckInstanceProver<F, FS>
+    for RangecheckRafSumcheckProver<F>
 {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
@@ -725,70 +683,52 @@ where
         let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutputRa(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            VirtualPolynomial::DivRangeCheckRa(self.params.computation_node.idx),
+            SumcheckId::Raf,
             opening_point,
             self.ra.as_ref().unwrap().final_sumcheck_claim(),
         );
     }
 }
 
-pub struct ReadRafSumcheckVerifier<F, T>
+pub struct RangecheckRafSumcheckVerifier<F>
 where
     F: JoltField,
-    T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
-    params: ReadRafSumcheckParams<F, T>,
+    params: RangecheckRafSumcheckParams<F>,
 }
 
-impl<F, T> ReadRafSumcheckVerifier<F, T>
+impl<F> RangecheckRafSumcheckVerifier<F>
 where
     F: JoltField,
-    T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
     pub fn new(
         computation_node: ComputationNode,
         opening_accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let params = ReadRafSumcheckParams::new(computation_node, opening_accumulator, transcript);
+        let params =
+            RangecheckRafSumcheckParams::new(computation_node, opening_accumulator, transcript);
         // Update accumulator
-        if params.computation_node.is_interleaved_operands() {
-            opening_accumulator.append_virtual(
-                transcript,
-                VirtualPolynomial::NodeOutput(params.computation_node.inputs[0]),
-                SumcheckId::Raf,
-                params.r_node_output.clone(),
-            );
-            opening_accumulator.append_virtual(
-                transcript,
-                VirtualPolynomial::NodeOutput(params.computation_node.inputs[1]),
-                SumcheckId::Raf,
-                params.r_node_output.clone(),
-            );
-        } else {
-            opening_accumulator.append_virtual(
-                transcript,
-                VirtualPolynomial::NodeOutput(params.computation_node.inputs[0]),
-                SumcheckId::Raf,
-                params.r_node_output.clone(),
-            );
-            opening_accumulator.append_virtual(
-                transcript,
-                VirtualPolynomial::NodeOutput(params.computation_node.inputs[0]),
-                SumcheckId::Execution,
-                params.r_node_output.clone(),
-            );
-        }
+        opening_accumulator.append_virtual(
+            transcript,
+            VirtualPolynomial::DivNodeRemainder(params.computation_node.idx),
+            SumcheckId::Execution,
+            params.r_node_output.clone(),
+        );
+        opening_accumulator.append_virtual(
+            transcript,
+            VirtualPolynomial::NodeOutput(params.computation_node.inputs[1]),
+            SumcheckId::Execution,
+            params.r_node_output.clone(),
+        );
 
         Self { params }
     }
 }
 
-impl<F: JoltField, FS: Transcript, T> SumcheckInstanceVerifier<F, FS>
-    for ReadRafSumcheckVerifier<F, T>
-where
-    T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
+impl<F: JoltField, FS: Transcript> SumcheckInstanceVerifier<F, FS>
+    for RangecheckRafSumcheckVerifier<F>
 {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
@@ -802,8 +742,8 @@ where
         let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
         let (r_address_prime, r_node_output_prime) = opening_point.split_at(LOG_K);
         let (_, ra_claim) = accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutputRa(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            VirtualPolynomial::DivRangeCheckRa(self.params.computation_node.idx),
+            SumcheckId::Raf,
         );
         let val_claim = self.params.table.evaluate_mle(&r_address_prime.r);
         let eq_eval = EqPolynomial::mle(&self.params.r_node_output.r, &r_node_output_prime.r);
@@ -831,8 +771,8 @@ where
         let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutputRa(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            VirtualPolynomial::DivRangeCheckRa(self.params.computation_node.idx),
+            SumcheckId::Raf,
             opening_point,
         );
     }
@@ -840,64 +780,41 @@ where
 
 pub fn compute_lookup_indices_from_operands(
     operand_tensors: &[&Tensor<i32>],
-    is_interleaved_operands: bool,
+    _is_interleaved_operands: bool,
 ) -> Vec<LookupBits> {
-    if is_interleaved_operands {
-        // Interleaved mode: requires exactly 2 operand tensors
-        assert_eq!(
-            operand_tensors.len(),
-            2,
-            "Interleaved operands mode requires exactly 2 input tensors, but got {}",
-            operand_tensors.len()
-        );
+    // Interleaved mode: requires exactly 2 operand tensors
+    assert_eq!(
+        operand_tensors.len(),
+        2,
+        "Interleaved operands mode requires exactly 2 input tensors, but got {}",
+        operand_tensors.len()
+    );
 
-        let left_operand = operand_tensors[0];
-        let right_operand = operand_tensors[1];
+    let left_operand = operand_tensors[0];
+    let right_operand = operand_tensors[1];
 
-        // Validate that both tensors have the same length
-        assert_eq!(
-            left_operand.len(),
-            right_operand.len(),
-            "Interleaved operands must have the same length: left={}, right={}",
-            left_operand.len(),
-            right_operand.len()
-        );
+    // Validate that both tensors have the same length
+    assert_eq!(
+        left_operand.len(),
+        right_operand.len(),
+        "Interleaved operands must have the same length: left={}, right={}",
+        left_operand.len(),
+        right_operand.len()
+    );
 
-        // Interleave bits from both operands to form lookup indices
-        left_operand
-            .data()
-            .par_iter()
-            .zip(right_operand.data().par_iter())
-            .map(|(&left_val, &right_val)| {
-                // Cast to u64 for interleaving
-                let left_bits = left_val as u32;
-                let right_bits = right_val as u32;
-                let interleaved = interleave_bits(left_bits, right_bits);
-                LookupBits::new(interleaved, LOG_K)
-            })
-            .collect()
-    } else {
-        // Single operand mode: requires exactly 1 input tensor
-        assert_eq!(
-            operand_tensors.len(),
-            1,
-            "Single operand mode requires exactly 1 input tensor, but got {}",
-            operand_tensors.len()
-        );
-
-        let operand = operand_tensors[0];
-
-        // Use tensor values directly as lookup indices
-        operand
-            .data()
-            .par_iter()
-            .map(|&value| {
-                // Cast to u64 for consistent bit representation
-                let index = value as u32 as u64;
-                LookupBits::new(index, LOG_K)
-            })
-            .collect()
-    }
+    // Interleave bits from both operands to form lookup indices
+    left_operand
+        .data()
+        .par_iter()
+        .zip(right_operand.data().par_iter())
+        .map(|(&left_val, &right_val)| {
+            // Cast to u64 for interleaving
+            let left_bits = left_val as u32;
+            let right_bits = right_val as u32;
+            let interleaved = interleave_bits(left_bits, right_bits);
+            LookupBits::new(interleaved, LOG_K)
+        })
+        .collect()
 }
 
 #[cfg(test)]

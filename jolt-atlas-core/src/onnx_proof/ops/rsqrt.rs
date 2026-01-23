@@ -44,6 +44,18 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
             &mut prover.accumulator,
             &mut prover.transcript,
         );
+
+        // let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
+        //     Box::new(ra_prover_sumcheck),
+        //     Box::new(lookups_ra_booleanity),
+        //     Box::new(lookups_ra_hamming_weight),
+        // ];
+        // let (range_checking_proof, _) = BatchedSumcheck::prove(
+        //     instances.iter_mut().map(|v| &mut **v as _).collect(),
+        //     &mut prover.accumulator,
+        //     &mut prover.transcript,
+        // );
+
         vec![(ProofId(node.idx, ProofType::Execution), proof)]
     }
 
@@ -299,18 +311,18 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RsqrtProver<F
             opening_point.r.clone(),
             self.rsqrt.final_sumcheck_claim(),
         );
-        accumulator.append_dense(
+        accumulator.append_virtual(
             transcript,
-            CommittedPolynomial::RsqrtNodeRi(self.params.computation_node.idx),
+            VirtualPolynomial::RsqrtNodeRi(self.params.computation_node.idx),
             SumcheckId::Execution,
-            opening_point.r.clone(),
+            opening_point.clone(),
             self.r_i.final_sumcheck_claim(),
         );
-        accumulator.append_dense(
+        accumulator.append_virtual(
             transcript,
-            CommittedPolynomial::RsqrtNodeRs(self.params.computation_node.idx),
+            VirtualPolynomial::RsqrtNodeRs(self.params.computation_node.idx),
             SumcheckId::Execution,
-            opening_point.r.clone(),
+            opening_point.clone(),
             self.r_s.final_sumcheck_claim(),
         );
     }
@@ -365,8 +377,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RsqrtVerifi
             )
             .1;
         let r_i_claim = accumulator
-            .get_committed_polynomial_opening(
-                CommittedPolynomial::RsqrtNodeRi(self.params.computation_node.idx),
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::RsqrtNodeRi(self.params.computation_node.idx),
                 SumcheckId::Execution,
             )
             .1;
@@ -377,8 +389,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RsqrtVerifi
             )
             .1;
         let r_s_claim = accumulator
-            .get_committed_polynomial_opening(
-                CommittedPolynomial::RsqrtNodeRs(self.params.computation_node.idx),
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::RsqrtNodeRs(self.params.computation_node.idx),
                 SumcheckId::Execution,
             )
             .1;
@@ -413,17 +425,17 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RsqrtVerifi
             SumcheckId::Execution,
             opening_point.r.clone(),
         );
-        accumulator.append_dense(
+        accumulator.append_virtual(
             transcript,
-            CommittedPolynomial::RsqrtNodeRi(self.params.computation_node.idx),
+            VirtualPolynomial::RsqrtNodeRi(self.params.computation_node.idx),
             SumcheckId::Execution,
-            opening_point.r.clone(),
+            opening_point.clone(),
         );
-        accumulator.append_dense(
+        accumulator.append_virtual(
             transcript,
-            CommittedPolynomial::RsqrtNodeRs(self.params.computation_node.idx),
+            VirtualPolynomial::RsqrtNodeRs(self.params.computation_node.idx),
             SumcheckId::Execution,
-            opening_point.r.clone(),
+            opening_point.clone(),
         );
     }
 }

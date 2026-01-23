@@ -40,12 +40,12 @@ pub fn ra_hamming_weight_params<F: JoltField>(
     let gamma_powers = transcript.challenge_scalar_powers(one_hot_params.instruction_d);
 
     let polynomial_types: Vec<CommittedPolynomial> = (0..one_hot_params.instruction_d)
-        .map(|i| CommittedPolynomial::NodeOutputRaD(computation_node.idx, i))
+        .map(|i| CommittedPolynomial::DivRangeCheckRaD(computation_node.idx, i))
         .collect();
 
     let r_cycle = opening_accumulator
         .get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(computation_node.idx),
+            VirtualPolynomial::DivRangeCheckRa(computation_node.idx),
             SumcheckId::Execution,
         )
         .0
@@ -68,11 +68,11 @@ pub fn ra_booleanity_params<F: JoltField>(
     transcript: &mut impl Transcript,
 ) -> BooleanitySumcheckParams<F> {
     let polynomial_types: Vec<CommittedPolynomial> = (0..one_hot_params.instruction_d)
-        .map(|i| CommittedPolynomial::NodeOutputRaD(computation_node.idx, i))
+        .map(|i| CommittedPolynomial::DivRangeCheckRaD(computation_node.idx, i))
         .collect();
 
     let (r_cycle, _) = opening_accumulator.get_virtual_polynomial_opening(
-        VirtualPolynomial::NodeOutput(computation_node.idx),
+        VirtualPolynomial::DivRangeCheckRa(computation_node.idx),
         SumcheckId::Execution,
     );
 

@@ -152,3 +152,114 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::onnx_proof::AtlasSharedPreprocessing;
+
+    use super::*;
+    use ark_bn254::Fr;
+    use atlas_onnx_tracer::{
+        model::{
+            self,
+            trace::{LayerData, Trace},
+        },
+        tensor::Tensor,
+    };
+    use common::VirtualPolynomial;
+    use joltworks::{
+        field::JoltField,
+        poly::{
+            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+            opening_proof::{
+                OpeningPoint, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
+                BIG_ENDIAN,
+            },
+        },
+        transcripts::{Blake2bTranscript, Transcript},
+    };
+    use rand::{rngs::StdRng, SeedableRng};
+
+    #[test]
+    fn test_relu() {
+        let log_T = 16;
+        let T = 1 << log_T;
+        let mut rng = StdRng::seed_from_u64(0x888);
+        let input = Tensor::<i32>::random_small(&mut rng, &[T]);
+        let model = model::test::relu_model(T);
+        let trace = model.trace(&[input]);
+
+        let prover_transcript = Blake2bTranscript::new(&[]);
+        let preprocessing: AtlasSharedPreprocessing =
+            AtlasSharedPreprocessing::preprocess(model.clone());
+        let prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
+            ProverOpeningAccumulator::new(log_T);
+        let mut prover = Prover {
+            trace: trace.clone(),
+            accumulator: prover_opening_accumulator,
+            preprocessing,
+            transcript: prover_transcript,
+        };
+
+        let r_node_output: Vec<<Fr as JoltField>::Challenge> =
+            prover.transcript.challenge_vector_optimized::<Fr>(log_T);
+
+        let output_index = model.outputs()[0];
+        let computation_node = &model[output_index];
+        let LayerData {
+            operands: _,
+            output,
+        } = Trace::layer_data(&trace, computation_node);
+
+        let relu_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
+        prover.accumulator.append_virtual(
+            &mut prover.transcript,
+            VirtualPolynomial::NodeOutput(output_index),
+            SumcheckId::Execution,
+            r_node_output.clone().into(),
+            relu_claim,
+        );
+
+        let proofs = ReLU.prove(computation_node, &mut prover);
+        let proofs = BTreeMap::from_iter(proofs);
+
+        let verifier_transcript = Blake2bTranscript::new(&[]);
+        let verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
+            VerifierOpeningAccumulator::new(log_T);
+
+        let io = Trace::io(&trace, &model);
+
+        let mut verifier = Verifier {
+            proofs: &proofs,
+            accumulator: verifier_opening_accumulator,
+            preprocessing: &prover.preprocessing.clone(),
+            io: &io,
+            transcript: verifier_transcript,
+        };
+        let _r_node_output: Vec<<Fr as JoltField>::Challenge> =
+            verifier.transcript.challenge_vector_optimized::<Fr>(log_T);
+
+        // Take claims
+        for (key, (_, value)) in &prover.accumulator.openings {
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
+            verifier
+                .accumulator
+                .openings
+                .insert(*key, (empty_point, *value));
+        }
+
+        verifier.accumulator.append_virtual(
+            &mut verifier.transcript,
+            VirtualPolynomial::NodeOutput(output_index),
+            SumcheckId::Execution,
+            r_node_output.into(),
+        );
+
+        let res = ReLU.verify(computation_node, &mut verifier);
+
+        prover.transcript.compare_to(verifier.transcript.clone());
+        res.unwrap();
+    }
+}

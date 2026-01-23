@@ -55,7 +55,7 @@ impl<F: JoltField> InstructionRaSumcheckParams<F> {
         opening_accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
         let (r, _) = opening_accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutputRa(computation_node.idx),
+            VirtualPolynomial::DivRangeCheckRa(computation_node.idx),
             SumcheckId::Execution,
         );
         let (r_address, r_cycle) = r.split_at(LOG_K);
@@ -75,7 +75,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for InstructionRaSumcheckParams<F> 
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         let (_, ra_claim) = accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutputRa(self.computation_node.idx),
+            VirtualPolynomial::DivRangeCheckRa(self.computation_node.idx),
             SumcheckId::Execution,
         );
         ra_claim
@@ -174,7 +174,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for InstructionRa
     ) {
         let r_cycle = self.params.normalize_opening_point(sumcheck_challenges);
         let (r, _) = accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutputRa(self.params.computation_node.idx),
+            VirtualPolynomial::DivRangeCheckRa(self.params.computation_node.idx),
             SumcheckId::Execution,
         );
 
@@ -190,7 +190,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for InstructionRa
             let claim = self.ra_i_polys[i].final_sumcheck_claim();
             accumulator.append_sparse(
                 transcript,
-                vec![CommittedPolynomial::NodeOutputRaD(
+                vec![CommittedPolynomial::DivRangeCheckRaD(
                     self.params.computation_node.idx,
                     i,
                 )],
@@ -234,7 +234,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RaSumcheckV
         let ra_claim_prod: F = (0..self.params.one_hot_params.instruction_d)
             .map(|i| {
                 let (_, ra_i_claim) = accumulator.get_committed_polynomial_opening(
-                    CommittedPolynomial::NodeOutputRaD(self.params.computation_node.idx, i),
+                    CommittedPolynomial::DivRangeCheckRaD(self.params.computation_node.idx, i),
                     SumcheckId::RaVirtualization,
                 );
                 ra_i_claim
@@ -252,7 +252,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RaSumcheckV
     ) {
         let r_cycle = self.params.normalize_opening_point(sumcheck_challenges);
         let (r, _) = accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutputRa(self.params.computation_node.idx),
+            VirtualPolynomial::DivRangeCheckRa(self.params.computation_node.idx),
             SumcheckId::Execution,
         );
 
@@ -269,7 +269,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RaSumcheckV
 
             accumulator.append_sparse(
                 transcript,
-                vec![CommittedPolynomial::NodeOutputRaD(
+                vec![CommittedPolynomial::DivRangeCheckRaD(
                     self.params.computation_node.idx,
                     i,
                 )],

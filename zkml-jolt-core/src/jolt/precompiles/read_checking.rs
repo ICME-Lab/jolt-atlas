@@ -81,7 +81,7 @@ impl<F: JoltField> SumcheckInstance<F> for ReadCheckingABCSumcheck<F> {
         univariate_poly_evals.into()
     }
 
-    fn bind(&mut self, r_j: F, _round: usize) {
+    fn bind(&mut self, r_j: F::Challenge, _round: usize) {
         let prover_state = self
             .prover_state
             .as_mut()
@@ -155,7 +155,7 @@ impl<F: JoltField> SumcheckInstance<F> for ReadCheckingABCSumcheck<F> {
 
     fn normalize_opening_point(
         &self,
-        opening_point: &[F],
+        opening_point: &[F::Challenge],
     ) -> jolt_core::poly::opening_proof::OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::new(opening_point.to_vec())
     }
@@ -165,7 +165,7 @@ impl<F: JoltField> SumcheckInstance<F> for ReadCheckingABCSumcheck<F> {
         opening_accumulator: Option<
             std::rc::Rc<std::cell::RefCell<crate::jolt::pcs::VerifierOpeningAccumulator<F>>>,
         >,
-        _r: &[F],
+        _r: &[F::Challenge],
     ) -> F {
         let accumulator = opening_accumulator.as_ref().unwrap();
         let (_, val_final_claim) = accumulator.borrow().get_virtual_polynomial_opening(
@@ -260,9 +260,12 @@ impl<F: JoltField> ReadCheckingABCSumcheck<F> {
             rv_claim += gamma_powers[index * 3] * rv_claim_a
                 + gamma_powers[index * 3 + 1] * rv_claim_b
                 + gamma_powers[index * 3 + 2] * rv_claim_c;
-            ra_a.push(pp.instances[index].compute_ra(&r_a.r, |m| &m.a_addr, K));
-            ra_b.push(pp.instances[index].compute_ra(&r_b.r, |m| &m.b_addr, K));
-            ra_c.push(pp.instances[index].compute_ra(&r_c.r, |m| &m.c_addr, K));
+            let r_a_field: Vec<F> = r_a.r.iter().map(|&x| x.into()).collect();
+            let r_b_field: Vec<F> = r_b.r.iter().map(|&x| x.into()).collect();
+            let r_c_field: Vec<F> = r_c.r.iter().map(|&x| x.into()).collect();
+            ra_a.push(pp.instances[index].compute_ra(&r_a_field, |m| &m.a_addr, K));
+            ra_b.push(pp.instances[index].compute_ra(&r_b_field, |m| &m.b_addr, K));
+            ra_c.push(pp.instances[index].compute_ra(&r_c_field, |m| &m.c_addr, K));
         }
         Self {
             prover_state: Some(ReadCheckingABCProverState {

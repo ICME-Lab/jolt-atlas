@@ -42,7 +42,7 @@ pub type SuffixEval<F> = jolt_core::zkvm::lookup_table::suffixes::SuffixEval<F>;
 impl Suffixes {
     /// Evaluates the MLE for this suffix on the bitvector `b`, where
     /// `b` represents `b.len()` variables, each assuming a Boolean value.
-    pub fn suffix_mle<const WORD_SIZE: usize>(&self, b: LookupBits) -> u32 {
+    pub fn suffix_mle<const WORD_SIZE: usize>(&self, b: LookupBits) -> u64 {
         match self {
             Suffixes::And => AndSuffix::suffix_mle(b),
             Suffixes::DivByZero => DivByZeroSuffix::suffix_mle(b),

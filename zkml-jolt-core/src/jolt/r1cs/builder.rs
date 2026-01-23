@@ -1,15 +1,9 @@
 use crate::jolt::r1cs::{
+    compat::{Constraint, LC, Term, Variable},
     inputs::JoltONNXR1CSInputs,
     key::{SparseConstraints, UniformR1CS},
 };
-use jolt_core::{
-    field::JoltField,
-    poly::multilinear_polynomial::MultilinearPolynomial,
-    zkvm::r1cs::{
-        builder::Constraint,
-        ops::{LC, Term, Variable},
-    },
-};
+use jolt_core::{field::JoltField, poly::multilinear_polynomial::MultilinearPolynomial};
 use std::{fmt::Write as _, marker::PhantomData};
 
 #[derive(Default)]

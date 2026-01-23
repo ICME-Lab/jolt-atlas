@@ -83,6 +83,7 @@ impl TryFrom<&JoltPrefixes> for AtlasPrefixes {
             JoltPrefixes::SignExtension => AtlasPrefixes::SignExtension,
             JoltPrefixes::UpperWord => AtlasPrefixes::UpperWord,
             JoltPrefixes::Xor => AtlasPrefixes::Xor,
+            _ => return Err("Unsupported Jolt prefix for Atlas conversion"),
         };
         Ok(result)
     }
@@ -96,7 +97,7 @@ macro_rules! impl_sparse_dense_atlas {
             impl<$(const $generic_const: usize,)? F: JoltField> AtlasSparseDensePrefix<F> for $prefix_type$(<$generic_const>)? {
                 fn prefix_mle(
                     checkpoints: &[AtlasPrefixCheckpoint<F>],
-                    r_x: Option<F>,
+                    r_x: Option<F::Challenge>,
                     c: u32,
                     b: LookupBits,
                     j: usize,
@@ -109,9 +110,10 @@ macro_rules! impl_sparse_dense_atlas {
 
                 fn update_prefix_checkpoint(
                     checkpoints: &[AtlasPrefixCheckpoint<F>],
-                    r_x: F,
-                    r_y: F,
+                    r_x: F::Challenge,
+                    r_y: F::Challenge,
                     j: usize,
+                    phase_length: usize,
                 ) -> AtlasPrefixCheckpoint<F> {
                     let checkpoints: Vec<JoltPrefixCheckpoint<F>> = map_atlas_checkpoints_to_jolt(checkpoints);
                     let cp = <$prefix_type$(<$generic_const>)? as JoltSparseDensePrefix<F>>::update_prefix_checkpoint(
@@ -119,6 +121,7 @@ macro_rules! impl_sparse_dense_atlas {
                         r_x,
                         r_y,
                         j,
+                        phase_length,
                     );
                     cp.into()
                 }

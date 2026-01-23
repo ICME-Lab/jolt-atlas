@@ -84,15 +84,16 @@ impl<F: JoltField> ExecutionSumcheck<F> {
         let dictionary = pp.extract_rv(final_memory_state, |m| &m.b_addr);
         let output = pp.extract_rv(final_memory_state, |m| &m.c_addr);
 
-        let r_c: Vec<F> = sm
+        let r_c: Vec<F::Challenge> = sm
             .get_transcript()
             .borrow_mut()
-            .challenge_vector(num_lookups_padded.log_2() + word_dim_padded.log_2());
+            .challenge_vector_optimized::<F>(num_lookups_padded.log_2() + word_dim_padded.log_2());
 
         let (r_x, r_y) = r_c.split_at(num_lookups_padded.log_2());
 
         // Create openings that are inserted in the state manager before creating instances
-        let rv_claim_c = MultilinearPolynomial::from(output).evaluate(&r_c);
+        let r_c_field: Vec<F> = r_c.iter().map(|&x| x.into()).collect();
+        let rv_claim_c = MultilinearPolynomial::from(output).evaluate(&r_c_field);
         sm.get_prover_accumulator().borrow_mut().append_virtual(
             VirtualPolynomial::PrecompileC(index),
             SumcheckId::PrecompileExecution,
@@ -100,7 +101,8 @@ impl<F: JoltField> ExecutionSumcheck<F> {
             rv_claim_c,
         );
 
-        let rv_claim_a = MultilinearPolynomial::from(read_addresses).evaluate(r_x);
+        let r_x_field: Vec<F> = r_x.iter().map(|&x| x.into()).collect();
+        let rv_claim_a = MultilinearPolynomial::from(read_addresses).evaluate(&r_x_field);
         sm.get_prover_accumulator().borrow_mut().append_virtual(
             VirtualPolynomial::PrecompileA(index),
             SumcheckId::PrecompileExecution,
@@ -109,9 +111,10 @@ impl<F: JoltField> ExecutionSumcheck<F> {
         );
         assert_eq!(r_y.len(), word_dim_padded.log_2());
 
-        let ra_folded = compute_ra_evals(r_x, &read_addresses_usize, num_words_padded);
+        let ra_folded = compute_ra_evals(&r_x_field, &read_addresses_usize, num_words_padded);
 
-        let eq_r_y = EqPolynomial::evals(r_y);
+        let r_y_field: Vec<F> = r_y.iter().map(|&x| x.into()).collect();
+        let eq_r_y: Vec<F> = EqPolynomial::evals(&r_y_field);
         // dictionary, folded to a single column
         let dictionary_folded: Vec<F> = dictionary
             .chunks(word_dim_padded)
@@ -194,10 +197,10 @@ impl<F: JoltField> ExecutionSumcheck<F> {
         let num_words_padded = pp.b_dims[0];
         let word_dim_padded = pp.b_dims[1];
 
-        let r_c: Vec<F> = sm
+        let r_c: Vec<F::Challenge> = sm
             .get_transcript()
             .borrow_mut()
-            .challenge_vector(num_lookups_padded.log_2() + word_dim_padded.log_2());
+            .challenge_vector_optimized::<F>(num_lookups_padded.log_2() + word_dim_padded.log_2());
 
         let (r_x, _r_y) = r_c.split_at(num_lookups_padded.log_2());
 
@@ -361,7 +364,7 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
         }
     }
 
-    fn bind(&mut self, r_j: F, round: usize) {
+    fn bind(&mut self, r_j: F::Challenge, round: usize) {
         if round < self.lookups_vars {
             // Not yet to raf and rv's variables
             self.booleanity.bind(r_j, round);
@@ -394,7 +397,7 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
     fn expected_output_claim(
         &self,
         opening_accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-        r: &[F],
+        r: &[F::Challenge],
     ) -> F {
         // Getting challenge slices for rv, raf and hb sumchecks
         let (r_lookups, r_words) = r.split_at(self.lookups_vars);
@@ -418,10 +421,10 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
             + self.gamma_powers[3] * self.rv.expected_output_claim(opening_accumulator, r_words)
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        let mut opening_point = opening_point.to_vec();
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+        let mut opening_point: Vec<F::Challenge> = opening_point.to_vec();
         opening_point.reverse();
-        opening_point.into()
+        OpeningPoint::new(opening_point)
     }
 
     fn cache_openings_prover(
@@ -488,7 +491,8 @@ impl<F: JoltField> HammingWeightSumcheck<F> {
             SumcheckId::GatherHB,
         );
 
-        let F = compute_ra_evals(&r_x.r, &read_addresses_usize, num_words_padded);
+        let r_x_field: Vec<F> = r_x.r.iter().map(|&x| x.into()).collect();
+        let F = compute_ra_evals(&r_x_field, &read_addresses_usize, num_words_padded);
 
         HwSumcheck::new_prover(sm, num_words_padded, F, index)
     }

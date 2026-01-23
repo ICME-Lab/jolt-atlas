@@ -146,7 +146,7 @@ impl<F: JoltField> SumcheckInstance<F> for ValFinalSumcheck<F> {
     }
 
     #[tracing::instrument(skip_all, name = "ValFinalSumcheck::bind")]
-    fn bind(&mut self, r_j: F, _: usize) {
+    fn bind(&mut self, r_j: F::Challenge, _: usize) {
         let ValFinalSumcheckProverState { inc, wa, .. } = self.prover_state.as_mut().unwrap();
         rayon::join(
             || inc.bind_parallel(r_j, BindingOrder::HighToLow),
@@ -157,7 +157,7 @@ impl<F: JoltField> SumcheckInstance<F> for ValFinalSumcheck<F> {
     fn expected_output_claim(
         &self,
         accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-        _: &[F],
+        _: &[F::Challenge],
     ) -> F {
         let accumulator = accumulator.as_ref().unwrap().borrow();
         let inc_claim = accumulator
@@ -173,7 +173,7 @@ impl<F: JoltField> SumcheckInstance<F> for ValFinalSumcheck<F> {
         inc_claim * wa_claim
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::new(opening_point.to_vec())
     }
 

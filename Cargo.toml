@@ -38,7 +38,7 @@ regex = "1.10.6"
 serde_json = "1.0.108"
 ark-bn254 = "0.5.0"
 ark-serialize = { workspace = true }
-jolt-core = { git = "https://github.com/ICME-Lab/zkml-jolt", branch = "dev", package = "jolt-core", default-features = true }
+jolt-core = { path = "../zkml-jolt/jolt-core", package = "jolt-core", default-features = true }
 
 
 [[example]]
@@ -76,3 +76,4 @@ ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist
 ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
 ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }

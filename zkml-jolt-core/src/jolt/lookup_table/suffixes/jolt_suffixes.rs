@@ -36,6 +36,7 @@ impl TryFrom<JoltSuffixes> for AtlasSuffixes {
             JoltSuffixes::SignExtension => AtlasSuffixes::SignExtension,
             JoltSuffixes::UpperWord => AtlasSuffixes::UpperWord,
             JoltSuffixes::Xor => AtlasSuffixes::Xor,
+            _ => return Err("Unsupported Jolt suffix for Atlas conversion"),
         };
         Ok(result)
     }

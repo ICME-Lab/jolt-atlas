@@ -4,7 +4,6 @@ use jolt_core::{
     field::JoltField,
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
-        compact_polynomial::SmallScalar,
         eq_poly::EqPolynomial,
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::{
@@ -15,6 +14,7 @@ use jolt_core::{
     transcripts::Transcript,
     utils::{
         math::Math,
+        small_scalar::SmallScalar,
         thread::{drop_in_background_thread, unsafe_allocate_zero_vec},
     },
 };
@@ -77,8 +77,8 @@ pub struct ReadValueSumcheck<F: JoltField> {
     // Dimension over which sumcheck is ran
     num_words: usize,
     rv_claim: F,
-    r_x: Vec<F>,
-    r_y: Vec<F>,
+    r_x: Vec<F::Challenge>,
+    r_y: Vec<F::Challenge>,
     // Index of the gather instance
     index: usize,
 }
@@ -171,7 +171,7 @@ impl<F: JoltField> SumcheckInstance<F> for ReadValueSumcheck<F> {
     }
 
     #[tracing::instrument(skip_all)]
-    fn bind(&mut self, r_j: F, _: usize) {
+    fn bind(&mut self, r_j: F::Challenge, _: usize) {
         let ReadValueProverState { ra, dict_folded } = self.prover_state.as_mut().unwrap();
         rayon::join(
             || ra.bind_parallel(r_j, BindingOrder::LowToHigh),
@@ -182,7 +182,7 @@ impl<F: JoltField> SumcheckInstance<F> for ReadValueSumcheck<F> {
     fn expected_output_claim(
         &self,
         accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-        _r: &[F],
+        _r: &[F::Challenge],
     ) -> F {
         let accumulator = accumulator.as_ref().unwrap();
 
@@ -198,10 +198,10 @@ impl<F: JoltField> SumcheckInstance<F> for ReadValueSumcheck<F> {
         ra_claim * dict_claim
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        let mut opening_point = opening_point.to_vec();
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+        let mut opening_point: Vec<F::Challenge> = opening_point.to_vec();
         opening_point.reverse();
-        opening_point.into()
+        OpeningPoint::new(opening_point)
     }
 
     fn cache_openings_prover(
@@ -273,7 +273,7 @@ pub struct HammingBooleanitySumcheck<F: JoltField> {
     prover_state: Option<HammingBooleanityProverState<F>>,
     // Dimension over which sumcheck is ran
     num_lookups: usize,
-    r_x: Vec<F>,
+    r_x: Vec<F::Challenge>,
     // Index of the gather instance
     index: usize,
 }
@@ -293,7 +293,8 @@ impl<F: JoltField> HammingBooleanitySumcheck<F> {
             SumcheckId::PrecompileExecution,
         );
 
-        let eq_r_x = EqPolynomial::evals(&r_x.r);
+        let r_x_field: Vec<F> = r_x.r.iter().map(|&x| x.into()).collect();
+        let eq_r_x = EqPolynomial::evals(&r_x_field);
         let hw_boolean_prover_state = HammingBooleanityProverState::new(hw, eq_r_x);
 
         Self {
@@ -369,7 +370,7 @@ impl<F: JoltField> SumcheckInstance<F> for HammingBooleanitySumcheck<F> {
     }
 
     #[tracing::instrument(skip_all)]
-    fn bind(&mut self, r_j: F, _: usize) {
+    fn bind(&mut self, r_j: F::Challenge, _: usize) {
         let HammingBooleanityProverState { hw, eq_r_x } = self.prover_state.as_mut().unwrap();
         rayon::join(
             || hw.bind_parallel(r_j, BindingOrder::LowToHigh),
@@ -380,7 +381,7 @@ impl<F: JoltField> SumcheckInstance<F> for HammingBooleanitySumcheck<F> {
     fn expected_output_claim(
         &self,
         accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-        r: &[F],
+        r: &[F::Challenge],
     ) -> F {
         let accumulator = accumulator.as_ref().unwrap();
 
@@ -389,15 +390,17 @@ impl<F: JoltField> SumcheckInstance<F> for HammingBooleanitySumcheck<F> {
             SumcheckId::GatherHB,
         );
 
-        let eq = EqPolynomial::mle(&self.r_x.iter().cloned().rev().collect::<Vec<F>>(), r);
+        let r_field: Vec<F> = r.iter().map(|&x| x.into()).collect();
+        let r_x_field: Vec<F> = self.r_x.iter().map(|&x| x.into()).collect();
+        let eq = EqPolynomial::mle(&r_x_field.into_iter().rev().collect::<Vec<F>>(), &r_field);
 
         eq * (hw_claim.square() - hw_claim)
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        let mut opening_point = opening_point.to_vec();
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+        let mut opening_point: Vec<F::Challenge> = opening_point.to_vec();
         opening_point.reverse();
-        opening_point.into()
+        OpeningPoint::new(opening_point)
     }
 
     fn cache_openings_prover(
@@ -448,7 +451,7 @@ impl<F: JoltField> BooleanityProverState<F> {
         r_words: &[F],
         num_words: usize,
     ) -> Self {
-        let B = MultilinearPolynomial::from(EqPolynomial::evals(r_words));
+        let B = MultilinearPolynomial::from(EqPolynomial::<F>::evals(r_words));
 
         let mut F_vec: Vec<F> = unsafe_allocate_zero_vec(num_words);
         F_vec[0] = F::one();
@@ -473,8 +476,8 @@ pub struct BooleanitySumcheck<F: JoltField> {
     prover_state: Option<BooleanityProverState<F>>,
     num_lookups: usize,
     num_words: usize,
-    r_x: Vec<F>,
-    r_words: Vec<F>,
+    r_x: Vec<F::Challenge>,
+    r_words: Vec<F::Challenge>,
     index: usize,
 }
 
@@ -496,16 +499,18 @@ impl<F: JoltField> BooleanitySumcheck<F> {
         // Generate a random challenge to complete with r_x for RA booleanity sumcheck:
         // r_x spans over the input length (column-length of RA matrix),
         // this random challenge will span over the number of words (row-length of RA matrix)
-        let r_words = sm
+        let r_words: Vec<F::Challenge> = sm
             .get_transcript()
             .borrow_mut()
-            .challenge_vector(num_words.log_2());
+            .challenge_vector_optimized::<F>(num_words.log_2());
 
+        let r_x_field: Vec<F> = r_x.r.iter().map(|&x| x.into()).collect();
+        let r_words_field: Vec<F> = r_words.iter().map(|&x| x.into()).collect();
         let booleanity_prover_state = BooleanityProverState::new(
             read_addresses,
-            EqPolynomial::evals(&r_x.r),
+            EqPolynomial::evals(&r_x_field),
             G,
-            &r_words,
+            &r_words_field,
             num_words,
         );
 
@@ -530,10 +535,10 @@ impl<F: JoltField> BooleanitySumcheck<F> {
             SumcheckId::PrecompileExecution,
         );
 
-        let r_words = sm
+        let r_words: Vec<F::Challenge> = sm
             .get_transcript()
             .borrow_mut()
-            .challenge_vector(num_words.log_2());
+            .challenge_vector_optimized::<F>(num_words.log_2());
 
         Self {
             prover_state: None,
@@ -571,7 +576,8 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
     }
 
     #[tracing::instrument(skip_all)]
-    fn bind(&mut self, r_j: F, round: usize) {
+    fn bind(&mut self, r_j: F::Challenge, round: usize) {
+        let r_j_field: F = r_j.into();
         let ps = self.prover_state.as_mut().unwrap();
 
         if round < self.num_words.log_2() {
@@ -584,7 +590,7 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
                 .par_iter_mut()
                 .zip(F_right.par_iter_mut())
                 .for_each(|(x, y)| {
-                    *y = *x * r_j;
+                    *y = *x * r_j_field;
                     *x -= *y;
                 });
 
@@ -623,7 +629,7 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
     fn expected_output_claim(
         &self,
         accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-        r: &[F],
+        r: &[F::Challenge],
     ) -> F {
         let accumulator = accumulator.as_ref().unwrap();
         let (_, ra_claim) = accumulator.borrow().get_virtual_polynomial_opening(
@@ -631,22 +637,23 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
             SumcheckId::GatherBooleanity,
         );
 
+        let r_field: Vec<F> = r.iter().map(|&x| x.into()).collect();
+        let r_words_field: Vec<F> = self.r_words.iter().map(|&x| x.into()).collect();
+        let r_x_field: Vec<F> = self.r_x.iter().map(|&x| x.into()).collect();
         EqPolynomial::mle(
-            r,
-            &self
-                .r_words
-                .iter()
-                .cloned()
+            &r_field,
+            &r_words_field
+                .into_iter()
                 .rev()
-                .chain(self.r_x.iter().cloned().rev())
+                .chain(r_x_field.into_iter().rev())
                 .collect::<Vec<F>>(),
         ) * (ra_claim.square() - ra_claim)
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        let mut opening_point = opening_point.to_vec();
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+        let mut opening_point: Vec<F::Challenge> = opening_point.to_vec();
         opening_point.reverse();
-        opening_point.into()
+        OpeningPoint::new(opening_point)
     }
 
     fn cache_openings_prover(
@@ -825,7 +832,7 @@ pub struct RafSumcheck<F: JoltField> {
     num_words: usize,
     rv_claim_a: F,
     int: IdentityPolynomial<F>,
-    r_x: Vec<F>,
+    r_x: Vec<F::Challenge>,
     // Index of the gather instance
     index: usize,
 }
@@ -920,7 +927,7 @@ impl<F: JoltField> SumcheckInstance<F> for RafSumcheck<F> {
     }
 
     #[tracing::instrument(skip_all)]
-    fn bind(&mut self, r_j: F, _: usize) {
+    fn bind(&mut self, r_j: F::Challenge, _: usize) {
         let RafProverState { ra } = self.prover_state.as_mut().unwrap();
         let int = &mut self.int;
         rayon::join(
@@ -932,7 +939,7 @@ impl<F: JoltField> SumcheckInstance<F> for RafSumcheck<F> {
     fn expected_output_claim(
         &self,
         accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-        r: &[F],
+        r: &[F::Challenge],
     ) -> F {
         let accumulator = accumulator.as_ref().unwrap();
 
@@ -940,17 +947,16 @@ impl<F: JoltField> SumcheckInstance<F> for RafSumcheck<F> {
             VirtualPolynomial::GatherRa(self.index),
             SumcheckId::GatherRaf,
         );
-        let int_claim = self
-            .int
-            .evaluate(&r.iter().copied().rev().collect::<Vec<F>>());
+        let r_rev: Vec<F::Challenge> = r.iter().copied().rev().collect();
+        let int_claim = self.int.evaluate(&r_rev);
 
         ra_claim * int_claim
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        let mut opening_point = opening_point.to_vec();
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+        let mut opening_point: Vec<F::Challenge> = opening_point.to_vec();
         opening_point.reverse();
-        opening_point.into()
+        OpeningPoint::new(opening_point)
     }
 
     fn cache_openings_prover(
@@ -1004,7 +1010,7 @@ pub struct HwSumcheck<F: JoltField> {
     // Dimension over which sumcheck is ran
     num_words: usize,
     hw_claim: F,
-    r_x: Vec<F>,
+    r_x: Vec<F::Challenge>,
     // Index of the gather instance
     index: usize,
 }
@@ -1084,7 +1090,7 @@ impl<F: JoltField> SumcheckInstance<F> for HwSumcheck<F> {
     }
 
     #[tracing::instrument(skip_all)]
-    fn bind(&mut self, r_j: F, _: usize) {
+    fn bind(&mut self, r_j: F::Challenge, _: usize) {
         let HwProverState { ra } = self.prover_state.as_mut().unwrap();
         ra.bind_parallel(r_j, BindingOrder::LowToHigh);
     }
@@ -1092,7 +1098,7 @@ impl<F: JoltField> SumcheckInstance<F> for HwSumcheck<F> {
     fn expected_output_claim(
         &self,
         accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-        _r: &[F],
+        _r: &[F::Challenge],
     ) -> F {
         let accumulator = accumulator.as_ref().unwrap();
 
@@ -1104,10 +1110,10 @@ impl<F: JoltField> SumcheckInstance<F> for HwSumcheck<F> {
         ra_claim
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        let mut opening_point = opening_point.to_vec();
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+        let mut opening_point: Vec<F::Challenge> = opening_point.to_vec();
         opening_point.reverse();
-        opening_point.into()
+        OpeningPoint::new(opening_point)
     }
 
     fn cache_openings_prover(

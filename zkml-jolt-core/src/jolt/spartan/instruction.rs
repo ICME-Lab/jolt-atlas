@@ -237,30 +237,30 @@ impl<F: JoltField> SumcheckInstance<F> for InstructionInputSumcheck<F> {
             })
             .reduce(|| [F::zero(); 4], |a, b| array::from_fn(|i| a[i] + b[i]));
 
-        let univariate_evals_stage_1 = state.eq_r_cycle_stage_1.gruen_evals_deg_3(
+        let univariate_evals_stage_1 = state.eq_r_cycle_stage_1.gruen_poly_deg_3(
             eval_at_0_for_stage_1,
             eval_at_inf_for_stage_1,
             state.prev_claim_stage_1,
         );
-        let univariate_evals_stage_2 = state.eq_r_cycle_stage_2.gruen_evals_deg_3(
+        let univariate_evals_stage_2 = state.eq_r_cycle_stage_2.gruen_poly_deg_3(
             eval_at_0_for_stage_2,
             eval_at_inf_for_stage_2,
             state.prev_claim_stage_2,
         );
         state.prev_round_poly_stage_1 = Some(UniPoly::from_evals(&from_even_evals_and_hint(
             state.prev_claim_stage_1,
-            univariate_evals_stage_1.to_vec(),
+            univariate_evals_stage_1.coeffs.clone(),
         )));
         state.prev_round_poly_stage_2 = Some(UniPoly::from_evals(&from_even_evals_and_hint(
             state.prev_claim_stage_2,
-            univariate_evals_stage_2.to_vec(),
+            univariate_evals_stage_2.coeffs.clone(),
         )));
-        zip(univariate_evals_stage_1, univariate_evals_stage_2)
-            .map(|(eval_stage_1, eval_stage_2)| eval_stage_1 + self.gamma.square() * eval_stage_2)
+        zip(&univariate_evals_stage_1.coeffs, &univariate_evals_stage_2.coeffs)
+            .map(|(&eval_stage_1, &eval_stage_2)| eval_stage_1 + self.gamma.square() * eval_stage_2)
             .collect()
     }
 
-    fn bind(&mut self, r_j: F, _round: usize) {
+    fn bind(&mut self, r_j: F::Challenge, _round: usize) {
         let ProverState {
             left_is_rs1_poly,
             right_is_rs2_poly,
@@ -377,11 +377,11 @@ impl<F: JoltField> SumcheckInstance<F> for InstructionInputSumcheck<F> {
         accumulator: Option<
             std::rc::Rc<std::cell::RefCell<crate::jolt::pcs::VerifierOpeningAccumulator<F>>>,
         >,
-        r: &[F],
+        r: &[F::Challenge],
     ) -> F {
-        let r = OpeningPoint::<BIG_ENDIAN, F>::new(r.to_vec());
-        let eq_eval_at_r_cycle_stage_1 = EqPolynomial::mle_endian(&r, &self.input_sample_stage_1.0);
-        let eq_eval_at_r_cycle_stage_2 = EqPolynomial::mle_endian(&r, &self.input_sample_stage_2.0);
+        let r_opening_point = OpeningPoint::<BIG_ENDIAN, F>::new(r.to_vec());
+        let eq_eval_at_r_cycle_stage_1 = EqPolynomial::mle_endian(&r_opening_point, &self.input_sample_stage_1.0);
+        let eq_eval_at_r_cycle_stage_2 = EqPolynomial::mle_endian(&r_opening_point, &self.input_sample_stage_2.0);
 
         let accumulator = accumulator.as_ref().unwrap().borrow();
         let (_, rs1_value_eval) = accumulator.get_virtual_polynomial_opening(
@@ -416,7 +416,7 @@ impl<F: JoltField> SumcheckInstance<F> for InstructionInputSumcheck<F> {
         (eq_eval_at_r_cycle_stage_1 + self.gamma.square() * eq_eval_at_r_cycle_stage_2)
             * (right_instruction_input + self.gamma * left_instruction_input)
     }
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.to_vec())
     }
 }

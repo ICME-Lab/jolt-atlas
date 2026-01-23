@@ -994,39 +994,39 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
             eval_at_inf_for_stage_3,
         ] = quadratic_coeffs;
 
-        let univariate_evals_stage_1 = gruen_eq_r_cycle_stage_1.gruen_evals_deg_3(
+        let univariate_evals_stage_1 = gruen_eq_r_cycle_stage_1.gruen_poly_deg_3(
             eval_at_0_for_stage_1,
             eval_at_inf_for_stage_1,
             *prev_claim_stage_1,
         );
-        let univariate_evals_stage_2 = gruen_eq_r_cycle_stage_2.gruen_evals_deg_3(
+        let univariate_evals_stage_2 = gruen_eq_r_cycle_stage_2.gruen_poly_deg_3(
             eval_at_0_for_stage_2,
             eval_at_inf_for_stage_2,
             *prev_claim_stage_2,
         );
-        let univariate_evals_stage_3 = gruen_eq_r_cycle_stage_3.gruen_evals_deg_3(
+        let univariate_evals_stage_3 = gruen_eq_r_cycle_stage_3.gruen_poly_deg_3(
             eval_at_0_for_stage_3,
             eval_at_inf_for_stage_3,
             *prev_claim_stage_3,
         );
         *prev_round_poly_stage_1 = Some(UniPoly::from_even_evals_and_hint(
             *prev_claim_stage_1,
-            &univariate_evals_stage_1,
+            &univariate_evals_stage_1.coeffs,
         ));
         *prev_round_poly_stage_2 = Some(UniPoly::from_even_evals_and_hint(
             *prev_claim_stage_2,
-            &univariate_evals_stage_2,
+            &univariate_evals_stage_2.coeffs,
         ));
         *prev_round_poly_stage_3 = Some(UniPoly::from_even_evals_and_hint(
             *prev_claim_stage_3,
-            &univariate_evals_stage_3,
+            &univariate_evals_stage_3.coeffs,
         ));
         // zip(univariate_evals_stage_1, univariate_evals_stage_3)
         //     .map(|(eval_stage_1, eval_stage_3)| eval_stage_1 + self.gamma_pow_5 * eval_stage_3)
         //     .collect()
-        zip(univariate_evals_stage_1, univariate_evals_stage_2)
-            .zip(univariate_evals_stage_3)
-            .map(|((eval_stage_1, eval_stage_2), eval_stage_3)| {
+        zip(&univariate_evals_stage_1.coeffs, &univariate_evals_stage_2.coeffs)
+            .zip(&univariate_evals_stage_3.coeffs)
+            .map(|((&eval_stage_1, &eval_stage_2), &eval_stage_3)| {
                 eval_stage_1 + self.gamma_4 * eval_stage_2 + self.gamma_pow_5 * eval_stage_3
             })
             .collect()
@@ -1351,7 +1351,9 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
         vec![eval_at_0, eval_at_2, eval_at_3]
     }
 
-    fn phase1_bind(&mut self, r_j: F, round: usize) {
+    fn phase1_bind(&mut self, r_j: F::Challenge, round: usize) {
+        let r_j_field: F = r_j.into();
+
         let ReadWriteCheckingProverState {
             addresses,
             I,
@@ -1393,7 +1395,7 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
                     if I_chunk[bound_index].0 == j_prime / 2 {
                         // Neighbor was already processed
                         debug_assert!(j_prime % 2 == 1);
-                        I_chunk[bound_index].2 += r_j * inc_lt;
+                        I_chunk[bound_index].2 += r_j_field * inc_lt;
                         I_chunk[bound_index].3 += inc;
                         continue;
                     }
@@ -1401,9 +1403,9 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
                 // First time this k has been encountered
                 let bound_value = if j_prime.is_multiple_of(2) {
                     // (1 - r_j) * inc_lt + r_j * inc
-                    inc_lt + r_j * (inc - inc_lt)
+                    inc_lt + r_j_field * (inc - inc_lt)
                 } else {
-                    r_j * inc_lt
+                    r_j_field * inc_lt
                 };
 
                 I_chunk[next_bound_index] = (j_prime / 2, k, bound_value, inc);
@@ -1433,7 +1435,7 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
             .par_iter_mut()
             .zip(A_right.par_iter_mut())
             .for_each(|(x, y)| {
-                *y = *x * r_j;
+                *y = *x * r_j_field;
                 *x -= *y;
             });
 
@@ -1578,7 +1580,7 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
         }
     }
 
-    fn phase2_bind(&mut self, r_j: F) {
+    fn phase2_bind(&mut self, r_j: F::Challenge) {
         let ReadWriteCheckingProverState {
             ts1_ra,
             ts2_ra,
@@ -1615,7 +1617,7 @@ impl<F: JoltField> MemoryReadWriteChecking<F> {
         .for_each(|poly| poly.bind_parallel(r_j, BindingOrder::HighToLow));
     }
 
-    fn phase3_bind(&mut self, r_j: F) {
+    fn phase3_bind(&mut self, r_j: F::Challenge) {
         let ReadWriteCheckingProverState {
             ts1_ra,
             ts2_ra,
@@ -1666,7 +1668,7 @@ impl<F: JoltField> SumcheckInstance<F> for MemoryReadWriteChecking<F> {
     }
 
     #[tracing::instrument(skip_all, name = "RegistersReadWriteChecking::bind")]
-    fn bind(&mut self, r_j: F, round: usize) {
+    fn bind(&mut self, r_j: F::Challenge, round: usize) {
         if let Some(prover_state) = self.prover_state.as_ref() {
             if round < prover_state.chunk_size.log_2() {
                 self.phase1_bind(r_j, round);
@@ -1681,12 +1683,12 @@ impl<F: JoltField> SumcheckInstance<F> for MemoryReadWriteChecking<F> {
     fn expected_output_claim(
         &self,
         accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-        r: &[F],
+        r: &[F::Challenge],
     ) -> F {
         let accumulator = accumulator.as_ref().unwrap();
 
         // First `sumcheck_switch_index` rounds bind cycle variables from low to high
-        let mut r_cycle = r[..self.sumcheck_switch_index].to_vec();
+        let mut r_cycle: Vec<F::Challenge> = r[..self.sumcheck_switch_index].to_vec();
         // The high-order cycle variables are bound after the switch
         r_cycle.extend(r[self.sumcheck_switch_index..self.T.log_2()].iter().rev());
         let r_cycle = OpeningPoint::<LITTLE_ENDIAN, F>::new(r_cycle);
@@ -1735,13 +1737,13 @@ impl<F: JoltField> SumcheckInstance<F> for MemoryReadWriteChecking<F> {
         stage_1_claim + self.gamma_4 * stage_2_claim + self.gamma_pow_5 * stage_3_claim
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
         // The high-order cycle variables are bound after the switch
-        let mut r_cycle = opening_point[self.sumcheck_switch_index..self.T.log_2()].to_vec();
+        let mut r_cycle: Vec<F::Challenge> = opening_point[self.sumcheck_switch_index..self.T.log_2()].to_vec();
         // First `sumcheck_switch_index` rounds bind cycle variables from low to high
         r_cycle.extend(opening_point[..self.sumcheck_switch_index].iter().rev());
         // Address variables are bound high-to-low
-        let r_address = opening_point[self.T.log_2()..].to_vec();
+        let r_address: Vec<F::Challenge> = opening_point[self.T.log_2()..].to_vec();
 
         [r_address, r_cycle].concat().into()
     }

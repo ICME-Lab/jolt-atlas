@@ -19,13 +19,15 @@ impl<const WORD_SIZE: usize> AtlasLookupTable for ReLUTable<WORD_SIZE> {
         }
     }
 
-    fn evaluate_mle<F: JoltField>(&self, r: &[F]) -> F {
+    fn evaluate_mle<F: JoltField>(&self, r: &[F::Challenge]) -> F {
         debug_assert_eq!(r.len(), 2 * WORD_SIZE);
+        // Convert challenges to field elements for arithmetic
+        let r_field: Vec<F> = r.iter().map(|&c| c.into()).collect();
         let mut result = F::zero();
         for i in 0..WORD_SIZE - 1 {
-            result += F::from_u64(1 << i) * r[r.len() - 1 - i];
+            result += F::from_u64(1 << i) * r_field[r_field.len() - 1 - i];
         }
-        result *= F::one() - r[WORD_SIZE];
+        result *= F::one() - r_field[WORD_SIZE];
         result
     }
 }

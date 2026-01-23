@@ -77,7 +77,7 @@ pub trait LookupQuery<const WORD_SIZE: usize> {
     /// By default, interleaves the two bits of the two operands together.
     fn to_lookup_index(&self) -> u64 {
         let (x, y) = LookupQuery::<WORD_SIZE>::to_lookup_operands(self);
-        interleave_bits(x as u32, y as u32)
+        interleave_bits(x, y).try_into().unwrap()
     }
 
     /// Computes the output lookup entry for this instruction as a u64.

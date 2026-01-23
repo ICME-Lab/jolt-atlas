@@ -216,8 +216,12 @@ impl CommittedPolynomial {
                 CommittedPolynomial::InstructionRa(i) => {
                     if *i < 8 {
                         let indices = std::mem::take(&mut batch.instruction_ra[*i]);
+                        let indices_u8: Vec<Option<u8>> = indices
+                            .into_iter()
+                            .map(|opt| opt.map(|v| v as u8))
+                            .collect();
                         let one_hot = OneHotPolynomial::from_indices(
-                            indices,
+                            indices_u8,
                             jolt_core::zkvm::instruction_lookups::K_CHUNK,
                         );
                         results.insert(*poly, MultilinearPolynomial::OneHot(one_hot));
@@ -248,7 +252,7 @@ impl CommittedPolynomial {
                 if *i > jolt_core::zkvm::instruction_lookups::D {
                     panic!("Unexpected i: {i}");
                 }
-                let addresses: Vec<_> = trace
+                let addresses: Vec<Option<u8>> = trace
                     .par_iter()
                     .map(|cycle| {
                         let lookup_index = LookupQuery::<32>::to_lookup_index(cycle);
@@ -256,7 +260,7 @@ impl CommittedPolynomial {
                             >> (jolt_core::zkvm::instruction_lookups::LOG_K_CHUNK
                                 * (jolt_core::zkvm::instruction_lookups::D - 1 - i)))
                             % jolt_core::zkvm::instruction_lookups::K_CHUNK as u64;
-                        Some(k as usize)
+                        Some(k as u8)
                     })
                     .collect();
                 MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(

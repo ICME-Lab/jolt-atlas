@@ -1,18 +1,16 @@
+use crate::compat::spartan_interleaved_poly::SparseCoefficient;
+use crate::jolt::r1cs::compat::Constraint;
 use jolt_core::{
     field::JoltField,
-    poly::{
-        dense_mlpoly::DensePolynomial, multilinear_polynomial::MultilinearPolynomial,
-        spartan_interleaved_poly::SparseCoefficient,
-    },
-    zkvm::r1cs::builder::Constraint,
+    poly::{dense_mlpoly::DensePolynomial, multilinear_polynomial::MultilinearPolynomial},
 };
 
 #[derive(Default, Debug, Clone)]
 pub struct SpartanInterleavedPolynomial<F: JoltField> {
     /// A sparse vector representing the (interleaved) coefficients in the Az, Bz, Cz
     /// polynomials used in the first Spartan sumcheck. Before the polynomial is bound
-    /// the first time, all the coefficients can be represented by `i128`s.
-    pub unbound_coeffs: Vec<SparseCoefficient<i128>>,
+    /// the first time, coefficients are stored as field elements.
+    pub unbound_coeffs: Vec<SparseCoefficient<F>>,
     /// A sparse vector representing the (interleaved) coefficients in the Az, Bz, Cz
     /// polynomials used in the first Spartan sumcheck. Once the polynomial has been
     /// bound, we switch to using `bound_coeffs` instead of `unbound_coeffs`, because
@@ -39,9 +37,9 @@ impl<F: JoltField> SpartanInterleavedPolynomial<F> {
         let num_chunks = 1;
         let chunk_size = num_steps;
 
-        let unbound_coeffs: Vec<SparseCoefficient<i128>> = (0..num_chunks)
+        let unbound_coeffs: Vec<SparseCoefficient<F>> = (0..num_chunks)
             .flat_map(|chunk_index| {
-            let mut coeffs = Vec::with_capacity(chunk_size * padded_num_constraints * 3);
+            let mut coeffs: Vec<SparseCoefficient<F>> = Vec::with_capacity(chunk_size * padded_num_constraints * 3);
             for step_index in chunk_size * chunk_index..chunk_size * (chunk_index + 1) {
                 // Uniform constraints
                 for (constraint_index, constraint) in uniform_constraints.iter().enumerate() {
@@ -49,22 +47,22 @@ impl<F: JoltField> SpartanInterleavedPolynomial<F> {
                         3 * (step_index * padded_num_constraints + constraint_index);
 
                     // Az
-                    let mut az_coeff = 0;
+                    let mut az_coeff = F::zero();
                     if !constraint.a.terms().is_empty() {
                         az_coeff = constraint
                         .a
-                        .evaluate_row(flattened_polynomials, step_index);
-                        if az_coeff != 0 {
+                        .evaluate_row::<F>(flattened_polynomials, step_index);
+                        if az_coeff != F::zero() {
                         coeffs.push((global_index, az_coeff).into());
                         }
                     }
                     // Bz
-                    let mut bz_coeff = 0;
+                    let mut bz_coeff = F::zero();
                     if !constraint.b.terms().is_empty() {
                         bz_coeff = constraint
                         .b
-                        .evaluate_row(flattened_polynomials, step_index);
-                        if bz_coeff != 0 {
+                        .evaluate_row::<F>(flattened_polynomials, step_index);
+                        if bz_coeff != F::zero() {
                         coeffs.push((global_index + 1, bz_coeff).into());
                         }
                     }
@@ -73,7 +71,7 @@ impl<F: JoltField> SpartanInterleavedPolynomial<F> {
                         let cz_coeff = az_coeff * bz_coeff;
                         if cz_coeff != constraint
                         .c
-                        .evaluate_row(flattened_polynomials, step_index) {
+                        .evaluate_row::<F>(flattened_polynomials, step_index) {
                             use crate::jolt::r1cs::builder::R1CSConstraintFormatter;
 
                             let mut constraint_string = String::new();
@@ -90,7 +88,7 @@ impl<F: JoltField> SpartanInterleavedPolynomial<F> {
                         }
                     }
                     // Cz = Az ⊙ Cz
-                    if az_coeff != 0 && bz_coeff != 0 {
+                    if az_coeff != F::zero() && bz_coeff != F::zero() {
                         let cz_coeff = az_coeff * bz_coeff;
                         coeffs.push((global_index + 2, cz_coeff).into());
                     }
@@ -126,9 +124,9 @@ impl<F: JoltField> SpartanInterleavedPolynomial<F> {
         if !self.is_bound() {
             for coeff in &self.unbound_coeffs {
                 match coeff.index % 3 {
-                    0 => az[coeff.index / 3] = F::from_i128(coeff.value),
-                    1 => bz[coeff.index / 3] = F::from_i128(coeff.value),
-                    2 => cz[coeff.index / 3] = F::from_i128(coeff.value),
+                    0 => az[coeff.index / 3] = coeff.value,
+                    1 => bz[coeff.index / 3] = coeff.value,
+                    2 => cz[coeff.index / 3] = coeff.value,
                     _ => unreachable!(),
                 }
             }

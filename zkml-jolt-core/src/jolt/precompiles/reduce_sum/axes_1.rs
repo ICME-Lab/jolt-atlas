@@ -20,7 +20,7 @@ use crate::jolt::{
 
 pub struct ExecutionSumcheck<F: JoltField> {
     prover_state: Option<ExecutionProverState<F>>,
-    r_x: Vec<F>,
+    r_x: Vec<F::Challenge>,
     rv_claim_c: F,
     index: usize,
     num_rounds: usize,
@@ -64,7 +64,7 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
         univariate_poly_evals.into()
     }
 
-    fn bind(&mut self, r_j: F, _round: usize) {
+    fn bind(&mut self, r_j: F::Challenge, _round: usize) {
         let prover_state = self
             .prover_state
             .as_mut()
@@ -88,7 +88,7 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
             r_a.into(),
             prover_state.a_r.final_sumcheck_claim(),
         );
-        let r_b = vec![F::zero()];
+        let r_b: Vec<F::Challenge> = vec![0u128.into()];
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::PrecompileB(self.index),
             SumcheckId::PrecompileExecution,
@@ -105,7 +105,7 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
 
     fn normalize_opening_point(
         &self,
-        opening_point: &[F],
+        opening_point: &[F::Challenge],
     ) -> jolt_core::poly::opening_proof::OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::new(opening_point.to_vec())
     }
@@ -113,7 +113,7 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
     fn expected_output_claim(
         &self,
         opening_accumulator: Option<std::rc::Rc<std::cell::RefCell<VerifierOpeningAccumulator<F>>>>,
-        _r: &[F],
+        _r: &[F::Challenge],
     ) -> F {
         let accumulator = opening_accumulator.as_ref().unwrap();
         accumulator
@@ -138,7 +138,7 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
             SumcheckId::PrecompileExecution,
             r_a.into(),
         );
-        let r_b = vec![F::zero()];
+        let r_b: Vec<F::Challenge> = vec![0u128.into()];
         accumulator.borrow_mut().append_virtual(
             VirtualPolynomial::PrecompileB(self.index),
             SumcheckId::PrecompileExecution,
@@ -160,10 +160,11 @@ impl<F: JoltField> ExecutionSumcheck<F> {
 
         // Get the size of the result vector and generate a random challenge
         let m = pp.c_dims[0];
-        let r_x: Vec<F> = sm.get_transcript().borrow_mut().challenge_vector(m.log_2());
+        let r_x: Vec<F::Challenge> = sm.get_transcript().borrow_mut().challenge_vector_optimized::<F>(m.log_2());
 
         // Extract values for operands a and b from memory
-        let E = EqPolynomial::evals(&r_x);
+        let r_x_field: Vec<F> = r_x.iter().map(|&x| x.into()).collect();
+        let E = EqPolynomial::evals(&r_x_field);
         let rv_a = pp.extract_rv(final_memory_state, |m| &m.a_addr);
         let rv_claim_c: F = pp
             .c_addr
@@ -177,7 +178,7 @@ impl<F: JoltField> ExecutionSumcheck<F> {
     /// Create the prover sum-check instance for matvec precompile
     pub fn init_prover(
         a: Vec<i64>,
-        r_x: Vec<F>,
+        r_x: Vec<F::Challenge>,
         eq_rx: Vec<F>,
         rv_claim_c: F,
         index: usize,
@@ -215,7 +216,7 @@ impl<F: JoltField> ExecutionSumcheck<F> {
         let n = pp.a_dims[1];
 
         // Generate the same random challenge as the prover (using the transcript)
-        let r_x: Vec<F> = sm.get_transcript().borrow_mut().challenge_vector(m.log_2());
+        let r_x: Vec<F::Challenge> = sm.get_transcript().borrow_mut().challenge_vector_optimized::<F>(m.log_2());
 
         // cache r_x
         let verifier_accumulator = sm.get_verifier_accumulator();

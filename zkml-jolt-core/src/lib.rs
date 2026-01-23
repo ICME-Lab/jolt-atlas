@@ -6,5 +6,6 @@
 )]
 
 pub mod benches;
+pub mod compat;
 pub mod jolt;
 pub mod utils;

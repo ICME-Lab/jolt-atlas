@@ -10,13 +10,12 @@ use jolt_core::{
     field::JoltField,
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
-        compact_polynomial::SmallScalar,
         eq_poly::EqPolynomial,
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
     },
     transcripts::Transcript,
-    utils::math::Math,
+    utils::{math::Math, small_scalar::SmallScalar},
 };
 use rayon::prelude::*;
 use std::iter::once;
@@ -190,7 +189,7 @@ impl<F: JoltField> ReadRafCheck<F> {
     fn compute_val_rv(
         sm: &mut StateManager<F, impl Transcript, impl CommitmentScheme<Field = F>>,
         val_type: ReadCheckingValType,
-    ) -> (Vec<F>, F, Vec<F>) {
+    ) -> (Vec<F>, F, Vec<F::Challenge>) {
         match val_type {
             ReadCheckingValType::Stage1 => {
                 let gamma: F = sm.get_transcript().borrow_mut().challenge_scalar();

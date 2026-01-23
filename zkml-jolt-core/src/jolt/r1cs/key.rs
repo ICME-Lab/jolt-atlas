@@ -197,7 +197,7 @@ impl<F: JoltField> UniformSpartanKey<F> {
         let num_vars = self.num_vars_uniform_padded();
         let var_bits = num_vars.log_2();
 
-        let eq_ry_var = EqPolynomial::evals(r);
+        let eq_ry_var: Vec<F> = EqPolynomial::evals(r);
         let eval_variables: F = (0..self.uniform_r1cs.num_vars)
             .map(|var_index| eq_ry_var[var_index] * segment_evals[var_index])
             .sum();
@@ -205,7 +205,7 @@ impl<F: JoltField> UniformSpartanKey<F> {
         // Evaluate at the constant position if it exists within the padded space
         let const_eval = if self.uniform_r1cs.num_vars < num_vars && with_const {
             let const_position_bits =
-                index_to_field_bitvector(self.uniform_r1cs.num_vars as u64, var_bits);
+                index_to_field_bitvector::<F>(self.uniform_r1cs.num_vars as u128, var_bits);
             EqPolynomial::mle(r, &const_position_bits)
         } else {
             F::zero()
@@ -240,8 +240,8 @@ impl<F: JoltField> UniformSpartanKey<F> {
 
         // Evaluate non-constant terms
         for (row, col, val) in constraints.vars.iter() {
-            let row_bits = index_to_field_bitvector(*row as u64, rx_constr.len());
-            let col_bits = index_to_field_bitvector(*col as u64, ry_var.len());
+            let row_bits = index_to_field_bitvector::<F>(*row as u128, rx_constr.len());
+            let col_bits = index_to_field_bitvector::<F>(*col as u128, ry_var.len());
             eval += *val
                 * EqPolynomial::mle(rx_constr, &row_bits)
                 * EqPolynomial::mle(ry_var, &col_bits);
@@ -249,11 +249,11 @@ impl<F: JoltField> UniformSpartanKey<F> {
 
         // Evaluate constant terms
         let constant_column = self.uniform_r1cs.num_vars;
-        let const_col_bits = index_to_field_bitvector(constant_column as u64, ry_var.len());
+        let const_col_bits = index_to_field_bitvector::<F>(constant_column as u128, ry_var.len());
         let eq_ry_const = EqPolynomial::mle(ry_var, &const_col_bits);
 
         for (row, val) in constraints.consts.iter() {
-            let row_bits = index_to_field_bitvector(*row as u64, rx_constr.len());
+            let row_bits = index_to_field_bitvector::<F>(*row as u128, rx_constr.len());
             eval += *val * EqPolynomial::mle(rx_constr, &row_bits) * eq_ry_const;
         }
 

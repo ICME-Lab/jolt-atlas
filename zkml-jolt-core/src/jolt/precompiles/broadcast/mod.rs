@@ -72,14 +72,14 @@ impl ExecutionSumcheck {
         // Vars required for multilinear polynomial evaluations for each dimension
         let dim_vars: Vec<usize> = target_dims.iter().map(|dim| dim.log_2()).collect();
 
-        let r_c: Vec<F> = sm
+        let r_c: Vec<F::Challenge> = sm
             .get_transcript()
             .borrow_mut()
-            .challenge_vector(dim_vars.iter().sum());
+            .challenge_vector_optimized::<F>(dim_vars.iter().sum());
 
         let mut start_idx = 0;
-        let mut r_input: Vec<F> = Vec::new();
-        let mut r_broadcast: Vec<F> = Vec::new();
+        let mut r_input: Vec<F::Challenge> = Vec::new();
+        let mut r_broadcast: Vec<F::Challenge> = Vec::new();
         // Allocate challenge variables to input or broadcast polynomials based on whether the dimension is broadcasted
         for (dim_size, vars) in broadcast_dims.iter().zip(dim_vars.iter()) {
             if dim_size == &1 {
@@ -126,10 +126,11 @@ impl ExecutionSumcheck {
         debug_assert_eq!(rv_claim_a * rv_claim_b, rv_claim_c);
 
         // Dummy value for PrecompileB as read checking needs an opening
+        let zero_challenge: F::Challenge = (0u128).into();
         sm.get_prover_accumulator().borrow_mut().append_virtual(
             VirtualPolynomial::PrecompileB(index),
             SumcheckId::PrecompileExecution,
-            vec![F::zero()].into(),
+            vec![zero_challenge].into(),
             F::zero(),
         );
         Self {}
@@ -157,11 +158,11 @@ impl ExecutionSumcheck {
         let dim_vars: Vec<usize> = target_dims.iter().map(|dim| dim.log_2()).collect();
         let num_vars: usize = dim_vars.iter().sum();
 
-        let r_c: Vec<F> = sm.get_transcript().borrow_mut().challenge_vector(num_vars);
+        let r_c: Vec<F::Challenge> = sm.get_transcript().borrow_mut().challenge_vector_optimized::<F>(num_vars);
 
         let mut start_idx = 0;
-        let mut r_input: Vec<F> = Vec::new();
-        let mut r_broadcast: Vec<F> = Vec::new();
+        let mut r_input: Vec<F::Challenge> = Vec::new();
+        let mut r_broadcast: Vec<F::Challenge> = Vec::new();
         // Allocate challenge variables to input or broadcast polynomials based on whether the dimension is broadcasted
         for (dim_size, vars) in broadcast_dims.iter().zip(dim_vars.iter()) {
             if dim_size == &1 {
@@ -213,10 +214,11 @@ impl ExecutionSumcheck {
         assert_eq!(a_claim * b_eval, c_claim);
 
         // Dummy value for PrecompileB as read checking needs an opening
+        let zero_challenge: F::Challenge = (0u128).into();
         sm.get_verifier_accumulator().borrow_mut().append_virtual(
             VirtualPolynomial::PrecompileB(index),
             SumcheckId::PrecompileExecution,
-            vec![F::zero()].into(),
+            vec![zero_challenge].into(),
         );
 
         Self {}
@@ -241,18 +243,18 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck {
         vec![F::zero()]
     }
 
-    fn bind(&mut self, _r_j: F, _round: usize) {}
+    fn bind(&mut self, _r_j: F::Challenge, _round: usize) {}
 
     fn expected_output_claim(
         &self,
         _opening_accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-        _r: &[F],
+        _r: &[F::Challenge],
     ) -> F {
         F::zero()
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        let mut opening_point = opening_point.to_vec();
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+        let mut opening_point: Vec<F::Challenge> = opening_point.to_vec();
         opening_point.reverse();
         opening_point.into()
     }

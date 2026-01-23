@@ -1,9 +1,11 @@
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use crate::jolt::r1cs::compat::Constraint;
 use jolt_core::{
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
         dense_mlpoly::DensePolynomial,
-        eq_poly::{EqPlusOnePolynomial, EqPolynomial},
+        eq_plus_one_poly::EqPlusOnePolynomial,
+        eq_poly::EqPolynomial,
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
@@ -11,8 +13,7 @@ use jolt_core::{
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
-    utils::{math::Math, small_value::NUM_SVO_ROUNDS},
-    zkvm::r1cs::builder::Constraint,
+    utils::math::Math,
 };
 
 use std::{cell::RefCell, marker::PhantomData, rc::Rc, sync::Arc};
@@ -111,21 +112,18 @@ where
 
     #[tracing::instrument(skip_all)]
     fn prove_outer_sumcheck(
-        num_rounds_x: usize,
-        uniform_constraints_only_padded: usize,
-        uniform_constraints: &[Constraint],
-        input_polys: &[MultilinearPolynomial<F>],
-        tau: &[F],
-        transcript: &mut ProofTranscript,
-    ) -> (SumcheckInstanceProof<F, ProofTranscript>, Vec<F>, [F; 3]) {
-        SumcheckInstanceProof::prove_spartan_small_value::<NUM_SVO_ROUNDS>(
-            num_rounds_x,
-            uniform_constraints_only_padded,
-            uniform_constraints,
-            input_polys,
-            tau,
-            transcript,
-        )
+        _num_rounds_x: usize,
+        _uniform_constraints_only_padded: usize,
+        _uniform_constraints: &[Constraint],
+        _input_polys: &[MultilinearPolynomial<F>],
+        _tau: &[F],
+        _transcript: &mut ProofTranscript,
+    ) -> (SumcheckInstanceProof<F, ProofTranscript>, Vec<F::Challenge>, [F; 3]) {
+        // TODO: Implement prove_spartan_small_value functionality
+        // This method was removed from jolt-core and needs to be reimplemented.
+        // It should prove the outer Spartan sumcheck:
+        //   \sum_x eq(tau, x) * (Az(x) * Bz(x) - Cz(x)) = 0
+        todo!("prove_spartan_small_value needs implementation")
     }
 }
 
@@ -279,7 +277,7 @@ impl<F: JoltField> SumcheckInstance<F> for InnerSumcheck<F> {
     }
 
     #[tracing::instrument(skip_all, name = "InnerSumcheck::bind")]
-    fn bind(&mut self, r_j: F, _round: usize) {
+    fn bind(&mut self, r_j: F::Challenge, _round: usize) {
         let prover_state = self
             .prover_state
             .as_mut()
@@ -303,12 +301,15 @@ impl<F: JoltField> SumcheckInstance<F> for InnerSumcheck<F> {
     fn expected_output_claim(
         &self,
         _accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-        r: &[F],
+        r: &[F::Challenge],
     ) -> F {
         let verifier_state = self
             .verifier_state
             .as_ref()
             .expect("Verifier state not initialized");
+
+        // Convert challenges to field elements for matrix evaluations
+        let r_field: Vec<F> = r.iter().map(|&c| c.into()).collect();
 
         // The verifier needs to compute:
         // (A_small(rx, ry) + r * B_small(rx, ry) + r^2 * C_small(rx, ry)) * z(ry)
@@ -316,13 +317,13 @@ impl<F: JoltField> SumcheckInstance<F> for InnerSumcheck<F> {
         // Evaluate uniform matrices A_small, B_small, C_small at point (rx_var, ry_var)
         let eval_a = verifier_state
             .key
-            .evaluate_uniform_a_at_point(&verifier_state.rx_var, r);
+            .evaluate_uniform_a_at_point(&verifier_state.rx_var, &r_field);
         let eval_b = verifier_state
             .key
-            .evaluate_uniform_b_at_point(&verifier_state.rx_var, r);
+            .evaluate_uniform_b_at_point(&verifier_state.rx_var, &r_field);
         let eval_c = verifier_state
             .key
-            .evaluate_uniform_c_at_point(&verifier_state.rx_var, r);
+            .evaluate_uniform_c_at_point(&verifier_state.rx_var, &r_field);
 
         let left_expected = eval_a
             + verifier_state.inner_sumcheck_RLC * eval_b
@@ -331,14 +332,14 @@ impl<F: JoltField> SumcheckInstance<F> for InnerSumcheck<F> {
         // Evaluate z(ry)
         let eval_z = verifier_state.key.evaluate_z_mle_with_segment_evals(
             &verifier_state.claimed_witness_evals,
-            r,
+            &r_field,
             true,
         );
 
         left_expected * eval_z
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::new(opening_point.to_vec())
     }
 
@@ -365,7 +366,7 @@ struct PCSumcheckProverState<F: JoltField> {
 }
 
 struct PCSumcheckVerifierState<F: JoltField> {
-    r_cycle: Vec<F>,
+    r_cycle: Vec<F::Challenge>,
     pc_eval_at_shift_r: F,
 }
 
@@ -377,7 +378,7 @@ pub struct PCSumcheck<F: JoltField> {
 }
 
 impl<F: JoltField> PCSumcheck<F> {
-    pub fn new_verifier(input_claim: F, r_cycle: Vec<F>, pc_eval_at_shift_r: F) -> Self {
+    pub fn new_verifier(input_claim: F, r_cycle: Vec<F::Challenge>, pc_eval_at_shift_r: F) -> Self {
         Self {
             input_claim,
             prover_state: None,
@@ -440,7 +441,7 @@ impl<F: JoltField> SumcheckInstance<F> for PCSumcheck<F> {
     }
 
     #[tracing::instrument(skip_all, name = "PCSumcheck::bind")]
-    fn bind(&mut self, r_j: F, _round: usize) {
+    fn bind(&mut self, r_j: F::Challenge, _round: usize) {
         let prover_state = self
             .prover_state
             .as_mut()
@@ -463,15 +464,15 @@ impl<F: JoltField> SumcheckInstance<F> for PCSumcheck<F> {
     fn expected_output_claim(
         &self,
         _accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-        r: &[F],
+        r: &[F::Challenge],
     ) -> F {
         let verifier_state = self
             .verifier_state
             .as_ref()
             .expect("Verifier state not initialized");
 
-        let eq_plus_one_shift_sumcheck =
-            EqPlusOnePolynomial::new(verifier_state.r_cycle.clone()).evaluate(r);
+        let eq_plus_one_shift_sumcheck: F =
+            EqPlusOnePolynomial::<F>::new(verifier_state.r_cycle.clone()).evaluate(r);
 
         verifier_state.pc_eval_at_shift_r * eq_plus_one_shift_sumcheck
     }
@@ -495,7 +496,7 @@ impl<F: JoltField> SumcheckInstance<F> for PCSumcheck<F> {
         );
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::new(opening_point.to_vec())
     }
 
@@ -593,7 +594,7 @@ where
             )
         };
 
-        let outer_sumcheck_r: Vec<F> = outer_sumcheck_r.into_iter().rev().collect();
+        let outer_sumcheck_r: Vec<F::Challenge> = outer_sumcheck_r.into_iter().rev().collect();
 
         ProofTranscript::append_scalars(
             &mut *state_manager.transcript.borrow_mut(),
@@ -703,7 +704,7 @@ where
 
         // Outer sumcheck is bound from the top, reverse the challenge
         // TODO(markosg04): Make use of Endianness here?
-        let outer_sumcheck_r_reversed: Vec<F> =
+        let outer_sumcheck_r_reversed: Vec<F::Challenge> =
             outer_sumcheck_r_original.iter().rev().cloned().collect();
         let opening_point = OpeningPoint::new(outer_sumcheck_r_reversed.clone());
 
@@ -789,7 +790,7 @@ where
             cz: claim_Cz,
         };
         let params = InnerSumcheckParams {
-            rx_var: rx_var.to_vec(),
+            rx_var: rx_var.iter().map(|&c| c.into()).collect(),
         };
 
         let inner_sumcheck =
@@ -863,7 +864,7 @@ where
         let inner_sumcheck = InnerSumcheck::<F>::new_verifier(
             claim_inner_joint,
             key,
-            rx_var.to_vec(),
+            rx_var.iter().map(|&c| c.into()).collect(),
             claimed_witness_evals,
             inner_sumcheck_RLC,
         );
@@ -924,7 +925,7 @@ where
 
         let (r_cycle, _rx_var) = outer_sumcheck_r.split_at(num_cycles_bits);
 
-        let (_, eq_plus_one_r_cycle) = EqPlusOnePolynomial::evals(&r_cycle.r, None);
+        let (_, eq_plus_one_r_cycle) = EqPlusOnePolynomial::<F>::evals(&r_cycle.r, None);
 
         let pc_sumcheck = PCSumcheck {
             input_claim: next_pc_eval,

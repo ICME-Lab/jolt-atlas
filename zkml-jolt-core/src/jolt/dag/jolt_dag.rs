@@ -18,12 +18,12 @@ use crate::utils::mcc::sanity_check_mcc;
 use anyhow::Context;
 #[cfg(not(target_arch = "wasm32"))]
 use jolt_core::utils::profiling::print_current_memory_usage;
+use crate::jolt::witness::DTH_ROOT_OF_K;
 use jolt_core::{
     field::JoltField,
-    poly::commitment::{commitment_scheme::CommitmentScheme, dory::DoryGlobals},
+    poly::commitment::{commitment_scheme::CommitmentScheme, dory::{DoryContext, DoryGlobals}},
     transcripts::Transcript,
     utils::thread::drop_in_background_thread,
-    zkvm::witness::DTH_ROOT_OF_K,
 };
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -60,7 +60,7 @@ impl JoltDAG {
 
         let _memory_K = state_manager.memory_K;
         let _guard = (
-            DoryGlobals::initialize(DTH_ROOT_OF_K, padded_trace_length),
+            DoryGlobals::initialize_context(DTH_ROOT_OF_K, padded_trace_length, DoryContext::Main, None),
             AllCommittedPolynomials::initialize(),
         );
 

@@ -19,8 +19,8 @@ use rayon::prelude::*;
 
 pub struct ExecutionSumcheck<F: JoltField> {
     prover_state: Option<ExecutionProverState<F>>,
-    r_x: Vec<F>,
-    r_y: Vec<F>,
+    r_x: Vec<F::Challenge>,
+    r_y: Vec<F::Challenge>,
     rv_claim_c: F,
     index: usize,
     num_rounds: usize,
@@ -71,7 +71,7 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
         univariate_poly_evals.into()
     }
 
-    fn bind(&mut self, r_j: F, _round: usize) {
+    fn bind(&mut self, r_j: F::Challenge, _round: usize) {
         let prover_state = self
             .prover_state
             .as_mut()
@@ -127,7 +127,7 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
 
     fn normalize_opening_point(
         &self,
-        opening_point: &[F],
+        opening_point: &[F::Challenge],
     ) -> jolt_core::poly::opening_proof::OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::new(opening_point.to_vec())
     }
@@ -135,7 +135,7 @@ impl<F: JoltField> SumcheckInstance<F> for ExecutionSumcheck<F> {
     fn expected_output_claim(
         &self,
         opening_accumulator: Option<std::rc::Rc<std::cell::RefCell<VerifierOpeningAccumulator<F>>>>,
-        _r: &[F],
+        _r: &[F::Challenge],
     ) -> F {
         let accumulator = opening_accumulator.as_ref().unwrap();
         let (_, a_claim) = accumulator.borrow().get_virtual_polynomial_opening(
@@ -184,8 +184,8 @@ impl<F: JoltField> ExecutionSumcheck<F> {
         let m = pp.c_dims[0];
         let n = pp.c_dims[1];
         let k = pp.a_dims[1];
-        let r_x: Vec<F> = sm.get_transcript().borrow_mut().challenge_vector(m.log_2());
-        let r_y: Vec<F> = sm.get_transcript().borrow_mut().challenge_vector(n.log_2());
+        let r_x: Vec<F::Challenge> = sm.get_transcript().borrow_mut().challenge_vector_optimized::<F>(m.log_2());
+        let r_y: Vec<F::Challenge> = sm.get_transcript().borrow_mut().challenge_vector_optimized::<F>(n.log_2());
 
         // Extract values for operands a and b from memory
         let rv_a = pp.extract_rv(final_memory_state, |m| &m.a_addr);
@@ -195,8 +195,8 @@ impl<F: JoltField> ExecutionSumcheck<F> {
 
     fn init_prover(
         index: usize,
-        r_x: Vec<F>,
-        r_y: Vec<F>,
+        r_x: Vec<F::Challenge>,
+        r_y: Vec<F::Challenge>,
         rv_a: Vec<i64>,
         rv_b: Vec<i64>,
         (m, n, k): (usize, usize, usize),
@@ -214,8 +214,8 @@ impl<F: JoltField> ExecutionSumcheck<F> {
     }
 
     fn witness_polys(
-        r_x: &[F],
-        r_y: &[F],
+        r_x: &[F::Challenge],
+        r_y: &[F::Challenge],
         rv_a: &[i64],
         rv_b: &[i64],
         m: usize,
@@ -264,8 +264,8 @@ impl<F: JoltField> ExecutionSumcheck<F> {
         let m = pp.c_dims[0];
         let n = pp.c_dims[1];
         let k = pp.a_dims[1];
-        let r_x: Vec<F> = sm.get_transcript().borrow_mut().challenge_vector(m.log_2());
-        let r_y: Vec<F> = sm.get_transcript().borrow_mut().challenge_vector(n.log_2());
+        let r_x: Vec<F::Challenge> = sm.get_transcript().borrow_mut().challenge_vector_optimized::<F>(m.log_2());
+        let r_y: Vec<F::Challenge> = sm.get_transcript().borrow_mut().challenge_vector_optimized::<F>(n.log_2());
         // cache r_c
         let verifier_accumulator = sm.get_verifier_accumulator();
         let r_c = [r_x.clone(), r_y.clone()].concat();

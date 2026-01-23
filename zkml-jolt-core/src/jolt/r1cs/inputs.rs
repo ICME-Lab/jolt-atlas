@@ -12,13 +12,13 @@ use crate::jolt::{
     trace::JoltONNXCycle,
     witness::VirtualPolynomial,
 };
+use crate::jolt::r1cs::compat::{LC, Term, Variable};
 use jolt_core::{
     field::JoltField,
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::MultilinearPolynomial,
     },
-    zkvm::r1cs::ops::{LC, Term, Variable},
 };
 use rayon::prelude::*;
 

@@ -276,12 +276,12 @@ impl<F: JoltField> SumcheckInstance<F> for ProductVirtualizationSumcheck<F> {
                 )
         };
 
-        eq.gruen_evals_deg_3(quadratic_coeffs[0], quadratic_coeffs[1], previous_claim)
-            .to_vec()
+        eq.gruen_poly_deg_3(quadratic_coeffs[0], quadratic_coeffs[1], previous_claim)
+            .coeffs
     }
 
     #[tracing::instrument(skip_all, name = "ProductVirtualizationSumcheck::bind")]
-    fn bind(&mut self, r_j: F, _round: usize) {
+    fn bind(&mut self, r_j: F::Challenge, _round: usize) {
         let prover_state = self
             .prover_state
             .as_mut()
@@ -305,7 +305,7 @@ impl<F: JoltField> SumcheckInstance<F> for ProductVirtualizationSumcheck<F> {
     fn expected_output_claim(
         &self,
         accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-        r: &[F],
+        r: &[F::Challenge],
     ) -> F {
         let accumulator = accumulator.as_ref().unwrap().borrow();
         // Get r_cycle from the SpartanOuter sumcheck opening point
@@ -319,12 +319,13 @@ impl<F: JoltField> SumcheckInstance<F> for ProductVirtualizationSumcheck<F> {
         let FactorPolynomials(left_poly, right_poly) = self.product_type.get_factor_polynomials();
         let (_, left_eval) = accumulator.get_virtual_polynomial_opening(left_poly, sumcheck_id);
         let (_, right_eval) = accumulator.get_virtual_polynomial_opening(right_poly, sumcheck_id);
-        let eq_eval = EqPolynomial::mle(&r.iter().rev().copied().collect::<Vec<_>>(), r_cycle);
+        let r_field: Vec<F> = r.iter().map(|&c| c.into()).collect();
+        let eq_eval = EqPolynomial::mle(&r_field.iter().rev().copied().collect::<Vec<_>>(), r_cycle);
         eq_eval * left_eval * right_eval
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::new(opening_point.iter().rev().copied().collect())
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+        OpeningPoint::new(opening_point.iter().rev().cloned().collect())
     }
 
     fn cache_openings_prover(

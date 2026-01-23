@@ -23,7 +23,6 @@ use jolt_core::{
     field::JoltField,
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
-        compact_polynomial::SmallScalar,
         eq_poly::EqPolynomial,
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
@@ -35,6 +34,7 @@ use jolt_core::{
     utils::{
         errors::ProofVerifyError,
         math::Math,
+        small_scalar::SmallScalar,
         thread::{drop_in_background_thread, unsafe_allocate_zero_vec},
     },
 };
@@ -121,7 +121,7 @@ impl ActivationLookupTable {
     }
 
     /// Evaluate the MLE at a given point
-    pub fn evaluate_mle<F: JoltField>(&self, r: &[F], log_table_size: usize, scale: f64) -> F {
+    pub fn evaluate_mle<F: JoltField>(&self, r: &[F::Challenge], log_table_size: usize, scale: f64) -> F {
         delegate_activation_method!(self, evaluate_mle, r, log_table_size, scale)
     }
 }
@@ -264,7 +264,7 @@ pub struct FpLookupSumcheck<F: JoltField> {
     prover_state: Option<FpLookupProver<F>>,
     input_claim: F,
     num_rounds: usize,
-    r_cycle: Vec<F>,
+    r_cycle: Vec<F::Challenge>,
     z: F,
     /// Index of this instance in the batch (used for VirtualPolynomial addressing)
     instance_index: usize,
@@ -319,7 +319,7 @@ impl<F: JoltField> SumcheckInstance<F> for FpLookupSumcheck<F> {
         univariate_poly_evals.into()
     }
 
-    fn bind(&mut self, r_j: F, _round: usize) {
+    fn bind(&mut self, r_j: F::Challenge, _round: usize) {
         let prover_state = self
             .prover_state
             .as_mut()
@@ -358,7 +358,7 @@ impl<F: JoltField> SumcheckInstance<F> for FpLookupSumcheck<F> {
         );
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::new(opening_point.to_vec())
     }
 
@@ -379,7 +379,7 @@ impl<F: JoltField> SumcheckInstance<F> for FpLookupSumcheck<F> {
     fn expected_output_claim(
         &self,
         opening_accumulator: Option<std::rc::Rc<std::cell::RefCell<VerifierOpeningAccumulator<F>>>>,
-        r: &[F],
+        r: &[F::Challenge],
     ) -> F {
         let accumulator = opening_accumulator.as_ref().unwrap();
         // Use indexed VirtualPolynomial to get the correct instance's ra_claim
@@ -388,7 +388,7 @@ impl<F: JoltField> SumcheckInstance<F> for FpLookupSumcheck<F> {
             SumcheckId::FpLookup,
         );
         // Evaluate the LUT MLE using the ActivationLookupTable
-        let val_r =
+        let val_r: F =
             self.activation_table
                 .evaluate_mle(r, self.log_table_size, DEFAULT_ACTIVATION_SCALE);
         ra_claim * (val_r + self.z)
@@ -402,7 +402,7 @@ pub struct FpLookupProver<F: JoltField> {
     F: MultilinearPolynomial<F>,
     val: MultilinearPolynomial<F>,
     input_claim: F,
-    r_cycle: Vec<F>,
+    r_cycle: Vec<F::Challenge>,
     z: F,
 }
 
@@ -439,7 +439,7 @@ impl<F: JoltField> FpLookupProver<F> {
         let rv: MultilinearPolynomial<F> = MultilinearPolynomial::from(rv);
         let T = rv.len();
         let n = T.log_2();
-        let r_cycle: Vec<F> = transcript.borrow_mut().challenge_vector(n);
+        let r_cycle: Vec<F::Challenge> = transcript.borrow_mut().challenge_vector_optimized::<F>(n);
         let z: F = transcript.borrow_mut().challenge_scalar();
         let rv_claim = rv.evaluate(&r_cycle);
 
@@ -524,7 +524,7 @@ impl<F: JoltField> FpLookupProver<F> {
         F: MultilinearPolynomial<F>,
         val: MultilinearPolynomial<F>,
         input_claim: F,
-        r_cycle: Vec<F>,
+        r_cycle: Vec<F::Challenge>,
         z: F,
     ) -> Self {
         FpLookupProver {
@@ -637,7 +637,7 @@ impl<F: JoltField, FS: Transcript> FpLookupProof<F, FS> {
                     .product::<usize>()
                     .next_power_of_two();
                 let log_T = T.log_2();
-                let r_cycle: Vec<F> = sm.get_transcript().borrow_mut().challenge_vector(log_T);
+                let r_cycle: Vec<F::Challenge> = sm.get_transcript().borrow_mut().challenge_vector_optimized::<F>(log_T);
                 let z: F = sm.get_transcript().borrow_mut().challenge_scalar();
 
                 // Register the claim for this instance
@@ -867,7 +867,7 @@ pub trait ActivationTableExt: ActivationTable {
     ///
     /// # Returns
     /// The MLE evaluation at point `r`
-    fn evaluate_mle<F: JoltField>(&self, r: &[F], log_table_size: usize, scale: f64) -> F {
+    fn evaluate_mle<F: JoltField>(&self, r: &[F::Challenge], log_table_size: usize, scale: f64) -> F {
         let table = self.materialize(log_table_size, scale);
         let table_i64: Vec<i64> = table.into_iter().map(|v| v as i64).collect();
         let poly: MultilinearPolynomial<F> = MultilinearPolynomial::from(table_i64);
@@ -900,8 +900,8 @@ pub struct BooleanitySumcheck<F: JoltField> {
     log_T: usize,
     log_K: usize,
     prover_state: Option<BooleanityProverState<F>>,
-    r_cycle: Vec<F>,
-    r_address: Vec<F>,
+    r_cycle: Vec<F::Challenge>,
+    r_address: Vec<F::Challenge>,
     instance_index: usize,
 }
 
@@ -910,13 +910,13 @@ impl<F: JoltField> BooleanitySumcheck<F> {
     pub fn new_prover(
         sm: &mut StateManager<F, impl Transcript, impl CommitmentScheme<Field = F>>,
         read_addresses: Vec<usize>,
-        r_cycle: Vec<F>,
+        r_cycle: Vec<F::Challenge>,
         G: Vec<F>,
         log_T: usize,
         instance_index: usize,
     ) -> Self {
         let log_K = sm.program_io.log_lookup_table_size();
-        let r_address: Vec<F> = sm.transcript.borrow_mut().challenge_vector(log_K);
+        let r_address: Vec<F::Challenge> = sm.transcript.borrow_mut().challenge_vector_optimized::<F>(log_K);
         Self {
             prover_state: Some(BooleanityProverState::new(
                 read_addresses,
@@ -935,12 +935,12 @@ impl<F: JoltField> BooleanitySumcheck<F> {
 
     pub fn new_verifier(
         sm: &mut StateManager<F, impl Transcript, impl CommitmentScheme<Field = F>>,
-        r_cycle: Vec<F>,
+        r_cycle: Vec<F::Challenge>,
         log_T: usize,
         instance_index: usize,
     ) -> Self {
         let log_K = sm.program_io.log_lookup_table_size();
-        let r_address: Vec<F> = sm.transcript.borrow_mut().challenge_vector(log_K);
+        let r_address: Vec<F::Challenge> = sm.transcript.borrow_mut().challenge_vector_optimized::<F>(log_K);
         Self {
             prover_state: None,
             log_T,
@@ -957,7 +957,7 @@ impl<F: JoltField> BooleanityProverState<F> {
         read_addresses: Vec<usize>,
         eq_r_cycle: Vec<F>,
         G: Vec<F>,
-        r_address: &[F],
+        r_address: &[F::Challenge],
         log_K: usize,
     ) -> Self {
         let B = MultilinearPolynomial::from(EqPolynomial::evals(r_address));
@@ -1004,8 +1004,10 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
     }
 
     #[tracing::instrument(skip_all, name = "BytecodeBooleanitySumcheck::bind")]
-    fn bind(&mut self, r_j: F, round: usize) {
+    fn bind(&mut self, r_j: F::Challenge, round: usize) {
         let ps = self.prover_state.as_mut().unwrap();
+        // Convert to field element for arithmetic operations
+        let r_j_field: F = r_j.into();
 
         if round < self.log_K {
             // Phase 1: Bind B and update F
@@ -1017,7 +1019,7 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
                 .par_iter_mut()
                 .zip(F_right.par_iter_mut())
                 .for_each(|(x, y)| {
-                    *y = *x * r_j;
+                    *y = *x * r_j_field;
                     *x -= *y;
                 });
 
@@ -1055,7 +1057,7 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
     fn expected_output_claim(
         &self,
         accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-        r: &[F],
+        r: &[F::Challenge],
     ) -> F {
         let accumulator = accumulator.as_ref().unwrap();
         let (_, ra_claim) = accumulator.borrow().get_virtual_polynomial_opening(
@@ -1063,23 +1065,25 @@ impl<F: JoltField> SumcheckInstance<F> for BooleanitySumcheck<F> {
             SumcheckId::FpLookupBooleanity,
         );
 
+        let r_f: Vec<F> = r.iter().map(|&x| x.into()).collect();
         EqPolynomial::mle(
-            r,
+            &r_f,
             &self
                 .r_address
                 .iter()
                 .cloned()
                 .rev()
                 .chain(self.r_cycle.iter().cloned().rev())
+                .map(Into::into)
                 .collect::<Vec<F>>(),
         ) * (ra_claim.square() - ra_claim)
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        let mut opening_point = opening_point.to_vec();
-        opening_point[..self.log_K].reverse();
-        opening_point[self.log_K..].reverse();
-        opening_point.into()
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+        let mut opening_point_f: Vec<F::Challenge> = opening_point.to_vec();
+        opening_point_f[..self.log_K].reverse();
+        opening_point_f[self.log_K..].reverse();
+        OpeningPoint::new(opening_point_f)
     }
 
     fn cache_openings_prover(

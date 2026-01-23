@@ -12,7 +12,7 @@ impl<const WORD_SIZE: usize, F: JoltField> SparseDensePrefix<F>
 {
     fn prefix_mle(
         checkpoints: &[PrefixCheckpoint<F>],
-        r_x: Option<F>,
+        r_x: Option<F::Challenge>,
         c: u32,
         mut b: LookupBits,
         j: usize,
@@ -53,7 +53,7 @@ impl<const WORD_SIZE: usize, F: JoltField> SparseDensePrefix<F>
             (Some(rx), _) => {
                 let x_shift = two - j;
                 let y_shift = x_shift - 1;
-                add(x_shift, rx);
+                add(x_shift, rx.into());
                 add(y_shift, c_f);
             }
         }
@@ -64,25 +64,28 @@ impl<const WORD_SIZE: usize, F: JoltField> SparseDensePrefix<F>
 
     fn update_prefix_checkpoint(
         checkpoints: &[PrefixCheckpoint<F>],
-        r_x: F,
-        r_y: F,
+        r_x: F::Challenge,
+        r_y: F::Challenge,
         j: usize,
+        _phase_length: usize,
     ) -> PrefixCheckpoint<F> {
         let two = 2 * WORD_SIZE;
+        let r_x_f: F = r_x.into();
+        let r_y_f: F = r_y.into();
         match j {
             j if j < WORD_SIZE => None.into(),
             j if j == WORD_SIZE + 1 => {
                 let y_shift = two - j - 1;
                 let updated = checkpoints[Prefixes::LowerWordNoMsb].unwrap_or(F::zero())
-                    + F::from_u64(1 << y_shift) * r_y;
+                    + F::from_u64(1 << y_shift) * r_y_f;
                 Some(updated).into()
             }
             _ => {
                 let x_shift = two - j;
                 let y_shift = x_shift - 1;
                 let updated = checkpoints[Prefixes::LowerWordNoMsb].unwrap_or(F::zero())
-                    + F::from_u64(1 << x_shift) * r_x
-                    + F::from_u64(1 << y_shift) * r_y;
+                    + F::from_u64(1 << x_shift) * r_x_f
+                    + F::from_u64(1 << y_shift) * r_y_f;
                 Some(updated).into()
             }
         }

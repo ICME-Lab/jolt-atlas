@@ -32,10 +32,10 @@ macro_rules! impl_atlas_traits {
         $(
             impl<const $generic_const: usize> AtlasLookupTable for $table_type<$generic_const> {
                 fn materialize_entry(&self, index: u64) -> u64 {
-                    JoltLookupTable::materialize_entry(self, index)
+                    JoltLookupTable::materialize_entry(self, index as u128)
                 }
 
-                fn evaluate_mle<F: JoltField>(&self, r: &[F]) -> F {
+                fn evaluate_mle<F: JoltField>(&self, r: &[F::Challenge]) -> F {
                     JoltLookupTable::evaluate_mle(self, r)
                 }
             }

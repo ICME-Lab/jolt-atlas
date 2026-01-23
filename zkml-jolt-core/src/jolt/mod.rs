@@ -18,8 +18,9 @@ use jolt_core::{
     poly::{commitment::commitment_scheme::CommitmentScheme, opening_proof::OpeningPoint},
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
-    zkvm::witness::DTH_ROOT_OF_K,
 };
+// Use local definitions instead of jolt-core
+use crate::jolt::witness::DTH_ROOT_OF_K;
 use onnx_tracer::{ProgramIO, graph::model::Model, tensor::Tensor, trace_types::ONNXInstr};
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, rc::Rc};

@@ -8,7 +8,7 @@ pub enum ReluPrefix<const WORD_SIZE: usize> {}
 impl<const WORD_SIZE: usize, F: JoltField> SparseDensePrefix<F> for ReluPrefix<WORD_SIZE> {
     fn prefix_mle(
         checkpoints: &[PrefixCheckpoint<F>],
-        r_x: Option<F>,
+        r_x: Option<F::Challenge>,
         c: u32,
         b: LookupBits,
         j: usize,
@@ -25,28 +25,31 @@ impl<const WORD_SIZE: usize, F: JoltField> SparseDensePrefix<F> for ReluPrefix<W
 
     fn update_prefix_checkpoint(
         checkpoints: &[PrefixCheckpoint<F>],
-        r_x: F,
-        r_y: F,
+        r_x: F::Challenge,
+        r_y: F::Challenge,
         j: usize,
+        _phase_length: usize,
     ) -> PrefixCheckpoint<F> {
         let two = 2 * WORD_SIZE;
+        let r_x_f: F = r_x.into();
+        let r_y_f: F = r_y.into();
         match j {
             // suffix handles relu
             j if j < WORD_SIZE => None.into(),
             j if j == WORD_SIZE + 1 => {
                 // Sign bit is in r_x
-                let sign_bit = r_x;
+                let sign_bit = r_x_f;
                 let y_shift = two - j - 1;
                 let updated = checkpoints[Prefixes::Relu].unwrap_or(F::zero())
-                    + F::from_u64(1 << y_shift) * r_y * (F::one() - sign_bit);
+                    + F::from_u64(1 << y_shift) * r_y_f * (F::one() - sign_bit);
                 Some(updated).into()
             }
             _ => {
                 let x_shift = two - j;
                 let y_shift = x_shift - 1;
                 let updated = checkpoints[Prefixes::Relu].unwrap_or(F::zero())
-                    + F::from_u64(1 << x_shift) * r_x * checkpoints[Prefixes::NotUnaryMsb].unwrap()
-                    + F::from_u64(1 << y_shift) * r_y * checkpoints[Prefixes::NotUnaryMsb].unwrap();
+                    + F::from_u64(1 << x_shift) * r_x_f * checkpoints[Prefixes::NotUnaryMsb].unwrap()
+                    + F::from_u64(1 << y_shift) * r_y_f * checkpoints[Prefixes::NotUnaryMsb].unwrap();
                 Some(updated).into()
             }
         }

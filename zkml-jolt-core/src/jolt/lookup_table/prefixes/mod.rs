@@ -39,7 +39,7 @@ pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
     /// they can be represented by a single bitvector.
     fn prefix_mle(
         checkpoints: &[PrefixCheckpoint<F>],
-        r_x: Option<F>,
+        r_x: Option<F::Challenge>,
         c: u32,
         b: LookupBits,
         j: usize,
@@ -53,9 +53,10 @@ pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
     /// so we pass in all such `checkpoints` to this function.
     fn update_prefix_checkpoint(
         checkpoints: &[PrefixCheckpoint<F>],
-        r_x: F,
-        r_y: F,
+        r_x: F::Challenge,
+        r_y: F::Challenge,
         j: usize,
+        phase_length: usize,
     ) -> PrefixCheckpoint<F>;
 }
 
@@ -138,12 +139,14 @@ impl Prefixes {
     #[tracing::instrument(skip_all)]
     pub fn update_checkpoints<const WORD_SIZE: usize, F: JoltField>(
         checkpoints: &mut [PrefixCheckpoint<F>],
-        r_x: F,
-        r_y: F,
+        r_x: F::Challenge,
+        r_y: F::Challenge,
         j: usize,
     ) {
         debug_assert_eq!(checkpoints.len(), Self::COUNT);
         let previous_checkpoints = checkpoints.to_vec();
+        // Compute phase_length based on LOG_K / 4
+        let phase_length = jolt_core::zkvm::instruction_lookups::LOG_K / 4;
         checkpoints
             .par_iter_mut()
             .enumerate()
@@ -154,6 +157,7 @@ impl Prefixes {
                     r_x,
                     r_y,
                     j,
+                    phase_length,
                 );
             });
     }
@@ -181,7 +185,7 @@ macro_rules! impl_prefixes {
             pub fn prefix_mle<const WORD_SIZE: usize, F: JoltField>(
                 &self,
                 checkpoints: &[PrefixCheckpoint<F>],
-                r_x: Option<F>,
+                r_x: Option<F::Challenge>,
                 c: u32,
                 b: LookupBits,
                 j: usize,
@@ -204,13 +208,14 @@ macro_rules! impl_prefixes {
             fn update_prefix_checkpoint<const WORD_SIZE: usize, F: JoltField>(
                 &self,
                 checkpoints: &[PrefixCheckpoint<F>],
-                r_x: F,
-                r_y: F,
+                r_x: F::Challenge,
+                r_y: F::Challenge,
                 j: usize,
+                phase_length: usize,
             ) -> PrefixCheckpoint<F> {
                 match self {
                     $(
-                        Prefixes::$prefix => {$type$(::<$word_size>)?::update_prefix_checkpoint(checkpoints, r_x, r_y, j)}
+                        Prefixes::$prefix => {$type$(::<$word_size>)?::update_prefix_checkpoint(checkpoints, r_x, r_y, j, phase_length)}
                     )*
                 }
             }

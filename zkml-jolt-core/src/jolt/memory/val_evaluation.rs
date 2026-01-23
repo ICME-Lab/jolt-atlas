@@ -27,10 +27,10 @@ pub struct ValEvaluationProverState<F: JoltField> {
 }
 
 pub(crate) struct ValEvaluationSumcheck<F: JoltField> {
-    pub r_address: Vec<F>,
+    pub r_address: Vec<F::Challenge>,
     pub input_claim: F,
     pub num_rounds: usize,
-    pub r_cycle: Vec<F>,
+    pub r_cycle: Vec<F::Challenge>,
     pub prover_state: Option<ValEvaluationProverState<F>>,
 }
 
@@ -50,9 +50,9 @@ impl<F: JoltField> ValEvaluationSumcheck<F> {
 
         // The opening point is r_address || r_cycle
         let r_address_len = K.ilog2() as usize;
-        let (r_address_slice, r_cycle_slice) = opening_point.split_at(r_address_len);
-        let r_address: Vec<F> = r_address_slice.into();
-        let r_cycle: Vec<F> = r_cycle_slice.into();
+        let (r_address, r_cycle) = opening_point.split_at(r_address_len);
+        let r_address = r_address.r;
+        let r_cycle = r_cycle.r;
 
         let inc = CommittedPolynomial::TdInc.generate_witness(trace);
 
@@ -102,9 +102,9 @@ impl<F: JoltField> ValEvaluationSumcheck<F> {
 
         // The opening point is r_address || r_cycle
         let r_address_len = K.ilog2() as usize;
-        let (r_address_slice, r_cycle_slice) = opening_point.split_at(r_address_len);
-        let r_address: Vec<F> = r_address_slice.into();
-        let r_cycle: Vec<F> = r_cycle_slice.into();
+        let (r_address, r_cycle) = opening_point.split_at(r_address_len);
+        let r_address = r_address.r;
+        let r_cycle = r_cycle.r;
 
         Self {
             input_claim: val_claim,
@@ -174,7 +174,7 @@ impl<F: JoltField> SumcheckInstance<F> for ValEvaluationSumcheck<F> {
     }
 
     #[tracing::instrument(skip_all, name = "RegistersValEvaluationSumcheck::bind")]
-    fn bind(&mut self, r_j: F, _round: usize) {
+    fn bind(&mut self, r_j: F::Challenge, _round: usize) {
         if let Some(prover_state) = &mut self.prover_state {
             [
                 &mut prover_state.inc,
@@ -189,14 +189,16 @@ impl<F: JoltField> SumcheckInstance<F> for ValEvaluationSumcheck<F> {
     fn expected_output_claim(
         &self,
         accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-        r: &[F],
+        r: &[F::Challenge],
     ) -> F {
         // Compute LT(r_cycle', r_cycle)
         let mut lt_eval = F::zero();
         let mut eq_term = F::one();
         for (x, y) in r.iter().zip(self.r_cycle.iter()) {
+            let x: F = (*x).into();
+            let y: F = (*y).into();
             lt_eval += (F::one() - x) * y * eq_term;
-            eq_term *= F::one() - x - y + *x * y + *x * y;
+            eq_term *= F::one() - x - y + x * y + x * y;
         }
 
         let accumulator = accumulator.as_ref().unwrap();
@@ -213,7 +215,7 @@ impl<F: JoltField> SumcheckInstance<F> for ValEvaluationSumcheck<F> {
         inc_claim * wa_claim * lt_eval
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::new(opening_point.to_vec())
     }
 

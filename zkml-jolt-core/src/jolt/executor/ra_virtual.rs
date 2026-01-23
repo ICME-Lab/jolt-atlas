@@ -15,6 +15,10 @@ use crate::jolt::{
     trace::{JoltONNXCycle, WORD_SIZE},
     witness::{CommittedPolynomial, VirtualPolynomial},
 };
+use crate::compat::large_degree_sumcheck::{
+    compute_eq_mle_product_univariate, compute_mle_product_coeffs_katatsuba,
+};
+use crate::jolt::witness::{DTH_ROOT_OF_K, compute_d_parameter_from_log_K};
 use jolt_core::{
     field::{JoltField, OptimizedMul},
     poly::{
@@ -23,20 +27,14 @@ use jolt_core::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{BIG_ENDIAN, OpeningPoint},
     },
-    subprotocols::large_degree_sumcheck::{
-        compute_eq_mle_product_univariate, compute_mle_product_coeffs_katatsuba,
-    },
     transcripts::Transcript,
     utils::{lookup_bits::LookupBits, math::Math},
-    zkvm::{
-        instruction_lookups::{K_CHUNK, LOG_K, LOG_K_CHUNK, LOG_M, M, PHASES, RA_PER_LOG_M},
-        witness::{DTH_ROOT_OF_K, compute_d_parameter_from_log_K},
-    },
+    zkvm::instruction_lookups::{K_CHUNK, LOG_K, LOG_K_CHUNK, LOG_M, M, PHASES, RA_PER_LOG_M},
 };
 
 pub struct RASumCheck<F: JoltField> {
-    r_cycle: Vec<F>,
-    r_address_chunks: Vec<Vec<F>>,
+    r_cycle: Vec<F::Challenge>,
+    r_address_chunks: Vec<Vec<F::Challenge>>,
     eq_ra_claim: F,
     d: usize,
     T: usize,
@@ -56,7 +54,7 @@ impl<F: JoltField> RASumCheck<F> {
     ) -> Vec<MultilinearPolynomial<F>> {
         let lookup_indices: Vec<_> = trace
             .par_iter()
-            .map(|cycle| LookupBits::new(LookupQuery::<WORD_SIZE>::to_lookup_index(cycle), LOG_K))
+            .map(|cycle| LookupBits::new(LookupQuery::<WORD_SIZE>::to_lookup_index(cycle) as u128, LOG_K))
             .collect();
 
         // Retrieve the random address variables generated in ReadRafSumcheck.
@@ -78,7 +76,7 @@ impl<F: JoltField> RASumCheck<F> {
                     .par_iter()
                     .map(|k| {
                         let (prefix, _) = k.split((PHASES - 1 - phase) * LOG_M);
-                        let k_bound: usize = ((prefix % M)
+                        let k_bound: usize = ((usize::from(prefix) % M)
                             >> (LOG_K_CHUNK * (RA_PER_LOG_M - 1 - (i % 2))))
                             % K_CHUNK;
                         eq[k_bound]
@@ -104,19 +102,17 @@ impl<F: JoltField> RASumCheck<F> {
         );
 
         let (r_address, r_cycle) = r.split_at_r(log_K);
-        let r_address = if r_address.len().is_multiple_of(DTH_ROOT_OF_K.log_2()) {
+        let r_address: Vec<F::Challenge> = if r_address.len().is_multiple_of(DTH_ROOT_OF_K.log_2()) {
             r_address.to_vec()
         } else {
-            // Pad with zeros
-            [
-                &vec![F::zero(); DTH_ROOT_OF_K.log_2() - (r_address.len() % DTH_ROOT_OF_K.log_2())],
-                r_address,
-            ]
-            .concat()
+            // Pad with zeros - create Challenge zero via From<u128>
+            let zero_challenge: F::Challenge = 0u128.into();
+            let padding = vec![zero_challenge; DTH_ROOT_OF_K.log_2() - (r_address.len() % DTH_ROOT_OF_K.log_2())];
+            [padding.as_slice(), r_address].concat()
         };
 
         // Split r_address into d chunks of variable sizes
-        let r_address_chunks: Vec<Vec<F>> = r_address
+        let r_address_chunks: Vec<Vec<F::Challenge>> = r_address
             .chunks(DTH_ROOT_OF_K.log_2())
             .map(|chunk| chunk.to_vec())
             .collect();
@@ -165,7 +161,7 @@ impl<F: JoltField> RASumCheck<F> {
         assert!(r_address.len().is_multiple_of(DTH_ROOT_OF_K.log_2()));
 
         // Split r_address into d chunks of variable sizes
-        let r_address_chunks: Vec<Vec<F>> = r_address
+        let r_address_chunks: Vec<Vec<F::Challenge>> = r_address
             .chunks(DTH_ROOT_OF_K.log_2())
             .map(|chunk| chunk.to_vec())
             .collect();
@@ -237,11 +233,14 @@ impl<F: JoltField> SumcheckInstance<F> for RASumCheck<F> {
         // Turning into eval points.
         (0..univariate_poly.coeffs.len())
             .filter(|i| *i != 1)
-            .map(|i| univariate_poly.evaluate(&F::from_u32(i as u32)))
+            .map(|i| {
+                let point: F::Challenge = (i as u128).into();
+                univariate_poly.evaluate(&point)
+            })
             .collect()
     }
 
-    fn bind(&mut self, r_j: F, round: usize) {
+    fn bind(&mut self, r_j: F::Challenge, round: usize) {
         let prover_state = self
             .prover_state
             .as_mut()
@@ -252,16 +251,18 @@ impl<F: JoltField> SumcheckInstance<F> for RASumCheck<F> {
             .par_iter_mut()
             .for_each(|poly| poly.bind_parallel(r_j, BindingOrder::HighToLow));
 
+        let r_cycle_round: F = self.r_cycle[round].into();
+        let r_j_field: F = r_j.into();
         prover_state.eq_factor = prover_state.eq_factor.mul_1_optimized(
-            (self.r_cycle[round] + self.r_cycle[round] - F::one()) * r_j
-                + (F::one() - self.r_cycle[round]),
+            (r_cycle_round + r_cycle_round - F::one()) * r_j_field
+                + (F::one() - r_cycle_round),
         );
     }
 
     fn expected_output_claim(
         &self,
         opening_accumulator: Option<Rc<RefCell<VerifierOpeningAccumulator<F>>>>,
-        r: &[F],
+        r: &[F::Challenge],
     ) -> F {
         let eq_eval = EqPolynomial::mle(&self.r_cycle, r);
         let ra_claim_prod: F = (0..self.d)
@@ -281,7 +282,7 @@ impl<F: JoltField> SumcheckInstance<F> for RASumCheck<F> {
         eq_eval * ra_claim_prod
     }
 
-    fn normalize_opening_point(&self, opening_point: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, opening_point: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::new(opening_point.to_vec())
     }
 

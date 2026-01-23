@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 pub mod lookup_tables;
 pub mod op_lookups;
 pub mod ops;
+pub mod range_checking;
 pub mod witness;
 
 /// Prover state that owns all data needed during proving.

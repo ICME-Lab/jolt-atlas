@@ -207,7 +207,7 @@ pub trait InterleavedBitsMarker {
 
 impl InterleavedBitsMarker for ComputationNode {
     fn is_interleaved_operands(&self) -> bool {
-        matches!(self.operator, Operator::And2(_))
+        matches!(self.operator, Operator::And2(_) | Operator::ULessThan(_))
     }
 }
 
@@ -217,6 +217,9 @@ pub trait CommitToOneHotEncodingsMarker {
 
 impl CommitToOneHotEncodingsMarker for ComputationNode {
     fn commit_to_one_encodings(&self) -> bool {
-        matches!(self.operator, Operator::And2(_) | Operator::ReLU(_))
+        matches!(
+            self.operator,
+            Operator::And2(_) | Operator::ReLU(_) | Operator::ULessThan(_)
+        )
     }
 }

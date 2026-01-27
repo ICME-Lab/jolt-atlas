@@ -1,7 +1,13 @@
 use crate::onnx_proof::{
     ops::OperatorProofTrait,
-    range_checking::read_raf_checking::{
-        RangecheckRafSumcheckParams, RangecheckRafSumcheckProver, RangecheckRafSumcheckVerifier,
+    range_checking::{
+        self,
+        ra_virtual::{
+            InstructionRaSumcheckParams, InstructionRaSumcheckProver, RaSumcheckVerifier,
+        },
+        read_raf_checking::{
+            RangecheckRafSumcheckParams, RangecheckRafSumcheckProver, RangecheckRafSumcheckVerifier,
+        },
     },
     ProofId, ProofType, Prover, Verifier,
 };
@@ -13,6 +19,7 @@ use atlas_onnx_tracer::{
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
+    config::OneHotParams,
     field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
@@ -25,7 +32,7 @@ use joltworks::{
         unipoly::UniPoly,
     },
     subprotocols::{
-        sumcheck::{Sumcheck, SumcheckInstanceProof},
+        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -52,24 +59,68 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         results.push((ProofId(node.idx, ProofType::Execution), proof));
 
         // Range check proof
-        // let params = RangecheckRafSumcheckParams::new(
-        //     node.clone(),
-        //     &prover.accumulator,
-        //     &mut prover.transcript,
-        // );
-        // let mut rangecheck_sumcheck = RangecheckRafSumcheckProver::initialize(
-        //     params,
-        //     &prover.trace,
-        //     &mut prover.accumulator,
-        //     &mut prover.transcript,
-        // );
-        // let (_rangecheck_proof, _) = Sumcheck::prove(
-        //     &mut rangecheck_sumcheck,
-        //     &mut prover.accumulator,
-        //     &mut prover.transcript,
-        // );
+        let params = RangecheckRafSumcheckParams::new(
+            node.clone(),
+            &prover.accumulator,
+            &mut prover.transcript,
+        );
+        let mut rangecheck_sumcheck = RangecheckRafSumcheckProver::initialize(
+            params,
+            &prover.trace,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+        let (rangecheck_proof, _) = Sumcheck::prove(
+            &mut rangecheck_sumcheck,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
 
-        // results.push((ProofId(node.idx, ProofType::RangeCheck), rangecheck_proof));
+        results.push((ProofId(node.idx, ProofType::RangeCheck), rangecheck_proof));
+
+        // RaOneHotChecks proof
+        let log_T = node.num_output_elements().log_2();
+        let one_hot_params = OneHotParams::new(log_T);
+        let ra_params =
+            InstructionRaSumcheckParams::new(node.clone(), &one_hot_params, &prover.accumulator);
+        let ra_prover_sumcheck = InstructionRaSumcheckProver::initialize(ra_params, &prover.trace);
+
+        let lookups_hamming_weight_params = range_checking::ra_hamming_weight_params(
+            node,
+            &one_hot_params,
+            &prover.accumulator,
+            &mut prover.transcript,
+        );
+        let lookups_booleanity_params = range_checking::ra_booleanity_params(
+            node,
+            &one_hot_params,
+            &prover.accumulator,
+            &mut prover.transcript,
+        );
+
+        let (lookups_ra_booleanity, lookups_ra_hamming_weight) =
+            range_checking::gen_ra_one_hot_provers(
+                lookups_hamming_weight_params,
+                lookups_booleanity_params,
+                &prover.trace,
+                node,
+                &one_hot_params,
+            );
+
+        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
+            Box::new(ra_prover_sumcheck),
+            Box::new(lookups_ra_booleanity),
+            Box::new(lookups_ra_hamming_weight),
+        ];
+        let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
+            instances.iter_mut().map(|v| &mut **v as _).collect(),
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+        results.push((
+            ProofId(node.idx, ProofType::RaOneHotChecks),
+            ra_one_hot_proof,
+        ));
 
         results
     }
@@ -91,21 +142,48 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
             &mut verifier.transcript,
         )?;
 
-        // let _rangecheck_proof = verifier
-        //     .proofs
-        //     .get(&ProofId(node.idx, ProofType::RangeCheck))
-        //     .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        // let _rangecheck_verifier = RangecheckRafSumcheckVerifier::new(
-        //     node.clone(),
-        //     &mut verifier.accumulator,
-        //     &mut verifier.transcript,
-        // );
-        // Sumcheck::verify(
-        //     rangecheck_proof,
-        //     &rangecheck_verifier,
-        //     &mut verifier.accumulator,
-        //     &mut verifier.transcript,
-        // )?;
+        let rangecheck_proof = verifier
+            .proofs
+            .get(&ProofId(node.idx, ProofType::RangeCheck))
+            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        let rangecheck_verifier = RangecheckRafSumcheckVerifier::new(
+            node.clone(),
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        );
+        Sumcheck::verify(
+            rangecheck_proof,
+            &rangecheck_verifier,
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        )?;
+
+        // Verify RaOneHotChecks
+        let log_T = node.num_output_elements().log_2();
+        let one_hot_params = OneHotParams::new(log_T);
+        let ra_verifier_sumcheck =
+            RaSumcheckVerifier::new(node.clone(), &one_hot_params, &verifier.accumulator);
+        let (lookups_ra_booleanity, lookups_rs_hamming_weight) =
+            range_checking::new_ra_one_hot_verifiers(
+                node,
+                &one_hot_params,
+                &verifier.accumulator,
+                &mut verifier.transcript,
+            );
+        let ra_one_hot_proof = verifier
+            .proofs
+            .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
+            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        BatchedSumcheck::verify(
+            ra_one_hot_proof,
+            vec![
+                &ra_verifier_sumcheck,
+                &lookups_ra_booleanity,
+                &lookups_rs_hamming_weight,
+            ],
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        )?;
 
         Ok(())
     }
@@ -448,13 +526,13 @@ mod tests {
             output,
         } = Trace::layer_data(&trace, computation_node);
 
-        let relu_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
+        let div_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
         prover.accumulator.append_virtual(
             &mut prover.transcript,
             VirtualPolynomial::NodeOutput(output_index),
             SumcheckId::Execution,
             r_node_output.clone().into(),
-            relu_claim,
+            div_claim,
         );
 
         let verifier_transcript = Blake2bTranscript::new(&[]);
@@ -494,7 +572,7 @@ mod tests {
 
         let res = Div.verify(computation_node, &mut verifier);
 
-        prover.transcript.compare_to(verifier.transcript.clone());
+        verifier.transcript.compare_to(prover.transcript);
         res.unwrap();
     }
 

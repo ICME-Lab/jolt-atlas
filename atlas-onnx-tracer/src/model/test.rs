@@ -189,6 +189,14 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    pub fn less_than(&mut self, a: Wire, b: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&a].output_dims.clone();
+        let node =
+            ComputationNode::new(id, Operator::ULessThan(ULessThan), vec![a, b], output_dims);
+        self.insert_node(node)
+    }
+
     /// Add an einsum node (general tensor contraction).
     pub fn einsum(&mut self, equation: &str, inputs: Vec<Wire>, output_dims: Vec<usize>) -> Wire {
         let id = self.alloc();
@@ -298,6 +306,15 @@ pub fn and2(rng: &mut StdRng, T: usize) -> Model {
     let i = b.input(vec![T]);
     let c = b.constant(Tensor::random(rng, &[T]));
     let res = b.and2(i, c);
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn less_than_model(rng: &mut StdRng, T: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![T]);
+    let c = b.constant(Tensor::random_pos(rng, &[T]));
+    let res = b.less_than(i, c);
     b.mark_output(res);
     b.build()
 }

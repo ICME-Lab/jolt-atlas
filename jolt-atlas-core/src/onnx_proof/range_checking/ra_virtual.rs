@@ -3,6 +3,7 @@ use std::sync::Arc;
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
+    tensor::Tensor,
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
@@ -28,8 +29,8 @@ use joltworks::{
 };
 use rayon::prelude::*;
 
-use crate::onnx_proof::op_lookups::{
-    read_raf_checking::compute_lookup_indices_from_operands, InterleavedBitsMarker, LOG_K,
+use crate::onnx_proof::range_checking::{
+    read_raf_checking::compute_lookup_indices_from_operands, LOG_K,
 };
 
 // Instruction read-access (RA) virtualization sumcheck
@@ -56,7 +57,7 @@ impl<F: JoltField> InstructionRaSumcheckParams<F> {
     ) -> Self {
         let (r, _) = opening_accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::DivRangeCheckRa(computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::Raf,
         );
         let (r_address, r_cycle) = r.split_at(LOG_K);
         Self {
@@ -76,7 +77,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for InstructionRaSumcheckParams<F> 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         let (_, ra_claim) = accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::DivRangeCheckRa(self.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::Raf,
         );
         ra_claim
     }
@@ -110,9 +111,27 @@ impl<F: JoltField> InstructionRaSumcheckProver<F> {
             output: _,
             operands,
         } = Trace::layer_data(trace, &params.computation_node);
-        let is_interleaved_operands = params.computation_node.is_interleaved_operands();
-        let lookup_indices =
-            compute_lookup_indices_from_operands(&operands, is_interleaved_operands);
+
+        let [dividend, divisor] = operands[..] else {
+            panic!("Expected exactly two operands for Div node.");
+        };
+
+        let remainder = {
+            let data: Vec<i32> = dividend
+                .iter()
+                .zip(divisor.iter())
+                .map(|(&a, &b)| {
+                    let mut R = a % b;
+                    if (R < 0 && b > 0) || R > 0 && b < 0 {
+                        R += b
+                    }
+                    R
+                })
+                .collect();
+            Tensor::<i32>::construct(data, dividend.dims().to_vec())
+        };
+
+        let lookup_indices = compute_lookup_indices_from_operands(&[&remainder, divisor]);
 
         let H_indices: Vec<Vec<Option<u8>>> = (0..params.one_hot_params.instruction_d)
             .map(|i| {
@@ -175,7 +194,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for InstructionRa
         let r_cycle = self.params.normalize_opening_point(sumcheck_challenges);
         let (r, _) = accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::DivRangeCheckRa(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::Raf,
         );
 
         let (r_address, _) = r.split_at_r(LOG_K);
@@ -253,7 +272,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RaSumcheckV
         let r_cycle = self.params.normalize_opening_point(sumcheck_challenges);
         let (r, _) = accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::DivRangeCheckRa(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::Raf,
         );
 
         let (r_address, _) = r.split_at_r(LOG_K);

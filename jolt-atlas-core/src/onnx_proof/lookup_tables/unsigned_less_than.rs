@@ -60,9 +60,9 @@ impl<const XLEN: usize> PrefixSuffixDecompositionTrait<XLEN> for UnsignedLessTha
     }
 
     fn combine<F: JoltField>(&self, prefixes: &[PrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F {
-        let [one, suf_less_than_suffix] = suffixes.try_into().unwrap();
+        let [one, less_than_suffix] = suffixes.try_into().unwrap();
         let [eq, less_than_prefix] = prefixes.try_into().unwrap();
-        less_than_prefix * one + eq * suf_less_than_suffix
+        less_than_prefix * one + eq * less_than_suffix
     }
 }
 

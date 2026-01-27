@@ -24,7 +24,7 @@ use joltworks::{
 };
 use rayon::prelude::*;
 
-use crate::onnx_proof::op_lookups::read_raf_checking::compute_lookup_indices_from_operands;
+use crate::onnx_proof::range_checking::read_raf_checking::compute_lookup_indices_from_operands;
 
 pub mod ra_virtual;
 pub mod read_raf_checking;
@@ -45,7 +45,7 @@ pub fn ra_hamming_weight_params<F: JoltField>(
 
     let r_cycle = opening_accumulator
         .get_virtual_polynomial_opening(
-            VirtualPolynomial::DivRangeCheckRa(computation_node.idx),
+            VirtualPolynomial::NodeOutput(computation_node.idx),
             SumcheckId::Execution,
         )
         .0
@@ -72,7 +72,7 @@ pub fn ra_booleanity_params<F: JoltField>(
         .collect();
 
     let (r_cycle, _) = opening_accumulator.get_virtual_polynomial_opening(
-        VirtualPolynomial::DivRangeCheckRa(computation_node.idx),
+        VirtualPolynomial::NodeOutput(computation_node.idx),
         SumcheckId::Execution,
     );
 
@@ -102,8 +102,7 @@ pub fn gen_ra_one_hot_provers<F: JoltField>(
         output: _,
         operands,
     } = Trace::layer_data(trace, computation_node);
-    let is_interleaved_operands = computation_node.is_interleaved_operands();
-    let lookup_indices = compute_lookup_indices_from_operands(&operands, is_interleaved_operands);
+    let lookup_indices = compute_lookup_indices_from_operands(&operands);
     let ra_evals = compute_ra_evals(&lookup_indices, one_hot_params, &booleanity_params.r_cycle);
     let H_indices = compute_instruction_h_indices(&lookup_indices, one_hot_params);
 

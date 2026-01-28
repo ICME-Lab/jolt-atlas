@@ -62,6 +62,7 @@ pub enum VirtualPolynomial {
     DivNodeRemainder(usize),
     RsqrtRiRangeCheckRa(usize),
     RsqrtRsRangeCheckRa(usize),
+    RsqrtNodeSqrt(usize),
     RsqrtNodeRi(usize),
     RsqrtNodeRs(usize),
 }

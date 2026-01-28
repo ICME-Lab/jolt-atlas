@@ -8,6 +8,7 @@ use crate::onnx_proof::{
         read_raf_checking::{
             RangecheckRafSumcheckParams, RangecheckRafSumcheckProver, RangecheckRafSumcheckVerifier,
         },
+        sumcheck_instance::DivRangeCheckOperands,
     },
     ProofId, ProofType, Prover, Verifier,
 };
@@ -59,7 +60,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         results.push((ProofId(node.idx, ProofType::Execution), proof));
 
         // Range check proof
-        let params = RangecheckRafSumcheckParams::new(
+        let params = RangecheckRafSumcheckParams::<_, DivRangeCheckOperands>::new(
             node.clone(),
             &prover.accumulator,
             &mut prover.transcript,
@@ -146,8 +147,15 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
             .proofs
             .get(&ProofId(node.idx, ProofType::RangeCheck))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let rangecheck_verifier = RangecheckRafSumcheckVerifier::new(
+
+        let params = RangecheckRafSumcheckParams::<_, DivRangeCheckOperands>::new(
             node.clone(),
+            &verifier.accumulator,
+            &mut verifier.transcript,
+        );
+
+        let rangecheck_verifier = RangecheckRafSumcheckVerifier::new(
+            params,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );

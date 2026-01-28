@@ -43,7 +43,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for HammingWeightSumcheckParams<F> 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         if self.sumcheck_id == SumcheckId::RamHammingWeight {
             let (_, hamming_booleanity_claim) = accumulator.get_virtual_polynomial_opening(
-                VirtualPolynomial::RamHammingWeight,
+                VirtualPolynomial::HammingWeight,
                 SumcheckId::RamHammingBooleanity,
             );
             hamming_booleanity_claim * self.gamma_powers.iter().sum::<F>()

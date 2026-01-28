@@ -1,11 +1,11 @@
 // TODO: Remove this file when we have the Softmax opcode decomposition in parser
 
 use crate::{
-    ops::{Op, Softmax},
+    ops::{Op, SoftmaxAxes},
     tensor::{self, Tensor},
 };
 
-impl Op for Softmax {
+impl Op for SoftmaxAxes {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         tensor::ops::nonlinearities::softmax_axes(inputs[0], self.scale.into(), &[self.axes])
     }

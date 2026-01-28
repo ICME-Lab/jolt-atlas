@@ -12,7 +12,7 @@ pub mod mul;
 pub mod relu;
 pub mod reshape;
 pub mod rsqrt;
-pub mod softmax;
+pub mod softmax_axes;
 pub mod square;
 pub mod sub;
 
@@ -85,7 +85,7 @@ impl OperatorProver {
             Operator::Reshape(inner) => inner.prove(node, prover),
             Operator::Rsqrt(inner) => inner.prove(node, prover),
             Operator::Square(inner) => inner.prove(node, prover),
-            Operator::Softmax(inner) => inner.prove(node, prover),
+            Operator::SoftmaxAxes(inner) => inner.prove(node, prover),
             Operator::Sub(inner) => inner.prove(node, prover),
             _ => {
                 println!("Unhandled operator in graph: {node:#?}");
@@ -121,7 +121,7 @@ impl OperatorVerifier {
             Operator::ReLU(inner) => inner.verify(node, verifier),
             Operator::Rsqrt(inner) => inner.verify(node, verifier),
             Operator::Square(inner) => inner.verify(node, verifier),
-            Operator::Softmax(inner) => inner.verify(node, verifier),
+            Operator::SoftmaxAxes(inner) => inner.verify(node, verifier),
             Operator::Sub(inner) => inner.verify(node, verifier),
             _ => {
                 tracing::warn!("Unhandled operator in graph: {node:#?}");

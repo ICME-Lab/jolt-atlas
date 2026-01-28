@@ -144,6 +144,8 @@ pub struct ProofId(pub usize, pub ProofType);
 pub enum ProofType {
     Execution,
     RaOneHotChecks,
+    SoftmaxDivSumMax,
+    SoftmaxExponentiation,
 }
 
 #[derive(Debug, Clone)]
@@ -197,7 +199,14 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         // Iterate over computation graph in reverse topological order
         // Verify each operation using dispatch
         for (_, computation_node) in pp.model.graph.nodes.iter().rev() {
-            OperatorVerifier::verify(computation_node, &mut verifier)?;
+            let res = OperatorVerifier::verify(computation_node, &mut verifier);
+            #[cfg(test)]
+            {
+                if let Err(e) = &res {
+                    println!("Verification failed at node {computation_node:#?}: {e:?}",);
+                }
+            }
+            res?;
         }
         Ok(())
     }
@@ -281,12 +290,15 @@ mod tests {
     #[test]
     fn test_self_attention_layer() {
         let working_dir = "../atlas-onnx-tracer/models/self_attention_layer/";
+        let mut _rng = StdRng::seed_from_u64(0x1003);
         let input_data = vec![SCALE; 64 * 64];
+        // let input_data: Vec<i32> = (0..64 * 64)
+        //     .map(|_| SCALE + rng.gen_range(-1..=1))
+        //     .collect(); // TODO(Forpee): Investigate bug - Einsum mk,kn->mn node failing
         let input = Tensor::construct(input_data, vec![1, 64, 64]);
 
         // Load the model
         let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
-
         let pp = AtlasSharedPreprocessing::preprocess(model);
         let (proof, io) =
             ONNXProof::<Fr, Blake2bTranscript, DoryCommitmentScheme>::prove(&pp, &input);

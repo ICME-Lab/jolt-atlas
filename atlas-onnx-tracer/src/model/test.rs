@@ -258,6 +258,22 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    /// Add a softmax node.
+    pub fn softmax(&mut self, axes: usize, input: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&input].output_dims.clone();
+        let node = ComputationNode::new(
+            id,
+            Operator::SoftmaxAxes(SoftmaxAxes {
+                axes,
+                scale: F32((1 << SCALE) as f32),
+            }),
+            vec![input],
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
     /// Mark a wire as an output of the model.
     pub fn mark_output(&mut self, wire: Wire) {
         self.outputs.push(wire);
@@ -420,6 +436,14 @@ pub fn reshape_model(input_shape: &[usize], output_shape: &[usize]) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(input_shape.to_vec());
     let res = b.reshape(i, output_shape.to_vec());
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn softmax_axes_model(input_shape: &[usize], axes: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(input_shape.to_vec());
+    let res = b.softmax(axes, i);
     b.mark_output(res);
     b.build()
 }

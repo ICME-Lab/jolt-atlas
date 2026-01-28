@@ -3168,17 +3168,205 @@ pub mod nonlinearities {
     ///     Some(&[2, 2, 3, 2, 2, 0]),
     ///     &[2, 3],
     /// ).unwrap();
-    /// let result = softmax(&x, 128.0);
+    /// let result = softmax(&x, 256.0);
     /// // doubles the scale of the input
-    /// let expected = Tensor::<i32>::new(Some(&[2730, 2730, 2751, 2730, 2730, 2688]), &[2, 3]).unwrap();
+    /// let expected = Tensor::<i32>::new(Some(&[10836, 10836, 10878, 10836, 10836, 10752]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
     pub fn softmax(a: &Tensor<i32>, scale: f64) -> Tensor<i32> {
-        // TODO: Subtract by max
-        let exp = exp(a, scale);
-        let sum = sum(&exp).unwrap();
-        let inv_denom = recip(&sum, scale * scale);
-        (exp * inv_denom).unwrap()
+        if (scale - 128.0).abs() < 1e-9 {
+            softmax_fixed_128::<false>(a).0
+        } else {
+            // fallback to floating-point for other scales
+            let exp = exp(a, scale);
+            let sum = sum(&exp).unwrap();
+            let inv_denom = recip(&sum, scale * scale);
+            (exp * inv_denom).unwrap()
+        }
+    }
+
+    pub const LOG_EXP_LUT_SIZE: usize = 10;
+    pub const EXP_LUT_SIZE: usize = 1 << LOG_EXP_LUT_SIZE;
+
+    /// Direct lookup table: exp(-i / 128) * 128 for i in [0, 1023].
+    /// Each index i represents z_q = -i (so z in range [0, -1023] maps to [0.0, -8.0] real).
+    pub const EXP_LUT_SCALE_128: [i32; EXP_LUT_SIZE] = [
+        128, 127, 126, 125, 124, 123, 122, 121, 120, 119, 118, 117, 117, 116, 115, 114, 113, 112,
+        111, 110, 109, 109, 108, 107, 106, 105, 104, 104, 103, 102, 101, 100, 100, 99, 98, 97, 97,
+        96, 95, 94, 94, 93, 92, 91, 91, 90, 89, 89, 88, 87, 87, 86, 85, 85, 84, 83, 83, 82, 81, 81,
+        80, 79, 79, 78, 78, 77, 76, 76, 75, 75, 74, 74, 73, 72, 72, 71, 71, 70, 70, 69, 69, 68, 67,
+        67, 66, 66, 65, 65, 64, 64, 63, 63, 62, 62, 61, 61, 60, 60, 60, 59, 59, 58, 58, 57, 57, 56,
+        56, 55, 55, 55, 54, 54, 53, 53, 53, 52, 52, 51, 51, 51, 50, 50, 49, 49, 49, 48, 48, 47, 47,
+        47, 46, 46, 46, 45, 45, 45, 44, 44, 44, 43, 43, 43, 42, 42, 42, 41, 41, 41, 40, 40, 40, 39,
+        39, 39, 38, 38, 38, 38, 37, 37, 37, 36, 36, 36, 36, 35, 35, 35, 34, 34, 34, 34, 33, 33, 33,
+        33, 32, 32, 32, 32, 31, 31, 31, 31, 30, 30, 30, 30, 29, 29, 29, 29, 29, 28, 28, 28, 28, 27,
+        27, 27, 27, 27, 26, 26, 26, 26, 26, 25, 25, 25, 25, 25, 24, 24, 24, 24, 24, 23, 23, 23, 23,
+        23, 23, 22, 22, 22, 22, 22, 22, 21, 21, 21, 21, 21, 21, 20, 20, 20, 20, 20, 20, 19, 19, 19,
+        19, 19, 19, 19, 18, 18, 18, 18, 18, 18, 18, 17, 17, 17, 17, 17, 17, 17, 17, 16, 16, 16, 16,
+        16, 16, 16, 16, 15, 15, 15, 15, 15, 15, 15, 15, 14, 14, 14, 14, 14, 14, 14, 14, 14, 13, 13,
+        13, 13, 13, 13, 13, 13, 13, 13, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 11, 11, 11, 11,
+        11, 11, 11, 11, 11, 11, 11, 11, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 9, 9, 9, 9,
+        9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 7, 7, 7,
+        7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+        6, 6, 6, 6, 6, 6, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+        5, 5, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+
+    /// Fixed-point exp for z_q <= 0 at scale=128.
+    /// Returns exp(z_q / 128) * 128.
+    /// Direct lookup with no step calculation - minimal operations for proving.
+    #[inline]
+    fn exp_fixed_lut_128(z_q: i32) -> i32 {
+        debug_assert!(z_q <= 0, "exp_fixed_lut_128 requires z_q <= 0");
+        let idx = (-z_q) as usize;
+
+        // For GPT-2 transformer models, logits won't exceed -8.0 in real units,
+        if idx >= EXP_LUT_SCALE_128.len() {
+            panic!("exp_fixed_lut_128 index out of bounds: z_q={z_q}, idx={idx}");
+        }
+        EXP_LUT_SCALE_128[idx]
+    }
+
+    pub struct SoftmaxTrace {
+        /// Original input tensor (scale 128)
+        pub input_logits: Tensor<i32>,
+
+        /// Step 1: Max value across all input logits
+        /// max_logit = max(input_logits)
+        pub max_logit: i32,
+        pub max_index: usize,
+
+        /// Step 2: Subtract max from each element for numerical stability
+        /// centered_logits[i] = input_logits[i] - max_logit
+        pub centered_logits: Tensor<i32>,
+
+        /// Step 2b: Absolute value of centered logits (for lookup indexing)
+        /// abs_centered_logits[i] = |centered_logits[i]|
+        pub abs_centered_logits: Tensor<i32>,
+
+        /// Step 3: Exponential values via lookup table at scale 128
+        /// exp_q_values[i] = exp_fixed_lut_128(centered_logits[i])
+        pub exp_q_values: Tensor<i32>,
+
+        /// Step 4: Sum of all exponential values (scale 128)
+        /// exp_sum_q = sum(exp_q_values)
+        pub exp_sum_q: i32,
+
+        /// Step 5b: Final softmax output (scale 128)
+        /// softmax_q[i] = scaled_exp_q_values[i] / exp_sum_q
+        pub softmax_q: Tensor<i32>,
+    }
+
+    /// Fixed-point softmax for scale=128, output at scale 128.
+    ///
+    /// ** Operations used:**
+    /// - Subtraction: `z = x - max` (max stability trick)
+    /// - Array lookup: `exp_lut[idx]` (1025-entry LUT, direct indexing)
+    /// - Addition: `sum(exp_values)`
+    /// - Multiplication: `e * S` (to maintain precision before division)
+    /// - Division: `(e * S) / sum` (integer division with truncation)
+    ///
+    /// **Output scaling:**
+    /// Input at scale 128 → Output at scale 128
+    /// This means: `output[i] = round(softmax(input)[i] * 128)`
+    ///
+    /// **Expected behavior:**
+    /// - Output values are non-negative
+    /// - Sum of outputs ≈ 128 (within ~10% due to integer division truncation)
+    /// - Larger input values → larger output values (monotonic property preserved)
+    ///
+    /// # Examples
+    /// ```
+    /// use atlas_onnx_tracer::tensor::Tensor;
+    /// use atlas_onnx_tracer::tensor::ops::nonlinearities::softmax_fixed_128;
+    ///
+    /// let x = Tensor::<i32>::new(Some(&[0, 128, 256]), &[3]).unwrap(); // [0.0, 1.0, 2.0] in real units
+    /// let result = softmax_fixed_128::<false>(&x).0;
+    /// // Output at scale 128: smaller values for x[0], larger for x[2]
+    /// assert!(result[0] < result[1]);
+    /// assert!(result[1] < result[2]);
+    /// ```
+    pub fn softmax_fixed_128<const TRACE: bool>(
+        a: &Tensor<i32>,
+    ) -> (Tensor<i32>, Option<SoftmaxTrace>) {
+        const S: i32 = 128;
+
+        // 1) Get max
+        let max_logit = a.iter().copied().max().unwrap_or(0);
+        let max_index = a.iter().copied().position(|x| x == max_logit).unwrap_or(0);
+
+        // 2) Subtract max from each element
+        let centered_logits = a
+            .par_enum_map(|_, x| {
+                let z = x - max_logit;
+                Ok::<_, TensorError>(z)
+            })
+            .unwrap();
+
+        let abs_centered_logits = centered_logits
+            .par_enum_map(|_, z| {
+                let abs_z = if z < 0 { -z } else { z };
+                Ok::<_, TensorError>(abs_z)
+            })
+            .unwrap();
+
+        // 3) exp(z_q) at scale S
+        let exp_q_values: Tensor<i32> = centered_logits
+            .par_enum_map(|_, z| Ok::<_, TensorError>(exp_fixed_lut_128(z)))
+            .unwrap();
+
+        // 4) sum at scale S
+        let exp_sum_q = sum(&exp_q_values).unwrap()[0];
+
+        // 5) Compute softmax: (exp_q * S) / sum_q to maintain scale S output
+        // This computes: (exp_q * 128) / sum_q
+        let scaled_exp_q_values = exp_q_values
+            .par_enum_map(|_, e| {
+                // Multiply by S first to maintain precision
+                let scaled_e = e * S;
+                Ok::<_, TensorError>(scaled_e)
+            })
+            .unwrap();
+        let softmax_q = scaled_exp_q_values
+            .par_enum_map(|_, numerator| {
+                let result = numerator / exp_sum_q;
+                Ok::<_, TensorError>(result)
+            })
+            .unwrap();
+        if TRACE {
+            let trace = SoftmaxTrace {
+                input_logits: a.clone(),
+                max_logit,
+                max_index,
+                centered_logits,
+                abs_centered_logits,
+                exp_q_values,
+                exp_sum_q,
+                softmax_q: softmax_q.clone(),
+            };
+            (softmax_q, Some(trace))
+        } else {
+            (softmax_q, None)
+        }
     }
 
     /// Applies range_check_percent

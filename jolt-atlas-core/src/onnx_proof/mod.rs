@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 pub mod lookup_tables;
 pub mod op_lookups;
 pub mod ops;
+pub mod range_checking;
 pub mod witness;
 
 /// Prover state that owns all data needed during proving.
@@ -144,6 +145,7 @@ pub struct ProofId(pub usize, pub ProofType);
 pub enum ProofType {
     Execution,
     RaOneHotChecks,
+    RangeCheck,
 }
 
 #[derive(Debug, Clone)]
@@ -379,6 +381,7 @@ mod tests {
 
         // Load the model
         let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
+        println!("model: {}", model.pretty_print());
 
         let pp = AtlasSharedPreprocessing::preprocess(model);
         let (proof, io) =

@@ -24,10 +24,11 @@ use joltworks::{
 };
 use rayon::prelude::*;
 
-use crate::onnx_proof::op_lookups::read_raf_checking::compute_lookup_indices_from_operands;
+use crate::onnx_proof::range_checking::read_raf_checking::compute_lookup_indices_from_operands;
 
 pub mod ra_virtual;
 pub mod read_raf_checking;
+pub mod sumcheck_instance;
 
 pub const LOG_K: usize = XLEN * 2;
 
@@ -40,7 +41,7 @@ pub fn ra_hamming_weight_params<F: JoltField>(
     let gamma_powers = transcript.challenge_scalar_powers(one_hot_params.instruction_d);
 
     let polynomial_types: Vec<CommittedPolynomial> = (0..one_hot_params.instruction_d)
-        .map(|i| CommittedPolynomial::NodeOutputRaD(computation_node.idx, i))
+        .map(|i| CommittedPolynomial::DivRangeCheckRaD(computation_node.idx, i))
         .collect();
 
     let r_cycle = opening_accumulator
@@ -68,7 +69,7 @@ pub fn ra_booleanity_params<F: JoltField>(
     transcript: &mut impl Transcript,
 ) -> BooleanitySumcheckParams<F> {
     let polynomial_types: Vec<CommittedPolynomial> = (0..one_hot_params.instruction_d)
-        .map(|i| CommittedPolynomial::NodeOutputRaD(computation_node.idx, i))
+        .map(|i| CommittedPolynomial::DivRangeCheckRaD(computation_node.idx, i))
         .collect();
 
     let (r_cycle, _) = opening_accumulator.get_virtual_polynomial_opening(
@@ -102,8 +103,7 @@ pub fn gen_ra_one_hot_provers<F: JoltField>(
         output: _,
         operands,
     } = Trace::layer_data(trace, computation_node);
-    let is_interleaved_operands = computation_node.is_interleaved_operands();
-    let lookup_indices = compute_lookup_indices_from_operands(&operands, is_interleaved_operands);
+    let lookup_indices = compute_lookup_indices_from_operands(&operands);
     let ra_evals = compute_ra_evals(&lookup_indices, one_hot_params, &booleanity_params.r_cycle);
     let H_indices = compute_instruction_h_indices(&lookup_indices, one_hot_params);
 
@@ -207,7 +207,7 @@ pub trait InterleavedBitsMarker {
 
 impl InterleavedBitsMarker for ComputationNode {
     fn is_interleaved_operands(&self) -> bool {
-        matches!(self.operator, Operator::And2(_) | Operator::ULessThan(_))
+        matches!(self.operator, Operator::And2(_))
     }
 }
 
@@ -217,9 +217,6 @@ pub trait CommitToOneHotEncodingsMarker {
 
 impl CommitToOneHotEncodingsMarker for ComputationNode {
     fn commit_to_one_encodings(&self) -> bool {
-        matches!(
-            self.operator,
-            Operator::And2(_) | Operator::ReLU(_) | Operator::ULessThan(_)
-        )
+        matches!(self.operator, Operator::And2(_) | Operator::ReLU(_))
     }
 }

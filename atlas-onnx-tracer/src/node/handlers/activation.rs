@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::{
     node::ComputationNode,
-    ops::{Constant, Erf, Operator, Rsqrt, Softmax, Tanh},
+    ops::{Constant, Erf, Operator, Rsqrt, SoftmaxAxes, Tanh},
     utils::{handler_builder::HandlerBuilder, parser::load_op, quantize::scale_to_multiplier},
 };
 
@@ -85,7 +85,7 @@ fn handle_softmax(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
     HandlerBuilder::new(hctx)
         .with_broadcast()
-        .simple_op(Operator::Softmax(Softmax {
+        .simple_op(Operator::SoftmaxAxes(SoftmaxAxes {
             axes: axes[0],
             scale,
         }))

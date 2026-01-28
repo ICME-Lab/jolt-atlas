@@ -76,7 +76,7 @@ define_operators! {
         Erf { scale: F32 }, Gather { dim: usize }, Identity, Iff, Input,
         IsNan { out_dims: Vec<usize> }, MoveAxis { source: usize, destination: usize },
         Mul, Broadcast { shape: Vec<usize> }, Noop, ReLU, Reshape { shape:Vec<usize> },
-        Rsqrt { scale: F32 }, Shr, Softmax { axes: usize, scale: F32 }, Square,
+        Rsqrt { scale: F32 }, Shr, SoftmaxAxes { axes: usize, scale: F32 }, Square,
         Sub, Sum { axes: Vec<usize> }, Tanh { scale: F32 }
     ]
 }

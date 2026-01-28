@@ -31,7 +31,7 @@ impl From<&ComputationNode> for NodeRow {
         let details = match &node.operator {
             Operator::Einsum(op) => format!("eq: {}", op.equation),
             Operator::Gather(op) => format!("dim: {}", op.dim),
-            Operator::Softmax(op) => format!("axes: {}", op.axes),
+            Operator::SoftmaxAxes(op) => format!("axes: {}", op.axes),
             Operator::Sum(op) => format!("axes: {:?}", op.axes),
             Operator::MoveAxis(op) => format!("src: {} → dst: {}", op.source, op.destination),
             Operator::Reshape(op) => format!("shape: {:?}", op.shape),

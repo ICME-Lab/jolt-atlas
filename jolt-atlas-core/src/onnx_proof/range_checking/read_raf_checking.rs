@@ -7,14 +7,11 @@ use crate::onnx_proof::{
         JoltLookupTable, PrefixSuffixDecompositionTrait,
     },
     op_lookups::LOG_K,
+    range_checking::sumcheck_instance::ReadRafSumcheckHelper,
 };
 use ark_std::Zero;
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    tensor::Tensor,
-};
-use common::{consts::XLEN, VirtualPolynomial};
+use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode, tensor::Tensor};
+use common::consts::XLEN;
 use itertools::Itertools;
 use joltworks::{
     field::{JoltField, MulTrunc},
@@ -51,9 +48,10 @@ use strum::EnumCount;
 
 const DEGREE_BOUND: usize = 2;
 
-pub struct RangecheckRafSumcheckParams<F>
+pub struct RangecheckRafSumcheckParams<F, Helper>
 where
     F: JoltField,
+    Helper: ReadRafSumcheckHelper,
 {
     /// γ and its square (γ^2) used for batching rv/branch/raf components.
     pub gamma: F,
@@ -64,11 +62,13 @@ where
     computation_node: ComputationNode,
     /// Table for this node
     table: UnsignedLessThanTable<XLEN>,
+    helper: Helper,
 }
 
-impl<F> RangecheckRafSumcheckParams<F>
+impl<F, Helper> RangecheckRafSumcheckParams<F, Helper>
 where
     F: JoltField,
+    Helper: ReadRafSumcheckHelper,
 {
     pub fn new(
         computation_node: ComputationNode,
@@ -77,11 +77,12 @@ where
     ) -> Self {
         let gamma = transcript.challenge_scalar::<F>();
         let gamma_sqr = gamma.square();
-        let (r_node_output, _) = opening_accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::DivNodeRemainder(computation_node.idx),
-            SumcheckId::Execution,
-        );
+        let helper = Helper::new(&computation_node);
+
+        let (r_node_output, _) = opening_accumulator
+            .get_virtual_polynomial_opening(helper.get_input_operands()[0], SumcheckId::Execution);
         let log_T = computation_node.num_output_elements().log_2();
+
         Self {
             gamma,
             gamma_sqr,
@@ -89,30 +90,34 @@ where
             r_node_output,
             computation_node,
             table: UnsignedLessThanTable::<XLEN>,
+            helper,
         }
     }
 }
 
-impl<F> SumcheckInstanceParams<F> for RangecheckRafSumcheckParams<F>
+impl<F, Helper> SumcheckInstanceParams<F> for RangecheckRafSumcheckParams<F, Helper>
 where
     F: JoltField,
+    Helper: ReadRafSumcheckHelper,
 {
     fn num_rounds(&self) -> usize {
         LOG_K + self.log_T
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, left_operand_claim) = accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::DivNodeRemainder(self.computation_node.idx),
-            SumcheckId::Raf,
-        );
-        let (_, right_operand_claim) = accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(self.computation_node.inputs[1]),
-            SumcheckId::Raf,
-        );
+        let raw_claims = self
+            .helper
+            .get_input_operands()
+            .iter()
+            .map(|operand| {
+                let (_, claim) =
+                    accumulator.get_virtual_polynomial_opening(*operand, SumcheckId::Raf);
+                claim
+            })
+            .collect::<Vec<_>>();
 
-        // rv is the 1-polynomial: we expect the LowerThan lookup to always return true (1)
-        F::one() + self.gamma * left_operand_claim + self.gamma_sqr * right_operand_claim
+        // rv is the 1-polynomial: we expect the LessThan lookup to always return true (1)
+        Helper::compute_input_claim(&raw_claims, self.gamma, self.gamma_sqr)
     }
 
     fn degree(&self) -> usize {
@@ -134,11 +139,12 @@ where
     }
 }
 
-pub struct RangecheckRafSumcheckProver<F>
+pub struct RangecheckRafSumcheckProver<F, Helper>
 where
     F: JoltField,
+    Helper: ReadRafSumcheckHelper,
 {
-    params: RangecheckRafSumcheckParams<F>,
+    params: RangecheckRafSumcheckParams<F, Helper>,
     /// Materialized `ra(k, j)` MLE over (address, cycle) after the first log(K) rounds.
     /// Present only in the last log(T) rounds.
     ra: Option<MultilinearPolynomial<F>>,
@@ -178,66 +184,52 @@ where
     identity_ps: PrefixSuffixDecomposition<F, 2>,
 }
 
-impl<F> RangecheckRafSumcheckProver<F>
+impl<F, Helper> RangecheckRafSumcheckProver<F, Helper>
 where
     F: JoltField,
+    Helper: ReadRafSumcheckHelper + Sync,
 {
     pub fn initialize(
-        params: RangecheckRafSumcheckParams<F>,
+        params: RangecheckRafSumcheckParams<F, Helper>,
         trace: &Trace,
         opening_accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let LayerData {
-            output: _,
-            operands,
-        } = Trace::layer_data(trace, &params.computation_node);
+        let (left_operand, right_operand) =
+            Helper::get_operands_tensors(trace, &params.computation_node);
 
-        let [dividend, divisor] = operands[..] else {
-            panic!("Expected exactly two input tensors")
+        let [left_operand_virtual_poly, right_operand_virtual_poly] =
+            params.helper.get_input_operands()[..]
+        else {
+            panic!("Expected exactly two input operands for RAF range check");
         };
 
-        let remainder = {
-            let data: Vec<i32> = dividend
-                .iter()
-                .zip(divisor.iter())
-                .map(|(&a, &b)| {
-                    let mut R = a % b;
-                    if (R < 0 && b > 0) || R > 0 && b < 0 {
-                        R += b
-                    }
-                    R
-                })
-                .collect();
-            Tensor::<i32>::construct(data, dividend.dims().to_vec())
-        };
-
-        // Cache left/right operand claims. ( In our case they have been cached in Execution sumcheck)
-        let remainder_claim = MultilinearPolynomial::from(remainder.into_container_data()) // TODO: make this work with from_i32
+        // Cache left/right operand claims. (In our case they have been cached in Execution sumcheck)
+        let left_claim = MultilinearPolynomial::from(left_operand.into_container_data()) // TODO: make this work with from_i32
             .evaluate(&params.r_node_output.r); // TODO: rm these clones
         opening_accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::DivNodeRemainder(params.computation_node.idx),
+            left_operand_virtual_poly,
             SumcheckId::Raf,
             params.r_node_output.clone(),
-            remainder_claim,
+            left_claim,
         );
-        let divisor_claim = MultilinearPolynomial::from(divisor.into_container_data())
+        let right_claim = MultilinearPolynomial::from(right_operand.into_container_data())
             .evaluate(&params.r_node_output.r);
         opening_accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(params.computation_node.inputs[1]),
+            right_operand_virtual_poly,
             SumcheckId::Raf,
             params.r_node_output.clone(),
-            divisor_claim,
+            right_claim,
         );
 
-        Self::new_prover(params, &remainder, divisor)
+        Self::new_prover(params, &left_operand, &right_operand)
     }
 
     /// Creates a new prover instance for the "LessThan" lookup table with RAF.
     fn new_prover(
-        params: RangecheckRafSumcheckParams<F>,
+        params: RangecheckRafSumcheckParams<F, Helper>,
         left_operand: &Tensor<i32>,
         right_operand: &Tensor<i32>,
     ) -> Self {
@@ -259,6 +251,42 @@ where
         let right_operand_poly = OperandPolynomial::new(LOG_K, OperandSide::Right);
         let left_operand_poly = OperandPolynomial::new(LOG_K, OperandSide::Left);
         let identity_poly = IdentityPolynomial::new(LOG_K);
+
+        #[cfg(test)]
+        {
+            let left_claim = MultilinearPolynomial::from(left_operand.into_container_data())
+                .evaluate(&params.r_node_output.r);
+
+            let right_claim = MultilinearPolynomial::from(right_operand.into_container_data())
+                .evaluate(&params.r_node_output.r);
+            assert_eq!(
+                lookup_indices
+                    .iter()
+                    .enumerate()
+                    .map(|(i, index)| {
+                        let mut index = *index;
+                        let mut lookupbits = LookupBits::new(i as u64, T.log_2());
+                        let cycle_bit_array = (0..T.log_2())
+                            .map(|_| F::from_u8(lookupbits.pop_msb()))
+                            .collect::<Vec<_>>();
+                        let eq = EqPolynomial::mle(&params.r_node_output.r, &cycle_bit_array);
+                        let address_bit_array = (0..LOG_K)
+                            .map(|_| F::from_u8(index.pop_msb()))
+                            .collect::<Vec<_>>();
+                        let lookup_value = params.table.evaluate_mle(&address_bit_array);
+                        eq * (lookup_value
+                            + params.gamma * left_operand_poly.evaluate(&address_bit_array)
+                            + params.gamma_sqr * right_operand_poly.evaluate(&address_bit_array))
+                    })
+                    .sum::<F>(),
+                Helper::compute_input_claim(
+                    &[left_claim, right_claim],
+                    params.gamma,
+                    params.gamma_sqr
+                )
+            );
+        }
+
         let span = tracing::span!(tracing::Level::INFO, "Init PrefixSuffixDecomposition");
         let _guard = span.enter();
         let right_operand_ps =
@@ -565,8 +593,8 @@ where
     }
 }
 
-impl<F: JoltField, FS: Transcript> SumcheckInstanceProver<F, FS>
-    for RangecheckRafSumcheckProver<F>
+impl<F: JoltField, FS: Transcript, Helper: ReadRafSumcheckHelper + Send + Sync>
+    SumcheckInstanceProver<F, FS> for RangecheckRafSumcheckProver<F, Helper>
 {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
@@ -701,7 +729,7 @@ impl<F: JoltField, FS: Transcript> SumcheckInstanceProver<F, FS>
         let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::DivRangeCheckRa(self.params.computation_node.idx),
+            self.params.helper.get_output_operand(),
             SumcheckId::Raf,
             opening_point,
             self.ra.as_ref().unwrap().final_sumcheck_claim(),
@@ -709,34 +737,37 @@ impl<F: JoltField, FS: Transcript> SumcheckInstanceProver<F, FS>
     }
 }
 
-pub struct RangecheckRafSumcheckVerifier<F>
+pub struct RangecheckRafSumcheckVerifier<F, Helper>
 where
     F: JoltField,
+    Helper: ReadRafSumcheckHelper,
 {
-    params: RangecheckRafSumcheckParams<F>,
+    params: RangecheckRafSumcheckParams<F, Helper>,
 }
 
-impl<F> RangecheckRafSumcheckVerifier<F>
+impl<F, Helper> RangecheckRafSumcheckVerifier<F, Helper>
 where
     F: JoltField,
+    Helper: ReadRafSumcheckHelper,
 {
     pub fn new(
-        computation_node: ComputationNode,
+        params: RangecheckRafSumcheckParams<F, Helper>,
         opening_accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let params =
-            RangecheckRafSumcheckParams::new(computation_node, opening_accumulator, transcript);
+        let [left_operand, right_operand] = params.helper.get_input_operands()[..] else {
+            panic!("Expected exactly two input operands for RAF range check");
+        };
         // Update accumulator
         opening_accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::DivNodeRemainder(params.computation_node.idx),
+            left_operand,
             SumcheckId::Raf,
             params.r_node_output.clone(),
         );
         opening_accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(params.computation_node.inputs[1]),
+            right_operand,
             SumcheckId::Raf,
             params.r_node_output.clone(),
         );
@@ -745,8 +776,8 @@ where
     }
 }
 
-impl<F: JoltField, FS: Transcript> SumcheckInstanceVerifier<F, FS>
-    for RangecheckRafSumcheckVerifier<F>
+impl<F: JoltField, FS: Transcript, Helper: ReadRafSumcheckHelper> SumcheckInstanceVerifier<F, FS>
+    for RangecheckRafSumcheckVerifier<F, Helper>
 {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
@@ -760,7 +791,7 @@ impl<F: JoltField, FS: Transcript> SumcheckInstanceVerifier<F, FS>
         let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
         let (r_address_prime, r_node_output_prime) = opening_point.split_at(LOG_K);
         let (_, ra_claim) = accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::DivRangeCheckRa(self.params.computation_node.idx),
+            self.params.helper.get_output_operand(),
             SumcheckId::Raf,
         );
         let val_claim = self.params.table.evaluate_mle(&r_address_prime.r);
@@ -786,7 +817,7 @@ impl<F: JoltField, FS: Transcript> SumcheckInstanceVerifier<F, FS>
         let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::DivRangeCheckRa(self.params.computation_node.idx),
+            self.params.helper.get_output_operand(),
             SumcheckId::Raf,
             opening_point,
         );
@@ -831,8 +862,11 @@ pub fn compute_lookup_indices_from_operands(operand_tensors: &[&Tensor<i32>]) ->
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::range_checking::read_raf_checking::{
-        RangecheckRafSumcheckParams, RangecheckRafSumcheckProver, RangecheckRafSumcheckVerifier,
+    use crate::onnx_proof::range_checking::{
+        read_raf_checking::{
+            RangecheckRafSumcheckParams, RangecheckRafSumcheckProver, RangecheckRafSumcheckVerifier,
+        },
+        sumcheck_instance::DivRangeCheckOperands,
     };
     use ark_bn254::Fr;
     use atlas_onnx_tracer::{model, tensor::Tensor};
@@ -877,13 +911,13 @@ mod tests {
             in0_claim,
         );
 
-        let params = RangecheckRafSumcheckParams::<Fr>::new(
+        let prover_params = RangecheckRafSumcheckParams::<Fr, DivRangeCheckOperands>::new(
             node.clone(),
             &prover_accumulator,
             &mut prover_transcript,
         );
         let mut prover = RangecheckRafSumcheckProver::initialize(
-            params,
+            prover_params,
             &trace,
             &mut prover_accumulator,
             &mut prover_transcript,
@@ -912,8 +946,14 @@ mod tests {
             OpeningPoint::new(r_exec.clone()),
         );
 
-        let verifier = RangecheckRafSumcheckVerifier::<Fr>::new(
-            node,
+        let verifier_params = RangecheckRafSumcheckParams::<Fr, DivRangeCheckOperands>::new(
+            node.clone(),
+            &verifier_accumulator,
+            &mut verifier_transcript,
+        );
+
+        let verifier = RangecheckRafSumcheckVerifier::<Fr, DivRangeCheckOperands>::new(
+            verifier_params,
             &mut verifier_accumulator,
             &mut verifier_transcript,
         );

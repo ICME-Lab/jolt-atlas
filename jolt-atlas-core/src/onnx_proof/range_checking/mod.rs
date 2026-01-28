@@ -28,6 +28,7 @@ use crate::onnx_proof::range_checking::read_raf_checking::compute_lookup_indices
 
 pub mod ra_virtual;
 pub mod read_raf_checking;
+pub mod sumcheck_instance;
 
 pub const LOG_K: usize = XLEN * 2;
 

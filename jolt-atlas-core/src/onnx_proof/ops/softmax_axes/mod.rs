@@ -1,3 +1,35 @@
+//! Softmax verification for softmax(axes = -1).
+//!
+//! This module verifies the softmax computation over the last dimension, which corresponds to
+//! ∏(prev_dims) standard softmax operations (i.e., one per feature vector).
+//!
+//! # Verification Approach
+//!
+//! For each feature vector, we verify the standard softmax computation in stages:
+//!
+//! ## 1. Division / Normalization
+//! We first verify the division step of softmax, as the division output yields the softmax output.
+//! The sum and max checks are batched together with division:
+//! - The sum and max tensors are scalars
+//! - They do not need to be virtualized, since evaluating them at any point always yields the same value
+//!
+//! This allows them to be batched with div for efficiency.
+//!
+//! ## 2. Exponentiation
+//! Exponentiation is verified using a small LUT, following the approach used in zkGPT
+//! (except we use shout instead of lasso).
+//!
+//! ## 3. Operand Consistency
+//! We constrain the softmax operand to be derived from the exponentiation raf claim by verifier checking:
+//! ```text
+//! softmax_operand_claim = (-raf_claim) + max_logit
+//! ```
+//! This also implies that the max value is greater than or equal to the other operand values,
+//! so no additional max-comparison constraint is required.
+//!
+//! ## 4. Linking to Main Operand Claim
+//! Finally, we link each per-feature softmax operand claim back to the main operand claim.
+
 use crate::onnx_proof::{
     ops::{
         softmax_axes::softmax::{
@@ -225,6 +257,11 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
         cached_traces
     }
 
+    /// Stage 1: Division / Normalization
+    ///
+    /// Verifies the division step of softmax along with sum and max checks.
+    /// Since sum and max are scalar values, they can be batched with division
+    /// for efficient verification.
     fn prove_div_sum_max<T: Transcript>(
         &self,
         cached_traces: &[atlas_onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace],
@@ -233,7 +270,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
     ) -> SumcheckInstanceProof<F, T> {
         let mut div_sum_max_instances: Vec<Box<dyn SumcheckInstanceProver<F, _>>> = vec![];
 
-        // Iterate over each (head, sequence) pair
+        // Iterate over each (head, sequence) pair (i.e., each feature vector)
         for (feature_idx, trace) in cached_traces.iter().enumerate() {
             let softmax_index = SoftmaxIndex {
                 node_idx: self.params.computation_node.idx,
@@ -298,6 +335,9 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
         div_sum_max_proof
     }
 
+    /// Stage 2: Exponentiation
+    ///
+    /// Verifies exponentiation using a small LUT approach (similar to zkGPT but using shout instead of lasso).
     fn prove_exponentiation<T: Transcript>(
         &self,
         cached_traces: &[atlas_onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace],
@@ -306,7 +346,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
     ) -> SumcheckInstanceProof<F, T> {
         let mut exponentiation_instances: Vec<Box<dyn SumcheckInstanceProver<F, _>>> = vec![];
 
-        // Iterate over each (head, sequence) pair using cached traces
+        // Iterate over each (head, sequence) pair (i.e., each feature vector)
         for (feature_idx, trace) in cached_traces.iter().enumerate() {
             let softmax_index = SoftmaxIndex {
                 node_idx: self.params.computation_node.idx,
@@ -339,6 +379,9 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
         exponentiation_proof
     }
 
+    /// Stage 4: Linking to Main Operand Claim
+    ///
+    /// Links each per-feature softmax operand claim back to the main operand claim.
     fn prove_operand_claims<T: Transcript>(
         &self,
         num_vars_num_heads: usize,
@@ -346,7 +389,6 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
     ) {
-        // Send verifier main operand claim
         let r_heads_seq_prime =
             transcript.challenge_vector_optimized::<F>(num_vars_num_heads + num_vars_seq_len);
         let (r_features_prime, _) = accumulator.get_virtual_polynomial_opening(
@@ -505,6 +547,9 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
         Ok(())
     }
 
+    /// Stage 1 (Verifier): Division / Normalization
+    ///
+    /// Verifies the division step proof along with sum and max checks.
     fn verify_div_sum_max<T: Transcript>(
         &self,
         div_sum_max_proof: &SumcheckInstanceProof<F, T>,
@@ -563,6 +608,9 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
         Ok(())
     }
 
+    /// Stage 2 (Verifier): Exponentiation
+    ///
+    /// Verifies the exponentiation proof using LUT approach.
     fn verify_exponentiation<T: Transcript>(
         &self,
         exponentiation_proof: &SumcheckInstanceProof<F, T>,
@@ -592,6 +640,12 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
         Ok(())
     }
 
+    /// Stages 3 & 4 (Verifier): Operand Consistency and Linking
+    ///
+    /// Stage 3: Verifies that softmax_operand_claim = (-raf_claim) + max_logit.
+    /// This constraint also implies max value >= other operand values.
+    ///
+    /// Stage 4: Links each per-feature softmax operand claim back to the main operand claim.
     fn verify_operand_claims<T: Transcript>(
         &self,
         num_heads_seq_len: usize,
@@ -606,7 +660,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
                 node_idx: self.params.computation_node.idx,
                 feature_idx,
             };
-            //  Check input from raf
+            // Stage 3: Check operand consistency - verify softmax_operand_claim = (-raf_claim) + max_logit
             let (_, abs_centered_logits_claim) = accumulator.get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxAbsCenteredLogitsOutput(
                     softmax_index.node_idx,
@@ -636,7 +690,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
             softmax_operand_claims.push(softmax_operand_claim);
         }
 
-        // Check expected main operand claim comes from sub softmax input claims
+        // Stage 4: Link per-feature softmax operand claims to main operand claim
         let r_heads_seq_prime =
             transcript.challenge_vector_optimized::<F>(num_vars_num_heads + num_vars_seq_len);
         let (r_features_prime, _) = accumulator.get_virtual_polynomial_opening(

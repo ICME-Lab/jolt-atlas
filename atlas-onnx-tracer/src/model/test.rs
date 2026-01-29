@@ -382,6 +382,15 @@ pub fn div_model(T: usize) -> Model {
     b.build()
 }
 
+pub fn recip_model(T: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![T]);
+    let c = b.constant(Tensor::construct(vec![1 << (SCALE * 2); T], vec![T]));
+    let res = b.div(c, i);
+    b.mark_output(res);
+    b.build()
+}
+
 pub fn rsqrt_model(T: usize) -> Model {
     let mut b = ModelBuilder::new();
     let input = b.input(vec![T]);

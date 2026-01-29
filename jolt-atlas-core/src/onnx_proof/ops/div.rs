@@ -141,6 +141,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
         &self.params
     }
 
+    // For s(X) = eq(X) * q(X), where q(X) = q(X) * b(X) + R(X) - a(X)
+    // q is quadratic in the current variable. Compute:
+    //   c0 = q(0) = io0 * (vf0 - vio0)
+    //   e  = coeff of X^2 in q(X) = b_lin * q_lin
+    // Where q_lin, b_lin are the linear coeffs of q and b in the current variable.
+    // q_lin = q(1) - q(0), b_lin = b(1) - b(0)
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         let Self {
             eq_r_node_output,
@@ -152,16 +158,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
         } = self;
         let [q_constant, q_quadratic] = eq_r_node_output.par_fold_out_in_unreduced::<9, 2>(&|g| {
             let lo0 = left_operand.get_bound_coeff(2 * g);
-            let lo1 = left_operand.get_bound_coeff(2 * g + 1);
             let ro0 = right_operand.get_bound_coeff(2 * g);
             let ro1 = right_operand.get_bound_coeff(2 * g + 1);
             let q0 = q.get_bound_coeff(2 * g);
             let q1 = q.get_bound_coeff(2 * g + 1);
             let R0 = R.get_bound_coeff(2 * g);
-            let R1 = R.get_bound_coeff(2 * g + 1);
             let c0 = (ro0 * q0) + R0 - lo0;
-            let m1 = ro1 * q1 + R1 - lo1;
-            let e = m1 - c0;
+
+            let e = (ro1 - ro0) * (q1 - q0);
             [c0, e]
         });
         eq_r_node_output.gruen_poly_deg_3(q_constant, q_quadratic, previous_claim)
@@ -317,6 +321,7 @@ mod tests {
         model::{
             self,
             trace::{LayerData, Trace},
+            Model,
         },
         tensor::Tensor,
     };
@@ -335,13 +340,9 @@ mod tests {
     };
     use rand::{rngs::StdRng, SeedableRng};
 
-    #[test]
-    fn test_div() {
-        let log_T = 16;
-        let T = 1 << log_T;
-        let mut rng = StdRng::seed_from_u64(0x888);
-        let input = Tensor::<i32>::random(&mut rng, &[T]);
-        let model = model::test::div_model(T);
+    fn test_div_helper(model: Model, input: Tensor<i32>) {
+        let T = input.len();
+        let log_T = T.log_2();
         let trace = model.trace(&[input]);
         let prover_transcript = &mut Blake2bTranscript::new(&[]);
         let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
@@ -407,5 +408,28 @@ mod tests {
         prover_transcript.compare_to(verifier_transcript.clone());
         let r_sumcheck_verif = res.unwrap();
         assert_eq!(r_sumcheck, r_sumcheck_verif);
+    }
+
+    #[test]
+    fn test_div_by_const() {
+        let mut rng = StdRng::seed_from_u64(0x888);
+        let T = 1 << 16;
+        let model = model::test::div_model(T);
+        let input = Tensor::<i32>::random(&mut rng, &[T]);
+        test_div_helper(model, input);
+    }
+
+    #[test]
+    fn test_div_by_tensor() {
+        let mut rng = StdRng::seed_from_u64(0x888);
+        let T = 1 << 16;
+        let model = model::test::recip_model(T);
+        let mut input = Tensor::<i32>::random(&mut rng, &[T]);
+        input.iter_mut().for_each(|v| {
+            if *v == 0 {
+                *v = 1
+            }
+        });
+        test_div_helper(model, input);
     }
 }

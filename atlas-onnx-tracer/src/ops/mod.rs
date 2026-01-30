@@ -15,6 +15,7 @@ pub mod identity;
 pub mod iff;
 pub mod input;
 pub mod is_nan;
+pub mod lt;
 pub mod move_axis;
 pub mod mul;
 pub mod noop;
@@ -77,7 +78,7 @@ define_operators! {
         IsNan { out_dims: Vec<usize> }, MoveAxis { source: usize, destination: usize },
         Mul, Broadcast { shape: Vec<usize> }, Noop, ReLU, Reshape { shape:Vec<usize> },
         Rsqrt { scale: F32 }, Shr, SoftmaxAxes { axes: usize, scale: F32 }, Square,
-        Sub, Sum { axes: Vec<usize> }, Tanh { scale: F32 }
+        Sub, Sum { axes: Vec<usize> }, Tanh { scale: F32 }, ULessThan,
     ]
 }
 

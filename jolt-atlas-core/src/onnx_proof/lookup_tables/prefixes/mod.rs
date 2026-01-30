@@ -1,6 +1,6 @@
 use crate::onnx_proof::lookup_tables::prefixes::{
-    and::AndPrefix, lower_word_no_msb::LowerWordNoMsbPrefix, not_msb::NotMsbPrefix, or::OrPrefix,
-    xor::XorPrefix,
+    and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix,
+    lower_word_no_msb::LowerWordNoMsbPrefix, not_msb::NotMsbPrefix, or::OrPrefix, xor::XorPrefix,
 };
 use joltworks::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
@@ -14,6 +14,8 @@ use strum::EnumCount;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 pub mod and;
+pub mod eq;
+pub mod less_than;
 pub mod lower_word_no_msb;
 pub mod not_msb;
 pub mod or;
@@ -67,10 +69,12 @@ pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
 #[derive(EnumCountMacro, EnumIter, FromPrimitive)]
 pub enum Prefixes {
     And,
-    Or,
-    Xor,
+    Eq,
+    LessThan,
     LowerWordNoMsb,
     NotMsb,
+    Or,
+    Xor,
 }
 
 #[derive(Clone, Copy)]
@@ -150,12 +154,14 @@ impl Prefixes {
     {
         let eval = match self {
             Prefixes::And => AndPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::Or => OrPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::Xor => XorPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::Eq => EqPrefix::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::LessThan => LessThanPrefix::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::LowerWordNoMsb => {
                 LowerWordNoMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
             }
             Prefixes::NotMsb => NotMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::Or => OrPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::Xor => XorPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
         };
         PrefixEval(eval)
     }
@@ -214,11 +220,11 @@ impl Prefixes {
             Prefixes::And => {
                 AndPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
             }
-            Prefixes::Or => {
-                OrPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
+            Prefixes::Eq => {
+                EqPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
             }
-            Prefixes::Xor => {
-                XorPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
+            Prefixes::LessThan => {
+                LessThanPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
             }
             Prefixes::LowerWordNoMsb => LowerWordNoMsbPrefix::<XLEN>::update_prefix_checkpoint(
                 checkpoints,
@@ -229,6 +235,12 @@ impl Prefixes {
             ),
             Prefixes::NotMsb => {
                 NotMsbPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
+            }
+            Prefixes::Or => {
+                OrPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
+            }
+            Prefixes::Xor => {
+                XorPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
             }
         }
     }

@@ -57,6 +57,7 @@ pub mod suffixes;
 pub mod and;
 pub mod or;
 pub mod relu;
+pub mod unsigned_less_than;
 pub mod xor;
 
 #[derive(

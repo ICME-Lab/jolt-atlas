@@ -549,7 +549,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x888);
         let T = 1 << 16;
         let model = model::test::recip_model(T);
-        let mut input = Tensor::<i32>::random(&mut rng, &[T]);
+        let mut input = Tensor::<i32>::random_pos(&mut rng, &[T]);
         input.iter_mut().for_each(|v| {
             if *v == 0 {
                 *v = 1

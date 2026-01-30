@@ -172,7 +172,7 @@ impl Tensor<i32> {
     /// Create a random positive tensor given the dims
     pub fn random_pos(rng: &mut StdRng, dims: &[usize]) -> Self {
         let data: Vec<i32> = (0..dims.iter().product())
-            .map(|_| (rng.next_u32() % 1000) as i32)
+            .map(|_| (rng.next_u32() % 20000) as i32)
             .collect();
         Tensor::new(Some(&data), dims).unwrap()
     }

@@ -2,12 +2,7 @@ use crate::onnx_proof::{
     ops::OperatorProofTrait,
     range_checking::{
         self,
-        ra_virtual::{
-            InstructionRaSumcheckParams, InstructionRaSumcheckProver, RaSumcheckVerifier,
-        },
-        read_raf_checking::{
-            RangecheckRafSumcheckParams, RangecheckRafSumcheckProver, RangecheckRafSumcheckVerifier,
-        },
+        read_raf_checking::{RangecheckRafSumcheckProver, RangecheckRafSumcheckVerifier},
         sumcheck_instance::DivRangeCheckOperands,
     },
     ProofId, ProofType, Prover, Verifier,
@@ -51,26 +46,18 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
 
         // Execution proof
         let params = DivParams::new(node.clone(), &prover.accumulator);
-        let mut prover_sumcheck = DivProver::initialize(&prover.trace, params);
+        let mut exec_sumcheck = DivProver::initialize(&prover.trace, params);
         let (proof, _) = Sumcheck::prove(
-            &mut prover_sumcheck,
+            &mut exec_sumcheck,
             &mut prover.accumulator,
             &mut prover.transcript,
         );
         results.push((ProofId(node.idx, ProofType::Execution), proof));
 
         // Range check proof
-        let params = RangecheckRafSumcheckParams::<_, DivRangeCheckOperands>::new(
-            node.clone(),
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-        let mut rangecheck_sumcheck = RangecheckRafSumcheckProver::initialize(
-            params,
-            &prover.trace,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
+
+        let mut rangecheck_sumcheck =
+            RangecheckRafSumcheckProver::<_, DivRangeCheckOperands>::new_from_prover(node, prover);
         let (rangecheck_proof, _) = Sumcheck::prove(
             &mut rangecheck_sumcheck,
             &mut prover.accumulator,
@@ -82,36 +69,18 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         // RaOneHotChecks proof
         let log_T = node.num_output_elements().log_2();
         let one_hot_params = OneHotParams::new(log_T);
-        let ra_params =
-            InstructionRaSumcheckParams::new(node.clone(), &one_hot_params, &prover.accumulator);
-        let ra_prover_sumcheck = InstructionRaSumcheckProver::initialize(ra_params, &prover.trace);
 
-        let lookups_hamming_weight_params = range_checking::ra_hamming_weight_params(
-            node,
-            &one_hot_params,
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-        let lookups_booleanity_params = range_checking::ra_booleanity_params(
-            node,
-            &one_hot_params,
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-
-        let (lookups_ra_booleanity, lookups_ra_hamming_weight) =
-            range_checking::gen_ra_one_hot_provers(
-                lookups_hamming_weight_params,
-                lookups_booleanity_params,
-                &prover.trace,
-                node,
+        let (ra_sumcheck, hw_sumcheck, bool_sumcheck) =
+            range_checking::new_ra_one_hot_sumcheck_provers::<F, DivRangeCheckOperands>(
+                node.clone(),
                 &one_hot_params,
+                prover,
             );
 
         let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
-            Box::new(ra_prover_sumcheck),
-            Box::new(lookups_ra_booleanity),
-            Box::new(lookups_ra_hamming_weight),
+            Box::new(ra_sumcheck),
+            Box::new(bool_sumcheck),
+            Box::new(hw_sumcheck),
         ];
         let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
             instances.iter_mut().map(|v| &mut **v as _).collect(),
@@ -131,34 +100,29 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
+        // Execution verification
         let proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let verifier_sumcheck = DivVerifier::new(node.clone(), &verifier.accumulator);
+        let exec_sumcheck = DivVerifier::new(node.clone(), &verifier.accumulator);
         Sumcheck::verify(
             proof,
-            &verifier_sumcheck,
+            &exec_sumcheck,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
 
+        // Range check verification
         let rangecheck_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::RangeCheck))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
 
-        let params = RangecheckRafSumcheckParams::<_, DivRangeCheckOperands>::new(
-            node.clone(),
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        );
-
-        let rangecheck_verifier = RangecheckRafSumcheckVerifier::new(
-            params,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        );
+        let rangecheck_verifier =
+            RangecheckRafSumcheckVerifier::<_, DivRangeCheckOperands>::new_from_verifier(
+                node, verifier,
+            );
         Sumcheck::verify(
             rangecheck_proof,
             &rangecheck_verifier,
@@ -167,28 +131,21 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         )?;
 
         // Verify RaOneHotChecks
-        let log_T = node.num_output_elements().log_2();
-        let one_hot_params = OneHotParams::new(log_T);
-        let ra_verifier_sumcheck =
-            RaSumcheckVerifier::new(node.clone(), &one_hot_params, &verifier.accumulator);
-        let (lookups_ra_booleanity, lookups_rs_hamming_weight) =
-            range_checking::new_ra_one_hot_verifiers(
-                node,
-                &one_hot_params,
-                &verifier.accumulator,
-                &mut verifier.transcript,
-            );
         let ra_one_hot_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        let log_T = node.num_output_elements().log_2();
+        let one_hot_params = OneHotParams::new(log_T);
+        let (ra_sumcheck, hw_sumcheck, bool_sumcheck) =
+            range_checking::new_ra_one_hot_sumcheck_verifiers::<F, DivRangeCheckOperands>(
+                node.clone(),
+                &one_hot_params,
+                verifier,
+            );
         BatchedSumcheck::verify(
             ra_one_hot_proof,
-            vec![
-                &ra_verifier_sumcheck,
-                &lookups_ra_booleanity,
-                &lookups_rs_hamming_weight,
-            ],
+            vec![&ra_sumcheck, &bool_sumcheck, &hw_sumcheck],
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
@@ -307,12 +264,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
         &self.params
     }
 
-    // For s(X) = eq(X) * q(X), where q(X) = q(X) * b(X) + R(X) - a(X)
-    // q is quadratic in the current variable. Compute:
-    //   c0 = q(0) = io0 * (vf0 - vio0)
-    //   e  = coeff of X^2 in q(X) = b_lin * q_lin
-    // Where q_lin, b_lin are the linear coeffs of q and b in the current variable.
-    // q_lin = q(1) - q(0), b_lin = b(1) - b(0)
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         let Self {
             eq_r_node_output,
@@ -377,7 +328,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
         );
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::DivNodeRemainder(self.params.computation_node.idx),
+            VirtualPolynomial::DivRemainder(self.params.computation_node.idx),
             SumcheckId::Execution,
             opening_point.clone(),
             self.R.final_sumcheck_claim(),
@@ -438,7 +389,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
             .1;
         let R_claim = accumulator
             .get_virtual_polynomial_opening(
-                VirtualPolynomial::DivNodeRemainder(self.params.computation_node.idx),
+                VirtualPolynomial::DivRemainder(self.params.computation_node.idx),
                 SumcheckId::Execution,
             )
             .1;
@@ -472,7 +423,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
         );
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::DivNodeRemainder(self.params.computation_node.idx),
+            VirtualPolynomial::DivRemainder(self.params.computation_node.idx),
             SumcheckId::Execution,
             opening_point.clone(),
         );

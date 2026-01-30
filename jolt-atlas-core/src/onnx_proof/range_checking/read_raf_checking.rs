@@ -8,6 +8,7 @@ use crate::onnx_proof::{
     },
     op_lookups::LOG_K,
     range_checking::sumcheck_instance::ReadRafSumcheckHelper,
+    Prover, Verifier,
 };
 use ark_std::Zero;
 use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode, tensor::Tensor};
@@ -18,7 +19,7 @@ use joltworks::{
     poly::{
         dense_mlpoly::DensePolynomial,
         eq_poly::EqPolynomial,
-        identity_poly::{IdentityPolynomial, OperandPolynomial, OperandSide},
+        identity_poly::{OperandPolynomial, OperandSide},
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
@@ -170,18 +171,12 @@ where
     eq_r_node_output: GruenSplitEqPolynomial<F>,
 
     // --- RAF stuff ---
-    /// Cycle indices with interleaved operands (used for left/right operand prefix-suffix Q).
-    lookup_indices_uninterleave: Vec<usize>,
-    /// Cycle indices with identity path (non-interleaved) used as the RAF flag source.
-    lookup_indices_identity: Vec<usize>,
     /// Registry holding prefix checkpoint values for `PrefixSuffixDecomposition` instances.
     prefix_registry: PrefixRegistry<F>,
     /// Prefix-suffix decomposition for right operand identity polynomial family.
     right_operand_ps: PrefixSuffixDecomposition<F, 2>,
     /// Prefix-suffix decomposition for left operand identity polynomial family.
     left_operand_ps: PrefixSuffixDecomposition<F, 2>,
-    /// Prefix-suffix decomposition for the instruction-identity path (RAF flag path).
-    identity_ps: PrefixSuffixDecomposition<F, 2>,
 }
 
 impl<F, Helper> RangecheckRafSumcheckProver<F, Helper>
@@ -189,6 +184,23 @@ where
     F: JoltField,
     Helper: ReadRafSumcheckHelper + Sync,
 {
+    pub fn new_from_prover(
+        node: &ComputationNode,
+        prover: &mut Prover<F, impl Transcript>,
+    ) -> Self {
+        let params = RangecheckRafSumcheckParams::new(
+            node.clone(),
+            &prover.accumulator,
+            &mut prover.transcript,
+        );
+        Self::initialize(
+            params,
+            &prover.trace,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        )
+    }
+
     pub fn initialize(
         params: RangecheckRafSumcheckParams<F, Helper>,
         trace: &Trace,
@@ -233,7 +245,6 @@ where
         left_operand: &Tensor<i32>,
         right_operand: &Tensor<i32>,
     ) -> Self {
-        let T = left_operand.len().next_power_of_two();
         let phases = 8;
         let log_m = LOG_K / phases;
         let u_evals = EqPolynomial::evals(&params.r_node_output.r);
@@ -247,45 +258,9 @@ where
             .map(|_| DensePolynomial::default())
             .collect();
 
-        let lookup_indices = compute_lookup_indices_from_operands(&[left_operand, right_operand]);
+        let lookup_indices = Helper::compute_lookup_indices(left_operand, right_operand);
         let right_operand_poly = OperandPolynomial::new(LOG_K, OperandSide::Right);
         let left_operand_poly = OperandPolynomial::new(LOG_K, OperandSide::Left);
-        let identity_poly = IdentityPolynomial::new(LOG_K);
-
-        #[cfg(test)]
-        {
-            let left_claim = MultilinearPolynomial::from(left_operand.into_container_data())
-                .evaluate(&params.r_node_output.r);
-
-            let right_claim = MultilinearPolynomial::from(right_operand.into_container_data())
-                .evaluate(&params.r_node_output.r);
-            assert_eq!(
-                lookup_indices
-                    .iter()
-                    .enumerate()
-                    .map(|(i, index)| {
-                        let mut index = *index;
-                        let mut lookupbits = LookupBits::new(i as u64, T.log_2());
-                        let cycle_bit_array = (0..T.log_2())
-                            .map(|_| F::from_u8(lookupbits.pop_msb()))
-                            .collect::<Vec<_>>();
-                        let eq = EqPolynomial::mle(&params.r_node_output.r, &cycle_bit_array);
-                        let address_bit_array = (0..LOG_K)
-                            .map(|_| F::from_u8(index.pop_msb()))
-                            .collect::<Vec<_>>();
-                        let lookup_value = params.table.evaluate_mle(&address_bit_array);
-                        eq * (lookup_value
-                            + params.gamma * left_operand_poly.evaluate(&address_bit_array)
-                            + params.gamma_sqr * right_operand_poly.evaluate(&address_bit_array))
-                    })
-                    .sum::<F>(),
-                Helper::compute_input_claim(
-                    &[left_claim, right_claim],
-                    params.gamma,
-                    params.gamma_sqr
-                )
-            );
-        }
 
         let span = tracing::span!(tracing::Level::INFO, "Init PrefixSuffixDecomposition");
         let _guard = span.enter();
@@ -293,13 +268,11 @@ where
             PrefixSuffixDecomposition::new(Box::new(right_operand_poly), log_m, LOG_K);
         let left_operand_ps =
             PrefixSuffixDecomposition::new(Box::new(left_operand_poly), log_m, LOG_K);
-        let identity_ps = PrefixSuffixDecomposition::new(Box::new(identity_poly), log_m, LOG_K);
         drop(_guard);
         drop(span);
         let eq_r_node_output =
             GruenSplitEqPolynomial::<F>::new(&params.r_node_output.r, BindingOrder::LowToHigh);
         // TODO: Adjust [PrefixSuffixDecomposition::init_Q_dual] and [PrefixSuffixDecomposition::init_Q] to be compatible with jolt-atlas usage
-        let (lookup_indices_uninterleave, lookup_indices_identity) = ((0..T).collect(), vec![]);
 
         let mut res = Self {
             r: Vec::with_capacity(params.log_T + LOG_K),
@@ -315,11 +288,8 @@ where
                 .map(|_| ExpandingTable::new(1 << log_m, BindingOrder::HighToLow))
                 .collect(),
             // raf
-            lookup_indices_identity,
-            lookup_indices_uninterleave,
             right_operand_ps,
             left_operand_ps,
-            identity_ps,
 
             // State for last log(T) rounds
             eq_r_node_output,
@@ -336,6 +306,7 @@ where
         let log_m = LOG_K / self.phases;
         let m = 1 << log_m;
         let m_mask = m - 1;
+        let T = 1 << self.params.log_T;
 
         // Condensation: update u evals
         if phase != 0 {
@@ -356,14 +327,7 @@ where
                     &mut self.left_operand_ps,
                     &mut self.right_operand_ps,
                     &self.u_evals,
-                    &self.lookup_indices_uninterleave,
-                    &self.lookup_indices,
-                )
-            });
-            s.spawn(|_| {
-                self.identity_ps.init_Q(
-                    &self.u_evals,
-                    &self.lookup_indices_identity,
+                    &(0..T).collect::<Vec<_>>(),
                     &self.lookup_indices,
                 )
             });
@@ -371,7 +335,6 @@ where
 
         self.init_suffix_polys(phase);
 
-        self.identity_ps.init_P(&mut self.prefix_registry);
         self.right_operand_ps.init_P(&mut self.prefix_registry);
         self.left_operand_ps.init_P(&mut self.prefix_registry);
 
@@ -510,18 +473,17 @@ where
     /// Builds two evaluations at X∈{0,2} for the batched
     /// (Left + γ·Right) vs Identity path, folding γ-weights into the result.
     fn prover_msg_raf(&self) -> [F; 2] {
-        let len = self.identity_ps.Q_len();
+        let len = self.right_operand_ps.Q_len();
         let [left_0, left_2, right_0, right_2] = (0..len / 2)
             .into_par_iter()
             .map(|b| {
-                let (i0, i2) = self.identity_ps.sumcheck_evals(b);
                 let (r0, r2) = self.right_operand_ps.sumcheck_evals(b);
                 let (l0, l2) = self.left_operand_ps.sumcheck_evals(b);
                 [
                     *l0.as_unreduced_ref(),
                     *l2.as_unreduced_ref(),
-                    *(i0 + r0).as_unreduced_ref(),
-                    *(i2 + r2).as_unreduced_ref(),
+                    *r0.as_unreduced_ref(),
+                    *r2.as_unreduced_ref(),
                 ]
             })
             .fold_with([F::Unreduced::<5>::zero(); 4], |running, new| {
@@ -656,7 +618,6 @@ impl<F: JoltField, FS: Transcript, Helper: ReadRafSumcheckHelper + Send + Sync>
                         .par_iter_mut()
                         .for_each(|s| s.bind(r_j, BindingOrder::HighToLow));
                 });
-                s.spawn(|_| self.identity_ps.bind(r_j));
                 s.spawn(|_| self.right_operand_ps.bind(r_j));
                 s.spawn(|_| self.left_operand_ps.bind(r_j));
                 s.spawn(|_| self.v[phase].update(r_j));
@@ -750,6 +711,18 @@ where
     F: JoltField,
     Helper: ReadRafSumcheckHelper,
 {
+    pub fn new_from_verifier(
+        node: &ComputationNode,
+        verifier: &mut Verifier<F, impl Transcript>,
+    ) -> Self {
+        let params = RangecheckRafSumcheckParams::new(
+            node.clone(),
+            &verifier.accumulator,
+            &mut verifier.transcript,
+        );
+        Self::new(params, &mut verifier.accumulator, &mut verifier.transcript)
+    }
+
     pub fn new(
         params: RangecheckRafSumcheckParams<F, Helper>,
         opening_accumulator: &mut VerifierOpeningAccumulator<F>,
@@ -905,7 +878,7 @@ mod tests {
         let in0_claim = MultilinearPolynomial::from(remainder.clone()).evaluate(&r_exec);
         prover_accumulator.append_virtual(
             &mut prover_transcript,
-            VirtualPolynomial::DivNodeRemainder(2),
+            VirtualPolynomial::DivRemainder(2),
             SumcheckId::Execution,
             OpeningPoint::new(r_exec.clone()),
             in0_claim,
@@ -941,7 +914,7 @@ mod tests {
 
         verifier_accumulator.append_virtual(
             &mut verifier_transcript,
-            VirtualPolynomial::DivNodeRemainder(2),
+            VirtualPolynomial::DivRemainder(2),
             SumcheckId::Execution,
             OpeningPoint::new(r_exec.clone()),
         );

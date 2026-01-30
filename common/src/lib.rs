@@ -24,12 +24,11 @@ pub enum CommittedPolynomial {
     ///
     /// `0` - node index
     // One-hot polynomials for Advices
-    DivRangeCheckRaD(usize, usize), // Interleaved R and input[1] for Div advice
-    DivNodeQuotient(usize),             // Advice for `quotient` in Div
-    RsqrtRiRangeCheckRaD(usize, usize), // Interleaved r_i and input[0] for Rsqrt advice
-    RsqrtNodeInv(usize),                // Advice for `inv` in Rsqrt
-    RsqrtRsRangeCheckRaD(usize, usize), // Interleaved r_s and `inv` for Rsqrt advice
-    RsqrtNodeRsqrt(usize),              // Advice for `rsqrt` in Rsqrt
+    DivRangeCheckRaD(usize, usize), // Interleaved R and divisor for Div advice
+    SqrtRangeCheckRaD(usize, usize), // Interleaved r_s and sqrt for Sqrt advice
+    DivNodeQuotient(usize),          // Advice for `quotient` in Div
+    RsqrtNodeInv(usize),             // Advice for `inv` in Rsqrt
+    RsqrtNodeRsqrt(usize),           // Advice for `rsqrt` in Rsqrt
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
@@ -59,10 +58,7 @@ pub enum VirtualPolynomial {
     // Those are proven by the ReadRafSumcheckProver,
     // from Committed one-hot polynomials.
     DivRangeCheckRa(usize),
-    DivNodeRemainder(usize),
-    RsqrtRiRangeCheckRa(usize),
-    RsqrtRsRangeCheckRa(usize),
-    RsqrtNodeSqrt(usize),
-    RsqrtNodeRi(usize),
-    RsqrtNodeRs(usize),
+    SqrtRangeCheckRa(usize),
+    DivRemainder(usize),
+    SqrtRemainder(usize),
 }

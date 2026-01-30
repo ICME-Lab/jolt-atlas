@@ -1,11 +1,6 @@
 use std::sync::Arc;
 
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    tensor::Tensor,
-};
-use common::{CommittedPolynomial, VirtualPolynomial};
+use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode};
 use joltworks::{
     config::OneHotParams,
     field::JoltField,
@@ -29,8 +24,9 @@ use joltworks::{
 };
 use rayon::prelude::*;
 
-use crate::onnx_proof::range_checking::{
-    read_raf_checking::compute_lookup_indices_from_operands, LOG_K,
+use crate::onnx_proof::{
+    range_checking::{sumcheck_instance::ReadRafSumcheckHelper, LOG_K},
+    Prover, Verifier,
 };
 
 // Instruction read-access (RA) virtualization sumcheck
@@ -42,43 +38,45 @@ use crate::onnx_proof::range_checking::{
 // - ra_i are MLEs of chunk-wise access indicators (1 on matching {0,1}-points).
 // - ra_claim is the claimed evaluation of the virtual read-access polynomial from the read-raf sumcheck.
 
-pub struct InstructionRaSumcheckParams<F: JoltField> {
+pub struct InstructionRaSumcheckParams<F: JoltField, Helper: ReadRafSumcheckHelper> {
     pub r_address: OpeningPoint<BIG_ENDIAN, F>,
     pub r_cycle: OpeningPoint<BIG_ENDIAN, F>,
     pub one_hot_params: OneHotParams,
     computation_node: ComputationNode,
+    helper: Helper,
 }
 
-impl<F: JoltField> InstructionRaSumcheckParams<F> {
+impl<F: JoltField, Helper: ReadRafSumcheckHelper> InstructionRaSumcheckParams<F, Helper> {
     pub fn new(
         computation_node: ComputationNode,
         one_hot_params: &OneHotParams,
         opening_accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
-        let (r, _) = opening_accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::DivRangeCheckRa(computation_node.idx),
-            SumcheckId::Raf,
-        );
+        let helper = Helper::new(&computation_node);
+
+        let (r, _) = opening_accumulator
+            .get_virtual_polynomial_opening(helper.get_output_operand(), SumcheckId::Raf);
         let (r_address, r_cycle) = r.split_at(LOG_K);
         Self {
             r_address,
             r_cycle,
             one_hot_params: one_hot_params.clone(),
             computation_node,
+            helper,
         }
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for InstructionRaSumcheckParams<F> {
+impl<F: JoltField, Helper: ReadRafSumcheckHelper> SumcheckInstanceParams<F>
+    for InstructionRaSumcheckParams<F, Helper>
+{
     fn num_rounds(&self) -> usize {
         self.r_cycle.len()
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, ra_claim) = accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::DivRangeCheckRa(self.computation_node.idx),
-            SumcheckId::Raf,
-        );
+        let (_, ra_claim) = accumulator
+            .get_virtual_polynomial_opening(self.helper.get_output_operand(), SumcheckId::Raf);
         ra_claim
     }
 
@@ -94,44 +92,34 @@ impl<F: JoltField> SumcheckInstanceParams<F> for InstructionRaSumcheckParams<F> 
     }
 }
 
-pub struct InstructionRaSumcheckProver<F: JoltField> {
+pub struct InstructionRaSumcheckProver<F: JoltField, Helper: ReadRafSumcheckHelper> {
     ra_i_polys: Vec<RaPolynomial<u8, F>>,
     eq_poly: GruenSplitEqPolynomial<F>,
-    params: InstructionRaSumcheckParams<F>,
+    params: InstructionRaSumcheckParams<F, Helper>,
 }
 
-impl<F: JoltField> InstructionRaSumcheckProver<F> {
+impl<F: JoltField, Helper: ReadRafSumcheckHelper> InstructionRaSumcheckProver<F, Helper> {
+    pub fn new_from_prover(
+        computation_node: ComputationNode,
+        one_hot_params: &OneHotParams,
+        prover: &mut Prover<F, impl Transcript>,
+    ) -> Self {
+        let params =
+            InstructionRaSumcheckParams::new(computation_node, one_hot_params, &prover.accumulator);
+        Self::initialize(params, &prover.trace)
+    }
+
     #[tracing::instrument(skip_all, name = "InstructionRaSumcheckProver::initialize")]
-    pub fn initialize(params: InstructionRaSumcheckParams<F>, trace: &Trace) -> Self {
+    pub fn initialize(params: InstructionRaSumcheckParams<F, Helper>, trace: &Trace) -> Self {
         // Compute r_address_chunks with proper padding
         let r_address_chunks = params
             .one_hot_params
             .compute_r_address_chunks::<F>(&params.r_address.r);
-        let LayerData {
-            output: _,
-            operands,
-        } = Trace::layer_data(trace, &params.computation_node);
 
-        let [dividend, divisor] = operands[..] else {
-            panic!("Expected exactly two operands for Div node.");
-        };
+        let (left_operand, right_operand) =
+            Helper::get_operands_tensors(trace, &params.computation_node);
 
-        let remainder = {
-            let data: Vec<i32> = dividend
-                .iter()
-                .zip(divisor.iter())
-                .map(|(&a, &b)| {
-                    let mut R = a % b;
-                    if (R < 0 && b > 0) || R > 0 && b < 0 {
-                        R += b
-                    }
-                    R
-                })
-                .collect();
-            Tensor::<i32>::construct(data, dividend.dims().to_vec())
-        };
-
-        let lookup_indices = compute_lookup_indices_from_operands(&[&remainder, divisor]);
+        let lookup_indices = Helper::compute_lookup_indices(&left_operand, &right_operand);
 
         let H_indices: Vec<Vec<Option<u8>>> = (0..params.one_hot_params.instruction_d)
             .map(|i| {
@@ -165,7 +153,9 @@ impl<F: JoltField> InstructionRaSumcheckProver<F> {
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for InstructionRaSumcheckProver<F> {
+impl<F: JoltField, T: Transcript, Helper: ReadRafSumcheckHelper + Sync + Send>
+    SumcheckInstanceProver<F, T> for InstructionRaSumcheckProver<F, Helper>
+{
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
@@ -193,7 +183,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for InstructionRa
     ) {
         let r_cycle = self.params.normalize_opening_point(sumcheck_challenges);
         let (r, _) = accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::DivRangeCheckRa(self.params.computation_node.idx),
+            self.params.helper.get_output_operand(),
             SumcheckId::Raf,
         );
 
@@ -209,10 +199,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for InstructionRa
             let claim = self.ra_i_polys[i].final_sumcheck_claim();
             accumulator.append_sparse(
                 transcript,
-                vec![CommittedPolynomial::DivRangeCheckRaD(
-                    self.params.computation_node.idx,
-                    i,
-                )],
+                vec![self.params.helper.rad_poly(i)],
                 SumcheckId::RaVirtualization,
                 r_address,
                 r_cycle.r.clone(),
@@ -222,11 +209,24 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for InstructionRa
     }
 }
 
-pub struct RaSumcheckVerifier<F: JoltField> {
-    params: InstructionRaSumcheckParams<F>,
+pub struct InstructionRaSumcheckVerifier<F: JoltField, Helper: ReadRafSumcheckHelper> {
+    params: InstructionRaSumcheckParams<F, Helper>,
 }
 
-impl<F: JoltField> RaSumcheckVerifier<F> {
+impl<F: JoltField, Helper: ReadRafSumcheckHelper> InstructionRaSumcheckVerifier<F, Helper> {
+    pub fn new_from_verifier(
+        computation_node: ComputationNode,
+        one_hot_params: &OneHotParams,
+        verifier: &mut Verifier<F, impl Transcript>,
+    ) -> Self {
+        let params = InstructionRaSumcheckParams::new(
+            computation_node,
+            one_hot_params,
+            &verifier.accumulator,
+        );
+        Self { params }
+    }
+
     pub fn new(
         computation_node: ComputationNode,
         one_hot_params: &OneHotParams,
@@ -238,7 +238,9 @@ impl<F: JoltField> RaSumcheckVerifier<F> {
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RaSumcheckVerifier<F> {
+impl<F: JoltField, T: Transcript, Helper: ReadRafSumcheckHelper> SumcheckInstanceVerifier<F, T>
+    for InstructionRaSumcheckVerifier<F, Helper>
+{
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
@@ -253,7 +255,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RaSumcheckV
         let ra_claim_prod: F = (0..self.params.one_hot_params.instruction_d)
             .map(|i| {
                 let (_, ra_i_claim) = accumulator.get_committed_polynomial_opening(
-                    CommittedPolynomial::DivRangeCheckRaD(self.params.computation_node.idx, i),
+                    self.params.helper.rad_poly(i),
                     SumcheckId::RaVirtualization,
                 );
                 ra_i_claim
@@ -271,7 +273,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RaSumcheckV
     ) {
         let r_cycle = self.params.normalize_opening_point(sumcheck_challenges);
         let (r, _) = accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::DivRangeCheckRa(self.params.computation_node.idx),
+            self.params.helper.get_output_operand(),
             SumcheckId::Raf,
         );
 
@@ -288,10 +290,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RaSumcheckV
 
             accumulator.append_sparse(
                 transcript,
-                vec![CommittedPolynomial::DivRangeCheckRaD(
-                    self.params.computation_node.idx,
-                    i,
-                )],
+                vec![self.params.helper.rad_poly(i)],
                 SumcheckId::RaVirtualization,
                 opening_point,
             );

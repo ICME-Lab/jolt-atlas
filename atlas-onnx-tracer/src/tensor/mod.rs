@@ -21,6 +21,9 @@ use tract_onnx::prelude::tract_itertools::Itertools;
 /// Implementations of common operations on tensors.
 pub mod ops;
 
+// Default scale
+const SCALE: u32 = 7;
+
 /// A generic multi-dimensional array representation of a Tensor.
 /// The `inner` attribute contains a vector of values whereas `dims` corresponds to
 /// the dimensionality of the array and as such determines how we index, query for
@@ -170,9 +173,10 @@ impl Tensor<i32> {
     }
 
     /// Create a random positive tensor given the dims
+    /// The values are capped to be relatively small
     pub fn random_pos(rng: &mut StdRng, dims: &[usize]) -> Self {
         let data: Vec<i32> = (0..dims.iter().product())
-            .map(|_| (rng.next_u32() % 20000) as i32)
+            .map(|_| (rng.next_u32() % (1 << (2 * SCALE + 1))) as i32)
             .collect();
         Tensor::new(Some(&data), dims).unwrap()
     }

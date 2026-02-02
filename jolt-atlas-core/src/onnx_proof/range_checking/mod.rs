@@ -1,4 +1,4 @@
-use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode, ops::Operator};
+use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode};
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     config::OneHotParams,
@@ -266,24 +266,4 @@ fn compute_ra_evals<F: JoltField>(
                 running
             },
         )
-}
-
-pub trait InterleavedBitsMarker {
-    fn is_interleaved_operands(&self) -> bool;
-}
-
-impl InterleavedBitsMarker for ComputationNode {
-    fn is_interleaved_operands(&self) -> bool {
-        matches!(self.operator, Operator::And2(_))
-    }
-}
-
-pub trait CommitToOneHotEncodingsMarker {
-    fn commit_to_one_encodings(&self) -> bool;
-}
-
-impl CommitToOneHotEncodingsMarker for ComputationNode {
-    fn commit_to_one_encodings(&self) -> bool {
-        matches!(self.operator, Operator::And2(_) | Operator::ReLU(_))
-    }
 }

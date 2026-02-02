@@ -1,8 +1,4 @@
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Operator,
-};
+use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode};
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     config::OneHotParams,
@@ -24,23 +20,32 @@ use joltworks::{
 };
 use rayon::prelude::*;
 
-use crate::onnx_proof::op_lookups::read_raf_checking::compute_lookup_indices_from_operands;
+use crate::onnx_proof::{
+    range_checking::{
+        ra_virtual::{InstructionRaSumcheckProver, InstructionRaSumcheckVerifier},
+        sumcheck_instance::ReadRafSumcheckHelper,
+    },
+    Prover, Verifier,
+};
 
 pub mod ra_virtual;
 pub mod read_raf_checking;
+pub mod sumcheck_instance;
 
 pub const LOG_K: usize = XLEN * 2;
 
-pub fn ra_hamming_weight_params<F: JoltField>(
+pub fn ra_hamming_weight_params<F: JoltField, Helper: ReadRafSumcheckHelper>(
     computation_node: &ComputationNode,
     one_hot_params: &OneHotParams,
     opening_accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut impl Transcript,
 ) -> HammingWeightSumcheckParams<F> {
+    let helper = Helper::new(computation_node);
+
     let gamma_powers = transcript.challenge_scalar_powers(one_hot_params.instruction_d);
 
     let polynomial_types: Vec<CommittedPolynomial> = (0..one_hot_params.instruction_d)
-        .map(|i| CommittedPolynomial::NodeOutputRaD(computation_node.idx, i))
+        .map(|i| helper.rad_poly(i))
         .collect();
 
     let r_cycle = opening_accumulator
@@ -61,14 +66,16 @@ pub fn ra_hamming_weight_params<F: JoltField>(
     }
 }
 
-pub fn ra_booleanity_params<F: JoltField>(
+pub fn ra_booleanity_params<F: JoltField, Helper: ReadRafSumcheckHelper>(
     computation_node: &ComputationNode,
     one_hot_params: &OneHotParams,
     opening_accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut impl Transcript,
 ) -> BooleanitySumcheckParams<F> {
+    let helper = Helper::new(computation_node);
+
     let polynomial_types: Vec<CommittedPolynomial> = (0..one_hot_params.instruction_d)
-        .map(|i| CommittedPolynomial::NodeOutputRaD(computation_node.idx, i))
+        .map(|i| helper.rad_poly(i))
         .collect();
 
     let (r_cycle, _) = opening_accumulator.get_virtual_polynomial_opening(
@@ -91,19 +98,55 @@ pub fn ra_booleanity_params<F: JoltField>(
     }
 }
 
-pub fn gen_ra_one_hot_provers<F: JoltField>(
+pub fn new_ra_one_hot_sumcheck_provers<F: JoltField, Helper: ReadRafSumcheckHelper>(
+    computation_node: ComputationNode,
+    one_hot_params: &OneHotParams,
+    prover: &mut Prover<F, impl Transcript>,
+) -> (
+    InstructionRaSumcheckProver<F, Helper>,
+    HammingWeightSumcheckProver<F>,
+    BooleanitySumcheckProver<F>,
+) {
+    let rad_prover = InstructionRaSumcheckProver::new_from_prover(
+        computation_node.clone(),
+        one_hot_params,
+        prover,
+    );
+
+    let hamming_weight_params = ra_hamming_weight_params::<F, Helper>(
+        &computation_node,
+        one_hot_params,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let booleanity_params = ra_booleanity_params::<F, Helper>(
+        &computation_node,
+        one_hot_params,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+
+    let (hamming_weight_prover, booleanity_prover) = gen_ra_one_hot_provers::<F, Helper>(
+        hamming_weight_params,
+        booleanity_params,
+        &prover.trace,
+        &computation_node,
+        one_hot_params,
+    );
+
+    (rad_prover, hamming_weight_prover, booleanity_prover)
+}
+
+pub fn gen_ra_one_hot_provers<F: JoltField, Helper: ReadRafSumcheckHelper>(
     hamming_weight_params: HammingWeightSumcheckParams<F>,
     booleanity_params: BooleanitySumcheckParams<F>,
     trace: &Trace,
     computation_node: &ComputationNode,
     one_hot_params: &OneHotParams,
 ) -> (HammingWeightSumcheckProver<F>, BooleanitySumcheckProver<F>) {
-    let LayerData {
-        output: _,
-        operands,
-    } = Trace::layer_data(trace, computation_node);
-    let is_interleaved_operands = computation_node.is_interleaved_operands();
-    let lookup_indices = compute_lookup_indices_from_operands(&operands, is_interleaved_operands);
+    let (left_operand, right_operand) = Helper::get_operands_tensors(trace, computation_node);
+    let lookup_indices = Helper::compute_lookup_indices(&left_operand, &right_operand);
+
     let ra_evals = compute_ra_evals(&lookup_indices, one_hot_params, &booleanity_params.r_cycle);
     let H_indices = compute_instruction_h_indices(&lookup_indices, one_hot_params);
 
@@ -113,7 +156,31 @@ pub fn gen_ra_one_hot_provers<F: JoltField>(
     )
 }
 
-pub fn new_ra_one_hot_verifiers<F: JoltField>(
+pub fn new_ra_one_hot_sumcheck_verifiers<F: JoltField, Helper: ReadRafSumcheckHelper>(
+    computation_node: ComputationNode,
+    one_hot_params: &OneHotParams,
+    verifier: &mut Verifier<F, impl Transcript>,
+) -> (
+    InstructionRaSumcheckVerifier<F, Helper>,
+    HammingWeightSumcheckVerifier<F>,
+    BooleanitySumcheckVerifier<F>,
+) {
+    let rad_verifier = InstructionRaSumcheckVerifier::new_from_verifier(
+        computation_node.clone(),
+        one_hot_params,
+        verifier,
+    );
+    let (hamming_weight_verifier, booleanity_verifier) = new_ra_one_hot_verifiers::<F, Helper>(
+        &computation_node,
+        one_hot_params,
+        &verifier.accumulator,
+        &mut verifier.transcript,
+    );
+
+    (rad_verifier, hamming_weight_verifier, booleanity_verifier)
+}
+
+pub fn new_ra_one_hot_verifiers<F: JoltField, Helper: ReadRafSumcheckHelper>(
     computation_node: &ComputationNode,
     one_hot_params: &OneHotParams,
     opening_accumulator: &VerifierOpeningAccumulator<F>,
@@ -122,13 +189,13 @@ pub fn new_ra_one_hot_verifiers<F: JoltField>(
     HammingWeightSumcheckVerifier<F>,
     BooleanitySumcheckVerifier<F>,
 ) {
-    let hamming_weight_params = ra_hamming_weight_params(
+    let hamming_weight_params = ra_hamming_weight_params::<_, Helper>(
         computation_node,
         one_hot_params,
         opening_accumulator,
         transcript,
     );
-    let booleanity_params = ra_booleanity_params(
+    let booleanity_params = ra_booleanity_params::<_, Helper>(
         computation_node,
         one_hot_params,
         opening_accumulator,
@@ -199,27 +266,4 @@ fn compute_ra_evals<F: JoltField>(
                 running
             },
         )
-}
-
-pub trait InterleavedBitsMarker {
-    fn is_interleaved_operands(&self) -> bool;
-}
-
-impl InterleavedBitsMarker for ComputationNode {
-    fn is_interleaved_operands(&self) -> bool {
-        matches!(self.operator, Operator::And2(_) | Operator::ULessThan(_))
-    }
-}
-
-pub trait CommitToOneHotEncodingsMarker {
-    fn commit_to_one_encodings(&self) -> bool;
-}
-
-impl CommitToOneHotEncodingsMarker for ComputationNode {
-    fn commit_to_one_encodings(&self) -> bool {
-        matches!(
-            self.operator,
-            Operator::And2(_) | Operator::ReLU(_) | Operator::ULessThan(_)
-        )
-    }
 }

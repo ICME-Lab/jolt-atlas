@@ -23,12 +23,12 @@ pub enum CommittedPolynomial {
     /// Fields:
     ///
     /// `0` - node index
-    DivNodeQuotient(usize),
-    DivNodeRemainder(usize),
-    RsqrtNodeInv(usize),
-    RsqrtNodeRsqrt(usize),
-    RsqrtNodeRi(usize),
-    RsqrtNodeRs(usize),
+    // One-hot polynomials for Advices
+    DivRangeCheckRaD(usize, usize), // Interleaved R and divisor for Div advice
+    SqrtRangeCheckRaD(usize, usize), // Interleaved r_s and sqrt for Sqrt advice
+    DivNodeQuotient(usize),          // Advice for `quotient` in Div
+    RsqrtNodeInv(usize),             // Advice for `inv` in Rsqrt
+    RsqrtNodeRsqrt(usize),           // Advice for `rsqrt` in Rsqrt
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
@@ -54,4 +54,11 @@ pub enum VirtualPolynomial {
 
     /// Used in hamming weight sumcheck
     HammingWeight,
+    // Advices given for operators requiring it
+    // Those are proven by the ReadRafSumcheckProver,
+    // from Committed one-hot polynomials.
+    DivRangeCheckRa(usize),
+    SqrtRangeCheckRa(usize),
+    DivRemainder(usize),
+    SqrtRemainder(usize),
 }

@@ -21,6 +21,7 @@ use atlas_onnx_tracer::{node::ComputationNode, ops::Operator};
 
 // Re-export operator param/prover/verifier types for the handler macro
 pub use add::{AddParams, AddProver, AddVerifier};
+use common::CommittedPolynomial;
 pub use cube::{CubeParams, CubeProver, CubeVerifier};
 pub use div::{DivParams, DivProver, DivVerifier};
 pub use iff::{IffParams, IffProver, IffVerifier};
@@ -57,8 +58,76 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError>;
+
+    /// Get the committed polynomials involved in this operator's proof.
+    fn get_committed_polynomials(&self, _node: &ComputationNode) -> Vec<CommittedPolynomial> {
+        vec![]
+    }
 }
 
+pub struct NodeCommittedPolynomials;
+
+// TODO: Refactor duplicate `OperatorProofTrait::<F, T>::get_committed_polynomials(...)` logic in each operator into this dispatch method
+impl NodeCommittedPolynomials {
+    pub fn get_committed_polynomials<F: JoltField, T: Transcript>(
+        node: &ComputationNode,
+    ) -> Vec<CommittedPolynomial> {
+        match &node.operator {
+            Operator::Add(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            Operator::Broadcast(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            Operator::Constant(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            Operator::Cube(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            Operator::Div(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            Operator::Einsum(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            Operator::Iff(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            Operator::Input(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            Operator::MoveAxis(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            Operator::Mul(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            Operator::ReLU(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            Operator::Reshape(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            Operator::Rsqrt(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            Operator::Square(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            Operator::SoftmaxAxes(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            Operator::Sub(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
+            _ => {
+                println!("Unhandled operator in graph: {node:#?}");
+                vec![]
+            }
+        }
+    }
+}
 pub struct OperatorProver;
 
 impl OperatorProver {

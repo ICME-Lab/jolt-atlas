@@ -155,7 +155,7 @@ impl ReadRafSumcheckHelper for RiRangeCheckOperands {
     }
 
     fn rad_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::DivRangeCheckRaD(self.node_idx, d)
+        CommittedPolynomial::SqrtDivRangeCheckRaD(self.node_idx, d)
     }
 }
 

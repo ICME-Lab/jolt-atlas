@@ -1,5 +1,3 @@
-// TODO: Remove this file when we have the Softmax opcode decomposition in parser
-
 use crate::{
     ops::{Op, SoftmaxAxes},
     tensor::{self, Tensor},
@@ -14,5 +12,3 @@ impl Op for SoftmaxAxes {
         true
     }
 }
-
-// TODO: Test for quantized softmax: sum_i softmax_i = 1

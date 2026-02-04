@@ -1,5 +1,4 @@
-use std::borrow::Borrow;
-use std::marker::PhantomData;
+use std::{borrow::Borrow, marker::PhantomData};
 
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 

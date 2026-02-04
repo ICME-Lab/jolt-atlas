@@ -196,6 +196,19 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
 
         Ok(())
     }
+
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
+        let mut polys = vec![
+            CommittedPolynomial::RsqrtNodeInv(node.idx),
+            CommittedPolynomial::RsqrtNodeRsqrt(node.idx),
+        ];
+        let one_hot_params = OneHotParams::new(node.num_output_elements().log_2());
+        for d in 0..one_hot_params.instruction_d {
+            polys.push(CommittedPolynomial::SqrtDivRangeCheckRaD(node.idx, d));
+            polys.push(CommittedPolynomial::SqrtRangeCheckRaD(node.idx, d));
+        }
+        polys
+    }
 }
 
 // Decomposes rsqrt into an inverse and a square root where the inverse `inv` of x is such that:
@@ -592,7 +605,7 @@ mod tests {
         let preprocessing: AtlasSharedPreprocessing =
             AtlasSharedPreprocessing::preprocess(model.clone());
         let prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-            ProverOpeningAccumulator::new(log_T);
+            ProverOpeningAccumulator::new();
         let mut prover = Prover {
             trace: trace.clone(),
             accumulator: prover_opening_accumulator,
@@ -621,7 +634,7 @@ mod tests {
 
         let verifier_transcript = Blake2bTranscript::new(&[]);
         let verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-            VerifierOpeningAccumulator::new(log_T);
+            VerifierOpeningAccumulator::new();
 
         let proofs = Rsqrt { scale: F32(0.0) }.prove(computation_node, &mut prover);
         let proofs = BTreeMap::from_iter(proofs);

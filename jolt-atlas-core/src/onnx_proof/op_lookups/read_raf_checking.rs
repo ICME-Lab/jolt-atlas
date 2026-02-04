@@ -902,7 +902,7 @@ pub fn compute_lookup_indices_from_operands(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, time::Instant};
+    use std::time::Instant;
 
     use crate::onnx_proof::{
         lookup_tables::{
@@ -917,7 +917,6 @@ mod tests {
                 ReadRafSumcheckParams, ReadRafSumcheckProver, ReadRafSumcheckVerifier,
             },
         },
-        witness::{generate_node_output_ra, node_committed_polynomials},
         AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     };
     use ark_bn254::Fr;
@@ -934,10 +933,7 @@ mod tests {
         config::OneHotParams,
         field::JoltField,
         poly::{
-            commitment::{
-                commitment_scheme::CommitmentScheme,
-                dory::{DoryCommitmentScheme, DoryGlobals},
-            },
+            commitment::{commitment_scheme::CommitmentScheme, mock::MockCommitScheme},
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
             opening_proof::{
                 OpeningPoint, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
@@ -951,7 +947,6 @@ mod tests {
         transcripts::{Blake2bTranscript, Transcript},
     };
     use rand::{rngs::StdRng, SeedableRng};
-    use rayon::prelude::*;
     use serial_test::serial;
 
     /// Helper function to run a complete sumcheck proof and verification for a given table
@@ -965,31 +960,17 @@ mod tests {
         T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
         PCS: CommitmentScheme<Field = Fr>,
     {
-        DoryGlobals::reset();
-        let one_hot_params = OneHotParams::new(log_T);
+        let _one_hot_params = OneHotParams::new(log_T);
         let shared_pp = AtlasSharedPreprocessing::preprocess(model);
         let prover_pp = AtlasProverPreprocessing::<Fr, PCS>::new(shared_pp);
-        let verifier_pp = AtlasVerifierPreprocessing::from(&prover_pp);
-
-        DoryGlobals::initialize(1 << one_hot_params.log_k_chunk, 1 << log_T);
-        let committed_polys = generate_node_output_ra::<Fr>(computation_node, trace);
-        let (commitments, hints): (Vec<PCS::Commitment>, Vec<PCS::OpeningProofHint>) =
-            committed_polys
-                .par_iter()
-                .map(|(_label, poly)| PCS::commit(poly, &prover_pp.generators))
-                .unzip();
-
-        let mut hint_map = HashMap::with_capacity(committed_polys.len());
-        for (i, hint) in hints.into_iter().enumerate() {
-            hint_map.insert(committed_polys[i].0, hint);
-        }
+        let _verifier_pp = AtlasVerifierPreprocessing::from(&prover_pp);
 
         let prover_transcript = &mut Blake2bTranscript::new(&[]);
         let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-            ProverOpeningAccumulator::new(log_T);
+            ProverOpeningAccumulator::new();
         let verifier_transcript = &mut Blake2bTranscript::new(&[]);
         let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-            VerifierOpeningAccumulator::new(log_T);
+            VerifierOpeningAccumulator::new();
 
         let r_node_output: Vec<<Fr as JoltField>::Challenge> =
             prover_transcript.challenge_vector_optimized::<Fr>(log_T);
@@ -1073,36 +1054,6 @@ mod tests {
         );
         println!("ra, bool, hw, time: {:?}", time.elapsed());
 
-        // Prepare sumcheck
-        let polynomial_map = HashMap::from_iter(committed_polys);
-        prover_opening_accumulator.prepare_for_sumcheck(&polynomial_map);
-
-        // Run sumcheck
-        let (accumulator_sumcheck_proof, r_sumcheck_acc) =
-            prover_opening_accumulator.prove_batch_opening_sumcheck(prover_transcript);
-
-        // Finalize sumcheck (uses claims cached via cache_openings, derives gamma, cleans up)
-        let state = prover_opening_accumulator
-            .finalize_batch_opening_sumcheck(r_sumcheck_acc, prover_transcript);
-
-        // Build RLC polynomial and combined hint
-        let (joint_poly, hint) = prover_opening_accumulator.build_rlc_polynomial::<PCS>(
-            polynomial_map,
-            hint_map,
-            &state,
-        );
-
-        // Dory opening proof
-        let joint_opening_proof = PCS::prove(
-            &prover_pp.generators,
-            &joint_poly,
-            &state.r_sumcheck,
-            Some(hint),
-            prover_transcript,
-        );
-
-        let stage7_sumcheck_claims = state.sumcheck_claims.clone();
-
         // Take claims
         for (key, (_, value)) in &prover_opening_accumulator.openings {
             let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
@@ -1155,43 +1106,6 @@ mod tests {
         )
         .unwrap();
 
-        // Prepare - populate sumcheck claims
-        verifier_opening_accumulator.prepare_for_sumcheck(&stage7_sumcheck_claims);
-
-        // Verify sumcheck
-        let r_sumcheck = verifier_opening_accumulator
-            .verify_batch_opening_sumcheck(&accumulator_sumcheck_proof, verifier_transcript)
-            .unwrap();
-
-        // Finalize and store state in accumulator for Stage 8
-        let verifier_state = verifier_opening_accumulator.finalize_batch_opening_sumcheck(
-            r_sumcheck,
-            &stage7_sumcheck_claims,
-            verifier_transcript,
-        );
-
-        // Stage 8: Dory batch opening verification.
-        // Build commitments map
-        let node_committed_polys = node_committed_polynomials(computation_node);
-        let mut commitments_map = HashMap::with_capacity(node_committed_polys.len());
-        for (i, commitment) in commitments.into_iter().enumerate() {
-            commitments_map.insert(node_committed_polys[i], commitment);
-        }
-        // Compute joint commitment
-        let joint_commitment = verifier_opening_accumulator
-            .compute_joint_commitment::<PCS>(&mut commitments_map, &verifier_state);
-
-        // Verify joint opening
-        verifier_opening_accumulator
-            .verify_joint_opening::<_, PCS>(
-                &verifier_pp.generators,
-                &joint_opening_proof,
-                &joint_commitment,
-                &verifier_state,
-                verifier_transcript,
-            )
-            .unwrap();
-
         prover_transcript.compare_to(verifier_transcript.clone());
     }
 
@@ -1208,7 +1122,7 @@ mod tests {
         let output_index = model.outputs()[0];
         let computation_node = &model[output_index];
 
-        run_read_raf_sumcheck_test::<AndTable<XLEN>, DoryCommitmentScheme>(
+        run_read_raf_sumcheck_test::<AndTable<XLEN>, MockCommitScheme<Fr>>(
             model.clone(),
             &trace,
             log_T,
@@ -1230,7 +1144,7 @@ mod tests {
         let output_index = model.outputs()[0];
         let computation_node = &model[output_index];
 
-        run_read_raf_sumcheck_test::<ReluTable<XLEN>, DoryCommitmentScheme>(
+        run_read_raf_sumcheck_test::<ReluTable<XLEN>, MockCommitScheme<Fr>>(
             model.clone(),
             &trace,
             log_T,
@@ -1252,7 +1166,7 @@ mod tests {
         let output_index = model.outputs()[0];
         let computation_node = &model[output_index];
 
-        run_read_raf_sumcheck_test::<ReluTable<XLEN>, DoryCommitmentScheme>(
+        run_read_raf_sumcheck_test::<ReluTable<XLEN>, MockCommitScheme<Fr>>(
             model.clone(),
             &trace,
             log_T,

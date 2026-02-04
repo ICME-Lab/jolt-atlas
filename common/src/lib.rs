@@ -18,17 +18,17 @@ pub enum CommittedPolynomial {
     /// `1` - feature index
     SoftmaxRemainder(usize, usize),
     SoftmaxExponentiationRa(usize, usize),
-    SoftmaxExponentiationRa2(usize, usize), // TODO: reduce two claims to one via 4.5.2 PAZK
 
     /// Fields:
     ///
     /// `0` - node index
     // One-hot polynomials for Advices
     DivRangeCheckRaD(usize, usize), // Interleaved R and divisor for Div advice
-    SqrtRangeCheckRaD(usize, usize), // Interleaved r_s and sqrt for Sqrt advice
-    DivNodeQuotient(usize),          // Advice for `quotient` in Div
-    RsqrtNodeInv(usize),             // Advice for `inv` in Rsqrt
-    RsqrtNodeRsqrt(usize),           // Advice for `rsqrt` in Rsqrt
+    SqrtDivRangeCheckRaD(usize, usize), // Interleaved R and divisor for Div advice
+    SqrtRangeCheckRaD(usize, usize),    // Interleaved r_s and sqrt for Sqrt advice
+    DivNodeQuotient(usize),             // Advice for `quotient` in Div
+    RsqrtNodeInv(usize),                // Advice for `inv` in Rsqrt
+    RsqrtNodeRsqrt(usize),              // Advice for `rsqrt` in Rsqrt
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]

@@ -870,7 +870,7 @@ mod tests {
         let node = model[model.outputs()[0]].clone();
 
         let mut prover_transcript = Blake2bTranscript::new(&[]);
-        let mut prover_accumulator = ProverOpeningAccumulator::<Fr>::new(log_T);
+        let mut prover_accumulator = ProverOpeningAccumulator::<Fr>::new();
 
         let r_exec: Vec<<Fr as JoltField>::Challenge> =
             prover_transcript.challenge_vector_optimized::<Fr>(log_T);
@@ -900,7 +900,7 @@ mod tests {
             Sumcheck::prove(&mut prover, &mut prover_accumulator, &mut prover_transcript);
 
         let mut verifier_transcript = Blake2bTranscript::new(&[]);
-        let mut verifier_accumulator = VerifierOpeningAccumulator::<Fr>::new(log_T);
+        let mut verifier_accumulator = VerifierOpeningAccumulator::<Fr>::new();
 
         let _r_exec: Vec<<Fr as JoltField>::Challenge> =
             verifier_transcript.challenge_vector_optimized::<Fr>(log_T);

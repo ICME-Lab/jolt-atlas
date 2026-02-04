@@ -17,7 +17,7 @@ use crate::onnx_proof::{
         read_raf_checking::{ReadRafSumcheckParams, ReadRafSumcheckProver},
     },
 };
-use common::consts::XLEN;
+use common::{consts::XLEN, CommittedPolynomial};
 use joltworks::{
     config::OneHotParams,
     subprotocols::{
@@ -151,6 +151,16 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
 
         Ok(())
     }
+
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
+        let mut polys = vec![];
+        let one_hot_params = OneHotParams::new(node.num_output_elements().log_2());
+        polys.extend(
+            (0..one_hot_params.instruction_d)
+                .map(|i| CommittedPolynomial::NodeOutputRaD(node.idx, i)),
+        );
+        polys
+    }
 }
 
 #[cfg(test)]
@@ -195,7 +205,7 @@ mod tests {
         let preprocessing: AtlasSharedPreprocessing =
             AtlasSharedPreprocessing::preprocess(model.clone());
         let prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-            ProverOpeningAccumulator::new(log_T);
+            ProverOpeningAccumulator::new();
         let mut prover = Prover {
             trace: trace.clone(),
             accumulator: prover_opening_accumulator,
@@ -227,7 +237,7 @@ mod tests {
 
         let verifier_transcript = Blake2bTranscript::new(&[]);
         let verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-            VerifierOpeningAccumulator::new(log_T);
+            VerifierOpeningAccumulator::new();
 
         let io = Trace::io(&trace, &model);
 

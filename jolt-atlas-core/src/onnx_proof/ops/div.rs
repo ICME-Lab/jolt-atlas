@@ -156,7 +156,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
 
 // TODO: Reduce two claims to 1 via 4.5.2 PAZK for Quotient polynomial openings
 // TODO: Commit to polynomials q and R
-// TODO: Prove R is well formed
 
 const DEGREE_BOUND: usize = 3;
 
@@ -548,8 +547,10 @@ mod tests {
     fn test_div_by_tensor() {
         let mut rng = StdRng::seed_from_u64(0x888);
         let T = 1 << 16;
+        const SCALE: i32 = 7;
+
         let model = model::test::recip_model(T);
-        let mut input = Tensor::<i32>::random_pos(&mut rng, &[T]);
+        let mut input = Tensor::<i32>::random_range(&mut rng, &[T], 1..SCALE * SCALE);
         input.iter_mut().for_each(|v| {
             if *v == 0 {
                 *v = 1

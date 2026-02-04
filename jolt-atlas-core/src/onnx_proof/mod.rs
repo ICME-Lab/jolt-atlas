@@ -145,6 +145,7 @@ pub struct ProofId(pub usize, pub ProofType);
 pub enum ProofType {
     Execution,
     RaOneHotChecks,
+    RaHammingWeight,
     SoftmaxDivSumMax,
     SoftmaxExponentiation,
     RangeCheck,
@@ -535,6 +536,27 @@ mod tests {
 
         // Print output for verification
         println!("Output shape: {:?}", io.outputs[0].dims());
+    }
+
+    #[test]
+    fn test_gather() {
+        let working_dir = "../atlas-onnx-tracer/models/gather/";
+
+        // Create test input vector of size [4]
+        //with values in [0, 8)
+        let input_vector = vec![0, 2, 4, 6];
+
+        let input = Tensor::construct(input_vector, vec![4]);
+        // Load the model
+        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
+        println!("model: {}", model.pretty_print());
+
+        let pp = AtlasSharedPreprocessing::preprocess(model);
+        let (proof, io) =
+            ONNXProof::<Fr, Blake2bTranscript, DoryCommitmentScheme>::prove(&pp, &input);
+
+        // verify proof
+        proof.verify(&pp, &io).unwrap();
     }
 
     #[test]

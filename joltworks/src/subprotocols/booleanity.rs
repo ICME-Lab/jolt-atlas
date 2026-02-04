@@ -4,7 +4,7 @@ use allocative::FlameGraphBuilder;
 use ark_std::Zero;
 use common::CommittedPolynomial;
 use rayon::prelude::*;
-use std::{iter::zip, sync::Arc};
+use std::{fmt::Debug, iter::zip, sync::Arc};
 
 use crate::{
     field::JoltField,
@@ -73,9 +73,18 @@ impl<F: JoltField> SumcheckInstanceParams<F> for BooleanitySumcheckParams<F> {
     }
 }
 
+// Specialization of BooleanitySumcheckProver for cases where log_K << 64
+// In those cases, we don't require d > 1 since the RA poly is not so large.
+// We then use a larger type (u16) for storing indexes,
+// since we store the whole lookup index in a single value.
+pub type SmallBooleanitySumcheckProver<F> = BooleanitySumcheckProver<F, u16>;
+
 /// Unified Booleanity Sumcheck implementation for RAM, Bytecode, and Instruction lookups
 #[derive(Allocative)]
-pub struct BooleanitySumcheckProver<F: JoltField> {
+pub struct BooleanitySumcheckProver<
+    F: JoltField,
+    I: Into<usize> + Copy + Default + Send + Sync + 'static = u8,
+> {
     /// B: split-eq over address-chunk variables (phase 1, LowToHigh).
     B: GruenSplitEqPolynomial<F>,
     /// D: split-eq over time/cycle variables (phase 2, LowToHigh).
@@ -83,22 +92,24 @@ pub struct BooleanitySumcheckProver<F: JoltField> {
     /// G as in the Twist and Shout paper
     G: Vec<Vec<F>>,
     /// H as in the Twist and Shout paper
-    H: Vec<RaPolynomial<u8, F>>,
+    H: Vec<RaPolynomial<I, F>>,
     /// F: Expanding table
     F: ExpandingTable<F>,
     /// eq_r_r
     eq_r_r: F,
     /// Indices for H polynomials
-    H_indices: Vec<Vec<Option<u8>>>,
+    H_indices: Vec<Vec<Option<I>>>,
     #[allocative(skip)]
     params: BooleanitySumcheckParams<F>,
 }
 
-impl<F: JoltField> BooleanitySumcheckProver<F> {
+impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
+    BooleanitySumcheckProver<F, I>
+{
     pub fn gen(
         params: BooleanitySumcheckParams<F>,
         G: Vec<Vec<F>>,
-        H_indices: Vec<Vec<Option<u8>>>,
+        H_indices: Vec<Vec<Option<I>>>,
     ) -> Self {
         let B = GruenSplitEqPolynomial::new(&params.r_address, BindingOrder::LowToHigh);
         let D_poly = GruenSplitEqPolynomial::new(&params.r_cycle, BindingOrder::LowToHigh);
@@ -218,7 +229,12 @@ impl<F: JoltField> BooleanitySumcheckProver<F> {
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for BooleanitySumcheckProver<F> {
+impl<
+        F: JoltField,
+        T: Transcript,
+        I: Into<usize> + Copy + Default + Debug + Send + Sync + 'static,
+    > SumcheckInstanceProver<F, T> for BooleanitySumcheckProver<F, I>
+{
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
@@ -351,5 +367,91 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BooleanityS
             self.params.sumcheck_id,
             opening_point.r,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ark_bn254::Fr;
+    use common::CommittedPolynomial;
+    use rand::{rngs::StdRng, RngCore, SeedableRng};
+
+    use crate::{
+        subprotocols::sumcheck::Sumcheck,
+        transcripts::{Blake2bTranscript, Transcript},
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_small_bool_sumcheck() {
+        let mut rng = StdRng::seed_from_u64(0x456);
+        let log_lookups = 4;
+        let log_words = 3;
+        let words = 1 << log_words;
+        let lookups = 1 << log_lookups;
+
+        let mut prover_transcript = Blake2bTranscript::default();
+        let mut prover_accumulator = ProverOpeningAccumulator::new(log_words + log_lookups);
+        let r_lookups: Vec<<Fr as JoltField>::Challenge> =
+            prover_transcript.challenge_vector_optimized::<Fr>(log_lookups);
+        let r_words: Vec<<Fr as JoltField>::Challenge> =
+            prover_transcript.challenge_vector_optimized::<Fr>(log_words);
+
+        let params = BooleanitySumcheckParams {
+            d: 1,
+            log_k_chunk: log_words,
+            log_t: log_lookups,
+            r_cycle: r_lookups,
+            r_address: r_words,
+            gammas: vec![<Fr as JoltField>::Challenge::from(1)],
+            polynomial_types: vec![CommittedPolynomial::NodeOutputRaD(0, 0)],
+            sumcheck_id: SumcheckId::Booleanity,
+        };
+
+        // Generate read addresses and G vector
+        let read_addresses: Vec<usize> = (0..lookups)
+            .map(|_| (rng.next_u32() as usize) % words)
+            .collect();
+
+        let E: Vec<Fr> = EqPolynomial::evals(&params.r_cycle);
+        let mut G = unsafe_allocate_zero_vec(words);
+        for (i, &addr) in read_addresses.iter().enumerate() {
+            G[addr] += E[i];
+        }
+
+        let H_indices: Vec<Option<u16>> = read_addresses
+            .iter()
+            .map(|&addr| Some(addr as u16))
+            .collect();
+
+        let mut prover = SmallBooleanitySumcheckProver::gen(params, vec![G], vec![H_indices]);
+
+        let (proof, _) =
+            Sumcheck::prove(&mut prover, &mut prover_accumulator, &mut prover_transcript);
+
+        let mut verifier_transcript = Blake2bTranscript::default();
+        let mut verifier_accumulator = VerifierOpeningAccumulator::new(log_words + log_lookups);
+        let _r_x: Vec<<Fr as JoltField>::Challenge> =
+            verifier_transcript.challenge_vector_optimized::<Fr>(log_lookups);
+        let _r_words: Vec<<Fr as JoltField>::Challenge> =
+            verifier_transcript.challenge_vector_optimized::<Fr>(log_words);
+
+        // Take claims
+        for (key, (_, value)) in &prover_accumulator.openings {
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
+            verifier_accumulator
+                .openings
+                .insert(*key, (empty_point, *value));
+        }
+
+        let verifier = BooleanitySumcheckVerifier::new(prover.params);
+        Sumcheck::verify(
+            &proof,
+            &verifier,
+            &mut verifier_accumulator,
+            &mut verifier_transcript,
+        )
+        .unwrap();
     }
 }

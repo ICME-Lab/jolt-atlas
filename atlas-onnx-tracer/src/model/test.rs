@@ -313,7 +313,7 @@ pub fn and2(rng: &mut StdRng, T: usize) -> Model {
 pub fn less_than_model(rng: &mut StdRng, T: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![T]);
-    let c = b.constant(Tensor::random_pos(rng, &[T]));
+    let c = b.constant(Tensor::random_range(rng, &[T], 0..(1 << SCALE)));
     let res = b.less_than(i, c);
     b.mark_output(res);
     b.build()
@@ -470,6 +470,22 @@ pub fn softmax_axes_model(input_shape: &[usize], axes: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(input_shape.to_vec());
     let res = b.softmax(axes, i);
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn gather_model(input_shape: &[usize], dictionnary_len: usize, word_dim: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let dictionnary = {
+        let data = (0..dictionnary_len * word_dim)
+            .map(|i| i as i32)
+            .collect::<Vec<_>>();
+        Tensor::construct(data, vec![dictionnary_len, word_dim])
+    };
+    let dict = b.constant(dictionnary);
+    let indexes = b.input(input_shape.to_vec());
+
+    let res = b.gather(dict, indexes, 0, vec![input_shape[0], word_dim]);
     b.mark_output(res);
     b.build()
 }

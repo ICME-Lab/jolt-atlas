@@ -379,6 +379,7 @@ mod tests {
     use crate::{
         subprotocols::sumcheck::Sumcheck,
         transcripts::{Blake2bTranscript, Transcript},
+        utils::thread::unsafe_allocate_zero_vec,
     };
 
     use super::*;

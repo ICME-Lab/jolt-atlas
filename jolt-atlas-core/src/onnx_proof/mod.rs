@@ -451,7 +451,10 @@ mod tests {
         AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof,
     };
     use ark_bn254::{Bn254, Fr};
-    use atlas_onnx_tracer::{model::Model, tensor::Tensor};
+    use atlas_onnx_tracer::{
+        model::{trace::ModelExecutionIO, Model},
+        tensor::Tensor,
+    };
     use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use serde_json::Value;
@@ -459,6 +462,53 @@ mod tests {
 
     // Fixed-point scale factor: 2^7 = 128
     const SCALE: i32 = 128;
+
+    /// Helper function to run the common prove-and-verify workflow.
+    /// Returns the proof IO for additional assertions if needed.
+    fn prove_and_verify(
+        model_dir: &str,
+        input: &Tensor<i32>,
+        print_model: bool,
+        print_timing: bool,
+    ) -> ModelExecutionIO {
+        prove_and_verify_with_debug(model_dir, input, print_model, print_timing, false).0
+    }
+
+    /// Helper function with debug info support.
+    fn prove_and_verify_with_debug(
+        model_dir: &str,
+        input: &Tensor<i32>,
+        print_model: bool,
+        print_timing: bool,
+        use_debug_info: bool,
+    ) -> (ModelExecutionIO, ()) {
+        let model = Model::load(&format!("{model_dir}network.onnx"), &Default::default());
+        if print_model {
+            println!("model: {}", model.pretty_print());
+        }
+
+        let pp = AtlasSharedPreprocessing::preprocess(model);
+        let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+
+        let timing = Instant::now();
+        let (proof, io, debug_info) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
+            &prover_preprocessing,
+            input,
+        );
+        if print_timing {
+            println!("Proof generation took {:?}", timing.elapsed());
+        }
+
+        let verifier_preprocessing =
+            AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
+
+        let debug_for_verify = if use_debug_info { debug_info } else { None };
+        proof
+            .verify(&verifier_preprocessing, &io, debug_for_verify)
+            .unwrap();
+
+        (io, ())
+    }
 
     #[test]
     fn test_self_attention_layer() {
@@ -470,19 +520,7 @@ mod tests {
         //     .collect(); // TODO(Forpee): Investigate bug - Einsum mk,kn->mn node failing
         let input = Tensor::construct(input_data, vec![1, 64, 64]);
 
-        // Load the model
-        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
-        println!("model: {}", model.pretty_print());
-        let pp = AtlasSharedPreprocessing::preprocess(model);
-        let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
-        let (proof, io, _) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
-            &prover_preprocessing,
-            &input,
-        );
-        let verifier_preprocessing =
-            AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
-        // verify proof
-        proof.verify(&verifier_preprocessing, &io, None).unwrap();
+        prove_and_verify(working_dir, &input, true, false);
     }
 
     #[test]
@@ -497,24 +535,9 @@ mod tests {
 
         // Build input vector from the input text (512 features for small MLP)
         let input_vector = build_input_vector(input_text, &vocab);
+        let input = Tensor::construct(input_vector, vec![1, 512]);
 
-        // Load the model
-        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
-        println!("model: {}", model.pretty_print());
-
-        let pp = AtlasSharedPreprocessing::preprocess(model);
-        let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
-        let timing = Instant::now();
-        let (proof, io, _) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
-            &prover_preprocessing,
-            &Tensor::construct(input_vector, vec![1, 512]),
-        );
-        println!("Proof generation took {:?}", timing.elapsed());
-
-        let verifier_preprocessing =
-            AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
-        // verify proof
-        proof.verify(&verifier_preprocessing, &io, None).unwrap();
+        prove_and_verify(working_dir, &input, true, true);
 
         /// Load vocab.json into HashMap<String, (usize, i32)>
         fn load_vocab(
@@ -570,27 +593,7 @@ mod tests {
         // Create tensor with shape [65536]
         let input = Tensor::random_small(&mut rng, &[1 << 16]);
 
-        // Load the model
-        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
-        println!("model: {}", model.pretty_print());
-
-        let pp = AtlasSharedPreprocessing::preprocess(model);
-        println!(
-            "committed polys: {:?}",
-            pp.get_models_committed_polynomials::<Fr, Blake2bTranscript>()
-        );
-        let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
-        let (proof, io, debug_info) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
-            &prover_preprocessing,
-            &input,
-        );
-
-        let verifier_preprocessing =
-            AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
-        // verify proof
-        proof
-            .verify(&verifier_preprocessing, &io, debug_info)
-            .unwrap();
+        prove_and_verify_with_debug(working_dir, &input, true, false, true);
     }
 
     #[test]
@@ -600,89 +603,27 @@ mod tests {
         // Create test input vector of size 4
         let mut rng = StdRng::seed_from_u64(0x100);
         let input_vec = (0..4)
-            .map(|_| {
-                // Generate random positive non-zero values
-                rng.gen_range(1..i32::MAX)
-            })
+            .map(|_| rng.gen_range(1..i32::MAX))
             .collect::<Vec<i32>>();
-
         let input = Tensor::construct(input_vec, vec![4]);
 
-        // Load the model
-        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
-        println!("model: {}", model.pretty_print());
-
-        let pp = AtlasSharedPreprocessing::preprocess(model);
-        let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
-        let timing = Instant::now();
-        let (proof, io, _) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
-            &prover_preprocessing,
-            &input,
-        );
-        println!("Proof generation took {:?}", timing.elapsed());
-
-        let verifier_preprocessing =
-            AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
-        // verify proof
-        proof.verify(&verifier_preprocessing, &io, None).unwrap();
+        prove_and_verify(working_dir, &input, true, true);
     }
 
     #[test]
     fn test_perceptron() {
         let working_dir = "../atlas-onnx-tracer/models/perceptron/";
+        let input = Tensor::construct(vec![1, 2, 3, 4], vec![1, 4]);
 
-        // Create test input vector of size [4]
-        // Using simple values to test broadcasting
-        let input_vector = vec![1, 2, 3, 4];
-
-        let input = Tensor::construct(input_vector, vec![1, 4]);
-
-        // Load the model
-        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
-        println!("model: {}", model.pretty_print());
-
-        let pp = AtlasSharedPreprocessing::preprocess(model);
-        let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
-        let timing = Instant::now();
-        let (proof, io, _) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
-            &prover_preprocessing,
-            &input,
-        );
-        println!("Proof generation took {:?}", timing.elapsed());
-
-        let verifier_preprocessing =
-            AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
-        // verify proof
-        proof.verify(&verifier_preprocessing, &io, None).unwrap();
+        prove_and_verify(working_dir, &input, true, true);
     }
 
     #[test]
     fn test_broadcast() {
         let working_dir = "../atlas-onnx-tracer/models/broadcast/";
+        let input = Tensor::construct(vec![1, 2, 3, 4], vec![4]);
 
-        // Create test input vector of size [4]
-        // Using simple values to test broadcasting
-        let input_vector = vec![1, 2, 3, 4];
-
-        let input = Tensor::construct(input_vector, vec![4]);
-
-        // Load the model
-        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
-        println!("model: {}", model.pretty_print());
-
-        let pp = AtlasSharedPreprocessing::preprocess(model);
-        let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
-        let timing = Instant::now();
-        let (proof, io, _) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
-            &prover_preprocessing,
-            &input,
-        );
-        println!("Proof generation took {:?}", timing.elapsed());
-
-        let verifier_preprocessing =
-            AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
-        // verify proof
-        proof.verify(&verifier_preprocessing, &io, None).unwrap();
+        let io = prove_and_verify(working_dir, &input, true, true);
 
         // Print output for verification
         println!("Output shape: {:?}", io.outputs[0].dims());
@@ -692,149 +633,58 @@ mod tests {
     #[test]
     fn test_reshape() {
         let working_dir = "../atlas-onnx-tracer/models/reshape/";
+        let input = Tensor::construct(vec![1, 2, 3, 4], vec![4]);
 
-        // Create test input vector of size [4]
-        // Using simple values to test reshaping
-        let input_vector = vec![1, 2, 3, 4];
+        let io = prove_and_verify(working_dir, &input, true, true);
 
-        let input = Tensor::construct(input_vector, vec![4]);
-
-        // Load the model
-        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
-        println!("model: {}", model.pretty_print());
-
-        let pp = AtlasSharedPreprocessing::preprocess(model);
-        let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
-        let timing = Instant::now();
-        let (proof, io, _) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
-            &prover_preprocessing,
-            &input,
-        );
-        println!("Proof generation took {:?}", timing.elapsed());
-
-        let verifier_preprocessing =
-            AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
-        // verify proof
-        proof.verify(&verifier_preprocessing, &io, None).unwrap();
-
-        // Print output for verification
         println!("Output shape: {:?}", io.outputs[0].dims());
     }
 
     #[test]
     fn test_moveaxis() {
         let working_dir = "../atlas-onnx-tracer/models/moveaxis/";
-
-        // Create test input vector of size [2, 4, 8]
-        // Using simple values to test moveaxis
         let input_vector: Vec<i32> = (1..=64).collect();
-
         let input = Tensor::construct(input_vector, vec![2, 4, 8]);
-        // Load the model
-        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
-        println!("model: {}", model.pretty_print());
 
-        let pp = AtlasSharedPreprocessing::preprocess(model);
-        let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
-        let timing = Instant::now();
-        let (proof, io, _) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
-            &prover_preprocessing,
-            &input,
-        );
-        println!("Proof generation took {:?}", timing.elapsed());
+        let io = prove_and_verify(working_dir, &input, true, true);
 
-        let verifier_preprocessing =
-            AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
-        // verify proof
-        proof.verify(&verifier_preprocessing, &io, None).unwrap();
-
-        // Print output for verification
         println!("Output shape: {:?}", io.outputs[0].dims());
     }
 
     #[test]
     fn test_gather() {
         let working_dir = "../atlas-onnx-tracer/models/gather/";
+        // Input values in [0, 8)
+        let input = Tensor::construct(vec![0, 2, 4, 6], vec![4]);
 
-        // Create test input vector of size [4]
-        //with values in [0, 8)
-        let input_vector = vec![0, 2, 4, 6];
-
-        let input = Tensor::construct(input_vector, vec![4]);
-        // Load the model
-        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
-        println!("model: {}", model.pretty_print());
-
-        let pp = AtlasSharedPreprocessing::preprocess(model);
-        let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
-        let (proof, io, _) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
-            &prover_preprocessing,
-            &input,
-        );
-
-        // verify proof
-        let verifier_preprocessing =
-            AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
-        proof.verify(&verifier_preprocessing, &io, None).unwrap();
+        prove_and_verify(working_dir, &input, true, false);
     }
 
     #[test]
     fn test_mlp_square() {
-        // Create test input vector [1, 4]
-        // Using simple values for testing
+        let working_dir = "../atlas-onnx-tracer/models/mlp_square/";
         let input_vector = vec![
             (70.0 * SCALE as f32) as i32,
             (71.0 * SCALE as f32) as i32,
             (72.0 * SCALE as f32) as i32,
             (73.0 * SCALE as f32) as i32,
         ];
-        let working_dir = "../atlas-onnx-tracer/models/mlp_square/";
-
         let input = Tensor::new(Some(&input_vector), &[1, 4]).unwrap();
 
-        // Load the model
-        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
-
-        let pp = AtlasSharedPreprocessing::preprocess(model);
-        let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
-        let (proof, io, _) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
-            &prover_preprocessing,
-            &input,
-        );
-
-        let verifier_preprocessing =
-            AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
-        // verify proof
-        proof.verify(&verifier_preprocessing, &io, None).unwrap();
+        prove_and_verify(working_dir, &input, false, false);
     }
 
     #[test]
     fn test_mlp_square_4layer() {
-        // Create test input vector [1, 4]
-        // Using simple values for testing
+        let working_dir = "../atlas-onnx-tracer/models/mlp_square_4layer/";
         let input_vector = vec![
             (1.0 * SCALE as f32) as i32,
             (2.0 * SCALE as f32) as i32,
             (3.0 * SCALE as f32) as i32,
             (4.0 * SCALE as f32) as i32,
         ];
-        let working_dir = "../atlas-onnx-tracer/models/mlp_square_4layer/";
-
         let input = Tensor::new(Some(&input_vector), &[1, 4]).unwrap();
 
-        // Load the model
-        let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
-
-        let pp = AtlasSharedPreprocessing::preprocess(model);
-        let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
-        let (proof, io, _) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
-            &prover_preprocessing,
-            &input,
-        );
-
-        let verifier_preprocessing =
-            AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
-        // verify proof
-        proof.verify(&verifier_preprocessing, &io, None).unwrap();
+        prove_and_verify(working_dir, &input, false, false);
     }
 }

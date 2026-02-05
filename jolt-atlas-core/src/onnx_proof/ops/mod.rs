@@ -5,6 +5,7 @@ pub mod constant;
 pub mod cube;
 pub mod div;
 pub mod einsum;
+pub mod gather;
 pub mod iff;
 pub mod input;
 pub mod moveaxis;
@@ -77,6 +78,7 @@ impl OperatorProver {
             Operator::Cube(inner) => inner.prove(node, prover),
             Operator::Div(inner) => inner.prove(node, prover),
             Operator::Einsum(inner) => inner.prove(node, prover),
+            Operator::Gather(inner) => inner.prove(node, prover),
             Operator::Iff(inner) => inner.prove(node, prover),
             Operator::Input(inner) => inner.prove(node, prover),
             Operator::MoveAxis(inner) => inner.prove(node, prover),
@@ -113,6 +115,7 @@ impl OperatorVerifier {
             Operator::Cube(inner) => inner.verify(node, verifier),
             Operator::Div(inner) => inner.verify(node, verifier),
             Operator::Einsum(inner) => inner.verify(node, verifier),
+            Operator::Gather(inner) => inner.verify(node, verifier),
             Operator::Iff(inner) => inner.verify(node, verifier),
             Operator::Input(inner) => inner.verify(node, verifier),
             Operator::MoveAxis(inner) => inner.verify(node, verifier),

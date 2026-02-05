@@ -218,7 +218,7 @@ mod tests {
         let T = 1 << log_T;
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let mut prover_accumulator = ProverOpeningAccumulator::new(log_T);
+        let mut prover_accumulator = ProverOpeningAccumulator::new();
         let r_cycle: Vec<<Fr as JoltField>::Challenge> =
             prover_transcript.challenge_vector_optimized::<Fr>(log_T);
 
@@ -239,7 +239,7 @@ mod tests {
             Sumcheck::prove(&mut prover, &mut prover_accumulator, &mut prover_transcript);
 
         let mut verifier_transcript = Blake2bTranscript::default();
-        let mut verifier_accumulator = VerifierOpeningAccumulator::new(log_T);
+        let mut verifier_accumulator = VerifierOpeningAccumulator::new();
         let _r_cycle: Vec<<Fr as JoltField>::Challenge> =
             verifier_transcript.challenge_vector_optimized::<Fr>(log_T);
 

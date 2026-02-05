@@ -744,7 +744,7 @@ mod tests {
         let preprocessing: AtlasSharedPreprocessing =
             AtlasSharedPreprocessing::preprocess(model.clone());
         let prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-            ProverOpeningAccumulator::new(log_T);
+            ProverOpeningAccumulator::new();
         let mut prover = Prover {
             trace: trace.clone(),
             accumulator: prover_opening_accumulator,
@@ -774,7 +774,7 @@ mod tests {
 
         let verifier_transcript = Blake2bTranscript::new(&[]);
         let verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-            VerifierOpeningAccumulator::new(log_T);
+            VerifierOpeningAccumulator::new();
 
         let proofs = Gather { dim: 0 }.prove(computation_node, &mut prover);
         let proofs = BTreeMap::from_iter(proofs);

@@ -766,11 +766,16 @@ mod tests {
         println!("model: {}", model.pretty_print());
 
         let pp = AtlasSharedPreprocessing::preprocess(model);
-        let (proof, io) =
-            ONNXProof::<Fr, Blake2bTranscript, DoryCommitmentScheme>::prove(&pp, &input);
+        let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+        let (proof, io, _) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
+            &prover_preprocessing,
+            &input,
+        );
 
         // verify proof
-        proof.verify(&pp, &io).unwrap();
+        let verifier_preprocessing =
+            AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
+        proof.verify(&verifier_preprocessing, &io, None).unwrap();
     }
 
     #[test]

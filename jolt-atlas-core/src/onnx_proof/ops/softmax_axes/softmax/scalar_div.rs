@@ -23,7 +23,7 @@ use joltworks::{
 // TODO: Commit to R and also prove R is well formed
 
 const DEGREE_BOUND: usize = 2;
-const S: usize = 128;
+pub const S: usize = 128;
 
 #[derive(Clone)]
 pub struct DivParams<F: JoltField> {
@@ -288,10 +288,10 @@ mod tests {
 
         let prover_transcript = &mut Blake2bTranscript::new(&[]);
         let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-            ProverOpeningAccumulator::new(N);
+            ProverOpeningAccumulator::new();
         let verifier_transcript = &mut Blake2bTranscript::new(&[]);
         let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-            VerifierOpeningAccumulator::new(N);
+            VerifierOpeningAccumulator::new();
 
         let _r_feature_output: Vec<<Fr as JoltField>::Challenge> =
             prover_transcript.challenge_vector_optimized::<Fr>(n);

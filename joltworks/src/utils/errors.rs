@@ -32,4 +32,6 @@ pub enum ProofVerifyError {
     UniSkipVerificationError,
     #[error("Missing proof for node {0}")]
     MissingProof(usize),
+    #[error("Missing reduction proof")]
+    MissingReductionProof,
 }

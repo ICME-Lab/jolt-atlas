@@ -245,10 +245,10 @@ mod tests {
 
             let prover_transcript = &mut Blake2bTranscript::new(&[]);
             let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-                ProverOpeningAccumulator::new(max_vars);
+                ProverOpeningAccumulator::new();
             let verifier_transcript = &mut Blake2bTranscript::new(&[]);
             let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-                VerifierOpeningAccumulator::new(max_vars);
+                VerifierOpeningAccumulator::new();
 
             let r_node_output: Vec<<Fr as JoltField>::Challenge> =
                 prover_transcript.challenge_vector_optimized::<Fr>(max_vars);

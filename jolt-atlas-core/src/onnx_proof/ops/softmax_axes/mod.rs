@@ -48,7 +48,7 @@ use atlas_onnx_tracer::{
     ops::SoftmaxAxes,
     tensor::{ops::nonlinearities::softmax_fixed_128, Tensor},
 };
-use common::VirtualPolynomial;
+use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
     poly::{
@@ -106,6 +106,30 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxAxes {
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )
+    }
+
+    fn get_committed_polynomials(
+        &self,
+        _node: &ComputationNode,
+    ) -> Vec<common::CommittedPolynomial> {
+        let mut polys = vec![];
+        let [num_heads, seq_len, _] = _node.output_dims[..] else {
+            panic!(
+                "Expected output_dims to have exactly three elements: [num_heads, seq_len, features]"
+            )
+        };
+        let num_heads_seq_len = num_heads * seq_len;
+        for feature_idx in 0..num_heads_seq_len {
+            polys.push(CommittedPolynomial::SoftmaxRemainder(
+                _node.idx,
+                feature_idx,
+            ));
+            polys.push(CommittedPolynomial::SoftmaxExponentiationRa(
+                _node.idx,
+                feature_idx,
+            ));
+        }
+        polys
     }
 }
 
@@ -762,10 +786,10 @@ mod tests {
 
         let prover_transcript = &mut Blake2bTranscript::new(&[]);
         let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-            ProverOpeningAccumulator::new(log_T);
+            ProverOpeningAccumulator::new();
         let verifier_transcript = &mut Blake2bTranscript::new(&[]);
         let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-            VerifierOpeningAccumulator::new(log_T);
+            VerifierOpeningAccumulator::new();
 
         let r_node_output: Vec<<Fr as JoltField>::Challenge> =
             prover_transcript.challenge_vector_optimized::<Fr>(log_T);

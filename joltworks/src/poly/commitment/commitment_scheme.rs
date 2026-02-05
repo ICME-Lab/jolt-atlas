@@ -1,11 +1,10 @@
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use std::borrow::Borrow;
-use std::fmt::Debug;
+use std::{borrow::Borrow, fmt::Debug};
 
-use crate::transcripts::{AppendToTranscript, Transcript};
 use crate::{
     field::JoltField,
     poly::multilinear_polynomial::MultilinearPolynomial,
+    transcripts::{AppendToTranscript, Transcript},
     utils::{errors::ProofVerifyError, small_scalar::SmallScalar},
 };
 
@@ -28,6 +27,10 @@ pub trait CommitmentScheme: Clone + Sync + Send + 'static {
     /// the commitment computation, e.g. for Dory the Pedersen commitments to the rows can be
     /// used as a hint for the opening proof.
     type OpeningProofHint: Sync + Send + Clone + Debug + PartialEq;
+
+    /// Whether this PCS requires materialized (dense) polynomials for opening proofs.
+    /// If true, use `build_materialized_rlc`; if false, use `build_streaming_rlc`.
+    const REQUIRES_MATERIALIZED_POLYS: bool = false;
 
     /// Generates the prover setup for this PCS. `max_num_vars` is the maximum number of
     /// variables of any polynomial that will be committed using this setup.

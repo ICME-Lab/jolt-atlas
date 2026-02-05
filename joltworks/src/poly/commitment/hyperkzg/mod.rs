@@ -8,34 +8,37 @@
 //! This means that Spartan's polynomial IOP can use commit to its polynomials as-is without incurring any interpolations or FFTs.
 //! (2) HyperKZG is specialized to use KZG as the univariate commitment scheme, so it includes several optimizations (both during the transformation of multilinear-to-univariate claims
 //! and within the KZG commitment scheme implementation itself).
-use super::{
-    commitment_scheme::CommitmentScheme,
-    kzg::{KZGProverKey, KZGVerifierKey, UnivariateKZG},
-};
+
 use crate::{
     field::JoltField,
     msm::VariableBaseMSM,
     poly::{
-        commitment::kzg::SRS,
-        dense_mlpoly::DensePolynomial,
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        rlc_polynomial::RLCPolynomial,
-        unipoly::UniPoly,
+        dense_mlpoly::DensePolynomial, multilinear_polynomial::MultilinearPolynomial,
+        one_hot_polynomial::OneHotPolynomial, unipoly::UniPoly,
     },
     transcripts::{AppendToTranscript, Transcript},
-    utils::{errors::ProofVerifyError, small_scalar::SmallScalar},
+    utils::errors::ProofVerifyError,
 };
-use ark_ec::{pairing::Pairing, AffineRepr, CurveGroup};
+use ark_ec::{pairing::Pairing, AffineRepr};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{One, Zero};
-use common::CommittedPolynomial;
-use rand_chacha::ChaCha20Rng;
-use rand_core::{CryptoRng, RngCore, SeedableRng};
+use kzg::{KZGProverKey, KZGVerifierKey, UnivariateKZG, SRS};
+use rand_core::{CryptoRng, RngCore};
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
     IntoParallelRefMutIterator, ParallelIterator,
 };
-use std::{borrow::Borrow, marker::PhantomData, sync::Arc};
+use std::{
+    io::{Read as IoRead, Write as IoWrite},
+    marker::PhantomData,
+    path::Path,
+    sync::Arc,
+};
+
+pub mod commitment_scheme;
+pub mod kzg;
+#[cfg(test)]
+pub mod tests;
 
 pub struct HyperKZGSRS<P: Pairing>(Arc<SRS<P>>);
 
@@ -50,6 +53,49 @@ impl<P: Pairing> HyperKZGSRS<P> {
     pub fn trim(self, max_degree: usize) -> (HyperKZGProverKey<P>, HyperKZGVerifierKey<P>) {
         let (kzg_pk, kzg_vk) = SRS::trim(self.0, max_degree);
         (HyperKZGProverKey { kzg_pk }, HyperKZGVerifierKey { kzg_vk })
+    }
+
+    /// Load SRS from a file using compressed serialization.
+    pub fn load_from_file<Pth: AsRef<Path>>(
+        path: Pth,
+    ) -> Result<Self, ark_serialize::SerializationError> {
+        let file = std::fs::File::open(path)?;
+        let reader = std::io::BufReader::new(file);
+        let srs = SRS::<P>::deserialize_compressed(reader)?;
+        Ok(Self(Arc::new(srs)))
+    }
+
+    /// Save SRS to a file using compressed serialization.
+    pub fn save_to_file<Pth: AsRef<Path>>(
+        &self,
+        path: Pth,
+    ) -> Result<(), ark_serialize::SerializationError> {
+        let file = std::fs::File::create(path)?;
+        let writer = std::io::BufWriter::new(file);
+        self.0.serialize_compressed(writer)?;
+        Ok(())
+    }
+
+    /// Load SRS from a reader using compressed serialization.
+    pub fn load_from_reader<R: IoRead>(
+        reader: R,
+    ) -> Result<Self, ark_serialize::SerializationError> {
+        let srs = SRS::<P>::deserialize_compressed(reader)?;
+        Ok(Self(Arc::new(srs)))
+    }
+
+    /// Save SRS to a writer using compressed serialization.
+    pub fn save_to_writer<W: IoWrite>(
+        &self,
+        writer: W,
+    ) -> Result<(), ark_serialize::SerializationError> {
+        self.0.serialize_compressed(writer)?;
+        Ok(())
+    }
+
+    /// Get the maximum degree this SRS supports.
+    pub fn max_degree(&self) -> usize {
+        self.0.g1_powers.len().saturating_sub(1)
     }
 }
 
@@ -166,17 +212,7 @@ where
     let f_arc: Vec<Arc<MultilinearPolynomial<P::ScalarField>>> =
         f.iter().map(|poly| Arc::new(poly.clone())).collect();
 
-    // HyperKZG is not currently used in Jolt, but we handle both dense-only and mixed cases
-    let has_one_hot = f_arc
-        .iter()
-        .any(|poly| matches!(poly.as_ref(), MultilinearPolynomial::OneHot(_)));
-
-    let B = if has_one_hot {
-        // Use RLCPolynomial::linear_combination for mixed dense + one-hot polynomials
-        let dummy_poly_ids = vec![CommittedPolynomial::NodeOutputRaD(0, 0); f_arc.len()];
-        let rlc_result = RLCPolynomial::linear_combination(dummy_poly_ids, f_arc, &q_powers);
-        MultilinearPolynomial::RLC(rlc_result)
-    } else {
+    let B = {
         let poly_refs: Vec<&MultilinearPolynomial<P::ScalarField>> =
             f_arc.iter().map(|arc| arc.as_ref()).collect();
         let dense_result = DensePolynomial::linear_combination(&poly_refs, &q_powers);
@@ -290,19 +326,22 @@ where
         b"HyperKZG"
     }
 
-    pub fn commit(
-        pp: &HyperKZGProverKey<P>,
-        poly: &MultilinearPolynomial<P::ScalarField>,
-    ) -> Result<HyperKZGCommitment<P>, ProofVerifyError> {
-        if pp.kzg_pk.g1_powers().len() < poly.len() {
-            return Err(ProofVerifyError::KeyLengthError(
-                pp.kzg_pk.g1_powers().len(),
-                poly.len(),
-            ));
-        }
-        Ok(HyperKZGCommitment(UnivariateKZG::commit_as_univariate(
-            &pp.kzg_pk, poly,
-        )?))
+    /// Setup prover key from a file containing the SRS.
+    pub fn setup_prover_from_file<Pth: AsRef<Path>>(
+        path: Pth,
+        max_degree: usize,
+    ) -> Result<HyperKZGProverKey<P>, ark_serialize::SerializationError> {
+        let srs = HyperKZGSRS::load_from_file(path)?;
+        Ok(srs.trim(max_degree).0)
+    }
+
+    /// Setup prover key from a reader containing the SRS.
+    pub fn setup_prover_from_reader<R: IoRead>(
+        reader: R,
+        max_degree: usize,
+    ) -> Result<HyperKZGProverKey<P>, ark_serialize::SerializationError> {
+        let srs = HyperKZGSRS::load_from_reader(reader)?;
+        Ok(srs.trim(max_degree).0)
     }
 
     #[tracing::instrument(skip_all, name = "HyperKZG::open")]
@@ -310,7 +349,6 @@ where
         pk: &HyperKZGProverKey<P>,
         poly: &MultilinearPolynomial<P::ScalarField>,
         point: &[<P::ScalarField as JoltField>::Challenge],
-        _eval: &P::ScalarField,
         transcript: &mut ProofTranscript,
     ) -> Result<HyperKZGProof<P>, ProofVerifyError> {
         let ell = point.len();
@@ -354,7 +392,8 @@ where
     }
 
     /// A method to verify purported evaluations of a batch of polynomials
-    pub fn verify<ProofTranscript: Transcript>(
+    #[tracing::instrument(skip_all, name = "HyperKZG::verify")]
+    pub fn verify_inner<ProofTranscript: Transcript>(
         vk: &HyperKZGVerifierKey<P>,
         C: &HyperKZGCommitment<P>,
         point: &[<P::ScalarField as JoltField>::Challenge],
@@ -415,291 +454,89 @@ where
     }
 }
 
-impl<P: Pairing> CommitmentScheme for HyperKZG<P>
-where
-    <P as Pairing>::ScalarField: JoltField,
-{
-    type Field = P::ScalarField;
-    type ProverSetup = HyperKZGProverKey<P>;
-    type VerifierSetup = HyperKZGVerifierKey<P>;
+/// Specialized implementation for BN254 that provides optimized sparse OneHot commitment.
+impl HyperKZG<ark_bn254::Bn254> {
+    /// Commit to a OneHotPolynomial without materializing the dense representation.
+    /// This exploits the sparsity of OneHot polynomials (only T nonzero coefficients
+    /// out of K*T total) by performing T point additions instead of a full MSM.
+    ///
+    /// The polynomial layout is: coefficient at index `k * T + t` is 1 if `nonzero_indices[t] == Some(k)`.
+    #[tracing::instrument(skip_all, name = "HyperKZG::commit_one_hot")]
+    pub fn commit_one_hot(
+        pk: &HyperKZGProverKey<ark_bn254::Bn254>,
+        poly: &OneHotPolynomial<ark_bn254::Fr>,
+    ) -> Result<HyperKZGCommitment<ark_bn254::Bn254>, ProofVerifyError> {
+        let T = poly.nonzero_indices.len();
+        let K = poly.K;
+        let required_size = K * T;
 
-    type Commitment = HyperKZGCommitment<P>;
-    type Proof = HyperKZGProof<P>;
-    type BatchedProof = HyperKZGProof<P>;
-    type OpeningProofHint = ();
-
-    fn setup_prover(max_num_vars: usize) -> Self::ProverSetup {
-        HyperKZGSRS(Arc::new(SRS::setup(
-            &mut ChaCha20Rng::from_seed(*b"HyperKZG_POLY_COMMITMENT_SCHEMEE"),
-            1 << max_num_vars,
-            2,
-        )))
-        .trim(1 << max_num_vars)
-        .0
-    }
-
-    fn setup_verifier(setup: &Self::ProverSetup) -> Self::VerifierSetup {
-        HyperKZGVerifierKey {
-            kzg_vk: KZGVerifierKey::from(&setup.kzg_pk),
+        if pk.kzg_pk.g1_powers().len() < required_size {
+            return Err(ProofVerifyError::KeyLengthError(
+                pk.kzg_pk.g1_powers().len(),
+                required_size,
+            ));
         }
-    }
 
-    #[tracing::instrument(skip_all, name = "HyperKZG::commit")]
-    fn commit(
-        poly: &MultilinearPolynomial<Self::Field>,
-        setup: &Self::ProverSetup,
-    ) -> (Self::Commitment, Self::OpeningProofHint) {
-        assert!(
-            setup.kzg_pk.g1_powers().len() >= poly.len(),
-            "COMMIT KEY LENGTH ERROR {}, {}",
-            setup.kzg_pk.g1_powers().len(),
-            poly.len()
-        );
-        let commitment =
-            HyperKZGCommitment(UnivariateKZG::commit_as_univariate(&setup.kzg_pk, poly).unwrap());
-        (commitment, ())
-    }
-
-    #[tracing::instrument(skip_all, name = "HyperKZG::batch_commit")]
-    fn batch_commit<U>(
-        polys: &[U],
-        gens: &Self::ProverSetup,
-    ) -> Vec<(Self::Commitment, Self::OpeningProofHint)>
-    where
-        U: Borrow<MultilinearPolynomial<Self::Field>> + Sync,
-    {
-        UnivariateKZG::commit_batch(&gens.kzg_pk, polys)
-            .unwrap()
-            .into_par_iter()
-            .map(|c| (HyperKZGCommitment(c), ()))
-            .collect()
-    }
-
-    fn combine_commitments<C: Borrow<Self::Commitment>>(
-        commitments: &[C],
-        coeffs: &[Self::Field],
-    ) -> Self::Commitment {
-        let combined_commitment: P::G1 = commitments
+        // Collect all indices where the coefficient is 1
+        // Index formula: k * T + t (where k is the address at timestep t)
+        let indices: Vec<usize> = poly
+            .nonzero_indices
             .iter()
-            .zip(coeffs.iter())
-            .map(|(commitment, coeff)| commitment.borrow().0 * coeff)
-            .sum();
-        HyperKZGCommitment(combined_commitment.into_affine())
-    }
+            .enumerate()
+            .filter_map(|(t, k)| k.map(|k| k as usize * T + t))
+            .collect();
 
-    fn prove<ProofTranscript: Transcript>(
-        setup: &Self::ProverSetup,
-        poly: &MultilinearPolynomial<Self::Field>,
-        opening_point: &[<Self::Field as JoltField>::Challenge], // point at which the polynomial is evaluated
-        _hint: Option<Self::OpeningProofHint>,
-        transcript: &mut ProofTranscript,
-    ) -> Self::Proof {
-        let eval = poly.evaluate(opening_point);
-        HyperKZG::<P>::open(setup, poly, opening_point, &eval, transcript).unwrap()
-    }
-
-    fn verify<ProofTranscript: Transcript>(
-        proof: &Self::Proof,
-        setup: &Self::VerifierSetup,
-        transcript: &mut ProofTranscript,
-        opening_point: &[<Self::Field as JoltField>::Challenge], // point at which the polynomial is evaluated
-        opening: &Self::Field,                                   // evaluation \widetilde{Z}(r)
-        commitment: &Self::Commitment,
-    ) -> Result<(), ProofVerifyError> {
-        HyperKZG::<P>::verify(setup, commitment, opening_point, opening, proof, transcript)
-    }
-
-    fn protocol_name() -> &'static [u8] {
-        b"hyperkzg"
-    }
-}
-
-impl<P: Pairing> super::commitment_scheme::StreamingCommitmentScheme for HyperKZG<P>
-where
-    <P as Pairing>::ScalarField: JoltField,
-{
-    type ChunkState = ();
-
-    fn process_chunk<T: SmallScalar>(_setup: &Self::ProverSetup, _chunk: &[T]) -> Self::ChunkState {
-    }
-
-    fn process_chunk_onehot(
-        _setup: &Self::ProverSetup,
-        _onehot_k: usize,
-        _chunk: &[Option<usize>],
-    ) -> Self::ChunkState {
-    }
-
-    fn aggregate_chunks(
-        _setup: &Self::ProverSetup,
-        _onehot_k: Option<usize>,
-        _tier1_commitments: &[Self::ChunkState],
-    ) -> (Self::Commitment, Self::OpeningProofHint) {
-        unimplemented!("HyperKZG does not support streaming commitment")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::transcripts::{Blake2bTranscript, Transcript};
-    use ark_bn254::Bn254;
-    use ark_std::UniformRand;
-    use rand::Rng;
-    use rand_core::SeedableRng;
-
-    //#[test]
-    //fn test_hyperkzg_eval() {
-    //    // Test with poly(X1, X2) = 1 + X1 + X2 + X1*X2
-    //    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
-    //    let srs = HyperKZGSRS::setup(&mut rng, 3);
-    //    let (pk, vk): (HyperKZGProverKey<Bn254>, HyperKZGVerifierKey<Bn254>) = srs.trim(3);
-    //
-    //    // poly is in eval. representation; evaluated at [(0,0), (0,1), (1,0), (1,1)]
-    //    let poly =
-    //        MultilinearPolynomial::from(vec![Fr::from(1), Fr::from(2), Fr::from(2), Fr::from(4)]);
-    //
-    //    let C = HyperKZG::commit(&pk, &poly).unwrap();
-    //
-    //    let test_inner =
-    //        |point: Vec<MontU128Challenge<Fr>>, eval: Fr| -> Result<(), ProofVerifyError> {
-    //            let mut tr = Blake2bTranscript::new(b"TestEval");
-    //            let proof = HyperKZG::open(&pk, &poly, &point, &eval, &mut tr).unwrap();
-    //            let mut tr = Blake2bTranscript::new(b"TestEval");
-    //            HyperKZG::verify(&vk, &C, &point, &eval, &proof, &mut tr)
-    //        };
-    //
-    //    // Call the prover with a (point, eval) pair.
-    //    // The prover does not recompute so it may produce a proof, but it should not verify
-    //    let point = vec![Fr::from(0), Fr::from(0)];
-    //    let eval = Fr::from(1);
-    //    assert!(test_inner(point, eval).is_ok());
-    //
-    //    let point = vec![Fr::from(0), Fr::from(1)];
-    //    let eval = Fr::from(2);
-    //    assert!(test_inner(point, eval).is_ok());
-    //
-    //    let point = vec![Fr::from(1), Fr::from(1)];
-    //    let eval = Fr::from(4);
-    //    assert!(test_inner(point, eval).is_ok());
-    //
-    //    let point = vec![Fr::from(0), Fr::from(2)];
-    //    let eval = Fr::from(3);
-    //    assert!(test_inner(point, eval).is_ok());
-    //
-    //    let point = vec![Fr::from(2), Fr::from(2)];
-    //    let eval = Fr::from(9);
-    //    assert!(test_inner(point, eval).is_ok());
-    //
-    //    // Try a couple incorrect evaluations and expect failure
-    //    let point = vec![Fr::from(2), Fr::from(2)];
-    //    let eval = Fr::from(50);
-    //    assert!(test_inner(point, eval).is_err());
-    //
-    //    let point = vec![Fr::from(0), Fr::from(2)];
-    //    let eval = Fr::from(4);
-    //    assert!(test_inner(point, eval).is_err());
-    //}
-
-    // THIS test does not make sense for MontU128Challenge
-    //#[test]
-    //fn test_hyperkzg_small() {
-    //    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
-    //
-    //    // poly = [1, 2, 1, 4]
-    //    let poly =
-    //        MultilinearPolynomial::from(vec![Fr::from(1), Fr::from(2), Fr::from(1), Fr::from(4)]);
-    //
-    //    // point = [4,3]
-    //    let point = vec![Fr::from(4), Fr::from(3)];
-    //
-    //    // eval = 28
-    //    let eval = Fr::from(28);
-    //
-    //    let srs = HyperKZGSRS::setup(&mut rng, 3);
-    //    let (pk, vk): (HyperKZGProverKey<Bn254>, HyperKZGVerifierKey<Bn254>) = srs.trim(3);
-    //
-    //    // make a commitment
-    //    let C = HyperKZG::commit(&pk, &poly).unwrap();
-    //
-    //    // prove an evaluation
-    //    let mut tr = Blake2bTranscript::new(b"TestEval");
-    //    let proof = HyperKZG::open(&pk, &poly, &point, &eval, &mut tr).unwrap();
-    //    let post_c_p = tr.challenge_scalar::<Fr>();
-    //
-    //    // verify the evaluation
-    //    let mut verifier_transcript = Blake2bTranscript::new(b"TestEval");
-    //    assert!(
-    //        HyperKZG::verify(&vk, &C, &point, &eval, &proof, &mut verifier_transcript,).is_ok()
-    //    );
-    //    let post_c_v = verifier_transcript.challenge_scalar::<Fr>();
-    //
-    //    // check if the prover transcript and verifier transcript are kept in the same state
-    //    assert_eq!(post_c_p, post_c_v);
-    //
-    //    let mut proof_bytes = Vec::new();
-    //    proof.serialize_compressed(&mut proof_bytes).unwrap();
-    //    assert_eq!(proof_bytes.len(), 368);
-    //
-    //    // Change the proof and expect verification to fail
-    //    let mut bad_proof = proof.clone();
-    //    let v1 = bad_proof.v[1].clone();
-    //    bad_proof.v[0].clone_from(&v1);
-    //    let mut verifier_transcript2 = Blake2bTranscript::new(b"TestEval");
-    //    assert!(HyperKZG::verify(
-    //        &vk,
-    //        &C,
-    //        &point,
-    //        &eval,
-    //        &bad_proof,
-    //        &mut verifier_transcript2
-    //    )
-    //    .is_err());
-    //}
-    #[test]
-    fn test_hyperkzg_large() {
-        // test the hyperkzg prover and verifier with random instances (derived from a seed)
-        for ell in [8, 9, 10] {
-            let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(ell as u64);
-
-            let n = 1 << ell; // n = 2^ell
-
-            let poly_raw = (0..n)
-                .map(|_| <Bn254 as Pairing>::ScalarField::rand(&mut rng))
-                .collect::<Vec<_>>();
-            let poly = MultilinearPolynomial::from(poly_raw.clone());
-            let point = (0..ell)
-                .map(|_| {
-                    <<Bn254 as Pairing>::ScalarField as JoltField>::Challenge::from(
-                        rng.gen::<u128>(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            let eval = poly.evaluate(&point);
-
-            let srs = HyperKZGSRS::setup(&mut rng, n);
-            let (pk, vk): (HyperKZGProverKey<Bn254>, HyperKZGVerifierKey<Bn254>) = srs.trim(n);
-
-            // make a commitment
-            let C = HyperKZG::commit(&pk, &poly).unwrap();
-
-            // prove an evaluation
-            let mut prover_transcript = Blake2bTranscript::new(b"TestEval");
-            let proof: HyperKZGProof<Bn254> =
-                HyperKZG::open(&pk, &poly, &point, &eval, &mut prover_transcript).unwrap();
-
-            // verify the evaluation
-            let mut verifier_tr = Blake2bTranscript::new(b"TestEval");
-            assert!(HyperKZG::verify(&vk, &C, &point, &eval, &proof, &mut verifier_tr,).is_ok());
-
-            // Change the proof and expect verification to fail
-            let mut bad_proof = proof.clone();
-            let v1 = bad_proof.v[1].clone();
-            bad_proof.v[0].clone_from(&v1);
-            let mut verifier_tr2 = Blake2bTranscript::new(b"TestEval");
-            assert!(
-                HyperKZG::verify(&vk, &C, &point, &eval, &bad_proof, &mut verifier_tr2,).is_err()
-            );
+        if indices.is_empty() {
+            return Ok(HyperKZGCommitment(ark_bn254::G1Affine::zero()));
         }
+
+        // Use optimized batch point addition (all coefficients are 1)
+        let g1_bases = pk.kzg_pk.g1_powers();
+        let indices_slice = [indices];
+        let results = jolt_optimizations::batch_g1_additions_multi(g1_bases, &indices_slice);
+
+        Ok(HyperKZGCommitment(results[0]))
+    }
+
+    /// Batch commit to multiple OneHotPolynomials efficiently.
+    #[tracing::instrument(skip_all, name = "HyperKZG::batch_commit_one_hot")]
+    pub fn batch_commit_one_hot(
+        pk: &HyperKZGProverKey<ark_bn254::Bn254>,
+        polys: &[OneHotPolynomial<ark_bn254::Fr>],
+    ) -> Result<Vec<HyperKZGCommitment<ark_bn254::Bn254>>, ProofVerifyError> {
+        if polys.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Verify SRS is large enough for all polynomials
+        let max_required = polys
+            .iter()
+            .map(|p| p.K * p.nonzero_indices.len())
+            .max()
+            .unwrap_or(0);
+        if pk.kzg_pk.g1_powers().len() < max_required {
+            return Err(ProofVerifyError::KeyLengthError(
+                pk.kzg_pk.g1_powers().len(),
+                max_required,
+            ));
+        }
+
+        // Collect indices for all polynomials
+        let all_indices: Vec<Vec<usize>> = polys
+            .iter()
+            .map(|poly| {
+                let T = poly.nonzero_indices.len();
+                poly.nonzero_indices
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(t, k)| k.map(|k| k as usize * T + t))
+                    .collect()
+            })
+            .collect();
+
+        let g1_bases = pk.kzg_pk.g1_powers();
+        let results = jolt_optimizations::batch_g1_additions_multi(g1_bases, &all_indices);
+
+        Ok(results.into_iter().map(HyperKZGCommitment).collect())
     }
 }

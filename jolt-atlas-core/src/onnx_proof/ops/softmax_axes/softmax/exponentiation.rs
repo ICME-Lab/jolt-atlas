@@ -607,11 +607,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for BooleanityPro
         let (r_address, r_node_output) = sumcheck_challenges.split_at(self.params.log_K());
         accumulator.append_sparse(
             transcript,
-            vec![CommittedPolynomial::SoftmaxExponentiationRa2(
+            vec![CommittedPolynomial::SoftmaxExponentiationRa(
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             )],
-            SumcheckId::Execution,
+            SumcheckId::Booleanity,
             r_address.to_vec(),
             r_node_output.to_vec(),
             vec![self.H.as_ref().unwrap().final_sumcheck_claim()],
@@ -646,11 +646,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BooleanityV
     ) -> F {
         let ra_claim = accumulator
             .get_committed_polynomial_opening(
-                CommittedPolynomial::SoftmaxExponentiationRa2(
+                CommittedPolynomial::SoftmaxExponentiationRa(
                     self.params.softmax_index.node_idx,
                     self.params.softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::Booleanity,
             )
             .1;
         EqPolynomial::mle(
@@ -674,11 +674,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BooleanityV
     ) {
         accumulator.append_sparse(
             transcript,
-            vec![CommittedPolynomial::SoftmaxExponentiationRa2(
+            vec![CommittedPolynomial::SoftmaxExponentiationRa(
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             )],
-            SumcheckId::Execution,
+            SumcheckId::Booleanity,
             sumcheck_challenges.to_vec(),
         );
     }

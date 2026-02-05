@@ -157,6 +157,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Gather {
 
         Ok(())
     }
+
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
+        vec![CommittedPolynomial::GatherRa(node.idx)]
+    }
 }
 
 const DEGREE_BOUND: usize = 2;
@@ -611,7 +615,7 @@ fn ra_booleanity_params<F: JoltField>(
         .unwrap()
         .output_dims[0];
 
-    let polynomial_type = CommittedPolynomial::NodeOutputRaD(computation_node.idx, 0);
+    let polynomial_type = CommittedPolynomial::GatherRa(computation_node.idx);
 
     let r_lookup = opening_accumulator
         .get_virtual_polynomial_opening(
@@ -679,7 +683,7 @@ fn ra_hamming_weight_params<F: JoltField>(
     let dict = graph.nodes.get(&computation_node.inputs[0]).unwrap();
     let num_words = dict.output_dims[0];
 
-    let polynomial_types = vec![CommittedPolynomial::NodeOutputRaD(computation_node.idx, 0)];
+    let polynomial_types = vec![CommittedPolynomial::GatherRa(computation_node.idx)];
 
     let r_lookup = opening_accumulator
         .get_virtual_polynomial_opening(
@@ -744,7 +748,7 @@ mod tests {
         let preprocessing: AtlasSharedPreprocessing =
             AtlasSharedPreprocessing::preprocess(model.clone());
         let prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-            ProverOpeningAccumulator::new(log_T);
+            ProverOpeningAccumulator::new();
         let mut prover = Prover {
             trace: trace.clone(),
             accumulator: prover_opening_accumulator,
@@ -774,7 +778,7 @@ mod tests {
 
         let verifier_transcript = Blake2bTranscript::new(&[]);
         let verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-            VerifierOpeningAccumulator::new(log_T);
+            VerifierOpeningAccumulator::new();
 
         let proofs = Gather { dim: 0 }.prove(computation_node, &mut prover);
         let proofs = BTreeMap::from_iter(proofs);

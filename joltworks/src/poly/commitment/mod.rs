@@ -1,7 +1,5 @@
 pub mod commitment_scheme;
-pub mod dory;
 pub mod hyperkzg;
-pub mod kzg;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-feature"))]
 pub mod mock;

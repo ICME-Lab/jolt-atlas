@@ -1,6 +1,6 @@
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps},
-    poly::{one_hot_polynomial::OneHotPolynomial, rlc_polynomial::RLCPolynomial},
+    poly::one_hot_polynomial::OneHotPolynomial,
     utils::{compute_dotproduct, small_scalar::SmallScalar},
 };
 use allocative::Allocative;
@@ -30,7 +30,6 @@ pub enum MultilinearPolynomial<F: JoltField> {
     I64Scalars(CompactPolynomial<i64, F>),
     I128Scalars(CompactPolynomial<i128, F>),
     S128Scalars(CompactPolynomial<S128, F>),
-    RLC(RLCPolynomial<F>),
     OneHot(OneHotPolynomial<F>),
 }
 
@@ -128,7 +127,7 @@ impl<F: JoltField> MultilinearPolynomial<F> {
             MultilinearPolynomial::I128Scalars(poly) => poly.len(),
             MultilinearPolynomial::U128Scalars(poly) => poly.len(),
             MultilinearPolynomial::S128Scalars(poly) => poly.len(),
-            _ => unimplemented!("Unexpected MultilinearPolynomial variant"),
+            MultilinearPolynomial::OneHot(poly) => poly.K * poly.nonzero_indices.len(),
         }
     }
 
@@ -146,7 +145,6 @@ impl<F: JoltField> MultilinearPolynomial<F> {
             MultilinearPolynomial::U128Scalars(poly) => poly.get_num_vars(),
             MultilinearPolynomial::S128Scalars(poly) => poly.get_num_vars(),
             MultilinearPolynomial::OneHot(poly) => poly.get_num_vars(),
-            _ => unimplemented!("Unexpected MultilinearPolynomial variant"),
         }
     }
 
@@ -312,9 +310,6 @@ impl<F: JoltField> MultilinearPolynomial<F> {
     {
         match self {
             MultilinearPolynomial::LargeScalars(poly) => poly.evaluate_dot_product(r),
-            MultilinearPolynomial::RLC(_) => {
-                unimplemented!("Unexpected RLC polynomial")
-            }
             _ => {
                 let chis = EqPolynomial::evals(r);
                 self.dot_product(&chis)
@@ -834,7 +829,6 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
                 poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
             }
             MultilinearPolynomial::OneHot(poly) => poly.evaluate(r),
-            _ => unimplemented!("Unsupported MultilinearPolynomial variant"),
         }
     }
 

@@ -19,16 +19,18 @@ pub enum CommittedPolynomial {
     SoftmaxRemainder(usize, usize),
     SoftmaxExponentiationRa(usize, usize),
 
-    /// Fields:
-    ///
-    /// `0` - node index
     // One-hot polynomials for Advices
     DivRangeCheckRaD(usize, usize), // Interleaved R and divisor for Div advice
     SqrtDivRangeCheckRaD(usize, usize), // Interleaved R and divisor for Div advice
-    SqrtRangeCheckRaD(usize, usize),    // Interleaved r_s and sqrt for Sqrt advice
-    DivNodeQuotient(usize),             // Advice for `quotient` in Div
-    RsqrtNodeInv(usize),                // Advice for `inv` in Rsqrt
-    RsqrtNodeRsqrt(usize),              // Advice for `rsqrt` in Rsqrt
+    SqrtRangeCheckRaD(usize, usize), // Interleaved r_s and sqrt for Sqrt advice
+
+    /// Fields:
+    ///
+    /// `0` - node index
+    DivNodeQuotient(usize), // Advice for `quotient` in Div
+    RsqrtNodeInv(usize),   // Advice for `inv` in Rsqrt
+    RsqrtNodeRsqrt(usize), // Advice for `rsqrt` in Rsqrt
+    GatherRa(usize),
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]

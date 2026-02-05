@@ -92,6 +92,9 @@ impl NodeCommittedPolynomials {
             Operator::Einsum(inner) => {
                 OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
             }
+            Operator::Gather(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
             Operator::Iff(inner) => {
                 OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
             }

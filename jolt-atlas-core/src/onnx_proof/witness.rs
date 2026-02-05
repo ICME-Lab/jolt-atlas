@@ -208,6 +208,24 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     EXP_LUT_SIZE,
                 ))
             }
+
+            CommittedPolynomial::GatherRa(node_idx) => {
+                let computation_node = &model.graph.nodes[node_idx];
+                assert!(matches!(computation_node.operator, Operator::Gather(_)));
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let indexes = &layer_data.operands[1];
+                let non_zero_addresses: Vec<_> = indexes
+                    .data()
+                    .par_iter()
+                    .map(|&index| Some(index as u16))
+                    .collect();
+                let input_dict = &model.graph.nodes.get(&computation_node.inputs[0]).unwrap();
+                let num_words = input_dict.output_dims[0];
+                MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                    non_zero_addresses,
+                    num_words,
+                ))
+            }
         }
     }
 }

@@ -6,7 +6,7 @@ use crate::utils::{
     quantize,
 };
 use maybe_rayon::iter::ParallelIterator;
-use rand::{RngCore, rngs::StdRng};
+use rand::{Rng, RngCore, distributions::Uniform, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::max,
@@ -20,9 +20,6 @@ use tract_onnx::prelude::tract_itertools::Itertools;
 
 /// Implementations of common operations on tensors.
 pub mod ops;
-
-// Default scale
-const SCALE: u32 = 7;
 
 /// A generic multi-dimensional array representation of a Tensor.
 /// The `inner` attribute contains a vector of values whereas `dims` corresponds to
@@ -172,11 +169,11 @@ impl Tensor<i32> {
         Tensor::new(Some(&data), dims).unwrap()
     }
 
-    /// Create a random positive tensor given the dims
-    /// The values are capped to be relatively small
-    pub fn random_pos(rng: &mut StdRng, dims: &[usize]) -> Self {
+    /// Create a random tensor given the dims and range
+    pub fn random_range(rng: &mut StdRng, dims: &[usize], range: Range<i32>) -> Self {
+        let between = Uniform::from(range);
         let data: Vec<i32> = (0..dims.iter().product())
-            .map(|_| (rng.next_u32() % (1 << (2 * SCALE + 1))) as i32)
+            .map(|_| rng.sample(between))
             .collect();
         Tensor::new(Some(&data), dims).unwrap()
     }

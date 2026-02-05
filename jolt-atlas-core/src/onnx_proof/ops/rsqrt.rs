@@ -594,10 +594,8 @@ mod tests {
         let log_T = 16;
         let T = 1 << log_T;
         let mut rng = StdRng::seed_from_u64(0x888);
-        let mut input = Tensor::<i32>::random_pos(&mut rng, &[T]);
-        input.iter_mut().for_each(|x| {
-            *x += 1; // avoid zero input
-        });
+        let input = Tensor::<i32>::random_range(&mut rng, &[T], 1..Q_SQUARE);
+
         let model = model::test::rsqrt_model(T);
         let trace = model.trace(&[input]);
 

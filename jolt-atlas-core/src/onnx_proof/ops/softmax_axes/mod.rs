@@ -110,22 +110,19 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxAxes {
 
     fn get_committed_polynomials(
         &self,
-        _node: &ComputationNode,
+        node: &ComputationNode,
     ) -> Vec<common::CommittedPolynomial> {
         let mut polys = vec![];
-        let [num_heads, seq_len, _] = _node.output_dims[..] else {
+        let [num_heads, seq_len, _] = node.output_dims[..] else {
             panic!(
                 "Expected output_dims to have exactly three elements: [num_heads, seq_len, features]"
             )
         };
         let num_heads_seq_len = num_heads * seq_len;
         for feature_idx in 0..num_heads_seq_len {
-            polys.push(CommittedPolynomial::SoftmaxRemainder(
-                _node.idx,
-                feature_idx,
-            ));
+            polys.push(CommittedPolynomial::SoftmaxRemainder(node.idx, feature_idx));
             polys.push(CommittedPolynomial::SoftmaxExponentiationRa(
-                _node.idx,
+                node.idx,
                 feature_idx,
             ));
         }

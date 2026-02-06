@@ -12,14 +12,18 @@ import os
 class SimpleGather(torch.nn.Module):
     def __init__(self):
         super(SimpleGather, self).__init__()
-        # Register data as a constant buffer
-        self.register_buffer('data', torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]))
+        # Embedding table - 2D tensor [65, 64]
+        self.embedding = torch.nn.Embedding(65, 64)
+        with torch.no_grad():
+            self.embedding.weight.copy_(
+                torch.arange(65 * 64, dtype=torch.float32).reshape(65, 64)
+            )
     
     def forward(self, indices):
-        # Gather operation: select elements from constant data using indices
-        # This should be converted to a Gather node
-        gathered = torch.index_select(self.data, dim=0, index=indices)
-        return gathered
+        # Gather operation: embedding lookup
+        # indices shape: [1, 64], embedding shape: [65, 64]
+        # Output shape: [1, 64, 64]
+        return self.embedding(indices)
 
 def main():
     # Create model instance
@@ -27,8 +31,17 @@ def main():
     model.eval()
     
     # Create dummy input (indices)
-    # Indices tensor with shape [4] (power of 2)
-    dummy_input = torch.tensor([0, 2, 4, 6], dtype=torch.long)
+    # Indices tensor with shape [1, 64]
+    dummy_input = torch.tensor([
+        [0, 3, 7, 2, 5, 1, 4, 6,
+         15, 14, 13, 12, 11, 10, 9, 8,
+         5, 5, 5, 5, 5, 5, 5, 5,
+         0, 1, 2, 3, 4, 5, 6, 7,
+         64, 63, 62, 61, 60, 59, 58, 57,
+         56, 55, 54, 53, 52, 51, 50, 49,
+         48, 47, 46, 45, 44, 43, 42, 41,
+         40, 39, 38, 37, 36, 35, 34, 33]
+    ], dtype=torch.long)
     
     # Export to ONNX
     output_path = "network.onnx"
@@ -55,21 +68,22 @@ def main():
         print(f"Removed external data file: {external_data_file}")
     
     print(f"ONNX model saved to {output_path}")
-    print(f"Data (constant): [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]")
-    print(f"Input (indices) shape: [4]")
-    print(f"Output shape: [4]")
-    print(f"\nModel operations:")
-    print(f"  1. Gather: select elements from constant data using input indices")
-    print(f"  Expected to be converted to Gather node")
+    print("Input shape: [1, 64] -> Output shape: [1, 64, 64]")
     
     # Test with sample input
-    test_indices = torch.tensor([0, 2, 4, 6], dtype=torch.long)
+    test_indices = torch.tensor([
+        [0, 3, 7, 2, 5, 1, 4, 6,
+         15, 14, 13, 12, 11, 10, 9, 8,
+         5, 5, 5, 5, 5, 5, 5, 5,
+         0, 1, 2, 3, 4, 5, 6, 7,
+         64, 63, 62, 61, 60, 59, 58, 57,
+         56, 55, 54, 53, 52, 51, 50, 49,
+         48, 47, 46, 45, 44, 43, 42, 41,
+         40, 39, 38, 37, 36, 35, 34, 33]
+    ], dtype=torch.long)
     with torch.no_grad():
         test_output = model(test_indices)
-    print(f"\nTest verification:")
-    print(f"  Indices: {test_indices.tolist()}")
-    print(f"  Output: {test_output.tolist()}")
-    print(f"  Expected: [10.0, 30.0, 50.0, 70.0] (elements at indices 0, 2, 4, 6)")
+    print(f"Test output shape: {test_output.shape}")
 
 if __name__ == "__main__":
     main()

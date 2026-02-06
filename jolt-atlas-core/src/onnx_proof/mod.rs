@@ -654,8 +654,9 @@ mod tests {
     #[test]
     fn test_gather() {
         let working_dir = "../atlas-onnx-tracer/models/gather/";
+        let mut rng = StdRng::seed_from_u64(0x100);
         // Input values in [0, 8)
-        let input = Tensor::construct(vec![0, 2, 4, 6], vec![4]);
+        let input = Tensor::random_range(&mut rng, &[1, 64], 0..65);
 
         prove_and_verify(working_dir, &input, true, false);
     }

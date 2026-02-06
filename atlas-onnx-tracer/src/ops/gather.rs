@@ -5,9 +5,13 @@ use crate::{
 
 impl Op for Gather {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
+        assert_eq!(
+            self.axis, 0,
+            "Only axis 0 is currently supported for Gather"
+        );
         let [x, y] = inputs[..] else {
             panic!("Expected exactly two inputs")
         };
-        tensor::ops::gather(x, &y.map(|v| v as usize), self.dim).unwrap()
+        tensor::ops::gather(x, &y.map(|v| v as usize), self.axis).unwrap()
     }
 }

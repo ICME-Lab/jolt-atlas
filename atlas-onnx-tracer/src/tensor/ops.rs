@@ -1211,13 +1211,20 @@ pub fn downsample<T: TensorType + Send + Sync>(
 /// let result = gather(&x, &index, 1).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[1, 2, 4, 5]), &[2, 2]).unwrap();
 /// assert_eq!(result, expected);
+///
+/// let x = Tensor::new(Some(&[1i32, 2, 3, 4, 5, 6]), &[3, 2]).unwrap();
+/// let index = Tensor::new(Some(&[0usize, 1, 2, 0, 1, 0]), &[3, 2]).unwrap();
+/// let result = gather(&x, &index, 0).unwrap();
+/// let expected = Tensor::new(Some(&[1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 1, 2]), &[3, 2, 2]).unwrap();
+/// assert_eq!(result, expected);
 /// ```
 pub fn gather<T: TensorType + Send + Sync>(
     input: &Tensor<T>,
     index: &Tensor<usize>,
-    dim: usize,
+    axis: usize,
 ) -> Result<Tensor<T>, TensorError> {
     let mut index_clone = index.clone();
+    // We first flatten the index tensor so that it is easier to iterate over the lookups
     index_clone.flatten();
     // TODO: not sure what this prevents from erroring
     if index_clone.is_singleton() {
@@ -1225,12 +1232,12 @@ pub fn gather<T: TensorType + Send + Sync>(
     }
 
     // Calculate the output tensor size
-    let mut output_size = input.dims().to_vec();
-    output_size[dim] = index_clone.dims()[0];
+    let mut output_flattened_size = input.dims().to_vec();
+    output_flattened_size[axis] = index_clone.dims()[0];
 
     // Allocate memory for the output tensor
-    let mut output = Tensor::new(None, &output_size)?;
-    let cartesian_coord = output_size
+    let mut output = Tensor::new(None, &output_flattened_size)?;
+    let cartesian_coord = output_flattened_size
         .iter()
         .map(|x| 0..*x)
         .multi_cartesian_product()
@@ -1238,21 +1245,21 @@ pub fn gather<T: TensorType + Send + Sync>(
 
     output = output.par_enum_map(|i, _: T| {
         let coord = cartesian_coord[i].clone();
-        let index_val = index_clone.get(&[coord[dim]]);
+        let index_val = index_clone.get(&[coord[axis]]);
 
         // Add bounds checking here
-        if index_val >= input.dims()[dim] {
+        if index_val >= input.dims()[axis] {
             panic!(
                 "Index {} is out of bounds for dimension {} with size {}",
                 index_val,
-                dim,
-                input.dims()[dim]
+                axis,
+                input.dims()[axis]
             );
         }
         let new_coord = coord
             .iter()
             .enumerate()
-            .map(|(i, x)| if i == dim { index_val } else { *x })
+            .map(|(i, x)| if i == axis { index_val } else { *x })
             .collect::<Vec<_>>();
 
         Ok(input.get(&new_coord))
@@ -1263,8 +1270,19 @@ pub fn gather<T: TensorType + Send + Sync>(
     // if index.is_singleton() {
     //     output_size.remove(dim);
     // }
+    // Recover actual output shape
+    let output_size: Vec<usize> = {
+        let mut output_dims: Vec<Vec<usize>> = input.dims().iter().map(|&x| vec![x]).collect();
+        output_dims[axis] = index.dims().to_vec();
+        output_dims.into_iter().flatten().collect()
+    };
+
     output.reshape(&output_size)?;
 
+    debug_assert_eq!(
+        output.dims().len(),
+        index.dims().len() + input.dims().len() - 1
+    );
     Ok(output)
 }
 

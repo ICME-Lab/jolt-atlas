@@ -5,7 +5,7 @@ use atlas_onnx_tracer::{
         ComputationGraph,
     },
     node::ComputationNode,
-    ops::Gather,
+    ops::{Gather, Operator},
     tensor::Tensor,
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
@@ -183,9 +183,14 @@ impl<F: JoltField> GatherParams<F> {
     ) -> Self {
         let gamma = transcript.challenge_scalar();
 
+        let Operator::Gather(gather_op) = &computation_node.operator else {
+            panic!("Expected Gather operator")
+        };
+
         let input_dict = &graph.nodes.get(&computation_node.inputs[0]).unwrap();
-        let num_words = input_dict.output_dims[0];
-        let lookup_vars = computation_node.output_dims[0].log_2();
+        let input_indices = &graph.nodes.get(&computation_node.inputs[1]).unwrap();
+        let num_words = input_dict.output_dims[gather_op.axis];
+        let lookup_vars = input_indices.num_output_elements().log_2();
 
         let r_node_output = accumulator
             .get_virtual_polynomial_opening(
@@ -257,7 +262,7 @@ impl<F: JoltField> GatherProver<F> {
             panic!("Expected two operands for Gather operation")
         };
 
-        let word_dim = dictionary.dims().get(1).unwrap_or(&1usize);
+        let word_dim = dictionary.dims().iter().product::<usize>() / params.num_words;
 
         let (r_index, r_word) = params.r_node_output.split_at(params.lookup_vars);
         assert_eq!(r_word.len(), word_dim.log_2(),);
@@ -494,6 +499,7 @@ where
     ra
 }
 
+// TODO: Assert correct behavior for axis != 0
 fn fold_dictionary<F: JoltField>(r: &[F::Challenge], dictionary: &Tensor<i32>) -> Vec<F> {
     let E = EqPolynomial::evals(r);
 
@@ -516,23 +522,29 @@ fn build_stage2_provers<F: JoltField>(
     HammingBooleanitySumcheckProver<F>,
     SmallBooleanitySumcheckProver<F>,
 ) {
+    let Operator::Gather(gather_op) = &computation_node.operator else {
+        panic!("Expected Gather operator")
+    };
+    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, computation_node);
+    let [dict, indexes] = operands[..] else {
+        panic!("Expected two operands for Gather operation")
+    };
+    let num_words = dict.dims()[gather_op.axis];
+    let num_lookups = indexes.len();
+
     let hb_params = ra_hamming_bool_params::<F>(
         computation_node,
+        num_lookups,
         &prover.accumulator,
         &mut prover.transcript,
     );
     let bool_params = ra_booleanity_params::<F>(
         computation_node,
-        &prover.preprocessing.model.graph,
+        num_words,
+        num_lookups,
         &prover.accumulator,
         &mut prover.transcript,
     );
-
-    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, computation_node);
-    let [dict, indexes] = operands[..] else {
-        panic!("Expected two operands for Gather operation")
-    };
-    let num_words = dict.dims()[0];
 
     let hw = {
         let mut lookup_vec = vec![F::one(); indexes.len()];
@@ -557,14 +569,26 @@ fn build_stage2_verifiers<F: JoltField>(
     HammingBooleanitySumcheckVerifier<F>,
     BooleanitySumcheckVerifier<F>,
 ) {
+    let Operator::Gather(gather_op) = &computation_node.operator else {
+        panic!("Expected Gather operator")
+    };
+    let graph = &verifier.preprocessing.model.graph;
+    let dict = graph.nodes.get(&computation_node.inputs[0]).unwrap();
+    let indices = graph.nodes.get(&computation_node.inputs[1]).unwrap();
+
+    let num_words = dict.output_dims[gather_op.axis];
+    let num_lookups = indices.num_output_elements();
+
     let hb_params = ra_hamming_bool_params::<F>(
         computation_node,
+        num_lookups,
         &verifier.accumulator,
         &mut verifier.transcript,
     );
     let bool_params = ra_booleanity_params::<F>(
         computation_node,
-        &verifier.preprocessing.model.graph,
+        num_words,
+        num_lookups,
         &verifier.accumulator,
         &mut verifier.transcript,
     );
@@ -577,12 +601,11 @@ fn build_stage2_verifiers<F: JoltField>(
 
 fn ra_hamming_bool_params<F: JoltField>(
     computation_node: &ComputationNode,
+    num_lookups: usize,
     opening_accumulator: &dyn OpeningAccumulator<F>,
     _transcript: &mut impl Transcript,
 ) -> HammingBooleanitySumcheckParams<F> {
     let polynomial_types = vec![VirtualPolynomial::HammingWeight];
-
-    let num_lookups = computation_node.output_dims[0];
 
     let r_lookup = opening_accumulator
         .get_virtual_polynomial_opening(
@@ -605,16 +628,11 @@ fn ra_hamming_bool_params<F: JoltField>(
 
 fn ra_booleanity_params<F: JoltField>(
     computation_node: &ComputationNode,
-    graph: &ComputationGraph,
+    num_words: usize,
+    num_lookups: usize,
     opening_accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut impl Transcript,
 ) -> BooleanitySumcheckParams<F> {
-    let num_words = graph
-        .nodes
-        .get(&computation_node.inputs[0])
-        .unwrap()
-        .output_dims[0];
-
     let polynomial_type = CommittedPolynomial::GatherRa(computation_node.idx);
 
     let r_lookup = opening_accumulator
@@ -629,7 +647,7 @@ fn ra_booleanity_params<F: JoltField>(
     BooleanitySumcheckParams {
         d: 1,
         log_k_chunk: num_words.log_2(),
-        log_t: computation_node.output_dims[0].log_2(),
+        log_t: num_lookups.log_2(),
         r_cycle: r_lookup,
         r_address,
         polynomial_types: vec![polynomial_type],
@@ -642,18 +660,21 @@ fn build_stage3_prover<F: JoltField>(
     computation_node: &ComputationNode,
     prover: &mut Prover<F, impl Transcript>,
 ) -> HammingWeightSumcheckProver<F> {
-    let hw_params = ra_hamming_weight_params::<F>(
-        computation_node,
-        &prover.preprocessing.model.graph,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-
+    let Operator::Gather(gather_op) = &computation_node.operator else {
+        panic!("Expected Gather operator")
+    };
     let LayerData { operands, .. } = Trace::layer_data(&prover.trace, computation_node);
     let [dict, indexes] = operands[..] else {
         panic!("Expected two operands for Gather operation")
     };
-    let num_words = dict.dims()[0];
+    let num_words = dict.dims()[gather_op.axis];
+
+    let hw_params = ra_hamming_weight_params::<F>(
+        computation_node,
+        num_words,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
 
     let ra_evals = compute_ra_evals(&hw_params.r_cycle, indexes, num_words);
 
@@ -664,9 +685,17 @@ fn build_stage3_verifier<F: JoltField>(
     computation_node: &ComputationNode,
     verifier: &mut Verifier<'_, F, impl Transcript>,
 ) -> HammingWeightSumcheckVerifier<F> {
+    let Operator::Gather(gather_op) = &computation_node.operator else {
+        panic!("Expected Gather operator")
+    };
+    let graph = &verifier.preprocessing.model.graph;
+    let dict = graph.nodes.get(&computation_node.inputs[0]).unwrap();
+
+    let num_words = dict.output_dims[gather_op.axis];
+
     let hw_params = ra_hamming_weight_params::<F>(
         computation_node,
-        &verifier.preprocessing.model.graph,
+        num_words,
         &verifier.accumulator,
         &mut verifier.transcript,
     );
@@ -676,13 +705,10 @@ fn build_stage3_verifier<F: JoltField>(
 
 fn ra_hamming_weight_params<F: JoltField>(
     computation_node: &ComputationNode,
-    graph: &ComputationGraph,
+    num_words: usize,
     opening_accumulator: &dyn OpeningAccumulator<F>,
     _transcript: &mut impl Transcript,
 ) -> HammingWeightSumcheckParams<F> {
-    let dict = graph.nodes.get(&computation_node.inputs[0]).unwrap();
-    let num_words = dict.output_dims[0];
-
     let polynomial_types = vec![CommittedPolynomial::GatherRa(computation_node.idx)];
 
     let r_lookup = opening_accumulator
@@ -732,16 +758,15 @@ mod tests {
 
     #[test]
     fn test_gather() {
-        let log_T = 16;
-        let T = 1 << log_T;
+        let indices_dims = vec![4, 8];
         let mut rng = StdRng::seed_from_u64(0x888);
 
         let dict_len = 32;
         let word_dim = 4;
 
-        let input = Tensor::<i32>::random_range(&mut rng, &[T], 0..dict_len as i32);
+        let input = Tensor::<i32>::random_range(&mut rng, &indices_dims, 0..dict_len as i32);
 
-        let model = model::test::gather_model(&[T], dict_len, word_dim);
+        let model = model::test::gather_model(&indices_dims, dict_len, word_dim);
         let trace = model.trace(&[input]);
 
         let prover_transcript = Blake2bTranscript::new(&[]);
@@ -758,10 +783,12 @@ mod tests {
 
         let output_index = model.outputs()[0];
         let computation_node = &model[output_index];
-        let LayerData {
-            operands: _,
-            output,
-        } = Trace::layer_data(&trace, computation_node);
+        let LayerData { operands, output } = Trace::layer_data(&trace, computation_node);
+
+        println!("Data: {:?}", operands[0]);
+        println!("Indexes: {:?}", operands[1]);
+        println!("Output: {output:?}");
+        println!("Computation node: {computation_node:?}");
 
         let r_node_output: Vec<<Fr as JoltField>::Challenge> = prover
             .transcript
@@ -780,7 +807,7 @@ mod tests {
         let verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
             VerifierOpeningAccumulator::new();
 
-        let proofs = Gather { dim: 0 }.prove(computation_node, &mut prover);
+        let proofs = Gather { axis: 0 }.prove(computation_node, &mut prover);
         let proofs = BTreeMap::from_iter(proofs);
 
         let io = Trace::io(&trace, &model);
@@ -812,7 +839,7 @@ mod tests {
             r_node_output.into(),
         );
 
-        let res = Gather { dim: 0 }.verify(computation_node, &mut verifier);
+        let res = Gather { axis: 0 }.verify(computation_node, &mut verifier);
 
         let r_prover: Fr = prover.transcript.challenge_scalar();
         let r_verifier: Fr = verifier.transcript.challenge_scalar();

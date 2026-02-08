@@ -74,7 +74,7 @@ macro_rules! define_operators {
 define_operators! {
     operators: [
         Add, And, And2, Constant(Tensor<i32>), Cube, Div, Einsum { equation: String },
-        Erf { scale: F32 }, Gather { dim: usize }, Identity, Iff, Input,
+        Erf { scale: F32 }, Gather { axis: usize }, Identity, Iff, Input,
         IsNan { out_dims: Vec<usize> }, MoveAxis { source: usize, destination: usize },
         Mul, Broadcast { shape: Vec<usize> }, Noop, ReLU, Reshape { shape:Vec<usize> },
         Rsqrt { scale: F32 }, Shr, SoftmaxAxes { axes: usize, scale: F32 }, Square,

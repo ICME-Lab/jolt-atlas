@@ -26,6 +26,6 @@ fn handle_gather(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     );
 
     HandlerBuilder::new(hctx)
-        .simple_op(Operator::Gather(Gather { dim: op.axis }))
+        .simple_op(Operator::Gather(Gather { axis: op.axis }))
         .build()
 }

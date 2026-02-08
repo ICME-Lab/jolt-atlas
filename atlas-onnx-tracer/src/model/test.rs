@@ -253,13 +253,13 @@ impl ModelBuilder {
         &mut self,
         data: Wire,
         indices: Wire,
-        dim: usize,
+        axis: usize,
         output_dims: Vec<usize>,
     ) -> Wire {
         let id = self.alloc();
         let node = ComputationNode::new(
             id,
-            Operator::Gather(Gather { dim }),
+            Operator::Gather(Gather { axis }),
             vec![data, indices],
             output_dims,
         );
@@ -474,6 +474,7 @@ pub fn softmax_axes_model(input_shape: &[usize], axes: usize) -> Model {
     b.build()
 }
 
+// Creates a model featuring a gather operation, with axis=0
 pub fn gather_model(input_shape: &[usize], dictionnary_len: usize, word_dim: usize) -> Model {
     let mut b = ModelBuilder::new();
     let dictionnary = {
@@ -485,7 +486,12 @@ pub fn gather_model(input_shape: &[usize], dictionnary_len: usize, word_dim: usi
     let dict = b.constant(dictionnary);
     let indexes = b.input(input_shape.to_vec());
 
-    let res = b.gather(dict, indexes, 0, vec![input_shape[0], word_dim]);
+    let res = b.gather(
+        dict,
+        indexes,
+        0,
+        [input_shape.to_vec(), vec![word_dim]].concat(),
+    );
     b.mark_output(res);
     b.build()
 }

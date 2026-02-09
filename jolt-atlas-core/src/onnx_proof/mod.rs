@@ -517,10 +517,73 @@ mod tests {
         let input_data = vec![SCALE; 64 * 64];
         // let input_data: Vec<i32> = (0..64 * 64)
         //     .map(|_| SCALE + _rng.gen_range(-1..=1))
-        //     .collect(); // TODO(Forpee): Investigate bug - Einsum mk,kn->mn node failing
+        //     .collect(); // TODO: requires #115 to be resolved
         let input = Tensor::construct(input_data, vec![1, 64, 64]);
 
-        prove_and_verify(working_dir, &input, true, false);
+        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+    }
+
+    // TODO: requires #115 to be resolved
+    // #[test]
+    // fn test_multihead_attention() {
+    //     let working_dir = "../atlas-onnx-tracer/models/multihead_attention/";
+    //     let mut _rng = StdRng::seed_from_u64(0x1013);
+    //     let input_data = vec![SCALE; 16 * 128];
+    //     let input = Tensor::construct(input_data, vec![1, 1, 16, 128]);
+    //     prove_and_verify_with_debug(working_dir, &input, true, false, true);
+    // }
+
+    // TODO: requires #115 to be resolved
+    // #[test]
+    // fn test_sum_axes() {
+    //     let working_dir = "../atlas-onnx-tracer/models/sum_axes_test/";
+    //     let mut rng = StdRng::seed_from_u64(0x923);
+    //     let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
+    //     prove_and_verify_with_debug(working_dir, &input, true, false, true);
+    // }
+
+    // TODO: requires #115 to be resolved
+    // #[test]
+    // fn test_sum_independent() {
+    //     let working_dir = "../atlas-onnx-tracer/models/sum_independent/";
+    //     let mut rng = StdRng::seed_from_u64(0x923);
+    //     let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
+    //     prove_and_verify_with_debug(working_dir, &input, true, false, true);
+    // }
+
+    #[test]
+    fn test_sum_operations_e2e() {
+        // Test 1D sum along axis 0
+        let working_dir = "../atlas-onnx-tracer/models/sum_1d_axis0/";
+        let mut rng = StdRng::seed_from_u64(0x923);
+        let input = Tensor::random_small(&mut rng, &[8]);
+        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+
+        // Test 2D sum along axis 0
+        let working_dir = "../atlas-onnx-tracer/models/sum_2d_axis0/";
+        let mut rng = StdRng::seed_from_u64(0x924);
+        let input = Tensor::random_small(&mut rng, &[4, 8]);
+        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+
+        // Test 2D sum along axis 1
+        let working_dir = "../atlas-onnx-tracer/models/sum_2d_axis1/";
+        let mut rng = StdRng::seed_from_u64(0x925);
+        let input = Tensor::random_small(&mut rng, &[4, 8]);
+        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+
+        // Test 3D sum along axis 2
+        let working_dir = "../atlas-onnx-tracer/models/sum_3d_axis2/";
+        let mut rng = StdRng::seed_from_u64(0x926);
+        let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
+        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+    }
+
+    #[test]
+    fn test_layernorm_partial_head() {
+        let working_dir = "../atlas-onnx-tracer/models/layernorm_partial_head/";
+        let input_data = vec![SCALE; 16 * 16];
+        let input = Tensor::construct(input_data, vec![16, 16]);
+        prove_and_verify(working_dir, &input, false, false);
     }
 
     #[test]
@@ -593,7 +656,7 @@ mod tests {
         // Create tensor with shape [65536]
         let input = Tensor::random_small(&mut rng, &[1 << 16]);
 
-        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+        prove_and_verify_with_debug(working_dir, &input, true, true, true);
     }
 
     #[test]

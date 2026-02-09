@@ -496,6 +496,14 @@ pub fn gather_model(input_shape: &[usize], dictionnary_len: usize, word_dim: usi
     b.build()
 }
 
+pub fn sum_model<const AXIS: usize>(m: usize, n: usize) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![m, n]);
+    let res = b.sum(i, vec![AXIS], vec![m, 1]);
+    b.mark_output(res);
+    b.build()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -25,7 +25,7 @@ use joltworks::{
 };
 use rayon::prelude::*;
 
-use crate::utils::einsum::EinsumDims;
+use crate::utils::dims::EinsumDims;
 
 // TODO: Add [DT24] opts
 
@@ -311,7 +311,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MbkNbkBmnVe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::einsum::EINSUM_REGISTRY;
+    use crate::utils::dims::EINSUM_REGISTRY;
     use ark_bn254::Fr;
     use atlas_onnx_tracer::{
         model::{

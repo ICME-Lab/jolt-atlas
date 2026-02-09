@@ -1,1 +1,1 @@
-pub mod einsum;
+pub mod dims;

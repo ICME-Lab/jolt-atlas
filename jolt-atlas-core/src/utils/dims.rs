@@ -1,4 +1,4 @@
-use atlas_onnx_tracer::{model::Model, node::ComputationNode};
+use atlas_onnx_tracer::{model::Model, node::ComputationNode, ops::Operator};
 
 pub type DimExtractor = fn(&ComputationNode, &Model) -> EinsumDims;
 
@@ -205,4 +205,172 @@ impl EinsumDims {
     pub fn output(&self) -> &[usize] {
         &self.output
     }
+}
+
+/// Complete configuration for a sum operation.
+///
+/// Contains both the normalized dimension information and the axis along which
+/// the sum is performed (after normalization to 2D).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SumConfig {
+    /// Normalized dimension information
+    pub dims: SumDims,
+    /// The axis to sum along (0 or 1 after normalization to 2D)
+    pub axis: SumAxis,
+}
+
+impl SumConfig {
+    /// Creates a new `SumConfig` with the given dimensions and axis.
+    pub fn new(dims: SumDims, axis: SumAxis) -> Self {
+        Self { dims, axis }
+    }
+
+    /// Returns the normalized dimension information for the sum operation.
+    pub fn dims(&self) -> &SumDims {
+        &self.dims
+    }
+
+    /// Returns the axis along which the sum is performed (0 or 1).
+    pub fn axis(&self) -> SumAxis {
+        self.axis
+    }
+}
+
+impl SumDims {
+    /// Creates a new `SumDims` with the given operand and output dimensions.
+    pub fn new(operand: Vec<usize>, output: Vec<usize>) -> Self {
+        Self { operand, output }
+    }
+
+    /// Returns the operand (input) dimensions.
+    pub fn operand(&self) -> &[usize] {
+        &self.operand
+    }
+
+    /// Returns the output dimensions.
+    pub fn output(&self) -> &[usize] {
+        &self.output
+    }
+}
+
+/// Extracts and normalizes sum operation dimensions from a computation node.
+///
+/// This function processes a sum operation from the ONNX model, extracting the input/output
+/// dimensions and normalizing them to a canonical 2D representation for the prover.
+/// The normalization handles tensors of varying dimensionality (1D, 2D, 3D+) uniformly.
+///
+/// # Arguments
+///
+/// * `computation_node` - The computation node representing the sum operation
+/// * `model` - The full model containing all nodes and their dimensions
+///
+/// # Returns
+///
+/// A `SumConfig` containing normalized dimensions and the adjusted axis index.
+///
+/// # Panics
+///
+/// - If the computation node doesn't have exactly one input
+/// - If the operator is not a `Sum` operator
+/// - If the sum operation has multiple axes (only single-axis sum is supported)
+/// - If the axis is out of bounds for the input tensor's dimensionality
+/// - If the input has 3+ dimensions and the leading dimension is not 1
+pub fn sum_config(computation_node: &ComputationNode, model: &Model) -> SumConfig {
+    // Extract the single input index
+    let [input_idx] = computation_node.inputs[..] else {
+        panic!("Expected exactly one input for Sum operation")
+    };
+
+    // Ensure we have a Sum operator and extract it
+    let Operator::Sum(sum_operator) = &computation_node.operator else {
+        panic!("Expected Sum operator")
+    };
+
+    // Extract the single axis (multi-axis sum not yet supported)
+    let [axis] = sum_operator.axes[..] else {
+        unimplemented!("Only single-axis sum is currently supported")
+    };
+
+    // Get dimension information from the model
+    let input_dims = &model[input_idx].output_dims;
+    let output_dims = &computation_node.output_dims;
+    let ndim = input_dims.len();
+
+    // Validate axis is within bounds
+    assert!(axis < ndim, "Axis {axis} out of bounds for {ndim}D tensor");
+
+    // Normalize to 2D representation for the prover
+    let (axis, operand_dims, output_dims) = normalize_sum_to_2d(axis, input_dims, output_dims);
+
+    SumConfig {
+        dims: SumDims::new(operand_dims, output_dims),
+        axis,
+    }
+}
+
+/// Recursively normalizes sum dimensions down to 2D
+///
+/// - **1D**: Appends a dummy dimension so it becomes a special case of 2D.
+/// - **2D**: Already in canonical form — returned as-is.
+/// - **3D+**: Strips the leading batch dimension (must be 1) and recurses,
+///   so 4D, 5D, etc. are automatically supported without new match arms (as long as the batch dimension is 1).
+///
+/// # Panics
+///
+/// Panics if `input_dims` has 3 or more dimensions and the leading dimension is not 1.
+fn normalize_sum_to_2d(
+    axis: usize,
+    input_dims: &[usize],
+    output_dims: &[usize],
+) -> (SumAxis, Vec<usize>, Vec<usize>) {
+    match input_dims.len() {
+        1 => (SumAxis::Axis0, vec![input_dims[0], 1], vec![1]),
+        2 => (axis.into(), input_dims.to_vec(), output_dims.to_vec()),
+        ndim => {
+            if input_dims[0] != 1 {
+                unimplemented!(
+                    "Only batch size of 1 is supported for {ndim}D tensors in Sum operations, but got leading dimension of {}",
+                    input_dims[0]
+                );
+            }
+            normalize_sum_to_2d(axis - 1, &input_dims[1..], &output_dims[1..])
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SumAxis {
+    Axis0,
+    Axis1,
+}
+
+impl SumAxis {
+    pub fn axis_index(&self) -> usize {
+        match self {
+            SumAxis::Axis0 => 0,
+            SumAxis::Axis1 => 1,
+        }
+    }
+}
+
+impl From<usize> for SumAxis {
+    fn from(axis: usize) -> Self {
+        match axis {
+            0 => SumAxis::Axis0,
+            1 => SumAxis::Axis1,
+            _ => panic!("Invalid axis index: {axis}"),
+        }
+    }
+}
+
+/// Dimension information for a sum operation.
+///
+/// Stores the operand (input) and output dimensions after normalization to 2D.
+/// These dimensions are used by the prover to generate the appropriate constraints.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SumDims {
+    /// Dimensions of the input tensor (normalized to 2D)
+    pub operand: Vec<usize>,
+    /// Dimensions of the output tensor (normalized to 2D)
+    pub output: Vec<usize>,
 }

@@ -73,7 +73,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SumAxisParams<F> {
     }
 
     fn num_rounds(&self) -> usize {
-        self.sum_config.dims().operand()[self.sum_config.axis().axis_index()].log_2()
+        self.sum_config.operand_dims()[self.sum_config.axis().axis_index()].log_2()
     }
 }
 
@@ -97,8 +97,8 @@ impl<F: JoltField> SumAxisProver<F> {
         };
 
         let (m, n) = (
-            params.sum_config.dims().operand()[0],
-            params.sum_config.dims().operand()[1],
+            params.sum_config.operand_dims()[0],
+            params.sum_config.operand_dims()[1],
         );
 
         let operand: Vec<F> = match params.sum_config.axis() {

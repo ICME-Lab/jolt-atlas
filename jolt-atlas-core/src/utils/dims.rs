@@ -234,6 +234,11 @@ impl SumConfig {
     pub fn axis(&self) -> SumAxis {
         self.axis
     }
+
+    /// Returns the operand dims for this sum operation.
+    pub fn operand_dims(&self) -> &[usize] {
+        self.dims.operand()
+    }
 }
 
 impl SumDims {

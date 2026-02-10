@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub mod lookup_tables;
+pub mod neural_teleport;
 pub mod op_lookups;
 pub mod ops;
 pub mod range_checking;
@@ -228,8 +229,11 @@ pub struct ProofId(pub usize, pub ProofType);
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ProofType {
     Execution,
+    TanhExecution,
     RaOneHotChecks,
     RaHammingWeight,
+    TanhRaOneHotChecks,
+    TanhRaHammingWeight,
     SoftmaxDivSumMax,
     SoftmaxExponentiation,
     RangeCheck,

@@ -165,7 +165,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
 }
 
 // TODO: Reduce two claims to 1 via 4.5.2 PAZK for Quotient polynomial openings
-// TODO: Commit to polynomials q and R
 
 const DEGREE_BOUND: usize = 3;
 

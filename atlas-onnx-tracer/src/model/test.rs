@@ -282,6 +282,22 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    pub fn tanh(&mut self, input: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&input].output_dims.clone();
+        let tau = 2;
+        let node = ComputationNode::new(
+            id,
+            Operator::Tanh(Tanh {
+                scale: F32((1 << SCALE) as f32),
+                tau,
+            }),
+            vec![input],
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
     /// Mark a wire as an output of the model.
     pub fn mark_output(&mut self, wire: Wire) {
         self.outputs.push(wire);
@@ -492,6 +508,14 @@ pub fn gather_model(input_shape: &[usize], dictionnary_len: usize, word_dim: usi
         0,
         [input_shape.to_vec(), vec![word_dim]].concat(),
     );
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn tanh_model(input_shape: &[usize]) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(input_shape.to_vec());
+    let res = b.tanh(i);
     b.mark_output(res);
     b.build()
 }

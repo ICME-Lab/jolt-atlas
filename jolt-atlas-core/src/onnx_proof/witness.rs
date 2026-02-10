@@ -226,6 +226,52 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     num_words,
                 ))
             }
+
+            CommittedPolynomial::TanhRa(node_idx) => {
+                use crate::onnx_proof::neural_teleport::division::{
+                    compute_division, NEURAL_TELEPORT_LOG_DIVISOR,
+                };
+                let computation_node = &model.graph.nodes[node_idx];
+                assert!(matches!(computation_node.operator, Operator::Tanh(_)));
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let input = &layer_data.operands[0];
+                // Compute quotient for neural teleportation
+                let (quotient, _remainder) = compute_division(input);
+                let non_zero_addresses: Vec<_> = quotient
+                    .data()
+                    .par_iter()
+                    .map(|&val| Some(val as u16))
+                    .collect();
+                let table_size = 1 << (16 - NEURAL_TELEPORT_LOG_DIVISOR); // Reduced by division
+                MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                    non_zero_addresses,
+                    table_size,
+                ))
+            }
+
+            CommittedPolynomial::NeuralTeleportRangeCheckRaD(node_idx, d) => {
+                use crate::onnx_proof::range_checking::sumcheck_instance::TeleportRangeCheckOperands;
+                let computation_node = &model.graph.nodes[node_idx];
+                let (left_operand, right_operand) =
+                    TeleportRangeCheckOperands::get_operands_tensors(trace, computation_node);
+                let lookup_indices = TeleportRangeCheckOperands::compute_lookup_indices(
+                    &left_operand,
+                    &right_operand,
+                );
+                let one_hot_params = OneHotParams::new(lookup_indices.len().log_2());
+                let addresses: Vec<_> = lookup_indices
+                    .par_iter()
+                    .map(|lookup_index| {
+                        Some(one_hot_params.lookup_index_chunk(lookup_index.into(), *d) as u16)
+                    })
+                    .collect();
+                MultilinearPolynomial::OneHot(
+                    joltworks::poly::one_hot_polynomial::OneHotPolynomial::from_indices(
+                        addresses,
+                        one_hot_params.k_chunk,
+                    ),
+                )
+            }
         }
     }
 }

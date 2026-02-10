@@ -248,3 +248,54 @@ impl ReadRafSumcheckHelper for RsRangeCheckOperands {
         CommittedPolynomial::SqrtRangeCheckRaD(self.node_idx, d)
     }
 }
+
+pub struct TeleportRangeCheckOperands {
+    pub node_idx: usize,
+    pub input_operands: Vec<VirtualPolynomial>,
+    pub virtual_ra: VirtualPolynomial,
+}
+
+impl ReadRafSumcheckHelper for TeleportRangeCheckOperands {
+    fn new(node: &ComputationNode) -> Self {
+        let input_operands = vec![
+            VirtualPolynomial::TeleportRemainder(node.idx),
+            VirtualPolynomial::NodeOutput(node.inputs[0]),
+        ];
+        let virtual_ra = VirtualPolynomial::NodeOutput(node.idx); // Use node output Ra
+
+        Self {
+            node_idx: node.idx,
+            input_operands,
+            virtual_ra,
+        }
+    }
+
+    fn get_input_operands(&self) -> Vec<VirtualPolynomial> {
+        self.input_operands.to_vec()
+    }
+
+    fn get_output_operand(&self) -> VirtualPolynomial {
+        self.virtual_ra
+    }
+
+    fn get_operands_tensors(trace: &Trace, node: &ComputationNode) -> (Tensor<i32>, Tensor<i32>) {
+        use crate::onnx_proof::neural_teleport::division::compute_division;
+
+        let LayerData {
+            output: _,
+            operands,
+        } = Trace::layer_data(trace, node);
+
+        let [input_tensor] = operands[..] else {
+            panic!("Expected exactly one input tensor for neural teleportation");
+        };
+
+        let (_, remainder) = compute_division(input_tensor);
+
+        (remainder, input_tensor.clone())
+    }
+
+    fn rad_poly(&self, d: usize) -> CommittedPolynomial {
+        CommittedPolynomial::NeuralTeleportRangeCheckRaD(self.node_idx, d)
+    }
+}

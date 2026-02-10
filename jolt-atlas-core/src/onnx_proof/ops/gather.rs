@@ -783,12 +783,10 @@ mod tests {
 
         let output_index = model.outputs()[0];
         let computation_node = &model[output_index];
-        let LayerData { operands, output } = Trace::layer_data(&trace, computation_node);
-
-        println!("Data: {:?}", operands[0]);
-        println!("Indexes: {:?}", operands[1]);
-        println!("Output: {output:?}");
-        println!("Computation node: {computation_node:?}");
+        let LayerData {
+            operands: _,
+            output,
+        } = Trace::layer_data(&trace, computation_node);
 
         let r_node_output: Vec<<Fr as JoltField>::Challenge> = prover
             .transcript

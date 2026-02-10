@@ -26,7 +26,7 @@ use joltworks::{
 use rayon::prelude::*;
 use std::array;
 
-use crate::utils::einsum::EinsumDims;
+use crate::utils::dims::EinsumDims;
 
 const DEGREE_BOUND: usize = 2;
 
@@ -246,7 +246,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for KNkNVerifie
 
 #[cfg(test)]
 mod tests {
-    use crate::utils::einsum::EINSUM_REGISTRY;
+    use crate::utils::dims::EINSUM_REGISTRY;
 
     use super::*;
     use ark_bn254::Fr;

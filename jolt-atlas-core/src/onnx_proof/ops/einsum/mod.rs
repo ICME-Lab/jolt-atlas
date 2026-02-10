@@ -1,19 +1,3 @@
-use atlas_onnx_tracer::{
-    model::{trace::Trace, Model},
-    node::ComputationNode,
-    ops::{Einsum, Operator},
-};
-use joltworks::{
-    field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, VerifierOpeningAccumulator},
-    subprotocols::{
-        sumcheck::SumcheckInstanceProof, sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::SumcheckInstanceVerifier,
-    },
-    transcripts::Transcript,
-    utils::errors::ProofVerifyError,
-};
-
 use crate::{
     onnx_proof::{
         ops::{
@@ -27,7 +11,23 @@ use crate::{
         },
         ProofId, ProofType,
     },
-    utils::einsum::EINSUM_REGISTRY,
+    utils::dims::EINSUM_REGISTRY,
+};
+use atlas_onnx_tracer::{
+    model::{trace::Trace, Model},
+    node::ComputationNode,
+    ops::{Einsum, Operator},
+};
+use joltworks::{
+    field::JoltField,
+    poly::opening_proof::{OpeningAccumulator, VerifierOpeningAccumulator},
+    subprotocols::{
+        sumcheck::{Sumcheck, SumcheckInstanceProof},
+        sumcheck_prover::SumcheckInstanceProver,
+        sumcheck_verifier::SumcheckInstanceVerifier,
+    },
+    transcripts::Transcript,
+    utils::errors::ProofVerifyError,
 };
 
 pub mod bmk_kbn_mbn;
@@ -41,9 +41,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        use crate::onnx_proof::ops::einsum::EinsumProver;
-        use joltworks::subprotocols::sumcheck::Sumcheck;
-
         let mut prover_sumcheck = EinsumProver::sumcheck(
             &prover.preprocessing.model,
             &prover.trace,
@@ -63,9 +60,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        use crate::onnx_proof::ops::einsum::EinsumVerifier;
-        use joltworks::subprotocols::sumcheck::Sumcheck;
-
         let proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))

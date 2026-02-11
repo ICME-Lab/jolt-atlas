@@ -25,12 +25,11 @@ use atlas_onnx_tracer::{
     tensor::Tensor,
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
-use joltworks::config::OneHotParams;
+use joltworks::{config::OneHotParams, poly::teleport_id_poly::TeleportIdPolynomial};
 use joltworks::{
     field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
-        identity_poly::IdentityPolynomial,
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
@@ -72,10 +71,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+        let log_T = node.num_output_elements().log_2();
+        let one_hot_params = OneHotParams::new(log_T);
         let mut results = Vec::new();
 
         // Stage 1a: Neural teleportation division proof
-        let div_params = TeleportDivisionParams::new(node.clone(), &prover.accumulator);
+        let div_params = TeleportDivisionParams::new(node.clone(), &prover.accumulator, self);
         let mut div_sumcheck = TeleportDivisionProver::new(&prover.trace, div_params);
 
         // Run division sumcheck first (output claim will be cached)
@@ -84,7 +85,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             &mut prover.accumulator,
             &mut prover.transcript,
         );
-        results.push((ProofId(node.idx, ProofType::Execution), div_proof));
+        results.push((ProofId(node.idx, ProofType::NeuralTeleport), div_proof));
 
         // Stage 1b: Tanh lookup proof (uses quotient from division)
         // This must be done AFTER division sumcheck completes
@@ -94,6 +95,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             &prover.preprocessing.model.graph,
             &prover.accumulator,
             &mut prover.transcript,
+            self.clone(),
         );
         let mut exec_sumcheck = TanhProver::initialize(
             &prover.trace,
@@ -108,23 +110,31 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             &mut prover.transcript,
         );
 
-        results.push((ProofId(node.idx, ProofType::TanhExecution), exec_proof));
+        results.push((ProofId(node.idx, ProofType::Execution), exec_proof));
 
-        // Stage 1b: Range check proof for division
-        let mut rangecheck_sumcheck =
+        // Stage 2: Range check proof for division and first One-Hot checks for TanhRa
+        let rangecheck_sumcheck =
             RangecheckRafSumcheckProver::<_, TeleportRangeCheckOperands>::new_from_prover(
                 node, prover,
             );
-        let (rangecheck_proof, _) = Sumcheck::prove(
-            &mut rangecheck_sumcheck,
+        let (tanh_hb_prover, tanh_bool_prover) = build_stage2_provers::<F>(node, prover, self);
+        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
+            Box::new(rangecheck_sumcheck),
+            Box::new(tanh_hb_prover),
+            Box::new(tanh_bool_prover),
+        ];
+        let (tanh_ra_one_hot_proof, _) = BatchedSumcheck::prove(
+            instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
             &mut prover.transcript,
         );
-        results.push((ProofId(node.idx, ProofType::RangeCheck), rangecheck_proof));
+        results.push((
+            ProofId(node.idx, ProofType::RaOneHotChecks),
+            tanh_ra_one_hot_proof,
+        ));
 
-        // Stage 2: RaOneHotChecks proof for division range checking
-        let log_T = node.num_output_elements().log_2();
-        let one_hot_params = OneHotParams::new(log_T);
+        // Stage 3: one-hot checks for division and last one-hot check for TanhRa
+        let tanh_hw_sumcheck = build_stage3_prover::<F>(node, prover, self);
         let (ra_sumcheck, hw_sumcheck, bool_sumcheck) =
             range_checking::new_ra_one_hot_sumcheck_provers::<F, TeleportRangeCheckOperands>(
                 node.clone(),
@@ -132,6 +142,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
                 prover,
             );
         let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
+            Box::new(tanh_hw_sumcheck),
             Box::new(ra_sumcheck),
             Box::new(bool_sumcheck),
             Box::new(hw_sumcheck),
@@ -142,34 +153,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             &mut prover.transcript,
         );
         results.push((
-            ProofId(node.idx, ProofType::RaOneHotChecks),
+            ProofId(node.idx, ProofType::RaHammingWeight),
             ra_one_hot_proof,
-        ));
-
-        // Stage 3: TanhRa one-hot checks (booleanity + hamming booleanity)
-        let (tanh_hb_prover, tanh_bool_prover) = build_stage3_provers::<F>(node, prover);
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-            vec![Box::new(tanh_hb_prover), Box::new(tanh_bool_prover)];
-        let (tanh_ra_one_hot_proof, _) = BatchedSumcheck::prove(
-            instances.iter_mut().map(|v| &mut **v as _).collect(),
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        results.push((
-            ProofId(node.idx, ProofType::TanhRaOneHotChecks),
-            tanh_ra_one_hot_proof,
-        ));
-
-        // Stage 4: TanhRa hamming weight
-        let mut tanh_hw_sumcheck = build_stage4_prover::<F>(node, prover);
-        let (tanh_hw_proof, _) = Sumcheck::prove(
-            &mut tanh_hw_sumcheck,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        results.push((
-            ProofId(node.idx, ProofType::TanhRaHammingWeight),
-            tanh_hw_proof,
         ));
 
         results
@@ -180,13 +165,16 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
+        let log_T = node.num_output_elements().log_2();
+        let one_hot_params = OneHotParams::new(log_T);
+
         // Stage 1a: Division verification
         let div_proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::Execution))
+            .get(&ProofId(node.idx, ProofType::NeuralTeleport))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
 
-        let div_verifier = TeleportDivisionVerifier::new(node.clone(), &verifier.accumulator);
+        let div_verifier = TeleportDivisionVerifier::new(node.clone(), &verifier.accumulator, self);
         Sumcheck::verify(
             div_proof,
             &div_verifier,
@@ -194,10 +182,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             &mut verifier.transcript,
         )?;
 
-        // Stage 1b: Tanh verification (after division is complete)
+        // Stage 1b: Tanh verification
         let tanh_proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::TanhExecution))
+            .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
 
         let exec_sumcheck = TanhVerifier::new(
@@ -205,6 +193,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             &verifier.preprocessing.model.graph,
             &mut verifier.accumulator,
             &mut verifier.transcript,
+            self.clone(),
         );
         Sumcheck::verify(
             tanh_proof,
@@ -213,29 +202,34 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             &mut verifier.transcript,
         )?;
 
-        // Stage 1b: Range check verification for division
-        let rangecheck_proof = verifier
+        // Stage 2: Range check verification for division and first One-Hot checks for TanhRa
+        let tanh_ra_one_hot_proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::RangeCheck))
+            .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+
         let rangecheck_verifier =
             RangecheckRafSumcheckVerifier::<_, TeleportRangeCheckOperands>::new_from_verifier(
                 node, verifier,
             );
-        Sumcheck::verify(
-            rangecheck_proof,
-            &rangecheck_verifier,
+        let (tanh_hb_verifier, tanh_bool_verifier) =
+            build_stage2_verifiers::<F>(node, verifier, self);
+        let instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
+            vec![&rangecheck_verifier, &tanh_hb_verifier, &tanh_bool_verifier];
+        BatchedSumcheck::verify(
+            tanh_ra_one_hot_proof,
+            instances,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
 
-        // Stage 2: RaOneHotChecks verification for division range checking
+        // Stage 3: one-hot check verification for division and last one-hot check for TanhRa
         let ra_one_hot_proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
+            .get(&ProofId(node.idx, ProofType::RaHammingWeight))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let log_T = node.num_output_elements().log_2();
-        let one_hot_params = OneHotParams::new(log_T);
+
+        let tanh_hw_verifier = build_stage3_verifier::<F>(node, verifier, self);
         let (ra_sumcheck, hw_sumcheck, bool_sumcheck) =
             range_checking::new_ra_one_hot_sumcheck_verifiers::<F, TeleportRangeCheckOperands>(
                 node.clone(),
@@ -244,35 +238,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             );
         BatchedSumcheck::verify(
             ra_one_hot_proof,
-            vec![&ra_sumcheck, &bool_sumcheck, &hw_sumcheck],
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        // Stage 3: TanhRa one-hot checks verification (booleanity + hamming booleanity)
-        let tanh_ra_one_hot_proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::TanhRaOneHotChecks))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let (tanh_hb_verifier, tanh_bool_verifier) = build_stage3_verifiers::<F>(node, verifier);
-        let instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
-            vec![&tanh_hb_verifier, &tanh_bool_verifier];
-        BatchedSumcheck::verify(
-            tanh_ra_one_hot_proof,
-            instances,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        // Stage 4: TanhRa hamming weight verification
-        let tanh_hw_proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::TanhRaHammingWeight))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let tanh_hw_verifier = build_stage4_verifier::<F>(node, verifier);
-        Sumcheck::verify(
-            tanh_hw_proof,
-            &tanh_hw_verifier,
+            vec![
+                &tanh_hw_verifier,
+                &ra_sumcheck,
+                &bool_sumcheck,
+                &hw_sumcheck,
+            ],
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
@@ -292,8 +263,7 @@ pub struct TanhParams<F: JoltField> {
     gamma: F,
     r_node_output: Vec<F::Challenge>,
     computation_node: ComputationNode,
-    table_size: usize,
-    log_table_size: usize,
+    op: Tanh,
 }
 
 impl<F: JoltField> TanhParams<F> {
@@ -302,13 +272,9 @@ impl<F: JoltField> TanhParams<F> {
         _graph: &ComputationGraph,
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut impl Transcript,
+        op: Tanh,
     ) -> Self {
         let gamma = transcript.challenge_scalar();
-
-        // With neural teleportation, we reduce the domain by dividing by NEURAL_TELEPORT_DIVISOR
-        let log_table_size = 16; // Reduced by division
-
-        let table_size = 1 << log_table_size;
 
         let r_node_output = accumulator
             .get_virtual_polynomial_opening(
@@ -322,8 +288,7 @@ impl<F: JoltField> TanhParams<F> {
             gamma,
             r_node_output,
             computation_node,
-            table_size,
-            log_table_size,
+            op,
         }
     }
 }
@@ -357,18 +322,18 @@ impl<F: JoltField> SumcheckInstanceParams<F> for TanhParams<F> {
     }
 
     fn num_rounds(&self) -> usize {
-        self.log_table_size
+        self.op.log_table
     }
 }
 
 // This is a Read-Raf sumcheck for Tanh lookup,
 // Where we assert that each output[i] = TanhTable[input[i]]
-// and input[i] = Ra[k] * Int[k] where Ra is one-hot encoding and Int is identity
+// and input[i] = Ra[k] * Int[k] where Ra is one-hot encoding and Int is a custom identity poly
 pub struct TanhProver<F: JoltField> {
     params: TanhParams<F>,
     tanh_table: MultilinearPolynomial<F>,
     input_onehot: MultilinearPolynomial<F>,
-    identity: IdentityPolynomial<F>,
+    identity: TeleportIdPolynomial<F>,
 }
 
 impl<F: JoltField> TanhProver<F> {
@@ -382,22 +347,33 @@ impl<F: JoltField> TanhProver<F> {
         let input = operands[0];
 
         // Compute quotient from division (neural teleportation)
-        let (quotient_tensor, _remainder) = compute_division(input);
+        let (quotient_tensor, _remainder) = compute_division(input, params.op.tau);
+
+        // Ensure input is within expected range for table size: 2^(log_table_size - 1) <= input < 2^(log_table_size - 1)
+        // Inputs outside this range will error
+        // TODO: Pass these input in a clamping lookup table, since anyway tanh(±∞) = ±1, so we only need to handle a limited input range.
+        assert!(quotient_tensor.iter().all(|&x| {
+            let lower_bound = -(1 << (params.op.log_table - 1));
+            let upper_bound = (1 << (params.op.log_table - 1)) - 1;
+            x >= lower_bound && x <= upper_bound
+        }));
 
         // Create and materialize the tanh lookup table (reduced size)
-        let tanh_table_impl = TanhTable::new(params.log_table_size);
-        let tanh_table_values = tanh_table_impl.materialize();
-        let tanh_table: Vec<F> = tanh_table_values.iter().map(|&v| F::from_i32(v)).collect();
-        let tanh_table = MultilinearPolynomial::from(tanh_table);
+        let tanh_table = TanhTable::new(params.op.log_table);
+        let tanh_table = MultilinearPolynomial::from(tanh_table.materialize());
 
         // Compute one-hot encoding of QUOTIENT values (not input)
-        println!("1");
         let input_onehot: Vec<F> =
-            compute_ra_evals(&params.r_node_output, &quotient_tensor, params.table_size);
+            compute_ra_evals(&params.r_node_output, &quotient_tensor, params.op.log_table);
 
         // Cache quotient claim (used in tanh lookup)
         // We do not reuse the claim from the division sumcheck, because the opening point is different
-        let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data())
+        // TODO(AntoineF4C5): Reuse the quotient claim from proving division.
+        // REQUIRED:
+        // - Computing an opening for output at same opening point than quotient tensor (and later perfom n-to-1 opening reduction).
+        // - Handling the difference between polynomials built from u32 and i32 tensors,
+        //   Namely we currently always use polynomials built from i32 tensors, except for raf-checking.
+        let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data()) // TODO: unify tensor representations (always i32 or always u32)
             .evaluate(&params.r_node_output);
         accumulator.append_virtual(
             transcript,
@@ -409,7 +385,7 @@ impl<F: JoltField> TanhProver<F> {
 
         let input_onehot = MultilinearPolynomial::from(input_onehot);
         assert_eq!(input_onehot.len(), tanh_table.len());
-        let identity = IdentityPolynomial::new(params.log_table_size);
+        let identity = TeleportIdPolynomial::new(params.op.log_table);
 
         #[cfg(test)]
         {
@@ -427,7 +403,7 @@ impl<F: JoltField> TanhProver<F> {
 
                     let a = input_onehot.get_bound_coeff(i);
                     let b = tanh_table.get_bound_coeff(i);
-                    let int = F::from_u32(usize_to_n_bits(i, 16) as u32);
+                    let int = F::from_u32(usize_to_n_bits(i, params.op.log_table) as u32);
                     a * (b + params.gamma * int)
                 })
                 .sum();
@@ -515,10 +491,11 @@ impl<F: JoltField> TanhVerifier<F> {
         graph: &ComputationGraph,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
+        op: Tanh,
     ) -> Self {
-        let params = TanhParams::new(computation_node, graph, accumulator, transcript);
+        let params = TanhParams::new(computation_node, graph, accumulator, transcript, op);
 
-        // Cache quotient polynomial opening (neural teleportation)
+        // Cache quotient polynomial opening
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::TeleportQuotient(params.computation_node.idx),
@@ -527,10 +504,8 @@ impl<F: JoltField> TanhVerifier<F> {
         );
 
         // Materialize the tanh table for verification
-        let tanh_table_impl = TanhTable::new(params.log_table_size);
-        let tanh_table_values = tanh_table_impl.materialize();
-        let tanh_table: Vec<F> = tanh_table_values.iter().map(|&v| F::from_i32(v)).collect();
-        let tanh_table = MultilinearPolynomial::from(tanh_table);
+        let tanh_table = TanhTable::new(params.op.log_table);
+        let tanh_table = MultilinearPolynomial::from(tanh_table.materialize());
 
         Self { params, tanh_table }
     }
@@ -559,7 +534,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifie
         let table_claim = self.tanh_table.evaluate(&opening_point.r);
 
         let int_eval =
-            IdentityPolynomial::new(self.params.log_table_size).evaluate(&opening_point.r);
+            TeleportIdPolynomial::new(self.params.op.log_table).evaluate(&opening_point.r);
 
         ra_claim * (table_claim + self.params.gamma * int_eval)
     }
@@ -582,8 +557,127 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifie
     }
 }
 
+// Stage 2: TanhRa one-hot checks (hamming booleanity + booleanity)
+fn build_stage2_provers<F: JoltField>(
+    computation_node: &ComputationNode,
+    prover: &mut Prover<F, impl Transcript>,
+    op: &Tanh,
+) -> (
+    HammingBooleanitySumcheckProver<F>,
+    SmallBooleanitySumcheckProver<F>,
+) {
+    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, computation_node);
+    let input = operands[0];
+
+    // Compute quotient for neural teleportation
+    let (quotient, _remainder) = compute_division(input, op.tau);
+
+    let num_lookups = quotient.len();
+
+    let hb_params = ra_hamming_bool_params::<F>(
+        computation_node,
+        num_lookups,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let bool_params = ra_booleanity_params::<F>(
+        computation_node,
+        op,
+        num_lookups,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+
+    let hw = {
+        let mut lookup_vec = vec![F::one(); quotient.len()];
+        lookup_vec.resize(quotient.len().next_power_of_two(), F::zero());
+        lookup_vec
+    };
+    let ra_evals = compute_ra_evals(&bool_params.r_cycle, &quotient, op.log_table);
+
+    let quotient_u = quotient.iter().map(|&x| Some(x as u16)).collect();
+
+    let hb_sumcheck = HammingBooleanitySumcheckProver::gen(hb_params, vec![hw]);
+    let bool_sumcheck =
+        SmallBooleanitySumcheckProver::gen(bool_params, vec![ra_evals], vec![quotient_u]);
+
+    (hb_sumcheck, bool_sumcheck)
+}
+
+fn build_stage2_verifiers<F: JoltField>(
+    computation_node: &ComputationNode,
+    verifier: &mut Verifier<'_, F, impl Transcript>,
+    op: &Tanh,
+) -> (
+    HammingBooleanitySumcheckVerifier<F>,
+    BooleanitySumcheckVerifier<F>,
+) {
+    let graph = &verifier.preprocessing.model.graph;
+    let input_node = graph.nodes.get(&computation_node.inputs[0]).unwrap();
+
+    let num_lookups = input_node.num_output_elements();
+
+    let hb_params = ra_hamming_bool_params::<F>(
+        computation_node,
+        num_lookups,
+        &verifier.accumulator,
+        &mut verifier.transcript,
+    );
+    let bool_params = ra_booleanity_params::<F>(
+        computation_node,
+        op,
+        num_lookups,
+        &verifier.accumulator,
+        &mut verifier.transcript,
+    );
+
+    let hb_sumcheck = HammingBooleanitySumcheckVerifier::new(hb_params);
+    let bool_sumcheck = BooleanitySumcheckVerifier::new(bool_params);
+
+    (hb_sumcheck, bool_sumcheck)
+}
+
+// Stage 3: TanhRa hamming weight
+fn build_stage3_prover<F: JoltField>(
+    computation_node: &ComputationNode,
+    prover: &mut Prover<F, impl Transcript>,
+    op: &Tanh,
+) -> HammingWeightSumcheckProver<F> {
+    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, computation_node);
+    let input = operands[0];
+
+    // Compute quotient for neural teleportation
+    let (quotient, _remainder) = compute_division(input, op.tau);
+
+    let hw_params = ra_hamming_weight_params::<F>(
+        computation_node,
+        op,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+
+    let ra_evals = compute_ra_evals(&hw_params.r_cycle, &quotient, op.log_table);
+
+    HammingWeightSumcheckProver::gen(hw_params, vec![ra_evals])
+}
+
+fn build_stage3_verifier<F: JoltField>(
+    computation_node: &ComputationNode,
+    verifier: &mut Verifier<'_, F, impl Transcript>,
+    op: &Tanh,
+) -> HammingWeightSumcheckVerifier<F> {
+    let hw_params = ra_hamming_weight_params::<F>(
+        computation_node,
+        op,
+        &verifier.accumulator,
+        &mut verifier.transcript,
+    );
+
+    HammingWeightSumcheckVerifier::new(hw_params)
+}
+
 // From the input values, computes the one-hot read address vector
-fn compute_ra_evals<F>(r: &[F::Challenge], input: &Tensor<i32>, table_size: usize) -> Vec<F>
+fn compute_ra_evals<F>(r: &[F::Challenge], input: &Tensor<i32>, log_table_size: usize) -> Vec<F>
 where
     F: JoltField,
 {
@@ -591,10 +685,10 @@ where
     let num_threads = rayon::current_num_threads();
     let chunk_size = input.len().div_ceil(num_threads);
 
-    // TODO: Handle table_size correctly
+    let table_size = 1 << log_table_size;
     let input_usize = input
         .par_iter()
-        .map(|&x| n_bits_to_usize(x, 16))
+        .map(|&x| n_bits_to_usize(x, log_table_size))
         .collect::<Vec<usize>>();
 
     let partial_results: Vec<Vec<F>> = input_usize
@@ -620,136 +714,9 @@ where
     ra
 }
 
-// Stage 3: TanhRa one-hot checks (hamming booleanity + booleanity)
-fn build_stage3_provers<F: JoltField>(
-    computation_node: &ComputationNode,
-    prover: &mut Prover<F, impl Transcript>,
-) -> (
-    HammingBooleanitySumcheckProver<F>,
-    SmallBooleanitySumcheckProver<F>,
-) {
-    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, computation_node);
-    let input = operands[0];
-
-    // Compute quotient for neural teleportation
-    let (quotient, _remainder) = compute_division(input);
-
-    let log_table_size = 16;
-    let table_size = 1 << log_table_size;
-    let num_lookups = quotient.len();
-
-    let hb_params = ra_hamming_bool_params::<F>(
-        computation_node,
-        num_lookups,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let bool_params = ra_booleanity_params::<F>(
-        computation_node,
-        table_size,
-        num_lookups,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-
-    let hw = {
-        let mut lookup_vec = vec![F::one(); quotient.len()];
-        lookup_vec.resize(quotient.len().next_power_of_two(), F::zero());
-        lookup_vec
-    };
-    println!("2");
-    let ra_evals = compute_ra_evals(&bool_params.r_cycle, &quotient, table_size);
-
-    let quotient_u = quotient.iter().map(|&x| Some(x as u16)).collect();
-
-    let hb_sumcheck = HammingBooleanitySumcheckProver::gen(hb_params, vec![hw]);
-    let bool_sumcheck =
-        SmallBooleanitySumcheckProver::gen(bool_params, vec![ra_evals], vec![quotient_u]);
-
-    (hb_sumcheck, bool_sumcheck)
-}
-
-fn build_stage3_verifiers<F: JoltField>(
-    computation_node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, impl Transcript>,
-) -> (
-    HammingBooleanitySumcheckVerifier<F>,
-    BooleanitySumcheckVerifier<F>,
-) {
-    let graph = &verifier.preprocessing.model.graph;
-    let input_node = graph.nodes.get(&computation_node.inputs[0]).unwrap();
-
-    let log_table_size = 16;
-    let table_size = 1 << log_table_size;
-    let num_lookups = input_node.num_output_elements();
-
-    let hb_params = ra_hamming_bool_params::<F>(
-        computation_node,
-        num_lookups,
-        &verifier.accumulator,
-        &mut verifier.transcript,
-    );
-    let bool_params = ra_booleanity_params::<F>(
-        computation_node,
-        table_size,
-        num_lookups,
-        &verifier.accumulator,
-        &mut verifier.transcript,
-    );
-
-    let hb_sumcheck = HammingBooleanitySumcheckVerifier::new(hb_params);
-    let bool_sumcheck = BooleanitySumcheckVerifier::new(bool_params);
-
-    (hb_sumcheck, bool_sumcheck)
-}
-
-// Stage 4: TanhRa hamming weight
-fn build_stage4_prover<F: JoltField>(
-    computation_node: &ComputationNode,
-    prover: &mut Prover<F, impl Transcript>,
-) -> HammingWeightSumcheckProver<F> {
-    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, computation_node);
-    let input = operands[0];
-
-    // Compute quotient for neural teleportation
-    let (quotient, _remainder) = compute_division(input);
-
-    let log_table_size = 16;
-    let table_size = 1 << log_table_size;
-
-    let hw_params = ra_hamming_weight_params::<F>(
-        computation_node,
-        table_size,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-
-    println!("3");
-    let ra_evals = compute_ra_evals(&hw_params.r_cycle, &quotient, table_size);
-
-    HammingWeightSumcheckProver::gen(hw_params, vec![ra_evals])
-}
-
-fn build_stage4_verifier<F: JoltField>(
-    computation_node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, impl Transcript>,
-) -> HammingWeightSumcheckVerifier<F> {
-    let log_table_size = 16;
-    let table_size = 1 << log_table_size;
-
-    let hw_params = ra_hamming_weight_params::<F>(
-        computation_node,
-        table_size,
-        &verifier.accumulator,
-        &mut verifier.transcript,
-    );
-
-    HammingWeightSumcheckVerifier::new(hw_params)
-}
-
 fn ra_hamming_weight_params<F: JoltField>(
     computation_node: &ComputationNode,
-    table_size: usize,
+    op: &Tanh,
     opening_accumulator: &dyn OpeningAccumulator<F>,
     _transcript: &mut impl Transcript,
 ) -> HammingWeightSumcheckParams<F> {
@@ -766,7 +733,7 @@ fn ra_hamming_weight_params<F: JoltField>(
 
     HammingWeightSumcheckParams {
         d: 1,
-        num_rounds: table_size.log_2(),
+        num_rounds: op.log_table,
         gamma_powers: vec![F::one()],
         polynomial_types,
         sumcheck_id: SumcheckId::HammingWeight,
@@ -803,7 +770,7 @@ fn ra_hamming_bool_params<F: JoltField>(
 
 fn ra_booleanity_params<F: JoltField>(
     computation_node: &ComputationNode,
-    table_size: usize,
+    op: &Tanh,
     num_lookups: usize,
     opening_accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut impl Transcript,
@@ -818,11 +785,11 @@ fn ra_booleanity_params<F: JoltField>(
         )
         .0
         .r;
-    let r_address = transcript.challenge_vector_optimized::<F>(table_size.log_2());
+    let r_address = transcript.challenge_vector_optimized::<F>(op.log_table);
 
     BooleanitySumcheckParams {
         d: 1,
-        log_k_chunk: table_size.log_2(),
+        log_k_chunk: op.log_table,
         log_t: num_lookups.log_2(),
         r_cycle: r_lookup,
         r_address,
@@ -837,7 +804,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use ark_bn254::Fr;
-    use atlas_onnx_tracer::{model, utils::f32::F32};
+    use atlas_onnx_tracer::model;
     use joltworks::transcripts::Blake2bTranscript;
     use rand::{rngs::StdRng, SeedableRng};
 
@@ -850,10 +817,11 @@ mod tests {
         let log_T = 10;
         let T = 1 << log_T;
 
+        const MIN_INPUT_VALUE: i32 = -(1 << 16);
         const MAX_INPUT_VALUE: i32 = 1 << 16;
 
         let mut rng = StdRng::seed_from_u64(0x888);
-        let input = Tensor::random_range(&mut rng, &[T], 0..MAX_INPUT_VALUE);
+        let input = Tensor::random_range(&mut rng, &[T], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
         let model = model::test::tanh_model(&[T]);
         let trace = model.trace(&[input]);
 
@@ -888,11 +856,15 @@ mod tests {
             tanh_claim,
         );
 
-        let proofs = Tanh {
-            scale: F32(0.0),
-            tau: 0,
-        }
-        .prove(computation_node, &mut prover);
+        // Extract the Tanh operator from the computation node
+        let tanh_op = if let atlas_onnx_tracer::ops::Operator::Tanh(op) = &computation_node.operator
+        {
+            op.clone()
+        } else {
+            panic!("Expected Tanh operator in computation node");
+        };
+
+        let proofs = tanh_op.prove(computation_node, &mut prover);
         let proofs = BTreeMap::from_iter(proofs);
 
         let io = Trace::io(&trace, &model);
@@ -927,11 +899,7 @@ mod tests {
             r_node_output.into(),
         );
 
-        let res = Tanh {
-            scale: F32(0.0),
-            tau: 0,
-        }
-        .verify(computation_node, &mut verifier);
+        let res = tanh_op.verify(computation_node, &mut verifier);
 
         let r_prover: Fr = prover.transcript.challenge_scalar();
         let r_verifier: Fr = verifier.transcript.challenge_scalar();

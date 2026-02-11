@@ -7,6 +7,7 @@ use atlas_onnx_tracer::{
         trace::{LayerData, ModelExecutionIO, Trace},
         Model,
     },
+    ops::Operator,
     tensor::Tensor,
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
@@ -229,11 +230,9 @@ pub struct ProofId(pub usize, pub ProofType);
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ProofType {
     Execution,
-    TanhExecution,
+    NeuralTeleport,
     RaOneHotChecks,
     RaHammingWeight,
-    TanhRaOneHotChecks,
-    TanhRaHammingWeight,
     SoftmaxDivSumMax,
     SoftmaxExponentiation,
     RangeCheck,
@@ -402,7 +401,21 @@ where
         } else {
             8
         };
-        let generators = PCS::setup_prover(max_log_k_chunk + max_log_T);
+        let small_lookups_log_kt = shared
+            .model
+            .graph
+            .nodes
+            .iter()
+            .map(|node| match &node.1.operator {
+                Operator::Tanh(inner) => inner.log_table + node.1.num_output_elements().log_2(),
+                Operator::Gather(_inner) => {
+                    todo!()
+                }
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0);
+        let generators = PCS::setup_prover((max_log_k_chunk + max_log_T).max(small_lookups_log_kt));
         AtlasProverPreprocessing { generators, shared }
     }
 
@@ -663,6 +676,15 @@ mod tests {
         let input = Tensor::random_range(&mut rng, &[1, 64], 0..65);
 
         prove_and_verify(working_dir, &input, true, false);
+    }
+
+    #[test]
+    fn test_tanh() {
+        let working_dir = "../atlas-onnx-tracer/models/tanh/";
+        let input_vector = vec![10, 40, 70, 100, 130];
+        let input = Tensor::new(Some(&input_vector), &[5]).unwrap();
+
+        prove_and_verify(working_dir, &input, true, true);
     }
 
     #[test]

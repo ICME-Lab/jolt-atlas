@@ -1,12 +1,14 @@
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
+    ops::Operator,
     tensor::Tensor,
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{field::JoltField, utils::lookup_bits::LookupBits};
 
 use crate::onnx_proof::{
+    neural_teleport::division::compute_division,
     ops::rsqrt::{Q, Q_SQUARE},
     range_checking::read_raf_checking::compute_lookup_indices_from_operands,
 };
@@ -279,8 +281,6 @@ impl ReadRafSumcheckHelper for TeleportRangeCheckOperands {
     }
 
     fn get_operands_tensors(trace: &Trace, node: &ComputationNode) -> (Tensor<i32>, Tensor<i32>) {
-        use crate::onnx_proof::neural_teleport::division::compute_division;
-
         let LayerData {
             output: _,
             operands,
@@ -290,7 +290,13 @@ impl ReadRafSumcheckHelper for TeleportRangeCheckOperands {
             panic!("Expected exactly one input tensor for neural teleportation");
         };
 
-        let (_, remainder) = compute_division(input_tensor);
+        let tau = if let Operator::Tanh(inner) = &node.operator {
+            inner.tau
+        } else {
+            panic!("Expected Tanh operator for neural teleportation division");
+        };
+
+        let (_, remainder) = compute_division(input_tensor, tau);
 
         (remainder, input_tensor.clone())
     }

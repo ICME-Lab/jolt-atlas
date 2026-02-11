@@ -13,6 +13,7 @@
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
+    ops::Tanh,
     tensor::Tensor,
 };
 use common::VirtualPolynomial;
@@ -36,23 +37,19 @@ use joltworks::{
     utils::math::Math,
 };
 
-/// Log2 of the divisor for neural teleportation
-pub const NEURAL_TELEPORT_LOG_DIVISOR: usize = 1;
-pub const NEURAL_TELEPORT_DIVISOR: i32 = 1 << NEURAL_TELEPORT_LOG_DIVISOR;
-
 const DEGREE_BOUND: usize = 2;
 
 /// Computes quotient and remainder for neural teleportation division.
 /// Returns (quotient, remainder) where input = DIVISOR * quotient + remainder
-pub fn compute_division(input: &Tensor<i32>) -> (Tensor<i32>, Tensor<i32>) {
+pub fn compute_division(input: &Tensor<i32>, tau: i32) -> (Tensor<i32>, Tensor<i32>) {
     let (remainder_data, quotient_data): (Vec<i32>, Vec<i32>) = input
         .iter()
         .map(|&x| {
-            let mut r = x % NEURAL_TELEPORT_DIVISOR;
-            let mut q = x / NEURAL_TELEPORT_DIVISOR;
+            let mut r = x % tau;
+            let mut q = x / tau;
             // Ensure remainder has same sign as divisor (Euclidean division)
-            if (r < 0 && NEURAL_TELEPORT_DIVISOR > 0) || (r > 0 && NEURAL_TELEPORT_DIVISOR < 0) {
-                r += NEURAL_TELEPORT_DIVISOR;
+            if (r < 0 && tau > 0) || (r > 0 && tau < 0) {
+                r += tau;
                 q -= 1;
             }
             (r, q)
@@ -70,10 +67,15 @@ pub fn compute_division(input: &Tensor<i32>) -> (Tensor<i32>, Tensor<i32>) {
 pub struct TeleportDivisionParams<F: JoltField> {
     r_node_output: Vec<F::Challenge>,
     computation_node: ComputationNode,
+    tau: i32,
 }
 
 impl<F: JoltField> TeleportDivisionParams<F> {
-    pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
+    pub fn new(
+        computation_node: ComputationNode,
+        accumulator: &dyn OpeningAccumulator<F>,
+        op: &Tanh,
+    ) -> Self {
         let r_node_output = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::NodeOutput(computation_node.idx),
@@ -81,9 +83,11 @@ impl<F: JoltField> TeleportDivisionParams<F> {
             )
             .0
             .r;
+
         Self {
             r_node_output,
             computation_node,
+            tau: op.tau,
         }
     }
 }
@@ -122,7 +126,7 @@ impl<F: JoltField> TeleportDivisionProver<F> {
         let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
         let input_data = operands[0];
 
-        let (quotient_tensor, remainder_tensor) = compute_division(input_data);
+        let (quotient_tensor, remainder_tensor) = compute_division(input_data, params.tau);
 
         let input = MultilinearPolynomial::from(input_data.clone());
         let quotient = MultilinearPolynomial::from(quotient_tensor);
@@ -135,7 +139,7 @@ impl<F: JoltField> TeleportDivisionProver<F> {
                     let a = input.get_bound_coeff(i);
                     let q = quotient.get_bound_coeff(i);
                     let r = remainder.get_bound_coeff(i);
-                    F::from_i32(NEURAL_TELEPORT_DIVISOR) * q + r - a
+                    F::from_i32(params.tau) * q + r - a
                 })
                 .sum();
             assert_eq!(F::zero(), claim, "Division constraint check failed");
@@ -165,7 +169,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TeleportDivis
             ..
         } = self;
 
-        let divisor = F::from_i32(NEURAL_TELEPORT_DIVISOR);
+        let divisor = F::from_i32(self.params.tau);
         let [q_constant] = eq_r_node_output.par_fold_out_in_unreduced::<9, 1>(&|g| {
             let inp0 = input.get_bound_coeff(2 * g);
             let q0 = quotient.get_bound_coeff(2 * g);
@@ -223,8 +227,9 @@ impl<F: JoltField> TeleportDivisionVerifier<F> {
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
+        op: &Tanh,
     ) -> Self {
-        let params = TeleportDivisionParams::new(computation_node, accumulator);
+        let params = TeleportDivisionParams::new(computation_node, accumulator, op);
         Self { params }
     }
 }
@@ -268,7 +273,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TeleportDiv
             )
             .1;
 
-        let divisor = F::from_i32(NEURAL_TELEPORT_DIVISOR);
+        let divisor = F::from_i32(self.params.tau);
         eq_eval * ((divisor * quotient_claim) + remainder_claim - input_claim)
     }
 

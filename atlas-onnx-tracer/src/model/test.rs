@@ -286,11 +286,13 @@ impl ModelBuilder {
         let id = self.alloc();
         let output_dims = self.nodes[&input].output_dims.clone();
         let tau = 2;
+        let log_table_size = 16;
         let node = ComputationNode::new(
             id,
             Operator::Tanh(Tanh {
                 scale: F32((1 << SCALE) as f32),
                 tau,
+                log_table: log_table_size,
             }),
             vec![input],
             output_dims,

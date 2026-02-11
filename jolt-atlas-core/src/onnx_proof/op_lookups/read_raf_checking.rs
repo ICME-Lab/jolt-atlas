@@ -250,7 +250,7 @@ where
                 right_operand_claim,
             );
 
-            // HACK: we should modify operand polynomials for proving these claims
+            // HACK: we should modify RAF operand polynomials for proving these claims
             let left_operand_claim = MultilinearPolynomial::from(left_operand_tensor.clone()) // TODO: make this work with from_i32
                 .evaluate(&params.r_node_output.r); // TODO: rm these clones
             opening_accumulator.append_virtual(

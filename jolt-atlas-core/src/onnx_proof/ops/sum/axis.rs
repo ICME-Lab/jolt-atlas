@@ -176,6 +176,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SumAxisProver
             opening_point.into(),
             self.operand.final_sumcheck_claim(),
         );
+        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -204,12 +205,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVeri
         accumulator: &VerifierOpeningAccumulator<F>,
         _sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                SumcheckId::Execution,
-            )
-            .1
+        accumulator.get_operand_claims::<1>(self.params.computation_node.idx)[0]
     }
 
     fn cache_openings(
@@ -228,6 +224,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVeri
             SumcheckId::Execution,
             opening_point.into(),
         );
+        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
     }
 }
 

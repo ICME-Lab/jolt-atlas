@@ -730,6 +730,7 @@ where
             opening_point,
             self.ra.as_ref().unwrap().final_sumcheck_claim(),
         );
+        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -835,6 +836,7 @@ where
             SumcheckId::Execution,
             opening_point,
         );
+        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
     }
 }
 

@@ -136,6 +136,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for CubeProver<F>
             opening_point.clone(),
             self.operand.final_sumcheck_claim(),
         );
+        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -172,12 +173,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for CubeVerifie
             .r;
         let r_node_output_prime = self.params.normalize_opening_point(sumcheck_challenges).r;
         let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
-        let operand_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                SumcheckId::Execution,
-            )
-            .1;
+        let [operand_claim] = accumulator.get_operand_claims::<1>(self.params.computation_node.idx);
         eq_eval * operand_claim * operand_claim * operand_claim
     }
 
@@ -194,6 +190,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for CubeVerifie
             SumcheckId::Execution,
             opening_point.clone(),
         );
+        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
     }
 }
 

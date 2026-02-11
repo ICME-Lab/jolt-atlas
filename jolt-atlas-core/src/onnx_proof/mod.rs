@@ -17,7 +17,7 @@ use joltworks::{
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
         opening_proof::{
             OpeningAccumulator, OpeningPoint, Openings, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator,
+            VerifierOpeningAccumulator, VirtualOperandClaims,
         },
         rlc_polynomial::build_materialized_rlc,
     },
@@ -88,6 +88,7 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
 pub struct ONNXProof<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> {
     pub opening_claims: Claims<F>,
     pub proofs: BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+    pub virtual_operand_claims: VirtualOperandClaims<F>,
     pub commitments: Vec<PCS::Commitment>,
     reduced_opening_proof: Option<ReducedOpeningProof<F, T, PCS>>,
 }
@@ -184,10 +185,13 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         });
         #[cfg(not(test))]
         let debug_info = None;
+
+        let (opening_claims, virtual_operand_claims) = prover.accumulator.take();
         (
             Self {
                 proofs,
-                opening_claims: Claims(prover.accumulator.take()),
+                opening_claims: Claims(opening_claims),
+                virtual_operand_claims,
                 commitments,
                 reduced_opening_proof,
             },
@@ -265,6 +269,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                 .openings
                 .insert(*key, (OpeningPoint::default(), *claim));
         }
+        verifier.accumulator.virtual_operand_claims = self.virtual_operand_claims.clone();
 
         for commitment in self.commitments.iter() {
             verifier.transcript.append_serializable(commitment);
@@ -317,12 +322,19 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                 .prepare_for_sumcheck(&reduced_opening_proof.sumcheck_claims);
 
             // Verify sumcheck
-            let r_sumcheck = verifier.accumulator.verify_batch_opening_sumcheck(
+            let reduction_res = verifier.accumulator.verify_batch_opening_sumcheck(
                 &reduced_opening_proof.sumcheck_proof,
                 &mut verifier.transcript,
-            )?;
+            );
+            #[cfg(test)]
+            {
+                if let Err(e) = &reduction_res {
+                    println!("Opening reduction via sumcheck failed: {e:?}");
+                }
+            }
+            let r_sumcheck = reduction_res?;
 
-            // Finalize and store state in accumulator for Stage 8
+            // Finalize and store state in accumulator
             let verifier_state = verifier.accumulator.finalize_batch_opening_sumcheck(
                 r_sumcheck,
                 &reduced_opening_proof.sumcheck_claims,
@@ -523,33 +535,33 @@ mod tests {
         prove_and_verify_with_debug(working_dir, &input, true, false, true);
     }
 
-    // TODO: requires #115 to be resolved
-    // #[test]
-    // fn test_multihead_attention() {
-    //     let working_dir = "../atlas-onnx-tracer/models/multihead_attention/";
-    //     let mut _rng = StdRng::seed_from_u64(0x1013);
-    //     let input_data = vec![SCALE; 16 * 128];
-    //     let input = Tensor::construct(input_data, vec![1, 1, 16, 128]);
-    //     prove_and_verify_with_debug(working_dir, &input, true, false, true);
-    // }
+    #[test]
+    fn test_multihead_attention() {
+        let working_dir = "../atlas-onnx-tracer/models/multihead_attention/";
+        let mut _rng = StdRng::seed_from_u64(0x1013);
+        let input_data = vec![SCALE; 16 * 128];
+        // let input_data: Vec<i32> = (0..16 * 128)
+        //     .map(|_| SCALE + _rng.gen_range(-1..=1))
+        //     .collect(); // TODO: requires #115 to be resolved
+        let input = Tensor::construct(input_data, vec![1, 1, 16, 128]);
+        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+    }
 
-    // TODO: requires #115 to be resolved
-    // #[test]
-    // fn test_sum_axes() {
-    //     let working_dir = "../atlas-onnx-tracer/models/sum_axes_test/";
-    //     let mut rng = StdRng::seed_from_u64(0x923);
-    //     let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
-    //     prove_and_verify_with_debug(working_dir, &input, true, false, true);
-    // }
+    #[test]
+    fn test_sum_axes() {
+        let working_dir = "../atlas-onnx-tracer/models/sum_axes_test/";
+        let mut rng = StdRng::seed_from_u64(0x923);
+        let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
+        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+    }
 
-    // TODO: requires #115 to be resolved
-    // #[test]
-    // fn test_sum_independent() {
-    //     let working_dir = "../atlas-onnx-tracer/models/sum_independent/";
-    //     let mut rng = StdRng::seed_from_u64(0x923);
-    //     let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
-    //     prove_and_verify_with_debug(working_dir, &input, true, false, true);
-    // }
+    #[test]
+    fn test_sum_independent() {
+        let working_dir = "../atlas-onnx-tracer/models/sum_independent/";
+        let mut rng = StdRng::seed_from_u64(0x923);
+        let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
+        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+    }
 
     #[test]
     fn test_sum_operations_e2e() {

@@ -1,12 +1,12 @@
 use super::multilinear_polynomial::{BindingOrder, PolynomialBinding};
-use crate::field::{JoltField, OptimizedMul};
-use crate::utils::math::Math;
-use crate::utils::small_scalar::SmallScalar;
+use crate::{
+    field::{JoltField, OptimizedMul},
+    utils::{math::Math, small_scalar::SmallScalar},
+};
 use allocative::Allocative;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use rayon::prelude::*;
-use std::cmp::Ordering;
-use std::ops::Index;
+use std::{cmp::Ordering, ops::Index};
 
 /// Compact polynomials are used to store coefficients of small scalars.
 /// They have two representations:
@@ -339,7 +339,11 @@ impl<T: SmallScalar, F: JoltField> PolynomialBinding<F> for CompactPolynomial<T,
 
     fn final_sumcheck_claim(&self) -> F {
         assert_eq!(self.len, 1);
-        self.bound_coeffs[0]
+        if self.is_bound() {
+            self.bound_coeffs[0]
+        } else {
+            self.coeffs[0].to_field()
+        }
     }
 }
 

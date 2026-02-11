@@ -249,6 +249,26 @@ where
                 params.r_node_output.clone(),
                 right_operand_claim,
             );
+
+            // HACK: we should modify operand polynomials for proving these claims
+            let left_operand_claim = MultilinearPolynomial::from(left_operand_tensor.clone()) // TODO: make this work with from_i32
+                .evaluate(&params.r_node_output.r); // TODO: rm these clones
+            opening_accumulator.append_virtual(
+                transcript,
+                VirtualPolynomial::NodeOutput(params.computation_node.inputs[0]),
+                SumcheckId::Execution,
+                params.r_node_output.clone(),
+                left_operand_claim,
+            );
+            let right_operand_claim = MultilinearPolynomial::from(right_operand_tensor.clone())
+                .evaluate(&params.r_node_output.r);
+            opening_accumulator.append_virtual(
+                transcript,
+                VirtualPolynomial::NodeOutput(params.computation_node.inputs[1]),
+                SumcheckId::Execution,
+                params.r_node_output.clone(),
+                right_operand_claim,
+            );
         } else {
             let right_operand_tensor = operands[0];
             let right_operand_claim =
@@ -949,7 +969,6 @@ mod tests {
         transcripts::{Blake2bTranscript, Transcript},
     };
     use rand::{rngs::StdRng, SeedableRng};
-    use serial_test::serial;
 
     /// Helper function to run a complete sumcheck proof and verification for a given table
     fn run_read_raf_sumcheck_test<T, PCS>(
@@ -1063,6 +1082,8 @@ mod tests {
                 .openings
                 .insert(*key, (empty_point, *value));
         }
+        verifier_opening_accumulator.virtual_operand_claims =
+            prover_opening_accumulator.virtual_operand_claims.clone();
 
         verifier_opening_accumulator.append_virtual(
             verifier_transcript,
@@ -1111,7 +1132,6 @@ mod tests {
         prover_transcript.compare_to(verifier_transcript.clone());
     }
 
-    #[serial]
     #[test]
     fn test_and() {
         let log_T = 16;
@@ -1133,7 +1153,6 @@ mod tests {
         );
     }
 
-    #[serial]
     #[test]
     fn test_relu() {
         let log_T = 16;
@@ -1155,7 +1174,6 @@ mod tests {
         );
     }
 
-    #[serial]
     #[test]
     fn test_relu_small_T() {
         let log_T = 2;

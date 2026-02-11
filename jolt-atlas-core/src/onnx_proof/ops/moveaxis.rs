@@ -275,6 +275,8 @@ mod tests {
                     .openings
                     .insert(*key, (empty_point, *value));
             }
+            verifier_opening_accumulator.virtual_operand_claims =
+                prover_opening_accumulator.virtual_operand_claims.clone();
 
             verifier_opening_accumulator.append_virtual(
                 verifier_transcript,

@@ -155,7 +155,10 @@ where
 
     /// Get the value of an opening by key
     pub fn get_opening(&self, key: OpeningId) -> F {
-        self.openings.get(&key).unwrap().1
+        self.openings
+            .get(&key)
+            .unwrap_or_else(|| panic!("opening should exist for {key:?}"))
+            .1
     }
 
     /// Adds an opening of a dense polynomial to the accumulator.

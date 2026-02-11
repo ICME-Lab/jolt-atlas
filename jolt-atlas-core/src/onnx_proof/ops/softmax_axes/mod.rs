@@ -426,6 +426,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
             r_operand.clone().into(),
             operand_claim,
         );
+        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -727,12 +728,8 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
             SumcheckId::Execution,
             r_operand.into(),
         );
-        let operand_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                SumcheckId::Execution,
-            )
-            .1;
+        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
+        let [operand_claim] = accumulator.get_operand_claims::<1>(self.params.computation_node.idx);
 
         let expected_operand_claim =
             MultilinearPolynomial::from(softmax_operand_claims).evaluate(&r_heads_seq_prime);
@@ -822,6 +819,8 @@ mod tests {
                 .openings
                 .insert(*key, (empty_point, *value));
         }
+        verifier_opening_accumulator.virtual_operand_claims =
+            prover_opening_accumulator.virtual_operand_claims.clone();
 
         verifier_opening_accumulator.append_virtual(
             verifier_transcript,

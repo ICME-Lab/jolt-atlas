@@ -54,6 +54,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         );
         results.push((ProofId(node.idx, ProofType::Execution), proof));
 
+        if node.is_scalar() {
+            // Skip range check for single output element since verifier can do div check on its own
+            return results;
+        }
+
         // Range check proof
 
         let mut rangecheck_sumcheck =
@@ -113,6 +118,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
             &mut verifier.transcript,
         )?;
 
+        if node.is_scalar() {
+            // Skip range check for single output element since verifier can do div check on its own
+            return Ok(());
+        }
+
         // Range check verification
         let rangecheck_proof = verifier
             .proofs
@@ -155,6 +165,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
         let mut polys = vec![CommittedPolynomial::DivNodeQuotient(node.idx)];
+        if node.is_scalar() {
+            return polys;
+        }
         let one_hot_params = OneHotParams::new(node.num_output_elements().log_2());
         polys.extend(
             (0..one_hot_params.instruction_d)
@@ -342,6 +355,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
             opening_point.clone(),
             self.R.final_sumcheck_claim(),
         );
+        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -378,18 +392,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
             .r;
         let r_node_output_prime = self.params.normalize_opening_point(sumcheck_challenges).r;
         let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
-        let left_operand_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                SumcheckId::Execution,
-            )
-            .1;
-        let right_operand_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-                SumcheckId::Execution,
-            )
-            .1;
         let q_claim = accumulator
             .get_committed_polynomial_opening(
                 CommittedPolynomial::DivNodeQuotient(self.params.computation_node.idx),
@@ -402,6 +404,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
                 SumcheckId::Execution,
             )
             .1;
+        let [left_operand_claim, right_operand_claim] =
+            accumulator.get_operand_claims::<2>(self.params.computation_node.idx);
         eq_eval * ((right_operand_claim * q_claim) + R_claim - left_operand_claim)
     }
 
@@ -436,6 +440,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
             SumcheckId::Execution,
             opening_point.clone(),
         );
+        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
     }
 }
 
@@ -530,6 +535,8 @@ mod tests {
                 .openings
                 .insert(*key, (empty_point, *value));
         }
+        verifier.accumulator.virtual_operand_claims =
+            prover.accumulator.virtual_operand_claims.clone();
 
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,

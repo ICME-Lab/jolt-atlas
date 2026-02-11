@@ -379,6 +379,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GatherProver<
             r_dict.into(),
             self.dictionary.final_sumcheck_claim(),
         );
+        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -425,15 +426,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GatherVerif
                 SumcheckId::Execution,
             )
             .1;
-        let dict_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                SumcheckId::Execution,
-            )
-            .1;
         let int_eval =
             IdentityPolynomial::new(self.params.num_words.log_2()).evaluate(&opening_point.r);
-
+        let [dict_claim, _] = accumulator.get_operand_claims::<2>(self.params.computation_node.idx);
         ra_claim * (dict_claim + self.params.gamma * int_eval)
     }
 
@@ -460,6 +455,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GatherVerif
             SumcheckId::Execution,
             r_dict.into(),
         );
+        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
     }
 }
 
@@ -831,6 +827,8 @@ mod tests {
                 .openings
                 .insert(*key, (empty_point, *value));
         }
+        verifier.accumulator.virtual_operand_claims =
+            prover.accumulator.virtual_operand_claims.clone();
 
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,

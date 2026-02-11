@@ -89,6 +89,7 @@ impl<F: JoltField> ReshapeProver<F> {
             self.params.r_output.clone().into(),
             claim_O,
         );
+        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -118,14 +119,11 @@ impl<F: JoltField> ReshapeVerifier<F> {
             SumcheckId::Execution,
             self.params.r_output.clone().into(),
         );
+        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
 
         // Retrieve the claim for the input node
-        let claim_A = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                SumcheckId::Execution,
-            )
-            .1;
+        let operand_claim =
+            accumulator.get_operand_claims::<1>(self.params.computation_node.idx)[0];
 
         // For reshape, the input claim should equal the output claim
         let claim_O = accumulator
@@ -135,7 +133,7 @@ impl<F: JoltField> ReshapeVerifier<F> {
             )
             .1;
 
-        if claim_A != claim_O {
+        if operand_claim != claim_O {
             return Err(ProofVerifyError::InvalidOpeningProof(
                 "Reshape claim does not match expected claim".to_string(),
             ));
@@ -227,6 +225,8 @@ mod tests {
                     .openings
                     .insert(*key, (empty_point, *value));
             }
+            verifier_opening_accumulator.virtual_operand_claims =
+                prover_opening_accumulator.virtual_operand_claims.clone();
 
             verifier_opening_accumulator.append_virtual(
                 verifier_transcript,

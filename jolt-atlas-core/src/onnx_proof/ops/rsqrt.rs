@@ -445,6 +445,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RsqrtProver<F
             opening_point.clone(),
             self.r_s.final_sumcheck_claim(),
         );
+        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -484,12 +485,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RsqrtVerifi
             .r;
         let r_node_output_prime = self.params.normalize_opening_point(sumcheck_challenges).r;
         let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
-        let left_operand_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                SumcheckId::Execution,
-            )
-            .1;
         let inv_claim = accumulator
             .get_committed_polynomial_opening(
                 CommittedPolynomial::RsqrtNodeInv(self.params.computation_node.idx),
@@ -514,7 +509,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RsqrtVerifi
                 SumcheckId::Execution,
             )
             .1;
-
+        let [left_operand_claim] =
+            accumulator.get_operand_claims::<1>(self.params.computation_node.idx);
         eq_eval
             * (left_operand_claim * inv_claim + r_i_claim - F::from_i32(Q_SQUARE)
                 + self.gamma * (rsqrt_claim * rsqrt_claim + r_s_claim - F::from_i32(Q) * inv_claim))
@@ -557,6 +553,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RsqrtVerifi
             SumcheckId::Execution,
             opening_point.clone(),
         );
+        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
     }
 }
 
@@ -657,6 +654,8 @@ mod tests {
                 .openings
                 .insert(*key, (empty_point, *value));
         }
+        verifier.accumulator.virtual_operand_claims =
+            prover.accumulator.virtual_operand_claims.clone();
 
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,

@@ -94,7 +94,7 @@ impl EinsumProver {
                 .find(|(pattern, _)| pattern == &equation.as_str())
                 .map(|(_, config)| config)
                 .unwrap_or_else(|| {
-                    panic!("Einsum equation ({equation}) not supported by precompile system")
+                    panic!("Einsum equation ({equation}) not supported by Einsum proof system")
                 }),
             _ => panic!("Unexpected operator"),
         };

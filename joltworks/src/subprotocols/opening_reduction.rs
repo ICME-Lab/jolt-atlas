@@ -109,7 +109,7 @@ where
             Arc<RwLock<SharedDensePolynomial<F>>>,
         >,
     ) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-feature"))]
         {
             use crate::poly::multilinear_polynomial::PolynomialEvaluation;
             let poly = polynomials_map.get(&self.polynomial).unwrap();

@@ -11,6 +11,7 @@ pub struct EinsumConfig {
 
 /// Registry mapping einsum patterns to their configurations using a BTreeMap for O(log n) lookup
 pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
+    /* **************** mk,kn->mn **************** */
     (
         "mk,kn->mn",
         EinsumConfig {
@@ -40,6 +41,33 @@ pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
         },
     ),
     (
+        "abmk,kn->mn",
+        EinsumConfig {
+            equation: "mk,kn->mn",
+            dims_extractor: extract_mk_kn_mn_dims,
+        },
+    ),
+    // Note: The equation "mbk,bkn->amn" contains two contraction dimensions (b and k).
+    // However, since these dimensions appear consecutively in both operands (as "bk"),
+    // we can flatten them into a single dimension and treat this as the simpler
+    // "mk,kn->mn" pattern. This optimization reduces duplicate prover logic while
+    // maintaining mathematical correctness.
+    (
+        "mbk,bkn->amn",
+        EinsumConfig {
+            equation: "mk,kn->mn",
+            dims_extractor: extract_mbk_bkn_amn_dims,
+        },
+    ),
+    (
+        "mbk,bkn->mn",
+        EinsumConfig {
+            equation: "mk,kn->mn",
+            dims_extractor: extract_mbk_bkn_amn_dims,
+        },
+    ),
+    /* **************** k,nk->n **************** */
+    (
         "k,nk->n",
         EinsumConfig {
             equation: "k,nk->n",
@@ -68,6 +96,14 @@ pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
         },
     ),
     (
+        "ak,k->mn",
+        EinsumConfig {
+            equation: "k,nk->n",
+            dims_extractor: extract_ak_k_mn_dims,
+        },
+    ),
+    /* **************** mbk,nbk->bmn **************** */
+    (
         "mbk,nbk->bmn",
         EinsumConfig {
             equation: "mbk,nbk->bmn",
@@ -81,6 +117,7 @@ pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
             dims_extractor: extract_mbk_nbk_bmn_dims,
         },
     ),
+    /* **************** bmk,kbn->mbn **************** */
     (
         "bmk,kbn->mbn",
         EinsumConfig {
@@ -93,18 +130,6 @@ pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
         EinsumConfig {
             equation: "bmk,kbn->mbn",
             dims_extractor: extract_bmk_kbn_mbn_dims,
-        },
-    ),
-    // Note: The equation "mbk,bkn->amn" contains two contraction dimensions (b and k).
-    // However, since these dimensions appear consecutively in both operands (as "bk"),
-    // we can flatten them into a single dimension and treat this as the simpler
-    // "mk,kn->mn" pattern. This optimization reduces duplicate prover logic while
-    // maintaining mathematical correctness.
-    (
-        "mbk,bkn->amn",
-        EinsumConfig {
-            equation: "mk,kn->mn",
-            dims_extractor: extract_mbk_bkn_amn_dims,
         },
     ),
 ];
@@ -135,6 +160,17 @@ fn extract_k_nk_n_dims(computation_node: &ComputationNode, model: &Model) -> Ein
     let k = b_node.output_dims[1];
     EinsumDims::new(vec![k], vec![n, k], vec![n])
 }
+
+fn extract_ak_k_mn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
+    let [a_idx, b_idx] = computation_node.inputs[..] else {
+        panic!("Expected exactly two inputs for k,nk->n operation")
+    };
+    let _a_node = &model[a_idx];
+    let b_node = &model[b_idx];
+    let k = b_node.output_dims[0];
+    EinsumDims::new(vec![k], vec![k], vec![1, 1])
+}
+
 fn extract_mbk_nbk_bmn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
     let [a_idx, b_idx] = computation_node.inputs[..] else {
         panic!("Expected exactly two inputs for mbk,nbk->bmn operation")

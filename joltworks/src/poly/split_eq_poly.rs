@@ -5,8 +5,7 @@ use allocative::Allocative;
 use ark_ff::Zero;
 use rayon::prelude::*;
 
-use super::dense_mlpoly::DensePolynomial;
-use super::multilinear_polynomial::BindingOrder;
+use super::{dense_mlpoly::DensePolynomial, multilinear_polynomial::BindingOrder};
 use crate::{
     field::JoltField,
     poly::{eq_poly::EqPolynomial, unipoly::UniPoly},
@@ -61,7 +60,7 @@ use crate::{
 /// ```
 ///
 /// The `current_scalar` accumulates eq(w_bound, r_bound) as we bind variables.
-#[derive(Debug, Clone, PartialEq, Allocative)]
+#[derive(Debug, Clone, PartialEq, Allocative, Default)]
 pub struct GruenSplitEqPolynomial<F: JoltField> {
     /// Number of unbound variables remaining (decrements each round).
     pub(crate) current_index: usize,
@@ -140,7 +139,12 @@ impl<F: JoltField> GruenSplitEqPolynomial<F> {
 
     #[tracing::instrument(skip_all, name = "GruenSplitEqPolynomial::new")]
     pub fn new(w: &[F::Challenge], binding_order: BindingOrder) -> Self {
-        Self::new_with_scaling(w, binding_order, None)
+        if w.is_empty() {
+            // Sum-check num_rounds is 0 for zero variables, so we won't call bind() and can skip precomputation.
+            Self::default()
+        } else {
+            Self::new_with_scaling(w, binding_order, None)
+        }
     }
 
     pub fn get_num_vars(&self) -> usize {

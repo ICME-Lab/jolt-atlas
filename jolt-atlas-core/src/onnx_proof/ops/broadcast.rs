@@ -133,6 +133,7 @@ impl<F: JoltField> BroadcastProver<F> {
             self.r_input.clone().into(),
             self.claim_A,
         );
+        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -183,16 +184,13 @@ impl<F: JoltField> BroadcastVerifier<F> {
             SumcheckId::Execution,
             self.r_input.clone().into(),
         );
+        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
 
         // Retrieve the claim for the input node
-        let claim_A = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                SumcheckId::Execution,
-            )
-            .1;
+        let operand_claim =
+            accumulator.get_operand_claims::<1>(self.params.computation_node.idx)[0];
 
-        let expected_claim_O = claim_A * self.eval_I;
+        let expected_claim_O = operand_claim * self.eval_I;
 
         let claim_O = accumulator
             .get_virtual_polynomial_opening(
@@ -364,6 +362,8 @@ mod tests {
                     .openings
                     .insert(*key, (empty_point, *value));
             }
+            verifier_opening_accumulator.virtual_operand_claims =
+                prover_opening_accumulator.virtual_operand_claims.clone();
 
             verifier_opening_accumulator.append_virtual(
                 verifier_transcript,

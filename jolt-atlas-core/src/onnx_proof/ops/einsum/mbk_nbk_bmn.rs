@@ -229,6 +229,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MbkNbkBmnProv
             right_opening_point,
             self.right_operand.final_sumcheck_claim(),
         );
+        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -260,18 +261,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MbkNbkBmnVe
         let b = self.params.einsum_dims.left_operand()[1];
         let (r_b, _) = self.params.r_node_output.split_at(b.log_2());
         let (r_h, _r_j) = sumcheck_challenges.split_at(self.params.log_b);
-        let left_operand_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                SumcheckId::Execution,
-            )
-            .1;
-        let right_operand_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-                SumcheckId::Execution,
-            )
-            .1;
+        let [left_operand_claim, right_operand_claim] =
+            accumulator.get_operand_claims::<2>(self.params.computation_node.idx);
         left_operand_claim * right_operand_claim * EqPolynomial::mle(r_b, r_h)
     }
 
@@ -305,6 +296,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MbkNbkBmnVe
             SumcheckId::Execution,
             right_opening_point,
         );
+        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
     }
 }
 
@@ -411,6 +403,8 @@ mod tests {
                 .openings
                 .insert(*key, (empty_point, *value));
         }
+        verifier_opening_accumulator.virtual_operand_claims =
+            prover_opening_accumulator.virtual_operand_claims.clone();
 
         verifier_opening_accumulator.append_virtual(
             verifier_transcript,

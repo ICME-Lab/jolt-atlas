@@ -155,6 +155,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for AddProver<F> 
             opening_point,
             self.right_operand.final_sumcheck_claim(),
         );
+        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -191,18 +192,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for AddVerifier
             .r;
         let r_node_output_prime = self.params.normalize_opening_point(sumcheck_challenges).r;
         let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
-        let left_operand_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                SumcheckId::Execution,
-            )
-            .1;
-        let right_operand_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-                SumcheckId::Execution,
-            )
-            .1;
+        let [left_operand_claim, right_operand_claim] =
+            accumulator.get_operand_claims::<2>(self.params.computation_node.idx);
         eq_eval * (left_operand_claim + right_operand_claim)
     }
 
@@ -225,6 +216,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for AddVerifier
             SumcheckId::Execution,
             opening_point,
         );
+        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
     }
 }
 
@@ -308,6 +300,8 @@ mod tests {
                 .openings
                 .insert(*key, (empty_point, *value));
         }
+        verifier_opening_accumulator.virtual_operand_claims =
+            prover_opening_accumulator.virtual_operand_claims.clone();
 
         verifier_opening_accumulator.append_virtual(
             verifier_transcript,

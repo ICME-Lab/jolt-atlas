@@ -525,11 +525,10 @@ mod tests {
     #[test]
     fn test_self_attention_layer() {
         let working_dir = "../atlas-onnx-tracer/models/self_attention_layer/";
-        let mut _rng = StdRng::seed_from_u64(0x1003);
-        let input_data = vec![SCALE; 64 * 64];
-        // let input_data: Vec<i32> = (0..64 * 64)
-        //     .map(|_| SCALE + _rng.gen_range(-1..=1))
-        //     .collect(); // TODO: requires #115 to be resolved
+        let mut rng = StdRng::seed_from_u64(0x1003);
+        let input_data: Vec<i32> = (0..64 * 64)
+            .map(|_| SCALE + rng.gen_range(-10..=10))
+            .collect();
         let input = Tensor::construct(input_data, vec![1, 64, 64]);
 
         prove_and_verify_with_debug(working_dir, &input, true, false, true);
@@ -538,11 +537,10 @@ mod tests {
     #[test]
     fn test_multihead_attention() {
         let working_dir = "../atlas-onnx-tracer/models/multihead_attention/";
-        let mut _rng = StdRng::seed_from_u64(0x1013);
-        let input_data = vec![SCALE; 16 * 128];
-        // let input_data: Vec<i32> = (0..16 * 128)
-        //     .map(|_| SCALE + _rng.gen_range(-1..=1))
-        //     .collect(); // TODO: requires #115 to be resolved
+        let mut rng = StdRng::seed_from_u64(0x1013);
+        let input_data: Vec<i32> = (0..16 * 128)
+            .map(|_| SCALE + rng.gen_range(-10..=10))
+            .collect();
         let input = Tensor::construct(input_data, vec![1, 1, 16, 128]);
         prove_and_verify_with_debug(working_dir, &input, true, false, true);
     }

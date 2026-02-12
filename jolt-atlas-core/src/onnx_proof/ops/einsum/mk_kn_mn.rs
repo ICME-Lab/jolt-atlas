@@ -27,7 +27,7 @@ use joltworks::{
 };
 use rayon::prelude::*;
 
-use crate::utils::einsum::EinsumDims;
+use crate::utils::dims::EinsumDims;
 
 const DEGREE_BOUND: usize = 2;
 
@@ -192,6 +192,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MkKnMnProver<
             right_opening_point,
             self.right_operand.final_sumcheck_claim(),
         );
+        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -220,18 +221,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MkKnMnVerif
         accumulator: &VerifierOpeningAccumulator<F>,
         _sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let left_operand_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                SumcheckId::Execution,
-            )
-            .1;
-        let right_operand_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-                SumcheckId::Execution,
-            )
-            .1;
+        let [left_operand_claim, right_operand_claim] =
+            accumulator.get_operand_claims::<2>(self.params.computation_node.idx);
         left_operand_claim * right_operand_claim
     }
 
@@ -261,12 +252,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MkKnMnVerif
             SumcheckId::Execution,
             right_opening_point,
         );
+        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::utils::einsum::EINSUM_REGISTRY;
+    use crate::utils::dims::EINSUM_REGISTRY;
 
     use super::*;
     use ark_bn254::Fr;
@@ -366,6 +358,8 @@ mod tests {
                 .openings
                 .insert(*key, (empty_point, *value));
         }
+        verifier_opening_accumulator.virtual_operand_claims =
+            prover_opening_accumulator.virtual_operand_claims.clone();
 
         verifier_opening_accumulator.append_virtual(
             verifier_transcript,

@@ -16,6 +16,7 @@ pub mod rsqrt;
 pub mod softmax_axes;
 pub mod square;
 pub mod sub;
+pub mod sum;
 pub mod tanh;
 
 use atlas_onnx_tracer::{node::ComputationNode, ops::Operator};
@@ -126,12 +127,14 @@ impl NodeCommittedPolynomials {
             Operator::Sub(inner) => {
                 OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
             }
+            Operator::Sum(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
             Operator::Tanh(inner) => {
                 OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
             }
             _ => {
-                println!("Unhandled operator in graph: {node:#?}");
-                vec![]
+                panic!("Unhandled operator in graph: {node:#?}");
             }
         }
     }
@@ -165,10 +168,10 @@ impl OperatorProver {
             Operator::Square(inner) => inner.prove(node, prover),
             Operator::SoftmaxAxes(inner) => inner.prove(node, prover),
             Operator::Sub(inner) => inner.prove(node, prover),
+            Operator::Sum(inner) => inner.prove(node, prover),
             Operator::Tanh(inner) => inner.prove(node, prover),
             _ => {
-                println!("Unhandled operator in graph: {node:#?}");
-                vec![]
+                panic!("Unhandled operator in graph: {node:#?}");
             }
         }
     }
@@ -204,10 +207,8 @@ impl OperatorVerifier {
             Operator::SoftmaxAxes(inner) => inner.verify(node, verifier),
             Operator::Sub(inner) => inner.verify(node, verifier),
             Operator::Tanh(inner) => inner.verify(node, verifier),
-            _ => {
-                tracing::warn!("Unhandled operator in graph: {node:#?}");
-                Ok(())
-            }
+            Operator::Sum(inner) => inner.verify(node, verifier),
+            _ => Err(ProofVerifyError::MissingProof(node.idx)),
         }
     }
 }

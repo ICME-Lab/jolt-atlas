@@ -347,7 +347,11 @@ impl<F: JoltField> SumcheckInstanceParams<F> for BooleanityParams<F> {
     }
 
     fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
+        let mut opening_point = challenges.to_vec();
+        let log_K = self.log_K();
+        opening_point[..log_K].reverse();
+        opening_point[log_K..].reverse();
+        opening_point.into()
     }
 
     fn num_rounds(&self) -> usize {
@@ -604,7 +608,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for BooleanityPro
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let (r_address, r_node_output) = sumcheck_challenges.split_at(self.params.log_K());
+        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let (r_address, r_node_output) = opening_point.r.split_at(self.params.log_K());
         accumulator.append_sparse(
             transcript,
             vec![CommittedPolynomial::SoftmaxExponentiationRa(
@@ -672,6 +677,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BooleanityV
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
         accumulator.append_sparse(
             transcript,
             vec![CommittedPolynomial::SoftmaxExponentiationRa(
@@ -679,7 +685,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BooleanityV
                 self.params.softmax_index.feature_idx,
             )],
             SumcheckId::Booleanity,
-            sumcheck_challenges.to_vec(),
+            opening_point.r,
         );
     }
 }

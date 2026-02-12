@@ -89,6 +89,7 @@ impl<F: JoltField> ReshapeProver<F> {
             self.params.r_output.clone().into(),
             claim_O,
         );
+        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -118,14 +119,11 @@ impl<F: JoltField> ReshapeVerifier<F> {
             SumcheckId::Execution,
             self.params.r_output.clone().into(),
         );
+        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
 
         // Retrieve the claim for the input node
-        let claim_A = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                SumcheckId::Execution,
-            )
-            .1;
+        let operand_claim =
+            accumulator.get_operand_claims::<1>(self.params.computation_node.idx)[0];
 
         // For reshape, the input claim should equal the output claim
         let claim_O = accumulator
@@ -135,7 +133,7 @@ impl<F: JoltField> ReshapeVerifier<F> {
             )
             .1;
 
-        if claim_A != claim_O {
+        if operand_claim != claim_O {
             return Err(ProofVerifyError::InvalidOpeningProof(
                 "Reshape claim does not match expected claim".to_string(),
             ));
@@ -193,14 +191,9 @@ mod tests {
             let prover_transcript = &mut Blake2bTranscript::new(&[]);
             let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
                 ProverOpeningAccumulator::new();
-            let verifier_transcript = &mut Blake2bTranscript::new(&[]);
-            let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-                VerifierOpeningAccumulator::new();
 
             let r_node_output: Vec<<Fr as JoltField>::Challenge> =
                 prover_transcript.challenge_vector_optimized::<Fr>(max_vars);
-            let _r_node_output: Vec<<Fr as JoltField>::Challenge> =
-                verifier_transcript.challenge_vector_optimized::<Fr>(max_vars);
 
             let reshape_claim =
                 MultilinearPolynomial::from(input_padded.clone()).evaluate(&r_node_output);
@@ -218,6 +211,13 @@ mod tests {
 
             reshape_prover.prove(&mut prover_opening_accumulator, prover_transcript);
 
+            let verifier_transcript = &mut Blake2bTranscript::new(&[]);
+            verifier_transcript.compare_to(prover_transcript.clone());
+            let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
+                VerifierOpeningAccumulator::new();
+            let _r_node_output: Vec<<Fr as JoltField>::Challenge> =
+                verifier_transcript.challenge_vector_optimized::<Fr>(max_vars);
+
             // Take claims
             for (key, (_, value)) in &prover_opening_accumulator.openings {
                 let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
@@ -225,6 +225,8 @@ mod tests {
                     .openings
                     .insert(*key, (empty_point, *value));
             }
+            verifier_opening_accumulator.virtual_operand_claims =
+                prover_opening_accumulator.virtual_operand_claims.clone();
 
             verifier_opening_accumulator.append_virtual(
                 verifier_transcript,
@@ -238,8 +240,6 @@ mod tests {
 
             let res =
                 reshape_verifier.verify(&mut verifier_opening_accumulator, verifier_transcript);
-
-            prover_transcript.compare_to(verifier_transcript.clone());
             assert!(res.is_ok(), "Reshape verification failed");
         }
     }

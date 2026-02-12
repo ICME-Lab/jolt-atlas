@@ -23,6 +23,7 @@ use crate::{
     utils::errors::ProofVerifyError,
 };
 use allocative::Allocative;
+use atlas_onnx_tracer::node::ComputationNode;
 use common::{CommittedPolynomial, VirtualPolynomial};
 use num_derive::FromPrimitive;
 use rayon::prelude::*;
@@ -41,6 +42,7 @@ pub const LITTLE_ENDIAN: Endianness = true;
 /// (point, claim)
 pub type Opening<F> = (OpeningPoint<BIG_ENDIAN, F>, F);
 pub type Openings<F> = BTreeMap<OpeningId, Opening<F>>;
+pub type VirtualOperandClaims<F> = BTreeMap<usize, Vec<F>>;
 
 /// Accumulates openings computed by the prover over the course of Jolt,
 /// so that they can all be reduced to a single opening proof using sumcheck.
@@ -56,6 +58,7 @@ where
     #[cfg(any(test, feature = "test-feature"))]
     pub appended_virtual_openings: RefCell<Vec<OpeningId>>,
     pub cached_opening_claims: BTreeMap<CommittedPolynomial, F>,
+    pub virtual_operand_claims: VirtualOperandClaims<F>,
 }
 
 /// Accumulates openings encountered by the verifier over the course of Jolt,
@@ -66,6 +69,7 @@ where
 {
     sumchecks: BTreeMap<CommittedPolynomial, OpeningProofReductionSumcheckVerifier<F>>,
     pub openings: Openings<F>,
+    pub virtual_operand_claims: VirtualOperandClaims<F>,
     /// In testing, the Jolt verifier may be provided the prover's openings so that we
     /// can detect any places where the openings don't match up.
     #[cfg(any(test, feature = "test-feature"))]
@@ -135,6 +139,7 @@ where
             #[cfg(any(test, feature = "test-feature"))]
             appended_virtual_openings: std::cell::RefCell::new(vec![]),
             cached_opening_claims: BTreeMap::new(),
+            virtual_operand_claims: BTreeMap::new(),
         }
     }
 
@@ -150,7 +155,10 @@ where
 
     /// Get the value of an opening by key
     pub fn get_opening(&self, key: OpeningId) -> F {
-        self.openings.get(&key).unwrap().1
+        self.openings
+            .get(&key)
+            .unwrap_or_else(|| panic!("opening should exist for {key:?}"))
+            .1
     }
 
     /// Adds an opening of a dense polynomial to the accumulator.
@@ -242,7 +250,11 @@ where
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
         claim: F,
     ) {
-        transcript.append_scalar(&claim);
+        // Don't add to transcript if node_output_poly as we will append in cache operand claims
+        if !matches!(polynomial, VirtualPolynomial::NodeOutput(_)) {
+            transcript.append_scalar(&claim);
+        }
+
         // assert!(
         //     self.openings
         //         .insert(
@@ -253,8 +265,8 @@ where
         //     "Key ({polynomial:?}, {sumcheck:?}) is already in opening map"
         // );
 
-        // TODO: Allow a node to have multiple openings that need to be checked
-        //       See #115
+        // TODO: Allow a node to have multiple openings that need to be reduced
+        //       See #138 for details
         self.openings.insert(
             OpeningId::Virtual(polynomial, sumcheck),
             (opening_point, claim),
@@ -265,16 +277,38 @@ where
             .push(OpeningId::Virtual(polynomial, sumcheck));
     }
 
+    pub fn cache_virtual_operand_claims<T: Transcript>(
+        &mut self,
+        transcript: &mut T,
+        computation_node: &ComputationNode,
+    ) {
+        let mut operand_claims = vec![];
+        for operand_node_index in computation_node.inputs.iter() {
+            let claim = self.get_opening(OpeningId::Virtual(
+                VirtualPolynomial::NodeOutput(*operand_node_index),
+                SumcheckId::Execution,
+            ));
+            transcript.append_scalar(&claim);
+            operand_claims.push(claim);
+        }
+        self.virtual_operand_claims
+            .insert(computation_node.idx, operand_claims);
+    }
+
     /// Take the openings, removing the points to reduce proof size
     ///
     /// # Returns:
     /// `Openings<F>` - The openings with points removed
-    pub fn take(&mut self) -> Openings<F> {
+    /// `VirtualOperandClaims<F>` - The virtual operand claims that were cached separately
+    pub fn take(&mut self) -> (Openings<F>, VirtualOperandClaims<F>) {
         // to reduce proof size, remove all the opening points from accumulator.openings and just leave the claims
         for (_, opening) in self.openings.iter_mut() {
             opening.0.r.clear();
         }
-        std::mem::take(&mut self.openings)
+        (
+            std::mem::take(&mut self.openings),
+            std::mem::take(&mut self.virtual_operand_claims),
+        )
     }
 
     pub fn assert_virtual_polynomial_opening_exists(
@@ -465,9 +499,37 @@ where
         Self {
             sumchecks: BTreeMap::new(),
             openings: BTreeMap::new(),
+            virtual_operand_claims: BTreeMap::new(),
             #[cfg(any(test, feature = "test-feature"))]
             prover_opening_accumulator: None,
         }
+    }
+
+    pub fn append_operand_claims<T: Transcript>(&self, transcript: &mut T, node_index: usize) {
+        let claims = self.operand_claims(node_index);
+        claims.iter().for_each(|claim| {
+            transcript.append_scalar(claim);
+        });
+    }
+
+    pub fn get_operand_claims<const NUM_OPERANDS: usize>(
+        &self,
+        node_index: usize,
+    ) -> [F; NUM_OPERANDS] {
+        self.operand_claims(node_index)
+            .try_into()
+            .unwrap_or_else(|claims: Vec<F>| {
+                panic!("Expected {NUM_OPERANDS} operand claims for node index {node_index}, but found {}", claims.len())
+            })
+    }
+
+    pub fn operand_claims(&self, node_index: usize) -> Vec<F> {
+        self.virtual_operand_claims
+            .get(&node_index)
+            .unwrap_or_else(|| {
+                panic!("No virtual operand claims found for node index {node_index}")
+            })
+            .clone()
     }
 
     /// Compare this accumulator to the corresponding `ProverOpeningAccumulator` and panic
@@ -548,7 +610,10 @@ where
     ) {
         let key = OpeningId::Virtual(polynomial, sumcheck);
         if let Some((_, claim)) = self.openings.get(&key) {
-            transcript.append_scalar(claim);
+            // Don't add to transcript if node_output_poly as we will append in append operand claims
+            if !matches!(polynomial, VirtualPolynomial::NodeOutput(_)) {
+                transcript.append_scalar(claim);
+            }
             let claim = *claim; // Copy the claim value
             self.openings.insert(key, (opening_point.clone(), claim));
         } else {

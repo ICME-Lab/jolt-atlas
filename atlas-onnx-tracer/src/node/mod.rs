@@ -58,4 +58,8 @@ impl ComputationNode {
     pub fn num_output_elements(&self) -> usize {
         self.output_dims.iter().product()
     }
+
+    pub fn is_scalar(&self) -> bool {
+        self.num_output_elements() == 1
+    }
 }

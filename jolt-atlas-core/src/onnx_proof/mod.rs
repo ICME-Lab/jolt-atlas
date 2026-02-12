@@ -539,6 +539,17 @@ mod tests {
     }
 
     #[test]
+    fn test_layernorm_head() {
+        let working_dir = "../atlas-onnx-tracer/models/layernorm_head/";
+        let mut rng = StdRng::seed_from_u64(0x8096);
+        let input_data: Vec<i32> = (0..16 * 16)
+            .map(|_| (1 << 7) + rng.gen_range(-50..=50))
+            .collect();
+        let input = Tensor::construct(input_data, vec![16, 16]);
+        prove_and_verify(working_dir, &input, false, false);
+    }
+
+    #[test]
     fn test_self_attention_layer() {
         let working_dir = "../atlas-onnx-tracer/models/self_attention_layer/";
         let mut rng = StdRng::seed_from_u64(0x1003);

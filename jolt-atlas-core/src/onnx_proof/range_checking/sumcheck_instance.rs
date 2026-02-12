@@ -263,7 +263,7 @@ impl ReadRafSumcheckHelper for TeleportRangeCheckOperands {
             VirtualPolynomial::TeleportRemainder(node.idx),
             VirtualPolynomial::NodeOutput(node.inputs[0]),
         ];
-        let virtual_ra = VirtualPolynomial::NodeOutput(node.idx); // Use node output Ra
+        let virtual_ra = VirtualPolynomial::TeleportRangeCheckRa(node.idx);
 
         Self {
             node_idx: node.idx,
@@ -297,11 +297,14 @@ impl ReadRafSumcheckHelper for TeleportRangeCheckOperands {
         };
 
         let (_, remainder) = compute_division(input_tensor, tau);
+        let divisor_tensor = Tensor::construct(vec![tau], vec![1])
+            .expand(input_tensor.dims())
+            .unwrap();
 
-        (remainder, input_tensor.clone())
+        (remainder, divisor_tensor)
     }
 
     fn rad_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::NeuralTeleportRangeCheckRaD(self.node_idx, d)
+        CommittedPolynomial::TeleportRangeCheckRaD(self.node_idx, d)
     }
 }

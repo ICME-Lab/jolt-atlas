@@ -23,7 +23,7 @@ pub enum CommittedPolynomial {
     DivRangeCheckRaD(usize, usize), // Interleaved R and divisor for Div advice
     SqrtDivRangeCheckRaD(usize, usize), // Interleaved R and divisor for Div advice
     SqrtRangeCheckRaD(usize, usize), // Interleaved r_s and sqrt for Sqrt advice
-    NeuralTeleportRangeCheckRaD(usize, usize), // Remainder and input for neural teleportation division
+    TeleportRangeCheckRaD(usize, usize), // Remainder and input for neural teleportation division
 
     /// Fields:
     ///
@@ -63,6 +63,8 @@ pub enum VirtualPolynomial {
     // from Committed one-hot polynomials.
     DivRangeCheckRa(usize),
     SqrtRangeCheckRa(usize),
+    TeleportRangeCheckRa(usize),
+
     DivRemainder(usize),
     SqrtRemainder(usize),
     TeleportQuotient(usize), // Quotient polynomial for neural teleportation lookups

@@ -252,7 +252,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
-        vec![CommittedPolynomial::TanhRa(node.idx)]
+        let one_hot_params = OneHotParams::new(node.num_output_elements().log_2());
+
+        let mut polys = vec![CommittedPolynomial::TanhRa(node.idx)];
+        polys.extend(
+            (0..one_hot_params.instruction_d)
+                .map(|i| CommittedPolynomial::TeleportRangeCheckRaD(node.idx, i)),
+        );
+        polys
     }
 }
 
@@ -469,13 +476,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TanhProver<F>
     ) {
         let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
 
-        let r_input_onehot = [self.params.r_node_output.as_slice(), &opening_point.r].concat();
-        accumulator.append_virtual(
+        accumulator.append_sparse(
             transcript,
-            VirtualPolynomial::NodeOutputRa(self.params.computation_node.idx),
+            vec![CommittedPolynomial::TanhRa(
+                self.params.computation_node.idx,
+            )],
             SumcheckId::Raf,
-            r_input_onehot.into(),
-            self.input_onehot.final_sumcheck_claim(),
+            opening_point.r,
+            self.params.r_node_output.clone(),
+            vec![self.input_onehot.final_sumcheck_claim()],
         );
     }
 }
@@ -524,8 +533,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifie
         let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
 
         let ra_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutputRa(self.params.computation_node.idx),
+            .get_committed_polynomial_opening(
+                CommittedPolynomial::TanhRa(self.params.computation_node.idx),
                 SumcheckId::Raf,
             )
             .1;
@@ -547,12 +556,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifie
     ) {
         let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
 
-        let r_input_onehot = [self.params.r_node_output.as_slice(), &opening_point.r].concat();
-        accumulator.append_virtual(
+        let r_input_onehot = [opening_point.r.as_slice(), &self.params.r_node_output].concat();
+        accumulator.append_sparse(
             transcript,
-            VirtualPolynomial::NodeOutputRa(self.params.computation_node.idx),
+            vec![CommittedPolynomial::TanhRa(
+                self.params.computation_node.idx,
+            )],
             SumcheckId::Raf,
-            r_input_onehot.into(),
+            r_input_onehot,
         );
     }
 }

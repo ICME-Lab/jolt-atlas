@@ -401,6 +401,8 @@ where
         } else {
             8
         };
+        // TODO: Virtualize TanhRa (and GatherRa) to remove this
+        // Currently the log_table_size for Tanh is greater than max_log_k_chunk
         let small_lookups_log_kt = shared
             .model
             .graph
@@ -408,9 +410,6 @@ where
             .iter()
             .map(|node| match &node.1.operator {
                 Operator::Tanh(inner) => inner.log_table + node.1.num_output_elements().log_2(),
-                Operator::Gather(_inner) => {
-                    todo!()
-                }
                 _ => 0,
             })
             .max()
@@ -681,8 +680,8 @@ mod tests {
     #[test]
     fn test_tanh() {
         let working_dir = "../atlas-onnx-tracer/models/tanh/";
-        let input_vector = vec![10, 40, 70, 100, 130];
-        let input = Tensor::new(Some(&input_vector), &[5]).unwrap();
+        let input_vector = vec![10, 40, 70, 100];
+        let input = Tensor::new(Some(&input_vector), &[4]).unwrap();
 
         prove_and_verify(working_dir, &input, true, true);
     }

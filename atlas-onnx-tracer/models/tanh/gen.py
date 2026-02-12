@@ -24,13 +24,13 @@ def main():
     
     # Create dummy input with simple shape [4]
     # Using inputs that show tanh's characteristic behavior
-    dummy_input = torch.tensor([-2.0, -1.0, 0.0, 1.0, 2.0])
+    dummy_input = torch.tensor([-2.0, -1.0, 0.0, 1.0])
     
     # Export to ONNX
     output_path = "network.onnx"
     torch.onnx.export(
         model,
-        dummy_input,
+        dummy_input,    
         output_path,
         export_params=True,
         opset_version=14,
@@ -51,20 +51,20 @@ def main():
         print(f"Removed external data file: {external_data_file}")
     
     print(f"ONNX model saved to {output_path}")
-    print(f"Input shape: [5]")
-    print(f"Output shape: [5]")
+    print(f"Input shape: [4]")
+    print(f"Output shape: [4]")
     print(f"\nModel operations:")
     print(f"  Tanh: tanh(input)")
     print(f"  Maps values to range (-1, 1)")
     
     # Test with sample input
-    test_input = torch.tensor([-2.0, -1.0, 0.0, 1.0, 2.0])
+    test_input = torch.tensor([-2.0, -1.0, 0.0, 1.0])
     with torch.no_grad():
         test_output = model(test_input)
     print(f"\nTest verification:")
     print(f"  Input: {test_input.tolist()}")
     print(f"  Output: {test_output.tolist()}")
-    print(f"  Expected: approximately [-0.964, -0.762, 0.0, 0.762, 0.964]")
+    print(f"  Expected: approximately [-0.964, -0.762, 0.0, 0.762]")
 
 if __name__ == "__main__":
     main()

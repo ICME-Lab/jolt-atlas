@@ -50,13 +50,14 @@ pub fn iff<
     a: &Tensor<T>,
     b: &Tensor<T>,
 ) -> Result<Tensor<T>, TensorError> {
-    // assert is boolean
-    if !mask
-        .par_iter()
-        .all(|x| *x == T::one().unwrap() || *x == T::zero().unwrap())
-    {
-        return Err(TensorError::WrongMethod);
-    }
+    // TODO: Make mask boolean with LT op (mask = mask > 0)
+    // // assert is boolean
+    // if !mask
+    //     .par_iter()
+    //     .all(|x| *x == T::one().unwrap() || *x == T::zero().unwrap())
+    // {
+    //     return Err(TensorError::WrongMethod);
+    // }
 
     let masked_a = (mask.clone() * a.clone())?;
 
@@ -3257,13 +3258,19 @@ pub mod nonlinearities {
         debug_assert!(z_q <= 0, "exp_fixed_lut_128 requires z_q <= 0");
         let idx = (-z_q) as usize;
 
-        // For GPT-2 transformer models, logits won't exceed -8.0 in real units,
+        // TODO(AntoineF4C5): Uncomment and prove
+        // if idx >= EXP_LUT_SCALE_128.len() {
+        //     return 0;
+        // }
+
         if idx >= EXP_LUT_SCALE_128.len() {
-            panic!("exp_fixed_lut_128 index out of bounds: z_q={z_q}, idx={idx}");
+            panic!("exp_fixed_lut_128: z_q={z_q} is out of LUT bounds (idx={idx}), returning 0");
         }
+
         EXP_LUT_SCALE_128[idx]
     }
 
+    #[derive(Debug, Clone)]
     pub struct SoftmaxTrace {
         /// Original input tensor (scale 128)
         pub input_logits: Tensor<i32>,

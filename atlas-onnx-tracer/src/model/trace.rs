@@ -72,6 +72,7 @@ impl Index<usize> for Model {
     }
 }
 
+#[derive(Debug, Clone)]
 /// Metadata, operands, and output for a single computation node.
 pub struct LayerData<'a> {
     pub output: &'a Tensor<i32>,

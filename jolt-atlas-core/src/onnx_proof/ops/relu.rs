@@ -198,6 +198,7 @@ mod tests {
         let T = 1 << log_T;
         let mut rng = StdRng::seed_from_u64(0x888);
         let input = Tensor::<i32>::random_small(&mut rng, &[T]);
+        println!("Input: {input:?}");
         let model = model::test::relu_model(T);
         let trace = model.trace(&[input]);
 

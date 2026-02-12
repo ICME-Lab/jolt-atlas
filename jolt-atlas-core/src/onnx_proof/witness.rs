@@ -1,8 +1,10 @@
 use crate::onnx_proof::{
+    neural_teleport::{division::compute_division, n_bits_to_usize},
     op_lookups::{read_raf_checking::compute_lookup_indices_from_operands, InterleavedBitsMarker},
     ops::{rsqrt::Q_SQUARE, softmax_axes::softmax::scalar_div::S},
     range_checking::sumcheck_instance::{
         DivRangeCheckOperands, ReadRafSumcheckHelper, RiRangeCheckOperands, RsRangeCheckOperands,
+        TeleportRangeCheckOperands,
     },
 };
 use atlas_onnx_tracer::{
@@ -141,7 +143,26 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     ),
                 )
             }
-
+            CommittedPolynomial::TeleportRangeCheckRaD(node_idx, d) => {
+                let computation_node = &model.graph.nodes[node_idx];
+                let (left_operand, right_operand) =
+                    TeleportRangeCheckOperands::get_operands_tensors(trace, computation_node);
+                let lookup_indices = TeleportRangeCheckOperands::compute_lookup_indices(
+                    &left_operand,
+                    &right_operand,
+                );
+                let one_hot_params = OneHotParams::new(lookup_indices.len().log_2());
+                let addresses: Vec<_> = lookup_indices
+                    .par_iter()
+                    .map(|lookup_index| {
+                        Some(one_hot_params.lookup_index_chunk(lookup_index.into(), *d) as u16)
+                    })
+                    .collect();
+                MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                    addresses,
+                    one_hot_params.k_chunk,
+                ))
+            }
             // TODO: Generate batch witness for Sofmax committed polynomials
             CommittedPolynomial::SoftmaxRemainder(node_idx, feature_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
@@ -224,6 +245,28 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
                     non_zero_addresses,
                     num_words,
+                ))
+            }
+
+            CommittedPolynomial::TanhRa(node_idx) => {
+                let computation_node = &model.graph.nodes[node_idx];
+                let Operator::Tanh(inner) = &computation_node.operator else {
+                    panic!("Expected Tanh operator for TanhRa committed polynomial");
+                };
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let input = &layer_data.operands[0];
+                // Compute quotient for neural teleportation
+                let (quotient, _remainder) = compute_division(input, inner.tau);
+
+                let non_zero_addresses: Vec<_> = quotient
+                    .data()
+                    .par_iter()
+                    .map(|&val| Some(n_bits_to_usize(val, inner.log_table) as u16))
+                    .collect();
+                let table_size = 1 << inner.log_table;
+                MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                    non_zero_addresses,
+                    table_size,
                 ))
             }
         }

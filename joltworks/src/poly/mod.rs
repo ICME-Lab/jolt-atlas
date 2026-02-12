@@ -15,4 +15,5 @@ pub mod ra_poly;
 pub mod range_mask_polynomial;
 pub mod rlc_polynomial;
 pub mod split_eq_poly;
+pub mod teleport_id_poly;
 pub mod unipoly;

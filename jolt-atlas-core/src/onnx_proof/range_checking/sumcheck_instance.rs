@@ -1,12 +1,14 @@
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
+    ops::Operator,
     tensor::Tensor,
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{field::JoltField, utils::lookup_bits::LookupBits};
 
 use crate::onnx_proof::{
+    neural_teleport::division::compute_division,
     ops::rsqrt::{Q, Q_SQUARE},
     range_checking::read_raf_checking::compute_lookup_indices_from_operands,
 };
@@ -246,5 +248,63 @@ impl ReadRafSumcheckHelper for RsRangeCheckOperands {
 
     fn rad_poly(&self, d: usize) -> CommittedPolynomial {
         CommittedPolynomial::SqrtRangeCheckRaD(self.node_idx, d)
+    }
+}
+
+pub struct TeleportRangeCheckOperands {
+    pub node_idx: usize,
+    pub input_operands: Vec<VirtualPolynomial>,
+    pub virtual_ra: VirtualPolynomial,
+}
+
+impl ReadRafSumcheckHelper for TeleportRangeCheckOperands {
+    fn new(node: &ComputationNode) -> Self {
+        let input_operands = vec![
+            VirtualPolynomial::TeleportRemainder(node.idx),
+            VirtualPolynomial::NodeOutput(node.inputs[0]),
+        ];
+        let virtual_ra = VirtualPolynomial::TeleportRangeCheckRa(node.idx);
+
+        Self {
+            node_idx: node.idx,
+            input_operands,
+            virtual_ra,
+        }
+    }
+
+    fn get_input_operands(&self) -> Vec<VirtualPolynomial> {
+        self.input_operands.to_vec()
+    }
+
+    fn get_output_operand(&self) -> VirtualPolynomial {
+        self.virtual_ra
+    }
+
+    fn get_operands_tensors(trace: &Trace, node: &ComputationNode) -> (Tensor<i32>, Tensor<i32>) {
+        let LayerData {
+            output: _,
+            operands,
+        } = Trace::layer_data(trace, node);
+
+        let [input_tensor] = operands[..] else {
+            panic!("Expected exactly one input tensor for neural teleportation");
+        };
+
+        let tau = if let Operator::Tanh(inner) = &node.operator {
+            inner.tau
+        } else {
+            panic!("Expected Tanh operator for neural teleportation division");
+        };
+
+        let (_, remainder) = compute_division(input_tensor, tau);
+        let divisor_tensor = Tensor::construct(vec![tau], vec![1])
+            .expand(input_tensor.dims())
+            .unwrap();
+
+        (remainder, divisor_tensor)
+    }
+
+    fn rad_poly(&self, d: usize) -> CommittedPolynomial {
+        CommittedPolynomial::TeleportRangeCheckRaD(self.node_idx, d)
     }
 }

@@ -17,6 +17,7 @@ pub mod softmax_axes;
 pub mod square;
 pub mod sub;
 pub mod sum;
+pub mod tanh;
 
 use atlas_onnx_tracer::{node::ComputationNode, ops::Operator};
 // Re-export handler types for convenient access
@@ -129,6 +130,9 @@ impl NodeCommittedPolynomials {
             Operator::Sum(inner) => {
                 OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
             }
+            Operator::Tanh(inner) => {
+                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+            }
             _ => {
                 panic!("Unhandled operator in graph: {node:#?}");
             }
@@ -165,6 +169,7 @@ impl OperatorProver {
             Operator::SoftmaxAxes(inner) => inner.prove(node, prover),
             Operator::Sub(inner) => inner.prove(node, prover),
             Operator::Sum(inner) => inner.prove(node, prover),
+            Operator::Tanh(inner) => inner.prove(node, prover),
             _ => {
                 panic!("Unhandled operator in graph: {node:#?}");
             }
@@ -201,6 +206,7 @@ impl OperatorVerifier {
             Operator::Square(inner) => inner.verify(node, verifier),
             Operator::SoftmaxAxes(inner) => inner.verify(node, verifier),
             Operator::Sub(inner) => inner.verify(node, verifier),
+            Operator::Tanh(inner) => inner.verify(node, verifier),
             Operator::Sum(inner) => inner.verify(node, verifier),
             _ => Err(ProofVerifyError::MissingProof(node.idx)),
         }

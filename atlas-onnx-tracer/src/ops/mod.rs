@@ -78,7 +78,7 @@ define_operators! {
         IsNan { out_dims: Vec<usize> }, MoveAxis { source: usize, destination: usize },
         Mul, Broadcast { shape: Vec<usize> }, Noop, ReLU, Reshape { shape:Vec<usize> },
         Rsqrt { scale: F32 }, Shr, SoftmaxAxes { axes: usize, scale: F32 }, Square,
-        Sub, Sum { axes: Vec<usize> }, Tanh { scale: F32 }, ULessThan,
+        Sub, Sum { axes: Vec<usize> }, Tanh { scale: F32, tau: i32, log_table: usize }, ULessThan,
     ]
 }
 

@@ -13,6 +13,10 @@ use crate::{
 
 use super::{HandlerContext, OpHandlerFn};
 
+// TODO: These values should be finetuned based on input ranges and desired output precision.
+const NEURAL_TELEPORT_TAU: i32 = 2;
+const NEURAL_TELEPORT_LOG_TABLE_SIZE: usize = 16;
+
 pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
     HashMap::from([
         ("Max", handle_max as OpHandlerFn),
@@ -55,10 +59,16 @@ fn handle_max(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 /// Tanh: Hyperbolic tangent activation.
 fn handle_tanh(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let scale = scale_to_multiplier(hctx.run_args.scale).into();
+    let tau = NEURAL_TELEPORT_TAU;
+    let log_table_size = NEURAL_TELEPORT_LOG_TABLE_SIZE;
 
     HandlerBuilder::new(hctx)
         .with_broadcast()
-        .simple_op(Operator::Tanh(Tanh { scale }))
+        .simple_op(Operator::Tanh(Tanh {
+            scale,
+            tau,
+            log_table: log_table_size,
+        }))
         .build()
 }
 

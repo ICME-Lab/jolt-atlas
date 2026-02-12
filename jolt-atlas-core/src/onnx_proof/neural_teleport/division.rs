@@ -215,6 +215,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TeleportDivis
             opening_point.clone(),
             self.remainder.final_sumcheck_claim(),
         );
+        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -254,12 +255,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TeleportDiv
         let r_node_output_prime = self.params.normalize_opening_point(sumcheck_challenges).r;
         let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
 
-        let input_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                SumcheckId::Execution,
-            )
-            .1;
+        let [input_claim] = accumulator.get_operand_claims(self.params.computation_node.idx);
         let quotient_claim = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::TeleportQuotient(self.params.computation_node.idx),
@@ -302,5 +298,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TeleportDiv
             SumcheckId::Execution,
             opening_point.clone(),
         );
+        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
     }
 }

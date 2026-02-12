@@ -903,6 +903,9 @@ mod tests {
                 .insert(*key, (empty_point, *value));
         }
 
+        verifier.accumulator.virtual_operand_claims =
+            prover.accumulator.virtual_operand_claims.clone();
+
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,
             VirtualPolynomial::NodeOutput(output_index),

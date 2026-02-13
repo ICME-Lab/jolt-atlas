@@ -55,6 +55,7 @@ pub mod prefixes;
 pub mod suffixes;
 
 pub mod and;
+pub mod clamp;
 pub mod or;
 pub mod relu;
 pub mod unsigned_less_than;

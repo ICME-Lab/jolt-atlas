@@ -3,20 +3,6 @@ name = "jolt-atlas-core"
 version = "0.1.0"
 edition = "2021"
 
-[profile.test]
-opt-level = 3
-lto = "off"
-
-[profile.release]
-debug = 1
-lto = "fat"
-
-[profile.build-fast]
-inherits = "release"
-incremental = true
-lto = "off"
-overflow-checks = true
-
 [dependencies]
 # Internal dependencies
 atlas-onnx-tracer = { path = "../atlas-onnx-tracer" }
@@ -66,10 +52,3 @@ serial_test = "3.2.0"
 [dev-dependencies]
 # Enable test-feature for joltworks during tests only
 joltworks = { path = "../joltworks", features = ["test-feature"] }
-
-[patch.crates-io]
-ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
-ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
-ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
-ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
-allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }

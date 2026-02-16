@@ -15,39 +15,15 @@ license-file = "LICENSE"
 keywords = ["SNARK", "cryptography", "proofs", "zkML"]
 
 [workspace]
-members = ["onnx-tracer", "zkml-jolt-core"]
-exclude = ["atlas-onnx-tracer", "joltworks", "jolt-atlas-core", "common"]
+members = ["jolt-atlas-core", "atlas-onnx-tracer", "common", "joltworks"]
+exclude = ["onnx-tracer", "zkml-jolt-core"]
 
 [lib]
 path = "./src/lib.rs"
 
 
 [dependencies]
-clap = { version = "4.5.4", features = ["derive"] }
-eyre = "0.6.12"
-rand = "0.8.5"
-sysinfo = "0.30.8"
-syn = { version = "1.0.0", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
-rmp-serde = "1.3.0"
-toml_edit = "0.22.14"
-
-zkml-jolt-core = { path = "./zkml-jolt-core" }
-onnx-tracer = { path = "./onnx-tracer" }
-regex = "1.10.6"
-serde_json = "1.0.108"
-ark-bn254 = "0.5.0"
-ark-serialize = { workspace = true }
-jolt-core = { git = "https://github.com/ICME-Lab/zkml-jolt", branch = "dev", package = "jolt-core", default-features = true }
-
-
-[[example]]
-name = "article_classification"
-path = "examples/article_classification.rs"
-
-[[example]]
-name = "authorization"
-path = "examples/authorization.rs"
+jolt-atlas-core = { path = "./jolt-atlas-core" }
 
 [workspace.dependencies]
 ark-serialize = { version = "0.5.0", default-features = false, features = [
@@ -66,6 +42,7 @@ lto = "fat"
 inherits = "release"
 incremental = true
 lto = "off"
+overflow-checks = true
 
 [profile.guest]
 inherits = "release"
@@ -76,3 +53,4 @@ ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist
 ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
 ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }

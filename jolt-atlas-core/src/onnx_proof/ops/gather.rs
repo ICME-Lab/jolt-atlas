@@ -50,6 +50,7 @@ use rayon::{
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Gather {
+    #[tracing::instrument(skip_all, name = "Gather::prove")]
     fn prove(
         &self,
         node: &ComputationNode,
@@ -104,6 +105,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Gather {
         results
     }
 
+    #[tracing::instrument(skip_all, name = "Gather::verify")]
     fn verify(
         &self,
         node: &ComputationNode,

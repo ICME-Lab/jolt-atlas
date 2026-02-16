@@ -50,14 +50,13 @@ pub fn iff<
     a: &Tensor<T>,
     b: &Tensor<T>,
 ) -> Result<Tensor<T>, TensorError> {
-    // TODO: Make mask boolean with LT op (mask = mask > 0)
-    // // assert is boolean
-    // if !mask
-    //     .par_iter()
-    //     .all(|x| *x == T::one().unwrap() || *x == T::zero().unwrap())
-    // {
-    //     return Err(TensorError::WrongMethod);
-    // }
+    // assert is boolean
+    if !mask
+        .par_iter()
+        .all(|x| *x == T::one().unwrap() || *x == T::zero().unwrap())
+    {
+        return Err(TensorError::WrongMethod);
+    }
 
     let masked_a = (mask.clone() * a.clone())?;
 
@@ -3204,12 +3203,12 @@ pub mod nonlinearities {
         }
     }
 
-    pub const LOG_EXP_LUT_SIZE: usize = 10;
+    pub const LOG_EXP_LUT_SIZE: usize = 11;
     pub const EXP_LUT_SIZE: usize = 1 << LOG_EXP_LUT_SIZE;
 
-    /// Direct lookup table: exp(-i / 128) * 128 for i in [0, 1023].
-    /// Each index i represents z_q = -i (so z in range [0, -1023] maps to [0.0, -8.0] real).
-    pub const EXP_LUT_SCALE_128: [i32; EXP_LUT_SIZE] = [
+    /// Non-zero portion of the exp LUT: exp(-i / 128) * 128 for i in [0, 709].
+    /// Beyond this range the values are 0 (exp decays to negligible).
+    const EXP_LUT_NONZERO: [i32; 710] = [
         128, 127, 126, 125, 124, 123, 122, 121, 120, 119, 118, 117, 117, 116, 115, 114, 113, 112,
         111, 110, 109, 109, 108, 107, 106, 105, 104, 104, 103, 102, 101, 100, 100, 99, 98, 97, 97,
         96, 95, 94, 94, 93, 92, 91, 91, 90, 89, 89, 88, 87, 87, 86, 85, 85, 84, 83, 83, 82, 81, 81,
@@ -3237,18 +3236,21 @@ pub mod nonlinearities {
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
     ];
+
+    /// Direct lookup table: exp(-i / 128) * 128 for i in [0, EXP_LUT_SIZE).
+    /// Built at compile time from the non-zero seed values; the tail is zero-filled.
+    /// To resize, just change `LOG_EXP_LUT_SIZE` — no manual zero-padding needed.
+    pub const EXP_LUT_SCALE_128: [i32; EXP_LUT_SIZE] = {
+        let mut lut = [0i32; EXP_LUT_SIZE];
+        let mut i = 0;
+        while i < EXP_LUT_NONZERO.len() {
+            lut[i] = EXP_LUT_NONZERO[i];
+            i += 1;
+        }
+        lut
+    };
 
     /// Fixed-point exp for z_q <= 0 at scale=128.
     /// Returns exp(z_q / 128) * 128.
@@ -3259,9 +3261,6 @@ pub mod nonlinearities {
         let idx = (-z_q) as usize;
 
         // TODO(AntoineF4C5): Uncomment and prove
-        // if idx >= EXP_LUT_SCALE_128.len() {
-        //     return 0;
-        // }
 
         if idx >= EXP_LUT_SCALE_128.len() {
             panic!("exp_fixed_lut_128: z_q={z_q} is out of LUT bounds (idx={idx}), returning 0");

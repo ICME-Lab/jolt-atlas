@@ -1,9 +1,9 @@
 use crate::onnx_proof::{
     ops::OperatorProofTrait,
     range_checking::{
-        self,
         read_raf_checking::{RangecheckRafSumcheckProver, RangecheckRafSumcheckVerifier},
-        sumcheck_instance::{RiRangeCheckOperands, RsRangeCheckOperands},
+        sumcheck_instance::{ReadRafSumcheckHelper, RiRangeCheckOperands, RsRangeCheckOperands},
+        RangeCheckEncoding,
     },
     ProofId, ProofType, Prover, Verifier,
 };
@@ -14,7 +14,6 @@ use atlas_onnx_tracer::{
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
-    config::OneHotParams,
     field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
@@ -27,6 +26,7 @@ use joltworks::{
         unipoly::UniPoly,
     },
     subprotocols::{
+        shout::{self, RaOneHotEncoding},
         sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
@@ -34,12 +34,14 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
+use rayon::prelude::*;
 
 // TODO: Handle global scale
 pub const Q: i32 = 128;
 pub const Q_SQUARE: i32 = Q * Q;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
+    #[tracing::instrument(skip_all, name = "Rsqrt::prove")]
     fn prove(
         &self,
         node: &ComputationNode,
@@ -72,29 +74,37 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
         results.push((ProofId(node.idx, ProofType::RangeCheck), rangecheck_proof));
 
         // RaOneHotChecks proof
-        let log_T = node.num_output_elements().log_2();
-        let one_hot_params = OneHotParams::new(log_T);
-        let (div_ra_sumcheck, div_hw_sumcheck, div_bool_sumcheck) =
-            range_checking::new_ra_one_hot_sumcheck_provers::<F, RiRangeCheckOperands>(
-                node.clone(),
-                &one_hot_params,
-                prover,
-            );
+        let div_encoding = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+        let (div_left, div_right) =
+            RiRangeCheckOperands::get_operands_tensors(&prover.trace, node);
+        let div_lookup_bits =
+            RiRangeCheckOperands::compute_lookup_indices(&div_left, &div_right);
+        let div_lookup_indices: Vec<usize> =
+            div_lookup_bits.par_iter().map(|&x| x.into()).collect();
+        let [div_ra, div_hw, div_bool] = shout::ra_onehot_provers(
+            &div_encoding,
+            &div_lookup_indices,
+            &prover.accumulator,
+            &mut prover.transcript,
+        );
 
-        let (sqrt_ra_sumcheck, sqrt_hw_sumcheck, sqrt_bool_sumcheck) =
-            range_checking::new_ra_one_hot_sumcheck_provers::<F, RsRangeCheckOperands>(
-                node.clone(),
-                &one_hot_params,
-                prover,
-            );
+        let sqrt_encoding = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+        let (sqrt_left, sqrt_right) =
+            RsRangeCheckOperands::get_operands_tensors(&prover.trace, node);
+        let sqrt_lookup_bits =
+            RsRangeCheckOperands::compute_lookup_indices(&sqrt_left, &sqrt_right);
+        let sqrt_lookup_indices: Vec<usize> =
+            sqrt_lookup_bits.par_iter().map(|&x| x.into()).collect();
+        let [sqrt_ra, sqrt_hw, sqrt_bool] = shout::ra_onehot_provers(
+            &sqrt_encoding,
+            &sqrt_lookup_indices,
+            &prover.accumulator,
+            &mut prover.transcript,
+        );
 
         let mut ra_one_hot_instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
-            Box::new(div_ra_sumcheck),
-            Box::new(div_bool_sumcheck),
-            Box::new(div_hw_sumcheck),
-            Box::new(sqrt_ra_sumcheck),
-            Box::new(sqrt_bool_sumcheck),
-            Box::new(sqrt_hw_sumcheck),
+            div_ra, div_hw, div_bool,
+            sqrt_ra, sqrt_hw, sqrt_bool,
         ];
 
         let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
@@ -113,6 +123,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
         results
     }
 
+    #[tracing::instrument(skip_all, name = "Rsqrt::prove")]
     fn verify(
         &self,
         node: &ComputationNode,
@@ -163,29 +174,22 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
             .proofs
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let log_T = node.num_output_elements().log_2();
-        let one_hot_params = OneHotParams::new(log_T);
-        let (div_ra_sumcheck, div_hw_sumcheck, div_bool_sumcheck) =
-            range_checking::new_ra_one_hot_sumcheck_verifiers::<F, RiRangeCheckOperands>(
-                node.clone(),
-                &one_hot_params,
-                verifier,
-            );
-
-        let (sqrt_ra_sumcheck, sqrt_hw_sumcheck, sqrt_bool_sumcheck) =
-            range_checking::new_ra_one_hot_sumcheck_verifiers::<F, RsRangeCheckOperands>(
-                node.clone(),
-                &one_hot_params,
-                verifier,
-            );
+        let div_encoding = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+        let [div_ra, div_hw, div_bool] = shout::ra_onehot_verifiers(
+            &div_encoding,
+            &verifier.accumulator,
+            &mut verifier.transcript,
+        );
+        let sqrt_encoding = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+        let [sqrt_ra, sqrt_hw, sqrt_bool] = shout::ra_onehot_verifiers(
+            &sqrt_encoding,
+            &verifier.accumulator,
+            &mut verifier.transcript,
+        );
 
         let ra_one_hot_instances: Vec<&dyn SumcheckInstanceVerifier<_, _>> = vec![
-            &div_ra_sumcheck,
-            &div_bool_sumcheck,
-            &div_hw_sumcheck,
-            &sqrt_ra_sumcheck,
-            &sqrt_bool_sumcheck,
-            &sqrt_hw_sumcheck,
+            &*div_ra, &*div_hw, &*div_bool,
+            &*sqrt_ra, &*sqrt_hw, &*sqrt_bool,
         ];
         BatchedSumcheck::verify(
             ra_one_hot_proof,
@@ -202,10 +206,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
             CommittedPolynomial::RsqrtNodeInv(node.idx),
             CommittedPolynomial::RsqrtNodeRsqrt(node.idx),
         ];
-        let one_hot_params = OneHotParams::new(node.num_output_elements().log_2());
-        for d in 0..one_hot_params.instruction_d {
-            polys.push(CommittedPolynomial::SqrtDivRangeCheckRaD(node.idx, d));
-            polys.push(CommittedPolynomial::SqrtRangeCheckRaD(node.idx, d));
+        let encoding = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+        let d = encoding.one_hot_params().instruction_d;
+        for i in 0..d {
+            polys.push(CommittedPolynomial::SqrtDivRangeCheckRaD(node.idx, i));
+            polys.push(CommittedPolynomial::SqrtRangeCheckRaD(node.idx, i));
         }
         polys
     }

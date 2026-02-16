@@ -31,6 +31,7 @@ impl CommitmentScheme for HyperKZG<ark_bn254::Bn254> {
 
     const REQUIRES_MATERIALIZED_POLYS: bool = true;
 
+    #[tracing::instrument(skip_all)]
     fn setup_prover(max_num_vars: usize) -> Self::ProverSetup {
         HyperKZGSRS(Arc::new(SRS::setup(
             &mut ChaCha20Rng::from_seed(*b"HyperKZG_POLY_COMMITMENT_SCHEMEE"),
@@ -41,6 +42,7 @@ impl CommitmentScheme for HyperKZG<ark_bn254::Bn254> {
         .0
     }
 
+    #[tracing::instrument(skip_all)]
     fn setup_verifier(setup: &Self::ProverSetup) -> Self::VerifierSetup {
         HyperKZGVerifierKey {
             kzg_vk: KZGVerifierKey::from(&setup.kzg_pk),
@@ -103,6 +105,7 @@ impl CommitmentScheme for HyperKZG<ark_bn254::Bn254> {
         // HyperKZG doesn't use hints, so combining is trivial
     }
 
+    #[tracing::instrument(skip_all, name = "HyperKZG::prove")]
     fn prove<ProofTranscript: Transcript>(
         setup: &Self::ProverSetup,
         poly: &MultilinearPolynomial<Self::Field>,
@@ -113,6 +116,7 @@ impl CommitmentScheme for HyperKZG<ark_bn254::Bn254> {
         HyperKZG::<ark_bn254::Bn254>::open(setup, poly, opening_point, transcript).unwrap()
     }
 
+    #[tracing::instrument(skip_all, name = "HyperKZG::verify")]
     fn verify<ProofTranscript: Transcript>(
         proof: &Self::Proof,
         setup: &Self::VerifierSetup,

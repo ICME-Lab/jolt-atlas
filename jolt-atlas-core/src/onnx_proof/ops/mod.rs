@@ -13,6 +13,7 @@ pub mod mul;
 pub mod relu;
 pub mod reshape;
 pub mod rsqrt;
+pub mod scalar_const_div;
 pub mod softmax_axes;
 pub mod square;
 pub mod sub;
@@ -68,77 +69,50 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
     }
 }
 
+/// Dispatches on all provable `Operator` variants, binding the inner value
+/// to `$inner` and evaluating `$body`. Unhandled variants hit `$fallback`.
+macro_rules! dispatch_operator {
+    ($node:expr, |$inner:ident| $body:expr, _ => $fallback:expr) => {
+        match &$node.operator {
+            Operator::Add($inner) => $body,
+            Operator::Broadcast($inner) => $body,
+            Operator::Constant($inner) => $body,
+            Operator::Cube($inner) => $body,
+            Operator::Div($inner) => $body,
+            Operator::Einsum($inner) => $body,
+            Operator::Gather($inner) => $body,
+            Operator::Iff($inner) => $body,
+            Operator::Input($inner) => $body,
+            Operator::MoveAxis($inner) => $body,
+            Operator::Mul($inner) => $body,
+            Operator::ReLU($inner) => $body,
+            Operator::Reshape($inner) => $body,
+            Operator::Rsqrt($inner) => $body,
+            Operator::ScalarConstDiv($inner) => $body,
+            Operator::SoftmaxAxes($inner) => $body,
+            Operator::Square($inner) => $body,
+            Operator::Sub($inner) => $body,
+            Operator::Sum($inner) => $body,
+            Operator::Tanh($inner) => $body,
+            _ => $fallback,
+        }
+    };
+}
+
 pub struct NodeCommittedPolynomials;
 
-// TODO: Refactor duplicate `OperatorProofTrait::<F, T>::get_committed_polynomials(...)` logic in each operator into this dispatch method
 impl NodeCommittedPolynomials {
     pub fn get_committed_polynomials<F: JoltField, T: Transcript>(
         node: &ComputationNode,
     ) -> Vec<CommittedPolynomial> {
-        match &node.operator {
-            Operator::Add(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::Broadcast(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::Constant(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::Cube(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::Div(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::Einsum(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::Gather(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::Iff(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::Input(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::MoveAxis(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::Mul(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::ReLU(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::Reshape(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::Rsqrt(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::Square(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::SoftmaxAxes(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::Sub(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::Sum(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            Operator::Tanh(inner) => {
-                OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-            }
-            _ => {
-                panic!("Unhandled operator in graph: {node:#?}");
-            }
-        }
+        dispatch_operator!(
+            node,
+            |inner| OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node),
+            _ => panic!("Unhandled operator in graph: {node:#?}")
+        )
     }
 }
+
 pub struct OperatorProver;
 
 impl OperatorProver {
@@ -150,30 +124,11 @@ impl OperatorProver {
         F: JoltField,
         T: Transcript,
     {
-        match &node.operator {
-            Operator::Add(inner) => inner.prove(node, prover),
-            Operator::Broadcast(inner) => inner.prove(node, prover),
-            Operator::Constant(inner) => inner.prove(node, prover),
-            Operator::Cube(inner) => inner.prove(node, prover),
-            Operator::Div(inner) => inner.prove(node, prover),
-            Operator::Einsum(inner) => inner.prove(node, prover),
-            Operator::Gather(inner) => inner.prove(node, prover),
-            Operator::Iff(inner) => inner.prove(node, prover),
-            Operator::Input(inner) => inner.prove(node, prover),
-            Operator::MoveAxis(inner) => inner.prove(node, prover),
-            Operator::Mul(inner) => inner.prove(node, prover),
-            Operator::ReLU(inner) => inner.prove(node, prover),
-            Operator::Reshape(inner) => inner.prove(node, prover),
-            Operator::Rsqrt(inner) => inner.prove(node, prover),
-            Operator::Square(inner) => inner.prove(node, prover),
-            Operator::SoftmaxAxes(inner) => inner.prove(node, prover),
-            Operator::Sub(inner) => inner.prove(node, prover),
-            Operator::Sum(inner) => inner.prove(node, prover),
-            Operator::Tanh(inner) => inner.prove(node, prover),
-            _ => {
-                panic!("Unhandled operator in graph: {node:#?}");
-            }
-        }
+        dispatch_operator!(
+            node,
+            |inner| inner.prove(node, prover),
+            _ => panic!("Unhandled operator in graph: {node:#?}")
+        )
     }
 }
 
@@ -188,28 +143,11 @@ impl OperatorVerifier {
         F: JoltField,
         T: Transcript,
     {
-        match &node.operator {
-            Operator::Add(inner) => inner.verify(node, verifier),
-            Operator::Broadcast(inner) => inner.verify(node, verifier),
-            Operator::Constant(inner) => inner.verify(node, verifier),
-            Operator::Cube(inner) => inner.verify(node, verifier),
-            Operator::Div(inner) => inner.verify(node, verifier),
-            Operator::Einsum(inner) => inner.verify(node, verifier),
-            Operator::Gather(inner) => inner.verify(node, verifier),
-            Operator::Iff(inner) => inner.verify(node, verifier),
-            Operator::Input(inner) => inner.verify(node, verifier),
-            Operator::MoveAxis(inner) => inner.verify(node, verifier),
-            Operator::Mul(inner) => inner.verify(node, verifier),
-            Operator::Reshape(inner) => inner.verify(node, verifier),
-            Operator::ReLU(inner) => inner.verify(node, verifier),
-            Operator::Rsqrt(inner) => inner.verify(node, verifier),
-            Operator::Square(inner) => inner.verify(node, verifier),
-            Operator::SoftmaxAxes(inner) => inner.verify(node, verifier),
-            Operator::Sub(inner) => inner.verify(node, verifier),
-            Operator::Tanh(inner) => inner.verify(node, verifier),
-            Operator::Sum(inner) => inner.verify(node, verifier),
-            _ => Err(ProofVerifyError::MissingProof(node.idx)),
-        }
+        dispatch_operator!(
+            node,
+            |inner| inner.verify(node, verifier),
+            _ => Err(ProofVerifyError::MissingProof(node.idx))
+        )
     }
 }
 
@@ -223,6 +161,7 @@ impl OperatorVerifier {
 macro_rules! impl_standard_sumcheck_proof_api {
     ($inner_ty:ty, $params_ty:ident, $prover_ty:ident, $verifier_ty:ident) => {
         impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for $inner_ty {
+            #[tracing::instrument(skip(node, prover))]
             fn prove(
                 &self,
                 node: &ComputationNode,
@@ -241,6 +180,7 @@ macro_rules! impl_standard_sumcheck_proof_api {
                 vec![(ProofId(node.idx, ProofType::Execution), proof)]
             }
 
+            #[tracing::instrument(skip(node, verifier))]
             fn verify(
                 &self,
                 node: &ComputationNode,

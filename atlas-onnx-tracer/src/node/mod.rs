@@ -55,10 +55,14 @@ impl ComputationNode {
         }
     }
 
+    /// Computes the total number of output elements produced by this node.
+    /// This is the product of the output dimensions.
+    /// For example, if `output_dims` is `[2, 3]`, this returns `6`.
     pub fn num_output_elements(&self) -> usize {
         self.output_dims.iter().product()
     }
 
+    /// Returns true if the output of this node is a scalar (i.e., has exactly one element).
     pub fn is_scalar(&self) -> bool {
         self.num_output_elements() == 1
     }

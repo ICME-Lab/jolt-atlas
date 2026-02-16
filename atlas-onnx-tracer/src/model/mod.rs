@@ -8,18 +8,62 @@ pub mod test;
 pub mod trace;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// A high-level representation of an ONNX machine learning model.
+///
+/// The `Model` struct encapsulates a computation graph and provides methods
+/// for loading models from ONNX files and executing forward passes with quantized inputs.
 pub struct Model {
     /// The computation graph of the model
     pub graph: ComputationGraph,
 }
 
 impl Model {
-    /// load a model from the given path
+    /// Load a model from an ONNX file at the given path.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the ONNX model file
+    /// * `run_args` - Runtime arguments including variables, scale, and padding settings
+    ///
+    /// # Returns
+    ///
+    /// A `Model` instance with the loaded computation graph
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use atlas_onnx_tracer::model::{Model, RunArgs};
+    ///
+    /// let run_args = RunArgs::default();
+    /// let model = Model::load("path/to/model.onnx", &run_args);
+    /// ```
+    #[tracing::instrument(name = "Model::load", skip_all)]
     pub fn load(path: &str, run_args: &RunArgs) -> Self {
         Self::load_onnx_model(path, run_args)
     }
 
-    /// Forward pass through the model given the input tensors
+    /// Execute a forward pass through the model with the given input tensors.
+    ///
+    /// # Arguments
+    ///
+    /// * `inputs` - Slice of quantized input tensors (i32)
+    ///
+    /// # Returns
+    ///
+    /// A vector of quantized output tensors (i32) corresponding to the model's outputs
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use atlas_onnx_tracer::model::{Model, RunArgs};
+    /// use atlas_onnx_tracer::tensor::Tensor;
+    ///
+    /// let run_args = RunArgs::default();
+    /// let model = Model::load("path/to/model.onnx", &run_args);
+    /// let inputs = vec![Tensor::new(vec![1, 2, 3, 4], vec![2, 2])];
+    /// let outputs = model.forward(&inputs);
+    /// ```
+    #[tracing::instrument(name = "Model::forward", skip_all)]
     pub fn forward(&self, inputs: &[Tensor<i32>]) -> Vec<Tensor<i32>> {
         let node_outputs = self.execute_graph(inputs);
         self.extract_graph_outputs(&node_outputs)
@@ -27,22 +71,32 @@ impl Model {
 }
 
 impl Model {
+    /// Returns a reference to the underlying computation graph.
     pub fn graph(&self) -> &ComputationGraph {
         &self.graph
     }
 
+    /// Returns a reference to the map of computation nodes in the graph.
+    ///
+    /// Each node is identified by its index in the computation graph.
     pub fn nodes(&self) -> &BTreeMap<usize, ComputationNode> {
         &self.graph.nodes
     }
 
+    /// Returns the indices of input nodes in the computation graph.
     pub fn inputs(&self) -> &[usize] {
         &self.graph.inputs
     }
 
+    /// Returns the indices of output nodes in the computation graph.
     pub fn outputs(&self) -> &[usize] {
         &self.graph.outputs
     }
 
+    /// Returns the maximum T value across all nodes in the graph.
+    ///
+    /// T is defined as the next power of 2 greater than or equal to the number of
+    /// output elements for each node. This is used to determine the size of the commitment key in the proof system.
     pub fn max_T(&self) -> usize {
         self.graph
             .nodes
@@ -61,7 +115,7 @@ pub struct ComputationGraph {
     pub nodes: BTreeMap<usize, ComputationNode>,
     /// Indices of input nodes
     pub inputs: Vec<usize>,
-    /// List of output connections (node_index)
+    /// Indices of output nodes
     pub outputs: Vec<usize>,
     /// Original (unpadded) dimensions for input nodes, indexed by node index
     /// Only populated when padding is enabled
@@ -71,8 +125,11 @@ pub struct ComputationGraph {
     pub original_output_dims: HashMap<usize, Vec<usize>>,
 }
 
-/// Parameters specific to a proving run
-/// Arguments for running the model
+/// Runtime arguments for model execution and tracing.
+///
+/// `RunArgs` encapsulates configuration parameters needed to load and execute
+/// a model, including variable bindings (e.g., batch_size, sequence_length),
+/// quantization scale, and padding options.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunArgs {
     /// Map of variable names to their values
@@ -116,7 +173,7 @@ impl RunArgs {
         RunArgs {
             variables,
             scale: DEFAULT_SCALE,
-            pad_to_power_of_2: true, // Default to true for optimal cryptographic performance
+            pad_to_power_of_2: true,
         }
     }
 
@@ -157,7 +214,10 @@ impl RunArgs {
         self
     }
 
-    /// Set the scale for the RunArgs
+    /// Set the quantization scale for the RunArgs.
+    ///
+    /// The scale is the denominator in the fixed-point representation
+    /// used when quantizing the model.
     pub fn set_scale(mut self, scale: i32) -> Self {
         self.scale = scale;
         self

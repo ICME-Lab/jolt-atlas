@@ -15,6 +15,7 @@ use joltworks::{
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
+    #[tracing::instrument(skip_all, name = "Reshape::prove")]
     fn prove(
         &self,
         node: &ComputationNode,
@@ -26,6 +27,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
         vec![]
     }
 
+    #[tracing::instrument(skip_all, name = "Reshape::verify")]
     fn verify(
         &self,
         node: &ComputationNode,

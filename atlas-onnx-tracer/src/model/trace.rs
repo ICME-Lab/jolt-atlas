@@ -6,6 +6,7 @@ use crate::{model::Model, node::ComputationNode, tensor::Tensor};
 use std::{collections::BTreeMap, ops::Index};
 
 impl Model {
+    #[tracing::instrument(name = "Model::trace", skip_all)]
     /// Execute the graph and capture every node's output tensor.
     pub fn trace(&self, inputs: &[Tensor<i32>]) -> Trace {
         Trace::new(self.execute_graph(inputs))

@@ -96,6 +96,7 @@ pub struct MbkNbkBmnProver<F: JoltField> {
 }
 
 impl<F: JoltField> MbkNbkBmnProver<F> {
+    #[tracing::instrument(skip_all, name = "MbkNbkBmnProver::initialize")]
     pub fn initialize(trace: &Trace, params: MbkNbkBmnParams<F>) -> Self {
         let LayerData {
             operands,
@@ -238,6 +239,7 @@ pub struct MbkNbkBmnVerifier<F: JoltField> {
 }
 
 impl<F: JoltField> MbkNbkBmnVerifier<F> {
+    #[tracing::instrument(skip_all, name = "MbkNbkBmnVerifier::new")]
     pub fn new(
         computation_node: ComputationNode,
         einsum_dims: EinsumDims,

@@ -21,10 +21,12 @@ overflow-checks = true
 # Internal dependencies
 atlas-onnx-tracer = { path = "../atlas-onnx-tracer" }
 common = { path = "../common" }
-joltworks = { path = "../joltworks", features = ["test-feature"] }
+joltworks = { path = "../joltworks" }
 
 # Tracing and Profiling
 tracing = { version = "0.1.37", default-features = false }
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+tracing-chrome = "0.7"
 
 # Serialization
 serde = { version = "1.0", default-features = false, features = ["derive"] }
@@ -60,6 +62,10 @@ ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "de
 
 # Testing
 serial_test = "3.2.0"
+
+[dev-dependencies]
+# Enable test-feature for joltworks during tests only
+joltworks = { path = "../joltworks", features = ["test-feature"] }
 
 [patch.crates-io]
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }

@@ -16,6 +16,7 @@ use joltworks::{
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Constant {
+    #[tracing::instrument(skip_all, name = "Constant::prove")]
     fn prove(
         &self,
         node: &ComputationNode,
@@ -28,6 +29,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Constant {
         vec![]
     }
 
+    #[tracing::instrument(skip_all, name = "Constant::verify")]
     fn verify(
         &self,
         node: &ComputationNode,

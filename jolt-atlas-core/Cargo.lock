@@ -881,6 +881,8 @@ dependencies = [
  "strum",
  "strum_macros",
  "tracing",
+ "tracing-chrome",
+ "tracing-subscriber",
 ]
 
 [[package]]

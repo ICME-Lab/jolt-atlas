@@ -12,14 +12,13 @@ fn main() {
     let input = Tensor::new(Some(&input_data), &[1, 64, 64]).unwrap();
 
     let trace = transformer.trace(&[input.clone()]);
-    let softmax_layer_data = trace.layer_data(&transformer[46]);
     let tanh_layer_data = trace.layer_data(&transformer[110]);
     println!(
-        "softmax inputs:{:?}",
-        softmax_layer_data.operands[0][0..64].to_vec()
+        "tanh max:{:?}",
+        tanh_layer_data.operands[0].iter().max().unwrap(),
     );
     println!(
-        "tanh inputs:{:?}",
-        tanh_layer_data.operands[0][0..64].to_vec()
+        "tanh min:{:?}",
+        tanh_layer_data.operands[0].iter().min().unwrap(),
     );
 }

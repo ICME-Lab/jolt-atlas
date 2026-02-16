@@ -16,6 +16,7 @@ use crate::onnx_proof::{
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MoveAxis {
+    #[tracing::instrument(skip_all, name = "MoveAxis::prove")]
     fn prove(
         &self,
         node: &ComputationNode,
@@ -27,6 +28,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MoveAxis {
         vec![]
     }
 
+    #[tracing::instrument(skip_all, name = "MoveAxis::verify")]
     fn verify(
         &self,
         node: &ComputationNode,

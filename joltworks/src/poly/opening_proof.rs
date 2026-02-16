@@ -332,7 +332,7 @@ where
 
     /// Prepares sumcheck instances for the batch opening reduction.
     /// Must be called before `prove_batch_opening_sumcheck`.
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, name = "ProverOpeningAccumulator::prepare_for_sumcheck")]
     pub fn prepare_for_sumcheck(
         &mut self,
         polynomials: &BTreeMap<CommittedPolynomial, MultilinearPolynomial<F>>,
@@ -373,7 +373,10 @@ where
 
     /// Proves the batch opening reduction sumcheck (Stage 7).
     /// Returns the sumcheck proof and challenges.
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(
+        skip_all,
+        name = "ProverOpeningAccumulator::prove_batch_opening_sumcheck"
+    )]
     pub fn prove_batch_opening_sumcheck<T: Transcript>(
         &mut self,
         transcript: &mut T,
@@ -632,6 +635,7 @@ where
 
     // ========== Batch Opening Reduction Sumcheck ==========
 
+    #[tracing::instrument(skip_all, name = "VerifierOpeningAccumulator::prepare_for_sumcheck")]
     /// Prepares the verifier for the batch opening reduction sumcheck.
     /// Populates sumcheck claims from the proof.
     pub fn prepare_for_sumcheck(&mut self, sumcheck_claims: &[F]) {
@@ -647,6 +651,10 @@ where
     }
 
     /// Verifies the batch opening reduction sumcheck (Stage 7).
+    #[tracing::instrument(
+        skip_all,
+        name = "VerifierOpeningAccumulator::verify_batch_opening_sumcheck"
+    )]
     pub fn verify_batch_opening_sumcheck<T: Transcript>(
         &self,
         sumcheck_proof: &SumcheckInstanceProof<F, T>,
@@ -668,8 +676,12 @@ where
         )
     }
 
+    #[tracing::instrument(
+        skip_all,
+        name = "VerifierOpeningAccumulator::finalize_batch_opening_sumcheck"
+    )]
     /// Finalizes the batch opening reduction sumcheck verification.
-    /// Returns the state needed for Stage 8.
+    /// Returns the state needed for verify joint opening.
     pub fn finalize_batch_opening_sumcheck<T: Transcript>(
         &self,
         r_sumcheck: Vec<F::Challenge>,
@@ -692,7 +704,7 @@ where
         }
     }
 
-    // ========== Stage 8: Dory Batch Opening Verification ==========
+    // ========== Batch Opening Verification ==========
 
     /// Computes the joint commitment by homomorphically combining individual commitments.
     pub fn compute_joint_commitment<PCS: CommitmentScheme<Field = F>>(
@@ -730,6 +742,7 @@ where
             .sum()
     }
 
+    #[tracing::instrument(skip_all, name = "VerifierOpeningAccumulator::verify_joint_opening")]
     /// Verifies the joint opening proof (Stage 8).
     pub fn verify_joint_opening<T: Transcript, PCS: CommitmentScheme<Field = F>>(
         &self,

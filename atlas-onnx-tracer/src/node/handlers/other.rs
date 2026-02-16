@@ -10,6 +10,7 @@ use tract_onnx::{prelude::DatumType, tract_hir::ops::konst::Const};
 use crate::{
     node::ComputationNode,
     ops::{Constant, Einsum, IsNan, Operator},
+    tensor::TensorError,
     utils::{
         handler_builder::HandlerBuilder,
         parser::{DecompositionBuilder, extract_tensor_value, load_op},
@@ -31,16 +32,31 @@ pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
 }
 
 /// Const: Constant tensor value (quantized for fixed-point).
+///
+/// Boolean constants (e.g., attention masks) are converted directly to 0/1 integers
+/// without quantization scaling, since they represent logical values, not numeric ones.
+/// All other constants are quantized to fixed-point representation.
 fn handle_const(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let op = load_op::<Const>(hctx.node.op(), hctx.node.op().name().to_string());
+    let datum_type = op.val().datum_type();
     let raw_tensor = extract_tensor_value(op.val().clone()).unwrap();
-    let quantized_tensor = quantize_tensor(raw_tensor, hctx.run_args.scale);
+
+    let result_tensor = if datum_type == DatumType::Bool {
+        // Boolean tensors (e.g., causal attention masks) must remain as 0/1 integers.
+        // Applying quantization scaling would turn 1s into 1<<scale (e.g., 128),
+        // breaking downstream boolean checks in operations like Iff.
+        raw_tensor
+            .par_enum_map::<_, i32, TensorError>(|_, x| Ok(x as i32))
+            .unwrap()
+    } else {
+        quantize_tensor(raw_tensor, hctx.run_args.scale)
+    };
 
     // Constants have no inputs, use builder directly for this special case
     let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
     builder.add_node(ComputationNode {
         idx: builder.idx(0),
-        operator: Operator::Constant(Constant(quantized_tensor)),
+        operator: Operator::Constant(Constant(result_tensor)),
         inputs: vec![],
         output_dims: hctx.output_dims.clone(),
     });

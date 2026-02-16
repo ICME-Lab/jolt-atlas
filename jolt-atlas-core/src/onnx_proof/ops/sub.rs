@@ -84,6 +84,7 @@ pub struct SubProver<F: JoltField> {
 }
 
 impl<F: JoltField> SubProver<F> {
+    #[tracing::instrument(skip_all, name = "SubProver::initialize")]
     pub fn initialize(trace: &Trace, params: SubParams<F>) -> Self {
         let eq_r_node_output =
             GruenSplitEqPolynomial::new(&params.r_node_output, BindingOrder::LowToHigh);
@@ -163,6 +164,7 @@ pub struct SubVerifier<F: JoltField> {
 }
 
 impl<F: JoltField> SubVerifier<F> {
+    #[tracing::instrument(skip_all, name = "SubVerifier::new")]
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,

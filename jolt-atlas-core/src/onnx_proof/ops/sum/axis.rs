@@ -83,6 +83,7 @@ pub struct SumAxisProver<F: JoltField> {
 }
 
 impl<F: JoltField> SumAxisProver<F> {
+    #[tracing::instrument(skip_all, name = "SumAxisProver::initialize")]
     pub fn initialize(
         trace: &Trace,
         params: SumAxisParams<F>,

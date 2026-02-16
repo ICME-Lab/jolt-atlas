@@ -33,7 +33,8 @@
 use crate::onnx_proof::{
     ops::{
         softmax_axes::softmax::{
-            exponentiation, max,
+            exponentiation::{self, SoftmaxExpRaEncoding},
+            max,
             scalar_div::{DivParams, DivProver, DivVerifier},
             sum::{SumParams, SumProver, SumVerifier},
             SoftmaxIndex,
@@ -46,7 +47,10 @@ use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::SoftmaxAxes,
-    tensor::{ops::nonlinearities::softmax_fixed_128, Tensor},
+    tensor::{
+        ops::nonlinearities::softmax_fixed_128,
+        Tensor,
+    },
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
@@ -58,24 +62,38 @@ use joltworks::{
         },
     },
     subprotocols::{
+        shout::{self, RaOneHotEncoding},
         sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::SumcheckInstanceVerifier,
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math},
+    utils::{errors::ProofVerifyError, math::Math, thread::drop_in_background_thread},
 };
 
 pub mod softmax;
 
-struct SoftmaxSetupVars {
-    features: usize,
-    num_heads_seq_len: usize,
-    num_vars_num_heads: usize,
-    num_vars_seq_len: usize,
+#[derive(Clone)]
+pub struct SoftmaxLastAxisConfig {
+    num_feature_vectors: usize,
+    feature_vector_size: usize,
+}
+
+impl SoftmaxLastAxisConfig {
+    pub fn new(computation_node: &ComputationNode) -> Self {
+        let (&feature_vector_size, dims) = computation_node
+            .output_dims
+            .split_last()
+            .expect("Softmax output dims should not be empty");
+        Self {
+            feature_vector_size,
+            num_feature_vectors: dims.iter().product(),
+        }
+    }
 }
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxAxes {
+    #[tracing::instrument(skip_all, name = "SoftmaxAxes::prove")]
     fn prove(
         &self,
         node: &ComputationNode,
@@ -86,6 +104,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxAxes {
         softmax_prover.prove(&mut prover.accumulator, &mut prover.transcript)
     }
 
+    #[tracing::instrument(skip_all, name = "SoftmaxAxes::verify")]
     fn verify(
         &self,
         node: &ComputationNode,
@@ -96,13 +115,18 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxAxes {
             .proofs
             .get(&ProofId(node.idx, ProofType::SoftmaxDivSumMax))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let exponentiation_proof = verifier
+        let exponentiation_read_raf_proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::SoftmaxExponentiation))
+            .get(&ProofId(node.idx, ProofType::SoftmaxExponentiationReadRaf))
+            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        let exponentiation_ra_onehot_proof = verifier
+            .proofs
+            .get(&ProofId(node.idx, ProofType::SoftmaxExponentiationRaOneHot))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         softmax_verifier.verify(
             div_sum_max_proof,
-            exponentiation_proof,
+            exponentiation_read_raf_proof,
+            exponentiation_ra_onehot_proof,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )
@@ -113,18 +137,23 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxAxes {
         node: &ComputationNode,
     ) -> Vec<common::CommittedPolynomial> {
         let mut polys = vec![];
-        let [num_heads, seq_len, _] = node.output_dims[..] else {
-            panic!(
-                "Expected output_dims to have exactly three elements: [num_heads, seq_len, features]"
-            )
+        let config = SoftmaxLastAxisConfig::new(node);
+        let encoding = SoftmaxExpRaEncoding {
+            softmax_index: SoftmaxIndex {
+                node_idx: node.idx,
+                feature_idx: 0,
+            },
         };
-        let num_heads_seq_len = num_heads * seq_len;
-        for feature_idx in 0..num_heads_seq_len {
+        let d = encoding.one_hot_params().instruction_d;
+        for feature_idx in 0..config.num_feature_vectors {
             polys.push(CommittedPolynomial::SoftmaxRemainder(node.idx, feature_idx));
-            polys.push(CommittedPolynomial::SoftmaxExponentiationRa(
-                node.idx,
-                feature_idx,
-            ));
+            (0..d).for_each(|i| {
+                polys.push(CommittedPolynomial::SoftmaxExponentiationRaD(
+                    node.idx,
+                    feature_idx,
+                    i,
+                ))
+            });
         }
         polys
     }
@@ -134,6 +163,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxAxes {
 pub struct SoftmaxAxesParams<F: JoltField> {
     r_output: Vec<F::Challenge>,
     computation_node: ComputationNode,
+    config: SoftmaxLastAxisConfig,
 }
 
 impl<F: JoltField> SoftmaxAxesParams<F> {
@@ -147,8 +177,25 @@ impl<F: JoltField> SoftmaxAxesParams<F> {
             .r;
         Self {
             r_output,
+            config: SoftmaxLastAxisConfig::new(&computation_node),
             computation_node,
         }
+    }
+
+    pub fn r_features(&self) -> &[F::Challenge] {
+        &self.r_output[self.config.num_feature_vectors.log_2()..]
+    }
+
+    pub fn r_leading_dims(&self) -> &[F::Challenge] {
+        &self.r_output[..self.config.num_feature_vectors.log_2()]
+    }
+
+    pub fn num_feature_vectors(&self) -> usize {
+        self.config.num_feature_vectors
+    }
+
+    pub fn feature_vector_size(&self) -> usize {
+        self.config.feature_vector_size
     }
 }
 
@@ -168,56 +215,22 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
         }
     }
 
-    fn setup_vars(&self) -> (Vec<F::Challenge>, SoftmaxSetupVars) {
-        let [num_heads, seq_len, features] = self.params.computation_node.output_dims[..] else {
-            panic!(
-                "Expected output_dims to have exactly three elements: [num_heads, seq_len, features]"
-            )
-        };
-        let num_heads_seq_len = num_heads * seq_len;
-        let num_vars_num_heads = num_heads.log_2();
-        let num_vars_seq_len = seq_len.log_2();
-        let r_features = self.params.r_output[num_vars_num_heads + num_vars_seq_len..].to_vec();
-
-        (
-            r_features,
-            SoftmaxSetupVars {
-                features,
-                num_heads_seq_len,
-                num_vars_num_heads,
-                num_vars_seq_len,
-            },
-        )
-    }
-
+    #[tracing::instrument(skip_all, name = "SoftmaxAxesProver::prove")]
     pub fn prove<T: Transcript>(
         &self,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        let (r_features, setup_vars) = self.setup_vars();
-        let SoftmaxSetupVars {
-            features,
-            num_vars_num_heads,
-            num_vars_seq_len,
-            ..
-        } = setup_vars;
+        self.prove_outer(accumulator, transcript);
 
-        self.prove_outer(features, &r_features, accumulator, transcript);
-
-        let cached_traces = self.generate_trace_cache(features);
+        let cached_traces = self.generate_trace_cache();
 
         let div_sum_max_proof = self.prove_div_sum_max(&cached_traces, accumulator, transcript);
 
-        let exponentiation_proof =
+        let (exponentiation_read_raf_proof, exponentiation_ra_onehot_proof) =
             self.prove_exponentiation(&cached_traces, accumulator, transcript);
 
-        self.prove_operand_claims(
-            num_vars_num_heads,
-            num_vars_seq_len,
-            accumulator,
-            transcript,
-        );
+        self.prove_operand_claims(accumulator, transcript);
 
         vec![
             (
@@ -230,25 +243,36 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
             (
                 ProofId(
                     self.params.computation_node.idx,
-                    ProofType::SoftmaxExponentiation,
+                    ProofType::SoftmaxExponentiationReadRaf,
                 ),
-                exponentiation_proof,
+                exponentiation_read_raf_proof,
+            ),
+            (
+                ProofId(
+                    self.params.computation_node.idx,
+                    ProofType::SoftmaxExponentiationRaOneHot,
+                ),
+                exponentiation_ra_onehot_proof,
             ),
         ]
     }
 
+    #[tracing::instrument(skip_all)]
     /// Outer proof is implicit in the way we construct the claims for the feature outputs
     fn prove_outer<T: Transcript>(
         &self,
-        features: usize,
-        r_features: &[F::Challenge],
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
     ) {
         // Iterate over each (head, sequence) pair
-        for (feature_idx, output_chunk) in self.output.data().chunks_exact(features).enumerate() {
-            let feature_claim =
-                MultilinearPolynomial::from(output_chunk.to_vec()).evaluate(r_features);
+        for (feature_idx, output_chunk) in self
+            .output
+            .data()
+            .chunks_exact(self.params.feature_vector_size())
+            .enumerate()
+        {
+            let feature_claim = MultilinearPolynomial::from(output_chunk.to_vec())
+                .evaluate(self.params.r_features());
             accumulator.append_virtual(
                 transcript,
                 VirtualPolynomial::SoftmaxFeatureOutput(
@@ -256,21 +280,25 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
                     feature_idx,
                 ),
                 SumcheckId::Execution,
-                r_features.to_vec().into(),
+                self.params.r_features().to_vec().into(),
                 feature_claim,
             );
         }
     }
 
+    #[tracing::instrument(skip_all)]
     fn generate_trace_cache(
         &self,
-        features: usize,
     ) -> Vec<atlas_onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace> {
         let mut cached_traces = Vec::new();
-        for operand_chunk in self.operand.data().chunks_exact(features) {
+        for operand_chunk in self
+            .operand
+            .data()
+            .chunks_exact(self.params.feature_vector_size())
+        {
             let (_, trace) = softmax_fixed_128::<true>(&Tensor::construct(
                 operand_chunk.to_vec(),
-                vec![features],
+                vec![self.params.feature_vector_size()],
             ));
             let trace = trace.expect("Softmax trace should be present");
             cached_traces.push(trace);
@@ -278,6 +306,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
         cached_traces
     }
 
+    #[tracing::instrument(skip_all)]
     /// Stage 1: Division / Normalization
     ///
     /// Verifies the division step of softmax along with sum and max checks.
@@ -356,6 +385,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
         div_sum_max_proof
     }
 
+    #[tracing::instrument(skip_all)]
     /// Stage 2: Exponentiation
     ///
     /// Verifies exponentiation using a small LUT approach (similar to zkGPT but using shout instead of lasso).
@@ -364,8 +394,8 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
         cached_traces: &[atlas_onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace],
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> SumcheckInstanceProof<F, T> {
-        let mut exponentiation_instances: Vec<Box<dyn SumcheckInstanceProver<F, _>>> = vec![];
+    ) -> (SumcheckInstanceProof<F, T>, SumcheckInstanceProof<F, T>) {
+        let mut read_raf_instances: Vec<Box<dyn SumcheckInstanceProver<F, _>>> = vec![];
 
         // Iterate over each (head, sequence) pair (i.e., each feature vector)
         for (feature_idx, trace) in cached_traces.iter().enumerate() {
@@ -373,51 +403,75 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
                 node_idx: self.params.computation_node.idx,
                 feature_idx,
             };
-            let exponentiation_params: exponentiation::ReadRafHwParams<F> =
-                exponentiation::ReadRafHwParams::new(softmax_index, accumulator, transcript);
-            let exponentiation_prover_sumcheck = exponentiation::ReadRafHwProver::initialize(
+            let read_raf_params: exponentiation::ReadRafParams<F> =
+                exponentiation::ReadRafParams::new(softmax_index, accumulator, transcript);
+            let read_raf_prover_sumcheck = exponentiation::ReadRafProver::initialize(
                 trace,
-                exponentiation_params,
+                read_raf_params,
                 accumulator,
                 transcript,
             );
-            let booleanity_params =
-                exponentiation::BooleanityParams::new(softmax_index, accumulator, transcript);
-            let booleanity_prover_sumcheck =
-                exponentiation::BooleanityProver::initialize(trace, booleanity_params);
 
-            exponentiation_instances.push(Box::new(exponentiation_prover_sumcheck));
-            exponentiation_instances.push(Box::new(booleanity_prover_sumcheck));
+            read_raf_instances.push(Box::new(read_raf_prover_sumcheck));
         }
-        let (exponentiation_proof, _) = BatchedSumcheck::prove(
-            exponentiation_instances
+
+        let (read_raf_proof, _) = BatchedSumcheck::prove(
+            read_raf_instances
                 .iter_mut()
                 .map(|v| &mut **v as _)
                 .collect(),
             accumulator,
             transcript,
         );
-        exponentiation_proof
+        drop_in_background_thread(read_raf_instances);
+
+        let mut ra_onehot_instances: Vec<Box<dyn SumcheckInstanceProver<F, _>>> = vec![];
+        for (feature_idx, trace) in cached_traces.iter().enumerate() {
+            let softmax_index = SoftmaxIndex {
+                node_idx: self.params.computation_node.idx,
+                feature_idx,
+            };
+            let encoding = SoftmaxExpRaEncoding { softmax_index };
+            let lookup_indices: Vec<usize> = trace
+                .abs_centered_logits
+                .data()
+                .iter()
+                .map(|v| *v as usize)
+                .collect();
+            let ra_onehot_sumchecks =
+                shout::ra_onehot_provers(&encoding, &lookup_indices, accumulator, transcript);
+
+            ra_onehot_instances.extend(ra_onehot_sumchecks);
+        }
+        let (ra_onehot_proof, _) = BatchedSumcheck::prove(
+            ra_onehot_instances
+                .iter_mut()
+                .map(|v| &mut **v as _)
+                .collect(),
+            accumulator,
+            transcript,
+        );
+
+        (read_raf_proof, ra_onehot_proof)
     }
 
+    #[tracing::instrument(skip_all)]
     /// Stage 4: Linking to Main Operand Claim
     ///
     /// Links each per-feature softmax operand claim back to the main operand claim.
     fn prove_operand_claims<T: Transcript>(
         &self,
-        num_vars_num_heads: usize,
-        num_vars_seq_len: usize,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
     ) {
-        let r_heads_seq_prime =
-            transcript.challenge_vector_optimized::<F>(num_vars_num_heads + num_vars_seq_len);
+        let r_leading_dims_prime =
+            transcript.challenge_vector_optimized::<F>(self.params.num_feature_vectors().log_2());
         let (r_features_prime, _) = accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::SoftmaxInputLogitsOutput(self.params.computation_node.idx, 0),
             SumcheckId::Execution,
         );
         let r_operand: Vec<F::Challenge> =
-            [r_heads_seq_prime.as_slice(), &r_features_prime.r].concat();
+            [r_leading_dims_prime.as_slice(), &r_features_prime.r].concat();
         let operand_claim = MultilinearPolynomial::from(self.operand.clone()).evaluate(&r_operand); // TODO: rm clone
         accumulator.append_virtual(
             transcript,
@@ -443,91 +497,40 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
         Self { params }
     }
 
+    #[tracing::instrument(skip_all, name = "SoftmaxAxesVerifier::verify")]
     pub fn verify<ProofTranscript: Transcript>(
         &self,
         div_sum_max_proof: &SumcheckInstanceProof<F, ProofTranscript>,
-        exponentiation_proof: &SumcheckInstanceProof<F, ProofTranscript>,
+        exponentiation_read_raf_proof: &SumcheckInstanceProof<F, ProofTranscript>,
+        exponentiation_ra_onehot_proof: &SumcheckInstanceProof<F, ProofTranscript>,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut ProofTranscript,
     ) -> Result<(), ProofVerifyError> {
-        let (r_heads_seq, r_features, setup_vars) = self.setup_vars();
-        let SoftmaxSetupVars {
-            num_heads_seq_len,
-            num_vars_num_heads,
-            num_vars_seq_len,
-            ..
-        } = setup_vars;
+        self.verify_outer(accumulator, transcript)?;
 
-        self.verify_outer(
-            accumulator,
-            transcript,
-            &r_heads_seq,
-            &r_features,
-            num_heads_seq_len,
-        )?;
-
-        self.verify_div_sum_max(
-            div_sum_max_proof,
-            num_heads_seq_len,
-            accumulator,
-            transcript,
-        )?;
+        self.verify_div_sum_max(div_sum_max_proof, accumulator, transcript)?;
 
         self.verify_exponentiation(
-            exponentiation_proof,
-            num_heads_seq_len,
+            exponentiation_read_raf_proof,
+            exponentiation_ra_onehot_proof,
             accumulator,
             transcript,
         )?;
 
-        self.verify_operand_claims(
-            num_heads_seq_len,
-            num_vars_num_heads,
-            num_vars_seq_len,
-            accumulator,
-            transcript,
-        )?;
+        self.verify_operand_claims(accumulator, transcript)?;
 
         Ok(())
     }
 
-    fn setup_vars(&self) -> (Vec<F::Challenge>, Vec<F::Challenge>, SoftmaxSetupVars) {
-        let [num_heads, seq_len, features] = self.params.computation_node.output_dims[..] else {
-            panic!(
-                "Expected output_dims to have exactly three elements: [num_heads, seq_len, features]"
-            )
-        };
-        let num_heads_seq_len = num_heads * seq_len;
-        let num_vars_num_heads = num_heads.log_2();
-        let num_vars_seq_len = seq_len.log_2();
-        let (r_heads_seq, r_features) = self
-            .params
-            .r_output
-            .split_at(num_vars_num_heads + num_vars_seq_len);
-
-        (
-            r_heads_seq.to_vec(),
-            r_features.to_vec(),
-            SoftmaxSetupVars {
-                features,
-                num_heads_seq_len,
-                num_vars_num_heads,
-                num_vars_seq_len,
-            },
-        )
-    }
-
+    #[tracing::instrument(skip_all)]
     fn verify_outer(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
-        r_heads_seq: &[F::Challenge],
-        r_features: &[F::Challenge],
-        num_heads_seq_len: usize,
     ) -> Result<(), ProofVerifyError> {
-        let mut softmax_features_claim = Vec::with_capacity(num_heads_seq_len);
+        let mut softmax_features_claim = Vec::with_capacity(self.params.num_feature_vectors());
         // Iterate over each (head, sequence) pair
-        for feature_idx in 0..num_heads_seq_len {
+        for feature_idx in 0..self.params.num_feature_vectors() {
             // implicitly add feature output claims to transcript
             accumulator.append_virtual(
                 transcript,
@@ -536,7 +539,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
                     feature_idx,
                 ),
                 SumcheckId::Execution,
-                r_features.to_vec().into(),
+                self.params.r_features().to_vec().into(),
             );
             softmax_features_claim.push(
                 accumulator
@@ -552,7 +555,8 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
         }
 
         let expected_softmax_axes_output_claim =
-            MultilinearPolynomial::from(softmax_features_claim).evaluate(r_heads_seq);
+            MultilinearPolynomial::from(softmax_features_claim)
+                .evaluate(self.params.r_leading_dims());
 
         let softmax_axes_output_claim = accumulator
             .get_virtual_polynomial_opening(
@@ -569,18 +573,18 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     /// Stage 1 (Verifier): Division / Normalization
     ///
     /// Verifies the division step proof along with sum and max checks.
     fn verify_div_sum_max<T: Transcript>(
         &self,
         div_sum_max_proof: &SumcheckInstanceProof<F, T>,
-        num_heads_seq_len: usize,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Result<(), ProofVerifyError> {
         let mut div_sum_max_instances: Vec<Box<dyn SumcheckInstanceVerifier<F, _>>> = vec![];
-        for feature_idx in 0..num_heads_seq_len {
+        for feature_idx in 0..self.params.num_feature_vectors() {
             let softmax_index = SoftmaxIndex {
                 node_idx: self.params.computation_node.idx,
                 feature_idx,
@@ -630,38 +634,55 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     /// Stage 2 (Verifier): Exponentiation
     ///
     /// Verifies the exponentiation proof using LUT approach.
     fn verify_exponentiation<T: Transcript>(
         &self,
-        exponentiation_proof: &SumcheckInstanceProof<F, T>,
-        num_heads_seq_len: usize,
+        read_raf_proof: &SumcheckInstanceProof<F, T>,
+        ra_one_hot_proof: &SumcheckInstanceProof<F, T>,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Result<(), ProofVerifyError> {
-        let mut exponentiation_instances: Vec<Box<dyn SumcheckInstanceVerifier<F, _>>> = vec![];
-        for feature_idx in 0..num_heads_seq_len {
+        let mut read_raf_instances: Vec<Box<dyn SumcheckInstanceVerifier<F, _>>> = vec![];
+        for feature_idx in 0..self.params.num_feature_vectors() {
             let softmax_index = SoftmaxIndex {
                 node_idx: self.params.computation_node.idx,
                 feature_idx,
             };
             let exponentiation_verifier_sumcheck =
-                exponentiation::ReadRafHwVerifier::new(softmax_index, accumulator, transcript);
-            let booleanity_verifier_sumcheck =
-                exponentiation::BooleanityVerifier::new(softmax_index, accumulator, transcript);
-            exponentiation_instances.push(Box::new(exponentiation_verifier_sumcheck));
-            exponentiation_instances.push(Box::new(booleanity_verifier_sumcheck));
+                exponentiation::ReadRafVerifier::new(softmax_index, accumulator, transcript);
+            read_raf_instances.push(Box::new(exponentiation_verifier_sumcheck));
         }
         BatchedSumcheck::verify(
-            exponentiation_proof,
-            exponentiation_instances.iter().map(|v| &**v as _).collect(),
+            read_raf_proof,
+            read_raf_instances.iter().map(|v| &**v as _).collect(),
+            accumulator,
+            transcript,
+        )?;
+
+        let mut ra_one_hot_instances: Vec<Box<dyn SumcheckInstanceVerifier<F, _>>> = vec![];
+        for feature_idx in 0..self.params.num_feature_vectors() {
+            let softmax_index = SoftmaxIndex {
+                node_idx: self.params.computation_node.idx,
+                feature_idx,
+            };
+            let encoding = SoftmaxExpRaEncoding { softmax_index };
+            let ra_one_hot_sumchecks =
+                shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
+            ra_one_hot_instances.extend(ra_one_hot_sumchecks);
+        }
+        BatchedSumcheck::verify(
+            ra_one_hot_proof,
+            ra_one_hot_instances.iter().map(|v| &**v as _).collect(),
             accumulator,
             transcript,
         )?;
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     /// Stages 3 & 4 (Verifier): Operand Consistency and Linking
     ///
     /// Stage 3: Verifies that softmax_operand_claim = (-raf_claim) + max_logit.
@@ -670,14 +691,11 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
     /// Stage 4: Links each per-feature softmax operand claim back to the main operand claim.
     fn verify_operand_claims<T: Transcript>(
         &self,
-        num_heads_seq_len: usize,
-        num_vars_num_heads: usize,
-        num_vars_seq_len: usize,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Result<(), ProofVerifyError> {
         let mut softmax_operand_claims = vec![];
-        for feature_idx in 0..num_heads_seq_len {
+        for feature_idx in 0..self.params.num_feature_vectors() {
             let softmax_index = SoftmaxIndex {
                 node_idx: self.params.computation_node.idx,
                 feature_idx,
@@ -713,14 +731,14 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
         }
 
         // Stage 4: Link per-feature softmax operand claims to main operand claim
-        let r_heads_seq_prime =
-            transcript.challenge_vector_optimized::<F>(num_vars_num_heads + num_vars_seq_len);
+        let r_leading_dims_prime =
+            transcript.challenge_vector_optimized::<F>(self.params.r_leading_dims().len());
         let (r_features_prime, _) = accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::SoftmaxInputLogitsOutput(self.params.computation_node.idx, 0),
             SumcheckId::Execution,
         );
         let r_operand: Vec<F::Challenge> =
-            [r_heads_seq_prime.as_slice(), &r_features_prime.r].concat();
+            [r_leading_dims_prime.as_slice(), &r_features_prime.r].concat();
 
         accumulator.append_virtual(
             transcript,
@@ -732,7 +750,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
         let [operand_claim] = accumulator.get_operand_claims::<1>(self.params.computation_node.idx);
 
         let expected_operand_claim =
-            MultilinearPolynomial::from(softmax_operand_claims).evaluate(&r_heads_seq_prime);
+            MultilinearPolynomial::from(softmax_operand_claims).evaluate(&r_leading_dims_prime);
 
         if operand_claim != expected_operand_claim {
             return Err(ProofVerifyError::InvalidOpeningProof(
@@ -781,14 +799,9 @@ mod tests {
         let prover_transcript = &mut Blake2bTranscript::new(&[]);
         let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
             ProverOpeningAccumulator::new();
-        let verifier_transcript = &mut Blake2bTranscript::new(&[]);
-        let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-            VerifierOpeningAccumulator::new();
 
         let r_node_output: Vec<<Fr as JoltField>::Challenge> =
             prover_transcript.challenge_vector_optimized::<Fr>(log_T);
-        let _r_node_output: Vec<<Fr as JoltField>::Challenge> =
-            verifier_transcript.challenge_vector_optimized::<Fr>(log_T);
 
         let output_index = model.outputs()[0];
         let computation_node = &model[output_index];
@@ -812,6 +825,12 @@ mod tests {
 
         let proofs = softmax_axes_prover.prove(&mut prover_opening_accumulator, prover_transcript);
 
+        let verifier_transcript = &mut Blake2bTranscript::new(&[]);
+        verifier_transcript.compare_to(prover_transcript.clone());
+        let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
+            VerifierOpeningAccumulator::new();
+        let _r_node_output: Vec<<Fr as JoltField>::Challenge> =
+            verifier_transcript.challenge_vector_optimized::<Fr>(log_T);
         // Take claims
         for (key, (_, value)) in &prover_opening_accumulator.openings {
             let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
@@ -831,16 +850,26 @@ mod tests {
 
         let verifier_softmax_axes =
             SoftmaxAxesVerifier::new(computation_node.clone(), &verifier_opening_accumulator);
-        let (div_sum_max_proof, exponentiation_proof) = match &proofs[..] {
-            [(ProofId(_, ProofType::SoftmaxDivSumMax), div_sum_max_proof), (ProofId(_, ProofType::SoftmaxExponentiation), exponentiation_proof)] => {
-                (div_sum_max_proof, exponentiation_proof)
-            }
-            _ => panic!("Unexpected proof structure"),
-        };
+        let (div_sum_max_proof, exponentiation_read_raf_proof, exponentiation_ra_onehot_proof) =
+            match &proofs[..] {
+                [(ProofId(_, ProofType::SoftmaxDivSumMax), div_sum_max_proof), (
+                    ProofId(_, ProofType::SoftmaxExponentiationReadRaf),
+                    exponentiation_read_raf_proof,
+                ), (
+                    ProofId(_, ProofType::SoftmaxExponentiationRaOneHot),
+                    exponentiation_ra_onehot_proof,
+                )] => (
+                    div_sum_max_proof,
+                    exponentiation_read_raf_proof,
+                    exponentiation_ra_onehot_proof,
+                ),
+                _ => panic!("Unexpected proof structure"),
+            };
         verifier_softmax_axes
             .verify(
                 div_sum_max_proof,
-                exponentiation_proof,
+                exponentiation_read_raf_proof,
+                exponentiation_ra_onehot_proof,
                 &mut verifier_opening_accumulator,
                 verifier_transcript,
             )

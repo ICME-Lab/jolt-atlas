@@ -931,12 +931,10 @@ mod tests {
             and::AndTable, relu::ReluTable, JoltLookupTable, PrefixSuffixDecompositionTrait,
         },
         op_lookups::{
-            self,
-            ra_virtual::{
-                InstructionRaSumcheckParams, InstructionRaSumcheckProver, RaSumcheckVerifier,
-            },
+            InterleavedBitsMarker, OpLookupEncoding,
             read_raf_checking::{
-                ReadRafSumcheckParams, ReadRafSumcheckProver, ReadRafSumcheckVerifier,
+                compute_lookup_indices_from_operands, ReadRafSumcheckParams,
+                ReadRafSumcheckProver, ReadRafSumcheckVerifier,
             },
         },
         AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
@@ -952,7 +950,6 @@ mod tests {
     };
     use common::{consts::XLEN, VirtualPolynomial};
     use joltworks::{
-        config::OneHotParams,
         field::JoltField,
         poly::{
             commitment::{commitment_scheme::CommitmentScheme, mock::MockCommitScheme},
@@ -963,6 +960,7 @@ mod tests {
             },
         },
         subprotocols::{
+            shout,
             sumcheck::{BatchedSumcheck, Sumcheck},
             sumcheck_prover::SumcheckInstanceProver,
         },
@@ -981,7 +979,6 @@ mod tests {
         T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
         PCS: CommitmentScheme<Field = Fr>,
     {
-        let _one_hot_params = OneHotParams::new(log_T);
         let shared_pp = AtlasSharedPreprocessing::preprocess(model);
         let prover_pp = AtlasProverPreprocessing::<Fr, PCS>::new(shared_pp);
         let _verifier_pp = AtlasVerifierPreprocessing::from(&prover_pp);
@@ -999,7 +996,7 @@ mod tests {
             verifier_transcript.challenge_vector_optimized::<Fr>(log_T);
 
         let LayerData {
-            operands: _,
+            operands,
             output,
         } = Trace::layer_data(trace, computation_node);
 
@@ -1033,40 +1030,22 @@ mod tests {
         println!("Proving time: {:?}", time.elapsed());
 
         // ra prover
-        let one_hot_params = OneHotParams::new(log_T);
-        let ra_params = InstructionRaSumcheckParams::new(
-            computation_node.clone(),
-            &OneHotParams::new(log_T),
-            &prover_opening_accumulator,
-        );
-        let ra_prover_sumcheck = InstructionRaSumcheckProver::initialize(ra_params, trace);
+        let encoding = OpLookupEncoding::new(computation_node);
+        let is_interleaved = computation_node.is_interleaved_operands();
+        let lookup_indices_bits =
+            compute_lookup_indices_from_operands(&operands, is_interleaved);
+        let lookup_indices: Vec<usize> =
+            lookup_indices_bits.iter().map(|&x| x.into()).collect();
 
-        let lookups_hamming_weight_params = op_lookups::ra_hamming_weight_params(
-            computation_node,
-            &one_hot_params,
-            &prover_opening_accumulator,
-            prover_transcript,
-        );
-        let lookups_booleanity_params = op_lookups::ra_booleanity_params(
-            computation_node,
-            &one_hot_params,
+        let [ra_prover, hw_prover, bool_prover] = shout::ra_onehot_provers(
+            &encoding,
+            &lookup_indices,
             &prover_opening_accumulator,
             prover_transcript,
         );
 
-        let (lookups_ra_booleanity, lookups_ra_hamming_weight) = op_lookups::gen_ra_one_hot_provers(
-            lookups_hamming_weight_params,
-            lookups_booleanity_params,
-            trace,
-            computation_node,
-            &one_hot_params,
-        );
-
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
-            Box::new(ra_prover_sumcheck),
-            Box::new(lookups_ra_booleanity),
-            Box::new(lookups_ra_hamming_weight),
-        ];
+        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
+            vec![ra_prover, hw_prover, bool_prover];
         let time = Instant::now();
         let (sumcheck_proof_6, _r_stage6) = BatchedSumcheck::prove(
             instances.iter_mut().map(|v| &mut **v as _).collect(),
@@ -1104,26 +1083,16 @@ mod tests {
         )
         .unwrap();
 
-        let ra_verifier_sumcheck = RaSumcheckVerifier::new(
-            computation_node.clone(),
-            &OneHotParams::new(log_T),
+        let encoding = OpLookupEncoding::new(computation_node);
+        let [ra_verifier, hw_verifier, bool_verifier] = shout::ra_onehot_verifiers(
+            &encoding,
             &verifier_opening_accumulator,
+            verifier_transcript,
         );
-        let (lookups_ra_booleanity, lookups_rs_hamming_weight) =
-            op_lookups::new_ra_one_hot_verifiers(
-                computation_node,
-                &one_hot_params,
-                &verifier_opening_accumulator,
-                verifier_transcript,
-            );
 
         let _ = BatchedSumcheck::verify(
             &sumcheck_proof_6,
-            vec![
-                &ra_verifier_sumcheck,
-                &lookups_ra_booleanity,
-                &lookups_rs_hamming_weight,
-            ],
+            vec![&*ra_verifier, &*hw_verifier, &*bool_verifier],
             &mut verifier_opening_accumulator,
             verifier_transcript,
         )

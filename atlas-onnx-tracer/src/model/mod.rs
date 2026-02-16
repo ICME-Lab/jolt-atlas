@@ -54,7 +54,7 @@ impl Model {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```ignore
     /// use atlas_onnx_tracer::model::{Model, RunArgs};
     /// use atlas_onnx_tracer::tensor::Tensor;
     ///

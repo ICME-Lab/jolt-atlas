@@ -28,8 +28,8 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --all --check
 
-  clippy:
-    name: Clippy
+  clippy-and-test:
+    name: Clippy & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -38,15 +38,9 @@ jobs:
           components: clippy
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@nextest
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo nextest run --workspace
 
   build-wasm-atlas-onnx-tracer:
     name: Build Wasm - atlas-onnx-tracer

@@ -1,1 +1,1 @@
-pub use zkml_jolt_core;
+pub use jolt_atlas_core;

@@ -52,5 +52,3 @@ serial_test = "3.2.0"
 [dev-dependencies]
 # Enable test-feature for joltworks during tests only
 joltworks = { path = "../joltworks", features = ["test-feature"] }
-
-

@@ -46,7 +46,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Run tests
-        run: cargo test --workspace --release
+        run: cargo test --workspace
 
   build-wasm-atlas-onnx-tracer:
     name: Build Wasm - atlas-onnx-tracer

@@ -75,11 +75,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
 
         // RaOneHotChecks proof
         let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
-        let (left, right) =
-            DivRangeCheckOperands::get_operands_tensors(&prover.trace, node);
+        let (left, right) = DivRangeCheckOperands::get_operands_tensors(&prover.trace, node);
         let lookup_bits = DivRangeCheckOperands::compute_lookup_indices(&left, &right);
-        let lookup_indices: Vec<usize> =
-            lookup_bits.par_iter().map(|&x| x.into()).collect();
+        let lookup_indices: Vec<usize> = lookup_bits.par_iter().map(|&x| x.into()).collect();
 
         let [ra_sumcheck, hw_sumcheck, bool_sumcheck] = shout::ra_onehot_provers(
             &encoding,
@@ -150,11 +148,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
-        let [ra_sumcheck, hw_sumcheck, bool_sumcheck] = shout::ra_onehot_verifiers(
-            &encoding,
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        );
+        let [ra_sumcheck, hw_sumcheck, bool_sumcheck] =
+            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
         BatchedSumcheck::verify(
             ra_one_hot_proof,
             vec![&*ra_sumcheck, &*hw_sumcheck, &*bool_sumcheck],
@@ -172,9 +167,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         }
         let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
         let d = encoding.one_hot_params().instruction_d;
-        polys.extend(
-            (0..d).map(|i| CommittedPolynomial::DivRangeCheckRaD(node.idx, i)),
-        );
+        polys.extend((0..d).map(|i| CommittedPolynomial::DivRangeCheckRaD(node.idx, i)));
         polys
     }
 }

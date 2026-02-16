@@ -66,8 +66,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
             operands,
         } = Trace::layer_data(&prover.trace, node);
         let is_interleaved = node.is_interleaved_operands();
-        let lookup_indices_bits =
-            compute_lookup_indices_from_operands(&operands, is_interleaved);
+        let lookup_indices_bits = compute_lookup_indices_from_operands(&operands, is_interleaved);
         let lookup_indices: Vec<usize> =
             lookup_indices_bits.par_iter().map(|&x| x.into()).collect();
 
@@ -118,11 +117,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
 
         // Verify RaOneHotChecks
         let encoding = OpLookupEncoding::new(node);
-        let [ra_verifier, hw_verifier, bool_verifier] = shout::ra_onehot_verifiers(
-            &encoding,
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        );
+        let [ra_verifier, hw_verifier, bool_verifier] =
+            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
         let ra_one_hot_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))

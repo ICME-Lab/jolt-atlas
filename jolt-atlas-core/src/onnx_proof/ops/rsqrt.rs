@@ -75,10 +75,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
 
         // RaOneHotChecks proof
         let div_encoding = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
-        let (div_left, div_right) =
-            RiRangeCheckOperands::get_operands_tensors(&prover.trace, node);
-        let div_lookup_bits =
-            RiRangeCheckOperands::compute_lookup_indices(&div_left, &div_right);
+        let (div_left, div_right) = RiRangeCheckOperands::get_operands_tensors(&prover.trace, node);
+        let div_lookup_bits = RiRangeCheckOperands::compute_lookup_indices(&div_left, &div_right);
         let div_lookup_indices: Vec<usize> =
             div_lookup_bits.par_iter().map(|&x| x.into()).collect();
         let [div_ra, div_hw, div_bool] = shout::ra_onehot_provers(
@@ -102,10 +100,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
             &mut prover.transcript,
         );
 
-        let mut ra_one_hot_instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
-            div_ra, div_hw, div_bool,
-            sqrt_ra, sqrt_hw, sqrt_bool,
-        ];
+        let mut ra_one_hot_instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
+            vec![div_ra, div_hw, div_bool, sqrt_ra, sqrt_hw, sqrt_bool];
 
         let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
             ra_one_hot_instances
@@ -188,8 +184,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
         );
 
         let ra_one_hot_instances: Vec<&dyn SumcheckInstanceVerifier<_, _>> = vec![
-            &*div_ra, &*div_hw, &*div_bool,
-            &*sqrt_ra, &*sqrt_hw, &*sqrt_bool,
+            &*div_ra,
+            &*div_hw,
+            &*div_bool,
+            &*sqrt_ra,
+            &*sqrt_hw,
+            &*sqrt_bool,
         ];
         BatchedSumcheck::verify(
             ra_one_hot_proof,

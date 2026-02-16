@@ -47,10 +47,7 @@ use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::SoftmaxAxes,
-    tensor::{
-        ops::nonlinearities::softmax_fixed_128,
-        Tensor,
-    },
+    tensor::{ops::nonlinearities::softmax_fixed_128, Tensor},
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{

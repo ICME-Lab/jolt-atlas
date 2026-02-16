@@ -931,11 +931,11 @@ mod tests {
             and::AndTable, relu::ReluTable, JoltLookupTable, PrefixSuffixDecompositionTrait,
         },
         op_lookups::{
-            InterleavedBitsMarker, OpLookupEncoding,
             read_raf_checking::{
-                compute_lookup_indices_from_operands, ReadRafSumcheckParams,
-                ReadRafSumcheckProver, ReadRafSumcheckVerifier,
+                compute_lookup_indices_from_operands, ReadRafSumcheckParams, ReadRafSumcheckProver,
+                ReadRafSumcheckVerifier,
             },
+            InterleavedBitsMarker, OpLookupEncoding,
         },
         AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     };
@@ -995,10 +995,7 @@ mod tests {
         let _r_node_output: Vec<<Fr as JoltField>::Challenge> =
             verifier_transcript.challenge_vector_optimized::<Fr>(log_T);
 
-        let LayerData {
-            operands,
-            output,
-        } = Trace::layer_data(trace, computation_node);
+        let LayerData { operands, output } = Trace::layer_data(trace, computation_node);
 
         let rv_claim =
             MultilinearPolynomial::from(output.into_container_data()).evaluate(&r_node_output);
@@ -1032,10 +1029,8 @@ mod tests {
         // ra prover
         let encoding = OpLookupEncoding::new(computation_node);
         let is_interleaved = computation_node.is_interleaved_operands();
-        let lookup_indices_bits =
-            compute_lookup_indices_from_operands(&operands, is_interleaved);
-        let lookup_indices: Vec<usize> =
-            lookup_indices_bits.iter().map(|&x| x.into()).collect();
+        let lookup_indices_bits = compute_lookup_indices_from_operands(&operands, is_interleaved);
+        let lookup_indices: Vec<usize> = lookup_indices_bits.iter().map(|&x| x.into()).collect();
 
         let [ra_prover, hw_prover, bool_prover] = shout::ra_onehot_provers(
             &encoding,

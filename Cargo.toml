@@ -25,11 +25,6 @@ path = "./src/lib.rs"
 [dependencies]
 jolt-atlas-core = { path = "./jolt-atlas-core" }
 
-[workspace.dependencies]
-ark-serialize = { version = "0.5.0", default-features = false, features = [
-    "derive",
-] }
-
 [profile.test]
 opt-level = 3
 lto = "off"

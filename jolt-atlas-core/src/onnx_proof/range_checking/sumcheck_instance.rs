@@ -16,6 +16,8 @@ use crate::onnx_proof::{
 pub trait ReadRafSumcheckHelper {
     fn new(node: &ComputationNode) -> Self;
 
+    fn node_idx(&self) -> usize;
+
     fn compute_input_claim<F: JoltField>(input_claims: &[F], gamma: F, gamma_sqr: F) -> F {
         let [left_claim, right_claim] = input_claims else {
             panic!("Expected exactly two input operands for division range check");
@@ -74,6 +76,10 @@ impl ReadRafSumcheckHelper for DivRangeCheckOperands {
         }
     }
 
+    fn node_idx(&self) -> usize {
+        self.node_idx
+    }
+
     fn get_input_operands(&self) -> Vec<VirtualPolynomial> {
         self.input_operands.to_vec()
     }
@@ -130,6 +136,10 @@ impl ReadRafSumcheckHelper for RiRangeCheckOperands {
         }
     }
 
+    fn node_idx(&self) -> usize {
+        self.node_idx
+    }
+
     fn get_input_operands(&self) -> Vec<VirtualPolynomial> {
         self.input_operands.to_vec()
     }
@@ -174,6 +184,10 @@ impl ReadRafSumcheckHelper for RsRangeCheckOperands {
             input_operands,
             virtual_ra,
         }
+    }
+
+    fn node_idx(&self) -> usize {
+        self.node_idx
     }
 
     // Override to implement the specific input claim computation for sqrt range check
@@ -270,6 +284,10 @@ impl ReadRafSumcheckHelper for TeleportRangeCheckOperands {
             input_operands,
             virtual_ra,
         }
+    }
+
+    fn node_idx(&self) -> usize {
+        self.node_idx
     }
 
     fn get_input_operands(&self) -> Vec<VirtualPolynomial> {

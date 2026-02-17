@@ -1,33 +1,38 @@
 use crate::onnx_proof::{
-    op_lookups::{ra_virtual::RaSumcheckVerifier, read_raf_checking::ReadRafSumcheckVerifier},
+    op_lookups::{
+        read_raf_checking::{
+            compute_lookup_indices_from_operands, ReadRafSumcheckParams, ReadRafSumcheckProver,
+            ReadRafSumcheckVerifier,
+        },
+        InterleavedBitsMarker, OpLookupEncoding,
+    },
     ops::OperatorProofTrait,
     ProofId, ProofType, Prover, Verifier,
 };
-use atlas_onnx_tracer::{node::ComputationNode, ops::ReLU};
-use joltworks::{
-    self, field::JoltField, subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
-    utils::errors::ProofVerifyError,
+use atlas_onnx_tracer::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
+    ops::ReLU,
 };
-
-use crate::onnx_proof::{
-    lookup_tables::relu::ReluTable,
-    op_lookups::{
-        self,
-        ra_virtual::{InstructionRaSumcheckParams, InstructionRaSumcheckProver},
-        read_raf_checking::{ReadRafSumcheckParams, ReadRafSumcheckProver},
-    },
-};
-use common::{consts::XLEN, CommittedPolynomial};
+use common::CommittedPolynomial;
 use joltworks::{
-    config::OneHotParams,
+    self,
+    field::JoltField,
     subprotocols::{
-        sumcheck::{BatchedSumcheck, Sumcheck},
+        shout::{self, RaOneHotEncoding},
+        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
     },
-    utils::math::Math,
+    transcripts::Transcript,
+    utils::errors::ProofVerifyError,
 };
+use rayon::prelude::*;
+
+use crate::onnx_proof::lookup_tables::relu::ReluTable;
+use common::consts::XLEN;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
+    #[tracing::instrument(skip_all, name = "ReLU::prove")]
     fn prove(
         &self,
         node: &ComputationNode,
@@ -55,38 +60,25 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
         results.push((ProofId(node.idx, ProofType::Execution), execution_proof));
 
         // RaOneHotChecks proof
-        let log_T = node.num_output_elements().log_2();
-        let one_hot_params = OneHotParams::new(log_T);
-        let ra_params =
-            InstructionRaSumcheckParams::new(node.clone(), &one_hot_params, &prover.accumulator);
-        let ra_prover_sumcheck = InstructionRaSumcheckProver::initialize(ra_params, &prover.trace);
+        let encoding = OpLookupEncoding::new(node);
+        let LayerData {
+            output: _,
+            operands,
+        } = Trace::layer_data(&prover.trace, node);
+        let is_interleaved = node.is_interleaved_operands();
+        let lookup_indices_bits = compute_lookup_indices_from_operands(&operands, is_interleaved);
+        let lookup_indices: Vec<usize> =
+            lookup_indices_bits.par_iter().map(|&x| x.into()).collect();
 
-        let lookups_hamming_weight_params = op_lookups::ra_hamming_weight_params(
-            node,
-            &one_hot_params,
+        let [ra_prover, hw_prover, bool_prover] = shout::ra_onehot_provers(
+            &encoding,
+            &lookup_indices,
             &prover.accumulator,
             &mut prover.transcript,
         );
-        let lookups_booleanity_params = op_lookups::ra_booleanity_params(
-            node,
-            &one_hot_params,
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
 
-        let (lookups_ra_booleanity, lookups_ra_hamming_weight) = op_lookups::gen_ra_one_hot_provers(
-            lookups_hamming_weight_params,
-            lookups_booleanity_params,
-            &prover.trace,
-            node,
-            &one_hot_params,
-        );
-
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
-            Box::new(ra_prover_sumcheck),
-            Box::new(lookups_ra_booleanity),
-            Box::new(lookups_ra_hamming_weight),
-        ];
+        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
+            vec![ra_prover, hw_prover, bool_prover];
         let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
             instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
@@ -100,6 +92,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
         results
     }
 
+    #[tracing::instrument(skip_all, name = "ReLU::verify")]
     fn verify(
         &self,
         node: &ComputationNode,
@@ -123,28 +116,16 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
         )?;
 
         // Verify RaOneHotChecks
-        let log_T = node.num_output_elements().log_2();
-        let one_hot_params = OneHotParams::new(log_T);
-        let ra_verifier_sumcheck =
-            RaSumcheckVerifier::new(node.clone(), &one_hot_params, &verifier.accumulator);
-        let (lookups_ra_booleanity, lookups_rs_hamming_weight) =
-            op_lookups::new_ra_one_hot_verifiers(
-                node,
-                &one_hot_params,
-                &verifier.accumulator,
-                &mut verifier.transcript,
-            );
+        let encoding = OpLookupEncoding::new(node);
+        let [ra_verifier, hw_verifier, bool_verifier] =
+            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
         let ra_one_hot_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         BatchedSumcheck::verify(
             ra_one_hot_proof,
-            vec![
-                &ra_verifier_sumcheck,
-                &lookups_ra_booleanity,
-                &lookups_rs_hamming_weight,
-            ],
+            vec![&*ra_verifier, &*hw_verifier, &*bool_verifier],
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
@@ -153,13 +134,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
-        let mut polys = vec![];
-        let one_hot_params = OneHotParams::new(node.num_output_elements().log_2());
-        polys.extend(
-            (0..one_hot_params.instruction_d)
-                .map(|i| CommittedPolynomial::NodeOutputRaD(node.idx, i)),
-        );
-        polys
+        let encoding = OpLookupEncoding::new(node);
+        let d = encoding.one_hot_params().instruction_d;
+        (0..d)
+            .map(|i| CommittedPolynomial::NodeOutputRaD(node.idx, i))
+            .collect()
     }
 }
 

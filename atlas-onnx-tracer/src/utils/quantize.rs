@@ -149,7 +149,13 @@ pub fn quantize_float(float: f64, scale: Scale) -> i32 {
         float
     };
     let scaled = (clamped_float * mult).round() as i32;
-    scaled
+
+    // HACK: rm this when we have clamping for Layernorm
+    if scaled == 0 && float != 0.0 {
+        if float > 0.0 { 1 } else { -1 }
+    } else {
+        scaled
+    }
 }
 
 /// Converts a fixed-point integer representation back to a floating-point number.

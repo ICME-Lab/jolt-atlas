@@ -15,7 +15,7 @@ use super::{HandlerContext, OpHandlerFn};
 
 // TODO: These values should be finetuned based on input ranges and desired output precision.
 const NEURAL_TELEPORT_TAU: i32 = 2;
-const NEURAL_TELEPORT_LOG_TABLE_SIZE: usize = 16;
+pub const NEURAL_TELEPORT_LOG_TABLE_SIZE: usize = 10;
 
 pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
     HashMap::from([

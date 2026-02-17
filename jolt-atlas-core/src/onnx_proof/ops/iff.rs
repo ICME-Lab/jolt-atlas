@@ -85,6 +85,7 @@ pub struct IffProver<F: JoltField> {
 }
 
 impl<F: JoltField> IffProver<F> {
+    #[tracing::instrument(skip_all, name = "IffProver::initialize")]
     pub fn initialize(trace: &Trace, params: IffParams<F>) -> Self {
         let eq_r_node_output =
             GruenSplitEqPolynomial::new(&params.r_node_output, BindingOrder::LowToHigh);
@@ -205,6 +206,7 @@ pub struct IffVerifier<F: JoltField> {
 }
 
 impl<F: JoltField> IffVerifier<F> {
+    #[tracing::instrument(skip_all, name = "IffVerifier::new")]
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,

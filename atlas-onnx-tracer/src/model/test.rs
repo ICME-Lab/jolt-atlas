@@ -122,6 +122,19 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    /// Add a scalar constant division node.
+    pub fn scalar_const_div(&mut self, a: Wire, divisor: i32) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&a].output_dims.clone();
+        let node = ComputationNode::new(
+            id,
+            Operator::ScalarConstDiv(ScalarConstDiv { divisor }),
+            vec![a],
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
     pub fn rsqrt(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
         let output_dims = self.nodes[&input].output_dims.clone();
@@ -429,6 +442,14 @@ pub fn div_model(T: usize) -> Model {
     let i = b.input(vec![T]);
     let c = b.constant(Tensor::construct(vec![128; T], vec![T]));
     let res = b.div(i, c);
+    b.mark_output(res);
+    b.build()
+}
+
+pub fn scalar_const_div_model(T: usize, divisor: i32) -> Model {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![T]);
+    let res = b.scalar_const_div(i, divisor);
     b.mark_output(res);
     b.build()
 }

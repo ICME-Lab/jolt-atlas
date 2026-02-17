@@ -112,6 +112,7 @@ impl<F: JoltField> DivProver<F> {
                 .collect();
             Tensor::<i32>::construct(data, left_operand.dims().to_vec())
         };
+
         let left_operand = MultilinearPolynomial::from(left_operand.clone());
         let R = MultilinearPolynomial::from(R_tensor);
         Self {

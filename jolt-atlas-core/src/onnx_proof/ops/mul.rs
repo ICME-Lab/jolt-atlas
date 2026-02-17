@@ -84,6 +84,7 @@ pub struct MulProver<F: JoltField> {
 }
 
 impl<F: JoltField> MulProver<F> {
+    #[tracing::instrument(skip_all, name = "MulProver::initialize")]
     pub fn initialize(trace: &Trace, params: MulParams<F>) -> Self {
         let eq_r_node_output =
             GruenSplitEqPolynomial::new(&params.r_node_output, BindingOrder::LowToHigh);
@@ -167,6 +168,7 @@ pub struct MulVerifier<F: JoltField> {
 }
 
 impl<F: JoltField> MulVerifier<F> {
+    #[tracing::instrument(skip_all, name = "MulVerifier::new")]
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,

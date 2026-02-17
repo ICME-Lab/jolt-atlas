@@ -10,6 +10,7 @@ pub enum CommittedPolynomial {
     ///
     /// `1` - d
     NodeOutputRaD(usize, usize),
+    TanhRaD(usize, usize), // One-hot read addresses for Tanh lookup
 
     /// Fields:
     ///
@@ -17,7 +18,15 @@ pub enum CommittedPolynomial {
     ///
     /// `1` - feature index
     SoftmaxRemainder(usize, usize),
-    SoftmaxExponentiationRa(usize, usize),
+
+    /// Fields:
+    ///
+    /// `0` - node index
+    ///
+    /// `1` - feature index
+    ///
+    /// `2` - d
+    SoftmaxExponentiationRaD(usize, usize, usize),
 
     // One-hot polynomials for Advices
     DivRangeCheckRaD(usize, usize), // Interleaved R and divisor for Div advice
@@ -29,10 +38,10 @@ pub enum CommittedPolynomial {
     ///
     /// `0` - node index
     DivNodeQuotient(usize), // Advice for `quotient` in Div
-    RsqrtNodeInv(usize),   // Advice for `inv` in Rsqrt
-    RsqrtNodeRsqrt(usize), // Advice for `rsqrt` in Rsqrt
+    ScalarConstDivNodeRemainder(usize), // Advice for `remainder` in Div
+    RsqrtNodeInv(usize),                // Advice for `inv` in Rsqrt
+    RsqrtNodeRsqrt(usize),              // Advice for `rsqrt` in Rsqrt
     GatherRa(usize),
-    TanhRa(usize), // One-hot read addresses for Tanh lookup
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
@@ -42,6 +51,7 @@ pub enum VirtualPolynomial {
     /// `0` - node index
     NodeOutput(usize),
     NodeOutputRa(usize),
+    TanhRa(usize), // One-hot read addresses for Tanh lookup
 
     /// Fields:
     ///
@@ -55,6 +65,7 @@ pub enum VirtualPolynomial {
     SoftmaxExponentiationOutput(usize, usize),
     SoftmaxInputLogitsOutput(usize, usize),
     SoftmaxAbsCenteredLogitsOutput(usize, usize),
+    SoftmaxExponentiationRa(usize, usize), // One-hot read address for exponentiation lookup
 
     /// Used in hamming weight sumcheck
     HammingWeight,

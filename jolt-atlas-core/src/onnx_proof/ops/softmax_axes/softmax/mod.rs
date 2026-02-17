@@ -12,7 +12,7 @@ pub struct SoftmaxIndex {
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::softmax_axes::softmax::{
-        exponentiation::{self, ReadRafHwParams, ReadRafHwProver, ReadRafHwVerifier},
+        exponentiation::{ReadRafParams, ReadRafProver, ReadRafVerifier, SoftmaxExpRaEncoding},
         max,
         scalar_div::{DivParams, DivProver, DivVerifier},
         sum::{SumParams, SumProver, SumVerifier},
@@ -30,7 +30,7 @@ mod tests {
                 VerifierOpeningAccumulator, BIG_ENDIAN,
             },
         },
-        subprotocols::{sumcheck::BatchedSumcheck, sumcheck_prover::SumcheckInstanceProver},
+        subprotocols::{shout, sumcheck::BatchedSumcheck, sumcheck_prover::SumcheckInstanceProver},
         transcripts::{Blake2bTranscript, Transcript},
     };
     use rand::{rngs::StdRng, SeedableRng};
@@ -124,31 +124,44 @@ mod tests {
         );
 
         // Construct exponentiation & booleanity prover and proof
-        let exponentiation_params: ReadRafHwParams<Fr> = ReadRafHwParams::new(
+        let exponentiation_read_raf_params: ReadRafParams<Fr> = ReadRafParams::new(
             softmax_index,
             &prover_opening_accumulator,
             prover_transcript,
         );
-        let exponentiation_prover_sumcheck = ReadRafHwProver::initialize(
+        let exponentiation_read_raf_prover_sumcheck = ReadRafProver::initialize(
             &trace,
-            exponentiation_params,
+            exponentiation_read_raf_params,
             &mut prover_opening_accumulator,
             prover_transcript,
         );
-        let booleanity_params = exponentiation::BooleanityParams::new(
-            softmax_index,
+
+        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
+            vec![Box::new(exponentiation_read_raf_prover_sumcheck)];
+        let (exponentiation_read_raf_proof, _r_sc) = BatchedSumcheck::prove(
+            instances.iter_mut().map(|v| &mut **v as _).collect(),
+            &mut prover_opening_accumulator,
+            prover_transcript,
+        );
+
+        let encoding = SoftmaxExpRaEncoding { softmax_index };
+        let lookup_indices: Vec<usize> = trace
+            .abs_centered_logits
+            .data()
+            .iter()
+            .map(|v| *v as usize)
+            .collect();
+        let mut ra_onehot_sumchecks = shout::ra_onehot_provers(
+            &encoding,
+            &lookup_indices,
             &prover_opening_accumulator,
             prover_transcript,
         );
-        let booleanity_prover_sumcheck =
-            exponentiation::BooleanityProver::initialize(&trace, booleanity_params);
-
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
-            Box::new(exponentiation_prover_sumcheck),
-            Box::new(booleanity_prover_sumcheck),
-        ];
-        let (exponentiation_proof, _r_sc) = BatchedSumcheck::prove(
-            instances.iter_mut().map(|v| &mut **v as _).collect(),
+        let (exponentiation_ra_onehot_proof, _r_sc) = BatchedSumcheck::prove(
+            ra_onehot_sumchecks
+                .iter_mut()
+                .map(|v| &mut **v as _)
+                .collect(),
             &mut prover_opening_accumulator,
             prover_transcript,
         );
@@ -209,29 +222,33 @@ mod tests {
         .unwrap();
 
         // Verify exponentiation sumcheck
-        let exponentiation_verifier_sumcheck = ReadRafHwVerifier::new(
-            softmax_index,
-            &mut verifier_opening_accumulator,
-            verifier_transcript,
-        );
-        let booleanity_verifier_sumcheck = exponentiation::BooleanityVerifier::new(
+        let exponentiation_read_raf_verifier_sumcheck = ReadRafVerifier::new(
             softmax_index,
             &mut verifier_opening_accumulator,
             verifier_transcript,
         );
 
-        let r_sc = BatchedSumcheck::verify(
-            &exponentiation_proof,
-            vec![
-                &exponentiation_verifier_sumcheck,
-                &booleanity_verifier_sumcheck,
-            ],
+        let _ = BatchedSumcheck::verify(
+            &exponentiation_read_raf_proof,
+            vec![&exponentiation_read_raf_verifier_sumcheck],
             &mut verifier_opening_accumulator,
             verifier_transcript,
         )
         .unwrap();
 
-        assert_eq!(r_sc, _r_sc);
+        let encoding = SoftmaxExpRaEncoding { softmax_index };
+        let ra_onehot_verifiers = shout::ra_onehot_verifiers(
+            &encoding,
+            &verifier_opening_accumulator,
+            verifier_transcript,
+        );
+        let _ = BatchedSumcheck::verify(
+            &exponentiation_ra_onehot_proof,
+            ra_onehot_verifiers.iter().map(|v| &**v as _).collect(),
+            &mut verifier_opening_accumulator,
+            verifier_transcript,
+        )
+        .unwrap();
 
         //  Check input from raf
         let (_, abs_centered_logits_claim) = verifier_opening_accumulator

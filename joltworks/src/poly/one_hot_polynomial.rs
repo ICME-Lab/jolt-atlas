@@ -71,6 +71,7 @@ impl<F: JoltField> OneHotPolynomial<F> {
         self.K.log_2() + self.nonzero_indices.len().log_2()
     }
 
+    /// # Note: r = (r_address, r_cycle) where r_address corresponds to the first log(K) variables and r_cycle corresponds to the last log(T) variables.
     pub fn evaluate<C>(&self, r: &[C]) -> F
     where
         C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,

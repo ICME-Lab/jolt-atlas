@@ -28,7 +28,7 @@
 
 use crate::{
     node::{ComputationNode, handlers::HandlerContext},
-    ops::{Constant, Operator},
+    ops::{Constant, Operator, ScalarConstDiv},
     tensor::Tensor,
 };
 
@@ -244,24 +244,10 @@ impl<'a, 'b> HandlerBuilder<'a, 'b> {
                         current_output_idx.expect("DivByConstant requires a previous node");
                     let output_dims = self.hctx.output_dims.clone();
 
-                    // Add constant node
                     builder.add_node(ComputationNode {
                         idx: builder.idx(node_offset),
-                        operator: Operator::Constant(Constant(Tensor::construct(
-                            vec![*value; output_dims.iter().product()],
-                            output_dims.clone(),
-                        ))),
-                        inputs: vec![],
-                        output_dims: output_dims.clone(),
-                    });
-                    let const_idx = builder.idx(node_offset);
-                    node_offset += 1;
-
-                    // Add div node
-                    builder.add_node(ComputationNode {
-                        idx: builder.idx(node_offset),
-                        operator: Operator::Div(Default::default()),
-                        inputs: vec![prev_idx, const_idx],
+                        operator: Operator::ScalarConstDiv(ScalarConstDiv { divisor: *value }),
+                        inputs: vec![prev_idx],
                         output_dims,
                     });
                     current_output_idx = Some(builder.idx(node_offset));
@@ -270,29 +256,15 @@ impl<'a, 'b> HandlerBuilder<'a, 'b> {
             }
         }
 
-        // Add rebase nodes if needed
+        // Add rebase node if needed
         if let Some(factor) = self.determine_rebase_factor() {
             let prev_idx = current_output_idx.expect("Rebase requires a previous node");
             let output_dims = self.hctx.output_dims.clone();
 
-            // Add constant node for scale divisor
             builder.add_node(ComputationNode {
                 idx: builder.idx(node_offset),
-                operator: Operator::Constant(Constant(Tensor::construct(
-                    vec![factor; output_dims.iter().product()],
-                    output_dims.clone(),
-                ))),
-                inputs: vec![],
-                output_dims: output_dims.clone(),
-            });
-            let const_idx = builder.idx(node_offset);
-            node_offset += 1;
-
-            // Add div node
-            builder.add_node(ComputationNode {
-                idx: builder.idx(node_offset),
-                operator: Operator::Div(Default::default()),
-                inputs: vec![prev_idx, const_idx],
+                operator: Operator::ScalarConstDiv(ScalarConstDiv { divisor: factor }),
+                inputs: vec![prev_idx],
                 output_dims,
             });
         }
@@ -310,7 +282,7 @@ impl<'a, 'b> HandlerBuilder<'a, 'b> {
                 | Stage::PipeOpWithDims { .. }
                 | Stage::Constant { .. } => 1,
                 Stage::DivByPrevious => 1,
-                Stage::DivByConstant { .. } => 2, // const + div
+                Stage::DivByConstant { .. } => 1,
             })
             .sum()
     }
@@ -318,7 +290,7 @@ impl<'a, 'b> HandlerBuilder<'a, 'b> {
     /// Counts the number of nodes needed for rebase.
     fn count_rebase_nodes(&self) -> usize {
         if self.determine_rebase_factor().is_some() {
-            2 // const + div
+            1
         } else {
             0
         }

@@ -26,6 +26,7 @@ use std::marker::PhantomData;
 /// We do what they describe as "front-loaded" batch sumcheck.
 pub enum BatchedSumcheck {}
 impl BatchedSumcheck {
+    #[tracing::instrument(skip_all, name = "BatchedSumcheck::prove")]
     pub fn prove<F: JoltField, ProofTranscript: Transcript>(
         mut sumcheck_instances: Vec<&mut dyn SumcheckInstanceProver<F, ProofTranscript>>,
         opening_accumulator: &mut ProverOpeningAccumulator<F>,
@@ -182,6 +183,7 @@ impl BatchedSumcheck {
         (SumcheckInstanceProof::new(compressed_polys), r_sumcheck)
     }
 
+    #[tracing::instrument(skip_all, name = "BatchedSumcheck::verify")]
     pub fn verify<F: JoltField, ProofTranscript: Transcript>(
         proof: &SumcheckInstanceProof<F, ProofTranscript>,
         sumcheck_instances: Vec<&dyn SumcheckInstanceVerifier<F, ProofTranscript>>,
@@ -260,6 +262,7 @@ impl BatchedSumcheck {
 pub struct Sumcheck;
 
 impl Sumcheck {
+    #[tracing::instrument(skip_all, name = "Sumcheck::prove")]
     pub fn prove<F: JoltField, ProofTranscript: Transcript>(
         sumcheck_instance: &mut dyn SumcheckInstanceProver<F, ProofTranscript>,
         opening_accumulator: &mut ProverOpeningAccumulator<F>,
@@ -296,6 +299,7 @@ impl Sumcheck {
         (SumcheckInstanceProof::new(compressed_polys), r_sumcheck)
     }
 
+    #[tracing::instrument(skip_all, name = "Sumcheck::verify")]
     pub fn verify<F: JoltField, ProofTranscript: Transcript>(
         proof: &SumcheckInstanceProof<F, ProofTranscript>,
         sumcheck_instance: &dyn SumcheckInstanceVerifier<F, ProofTranscript>,

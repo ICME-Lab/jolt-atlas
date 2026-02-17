@@ -1,9 +1,9 @@
 use crate::onnx_proof::{
     ops::OperatorProofTrait,
     range_checking::{
-        self,
         read_raf_checking::{RangecheckRafSumcheckProver, RangecheckRafSumcheckVerifier},
-        sumcheck_instance::DivRangeCheckOperands,
+        sumcheck_instance::{DivRangeCheckOperands, ReadRafSumcheckHelper},
+        RangeCheckEncoding,
     },
     ProofId, ProofType, Prover, Verifier,
 };
@@ -15,7 +15,6 @@ use atlas_onnx_tracer::{
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
-    config::OneHotParams,
     field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
@@ -28,6 +27,7 @@ use joltworks::{
         unipoly::UniPoly,
     },
     subprotocols::{
+        shout::{self, RaOneHotEncoding},
         sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
@@ -35,8 +35,10 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
+use rayon::prelude::*;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
+    #[tracing::instrument(skip_all, name = "Div::prove")]
     fn prove(
         &self,
         node: &ComputationNode,
@@ -72,21 +74,20 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         results.push((ProofId(node.idx, ProofType::RangeCheck), rangecheck_proof));
 
         // RaOneHotChecks proof
-        let log_T = node.num_output_elements().log_2();
-        let one_hot_params = OneHotParams::new(log_T);
+        let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+        let (left, right) = DivRangeCheckOperands::get_operands_tensors(&prover.trace, node);
+        let lookup_bits = DivRangeCheckOperands::compute_lookup_indices(&left, &right);
+        let lookup_indices: Vec<usize> = lookup_bits.par_iter().map(|&x| x.into()).collect();
 
-        let (ra_sumcheck, hw_sumcheck, bool_sumcheck) =
-            range_checking::new_ra_one_hot_sumcheck_provers::<F, DivRangeCheckOperands>(
-                node.clone(),
-                &one_hot_params,
-                prover,
-            );
+        let [ra_sumcheck, hw_sumcheck, bool_sumcheck] = shout::ra_onehot_provers(
+            &encoding,
+            &lookup_indices,
+            &prover.accumulator,
+            &mut prover.transcript,
+        );
 
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
-            Box::new(ra_sumcheck),
-            Box::new(bool_sumcheck),
-            Box::new(hw_sumcheck),
-        ];
+        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
+            vec![ra_sumcheck, hw_sumcheck, bool_sumcheck];
         let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
             instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
@@ -100,6 +101,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         results
     }
 
+    #[tracing::instrument(skip_all, name = "Div::verify")]
     fn verify(
         &self,
         node: &ComputationNode,
@@ -145,17 +147,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
             .proofs
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let log_T = node.num_output_elements().log_2();
-        let one_hot_params = OneHotParams::new(log_T);
-        let (ra_sumcheck, hw_sumcheck, bool_sumcheck) =
-            range_checking::new_ra_one_hot_sumcheck_verifiers::<F, DivRangeCheckOperands>(
-                node.clone(),
-                &one_hot_params,
-                verifier,
-            );
+        let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+        let [ra_sumcheck, hw_sumcheck, bool_sumcheck] =
+            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
         BatchedSumcheck::verify(
             ra_one_hot_proof,
-            vec![&ra_sumcheck, &bool_sumcheck, &hw_sumcheck],
+            vec![&*ra_sumcheck, &*hw_sumcheck, &*bool_sumcheck],
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
@@ -168,11 +165,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         if node.is_scalar() {
             return polys;
         }
-        let one_hot_params = OneHotParams::new(node.num_output_elements().log_2());
-        polys.extend(
-            (0..one_hot_params.instruction_d)
-                .map(|i| CommittedPolynomial::DivRangeCheckRaD(node.idx, i)),
-        );
+        let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+        let d = encoding.one_hot_params().instruction_d;
+        polys.extend((0..d).map(|i| CommittedPolynomial::DivRangeCheckRaD(node.idx, i)));
         polys
     }
 }
@@ -231,6 +226,7 @@ pub struct DivProver<F: JoltField> {
 }
 
 impl<F: JoltField> DivProver<F> {
+    #[tracing::instrument(skip_all)]
     pub fn initialize(trace: &Trace, params: DivParams<F>) -> Self {
         let eq_r_node_output =
             GruenSplitEqPolynomial::new(&params.r_node_output, BindingOrder::LowToHigh);

@@ -83,6 +83,7 @@ pub struct SquareProver<F: JoltField> {
 }
 
 impl<F: JoltField> SquareProver<F> {
+    #[tracing::instrument(skip_all, name = "SquareProver::initialize")]
     pub fn initialize(trace: &Trace, params: SquareParams<F>) -> Self {
         let eq_r_node_output =
             GruenSplitEqPolynomial::new(&params.r_node_output, BindingOrder::LowToHigh);
@@ -152,6 +153,7 @@ pub struct SquareVerifier<F: JoltField> {
 }
 
 impl<F: JoltField> SquareVerifier<F> {
+    #[tracing::instrument(skip_all, name = "SquareVerifier::new")]
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,

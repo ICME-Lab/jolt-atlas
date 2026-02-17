@@ -36,6 +36,7 @@ pub mod mbk_nbk_bmn;
 pub mod mk_kn_mn;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
+    #[tracing::instrument(skip_all, name = "Einsum::prove")]
     fn prove(
         &self,
         node: &ComputationNode,
@@ -55,6 +56,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
         vec![(ProofId(node.idx, ProofType::Execution), proof)]
     }
 
+    #[tracing::instrument(skip_all, name = "Einsum::verify")]
     fn verify(
         &self,
         node: &ComputationNode,

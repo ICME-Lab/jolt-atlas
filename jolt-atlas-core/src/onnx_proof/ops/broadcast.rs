@@ -29,6 +29,7 @@ use crate::onnx_proof::{
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
+    #[tracing::instrument(skip_all, name = "Broadcast::prove")]
     fn prove(
         &self,
         node: &ComputationNode,
@@ -84,6 +85,7 @@ pub struct BroadcastProver<F: JoltField> {
 }
 
 impl<F: JoltField> BroadcastProver<F> {
+    #[tracing::instrument(skip_all)]
     pub fn initialize(trace: &Trace, params: BroadcastParams<F>) -> Self {
         let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
         let [operand] = operands[..] else {
@@ -121,6 +123,7 @@ impl<F: JoltField> BroadcastProver<F> {
         }
     }
 
+    #[tracing::instrument(skip_all)]
     pub fn prove(
         &self,
         accumulator: &mut ProverOpeningAccumulator<F>,

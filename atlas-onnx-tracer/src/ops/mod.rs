@@ -22,6 +22,7 @@ pub mod noop;
 pub mod relu;
 pub mod reshape;
 pub mod rsqrt;
+pub mod scalar_const_div;
 pub mod shr;
 pub mod softmax;
 pub mod square;
@@ -77,7 +78,7 @@ define_operators! {
         Erf { scale: F32 }, Gather { axis: usize }, Identity, Iff, Input,
         IsNan { out_dims: Vec<usize> }, MoveAxis { source: usize, destination: usize },
         Mul, Broadcast { shape: Vec<usize> }, Noop, ReLU, Reshape { shape:Vec<usize> },
-        Rsqrt { scale: F32 }, Shr, SoftmaxAxes { axes: usize, scale: F32 }, Square,
+        Rsqrt { scale: F32 }, ScalarConstDiv {divisor: i32}, Shr, SoftmaxAxes { axes: usize, scale: F32 }, Square,
         Sub, Sum { axes: Vec<usize> }, Tanh { scale: F32, tau: i32, log_table: usize }, ULessThan,
     ]
 }

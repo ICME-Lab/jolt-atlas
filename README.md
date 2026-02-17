@@ -12,90 +12,79 @@ JOLT Atlas enables practical zero-knowledge machine learning by leveraging Just 
 
 In JOLT Atlas, we eliminate the complexity that plagues other approaches: no quotient polynomials, no byte decomposition, no grand products, no permutation checks, and most importantly — no complicated circuits.
 
+Our core ethos is to reduce commitment costs via sumcheck while committing only to small-value polynomials.
+
 ## Examples
 
-The `examples/` directory contains practical demonstrations of zkML models:
+Examples live in `jolt-atlas-core/examples/` and demonstrate end-to-end prove → verify flows for various ONNX models.
 
-### Article Classification
+### nanoGPT
 
-A text classification model that categorizes articles into business, tech, sport, entertainment, and politics.
-
-```bash
-cargo run --release --example article_classification
-```
-
-This example:
-- Tests model accuracy on sample texts
-- Generates a SNARK proof for one classification
-- Verifies the proof cryptographically
-
-### Transaction Authorization
-
-A financial transaction authorization model that decides whether to approve or deny transactions based on features like budget, trust score, amount, etc.
+A ~0.25M-parameter GPT model (4 transformer layers). Loads the ONNX graph, generates a SNARK proof of inference, and verifies it.
 
 ```bash
-cargo run --release --example authorization
+cargo run --release --package jolt-atlas-core --example nanoGPT
 ```
 
-This example:
-- Tests the model on various transaction scenarios
-- Shows authorization decisions with confidence scores
-- Generates and verifies a SNARK proof for one transaction
+### Transformer (self-attention)
+
+Single self-attention block proof.
+
+```bash
+cargo run --release --package jolt-atlas-core --example transformer
+```
+
+### MiniGPT / MicroGPT
+
+Smaller GPT variants useful for quick iteration and debugging.
+
+```bash
+cargo run --release --package jolt-atlas-core --example minigpt
+cargo run --release --package jolt-atlas-core --example microgpt
+```
 
 ## Benchmarks
 
-### Transformer (self-attention) profile
+### nanoGPT (~0.25M params, 4 transformer layers)
 
-Latest run (`cargo run -r -- profile --name self-attention --format default`):
+nanoGPT is the standard workload we use for cross-project comparison. It is a ~250k-parameter GPT model with 4 transformer layers.
 
-| Stage  | Wall clock |
-| ------ | ----------- |
-| Prove  | 20.8 s |
-| Verify | 143 ms |
-| End-to-end CLI run | 25.8 s |
+**JOLT Atlas** end-to-end proving breakdown:
 
-The prover hit a peak allocated footprint of roughly 5.6 GB during sumcheck round 10, which matches what we have seen in the integration test harness. Numbers were collected from this workstation; expect ±10% variance depending on CPU, memory bandwidth.
+| Stage | Wall clock |
+| ----- | ---------- |
+| Verifying key generation | 0.246 s |
+| Proving key generation | 0.246 s |
+| Proof time | 14 s |
+| Verify time | 0.517 s |
 
-### Cross-project snapshot
+**ezkl** on the same model ([source](https://blog.ezkl.xyz/post/nanogpt/)):
 
-Article-classification workload comparison
+| Stage | Wall clock |
+| ----- | ---------- |
+| Verifying key generation | 192 s |
+| Proving key generation | 212 s |
+| Proof time | 237 s |
+| Verify time | 0.34 s |
 
-| Project    | Latency | Notes                        |
-| ---------- | ------- | ---------------------------- |
-| zkml-jolt  | ~0.7s   | in-tree article-classification bench |
-| mina-zkml  | ~2.0s   |                              |
-| ezkl       | 4–5s    |                              |
-| deep-prove | N/A     | missing gather primitive     |
-| zk-torch   | N/A     | missing reduceSum primitive  |
-
-Perceptron MLP baseline (easy sanity workload):
-
-| Project    | Latency | Notes                |
-| ---------- | ------- | -------------------- |
-| zkml-jolt  | ~800ms  |                      |
-| deep-prove | ~200ms  | lacks MCC            |
+JOLT Atlas produces a proof for nanoGPT in **~14 s** versus ezkl's **~237 s proof time** (not counting their 400+ s of key generation). That is roughly a **17× speed-up** on proof generation alone.
 
 ### How to reproduce locally
 
 ```bash
 # from repo root
-cd zkml-jolt-core
-
-cargo run -r -- profile --name article-classification --format default
-cargo run -r -- profile --name self-attention --format default
-cargo run -r -- profile --name mlp --format default
+cargo run --release --package jolt-atlas-core --example nanoGPT
 ```
 
-Add `--format chrome` if you want a tracing JSON for Chrome's `chrome://tracing` viewer instead of plain-text timings.
+Add `-- --trace` for Chrome Tracing JSON output (view in `chrome://tracing`), or `-- --trace-terminal` for timing printed to the terminal.
 
 ## Getting Started
 
 1. Clone the repository
 2. Install Rust and Cargo
-3. Run the examples:
+3. Run an example:
    ```bash
-   cargo run --example article_classification
-   cargo run --example authorization
+   cargo run --release --package jolt-atlas-core --example nanoGPT
    ```
 
 ## Acknowledgments

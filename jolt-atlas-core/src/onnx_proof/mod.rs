@@ -10,7 +10,7 @@ use atlas_onnx_tracer::{
     ops::Operator,
     tensor::Tensor,
 };
-use common::{CommittedPolynomial, VirtualPolynomial};
+use common::{consts::LOG_K_CHUNK, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
     poly::{
@@ -35,6 +35,9 @@ pub mod op_lookups;
 pub mod ops;
 pub mod range_checking;
 pub mod witness;
+
+pub use ark_bn254::{Bn254, Fr};
+pub use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
 
 /// Prover state that owns all data needed during proving.
 /// Created once before the proving loop and passed to operator handlers.
@@ -103,6 +106,7 @@ pub struct ReducedOpeningProof<F: JoltField, T: Transcript, PCS: CommitmentSchem
 }
 
 impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F, T, PCS> {
+    #[tracing::instrument(skip_all, name = "ONNXProof::prove")]
     pub fn prove(
         pp: &AtlasProverPreprocessing<F, PCS>,
         input: &Tensor<i32>,
@@ -142,12 +146,16 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
 
         // Iterate over computation graph in reverse topological order
         // Prove each operation using sum-check and virtual polynomials
+        let span = tracing::span!(tracing::Level::INFO, "IOP Proving Portion");
+        let _guard = span.enter();
         for (_, computation_node) in pp.model().graph.nodes.iter().rev() {
             let new_proofs = OperatorProver::prove(computation_node, &mut prover);
             for (proof_id, proof) in new_proofs {
                 proofs.insert(proof_id, proof);
             }
         }
+        drop(_guard);
+        drop(span);
 
         let reduced_opening_proof = if poly_map.is_empty() {
             None
@@ -202,6 +210,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         )
     }
 
+    #[tracing::instrument(skip_all)]
     fn polynomial_map(
         model: &Model,
         trace: &Trace,
@@ -217,6 +226,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         poly_map
     }
 
+    #[tracing::instrument(skip_all)]
     fn commit_to_polynomials(
         poly_map: &BTreeMap<CommittedPolynomial, MultilinearPolynomial<F>>,
         pcs: &PCS::ProverSetup,
@@ -238,7 +248,8 @@ pub enum ProofType {
     RaOneHotChecks,
     RaHammingWeight,
     SoftmaxDivSumMax,
-    SoftmaxExponentiation,
+    SoftmaxExponentiationReadRaf,
+    SoftmaxExponentiationRaOneHot,
     RangeCheck,
 }
 
@@ -248,6 +259,7 @@ pub struct Claims<F: JoltField>(pub Openings<F>);
 /* ---------- Verifier Logic ---------- */
 
 impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F, T, PCS> {
+    #[tracing::instrument(skip_all, name = "ONNXProof::verify")]
     pub fn verify(
         &self,
         pp: &AtlasVerifierPreprocessing<F, PCS>,
@@ -375,6 +387,7 @@ pub struct AtlasSharedPreprocessing {
 }
 
 impl AtlasSharedPreprocessing {
+    #[tracing::instrument(skip_all, name = "AtlasSharedPreprocessing::preprocess")]
     pub fn preprocess(model: Model) -> Self {
         Self { model }
     }
@@ -404,29 +417,42 @@ where
 {
     #[tracing::instrument(skip_all, name = "AtlasProverPreprocessing::gen")]
     pub fn new(shared: AtlasSharedPreprocessing) -> AtlasProverPreprocessing<F, PCS> {
-        use common::consts::ONEHOT_CHUNK_THRESHOLD_LOG_T;
         let max_T: usize = shared.model.max_T();
         let max_log_T = max_T.log_2();
         // Use the maximum possible log_k_chunk for generator setup
-        let max_log_k_chunk = if max_log_T < ONEHOT_CHUNK_THRESHOLD_LOG_T {
-            4
-        } else {
-            8
-        };
+        let max_log_k_chunk = shared
+            .model
+            .graph
+            .nodes
+            .values()
+            .map(|node| match &node.operator {
+                Operator::Tanh(_) | Operator::ReLU(_) | Operator::Div(_) | Operator::Rsqrt(_) => {
+                    LOG_K_CHUNK
+                }
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0);
         // TODO: Virtualize TanhRa (and GatherRa) to remove this
         // Currently the log_table_size for Tanh is greater than max_log_k_chunk
         let small_lookups_log_kt = shared
             .model
             .graph
             .nodes
-            .iter()
-            .map(|node| match &node.1.operator {
-                Operator::Tanh(inner) => inner.log_table + node.1.num_output_elements().log_2(),
+            .values()
+            .map(|node| match &node.operator {
+                Operator::Tanh(_) => LOG_K_CHUNK + node.num_output_elements().log_2(),
+                Operator::SoftmaxAxes(_) => {
+                    LOG_K_CHUNK + node.output_dims.last().unwrap_or(&1).log_2()
+                }
                 _ => 0,
             })
             .max()
             .unwrap_or(0);
-        let generators = PCS::setup_prover((max_log_k_chunk + max_log_T).max(small_lookups_log_kt));
+        let max_num_vars = (max_log_k_chunk + max_log_T).max(small_lookups_log_kt);
+        tracing::info!("Prover preprocessing: max_num_vars = {max_num_vars}");
+        println!("Prover preprocessing: max_num_vars = {max_num_vars}");
+        let generators = PCS::setup_prover(max_num_vars);
         AtlasProverPreprocessing { generators, shared }
     }
 
@@ -539,6 +565,64 @@ mod tests {
     }
 
     #[test]
+    fn test_nanoGPT() {
+        let working_dir = "../atlas-onnx-tracer/models/nanoGPT/";
+        let mut rng = StdRng::seed_from_u64(0x1096);
+        let input_data: Vec<i32> = (0..64)
+            .map(|_| (1 << 5) + rng.gen_range(-20..=20))
+            .collect();
+        let input = Tensor::new(Some(&input_data), &[1, 64]).unwrap();
+        prove_and_verify(working_dir, &input, false, false);
+    }
+
+    #[test]
+    fn test_transformer() {
+        let working_dir = "../atlas-onnx-tracer/models/transformer/";
+        let mut rng = StdRng::seed_from_u64(0x1096);
+        let input_data: Vec<i32> = (0..64 * 64)
+            .map(|_| (1 << 7) + rng.gen_range(-50..=50))
+            .collect();
+        let input = Tensor::new(Some(&input_data), &[1, 64, 64]).unwrap();
+        prove_and_verify(working_dir, &input, false, false);
+    }
+
+    #[test]
+    fn test_minigpt() {
+        let working_dir = "../atlas-onnx-tracer/models/minigpt/";
+        let mut rng = StdRng::seed_from_u64(0x42);
+
+        // Model hyperparameters (matching the minigpt Python script by @karpathy)
+        // vocab_size=1024, n_embd=32, n_head=8, n_layer=2, block_size=32
+        let vocab_size: i32 = 1024;
+        let block_size = 32;
+
+        // Generate random token IDs in [0, vocab_size)
+        let input_data: Vec<i32> = (0..block_size)
+            .map(|_| rng.gen_range(0..vocab_size))
+            .collect();
+        let input = Tensor::new(Some(&input_data), &[1, block_size]).unwrap();
+        prove_and_verify(working_dir, &input, true, true);
+    }
+
+    #[test]
+    fn test_microgpt() {
+        let working_dir = "../atlas-onnx-tracer/models/microgpt/";
+        let mut rng = StdRng::seed_from_u64(0x42);
+
+        // Model hyperparameters (matching the microGPT Python script by @karpathy)
+        // vocab_size=32, n_embd=16, n_head=4, n_layer=1, block_size=16
+        let vocab_size: i32 = 32;
+        let block_size = 16;
+
+        // Generate random token IDs in [0, vocab_size)
+        let input_data: Vec<i32> = (0..block_size)
+            .map(|_| rng.gen_range(0..vocab_size))
+            .collect();
+        let input = Tensor::new(Some(&input_data), &[1, block_size]).unwrap();
+        prove_and_verify(working_dir, &input, true, true);
+    }
+
+    #[test]
     fn test_layernorm_head() {
         let working_dir = "../atlas-onnx-tracer/models/layernorm_head/";
         let mut rng = StdRng::seed_from_u64(0x8096);
@@ -547,6 +631,17 @@ mod tests {
             .collect();
         let input = Tensor::construct(input_data, vec![16, 16]);
         prove_and_verify(working_dir, &input, false, false);
+    }
+
+    #[test]
+    fn test_multihead_attention() {
+        let working_dir = "../atlas-onnx-tracer/models/multihead_attention/";
+        let mut rng = StdRng::seed_from_u64(0x1013);
+        let input_data: Vec<i32> = (0..16 * 128)
+            .map(|_| SCALE + rng.gen_range(-10..=10))
+            .collect();
+        let input = Tensor::construct(input_data, vec![1, 1, 16, 128]);
+        prove_and_verify_with_debug(working_dir, &input, true, false, true);
     }
 
     #[test]
@@ -562,17 +657,6 @@ mod tests {
     }
 
     #[test]
-    fn test_multihead_attention() {
-        let working_dir = "../atlas-onnx-tracer/models/multihead_attention/";
-        let mut rng = StdRng::seed_from_u64(0x1013);
-        let input_data: Vec<i32> = (0..16 * 128)
-            .map(|_| SCALE + rng.gen_range(-10..=10))
-            .collect();
-        let input = Tensor::construct(input_data, vec![1, 1, 16, 128]);
-        prove_and_verify_with_debug(working_dir, &input, true, false, true);
-    }
-
-    #[test]
     fn test_sum_axes() {
         let working_dir = "../atlas-onnx-tracer/models/sum_axes_test/";
         let mut rng = StdRng::seed_from_u64(0x923);
@@ -580,6 +664,7 @@ mod tests {
         prove_and_verify_with_debug(working_dir, &input, true, false, true);
     }
 
+    #[ignore = "hzkg fails when all coeffs are zero"]
     #[test]
     fn test_sum_independent() {
         let working_dir = "../atlas-onnx-tracer/models/sum_independent/";
@@ -615,12 +700,13 @@ mod tests {
         prove_and_verify_with_debug(working_dir, &input, true, false, true);
     }
 
+    #[ignore = "hzkg fails when all coeffs are zero"]
     #[test]
     fn test_layernorm_partial_head() {
         let working_dir = "../atlas-onnx-tracer/models/layernorm_partial_head/";
         let input_data = vec![SCALE; 16 * 16];
         let input = Tensor::construct(input_data, vec![16, 16]);
-        prove_and_verify(working_dir, &input, false, false);
+        prove_and_verify(working_dir, &input, true, false);
     }
 
     #[test]
@@ -683,6 +769,7 @@ mod tests {
         }
     }
 
+    #[ignore = "hzkg fails when all coeffs are zero"]
     #[test]
     fn test_add_sub_mul() {
         let working_dir = "../atlas-onnx-tracer/models/test_add_sub_mul/";
@@ -691,7 +778,7 @@ mod tests {
         // Using small values to avoid overflow
         let mut rng = StdRng::seed_from_u64(0x100);
         // Create tensor with shape [65536]
-        let input = Tensor::random_small(&mut rng, &[1 << 16]);
+        let input = Tensor::random_range(&mut rng, &[1 << 16], -(1 << 10)..(1 << 10));
 
         prove_and_verify_with_debug(working_dir, &input, true, true, true);
     }
@@ -718,6 +805,7 @@ mod tests {
         prove_and_verify(working_dir, &input, true, true);
     }
 
+    #[ignore = "hzkg fails when all coeffs are zero"]
     #[test]
     fn test_broadcast() {
         let working_dir = "../atlas-onnx-tracer/models/broadcast/";

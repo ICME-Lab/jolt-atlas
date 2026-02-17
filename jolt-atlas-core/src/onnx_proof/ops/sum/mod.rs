@@ -21,6 +21,7 @@ use crate::{
 pub mod axis;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sum {
+    #[tracing::instrument(skip_all, name = "Sum::prove")]
     fn prove(
         &self,
         node: &ComputationNode,
@@ -38,6 +39,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sum {
         vec![(ProofId(node.idx, ProofType::Execution), proof)]
     }
 
+    #[tracing::instrument(skip_all, name = "Sum::verify")]
     fn verify(
         &self,
         node: &ComputationNode,

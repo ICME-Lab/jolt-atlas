@@ -4,51 +4,47 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# Internal dependencies
-atlas-onnx-tracer = { path = "../atlas-onnx-tracer" }
-common = { path = "../common" }
-joltworks = { path = "../joltworks" }
-
-# Tracing and Profiling
-tracing = { version = "0.1.37", default-features = false }
-tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
-tracing-chrome = "0.7"
-
-# Serialization
-serde = { version = "1.0", default-features = false, features = ["derive"] }
-serde_json = { version = "1.0.108", default-features = false }
-
-# Parallel Processing
-rayon = { version = "^1.8.0" }
-
-# Core Utilities
-strum = { version = "0.26.3", default-features = false }
-strum_macros = "0.26.4"
-derive_more = { version = "2.0.1", features = [
-    "from",
-], default-features = false }
-itertools = "0.10.0"
-regex = "1.10.6"
-
-# Randomness
-rand = { version = "0.8.5", default-features = false }
-rand_core = { version = "0.6.4", default-features = false }
-
-# Numeric
-num = "0.4.3"
-num-derive = "0.4.2"
-num-traits = "0.2.19"
+# Internal
+atlas-onnx-tracer.workspace = true
+common.workspace = true
+joltworks.workspace = true
 
 # Cryptography and Math
-ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }
-ark-std = { version = "0.5.0", default-features = false }
-ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false, features = [
-    "derive",
-] }
+ark-bn254.workspace = true
+ark-std.workspace = true
+ark-serialize.workspace = true
+
+# Numeric
+num.workspace = true
+num-derive.workspace = true
+num-traits.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Parallel Processing
+rayon.workspace = true
+
+# Randomness
+rand.workspace = true
+rand_core.workspace = true
+
+# Tracing and Profiling
+tracing.workspace = true
+tracing-chrome.workspace = true
+tracing-subscriber.workspace = true
+
+# Core Utilities
+derive_more.workspace = true
+itertools.workspace = true
+regex.workspace = true
+strum.workspace = true
+strum_macros.workspace = true
 
 # Testing
-serial_test = "3.2.0"
+serial_test.workspace = true
 
 [dev-dependencies]
 # Enable test-feature for joltworks during tests only
-joltworks = { path = "../joltworks", features = ["test-feature"] }
+joltworks = { workspace = true, features = ["test-feature"] }

@@ -10,18 +10,16 @@ challenge-254-bit = []
 test-feature = []
 
 [dependencies]
-# Internal dependencies
-common = { path = "../common" }
-atlas-onnx-tracer = { path = "../atlas-onnx-tracer" }
+# Internal
+common.workspace = true
+atlas-onnx-tracer.workspace = true
 
 # Cryptography and Math
-ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }
+ark-bn254.workspace = true
 ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }
 ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }
-ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false, features = [
-    "derive",
-] }
-ark-std = { version = "0.5.0", default-features = false }
+ark-serialize.workspace = true
+ark-std.workspace = true
 sha3 = "0.10.8"
 blake2 = "0.10"
 jolt-optimizations = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
@@ -32,37 +30,35 @@ dory = { package = "dory-pcs", version = "0.1.0", features = [
 ] }
 
 # Numeric
-num = "0.4.3"
-num-derive = "0.4.2"
-num-traits = "0.2.19"
+num.workspace = true
+num-derive.workspace = true
+num-traits.workspace = true
 
 # Parallel Processing
-rayon = { version = "^1.8.0" }
+rayon.workspace = true
 
 # Randomness
-rand = { version = "0.8.5", default-features = false }
+rand.workspace = true
 rand_chacha = { version = "0.3.0", default-features = false }
-rand_core = { version = "0.6.4", default-features = false }
+rand_core.workspace = true
 rand_distr = "0.4.3"
 
 # Tracing and Profiling
-tracing = { version = "0.1.37", default-features = false }
+tracing.workspace = true
 inferno = { version = "0.12.3", optional = true }
-allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
+allocative.workspace = true
 
 # Core Utilities
-thiserror = "1.0.58"
-strum = { version = "0.26.3", default-features = false }
-strum_macros = "0.26.4"
+thiserror = { workspace = true, default-features = true }
+strum.workspace = true
+strum_macros.workspace = true
 fixedbitset = "0.5.0"
-derive_more = { version = "2.0.1", features = [
-    "from",
-], default-features = false }
-itertools = "0.10.0"
+derive_more.workspace = true
+itertools.workspace = true
 
 # System and Platform
 sysinfo = { version = "0.30.8", optional = true }
 memory-stats = { version = "1.0.0", features = ["always_use_statm"] }
 
 # Testing
-serial_test = "3.2.0"
+serial_test.workspace = true

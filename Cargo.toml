@@ -18,6 +18,52 @@ keywords = ["SNARK", "cryptography", "proofs", "zkML"]
 members = ["jolt-atlas-core", "atlas-onnx-tracer", "common", "joltworks"]
 exclude = ["onnx-tracer", "zkml-jolt-core"]
 
+[workspace.dependencies]
+# Internal
+atlas-onnx-tracer = { path = "./atlas-onnx-tracer" }
+common = { path = "./common" }
+joltworks = { path = "./joltworks" }
+
+# Cryptography and Math
+ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }
+ark-serialize = { version = "0.5.0", default-features = false, features = [
+    "derive",
+] }
+ark-std = { version = "0.5.0", default-features = false }
+allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
+
+# Numeric
+num = "0.4.3"
+num-derive = "0.4.2"
+num-traits = "0.2.19"
+
+# Serialization
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false }
+
+# Parallel Processing
+rayon = "1.10"
+
+# Randomness
+rand = { version = "0.8.5", default-features = false }
+rand_core = { version = "0.6.4", default-features = false }
+
+# Tracing and Profiling
+tracing = { version = "0.1.37", default-features = false }
+tracing-chrome = "0.7"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+
+# Core Utilities
+derive_more = { version = "2.0.1", default-features = false, features = ["from"] }
+itertools = "0.10.0"
+regex = "1.10.6"
+strum = { version = "0.26.3", default-features = false }
+strum_macros = "0.26.4"
+thiserror = { version = "1.0.58", default-features = false }
+
+# Testing
+serial_test = "3.2.0"
+
 [lib]
 path = "./src/lib.rs"
 

@@ -4,7 +4,7 @@
 /// cargo run --example microgpt -- --trace
 ///
 /// # Terminal output with timing
-/// cargo run --example microgpt -- --trace-default
+/// cargo run --example microgpt -- --trace-terminal
 /// ```
 use atlas_onnx_tracer::{model::Model, tensor::Tensor};
 use jolt_atlas_core::{

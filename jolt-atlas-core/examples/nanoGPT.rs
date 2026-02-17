@@ -1,3 +1,11 @@
+/// Run with tracing:
+/// ```bash
+/// # Chrome Tracing JSON output (view in chrome://tracing)
+/// cargo run --example nanoGPT -- --trace
+///
+/// # Terminal output with timing
+/// cargo run --example nanoGPT -- --trace-terminal
+/// ```
 use atlas_onnx_tracer::{model::Model, tensor::Tensor};
 use jolt_atlas_core::{
     onnx_proof::{

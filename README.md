@@ -45,6 +45,8 @@ cargo run --release --package jolt-atlas-core --example microgpt
 
 ## Benchmarks
 
+**System specs:** MacBook Pro M3, 16GB RAM
+
 ### nanoGPT (~0.25M params, 4 transformer layers)
 
 nanoGPT is the standard workload we use for cross-project comparison. It is a ~250k-parameter GPT model with 4 transformer layers.
@@ -68,6 +70,22 @@ nanoGPT is the standard workload we use for cross-project comparison. It is a ~2
 | Verify time | 0.34 s |
 
 JOLT Atlas produces a proof for nanoGPT in **~14 s** versus ezkl's **~237 s proof time** (not counting their 400+ s of key generation). That is roughly a **17× speed-up** on proof generation alone.
+
+### GPT-2 (125M params)
+
+GPT-2 is a 125-million-parameter transformer model from OpenAI.
+
+**JOLT Atlas** end-to-end proving breakdown:
+
+| Stage | Wall clock |
+| ----- | ---------- |
+| Proving/verifying key generation | 0.872 s |
+| Witness generation | ~7.5 s |
+| Commitment time | ~3.5 s |
+| Sum-check proving | ~16 s |
+| Reduction opening proof | ~7 s |
+| HyperKZG prove | ~3 s |
+| **End-to-end total** | **~38 s** |
 
 ### How to reproduce locally
 

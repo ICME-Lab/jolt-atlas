@@ -7,10 +7,9 @@ use atlas_onnx_tracer::{
         trace::{LayerData, ModelExecutionIO, Trace},
         Model,
     },
-    ops::Operator,
     tensor::Tensor,
 };
-use common::{consts::LOG_K_CHUNK, CommittedPolynomial, VirtualPolynomial};
+use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
     poly::{
@@ -109,10 +108,10 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     #[tracing::instrument(skip_all, name = "ONNXProof::prove")]
     pub fn prove(
         pp: &AtlasProverPreprocessing<F, PCS>,
-        input: &Tensor<i32>,
+        inputs: &[Tensor<i32>],
     ) -> (Self, ModelExecutionIO, Option<ProverDebugInfo<F, T>>) {
         // Generate trace and io
-        let trace = pp.model().trace(&[input.clone()]); // TODO: Allow for multiple inputs
+        let trace = pp.model().trace(inputs);
         let io = Trace::io(&trace, pp.model());
 
         // Initialize prover state
@@ -417,41 +416,9 @@ where
 {
     #[tracing::instrument(skip_all, name = "AtlasProverPreprocessing::gen")]
     pub fn new(shared: AtlasSharedPreprocessing) -> AtlasProverPreprocessing<F, PCS> {
-        let max_T: usize = shared.model.max_T();
-        let max_log_T = max_T.log_2();
-        // Use the maximum possible log_k_chunk for generator setup
-        let max_log_k_chunk = shared
-            .model
-            .graph
-            .nodes
-            .values()
-            .map(|node| match &node.operator {
-                Operator::Tanh(_) | Operator::ReLU(_) | Operator::Div(_) | Operator::Rsqrt(_) => {
-                    LOG_K_CHUNK
-                }
-                _ => 0,
-            })
-            .max()
-            .unwrap_or(0);
-        // TODO: Virtualize TanhRa (and GatherRa) to remove this
-        // Currently the log_table_size for Tanh is greater than max_log_k_chunk
-        let small_lookups_log_kt = shared
-            .model
-            .graph
-            .nodes
-            .values()
-            .map(|node| match &node.operator {
-                Operator::Tanh(_) => LOG_K_CHUNK + node.num_output_elements().log_2(),
-                Operator::SoftmaxAxes(_) => {
-                    LOG_K_CHUNK + node.output_dims.last().unwrap_or(&1).log_2()
-                }
-                _ => 0,
-            })
-            .max()
-            .unwrap_or(0);
-        let max_num_vars = (max_log_k_chunk + max_log_T).max(small_lookups_log_kt);
+        let model = &shared.model;
+        let max_num_vars = model.max_num_vars();
         tracing::info!("Prover preprocessing: max_num_vars = {max_num_vars}");
-        println!("Prover preprocessing: max_num_vars = {max_num_vars}");
         let generators = PCS::setup_prover(max_num_vars);
         AtlasProverPreprocessing { generators, shared }
     }
@@ -506,7 +473,7 @@ mod tests {
     };
     use ark_bn254::{Bn254, Fr};
     use atlas_onnx_tracer::{
-        model::{trace::ModelExecutionIO, Model},
+        model::{trace::ModelExecutionIO, Model, RunArgs},
         tensor::Tensor,
     };
     use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
@@ -521,22 +488,32 @@ mod tests {
     /// Returns the proof IO for additional assertions if needed.
     fn prove_and_verify(
         model_dir: &str,
-        input: &Tensor<i32>,
+        inputs: &[Tensor<i32>],
+        run_args: &RunArgs,
         print_model: bool,
         print_timing: bool,
     ) -> ModelExecutionIO {
-        prove_and_verify_with_debug(model_dir, input, print_model, print_timing, false).0
+        prove_and_verify_with_debug(
+            model_dir,
+            inputs,
+            run_args,
+            print_model,
+            print_timing,
+            false,
+        )
+        .0
     }
 
     /// Helper function with debug info support.
     fn prove_and_verify_with_debug(
         model_dir: &str,
-        input: &Tensor<i32>,
+        inputs: &[Tensor<i32>],
+        run_args: &RunArgs,
         print_model: bool,
         print_timing: bool,
         use_debug_info: bool,
     ) -> (ModelExecutionIO, ()) {
-        let model = Model::load(&format!("{model_dir}network.onnx"), &Default::default());
+        let model = Model::load(&format!("{model_dir}network.onnx"), run_args);
         if print_model {
             println!("model: {}", model.pretty_print());
         }
@@ -547,7 +524,7 @@ mod tests {
         let timing = Instant::now();
         let (proof, io, debug_info) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
             &prover_preprocessing,
-            input,
+            inputs,
         );
         if print_timing {
             println!("Proof generation took {:?}", timing.elapsed());
@@ -565,6 +542,44 @@ mod tests {
     }
 
     #[test]
+    fn test_gpt2() {
+        let working_dir = "../atlas-onnx-tracer/models/gpt2/";
+        let mut rng = StdRng::seed_from_u64(42);
+        let seq_len: usize = 16;
+        let vocab_size: i32 = 50257;
+
+        // Input 0: input_ids — random token IDs used as Gather indices
+        let input_ids_data: Vec<i32> = (0..seq_len).map(|_| rng.gen_range(0..vocab_size)).collect();
+        let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
+
+        // Input 1: position_ids — sequential positions used as Gather indices
+        let position_ids_data: Vec<i32> = (0..seq_len as i32).collect();
+        let position_ids = Tensor::new(Some(&position_ids_data), &[1, seq_len]).unwrap();
+
+        // Input 2: attention_mask — all 1s (attend everywhere)
+        // The model's Cast handler divides by scale to de-quantize, so we provide
+        // the mask in quantized form: 1.0 in fixed-point = 1 << scale.
+        let attention_mask_data: Vec<i32> = vec![SCALE; seq_len];
+        let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
+
+        // Configure RunArgs for GPT-2
+        let run_args = RunArgs::new([
+            ("batch_size", 1),
+            ("sequence_length", seq_len),
+            ("past_sequence_length", 0),
+        ])
+        .with_pre_rebase_nonlinear(true);
+
+        prove_and_verify(
+            working_dir,
+            &[input_ids, position_ids, attention_mask],
+            &run_args,
+            true,
+            true,
+        );
+    }
+
+    #[test]
     fn test_nanoGPT() {
         let working_dir = "../atlas-onnx-tracer/models/nanoGPT/";
         let mut rng = StdRng::seed_from_u64(0x1096);
@@ -572,7 +587,7 @@ mod tests {
             .map(|_| (1 << 5) + rng.gen_range(-20..=20))
             .collect();
         let input = Tensor::new(Some(&input_data), &[1, 64]).unwrap();
-        prove_and_verify(working_dir, &input, false, false);
+        prove_and_verify(working_dir, &[input], &Default::default(), false, false);
     }
 
     #[test]
@@ -583,7 +598,7 @@ mod tests {
             .map(|_| (1 << 7) + rng.gen_range(-50..=50))
             .collect();
         let input = Tensor::new(Some(&input_data), &[1, 64, 64]).unwrap();
-        prove_and_verify(working_dir, &input, false, false);
+        prove_and_verify(working_dir, &[input], &Default::default(), false, false);
     }
 
     #[test]
@@ -601,7 +616,7 @@ mod tests {
             .map(|_| rng.gen_range(0..vocab_size))
             .collect();
         let input = Tensor::new(Some(&input_data), &[1, block_size]).unwrap();
-        prove_and_verify(working_dir, &input, true, true);
+        prove_and_verify(working_dir, &[input], &Default::default(), true, true);
     }
 
     #[test]
@@ -619,7 +634,7 @@ mod tests {
             .map(|_| rng.gen_range(0..vocab_size))
             .collect();
         let input = Tensor::new(Some(&input_data), &[1, block_size]).unwrap();
-        prove_and_verify(working_dir, &input, true, true);
+        prove_and_verify(working_dir, &[input], &Default::default(), true, true);
     }
 
     #[test]
@@ -630,7 +645,7 @@ mod tests {
             .map(|_| (1 << 7) + rng.gen_range(-50..=50))
             .collect();
         let input = Tensor::construct(input_data, vec![16, 16]);
-        prove_and_verify(working_dir, &input, false, false);
+        prove_and_verify(working_dir, &[input], &Default::default(), false, false);
     }
 
     #[test]
@@ -641,7 +656,14 @@ mod tests {
             .map(|_| SCALE + rng.gen_range(-10..=10))
             .collect();
         let input = Tensor::construct(input_data, vec![1, 1, 16, 128]);
-        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+        prove_and_verify_with_debug(
+            working_dir,
+            &[input],
+            &Default::default(),
+            true,
+            false,
+            true,
+        );
     }
 
     #[test]
@@ -653,7 +675,14 @@ mod tests {
             .collect();
         let input = Tensor::construct(input_data, vec![1, 64, 64]);
 
-        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+        prove_and_verify_with_debug(
+            working_dir,
+            &[input],
+            &Default::default(),
+            true,
+            false,
+            true,
+        );
     }
 
     #[test]
@@ -661,7 +690,14 @@ mod tests {
         let working_dir = "../atlas-onnx-tracer/models/sum_axes_test/";
         let mut rng = StdRng::seed_from_u64(0x923);
         let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
-        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+        prove_and_verify_with_debug(
+            working_dir,
+            &[input],
+            &Default::default(),
+            true,
+            false,
+            true,
+        );
     }
 
     #[ignore = "hzkg fails when all coeffs are zero"]
@@ -670,7 +706,14 @@ mod tests {
         let working_dir = "../atlas-onnx-tracer/models/sum_independent/";
         let mut rng = StdRng::seed_from_u64(0x923);
         let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
-        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+        prove_and_verify_with_debug(
+            working_dir,
+            &[input],
+            &Default::default(),
+            true,
+            false,
+            true,
+        );
     }
 
     #[test]
@@ -679,25 +722,53 @@ mod tests {
         let working_dir = "../atlas-onnx-tracer/models/sum_1d_axis0/";
         let mut rng = StdRng::seed_from_u64(0x923);
         let input = Tensor::random_small(&mut rng, &[8]);
-        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+        prove_and_verify_with_debug(
+            working_dir,
+            &[input],
+            &Default::default(),
+            true,
+            false,
+            true,
+        );
 
         // Test 2D sum along axis 0
         let working_dir = "../atlas-onnx-tracer/models/sum_2d_axis0/";
         let mut rng = StdRng::seed_from_u64(0x924);
         let input = Tensor::random_small(&mut rng, &[4, 8]);
-        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+        prove_and_verify_with_debug(
+            working_dir,
+            &[input],
+            &Default::default(),
+            true,
+            false,
+            true,
+        );
 
         // Test 2D sum along axis 1
         let working_dir = "../atlas-onnx-tracer/models/sum_2d_axis1/";
         let mut rng = StdRng::seed_from_u64(0x925);
         let input = Tensor::random_small(&mut rng, &[4, 8]);
-        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+        prove_and_verify_with_debug(
+            working_dir,
+            &[input],
+            &Default::default(),
+            true,
+            false,
+            true,
+        );
 
         // Test 3D sum along axis 2
         let working_dir = "../atlas-onnx-tracer/models/sum_3d_axis2/";
         let mut rng = StdRng::seed_from_u64(0x926);
         let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
-        prove_and_verify_with_debug(working_dir, &input, true, false, true);
+        prove_and_verify_with_debug(
+            working_dir,
+            &[input],
+            &Default::default(),
+            true,
+            false,
+            true,
+        );
     }
 
     #[ignore = "hzkg fails when all coeffs are zero"]
@@ -706,7 +777,7 @@ mod tests {
         let working_dir = "../atlas-onnx-tracer/models/layernorm_partial_head/";
         let input_data = vec![SCALE; 16 * 16];
         let input = Tensor::construct(input_data, vec![16, 16]);
-        prove_and_verify(working_dir, &input, true, false);
+        prove_and_verify(working_dir, &[input], &Default::default(), true, false);
     }
 
     #[test]
@@ -723,7 +794,7 @@ mod tests {
         let input_vector = build_input_vector(input_text, &vocab);
         let input = Tensor::construct(input_vector, vec![1, 512]);
 
-        prove_and_verify(working_dir, &input, true, true);
+        prove_and_verify(working_dir, &[input], &Default::default(), true, true);
 
         /// Load vocab.json into HashMap<String, (usize, i32)>
         fn load_vocab(
@@ -780,7 +851,7 @@ mod tests {
         // Create tensor with shape [65536]
         let input = Tensor::random_range(&mut rng, &[1 << 16], -(1 << 10)..(1 << 10));
 
-        prove_and_verify_with_debug(working_dir, &input, true, true, true);
+        prove_and_verify_with_debug(working_dir, &[input], &Default::default(), true, true, true);
     }
 
     #[test]
@@ -794,7 +865,7 @@ mod tests {
             .collect::<Vec<i32>>();
         let input = Tensor::construct(input_vec, vec![4]);
 
-        prove_and_verify(working_dir, &input, true, true);
+        prove_and_verify(working_dir, &[input], &Default::default(), true, true);
     }
 
     #[test]
@@ -802,7 +873,7 @@ mod tests {
         let working_dir = "../atlas-onnx-tracer/models/perceptron/";
         let input = Tensor::construct(vec![1, 2, 3, 4], vec![1, 4]);
 
-        prove_and_verify(working_dir, &input, true, true);
+        prove_and_verify(working_dir, &[input], &Default::default(), true, true);
     }
 
     #[ignore = "hzkg fails when all coeffs are zero"]
@@ -811,7 +882,7 @@ mod tests {
         let working_dir = "../atlas-onnx-tracer/models/broadcast/";
         let input = Tensor::construct(vec![1, 2, 3, 4], vec![4]);
 
-        let io = prove_and_verify(working_dir, &input, true, true);
+        let io = prove_and_verify(working_dir, &[input], &Default::default(), true, true);
 
         // Print output for verification
         println!("Output shape: {:?}", io.outputs[0].dims());
@@ -823,7 +894,7 @@ mod tests {
         let working_dir = "../atlas-onnx-tracer/models/reshape/";
         let input = Tensor::construct(vec![1, 2, 3, 4], vec![4]);
 
-        let io = prove_and_verify(working_dir, &input, true, true);
+        let io = prove_and_verify(working_dir, &[input], &Default::default(), true, true);
 
         println!("Output shape: {:?}", io.outputs[0].dims());
     }
@@ -834,7 +905,7 @@ mod tests {
         let input_vector: Vec<i32> = (1..=64).collect();
         let input = Tensor::construct(input_vector, vec![2, 4, 8]);
 
-        let io = prove_and_verify(working_dir, &input, true, true);
+        let io = prove_and_verify(working_dir, &[input], &Default::default(), true, true);
 
         println!("Output shape: {:?}", io.outputs[0].dims());
     }
@@ -846,7 +917,7 @@ mod tests {
         // Input values in [0, 8)
         let input = Tensor::random_range(&mut rng, &[1, 64], 0..65);
 
-        prove_and_verify(working_dir, &input, true, false);
+        prove_and_verify(working_dir, &[input], &Default::default(), true, false);
     }
 
     #[test]
@@ -855,7 +926,7 @@ mod tests {
         let input_vector = vec![10, 40, 70, 100];
         let input = Tensor::new(Some(&input_vector), &[4]).unwrap();
 
-        prove_and_verify(working_dir, &input, true, true);
+        prove_and_verify(working_dir, &[input], &Default::default(), true, true);
     }
 
     #[test]
@@ -869,7 +940,7 @@ mod tests {
         ];
         let input = Tensor::new(Some(&input_vector), &[1, 4]).unwrap();
 
-        prove_and_verify(working_dir, &input, false, false);
+        prove_and_verify(working_dir, &[input], &Default::default(), false, false);
     }
 
     #[test]
@@ -883,6 +954,6 @@ mod tests {
         ];
         let input = Tensor::new(Some(&input_vector), &[1, 4]).unwrap();
 
-        prove_and_verify(working_dir, &input, false, false);
+        prove_and_verify(working_dir, &[input], &Default::default(), false, false);
     }
 }

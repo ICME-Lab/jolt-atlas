@@ -11,14 +11,5 @@ fn main() {
         .collect();
     let input = Tensor::new(Some(&input_data), &[1, 64, 64]).unwrap();
 
-    let trace = transformer.trace(&[input.clone()]);
-    let tanh_layer_data = trace.layer_data(&transformer[110]);
-    println!(
-        "tanh max:{:?}",
-        tanh_layer_data.operands[0].iter().max().unwrap(),
-    );
-    println!(
-        "tanh min:{:?}",
-        tanh_layer_data.operands[0].iter().min().unwrap(),
-    );
+    let _trace = transformer.trace(&[input.clone()]);
 }

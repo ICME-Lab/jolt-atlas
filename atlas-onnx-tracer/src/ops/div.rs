@@ -2,6 +2,7 @@ use super::{Div, Op};
 use crate::tensor::Tensor;
 
 impl Op for Div {
+    #[tracing::instrument(name = "Div::f", skip_all)]
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         let a = inputs[0];
         let b = inputs[1];

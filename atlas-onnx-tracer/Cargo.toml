@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# Internal
+common.workspace = true
+
 # Serialization
 serde = { workspace = true, default-features = true }
 serde_json = { workspace = true, default-features = true }
@@ -31,6 +34,9 @@ tract-onnx = { git = "https://github.com/sonos/tract/", default-features = false
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
 maybe-rayon = { version = "0.1.1" }
+
+[dev-dependencies]
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 
 [target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
 colored = { version = "2.0.0", default-features = false }

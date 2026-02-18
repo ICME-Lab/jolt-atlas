@@ -18,6 +18,7 @@ impl Model {
     /// # Returns
     ///
     /// A `BTreeMap` containing all node outputs, indexed by node ID
+    #[tracing::instrument(name = "Model::execute_graph", skip_all)]
     pub fn execute_graph(&self, inputs: &[Tensor<i32>]) -> BTreeMap<usize, Tensor<i32>> {
         let mut node_outputs: BTreeMap<usize, Tensor<i32>> = BTreeMap::new();
         self.store_inputs(inputs, &mut node_outputs);
@@ -65,6 +66,7 @@ impl Model {
     ///
     /// * `inputs` - A slice of input tensors to store
     /// * `node_outputs` - A mutable map to store the input tensors, indexed by node ID
+    #[tracing::instrument(name = "Model::store_inputs", skip_all)]
     fn store_inputs(
         &self,
         inputs: &[Tensor<i32>],

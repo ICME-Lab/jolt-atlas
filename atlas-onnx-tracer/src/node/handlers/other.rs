@@ -27,6 +27,7 @@ pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
         ("EinSum", handle_einsum as OpHandlerFn),
         ("Iff", handle_iff as OpHandlerFn),
         ("onnx.IsNan", handle_is_nan as OpHandlerFn),
+        ("IsNan", handle_is_nan as OpHandlerFn),
         ("Cast", handle_cast as OpHandlerFn),
     ])
 }
@@ -41,10 +42,21 @@ fn handle_const(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let datum_type = op.val().datum_type();
     let raw_tensor = extract_tensor_value(op.val().clone()).unwrap();
 
-    let result_tensor = if datum_type == DatumType::Bool {
+    let result_tensor = if datum_type == DatumType::Bool
+        || datum_type == DatumType::I64
+        || datum_type == DatumType::I32
+        || datum_type == DatumType::I16
+        || datum_type == DatumType::I8
+        || datum_type == DatumType::U8
+        || datum_type == DatumType::U16
+        || datum_type == DatumType::U32
+        || datum_type == DatumType::U64
+    {
         // Boolean tensors (e.g., causal attention masks) must remain as 0/1 integers.
+        // Integer tensors (e.g., gather indices, shapes) must remain as raw values.
         // Applying quantization scaling would turn 1s into 1<<scale (e.g., 128),
-        // breaking downstream boolean checks in operations like Iff.
+        // breaking downstream boolean checks in operations like Iff, or causing
+        // out-of-bounds errors when used as Gather indices.
         raw_tensor
             .par_enum_map::<_, i32, TensorError>(|_, x| Ok(x as i32))
             .unwrap()
@@ -131,11 +143,12 @@ fn handle_cast(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         | DatumType::U16
         | DatumType::U32
         | DatumType::U64 => {
-            // For integer types, divide by scale to convert from fixed-point
+            // For integer types, divide by the quantization multiplier (2^scale)
+            // to convert from fixed-point back to integer domain.
             let scale = hctx.run_args.scale;
             HandlerBuilder::new(hctx)
                 .simple_op(Operator::Identity(Default::default()))
-                .div_by_constant(scale)
+                .div_by_constant(1 << scale)
                 .build()
         }
         DatumType::F16 | DatumType::F32 | DatumType::F64 => {

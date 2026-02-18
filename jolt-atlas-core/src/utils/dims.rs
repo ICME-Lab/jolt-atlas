@@ -1,4 +1,6 @@
 use atlas_onnx_tracer::{model::Model, node::ComputationNode, ops::Operator};
+use joltworks::{field::JoltField, utils::thread::unsafe_allocate_zero_vec};
+use rayon::prelude::*;
 
 pub type DimExtractor = fn(&ComputationNode, &Model) -> EinsumDims;
 
@@ -35,6 +37,13 @@ pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
     ),
     (
         "mk,kn->amn",
+        EinsumConfig {
+            equation: "mk,kn->mn",
+            dims_extractor: extract_mk_kn_mn_dims,
+        },
+    ),
+    (
+        "amk,kn->bmn",
         EinsumConfig {
             equation: "mk,kn->mn",
             dims_extractor: extract_mk_kn_mn_dims,
@@ -132,6 +141,43 @@ pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
             dims_extractor: extract_bmk_kbn_mbn_dims,
         },
     ),
+    /* **************** bmk,bkn->mbn **************** */
+    (
+        "abmk,abkn->mbn",
+        EinsumConfig {
+            equation: "bmk,bkn->mbn",
+            dims_extractor: extract_bmk_bkn_mbn_dims,
+        },
+    ),
+    (
+        "bmk,bkn->mbn",
+        EinsumConfig {
+            equation: "bmk,bkn->mbn",
+            dims_extractor: extract_bmk_bkn_mbn_dims,
+        },
+    ),
+    /* **************** mbk,bnk->bmn **************** */
+    (
+        "mbk,bnk->bmn",
+        EinsumConfig {
+            equation: "mbk,bnk->bmn",
+            dims_extractor: extract_mbk_bnk_bmn_dims,
+        },
+    ),
+    (
+        "mbk,bnk->abmn",
+        EinsumConfig {
+            equation: "mbk,bnk->bmn",
+            dims_extractor: extract_mbk_bnk_bmn_dims,
+        },
+    ),
+    (
+        "mbk,abnk->abmn",
+        EinsumConfig {
+            equation: "mbk,bnk->bmn",
+            dims_extractor: extract_mbk_bnk_bmn_dims,
+        },
+    ),
 ];
 
 fn extract_mk_kn_mn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
@@ -184,9 +230,26 @@ fn extract_mbk_nbk_bmn_dims(computation_node: &ComputationNode, model: &Model) -
     EinsumDims::new(vec![m, b, k], vec![n, b, k], vec![b, m, n])
 }
 
+fn extract_mbk_bnk_bmn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
+    let [a_idx, b_idx] = computation_node.inputs[..] else {
+        panic!("Expected exactly two inputs for mbk,bnk->bmn operation")
+    };
+    let a_node = &model[a_idx];
+    let _b_node = &model[b_idx];
+    let m = a_node.output_dims[0];
+    let b = a_node.output_dims[1];
+    let k = a_node.output_dims[2];
+    let n = computation_node
+        .output_dims
+        .last()
+        .copied()
+        .expect("Expected at least 1 output dimension for mbk,bnk->bmn operation");
+    EinsumDims::new(vec![m, b, k], vec![b, n, k], vec![b, m, n])
+}
+
 fn extract_bmk_kbn_mbn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
     let [a_idx, b_idx] = computation_node.inputs[..] else {
-        panic!("Expected exactly two inputs for mbk,nbk->bmn operation")
+        panic!("Expected exactly two inputs for bmk,kbn->mbn operation")
     };
     let _a_node = &model[a_idx];
     let b_node = &model[b_idx];
@@ -195,6 +258,23 @@ fn extract_bmk_kbn_mbn_dims(computation_node: &ComputationNode, model: &Model) -
     let n = computation_node.output_dims[2];
     let k = b_node.output_dims[0];
     EinsumDims::new(vec![b, m, k], vec![k, b, n], vec![m, b, n])
+}
+
+fn extract_bmk_bkn_mbn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
+    let [a_idx, b_idx] = computation_node.inputs[..] else {
+        panic!("Expected exactly two inputs for bmk,bkn->mbn operation")
+    };
+    let a_node = &model[a_idx];
+    let _b_node = &model[b_idx];
+    let m = computation_node.output_dims[0];
+    let b = computation_node.output_dims[1];
+    let n = computation_node.output_dims[2];
+    let k = a_node
+        .output_dims
+        .last()
+        .copied()
+        .expect("Expected at least 1 dimension for a_node in bmk,bkn->mbn operation");
+    EinsumDims::new(vec![b, m, k], vec![b, k, n], vec![m, b, n])
 }
 
 fn extract_mbk_bkn_amn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
@@ -414,4 +494,33 @@ pub struct SumDims {
     pub operand: Vec<usize>,
     /// Dimensions of the output tensor (normalized to 2D)
     pub output: Vec<usize>,
+}
+
+pub fn transpose_flat_matrix<F: JoltField>(
+    flat_vector: Vec<F>,
+    num_rows: usize,
+    num_cols: usize,
+) -> Vec<F> {
+    const MIN_SIZE_FOR_PARALLEL: usize = 1024;
+
+    let mut transposed = unsafe_allocate_zero_vec(num_rows * num_cols);
+    let total_size = num_rows * num_cols;
+
+    if total_size >= MIN_SIZE_FOR_PARALLEL {
+        transposed
+            .par_chunks_mut(num_rows)
+            .enumerate()
+            .for_each(|(j, col)| {
+                for i in 0..num_rows {
+                    col[i] = flat_vector[i * num_cols + j];
+                }
+            });
+    } else {
+        for i in 0..num_rows {
+            for j in 0..num_cols {
+                transposed[j * num_rows + i] = flat_vector[i * num_cols + j];
+            }
+        }
+    }
+    transposed
 }

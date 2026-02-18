@@ -25,7 +25,7 @@ use joltworks::{
 };
 use rayon::prelude::*;
 
-use crate::utils::dims::EinsumDims;
+use crate::utils::dims::{transpose_flat_matrix, EinsumDims};
 
 // TODO: Add [DT24] opts
 
@@ -130,7 +130,7 @@ impl<F: JoltField> BmkKbnMbnProver<F> {
                     .sum();
             }
         });
-        let lo_r_m = Self::transpose_flat_matrix(lo_r_m, b, k);
+        let lo_r_m = transpose_flat_matrix(lo_r_m, b, k);
         let eq_r_b = MultilinearPolynomial::from(EqPolynomial::evals(r_b));
         let left_operand = MultilinearPolynomial::from(lo_r_m);
         let right_operand = MultilinearPolynomial::from(ro_r_n);
@@ -140,16 +140,6 @@ impl<F: JoltField> BmkKbnMbnProver<F> {
             right_operand,
             eq_r_b,
         }
-    }
-
-    fn transpose_flat_matrix(flat_vector: Vec<F>, num_rows: usize, num_cols: usize) -> Vec<F> {
-        let mut transposed = unsafe_allocate_zero_vec(num_rows * num_cols);
-        for i in 0..num_rows {
-            for j in 0..num_cols {
-                transposed[j * num_rows + i] = flat_vector[i * num_cols + j];
-            }
-        }
-        transposed
     }
 }
 

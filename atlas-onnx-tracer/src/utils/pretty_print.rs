@@ -29,6 +29,7 @@ impl From<&ComputationNode> for NodeRow {
 
         // Extract operator-specific details
         let details = match &node.operator {
+            Operator::Clamp(op) => format!("axes: {}, spread: {}", op.axes, op.max_spread),
             Operator::Einsum(op) => format!("eq: {}", op.equation),
             Operator::Gather(op) => format!("axis: {}", op.axis),
             Operator::SoftmaxAxes(op) => format!("axes: {}", op.axes),
@@ -73,6 +74,35 @@ impl Model {
     pub fn pretty_print(&self) -> String {
         self.graph.pretty_print()
     }
+
+    /// Returns an estimate of the total number of parameters in the model.
+    ///
+    /// This counts the elements in all `Constant` nodes, which represent
+    /// weights, biases, embeddings, and other learned parameters.
+    pub fn estimate_num_params(&self) -> usize {
+        self.graph
+            .nodes
+            .values()
+            .filter_map(|node| match &node.operator {
+                Operator::Constant(tensor) => Some(tensor.0.len()),
+                _ => None,
+            })
+            .sum()
+    }
+
+    /// Returns a human-readable string of the estimated parameter count (e.g., "1.2M", "350K").
+    pub fn pretty_num_params(&self) -> String {
+        let n = self.estimate_num_params();
+        if n >= 1_000_000_000 {
+            format!("{:.2}B", n as f64 / 1_000_000_000.0)
+        } else if n >= 1_000_000 {
+            format!("{:.2}M", n as f64 / 1_000_000.0)
+        } else if n >= 1_000 {
+            format!("{:.1}K", n as f64 / 1_000.0)
+        } else {
+            format!("{n}")
+        }
+    }
 }
 
 impl ComputationGraph {
@@ -80,10 +110,33 @@ impl ComputationGraph {
     pub fn pretty_print(&self) -> String {
         let mut output = String::new();
 
+        // Count parameters from Constant nodes
+        let num_params: usize = self
+            .nodes
+            .values()
+            .filter_map(|node| match &node.operator {
+                Operator::Constant(tensor) => Some(tensor.0.len()),
+                _ => None,
+            })
+            .sum();
+
+        let params_str = if num_params >= 1_000_000_000 {
+            format!("{:.2}B", num_params as f64 / 1_000_000_000.0)
+        } else if num_params >= 1_000_000 {
+            format!("{:.2}M", num_params as f64 / 1_000_000.0)
+        } else if num_params >= 1_000 {
+            format!("{:.1}K", num_params as f64 / 1_000.0)
+        } else {
+            format!("{num_params}")
+        };
+
         // Add graph summary
         output.push_str("Computation Graph Summary\n");
         output.push_str("━━━━━━━━━━━━━━━━━━━━━━━━━\n");
         output.push_str(&format!("Total Nodes: {}\n", self.nodes.len()));
+        output.push_str(&format!(
+            "Estimated Parameters: {num_params} ({params_str})\n"
+        ));
         output.push_str(&format!("Input Nodes: {:?}\n", self.inputs));
         output.push_str(&format!("Output Nodes: {:?}\n\n", self.outputs));
 

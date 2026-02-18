@@ -4,6 +4,7 @@ use crate::{
 };
 
 impl Op for Mul {
+    #[tracing::instrument(name = "Mul::f", skip_all)]
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         tensor::ops::mult(&inputs).unwrap()
     }

@@ -129,8 +129,11 @@ pub fn quantize_float(float: f64, scale: Scale) -> i32 {
 
     let clamped_float = if float < -max_value {
         if float < -1e6 {
-            // Common attention mask values
-            -max_value
+            // Extreme values (e.g., -3.4e38 attention mask in GPT-2).
+            // Clamp to half the representable range to leave headroom for
+            // subsequent additions (e.g., attention_score + mask_value).
+            // Still negative enough that softmax produces ~0 for masked positions.
+            -(max_value / 2.0)
         } else {
             panic!(
                 "sig bit truncation error: value {float} is out of range for quantization with scale {scale}"
@@ -138,8 +141,7 @@ pub fn quantize_float(float: f64, scale: Scale) -> i32 {
         }
     } else if float > max_value {
         if float > 1e6 {
-            // Also handle extremely positive values
-            max_value
+            max_value / 2.0
         } else {
             panic!(
                 "sig bit truncation error: value {float} is out of range for quantization with scale {scale}"

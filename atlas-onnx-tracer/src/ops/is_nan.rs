@@ -4,6 +4,7 @@ use crate::{
 };
 
 impl Op for IsNan {
+    #[tracing::instrument(name = "IsNan::f", skip_all)]
     fn f(&self, _inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         Tensor::new(
             Some(

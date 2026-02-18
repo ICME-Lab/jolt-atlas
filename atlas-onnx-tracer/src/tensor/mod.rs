@@ -18,6 +18,39 @@ use std::{
 use thiserror::Error;
 use tract_onnx::prelude::tract_itertools::Itertools;
 
+/// Recursively copies data from a source tensor layout to a (larger) destination layout,
+/// preserving multi-dimensional structure. Copies contiguous slices along the innermost
+/// dimension for efficiency, avoiding per-element coordinate generation.
+fn copy_strided<T: Clone>(
+    src: &[T],
+    dst: &mut [T],
+    old_dims: &[usize],
+    new_dims: &[usize],
+    depth: usize,
+    src_base: usize,
+    dst_base: usize,
+) {
+    if depth == old_dims.len() - 1 {
+        // Innermost dimension: copy contiguous row
+        let count = old_dims[depth];
+        dst[dst_base..dst_base + count].clone_from_slice(&src[src_base..src_base + count]);
+    } else {
+        let src_stride: usize = old_dims[depth + 1..].iter().product();
+        let dst_stride: usize = new_dims[depth + 1..].iter().product();
+        for i in 0..old_dims[depth] {
+            copy_strided(
+                src,
+                dst,
+                old_dims,
+                new_dims,
+                depth + 1,
+                src_base + i * src_stride,
+                dst_base + i * dst_stride,
+            );
+        }
+    }
+}
+
 /// Implementations of common operations on tensors.
 pub mod ops;
 
@@ -189,6 +222,24 @@ impl Tensor<i32> {
     pub fn into_container_data(&self) -> Tensor<u32> {
         let data: Vec<u32> = self.data().iter().map(|d| *d as u32).collect();
         Tensor::construct(data, self.dims().to_vec())
+    }
+
+    pub fn min_max(&self) -> Option<(i32, i32)> {
+        if self.is_empty() {
+            None
+        } else {
+            let mut min = i32::MAX;
+            let mut max = i32::MIN;
+            for &value in self.data() {
+                if value < min {
+                    min = value;
+                }
+                if value > max {
+                    max = value;
+                }
+            }
+            Some((min, max))
+        }
     }
 }
 
@@ -438,7 +489,13 @@ impl<T: Clone + TensorType> Tensor<T> {
         };
 
         let result = if is_scalar_const_tensor {
-            self.pad_to_dims_with_value(&padded_dims, self.inner[0].clone())
+            // For scalar constant tensors, just resize and update dims — no copy needed
+            // since every element (old and new) should be the same value
+            let target_len: usize = padded_dims.iter().product();
+            let fill_value = self.inner[0].clone();
+            self.inner.resize(target_len, fill_value);
+            self.dims = padded_dims;
+            Ok(())
         } else {
             self.pad_to_dims(&padded_dims)
         };
@@ -495,35 +552,17 @@ impl<T: Clone + TensorType> Tensor<T> {
         // Create a new tensor with the target dimensions
         let mut new_tensor = Tensor::new(None, target_dims)?;
 
-        // Copy existing data to the new tensor preserving the multi-dimensional layout
+        // Copy existing data using efficient stride-based recursive copy
         let old_dims = self.dims.clone();
-
-        // Generate all valid coordinates in the old tensor
-        fn generate_coords(dims: &[usize]) -> Vec<Vec<usize>> {
-            if dims.is_empty() {
-                return vec![vec![]];
-            }
-            let mut result = vec![];
-            let first_dim = dims[0];
-            let rest_coords = generate_coords(&dims[1..]);
-
-            for i in 0..first_dim {
-                for rest in &rest_coords {
-                    let mut coord = vec![i];
-                    coord.extend(rest);
-                    result.push(coord);
-                }
-            }
-            result
-        }
-
-        let all_coords = generate_coords(&old_dims);
-
-        for coord in all_coords {
-            let old_idx = self.coord_to_index(&coord);
-            let new_idx = new_tensor.coord_to_index(&coord);
-            new_tensor.inner[new_idx] = self.inner[old_idx].clone();
-        }
+        copy_strided(
+            &self.inner,
+            &mut new_tensor.inner,
+            &old_dims,
+            target_dims,
+            0,
+            0,
+            0,
+        );
 
         // Replace our data with the padded tensor
         self.inner = new_tensor.inner;
@@ -578,46 +617,9 @@ impl<T: Clone + TensorType> Tensor<T> {
         let target_len = target_dims.iter().product();
         let mut new_inner = vec![fill_value; target_len];
 
-        // Copy existing data to the new tensor preserving the multi-dimensional layout
+        // Copy existing data using efficient stride-based recursive copy
         let old_dims = self.dims.clone();
-
-        // Generate all valid coordinates in the old tensor
-        fn generate_coords(dims: &[usize]) -> Vec<Vec<usize>> {
-            if dims.is_empty() {
-                return vec![vec![]];
-            }
-            let mut result = vec![];
-            let first_dim = dims[0];
-            let rest_coords = generate_coords(&dims[1..]);
-
-            for i in 0..first_dim {
-                for rest in &rest_coords {
-                    let mut coord = vec![i];
-                    coord.extend(rest);
-                    result.push(coord);
-                }
-            }
-            result
-        }
-
-        let all_coords = generate_coords(&old_dims);
-
-        // Helper to convert coordinates to flat index
-        fn coord_to_index(coord: &[usize], dims: &[usize]) -> usize {
-            let mut index = 0;
-            let mut stride = 1;
-            for i in (0..coord.len()).rev() {
-                index += coord[i] * stride;
-                stride *= dims[i];
-            }
-            index
-        }
-
-        for coord in all_coords {
-            let old_idx = coord_to_index(&coord, &old_dims);
-            let new_idx = coord_to_index(&coord, target_dims);
-            new_inner[new_idx] = self.inner[old_idx].clone();
-        }
+        copy_strided(&self.inner, &mut new_inner, &old_dims, target_dims, 0, 0, 0);
 
         // Replace our data with the padded tensor
         self.inner = new_inner;
@@ -675,7 +677,7 @@ impl<T: Clone + TensorType> Tensor<T> {
     }
 
     /// Helper method to convert coordinates to flat index
-    fn coord_to_index(&self, coord: &[usize]) -> usize {
+    pub fn coord_to_index(&self, coord: &[usize]) -> usize {
         let mut index = 0;
         let mut stride = 1;
         for i in (0..self.dims.len()).rev() {
@@ -1583,6 +1585,7 @@ pub fn get_broadcasted_shape(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tensor::ops::einsum;
 
     #[test]
     fn test_tensor() {
@@ -1705,5 +1708,442 @@ mod tests {
         assert_eq!(result_cropped.len(), 6);
         assert_eq!(result_cropped.get(&[0, 0]), 100);
         assert_eq!(result_cropped.get(&[2, 1]), 600);
+    }
+
+    // =======================================================================
+    // Robust einsum tests covering all production patterns from EINSUM_REGISTRY
+    // =======================================================================
+
+    /// Helper: naive einsum via nested loops for ground-truth verification
+    fn naive_matmul_mk_kn(a: &[i32], m: usize, k: usize, b: &[i32], n: usize) -> Vec<i32> {
+        let mut out = vec![0i32; m * n];
+        for i in 0..m {
+            for j in 0..n {
+                let mut sum = 0i32;
+                for l in 0..k {
+                    sum += a[i * k + l] * b[l * n + j];
+                }
+                out[i * n + j] = sum;
+            }
+        }
+        out
+    }
+
+    // ---- mk,kn->mn (standard matmul) ----
+
+    #[test]
+    fn test_einsum_mk_kn_mn_basic() {
+        // 2x3 @ 3x2 = 2x2
+        let a = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[2, 3]).unwrap();
+        let b = Tensor::<i32>::new(Some(&[7, 8, 9, 10, 11, 12]), &[3, 2]).unwrap();
+        let result = einsum("mk,kn->mn", &[&a, &b]).unwrap();
+        let expected_data =
+            naive_matmul_mk_kn(&[1, 2, 3, 4, 5, 6], 2, 3, &[7, 8, 9, 10, 11, 12], 2);
+        let expected = Tensor::<i32>::new(Some(&expected_data), &[2, 2]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_einsum_mk_kn_mn_square() {
+        // 4x4 @ 4x4 = 4x4
+        let a_data: Vec<i32> = (1..=16).collect();
+        let b_data: Vec<i32> = (17..=32).collect();
+        let a = Tensor::<i32>::new(Some(&a_data), &[4, 4]).unwrap();
+        let b = Tensor::<i32>::new(Some(&b_data), &[4, 4]).unwrap();
+        let result = einsum("mk,kn->mn", &[&a, &b]).unwrap();
+        let expected_data = naive_matmul_mk_kn(&a_data, 4, 4, &b_data, 4);
+        let expected = Tensor::<i32>::new(Some(&expected_data), &[4, 4]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_einsum_mk_kn_mn_identity() {
+        // Multiply by identity
+        let a = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6, 7, 8, 9]), &[3, 3]).unwrap();
+        let eye = Tensor::<i32>::new(Some(&[1, 0, 0, 0, 1, 0, 0, 0, 1]), &[3, 3]).unwrap();
+        let result = einsum("mk,kn->mn", &[&a, &eye]).unwrap();
+        assert_eq!(result, a);
+    }
+
+    #[test]
+    fn test_einsum_mk_kn_mn_1x1() {
+        // Scalar multiply as 1x1 matmul
+        let a = Tensor::<i32>::new(Some(&[5]), &[1, 1]).unwrap();
+        let b = Tensor::<i32>::new(Some(&[3]), &[1, 1]).unwrap();
+        let result = einsum("mk,kn->mn", &[&a, &b]).unwrap();
+        let expected = Tensor::<i32>::new(Some(&[15]), &[1, 1]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_einsum_mk_kn_mn_rectangular() {
+        // 1x4 @ 4x8 (GPT-like projection shapes)
+        let a_data: Vec<i32> = (0..4).collect();
+        let b_data: Vec<i32> = (0..32).collect();
+        let a = Tensor::<i32>::new(Some(&a_data), &[1, 4]).unwrap();
+        let b = Tensor::<i32>::new(Some(&b_data), &[4, 8]).unwrap();
+        let result = einsum("mk,kn->mn", &[&a, &b]).unwrap();
+        let expected_data = naive_matmul_mk_kn(&a_data, 1, 4, &b_data, 8);
+        let expected = Tensor::<i32>::new(Some(&expected_data), &[1, 8]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- ij,jk->ik (same as mk,kn->mn, different labels) ----
+
+    #[test]
+    fn test_einsum_ij_jk_ik() {
+        let x = Tensor::<i32>::new(Some(&[2, 1, 2, 1, 1, 1]), &[2, 3]).unwrap();
+        let k = Tensor::<i32>::new(Some(&[2, 3, 2, 1, 1, 1]), &[3, 2]).unwrap();
+        let result = einsum("ij,jk->ik", &[&x, &k]).unwrap();
+        let expected = Tensor::<i32>::new(Some(&[8, 9, 5, 5]), &[2, 2]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- ij,ij->ij (element-wise multiplication) ----
+
+    #[test]
+    fn test_einsum_elementwise_mul() {
+        let x = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[2, 3]).unwrap();
+        let k = Tensor::<i32>::new(Some(&[7, 8, 9, 10, 11, 12]), &[2, 3]).unwrap();
+        let result = einsum("ij,ij->ij", &[&x, &k]).unwrap();
+        let expected = Tensor::<i32>::new(Some(&[7, 16, 27, 40, 55, 72]), &[2, 3]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- ik,jk->ij (A @ B^T) ----
+
+    #[test]
+    fn test_einsum_ik_jk_ij() {
+        let x = Tensor::<i32>::new(Some(&[1, 2, 3, 2, 3, 4, 3, 4, 5]), &[3, 3]).unwrap();
+        let k = Tensor::<i32>::new(Some(&[1, 2, 3, 1, 2, 3, 1, 2, 3]), &[3, 3]).unwrap();
+        let result = einsum("ik,jk->ij", &[&x, &k]).unwrap();
+        let expected =
+            Tensor::<i32>::new(Some(&[14, 14, 14, 20, 20, 20, 26, 26, 26]), &[3, 3]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- ik,ik->i (row-wise dot product) ----
+
+    #[test]
+    fn test_einsum_row_dot() {
+        let x = Tensor::<i32>::new(Some(&[1, 2, 3, 2, 3, 4, 3, 4, 5]), &[3, 3]).unwrap();
+        let k = Tensor::<i32>::new(Some(&[1, 2, 3, 1, 2, 3, 1, 2, 3]), &[3, 3]).unwrap();
+        let result = einsum("ik,ik->i", &[&x, &k]).unwrap();
+        let expected = Tensor::<i32>::new(Some(&[14, 20, 26]), &[3]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- i,i-> (scalar dot product) ----
+
+    #[test]
+    fn test_einsum_scalar_dot() {
+        let x = Tensor::<i32>::new(Some(&[1, 2, 3]), &[3]).unwrap();
+        let k = Tensor::<i32>::new(Some(&[4, 5, 6]), &[3]).unwrap();
+        let result = einsum("i,i->", &[&x, &k]).unwrap();
+        let expected = Tensor::<i32>::new(Some(&[32]), &[1]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- mk,k->m (matrix-vector product) ----
+
+    #[test]
+    fn test_einsum_matvec() {
+        let a = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[2, 3]).unwrap();
+        let v = Tensor::<i32>::new(Some(&[1, 2, 3]), &[3]).unwrap();
+        let result = einsum("mk,k->m", &[&a, &v]).unwrap();
+        // [1*1+2*2+3*3, 4*1+5*2+6*3] = [14, 32]
+        let expected = Tensor::<i32>::new(Some(&[14, 32]), &[2]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- mk,k->mn (matvec with trivial output dim) ----
+
+    #[test]
+    fn test_einsum_matvec_extra_dim() {
+        let x = Tensor::<i32>::new(Some(&[4, 5, 7, 8]), &[2, 2]).unwrap();
+        let k = Tensor::<i32>::new(Some(&[4, 5]), &[2]).unwrap();
+        let result = einsum("mk,k->mn", &[&x, &k]).unwrap();
+        // n not in any input → size 1. [4*4+5*5, 7*4+8*5] = [41, 68]
+        let expected = Tensor::<i32>::new(Some(&[41, 68]), &[2, 1]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- mk,k->ma (matvec with unmapped output dim) ----
+
+    #[test]
+    fn test_einsum_mk_k_ma() {
+        let x = Tensor::<i32>::new(Some(&[0, 0, 0, 3]), &[1, 4]).unwrap();
+        let k = Tensor::<i32>::new(Some(&[213, 227, 74, 77]), &[4]).unwrap();
+        let result = einsum("mk,k->ma", &[&x, &k]).unwrap();
+        // 0*213+0*227+0*74+3*77 = 231
+        let expected = Tensor::<i32>::new(Some(&[231]), &[1, 1]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- mk,n->ma (no shared contraction dim between inputs) ----
+
+    #[test]
+    fn test_einsum_mk_n_ma() {
+        let x = Tensor::<i32>::new(Some(&[0, 0, 0, 3]), &[1, 4]).unwrap();
+        let k = Tensor::<i32>::new(Some(&[213, 227, 74, 77]), &[4]).unwrap();
+        let result = einsum("mk,n->ma", &[&x, &k]).unwrap();
+        // sum_k(x[0,k]) * sum_n(k[n]) = (0+0+0+3)*(213+227+74+77) = 3*591 = 1773
+        let expected = Tensor::<i32>::new(Some(&[1773]), &[1, 1]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- k,nk->n (vector-matrix) ----
+
+    #[test]
+    fn test_einsum_k_nk_n() {
+        let k = Tensor::<i32>::new(Some(&[1, 2, 3]), &[3]).unwrap();
+        // n=2, k=3: [[1,2,3],[4,5,6]]
+        let b = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[2, 3]).unwrap();
+        let result = einsum("k,nk->n", &[&k, &b]).unwrap();
+        // [1*1+2*2+3*3, 1*4+2*5+3*6] = [14, 32]
+        let expected = Tensor::<i32>::new(Some(&[14, 32]), &[2]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- anm,bm->ba (3-input contraction) ----
+
+    #[test]
+    fn test_einsum_anm_bm_ba() {
+        let x = Tensor::<i32>::new(
+            Some(&[1, 2, 3, 2, 3, 4, 3, 4, 5, 1, 2, 3, 2, 3, 4, 3, 4, 5]),
+            &[3, 3, 2],
+        )
+        .unwrap();
+        let k = Tensor::<i32>::new(Some(&[4, 5, 7, 8]), &[2, 2]).unwrap();
+        let result = einsum("anm,bm->ba", &[&x, &k]).unwrap();
+        let expected = Tensor::<i32>::new(Some(&[68, 80, 95, 113, 134, 158]), &[2, 3]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- bn,anm,bm->ba (3-input contraction) ----
+
+    #[test]
+    fn test_einsum_three_inputs() {
+        let x = Tensor::<i32>::new(
+            Some(&[1, 2, 3, 2, 3, 4, 3, 4, 5, 1, 2, 3, 2, 3, 4, 3, 4, 5]),
+            &[3, 3, 2],
+        )
+        .unwrap();
+        let k = Tensor::<i32>::new(Some(&[4, 5, 7, 8]), &[2, 2]).unwrap();
+        let z = Tensor::<i32>::new(Some(&[4, 5, 7, 8, 9, 9]), &[2, 3]).unwrap();
+        let result = einsum("bn,anm,bm->ba", &[&z, &x, &k]).unwrap();
+        let expected =
+            Tensor::<i32>::new(Some(&[390, 414, 534, 994, 1153, 1384]), &[2, 3]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- abc,cd-> (full contraction, single shared axis) ----
+
+    #[test]
+    fn test_einsum_full_contraction_shared() {
+        let x = Tensor::<i32>::new(
+            Some(&[1, 2, 3, 2, 3, 4, 3, 4, 5, 1, 2, 3, 2, 3, 4, 3, 4, 5]),
+            &[3, 3, 2],
+        )
+        .unwrap();
+        let k = Tensor::<i32>::new(Some(&[4, 5, 7, 8]), &[2, 2]).unwrap();
+        let result = einsum("abc,cd->", &[&x, &k]).unwrap();
+        let expected = Tensor::<i32>::new(Some(&[648]), &[1]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- abc,ed-> (full contraction, no shared axes / outer product then contract) ----
+
+    #[test]
+    fn test_einsum_full_contraction_no_shared() {
+        let x = Tensor::<i32>::new(
+            Some(&[1, 2, 3, 2, 3, 4, 3, 4, 5, 1, 2, 3, 2, 3, 4, 3, 4, 5]),
+            &[3, 3, 2],
+        )
+        .unwrap();
+        let k = Tensor::<i32>::new(Some(&[4, 5, 7, 8]), &[2, 2]).unwrap();
+        let result = einsum("abc,ed->", &[&x, &k]).unwrap();
+        let expected = Tensor::<i32>::new(Some(&[1296]), &[1]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- mbk,nbk->bmn (multi-head attention Q·K^T) ----
+
+    #[test]
+    fn test_einsum_mbk_nbk_bmn() {
+        // m=2 (seq_len_q), b=3 (heads), k=2 (head_dim)
+        // n=2 (seq_len_k)
+        let q =
+            Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]), &[2, 3, 2]).unwrap();
+        let k =
+            Tensor::<i32>::new(Some(&[1, 0, 0, 1, 1, 1, 0, 1, 2, 1, 1, 2]), &[2, 3, 2]).unwrap();
+        let result = einsum("mbk,nbk->bmn", &[&q, &k]).unwrap();
+        // b=3 heads, m=2, n=2
+        assert_eq!(result.dims(), &[3, 2, 2]);
+
+        // Verify a few elements by hand:
+        // b=0: Q[m,0,:] = [[1,2],[7,8]], K[n,0,:] = [[1,0],[0,1]]
+        // result[0,0,0] = 1*1+2*0 = 1
+        // result[0,0,1] = 1*0+2*1 = 2
+        // result[0,1,0] = 7*1+8*0 = 7
+        // result[0,1,1] = 7*0+8*1 = 8
+        assert_eq!(result.inner[0], 1);
+        assert_eq!(result.inner[1], 2);
+        assert_eq!(result.inner[2], 7);
+        assert_eq!(result.inner[3], 8);
+    }
+
+    // ---- bmk,kbn->mbn (attention weights × values) ----
+
+    #[test]
+    fn test_einsum_bmk_kbn_mbn() {
+        // b=2 (heads), m=2 (seq_len), k=2 (contraction)
+        // n=2 (head_dim)
+        let attn = Tensor::<i32>::new(Some(&[1, 0, 0, 1, 1, 1, 1, 1]), &[2, 2, 2]).unwrap();
+        // k=2, b=2, n=2
+        let v = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6, 7, 8]), &[2, 2, 2]).unwrap();
+        let result = einsum("bmk,kbn->mbn", &[&attn, &v]).unwrap();
+        assert_eq!(result.dims(), &[2, 2, 2]);
+
+        // m=0,b=0,n=0: sum_k attn[0,0,k]*v[k,0,0] = 1*1+0*5 = 1
+        // m=0,b=0,n=1: sum_k attn[0,0,k]*v[k,0,1] = 1*2+0*6 = 2
+        // m=1,b=0,n=0: sum_k attn[0,1,k]*v[k,0,0] = 0*1+1*5 = 5
+        // m=1,b=0,n=1: sum_k attn[0,1,k]*v[k,0,1] = 0*2+1*6 = 6
+        assert_eq!(result.inner[0], 1); // m=0,b=0,n=0
+        assert_eq!(result.inner[1], 2); // m=0,b=0,n=1
+        assert_eq!(result.inner[4], 5); // m=1,b=0,n=0
+        assert_eq!(result.inner[5], 6); // m=1,b=0,n=1
+    }
+
+    // ---- Production-shape tests (GPT-like dimensions) ----
+
+    #[test]
+    fn test_einsum_mk_kn_mn_gpt_projection() {
+        // 64x64 @ 64x64 — typical QKV projection in nanoGPT
+        let m = 64;
+        let k = 64;
+        let n = 64;
+        let a_data: Vec<i32> = (0..m * k).map(|i| (i % 7) as i32 - 3).collect();
+        let b_data: Vec<i32> = (0..k * n).map(|i| (i % 5) as i32 - 2).collect();
+        let a = Tensor::<i32>::new(Some(&a_data), &[m, k]).unwrap();
+        let b = Tensor::<i32>::new(Some(&b_data), &[k, n]).unwrap();
+        let result = einsum("mk,kn->mn", &[&a, &b]).unwrap();
+        let expected_data = naive_matmul_mk_kn(&a_data, m, k, &b_data, n);
+        let expected = Tensor::<i32>::new(Some(&expected_data), &[m, n]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_einsum_mbk_nbk_bmn_multihead_attention() {
+        // m=8 (seq_q), b=4 (heads), k=16 (head_dim), n=8 (seq_k)
+        let m = 8;
+        let b = 4;
+        let k_dim = 16;
+        let n = 8;
+        let q_data: Vec<i32> = (0..m * b * k_dim).map(|i| (i % 11) as i32 - 5).collect();
+        let k_data: Vec<i32> = (0..n * b * k_dim).map(|i| (i % 13) as i32 - 6).collect();
+        let q = Tensor::<i32>::new(Some(&q_data), &[m, b, k_dim]).unwrap();
+        let k = Tensor::<i32>::new(Some(&k_data), &[n, b, k_dim]).unwrap();
+        let result = einsum("mbk,nbk->bmn", &[&q, &k]).unwrap();
+        assert_eq!(result.dims(), &[b, m, n]);
+
+        // Cross-validate all head slices
+        for bi in 0..b {
+            for mi in 0..m {
+                for ni in 0..n {
+                    let mut expected = 0i32;
+                    for ki in 0..k_dim {
+                        let q_val = q_data[mi * b * k_dim + bi * k_dim + ki];
+                        let k_val = k_data[ni * b * k_dim + bi * k_dim + ki];
+                        expected += q_val * k_val;
+                    }
+                    let actual = result.inner[bi * m * n + mi * n + ni];
+                    assert_eq!(actual, expected, "mismatch at b={bi}, m={mi}, n={ni}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_einsum_bmk_kbn_mbn_attention_value() {
+        // b=4, m=8, k=8, n=16
+        let b = 4;
+        let m = 8;
+        let k_dim = 8;
+        let n = 16;
+        let attn_data: Vec<i32> = (0..b * m * k_dim).map(|i| (i % 9) as i32 - 4).collect();
+        let v_data: Vec<i32> = (0..k_dim * b * n).map(|i| (i % 7) as i32 - 3).collect();
+        let attn = Tensor::<i32>::new(Some(&attn_data), &[b, m, k_dim]).unwrap();
+        let v = Tensor::<i32>::new(Some(&v_data), &[k_dim, b, n]).unwrap();
+        let result = einsum("bmk,kbn->mbn", &[&attn, &v]).unwrap();
+        assert_eq!(result.dims(), &[m, b, n]);
+
+        // Cross-validate all slices
+        for mi in 0..m {
+            for bi in 0..b {
+                for ni in 0..n {
+                    let mut expected = 0i32;
+                    for ki in 0..k_dim {
+                        let a_val = attn_data[bi * m * k_dim + mi * k_dim + ki];
+                        let v_val = v_data[ki * b * n + bi * n + ni];
+                        expected += a_val * v_val;
+                    }
+                    let actual = result.inner[mi * b * n + bi * n + ni];
+                    assert_eq!(actual, expected, "mismatch at m={mi}, b={bi}, n={ni}");
+                }
+            }
+        }
+    }
+
+    // ---- Edge cases ----
+
+    #[test]
+    fn test_einsum_dimension_mismatch_error() {
+        let a = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[2, 2]).unwrap();
+        let b = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[3, 2]).unwrap();
+        // k dimension mismatch: a has k=2, b has k=3
+        let result = einsum("mk,kn->mn", &[&a, &b]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_einsum_wrong_input_count_error() {
+        let a = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[2, 2]).unwrap();
+        // Equation expects 2 inputs, we give 1
+        let result = einsum("mk,kn->mn", &[&a]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_einsum_single_element() {
+        let a = Tensor::<i32>::new(Some(&[7]), &[1, 1]).unwrap();
+        let b = Tensor::<i32>::new(Some(&[3]), &[1, 1]).unwrap();
+        let result = einsum("ij,jk->ik", &[&a, &b]).unwrap();
+        let expected = Tensor::<i32>::new(Some(&[21]), &[1, 1]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_einsum_zeros() {
+        let a = Tensor::<i32>::new(Some(&[0, 0, 0, 0]), &[2, 2]).unwrap();
+        let b = Tensor::<i32>::new(Some(&[1, 2, 3, 4]), &[2, 2]).unwrap();
+        let result = einsum("mk,kn->mn", &[&a, &b]).unwrap();
+        let expected = Tensor::<i32>::new(Some(&[0, 0, 0, 0]), &[2, 2]).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ---- Associativity / commutativity checks ----
+
+    #[test]
+    fn test_einsum_matmul_vs_transposed_matmul() {
+        // Verify: einsum("ij,jk->ik", A, B) == einsum("ij,kj->ik", A, B^T)
+        let a = Tensor::<i32>::new(Some(&[1, 2, 3, 4, 5, 6]), &[2, 3]).unwrap();
+        let b = Tensor::<i32>::new(Some(&[7, 8, 9, 10, 11, 12]), &[3, 2]).unwrap();
+        // B transposed: [[7,9,11],[8,10,12]] -> [2,3]
+        let bt = Tensor::<i32>::new(Some(&[7, 9, 11, 8, 10, 12]), &[2, 3]).unwrap();
+
+        let r1 = einsum("ij,jk->ik", &[&a, &b]).unwrap();
+        let r2 = einsum("ij,kj->ik", &[&a, &bt]).unwrap();
+        assert_eq!(r1, r2);
     }
 }

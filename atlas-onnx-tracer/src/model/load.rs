@@ -14,6 +14,7 @@ use tract_onnx::prelude::*;
 pub type GraphLoadResult = (Graph<TypedFact, Box<dyn TypedOp>>, SymbolValues);
 
 impl Model {
+    #[tracing::instrument(name = "Model::load_onnx_model", skip_all)]
     /// Load a model from an ONNX file.
     ///
     /// This is the main entry point for loading ONNX models.
@@ -129,6 +130,7 @@ impl Model {
     /// Builds a SymbolValues map that tells tract what concrete integer values to use for
     /// symbolic dimensions (e.g., batch_size, seq_len, etc.)
     /// when the model has shapes expressed with symbols
+    #[tracing::instrument(name = "ModelLoader::build_symbol_values_from_run_args", skip_all)]
     fn build_symbol_values_from_run_args(
         model: &InferenceModel,
         run_args: &RunArgs,
@@ -153,6 +155,7 @@ impl Model {
     ///
     /// # Panics
     /// Panics if type conversion fails, dimension concretization fails, or decluttering fails.
+    #[tracing::instrument(name = "ModelLoader::model_into_typed", skip_all)]
     fn model_into_typed(
         model: InferenceModel,
         symbol_values: &SymbolValues,
@@ -185,6 +188,7 @@ impl Model {
     ///
     /// # Panics
     /// Panics if any node cannot be parsed or converted.
+    #[tracing::instrument(name = "ModelLoader::nodes_from_graph", skip_all)]
     pub fn nodes_from_graph(
         graph: &Graph<TypedFact, Box<dyn TypedOp>>,
         run_args: &RunArgs,
@@ -270,6 +274,7 @@ impl Model {
     ///
     /// # Returns
     /// A mapping from old node indices to new node indices (only for retained nodes)
+    #[tracing::instrument(name = "Model::prune_unused_nodes", skip_all)]
     pub fn prune_unused_nodes(
         nodes: &mut BTreeMap<usize, ComputationNode>,
         inputs: &mut Vec<usize>,
@@ -340,7 +345,11 @@ impl Model {
         *nodes = new_nodes;
 
         // Step 5: Update input and output node lists
-        *inputs = inputs.iter().map(|&idx| old_to_new[&idx]).collect();
+        // Filter out input nodes that were pruned (unreachable from outputs)
+        *inputs = inputs
+            .iter()
+            .filter_map(|&idx| old_to_new.get(&idx).copied())
+            .collect();
         *outputs = outputs.iter().map(|&idx| old_to_new[&idx]).collect();
 
         old_to_new
@@ -392,6 +401,7 @@ impl<'a> ModelLoader<'a> {
         }
     }
 
+    #[tracing::instrument(name = "ModelLoader::load_onnx_using_tract", skip_all)]
     /// Loads and prepares the ONNX model using Tract.
     ///
     /// This step:
@@ -409,6 +419,7 @@ impl<'a> ModelLoader<'a> {
     ///
     /// Converts Tract's internal graph structure into our domain-specific
     /// node representation.
+    #[tracing::instrument(name = "ModelLoader::parse_nodes", skip_all)]
     pub fn parse_nodes(mut self) -> Self {
         let tract_graph = self
             .tract_graph
@@ -425,6 +436,7 @@ impl<'a> ModelLoader<'a> {
         self
     }
 
+    #[tracing::instrument(name = "ModelLoader::collect_input_nodes", skip_all)]
     /// Collects indices of all input nodes from the parsed computation nodes.
     pub fn collect_input_nodes(mut self) -> Self {
         let nodes = self
@@ -436,6 +448,7 @@ impl<'a> ModelLoader<'a> {
         self
     }
 
+    #[tracing::instrument(name = "ModelLoader::collect_outputs", skip_all)]
     /// Collects output connections from the Tract graph.
     pub fn collect_outputs(mut self) -> Self {
         let tract_graph = self
@@ -451,6 +464,7 @@ impl<'a> ModelLoader<'a> {
         self
     }
 
+    #[tracing::instrument(name = "ModelLoader::prune", skip_all)]
     /// Prunes unused nodes from the computation graph and remaps indices.
     ///
     /// This step removes nodes that are not reachable from any output node
@@ -476,6 +490,7 @@ impl<'a> ModelLoader<'a> {
         self
     }
 
+    #[tracing::instrument(name = "ModelLoader::pad", skip_all)]
     /// Pads all constant tensors and node output dimensions to the next power of 2.
     ///
     /// This step:
@@ -485,6 +500,7 @@ impl<'a> ModelLoader<'a> {
     ///
     /// # Panics
     /// Panics if parse_nodes, collect_input_nodes, or collect_outputs have not been called.
+    #[tracing::instrument(name = "ModelLoader::pad", skip_all)]
     pub fn pad(mut self) -> Self {
         let nodes = self
             .nodes
@@ -515,11 +531,25 @@ impl<'a> ModelLoader<'a> {
             }
         }
 
-        // Pad all nodes: constant tensors and output dimensions
+        // Pad all nodes: constant tensors, operator-internal shapes, and output dimensions
         for node in nodes.values_mut() {
             // Pad constant tensors
             if let Operator::Constant(constant) = &mut node.operator {
                 constant.0.pad_next_power_of_two();
+            }
+
+            // Pad operator-internal shapes that must stay consistent with padded dimensions
+            match &mut node.operator {
+                Operator::Broadcast(broadcast) => {
+                    broadcast.shape = Model::pad_dims_to_power_of_2(&broadcast.shape);
+                }
+                Operator::Reshape(reshape) => {
+                    reshape.shape = Model::pad_dims_to_power_of_2(&reshape.shape);
+                }
+                Operator::IsNan(is_nan) => {
+                    is_nan.out_dims = Model::pad_dims_to_power_of_2(&is_nan.out_dims);
+                }
+                _ => {}
             }
 
             // Pad output dimensions for all nodes
@@ -533,6 +563,7 @@ impl<'a> ModelLoader<'a> {
     ///
     /// # Panics
     /// Panics if any of the required builder steps were not called.
+    #[tracing::instrument(name = "ModelLoader::build", skip_all)]
     pub fn build(self) -> Model {
         Model {
             graph: ComputationGraph {
@@ -622,6 +653,7 @@ impl<P: AsRef<Path>> TractModelLoader<P> {
     /// - The ONNX model cannot be parsed
     /// - Variables are not provided but the model has dynamic dimensions
     /// - Any preparation step fails
+    #[tracing::instrument(name = "TractModelLoader::build", skip_all)]
     pub fn build(self) -> GraphLoadResult {
         // Step 1: Load ONNX file
         let mut model = self.load_onnx_file();
@@ -647,11 +679,13 @@ impl<P: AsRef<Path>> TractModelLoader<P> {
     }
 
     /// Loads the ONNX file into a Tract inference model.
+    #[tracing::instrument(name = "TractModelLoader::load_onnx_file", skip_all)]
     fn load_onnx_file(&self) -> InferenceModel {
         tract_onnx::onnx().model_for_path(&self.path).unwrap()
     }
 
     /// Concretizes dynamic input dimensions using provided variables.
+    #[tracing::instrument(name = "TractModelLoader::concretize_input_dimensions", skip_all)]
     fn concretize_input_dimensions(
         model: &mut InferenceModel,
         variables: &HashMap<String, usize>,
@@ -675,6 +709,7 @@ impl<P: AsRef<Path>> TractModelLoader<P> {
     }
 
     /// Converts inference model to typed model with concrete dimensions.
+    #[tracing::instrument(name = "TractModelLoader::convert_to_typed", skip_all)]
     fn convert_to_typed(
         model: InferenceModel,
         symbol_values: &SymbolValues,

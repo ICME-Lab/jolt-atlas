@@ -194,22 +194,6 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
-    /// Add a AND node.
-    pub fn and2(&mut self, a: Wire, b: Wire) -> Wire {
-        let id = self.alloc();
-        let output_dims = self.nodes[&a].output_dims.clone();
-        let node = ComputationNode::new(id, Operator::And2(And2), vec![a, b], output_dims);
-        self.insert_node(node)
-    }
-
-    pub fn less_than(&mut self, a: Wire, b: Wire) -> Wire {
-        let id = self.alloc();
-        let output_dims = self.nodes[&a].output_dims.clone();
-        let node =
-            ComputationNode::new(id, Operator::ULessThan(ULessThan), vec![a, b], output_dims);
-        self.insert_node(node)
-    }
-
     /// Add an einsum node (general tensor contraction).
     pub fn einsum(&mut self, equation: &str, inputs: Vec<Wire>, output_dims: Vec<usize>) -> Wire {
         let id = self.alloc();
@@ -332,24 +316,6 @@ impl ModelBuilder {
     }
 }
 
-pub fn and2(rng: &mut StdRng, T: usize) -> Model {
-    let mut b = ModelBuilder::new();
-    let i = b.input(vec![T]);
-    let c = b.constant(Tensor::random(rng, &[T]));
-    let res = b.and2(i, c);
-    b.mark_output(res);
-    b.build()
-}
-
-pub fn less_than_model(rng: &mut StdRng, T: usize) -> Model {
-    let mut b = ModelBuilder::new();
-    let i = b.input(vec![T]);
-    let c = b.constant(Tensor::random_range(rng, &[T], 0..(1 << SCALE)));
-    let res = b.less_than(i, c);
-    b.mark_output(res);
-    b.build()
-}
-
 pub fn mul_model(rng: &mut StdRng, T: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![T]);
@@ -386,11 +352,29 @@ pub fn mbk_nbk_bmn_model(rng: &mut StdRng, m: usize, b: usize, k: usize, n: usiz
     builder.build()
 }
 
+pub fn mbk_bnk_bmn_model(rng: &mut StdRng, m: usize, b: usize, k: usize, n: usize) -> Model {
+    let mut builder = ModelBuilder::new();
+    let i = builder.input(vec![m, b, k]);
+    let c = builder.constant(Tensor::random_small(rng, &[b, n, k]));
+    let res = builder.einsum("mbk,bnk->bmn", vec![i, c], vec![b, m, n]);
+    builder.mark_output(res);
+    builder.build()
+}
+
 pub fn bmk_kbn_mbn_model(rng: &mut StdRng, b: usize, m: usize, k: usize, n: usize) -> Model {
     let mut builder = ModelBuilder::new();
     let i = builder.input(vec![b, m, k]);
     let c = builder.constant(Tensor::random_small(rng, &[k, b, n]));
     let res = builder.einsum("bmk,kbn->mbn", vec![i, c], vec![m, b, n]);
+    builder.mark_output(res);
+    builder.build()
+}
+
+pub fn bmk_bkn_mbn_model(rng: &mut StdRng, b: usize, m: usize, k: usize, n: usize) -> Model {
+    let mut builder = ModelBuilder::new();
+    let i = builder.input(vec![b, m, k]);
+    let c = builder.constant(Tensor::random_small(rng, &[b, k, n]));
+    let res = builder.einsum("bmk,bkn->mbn", vec![i, c], vec![m, b, n]);
     builder.mark_output(res);
     builder.build()
 }

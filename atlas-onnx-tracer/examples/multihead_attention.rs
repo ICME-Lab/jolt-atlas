@@ -2,7 +2,7 @@ use atlas_onnx_tracer::{model::Model, tensor::Tensor};
 
 fn main() {
     let multihead_attention = Model::load(
-        "./models/multihead_attention/network.onnx",
+        "atlas-onnx-tracer/models/multihead_attention/network.onnx",
         &Default::default(),
     );
     println!("{}", multihead_attention.pretty_print());

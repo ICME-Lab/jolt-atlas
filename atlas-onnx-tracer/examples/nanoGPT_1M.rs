@@ -2,7 +2,7 @@ use atlas_onnx_tracer::{model::Model, tensor::Tensor};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
 fn main() {
-    let model = Model::load("./models/nanoGPT_1M/network.onnx", &Default::default());
+    let model = Model::load("atlas-onnx-tracer/models/nanoGPT_1M/network.onnx", &Default::default());
     println!("{}", model.pretty_print());
 
     let mut rng = StdRng::seed_from_u64(42);

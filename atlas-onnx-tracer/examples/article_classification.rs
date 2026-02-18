@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Article Classification");
     println!("======================================");
 
-    let working_dir = "./models/article_classification/";
+    let working_dir = "atlas-onnx-tracer/models/article_classification/";
 
     // Load the vocab mapping from JSON
     let vocab_path = format!("{working_dir}/vocab.json");

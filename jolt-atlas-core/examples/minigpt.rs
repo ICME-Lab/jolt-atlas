@@ -8,7 +8,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 
 fn main() {
     let (_guard, _tracing_enabled) = setup_tracing("miniGPT ONNX Proof");
-    let working_dir = "../atlas-onnx-tracer/models/minigpt/";
+    let working_dir = "atlas-onnx-tracer/models/minigpt/";
     let mut rng = StdRng::seed_from_u64(0x44);
 
     let vocab_size: i32 = 1024;

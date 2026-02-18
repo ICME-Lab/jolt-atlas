@@ -43,7 +43,7 @@ fn main() {
         ("past_sequence_length", 0),
     ])
     .with_pre_rebase_nonlinear(true);
-    let model = Model::load("./models/gpt2/model.onnx", &run_args);
+    let model = Model::load("atlas-onnx-tracer/models/gpt2/model.onnx", &run_args);
     println!("{}", model.pretty_print());
     println!("max num vars: {}", model.max_num_vars());
 

@@ -16,7 +16,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 
 fn main() {
     let (_guard, _tracing_enabled) = setup_tracing("microGPT ONNX Proof");
-    let working_dir = "../atlas-onnx-tracer/models/microgpt/";
+    let working_dir = "atlas-onnx-tracer/models/microgpt/";
     let mut rng = StdRng::seed_from_u64(0x42);
 
     // Model hyperparameters (matching the microGPT Python script by @karpathy)

@@ -7,6 +7,6 @@ fn main() {
         ("sequence_length", 512),
         ("past_sequence_length", 0),
     ]);
-    let bge_small = Model::load("./models/bge-small/network.onnx", &run_args);
+    let bge_small = Model::load("atlas-onnx-tracer/models/bge-small/network.onnx", &run_args);
     println!("{}", bge_small.pretty_print());
 }

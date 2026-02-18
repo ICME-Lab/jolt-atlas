@@ -87,6 +87,42 @@ Add `-- --trace` for Chrome Tracing JSON output (view in `chrome://tracing`), or
    cargo run --release --package jolt-atlas-core --example nanoGPT
    ```
 
+### GPT-2
+
+GPT-2 uses a Hugging Face–hosted ONNX model that is **not** checked into the
+repo. A helper script downloads and prepares it automatically.
+
+#### 1. Download the model
+
+```bash
+# Create a virtual environment (one-time)
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Run the download script
+python scripts/download_gpt2.py
+```
+
+This exports GPT-2 via [Hugging Face Optimum](https://huggingface.co/docs/optimum/index)
+into `atlas-onnx-tracer/models/gpt2/` and copies `model.onnx` → `network.onnx`.
+
+#### 2. Test the model (trace only, no proof)
+
+```bash
+cargo run --release --package atlas-onnx-tracer --example gpt2
+```
+
+You should see the model graph printed and an output shape like
+`[1, 16, 65536]` (vocab size 50257 padded to the next power of two).
+
+#### 3. Prove & verify GPT-2
+
+```bash
+cargo run --release --package jolt-atlas-core --example gpt2
+```
+
+A successful run prints `Proof verified successfully!`.
+
 ## Acknowledgments
 
 Thanks to the Jolt team for their foundational work. We are standing on the shoulders of giants.

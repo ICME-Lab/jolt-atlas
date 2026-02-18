@@ -541,6 +541,7 @@ mod tests {
         (io, ())
     }
 
+    #[ignore = "requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)"]
     #[test]
     fn test_gpt2() {
         let working_dir = "../atlas-onnx-tracer/models/gpt2/";

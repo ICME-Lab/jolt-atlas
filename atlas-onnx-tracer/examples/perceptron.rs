@@ -6,7 +6,10 @@ use atlas_onnx_tracer::{
 fn main() {
     // Load the perceptron model with padding enabled (default)
     let run_args = RunArgs::default();
-    let model = Model::load("atlas-onnx-tracer/models/perceptron/network.onnx", &run_args);
+    let model = Model::load(
+        "atlas-onnx-tracer/models/perceptron/network.onnx",
+        &run_args,
+    );
 
     println!("{}", model.pretty_print());
 

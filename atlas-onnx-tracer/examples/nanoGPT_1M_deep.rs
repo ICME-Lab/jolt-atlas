@@ -4,7 +4,10 @@ use rand::{Rng, SeedableRng, rngs::StdRng};
 
 fn main() {
     let (_guard, _tracing_enabled) = setup_tracing("nanoGPT deep");
-    let model = Model::load("atlas-onnx-tracer/models/nanoGPT_1M_deep/network.onnx", &Default::default());
+    let model = Model::load(
+        "atlas-onnx-tracer/models/nanoGPT_1M_deep/network.onnx",
+        &Default::default(),
+    );
     println!("{}", model.pretty_print());
 
     let mut rng = StdRng::seed_from_u64(42);

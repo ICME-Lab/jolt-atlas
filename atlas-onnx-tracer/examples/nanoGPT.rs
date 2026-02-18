@@ -5,7 +5,10 @@ use rand::{Rng, SeedableRng, rngs::StdRng};
 fn main() {
     let (_guard, _tracing_enabled) = setup_tracing("nanoGPT");
 
-    let nano_gpt = Model::load("atlas-onnx-tracer/models/nanoGPT/network.onnx", &Default::default());
+    let nano_gpt = Model::load(
+        "atlas-onnx-tracer/models/nanoGPT/network.onnx",
+        &Default::default(),
+    );
     println!("{}", nano_gpt.pretty_print());
     let mut rng = StdRng::seed_from_u64(0x1096);
     let input_data: Vec<i32> = (0..64)

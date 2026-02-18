@@ -1,10 +1,10 @@
 /// Run with tracing:
 /// ```bash
 /// # Chrome Tracing JSON output (view in chrome://tracing)
-/// cargo run --example nanoGPT -- --trace
+/// cargo run --release --package jolt-atlas-core --example gpt2  -- --trace
 ///
 /// # Terminal output with timing
-/// cargo run --example nanoGPT -- --trace-terminal
+/// cargo run --release --package jolt-atlas-core --example gpt2  -- --trace-terminal
 /// ```
 use atlas_onnx_tracer::{
     model::{Model, RunArgs},
@@ -54,10 +54,12 @@ fn main() {
     let pp = AtlasSharedPreprocessing::preprocess(model);
     let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
 
+    let timing = std::time::Instant::now();
     let (proof, io, _debug_info) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
         &prover_preprocessing,
         &[input_ids, position_ids, attention_mask],
     );
+    println!("Proof generation took {:.2?}", timing.elapsed());
 
     let verifier_preprocessing =
         AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);

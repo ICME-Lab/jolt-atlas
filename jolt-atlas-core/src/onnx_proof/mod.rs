@@ -32,9 +32,8 @@ pub mod lookup_tables;
 
 pub mod neural_teleport;
 pub mod op_lookups;
-#[warn(missing_docs)]
 pub mod ops;
-
+#[warn(missing_docs)]
 pub mod range_checking;
 pub mod witness;
 

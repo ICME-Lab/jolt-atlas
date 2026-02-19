@@ -868,7 +868,10 @@ mod tests {
         sumcheck_instance::DivRangeCheckOperands,
     };
     use ark_bn254::Fr;
-    use atlas_onnx_tracer::{model, tensor::Tensor};
+    use atlas_onnx_tracer::{
+        model::{test::ModelBuilder, Model},
+        tensor::Tensor,
+    };
     use common::VirtualPolynomial;
     use joltworks::{
         field::JoltField,
@@ -884,6 +887,16 @@ mod tests {
     use rand::{rngs::StdRng, SeedableRng};
     use serial_test::serial;
 
+    /// Create a model for element-wise division of an input by a constant tensor.
+    pub fn div_model(T: usize) -> Model {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![T]);
+        let c = b.constant(Tensor::construct(vec![128; T], vec![T]));
+        let res = b.div(i, c);
+        b.mark_output(res);
+        b.build()
+    }
+
     #[serial]
     #[test]
     fn test_range_check() {
@@ -891,7 +904,7 @@ mod tests {
         let log_T = 10;
         let T = 1 << log_T;
         let input = Tensor::random_small(&mut rng, &[T]);
-        let model = model::test::div_model(T);
+        let model = div_model(T);
         let trace = model.trace(&[input.clone()]);
         let node = model[model.outputs()[0]].clone();
 
@@ -922,15 +935,15 @@ mod tests {
             &mut prover_transcript,
         );
 
-        let (proof, r_sumcheck_prover) =
+        let (proof, _) =
             Sumcheck::prove(&mut prover, &mut prover_accumulator, &mut prover_transcript);
 
         let mut verifier_transcript = Blake2bTranscript::new(&[]);
+        verifier_transcript.compare_to(prover_transcript.clone());
         let mut verifier_accumulator = VerifierOpeningAccumulator::<Fr>::new();
 
         let _r_exec: Vec<<Fr as JoltField>::Challenge> =
             verifier_transcript.challenge_vector_optimized::<Fr>(log_T);
-        assert_eq!(r_exec, _r_exec);
 
         for (key, (_, value)) in prover_accumulator.openings.iter() {
             verifier_accumulator
@@ -956,13 +969,12 @@ mod tests {
             &mut verifier_accumulator,
             &mut verifier_transcript,
         );
-        let r_sumcheck_verifier = Sumcheck::verify(
+        let _ = Sumcheck::verify(
             &proof,
             &verifier,
             &mut verifier_accumulator,
             &mut verifier_transcript,
         )
         .unwrap();
-        assert_eq!(r_sumcheck_prover, r_sumcheck_verifier);
     }
 }

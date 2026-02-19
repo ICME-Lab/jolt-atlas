@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 # Cryptography and Math
 allocative.workspace = true
+ark-serialize.workspace = true
 
 # Tracing and profiling
 tracing-chrome.workspace = true

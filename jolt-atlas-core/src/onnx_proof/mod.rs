@@ -11,6 +11,10 @@ use crate::onnx_proof::{
     ops::{NodeCommittedPolynomials, OperatorProver, OperatorVerifier},
     witness::WitnessGenerator,
 };
+use ark_serialize::{
+    CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
+    Write,
+};
 use atlas_onnx_tracer::{
     model::{
         trace::{LayerData, ModelExecutionIO, Trace},
@@ -42,6 +46,7 @@ pub mod lookup_tables;
 pub mod neural_teleport;
 pub mod op_lookups;
 pub mod ops;
+pub mod proof_serialization;
 pub mod range_checking;
 pub mod witness;
 
@@ -279,7 +284,9 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
 /// Unique identifier for a sumcheck proof instance.
 ///
 /// Combines the node index with the proof type to uniquely identify each proof.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, CanonicalSerialize, CanonicalDeserialize,
+)]
 pub struct ProofId(pub usize, pub ProofType);
 
 /// Type of sumcheck proof for different operations in the neural network.
@@ -301,6 +308,57 @@ pub enum ProofType {
     SoftmaxExponentiationRaOneHot,
     /// Range-checking for remainders.
     RangeCheck,
+}
+
+impl CanonicalSerialize for ProofType {
+    fn serialize_with_mode<W: Write>(
+        &self,
+        writer: W,
+        compress: Compress,
+    ) -> Result<(), SerializationError> {
+        let tag: u8 = match self {
+            Self::Execution => 0,
+            Self::NeuralTeleport => 1,
+            Self::RaOneHotChecks => 2,
+            Self::RaHammingWeight => 3,
+            Self::SoftmaxDivSumMax => 4,
+            Self::SoftmaxExponentiationReadRaf => 5,
+            Self::SoftmaxExponentiationRaOneHot => 6,
+            Self::RangeCheck => 7,
+        };
+        tag.serialize_with_mode(writer, compress)
+    }
+
+    fn serialized_size(&self, compress: Compress) -> usize {
+        0u8.serialized_size(compress)
+    }
+}
+
+impl Valid for ProofType {
+    fn check(&self) -> Result<(), SerializationError> {
+        Ok(())
+    }
+}
+
+impl CanonicalDeserialize for ProofType {
+    fn deserialize_with_mode<R: Read>(
+        reader: R,
+        compress: Compress,
+        validate: Validate,
+    ) -> Result<Self, SerializationError> {
+        let tag = u8::deserialize_with_mode(reader, compress, validate)?;
+        match tag {
+            0 => Ok(Self::Execution),
+            1 => Ok(Self::NeuralTeleport),
+            2 => Ok(Self::RaOneHotChecks),
+            3 => Ok(Self::RaHammingWeight),
+            4 => Ok(Self::SoftmaxDivSumMax),
+            5 => Ok(Self::SoftmaxExponentiationReadRaf),
+            6 => Ok(Self::SoftmaxExponentiationRaOneHot),
+            7 => Ok(Self::RangeCheck),
+            _ => Err(SerializationError::InvalidData),
+        }
+    }
 }
 
 /// Wrapper for polynomial opening claims.
@@ -551,7 +609,8 @@ where
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::{
-        AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof,
+        proof_serialization::serialize_proof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
+        AtlasVerifierPreprocessing, ONNXProof,
     };
     use ark_bn254::{Bn254, Fr};
     use atlas_onnx_tracer::{
@@ -566,37 +625,60 @@ mod tests {
     // Fixed-point scale factor: 2^7 = 128
     const SCALE: i32 = 128;
 
-    /// Helper function to run the common prove-and-verify workflow.
-    /// Returns the proof IO for additional assertions if needed.
+    /// Configuration for test prove-and-verify workflows.
+    ///
+    /// Uses a builder pattern — all options default to `false`.
+    ///
+    /// ```ignore
+    /// let io = prove_and_verify(dir, &[input], &RunArgs::default(), TestConfig::default());
+    /// let io = prove_and_verify(dir, &[input], &run_args, TestConfig::new()
+    ///     .print_model()
+    ///     .print_timing()
+    ///     .debug_info());
+    /// ```
+    #[derive(Clone, Debug, Default)]
+    struct TestConfig {
+        print_model: bool,
+        print_timing: bool,
+        debug_info: bool,
+        print_proof_size: bool,
+    }
+
+    impl TestConfig {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        fn print_model(mut self) -> Self {
+            self.print_model = true;
+            self
+        }
+
+        fn print_timing(mut self) -> Self {
+            self.print_timing = true;
+            self
+        }
+
+        fn debug_info(mut self) -> Self {
+            self.debug_info = true;
+            self
+        }
+
+        fn print_proof_size(mut self) -> Self {
+            self.print_proof_size = true;
+            self
+        }
+    }
+
+    /// Run the prove-and-verify workflow, returning the execution IO.
     fn prove_and_verify(
         model_dir: &str,
         inputs: &[Tensor<i32>],
         run_args: &RunArgs,
-        print_model: bool,
-        print_timing: bool,
+        config: TestConfig,
     ) -> ModelExecutionIO {
-        prove_and_verify_with_debug(
-            model_dir,
-            inputs,
-            run_args,
-            print_model,
-            print_timing,
-            false,
-        )
-        .0
-    }
-
-    /// Helper function with debug info support.
-    fn prove_and_verify_with_debug(
-        model_dir: &str,
-        inputs: &[Tensor<i32>],
-        run_args: &RunArgs,
-        print_model: bool,
-        print_timing: bool,
-        use_debug_info: bool,
-    ) -> (ModelExecutionIO, ()) {
         let model = Model::load(&format!("{model_dir}network.onnx"), run_args);
-        if print_model {
+        if config.print_model {
             println!("model: {}", model.pretty_print());
         }
 
@@ -608,19 +690,32 @@ mod tests {
             &prover_preprocessing,
             inputs,
         );
-        if print_timing {
+        if config.print_timing {
             println!("Proof generation took {:?}", timing.elapsed());
+        }
+
+        if config.print_proof_size {
+            let bytes = serialize_proof(&proof).expect("proof serialization failed");
+            println!(
+                "Proof size: {:.1} kB ({} bytes)",
+                bytes.len() as f64 / 1024.0,
+                bytes.len()
+            );
         }
 
         let verifier_preprocessing =
             AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
 
-        let debug_for_verify = if use_debug_info { debug_info } else { None };
+        let debug_for_verify = if config.debug_info { debug_info } else { None };
+        let timing = Instant::now();
         proof
             .verify(&verifier_preprocessing, &io, debug_for_verify)
             .unwrap();
+        if config.print_timing {
+            println!("Proof verification took {:?}", timing.elapsed());
+        }
 
-        (io, ())
+        io
     }
 
     #[ignore = "requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)"]
@@ -657,8 +752,7 @@ mod tests {
             working_dir,
             &[input_ids, position_ids, attention_mask],
             &run_args,
-            true,
-            true,
+            TestConfig::new().print_model().print_timing(),
         );
     }
 
@@ -670,7 +764,15 @@ mod tests {
             .map(|_| (1 << 5) + rng.gen_range(-20..=20))
             .collect();
         let input = Tensor::new(Some(&input_data), &[1, 64]).unwrap();
-        prove_and_verify(working_dir, &[input], &Default::default(), false, false);
+        prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::new()
+                .print_model()
+                .print_timing()
+                .print_proof_size(),
+        );
     }
 
     #[test]
@@ -681,7 +783,12 @@ mod tests {
             .map(|_| (1 << 7) + rng.gen_range(-50..=50))
             .collect();
         let input = Tensor::new(Some(&input_data), &[1, 64, 64]).unwrap();
-        prove_and_verify(working_dir, &[input], &Default::default(), false, false);
+        prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::default(),
+        );
     }
 
     #[test]
@@ -699,7 +806,12 @@ mod tests {
             .map(|_| rng.gen_range(0..vocab_size))
             .collect();
         let input = Tensor::new(Some(&input_data), &[1, block_size]).unwrap();
-        prove_and_verify(working_dir, &[input], &Default::default(), true, true);
+        prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::new().print_model().print_timing(),
+        );
     }
 
     #[test]
@@ -717,7 +829,12 @@ mod tests {
             .map(|_| rng.gen_range(0..vocab_size))
             .collect();
         let input = Tensor::new(Some(&input_data), &[1, block_size]).unwrap();
-        prove_and_verify(working_dir, &[input], &Default::default(), true, true);
+        prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::new().print_model().print_timing(),
+        );
     }
 
     #[test]
@@ -728,7 +845,12 @@ mod tests {
             .map(|_| (1 << 7) + rng.gen_range(-50..=50))
             .collect();
         let input = Tensor::construct(input_data, vec![16, 16]);
-        prove_and_verify(working_dir, &[input], &Default::default(), false, false);
+        prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::default(),
+        );
     }
 
     #[test]
@@ -739,13 +861,11 @@ mod tests {
             .map(|_| SCALE + rng.gen_range(-10..=10))
             .collect();
         let input = Tensor::construct(input_data, vec![1, 1, 16, 128]);
-        prove_and_verify_with_debug(
+        prove_and_verify(
             working_dir,
             &[input],
             &Default::default(),
-            true,
-            false,
-            true,
+            TestConfig::new().print_model().debug_info(),
         );
     }
 
@@ -758,13 +878,11 @@ mod tests {
             .collect();
         let input = Tensor::construct(input_data, vec![1, 64, 64]);
 
-        prove_and_verify_with_debug(
+        prove_and_verify(
             working_dir,
             &[input],
             &Default::default(),
-            true,
-            false,
-            true,
+            TestConfig::new().print_model().debug_info(),
         );
     }
 
@@ -773,13 +891,11 @@ mod tests {
         let working_dir = "../atlas-onnx-tracer/models/sum_axes_test/";
         let mut rng = StdRng::seed_from_u64(0x923);
         let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
-        prove_and_verify_with_debug(
+        prove_and_verify(
             working_dir,
             &[input],
             &Default::default(),
-            true,
-            false,
-            true,
+            TestConfig::new().print_model().debug_info(),
         );
     }
 
@@ -789,13 +905,11 @@ mod tests {
         let working_dir = "../atlas-onnx-tracer/models/sum_independent/";
         let mut rng = StdRng::seed_from_u64(0x923);
         let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
-        prove_and_verify_with_debug(
+        prove_and_verify(
             working_dir,
             &[input],
             &Default::default(),
-            true,
-            false,
-            true,
+            TestConfig::new().print_model().debug_info(),
         );
     }
 
@@ -805,52 +919,44 @@ mod tests {
         let working_dir = "../atlas-onnx-tracer/models/sum_1d_axis0/";
         let mut rng = StdRng::seed_from_u64(0x923);
         let input = Tensor::random_small(&mut rng, &[8]);
-        prove_and_verify_with_debug(
+        prove_and_verify(
             working_dir,
             &[input],
             &Default::default(),
-            true,
-            false,
-            true,
+            TestConfig::new().print_model().debug_info(),
         );
 
         // Test 2D sum along axis 0
         let working_dir = "../atlas-onnx-tracer/models/sum_2d_axis0/";
         let mut rng = StdRng::seed_from_u64(0x924);
         let input = Tensor::random_small(&mut rng, &[4, 8]);
-        prove_and_verify_with_debug(
+        prove_and_verify(
             working_dir,
             &[input],
             &Default::default(),
-            true,
-            false,
-            true,
+            TestConfig::new().print_model().debug_info(),
         );
 
         // Test 2D sum along axis 1
         let working_dir = "../atlas-onnx-tracer/models/sum_2d_axis1/";
         let mut rng = StdRng::seed_from_u64(0x925);
         let input = Tensor::random_small(&mut rng, &[4, 8]);
-        prove_and_verify_with_debug(
+        prove_and_verify(
             working_dir,
             &[input],
             &Default::default(),
-            true,
-            false,
-            true,
+            TestConfig::new().print_model().debug_info(),
         );
 
         // Test 3D sum along axis 2
         let working_dir = "../atlas-onnx-tracer/models/sum_3d_axis2/";
         let mut rng = StdRng::seed_from_u64(0x926);
         let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
-        prove_and_verify_with_debug(
+        prove_and_verify(
             working_dir,
             &[input],
             &Default::default(),
-            true,
-            false,
-            true,
+            TestConfig::new().print_model().debug_info(),
         );
     }
 
@@ -860,7 +966,12 @@ mod tests {
         let working_dir = "../atlas-onnx-tracer/models/layernorm_partial_head/";
         let input_data = vec![SCALE; 16 * 16];
         let input = Tensor::construct(input_data, vec![16, 16]);
-        prove_and_verify(working_dir, &[input], &Default::default(), true, false);
+        prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::new().print_model(),
+        );
     }
 
     #[test]
@@ -877,7 +988,12 @@ mod tests {
         let input_vector = build_input_vector(input_text, &vocab);
         let input = Tensor::construct(input_vector, vec![1, 512]);
 
-        prove_and_verify(working_dir, &[input], &Default::default(), true, true);
+        prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::new().print_model().print_timing(),
+        );
 
         /// Load vocab.json into HashMap<String, (usize, i32)>
         fn load_vocab(
@@ -934,7 +1050,12 @@ mod tests {
         // Create tensor with shape [65536]
         let input = Tensor::random_range(&mut rng, &[1 << 16], -(1 << 10)..(1 << 10));
 
-        prove_and_verify_with_debug(working_dir, &[input], &Default::default(), true, true, true);
+        prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::new().print_model().print_timing().debug_info(),
+        );
     }
 
     #[test]
@@ -948,7 +1069,12 @@ mod tests {
             .collect::<Vec<i32>>();
         let input = Tensor::construct(input_vec, vec![4]);
 
-        prove_and_verify(working_dir, &[input], &Default::default(), true, true);
+        prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::new().print_model().print_timing(),
+        );
     }
 
     #[test]
@@ -956,7 +1082,12 @@ mod tests {
         let working_dir = "../atlas-onnx-tracer/models/perceptron/";
         let input = Tensor::construct(vec![1, 2, 3, 4], vec![1, 4]);
 
-        prove_and_verify(working_dir, &[input], &Default::default(), true, true);
+        prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::new().print_model().print_timing(),
+        );
     }
 
     #[ignore = "hzkg fails when all coeffs are zero"]
@@ -965,7 +1096,12 @@ mod tests {
         let working_dir = "../atlas-onnx-tracer/models/broadcast/";
         let input = Tensor::construct(vec![1, 2, 3, 4], vec![4]);
 
-        let io = prove_and_verify(working_dir, &[input], &Default::default(), true, true);
+        let io = prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::new().print_model().print_timing(),
+        );
 
         // Print output for verification
         println!("Output shape: {:?}", io.outputs[0].dims());
@@ -977,7 +1113,12 @@ mod tests {
         let working_dir = "../atlas-onnx-tracer/models/reshape/";
         let input = Tensor::construct(vec![1, 2, 3, 4], vec![4]);
 
-        let io = prove_and_verify(working_dir, &[input], &Default::default(), true, true);
+        let io = prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::new().print_model().print_timing(),
+        );
 
         println!("Output shape: {:?}", io.outputs[0].dims());
     }
@@ -988,7 +1129,12 @@ mod tests {
         let input_vector: Vec<i32> = (1..=64).collect();
         let input = Tensor::construct(input_vector, vec![2, 4, 8]);
 
-        let io = prove_and_verify(working_dir, &[input], &Default::default(), true, true);
+        let io = prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::new().print_model().print_timing(),
+        );
 
         println!("Output shape: {:?}", io.outputs[0].dims());
     }
@@ -1000,7 +1146,12 @@ mod tests {
         // Input values in [0, 8)
         let input = Tensor::random_range(&mut rng, &[1, 64], 0..65);
 
-        prove_and_verify(working_dir, &[input], &Default::default(), true, false);
+        prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::new().print_model(),
+        );
     }
 
     #[test]
@@ -1009,7 +1160,12 @@ mod tests {
         let input_vector = vec![10, 40, 70, 100];
         let input = Tensor::new(Some(&input_vector), &[4]).unwrap();
 
-        prove_and_verify(working_dir, &[input], &Default::default(), true, true);
+        prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::new().print_model().print_timing(),
+        );
     }
 
     #[test]
@@ -1023,7 +1179,12 @@ mod tests {
         ];
         let input = Tensor::new(Some(&input_vector), &[1, 4]).unwrap();
 
-        prove_and_verify(working_dir, &[input], &Default::default(), false, false);
+        prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::default(),
+        );
     }
 
     #[test]
@@ -1037,6 +1198,11 @@ mod tests {
         ];
         let input = Tensor::new(Some(&input_vector), &[1, 4]).unwrap();
 
-        prove_and_verify(working_dir, &[input], &Default::default(), false, false);
+        prove_and_verify(
+            working_dir,
+            &[input],
+            &Default::default(),
+            TestConfig::default(),
+        );
     }
 }

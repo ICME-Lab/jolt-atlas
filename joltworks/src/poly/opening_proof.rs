@@ -23,9 +23,14 @@ use crate::{
     utils::errors::ProofVerifyError,
 };
 use allocative::Allocative;
+use ark_serialize::{
+    CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
+    Write,
+};
 use atlas_onnx_tracer::node::ComputationNode;
 use common::{CommittedPolynomial, VirtualPolynomial};
 use num_derive::FromPrimitive;
+use num_traits::FromPrimitive as _;
 use rayon::prelude::*;
 
 #[cfg(any(test, feature = "test-feature"))]
@@ -888,8 +893,103 @@ pub enum SumcheckId {
     HammingWeight,
 }
 
+impl CanonicalSerialize for SumcheckId {
+    fn serialize_with_mode<W: Write>(
+        &self,
+        writer: W,
+        compress: Compress,
+    ) -> Result<(), SerializationError> {
+        (*self as u8).serialize_with_mode(writer, compress)
+    }
+
+    fn serialized_size(&self, compress: Compress) -> usize {
+        (*self as u8).serialized_size(compress)
+    }
+}
+
+impl Valid for SumcheckId {
+    fn check(&self) -> Result<(), SerializationError> {
+        Ok(())
+    }
+}
+
+impl CanonicalDeserialize for SumcheckId {
+    fn deserialize_with_mode<R: Read>(
+        reader: R,
+        compress: Compress,
+        validate: Validate,
+    ) -> Result<Self, SerializationError> {
+        let v = u8::deserialize_with_mode(reader, compress, validate)?;
+        Self::from_u8(v).ok_or(SerializationError::InvalidData)
+    }
+}
+
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
 pub enum OpeningId {
     Committed(CommittedPolynomial, SumcheckId),
     Virtual(VirtualPolynomial, SumcheckId),
+}
+
+impl CanonicalSerialize for OpeningId {
+    fn serialize_with_mode<W: Write>(
+        &self,
+        mut writer: W,
+        compress: Compress,
+    ) -> Result<(), SerializationError> {
+        match self {
+            Self::Committed(poly, sc) => {
+                0u8.serialize_with_mode(&mut writer, compress)?;
+                poly.serialize_with_mode(&mut writer, compress)?;
+                sc.serialize_with_mode(&mut writer, compress)?;
+            }
+            Self::Virtual(poly, sc) => {
+                1u8.serialize_with_mode(&mut writer, compress)?;
+                poly.serialize_with_mode(&mut writer, compress)?;
+                sc.serialize_with_mode(&mut writer, compress)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn serialized_size(&self, compress: Compress) -> usize {
+        1 + match self {
+            Self::Committed(poly, sc) => {
+                poly.serialized_size(compress) + sc.serialized_size(compress)
+            }
+            Self::Virtual(poly, sc) => {
+                poly.serialized_size(compress) + sc.serialized_size(compress)
+            }
+        }
+    }
+}
+
+impl Valid for OpeningId {
+    fn check(&self) -> Result<(), SerializationError> {
+        Ok(())
+    }
+}
+
+impl CanonicalDeserialize for OpeningId {
+    fn deserialize_with_mode<R: Read>(
+        mut reader: R,
+        compress: Compress,
+        validate: Validate,
+    ) -> Result<Self, SerializationError> {
+        let tag = u8::deserialize_with_mode(&mut reader, compress, validate)?;
+        match tag {
+            0 => {
+                let poly =
+                    CommittedPolynomial::deserialize_with_mode(&mut reader, compress, validate)?;
+                let sc = SumcheckId::deserialize_with_mode(&mut reader, compress, validate)?;
+                Ok(Self::Committed(poly, sc))
+            }
+            1 => {
+                let poly =
+                    VirtualPolynomial::deserialize_with_mode(&mut reader, compress, validate)?;
+                let sc = SumcheckId::deserialize_with_mode(&mut reader, compress, validate)?;
+                Ok(Self::Virtual(poly, sc))
+            }
+            _ => Err(SerializationError::InvalidData),
+        }
+    }
 }

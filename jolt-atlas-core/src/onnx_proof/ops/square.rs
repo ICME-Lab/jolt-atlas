@@ -32,6 +32,9 @@ impl_standard_sumcheck_proof_api!(Square, SquareParams, SquareProver, SquareVeri
 
 const DEGREE_BOUND: usize = 3;
 
+/// Parameters for proving element-wise square (x²) operations.
+///
+/// Stores the opening point and computation node information needed for the sumcheck protocol.
 #[derive(Clone)]
 pub struct SquareParams<F: JoltField> {
     r_node_output: Vec<F::Challenge>,
@@ -39,6 +42,7 @@ pub struct SquareParams<F: JoltField> {
 }
 
 impl<F: JoltField> SquareParams<F> {
+    /// Create new square parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_node_output = accumulator
             .get_virtual_polynomial_opening(
@@ -76,6 +80,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SquareParams<F> {
     }
 }
 
+/// Prover state for element-wise square sumcheck protocol.
+///
+/// Maintains the equality polynomial and operand polynomial needed to generate
+/// sumcheck messages proving that output[i] = operand[i]² for all i.
 pub struct SquareProver<F: JoltField> {
     params: SquareParams<F>,
     eq_r_node_output: GruenSplitEqPolynomial<F>,
@@ -83,6 +91,7 @@ pub struct SquareProver<F: JoltField> {
 }
 
 impl<F: JoltField> SquareProver<F> {
+    /// Initialize the prover with trace data and parameters.
     #[tracing::instrument(skip_all, name = "SquareProver::initialize")]
     pub fn initialize(trace: &Trace, params: SquareParams<F>) -> Self {
         let eq_r_node_output =
@@ -148,11 +157,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SquareProver<
     }
 }
 
+/// Verifier for element-wise square sumcheck protocol.
+///
+/// Verifies that the prover's sumcheck messages are consistent with the claimed
+/// square operation output.
 pub struct SquareVerifier<F: JoltField> {
     params: SquareParams<F>,
 }
 
 impl<F: JoltField> SquareVerifier<F> {
+    /// Create a new verifier for the square operation.
     #[tracing::instrument(skip_all, name = "SquareVerifier::new")]
     pub fn new(
         computation_node: ComputationNode,

@@ -9,6 +9,9 @@ use joltworks::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Lookup table for ReLU (Rectified Linear Unit) activation function.
+///
+/// Implements ReLU(x) = max(0, x) treating the input as a signed integer.
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct ReluTable<const X_LEN: usize>;
 

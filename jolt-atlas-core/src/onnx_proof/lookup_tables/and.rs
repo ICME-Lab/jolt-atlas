@@ -12,6 +12,9 @@ use super::{
     JoltLookupTable,
 };
 
+/// Lookup table for bitwise AND operations.
+///
+/// Implements AND(x, y) = x & y using prefix-suffix decomposition.
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AndTable<const XLEN: usize>;
 

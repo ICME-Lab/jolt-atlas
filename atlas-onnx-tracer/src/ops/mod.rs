@@ -1,46 +1,79 @@
+//! Operator definitions and implementations for ONNX operations.
+
 use crate::{tensor::Tensor, utils::f32::F32};
 use serde::{Deserialize, Serialize};
 
+/// Element-wise addition operator.
 pub mod add;
+/// Logical AND operator.
 pub mod and;
+/// Broadcast operator for expanding tensor dimensions.
 pub mod broadcast;
+/// Clamp operator for limiting values to a range.
 pub mod clamp;
+/// Constant tensor operator.
 pub mod constant;
+/// Element-wise cube (x^3) operator.
 pub mod cube;
+/// Element-wise division operator.
 pub mod div;
+/// Einstein summation (einsum) operator for tensor contractions.
 pub mod einsum;
+/// Error function (erf) operator.
 pub mod erf;
+/// Gather operator for indexing and embedding lookups.
 pub mod gather;
+/// Identity (pass-through) operator.
 pub mod identity;
+/// Conditional if-then-else operator.
 pub mod iff;
+/// Input placeholder operator.
 pub mod input;
+/// IsNaN check operator.
 pub mod is_nan;
+/// MoveAxis operator for transposing dimensions.
 pub mod move_axis;
+/// Element-wise multiplication operator.
 pub mod mul;
+/// ReLU activation operator.
 pub mod relu;
+/// Reshape operator for changing tensor dimensions.
 pub mod reshape;
+/// Reciprocal square root operator.
 pub mod rsqrt;
+/// Division by a scalar constant operator.
 pub mod scalar_const_div;
+/// Softmax activation operator.
 pub mod softmax;
+/// Element-wise square (x^2) operator.
 pub mod square;
+/// Element-wise subtraction operator.
 pub mod sub;
+/// Sum reduction operator.
 pub mod sum;
+/// Hyperbolic tangent activation operator.
 pub mod tanh;
 
 macro_rules! define_operators {
     // Internal rule to generate struct definition
     (@struct $operator:ident) => {
         #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+        #[doc = concat!(stringify!($operator), " operator.")]
         pub struct $operator;
     };
     (@struct $operator:ident { $($field:ident : $ty:ty),* $(,)? }) => {
         #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[doc = concat!(stringify!($operator), " operator.")]
         pub struct $operator {
-            $(pub $field: $ty),*
+            $(
+                #[doc = concat!(stringify!($field), " field.")]
+                pub $field: $ty
+            ),*
         }
     };
     (@struct $operator:ident ( $($ty:ty),* $(,)? )) => {
         #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[doc = concat!(stringify!($operator), " operator.")]
         pub struct $operator($(pub $ty),*);
     };
 
@@ -51,13 +84,16 @@ macro_rules! define_operators {
         )*
 
         #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        /// An enum representing all supported ONNX operators.
         pub enum Operator {
             $(
+                #[doc = concat!(stringify!($operator), " variant.")]
                 $operator($operator),
             )*
         }
 
         impl Operator {
+            /// Get a reference to the inner operator as a trait object.
             pub fn inner(&self) -> &dyn Op {
                 match self {
                     $(
@@ -81,7 +117,9 @@ define_operators! {
     ]
 }
 
+/// Trait for all operators - defines how to execute the operation on input tensors.
 pub trait Op {
+    /// Execute the operator on the given input tensors.
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32>;
 
     /// Returns true if this operator requires all inputs to have matching shapes.

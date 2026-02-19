@@ -32,16 +32,17 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 
-// TODO: Refactor these two einsum impls
+/// Einstein summation for batch matrix-matrix multiply: bmk,bkn->mbn
 pub mod bmk_bkn_mbn;
+/// Einstein summation for batch matrix-matrix multiply: bmk,kbn->mbn
 pub mod bmk_kbn_mbn;
-
+/// Einstein summation for vector-matrix multiply: k,nk->n
 pub mod k_nk_n;
-
-// TODO: Refactor these two einsum impls
+/// Einstein summation for batch matrix-matrix multiply: mbk,bnk->bmn
 pub mod mbk_bnk_bmn;
+/// Einstein summation for batch matrix-matrix multiply: mbk,nbk->bmn
 pub mod mbk_nbk_bmn;
-
+/// Einstein summation for matrix-matrix multiply: mk,kn->mn
 pub mod mk_kn_mn;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
@@ -90,9 +91,16 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
     }
 }
 
+/// Prover dispatcher for Einsum operations.
+///
+/// Routes to the appropriate Einsum variant based on the equation pattern.
 pub struct EinsumProver;
 
 impl EinsumProver {
+    /// Create a sumcheck prover for the specified Einsum equation.
+    ///
+    /// Dispatches to one of the supported Einsum variants (mk,kn->mn, k,nk->n, etc.)
+    /// based on the equation in the computation node.
     pub fn sumcheck<F: JoltField, T: Transcript>(
         model: &Model,
         trace: &Trace,
@@ -140,9 +148,16 @@ impl EinsumProver {
     }
 }
 
+/// Verifier dispatcher for Einsum operations.
+///
+/// Routes to the appropriate Einsum variant verifier based on the equation pattern.
 pub struct EinsumVerifier;
 
 impl EinsumVerifier {
+    /// Create a sumcheck verifier for the specified Einsum equation.
+    ///
+    /// Dispatches to one of the supported Einsum variants (mk,kn->mn, k,nk->n, etc.)
+    /// based on the equation in the computation node.
     pub fn sumcheck<F: JoltField, T: Transcript>(
         model: &Model,
         computation_node: ComputationNode,

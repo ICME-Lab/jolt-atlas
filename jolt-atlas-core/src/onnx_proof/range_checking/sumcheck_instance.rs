@@ -13,11 +13,22 @@ use crate::onnx_proof::{
     range_checking::read_raf_checking::compute_lookup_indices_from_operands,
 };
 
+/// Trait defining the interface for operations that require range-checking.
+///
+/// This trait provides all the information needed from operations (Div, Rsqrt, Tanh) that require
+/// range-checking to verify that remainder values are within valid bounds. It abstracts the common
+/// patterns for range-checking across different operations.
 pub trait ReadRafSumcheckHelper {
+    /// Create a new helper from a computation node.
     fn new(node: &ComputationNode) -> Self;
 
+    /// Get the index of the computation node this helper is associated with.
     fn node_idx(&self) -> usize;
 
+    /// Compute the batched input claim from individual input operand claims.
+    ///
+    /// Combines the left and right operand claims using powers of gamma:
+    /// `1 + γ * left_claim + γ² * right_claim`
     fn compute_input_claim<F: JoltField>(input_claims: &[F], gamma: F, gamma_sqr: F) -> F {
         let [left_claim, right_claim] = input_claims else {
             panic!("Expected exactly two input operands for division range check");
@@ -26,12 +37,21 @@ pub trait ReadRafSumcheckHelper {
         F::one() + gamma * left_claim + gamma_sqr * right_claim
     }
 
+    /// Get the virtual polynomials representing the input operands for range-checking.
     fn get_input_operands(&self) -> Vec<VirtualPolynomial>;
 
+    /// Get the virtual polynomial representing the range-check read-address (Ra) output.
     fn get_output_operand(&self) -> VirtualPolynomial;
 
+    /// Extract or compute the operand tensors (remainder and bound) from the trace.
+    ///
+    /// Returns a tuple of (left_operand, right_operand) tensors used for range-checking.
     fn get_operands_tensors(trace: &Trace, node: &ComputationNode) -> (Tensor<i32>, Tensor<i32>);
 
+    /// Compute lookup indices for the range-checking table from the operand tensors.
+    ///
+    /// Each lookup index verifies that `left_operand < right_operand` using the
+    /// unsigned less-than lookup table.
     fn compute_lookup_indices(
         left_operand: &Tensor<i32>,
         right_operand: &Tensor<i32>,
@@ -39,25 +59,44 @@ pub trait ReadRafSumcheckHelper {
         compute_lookup_indices_from_operands(&[left_operand, right_operand])
     }
 
+    /// Get the committed polynomial for the d-th dimension of the range-check read-address.
     fn rad_poly(&self, d: usize) -> CommittedPolynomial;
 }
 
-// Generic struct that holds input and output operands for sumcheck instances
+/// Operands for division range-checking.
+///
+/// For integer division `a / b = q`, there exists a remainder `r` such that `a = q·b + r`.
+/// This struct holds the operands needed to verify `0 ≤ r < b`.
 pub struct DivRangeCheckOperands {
+    /// Index of the division node in the computation graph.
     pub node_idx: usize,
+    /// Input operands: [remainder, divisor].
     pub input_operands: Vec<VirtualPolynomial>,
+    /// Virtual polynomial representing the range-check read-address.
     pub virtual_ra: VirtualPolynomial,
 }
 
+/// Operands for reciprocal square root (rsqrt) division range-checking.
+///
+/// For rsqrt computation involving `Q²/x`, this verifies the intermediate division remainder.
 pub struct RiRangeCheckOperands {
+    /// Index of the rsqrt node in the computation graph.
     pub node_idx: usize,
+    /// Input operands: [remainder, input].
     pub input_operands: Vec<VirtualPolynomial>,
+    /// Virtual polynomial representing the range-check read-address.
     pub virtual_ra: VirtualPolynomial,
 }
 
+/// Operands for reciprocal square root (rsqrt) final range-checking.
+///
+/// For square root `v = √(S·x̂)`, verifies that the remainder `r = S·x̂ - v̂²` satisfies `0 ≤ r < 2v̂ + 1`.
 pub struct RsRangeCheckOperands {
+    /// Index of the rsqrt node in the computation graph.
     pub node_idx: usize,
+    /// Input operands: [remainder, output].
     pub input_operands: Vec<VirtualPolynomial>,
+    /// Virtual polynomial representing the range-check read-address.
     pub virtual_ra: VirtualPolynomial,
 }
 
@@ -265,9 +304,15 @@ impl ReadRafSumcheckHelper for RsRangeCheckOperands {
     }
 }
 
+/// Operands for neural teleportation (tanh) range-checking.
+///
+/// For tanh computation involving division by τ, verifies that the remainder satisfies the bounds.
 pub struct TeleportRangeCheckOperands {
+    /// Index of the tanh node in the computation graph.
     pub node_idx: usize,
+    /// Input operands: [remainder, divisor].
     pub input_operands: Vec<VirtualPolynomial>,
+    /// Virtual polynomial representing the range-check read-address.
     pub virtual_ra: VirtualPolynomial,
 }
 

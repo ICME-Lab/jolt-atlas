@@ -71,6 +71,10 @@ pub struct TeleportDivisionParams<F: JoltField> {
 }
 
 impl<F: JoltField> TeleportDivisionParams<F> {
+    /// Creates new division parameters for neural teleportation.
+    ///
+    /// Extracts the opening point for the node output and stores the computation node
+    /// and divisor (tau) for use in the sumcheck protocol.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
@@ -120,6 +124,10 @@ pub struct TeleportDivisionProver<F: JoltField> {
 }
 
 impl<F: JoltField> TeleportDivisionProver<F> {
+    /// Creates a new prover for neural teleportation division.
+    ///
+    /// Computes the quotient and remainder for the input tensor and constructs
+    /// the multilinear polynomials needed for the sumcheck protocol.
     pub fn new(trace: &Trace, params: TeleportDivisionParams<F>) -> Self {
         let eq_r_node_output =
             GruenSplitEqPolynomial::new(&params.r_node_output, BindingOrder::LowToHigh);
@@ -225,6 +233,10 @@ pub struct TeleportDivisionVerifier<F: JoltField> {
 }
 
 impl<F: JoltField> TeleportDivisionVerifier<F> {
+    /// Creates a new verifier for neural teleportation division.
+    ///
+    /// Constructs the verifier with parameters extracted from the computation node
+    /// and opening accumulator.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,

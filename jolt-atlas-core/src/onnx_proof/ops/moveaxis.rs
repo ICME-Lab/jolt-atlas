@@ -39,6 +39,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MoveAxis {
     }
 }
 
+/// Parameters for proving moveaxis (transpose) operations.
+///
+/// MoveAxis reorders tensor dimensions (axes) without changing the underlying data.
 #[derive(Clone)]
 pub struct MoveAxisParams<F: JoltField> {
     r_output: Vec<F::Challenge>,
@@ -46,6 +49,7 @@ pub struct MoveAxisParams<F: JoltField> {
 }
 
 impl<F: JoltField> MoveAxisParams<F> {
+    /// Create new moveaxis parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_output = accumulator
             .get_virtual_polynomial_opening(
@@ -61,12 +65,16 @@ impl<F: JoltField> MoveAxisParams<F> {
     }
 }
 
+/// Prover state for moveaxis (transpose) operations.
+///
+/// Maintains permuted input challenge variables that correspond to the reordered axes.
 pub struct MoveAxisProver<F: JoltField> {
     params: MoveAxisParams<F>,
     r_input: Vec<F::Challenge>,
 }
 
 impl<F: JoltField> MoveAxisProver<F> {
+    /// Initialize the prover with parameters, computing the permuted input challenges.
     pub fn initialize(params: MoveAxisParams<F>) -> Self {
         let r_input = permute_challenge_groups::<F>(
             &params.computation_node.output_dims,
@@ -77,6 +85,7 @@ impl<F: JoltField> MoveAxisProver<F> {
         Self { params, r_input }
     }
 
+    /// Generate the proof for the moveaxis operation.
     pub fn prove(
         &self,
         accumulator: &mut ProverOpeningAccumulator<F>,
@@ -101,12 +110,16 @@ impl<F: JoltField> MoveAxisProver<F> {
     }
 }
 
+/// Verifier for moveaxis (transpose) operations.
+///
+/// Verifies that input and output claims match with appropriately permuted challenge variables.
 pub struct MoveAxisVerifier<F: JoltField> {
     params: MoveAxisParams<F>,
     r_input: Vec<F::Challenge>,
 }
 
 impl<F: JoltField> MoveAxisVerifier<F> {
+    /// Create a new verifier for the moveaxis operation.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
@@ -122,6 +135,7 @@ impl<F: JoltField> MoveAxisVerifier<F> {
         Self { params, r_input }
     }
 
+    /// Verify the moveaxis operation.
     pub fn verify(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,

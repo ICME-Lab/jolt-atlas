@@ -5,6 +5,7 @@ use joltworks::{
     utils::lookup_bits::LookupBits,
 };
 
+/// Prefix component for bitwise AND lookup table decomposition.
 pub enum AndPrefix<const XLEN: usize> {}
 
 impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for AndPrefix<XLEN> {

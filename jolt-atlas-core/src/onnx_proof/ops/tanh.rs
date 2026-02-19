@@ -285,6 +285,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
 
 const DEGREE_BOUND: usize = 2;
 
+/// Parameters for proving hyperbolic tangent (tanh) activation operations.
+///
+/// Tanh uses a lookup table approach with range checking. The folding challenge gamma
+/// is used to combine multiple checks.
 #[derive(Clone)]
 pub struct TanhParams<F: JoltField> {
     gamma: F,
@@ -294,6 +298,7 @@ pub struct TanhParams<F: JoltField> {
 }
 
 impl<F: JoltField> TanhParams<F> {
+    /// Create new tanh parameters from a computation node, graph, accumulator, transcript, and operation.
     pub fn new(
         computation_node: ComputationNode,
         _graph: &ComputationGraph,
@@ -353,9 +358,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for TanhParams<F> {
     }
 }
 
-// This is a Read-Raf sumcheck for Tanh lookup,
-// Where we assert that each output[i] = TanhTable[input[i]]
-// and input[i] = Ra[k] * Int[k] where Ra is one-hot encoding and Int is a custom identity poly
+/// Prover state for tanh activation sumcheck protocol.
+///
+/// This implements a Read-Raf sumcheck for Tanh lookup, asserting that each output[i] = TanhTable[input[i]]
+/// where input[i] = Ra[k] * Int[k] with Ra as one-hot encoding and Int as custom identity polynomial.
 pub struct TanhProver<F: JoltField> {
     params: TanhParams<F>,
     tanh_table: MultilinearPolynomial<F>,
@@ -364,6 +370,7 @@ pub struct TanhProver<F: JoltField> {
 }
 
 impl<F: JoltField> TanhProver<F> {
+    /// Initialize the prover with trace data, parameters, accumulator, and transcript.
     pub fn initialize(
         trace: &Trace,
         params: TanhParams<F>,
@@ -507,12 +514,17 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TanhProver<F>
     }
 }
 
+/// Verifier for tanh activation sumcheck protocol.
+///
+/// Verifies that the prover's sumcheck messages are consistent with the claimed
+/// tanh activation lookup table output.
 pub struct TanhVerifier<F: JoltField> {
     params: TanhParams<F>,
     tanh_table: MultilinearPolynomial<F>,
 }
 
 impl<F: JoltField> TanhVerifier<F> {
+    /// Create a new verifier for the tanh operation.
     pub fn new(
         computation_node: ComputationNode,
         graph: &ComputationGraph,
@@ -587,8 +599,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifie
 // TanhRaEncoding — implements RaOneHotEncoding for Tanh's stage-2 one-hot checks
 // ---------------------------------------------------------------------------
 
+/// Encoding impl for tanh one-hot checking.
+///
+/// Used in the stage-2 one-hot checks for tanh lookup table accesses.
 pub struct TanhRaEncoding {
+    /// Index of the computation node this encoding belongs to.
     pub node_idx: usize,
+    /// Log2 of the lookup table size.
     pub log_table: usize,
 }
 

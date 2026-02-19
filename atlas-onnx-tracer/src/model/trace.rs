@@ -16,6 +16,7 @@ impl Model {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// Captures intermediate node outputs from a model run.
 pub struct Trace {
+    /// Map from node index to its output tensor.
     pub node_outputs: BTreeMap<usize, Tensor<i32>>,
 }
 
@@ -81,13 +82,20 @@ impl Index<usize> for Model {
 #[derive(Debug, Clone)]
 /// Metadata, operands, and output for a single computation node.
 pub struct LayerData<'a> {
+    /// The output tensor of this layer.
     pub output: &'a Tensor<i32>,
+    /// Input tensors (operands) fed into this layer.
     pub operands: Vec<&'a Tensor<i32>>,
 }
 
+/// Inputs and outputs of a model execution.
 pub struct ModelExecutionIO {
+    /// Input tensors provided to the model.
     pub inputs: Vec<Tensor<i32>>,
+    /// Output tensors produced by the model.
     pub outputs: Vec<Tensor<i32>>,
+    /// Node indices corresponding to model inputs.
     pub input_indices: Vec<usize>,
+    /// Node indices corresponding to model outputs.
     pub output_indices: Vec<usize>,
 }

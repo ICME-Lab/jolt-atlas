@@ -12,6 +12,9 @@ use joltworks::{
     utils::uninterleave_bits,
 };
 
+/// Lookup table for bitwise OR operations.
+///
+/// Implements OR(x, y) = x | y using prefix-suffix decomposition.
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 pub struct OrTable<const XLEN: usize>;
 

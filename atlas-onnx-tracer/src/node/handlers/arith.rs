@@ -14,6 +14,7 @@ use crate::{
 
 use super::{HandlerContext, OpHandlerFn};
 
+/// Returns a map of arithmetic operator names to their handler functions.
 pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
     HashMap::from([
         ("Add", handle_add as OpHandlerFn),

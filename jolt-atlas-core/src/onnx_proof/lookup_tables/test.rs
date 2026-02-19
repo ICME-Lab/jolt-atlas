@@ -13,6 +13,10 @@ use crate::onnx_proof::lookup_tables::{
     JoltLookupTable, PrefixSuffixDecompositionTrait,
 };
 
+/// Tests that a lookup table's MLE evaluates correctly at random points.
+///
+/// Verifies that the MLE evaluation at random points matches the linear
+/// combination of table entries with Lagrange basis polynomials.
 pub fn lookup_table_mle_random_test<F: JoltField, T: JoltLookupTable + Default>() {
     let mut rng = StdRng::seed_from_u64(12345);
 
@@ -25,7 +29,12 @@ pub fn lookup_table_mle_random_test<F: JoltField, T: JoltLookupTable + Default>(
         );
     }
 }
-
+/// Tests that a lookup table's MLE evaluates correctly at random points.
+///
+/// Verifies that the MLE evaluation at random points matches the linear
+/// combination of table entries with Lagrange basis polynomials./// Tests that a lookup table's MLE evaluates correctly over the full boolean hypercube.
+///
+/// Verifies MLE correctness by testing on all 2^n corners of the hypercube.
 pub fn lookup_table_mle_full_hypercube_test<F: JoltField, T: JoltLookupTable + Default>() {
     let materialized = T::default().materialize();
     for (i, entry) in materialized.iter().enumerate() {
@@ -45,6 +54,10 @@ pub fn gen_bitmask_lookup_index(rng: &mut StdRng) -> u64 {
     interleave_bits(x, y)
 }
 
+/// Tests the prefix-suffix decomposition of a lookup table.
+///
+/// Verifies that combining prefix and suffix evaluations correctly reconstructs
+/// the full lookup table value at random indices.
 pub fn prefix_suffix_test<
     const XLEN: usize,
     F: JoltField,

@@ -5,6 +5,7 @@ use joltworks::{
     utils::lookup_bits::LookupBits,
 };
 
+/// Prefix component for lower word without MSB lookup table decomposition.
 pub enum LowerWordNoMsbPrefix<const XLEN: usize> {}
 
 impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for LowerWordNoMsbPrefix<XLEN> {

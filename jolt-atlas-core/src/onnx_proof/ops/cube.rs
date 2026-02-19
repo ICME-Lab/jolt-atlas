@@ -33,6 +33,9 @@ impl_standard_sumcheck_proof_api!(Cube, CubeParams, CubeProver, CubeVerifier);
 
 const DEGREE_BOUND: usize = 4;
 
+/// Parameters for proving element-wise cube (x³) operations.
+///
+/// Stores the opening point and computation node information needed for the sumcheck protocol.
 #[derive(Clone)]
 pub struct CubeParams<F: JoltField> {
     r_node_output: Vec<F::Challenge>,
@@ -40,6 +43,7 @@ pub struct CubeParams<F: JoltField> {
 }
 
 impl<F: JoltField> CubeParams<F> {
+    /// Create new cube parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_node_output = accumulator
             .get_virtual_polynomial_opening(
@@ -77,6 +81,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for CubeParams<F> {
     }
 }
 
+/// Prover state for element-wise cube sumcheck protocol.
+///
+/// Maintains the equality polynomial and operand polynomial needed to generate
+/// sumcheck messages proving that output[i] = operand[i]³ for all i.
 pub struct CubeProver<F: JoltField> {
     params: CubeParams<F>,
     eq_r_node_output: GruenSplitEqPolynomial<F>,
@@ -84,6 +92,7 @@ pub struct CubeProver<F: JoltField> {
 }
 
 impl<F: JoltField> CubeProver<F> {
+    /// Initialize the prover with trace data and parameters.
     #[tracing::instrument(skip_all, name = "CubeProver::initialize")]
     pub fn initialize(trace: &Trace, params: CubeParams<F>) -> Self {
         let eq_r_node_output =
@@ -141,11 +150,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for CubeProver<F>
     }
 }
 
+/// Verifier for element-wise cube sumcheck protocol.
+///
+/// Verifies that the prover's sumcheck messages are consistent with the claimed
+/// cube operation output.
 pub struct CubeVerifier<F: JoltField> {
     params: CubeParams<F>,
 }
 
 impl<F: JoltField> CubeVerifier<F> {
+    /// Create a new verifier for the cube operation.
     #[tracing::instrument(skip_all, name = "CubeVerifier::new")]
     pub fn new(
         computation_node: ComputationNode,

@@ -32,6 +32,10 @@ impl_standard_sumcheck_proof_api!(Iff, IffParams, IffProver, IffVerifier);
 
 const DEGREE_BOUND: usize = 3;
 
+/// Parameters for proving conditional selection (if-then-else) operations.
+///
+/// The Iff operation computes: output = mask ? a : b (i.e., if mask then a else b).
+/// Stores the opening point and computation node information needed for the sumcheck protocol.
 #[derive(Clone)]
 pub struct IffParams<F: JoltField> {
     r_node_output: Vec<F::Challenge>,
@@ -39,6 +43,7 @@ pub struct IffParams<F: JoltField> {
 }
 
 impl<F: JoltField> IffParams<F> {
+    /// Create new conditional selection parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_node_output = accumulator
             .get_virtual_polynomial_opening(
@@ -76,6 +81,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for IffParams<F> {
     }
 }
 
+/// Prover state for conditional selection (if-then-else) sumcheck protocol.
+///
+/// Maintains the equality polynomial, mask, and two operand polynomials needed to generate
+/// sumcheck messages proving that output[i] = mask[i] ? a[i] : b[i] for all i.
 pub struct IffProver<F: JoltField> {
     params: IffParams<F>,
     eq_r_node_output: GruenSplitEqPolynomial<F>,
@@ -85,6 +94,7 @@ pub struct IffProver<F: JoltField> {
 }
 
 impl<F: JoltField> IffProver<F> {
+    /// Initialize the prover with trace data and parameters.
     #[tracing::instrument(skip_all, name = "IffProver::initialize")]
     pub fn initialize(trace: &Trace, params: IffParams<F>) -> Self {
         let eq_r_node_output =
@@ -201,11 +211,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for IffProver<F> 
     }
 }
 
+/// Verifier for conditional selection (if-then-else) sumcheck protocol.
+///
+/// Verifies that the prover's sumcheck messages are consistent with the claimed
+/// conditional selection operation output.
 pub struct IffVerifier<F: JoltField> {
     params: IffParams<F>,
 }
 
 impl<F: JoltField> IffVerifier<F> {
+    /// Create a new verifier for the conditional selection operation.
     #[tracing::instrument(skip_all, name = "IffVerifier::new")]
     pub fn new(
         computation_node: ComputationNode,

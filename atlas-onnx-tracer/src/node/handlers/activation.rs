@@ -16,8 +16,10 @@ use super::{HandlerContext, OpHandlerFn};
 
 // TODO: These values should be finetuned based on input ranges and desired output precision.
 const NEURAL_TELEPORT_TAU: i32 = 2;
+/// Log2 of the lookup table size used for activation functions.
 pub const NEURAL_TELEPORT_LOG_TABLE_SIZE: usize = 12;
 
+/// Returns a map of activation operator names to their handler functions.
 pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
     HashMap::from([
         ("Max", handle_max as OpHandlerFn),

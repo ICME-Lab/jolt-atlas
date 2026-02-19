@@ -50,16 +50,28 @@ use strum::EnumCount;
 
 const DEGREE_BOUND: usize = 2;
 
+/// Parameters for the Prefix suffix Read-raf checking sum-check protocol.
+///
+/// This protocol proves correct lookups from instruction tables by verifying that
+/// read values match the table entries at computed addresses. The protocol uses
+/// gamma batching to efficiently combine the lookup output with left/right operand
+/// contributions and RAF values that depend on operand interleaving.
+///
+/// The sumcheck proceeds in two phases:
+/// - Address phase (log K rounds): binds address variables using prefix-suffix decomposition
+/// - Cycle phase (log T rounds): binds cycle variables and evaluates equality polynomials
 pub struct ReadRafSumcheckParams<F, T>
 where
     F: JoltField,
     T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
-    /// γ and its square (γ^2) used for batching rv/branch/raf components.
+    /// γ and its square (γ^2) used for batching lookup output with operand contributions.
     pub gamma: F,
+    /// Gamma squared, precomputed for efficiency.
     pub gamma_sqr: F,
-    /// log2(T): number of variables in the node output polynomial (last rounds bind input).
+    /// log2(T): number of variables in the node output polynomial (cycle variables).
     pub log_T: usize,
+    /// Opening point for the node output polynomial (r_reduction).
     pub r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
     /// Table for this node
@@ -71,6 +83,10 @@ where
     F: JoltField,
     T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
+    /// Creates new parameters for the Prefix suffix Read-raf checking sum-check.
+    ///
+    /// Generates a random gamma challenge from the transcript for batching multiple
+    /// claims, and extracts the opening point for the node output polynomial.
     pub fn new(
         computation_node: ComputationNode,
         opening_accumulator: &dyn OpeningAccumulator<F>,
@@ -149,6 +165,15 @@ where
     }
 }
 
+/// Prover for the Prefix suffix Read-raf checking sum-check protocol.
+///
+/// Proves correct instruction lookups by evaluating table values using prefix-suffix
+/// decomposition and combining them with RAF values that account for operand interleaving.
+/// The protocol combines the lookup output with gamma-batched operand contributions.
+///
+/// The sumcheck has two phases:
+/// - Address phase: binds address variables (log K rounds), accumulating ra(k,j)·Val and ra(k,j)·RafVal
+/// - Cycle phase: binds cycle variables (log T rounds), evaluating with equality polynomials
 pub struct ReadRafSumcheckProver<F, T>
 where
     F: JoltField,
@@ -199,6 +224,11 @@ where
     F: JoltField,
     T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
+    /// Initializes the Prefix suffix Read-raf checking prover with trace data.
+    ///
+    /// Computes lookup indices from operand tensors, initializes prefix-suffix
+    /// decomposition structures for table values and RAF values, and prepares
+    /// expanding tables for accumulating results during the address phase.
     pub fn initialize(
         params: ReadRafSumcheckParams<F, T>,
         trace: &Trace,
@@ -754,6 +784,11 @@ where
     }
 }
 
+/// Verifier for the Prefix suffix Read-raf checking sum-check protocol.
+///
+/// Verifies the prover's claims about instruction lookups by checking the sumcheck
+/// transcript and computing the expected output claim that combines lookup outputs
+/// with gamma-batched operand contributions.
 pub struct ReadRafSumcheckVerifier<F, T>
 where
     F: JoltField,
@@ -767,6 +802,11 @@ where
     F: JoltField,
     T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
+    /// Creates a new Prefix suffix Read-raf checking verifier.
+    ///
+    /// Appends virtual polynomial openings for operands to the accumulator when
+    /// the instruction uses interleaved operands, preparing for verification of
+    /// the combined gamma-batched claims.
     pub fn new(
         computation_node: ComputationNode,
         opening_accumulator: &mut VerifierOpeningAccumulator<F>,
@@ -860,6 +900,17 @@ where
     }
 }
 
+/// Computes lookup table indices from operand tensors.
+///
+/// # Arguments
+/// * `operand_tensors` - Slice of operand tensors to compute indices from
+/// * `is_interleaved_operands` - If true, expects 2 tensors and interleaves their bits
+///
+/// # Returns
+/// A vector of `LookupBits` representing the lookup indices for each element.
+///
+/// # Panics
+/// Panics if `is_interleaved_operands` is true but the number of operand tensors is not 2.
 pub fn compute_lookup_indices_from_operands(
     operand_tensors: &[&Tensor<i32>],
     is_interleaved_operands: bool,

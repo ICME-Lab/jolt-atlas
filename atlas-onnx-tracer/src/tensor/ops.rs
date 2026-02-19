@@ -3304,7 +3304,9 @@ pub mod nonlinearities {
         }
     }
 
+    /// Log2 of the exponential lookup table size.
     pub const LOG_EXP_LUT_SIZE: usize = 11;
+    /// Size of the exponential lookup table.
     pub const EXP_LUT_SIZE: usize = 1 << LOG_EXP_LUT_SIZE;
 
     /// Non-zero portion of the exp LUT: exp(-i / 128) * 128 for i in [0, 709].
@@ -3374,6 +3376,7 @@ pub mod nonlinearities {
         EXP_LUT_SCALE_128[idx]
     }
 
+    /// Trace data for softmax computation, capturing all intermediate steps.
     #[derive(Debug, Clone)]
     pub struct SoftmaxTrace {
         /// Original input tensor (scale 128)
@@ -3382,6 +3385,7 @@ pub mod nonlinearities {
         /// Step 1: Max value across all input logits
         /// max_logit = max(input_logits)
         pub max_logit: i32,
+        /// Index of the maximum logit value.
         pub max_index: usize,
 
         /// Step 2: Subtract max from each element for numerical stability

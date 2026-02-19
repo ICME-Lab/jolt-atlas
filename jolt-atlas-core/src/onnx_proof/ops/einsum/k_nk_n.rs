@@ -30,6 +30,9 @@ use crate::utils::dims::EinsumDims;
 
 const DEGREE_BOUND: usize = 2;
 
+/// Parameters for proving Einsum k,nk->n operations.
+///
+/// This implements matrix-vector multiplication variants.
 #[derive(Clone)]
 pub struct KNkNParams<F: JoltField> {
     r_node_output: Vec<F::Challenge>,
@@ -38,6 +41,7 @@ pub struct KNkNParams<F: JoltField> {
 }
 
 impl<F: JoltField> KNkNParams<F> {
+    /// Create new parameters for k,nk->n einsum.
     pub fn new(
         computation_node: ComputationNode,
         einsum_dims: EinsumDims,
@@ -80,6 +84,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for KNkNParams<F> {
     }
 }
 
+/// Prover state for k,nk->n einsum sumcheck protocol.
 pub struct KNkNProver<F: JoltField> {
     params: KNkNParams<F>,
     left_operand: MultilinearPolynomial<F>,
@@ -87,6 +92,7 @@ pub struct KNkNProver<F: JoltField> {
 }
 
 impl<F: JoltField> KNkNProver<F> {
+    /// Initialize the prover with trace data and parameters for k,nk->n einsum.
     #[tracing::instrument(skip_all, name = "KNkNProver::initialize")]
     pub fn initialize(trace: &Trace, params: KNkNParams<F>) -> Self {
         let LayerData {
@@ -181,11 +187,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for KNkNProver<F>
     }
 }
 
+/// Verifier for k,nk->n einsum sumcheck protocol.
 pub struct KNkNVerifier<F: JoltField> {
     params: KNkNParams<F>,
 }
 
 impl<F: JoltField> KNkNVerifier<F> {
+    /// Create new verifier for k,nk->n einsum.
     #[tracing::instrument(skip_all, name = "KNkNVerifier::new")]
     pub fn new(
         computation_node: ComputationNode,

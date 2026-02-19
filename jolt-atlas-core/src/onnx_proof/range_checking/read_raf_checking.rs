@@ -49,6 +49,11 @@ use strum::EnumCount;
 
 const DEGREE_BOUND: usize = 2;
 
+/// Parameters for range-checking read-raf sumcheck protocol.
+///
+/// This struct holds the configuration and randomness for the prefix-suffix read-checking
+/// sumcheck from the Twist and Shout paper, applied to range-checking for division and
+/// square root operations.
 pub struct RangecheckRafSumcheckParams<F, Helper>
 where
     F: JoltField,
@@ -56,9 +61,11 @@ where
 {
     /// γ and its square (γ^2) used for batching rv/branch/raf components.
     pub gamma: F,
+    /// γ² for batching.
     pub gamma_sqr: F,
     /// log2(T): number of variables in the node output polynomial (last rounds bind input).
     pub log_T: usize,
+    /// Opening point for the node output polynomial.
     pub r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
     /// Table for this node
@@ -71,6 +78,9 @@ where
     F: JoltField,
     Helper: ReadRafSumcheckHelper,
 {
+    /// Create new parameters for range-checking read-raf sumcheck.
+    ///
+    /// Samples randomness from the transcript and extracts opening points from the accumulator.
     pub fn new(
         computation_node: ComputationNode,
         opening_accumulator: &dyn OpeningAccumulator<F>,
@@ -140,6 +150,10 @@ where
     }
 }
 
+/// Prover for range-checking read-raf sumcheck protocol.
+///
+/// Implements the prefix-suffix read-checking sumcheck from Twist and Shout paper,
+/// proving that remainder values are within valid bounds using lookup tables.
 pub struct RangecheckRafSumcheckProver<F, Helper>
 where
     F: JoltField,
@@ -184,6 +198,7 @@ where
     F: JoltField,
     Helper: ReadRafSumcheckHelper + Sync,
 {
+    /// Create a new prover from a computation node and prover state.
     pub fn new_from_prover(
         node: &ComputationNode,
         prover: &mut Prover<F, impl Transcript>,
@@ -201,6 +216,10 @@ where
         )
     }
 
+    /// Initialize the prover with parameters, trace, and accumulators.
+    ///
+    /// Computes lookup indices, initializes prefix-suffix decompositions, and sets up
+    /// the sumcheck instance for the read-raf protocol.
     pub fn initialize(
         params: RangecheckRafSumcheckParams<F, Helper>,
         trace: &Trace,
@@ -698,6 +717,7 @@ impl<F: JoltField, FS: Transcript, Helper: ReadRafSumcheckHelper + Send + Sync>
     }
 }
 
+/// Verifier for range-checking read-raf sumcheck protocol.
 pub struct RangecheckRafSumcheckVerifier<F, Helper>
 where
     F: JoltField,
@@ -711,6 +731,7 @@ where
     F: JoltField,
     Helper: ReadRafSumcheckHelper,
 {
+    /// Create a new verifier from a computation node and verifier state.
     pub fn new_from_verifier(
         node: &ComputationNode,
         verifier: &mut Verifier<F, impl Transcript>,
@@ -723,6 +744,7 @@ where
         Self::new(params, &mut verifier.accumulator, &mut verifier.transcript)
     }
 
+    /// Create a new verifier with parameters and accumulators.
     pub fn new(
         params: RangecheckRafSumcheckParams<F, Helper>,
         opening_accumulator: &mut VerifierOpeningAccumulator<F>,
@@ -797,6 +819,10 @@ impl<F: JoltField, FS: Transcript, Helper: ReadRafSumcheckHelper> SumcheckInstan
     }
 }
 
+/// Compute lookup indices from operand tensors for range-checking.
+///
+/// Takes two operand tensors (left and right) and interleaves their bits to form
+/// lookup indices for the unsigned less-than table, verifying `left < right`.
 pub fn compute_lookup_indices_from_operands(operand_tensors: &[&Tensor<i32>]) -> Vec<LookupBits> {
     // Interleaved mode: requires exactly 2 operand tensors
     assert_eq!(

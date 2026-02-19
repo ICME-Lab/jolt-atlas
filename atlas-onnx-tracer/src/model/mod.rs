@@ -1,9 +1,13 @@
+//! Core model types for loading and executing ONNX models.
+
 use crate::{node::ComputationNode, ops::Operator, tensor::Tensor, utils::quantize};
 use common::consts::LOG_K_CHUNK;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
+/// Functions for executing models and tracing intermediate outputs.
 pub mod execute;
+/// Functions for loading models from ONNX files.
 pub mod load;
 pub mod test;
 pub mod trace;
@@ -115,6 +119,7 @@ impl Model {
             .collect()
     }
 
+    /// Calculate the maximum number of variables needed for any single node in the model.
     pub fn max_num_vars(&self) -> usize {
         let log_2 = |x: usize| {
             assert_ne!(x, 0);
@@ -296,6 +301,7 @@ impl RunArgs {
     }
 }
 
+/// Default quantization scale (denominator in fixed-point representation).
 pub const DEFAULT_SCALE: i32 = 7;
 
 #[cfg(test)]

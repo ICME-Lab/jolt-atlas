@@ -1,3 +1,10 @@
+//! Prefix components of lookup table MLE decompositions.
+//!
+//! Prefixes capture the high-order bits of lookup table inputs and maintain checkpoints
+//! that accumulate contributions during the prefix-suffix sum-check protocol. By evaluating
+//! prefix MLEs incrementally with checkpoints updated every two rounds, we avoid summing
+//! over the full 2^(2*XLEN) lookup table.
+
 use crate::onnx_proof::lookup_tables::prefixes::{
     and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix,
     lower_word_no_msb::LowerWordNoMsbPrefix, not_msb::NotMsbPrefix, or::OrPrefix, xor::XorPrefix,
@@ -13,14 +20,26 @@ use std::{fmt::Display, ops::Index};
 use strum::EnumCount;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
+/// Bitwise AND prefix implementation.
 pub mod and;
+/// Equality comparison prefix implementation.
 pub mod eq;
+/// Less-than comparison prefix implementation.
 pub mod less_than;
+/// Lower word (without MSB) prefix implementation.
 pub mod lower_word_no_msb;
+/// Not-MSB (most significant bit) prefix implementation.
 pub mod not_msb;
+/// Bitwise OR prefix implementation.
 pub mod or;
+/// Bitwise XOR prefix implementation.
 pub mod xor;
 
+/// Trait for prefix components that support sparse-dense MLE evaluation.
+///
+/// Prefixes are evaluated during the sum-check protocol using checkpoints that
+/// accumulate contributions from previously bound variables. This enables efficient
+/// prover implementation without iterating over the full lookup table.
 pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
     /// Evalautes the MLE for this prefix:
     /// - prefix(r, r_x, c, b)   if j is odd
@@ -68,12 +87,19 @@ pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
 #[repr(u8)]
 #[derive(EnumCountMacro, EnumIter, FromPrimitive)]
 pub enum Prefixes {
+    /// Bitwise AND prefix
     And,
+    /// Equality comparison prefix
     Eq,
+    /// Less-than comparison prefix
     LessThan,
+    /// Lower word without MSB prefix
     LowerWordNoMsb,
+    /// Not-MSB prefix
     NotMsb,
+    /// Bitwise OR prefix
     Or,
+    /// Bitwise XOR prefix
     Xor,
 }
 
@@ -111,6 +137,7 @@ impl<F> From<F> for PrefixEval<F> {
 }
 
 impl<F> PrefixCheckpoint<F> {
+    /// Unwraps the optional checkpoint value, panicking if None.
     pub fn unwrap(self) -> PrefixEval<F> {
         self.0.unwrap().into()
     }

@@ -31,6 +31,9 @@ use crate::utils::dims::EinsumDims;
 
 const DEGREE_BOUND: usize = 2;
 
+/// Parameters for proving Einsum mk,kn->mn operations.
+///
+/// This implements standard matrix multiplication.
 #[derive(Clone)]
 pub struct MkKnMnParams<F: JoltField> {
     r_node_output: Vec<F::Challenge>,
@@ -39,6 +42,7 @@ pub struct MkKnMnParams<F: JoltField> {
 }
 
 impl<F: JoltField> MkKnMnParams<F> {
+    /// Create new parameters for mk,kn->mn einsum.
     pub fn new(
         computation_node: ComputationNode,
         einsum_dims: EinsumDims,
@@ -81,6 +85,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MkKnMnParams<F> {
     }
 }
 
+/// Prover state for mk,kn->mn einsum sumcheck protocol.
 pub struct MkKnMnProver<F: JoltField> {
     params: MkKnMnParams<F>,
     left_operand: MultilinearPolynomial<F>,
@@ -88,6 +93,7 @@ pub struct MkKnMnProver<F: JoltField> {
 }
 
 impl<F: JoltField> MkKnMnProver<F> {
+    /// Initialize the prover with trace data and parameters for mk,kn->mn einsum.
     #[tracing::instrument(skip_all, name = "MkKnMnProver::initialize")]
     pub fn initialize(trace: &Trace, params: MkKnMnParams<F>) -> Self {
         let LayerData {
@@ -197,11 +203,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MkKnMnProver<
     }
 }
 
+/// Verifier for mk,kn->mn einsum sumcheck protocol.
 pub struct MkKnMnVerifier<F: JoltField> {
     params: MkKnMnParams<F>,
 }
 
 impl<F: JoltField> MkKnMnVerifier<F> {
+    /// Create new verifier for mk,kn->mn einsum.
     #[tracing::instrument(skip_all, name = "MkKnMnVerifier::new")]
     pub fn new(
         computation_node: ComputationNode,

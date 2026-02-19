@@ -1,3 +1,12 @@
+//! Proofs for ONNX neural network computations.
+//!
+//! This module implements the core proving and verification logic for ONNX neural networks.
+//! It provides:
+//! - [`ONNXProof`]: The main proof structure containing all sumcheck proofs and commitments
+//! - [`Prover`] and [`Verifier`]: State management for proving and verification
+//! - Preprocessing for model setup and commitment scheme initialization
+//! - Operator-specific proving logic for neural network operations
+
 use crate::onnx_proof::{
     ops::{NodeCommittedPolynomials, OperatorProver, OperatorVerifier},
     witness::WitnessGenerator,
@@ -33,7 +42,6 @@ pub mod lookup_tables;
 pub mod neural_teleport;
 pub mod op_lookups;
 pub mod ops;
-#[warn(missing_docs)]
 pub mod range_checking;
 pub mod witness;
 
@@ -43,9 +51,13 @@ pub use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTr
 /// Prover state that owns all data needed during proving.
 /// Created once before the proving loop and passed to operator handlers.
 pub struct Prover<F: JoltField, T: Transcript> {
+    /// Execution trace of the neural network model.
     pub trace: Trace,
+    /// Shared preprocessing data (model structure).
     pub preprocessing: AtlasSharedPreprocessing,
+    /// Opening accumulator for batching polynomial openings.
     pub accumulator: ProverOpeningAccumulator<F>,
+    /// Interactive proof transcript.
     pub transcript: T,
 }
 
@@ -64,10 +76,15 @@ impl<F: JoltField, T: Transcript> Prover<F, T> {
 /// Verifier state that owns all data needed during verification.
 /// Created once before the verification loop and passed to operator handlers.
 pub struct Verifier<'a, F: JoltField, T: Transcript> {
+    /// Shared preprocessing data (model structure).
     pub preprocessing: &'a AtlasSharedPreprocessing,
+    /// Opening accumulator for batching polynomial openings.
     pub accumulator: VerifierOpeningAccumulator<F>,
+    /// Interactive proof transcript.
     pub transcript: T,
+    /// Map of proof IDs to sumcheck proofs.
     pub proofs: &'a BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+    /// Model execution inputs and outputs.
     pub io: &'a ModelExecutionIO,
 }
 
@@ -90,23 +107,43 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
 
 /* ---------- Prover Logic ---------- */
 
+/// Complete ZK proof for an ONNX neural network computation.
+///
+/// Contains all sumcheck proofs, polynomial commitments, and opening proofs
+/// needed to verify the correct execution of a neural network.
 #[derive(Debug, Clone)]
 pub struct ONNXProof<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> {
+    /// Opening claims for committed polynomials.
     pub opening_claims: Claims<F>,
+    /// Map of proof IDs to sumcheck instance proofs.
     pub proofs: BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+    /// Claims for virtual polynomial operands.
     pub virtual_operand_claims: VirtualOperandClaims<F>,
+    /// Polynomial commitments for witness polynomials.
     pub commitments: Vec<PCS::Commitment>,
+    /// Batched opening proof using reduction sum-check protocol to reduce all polynomial openings to the same point.
     reduced_opening_proof: Option<ReducedOpeningProof<F, T, PCS>>,
 }
 
+/// Batched polynomial opening proof using sumcheck reduction.
+///
+/// Reduces multiple polynomial openings to a single joint opening using sumcheck.
 #[derive(Debug, Clone)]
 pub struct ReducedOpeningProof<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> {
+    /// Sumcheck proof for batching multiple openings.
     pub sumcheck_proof: SumcheckInstanceProof<F, T>,
+    /// Evaluation claims at the sumcheck point.
     pub sumcheck_claims: Vec<F>,
+    /// Joint opening proof for the batched polynomial.
     joint_opening_proof: PCS::Proof,
 }
 
 impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F, T, PCS> {
+    /// Generate a proof for an ONNX neural network computation.
+    ///
+    /// Executes the model with the given inputs, generates a trace, and produces
+    /// sumcheck proofs for each operation. Returns the proof, execution IO, and
+    /// optional debug information.
     #[tracing::instrument(skip_all, name = "ONNXProof::prove")]
     pub fn prove(
         pp: &AtlasProverPreprocessing<F, PCS>,
@@ -239,27 +276,44 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     }
 }
 
+/// Unique identifier for a sumcheck proof instance.
+///
+/// Combines the node index with the proof type to uniquely identify each proof.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ProofId(pub usize, pub ProofType);
 
+/// Type of sumcheck proof for different operations in the neural network.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ProofType {
+    /// Execution sumcheck for basic operations.
     Execution,
+    /// Neural teleportation for tanh approximation.
     NeuralTeleport,
+    /// Read-address one-hot encoding checks.
     RaOneHotChecks,
+    /// Hamming weight check for read-addresses.
     RaHammingWeight,
+    /// Softmax division by sum of max.
     SoftmaxDivSumMax,
+    /// Softmax exponentiation read-raf checking.
     SoftmaxExponentiationReadRaf,
+    /// Softmax exponentiation read-address one-hot encoding checks.
     SoftmaxExponentiationRaOneHot,
+    /// Range-checking for remainders.
     RangeCheck,
 }
 
+/// Wrapper for polynomial opening claims.
 #[derive(Debug, Clone)]
 pub struct Claims<F: JoltField>(pub Openings<F>);
 
 /* ---------- Verifier Logic ---------- */
 
 impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F, T, PCS> {
+    /// Verify a proof for an ONNX neural network computation.
+    ///
+    /// Checks all sumcheck proofs, validates opening claims, and verifies that the
+    /// computation produces the expected output.
     #[tracing::instrument(skip_all, name = "ONNXProof::verify")]
     pub fn verify(
         &self,
@@ -382,17 +436,23 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
 
 /* ---------- Preprocessing ---------- */
 
+/// Shared preprocessing data for both prover and verifier.
+///
+/// Contains the ONNX model structure that is used by both parties.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AtlasSharedPreprocessing {
+    /// The ONNX neural network model.
     pub model: Model,
 }
 
 impl AtlasSharedPreprocessing {
+    /// Preprocess an ONNX model for proving and verification.
     #[tracing::instrument(skip_all, name = "AtlasSharedPreprocessing::preprocess")]
     pub fn preprocess(model: Model) -> Self {
         Self { model }
     }
 
+    /// Get all committed polynomials required by the model's operations.
     pub fn get_models_committed_polynomials<F: JoltField, T: Transcript>(
         &self,
     ) -> Vec<CommittedPolynomial> {
@@ -405,9 +465,14 @@ impl AtlasSharedPreprocessing {
     }
 }
 
+/// Prover-specific preprocessing with commitment scheme generators.
+///
+/// Contains the polynomial commitment scheme setup for the prover.
 #[derive(Clone)]
 pub struct AtlasProverPreprocessing<F: JoltField, PCS: CommitmentScheme<Field = F>> {
+    /// Polynomial commitment scheme prover setup (SRS generators).
     pub generators: PCS::ProverSetup,
+    /// Shared preprocessing data.
     pub shared: AtlasSharedPreprocessing,
 }
 
@@ -416,6 +481,10 @@ where
     F: JoltField,
     PCS: CommitmentScheme<Field = F>,
 {
+    /// Create new prover preprocessing from shared preprocessing.
+    ///
+    /// Generates the polynomial commitment scheme setup (SRS) based on the
+    /// maximum number of variables in the model.
     #[tracing::instrument(skip_all, name = "AtlasProverPreprocessing::gen")]
     pub fn new(shared: AtlasSharedPreprocessing) -> AtlasProverPreprocessing<F, PCS> {
         let model = &shared.model;
@@ -425,18 +494,24 @@ where
         AtlasProverPreprocessing { generators, shared }
     }
 
+    /// Get a reference to the ONNX model.
     pub fn model(&self) -> &Model {
         &self.shared.model
     }
 }
 
+/// Verifier-specific preprocessing with commitment scheme verification key.
+///
+/// Contains the polynomial commitment scheme setup for the verifier.
 #[derive(Debug, Clone)]
 pub struct AtlasVerifierPreprocessing<F, PCS>
 where
     F: JoltField,
     PCS: CommitmentScheme<Field = F>,
 {
+    /// Polynomial commitment scheme verifier setup (verification key).
     pub generators: PCS::VerifierSetup,
+    /// Shared preprocessing data.
     pub shared: AtlasSharedPreprocessing,
 }
 
@@ -453,11 +528,16 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> From<&AtlasProverPreprocess
 }
 
 impl<F: JoltField, PCS: CommitmentScheme<Field = F>> AtlasVerifierPreprocessing<F, PCS> {
+    /// Get a reference to the ONNX model.
     pub fn model(&self) -> &Model {
         &self.shared.model
     }
 }
 
+/// Debug information from the prover for testing and verification.
+///
+/// Contains the transcript and opening accumulator state for comparing
+/// prover and verifier execution in tests.
 #[allow(dead_code)]
 pub struct ProverDebugInfo<F, ProofTranscript>
 where

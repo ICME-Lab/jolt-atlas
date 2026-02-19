@@ -1,3 +1,20 @@
+//! # Witness Generation Module
+//!
+//! This module provides functionality for generating witness polynomials from neural network
+//! model traces. The witness generation process is a critical component of the proof system:
+//!
+//! 1. **Trace Execution**: The model is executed with specific inputs, generating a trace of all
+//!    intermediate computations.
+//! 2. **Witness Generation**: For each committed polynomial in the protocol, this module generates
+//!    the corresponding witness data from the trace.
+//! 3. **Polynomial Commitment**: The generated polynomials are committed to using the commitment
+//!    scheme (e.g., multilinear polynomial commitments or one-hot polynomial commitments).
+//! 4. **Verifier Interaction**: The commitments are sent to the verifier as part of the proof.
+//!
+//! The [`WitnessGenerator`] trait defines the interface for generating witness polynomials from
+//! different types of committed polynomials (e.g., node outputs, division quotients, range check
+//! addresses, etc.).
+
 use crate::onnx_proof::{
     neural_teleport::{division::compute_division, n_bits_to_usize},
     op_lookups::{read_raf_checking::compute_lookup_indices_from_operands, InterleavedBitsMarker},
@@ -28,10 +45,52 @@ use joltworks::{
 };
 use rayon::prelude::*;
 
+/// Trait for generating witness polynomials from model execution traces.
+///
+/// This trait defines the interface for converting committed polynomial specifications
+/// into concrete witness data. The witness generation process takes a neural network
+/// model and its execution trace, then produces the multilinear polynomial that the
+/// prover commits to and sends to the verifier.
+///
+/// # Type Parameters
+///
+/// * `F` - The finite field over which polynomials are defined
+///
+/// # Example Flow
+///
+/// ```text
+/// Model + Trace → WitnessGenerator → MultilinearPolynomial → Commitment → Verifier
+/// ```
 pub trait WitnessGenerator<F: JoltField> {
+    /// Generates a witness polynomial from a model and its execution trace.
+    ///
+    /// This method creates the concrete polynomial data that will be committed to by the prover.
+    /// Different types of committed polynomials (node outputs, range check addresses, division
+    /// remainders, etc.) require different witness generation logic.
+    ///
+    /// # Arguments
+    ///
+    /// * `model` - The neural network model containing the computation graph
+    /// * `trace` - The execution trace containing intermediate values and operands
+    ///
+    /// # Returns
+    ///
+    /// A multilinear polynomial representing the witness data. This can be:
+    /// - A regular `MultilinearPolynomial` for dense data
+    /// - A `OneHotPolynomial` for sparse one-hot encoded data (e.g., lookup addresses)
     fn generate_witness(&self, model: &Model, trace: &Trace) -> MultilinearPolynomial<F>;
 }
 
+/// Implementation of witness generation for different types of committed polynomials.
+///
+/// This implementation handles witness generation for all committed polynomial types used in
+/// the proof system, including:
+/// - Node output read-after-decompose (RaD) addresses
+/// - Division quotients and remainders
+/// - Range check addresses for various operations
+/// - Softmax intermediate values
+/// - Gather operation addresses
+/// - Tanh lookup table addresses
 impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
     #[tracing::instrument(skip_all)]
     fn generate_witness(&self, model: &Model, trace: &Trace) -> MultilinearPolynomial<F> {

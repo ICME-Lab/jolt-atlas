@@ -31,9 +31,10 @@ use std::collections::BTreeMap;
 pub mod lookup_tables;
 
 pub mod neural_teleport;
-#[warn(missing_docs)]
 pub mod op_lookups;
+#[warn(missing_docs)]
 pub mod ops;
+
 pub mod range_checking;
 pub mod witness;
 

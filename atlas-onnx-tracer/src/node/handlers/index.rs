@@ -13,6 +13,7 @@ use crate::{
 
 use super::{HandlerContext, OpHandlerFn};
 
+/// Returns a map of indexing operator names to their handler functions.
 pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
     HashMap::from([("Gather", handle_gather as OpHandlerFn)])
 }

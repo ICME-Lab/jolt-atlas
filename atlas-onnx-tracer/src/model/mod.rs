@@ -1,3 +1,5 @@
+//! Core model types for loading and executing ONNX models.
+
 use crate::{node::ComputationNode, ops::Operator, tensor::Tensor, utils::quantize};
 use common::consts::LOG_K_CHUNK;
 use serde::{Deserialize, Serialize};

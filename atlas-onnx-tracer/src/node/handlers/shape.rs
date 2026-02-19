@@ -18,6 +18,7 @@ use crate::{
 
 use super::{HandlerContext, OpHandlerFn};
 
+/// Returns a map of shape manipulation operator names to their handler functions.
 pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
     HashMap::from([
         ("Reshape", handle_reshape as OpHandlerFn),

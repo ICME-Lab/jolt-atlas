@@ -20,6 +20,7 @@ use crate::{
 
 use super::{HandlerContext, OpHandlerFn};
 
+/// Returns a map of miscellaneous operator names to their handler functions.
 pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
     HashMap::from([
         ("Const", handle_const as OpHandlerFn),

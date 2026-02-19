@@ -18,6 +18,7 @@ use crate::{
 
 use super::{HandlerContext, OpHandlerFn};
 
+/// Returns a map of reduction operator names to their handler functions.
 pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
     HashMap::from([
         ("Reduce<Sum>", handle_reduce_sum as OpHandlerFn),

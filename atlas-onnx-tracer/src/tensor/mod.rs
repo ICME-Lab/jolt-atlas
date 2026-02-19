@@ -1,3 +1,5 @@
+//! Multi-dimensional tensor representation and operations.
+
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use crate::utils::parallel_utils::IndexedParallelIterator;
 use crate::utils::{
@@ -60,6 +62,7 @@ pub mod ops;
 /// values, or slice a Tensor.
 #[derive(Clone, Debug, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct Tensor<T: TensorType> {
+    /// The flattened data of the tensor.
     pub inner: Vec<T>,
     dims: Vec<usize>,
     scale: Option<quantize::Scale>,
@@ -219,11 +222,13 @@ impl Tensor<i32> {
         Tensor::new(Some(&data), dims).unwrap()
     }
 
+    /// Convert tensor data to u32 container format.
     pub fn into_container_data(&self) -> Tensor<u32> {
         let data: Vec<u32> = self.data().iter().map(|d| *d as u32).collect();
         Tensor::construct(data, self.dims().to_vec())
     }
 
+    /// Find the minimum and maximum values in the tensor.
     pub fn min_max(&self) -> Option<(i32, i32)> {
         if self.is_empty() {
             None
@@ -358,6 +363,7 @@ impl<T: Clone + TensorType> Tensor<T> {
         }
     }
 
+    /// Construct a tensor directly from inner data and dimensions.
     pub fn construct(inner: Vec<T>, dims: Vec<usize>) -> Self {
         Self {
             inner,

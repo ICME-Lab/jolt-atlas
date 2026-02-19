@@ -24,7 +24,8 @@ use crate::{
 };
 use allocative::Allocative;
 use ark_serialize::{
-    CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
+    CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
+    Write,
 };
 use atlas_onnx_tracer::node::ComputationNode;
 use common::{CommittedPolynomial, VirtualPolynomial};
@@ -893,7 +894,7 @@ pub enum SumcheckId {
 }
 
 impl CanonicalSerialize for SumcheckId {
-    fn serialize_with_mode<W: std::io::Write>(
+    fn serialize_with_mode<W: Write>(
         &self,
         writer: W,
         compress: Compress,
@@ -913,7 +914,7 @@ impl Valid for SumcheckId {
 }
 
 impl CanonicalDeserialize for SumcheckId {
-    fn deserialize_with_mode<R: std::io::Read>(
+    fn deserialize_with_mode<R: Read>(
         reader: R,
         compress: Compress,
         validate: Validate,
@@ -930,7 +931,7 @@ pub enum OpeningId {
 }
 
 impl CanonicalSerialize for OpeningId {
-    fn serialize_with_mode<W: std::io::Write>(
+    fn serialize_with_mode<W: Write>(
         &self,
         mut writer: W,
         compress: Compress,
@@ -969,7 +970,7 @@ impl Valid for OpeningId {
 }
 
 impl CanonicalDeserialize for OpeningId {
-    fn deserialize_with_mode<R: std::io::Read>(
+    fn deserialize_with_mode<R: Read>(
         mut reader: R,
         compress: Compress,
         validate: Validate,

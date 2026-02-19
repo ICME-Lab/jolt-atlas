@@ -12,7 +12,8 @@ use crate::onnx_proof::{
     witness::WitnessGenerator,
 };
 use ark_serialize::{
-    CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
+    CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
+    Write,
 };
 use atlas_onnx_tracer::{
     model::{
@@ -310,7 +311,7 @@ pub enum ProofType {
 }
 
 impl CanonicalSerialize for ProofType {
-    fn serialize_with_mode<W: std::io::Write>(
+    fn serialize_with_mode<W: Write>(
         &self,
         writer: W,
         compress: Compress,
@@ -340,7 +341,7 @@ impl Valid for ProofType {
 }
 
 impl CanonicalDeserialize for ProofType {
-    fn deserialize_with_mode<R: std::io::Read>(
+    fn deserialize_with_mode<R: Read>(
         reader: R,
         compress: Compress,
         validate: Validate,

@@ -1,8 +1,8 @@
 use allocative::Allocative;
 use ark_serialize::{
-    CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
+    CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
+    Write,
 };
-use std::io::{Read, Write};
 
 pub mod consts;
 pub mod utils;

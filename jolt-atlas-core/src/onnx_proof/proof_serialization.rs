@@ -3,13 +3,11 @@
 //! Uses `ark_serialize`'s `CanonicalSerialize` / `CanonicalDeserialize` traits.
 //! BTreeMap fields are serialized as sorted `(key, value)` pairs prefixed by their length.
 
-use std::{
-    collections::BTreeMap,
-    io::{Read, Write},
-};
+use std::collections::BTreeMap;
 
 use ark_serialize::{
-    CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
+    CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
+    Write,
 };
 
 use joltworks::{

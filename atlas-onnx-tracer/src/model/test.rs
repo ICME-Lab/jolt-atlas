@@ -135,6 +135,7 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    /// Add a reciprocal square root (rsqrt) node.
     pub fn rsqrt(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
         let output_dims = self.nodes[&input].output_dims.clone();
@@ -162,6 +163,7 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    /// Add a broadcast node (expand dimensions to match target shape).
     pub fn broadcast(&mut self, input: Wire, target_dims: Vec<usize>) -> Wire {
         let id = self.alloc();
         let node = ComputationNode::new(
@@ -175,6 +177,7 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    /// Add a moveaxis node (transpose an axis from source to destination position).
     pub fn moveaxis(&mut self, input: Wire, source: usize, destination: usize) -> Wire {
         let id = self.alloc();
         let input_dims = self.nodes[&input].output_dims.clone();
@@ -279,6 +282,7 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    /// Add a hyperbolic tangent (tanh) activation node.
     pub fn tanh(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
         let output_dims = self.nodes[&input].output_dims.clone();
@@ -316,6 +320,7 @@ impl ModelBuilder {
     }
 }
 
+/// Create a model for element-wise multiplication of an input and constant tensor.
 pub fn mul_model(rng: &mut StdRng, T: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![T]);
@@ -325,6 +330,7 @@ pub fn mul_model(rng: &mut StdRng, T: usize) -> Model {
     b.build()
 }
 
+/// Create a model for matrix multiplication (mk,kn->mn).
 pub fn matmul_model(rng: &mut StdRng, m: usize, k: usize, n: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![m, k]);
@@ -334,6 +340,7 @@ pub fn matmul_model(rng: &mut StdRng, m: usize, k: usize, n: usize) -> Model {
     b.build()
 }
 
+/// Create a model for matrix-vector multiplication (k,nk->n).
 pub fn matvec_model(rng: &mut StdRng, k: usize, n: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![k]);
@@ -343,6 +350,7 @@ pub fn matvec_model(rng: &mut StdRng, k: usize, n: usize) -> Model {
     b.build()
 }
 
+/// Create a model for einsum contraction (mbk,nbk->bmn).
 pub fn mbk_nbk_bmn_model(rng: &mut StdRng, m: usize, b: usize, k: usize, n: usize) -> Model {
     let mut builder = ModelBuilder::new();
     let i = builder.input(vec![m, b, k]);
@@ -352,6 +360,7 @@ pub fn mbk_nbk_bmn_model(rng: &mut StdRng, m: usize, b: usize, k: usize, n: usiz
     builder.build()
 }
 
+/// Create a model for einsum contraction (mbk,bnk->bmn).
 pub fn mbk_bnk_bmn_model(rng: &mut StdRng, m: usize, b: usize, k: usize, n: usize) -> Model {
     let mut builder = ModelBuilder::new();
     let i = builder.input(vec![m, b, k]);
@@ -361,6 +370,7 @@ pub fn mbk_bnk_bmn_model(rng: &mut StdRng, m: usize, b: usize, k: usize, n: usiz
     builder.build()
 }
 
+/// Create a model for einsum contraction (bmk,kbn->mbn).
 pub fn bmk_kbn_mbn_model(rng: &mut StdRng, b: usize, m: usize, k: usize, n: usize) -> Model {
     let mut builder = ModelBuilder::new();
     let i = builder.input(vec![b, m, k]);
@@ -370,6 +380,7 @@ pub fn bmk_kbn_mbn_model(rng: &mut StdRng, b: usize, m: usize, k: usize, n: usiz
     builder.build()
 }
 
+/// Create a model for einsum contraction (bmk,bkn->mbn).
 pub fn bmk_bkn_mbn_model(rng: &mut StdRng, b: usize, m: usize, k: usize, n: usize) -> Model {
     let mut builder = ModelBuilder::new();
     let i = builder.input(vec![b, m, k]);
@@ -379,6 +390,7 @@ pub fn bmk_bkn_mbn_model(rng: &mut StdRng, b: usize, m: usize, k: usize, n: usiz
     builder.build()
 }
 
+/// Create a model for element-wise subtraction of an input and constant tensor.
 pub fn sub_model(rng: &mut StdRng, T: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![T]);
@@ -388,6 +400,7 @@ pub fn sub_model(rng: &mut StdRng, T: usize) -> Model {
     b.build()
 }
 
+/// Create a model for element-wise addition of an input and constant tensor.
 pub fn add_model(rng: &mut StdRng, T: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![T]);
@@ -397,6 +410,7 @@ pub fn add_model(rng: &mut StdRng, T: usize) -> Model {
     b.build()
 }
 
+/// Create a model for element-wise squaring of an input tensor.
 pub fn square_model(T: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![T]);
@@ -405,6 +419,7 @@ pub fn square_model(T: usize) -> Model {
     b.build()
 }
 
+/// Create a model for ReLU activation.
 pub fn relu_model(T: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![T]);
@@ -413,6 +428,7 @@ pub fn relu_model(T: usize) -> Model {
     b.build()
 }
 
+/// Create a model for element-wise cubing of an input tensor.
 pub fn cube_model(T: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![T]);
@@ -421,6 +437,7 @@ pub fn cube_model(T: usize) -> Model {
     b.build()
 }
 
+/// Create a model for element-wise division of an input by a constant tensor.
 pub fn div_model(T: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![T]);
@@ -430,6 +447,7 @@ pub fn div_model(T: usize) -> Model {
     b.build()
 }
 
+/// Create a model for element-wise division of an input by a scalar constant.
 pub fn scalar_const_div_model(T: usize, divisor: i32) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![T]);
@@ -438,6 +456,7 @@ pub fn scalar_const_div_model(T: usize, divisor: i32) -> Model {
     b.build()
 }
 
+/// Create a model for element-wise reciprocal (1/x) of an input.
 pub fn recip_model(T: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![T]);
@@ -447,6 +466,7 @@ pub fn recip_model(T: usize) -> Model {
     b.build()
 }
 
+/// Create a model for element-wise reciprocal square root (1/sqrt(x)).
 pub fn rsqrt_model(T: usize) -> Model {
     let mut b = ModelBuilder::new();
     let input = b.input(vec![T]);
@@ -455,6 +475,7 @@ pub fn rsqrt_model(T: usize) -> Model {
     b.build()
 }
 
+/// Create a model for conditional selection (if-then-else).
 pub fn iff_model(rng: &mut StdRng, T: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![T]);
@@ -465,6 +486,7 @@ pub fn iff_model(rng: &mut StdRng, T: usize) -> Model {
     b.build()
 }
 
+/// Create a model for broadcasting an input to a target shape.
 pub fn broadcast_model(input_shape: &[usize], output_shape: &[usize]) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(input_shape.to_vec());
@@ -473,6 +495,7 @@ pub fn broadcast_model(input_shape: &[usize], output_shape: &[usize]) -> Model {
     b.build()
 }
 
+/// Create a model for moving an axis from one position to another.
 pub fn moveaxis_model(input_shape: &[usize], source: usize, destination: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(input_shape.to_vec());
@@ -481,6 +504,7 @@ pub fn moveaxis_model(input_shape: &[usize], source: usize, destination: usize) 
     b.build()
 }
 
+/// Create a model for reshaping a tensor to a new shape.
 pub fn reshape_model(input_shape: &[usize], output_shape: &[usize]) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(input_shape.to_vec());
@@ -489,6 +513,7 @@ pub fn reshape_model(input_shape: &[usize], output_shape: &[usize]) -> Model {
     b.build()
 }
 
+/// Create a model for softmax activation along specified axes.
 pub fn softmax_axes_model(input_shape: &[usize], axes: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(input_shape.to_vec());
@@ -497,7 +522,7 @@ pub fn softmax_axes_model(input_shape: &[usize], axes: usize) -> Model {
     b.build()
 }
 
-// Creates a model featuring a gather operation, with axis=0
+/// Creates a model featuring a gather operation (embedding lookup), with axis=0
 pub fn gather_model(input_shape: &[usize], dictionnary_len: usize, word_dim: usize) -> Model {
     let mut b = ModelBuilder::new();
     let dictionnary = {
@@ -519,6 +544,7 @@ pub fn gather_model(input_shape: &[usize], dictionnary_len: usize, word_dim: usi
     b.build()
 }
 
+/// Create a model for summing a 2D tensor along a specified axis.
 pub fn sum_model<const AXIS: usize>(m: usize, n: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![m, n]);
@@ -527,6 +553,7 @@ pub fn sum_model<const AXIS: usize>(m: usize, n: usize) -> Model {
     b.build()
 }
 
+/// Create a model for hyperbolic tangent (tanh) activation.
 pub fn tanh_model(input_shape: &[usize]) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(input_shape.to_vec());

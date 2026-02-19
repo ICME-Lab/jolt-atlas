@@ -106,6 +106,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         let output_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
 
         // send claim to verifier
+        prover.transcript.append_scalar(&output_claim);
         prover.accumulator.append_virtual(
             &mut prover.transcript,
             VirtualPolynomial::NodeOutput(output_computation_node.idx),

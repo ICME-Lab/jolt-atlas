@@ -104,6 +104,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                 SumcheckId::Execution,
             )
             .1;
+        verifier.transcript.append_scalar(&output_claim);
         if expected_output_claim != output_claim {
             return Err(ProofVerifyError::InvalidOpeningProof(
                 "Expected output claim does not match actual output claim".to_string(),

@@ -27,6 +27,7 @@ use crate::utils::dims::{SumAxis, SumConfig};
 
 const DEGREE_BOUND: usize = 1;
 
+/// Parameters for proving sum operations along an axis.
 #[derive(Clone)]
 pub struct SumAxisParams<F: JoltField> {
     r_node_output: Vec<F::Challenge>,
@@ -35,6 +36,7 @@ pub struct SumAxisParams<F: JoltField> {
 }
 
 impl<F: JoltField> SumAxisParams<F> {
+    /// Create new parameters for sum operation along an axis.
     pub fn new(
         computation_node: ComputationNode,
         sum_config: SumConfig,
@@ -77,12 +79,14 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SumAxisParams<F> {
     }
 }
 
+/// Prover state for sum along axis sumcheck protocol.
 pub struct SumAxisProver<F: JoltField> {
     params: SumAxisParams<F>,
     operand: MultilinearPolynomial<F>,
 }
 
 impl<F: JoltField> SumAxisProver<F> {
+    /// Initialize the prover with trace data and parameters for sum along axis.
     #[tracing::instrument(skip_all, name = "SumAxisProver::initialize")]
     pub fn initialize(
         trace: &Trace,
@@ -181,11 +185,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SumAxisProver
     }
 }
 
+/// Verifier for sum along axis sumcheck protocol.
 pub struct SumAxisVerifier<F: JoltField> {
     params: SumAxisParams<F>,
 }
 
 impl<F: JoltField> SumAxisVerifier<F> {
+    /// Create new verifier for sum along axis.
     pub fn new(
         computation_node: ComputationNode,
         sum_config: SumConfig,

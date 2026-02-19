@@ -68,8 +68,10 @@ use joltworks::{
     utils::{errors::ProofVerifyError, math::Math, thread::drop_in_background_thread},
 };
 
+/// Softmax operation implementation details including exponentiation, max, sum, and division.
 pub mod softmax;
 
+/// Configuration for softmax operation along the last axis.
 #[derive(Clone)]
 pub struct SoftmaxLastAxisConfig {
     num_feature_vectors: usize,
@@ -77,6 +79,7 @@ pub struct SoftmaxLastAxisConfig {
 }
 
 impl SoftmaxLastAxisConfig {
+    /// Create new configuration from computation node.
     pub fn new(computation_node: &ComputationNode) -> Self {
         let (&feature_vector_size, dims) = computation_node
             .output_dims
@@ -156,6 +159,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxAxes {
     }
 }
 
+/// Parameters for proving softmax operations along last axis.
 #[derive(Clone)]
 pub struct SoftmaxAxesParams<F: JoltField> {
     r_output: Vec<F::Challenge>,
@@ -164,6 +168,7 @@ pub struct SoftmaxAxesParams<F: JoltField> {
 }
 
 impl<F: JoltField> SoftmaxAxesParams<F> {
+    /// Create new parameters for softmax operation.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_output = accumulator
             .get_virtual_polynomial_opening(
@@ -179,23 +184,28 @@ impl<F: JoltField> SoftmaxAxesParams<F> {
         }
     }
 
+    /// Get the random challenges for feature dimensions.
     pub fn r_features(&self) -> &[F::Challenge] {
         &self.r_output[self.config.num_feature_vectors.log_2()..]
     }
 
+    /// Get the random challenges for leading dimensions.
     pub fn r_leading_dims(&self) -> &[F::Challenge] {
         &self.r_output[..self.config.num_feature_vectors.log_2()]
     }
 
+    /// Get the number of feature vectors.
     pub fn num_feature_vectors(&self) -> usize {
         self.config.num_feature_vectors
     }
 
+    /// Get the size of each feature vector.
     pub fn feature_vector_size(&self) -> usize {
         self.config.feature_vector_size
     }
 }
 
+/// Prover state for softmax sumcheck protocol.
 pub struct SoftmaxAxesProver<F: JoltField> {
     params: SoftmaxAxesParams<F>,
     output: Tensor<i32>,
@@ -203,6 +213,7 @@ pub struct SoftmaxAxesProver<F: JoltField> {
 }
 
 impl<F: JoltField> SoftmaxAxesProver<F> {
+    /// Initialize the prover with trace data and parameters for softmax.
     pub fn initialize(trace: &Trace, params: SoftmaxAxesParams<F>) -> Self {
         let LayerData { output, operands } = Trace::layer_data(trace, &params.computation_node);
         Self {
@@ -212,6 +223,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
         }
     }
 
+    /// Prove the softmax operation combining division, sum, max, and exponentiation.
     #[tracing::instrument(skip_all, name = "SoftmaxAxesProver::prove")]
     pub fn prove<T: Transcript>(
         &self,
@@ -481,11 +493,13 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
     }
 }
 
+/// Verifier for softmax sumcheck protocol.
 pub struct SoftmaxAxesVerifier<F: JoltField> {
     params: SoftmaxAxesParams<F>,
 }
 
 impl<F: JoltField> SoftmaxAxesVerifier<F> {
+    /// Create new verifier for softmax operation.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
@@ -494,6 +508,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
         Self { params }
     }
 
+    /// Verify the softmax operation proofs.
     #[tracing::instrument(skip_all, name = "SoftmaxAxesVerifier::verify")]
     pub fn verify<ProofTranscript: Transcript>(
         &self,

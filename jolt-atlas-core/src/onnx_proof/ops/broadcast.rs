@@ -56,6 +56,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
     }
 }
 
+/// Parameters for proving broadcast operations.
+///
+/// Broadcasting expands tensors to larger shapes by replicating elements.
 #[derive(Clone)]
 pub struct BroadcastParams<F: JoltField> {
     r_output: Vec<F::Challenge>,
@@ -63,6 +66,7 @@ pub struct BroadcastParams<F: JoltField> {
 }
 
 impl<F: JoltField> BroadcastParams<F> {
+    /// Create new broadcast parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_output = accumulator
             .get_virtual_polynomial_opening(
@@ -78,6 +82,9 @@ impl<F: JoltField> BroadcastParams<F> {
     }
 }
 
+/// Prover state for broadcast sumcheck protocol.
+///
+/// Maintains transformed input variables and claims for proving the broadcast relation.
 pub struct BroadcastProver<F: JoltField> {
     params: BroadcastParams<F>,
     r_input: Vec<F::Challenge>,
@@ -85,6 +92,7 @@ pub struct BroadcastProver<F: JoltField> {
 }
 
 impl<F: JoltField> BroadcastProver<F> {
+    /// Initialize the prover with trace data and parameters.
     #[tracing::instrument(skip_all)]
     pub fn initialize(trace: &Trace, params: BroadcastParams<F>) -> Self {
         let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
@@ -123,6 +131,7 @@ impl<F: JoltField> BroadcastProver<F> {
         }
     }
 
+    /// Prove the broadcast operation by adding the input polynomial to the opening accumulator.
     #[tracing::instrument(skip_all)]
     pub fn prove(
         &self,
@@ -140,6 +149,7 @@ impl<F: JoltField> BroadcastProver<F> {
     }
 }
 
+/// Verifier for broadcast operation sumcheck protocol.
 pub struct BroadcastVerifier<F: JoltField> {
     params: BroadcastParams<F>,
     r_input: Vec<F::Challenge>,
@@ -147,6 +157,7 @@ pub struct BroadcastVerifier<F: JoltField> {
 }
 
 impl<F: JoltField> BroadcastVerifier<F> {
+    /// Create new broadcast verifier and compute the broadcast tensor evaluation.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
@@ -175,6 +186,7 @@ impl<F: JoltField> BroadcastVerifier<F> {
         }
     }
 
+    /// Verify the broadcast operation by checking the polynomial openings.
     pub fn verify(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,

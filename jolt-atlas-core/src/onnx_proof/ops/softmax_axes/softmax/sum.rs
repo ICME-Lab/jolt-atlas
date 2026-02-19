@@ -24,6 +24,7 @@ use std::marker::PhantomData;
 
 const DEGREE_BOUND: usize = 1;
 
+/// Parameters for proving sum computation in softmax.
 #[derive(Clone)]
 pub struct SumParams {
     softmax_index: SoftmaxIndex,
@@ -31,6 +32,7 @@ pub struct SumParams {
 }
 
 impl SumParams {
+    /// Create new parameters for sum computation.
     pub fn new<F: JoltField>(
         softmax_index: SoftmaxIndex,
         accumulator: &dyn OpeningAccumulator<F>,
@@ -77,12 +79,14 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SumParams {
     }
 }
 
+/// Prover state for sum computation in softmax.
 pub struct SumProver<F: JoltField> {
     params: SumParams,
     operand: MultilinearPolynomial<F>,
 }
 
 impl<F: JoltField> SumProver<F> {
+    /// Initialize the prover for sum computation.
     pub fn initialize(trace: &SoftmaxTrace, params: SumParams) -> Self {
         let operand = MultilinearPolynomial::from(trace.exp_q_values.clone());
         Self { params, operand }
@@ -131,12 +135,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SumProver<F> 
     }
 }
 
+/// Verifier for sum computation in softmax.
 pub struct SumVerifier<F: JoltField> {
     params: SumParams,
     _field: PhantomData<F>,
 }
 
 impl<F: JoltField> SumVerifier<F> {
+    /// Create new verifier for sum computation.
     pub fn new(softmax_index: SoftmaxIndex, accumulator: &VerifierOpeningAccumulator<F>) -> Self {
         let params = SumParams::new(softmax_index, accumulator);
         Self {

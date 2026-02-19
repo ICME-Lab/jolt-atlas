@@ -176,6 +176,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
 
 const DEGREE_BOUND: usize = 3;
 
+/// Parameters for proving element-wise division operations.
+///
+/// Division requires proving a * q = b * R where a/b = q with remainder R.
+/// Stores the opening point and computation node information needed for the sumcheck protocol.
 #[derive(Clone)]
 pub struct DivParams<F: JoltField> {
     r_node_output: Vec<F::Challenge>,
@@ -183,6 +187,7 @@ pub struct DivParams<F: JoltField> {
 }
 
 impl<F: JoltField> DivParams<F> {
+    /// Create new division parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_node_output = accumulator
             .get_virtual_polynomial_opening(
@@ -216,6 +221,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for DivParams<F> {
     }
 }
 
+/// Prover state for element-wise division sumcheck protocol.
+///
+/// Maintains the equality polynomial, operand polynomials, quotient q, and remainder R
+/// needed to prove the division relation: left = right * q + R.
 pub struct DivProver<F: JoltField> {
     params: DivParams<F>,
     eq_r_node_output: GruenSplitEqPolynomial<F>,
@@ -226,6 +235,7 @@ pub struct DivProver<F: JoltField> {
 }
 
 impl<F: JoltField> DivProver<F> {
+    /// Initialize the prover with trace data and parameters.
     #[tracing::instrument(skip_all)]
     pub fn initialize(trace: &Trace, params: DivParams<F>) -> Self {
         let eq_r_node_output =
@@ -354,11 +364,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
     }
 }
 
+/// Verifier for element-wise division sumcheck protocol.
+///
+/// Verifies that the prover's sumcheck messages are consistent with the claimed
+/// division operation output and the division relation.
 pub struct DivVerifier<F: JoltField> {
     params: DivParams<F>,
 }
 
 impl<F: JoltField> DivVerifier<F> {
+    /// Create a new verifier for the division operation.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,

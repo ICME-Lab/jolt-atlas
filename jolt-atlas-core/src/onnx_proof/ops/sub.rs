@@ -32,6 +32,9 @@ impl_standard_sumcheck_proof_api!(Sub, SubParams, SubProver, SubVerifier);
 
 const DEGREE_BOUND: usize = 2;
 
+/// Parameters for proving element-wise subtraction operations.
+///
+/// Stores the opening point and computation node information needed for the sumcheck protocol.
 #[derive(Clone)]
 pub struct SubParams<F: JoltField> {
     r_node_output: Vec<F::Challenge>,
@@ -39,6 +42,7 @@ pub struct SubParams<F: JoltField> {
 }
 
 impl<F: JoltField> SubParams<F> {
+    /// Create new subtraction parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_node_output = accumulator
             .get_virtual_polynomial_opening(
@@ -76,6 +80,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SubParams<F> {
     }
 }
 
+/// Prover state for element-wise subtraction sumcheck protocol.
+///
+/// Maintains the equality polynomial and operand polynomials needed to generate
+/// sumcheck messages proving that output[i] = left[i] - right[i] for all i.
 pub struct SubProver<F: JoltField> {
     params: SubParams<F>,
     eq_r_node_output: GruenSplitEqPolynomial<F>,
@@ -84,6 +92,7 @@ pub struct SubProver<F: JoltField> {
 }
 
 impl<F: JoltField> SubProver<F> {
+    /// Initialize the prover with trace data and parameters.
     #[tracing::instrument(skip_all, name = "SubProver::initialize")]
     pub fn initialize(trace: &Trace, params: SubParams<F>) -> Self {
         let eq_r_node_output =
@@ -159,11 +168,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SubProver<F> 
     }
 }
 
+/// Verifier for element-wise subtraction sumcheck protocol.
+///
+/// Verifies that the prover's sumcheck messages are consistent with the claimed
+/// subtraction operation output.
 pub struct SubVerifier<F: JoltField> {
     params: SubParams<F>,
 }
 
 impl<F: JoltField> SubVerifier<F> {
+    /// Create a new verifier for the subtraction operation.
     #[tracing::instrument(skip_all, name = "SubVerifier::new")]
     pub fn new(
         computation_node: ComputationNode,

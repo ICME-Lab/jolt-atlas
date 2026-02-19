@@ -36,8 +36,9 @@ use joltworks::{
 };
 use rayon::prelude::*;
 
-// TODO: Handle global scale
+/// Fixed-point scaling factor for reciprocal square root calculations.
 pub const Q: i32 = 128;
+/// Square of the fixed-point scaling factor (Q * Q = 16384).
 pub const Q_SQUARE: i32 = Q * Q;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
@@ -241,6 +242,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
 
 const DEGREE_BOUND: usize = 3;
 
+/// Parameters for proving reciprocal square root (1/√x) operations.
+///
+/// Rsqrt requires proving multiple relations including the reciprocal and square root properties.
+/// Stores the opening point and computation node information needed for the sumcheck protocol.
 #[derive(Clone)]
 pub struct RsqrtParams<F: JoltField> {
     r_node_output: Vec<F::Challenge>,
@@ -248,6 +253,7 @@ pub struct RsqrtParams<F: JoltField> {
 }
 
 impl<F: JoltField> RsqrtParams<F> {
+    /// Create new rsqrt parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_node_output = accumulator
             .get_virtual_polynomial_opening(
@@ -281,6 +287,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for RsqrtParams<F> {
     }
 }
 
+/// Prover state for reciprocal square root sumcheck protocol.
+///
+/// Maintains the equality polynomial, operand polynomial, inverse, rsqrt result,
+/// and remainders (r_i, r_s) needed to prove the rsqrt relation along with a folding challenge.
 pub struct RsqrtProver<F: JoltField> {
     params: RsqrtParams<F>,
     eq_r_node_output: GruenSplitEqPolynomial<F>,
@@ -294,6 +304,7 @@ pub struct RsqrtProver<F: JoltField> {
 }
 
 impl<F: JoltField> RsqrtProver<F> {
+    /// Initialize the prover with trace data, transcript, and parameters.
     pub fn initialize<T: Transcript>(
         trace: &Trace,
         transcript: &mut T,
@@ -454,12 +465,17 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RsqrtProver<F
     }
 }
 
+/// Verifier for reciprocal square root sumcheck protocol.
+///
+/// Verifies that the prover's sumcheck messages are consistent with the claimed
+/// rsqrt operation output and all required rsqrt relations.
 pub struct RsqrtVerifier<F: JoltField> {
     params: RsqrtParams<F>,
     gamma: F,
 }
 
 impl<F: JoltField> RsqrtVerifier<F> {
+    /// Create a new verifier for the rsqrt operation with folding challenge from transcript.
     pub fn new<T: Transcript>(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,

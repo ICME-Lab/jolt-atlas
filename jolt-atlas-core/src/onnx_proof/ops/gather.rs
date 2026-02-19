@@ -167,6 +167,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Gather {
 
 const DEGREE_BOUND: usize = 2;
 
+/// Parameters for proving gather (indexed lookup) operations.
+///
+/// Gather selects elements from an input dictionary tensor using an index tensor.
+/// Uses one-hot encoding to prove correct lookups with a folding challenge gamma.
 #[derive(Clone)]
 pub struct GatherParams<F: JoltField> {
     gamma: F,
@@ -177,6 +181,7 @@ pub struct GatherParams<F: JoltField> {
 }
 
 impl<F: JoltField> GatherParams<F> {
+    /// Create new gather parameters from a computation node, graph, accumulator, and transcript.
     pub fn new(
         computation_node: ComputationNode,
         graph: &ComputationGraph,
@@ -243,8 +248,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for GatherParams<F> {
     }
 }
 
-// This is essentially a Read-Raf sumcheck,
-// Where we assert that each output[i] corresponds to a lookup into input0 at index input1[i]
+/// Prover state for gather sumcheck protocol.
+///
+/// Implements a Read-Raf sumcheck asserting that each output[i] corresponds to a lookup
+/// into the input dictionary at index input1[i].
 pub struct GatherProver<F: JoltField> {
     params: GatherParams<F>,
     dictionary: MultilinearPolynomial<F>,
@@ -253,6 +260,7 @@ pub struct GatherProver<F: JoltField> {
 }
 
 impl<F: JoltField> GatherProver<F> {
+    /// Initialize the prover with trace data, parameters, accumulator, and transcript.
     pub fn initialize(
         trace: &Trace,
         params: GatherParams<F>,
@@ -385,11 +393,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GatherProver<
     }
 }
 
+/// Verifier for gather sumcheck protocol.
+///
+/// Verifies that the prover's claims are consistent with the gather (indexed lookup) operation.
 pub struct GatherVerifier<F: JoltField> {
     params: GatherParams<F>,
 }
 
 impl<F: JoltField> GatherVerifier<F> {
+    /// Create a new verifier for the gather operation, caching index operand openings.
     pub fn new(
         computation_node: ComputationNode,
         graph: &ComputationGraph,

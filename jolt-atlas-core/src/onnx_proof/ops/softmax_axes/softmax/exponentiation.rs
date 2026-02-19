@@ -41,6 +41,7 @@ pub struct ReadRafParams<F: JoltField> {
 }
 
 impl<F: JoltField> ReadRafParams<F> {
+    /// Create new parameters for exponentiation lookups.
     pub fn new(
         softmax_index: SoftmaxIndex,
         accumulator: &dyn OpeningAccumulator<F>,
@@ -97,6 +98,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReadRafParams<F> {
     }
 }
 
+/// Prover state for exponentiations.
 pub struct ReadRafProver<F: JoltField> {
     params: ReadRafParams<F>,
     val: MultilinearPolynomial<F>,
@@ -105,6 +107,7 @@ pub struct ReadRafProver<F: JoltField> {
 }
 
 impl<F: JoltField> ReadRafProver<F> {
+    /// Initialize the prover for exponentiation lookups.
     pub fn initialize(
         trace: &SoftmaxTrace,
         params: ReadRafParams<F>,
@@ -215,11 +218,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReadRafProver
     }
 }
 
+/// Verifier for exponentiation lookups.
 pub struct ReadRafVerifier<F: JoltField> {
     params: ReadRafParams<F>,
 }
 
 impl<F: JoltField> ReadRafVerifier<F> {
+    /// Create new verifier for exponentiation lookups.
     pub fn new(
         softmax_index: SoftmaxIndex,
         accumulator: &mut VerifierOpeningAccumulator<F>,
@@ -291,7 +296,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReadRafVeri
 // SoftmaxExpRaEncoding — implements RaOneHotEncoding for softmax exponentiation
 // ---------------------------------------------------------------------------
 
+/// Encoding for softmax exponentiation read-address one-hot checking.
 pub struct SoftmaxExpRaEncoding {
+    /// Feature identifier within the softmax operation.
     pub softmax_index: SoftmaxIndex,
 }
 

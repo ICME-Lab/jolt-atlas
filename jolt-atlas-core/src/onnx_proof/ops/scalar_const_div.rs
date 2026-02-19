@@ -78,6 +78,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ScalarConstDiv {
 
 const DEGREE_BOUND: usize = 2;
 
+/// Parameters for proving division by a scalar constant.
+///
+/// For division a/b where b is a constant, proves a = b*q + R where R is the remainder.
+/// This is more efficient than general division since the divisor is known.
 #[derive(Clone)]
 pub struct ScalarConstDivParams<F: JoltField> {
     r_node_output: Vec<F::Challenge>,
@@ -86,6 +90,7 @@ pub struct ScalarConstDivParams<F: JoltField> {
 }
 
 impl<F: JoltField> ScalarConstDivParams<F> {
+    /// Create new scalar constant division parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_node_output = accumulator
             .get_virtual_polynomial_opening(
@@ -129,6 +134,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ScalarConstDivParams<F> {
     }
 }
 
+/// Prover state for scalar constant division sumcheck protocol.
+///
+/// Maintains the equality polynomial, operand polynomial, and remainder R
+/// needed to prove the division relation: operand = divisor * q + R where divisor is constant.
 pub struct ScalarConstDivProver<F: JoltField> {
     params: ScalarConstDivParams<F>,
     eq_r_node_output: GruenSplitEqPolynomial<F>,
@@ -137,6 +146,7 @@ pub struct ScalarConstDivProver<F: JoltField> {
 }
 
 impl<F: JoltField> ScalarConstDivProver<F> {
+    /// Initialize the prover with trace data and parameters.
     #[tracing::instrument(skip_all)]
     pub fn initialize(trace: &Trace, params: ScalarConstDivParams<F>) -> Self {
         let eq_r_node_output =
@@ -223,11 +233,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ScalarConstDi
     }
 }
 
+/// Verifier for scalar constant division sumcheck protocol.
+///
+/// Verifies that the prover's sumcheck messages are consistent with the claimed
+/// division by scalar constant output and the division relation.
 pub struct ScalarConstDivVerifier<F: JoltField> {
     params: ScalarConstDivParams<F>,
 }
 
 impl<F: JoltField> ScalarConstDivVerifier<F> {
+    /// Create a new verifier for the scalar constant division operation.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,

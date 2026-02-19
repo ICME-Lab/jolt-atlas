@@ -23,8 +23,10 @@ use joltworks::{
 // TODO: Commit to R and also prove R is well formed
 
 const DEGREE_BOUND: usize = 2;
+/// Fixed-point scale factor for softmax division (2^128).
 pub const S: usize = 128;
 
+/// Parameters for proving division by sum in softmax.
 #[derive(Clone)]
 pub struct DivParams<F: JoltField> {
     r_feature_output: Vec<F::Challenge>,
@@ -32,6 +34,7 @@ pub struct DivParams<F: JoltField> {
 }
 
 impl<F: JoltField> DivParams<F> {
+    /// Create new parameters for division operation.
     pub fn new(softmax_index: SoftmaxIndex, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_feature_output = accumulator
             .get_virtual_polynomial_opening(
@@ -86,6 +89,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for DivParams<F> {
     }
 }
 
+/// Prover state for division by sum in softmax.
 pub struct DivProver<F: JoltField> {
     params: DivParams<F>,
     eq_r_feature_output: GruenSplitEqPolynomial<F>,
@@ -94,6 +98,7 @@ pub struct DivProver<F: JoltField> {
 }
 
 impl<F: JoltField> DivProver<F> {
+    /// Initialize the prover for division operation.
     pub fn initialize(trace: &SoftmaxTrace, params: DivParams<F>) -> Self {
         let eq_r_feature_output =
             GruenSplitEqPolynomial::new(&params.r_feature_output, BindingOrder::LowToHigh);
@@ -183,11 +188,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
     }
 }
 
+/// Verifier for division by sum in softmax.
 pub struct DivVerifier<F: JoltField> {
     params: DivParams<F>,
 }
 
 impl<F: JoltField> DivVerifier<F> {
+    /// Create new verifier for division operation.
     pub fn new(softmax_index: SoftmaxIndex, accumulator: &VerifierOpeningAccumulator<F>) -> Self {
         let params = DivParams::new(softmax_index, accumulator);
         Self { params }

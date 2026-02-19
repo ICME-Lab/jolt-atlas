@@ -38,6 +38,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
     }
 }
 
+/// Parameters for proving reshape operations.
+///
+/// Reshape changes tensor dimensions without modifying data layout in memory.
 #[derive(Clone)]
 pub struct ReshapeParams<F: JoltField> {
     r_output: Vec<F::Challenge>,
@@ -45,6 +48,7 @@ pub struct ReshapeParams<F: JoltField> {
 }
 
 impl<F: JoltField> ReshapeParams<F> {
+    /// Create new reshape parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_output = accumulator
             .get_virtual_polynomial_opening(
@@ -60,15 +64,21 @@ impl<F: JoltField> ReshapeParams<F> {
     }
 }
 
+/// Prover state for reshape operations.
+///
+/// Since reshape doesn't change data, proving simply involves showing that input and output
+/// evaluate to the same claim at the same opening point.
 pub struct ReshapeProver<F: JoltField> {
     params: ReshapeParams<F>,
 }
 
 impl<F: JoltField> ReshapeProver<F> {
+    /// Initialize the prover with parameters.
     pub fn initialize(params: ReshapeParams<F>) -> Self {
         Self { params }
     }
 
+    /// Generate the proof for the reshape operation.
     pub fn prove(
         &self,
         accumulator: &mut ProverOpeningAccumulator<F>,
@@ -95,11 +105,15 @@ impl<F: JoltField> ReshapeProver<F> {
     }
 }
 
+/// Verifier for reshape operations.
+///
+/// Verifies that input and output claims match for the reshape operation.
 pub struct ReshapeVerifier<F: JoltField> {
     params: ReshapeParams<F>,
 }
 
 impl<F: JoltField> ReshapeVerifier<F> {
+    /// Create a new verifier for the reshape operation.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
@@ -108,6 +122,7 @@ impl<F: JoltField> ReshapeVerifier<F> {
         Self { params }
     }
 
+    /// Verify the reshape operation.
     pub fn verify(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,

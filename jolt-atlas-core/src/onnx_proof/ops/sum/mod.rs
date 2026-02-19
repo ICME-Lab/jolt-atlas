@@ -18,6 +18,7 @@ use crate::{
     utils,
 };
 
+/// Axis-wise sum implementations for sumcheck protocol.
 pub mod axis;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sum {

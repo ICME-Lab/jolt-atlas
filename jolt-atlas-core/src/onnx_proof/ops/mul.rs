@@ -32,6 +32,9 @@ impl_standard_sumcheck_proof_api!(Mul, MulParams, MulProver, MulVerifier);
 
 const DEGREE_BOUND: usize = 3;
 
+/// Parameters for proving element-wise multiplication operations.
+///
+/// Stores the opening point and computation node information needed for the sumcheck protocol.
 #[derive(Clone)]
 pub struct MulParams<F: JoltField> {
     r_node_output: Vec<F::Challenge>,
@@ -39,6 +42,7 @@ pub struct MulParams<F: JoltField> {
 }
 
 impl<F: JoltField> MulParams<F> {
+    /// Create new multiplication parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_node_output = accumulator
             .get_virtual_polynomial_opening(
@@ -76,6 +80,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MulParams<F> {
     }
 }
 
+/// Prover state for element-wise multiplication sumcheck protocol.
+///
+/// Maintains the equality polynomial and operand polynomials needed to generate
+/// sumcheck messages proving that output[i] = left[i] * right[i] for all i.
 pub struct MulProver<F: JoltField> {
     params: MulParams<F>,
     eq_r_node_output: GruenSplitEqPolynomial<F>,
@@ -84,6 +92,7 @@ pub struct MulProver<F: JoltField> {
 }
 
 impl<F: JoltField> MulProver<F> {
+    /// Initialize the prover with trace data and parameters.
     #[tracing::instrument(skip_all, name = "MulProver::initialize")]
     pub fn initialize(trace: &Trace, params: MulParams<F>) -> Self {
         let eq_r_node_output =
@@ -163,11 +172,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MulProver<F> 
     }
 }
 
+/// Verifier for element-wise multiplication sumcheck protocol.
+///
+/// Verifies that the prover's sumcheck messages are consistent with the claimed
+/// multiplication operation output.
 pub struct MulVerifier<F: JoltField> {
     params: MulParams<F>,
 }
 
 impl<F: JoltField> MulVerifier<F> {
+    /// Create a new verifier for the multiplication operation.
     #[tracing::instrument(skip_all, name = "MulVerifier::new")]
     pub fn new(
         computation_node: ComputationNode,

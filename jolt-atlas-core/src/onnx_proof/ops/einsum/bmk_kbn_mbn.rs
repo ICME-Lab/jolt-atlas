@@ -31,6 +31,9 @@ use crate::utils::dims::{transpose_flat_matrix, EinsumDims};
 
 const DEGREE_BOUND: usize = 3;
 
+/// Parameters for proving Einsum bmk,kbn->mbn operations.
+///
+/// This implements batch matrix multiplication with transposed middle tensor.
 #[derive(Clone)]
 pub struct BmkKbnMbnParams<F: JoltField> {
     r_node_output: Vec<F::Challenge>,
@@ -41,6 +44,7 @@ pub struct BmkKbnMbnParams<F: JoltField> {
 }
 
 impl<F: JoltField> BmkKbnMbnParams<F> {
+    /// Create new parameters for bmk,kbn->mbn einsum.
     pub fn new(
         computation_node: ComputationNode,
         einsum_dims: EinsumDims,
@@ -87,6 +91,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for BmkKbnMbnParams<F> {
     }
 }
 
+/// Prover state for bmk,kbn->mbn einsum sumcheck protocol.
 pub struct BmkKbnMbnProver<F: JoltField> {
     params: BmkKbnMbnParams<F>,
     left_operand: MultilinearPolynomial<F>,
@@ -95,6 +100,7 @@ pub struct BmkKbnMbnProver<F: JoltField> {
 }
 
 impl<F: JoltField> BmkKbnMbnProver<F> {
+    /// Initialize the prover with trace data and parameters for bmk,kbn->mbn einsum.
     #[tracing::instrument(skip_all, name = "BmkKbnMbnProver::initialize")]
     pub fn initialize(trace: &Trace, params: BmkKbnMbnParams<F>) -> Self {
         let LayerData {
@@ -229,11 +235,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for BmkKbnMbnProv
     }
 }
 
+/// Verifier for bmk,kbn->mbn einsum sumcheck protocol.
 pub struct BmkKbnMbnVerifier<F: JoltField> {
     params: BmkKbnMbnParams<F>,
 }
 
 impl<F: JoltField> BmkKbnMbnVerifier<F> {
+    /// Create new verifier for bmk,kbn->mbn einsum.
     #[tracing::instrument(skip_all, name = "BmkKbnMbnVerifier::new")]
     pub fn new(
         computation_node: ComputationNode,

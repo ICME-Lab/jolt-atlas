@@ -1,11 +1,18 @@
+/// Exponentiation phase of softmax computation.
 pub mod exponentiation;
+/// Maximum value computation for softmax.
 pub mod max;
+/// Scalar division for softmax normalization.
 pub mod scalar_div;
+/// Sum computation for softmax.
 pub mod sum;
 
+/// Index identifying a specific feature vector in a softmax operation.
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord)]
 pub struct SoftmaxIndex {
+    /// Node index in the computation graph.
     pub node_idx: usize,
+    /// Feature vector index within the softmax operation.
     pub feature_idx: usize,
 }
 

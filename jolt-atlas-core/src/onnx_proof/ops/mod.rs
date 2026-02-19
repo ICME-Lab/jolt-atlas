@@ -1,27 +1,84 @@
+//! # Neural Network Operator Proofs Module
+//!
+//! This module contains proving and verification logic for all supported ONNX operations
+//! in the zero-knowledge proof system. Each operator module implements the [`OperatorProofTrait`]
+//! to provide:
+//!
+//! - **Proving**: Generate sumcheck proofs for the operation's correctness
+//! - **Verification**: Verify sumcheck proofs from the prover
+//! - **Committed Polynomials**: Specify which polynomials need to be committed
+//!
+//! ## Operator Categories
+//!
+//! **Arithmetic Operations**: [`add`], [`sub`], [`mul`], [`div`], [`square`], [`cube`], [`scalar_const_div`]
+//!
+//! **Activation Functions**: [`relu`], [`tanh`], [`softmax_axes`]
+//!
+//! **Tensor Operations**: [`einsum`], [`sum`], [`reshape`], [`broadcast`], [`moveaxis`], [`gather`]
+//!
+//! **Special Operations**: [`rsqrt`] (reciprocal square root), [`clamp`], [`iff`] (conditional select)
+//!
+//! **Logic Operations**: [`and`], [`is_nan`]
+//!
+//! **Infrastructure**: [`input`], [`constant`], [`identity`]
+//!
+//! ## Architecture
+//!
+//! Most operators follow a standard pattern using the [`impl_standard_sumcheck_proof_api`] macro,
+//! implementing three key components:
+//!
+//! - `Params` struct: Configuration and challenge points for the sumcheck
+//! - `Prover` struct: Generate sumcheck messages during proving
+//! - `Verifier` struct: Verify sumcheck messages and compute expected claims
+
 // TODO: Refactor duplicate logic in operators that use a zero-check sum-check & refactor duplicate test logic as-well
+/// Element-wise addition operation.
 pub mod add;
+/// Logical AND operation.
 pub mod and;
+/// Broadcast tensors to target shapes.
 pub mod broadcast;
+/// Clamp values to a specified range.
 pub mod clamp;
+/// Constant tensor nodes.
 pub mod constant;
+/// Element-wise cube (x³) operation.
 pub mod cube;
+/// Element-wise division operation.
 pub mod div;
+/// Einstein summation for tensor contractions.
 pub mod einsum;
+/// Gather elements from input tensor using indices.
 pub mod gather;
+/// Identity operation (pass-through).
 pub mod identity;
+/// Conditional selection (if-then-else) operation.
 pub mod iff;
+/// Input tensor nodes.
 pub mod input;
+/// Check for NaN values.
 pub mod is_nan;
+/// Reorder tensor axes.
 pub mod moveaxis;
+/// Element-wise multiplication operation.
 pub mod mul;
+/// ReLU activation function.
 pub mod relu;
+/// Reshape tensor dimensions.
 pub mod reshape;
+/// Reciprocal square root operation.
 pub mod rsqrt;
+/// Division by a scalar constant.
 pub mod scalar_const_div;
+/// Softmax operation along specified axes.
 pub mod softmax_axes;
+/// Element-wise square (x²) operation.
 pub mod square;
+/// Element-wise subtraction operation.
 pub mod sub;
+/// Sum reduction along axes.
 pub mod sum;
+/// Tanh activation function.
 pub mod tanh;
 
 use atlas_onnx_tracer::{node::ComputationNode, ops::Operator};
@@ -107,9 +164,25 @@ macro_rules! dispatch_operator {
     };
 }
 
+/// Helper for retrieving committed polynomials for a computation node.
+///
+/// This struct dispatches to the appropriate operator's `get_committed_polynomials`
+/// implementation based on the node's operator type.
 pub struct NodeCommittedPolynomials;
 
 impl NodeCommittedPolynomials {
+    /// Get all committed polynomials required for proving the given computation node.
+    ///
+    /// Different operators require different committed polynomials (e.g., division needs
+    /// quotient polynomials, range checks need address polynomials, etc.).
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The computation node to get committed polynomials for
+    ///
+    /// # Returns
+    ///
+    /// A vector of [`CommittedPolynomial`] instances that the prover must commit to
     pub fn get_committed_polynomials<F: JoltField, T: Transcript>(
         node: &ComputationNode,
     ) -> Vec<CommittedPolynomial> {
@@ -121,9 +194,26 @@ impl NodeCommittedPolynomials {
     }
 }
 
+/// Prover dispatcher for operator proofs.
+///
+/// This struct provides a single entry point for generating proofs for any computation node,
+/// dispatching to the appropriate operator-specific proving logic.
 pub struct OperatorProver;
 
 impl OperatorProver {
+    /// Generate a proof for the given computation node.
+    ///
+    /// Dispatches to the operator-specific proving implementation and returns
+    /// one or more sumcheck proofs (most operators return a single proof).
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The computation node to prove
+    /// * `prover` - The prover state containing trace, transcript, and accumulator
+    ///
+    /// # Returns
+    ///
+    /// A vector of (ProofId, SumcheckInstanceProof) pairs
     pub fn prove<F, T>(
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
@@ -140,9 +230,26 @@ impl OperatorProver {
     }
 }
 
+/// Verifier dispatcher for operator proofs.
+///
+/// This struct provides a single entry point for verifying proofs for any computation node,
+/// dispatching to the appropriate operator-specific verification logic.
 pub struct OperatorVerifier;
 
 impl OperatorVerifier {
+    /// Verify a proof for the given computation node.
+    ///
+    /// Dispatches to the operator-specific verification implementation to check
+    /// the sumcheck proof and update the accumulator with opening claims.
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The computation node to verify
+    /// * `verifier` - The verifier state containing proofs, transcript, and accumulator
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if verification succeeds, or a [`ProofVerifyError`] if it fails
     pub fn verify<F, T>(
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,

@@ -26,6 +26,7 @@ use std::{array, marker::PhantomData};
 
 const DEGREE_BOUND: usize = 2;
 
+/// Parameters for proving indicator polynomial in max computation.
 #[derive(Clone)]
 pub struct IndicatorParams {
     softmax_index: SoftmaxIndex,
@@ -34,6 +35,7 @@ pub struct IndicatorParams {
 }
 
 impl IndicatorParams {
+    /// Create new parameters for indicator polynomial computation.
     pub fn new<F: JoltField>(
         softmax_index: SoftmaxIndex,
         accumulator: &dyn OpeningAccumulator<F>,
@@ -93,6 +95,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for IndicatorParams {
     }
 }
 
+/// Prover state for indicator polynomial in max computation.
 pub struct IndicatorProver<F: JoltField> {
     params: IndicatorParams,
     softmax_operand: MultilinearPolynomial<F>,
@@ -100,6 +103,7 @@ pub struct IndicatorProver<F: JoltField> {
 }
 
 impl<F: JoltField> IndicatorProver<F> {
+    /// Initialize the prover for indicator polynomial computation.
     pub fn initialize(trace: &SoftmaxTrace, params: IndicatorParams) -> Self {
         let softmax_operand = MultilinearPolynomial::from(trace.input_logits.clone());
         let e = {
@@ -168,12 +172,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for IndicatorProv
     }
 }
 
+/// Verifier for indicator polynomial in max computation.
 pub struct IndicatorVerifier<F: JoltField> {
     params: IndicatorParams,
     _field: PhantomData<F>,
 }
 
 impl<F: JoltField> IndicatorVerifier<F> {
+    /// Create new verifier for indicator polynomial computation.
     pub fn new(softmax_index: SoftmaxIndex, accumulator: &VerifierOpeningAccumulator<F>) -> Self {
         let params = IndicatorParams::new(softmax_index, accumulator);
         Self {

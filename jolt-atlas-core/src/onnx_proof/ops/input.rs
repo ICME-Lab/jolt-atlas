@@ -39,8 +39,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Input {
             VirtualPolynomial::NodeOutput(node.idx),
             SumcheckId::Execution,
         );
-        let expected_claim =
-            MultilinearPolynomial::from(verifier.io.inputs[0].clone()).evaluate(&r_node_input.r);
+        let input = verifier.io.inputs[verifier
+            .io
+            .input_indices
+            .iter()
+            .position(|&idx| idx == node.idx)
+            .unwrap()]
+        .clone();
+        let expected_claim = MultilinearPolynomial::from(input).evaluate(&r_node_input.r);
         if expected_claim != input_claim {
             return Err(ProofVerifyError::InvalidOpeningProof(
                 "Input claim does not match expected claim".to_string(),

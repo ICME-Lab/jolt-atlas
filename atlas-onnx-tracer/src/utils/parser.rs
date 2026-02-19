@@ -94,6 +94,7 @@ impl<'a> GraphParser<'a> {
     /// A tuple containing:
     /// * A map of internal node indices to computation nodes
     /// * A mapper tracking the relationship between original and internal indices
+    #[tracing::instrument(name = "GraphParser::parse", skip_all)]
     pub fn parse(self) -> (BTreeMap<usize, ComputationNode>, NodeIndexMapper) {
         // nodes
         let mut context = ParsingContext::new();
@@ -787,8 +788,7 @@ pub fn extract_tensor_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node::ComputationNode;
-    use crate::ops::Noop;
+    use crate::{node::ComputationNode, ops::Add};
 
     /// Test when input shapes already match output shape - no broadcasting needed
     #[test]
@@ -796,7 +796,7 @@ mod tests {
         let mut ctx = ParsingContext::new();
         ctx.nodes.insert(
             0,
-            ComputationNode::new(0, Operator::Noop(Noop), vec![], vec![2, 3]),
+            ComputationNode::new(0, Operator::Add(Add), vec![], vec![2, 3]),
         );
         ctx.next_idx = 1;
 
@@ -820,7 +820,7 @@ mod tests {
         let mut ctx = ParsingContext::new();
         ctx.nodes.insert(
             0,
-            ComputationNode::new(0, Operator::Noop(Noop), vec![], vec![5]),
+            ComputationNode::new(0, Operator::Add(Add), vec![], vec![5]),
         );
         ctx.next_idx = 1;
 
@@ -846,11 +846,11 @@ mod tests {
         let mut ctx = ParsingContext::new();
         ctx.nodes.insert(
             0,
-            ComputationNode::new(0, Operator::Noop(Noop), vec![], vec![5]),
+            ComputationNode::new(0, Operator::Add(Add), vec![], vec![5]),
         );
         ctx.nodes.insert(
             1,
-            ComputationNode::new(1, Operator::Noop(Noop), vec![], vec![3, 4, 5]),
+            ComputationNode::new(1, Operator::Add(Add), vec![], vec![3, 4, 5]),
         );
         ctx.next_idx = 2;
 
@@ -875,11 +875,11 @@ mod tests {
         let mut ctx = ParsingContext::new();
         ctx.nodes.insert(
             0,
-            ComputationNode::new(0, Operator::Noop(Noop), vec![], vec![2]),
+            ComputationNode::new(0, Operator::Add(Add), vec![], vec![2]),
         );
         ctx.nodes.insert(
             1,
-            ComputationNode::new(1, Operator::Noop(Noop), vec![], vec![3]),
+            ComputationNode::new(1, Operator::Add(Add), vec![], vec![3]),
         );
         ctx.next_idx = 2;
 

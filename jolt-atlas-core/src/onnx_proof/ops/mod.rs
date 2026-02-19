@@ -1,13 +1,17 @@
 // TODO: Refactor duplicate logic in operators that use a zero-check sum-check & refactor duplicate test logic as-well
 pub mod add;
+pub mod and;
 pub mod broadcast;
+pub mod clamp;
 pub mod constant;
 pub mod cube;
 pub mod div;
 pub mod einsum;
 pub mod gather;
+pub mod identity;
 pub mod iff;
 pub mod input;
+pub mod is_nan;
 pub mod moveaxis;
 pub mod mul;
 pub mod relu;
@@ -74,15 +78,19 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
 macro_rules! dispatch_operator {
     ($node:expr, |$inner:ident| $body:expr, _ => $fallback:expr) => {
         match &$node.operator {
+            Operator::And($inner) => $body,
             Operator::Add($inner) => $body,
             Operator::Broadcast($inner) => $body,
             Operator::Constant($inner) => $body,
             Operator::Cube($inner) => $body,
+            Operator::Clamp($inner) => $body,
             Operator::Div($inner) => $body,
             Operator::Einsum($inner) => $body,
             Operator::Gather($inner) => $body,
+            Operator::Identity($inner) => $body,
             Operator::Iff($inner) => $body,
             Operator::Input($inner) => $body,
+            Operator::IsNan($inner) => $body,
             Operator::MoveAxis($inner) => $body,
             Operator::Mul($inner) => $body,
             Operator::ReLU($inner) => $body,

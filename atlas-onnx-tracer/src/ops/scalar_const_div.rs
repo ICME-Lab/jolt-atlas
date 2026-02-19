@@ -2,6 +2,7 @@ use super::Op;
 use crate::{ops::ScalarConstDiv, tensor::Tensor};
 
 impl Op for ScalarConstDiv {
+    #[tracing::instrument(name = "ScalarConstDiv::f", skip_all)]
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         let a = inputs[0];
         let b = self.divisor;

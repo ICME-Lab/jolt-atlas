@@ -4,6 +4,7 @@ use crate::{
 };
 
 impl Op for Cube {
+    #[tracing::instrument(name = "Cube::f", skip_all)]
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         inputs[0].pow(3).unwrap()
     }

@@ -4,7 +4,10 @@ use rand::{Rng, SeedableRng, rngs::StdRng};
 fn main() {
     println!("Minimal GPT with RMSNorm + Multi-Head Attention + ReLU MLP\n");
 
-    let microgpt = Model::load("./models/microgpt/network.onnx", &Default::default());
+    let microgpt = Model::load(
+        "atlas-onnx-tracer/models/microgpt/network.onnx",
+        &Default::default(),
+    );
     println!("model: {}", microgpt.pretty_print());
 
     let mut rng = StdRng::seed_from_u64(0x42);

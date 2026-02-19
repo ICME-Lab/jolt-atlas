@@ -22,17 +22,17 @@ pub struct ComputationNode {
     pub output_dims: Vec<usize>,
 }
 
-impl Default for ComputationNode {
-    /// Creates a default no-op node with no inputs and no output dims.
-    fn default() -> Self {
-        Self {
-            idx: 0,
-            operator: Operator::Noop(Default::default()),
-            inputs: vec![],
-            output_dims: vec![],
-        }
-    }
-}
+// impl Default for ComputationNode {
+//     /// Creates a default no-op node with no inputs and no output dims.
+//     fn default() -> Self {
+//         Self {
+//             idx: 0,
+//             operator: Operator::Noop(Default::default()),
+//             inputs: vec![],
+//             output_dims: vec![],
+//         }
+//     }
+// }
 
 impl ComputationNode {
     /// Construct a new computation node.

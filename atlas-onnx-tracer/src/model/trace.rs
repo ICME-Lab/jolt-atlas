@@ -53,7 +53,12 @@ impl Trace {
             .iter()
             .map(|&idx| self.node_outputs[&idx].clone())
             .collect();
-        ModelExecutionIO { inputs, outputs }
+        ModelExecutionIO {
+            inputs,
+            outputs,
+            input_indices: model.inputs().to_vec(),
+            output_indices: model.outputs().to_vec(),
+        }
     }
 }
 
@@ -83,4 +88,6 @@ pub struct LayerData<'a> {
 pub struct ModelExecutionIO {
     pub inputs: Vec<Tensor<i32>>,
     pub outputs: Vec<Tensor<i32>>,
+    pub input_indices: Vec<usize>,
+    pub output_indices: Vec<usize>,
 }

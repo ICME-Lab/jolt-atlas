@@ -4,6 +4,7 @@ use crate::{
 };
 
 impl Op for Einsum {
+    #[tracing::instrument(name = "Einsum::f", skip_all)]
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         tensor::ops::einsum(&self.equation, &inputs).unwrap()
     }

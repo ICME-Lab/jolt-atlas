@@ -45,6 +45,8 @@ cargo run --release --package jolt-atlas-core --example microgpt
 
 ## Benchmarks
 
+**System specs:** MacBook Pro M3, 16GB RAM
+
 ### nanoGPT (~0.25M params, 4 transformer layers)
 
 nanoGPT is the standard workload we use for cross-project comparison. It is a ~250k-parameter GPT model with 4 transformer layers.
@@ -69,6 +71,22 @@ nanoGPT is the standard workload we use for cross-project comparison. It is a ~2
 
 JOLT Atlas produces a proof for nanoGPT in **~14 s** versus ezkl's **~237 s proof time** (not counting their 400+ s of key generation). That is roughly a **17× speed-up** on proof generation alone.
 
+### GPT-2 (125M params)
+
+GPT-2 is a 125-million-parameter transformer model from OpenAI.
+
+**JOLT Atlas** end-to-end proving breakdown:
+
+| Stage | Wall clock |
+| ----- | ---------- |
+| Proving/verifying key generation | 0.872 s |
+| Witness generation | ~7.5 s |
+| Commitment time | ~3.5 s |
+| Sum-check proving | ~16 s |
+| Reduction opening proof | ~7 s |
+| HyperKZG prove | ~3 s |
+| **End-to-end total** | **~38 s** |
+
 ### How to reproduce locally
 
 ```bash
@@ -86,6 +104,42 @@ Add `-- --trace` for Chrome Tracing JSON output (view in `chrome://tracing`), or
    ```bash
    cargo run --release --package jolt-atlas-core --example nanoGPT
    ```
+
+### GPT-2
+
+GPT-2 uses a Hugging Face–hosted ONNX model that is **not** checked into the
+repo. A helper script downloads and prepares it automatically.
+
+#### 1. Download the model
+
+```bash
+# Create a virtual environment (one-time)
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Run the download script
+python scripts/download_gpt2.py
+```
+
+This exports GPT-2 via [Hugging Face Optimum](https://huggingface.co/docs/optimum/index)
+into `atlas-onnx-tracer/models/gpt2/` and copies `model.onnx` → `network.onnx`.
+
+#### 2. Test the model (trace only, no proof)
+
+```bash
+cargo run --release --package atlas-onnx-tracer --example gpt2
+```
+
+You should see the model graph printed and an output shape like
+`[1, 16, 65536]` (vocab size 50257 padded to the next power of two).
+
+#### 3. Prove & verify GPT-2
+
+```bash
+cargo run --release --package jolt-atlas-core --example gpt2
+```
+
+A successful run prints `Proof verified successfully!`.
 
 ## Acknowledgments
 

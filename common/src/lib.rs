@@ -1,6 +1,7 @@
 use allocative::Allocative;
 
 pub mod consts;
+pub mod utils;
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
 pub enum CommittedPolynomial {

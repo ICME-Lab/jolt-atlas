@@ -1,4 +1,5 @@
-use crate::{node::ComputationNode, tensor::Tensor, utils::quantize};
+use crate::{node::ComputationNode, ops::Operator, tensor::Tensor, utils::quantize};
+use common::consts::LOG_K_CHUNK;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -105,6 +106,48 @@ impl Model {
             .max()
             .unwrap_or(0)
     }
+
+    /// Get a nodes input nodes
+    pub fn get_input_nodes(&self, node: &ComputationNode) -> Vec<&ComputationNode> {
+        node.inputs
+            .iter()
+            .filter_map(|idx| self.graph.nodes.get(idx))
+            .collect()
+    }
+
+    pub fn max_num_vars(&self) -> usize {
+        let log_2 = |x: usize| {
+            assert_ne!(x, 0);
+
+            if x.is_power_of_two() {
+                (1usize.leading_zeros() - x.leading_zeros()) as usize
+            } else {
+                (0usize.leading_zeros() - x.leading_zeros()) as usize
+            }
+        };
+
+        self.graph
+            .nodes
+            .values()
+            .map(|node| match &node.operator {
+                Operator::Tanh(_) | &Operator::ReLU(_) | Operator::Div(_) | Operator::Rsqrt(_) => {
+                    LOG_K_CHUNK + log_2(node.num_output_elements())
+                }
+                Operator::ScalarConstDiv(_) => log_2(node.num_output_elements()),
+                Operator::SoftmaxAxes(_) => {
+                    LOG_K_CHUNK + log_2(*node.output_dims.last().unwrap_or(&1))
+                }
+                Operator::Gather(_) => {
+                    let input_nodes = self.get_input_nodes(node);
+                    let num_words = input_nodes[0].output_dims[0];
+                    let num_indices = input_nodes[1].num_output_elements();
+                    log_2(num_words) + log_2(num_indices) // TODO: Gather ra virtualization
+                }
+                _ => 1,
+            })
+            .max()
+            .unwrap_or(1)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -139,6 +182,10 @@ pub struct RunArgs {
     /// Whether to pad all dimensions to powers of 2.
     /// Defaults to true for optimal cryptographic performance.
     pub pad_to_power_of_2: bool,
+    /// When true, divide inputs by 1<<scale BEFORE Square/Cube (to prevent i32 overflow)
+    /// instead of dividing the output AFTER (the default rebase).
+    /// Enable this for large models (e.g., GPT-2) whose weight magnitudes would overflow.
+    pub pre_rebase_nonlinear: bool,
 }
 
 impl Default for RunArgs {
@@ -149,6 +196,7 @@ impl Default for RunArgs {
             variables,
             scale: DEFAULT_SCALE,
             pad_to_power_of_2: true, // Default to true for prover use-case
+            pre_rebase_nonlinear: false,
         }
     }
 }
@@ -174,6 +222,7 @@ impl RunArgs {
             variables,
             scale: DEFAULT_SCALE,
             pad_to_power_of_2: true,
+            pre_rebase_nonlinear: false,
         }
     }
 
@@ -197,6 +246,7 @@ impl RunArgs {
             variables,
             scale,
             pad_to_power_of_2: true,
+            pre_rebase_nonlinear: false,
         } // Default to true for optimal cryptographic performance
     }
 
@@ -232,6 +282,16 @@ impl RunArgs {
     /// ```
     pub fn with_padding(mut self, enable: bool) -> Self {
         self.pad_to_power_of_2 = enable;
+        self
+    }
+
+    /// Enable pre-rebase for nonlinear ops (Square, Cube).
+    ///
+    /// When enabled, inputs to Square/Cube are divided by `1 << scale` BEFORE
+    /// the operation instead of dividing the output AFTER. This prevents i32
+    /// overflow for large models (e.g., GPT-2) at the cost of some precision.
+    pub fn with_pre_rebase_nonlinear(mut self, enable: bool) -> Self {
+        self.pre_rebase_nonlinear = enable;
         self
     }
 }

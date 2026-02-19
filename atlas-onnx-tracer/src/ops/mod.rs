@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 
 pub mod add;
 pub mod and;
-pub mod and2;
 pub mod broadcast;
+pub mod clamp;
 pub mod constant;
 pub mod cube;
 pub mod div;
@@ -15,15 +15,12 @@ pub mod identity;
 pub mod iff;
 pub mod input;
 pub mod is_nan;
-pub mod lt;
 pub mod move_axis;
 pub mod mul;
-pub mod noop;
 pub mod relu;
 pub mod reshape;
 pub mod rsqrt;
 pub mod scalar_const_div;
-pub mod shr;
 pub mod softmax;
 pub mod square;
 pub mod sub;
@@ -74,12 +71,13 @@ macro_rules! define_operators {
 
 define_operators! {
     operators: [
-        Add, And, And2, Constant(Tensor<i32>), Cube, Div, Einsum { equation: String },
+        Add, And, Clamp { axes: usize, max_spread: i32 },
+        Constant(Tensor<i32>), Cube, Div, Einsum { equation: String },
         Erf { scale: F32 }, Gather { axis: usize }, Identity, Iff, Input,
         IsNan { out_dims: Vec<usize> }, MoveAxis { source: usize, destination: usize },
-        Mul, Broadcast { shape: Vec<usize> }, Noop, ReLU, Reshape { shape:Vec<usize> },
-        Rsqrt { scale: F32 }, ScalarConstDiv {divisor: i32}, Shr, SoftmaxAxes { axes: usize, scale: F32 }, Square,
-        Sub, Sum { axes: Vec<usize> }, Tanh { scale: F32, tau: i32, log_table: usize }, ULessThan,
+        Mul, Broadcast { shape: Vec<usize> }, ReLU, Reshape { shape:Vec<usize> },
+        Rsqrt { scale: F32 }, ScalarConstDiv {divisor: i32}, SoftmaxAxes { axes: usize, scale: F32 }, Square,
+        Sub, Sum { axes: Vec<usize> }, Tanh { scale: F32, tau: i32, log_table: usize },
     ]
 }
 

@@ -7,18 +7,16 @@
 /// cargo run --example microgpt -- --trace-terminal
 /// ```
 use atlas_onnx_tracer::{model::Model, tensor::Tensor};
-use jolt_atlas_core::{
-    onnx_proof::{
-        AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
-        Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
-    },
-    utils::logging::setup_tracing,
+use common::utils::logging::setup_tracing;
+use jolt_atlas_core::onnx_proof::{
+    AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
+    Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 fn main() {
     let (_guard, _tracing_enabled) = setup_tracing("microGPT ONNX Proof");
-    let working_dir = "../atlas-onnx-tracer/models/microgpt/";
+    let working_dir = "atlas-onnx-tracer/models/microgpt/";
     let mut rng = StdRng::seed_from_u64(0x42);
 
     // Model hyperparameters (matching the microGPT Python script by @karpathy)
@@ -37,7 +35,7 @@ fn main() {
     let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
 
     let (proof, io, _debug_info) =
-        ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_preprocessing, &input);
+        ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_preprocessing, &[input]);
 
     let verifier_preprocessing =
         AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);

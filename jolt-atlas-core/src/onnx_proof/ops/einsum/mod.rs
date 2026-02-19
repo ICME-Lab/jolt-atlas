@@ -2,8 +2,10 @@ use crate::{
     onnx_proof::{
         ops::{
             einsum::{
+                bmk_bkn_mbn::{BmkBknMbnParams, BmkBknMbnProver, BmkBknMbnVerifier},
                 bmk_kbn_mbn::{BmkKbnMbnParams, BmkKbnMbnProver, BmkKbnMbnVerifier},
                 k_nk_n::{KNkNParams, KNkNProver, KNkNVerifier},
+                mbk_bnk_bmn::{MbkBnkBmnParams, MbkBnkBmnProver, MbkBnkBmnVerifier},
                 mbk_nbk_bmn::{MbkNbkBmnParams, MbkNbkBmnProver, MbkNbkBmnVerifier},
                 mk_kn_mn::{MkKnMnParams, MkKnMnProver, MkKnMnVerifier},
             },
@@ -30,9 +32,16 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 
+// TODO: Refactor these two einsum impls
+pub mod bmk_bkn_mbn;
 pub mod bmk_kbn_mbn;
+
 pub mod k_nk_n;
+
+// TODO: Refactor these two einsum impls
+pub mod mbk_bnk_bmn;
 pub mod mbk_nbk_bmn;
+
 pub mod mk_kn_mn;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
@@ -114,9 +123,17 @@ impl EinsumProver {
                 let params = BmkKbnMbnParams::new(computation_node, einsum_dims, accumulator);
                 Box::new(BmkKbnMbnProver::initialize(trace, params))
             }
+            "bmk,bkn->mbn" => {
+                let params = BmkBknMbnParams::new(computation_node, einsum_dims, accumulator);
+                Box::new(BmkBknMbnProver::initialize(trace, params))
+            }
             "mbk,nbk->bmn" => {
                 let params = MbkNbkBmnParams::new(computation_node, einsum_dims, accumulator);
                 Box::new(MbkNbkBmnProver::initialize(trace, params))
+            }
+            "mbk,bnk->bmn" => {
+                let params = MbkBnkBmnParams::new(computation_node, einsum_dims, accumulator);
+                Box::new(MbkBnkBmnProver::initialize(trace, params))
             }
             _ => panic!("unexpected equation: {}", config.equation),
         }
@@ -158,7 +175,17 @@ impl EinsumVerifier {
                 einsum_dims,
                 accumulator,
             )),
+            "mbk,bnk->bmn" => Box::new(MbkBnkBmnVerifier::new(
+                computation_node,
+                einsum_dims,
+                accumulator,
+            )),
             "bmk,kbn->mbn" => Box::new(BmkKbnMbnVerifier::new(
+                computation_node,
+                einsum_dims,
+                accumulator,
+            )),
+            "bmk,bkn->mbn" => Box::new(BmkBknMbnVerifier::new(
                 computation_node,
                 einsum_dims,
                 accumulator,

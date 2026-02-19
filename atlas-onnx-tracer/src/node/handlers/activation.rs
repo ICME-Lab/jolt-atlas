@@ -7,7 +7,8 @@ use std::collections::HashMap;
 
 use crate::{
     node::ComputationNode,
-    ops::{Constant, Erf, Operator, Rsqrt, SoftmaxAxes, Tanh},
+    ops::{Clamp, Constant, Erf, Operator, Rsqrt, SoftmaxAxes, Tanh},
+    tensor::ops::nonlinearities::EXP_LUT_SIZE,
     utils::{handler_builder::HandlerBuilder, parser::load_op, quantize::scale_to_multiplier},
 };
 
@@ -15,7 +16,7 @@ use super::{HandlerContext, OpHandlerFn};
 
 // TODO: These values should be finetuned based on input ranges and desired output precision.
 const NEURAL_TELEPORT_TAU: i32 = 2;
-pub const NEURAL_TELEPORT_LOG_TABLE_SIZE: usize = 10;
+pub const NEURAL_TELEPORT_LOG_TABLE_SIZE: usize = 12;
 
 pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
     HashMap::from([
@@ -82,7 +83,7 @@ fn handle_erf(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         .build()
 }
 
-/// Softmax: Softmax activation along specified axis.
+/// Softmax: Clamp inputs to fit the exp LUT, then apply softmax along specified axis.
 fn handle_softmax(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let op = load_op::<tract_onnx::tract_core::ops::nn::Softmax>(
         hctx.node.op(),
@@ -95,7 +96,11 @@ fn handle_softmax(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
     HandlerBuilder::new(hctx)
         .with_broadcast()
-        .simple_op(Operator::SoftmaxAxes(SoftmaxAxes {
+        .simple_op(Operator::Clamp(Clamp {
+            axes: axes[0],
+            max_spread: (EXP_LUT_SIZE as i32 - 1),
+        }))
+        .pipe(Operator::SoftmaxAxes(SoftmaxAxes {
             axes: axes[0],
             scale,
         }))

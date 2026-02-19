@@ -2,6 +2,7 @@ use joltworks::utils::lookup_bits::LookupBits;
 
 use super::SparseDenseSuffix;
 
+/// Suffix component for ReLU activation lookup table decomposition.
 pub enum ReluSuffix<const XLEN: usize> {}
 
 impl<const XLEN: usize> SparseDenseSuffix for ReluSuffix<XLEN> {

@@ -5,6 +5,7 @@ use joltworks::{
     utils::lookup_bits::LookupBits,
 };
 
+/// Prefix component for bitwise XOR lookup table decomposition.
 pub enum XorPrefix<const XLEN: usize> {}
 
 impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for XorPrefix<XLEN> {

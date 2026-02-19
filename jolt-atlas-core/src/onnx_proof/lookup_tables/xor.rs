@@ -11,6 +11,9 @@ use joltworks::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Lookup table for bitwise XOR operations.
+///
+/// Implements XOR(x, y) = x ^ y using prefix-suffix decomposition.
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 pub struct XorTable<const XLEN: usize>;
 

@@ -12,6 +12,9 @@ use super::{
     JoltLookupTable,
 };
 
+/// Lookup table for unsigned less-than comparison.
+///
+/// Implements LT(x, y) = 1 if x < y (unsigned), 0 otherwise.
 #[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 pub struct UnsignedLessThanTable<const XLEN: usize>;
 

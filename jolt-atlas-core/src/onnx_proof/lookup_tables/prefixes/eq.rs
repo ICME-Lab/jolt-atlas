@@ -5,6 +5,7 @@ use joltworks::{
 
 use super::{PrefixCheckpoint, Prefixes, SparseDensePrefix};
 
+/// Prefix component for equality comparison lookup table decomposition.
 pub enum EqPrefix {}
 
 impl<F: JoltField> SparseDensePrefix<F> for EqPrefix {

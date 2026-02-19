@@ -5,6 +5,7 @@ use joltworks::{
 
 use super::{PrefixCheckpoint, Prefixes, SparseDensePrefix};
 
+/// Prefix component for less-than comparison lookup table decomposition.
 pub enum LessThanPrefix {}
 
 impl<F: JoltField> SparseDensePrefix<F> for LessThanPrefix {

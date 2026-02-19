@@ -1,13 +1,28 @@
+//! Dimension handling utilities for normalizing ONNX tensor operations.
+//!
+//! The primary purpose of this module is to normalize ONNX model's einsum and sum patterns
+//! into simpler, grouped canonical forms. This normalization process extracts dimension
+//! information from computation nodes and transforms complex tensor operations into
+//! standardized patterns that can be efficiently proven.
+//!
+//! Key functionality includes:
+//! - Mapping diverse einsum patterns to canonical forms (e.g., mapping "amk,kn->bmn" to "mk,kn->mn")
+//! - Normalizing multi-dimensional sum operations to 2D representations
+//! - Extracting and storing dimension information for efficient constraint generation
+
 use atlas_onnx_tracer::{model::Model, node::ComputationNode, ops::Operator};
 use joltworks::{field::JoltField, utils::thread::unsafe_allocate_zero_vec};
 use rayon::prelude::*;
 
+/// Function type for extracting dimension information from a computation node.
 pub type DimExtractor = fn(&ComputationNode, &Model) -> EinsumDims;
 
 /// Configuration for different einsum equation types
 #[derive(Debug, Clone)]
 pub struct EinsumConfig {
+    /// The einsum equation pattern in standard notation (e.g., "mk,kn->mn")
     pub equation: &'static str,
+    /// Function to extract dimensions from a computation node
     pub dims_extractor: DimExtractor,
 }
 
@@ -293,8 +308,8 @@ fn extract_mbk_bkn_amn_dims(computation_node: &ComputationNode, model: &Model) -
     EinsumDims::new(vec![m, bk], vec![bk, n], vec![m, n])
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
 /// Stores preprocessed dims (from the Model) for einsum equations
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EinsumDims {
     left_operand: Vec<usize>,
     right_operand: Vec<usize>,
@@ -302,6 +317,7 @@ pub struct EinsumDims {
 }
 
 impl EinsumDims {
+    /// Creates a new `EinsumDims` instance with the specified dimensions.
     pub fn new(left_operand: Vec<usize>, right_operand: Vec<usize>, output: Vec<usize>) -> Self {
         Self {
             left_operand,
@@ -310,14 +326,17 @@ impl EinsumDims {
         }
     }
 
+    /// Returns the dimensions of the left operand.
     pub fn left_operand(&self) -> &[usize] {
         &self.left_operand
     }
 
+    /// Returns the dimensions of the right operand.
     pub fn right_operand(&self) -> &[usize] {
         &self.right_operand
     }
 
+    /// Returns the dimensions of the output.
     pub fn output(&self) -> &[usize] {
         &self.output
     }
@@ -459,13 +478,17 @@ fn normalize_sum_to_2d(
     }
 }
 
+/// Represents the axis along which a sum operation is performed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SumAxis {
+    /// Sum along axis 0 (rows)
     Axis0,
+    /// Sum along axis 1 (columns)
     Axis1,
 }
 
 impl SumAxis {
+    /// Returns the numeric index of the axis (0 or 1).
     pub fn axis_index(&self) -> usize {
         match self {
             SumAxis::Axis0 => 0,
@@ -496,6 +519,15 @@ pub struct SumDims {
     pub output: Vec<usize>,
 }
 
+/// Transposes a flattened matrix stored in row-major order.
+///
+/// # Arguments
+/// * `flat_vector` - The input vector representing a flattened matrix in row-major order
+/// * `num_rows` - The number of rows in the original matrix
+/// * `num_cols` - The number of columns in the original matrix
+///
+/// # Returns
+/// A new vector representing the transposed matrix in row-major order
 pub fn transpose_flat_matrix<F: JoltField>(
     flat_vector: Vec<F>,
     num_rows: usize,

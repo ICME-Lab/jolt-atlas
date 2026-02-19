@@ -1,6 +1,7 @@
 use super::SparseDenseSuffix;
 use joltworks::utils::lookup_bits::LookupBits;
 
+/// Suffix component for lower word without MSB lookup table decomposition.
 pub enum LowerWordNoMsbSuffix<const XLEN: usize> {}
 
 impl<const XLEN: usize> SparseDenseSuffix for LowerWordNoMsbSuffix<XLEN> {

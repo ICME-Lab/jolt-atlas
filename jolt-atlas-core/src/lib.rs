@@ -5,7 +5,6 @@
     non_snake_case,
     type_alias_bounds
 )]
-#![warn(missing_docs)]
 
 pub mod onnx_proof;
 pub mod utils;

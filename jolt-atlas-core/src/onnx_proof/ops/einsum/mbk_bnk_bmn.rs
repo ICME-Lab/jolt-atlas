@@ -314,160 +314,25 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MbkBnkBmnVe
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::utils::dims::EINSUM_REGISTRY;
-    use ark_bn254::Fr;
-    use atlas_onnx_tracer::{
-        model::{
-            self,
-            trace::{LayerData, Trace},
-        },
-        ops::{Einsum, Operator},
-        tensor::Tensor,
-    };
-    use common::VirtualPolynomial;
-    use joltworks::{
-        field::JoltField,
-        poly::{
-            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-            opening_proof::{
-                OpeningPoint, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
-                BIG_ENDIAN,
-            },
-        },
-        subprotocols::sumcheck::Sumcheck,
-        transcripts::{Blake2bTranscript, Transcript},
-    };
+    use crate::onnx_proof::ops::test::unit_test_op;
+    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
+
+    fn mbk_bnk_bmn_model(rng: &mut StdRng, m: usize, b: usize, k: usize, n: usize) -> Model {
+        let mut builder = ModelBuilder::new();
+        let i = builder.input(vec![m, b, k]);
+        let c = builder.constant(Tensor::random_small(rng, &[b, n, k]));
+        let res = builder.einsum("mbk,bnk->bmn", vec![i, c], vec![b, m, n]);
+        builder.mark_output(res);
+        builder.build()
+    }
 
     #[test]
     fn test_mbk_bnk_bmn() {
-        let log_m = 2;
-        let log_b = 3;
-        let log_k = 4;
-        let log_n = 5;
-        let m = 1 << log_m;
-        let b = 1 << log_b;
-        let k = 1 << log_k;
-        let n = 1 << log_n;
+        let (m, b, k, n) = (1 << 2, 1 << 3, 1 << 4, 1 << 5);
         let mut rng = StdRng::seed_from_u64(0x86078);
         let input = Tensor::<i32>::random_small(&mut rng, &[m, b, k]);
-        let model = model::test::mbk_bnk_bmn_model(&mut rng, m, b, k, n);
-        let trace = model.trace(&[input]);
-
-        let prover_transcript = &mut Blake2bTranscript::new(&[]);
-        let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-            ProverOpeningAccumulator::new();
-
-        let r_node_output: Vec<<Fr as JoltField>::Challenge> =
-            prover_transcript.challenge_vector_optimized::<Fr>(log_b + log_m + log_n);
-
-        let output_index = model.outputs()[0];
-        let computation_node = &model[output_index];
-        let LayerData {
-            operands: _,
-            output,
-        } = Trace::layer_data(&trace, computation_node);
-
-        let mbk_bnk_bmn_claim =
-            MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
-        prover_opening_accumulator.append_virtual(
-            prover_transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.clone().into(),
-            mbk_bnk_bmn_claim,
-        );
-
-        let config = match &computation_node.operator {
-            Operator::Einsum(Einsum { equation }) => EINSUM_REGISTRY
-                .iter()
-                .find(|(pattern, _)| pattern == &equation.as_str())
-                .map(|(_, config)| config)
-                .unwrap_or_else(|| {
-                    panic!("Einsum equation ({equation}) not supported by precompile system")
-                }),
-            _ => panic!("Unexpected operator"),
-        };
-        let einsum_dims = (config.dims_extractor)(computation_node, &model);
-
-        let params: MbkBnkBmnParams<Fr> = MbkBnkBmnParams::new(
-            computation_node.clone(),
-            einsum_dims.clone(),
-            &prover_opening_accumulator,
-        );
-        let mut prover_sumcheck = MbkBnkBmnProver::initialize(&trace, params);
-        let (proof, _) = Sumcheck::prove(
-            &mut prover_sumcheck,
-            &mut prover_opening_accumulator,
-            prover_transcript,
-        );
-
-        let verifier_transcript = &mut Blake2bTranscript::new(&[]);
-        verifier_transcript.compare_to(prover_transcript.clone());
-        let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-            VerifierOpeningAccumulator::new();
-        let _r_node_output: Vec<<Fr as JoltField>::Challenge> =
-            verifier_transcript.challenge_vector_optimized::<Fr>(log_b + log_m + log_n);
-
-        // Take claims
-        for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
-            verifier_opening_accumulator
-                .openings
-                .insert(*key, (empty_point, *value));
-        }
-        verifier_opening_accumulator.virtual_operand_claims =
-            prover_opening_accumulator.virtual_operand_claims.clone();
-
-        verifier_opening_accumulator.append_virtual(
-            verifier_transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.into(),
-        );
-
-        let verifier_sumcheck = MbkBnkBmnVerifier::new(
-            computation_node.clone(),
-            einsum_dims,
-            &verifier_opening_accumulator,
-        );
-        let _ = Sumcheck::verify(
-            &proof,
-            &verifier_sumcheck,
-            &mut verifier_opening_accumulator,
-            verifier_transcript,
-        );
-
-        // Evaluate input at operand point and check it equals the expected output claim
-        let [left_operand_idx, right_operand_idx] = computation_node.inputs[..] else {
-            panic!("Expected two operands for BmkBknMbn operation")
-        };
-
-        // check left operand
-        let left_operand_layer = &model[left_operand_idx];
-        let left_operand_data = Trace::layer_data(&trace, left_operand_layer).output.clone();
-        let left_operand_poly = MultilinearPolynomial::from(left_operand_data);
-        let (opening_point, expected_left_operand_output_claim) = verifier_opening_accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(left_operand_idx),
-                SumcheckId::Execution,
-            );
-        let left_operand_eval = left_operand_poly.evaluate(&opening_point.r);
-        assert_eq!(left_operand_eval, expected_left_operand_output_claim);
-
-        // check right operand
-        let right_operand_layer = &model[right_operand_idx];
-        let right_operand_data = Trace::layer_data(&trace, right_operand_layer)
-            .output
-            .clone();
-        let right_operand_poly = MultilinearPolynomial::from(right_operand_data);
-        let (opening_point, right_operand_output_claim) = verifier_opening_accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(right_operand_idx),
-                SumcheckId::Execution,
-            );
-        let right_operand_eval = right_operand_poly.evaluate(&opening_point.r);
-        assert_eq!(right_operand_eval, right_operand_output_claim);
+        let model = mbk_bnk_bmn_model(&mut rng, m, b, k, n);
+        unit_test_op(model, &[input]);
     }
 }

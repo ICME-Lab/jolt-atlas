@@ -219,104 +219,24 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SquareVerif
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use ark_bn254::Fr;
-    use atlas_onnx_tracer::{
-        model::{
-            self,
-            trace::{LayerData, Trace},
-        },
-        tensor::Tensor,
-    };
-    use common::VirtualPolynomial;
-    use joltworks::{
-        field::JoltField,
-        poly::{
-            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-            opening_proof::{
-                OpeningPoint, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
-                BIG_ENDIAN,
-            },
-        },
-        subprotocols::sumcheck::Sumcheck,
-        transcripts::{Blake2bTranscript, Transcript},
-    };
+    use crate::onnx_proof::ops::test::unit_test_op;
+    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
+
+    fn square_model(T: usize) -> Model {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![T]);
+        let res = b.square(i);
+        b.mark_output(res);
+        b.build()
+    }
 
     #[test]
     fn test_square() {
-        let log_T = 16;
-        let T = 1 << log_T;
+        let T = 1 << 16;
         let mut rng = StdRng::seed_from_u64(0x888);
         let input = Tensor::<i32>::random_small(&mut rng, &[T]);
-        let model = model::test::square_model(T);
-        let trace = model.trace(&[input]);
-
-        let prover_transcript = &mut Blake2bTranscript::new(&[]);
-        let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-            ProverOpeningAccumulator::new();
-        let verifier_transcript = &mut Blake2bTranscript::new(&[]);
-        let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-            VerifierOpeningAccumulator::new();
-
-        let r_node_output: Vec<<Fr as JoltField>::Challenge> =
-            prover_transcript.challenge_vector_optimized::<Fr>(log_T);
-        let _r_node_output: Vec<<Fr as JoltField>::Challenge> =
-            verifier_transcript.challenge_vector_optimized::<Fr>(log_T);
-
-        let output_index = model.outputs()[0];
-        let computation_node = &model[output_index];
-        let LayerData {
-            operands: _,
-            output,
-        } = Trace::layer_data(&trace, computation_node);
-
-        let square_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
-        prover_opening_accumulator.append_virtual(
-            prover_transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.clone().into(),
-            square_claim,
-        );
-
-        let params: SquareParams<Fr> =
-            SquareParams::new(computation_node.clone(), &prover_opening_accumulator);
-        let mut prover_sumcheck = SquareProver::initialize(&trace, params);
-
-        let (proof, r_sumcheck) = Sumcheck::prove(
-            &mut prover_sumcheck,
-            &mut prover_opening_accumulator,
-            prover_transcript,
-        );
-
-        // Take claims
-        for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
-            verifier_opening_accumulator
-                .openings
-                .insert(*key, (empty_point, *value));
-        }
-        verifier_opening_accumulator.virtual_operand_claims =
-            prover_opening_accumulator.virtual_operand_claims.clone();
-
-        verifier_opening_accumulator.append_virtual(
-            verifier_transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.into(),
-        );
-
-        let verifier_sumcheck =
-            SquareVerifier::new(computation_node.clone(), &verifier_opening_accumulator);
-        let res = Sumcheck::verify(
-            &proof,
-            &verifier_sumcheck,
-            &mut verifier_opening_accumulator,
-            verifier_transcript,
-        );
-        prover_transcript.compare_to(verifier_transcript.clone());
-        let r_sumcheck_verif = res.unwrap();
-        assert_eq!(r_sumcheck, r_sumcheck_verif);
+        let model = square_model(T);
+        unit_test_op(model, &[input]);
     }
 }

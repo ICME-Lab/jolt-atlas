@@ -237,156 +237,33 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVeri
 
 #[cfg(test)]
 mod tests {
-    use ark_bn254::Fr;
+    use crate::onnx_proof::ops::test::unit_test_op;
     use atlas_onnx_tracer::{
-        model::{
-            self,
-            trace::{LayerData, Trace},
-        },
-        ops::{Operator, Sum},
+        model::{test::ModelBuilder, Model},
         tensor::Tensor,
-    };
-    use common::VirtualPolynomial;
-    use joltworks::{
-        field::JoltField,
-        poly::{
-            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-            opening_proof::{
-                OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-                VerifierOpeningAccumulator, BIG_ENDIAN,
-            },
-        },
-        subprotocols::sumcheck::Sumcheck,
-        transcripts::{Blake2bTranscript, Transcript},
     };
     use rand::{rngs::StdRng, SeedableRng};
 
-    use crate::{
-        onnx_proof::ops::sum::axis::{SumAxis, SumAxisParams, SumAxisProver, SumAxisVerifier},
-        utils::dims::{SumConfig, SumDims},
-    };
+    fn sum_model<const AXIS: usize>(m: usize, n: usize) -> Model {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![m, n]);
+        let output_dims = if AXIS == 0 { vec![n] } else { vec![m] };
+        let res = b.sum(i, vec![AXIS], output_dims);
+        b.mark_output(res);
+        b.build()
+    }
 
-    pub fn test_sum_axis_generic(log_m: usize, log_n: usize, seed: u64, axis: usize) {
+    fn test_sum_axis_generic(log_m: usize, log_n: usize, seed: u64, axis: usize) {
         let m = 1 << log_m;
         let n = 1 << log_n;
         let mut rng = StdRng::seed_from_u64(seed);
         let input = Tensor::<i32>::random_small(&mut rng, &[m, n]);
-
         let model = match axis {
-            0 => model::test::sum_model::<0>(m, n),
-            1 => model::test::sum_model::<1>(m, n),
+            0 => sum_model::<0>(m, n),
+            1 => sum_model::<1>(m, n),
             _ => panic!("Invalid axis"),
         };
-        let trace = model.trace(&[input]);
-
-        let prover_transcript = &mut Blake2bTranscript::new(&[]);
-        let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-            ProverOpeningAccumulator::new();
-
-        let output_log_size = match axis {
-            0 => log_n,
-            1 => log_m,
-            _ => panic!("Invalid axis"),
-        };
-        let r_node_output: Vec<<Fr as JoltField>::Challenge> =
-            prover_transcript.challenge_vector_optimized::<Fr>(output_log_size);
-
-        let output_index = model.outputs()[0];
-        let computation_node = &model[output_index];
-        let LayerData {
-            operands: _,
-            output,
-        } = Trace::layer_data(&trace, computation_node);
-
-        let sum_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
-        prover_opening_accumulator.append_virtual(
-            prover_transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.clone().into(),
-            sum_claim,
-        );
-
-        let sum_config = match &computation_node.operator {
-            Operator::Sum(Sum { axes }) => {
-                assert_eq!(axes, &[axis]);
-                let operand_dims = model[computation_node.inputs[0]].output_dims.clone();
-                let output_dims = computation_node.output_dims.clone();
-                let sum_dims = SumDims::new(operand_dims, output_dims);
-                let axis_enum = match axis {
-                    0 => SumAxis::Axis0,
-                    1 => SumAxis::Axis1,
-                    _ => panic!("Invalid axis"),
-                };
-                SumConfig::new(sum_dims, axis_enum)
-            }
-            _ => panic!("Unexpected operator"),
-        };
-
-        let params: SumAxisParams<Fr> = SumAxisParams::new(
-            computation_node.clone(),
-            sum_config.clone(),
-            &prover_opening_accumulator,
-        );
-        let mut prover_sumcheck =
-            SumAxisProver::initialize(&trace, params, &prover_opening_accumulator);
-
-        let (proof, r_sumcheck) = Sumcheck::prove(
-            &mut prover_sumcheck,
-            &mut prover_opening_accumulator,
-            prover_transcript,
-        );
-
-        let verifier_transcript = &mut Blake2bTranscript::new(&[]);
-        verifier_transcript.compare_to(prover_transcript.clone());
-
-        let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-            VerifierOpeningAccumulator::new();
-        let _r_node_output: Vec<<Fr as JoltField>::Challenge> =
-            verifier_transcript.challenge_vector_optimized::<Fr>(output_log_size);
-        // Take claims
-        for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
-            verifier_opening_accumulator
-                .openings
-                .insert(*key, (empty_point, *value));
-        }
-        verifier_opening_accumulator.virtual_operand_claims =
-            prover_opening_accumulator.virtual_operand_claims.clone();
-
-        verifier_opening_accumulator.append_virtual(
-            verifier_transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.into(),
-        );
-
-        let verifier_sumcheck = SumAxisVerifier::new(
-            computation_node.clone(),
-            sum_config.clone(),
-            &verifier_opening_accumulator,
-        );
-        let res = Sumcheck::verify(
-            &proof,
-            &verifier_sumcheck,
-            &mut verifier_opening_accumulator,
-            verifier_transcript,
-        );
-        let r_sumcheck_verif = res.unwrap();
-        assert_eq!(r_sumcheck, r_sumcheck_verif);
-
-        // Evaluate input at operand point and check it equals the expected output claim
-        let input_index = computation_node.inputs[0];
-        let input_layer = &model[input_index];
-        let input_data = Trace::layer_data(&trace, input_layer).output.clone();
-        let input_poly = MultilinearPolynomial::from(input_data);
-        let (opening_point, expected_output_claim) = verifier_opening_accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(input_index),
-                SumcheckId::Execution,
-            );
-        let input_eval = input_poly.evaluate(&opening_point.r);
-        assert_eq!(input_eval, expected_output_claim);
+        unit_test_op(model, &[input]);
     }
 
     #[test]

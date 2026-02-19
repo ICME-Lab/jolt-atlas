@@ -775,124 +775,24 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use ark_bn254::Fr;
-    use atlas_onnx_tracer::{
-        model::{
-            self,
-            trace::{LayerData, Trace},
-        },
-        tensor::Tensor,
-    };
-    use common::VirtualPolynomial;
-    use joltworks::{
-        field::JoltField,
-        poly::{
-            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-            opening_proof::{
-                OpeningPoint, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
-                BIG_ENDIAN,
-            },
-        },
-        transcripts::{Blake2bTranscript, Transcript},
-    };
+    use crate::onnx_proof::ops::test::unit_test_op;
+    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
+
+    fn softmax_axes_model(input_shape: &[usize], axes: usize) -> Model {
+        let mut b = ModelBuilder::new();
+        let i = b.input(input_shape.to_vec());
+        let res = b.softmax(axes, i);
+        b.mark_output(res);
+        b.build()
+    }
 
     #[test]
     fn test_softmax_axes() {
         let input_shape = vec![4, 64, 64];
-        let T: usize = input_shape.iter().product();
-        let log_T = T.log_2();
         let mut rng = StdRng::seed_from_u64(0x858);
         let input = Tensor::<i32>::random_small(&mut rng, &input_shape);
-        let model = model::test::softmax_axes_model(&input_shape, 2);
-        let trace = model.trace(&[input.clone()]);
-
-        let prover_transcript = &mut Blake2bTranscript::new(&[]);
-        let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-            ProverOpeningAccumulator::new();
-
-        let r_node_output: Vec<<Fr as JoltField>::Challenge> =
-            prover_transcript.challenge_vector_optimized::<Fr>(log_T);
-
-        let output_index = model.outputs()[0];
-        let computation_node = &model[output_index];
-        let LayerData {
-            operands: _,
-            output,
-        } = Trace::layer_data(&trace, computation_node);
-
-        let softmax_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
-        prover_opening_accumulator.append_virtual(
-            prover_transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.clone().into(),
-            softmax_claim,
-        );
-
-        let params: SoftmaxAxesParams<Fr> =
-            SoftmaxAxesParams::new(computation_node.clone(), &prover_opening_accumulator);
-        let softmax_axes_prover = SoftmaxAxesProver::initialize(&trace, params);
-
-        let proofs = softmax_axes_prover.prove(&mut prover_opening_accumulator, prover_transcript);
-
-        let verifier_transcript = &mut Blake2bTranscript::new(&[]);
-        verifier_transcript.compare_to(prover_transcript.clone());
-        let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-            VerifierOpeningAccumulator::new();
-        let _r_node_output: Vec<<Fr as JoltField>::Challenge> =
-            verifier_transcript.challenge_vector_optimized::<Fr>(log_T);
-        // Take claims
-        for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
-            verifier_opening_accumulator
-                .openings
-                .insert(*key, (empty_point, *value));
-        }
-        verifier_opening_accumulator.virtual_operand_claims =
-            prover_opening_accumulator.virtual_operand_claims.clone();
-
-        verifier_opening_accumulator.append_virtual(
-            verifier_transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.into(),
-        );
-
-        let verifier_softmax_axes =
-            SoftmaxAxesVerifier::new(computation_node.clone(), &verifier_opening_accumulator);
-        let (div_sum_max_proof, exponentiation_read_raf_proof, exponentiation_ra_onehot_proof) =
-            match &proofs[..] {
-                [(ProofId(_, ProofType::SoftmaxDivSumMax), div_sum_max_proof), (
-                    ProofId(_, ProofType::SoftmaxExponentiationReadRaf),
-                    exponentiation_read_raf_proof,
-                ), (
-                    ProofId(_, ProofType::SoftmaxExponentiationRaOneHot),
-                    exponentiation_ra_onehot_proof,
-                )] => (
-                    div_sum_max_proof,
-                    exponentiation_read_raf_proof,
-                    exponentiation_ra_onehot_proof,
-                ),
-                _ => panic!("Unexpected proof structure"),
-            };
-        verifier_softmax_axes
-            .verify(
-                div_sum_max_proof,
-                exponentiation_read_raf_proof,
-                exponentiation_ra_onehot_proof,
-                &mut verifier_opening_accumulator,
-                verifier_transcript,
-            )
-            .expect("SoftmaxAxes verification failed");
-
-        // check input claim
-        let (r_input, input_claim) = verifier_opening_accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(computation_node.inputs[0]),
-            SumcheckId::Execution,
-        );
-        let expected_input_claim = MultilinearPolynomial::from(input.clone()).evaluate(&r_input.r);
-        assert_eq!(input_claim, expected_input_claim);
+        let model = softmax_axes_model(&input_shape, 2);
+        unit_test_op(model, &[input]);
     }
 }

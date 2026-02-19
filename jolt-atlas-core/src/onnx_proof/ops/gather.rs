@@ -741,121 +741,38 @@ fn ra_hamming_weight_params<F: JoltField>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::onnx_proof::AtlasSharedPreprocessing;
-    use ark_bn254::Fr;
-    use atlas_onnx_tracer::{
-        model::{
-            self,
-            trace::{LayerData, Trace},
-        },
-        tensor::Tensor,
-    };
-    use common::VirtualPolynomial;
-    use joltworks::{
-        field::JoltField,
-        poly::{
-            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-            opening_proof::{
-                OpeningPoint, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
-                BIG_ENDIAN,
-            },
-        },
-        transcripts::{Blake2bTranscript, Transcript},
-    };
+    use crate::onnx_proof::ops::test::unit_test_op;
+    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
-    use std::collections::BTreeMap;
+
+    fn gather_model(input_shape: &[usize], dictionnary_len: usize, word_dim: usize) -> Model {
+        let mut b = ModelBuilder::new();
+        let dictionnary = {
+            let data = (0..dictionnary_len * word_dim)
+                .map(|i| i as i32)
+                .collect::<Vec<_>>();
+            Tensor::construct(data, vec![dictionnary_len, word_dim])
+        };
+        let dict = b.constant(dictionnary);
+        let indexes = b.input(input_shape.to_vec());
+        let res = b.gather(
+            dict,
+            indexes,
+            0,
+            [input_shape.to_vec(), vec![word_dim]].concat(),
+        );
+        b.mark_output(res);
+        b.build()
+    }
 
     #[test]
     fn test_gather() {
         let indices_dims = vec![4, 8];
-        let mut rng = StdRng::seed_from_u64(0x888);
-
         let dict_len = 32;
         let word_dim = 4;
-
+        let mut rng = StdRng::seed_from_u64(0x888);
         let input = Tensor::<i32>::random_range(&mut rng, &indices_dims, 0..dict_len as i32);
-
-        let model = model::test::gather_model(&indices_dims, dict_len, word_dim);
-        let trace = model.trace(&[input]);
-
-        let prover_transcript = Blake2bTranscript::new(&[]);
-        let preprocessing: AtlasSharedPreprocessing =
-            AtlasSharedPreprocessing::preprocess(model.clone());
-        let prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-            ProverOpeningAccumulator::new();
-        let mut prover = Prover {
-            trace: trace.clone(),
-            accumulator: prover_opening_accumulator,
-            preprocessing,
-            transcript: prover_transcript,
-        };
-
-        let output_index = model.outputs()[0];
-        let computation_node = &model[output_index];
-        let LayerData {
-            operands: _,
-            output,
-        } = Trace::layer_data(&trace, computation_node);
-
-        let r_node_output: Vec<<Fr as JoltField>::Challenge> = prover
-            .transcript
-            .challenge_vector_optimized::<Fr>(computation_node.num_output_elements().log_2());
-
-        let gather_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
-        prover.accumulator.append_virtual(
-            &mut prover.transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.clone().into(),
-            gather_claim,
-        );
-
-        let verifier_transcript = Blake2bTranscript::new(&[]);
-        let verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-            VerifierOpeningAccumulator::new();
-
-        let proofs = Gather { axis: 0 }.prove(computation_node, &mut prover);
-        let proofs = BTreeMap::from_iter(proofs);
-
-        let io = Trace::io(&trace, &model);
-
-        let mut verifier = Verifier {
-            proofs: &proofs,
-            accumulator: verifier_opening_accumulator,
-            preprocessing: &prover.preprocessing.clone(),
-            io: &io,
-            transcript: verifier_transcript,
-        };
-        let _r_node_output: Vec<<Fr as JoltField>::Challenge> = verifier
-            .transcript
-            .challenge_vector_optimized::<Fr>(computation_node.num_output_elements().log_2());
-
-        // Take claims
-        for (key, (_, value)) in &prover.accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
-            verifier
-                .accumulator
-                .openings
-                .insert(*key, (empty_point, *value));
-        }
-        verifier.accumulator.virtual_operand_claims =
-            prover.accumulator.virtual_operand_claims.clone();
-
-        verifier.accumulator.append_virtual(
-            &mut verifier.transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.into(),
-        );
-
-        let res = Gather { axis: 0 }.verify(computation_node, &mut verifier);
-
-        let r_prover: Fr = prover.transcript.challenge_scalar();
-        let r_verifier: Fr = verifier.transcript.challenge_scalar();
-        assert_eq!(r_prover, r_verifier);
-
-        verifier.transcript.compare_to(prover.transcript);
-        res.unwrap();
+        let model = gather_model(&indices_dims, dict_len, word_dim);
+        unit_test_op(model, &[input]);
     }
 }

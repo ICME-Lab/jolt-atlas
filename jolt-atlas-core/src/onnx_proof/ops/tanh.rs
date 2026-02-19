@@ -503,7 +503,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TanhProver<F>
     ) {
         let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
         let r = [opening_point.r.as_slice(), &self.params.r_node_output].concat();
-        // let r = [sumcheck_challenges, &self.params.r_node_output].concat();
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::TanhRa(self.params.computation_node.idx),
@@ -677,114 +676,30 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
-    use ark_bn254::Fr;
-    use atlas_onnx_tracer::model;
-    use joltworks::{transcripts::Blake2bTranscript, utils::math::Math};
+    use crate::onnx_proof::ops::test::unit_test_op;
+    use atlas_onnx_tracer::{
+        model::{test::ModelBuilder, Model},
+        node::handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE,
+        tensor::Tensor,
+    };
     use rand::{rngs::StdRng, SeedableRng};
 
-    use crate::onnx_proof::AtlasSharedPreprocessing;
-
-    use super::*;
+    fn tanh_model(input_shape: &[usize]) -> Model {
+        let mut b = ModelBuilder::new();
+        let i = b.input(input_shape.to_vec());
+        let res = b.tanh(i);
+        b.mark_output(res);
+        b.build()
+    }
 
     #[test]
     fn test_tanh() {
-        let log_T = 14;
-        let T = 1 << log_T;
-
-        const MIN_INPUT_VALUE: i32 = -(1 << 16);
-        const MAX_INPUT_VALUE: i32 = 1 << 16;
-
+        let T = 1 << 14;
+        const MIN_INPUT_VALUE: i32 = -(1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1));
+        const MAX_INPUT_VALUE: i32 = 1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1);
         let mut rng = StdRng::seed_from_u64(0x888);
         let input = Tensor::random_range(&mut rng, &[T], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
-        let model = model::test::tanh_model(&[T]);
-        let trace = model.trace(&[input]);
-
-        let prover_transcript = Blake2bTranscript::new(&[]);
-        let preprocessing: AtlasSharedPreprocessing =
-            AtlasSharedPreprocessing::preprocess(model.clone());
-        let prover_opening_accumulator = ProverOpeningAccumulator::new();
-        let mut prover = Prover {
-            trace: trace.clone(),
-            preprocessing,
-            accumulator: prover_opening_accumulator,
-            transcript: prover_transcript,
-        };
-
-        let output_index = model.outputs()[0];
-        let computation_node = &model[output_index];
-        let LayerData {
-            operands: _,
-            output,
-        } = Trace::layer_data(&trace, computation_node);
-
-        let r_node_output: Vec<<Fr as JoltField>::Challenge> = prover
-            .transcript
-            .challenge_vector_optimized::<Fr>(computation_node.num_output_elements().log_2());
-
-        let tanh_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
-        prover.accumulator.append_virtual(
-            &mut prover.transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.clone().into(),
-            tanh_claim,
-        );
-
-        // Extract the Tanh operator from the computation node
-        let tanh_op = if let atlas_onnx_tracer::ops::Operator::Tanh(op) = &computation_node.operator
-        {
-            op.clone()
-        } else {
-            panic!("Expected Tanh operator in computation node");
-        };
-
-        let proofs = tanh_op.prove(computation_node, &mut prover);
-        let proofs = BTreeMap::from_iter(proofs);
-
-        let io = Trace::io(&trace, &model);
-
-        let verifier_transcript = Blake2bTranscript::new(&[]);
-        let verifier_opening_accumulator = VerifierOpeningAccumulator::new();
-        let mut verifier = Verifier {
-            preprocessing: &prover.preprocessing.clone(),
-            accumulator: verifier_opening_accumulator,
-            transcript: verifier_transcript,
-            io: &io,
-            proofs: &proofs,
-        };
-
-        let _r_node_output = verifier
-            .transcript
-            .challenge_vector_optimized::<Fr>(computation_node.num_output_elements().log_2());
-        assert_eq!(r_node_output, _r_node_output);
-
-        for (key, (_, value)) in &prover.accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
-            verifier
-                .accumulator
-                .openings
-                .insert(*key, (empty_point, *value));
-        }
-
-        verifier.accumulator.virtual_operand_claims =
-            prover.accumulator.virtual_operand_claims.clone();
-
-        verifier.accumulator.append_virtual(
-            &mut verifier.transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.into(),
-        );
-
-        let res = tanh_op.verify(computation_node, &mut verifier);
-
-        let r_prover: Fr = prover.transcript.challenge_scalar();
-        let r_verifier: Fr = verifier.transcript.challenge_scalar();
-        assert_eq!(r_prover, r_verifier);
-
-        verifier.transcript.compare_to(prover.transcript);
-        res.unwrap();
+        let model = tanh_model(&[T]);
+        unit_test_op(model, &[input]);
     }
 }

@@ -28,9 +28,10 @@ use joltworks::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[warn(missing_docs)]
 pub mod lookup_tables;
+
 pub mod neural_teleport;
+#[warn(missing_docs)]
 pub mod op_lookups;
 pub mod ops;
 pub mod range_checking;

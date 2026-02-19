@@ -347,6 +347,7 @@ where
             polynomials.len(),
             "Number of sumcheck instances does not match number of cached opening claims"
         );
+
         tracing::debug!(
             "{} sumcheck instances in batched opening proof reduction",
             self.sumchecks.len()

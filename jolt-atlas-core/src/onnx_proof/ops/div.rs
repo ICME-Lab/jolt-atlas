@@ -456,133 +456,50 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::onnx_proof::AtlasSharedPreprocessing;
-    use ark_bn254::Fr;
-    use atlas_onnx_tracer::{
-        model::{
-            self,
-            trace::{LayerData, Trace},
-            Model,
-        },
-        tensor::Tensor,
-    };
-    use common::VirtualPolynomial;
-    use joltworks::{
-        field::JoltField,
-        poly::{
-            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-            opening_proof::{
-                OpeningPoint, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
-                BIG_ENDIAN,
-            },
-        },
-        transcripts::{Blake2bTranscript, Transcript},
-    };
+    use crate::onnx_proof::ops::test::unit_test_op;
+    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
-    use std::collections::BTreeMap;
 
-    fn test_div_helper(model: Model, input: Tensor<i32>) {
-        let T = input.len();
-        let log_T = T.log_2();
-        let trace = model.trace(&[input]);
+    const SCALE: i32 = 7;
 
-        let prover_transcript = Blake2bTranscript::new(&[]);
-        let preprocessing: AtlasSharedPreprocessing =
-            AtlasSharedPreprocessing::preprocess(model.clone());
-        let prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-            ProverOpeningAccumulator::new();
-        let mut prover = Prover {
-            trace: trace.clone(),
-            accumulator: prover_opening_accumulator,
-            preprocessing,
-            transcript: prover_transcript,
-        };
+    fn div_model(T: usize) -> Model {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![T]);
+        let c = b.constant(Tensor::construct(vec![128; T], vec![T]));
+        let res = b.div(i, c);
+        b.mark_output(res);
+        b.build()
+    }
 
-        let r_node_output: Vec<<Fr as JoltField>::Challenge> =
-            prover.transcript.challenge_vector_optimized::<Fr>(log_T);
-
-        let output_index = model.outputs()[0];
-        let computation_node = &model[output_index];
-        let LayerData {
-            operands: _,
-            output,
-        } = Trace::layer_data(&trace, computation_node);
-
-        let div_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
-        prover.accumulator.append_virtual(
-            &mut prover.transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.clone().into(),
-            div_claim,
-        );
-
-        let verifier_transcript = Blake2bTranscript::new(&[]);
-        let verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-            VerifierOpeningAccumulator::new();
-
-        let proofs = Div.prove(computation_node, &mut prover);
-        let proofs = BTreeMap::from_iter(proofs);
-
-        let io = Trace::io(&trace, &model);
-
-        let mut verifier = Verifier {
-            proofs: &proofs,
-            accumulator: verifier_opening_accumulator,
-            preprocessing: &prover.preprocessing.clone(),
-            io: &io,
-            transcript: verifier_transcript,
-        };
-        let _r_node_output: Vec<<Fr as JoltField>::Challenge> =
-            verifier.transcript.challenge_vector_optimized::<Fr>(log_T);
-
-        // Take claims
-        for (key, (_, value)) in &prover.accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
-            verifier
-                .accumulator
-                .openings
-                .insert(*key, (empty_point, *value));
-        }
-        verifier.accumulator.virtual_operand_claims =
-            prover.accumulator.virtual_operand_claims.clone();
-
-        verifier.accumulator.append_virtual(
-            &mut verifier.transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.into(),
-        );
-
-        let res = Div.verify(computation_node, &mut verifier);
-
-        verifier.transcript.compare_to(prover.transcript);
-        res.unwrap();
+    fn recip_model(T: usize) -> Model {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![T]);
+        let c = b.constant(Tensor::construct(vec![1 << (SCALE * 2); T], vec![T]));
+        let res = b.div(c, i);
+        b.mark_output(res);
+        b.build()
     }
 
     #[test]
     fn test_div_by_const() {
-        let mut rng = StdRng::seed_from_u64(0x888);
         let T = 1 << 16;
-        let model = model::test::div_model(T);
+        let mut rng = StdRng::seed_from_u64(0x888);
         let input = Tensor::<i32>::random(&mut rng, &[T]);
-        test_div_helper(model, input);
+        let model = div_model(T);
+        unit_test_op(model, &[input]);
     }
 
     #[test]
     fn test_div_by_tensor() {
-        let mut rng = StdRng::seed_from_u64(0x888);
         let T = 1 << 16;
-        const SCALE: i32 = 7;
-
-        let model = model::test::recip_model(T);
+        let mut rng = StdRng::seed_from_u64(0x888);
+        let model = recip_model(T);
         let mut input = Tensor::<i32>::random_range(&mut rng, &[T], 1..SCALE * SCALE);
         input.iter_mut().for_each(|v| {
             if *v == 0 {
                 *v = 1
             }
         });
-        test_div_helper(model, input);
+        unit_test_op(model, &[input]);
     }
 }

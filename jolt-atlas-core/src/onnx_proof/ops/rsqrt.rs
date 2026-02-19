@@ -580,118 +580,25 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RsqrtVerifi
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::AtlasSharedPreprocessing;
-    use std::collections::BTreeMap;
-
-    use super::*;
-    use ark_bn254::Fr;
-    use atlas_onnx_tracer::{
-        model::{
-            self,
-            trace::{LayerData, Trace},
-        },
-        tensor::Tensor,
-        utils::f32::F32,
-    };
-    use common::VirtualPolynomial;
-    use joltworks::{
-        field::JoltField,
-        poly::{
-            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-            opening_proof::{
-                OpeningPoint, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
-                BIG_ENDIAN,
-            },
-        },
-        transcripts::{Blake2bTranscript, Transcript},
-    };
+    use super::Q_SQUARE;
+    use crate::onnx_proof::ops::test::unit_test_op;
+    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
+
+    fn rsqrt_model(T: usize) -> Model {
+        let mut b = ModelBuilder::new();
+        let input = b.input(vec![T]);
+        let res = b.rsqrt(input);
+        b.mark_output(res);
+        b.build()
+    }
 
     #[test]
     fn test_rsqrt() {
-        let log_T = 16;
-        let T = 1 << log_T;
+        let T = 1 << 16;
         let mut rng = StdRng::seed_from_u64(0x888);
         let input = Tensor::<i32>::random_range(&mut rng, &[T], 1..Q_SQUARE);
-
-        let model = model::test::rsqrt_model(T);
-        let trace = model.trace(&[input]);
-
-        let prover_transcript = Blake2bTranscript::new(&[]);
-        let preprocessing: AtlasSharedPreprocessing =
-            AtlasSharedPreprocessing::preprocess(model.clone());
-        let prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-            ProverOpeningAccumulator::new();
-        let mut prover = Prover {
-            trace: trace.clone(),
-            accumulator: prover_opening_accumulator,
-            preprocessing,
-            transcript: prover_transcript,
-        };
-
-        let r_node_output: Vec<<Fr as JoltField>::Challenge> =
-            prover.transcript.challenge_vector_optimized::<Fr>(log_T);
-
-        let output_index = model.outputs()[0];
-        let computation_node = &model[output_index];
-        let LayerData {
-            operands: _,
-            output,
-        } = Trace::layer_data(&trace, computation_node);
-
-        let rsqrt_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
-        prover.accumulator.append_virtual(
-            &mut prover.transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.clone().into(),
-            rsqrt_claim,
-        );
-
-        let verifier_transcript = Blake2bTranscript::new(&[]);
-        let verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-            VerifierOpeningAccumulator::new();
-
-        let proofs = Rsqrt { scale: F32(0.0) }.prove(computation_node, &mut prover);
-        let proofs = BTreeMap::from_iter(proofs);
-
-        let io = Trace::io(&trace, &model);
-
-        let mut verifier = Verifier {
-            proofs: &proofs,
-            accumulator: verifier_opening_accumulator,
-            preprocessing: &prover.preprocessing.clone(),
-            io: &io,
-            transcript: verifier_transcript,
-        };
-        let _r_node_output: Vec<<Fr as JoltField>::Challenge> =
-            verifier.transcript.challenge_vector_optimized::<Fr>(log_T);
-
-        // Take claims
-        for (key, (_, value)) in &prover.accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
-            verifier
-                .accumulator
-                .openings
-                .insert(*key, (empty_point, *value));
-        }
-        verifier.accumulator.virtual_operand_claims =
-            prover.accumulator.virtual_operand_claims.clone();
-
-        verifier.accumulator.append_virtual(
-            &mut verifier.transcript,
-            VirtualPolynomial::NodeOutput(output_index),
-            SumcheckId::Execution,
-            r_node_output.into(),
-        );
-
-        let res = Rsqrt { scale: F32(0.0) }.verify(computation_node, &mut verifier);
-
-        let r_prover: Fr = prover.transcript.challenge_scalar();
-        let r_verifier: Fr = verifier.transcript.challenge_scalar();
-        assert_eq!(r_prover, r_verifier);
-
-        verifier.transcript.compare_to(prover.transcript);
-        res.unwrap();
+        let model = rsqrt_model(T);
+        unit_test_op(model, &[input]);
     }
 }

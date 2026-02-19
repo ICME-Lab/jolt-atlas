@@ -205,28 +205,17 @@ fn permute_challenge_groups<F: JoltField>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use ark_bn254::Fr;
-    use atlas_onnx_tracer::{
-        model::{
-            self,
-            trace::{LayerData, Trace},
-        },
-        tensor::Tensor,
-    };
-    use common::VirtualPolynomial;
-    use joltworks::{
-        field::JoltField,
-        poly::{
-            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-            opening_proof::{
-                OpeningPoint, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
-                BIG_ENDIAN,
-            },
-        },
-        transcripts::{Blake2bTranscript, Transcript},
-    };
+    use crate::onnx_proof::ops::test::unit_test_op;
+    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
+
+    fn moveaxis_model(input_shape: &[usize], source: usize, destination: usize) -> Model {
+        let mut b = ModelBuilder::new();
+        let i = b.input(input_shape.to_vec());
+        let res = b.moveaxis(i, source, destination);
+        b.mark_output(res);
+        b.build()
+    }
 
     #[test]
     fn test_moveaxis() {
@@ -242,73 +231,8 @@ mod tests {
 
         for (input_shape, source, destination) in test_cases {
             let input = Tensor::<i32>::random_small(&mut rng, &input_shape);
-            let model = model::test::moveaxis_model(&input_shape, source, destination);
-            let trace = model.trace(&[input.clone()]);
-
-            let output_index = model.outputs()[0];
-            let computation_node = &model[output_index];
-            let LayerData {
-                operands: _,
-                output,
-            } = Trace::layer_data(&trace, computation_node);
-
-            let mut output = output.clone();
-            output.pad_next_power_of_two();
-            let max_vars: usize = output.dims().iter().map(|&d| d.log_2()).sum();
-
-            let prover_transcript = &mut Blake2bTranscript::new(&[]);
-            let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
-                ProverOpeningAccumulator::new();
-            let verifier_transcript = &mut Blake2bTranscript::new(&[]);
-            let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
-                VerifierOpeningAccumulator::new();
-
-            let r_node_output: Vec<<Fr as JoltField>::Challenge> =
-                prover_transcript.challenge_vector_optimized::<Fr>(max_vars);
-            let _r_node_output: Vec<<Fr as JoltField>::Challenge> =
-                verifier_transcript.challenge_vector_optimized::<Fr>(max_vars);
-
-            let moveaxis_claim =
-                MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
-            prover_opening_accumulator.append_virtual(
-                prover_transcript,
-                VirtualPolynomial::NodeOutput(output_index),
-                SumcheckId::Execution,
-                r_node_output.clone().into(),
-                moveaxis_claim,
-            );
-
-            let params: MoveAxisParams<Fr> =
-                MoveAxisParams::new(computation_node.clone(), &prover_opening_accumulator);
-            let moveaxis_prover = MoveAxisProver::initialize(params);
-
-            moveaxis_prover.prove(&mut prover_opening_accumulator, prover_transcript);
-
-            // Take claims
-            for (key, (_, value)) in &prover_opening_accumulator.openings {
-                let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
-                verifier_opening_accumulator
-                    .openings
-                    .insert(*key, (empty_point, *value));
-            }
-            verifier_opening_accumulator.virtual_operand_claims =
-                prover_opening_accumulator.virtual_operand_claims.clone();
-
-            verifier_opening_accumulator.append_virtual(
-                verifier_transcript,
-                VirtualPolynomial::NodeOutput(output_index),
-                SumcheckId::Execution,
-                r_node_output.into(),
-            );
-
-            let moveaxis_verifier =
-                MoveAxisVerifier::new(computation_node.clone(), &verifier_opening_accumulator);
-
-            let res =
-                moveaxis_verifier.verify(&mut verifier_opening_accumulator, verifier_transcript);
-
-            prover_transcript.compare_to(verifier_transcript.clone());
-            assert!(res.is_ok(), "MoveAxis verification failed");
+            let model = moveaxis_model(&input_shape, source, destination);
+            unit_test_op(model, &[input]);
         }
     }
 }

@@ -5,7 +5,12 @@
 
 use rand::rngs::StdRng;
 
-use crate::{node::ComputationNode, ops::*, tensor::Tensor, utils::f32::F32};
+use crate::{
+    node::{ComputationNode, handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE},
+    ops::*,
+    tensor::Tensor,
+    utils::f32::F32,
+};
 use std::collections::{BTreeMap, HashMap};
 
 use super::{ComputationGraph, Model};
@@ -287,13 +292,12 @@ impl ModelBuilder {
         let id = self.alloc();
         let output_dims = self.nodes[&input].output_dims.clone();
         let tau = 2;
-        let log_table_size = 16;
         let node = ComputationNode::new(
             id,
             Operator::Tanh(Tanh {
                 scale: F32((1 << SCALE) as f32),
                 tau,
-                log_table: log_table_size,
+                log_table: NEURAL_TELEPORT_LOG_TABLE_SIZE,
             }),
             vec![input],
             output_dims,
@@ -396,16 +400,6 @@ pub fn sub_model(rng: &mut StdRng, T: usize) -> Model {
     let i = b.input(vec![T]);
     let c = b.constant(Tensor::random_small(rng, &[T]));
     let res = b.sub(i, c);
-    b.mark_output(res);
-    b.build()
-}
-
-/// Create a model for element-wise addition of an input and constant tensor.
-pub fn add_model(rng: &mut StdRng, T: usize) -> Model {
-    let mut b = ModelBuilder::new();
-    let i = b.input(vec![T]);
-    let c = b.constant(Tensor::random_small(rng, &[T]));
-    let res = b.add(i, c);
     b.mark_output(res);
     b.build()
 }

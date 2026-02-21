@@ -71,8 +71,8 @@ use joltworks::{
 /// # See Also
 ///
 /// - [`PrefixSuffixShoutProvider`] - The trait this struct implements
-/// - [`OpLookupEncoding`] - The one-hot encoding used for RAF checks
-/// - [`ps_read_raf_prover`] and [`ps_read_raf_verifier`] - Underlying RAF protocol functions
+/// - [`OpLookupEncoding`] - The struct that provides one-hot encoding parameters for one-hot checks related to these lookups
+/// - [`ps_read_raf_prover`] and [`ps_read_raf_verifier`] - Underlying read-raf protocol
 pub struct OpLookupProvider {
     /// The computation node being proven, containing operation type, inputs, and dimensionality.
     computation_node: ComputationNode,

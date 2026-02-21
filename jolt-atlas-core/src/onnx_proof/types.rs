@@ -27,24 +27,46 @@ use joltworks::{
 pub struct ProofId(pub usize, pub ProofType);
 
 /// Type of sumcheck proof for different operations in the neural network.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// The `u8` discriminants are part of the serialization format — do not reorder or remove variants
+/// without a migration, as it would break proof deserialization.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ProofType {
     /// Execution sumcheck for basic operations.
-    Execution,
+    Execution = 0,
     /// Neural teleportation for tanh approximation.
-    NeuralTeleport,
+    NeuralTeleport = 1,
     /// Read-address one-hot encoding checks.
-    RaOneHotChecks,
+    RaOneHotChecks = 2,
     /// Hamming weight check for read-addresses.
-    RaHammingWeight,
+    RaHammingWeight = 3,
     /// Softmax division by sum of max.
-    SoftmaxDivSumMax,
+    SoftmaxDivSumMax = 4,
     /// Softmax exponentiation read-raf checking.
-    SoftmaxExponentiationReadRaf,
+    SoftmaxExponentiationReadRaf = 5,
     /// Softmax exponentiation read-address one-hot encoding checks.
-    SoftmaxExponentiationRaOneHot,
+    SoftmaxExponentiationRaOneHot = 6,
     /// Range-checking for remainders.
-    RangeCheck,
+    RangeCheck = 7,
+}
+
+impl TryFrom<u8> for ProofType {
+    type Error = SerializationError;
+
+    fn try_from(tag: u8) -> Result<Self, Self::Error> {
+        match tag {
+            0 => Ok(Self::Execution),
+            1 => Ok(Self::NeuralTeleport),
+            2 => Ok(Self::RaOneHotChecks),
+            3 => Ok(Self::RaHammingWeight),
+            4 => Ok(Self::SoftmaxDivSumMax),
+            5 => Ok(Self::SoftmaxExponentiationReadRaf),
+            6 => Ok(Self::SoftmaxExponentiationRaOneHot),
+            7 => Ok(Self::RangeCheck),
+            _ => Err(SerializationError::InvalidData),
+        }
+    }
 }
 
 impl CanonicalSerialize for ProofType {
@@ -53,17 +75,7 @@ impl CanonicalSerialize for ProofType {
         writer: W,
         compress: Compress,
     ) -> Result<(), SerializationError> {
-        let tag: u8 = match self {
-            Self::Execution => 0,
-            Self::NeuralTeleport => 1,
-            Self::RaOneHotChecks => 2,
-            Self::RaHammingWeight => 3,
-            Self::SoftmaxDivSumMax => 4,
-            Self::SoftmaxExponentiationReadRaf => 5,
-            Self::SoftmaxExponentiationRaOneHot => 6,
-            Self::RangeCheck => 7,
-        };
-        tag.serialize_with_mode(writer, compress)
+        (*self as u8).serialize_with_mode(writer, compress)
     }
 
     fn serialized_size(&self, compress: Compress) -> usize {
@@ -84,17 +96,7 @@ impl CanonicalDeserialize for ProofType {
         validate: Validate,
     ) -> Result<Self, SerializationError> {
         let tag = u8::deserialize_with_mode(reader, compress, validate)?;
-        match tag {
-            0 => Ok(Self::Execution),
-            1 => Ok(Self::NeuralTeleport),
-            2 => Ok(Self::RaOneHotChecks),
-            3 => Ok(Self::RaHammingWeight),
-            4 => Ok(Self::SoftmaxDivSumMax),
-            5 => Ok(Self::SoftmaxExponentiationReadRaf),
-            6 => Ok(Self::SoftmaxExponentiationRaOneHot),
-            7 => Ok(Self::RangeCheck),
-            _ => Err(SerializationError::InvalidData),
-        }
+        ProofType::try_from(tag)
     }
 }
 

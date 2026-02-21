@@ -125,10 +125,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
     ) {
         for (_, computation_node) in computation_nodes.iter().rev() {
-            let new_proofs = OperatorProver::prove(computation_node, prover);
-            for (proof_id, proof) in new_proofs {
-                proofs.insert(proof_id, proof);
-            }
+            proofs.extend(OperatorProver::prove(computation_node, prover));
         }
     }
 
@@ -204,15 +201,16 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         model: &Model,
         trace: &Trace,
     ) -> BTreeMap<CommittedPolynomial, MultilinearPolynomial<F>> {
-        let mut poly_map = BTreeMap::new();
-        for (_, node) in model.graph.nodes.iter() {
-            let node_polys = NodeCommittedPolynomials::get_committed_polynomials::<F, T>(node);
-            for committed_poly in node_polys {
-                let witness_poly = committed_poly.generate_witness(model, trace);
-                poly_map.insert(committed_poly, witness_poly);
-            }
-        }
-        poly_map
+        model
+            .graph
+            .nodes
+            .values()
+            .flat_map(|node| NodeCommittedPolynomials::get_committed_polynomials::<F, T>(node))
+            .map(|committed_poly| {
+                let witness = committed_poly.generate_witness(model, trace);
+                (committed_poly, witness)
+            })
+            .collect()
     }
 
     #[tracing::instrument(skip_all)]

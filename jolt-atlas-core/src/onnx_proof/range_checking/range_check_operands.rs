@@ -16,7 +16,7 @@ use crate::{
         neural_teleport::division::compute_division,
         ops::rsqrt::{Q, Q_SQUARE},
     },
-    utils::compute_lookup_indices_from_operands,
+    utils::{adjusted_remainder, compute_lookup_indices_from_operands},
 };
 
 /// Common fields shared by all range-checking operand types.
@@ -160,20 +160,12 @@ impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
             panic!("Expected exactly two input tensors");
         };
 
-        let remainder = {
-            let data: Vec<i32> = dividend
-                .iter()
-                .zip(divisor.iter())
-                .map(|(&a, &b)| {
-                    let mut R = a % b;
-                    if (R < 0 && b > 0) || R > 0 && b < 0 {
-                        R += b
-                    }
-                    R
-                })
-                .collect();
-            Tensor::<i32>::construct(data, dividend.dims().to_vec())
-        };
+        let remainder_data: Vec<i32> = dividend
+            .iter()
+            .zip(divisor.iter())
+            .map(|(&a, &b)| adjusted_remainder(a, b))
+            .collect();
+        let remainder = Tensor::<i32>::construct(remainder_data, dividend.dims().to_vec());
 
         (remainder, divisor.clone())
     }

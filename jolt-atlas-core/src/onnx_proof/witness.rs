@@ -25,16 +25,17 @@ use crate::{
             RsRangeCheckOperands, TeleportRangeCheckOperands,
         },
     },
-    utils::compute_lookup_indices_from_operands,
+    utils::{adjusted_remainder, compute_lookup_indices_from_operands},
 };
 use atlas_onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
         Model,
     },
+    node::ComputationNode,
     ops::Operator,
     tensor::{
-        ops::nonlinearities::{softmax_fixed_128, LOG_EXP_LUT_SIZE},
+        ops::nonlinearities::{softmax_fixed_128, SoftmaxTrace, LOG_EXP_LUT_SIZE},
         Tensor,
     },
 };
@@ -44,9 +45,59 @@ use joltworks::{
     field::JoltField,
     poly::{multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial},
     subprotocols,
-    utils::math::Math,
+    utils::{lookup_bits::LookupBits, math::Math},
 };
 use rayon::prelude::*;
+
+/// Computes the softmax intermediate trace for one feature-group chunk of a `SoftmaxAxes` node.
+///
+/// Both `SoftmaxRemainder` and `SoftmaxExponentiationRaD` need identical slicing and
+/// `softmax_fixed_128` logic; this helper eliminates the duplication.
+fn softmax_chunk_trace(node: &ComputationNode, trace: &Trace, feature_idx: usize) -> SoftmaxTrace {
+    let features = node.output_dims[2];
+    let LayerData { operands, .. } = Trace::layer_data(trace, node);
+    let operand = operands[0];
+    let chunk = operand.data()[feature_idx * features..(feature_idx + 1) * features].to_vec();
+    let (_, softmax_trace) = softmax_fixed_128::<true>(&Tensor::construct(chunk, vec![features]));
+    softmax_trace.expect("softmax trace is always Some when TRACE = true")
+}
+
+/// Builds a one-hot RaD witness for any of the range-checking operand types.
+///
+/// Every range-check variant (`DivRangeCheckRaD`, `SqrtRangeCheckRaD`, etc.) follows the
+/// same three steps: get operand tensors via the trait, compute lookup indices, then call
+/// `build_one_hot_rad_witness`. This helper collapses all four arms to a single call site.
+fn build_range_check_rad_witness<F: JoltField, R: RangeCheckingOperandsTrait>(
+    model: &Model,
+    trace: &Trace,
+    node_idx: usize,
+    d: usize,
+) -> MultilinearPolynomial<F> {
+    let computation_node = &model.graph.nodes[&node_idx];
+    let (left_operand, right_operand) = R::get_operands_tensors(trace, computation_node);
+    let lookup_indices = R::compute_lookup_indices(&left_operand, &right_operand);
+    build_one_hot_rad_witness(&lookup_indices, d)
+}
+
+/// Builds a one-hot polynomial witness for the `d`-th dimension of a read-after-decompose (RaD)
+/// address polynomial.
+///
+/// This pattern appears in every operand type that decomposes lookup indices across multiple
+/// dimensions (NodeOutputRaD, DivRangeCheckRaD, SqrtRangeCheckRaD, etc.).
+fn build_one_hot_rad_witness<F: JoltField>(
+    lookup_indices: &[LookupBits],
+    d: usize,
+) -> MultilinearPolynomial<F> {
+    let one_hot_params = OneHotParams::new(lookup_indices.len().log_2());
+    let addresses: Vec<_> = lookup_indices
+        .par_iter()
+        .map(|lookup_index| Some(one_hot_params.lookup_index_chunk(lookup_index.into(), d) as u16))
+        .collect();
+    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+        addresses,
+        one_hot_params.k_chunk,
+    ))
+}
 
 /// Trait for generating witness polynomials from model execution traces.
 ///
@@ -106,19 +157,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     &layer_data.operands,
                     is_interleaved_operands,
                 );
-                let one_hot_params = OneHotParams::new(lookup_indices.len().log_2());
-                let addresses: Vec<_> = lookup_indices
-                    .par_iter()
-                    .map(|lookup_index| {
-                        Some(one_hot_params.lookup_index_chunk(lookup_index.into(), *d) as u16)
-                    })
-                    .collect();
-                MultilinearPolynomial::OneHot(
-                    joltworks::poly::one_hot_polynomial::OneHotPolynomial::from_indices(
-                        addresses,
-                        one_hot_params.k_chunk,
-                    ),
-                )
+                build_one_hot_rad_witness(&lookup_indices, *d)
             }
             CommittedPolynomial::DivNodeQuotient(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
@@ -129,32 +168,22 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
             }
             CommittedPolynomial::ScalarConstDivNodeRemainder(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
-                assert!(matches!(
-                    computation_node.operator,
-                    Operator::ScalarConstDiv(_)
-                ));
-                let layer_data = Trace::layer_data(trace, computation_node);
-                let R_tensor = {
-                    let [left_operand] = layer_data.operands[..] else {
-                        panic!("Expected one operand for ScalarConstDiv operation")
-                    };
-                    let b = match &computation_node.operator {
-                        Operator::ScalarConstDiv(scalar_const_div) => scalar_const_div.divisor,
-                        _ => panic!("Expected ScalarConstDiv operator"),
-                    };
-                    let data: Vec<i32> = left_operand
-                        .iter()
-                        .map(|&a| {
-                            let mut R = a % b;
-                            if (R < 0 && b > 0) || R > 0 && b < 0 {
-                                R += b
-                            }
-                            R
-                        })
-                        .collect();
-                    Tensor::<i32>::construct(data, left_operand.dims().to_vec())
+                let Operator::ScalarConstDiv(op) = &computation_node.operator else {
+                    panic!("Expected ScalarConstDiv operator at node {node_idx}");
                 };
-                MultilinearPolynomial::from(R_tensor)
+                let b = op.divisor;
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let [left_operand] = layer_data.operands[..] else {
+                    panic!("Expected one operand for ScalarConstDiv operation")
+                };
+                let remainder_data: Vec<i32> = left_operand
+                    .iter()
+                    .map(|&a| adjusted_remainder(a, b))
+                    .collect();
+                MultilinearPolynomial::from(Tensor::<i32>::construct(
+                    remainder_data,
+                    left_operand.dims().to_vec(),
+                ))
             }
             CommittedPolynomial::RsqrtNodeRsqrt(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
@@ -174,124 +203,42 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 MultilinearPolynomial::from(inv_data)
             }
             CommittedPolynomial::DivRangeCheckRaD(node_idx, d) => {
-                let computation_node = &model.graph.nodes[node_idx];
-                assert!(matches!(computation_node.operator, Operator::Div(_)));
-                let (left_operand, right_operand) =
-                    DivRangeCheckOperands::get_operands_tensors(trace, computation_node);
-                let lookup_indices =
-                    DivRangeCheckOperands::compute_lookup_indices(&left_operand, &right_operand);
-                let one_hot_params = OneHotParams::new(lookup_indices.len().log_2());
-                let addresses: Vec<_> = lookup_indices
-                    .par_iter()
-                    .map(|lookup_index| {
-                        Some(one_hot_params.lookup_index_chunk(lookup_index.into(), *d) as u16)
-                    })
-                    .collect();
-                MultilinearPolynomial::OneHot(
-                    joltworks::poly::one_hot_polynomial::OneHotPolynomial::from_indices(
-                        addresses,
-                        one_hot_params.k_chunk,
-                    ),
+                build_range_check_rad_witness::<F, DivRangeCheckOperands>(
+                    model, trace, *node_idx, *d,
                 )
             }
             CommittedPolynomial::SqrtRangeCheckRaD(node_idx, d) => {
-                let computation_node = &model.graph.nodes[node_idx];
-                assert!(matches!(computation_node.operator, Operator::Rsqrt(_)));
-                let (left_operand, right_operand) =
-                    RsRangeCheckOperands::get_operands_tensors(trace, computation_node);
-                let lookup_indices =
-                    RsRangeCheckOperands::compute_lookup_indices(&left_operand, &right_operand);
-                let one_hot_params = OneHotParams::new(lookup_indices.len().log_2());
-                let addresses: Vec<_> = lookup_indices
-                    .par_iter()
-                    .map(|lookup_index| {
-                        Some(one_hot_params.lookup_index_chunk(lookup_index.into(), *d) as u16)
-                    })
-                    .collect();
-                MultilinearPolynomial::OneHot(
-                    joltworks::poly::one_hot_polynomial::OneHotPolynomial::from_indices(
-                        addresses,
-                        one_hot_params.k_chunk,
-                    ),
+                build_range_check_rad_witness::<F, RsRangeCheckOperands>(
+                    model, trace, *node_idx, *d,
                 )
             }
             CommittedPolynomial::SqrtDivRangeCheckRaD(node_idx, d) => {
-                let computation_node = &model.graph.nodes[node_idx];
-                assert!(matches!(computation_node.operator, Operator::Rsqrt(_)));
-                let (left_operand, right_operand) =
-                    RiRangeCheckOperands::get_operands_tensors(trace, computation_node);
-                let lookup_indices =
-                    RiRangeCheckOperands::compute_lookup_indices(&left_operand, &right_operand);
-                let one_hot_params = OneHotParams::new(lookup_indices.len().log_2());
-                let addresses: Vec<_> = lookup_indices
-                    .par_iter()
-                    .map(|lookup_index| {
-                        Some(one_hot_params.lookup_index_chunk(lookup_index.into(), *d) as u16)
-                    })
-                    .collect();
-                MultilinearPolynomial::OneHot(
-                    joltworks::poly::one_hot_polynomial::OneHotPolynomial::from_indices(
-                        addresses,
-                        one_hot_params.k_chunk,
-                    ),
+                build_range_check_rad_witness::<F, RiRangeCheckOperands>(
+                    model, trace, *node_idx, *d,
                 )
             }
             CommittedPolynomial::TeleportRangeCheckRaD(node_idx, d) => {
-                let computation_node = &model.graph.nodes[node_idx];
-                let (left_operand, right_operand) =
-                    TeleportRangeCheckOperands::get_operands_tensors(trace, computation_node);
-                let lookup_indices = TeleportRangeCheckOperands::compute_lookup_indices(
-                    &left_operand,
-                    &right_operand,
-                );
-                let one_hot_params = OneHotParams::new(lookup_indices.len().log_2());
-                let addresses: Vec<_> = lookup_indices
-                    .par_iter()
-                    .map(|lookup_index| {
-                        Some(one_hot_params.lookup_index_chunk(lookup_index.into(), *d) as u16)
-                    })
-                    .collect();
-                MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
-                    addresses,
-                    one_hot_params.k_chunk,
-                ))
+                build_range_check_rad_witness::<F, TeleportRangeCheckOperands>(
+                    model, trace, *node_idx, *d,
+                )
             }
-            // TODO: Generate batch witness for Sofmax committed polynomials
+            // TODO: Generate batch witness for Softmax committed polynomials
             CommittedPolynomial::SoftmaxRemainder(node_idx, feature_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 assert!(matches!(
                     computation_node.operator,
                     Operator::SoftmaxAxes(_)
                 ));
-                let features = computation_node.output_dims[2];
-                let LayerData {
-                    output: _,
-                    operands,
-                } = Trace::layer_data(trace, computation_node);
-                let operand = operands[0];
-                let operand_chunk =
-                    operand.data()[feature_idx * features..(feature_idx + 1) * features].to_vec();
-                let (_, softmax_trace) = softmax_fixed_128::<true>(&Tensor::construct(
-                    operand_chunk.to_vec(),
-                    vec![features],
-                ));
-                let softmax_trace = softmax_trace.unwrap();
-                let left_operand = &softmax_trace.exp_q_values;
-                let right_operand = softmax_trace.exp_sum_q;
-                let R_tensor = {
-                    let data: Vec<i32> = left_operand
-                        .iter()
-                        .map(|&a| {
-                            let mut R = (a * S as i32) % right_operand;
-                            if (R < 0 && right_operand > 0) || R > 0 && right_operand < 0 {
-                                R += right_operand
-                            }
-                            R
-                        })
-                        .collect();
-                    Tensor::<i32>::construct(data, left_operand.dims().to_vec())
-                };
-                MultilinearPolynomial::from(R_tensor)
+                let st = softmax_chunk_trace(computation_node, trace, *feature_idx);
+                let remainder_data: Vec<i32> = st
+                    .exp_q_values
+                    .iter()
+                    .map(|&a| adjusted_remainder(a * S as i32, st.exp_sum_q))
+                    .collect();
+                MultilinearPolynomial::from(Tensor::<i32>::construct(
+                    remainder_data,
+                    st.exp_q_values.dims().to_vec(),
+                ))
             }
             CommittedPolynomial::SoftmaxExponentiationRaD(node_idx, feature_idx, d_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
@@ -299,33 +246,20 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     computation_node.operator,
                     Operator::SoftmaxAxes(_)
                 ));
-                let features = computation_node.output_dims[2];
-                let LayerData {
-                    output: _,
-                    operands,
-                } = Trace::layer_data(trace, computation_node);
-                let operand = operands[0];
-                let operand_chunk =
-                    operand.data()[feature_idx * features..(feature_idx + 1) * features].to_vec();
-                let (_, softmax_trace) = softmax_fixed_128::<true>(&Tensor::construct(
-                    operand_chunk.to_vec(),
-                    vec![features],
-                ));
-                let softmax_trace = softmax_trace.unwrap();
-                let lookup_indices = &softmax_trace.abs_centered_logits;
-                let lookup_indices = lookup_indices
+                let st = softmax_chunk_trace(computation_node, trace, *feature_idx);
+                let lookup_indices: Vec<usize> = st
+                    .abs_centered_logits
                     .par_iter()
-                    .map(|&lookup_index| lookup_index as usize)
-                    .collect::<Vec<_>>();
+                    .map(|&x| x as usize)
+                    .collect();
                 let one_hot_params =
                     OneHotParams::from_config_and_log_K(&OneHotConfig::default(), LOG_EXP_LUT_SIZE);
-                let H_indices = subprotocols::shout::compute_instruction_h_indices(
+                let h_indices = subprotocols::shout::compute_instruction_h_indices(
                     &lookup_indices,
                     &one_hot_params,
                 );
-
                 MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
-                    H_indices[*d_idx]
+                    h_indices[*d_idx]
                         .par_iter()
                         .map(|&h| h.map(|h| h as u16))
                         .collect(),
@@ -358,20 +292,19 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 };
                 let layer_data = Trace::layer_data(trace, computation_node);
                 let input = &layer_data.operands[0];
-                // Compute quotient
                 let (quotient, _remainder) = compute_division(input, inner.tau);
-                let lookup_indices = quotient
+                let lookup_indices: Vec<usize> = quotient
                     .par_iter()
                     .map(|&x| n_bits_to_usize(x, inner.log_table))
-                    .collect::<Vec<usize>>();
+                    .collect();
                 let one_hot_params =
                     OneHotParams::from_config_and_log_K(&OneHotConfig::default(), inner.log_table);
-                let H_indices = subprotocols::shout::compute_instruction_h_indices(
+                let h_indices = subprotocols::shout::compute_instruction_h_indices(
                     &lookup_indices,
                     &one_hot_params,
                 );
                 MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
-                    H_indices[*d_idx]
+                    h_indices[*d_idx]
                         .par_iter()
                         .map(|&h| h.map(|h| h as u16))
                         .collect(),

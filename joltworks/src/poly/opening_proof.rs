@@ -342,11 +342,19 @@ where
         &mut self,
         polynomials: &BTreeMap<CommittedPolynomial, MultilinearPolynomial<F>>,
     ) {
-        assert_eq!(
-            self.sumchecks.len(),
-            polynomials.len(),
-            "Number of sumcheck instances does not match number of cached opening claims"
-        );
+        if self.sumchecks.len() != polynomials.len() {
+            let missing_sumchecks: Vec<CommittedPolynomial> = polynomials
+                .keys()
+                .filter(|poly| !self.sumchecks.contains_key(poly))
+                .cloned()
+                .collect();
+            println!("Missing sumcheck instances for polynomials: {missing_sumchecks:?}");
+            panic!(
+                "Expected {} sumcheck instances, but found {}",
+                polynomials.len(),
+                self.sumchecks.len()
+            );
+        }
 
         tracing::debug!(
             "{} sumcheck instances in batched opening proof reduction",

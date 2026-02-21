@@ -1,9 +1,7 @@
 use crate::onnx_proof::{
     ops::OperatorProofTrait,
     range_checking::{
-        read_raf_checking::{RangecheckRafSumcheckProver, RangecheckRafSumcheckVerifier},
-        sumcheck_instance::{DivRangeCheckOperands, ReadRafSumcheckHelper},
-        RangeCheckEncoding,
+        range_check_operands::DivRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
     },
     ProofId, ProofType, Prover, Verifier,
 };
@@ -13,9 +11,10 @@ use atlas_onnx_tracer::{
     ops::Div,
     tensor::Tensor,
 };
-use common::{CommittedPolynomial, VirtualPolynomial};
+use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
+    lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
@@ -35,7 +34,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
-use rayon::prelude::*;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
     #[tracing::instrument(skip_all, name = "Div::prove")]
@@ -62,9 +60,13 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         }
 
         // Range check proof
-
-        let mut rangecheck_sumcheck =
-            RangecheckRafSumcheckProver::<_, DivRangeCheckOperands>::new_from_prover(node, prover);
+        let rangecheck_provider = RangeCheckProvider::<DivRangeCheckOperands>::new(node);
+        let (mut rangecheck_sumcheck, lookup_indices) = rangecheck_provider
+            .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
+                &prover.trace,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            );
         let (rangecheck_proof, _) = Sumcheck::prove(
             &mut rangecheck_sumcheck,
             &mut prover.accumulator,
@@ -75,9 +77,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
 
         // RaOneHotChecks proof
         let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
-        let (left, right) = DivRangeCheckOperands::get_operands_tensors(&prover.trace, node);
-        let lookup_bits = DivRangeCheckOperands::compute_lookup_indices(&left, &right);
-        let lookup_indices: Vec<usize> = lookup_bits.par_iter().map(|&x| x.into()).collect();
 
         let [ra_sumcheck, hw_sumcheck, bool_sumcheck] = shout::ra_onehot_provers(
             &encoding,
@@ -131,9 +130,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
             .get(&ProofId(node.idx, ProofType::RangeCheck))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
 
-        let rangecheck_verifier =
-            RangecheckRafSumcheckVerifier::<_, DivRangeCheckOperands>::new_from_verifier(
-                node, verifier,
+        let rangecheck_provider = RangeCheckProvider::<DivRangeCheckOperands>::new(node);
+        let rangecheck_verifier = rangecheck_provider
+            .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
+                &mut verifier.accumulator,
+                &mut verifier.transcript,
             );
         Sumcheck::verify(
             rangecheck_proof,
@@ -457,7 +458,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use atlas_onnx_tracer::{
+        model::{test::ModelBuilder, Model},
+        tensor::Tensor,
+    };
     use rand::{rngs::StdRng, SeedableRng};
 
     const SCALE: i32 = 7;

@@ -1,4 +1,4 @@
-use joltworks::utils::lookup_bits::LookupBits;
+use crate::utils::lookup_bits::LookupBits;
 
 use super::SparseDenseSuffix;
 

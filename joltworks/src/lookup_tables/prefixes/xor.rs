@@ -1,6 +1,5 @@
 use super::{PrefixCheckpoint, Prefixes, SparseDensePrefix};
-use crate::onnx_proof::op_lookups::LOG_K;
-use joltworks::{
+use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     utils::lookup_bits::LookupBits,
 };
@@ -20,7 +19,7 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for XorPrefix<XLEN> {
         C: ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
-        let suffix_len = LOG_K - j - b.len() - 1;
+        let suffix_len = XLEN * 2 - j - b.len() - 1;
         let mut result = checkpoints[Prefixes::Xor].unwrap_or(F::zero());
 
         // XOR high-order variables of x and y

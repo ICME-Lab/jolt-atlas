@@ -27,15 +27,14 @@
 //! This decomposition dramatically reduces prover complexity by avoiding iteration over
 //! the full 2^(2*XLEN) table.
 
-use crate::onnx_proof::lookup_tables::{
-    and::AndTable,
-    or::OrTable,
-    prefixes::{PrefixEval, Prefixes},
-    suffixes::{SuffixEval, Suffixes},
-    xor::XorTable,
-};
+use and::AndTable;
+use or::OrTable;
+use prefixes::{PrefixEval, Prefixes};
+use suffixes::{SuffixEval, Suffixes};
+use xor::XorTable;
+
+use crate::field::{ChallengeFieldOps, FieldChallengeOps, JoltField};
 use derive_more::From;
-use joltworks::field::{ChallengeFieldOps, FieldChallengeOps, JoltField};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter, IntoStaticStr};

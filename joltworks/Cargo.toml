@@ -14,6 +14,9 @@ test-feature = []
 common.workspace = true
 atlas-onnx-tracer.workspace = true
 
+# Serialization
+serde.workspace = true
+
 # Cryptography and Math
 ark-bn254.workspace = true
 ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }

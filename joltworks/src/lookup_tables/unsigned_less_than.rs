@@ -1,10 +1,10 @@
-use joltworks::{
+use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     utils::uninterleave_bits,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::onnx_proof::lookup_tables::PrefixSuffixDecompositionTrait;
+use super::PrefixSuffixDecompositionTrait;
 
 use super::{
     prefixes::{PrefixEval, Prefixes},
@@ -74,7 +74,7 @@ mod test {
     use ark_bn254::Fr;
     use common::consts::XLEN;
 
-    use crate::onnx_proof::lookup_tables::test::{
+    use crate::lookup_tables::test::{
         lookup_table_mle_full_hypercube_test, lookup_table_mle_random_test, prefix_suffix_test,
     };
 

@@ -3,6 +3,7 @@ pub mod hamming_booleanity;
 pub mod hamming_weight;
 pub mod mles_product_sum;
 pub mod opening_reduction;
+pub mod ps_shout;
 pub mod ra_virtual;
 pub mod shout;
 pub mod sumcheck;

@@ -52,7 +52,7 @@ pub mod range_check_operands;
 /// # Architecture
 ///
 /// The range-checking provider:
-/// - Uses a helper to extract operation-specific operands (e.g., numerator/denominator for Div)
+/// - Uses the operands to extract operation-specific values (e.g., numerator/denominator for Div)
 /// - Computes lookup indices based on remainder bounds
 /// - Generates RAF claims for both left and right operands
 /// - Integrates with the prefix-suffix read-checking sumcheck protocol
@@ -64,9 +64,9 @@ pub mod range_check_operands;
 /// # Usage
 ///
 /// ```ignore
-/// use crate::onnx_proof::range_checking::{RangeCheckProvider, range_check_operands::DivHelper};
+/// use crate::onnx_proof::range_checking::{RangeCheckProvider, range_check_operands::DivRangeCheckOperands};
 ///
-/// let provider = RangeCheckProvider::<DivHelper>::new(&div_node);
+/// let provider = RangeCheckProvider::<DivRangeCheckOperands>::new(&div_node);
 ///
 /// // Prover side
 /// let (prover, indices) = provider.read_raf_prove::<F, _, RangeLookup>(
@@ -88,8 +88,8 @@ pub mod range_check_operands;
 /// - [`RangeCheckEncoding`] - The encoding struct for one-hot checks related to range-checking operations
 /// - [`PrefixSuffixShoutProvider`] - The trait this struct implements
 pub struct RangeCheckProvider<H: RangeCheckingOperandsTrait> {
-    /// Helper providing operation-specific range-checking logic (e.g., Div, Rsqrt, Tanh).
-    pub helper: H,
+    /// Operands providing operation-specific range-checking logic (e.g., Div, Rsqrt, Tanh).
+    pub operands: H,
     /// The computation node being proven, containing operation type, inputs, and dimensionality.
     pub computation_node: ComputationNode,
 }
@@ -97,7 +97,7 @@ pub struct RangeCheckProvider<H: RangeCheckingOperandsTrait> {
 impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
     /// Creates a new range-checking provider for the specified computation node.
     ///
-    /// This initializes both the helper (with operation-specific logic) and stores
+    /// This initializes the operands (with operation-specific logic) and stores
     /// the computation node for later access during the proving/verification protocol.
     ///
     /// # Parameters
@@ -108,26 +108,26 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
     /// # Returns
     ///
     /// A new [`RangeCheckProvider`] instance configured for the given node with the
-    /// appropriate helper implementation.
+    /// appropriate operands implementation.
     ///
     /// # Type Parameters
     ///
     /// The generic `H` determines which operation is being proven:
-    /// - `DivHelper` for division operations
-    /// - `RsqrtHelper` for reciprocal square root operations
-    /// - `TanhHelper` for hyperbolic tangent operations
+    /// - [`DivRangeCheckOperands`](range_check_operands::DivRangeCheckOperands) for division operations
+    /// - [`RiRangeCheckOperands`](range_check_operands::RiRangeCheckOperands) / [`RsRangeCheckOperands`](range_check_operands::RsRangeCheckOperands) for reciprocal square root operations
+    /// - [`TeleportRangeCheckOperands`](range_check_operands::TeleportRangeCheckOperands) for tanh operations
     ///
     /// # Example
     ///
     /// ```ignore
-    /// use crate::onnx_proof::range_checking::{RangeCheckProvider, range_check_operands::DivHelper};
+    /// use crate::onnx_proof::range_checking::{RangeCheckProvider, range_check_operands::DivRangeCheckOperands};
     ///
     /// let div_node = trace.get_computation_node(node_idx);
-    /// let provider = RangeCheckProvider::<DivHelper>::new(&div_node);
+    /// let provider = RangeCheckProvider::<DivRangeCheckOperands>::new(&div_node);
     /// ```
     pub fn new(computation_node: &ComputationNode) -> Self {
         Self {
-            helper: H::new(computation_node),
+            operands: H::new(computation_node),
             computation_node: computation_node.clone(),
         }
     }
@@ -184,7 +184,7 @@ where
     H: RangeCheckingOperandsTrait,
 {
     fn read_raf_claims(&self, accumulator: &dyn OpeningAccumulator<F>) -> ReadRafClaims<F> {
-        let (left_operand_claim, right_operand_claim) = self.helper.operand_claims(accumulator);
+        let (left_operand_claim, right_operand_claim) = self.operands.operand_claims(accumulator);
         ReadRafClaims {
             rv_claim: F::one(),
             left_operand_claim,
@@ -198,18 +198,18 @@ where
 
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
         let (r_node_output, _) = accumulator.get_virtual_polynomial_opening(
-            self.helper.get_input_operands()[0],
+            self.operands.get_input_operands()[0],
             SumcheckId::Execution,
         );
         r_node_output
     }
 
     fn ra_poly(&self) -> (VirtualPolynomial, SumcheckId) {
-        (self.helper.get_output_operand(), SumcheckId::Raf)
+        (self.operands.get_output_operand(), SumcheckId::Raf)
     }
 
     fn raf_claim_specs(&self) -> Vec<(VirtualPolynomial, SumcheckId)> {
-        self.helper
+        self.operands
             .get_input_operands()
             .into_iter()
             .map(|p| (p, SumcheckId::Raf))
@@ -228,8 +228,8 @@ where
 /// operations that produce remainders (Div, Rsqrt, Tanh). It implements the
 /// [`RaOneHotEncoding`] trait to integrate with the one-hot checking protocol.
 pub struct RangeCheckEncoding<H: RangeCheckingOperandsTrait> {
-    /// Helper providing operation-specific range-checking logic.
-    pub helper: H,
+    /// Operands providing operation-specific range-checking logic.
+    pub operands: H,
     /// log2 of the number of elements in the computation (T).
     pub log_t: usize,
 }
@@ -238,7 +238,7 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckEncoding<H> {
     /// Create a new range-check encoding from a computation node.
     pub fn new(computation_node: &ComputationNode) -> Self {
         Self {
-            helper: H::new(computation_node),
+            operands: H::new(computation_node),
             log_t: computation_node.num_output_elements().log_2(),
         }
     }
@@ -246,18 +246,18 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckEncoding<H> {
 
 impl<H: RangeCheckingOperandsTrait> RaOneHotEncoding for RangeCheckEncoding<H> {
     fn committed_poly(&self, d: usize) -> CommittedPolynomial {
-        self.helper.rad_poly(d)
+        self.operands.rad_poly(d)
     }
 
     fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
         (
-            VirtualPolynomial::NodeOutput(self.helper.node_idx()),
+            VirtualPolynomial::NodeOutput(self.operands.node_idx()),
             SumcheckId::Execution,
         )
     }
 
     fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (self.helper.get_output_operand(), SumcheckId::Raf)
+        (self.operands.get_output_operand(), SumcheckId::Raf)
     }
 
     fn log_k(&self) -> usize {

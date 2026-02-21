@@ -44,13 +44,13 @@ pub struct RangeCheckOperandsBase {
 /// Common accessors (`node_idx`, `get_input_operands`, `get_output_operand`,
 /// `operand_claims`) are provided as defaults via [`Self::base`].
 pub trait RangeCheckingOperandsTrait {
-    /// Create a new helper from a computation node.
+    /// Create a new operands instance from a computation node.
     fn new(node: &ComputationNode) -> Self;
 
     /// Returns a reference to the common base fields.
     fn base(&self) -> &RangeCheckOperandsBase;
 
-    /// Get the index of the computation node this helper is associated with.
+    /// Get the index of the computation node these operands are associated with.
     fn node_idx(&self) -> usize {
         self.base().node_idx
     }

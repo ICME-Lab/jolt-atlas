@@ -7,6 +7,27 @@ use rayon::prelude::*;
 
 pub mod dims;
 
+/// Computes the floored (Euclidean-style) remainder of `a / b`.
+///
+/// This matches Python's `%` semantics: the result always has the same sign as `b`
+/// (or is zero). This is used in integer division proofs where the remainder must
+/// lie in the half-open interval `[0, |b|)`.
+///
+/// # Examples
+/// ```
+/// use jolt_atlas_core::utils::adjusted_remainder;
+/// assert_eq!(adjusted_remainder(7, 3), 1);
+/// assert_eq!(adjusted_remainder(-7, 3), 2);  // not -1
+/// assert_eq!(adjusted_remainder(7, -3), -2); // not 1
+/// ```
+pub fn adjusted_remainder(a: i32, b: i32) -> i32 {
+    let mut r = a % b;
+    if (r < 0 && b > 0) || (r > 0 && b < 0) {
+        r += b;
+    }
+    r
+}
+
 /// Computes lookup table indices from operand tensors.
 ///
 /// # Arguments

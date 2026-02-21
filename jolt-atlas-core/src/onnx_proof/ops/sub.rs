@@ -1,4 +1,7 @@
-use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
+use crate::{
+    impl_standard_params, impl_standard_sumcheck_proof_api,
+    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
+};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
@@ -23,62 +26,11 @@ use joltworks::{
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math},
+    utils::errors::ProofVerifyError,
 };
 
-use crate::impl_standard_sumcheck_proof_api;
-
 impl_standard_sumcheck_proof_api!(Sub, SubParams, SubProver, SubVerifier);
-
-const DEGREE_BOUND: usize = 2;
-
-/// Parameters for proving element-wise subtraction operations.
-///
-/// Stores the opening point and computation node information needed for the sumcheck protocol.
-#[derive(Clone)]
-pub struct SubParams<F: JoltField> {
-    r_node_output: Vec<F::Challenge>,
-    computation_node: ComputationNode,
-}
-
-impl<F: JoltField> SubParams<F> {
-    /// Create new subtraction parameters from a computation node and opening accumulator.
-    pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let r_node_output = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(computation_node.idx),
-                SumcheckId::Execution,
-            )
-            .0
-            .r;
-        Self {
-            r_node_output,
-            computation_node,
-        }
-    }
-}
-
-impl<F: JoltField> SumcheckInstanceParams<F> for SubParams<F> {
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, sub_claim) = accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(self.computation_node.idx),
-            SumcheckId::Execution,
-        );
-        sub_claim
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.computation_node.num_output_elements().log_2()
-    }
-}
+impl_standard_params!(SubParams, 2);
 
 /// Prover state for element-wise subtraction sumcheck protocol.
 ///

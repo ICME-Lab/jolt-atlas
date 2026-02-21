@@ -1,4 +1,7 @@
-use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
+use crate::{
+    impl_standard_params, impl_standard_sumcheck_proof_api,
+    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
+};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
@@ -24,62 +27,13 @@ use joltworks::{
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math},
+    utils::errors::ProofVerifyError,
 };
 
-use crate::impl_standard_sumcheck_proof_api;
-
 impl_standard_sumcheck_proof_api!(Cube, CubeParams, CubeProver, CubeVerifier);
+impl_standard_params!(CubeParams, 4);
 
 const DEGREE_BOUND: usize = 4;
-
-/// Parameters for proving element-wise cube (x³) operations.
-///
-/// Stores the opening point and computation node information needed for the sumcheck protocol.
-#[derive(Clone)]
-pub struct CubeParams<F: JoltField> {
-    r_node_output: Vec<F::Challenge>,
-    computation_node: ComputationNode,
-}
-
-impl<F: JoltField> CubeParams<F> {
-    /// Create new cube parameters from a computation node and opening accumulator.
-    pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let r_node_output = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(computation_node.idx),
-                SumcheckId::Execution,
-            )
-            .0
-            .r;
-        Self {
-            r_node_output,
-            computation_node,
-        }
-    }
-}
-
-impl<F: JoltField> SumcheckInstanceParams<F> for CubeParams<F> {
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, cube_claim) = accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(self.computation_node.idx),
-            SumcheckId::Execution,
-        );
-        cube_claim
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.computation_node.num_output_elements().log_2()
-    }
-}
 
 /// Prover state for element-wise cube sumcheck protocol.
 ///
@@ -143,7 +97,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for CubeProver<F>
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
             SumcheckId::Execution,
-            opening_point.clone(),
+            opening_point,
             self.operand.final_sumcheck_claim(),
         );
         accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
@@ -204,7 +158,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for CubeVerifie
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
             SumcheckId::Execution,
-            opening_point.clone(),
+            opening_point,
         );
         accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
     }

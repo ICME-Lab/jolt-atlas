@@ -1,6 +1,5 @@
 use super::{PrefixCheckpoint, Prefixes, SparseDensePrefix};
-use crate::onnx_proof::op_lookups::LOG_K;
-use joltworks::{
+use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     utils::lookup_bits::LookupBits,
 };
@@ -26,7 +25,7 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for LowerWordNoMsbPre
         }
         let jj = j - XLEN;
         let mut word = checkpoints[Prefixes::LowerWordNoMsb].unwrap_or(F::zero());
-        let suffix_len = LOG_K - j - b.len() - 1;
+        let suffix_len = XLEN * 2 - j - b.len() - 1;
         match (r_x, j) {
             (None, jjj) if jjj == XLEN => {
                 // sign bit is in c

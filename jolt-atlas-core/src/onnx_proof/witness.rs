@@ -15,14 +15,17 @@
 //! different types of committed polynomials (e.g., node outputs, division quotients, range check
 //! addresses, etc.).
 
-use crate::onnx_proof::{
-    neural_teleport::{division::compute_division, n_bits_to_usize},
-    op_lookups::{read_raf_checking::compute_lookup_indices_from_operands, InterleavedBitsMarker},
-    ops::{rsqrt::Q_SQUARE, softmax_axes::softmax::scalar_div::S},
-    range_checking::sumcheck_instance::{
-        DivRangeCheckOperands, ReadRafSumcheckHelper, RiRangeCheckOperands, RsRangeCheckOperands,
-        TeleportRangeCheckOperands,
+use crate::{
+    onnx_proof::{
+        neural_teleport::{division::compute_division, n_bits_to_usize},
+        op_lookups::InterleavedBitsMarker,
+        ops::{rsqrt::Q_SQUARE, softmax_axes::softmax::scalar_div::S},
+        range_checking::range_check_operands::{
+            DivRangeCheckOperands, RangeCheckingOperandsTrait, RiRangeCheckOperands,
+            RsRangeCheckOperands, TeleportRangeCheckOperands,
+        },
     },
+    utils::compute_lookup_indices_from_operands,
 };
 use atlas_onnx_tracer::{
     model::{

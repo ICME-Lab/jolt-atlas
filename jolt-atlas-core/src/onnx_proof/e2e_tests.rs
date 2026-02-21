@@ -175,7 +175,7 @@ fn test_transformer() {
         working_dir,
         &[input],
         &Default::default(),
-        TestConfig::default(),
+        TestConfig::default().print_timing().print_proof_size(),
     );
 }
 
@@ -472,7 +472,10 @@ fn test_perceptron() {
         working_dir,
         &[input],
         &Default::default(),
-        TestConfig::new().print_model().print_timing(),
+        TestConfig::new()
+            .print_model()
+            .print_timing()
+            .print_proof_size(),
     );
 }
 

@@ -5,11 +5,11 @@
 //! protocol, suffix MLEs are evaluated and combined with prefix contributions to
 //! reconstruct the full lookup table evaluation without materializing the entire table.
 
-use joltworks::{field::JoltField, utils::lookup_bits::LookupBits};
+use crate::{field::JoltField, utils::lookup_bits::LookupBits};
 use num_derive::FromPrimitive;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
-use crate::onnx_proof::lookup_tables::suffixes::{
+use self::{
     and::AndSuffix, less_than::LessThanSuffix, lower_word_no_msb::LowerWordNoMsbSuffix,
     one::OneSuffix, or::OrSuffix, relu::ReluSuffix, xor::XorSuffix,
 };

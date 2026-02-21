@@ -1,4 +1,4 @@
-use joltworks::{
+use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     utils::lookup_bits::LookupBits,
 };

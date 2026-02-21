@@ -1,23 +1,14 @@
 use crate::onnx_proof::{
-    op_lookups::{
-        read_raf_checking::{
-            compute_lookup_indices_from_operands, ReadRafSumcheckParams, ReadRafSumcheckProver,
-            ReadRafSumcheckVerifier,
-        },
-        InterleavedBitsMarker, OpLookupEncoding,
-    },
+    op_lookups::{OpLookupEncoding, OpLookupProvider},
     ops::OperatorProofTrait,
     ProofId, ProofType, Prover, Verifier,
 };
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::ReLU,
-};
+use atlas_onnx_tracer::{node::ComputationNode, ops::ReLU};
 use common::CommittedPolynomial;
 use joltworks::{
     self,
     field::JoltField,
+    lookup_tables::relu::ReluTable,
     subprotocols::{
         shout::{self, RaOneHotEncoding},
         sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
@@ -26,9 +17,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
-use rayon::prelude::*;
 
-use crate::onnx_proof::lookup_tables::relu::ReluTable;
 use common::consts::XLEN;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
@@ -41,17 +30,13 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
         let mut results = Vec::new();
 
         // Execution proof
-        let params = ReadRafSumcheckParams::<F, ReluTable<XLEN>>::new(
-            node.clone(),
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-        let mut execution_sumcheck = ReadRafSumcheckProver::initialize(
-            params,
-            &prover.trace,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
+        let provider = OpLookupProvider::new(node.clone());
+        let (mut execution_sumcheck, lookup_indices) = provider
+            .read_raf_prove::<F, T, ReluTable<XLEN>>(
+                &prover.trace,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            );
         let (execution_proof, _) = Sumcheck::prove(
             &mut execution_sumcheck,
             &mut prover.accumulator,
@@ -61,14 +46,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
 
         // RaOneHotChecks proof
         let encoding = OpLookupEncoding::new(node);
-        let LayerData {
-            output: _,
-            operands,
-        } = Trace::layer_data(&prover.trace, node);
-        let is_interleaved = node.is_interleaved_operands();
-        let lookup_indices_bits = compute_lookup_indices_from_operands(&operands, is_interleaved);
-        let lookup_indices: Vec<usize> =
-            lookup_indices_bits.par_iter().map(|&x| x.into()).collect();
 
         let [ra_prover, hw_prover, bool_prover] = shout::ra_onehot_provers(
             &encoding,
@@ -99,8 +76,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         // Verify execution proof
-        let verifier_sumcheck = ReadRafSumcheckVerifier::<F, ReluTable<XLEN>>::new(
-            node.clone(),
+        let provider = OpLookupProvider::new(node.clone());
+        let verifier_sumcheck = provider.read_raf_verify::<F, T, ReluTable<XLEN>>(
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );
@@ -145,7 +122,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use atlas_onnx_tracer::{
+        model::{test::ModelBuilder, Model},
+        tensor::Tensor,
+    };
     use rand::{rngs::StdRng, SeedableRng};
 
     fn relu_model(T: usize) -> Model {

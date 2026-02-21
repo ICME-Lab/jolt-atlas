@@ -1,13 +1,13 @@
-use common::consts::XLEN;
-use joltworks::{
+use crate::{
     field::JoltField,
     utils::{index_to_field_bitvector, interleave_bits, lookup_bits::LookupBits},
 };
+use common::consts::XLEN;
 use num::Integer;
 use rand::{rngs::StdRng, Rng, RngCore, SeedableRng};
 use strum::{EnumCount, IntoEnumIterator};
 
-use crate::onnx_proof::lookup_tables::{
+use super::{
     prefixes::{PrefixCheckpoint, Prefixes},
     suffixes::SuffixEval,
     JoltLookupTable, PrefixSuffixDecompositionTrait,

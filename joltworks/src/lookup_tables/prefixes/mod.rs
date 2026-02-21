@@ -5,11 +5,11 @@
 //! prefix MLEs incrementally with checkpoints updated every two rounds, we avoid summing
 //! over the full 2^(2*XLEN) lookup table.
 
-use crate::onnx_proof::lookup_tables::prefixes::{
+use self::{
     and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix,
     lower_word_no_msb::LowerWordNoMsbPrefix, not_msb::NotMsbPrefix, or::OrPrefix, xor::XorPrefix,
 };
-use joltworks::{
+use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     utils::lookup_bits::LookupBits,
 };

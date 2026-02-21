@@ -12,6 +12,7 @@
 
 pub mod config;
 pub mod field;
+pub mod lookup_tables;
 pub mod msm;
 pub mod poly;
 pub mod subprotocols;

@@ -1,9 +1,8 @@
 use crate::onnx_proof::{
     ops::OperatorProofTrait,
     range_checking::{
-        read_raf_checking::{RangecheckRafSumcheckProver, RangecheckRafSumcheckVerifier},
-        sumcheck_instance::{ReadRafSumcheckHelper, RiRangeCheckOperands, RsRangeCheckOperands},
-        RangeCheckEncoding,
+        range_check_operands::{RiRangeCheckOperands, RsRangeCheckOperands},
+        RangeCheckEncoding, RangeCheckProvider,
     },
     ProofId, ProofType, Prover, Verifier,
 };
@@ -12,9 +11,10 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
     ops::Rsqrt,
 };
-use common::{CommittedPolynomial, VirtualPolynomial};
+use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
+    lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
@@ -34,7 +34,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
-use rayon::prelude::*;
 
 /// Fixed-point scaling factor for reciprocal square root calculations.
 pub const Q: i32 = 128;
@@ -61,10 +60,21 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
         results.push((ProofId(node.idx, ProofType::Execution), proof));
 
         // Rangecheck Raf proof
-        let div_rc_prover =
-            RangecheckRafSumcheckProver::<_, RiRangeCheckOperands>::new_from_prover(node, prover);
-        let sqrt_rc_prover =
-            RangecheckRafSumcheckProver::<_, RsRangeCheckOperands>::new_from_prover(node, prover);
+        let div_rangecheck_provider = RangeCheckProvider::<RiRangeCheckOperands>::new(node);
+        let (div_rc_prover, div_lookup_indices) = div_rangecheck_provider
+            .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
+                &prover.trace,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            );
+
+        let sqrt_rangecheck_provider = RangeCheckProvider::<RsRangeCheckOperands>::new(node);
+        let (sqrt_rc_prover, sqrt_lookup_indices) = sqrt_rangecheck_provider
+            .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
+                &prover.trace,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            );
         let mut rc_instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
             vec![Box::new(div_rc_prover), Box::new(sqrt_rc_prover)];
         let (rangecheck_proof, _) = BatchedSumcheck::prove(
@@ -76,10 +86,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
 
         // RaOneHotChecks proof
         let div_encoding = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
-        let (div_left, div_right) = RiRangeCheckOperands::get_operands_tensors(&prover.trace, node);
-        let div_lookup_bits = RiRangeCheckOperands::compute_lookup_indices(&div_left, &div_right);
-        let div_lookup_indices: Vec<usize> =
-            div_lookup_bits.par_iter().map(|&x| x.into()).collect();
         let [div_ra, div_hw, div_bool] = shout::ra_onehot_provers(
             &div_encoding,
             &div_lookup_indices,
@@ -88,12 +94,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
         );
 
         let sqrt_encoding = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
-        let (sqrt_left, sqrt_right) =
-            RsRangeCheckOperands::get_operands_tensors(&prover.trace, node);
-        let sqrt_lookup_bits =
-            RsRangeCheckOperands::compute_lookup_indices(&sqrt_left, &sqrt_right);
-        let sqrt_lookup_indices: Vec<usize> =
-            sqrt_lookup_bits.par_iter().map(|&x| x.into()).collect();
         let [sqrt_ra, sqrt_hw, sqrt_bool] = shout::ra_onehot_provers(
             &sqrt_encoding,
             &sqrt_lookup_indices,
@@ -149,13 +149,18 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
 
         // Rangecheck Raf proof
-        let div_rc_verifier =
-            RangecheckRafSumcheckVerifier::<_, RiRangeCheckOperands>::new_from_verifier(
-                node, verifier,
+        let div_rangecheck_provider = RangeCheckProvider::<RiRangeCheckOperands>::new(node);
+        let div_rc_verifier = div_rangecheck_provider
+            .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
+                &mut verifier.accumulator,
+                &mut verifier.transcript,
             );
-        let sqrt_rc_verifier =
-            RangecheckRafSumcheckVerifier::<_, RsRangeCheckOperands>::new_from_verifier(
-                node, verifier,
+
+        let sqrt_rangecheck_provider = RangeCheckProvider::<RsRangeCheckOperands>::new(node);
+        let sqrt_rc_verifier = sqrt_rangecheck_provider
+            .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
+                &mut verifier.accumulator,
+                &mut verifier.transcript,
             );
         let rc_instances: Vec<&dyn SumcheckInstanceVerifier<_, _>> =
             vec![&div_rc_verifier, &sqrt_rc_verifier];
@@ -582,7 +587,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RsqrtVerifi
 mod tests {
     use super::Q_SQUARE;
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use atlas_onnx_tracer::{
+        model::{test::ModelBuilder, Model},
+        tensor::Tensor,
+    };
     use rand::{rngs::StdRng, SeedableRng};
 
     fn rsqrt_model(T: usize) -> Model {

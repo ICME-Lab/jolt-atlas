@@ -5,43 +5,90 @@ use atlas_onnx_tracer::{
     tensor::Tensor,
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
-use joltworks::{field::JoltField, utils::lookup_bits::LookupBits};
-
-use crate::onnx_proof::{
-    neural_teleport::division::compute_division,
-    ops::rsqrt::{Q, Q_SQUARE},
-    range_checking::read_raf_checking::compute_lookup_indices_from_operands,
+use joltworks::{
+    field::JoltField,
+    poly::opening_proof::{OpeningAccumulator, SumcheckId},
+    utils::lookup_bits::LookupBits,
 };
+
+use crate::{
+    onnx_proof::{
+        neural_teleport::division::compute_division,
+        ops::rsqrt::{Q, Q_SQUARE},
+    },
+    utils::compute_lookup_indices_from_operands,
+};
+
+/// Common fields shared by all range-checking operand types.
+///
+/// Every operation that needs range-checking (Div, Rsqrt, Tanh) stores the same
+/// triple of values: a node index, input operands, and a virtual read-address polynomial.
+/// This struct eliminates the field duplication across the individual operand types.
+pub struct RangeCheckOperandsBase {
+    /// Index of the computation node in the graph.
+    pub node_idx: usize,
+    /// Input operand virtual polynomials: [left_operand, right_operand].
+    pub input_operands: Vec<VirtualPolynomial>,
+    /// Virtual polynomial representing the range-check read-address (Ra).
+    pub virtual_ra: VirtualPolynomial,
+}
 
 /// Trait defining the interface for operations that require range-checking.
 ///
 /// This trait provides all the information needed from operations (Div, Rsqrt, Tanh) that require
 /// range-checking to verify that remainder values are within valid bounds. It abstracts the common
 /// patterns for range-checking across different operations.
-pub trait ReadRafSumcheckHelper {
+///
+/// Implementors only need to provide [`Self::new`], [`Self::base`],
+/// [`Self::get_operands_tensors`], and [`Self::rad_poly`].
+/// Common accessors (`node_idx`, `get_input_operands`, `get_output_operand`,
+/// `operand_claims`) are provided as defaults via [`Self::base`].
+pub trait RangeCheckingOperandsTrait {
     /// Create a new helper from a computation node.
     fn new(node: &ComputationNode) -> Self;
 
+    /// Returns a reference to the common base fields.
+    fn base(&self) -> &RangeCheckOperandsBase;
+
     /// Get the index of the computation node this helper is associated with.
-    fn node_idx(&self) -> usize;
-
-    /// Compute the batched input claim from individual input operand claims.
-    ///
-    /// Combines the left and right operand claims using powers of gamma:
-    /// `1 + γ * left_claim + γ² * right_claim`
-    fn compute_input_claim<F: JoltField>(input_claims: &[F], gamma: F, gamma_sqr: F) -> F {
-        let [left_claim, right_claim] = input_claims else {
-            panic!("Expected exactly two input operands for division range check");
-        };
-
-        F::one() + gamma * left_claim + gamma_sqr * right_claim
+    fn node_idx(&self) -> usize {
+        self.base().node_idx
     }
 
     /// Get the virtual polynomials representing the input operands for range-checking.
-    fn get_input_operands(&self) -> Vec<VirtualPolynomial>;
+    fn get_input_operands(&self) -> Vec<VirtualPolynomial> {
+        self.base().input_operands.to_vec()
+    }
 
     /// Get the virtual polynomial representing the range-check read-address (Ra) output.
-    fn get_output_operand(&self) -> VirtualPolynomial;
+    fn get_output_operand(&self) -> VirtualPolynomial {
+        self.base().virtual_ra
+    }
+
+    /// Optional transformation applied to the right operand claim before returning.
+    ///
+    /// Override this for operations where the range-check bound is a function of the
+    /// right operand (e.g., sqrt range check uses `2·v̂ + 1` instead of `v̂`).
+    fn transform_right_claim<F: JoltField>(&self, claim: F) -> F {
+        claim
+    }
+
+    /// Extract the operand claims from the accumulator for the left and right operands.
+    fn operand_claims<F: JoltField>(&self, accumulator: &dyn OpeningAccumulator<F>) -> (F, F) {
+        let operand_claims = self
+            .get_input_operands()
+            .iter()
+            .map(|operand| {
+                let (_, claim) =
+                    accumulator.get_virtual_polynomial_opening(*operand, SumcheckId::Raf);
+                claim
+            })
+            .collect::<Vec<_>>();
+        (
+            operand_claims[0],
+            self.transform_right_claim(operand_claims[1]),
+        )
+    }
 
     /// Extract or compute the operand tensors (remainder and bound) from the trace.
     ///
@@ -56,7 +103,7 @@ pub trait ReadRafSumcheckHelper {
         left_operand: &Tensor<i32>,
         right_operand: &Tensor<i32>,
     ) -> Vec<LookupBits> {
-        compute_lookup_indices_from_operands(&[left_operand, right_operand])
+        compute_lookup_indices_from_operands(&[left_operand, right_operand], true)
     }
 
     /// Get the committed polynomial for the d-th dimension of the range-check read-address.
@@ -68,63 +115,39 @@ pub trait ReadRafSumcheckHelper {
 /// For integer division `a / b = q`, there exists a remainder `r` such that `a = q·b + r`.
 /// This struct holds the operands needed to verify `0 ≤ r < b`.
 pub struct DivRangeCheckOperands {
-    /// Index of the division node in the computation graph.
-    pub node_idx: usize,
-    /// Input operands: [remainder, divisor].
-    pub input_operands: Vec<VirtualPolynomial>,
-    /// Virtual polynomial representing the range-check read-address.
-    pub virtual_ra: VirtualPolynomial,
+    base: RangeCheckOperandsBase,
 }
 
 /// Operands for reciprocal square root (rsqrt) division range-checking.
 ///
 /// For rsqrt computation involving `Q²/x`, this verifies the intermediate division remainder.
 pub struct RiRangeCheckOperands {
-    /// Index of the rsqrt node in the computation graph.
-    pub node_idx: usize,
-    /// Input operands: [remainder, input].
-    pub input_operands: Vec<VirtualPolynomial>,
-    /// Virtual polynomial representing the range-check read-address.
-    pub virtual_ra: VirtualPolynomial,
+    base: RangeCheckOperandsBase,
 }
 
 /// Operands for reciprocal square root (rsqrt) final range-checking.
 ///
 /// For square root `v = √(S·x̂)`, verifies that the remainder `r = S·x̂ - v̂²` satisfies `0 ≤ r < 2v̂ + 1`.
 pub struct RsRangeCheckOperands {
-    /// Index of the rsqrt node in the computation graph.
-    pub node_idx: usize,
-    /// Input operands: [remainder, output].
-    pub input_operands: Vec<VirtualPolynomial>,
-    /// Virtual polynomial representing the range-check read-address.
-    pub virtual_ra: VirtualPolynomial,
+    base: RangeCheckOperandsBase,
 }
 
-impl ReadRafSumcheckHelper for DivRangeCheckOperands {
+impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
     fn new(node: &ComputationNode) -> Self {
-        let input_operands = vec![
-            VirtualPolynomial::DivRemainder(node.idx),
-            VirtualPolynomial::NodeOutput(node.inputs[1]),
-        ];
-        let virtual_ra = VirtualPolynomial::DivRangeCheckRa(node.idx);
-
         Self {
-            node_idx: node.idx,
-            input_operands,
-            virtual_ra,
+            base: RangeCheckOperandsBase {
+                node_idx: node.idx,
+                input_operands: vec![
+                    VirtualPolynomial::DivRemainder(node.idx),
+                    VirtualPolynomial::NodeOutput(node.inputs[1]),
+                ],
+                virtual_ra: VirtualPolynomial::DivRangeCheckRa(node.idx),
+            },
         }
     }
 
-    fn node_idx(&self) -> usize {
-        self.node_idx
-    }
-
-    fn get_input_operands(&self) -> Vec<VirtualPolynomial> {
-        self.input_operands.to_vec()
-    }
-
-    fn get_output_operand(&self) -> VirtualPolynomial {
-        self.virtual_ra
+    fn base(&self) -> &RangeCheckOperandsBase {
+        &self.base
     }
 
     fn get_operands_tensors(trace: &Trace, node: &ComputationNode) -> (Tensor<i32>, Tensor<i32>) {
@@ -156,35 +179,26 @@ impl ReadRafSumcheckHelper for DivRangeCheckOperands {
     }
 
     fn rad_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::DivRangeCheckRaD(self.node_idx, d)
+        CommittedPolynomial::DivRangeCheckRaD(self.base.node_idx, d)
     }
 }
 
-impl ReadRafSumcheckHelper for RiRangeCheckOperands {
+impl RangeCheckingOperandsTrait for RiRangeCheckOperands {
     fn new(node: &ComputationNode) -> Self {
-        let input_operands = vec![
-            VirtualPolynomial::DivRemainder(node.idx),
-            VirtualPolynomial::NodeOutput(node.inputs[0]),
-        ];
-        let virtual_ra = VirtualPolynomial::DivRangeCheckRa(node.idx);
-
         Self {
-            node_idx: node.idx,
-            input_operands,
-            virtual_ra,
+            base: RangeCheckOperandsBase {
+                node_idx: node.idx,
+                input_operands: vec![
+                    VirtualPolynomial::DivRemainder(node.idx),
+                    VirtualPolynomial::NodeOutput(node.inputs[0]),
+                ],
+                virtual_ra: VirtualPolynomial::DivRangeCheckRa(node.idx),
+            },
         }
     }
 
-    fn node_idx(&self) -> usize {
-        self.node_idx
-    }
-
-    fn get_input_operands(&self) -> Vec<VirtualPolynomial> {
-        self.input_operands.to_vec()
-    }
-
-    fn get_output_operand(&self) -> VirtualPolynomial {
-        self.virtual_ra
+    fn base(&self) -> &RangeCheckOperandsBase {
+        &self.base
     }
 
     fn get_operands_tensors(trace: &Trace, node: &ComputationNode) -> (Tensor<i32>, Tensor<i32>) {
@@ -206,46 +220,31 @@ impl ReadRafSumcheckHelper for RiRangeCheckOperands {
     }
 
     fn rad_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::SqrtDivRangeCheckRaD(self.node_idx, d)
+        CommittedPolynomial::SqrtDivRangeCheckRaD(self.base.node_idx, d)
     }
 }
 
-impl ReadRafSumcheckHelper for RsRangeCheckOperands {
+impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
     fn new(node: &ComputationNode) -> Self {
-        let input_operands = vec![
-            VirtualPolynomial::SqrtRemainder(node.idx),
-            VirtualPolynomial::NodeOutput(node.idx),
-        ];
-        let virtual_ra = VirtualPolynomial::SqrtRangeCheckRa(node.idx);
-
         Self {
-            node_idx: node.idx,
-            input_operands,
-            virtual_ra,
+            base: RangeCheckOperandsBase {
+                node_idx: node.idx,
+                input_operands: vec![
+                    VirtualPolynomial::SqrtRemainder(node.idx),
+                    VirtualPolynomial::NodeOutput(node.idx),
+                ],
+                virtual_ra: VirtualPolynomial::SqrtRangeCheckRa(node.idx),
+            },
         }
     }
 
-    fn node_idx(&self) -> usize {
-        self.node_idx
+    fn base(&self) -> &RangeCheckOperandsBase {
+        &self.base
     }
 
-    // Override to implement the specific input claim computation for sqrt range check
-    // the right claim is encoded as 2 * right_claim + 1 in the lookup table
-    // So that we the lookup output corresponds to the check r < 2 * v̂ + 1
-    fn compute_input_claim<F: JoltField>(input_claims: &[F], gamma: F, gamma_sqr: F) -> F {
-        let [left_claim, right_claim] = input_claims else {
-            panic!("Expected exactly two input operands for square root range check");
-        };
-
-        F::one() + gamma * left_claim + gamma_sqr * (F::from_i32(2) * right_claim + F::one())
-    }
-
-    fn get_input_operands(&self) -> Vec<VirtualPolynomial> {
-        self.input_operands.to_vec()
-    }
-
-    fn get_output_operand(&self) -> VirtualPolynomial {
-        self.virtual_ra
+    /// For sqrt range check: the bound is `2·v̂ + 1`, not just `v̂`.
+    fn transform_right_claim<F: JoltField>(&self, claim: F) -> F {
+        claim * F::from_i32(2) + F::one()
     }
 
     fn get_operands_tensors(trace: &Trace, node: &ComputationNode) -> (Tensor<i32>, Tensor<i32>) {
@@ -296,11 +295,11 @@ impl ReadRafSumcheckHelper for RsRangeCheckOperands {
             Tensor::<i32>::construct(data, right_operand.dims().to_vec())
         };
 
-        compute_lookup_indices_from_operands(&[left_operand, &upper_bound])
+        compute_lookup_indices_from_operands(&[left_operand, &upper_bound], true)
     }
 
     fn rad_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::SqrtRangeCheckRaD(self.node_idx, d)
+        CommittedPolynomial::SqrtRangeCheckRaD(self.base.node_idx, d)
     }
 }
 
@@ -308,39 +307,25 @@ impl ReadRafSumcheckHelper for RsRangeCheckOperands {
 ///
 /// For tanh computation involving division by τ, verifies that the remainder satisfies the bounds.
 pub struct TeleportRangeCheckOperands {
-    /// Index of the tanh node in the computation graph.
-    pub node_idx: usize,
-    /// Input operands: [remainder, divisor].
-    pub input_operands: Vec<VirtualPolynomial>,
-    /// Virtual polynomial representing the range-check read-address.
-    pub virtual_ra: VirtualPolynomial,
+    base: RangeCheckOperandsBase,
 }
 
-impl ReadRafSumcheckHelper for TeleportRangeCheckOperands {
+impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
     fn new(node: &ComputationNode) -> Self {
-        let input_operands = vec![
-            VirtualPolynomial::TeleportRemainder(node.idx),
-            VirtualPolynomial::NodeOutput(node.inputs[0]),
-        ];
-        let virtual_ra = VirtualPolynomial::TeleportRangeCheckRa(node.idx);
-
         Self {
-            node_idx: node.idx,
-            input_operands,
-            virtual_ra,
+            base: RangeCheckOperandsBase {
+                node_idx: node.idx,
+                input_operands: vec![
+                    VirtualPolynomial::TeleportRemainder(node.idx),
+                    VirtualPolynomial::NodeOutput(node.inputs[0]),
+                ],
+                virtual_ra: VirtualPolynomial::TeleportRangeCheckRa(node.idx),
+            },
         }
     }
 
-    fn node_idx(&self) -> usize {
-        self.node_idx
-    }
-
-    fn get_input_operands(&self) -> Vec<VirtualPolynomial> {
-        self.input_operands.to_vec()
-    }
-
-    fn get_output_operand(&self) -> VirtualPolynomial {
-        self.virtual_ra
+    fn base(&self) -> &RangeCheckOperandsBase {
+        &self.base
     }
 
     fn get_operands_tensors(trace: &Trace, node: &ComputationNode) -> (Tensor<i32>, Tensor<i32>) {
@@ -368,6 +353,6 @@ impl ReadRafSumcheckHelper for TeleportRangeCheckOperands {
     }
 
     fn rad_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::TeleportRangeCheckRaD(self.node_idx, d)
+        CommittedPolynomial::TeleportRangeCheckRaD(self.base.node_idx, d)
     }
 }

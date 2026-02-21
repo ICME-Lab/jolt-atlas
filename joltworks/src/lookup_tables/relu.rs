@@ -1,9 +1,9 @@
-use crate::onnx_proof::lookup_tables::{
+use super::{
     prefixes::{PrefixEval, Prefixes},
     suffixes::{SuffixEval, Suffixes},
     JoltLookupTable, PrefixSuffixDecompositionTrait,
 };
-use joltworks::{
+use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     utils::math::Math,
 };
@@ -70,7 +70,7 @@ impl<const X_LEN: usize> PrefixSuffixDecompositionTrait<X_LEN> for ReluTable<X_L
 
 #[cfg(test)]
 mod test {
-    use crate::onnx_proof::lookup_tables::{
+    use crate::lookup_tables::{
         relu::ReluTable,
         test::{
             lookup_table_mle_full_hypercube_test, lookup_table_mle_random_test, prefix_suffix_test,

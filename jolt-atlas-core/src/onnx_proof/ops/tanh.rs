@@ -9,9 +9,7 @@ use crate::onnx_proof::{
     },
     ops::OperatorProofTrait,
     range_checking::{
-        read_raf_checking::{RangecheckRafSumcheckProver, RangecheckRafSumcheckVerifier},
-        sumcheck_instance::{ReadRafSumcheckHelper, TeleportRangeCheckOperands},
-        RangeCheckEncoding,
+        range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
     },
     ProofId, ProofType, Prover, Verifier,
 };
@@ -24,10 +22,11 @@ use atlas_onnx_tracer::{
     ops::{Operator, Tanh},
     tensor::Tensor,
 };
-use common::{CommittedPolynomial, VirtualPolynomial};
+use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::JoltField,
+    lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{
@@ -117,9 +116,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             .collect::<Vec<usize>>();
 
         // Stage 2: Range check proof for division and first One-Hot checks for TanhRa
-        let rangecheck_sumcheck =
-            RangecheckRafSumcheckProver::<_, TeleportRangeCheckOperands>::new_from_prover(
-                node, prover,
+        let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
+        let (rangecheck_sumcheck, rc_lookup_indices) = rangecheck_provider
+            .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
+                &prover.trace,
+                &mut prover.accumulator,
+                &mut prover.transcript,
             );
         let tanh_encoding = TanhRaEncoding {
             node_idx: node.idx,
@@ -147,11 +149,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
 
         // Stage 3: one-hot checks for division
         let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-        let (rc_left, rc_right) =
-            TeleportRangeCheckOperands::get_operands_tensors(&prover.trace, node);
-        let rc_lookup_bits =
-            TeleportRangeCheckOperands::compute_lookup_indices(&rc_left, &rc_right);
-        let rc_lookup_indices: Vec<usize> = rc_lookup_bits.par_iter().map(|&x| x.into()).collect();
         let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_provers(
             &rc_encoding,
             &rc_lookup_indices,
@@ -219,9 +216,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
 
-        let rangecheck_verifier =
-            RangecheckRafSumcheckVerifier::<_, TeleportRangeCheckOperands>::new_from_verifier(
-                node, verifier,
+        let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
+        let rangecheck_verifier = rangecheck_provider
+            .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
+                &mut verifier.accumulator,
+                &mut verifier.transcript,
             );
         let Operator::Tanh(tanh_op) = &node.operator else {
             panic!("Expected Tanh operator")

@@ -60,9 +60,7 @@ fn build_one_hot_rad_witness<F: JoltField>(
     let one_hot_params = OneHotParams::new(lookup_indices.len().log_2());
     let addresses: Vec<_> = lookup_indices
         .par_iter()
-        .map(|lookup_index| {
-            Some(one_hot_params.lookup_index_chunk(lookup_index.into(), d) as u16)
-        })
+        .map(|lookup_index| Some(one_hot_params.lookup_index_chunk(lookup_index.into(), d) as u16))
         .collect();
     MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
         addresses,
@@ -151,8 +149,10 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     Operator::ScalarConstDiv(scalar_const_div) => scalar_const_div.divisor,
                     _ => panic!("Expected ScalarConstDiv operator"),
                 };
-                let remainder_data: Vec<i32> =
-                    left_operand.iter().map(|&a| adjusted_remainder(a, b)).collect();
+                let remainder_data: Vec<i32> = left_operand
+                    .iter()
+                    .map(|&a| adjusted_remainder(a, b))
+                    .collect();
                 MultilinearPolynomial::from(Tensor::<i32>::construct(
                     remainder_data,
                     left_operand.dims().to_vec(),

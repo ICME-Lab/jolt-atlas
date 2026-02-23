@@ -73,6 +73,121 @@ impl Model {
         let node_outputs = self.execute_graph(inputs);
         self.extract_graph_outputs(&node_outputs)
     }
+
+    /// Run an ONNX model directly through Tract (unquantized, f32 precision).
+    ///
+    /// This loads the ONNX file, concretizes dynamic dimensions from `run_args`,
+    /// converts the typed graph into a runnable model, executes the forward pass
+    /// with the supplied f32 input tensors, and returns f32 output tensors.
+    ///
+    /// Unlike [`Model::forward`], this does **not** quantize inputs/outputs—it
+    /// operates entirely in native floating-point, which is useful for comparing
+    /// against the quantized path or running stand-alone inference.
+    ///
+    /// Inputs are matched to model slots **by name** (e.g. `"input_ids"`,
+    /// `"attention_mask"`). Any model input not present in the map is
+    /// automatically filled with a zero tensor of the correct shape and dtype
+    /// (useful for past-key-value caches on the first forward pass).
+    ///
+    /// # Arguments
+    ///
+    /// * `path`     - Path to the ONNX model file (e.g., `"models/gpt2/network.onnx"`)
+    /// * `run_args` - Runtime arguments (variables such as `batch_size`, `sequence_length`, etc.)
+    /// * `inputs`   - Named input tensors as `(name, Tensor<f32>)` pairs
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<Tensor<f32>>` containing one tensor per model output.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ONNX file cannot be loaded, the model cannot be made runnable,
+    /// or the forward pass fails.
+    pub fn run_tract_forward(
+        path: &str,
+        run_args: &RunArgs,
+        inputs: &[(&str, crate::tensor::Tensor<f32>)],
+    ) -> Vec<crate::tensor::Tensor<f32>> {
+        use tract_onnx::{prelude::*, tract_core::internal::IntoArcTensor};
+
+        // 1. Load & prepare the typed graph (reusing the existing helper)
+        let (typed_model, _symbol_values) = Self::load_onnx_using_tract(path, run_args);
+
+        // 2. Discover each input's expected shape, DatumType, and name
+        let input_outlets = typed_model.input_outlets().unwrap().to_vec();
+
+        let input_facts: Vec<(Vec<usize>, DatumType, String)> = input_outlets
+            .iter()
+            .map(|o| {
+                let node = typed_model.node(o.node);
+                let fact = &node.outputs[o.slot].fact;
+                let shape: Vec<usize> = fact
+                    .shape
+                    .as_concrete()
+                    .expect("all input dims must be concrete after concretization")
+                    .to_vec();
+                (shape, fact.datum_type, node.name.clone())
+            })
+            .collect();
+
+        // Build a lookup from caller-supplied name → tensor
+        let input_map: HashMap<&str, &crate::tensor::Tensor<f32>> =
+            inputs.iter().map(|(name, t)| (*name, t)).collect();
+
+        // 3. Build a runnable model
+        let runnable = typed_model
+            .into_runnable()
+            .expect("failed to build runnable tract model");
+
+        // Helper: convert a crate::tensor::Tensor<f32> to a tract TValue
+        let to_tvalue = |t: &crate::tensor::Tensor<f32>, dt: DatumType| -> TValue {
+            let shape: Vec<usize> = t.dims().to_vec();
+            let data = t.data();
+            let tract_tensor: tract_onnx::prelude::Tensor = match dt {
+                DatumType::I64 => {
+                    let cast: Vec<i64> = data.iter().map(|&v| v as i64).collect();
+                    tract_onnx::prelude::Tensor::from_shape(&shape, &cast).unwrap()
+                }
+                DatumType::I32 => {
+                    let cast: Vec<i32> = data.iter().map(|&v| v as i32).collect();
+                    tract_onnx::prelude::Tensor::from_shape(&shape, &cast).unwrap()
+                }
+                _ => tract_onnx::prelude::Tensor::from_shape(&shape, data).unwrap(),
+            };
+            tract_tensor.into_tvalue()
+        };
+
+        // 4. Build the full input TVec, matching by name.
+        //    Missing inputs (e.g. past-key-value caches) get zero-filled.
+        let tract_inputs: TVec<TValue> = input_facts
+            .iter()
+            .map(|(shape, dt, name)| {
+                if let Some(tensor) = input_map.get(name.as_str()) {
+                    to_tvalue(tensor, *dt)
+                } else {
+                    // Auto-fill with zeros
+                    let numel: usize = shape.iter().product();
+                    let zeros = vec![0.0f32; numel];
+                    let zero_tensor = crate::tensor::Tensor::construct(zeros, shape.clone());
+                    to_tvalue(&zero_tensor, *dt)
+                }
+            })
+            .collect();
+
+        // 5. Run the forward pass
+        let results = runnable
+            .run(tract_inputs)
+            .expect("tract forward pass failed");
+
+        // 6. Convert tract outputs → Tensor<f32>
+        results
+            .into_iter()
+            .map(|tv| {
+                crate::utils::parser::extract_tensor_value(tv.into_arc_tensor())
+                    .expect("failed to extract tensor from tract output")
+            })
+            .collect()
+    }
 }
 
 impl Model {

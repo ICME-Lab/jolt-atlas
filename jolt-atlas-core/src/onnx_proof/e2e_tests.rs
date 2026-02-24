@@ -558,6 +558,20 @@ fn test_tanh() {
 }
 
 #[test]
+fn test_erf() {
+    let working_dir = "../atlas-onnx-tracer/models/erf/";
+    let input_vector = vec![10, 40, 70, 100];
+    let input = Tensor::new(Some(&input_vector), &[4]).unwrap();
+
+    prove_and_verify(
+        working_dir,
+        &[input],
+        &Default::default(),
+        TestConfig::new().print_model().print_timing(),
+    );
+}
+
+#[test]
 fn test_mlp_square() {
     let working_dir = "../atlas-onnx-tracer/models/mlp_square/";
     let input_vector = vec![

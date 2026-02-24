@@ -1,5 +1,7 @@
 use crate::onnx_proof::neural_teleport::{
-    division::{compute_division, TeleportDivisionParams, TeleportDivisionProver},
+    division::{
+        compute_division, TeleportDivisionParams, TeleportDivisionProver, TeleportDivisionVerifier,
+    },
     erf::ErfTable,
     n_bits_to_usize,
 };
@@ -16,7 +18,7 @@ use atlas_onnx_tracer::{
         ComputationGraph,
     },
     node::{handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE, ComputationNode},
-    ops::{Erf, Tanh},
+    ops::Erf,
 };
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
@@ -55,13 +57,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
         let mut results = Vec::new();
 
         // Stage 1a: Neural teleportation division proof
-        let tanh_compat = Tanh {
-            scale: self.scale,
-            tau: self.tau,
-            log_table: self.log_table,
-        };
-        let div_params =
-            TeleportDivisionParams::new(node.clone(), &prover.accumulator, &tanh_compat);
+        let div_params = TeleportDivisionParams::new(node.clone(), &prover.accumulator, self.tau);
         let mut div_sumcheck = TeleportDivisionProver::new(&prover.trace, div_params);
         let (div_proof, _) = Sumcheck::prove(
             &mut div_sumcheck,
@@ -158,10 +154,96 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
 
     fn verify(
         &self,
-        _node: &ComputationNode,
-        _verifier: &mut Verifier<'_, F, T>,
+        node: &ComputationNode,
+        verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        todo!("Implement Erf verification pipeline")
+        // Stage 1a: Division verification
+        let div_proof = verifier
+            .proofs
+            .get(&ProofId(node.idx, ProofType::NeuralTeleport))
+            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+
+        let div_verifier =
+            TeleportDivisionVerifier::new(node.clone(), &verifier.accumulator, self.tau);
+        Sumcheck::verify(
+            div_proof,
+            &div_verifier,
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        )?;
+
+        // Stage 1b: Erf verification
+        let erf_proof = verifier
+            .proofs
+            .get(&ProofId(node.idx, ProofType::Execution))
+            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+
+        let exec_sumcheck = ErfVerifier::new(
+            node.clone(),
+            &verifier.preprocessing.model.graph,
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+            self.clone(),
+        );
+        Sumcheck::verify(
+            erf_proof,
+            &exec_sumcheck,
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        )?;
+
+        // Stage 2: Range check verification for division and first One-Hot checks for ErfRa
+        let erf_ra_one_hot_proof = verifier
+            .proofs
+            .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
+            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+
+        let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
+        let rangecheck_verifier = rangecheck_provider
+            .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
+                &mut verifier.accumulator,
+                &mut verifier.transcript,
+            );
+        let erf_encoding = ErfRaEncoding {
+            node_idx: node.idx,
+            log_table: self.log_table,
+        };
+        let ra_onehot_verifier = shout::ra_onehot_verifiers(
+            &erf_encoding,
+            &verifier.accumulator,
+            &mut verifier.transcript,
+        );
+        let ra_onehot_verifier: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
+            ra_onehot_verifier.iter().map(|v| &**v as _).collect();
+        let mut instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = vec![&rangecheck_verifier];
+        instances.extend(ra_onehot_verifier);
+        BatchedSumcheck::verify(
+            erf_ra_one_hot_proof,
+            instances,
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        )?;
+
+        // Stage 3: one-hot check verification for division
+        let ra_one_hot_proof = verifier
+            .proofs
+            .get(&ProofId(node.idx, ProofType::RaHammingWeight))
+            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+
+        let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+        let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_verifiers(
+            &rc_encoding,
+            &verifier.accumulator,
+            &mut verifier.transcript,
+        );
+        BatchedSumcheck::verify(
+            ra_one_hot_proof,
+            vec![&*rc_ra, &*rc_hw, &*rc_bool],
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        )?;
+
+        Ok(())
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {

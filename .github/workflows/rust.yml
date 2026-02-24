@@ -60,6 +60,24 @@ jobs:
       - name: Run GPT-2 test
         run: cargo nextest run --workspace --run-ignored ignored-only -E 'test(test_gpt2)'
 
+  test-bge:
+    name: BGE Prove & Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Download BGE ONNX model
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          python scripts/download_bge_small_en_v1_5.py
+      - uses: taiki-e/install-action@nextest
+      - name: Run BGE test
+        run: cargo nextest run --workspace --run-ignored ignored-only -E 'test(test_bge_small_en_v1_5)'
+
   build-wasm-atlas-onnx-tracer:
     name: Build Wasm - atlas-onnx-tracer
     runs-on: ubuntu-latest

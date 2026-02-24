@@ -584,3 +584,33 @@ impl RaOneHotEncoding for ErfRaEncoding {
         OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.log_table)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::onnx_proof::ops::test::unit_test_op;
+    use atlas_onnx_tracer::{
+        model::{test::ModelBuilder, Model},
+        node::handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE,
+        tensor::Tensor,
+    };
+    use rand::{rngs::StdRng, SeedableRng};
+
+    fn erf_model(input_shape: &[usize]) -> Model {
+        let mut b = ModelBuilder::new();
+        let i = b.input(input_shape.to_vec());
+        let res = b.erf(i);
+        b.mark_output(res);
+        b.build()
+    }
+
+    #[test]
+    fn test_erf() {
+        let t = 1 << 14;
+        const MIN_INPUT_VALUE: i32 = -(1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1));
+        const MAX_INPUT_VALUE: i32 = 1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1);
+        let mut rng = StdRng::seed_from_u64(0x889);
+        let input = Tensor::random_range(&mut rng, &[t], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
+        let model = erf_model(&[t]);
+        unit_test_op(model, &[input]);
+    }
+}

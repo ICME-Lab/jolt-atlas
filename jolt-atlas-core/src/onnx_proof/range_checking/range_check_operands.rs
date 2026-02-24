@@ -330,10 +330,10 @@ impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
             panic!("Expected exactly one input tensor for neural teleportation");
         };
 
-        let tau = if let Operator::Tanh(inner) = &node.operator {
-            inner.tau
-        } else {
-            panic!("Expected Tanh operator for neural teleportation division");
+        let tau = match &node.operator {
+            Operator::Tanh(inner) => inner.tau,
+            Operator::Erf(inner) => inner.tau,
+            _ => panic!("Expected Tanh or Erf operator for neural teleportation division"),
         };
 
         let (_, remainder) = compute_division(input_tensor, tau);

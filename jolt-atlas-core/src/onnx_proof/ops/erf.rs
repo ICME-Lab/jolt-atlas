@@ -256,15 +256,30 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
 
 pub struct ErfVerifier<F: JoltField> {
     pub params: ErfParams<F>,
+    pub erf_table: MultilinearPolynomial<F>,
 }
 
 impl<F: JoltField> ErfVerifier<F> {
     pub fn new(
-        _computation_node: ComputationNode,
-        _accumulator: &mut VerifierOpeningAccumulator<F>,
-        _transcript: &mut impl Transcript,
+        computation_node: ComputationNode,
+        graph: &ComputationGraph,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut impl Transcript,
+        op: Erf,
     ) -> Self {
-        todo!("Initialize Erf verifier state")
+        let params = ErfParams::new(computation_node, graph, accumulator, transcript, op);
+
+        accumulator.append_virtual(
+            transcript,
+            VirtualPolynomial::TeleportQuotient(params.computation_node.idx),
+            SumcheckId::Raf,
+            params.r_node_output.clone().into(),
+        );
+
+        let erf_table = ErfTable::new(params.op.log_table);
+        let erf_table = MultilinearPolynomial::from(erf_table.materialize());
+
+        Self { params, erf_table }
     }
 }
 

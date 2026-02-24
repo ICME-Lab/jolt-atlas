@@ -48,6 +48,8 @@ pub mod constant;
 pub mod cube;
 /// Element-wise division operation.
 pub mod div;
+/// Erf activation function.
+pub mod erf;
 /// Einstein summation for tensor contractions.
 pub mod einsum;
 /// Gather elements from input tensor using indices.
@@ -147,6 +149,7 @@ macro_rules! dispatch_operator {
             Operator::Cube($inner) => $body,
             Operator::Clamp($inner) => $body,
             Operator::Div($inner) => $body,
+            Operator::Erf($inner) => $body,
             Operator::Einsum($inner) => $body,
             Operator::Gather($inner) => $body,
             Operator::Identity($inner) => $body,

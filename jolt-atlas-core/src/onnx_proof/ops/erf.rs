@@ -290,10 +290,25 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ErfVerifier
 
     fn expected_output_claim(
         &self,
-        _accumulator: &VerifierOpeningAccumulator<F>,
-        _sumcheck_challenges: &[F::Challenge],
+        accumulator: &VerifierOpeningAccumulator<F>,
+        sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        todo!("Compute expected Erf output claim")
+        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+
+        let ra_claim = accumulator
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::ErfRa(self.params.computation_node.idx),
+                SumcheckId::Execution,
+            )
+            .1;
+
+        // Evaluate erf table at the opening point
+        let table_claim = self.erf_table.evaluate(&opening_point.r);
+
+        let int_eval =
+            TeleportIdPolynomial::new(self.params.op.log_table).evaluate(&opening_point.r);
+
+        ra_claim * (table_claim + self.params.gamma * int_eval)
     }
 
     fn cache_openings(

@@ -254,9 +254,7 @@ impl Model {
                 | Operator::Erf(_)
                 | &Operator::ReLU(_)
                 | Operator::Div(_)
-                | Operator::Rsqrt(_) => {
-                    LOG_K_CHUNK + log_2(node.num_output_elements())
-                }
+                | Operator::Rsqrt(_) => LOG_K_CHUNK + log_2(node.num_output_elements()),
                 Operator::ScalarConstDiv(_) => log_2(node.num_output_elements()),
                 Operator::SoftmaxAxes(_) => {
                     LOG_K_CHUNK + log_2(*node.output_dims.last().unwrap_or(&1))

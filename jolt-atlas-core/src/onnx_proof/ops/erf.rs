@@ -265,7 +265,7 @@ const DEGREE_BOUND: usize = 2; // TODO
 
 /// Parameters for proving error function (erf) activation operations.
 ///
-/// Mirrors the parameter layout used by `TanhParams` so both lookup-style
+/// Mirrors the parameter layout used by `ErfParams` so both lookup-style
 /// activations follow the same transcript/challenge flow.
 #[derive(Clone)]
 pub struct ErfParams<F: JoltField> {
@@ -285,7 +285,7 @@ impl<F: JoltField> ErfParams<F> {
     /// Build erf parameters from the current accumulator/transcript state.
     ///
     /// This samples a fresh folding challenge and reuses the node-output opening
-    /// point already present in the accumulator, matching the tanh flow.
+    /// point already present in the accumulator, matching the erf flow.
     pub fn new(
         computation_node: ComputationNode,
         _graph: &ComputationGraph,
@@ -346,12 +346,16 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ErfParams<F> {
 
 /// Prover state for erf activation sumcheck protocol.
 ///
-/// This implements a Read-Raf sumcheck for Erf lookup, asserting that each output[i] = ErfTable[input[i]]
-/// where input[i] = Ra[k] * Int[k] with Ra as one-hot encoding and Int as custom identity polynomial.
+/// Implements a Read-Raf sumcheck for Erf lookup:
+/// output[i] = ErfTable[input[i]], where input is encoded via Ra * Int.
 pub struct ErfProver<F: JoltField> {
+    /// Parameters shared across rounds (gamma, node, opening point, op config).
     pub params: ErfParams<F>,
+    /// Materialized erf lookup table as a multilinear polynomial.
     pub erf_table: MultilinearPolynomial<F>,
+    /// One-hot Ra evaluations over lookup indices.
     pub input_onehot: MultilinearPolynomial<F>,
+    /// Identity polynomial used for index folding in the lookup relation.
     pub identity: TeleportIdPolynomial<F>,
 }
 
@@ -370,7 +374,7 @@ impl<F: JoltField> ErfProver<F> {
 
         // Ensure input is within expected range for table size: 2^(log_table_size - 1) <= input < 2^(log_table_size - 1)
         // Inputs outside this range will error
-        // TODO: Pass these input in a clamping lookup table, since anyway tanh(±∞) = ±1, so we only need to handle a limited input range.
+        // TODO: Same as tanh.rs
         assert!(quotient_tensor.iter().all(|&x| {
             let lower_bound = -(1 << (params.op.log_table - 1));
             let upper_bound = (1 << (params.op.log_table - 1)) - 1;
@@ -469,12 +473,21 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
     }
 }
 
+/// Verifier state for erf activation sumcheck protocol.
+///
+/// Reconstructs the same lookup relation checked by `ErfProver`.
 pub struct ErfVerifier<F: JoltField> {
+    /// Parameters shared across rounds (gamma, node, opening point, op config).
     pub params: ErfParams<F>,
+    /// Materialized erf lookup table used for expected-claim evaluation.
     pub erf_table: MultilinearPolynomial<F>,
 }
 
 impl<F: JoltField> ErfVerifier<F> {
+    /// Create a verifier instance for erf lookup proof.
+    ///
+    /// Samples verifier-side parameters from transcript/accumulator,
+    /// registers required virtual openings, and materializes the erf table.
     pub fn new(
         computation_node: ComputationNode,
         graph: &ComputationGraph,

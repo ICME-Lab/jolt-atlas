@@ -50,6 +50,8 @@ pub mod cube;
 pub mod div;
 /// Einstein summation for tensor contractions.
 pub mod einsum;
+/// Erf activation function.
+pub mod erf;
 /// Gather elements from input tensor using indices.
 pub mod gather;
 /// Identity operation (pass-through).
@@ -147,6 +149,7 @@ macro_rules! dispatch_operator {
             Operator::Cube($inner) => $body,
             Operator::Clamp($inner) => $body,
             Operator::Div($inner) => $body,
+            Operator::Erf($inner) => $body,
             Operator::Einsum($inner) => $body,
             Operator::Gather($inner) => $body,
             Operator::Identity($inner) => $body,
@@ -164,7 +167,7 @@ macro_rules! dispatch_operator {
             Operator::Sub($inner) => $body,
             Operator::Sum($inner) => $body,
             Operator::Tanh($inner) => $body,
-            _ => $fallback,
+            // _ => $fallback,
         }
     };
 }

@@ -1,13 +1,12 @@
-use crate::onnx_proof::{
-    neural_teleport::{
-        division::{
-            compute_division, TeleportDivisionParams, TeleportDivisionProver,
-            TeleportDivisionVerifier,
-        },
-        n_bits_to_usize,
-        tanh::TanhTable,
+use crate::onnx_proof::neural_teleport::{
+    division::{
+        compute_division, TeleportDivisionParams, TeleportDivisionProver, TeleportDivisionVerifier,
     },
-    ops::OperatorProofTrait,
+    erf::ErfTable,
+    n_bits_to_usize,
+};
+use crate::onnx_proof::{
+    ops::{tanh::compute_ra_evals, OperatorProofTrait},
     range_checking::{
         range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
     },
@@ -19,8 +18,7 @@ use atlas_onnx_tracer::{
         ComputationGraph,
     },
     node::{handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE, ComputationNode},
-    ops::{Operator, Tanh},
-    tensor::Tensor,
+    ops::Erf,
 };
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
@@ -28,7 +26,6 @@ use joltworks::{
     field::JoltField,
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
-        eq_poly::EqPolynomial,
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
@@ -41,23 +38,17 @@ use joltworks::{
     },
     subprotocols::{
         shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
+        sumcheck::BatchedSumcheck,
+        sumcheck::{Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, thread::unsafe_allocate_zero_vec},
+    utils::errors::ProofVerifyError,
 };
-use rayon::{
-    iter::{
-        IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
-        IntoParallelRefMutIterator, ParallelIterator,
-    },
-    slice::ParallelSlice,
-};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
-    #[tracing::instrument(skip_all, name = "Tanh::prove")]
+impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
     fn prove(
         &self,
         node: &ComputationNode,
@@ -68,8 +59,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
         // Stage 1a: Neural teleportation division proof
         let div_params = TeleportDivisionParams::new(node.clone(), &prover.accumulator, self.tau);
         let mut div_sumcheck = TeleportDivisionProver::new(&prover.trace, div_params);
-
-        // Run division sumcheck first (output claim will be cached)
         let (div_proof, _) = Sumcheck::prove(
             &mut div_sumcheck,
             &mut prover.accumulator,
@@ -77,45 +66,38 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
         );
         results.push((ProofId(node.idx, ProofType::NeuralTeleport), div_proof));
 
-        // Stage 1b: Tanh lookup proof (uses quotient from division)
-        // This must be done AFTER division sumcheck completes
-        // so that the quotient opening is cached in the accumulator
-        let params = TanhParams::new(
+        // Stage 1b: Erf lookup proof
+        let params = ErfParams::new(
             node.clone(),
             &prover.preprocessing.model.graph,
             &prover.accumulator,
             &mut prover.transcript,
             self.clone(),
         );
-        let mut exec_sumcheck = TanhProver::initialize(
+        let mut exec_sumcheck = ErfProver::initialize(
             &prover.trace,
             params,
             &mut prover.accumulator,
             &mut prover.transcript,
         );
-
         let (exec_proof, _) = Sumcheck::prove(
             &mut exec_sumcheck,
             &mut prover.accumulator,
             &mut prover.transcript,
         );
-
         results.push((ProofId(node.idx, ProofType::Execution), exec_proof));
 
         let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
         let input = operands[0];
-        let Operator::Tanh(tanh_op) = &node.operator else {
-            panic!("Expected Tanh operator")
-        };
 
         // Compute quotient for neural teleportation
-        let (quotient, _remainder) = compute_division(input, tanh_op.tau);
+        let (quotient, _remainder) = compute_division(input, self.tau);
         let lookup_indices = quotient
             .par_iter()
-            .map(|&x| n_bits_to_usize(x, tanh_op.log_table))
+            .map(|&x| n_bits_to_usize(x, self.log_table))
             .collect::<Vec<usize>>();
 
-        // Stage 2: Range check proof for division and first One-Hot checks for TanhRa
+        // Stage 2: Range check proof for division and first One-Hot checks for ErfRa
         let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
         let (rangecheck_sumcheck, rc_lookup_indices) = rangecheck_provider
             .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
@@ -123,12 +105,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
                 &mut prover.accumulator,
                 &mut prover.transcript,
             );
-        let tanh_encoding = TanhRaEncoding {
+        let erf_encoding = ErfRaEncoding {
             node_idx: node.idx,
-            log_table: tanh_op.log_table,
+            log_table: self.log_table,
         };
         let ra_onehot_provers = shout::ra_onehot_provers(
-            &tanh_encoding,
+            &erf_encoding,
             &lookup_indices,
             &prover.accumulator,
             &mut prover.transcript,
@@ -137,14 +119,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             vec![Box::new(rangecheck_sumcheck)];
         instances.extend(ra_onehot_provers);
 
-        let (tanh_ra_one_hot_proof, _) = BatchedSumcheck::prove(
+        let (erf_ra_one_hot_proof, _) = BatchedSumcheck::prove(
             instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
             &mut prover.transcript,
         );
         results.push((
             ProofId(node.idx, ProofType::RaOneHotChecks),
-            tanh_ra_one_hot_proof,
+            erf_ra_one_hot_proof,
         ));
 
         // Stage 3: one-hot checks for division
@@ -170,7 +152,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
         results
     }
 
-    #[tracing::instrument(skip_all, name = "Tanh::verify")]
     fn verify(
         &self,
         node: &ComputationNode,
@@ -191,13 +172,13 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             &mut verifier.transcript,
         )?;
 
-        // Stage 1b: Tanh verification
-        let tanh_proof = verifier
+        // Stage 1b: Erf verification
+        let erf_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
 
-        let exec_sumcheck = TanhVerifier::new(
+        let exec_sumcheck = ErfVerifier::new(
             node.clone(),
             &verifier.preprocessing.model.graph,
             &mut verifier.accumulator,
@@ -205,14 +186,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             self.clone(),
         );
         Sumcheck::verify(
-            tanh_proof,
+            erf_proof,
             &exec_sumcheck,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
 
-        // Stage 2: Range check verification for division and first One-Hot checks for TanhRa
-        let tanh_ra_one_hot_proof = verifier
+        // Stage 2: Range check verification for division and first One-Hot checks for ErfRa
+        let erf_ra_one_hot_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
@@ -223,15 +204,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
                 &mut verifier.accumulator,
                 &mut verifier.transcript,
             );
-        let Operator::Tanh(tanh_op) = &node.operator else {
-            panic!("Expected Tanh operator")
-        };
-        let tanh_encoding = TanhRaEncoding {
+        let erf_encoding = ErfRaEncoding {
             node_idx: node.idx,
-            log_table: tanh_op.log_table,
+            log_table: self.log_table,
         };
         let ra_onehot_verifier = shout::ra_onehot_verifiers(
-            &tanh_encoding,
+            &erf_encoding,
             &verifier.accumulator,
             &mut verifier.transcript,
         );
@@ -240,13 +218,13 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
         let mut instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = vec![&rangecheck_verifier];
         instances.extend(ra_onehot_verifier);
         BatchedSumcheck::verify(
-            tanh_ra_one_hot_proof,
+            erf_ra_one_hot_proof,
             instances,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
 
-        // Stage 3: one-hot check verification for division and last one-hot check for TanhRa
+        // Stage 3: one-hot check verification for division
         let ra_one_hot_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::RaHammingWeight))
@@ -269,45 +247,53 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
-        let tanh_encoding = TanhRaEncoding {
+        let erf_encoding = ErfRaEncoding {
             node_idx: node.idx,
             log_table: NEURAL_TELEPORT_LOG_TABLE_SIZE,
         };
         let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-        let tanh_d = tanh_encoding.one_hot_params().instruction_d;
+        let erf_d = erf_encoding.one_hot_params().instruction_d;
         let rc_d = rc_encoding.one_hot_params().instruction_d;
         let mut polys = vec![];
-        polys.extend((0..tanh_d).map(|i| CommittedPolynomial::TanhRaD(node.idx, i)));
+        polys.extend((0..erf_d).map(|i| CommittedPolynomial::ErfRaD(node.idx, i)));
         polys.extend((0..rc_d).map(|i| CommittedPolynomial::TeleportRangeCheckRaD(node.idx, i)));
         polys
     }
 }
 
-const DEGREE_BOUND: usize = 2;
+const DEGREE_BOUND: usize = 2; // TODO
 
-/// Parameters for proving hyperbolic tangent (tanh) activation operations.
+/// Parameters for proving error function (erf) activation operations.
 ///
-/// Tanh uses a lookup table approach with range checking. The folding challenge gamma
-/// is used to combine multiple checks.
+/// Mirrors the parameter layout used by `ErfParams` so both lookup-style
+/// activations follow the same transcript/challenge flow.
 #[derive(Clone)]
-pub struct TanhParams<F: JoltField> {
-    gamma: F,
-    r_node_output: Vec<F::Challenge>,
-    computation_node: ComputationNode,
-    op: Tanh,
+pub struct ErfParams<F: JoltField> {
+    /// Folding challenge used to combine multiple checks into one claim.
+    pub gamma: F,
+    /// Opening point sampled from the output claim of this node.
+    pub r_node_output: Vec<F::Challenge>,
+    /// Computation node currently being proven.
+    pub computation_node: ComputationNode,
+    /// Operator parameters (e.g. fixed-point scale for erf).
+    pub op: Erf,
+    /// Phantom marker for the field type.
+    pub _marker: core::marker::PhantomData<F>,
 }
 
-impl<F: JoltField> TanhParams<F> {
-    /// Create new tanh parameters from a computation node, graph, accumulator, transcript, and operation.
+impl<F: JoltField> ErfParams<F> {
+    /// Build erf parameters from the current accumulator/transcript state.
+    ///
+    /// This samples a fresh folding challenge and reuses the node-output opening
+    /// point already present in the accumulator, matching the erf flow.
     pub fn new(
         computation_node: ComputationNode,
         _graph: &ComputationGraph,
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut impl Transcript,
-        op: Tanh,
+        op: Erf,
     ) -> Self {
         let gamma = transcript.challenge_scalar();
-
         let r_node_output = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::NodeOutput(computation_node.idx),
@@ -321,11 +307,12 @@ impl<F: JoltField> TanhParams<F> {
             r_node_output,
             computation_node,
             op,
+            _marker: core::marker::PhantomData,
         }
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for TanhParams<F> {
+impl<F: JoltField> SumcheckInstanceParams<F> for ErfParams<F> {
     fn degree(&self) -> usize {
         DEGREE_BOUND
     }
@@ -338,7 +325,6 @@ impl<F: JoltField> SumcheckInstanceParams<F> for TanhParams<F> {
             )
             .1;
 
-        // Use quotient claim instead of input claim (neural teleportation)
         let quotient_claim = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::TeleportQuotient(self.computation_node.idx),
@@ -358,57 +344,53 @@ impl<F: JoltField> SumcheckInstanceParams<F> for TanhParams<F> {
     }
 }
 
-/// Prover state for tanh activation sumcheck protocol.
+/// Prover state for erf activation sumcheck protocol.
 ///
-/// This implements a Read-Raf sumcheck for Tanh lookup, asserting that each output[i] = TanhTable[input[i]]
-/// where input[i] = Ra[k] * Int[k] with Ra as one-hot encoding and Int as custom identity polynomial.
-pub struct TanhProver<F: JoltField> {
-    params: TanhParams<F>,
-    tanh_table: MultilinearPolynomial<F>,
-    input_onehot: MultilinearPolynomial<F>,
-    identity: TeleportIdPolynomial<F>,
+/// Implements a Read-Raf sumcheck for Erf lookup:
+/// output[i] = ErfTable[input[i]], where input is encoded via Ra * Int.
+pub struct ErfProver<F: JoltField> {
+    /// Parameters shared across rounds (gamma, node, opening point, op config).
+    pub params: ErfParams<F>,
+    /// Materialized erf lookup table as a multilinear polynomial.
+    pub erf_table: MultilinearPolynomial<F>,
+    /// One-hot Ra evaluations over lookup indices.
+    pub input_onehot: MultilinearPolynomial<F>,
+    /// Identity polynomial used for index folding in the lookup relation.
+    pub identity: TeleportIdPolynomial<F>,
 }
 
-impl<F: JoltField> TanhProver<F> {
+impl<F: JoltField> ErfProver<F> {
     /// Initialize the prover with trace data, parameters, accumulator, and transcript.
     pub fn initialize(
         trace: &Trace,
-        params: TanhParams<F>,
+        params: ErfParams<F>,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
         let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
         let input = operands[0];
 
-        // Compute quotient from division (neural teleportation)
         let (quotient_tensor, _remainder) = compute_division(input, params.op.tau);
 
         // Ensure input is within expected range for table size: 2^(log_table_size - 1) <= input < 2^(log_table_size - 1)
         // Inputs outside this range will error
-        // TODO: Pass these input in a clamping lookup table, since anyway tanh(±∞) = ±1, so we only need to handle a limited input range.
+        // TODO: Same as tanh.rs
         assert!(quotient_tensor.iter().all(|&x| {
             let lower_bound = -(1 << (params.op.log_table - 1));
             let upper_bound = (1 << (params.op.log_table - 1)) - 1;
             x >= lower_bound && x <= upper_bound
         }));
 
-        // Create and materialize the tanh lookup table (reduced size)
-        let tanh_table = TanhTable::new(params.op.log_table);
-        let tanh_table = MultilinearPolynomial::from(tanh_table.materialize());
+        // Create and materialize the erf lookup table (reduced size)
+        let erf_table = ErfTable::new(params.op.log_table);
+        let erf_table = MultilinearPolynomial::from(erf_table.materialize());
 
-        // Compute one-hot encoding of QUOTIENT values (not input)
+        // Use the compute_ra_evals in tanh.rs
         let input_onehot: Vec<F> =
             compute_ra_evals(&params.r_node_output, &quotient_tensor, params.op.log_table);
 
-        // Cache quotient claim (used in tanh lookup)
-        // We do not reuse the claim from the division sumcheck, because the opening point is different
-        // TODO(AntoineF4C5): Reuse the quotient claim from proving division.
-        // TODO(ClankPan): erf.rs has a similar implementation
-        // REQUIRED:
-        // - Computing an opening for output at same opening point than quotient tensor (and later perfom n-to-1 opening reduction).
-        // - Handling the difference between polynomials built from u32 and i32 tensors,
-        //   Namely we currently always use polynomials built from i32 tensors, except for raf-checking.
-        let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data()) // TODO: unify tensor representations (always i32 or always u32)
+        // TODO(ClankPan): Follow up on the TODOs in tanh.rs.
+        let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data())
             .evaluate(&params.r_node_output);
         accumulator.append_virtual(
             transcript,
@@ -419,42 +401,19 @@ impl<F: JoltField> TanhProver<F> {
         );
 
         let input_onehot = MultilinearPolynomial::from(input_onehot);
-        assert_eq!(input_onehot.len(), tanh_table.len());
+        assert_eq!(input_onehot.len(), erf_table.len());
         let identity = TeleportIdPolynomial::new(params.op.log_table);
-
-        #[cfg(test)]
-        {
-            let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data())
-                .evaluate(&params.r_node_output);
-            let rv_claim = accumulator
-                .get_virtual_polynomial_opening(
-                    VirtualPolynomial::NodeOutput(params.computation_node.idx),
-                    SumcheckId::Execution,
-                )
-                .1;
-            let claim = (0..input_onehot.len())
-                .map(|i| {
-                    use crate::onnx_proof::neural_teleport::usize_to_n_bits;
-
-                    let a = input_onehot.get_bound_coeff(i);
-                    let b = tanh_table.get_bound_coeff(i);
-                    let int = F::from_u32(usize_to_n_bits(i, params.op.log_table) as u32);
-                    a * (b + params.gamma * int)
-                })
-                .sum();
-            assert_eq!(rv_claim + params.gamma * quotient_claim, claim)
-        }
 
         Self {
             params,
-            tanh_table,
+            erf_table,
             input_onehot,
             identity,
         }
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TanhProver<F> {
+impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
@@ -462,7 +421,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TanhProver<F>
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         let Self {
             input_onehot,
-            tanh_table,
+            erf_table,
             identity,
             ..
         } = self;
@@ -473,7 +432,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TanhProver<F>
                 let ra_evals =
                     input_onehot.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
                 let table_evals =
-                    tanh_table.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+                    erf_table.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
                 let id_evals = identity.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
 
                 [
@@ -492,7 +451,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TanhProver<F>
     fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
         self.input_onehot
             .bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.tanh_table.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.erf_table.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.identity.bind_parallel(r_j, BindingOrder::LowToHigh);
     }
 
@@ -506,7 +465,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TanhProver<F>
         let r = [opening_point.r.as_slice(), &self.params.r_node_output].concat();
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::TanhRa(self.params.computation_node.idx),
+            VirtualPolynomial::ErfRa(self.params.computation_node.idx),
             SumcheckId::Execution,
             r.into(),
             self.input_onehot.final_sumcheck_claim(),
@@ -514,27 +473,30 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TanhProver<F>
     }
 }
 
-/// Verifier for tanh activation sumcheck protocol.
+/// Verifier state for erf activation sumcheck protocol.
 ///
-/// Verifies that the prover's sumcheck messages are consistent with the claimed
-/// tanh activation lookup table output.
-pub struct TanhVerifier<F: JoltField> {
-    params: TanhParams<F>,
-    tanh_table: MultilinearPolynomial<F>,
+/// Reconstructs the same lookup relation checked by `ErfProver`.
+pub struct ErfVerifier<F: JoltField> {
+    /// Parameters shared across rounds (gamma, node, opening point, op config).
+    pub params: ErfParams<F>,
+    /// Materialized erf lookup table used for expected-claim evaluation.
+    pub erf_table: MultilinearPolynomial<F>,
 }
 
-impl<F: JoltField> TanhVerifier<F> {
-    /// Create a new verifier for the tanh operation.
+impl<F: JoltField> ErfVerifier<F> {
+    /// Create a verifier instance for erf lookup proof.
+    ///
+    /// Samples verifier-side parameters from transcript/accumulator,
+    /// registers required virtual openings, and materializes the erf table.
     pub fn new(
         computation_node: ComputationNode,
         graph: &ComputationGraph,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
-        op: Tanh,
+        op: Erf,
     ) -> Self {
-        let params = TanhParams::new(computation_node, graph, accumulator, transcript, op);
+        let params = ErfParams::new(computation_node, graph, accumulator, transcript, op);
 
-        // Cache quotient polynomial opening
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::TeleportQuotient(params.computation_node.idx),
@@ -542,15 +504,14 @@ impl<F: JoltField> TanhVerifier<F> {
             params.r_node_output.clone().into(),
         );
 
-        // Materialize the tanh table for verification
-        let tanh_table = TanhTable::new(params.op.log_table);
-        let tanh_table = MultilinearPolynomial::from(tanh_table.materialize());
+        let erf_table = ErfTable::new(params.op.log_table);
+        let erf_table = MultilinearPolynomial::from(erf_table.materialize());
 
-        Self { params, tanh_table }
+        Self { params, erf_table }
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifier<F> {
+impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ErfVerifier<F> {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
@@ -564,13 +525,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifie
 
         let ra_claim = accumulator
             .get_virtual_polynomial_opening(
-                VirtualPolynomial::TanhRa(self.params.computation_node.idx),
+                VirtualPolynomial::ErfRa(self.params.computation_node.idx),
                 SumcheckId::Execution,
             )
             .1;
 
-        // Evaluate tanh table at the opening point
-        let table_claim = self.tanh_table.evaluate(&opening_point.r);
+        // Evaluate erf table at the opening point
+        let table_claim = self.erf_table.evaluate(&opening_point.r);
 
         let int_eval =
             TeleportIdPolynomial::new(self.params.op.log_table).evaluate(&opening_point.r);
@@ -588,7 +549,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifie
         let r = [opening_point.r.as_slice(), &self.params.r_node_output].concat();
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::TanhRa(self.params.computation_node.idx),
+            VirtualPolynomial::ErfRa(self.params.computation_node.idx),
             SumcheckId::Execution,
             r.into(),
         );
@@ -596,22 +557,22 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifie
 }
 
 // ---------------------------------------------------------------------------
-// TanhRaEncoding — implements RaOneHotEncoding for Tanh's stage-2 one-hot checks
+// ErfRaEncoding — implements RaOneHotEncoding for Erf's stage-2 one-hot checks
 // ---------------------------------------------------------------------------
 
-/// Encoding impl for tanh one-hot checking.
+/// Encoding impl for erf one-hot checking.
 ///
-/// Used in the stage-2 one-hot checks for tanh lookup table accesses.
-pub struct TanhRaEncoding {
+/// Used in the stage-2 one-hot checks for erf lookup table accesses.
+pub struct ErfRaEncoding {
     /// Index of the computation node this encoding belongs to.
     pub node_idx: usize,
     /// Log2 of the lookup table size.
     pub log_table: usize,
 }
 
-impl RaOneHotEncoding for TanhRaEncoding {
+impl RaOneHotEncoding for ErfRaEncoding {
     fn committed_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::TanhRaD(self.node_idx, d)
+        CommittedPolynomial::ErfRaD(self.node_idx, d)
     }
 
     fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
@@ -623,7 +584,7 @@ impl RaOneHotEncoding for TanhRaEncoding {
 
     fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
         (
-            VirtualPolynomial::TanhRa(self.node_idx),
+            VirtualPolynomial::ErfRa(self.node_idx),
             SumcheckId::Execution,
         )
     }
@@ -637,48 +598,6 @@ impl RaOneHotEncoding for TanhRaEncoding {
     }
 }
 
-// From the input values, computes the one-hot read address vector
-pub(crate) fn compute_ra_evals<F>(
-    r: &[F::Challenge],
-    input: &Tensor<i32>,
-    log_table_size: usize,
-) -> Vec<F>
-where
-    F: JoltField,
-{
-    let E = EqPolynomial::evals(r);
-    let num_threads = rayon::current_num_threads();
-    let chunk_size = input.len().div_ceil(num_threads);
-
-    let table_size = 1 << log_table_size;
-    let input_usize = input
-        .par_iter()
-        .map(|&x| n_bits_to_usize(x, log_table_size))
-        .collect::<Vec<usize>>();
-
-    let partial_results: Vec<Vec<F>> = input_usize
-        .par_chunks(chunk_size)
-        .enumerate()
-        .map(|(chunk_idx, chunk)| {
-            let mut local_ra = unsafe_allocate_zero_vec::<F>(table_size);
-            let base_idx = chunk_idx * chunk_size;
-            chunk.iter().enumerate().for_each(|(local_j, &k)| {
-                let global_j = base_idx + local_j;
-                local_ra[k] += E[global_j];
-            });
-            local_ra
-        })
-        .collect();
-
-    let mut ra = unsafe_allocate_zero_vec::<F>(table_size);
-    for partial in partial_results {
-        ra.par_iter_mut()
-            .zip(partial.par_iter())
-            .for_each(|(dest, &src)| *dest += src);
-    }
-    ra
-}
-
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
@@ -689,22 +608,22 @@ mod tests {
     };
     use rand::{rngs::StdRng, SeedableRng};
 
-    fn tanh_model(input_shape: &[usize]) -> Model {
+    fn erf_model(input_shape: &[usize]) -> Model {
         let mut b = ModelBuilder::new();
         let i = b.input(input_shape.to_vec());
-        let res = b.tanh(i);
+        let res = b.erf(i);
         b.mark_output(res);
         b.build()
     }
 
     #[test]
-    fn test_tanh() {
-        let T = 1 << 14;
+    fn test_erf() {
+        let t = 1 << 14;
         const MIN_INPUT_VALUE: i32 = -(1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1));
         const MAX_INPUT_VALUE: i32 = 1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1);
-        let mut rng = StdRng::seed_from_u64(0x888);
-        let input = Tensor::random_range(&mut rng, &[T], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
-        let model = tanh_model(&[T]);
+        let mut rng = StdRng::seed_from_u64(0x889);
+        let input = Tensor::random_range(&mut rng, &[t], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
+        let model = erf_model(&[t]);
         unit_test_op(model, &[input]);
     }
 }

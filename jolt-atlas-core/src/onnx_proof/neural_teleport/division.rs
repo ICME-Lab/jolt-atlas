@@ -13,7 +13,6 @@
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
-    ops::Tanh,
     tensor::Tensor,
 };
 use common::VirtualPolynomial;
@@ -78,7 +77,7 @@ impl<F: JoltField> TeleportDivisionParams<F> {
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-        op: &Tanh,
+        tau: i32,
     ) -> Self {
         let r_node_output = accumulator
             .get_virtual_polynomial_opening(
@@ -91,7 +90,7 @@ impl<F: JoltField> TeleportDivisionParams<F> {
         Self {
             r_node_output,
             computation_node,
-            tau: op.tau,
+            tau,
         }
     }
 }
@@ -240,9 +239,9 @@ impl<F: JoltField> TeleportDivisionVerifier<F> {
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
-        op: &Tanh,
+        tau: i32,
     ) -> Self {
-        let params = TeleportDivisionParams::new(computation_node, accumulator, op);
+        let params = TeleportDivisionParams::new(computation_node, accumulator, tau);
         Self { params }
     }
 }

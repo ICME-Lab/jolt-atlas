@@ -16,6 +16,7 @@ pub enum CommittedPolynomial {
     /// `1` - d
     NodeOutputRaD(usize, usize),
     TanhRaD(usize, usize), // One-hot read addresses for Tanh lookup
+    ErfRaD(usize, usize),  // One-hot read addresses for Erf lookup
 
     /// Fields:
     ///
@@ -57,6 +58,7 @@ pub enum VirtualPolynomial {
     NodeOutput(usize),
     NodeOutputRa(usize),
     TanhRa(usize), // One-hot read addresses for Tanh lookup
+    ErfRa(usize),  // One-hot read addresses for Erf lookup
 
     /// Fields:
     ///
@@ -159,6 +161,11 @@ impl CanonicalSerialize for CommittedPolynomial {
                 12u8.serialize_with_mode(&mut writer, compress)?;
                 a.serialize_with_mode(&mut writer, compress)?;
             }
+            Self::ErfRaD(a, b) => {
+                13u8.serialize_with_mode(&mut writer, compress)?;
+                a.serialize_with_mode(&mut writer, compress)?;
+                b.serialize_with_mode(&mut writer, compress)?;
+            }
         }
         Ok(())
     }
@@ -167,6 +174,7 @@ impl CanonicalSerialize for CommittedPolynomial {
         1 + match self {
             Self::NodeOutputRaD(a, b)
             | Self::TanhRaD(a, b)
+            | Self::ErfRaD(a, b)
             | Self::SoftmaxRemainder(a, b)
             | Self::DivRangeCheckRaD(a, b)
             | Self::SqrtDivRangeCheckRaD(a, b)
@@ -258,6 +266,10 @@ impl CanonicalDeserialize for CommittedPolynomial {
                 compress,
                 validate,
             )?)),
+            13 => Ok(Self::ErfRaD(
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+            )),
             _ => Err(SerializationError::InvalidData),
         }
     }
@@ -357,6 +369,10 @@ impl CanonicalSerialize for VirtualPolynomial {
                 18u8.serialize_with_mode(&mut writer, compress)?;
                 a.serialize_with_mode(&mut writer, compress)?;
             }
+            Self::ErfRa(a) => {
+                19u8.serialize_with_mode(&mut writer, compress)?;
+                a.serialize_with_mode(&mut writer, compress)?;
+            }
         }
         Ok(())
     }
@@ -367,6 +383,7 @@ impl CanonicalSerialize for VirtualPolynomial {
             Self::NodeOutput(a)
             | Self::NodeOutputRa(a)
             | Self::TanhRa(a)
+            | Self::ErfRa(a)
             | Self::DivRangeCheckRa(a)
             | Self::SqrtRangeCheckRa(a)
             | Self::TeleportRangeCheckRa(a)
@@ -481,6 +498,11 @@ impl CanonicalDeserialize for VirtualPolynomial {
                 validate,
             )?)),
             18 => Ok(Self::TeleportRemainder(usize::deserialize_with_mode(
+                &mut reader,
+                compress,
+                validate,
+            )?)),
+            19 => Ok(Self::ErfRa(usize::deserialize_with_mode(
                 &mut reader,
                 compress,
                 validate,

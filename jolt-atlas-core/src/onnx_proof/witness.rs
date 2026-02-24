@@ -99,6 +99,34 @@ fn build_one_hot_rad_witness<F: JoltField>(
     ))
 }
 
+/// Builds a one-hot RaD witness for neural-teleport activation lookups (tanh/erf).
+///
+/// Both activations share the exact same witness construction pipeline:
+/// compute quotient via teleport-division, map quotient to lookup indices, then
+/// construct the `d`-th one-hot address chunk.
+fn build_teleport_activation_rad_witness<F: JoltField>(
+    input: &Tensor<i32>,
+    tau: i32,
+    log_table: usize,
+    d: usize,
+) -> MultilinearPolynomial<F> {
+    let (quotient, _remainder) = compute_division(input, tau);
+    let lookup_indices: Vec<usize> = quotient
+        .par_iter()
+        .map(|&x| n_bits_to_usize(x, log_table))
+        .collect();
+    let one_hot_params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_table);
+    let h_indices =
+        subprotocols::shout::compute_instruction_h_indices(&lookup_indices, &one_hot_params);
+    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+        h_indices[d]
+            .par_iter()
+            .map(|&h| h.map(|h| h as u16))
+            .collect(),
+        one_hot_params.k_chunk,
+    ))
+}
+
 /// Trait for generating witness polynomials from model execution traces.
 ///
 /// This trait defines the interface for converting committed polynomial specifications
@@ -292,24 +320,17 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 };
                 let layer_data = Trace::layer_data(trace, computation_node);
                 let input = &layer_data.operands[0];
-                let (quotient, _remainder) = compute_division(input, inner.tau);
-                let lookup_indices: Vec<usize> = quotient
-                    .par_iter()
-                    .map(|&x| n_bits_to_usize(x, inner.log_table))
-                    .collect();
-                let one_hot_params =
-                    OneHotParams::from_config_and_log_K(&OneHotConfig::default(), inner.log_table);
-                let h_indices = subprotocols::shout::compute_instruction_h_indices(
-                    &lookup_indices,
-                    &one_hot_params,
-                );
-                MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
-                    h_indices[*d_idx]
-                        .par_iter()
-                        .map(|&h| h.map(|h| h as u16))
-                        .collect(),
-                    one_hot_params.k_chunk,
-                ))
+                build_teleport_activation_rad_witness(input, inner.tau, inner.log_table, *d_idx)
+            }
+
+            CommittedPolynomial::ErfRaD(node_idx, d_idx) => {
+                let computation_node = &model.graph.nodes[node_idx];
+                let Operator::Erf(inner) = &computation_node.operator else {
+                    panic!("Expected Erf operator for ErfRa committed polynomial");
+                };
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let input = &layer_data.operands[0];
+                build_teleport_activation_rad_witness(input, inner.tau, inner.log_table, *d_idx)
             }
         }
     }

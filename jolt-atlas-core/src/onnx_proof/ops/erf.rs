@@ -1,12 +1,16 @@
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier};
-use atlas_onnx_tracer::{node::ComputationNode, ops::Erf};
-use common::CommittedPolynomial;
+use atlas_onnx_tracer::{
+    model::ComputationGraph,
+    node::{handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE, ComputationNode},
+    ops::Erf,
+};
+use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
     poly::{
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator,
-            VerifierOpeningAccumulator, BIG_ENDIAN,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -41,33 +45,86 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
     }
 }
 
+const DEGREE_BOUND: usize = 2; // TODO
+
+/// Parameters for proving error function (erf) activation operations.
+///
+/// Mirrors the parameter layout used by `TanhParams` so both lookup-style
+/// activations follow the same transcript/challenge flow.
 #[derive(Clone)]
 pub struct ErfParams<F: JoltField> {
+    /// Folding challenge used to combine multiple checks into one claim.
+    pub gamma: F,
+    /// Opening point sampled from the output claim of this node.
+    pub r_node_output: Vec<F::Challenge>,
+    /// Computation node currently being proven.
     pub computation_node: ComputationNode,
+    /// Operator parameters (e.g. fixed-point scale for erf).
+    pub op: Erf,
+    /// Phantom marker for the field type.
     pub _marker: core::marker::PhantomData<F>,
 }
 
 impl<F: JoltField> ErfParams<F> {
-    pub fn new(_computation_node: ComputationNode, _accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        todo!("Initialize Erf params from accumulator challenges")
+    /// Build erf parameters from the current accumulator/transcript state.
+    ///
+    /// This samples a fresh folding challenge and reuses the node-output opening
+    /// point already present in the accumulator, matching the tanh flow.
+    pub fn new(
+        computation_node: ComputationNode,
+        _graph: &ComputationGraph,
+        accumulator: &dyn OpeningAccumulator<F>,
+        transcript: &mut impl Transcript,
+        op: Erf,
+    ) -> Self {
+        let gamma = transcript.challenge_scalar();
+        let r_node_output = accumulator
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::NodeOutput(computation_node.idx),
+                SumcheckId::Execution,
+            )
+            .0
+            .r;
+
+        Self {
+            gamma,
+            r_node_output,
+            computation_node,
+            op,
+            _marker: core::marker::PhantomData,
+        }
     }
 }
 
 impl<F: JoltField> SumcheckInstanceParams<F> for ErfParams<F> {
     fn degree(&self) -> usize {
-        todo!("Define sumcheck degree for Erf")
+        DEGREE_BOUND
     }
 
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
-        todo!("Define folded input claim for Erf")
+    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
+        let rv_claim = accumulator
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::NodeOutput(self.computation_node.idx),
+                SumcheckId::Execution,
+            )
+            .1;
+
+        let quotient_claim = accumulator
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::TeleportQuotient(self.computation_node.idx),
+                SumcheckId::Raf,
+            )
+            .1;
+
+        rv_claim + self.gamma * quotient_claim
     }
 
-    fn normalize_opening_point(&self, _challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
-        todo!("Define opening-point normalization for Erf")
+    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
     fn num_rounds(&self) -> usize {
-        todo!("Define number of sumcheck rounds for Erf")
+        self.op.log_table
     }
 }
 

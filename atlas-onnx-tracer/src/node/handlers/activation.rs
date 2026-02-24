@@ -78,10 +78,16 @@ fn handle_tanh(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 /// Erf: Error function activation.
 fn handle_erf(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let scale = scale_to_multiplier(hctx.run_args.scale).into();
+    let tau = NEURAL_TELEPORT_TAU;
+    let log_table_size = NEURAL_TELEPORT_LOG_TABLE_SIZE;
 
     HandlerBuilder::new(hctx)
         .with_broadcast()
-        .simple_op(Operator::Erf(Erf { scale }))
+        .simple_op(Operator::Erf(Erf {
+            scale,
+            tau,
+            log_table: log_table_size,
+        }))
         .build()
 }
 

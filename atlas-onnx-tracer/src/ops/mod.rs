@@ -109,7 +109,7 @@ define_operators! {
     operators: [
         Add, And, Clamp { axes: usize, max_spread: i32 },
         Constant(Tensor<i32>), Cube, Div, Einsum { equation: String },
-        Erf { scale: F32 }, Gather { axis: usize }, Identity, Iff, Input,
+        Erf { scale: F32, tau: i32, log_table: usize }, Gather { axis: usize }, Identity, Iff, Input,
         IsNan { out_dims: Vec<usize> }, MoveAxis { source: usize, destination: usize },
         Mul, Broadcast { shape: Vec<usize> }, ReLU, Reshape { shape:Vec<usize> },
         Rsqrt { scale: F32 }, ScalarConstDiv {divisor: i32}, SoftmaxAxes { axes: usize, scale: F32 }, Square,

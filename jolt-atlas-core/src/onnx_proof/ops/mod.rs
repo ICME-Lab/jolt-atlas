@@ -48,10 +48,10 @@ pub mod constant;
 pub mod cube;
 /// Element-wise division operation.
 pub mod div;
-/// Erf activation function.
-pub mod erf;
 /// Einstein summation for tensor contractions.
 pub mod einsum;
+/// Erf activation function.
+pub mod erf;
 /// Gather elements from input tensor using indices.
 pub mod gather;
 /// Identity operation (pass-through).

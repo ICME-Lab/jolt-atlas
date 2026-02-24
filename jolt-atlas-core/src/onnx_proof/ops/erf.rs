@@ -246,11 +246,19 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
 
     fn cache_openings(
         &self,
-        _accumulator: &mut ProverOpeningAccumulator<F>,
-        _transcript: &mut T,
-        _sumcheck_challenges: &[F::Challenge],
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
     ) {
-        todo!("Cache Erf prover virtual openings")
+        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let r = [opening_point.r.as_slice(), &self.params.r_node_output].concat();
+        accumulator.append_virtual(
+            transcript,
+            VirtualPolynomial::ErfRa(self.params.computation_node.idx),
+            SumcheckId::Execution,
+            r.into(),
+            self.input_onehot.final_sumcheck_claim(),
+        );
     }
 }
 

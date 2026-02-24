@@ -5,14 +5,12 @@ use atlas_onnx_tracer::{
         ComputationGraph,
     },
     node::ComputationNode,
-    tensor::Tensor,
     ops::Erf,
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
     poly::{
-        eq_poly::EqPolynomial,
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
@@ -29,13 +27,10 @@ use joltworks::{
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, thread::unsafe_allocate_zero_vec},
+    utils::errors::ProofVerifyError,
 };
-use rayon::{
-    iter::{IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator},
-    slice::ParallelSlice,
-};
-use crate::onnx_proof::neural_teleport::{division::compute_division, erf::ErfTable, n_bits_to_usize};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use crate::onnx_proof::neural_teleport::{division::compute_division, erf::ErfTable};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
     fn prove(
@@ -213,12 +208,40 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
         &self.params
     }
 
-    fn compute_message(&mut self, _round: usize, _previous_claim: F) -> UniPoly<F> {
-        todo!("Compute Erf prover univariate message")
+    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
+        let Self {
+            input_onehot,
+            erf_table,
+            identity,
+            ..
+        } = self;
+
+        let univariate_poly_evals: [F; 2] = (0..input_onehot.len() / 2)
+            .into_par_iter()
+            .map(|i| {
+                let ra_evals =
+                    input_onehot.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+                let table_evals = erf_table.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+                let id_evals = identity.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+
+                [
+                    ra_evals[0] * (table_evals[0] + id_evals[0] * self.params.gamma),
+                    ra_evals[1] * (table_evals[1] + id_evals[1] * self.params.gamma),
+                ]
+            })
+            .reduce(
+                || [F::zero(); 2],
+                |running, new| [running[0] + new[0], running[1] + new[1]],
+            );
+
+        UniPoly::from_evals_and_hint(previous_claim, &univariate_poly_evals)
     }
 
-    fn ingest_challenge(&mut self, _r_j: F::Challenge, _round: usize) {
-        todo!("Bind Erf prover polynomials to verifier challenge")
+    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
+        self.input_onehot
+            .bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.erf_table.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.identity.bind_parallel(r_j, BindingOrder::LowToHigh);
     }
 
     fn cache_openings(
@@ -230,43 +253,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
         todo!("Cache Erf prover virtual openings")
     }
 }
-
-// fn compute_ra_evals<F>(r: &[F::Challenge], input: &Tensor<i32>, log_table_size: usize) -> Vec<F>
-// where
-//     F: JoltField,
-// {
-//     let E = EqPolynomial::evals(r);
-//     let num_threads = rayon::current_num_threads();
-//     let chunk_size = input.len().div_ceil(num_threads);
-
-//     let table_size = 1 << log_table_size;
-//     let input_usize = input
-//         .par_iter()
-//         .map(|&x| n_bits_to_usize(x, log_table_size))
-//         .collect::<Vec<usize>>();
-
-//     let partial_results: Vec<Vec<F>> = input_usize
-//         .par_chunks(chunk_size)
-//         .enumerate()
-//         .map(|(chunk_idx, chunk)| {
-//             let mut local_ra = unsafe_allocate_zero_vec::<F>(table_size);
-//             let base_idx = chunk_idx * chunk_size;
-//             chunk.iter().enumerate().for_each(|(local_j, &k)| {
-//                 let global_j = base_idx + local_j;
-//                 local_ra[k] += E[global_j];
-//             });
-//             local_ra
-//         })
-//         .collect();
-
-//     let mut ra = unsafe_allocate_zero_vec::<F>(table_size);
-//     for partial in partial_results {
-//         ra.par_iter_mut()
-//             .zip(partial.par_iter())
-//             .for_each(|(dest, &src)| *dest += src);
-//     }
-//     ra
-// }
 
 pub struct ErfVerifier<F: JoltField> {
     pub params: ErfParams<F>,

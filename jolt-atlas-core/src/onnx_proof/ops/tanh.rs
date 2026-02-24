@@ -402,6 +402,7 @@ impl<F: JoltField> TanhProver<F> {
         // Cache quotient claim (used in tanh lookup)
         // We do not reuse the claim from the division sumcheck, because the opening point is different
         // TODO(AntoineF4C5): Reuse the quotient claim from proving division.
+        // TODO(ClankPan): erf.rs has a similar implementation
         // REQUIRED:
         // - Computing an opening for output at same opening point than quotient tensor (and later perfom n-to-1 opening reduction).
         // - Handling the difference between polynomials built from u32 and i32 tensors,
@@ -636,7 +637,7 @@ impl RaOneHotEncoding for TanhRaEncoding {
 }
 
 // From the input values, computes the one-hot read address vector
-fn compute_ra_evals<F>(r: &[F::Challenge], input: &Tensor<i32>, log_table_size: usize) -> Vec<F>
+pub(crate) fn compute_ra_evals<F>(r: &[F::Challenge], input: &Tensor<i32>, log_table_size: usize) -> Vec<F>
 where
     F: JoltField,
 {

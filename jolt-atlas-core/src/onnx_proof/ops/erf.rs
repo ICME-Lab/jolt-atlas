@@ -1,17 +1,26 @@
-use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier};
+use crate::onnx_proof::{ProofId, Prover, Verifier, ops::{OperatorProofTrait, tanh::compute_ra_evals}};
 use atlas_onnx_tracer::{
-    model::ComputationGraph,
+    model::{
+        trace::{LayerData, Trace},
+        ComputationGraph,
+    },
     node::ComputationNode,
+    tensor::Tensor,
     ops::Erf,
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
     poly::{
+        eq_poly::EqPolynomial,
+        multilinear_polynomial::{
+            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+        },
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
+        teleport_id_poly::TeleportIdPolynomial,
         unipoly::UniPoly,
     },
     subprotocols::{
@@ -20,8 +29,13 @@ use joltworks::{
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::errors::ProofVerifyError,
+    utils::{errors::ProofVerifyError, thread::unsafe_allocate_zero_vec},
 };
+use rayon::{
+    iter::{IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator},
+    slice::ParallelSlice,
+};
+use crate::onnx_proof::neural_teleport::{division::compute_division, erf::ErfTable, n_bits_to_usize};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
     fn prove(
@@ -128,17 +142,69 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ErfParams<F> {
     }
 }
 
+
+/// Prover state for erf activation sumcheck protocol.
+///
+/// This implements a Read-Raf sumcheck for Erf lookup, asserting that each output[i] = ErfTable[input[i]]
+/// where input[i] = Ra[k] * Int[k] with Ra as one-hot encoding and Int as custom identity polynomial.
 pub struct ErfProver<F: JoltField> {
     pub params: ErfParams<F>,
+    pub erf_table: MultilinearPolynomial<F>,
+    pub input_onehot: MultilinearPolynomial<F>,
+    pub identity: TeleportIdPolynomial<F>,
 }
 
 impl<F: JoltField> ErfProver<F> {
+  /// Initialize the prover with trace data, parameters, accumulator, and transcript.
     pub fn initialize(
-        _params: ErfParams<F>,
-        _accumulator: &mut ProverOpeningAccumulator<F>,
-        _transcript: &mut impl Transcript,
+        trace: &Trace,
+        params: ErfParams<F>,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut impl Transcript,
     ) -> Self {
-        todo!("Initialize Erf prover state")
+        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
+        let input = operands[0];
+
+        let (quotient_tensor, _remainder) = compute_division(input, params.op.tau);
+
+        // Ensure input is within expected range for table size: 2^(log_table_size - 1) <= input < 2^(log_table_size - 1)
+        // Inputs outside this range will error
+        // TODO: Pass these input in a clamping lookup table, since anyway tanh(±∞) = ±1, so we only need to handle a limited input range.
+        assert!(quotient_tensor.iter().all(|&x| {
+            let lower_bound = -(1 << (params.op.log_table - 1));
+            let upper_bound = (1 << (params.op.log_table - 1)) - 1;
+            x >= lower_bound && x <= upper_bound
+        }));
+
+        // Create and materialize the erf lookup table (reduced size)
+        let erf_table = ErfTable::new(params.op.log_table);
+        let erf_table = MultilinearPolynomial::from(erf_table.materialize());
+
+        // Use the compute_ra_evals in tanh.rs
+        let input_onehot: Vec<F> =
+            compute_ra_evals(&params.r_node_output, &quotient_tensor, params.op.log_table);
+
+        // TODO(ClankPan): Follow up on the TODOs in tanh.rs.
+        let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data())
+            .evaluate(&params.r_node_output);
+        accumulator.append_virtual(
+            transcript,
+            VirtualPolynomial::TeleportQuotient(params.computation_node.idx),
+            SumcheckId::Raf,
+            params.r_node_output.clone().into(),
+            quotient_claim,
+        );
+
+        let input_onehot = MultilinearPolynomial::from(input_onehot);
+        assert_eq!(input_onehot.len(), erf_table.len());
+        let identity = TeleportIdPolynomial::new(params.op.log_table);
+
+        Self {
+            params,
+            erf_table,
+            input_onehot,
+            identity,
+        }
     }
 }
 
@@ -164,6 +230,43 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
         todo!("Cache Erf prover virtual openings")
     }
 }
+
+// fn compute_ra_evals<F>(r: &[F::Challenge], input: &Tensor<i32>, log_table_size: usize) -> Vec<F>
+// where
+//     F: JoltField,
+// {
+//     let E = EqPolynomial::evals(r);
+//     let num_threads = rayon::current_num_threads();
+//     let chunk_size = input.len().div_ceil(num_threads);
+
+//     let table_size = 1 << log_table_size;
+//     let input_usize = input
+//         .par_iter()
+//         .map(|&x| n_bits_to_usize(x, log_table_size))
+//         .collect::<Vec<usize>>();
+
+//     let partial_results: Vec<Vec<F>> = input_usize
+//         .par_chunks(chunk_size)
+//         .enumerate()
+//         .map(|(chunk_idx, chunk)| {
+//             let mut local_ra = unsafe_allocate_zero_vec::<F>(table_size);
+//             let base_idx = chunk_idx * chunk_size;
+//             chunk.iter().enumerate().for_each(|(local_j, &k)| {
+//                 let global_j = base_idx + local_j;
+//                 local_ra[k] += E[global_j];
+//             });
+//             local_ra
+//         })
+//         .collect();
+
+//     let mut ra = unsafe_allocate_zero_vec::<F>(table_size);
+//     for partial in partial_results {
+//         ra.par_iter_mut()
+//             .zip(partial.par_iter())
+//             .for_each(|(dest, &src)| *dest += src);
+//     }
+//     ra
+// }
 
 pub struct ErfVerifier<F: JoltField> {
     pub params: ErfParams<F>,

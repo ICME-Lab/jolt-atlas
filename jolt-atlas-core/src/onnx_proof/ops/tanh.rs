@@ -66,7 +66,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
         let mut results = Vec::new();
 
         // Stage 1a: Neural teleportation division proof
-        let div_params = TeleportDivisionParams::new(node.clone(), &prover.accumulator, self);
+        let div_params = TeleportDivisionParams::new(node.clone(), &prover.accumulator, self.tau);
         let mut div_sumcheck = TeleportDivisionProver::new(&prover.trace, div_params);
 
         // Run division sumcheck first (output claim will be cached)
@@ -182,7 +182,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             .get(&ProofId(node.idx, ProofType::NeuralTeleport))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
 
-        let div_verifier = TeleportDivisionVerifier::new(node.clone(), &verifier.accumulator, self);
+        let div_verifier =
+            TeleportDivisionVerifier::new(node.clone(), &verifier.accumulator, self.tau);
         Sumcheck::verify(
             div_proof,
             &div_verifier,

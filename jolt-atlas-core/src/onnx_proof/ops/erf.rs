@@ -321,10 +321,17 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ErfVerifier
 
     fn cache_openings(
         &self,
-        _accumulator: &mut VerifierOpeningAccumulator<F>,
-        _transcript: &mut T,
-        _sumcheck_challenges: &[F::Challenge],
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
     ) {
-        todo!("Cache Erf verifier virtual openings")
+        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let r = [opening_point.r.as_slice(), &self.params.r_node_output].concat();
+        accumulator.append_virtual(
+            transcript,
+            VirtualPolynomial::ErfRa(self.params.computation_node.idx),
+            SumcheckId::Execution,
+            r.into(),
+        );
     }
 }

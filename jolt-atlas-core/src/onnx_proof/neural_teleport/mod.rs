@@ -6,6 +6,7 @@
 //! table sizes typical of activation functions.
 
 pub mod division;
+pub mod erf;
 pub mod tanh;
 
 /// Fixed-point scale factor: maps [-1, 1] to [-128, 128]

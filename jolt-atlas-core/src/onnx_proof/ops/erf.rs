@@ -1,7 +1,7 @@
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier};
 use atlas_onnx_tracer::{
     model::ComputationGraph,
-    node::{handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE, ComputationNode},
+    node::ComputationNode,
     ops::Erf,
 };
 use common::{CommittedPolynomial, VirtualPolynomial};

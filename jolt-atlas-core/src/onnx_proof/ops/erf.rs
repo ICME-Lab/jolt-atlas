@@ -1,15 +1,28 @@
-use crate::onnx_proof::{ProofId, Prover, Verifier, ops::{OperatorProofTrait, tanh::compute_ra_evals}};
+use crate::onnx_proof::neural_teleport::{
+    division::{compute_division, TeleportDivisionParams, TeleportDivisionProver},
+    erf::ErfTable,
+    n_bits_to_usize,
+};
+use crate::onnx_proof::{
+    ops::{tanh::compute_ra_evals, OperatorProofTrait},
+    range_checking::{
+        range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+    },
+    ProofId, ProofType, Prover, Verifier,
+};
 use atlas_onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
         ComputationGraph,
     },
-    node::ComputationNode,
-    ops::Erf,
+    node::{handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE, ComputationNode},
+    ops::{Erf, Tanh},
 };
-use common::{CommittedPolynomial, VirtualPolynomial};
+use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
+    config::{OneHotConfig, OneHotParams},
     field::JoltField,
+    lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
@@ -22,23 +35,125 @@ use joltworks::{
         unipoly::UniPoly,
     },
     subprotocols::{
-        sumcheck::SumcheckInstanceProof,
+        shout::{self, RaOneHotEncoding},
+        sumcheck::BatchedSumcheck,
+        sumcheck::{Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use crate::onnx_proof::neural_teleport::{division::compute_division, erf::ErfTable};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
     fn prove(
         &self,
-        _node: &ComputationNode,
-        _prover: &mut Prover<F, T>,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        todo!("Implement Erf proving pipeline")
+        let mut results = Vec::new();
+
+        // Stage 1a: Neural teleportation division proof
+        let tanh_compat = Tanh {
+            scale: self.scale,
+            tau: self.tau,
+            log_table: self.log_table,
+        };
+        let div_params =
+            TeleportDivisionParams::new(node.clone(), &prover.accumulator, &tanh_compat);
+        let mut div_sumcheck = TeleportDivisionProver::new(&prover.trace, div_params);
+        let (div_proof, _) = Sumcheck::prove(
+            &mut div_sumcheck,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+        results.push((ProofId(node.idx, ProofType::NeuralTeleport), div_proof));
+
+        // Stage 1b: Erf lookup proof
+        let params = ErfParams::new(
+            node.clone(),
+            &prover.preprocessing.model.graph,
+            &prover.accumulator,
+            &mut prover.transcript,
+            self.clone(),
+        );
+        let mut exec_sumcheck = ErfProver::initialize(
+            &prover.trace,
+            params,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+        let (exec_proof, _) = Sumcheck::prove(
+            &mut exec_sumcheck,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+        results.push((ProofId(node.idx, ProofType::Execution), exec_proof));
+
+        let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+        let input = operands[0];
+
+        // Compute quotient for neural teleportation
+        let (quotient, _remainder) = compute_division(input, self.tau);
+        let lookup_indices = quotient
+            .par_iter()
+            .map(|&x| n_bits_to_usize(x, self.log_table))
+            .collect::<Vec<usize>>();
+
+        // Stage 2: Range check proof for division and first One-Hot checks for ErfRa
+        let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
+        let (rangecheck_sumcheck, rc_lookup_indices) = rangecheck_provider
+            .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
+                &prover.trace,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            );
+        let erf_encoding = ErfRaEncoding {
+            node_idx: node.idx,
+            log_table: self.log_table,
+        };
+        let ra_onehot_provers = shout::ra_onehot_provers(
+            &erf_encoding,
+            &lookup_indices,
+            &prover.accumulator,
+            &mut prover.transcript,
+        );
+        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
+            vec![Box::new(rangecheck_sumcheck)];
+        instances.extend(ra_onehot_provers);
+
+        let (erf_ra_one_hot_proof, _) = BatchedSumcheck::prove(
+            instances.iter_mut().map(|v| &mut **v as _).collect(),
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+        results.push((
+            ProofId(node.idx, ProofType::RaOneHotChecks),
+            erf_ra_one_hot_proof,
+        ));
+
+        // Stage 3: one-hot checks for division
+        let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+        let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_provers(
+            &rc_encoding,
+            &rc_lookup_indices,
+            &prover.accumulator,
+            &mut prover.transcript,
+        );
+
+        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![rc_ra, rc_hw, rc_bool];
+        let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
+            instances.iter_mut().map(|v| &mut **v as _).collect(),
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+        results.push((
+            ProofId(node.idx, ProofType::RaHammingWeight),
+            ra_one_hot_proof,
+        ));
+
+        results
     }
 
     fn verify(
@@ -49,8 +164,18 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
         todo!("Implement Erf verification pipeline")
     }
 
-    fn get_committed_polynomials(&self, _node: &ComputationNode) -> Vec<CommittedPolynomial> {
-        todo!("Implement Erf committed polynomial list")
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
+        let erf_encoding = ErfRaEncoding {
+            node_idx: node.idx,
+            log_table: NEURAL_TELEPORT_LOG_TABLE_SIZE,
+        };
+        let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+        let erf_d = erf_encoding.one_hot_params().instruction_d;
+        let rc_d = rc_encoding.one_hot_params().instruction_d;
+        let mut polys = vec![];
+        polys.extend((0..erf_d).map(|i| CommittedPolynomial::ErfRaD(node.idx, i)));
+        polys.extend((0..rc_d).map(|i| CommittedPolynomial::TeleportRangeCheckRaD(node.idx, i)));
+        polys
     }
 }
 
@@ -137,7 +262,6 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ErfParams<F> {
     }
 }
 
-
 /// Prover state for erf activation sumcheck protocol.
 ///
 /// This implements a Read-Raf sumcheck for Erf lookup, asserting that each output[i] = ErfTable[input[i]]
@@ -150,7 +274,7 @@ pub struct ErfProver<F: JoltField> {
 }
 
 impl<F: JoltField> ErfProver<F> {
-  /// Initialize the prover with trace data, parameters, accumulator, and transcript.
+    /// Initialize the prover with trace data, parameters, accumulator, and transcript.
     pub fn initialize(
         trace: &Trace,
         params: ErfParams<F>,
@@ -221,7 +345,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
             .map(|i| {
                 let ra_evals =
                     input_onehot.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-                let table_evals = erf_table.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+                let table_evals =
+                    erf_table.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
                 let id_evals = identity.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
 
                 [
@@ -333,5 +458,47 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ErfVerifier
             SumcheckId::Execution,
             r.into(),
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ErfRaEncoding — implements RaOneHotEncoding for Erf's stage-2 one-hot checks
+// ---------------------------------------------------------------------------
+
+/// Encoding impl for erf one-hot checking.
+///
+/// Used in the stage-2 one-hot checks for erf lookup table accesses.
+pub struct ErfRaEncoding {
+    /// Index of the computation node this encoding belongs to.
+    pub node_idx: usize,
+    /// Log2 of the lookup table size.
+    pub log_table: usize,
+}
+
+impl RaOneHotEncoding for ErfRaEncoding {
+    fn committed_poly(&self, d: usize) -> CommittedPolynomial {
+        CommittedPolynomial::ErfRaD(self.node_idx, d)
+    }
+
+    fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
+        (
+            VirtualPolynomial::TeleportQuotient(self.node_idx),
+            SumcheckId::Execution,
+        )
+    }
+
+    fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
+        (
+            VirtualPolynomial::ErfRa(self.node_idx),
+            SumcheckId::Execution,
+        )
+    }
+
+    fn log_k(&self) -> usize {
+        self.log_table
+    }
+
+    fn one_hot_params(&self) -> OneHotParams {
+        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.log_table)
     }
 }

@@ -116,7 +116,8 @@ fn build_teleport_activation_rad_witness<F: JoltField>(
         .map(|&x| n_bits_to_usize(x, log_table))
         .collect();
     let one_hot_params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_table);
-    let h_indices = subprotocols::shout::compute_instruction_h_indices(&lookup_indices, &one_hot_params);
+    let h_indices =
+        subprotocols::shout::compute_instruction_h_indices(&lookup_indices, &one_hot_params);
     MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
         h_indices[d]
             .par_iter()

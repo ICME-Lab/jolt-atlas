@@ -637,7 +637,11 @@ impl RaOneHotEncoding for TanhRaEncoding {
 }
 
 // From the input values, computes the one-hot read address vector
-pub(crate) fn compute_ra_evals<F>(r: &[F::Challenge], input: &Tensor<i32>, log_table_size: usize) -> Vec<F>
+pub(crate) fn compute_ra_evals<F>(
+    r: &[F::Challenge],
+    input: &Tensor<i32>,
+    log_table_size: usize,
+) -> Vec<F>
 where
     F: JoltField,
 {

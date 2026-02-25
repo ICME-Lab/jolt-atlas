@@ -66,6 +66,8 @@ pub mod is_nan;
 pub mod moveaxis;
 /// Element-wise multiplication operation.
 pub mod mul;
+/// Element-wise negation operation.
+pub mod neg;
 /// ReLU activation function.
 pub mod relu;
 /// Reshape tensor dimensions.
@@ -102,6 +104,7 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 pub use mul::{MulParams, MulProver, MulVerifier};
+pub use neg::{NegParams, NegProver, NegVerifier};
 pub use rsqrt::{RsqrtParams, RsqrtProver, RsqrtVerifier};
 pub use square::{SquareParams, SquareProver, SquareVerifier};
 pub use sub::{SubParams, SubProver, SubVerifier};
@@ -158,6 +161,7 @@ macro_rules! dispatch_operator {
             Operator::IsNan($inner) => $body,
             Operator::MoveAxis($inner) => $body,
             Operator::Mul($inner) => $body,
+            Operator::Neg($inner) => $body,
             Operator::ReLU($inner) => $body,
             Operator::Reshape($inner) => $body,
             Operator::Rsqrt($inner) => $body,

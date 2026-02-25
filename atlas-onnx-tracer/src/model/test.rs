@@ -109,6 +109,14 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    /// Add a negation node.
+    pub fn neg(&mut self, input: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&input].output_dims.clone();
+        let node = ComputationNode::new(id, Operator::Neg(Neg), vec![input], output_dims);
+        self.insert_node(node)
+    }
+
     /// Add a multiplication node.
     pub fn mul(&mut self, a: Wire, b: Wire) -> Wire {
         let id = self.alloc();

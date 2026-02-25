@@ -19,6 +19,7 @@ pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
     HashMap::from([
         ("Add", handle_add as OpHandlerFn),
         ("Sub", handle_sub as OpHandlerFn),
+        ("Neg", handle_neg as OpHandlerFn),
         ("Mul", handle_mul as OpHandlerFn),
         ("Pow", handle_pow as OpHandlerFn),
         ("Square", handle_square as OpHandlerFn),
@@ -31,6 +32,9 @@ simple_handler!(handle_add, Operator::Add(Default::default()));
 
 // Sub: Simple element-wise subtraction, no rebase needed.
 simple_handler!(handle_sub, Operator::Sub(Default::default()));
+
+// Neg: Simple element-wise negation, no rebase needed.
+simple_handler!(handle_neg, Operator::Neg(Default::default()));
 
 // Mul: Element-wise multiplication, needs rebase (div by 1 << scale).
 simple_handler!(handle_mul, Operator::Mul(Default::default()), rebase);

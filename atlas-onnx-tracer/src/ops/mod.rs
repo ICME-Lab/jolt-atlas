@@ -35,6 +35,8 @@ pub mod is_nan;
 pub mod move_axis;
 /// Element-wise multiplication operator.
 pub mod mul;
+/// Element-wise negation operator.
+pub mod neg;
 /// ReLU activation operator.
 pub mod relu;
 /// Reshape operator for changing tensor dimensions.
@@ -111,7 +113,7 @@ define_operators! {
         Constant(Tensor<i32>), Cube, Div, Einsum { equation: String },
         Erf { scale: F32, tau: i32, log_table: usize }, Gather { axis: usize }, Identity, Iff, Input,
         IsNan { out_dims: Vec<usize> }, MoveAxis { source: usize, destination: usize },
-        Mul, Broadcast { shape: Vec<usize> }, ReLU, Reshape { shape:Vec<usize> },
+        Mul, Neg, Broadcast { shape: Vec<usize> }, ReLU, Reshape { shape:Vec<usize> },
         Rsqrt { scale: F32 }, ScalarConstDiv {divisor: i32}, SoftmaxAxes { axes: usize, scale: F32 }, Square,
         Sub, Sum { axes: Vec<usize> }, Tanh { scale: F32, tau: i32, log_table: usize },
     ]

@@ -39,6 +39,8 @@ mod verifier;
 
 #[cfg(test)]
 mod e2e_tests;
+#[cfg(test)]
+mod soundness_tests;
 
 // ── Re-exports ───────────────────────────────────────────────────────────
 

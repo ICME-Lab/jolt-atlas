@@ -36,6 +36,7 @@ mod preprocessing;
 mod prover;
 mod types;
 mod verifier;
+pub mod malicious_prover;
 
 #[cfg(test)]
 mod e2e_tests;

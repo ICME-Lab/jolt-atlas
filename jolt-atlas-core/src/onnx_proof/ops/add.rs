@@ -190,7 +190,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for AddVerifier
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use atlas_onnx_tracer::{
+        model::{test::ModelBuilder, Model},
+        tensor::Tensor,
+    };
     use rand::{rngs::StdRng, SeedableRng};
 
     fn add_model(rng: &mut StdRng, T: usize) -> Model {

@@ -27,6 +27,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Identity {
             opening_point,
             claim,
         );
+        prover
+            .accumulator
+            .cache_virtual_operand_claims(&mut prover.transcript, node);
         vec![]
     }
 
@@ -46,6 +49,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Identity {
             SumcheckId::Execution,
             opening_point,
         );
+        verifier
+            .accumulator
+            .append_operand_claims(&mut verifier.transcript, node.idx);
 
         let (_, operand_claim) = verifier.accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::NodeOutput(node.inputs[0]),

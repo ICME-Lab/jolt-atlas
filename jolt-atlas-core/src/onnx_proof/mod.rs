@@ -32,6 +32,7 @@ pub mod proof_serialization;
 pub mod range_checking;
 pub mod witness;
 
+pub mod malicious_prover;
 mod preprocessing;
 mod prover;
 mod types;
@@ -39,6 +40,8 @@ mod verifier;
 
 #[cfg(test)]
 mod e2e_tests;
+#[cfg(test)]
+mod soundness_tests;
 
 // ── Re-exports ───────────────────────────────────────────────────────────
 
@@ -136,8 +139,9 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             }
         }
 
-        // Populate claims and commitments in the verifier accumulator
-        self.populate_accumulator(&mut verifier);
+        // Populate claims and commitments in the verifier accumulator.
+        // NodeOutput openings are derived from virtual_operand_claims (single source of truth).
+        self.populate_accumulator(pp.model(), &mut verifier);
 
         // Verify output MLE at random point τ
         Self::verify_output_claim(pp.model(), io, &mut verifier)?;

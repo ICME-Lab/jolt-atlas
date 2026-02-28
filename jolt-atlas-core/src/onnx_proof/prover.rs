@@ -25,7 +25,7 @@ use joltworks::{
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{ProverOpeningAccumulator, SumcheckId},
+        opening_proof::{OpeningId, ProverOpeningAccumulator, SumcheckId},
         rlc_polynomial::build_materialized_rlc,
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
@@ -114,6 +114,18 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             r_node_output.clone().into(),
             output_claim,
         );
+
+        // The output node has no consumer, so cache_virtual_operand_claims is never
+        // called for it. We must also insert into openings so it gets serialized
+        // into opening_claims for the verifier to read back and check against IO.
+        let output_key = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(output_computation_node.idx),
+            SumcheckId::Execution,
+        );
+        prover
+            .accumulator
+            .openings
+            .insert(output_key, (r_node_output.clone().into(), output_claim));
     }
 
     /// Iterate over computation graph in reverse topological order

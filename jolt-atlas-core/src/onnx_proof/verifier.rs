@@ -13,7 +13,9 @@ use joltworks::{
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{OpeningAccumulator, OpeningPoint, SumcheckId, VerifierOpeningAccumulator},
+        opening_proof::{
+            OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, VerifierOpeningAccumulator,
+        },
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
@@ -64,7 +66,9 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
 impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F, T, PCS> {
     /// Populate the verifier accumulator with opening claims, virtual operand claims,
     /// and commitments from the proof.
-    pub(super) fn populate_accumulator(&self, verifier: &mut Verifier<'_, F, T>) {
+    pub(super) fn populate_accumulator(&self, model: &Model, verifier: &mut Verifier<'_, F, T>) {
+        // Load opening claims from the proof (includes the output node's
+        // NodeOutput claim, which was placed in openings by output_claim()).
         for (key, (_, claim)) in &self.opening_claims.0 {
             verifier
                 .accumulator
@@ -72,6 +76,31 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                 .insert(*key, (OpeningPoint::default(), *claim));
         }
         verifier.accumulator.virtual_operand_claims = self.virtual_operand_claims.clone();
+
+        // Derive NodeOutput(X, Execution) openings from virtual_operand_claims
+        // (single source of truth). For each consumer's operand claims, populate
+        // openings[NodeOutput(input)] with the claim. We iterate in descending
+        // consumer order and use `insert` (overwrite) so that the lowest consumer
+        // idx writes last — matching the last-writer semantics of the IOP
+        // (which iterates descending, so lowest idx writes last).
+        // Using `insert` instead of `or_insert` ensures that even if a malicious
+        // prover included honest-looking NodeOutput entries in opening_claims,
+        // the values from virtual_operand_claims always take precedence.
+        for (consumer_idx, operand_openings) in
+            verifier.accumulator.virtual_operand_claims.iter().rev()
+        {
+            let consumer_node = &model[*consumer_idx];
+            for (i, input_idx) in consumer_node.inputs.iter().enumerate() {
+                let key = OpeningId::Virtual(
+                    VirtualPolynomial::NodeOutput(*input_idx),
+                    SumcheckId::Execution,
+                );
+                verifier
+                    .accumulator
+                    .openings
+                    .insert(key, operand_openings[i].clone());
+            }
+        }
 
         for commitment in &self.commitments {
             verifier.transcript.append_serializable(commitment);
@@ -91,12 +120,19 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             .challenge_vector_optimized::<F>(output_computation_node.num_output_elements().log_2());
         let expected_output_claim =
             MultilinearPolynomial::from(io.outputs[0].clone()).evaluate(&r_node_output);
+
+        // The output node has no consumer, so its claim is not in
+        // virtual_operand_claims. It was serialized in opening_claims by the
+        // prover and loaded into openings by populate_accumulator.
+        // Refresh the opening point (which was cleared for serialization)
+        // with the actual challenge point derived from the transcript.
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,
             VirtualPolynomial::NodeOutput(output_computation_node.idx),
             SumcheckId::Execution,
             r_node_output.clone().into(),
         );
+        // Read the prover's claimed value and compare against IO.
         let output_claim = verifier
             .accumulator
             .get_virtual_polynomial_opening(

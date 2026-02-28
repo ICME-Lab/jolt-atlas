@@ -129,7 +129,8 @@ impl<F: JoltField> CanonicalDeserialize for Claims<F> {
 }
 
 // ---------------------------------------------------------------------------
-// VirtualOperandClaims<F> helper (type alias for BTreeMap<usize, Vec<F>>)
+// VirtualOperandClaims<F> helper (type alias for BTreeMap<usize, Vec<Opening<F>>>)
+// Only claims are serialized (points are reconstructed by the verifier).
 // ---------------------------------------------------------------------------
 
 fn serialize_virtual_operand_claims<W: Write, F: JoltField>(
@@ -137,14 +138,30 @@ fn serialize_virtual_operand_claims<W: Write, F: JoltField>(
     writer: &mut W,
     compress: Compress,
 ) -> Result<(), SerializationError> {
-    serialize_btreemap(claims, writer, compress)
+    (claims.len() as u64).serialize_with_mode(&mut *writer, compress)?;
+    for (k, openings) in claims.iter() {
+        k.serialize_with_mode(&mut *writer, compress)?;
+        (openings.len() as u64).serialize_with_mode(&mut *writer, compress)?;
+        for (_, claim) in openings {
+            claim.serialize_with_mode(&mut *writer, compress)?;
+        }
+    }
+    Ok(())
 }
 
 fn serialized_size_virtual_operand_claims<F: JoltField>(
     claims: &VirtualOperandClaims<F>,
     compress: Compress,
 ) -> usize {
-    serialized_size_btreemap(claims, compress)
+    let mut size = 0u64.serialized_size(compress);
+    for (k, openings) in claims.iter() {
+        size += k.serialized_size(compress);
+        size += 0u64.serialized_size(compress);
+        for (_, claim) in openings {
+            size += claim.serialized_size(compress);
+        }
+    }
+    size
 }
 
 fn deserialize_virtual_operand_claims<R: Read, F: JoltField>(
@@ -152,7 +169,19 @@ fn deserialize_virtual_operand_claims<R: Read, F: JoltField>(
     compress: Compress,
     validate: Validate,
 ) -> Result<VirtualOperandClaims<F>, SerializationError> {
-    deserialize_btreemap(reader, compress, validate)
+    let len = u64::deserialize_with_mode(&mut *reader, compress, validate)? as usize;
+    let mut map = BTreeMap::new();
+    for _ in 0..len {
+        let k = usize::deserialize_with_mode(&mut *reader, compress, validate)?;
+        let n = u64::deserialize_with_mode(&mut *reader, compress, validate)? as usize;
+        let mut openings = Vec::with_capacity(n);
+        for _ in 0..n {
+            let claim = F::deserialize_with_mode(&mut *reader, compress, validate)?;
+            openings.push((OpeningPoint::default(), claim));
+        }
+        map.insert(k, openings);
+    }
+    Ok(map)
 }
 
 // ---------------------------------------------------------------------------

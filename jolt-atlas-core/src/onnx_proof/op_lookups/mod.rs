@@ -381,6 +381,9 @@ fn append_raf_claims_prover<F: JoltField, LUT>(
             right_operand_claim,
         );
     };
+
+    // Store operand claims in virtual_operand_claims (single source of truth for NodeOutput+Execution).
+    opening_accumulator.cache_virtual_operand_claims(transcript, &provider.computation_node);
 }
 
 fn append_raf_claims_verifier<F: JoltField, LUT>(
@@ -403,4 +406,7 @@ fn append_raf_claims_verifier<F: JoltField, LUT>(
     {
         opening_accumulator.append_virtual(transcript, poly, sumcheck_id, r_cycle.clone());
     }
+
+    // Read operand claims from virtual_operand_claims to keep transcript in sync with prover.
+    opening_accumulator.append_operand_claims(transcript, provider.computation_node.idx);
 }

@@ -32,6 +32,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for IsNan {
             opening_point,
             operand_claim,
         );
+        prover
+            .accumulator
+            .cache_virtual_operand_claims(&mut prover.transcript, node);
         vec![]
     }
 
@@ -56,6 +59,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for IsNan {
             SumcheckId::Execution,
             opening_point,
         );
+        verifier
+            .accumulator
+            .append_operand_claims(&mut verifier.transcript, node.idx);
         Ok(())
     }
 }

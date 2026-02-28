@@ -98,11 +98,11 @@ fn soundness_sub_virtual_operand_attack_still_verifies() {
         "right operand virtual claim should be forged"
     );
 
-    // Despite forged operand claims, verifier accepts the proof.
+    // Sound behavior should reject forged operand claims.
     let res = proof.verify(&verifier_pp, &io, debug_info);
     assert!(
-        res.is_ok(),
-        "expected verification to pass with forged virtual operand claims: {res:?}"
+        res.is_err(),
+        "soundness bug: forged virtual operand claims were accepted (verification unexpectedly succeeded): {res:?}"
     );
 }
 
@@ -125,7 +125,7 @@ fn soundness_sub_trace_tamper_3_minus_2_becomes_0_and_verifies() {
     assert_eq!(io.outputs[0].data()[0], 0);
     let res = proof.verify(&verifier_pp, &io, debug_info);
     assert!(
-        res.is_ok(),
-        "tampered-trace proof should still verify in this attack experiment: {res:?}"
+        res.is_err(),
+        "soundness bug: tampered-trace proof was accepted (verification unexpectedly succeeded): {res:?}"
     );
 }

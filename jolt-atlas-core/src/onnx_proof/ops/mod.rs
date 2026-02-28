@@ -64,6 +64,8 @@ pub mod input;
 pub mod is_nan;
 /// Reorder tensor axes.
 pub mod moveaxis;
+/// Experimental malicious variant of Sub proof logic.
+pub mod malicious_sub;
 /// Element-wise multiplication operation.
 pub mod mul;
 /// Element-wise negation operation.
@@ -80,8 +82,8 @@ pub mod scalar_const_div;
 pub mod softmax_axes;
 /// Element-wise square (x²) operation.
 pub mod square;
-/// Element-wise subtraction operation.
-pub mod sub;
+/// Element-wise subtraction operation (wired to malicious_sub implementation).
+// pub mod sub;
 /// Sum reduction along axes.
 pub mod sum;
 /// Tanh activation function.
@@ -107,7 +109,7 @@ pub use mul::{MulParams, MulProver, MulVerifier};
 pub use neg::{NegParams, NegProver, NegVerifier};
 pub use rsqrt::{RsqrtParams, RsqrtProver, RsqrtVerifier};
 pub use square::{SquareParams, SquareProver, SquareVerifier};
-pub use sub::{SubParams, SubProver, SubVerifier};
+pub use malicious_sub::{SubParams, SubProver, SubVerifier};
 
 use crate::onnx_proof::{ProofId, Prover, Verifier};
 

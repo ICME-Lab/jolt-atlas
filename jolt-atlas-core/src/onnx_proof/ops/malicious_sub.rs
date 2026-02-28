@@ -1,6 +1,9 @@
 use crate::{
     impl_standard_params,
-    onnx_proof::{ProofId, ProofType, Prover, Verifier, malicious_prover::malicious_sumcheck_prove, ops::OperatorProofTrait},
+    onnx_proof::{
+        malicious_prover::malicious_sumcheck_prove, ops::OperatorProofTrait, ProofId, ProofType,
+        Prover, Verifier,
+    },
 };
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
@@ -41,20 +44,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sub {
         let params = SubParams::new(node.clone(), &prover.accumulator);
         let mut prover_sumcheck = SubProver::initialize(&prover.trace, params);
 
-        // ここで、malicious_sumchcheck_proveを使う。
         let (proof, r_sumcheck, final_claim) = malicious_sumcheck_prove(
-
             &mut prover_sumcheck,
             &mut prover.accumulator,
             &mut prover.transcript,
         );
-        // let (proof, _) = Sumcheck::prove(
-        //     &mut prover_sumcheck,
-        //     &mut prover.accumulator,
-        //     &mut prover.transcript,
-        // );
         prover_sumcheck.final_claim = Some(final_claim);
-        // Register forged/honest openings after all challenges are known.
         prover_sumcheck.cache_openings(&mut prover.accumulator, &mut prover.transcript, &r_sumcheck);
         vec![(ProofId(node.idx, ProofType::Execution), proof)]
     }
@@ -114,7 +109,7 @@ impl<F: JoltField> SubProver<F> {
             eq_r_node_output,
             left_operand,
             right_operand,
-            final_claim: None
+            final_claim: None,
         }
     }
 }

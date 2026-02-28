@@ -14,15 +14,6 @@ use joltworks::{
     transcripts::{AppendToTranscript, Transcript},
 };
 
-// ── Re-exports ───────────────────────────────────────────────────────────
-
-// pub use preprocessing::{
-//     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
-// };
-// pub use prover::Prover;
-// pub use types::{Claims, ProofId, ProofType, ProverDebugInfo};
-// pub use verifier::Verifier;
-
 pub use ark_bn254::{Bn254, Fr};
 pub use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
 
@@ -54,8 +45,6 @@ impl MaliciousONNXProof {
         // Generate trace and io
         let trace = pp.model().trace(inputs);
         let io = Trace::io(&trace, pp.model());
-
-        // !! トレースを改ざんする !!
 
         // Initialize prover state
         let mut prover: Prover<F, T> = Prover::new(pp.shared.clone(), trace);
@@ -155,7 +144,8 @@ impl MaliciousONNXProof {
     }
 }
 
-///
+/// Variant of `Sumcheck::prove` that also returns the final claim and leaves
+/// opening caching to the caller (for adversarial experiments).
 pub fn malicious_sumcheck_prove<F: JoltField, ProofTranscript: Transcript>(
     sumcheck_instance: &mut dyn SumcheckInstanceProver<F, ProofTranscript>,
     opening_accumulator: &mut ProverOpeningAccumulator<F>,
@@ -190,8 +180,7 @@ pub fn malicious_sumcheck_prove<F: JoltField, ProofTranscript: Transcript>(
     // openings.
     sumcheck_instance.finalize();
 
-    // この、cache_openingsで、final_claimになるようなoperand_claimを保存する。
-    // この中ではやらない。
-    // sumcheck_instance.cache_openings(opening_accumulator, transcript, &r_sumcheck);
+    // Deliberately do not call `cache_openings` here. The caller controls how
+    // openings and operand claims are cached for attack experiments.
     (SumcheckInstanceProof::new(compressed_polys), r_sumcheck, final_claim)
 }

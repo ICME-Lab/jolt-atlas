@@ -136,7 +136,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         }
 
         // Populate claims and commitments in the verifier accumulator.
-        self.populate_accumulator(pp.model(), &mut verifier);
+        self.populate_accumulator(&mut verifier);
 
         // Verify output MLE at random point τ
         Self::verify_output_claim(pp.model(), io, &mut verifier)?;

@@ -64,7 +64,7 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
 impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F, T, PCS> {
     /// Populate the verifier accumulator with opening claims and
     /// commitments from the proof.
-    pub(super) fn populate_accumulator(&self, _model: &Model, verifier: &mut Verifier<'_, F, T>) {
+    pub(super) fn populate_accumulator(&self, verifier: &mut Verifier<'_, F, T>) {
         // Load all opening claims from the proof (NodeOutput+Execution claims
         // are now stored directly in opening_claims alongside everything else).
         for (key, (_, claim)) in &self.opening_claims.0 {

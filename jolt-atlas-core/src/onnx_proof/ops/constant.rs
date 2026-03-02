@@ -3,12 +3,12 @@ use crate::onnx_proof::{
     ProofId,
 };
 use atlas_onnx_tracer::{node::ComputationNode, ops::Constant};
-use common::VirtualPolynomial;
+
 use joltworks::{
     field::JoltField,
     poly::{
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{OpeningAccumulator, SumcheckId},
+        opening_proof::OpeningAccumulator,
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
@@ -22,10 +22,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Constant {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        let node_poly = VirtualPolynomial::NodeOutput(node.idx);
-        prover
-            .accumulator
-            .assert_virtual_polynomial_opening_exists(node_poly, SumcheckId::Execution);
+        let _opening = prover.accumulator.get_node_output_opening(node.idx);
         vec![]
     }
 
@@ -35,10 +32,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Constant {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        let (r_node_const, const_claim) = verifier.accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(node.idx),
-            SumcheckId::Execution,
-        );
+        let (r_node_const, const_claim) = verifier.accumulator.get_node_output_opening(node.idx);
         let expected_claim = MultilinearPolynomial::from(self.0.clone()).evaluate(&r_node_const.r);
         if expected_claim != const_claim {
             return Err(ProofVerifyError::InvalidOpeningProof(

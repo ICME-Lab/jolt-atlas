@@ -16,20 +16,15 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Identity {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        let node_poly = VirtualPolynomial::NodeOutput(node.idx);
-        let (opening_point, claim) = prover
-            .accumulator
-            .get_virtual_polynomial_opening(node_poly, SumcheckId::Execution);
+        let node_poly_opening = prover.accumulator.get_node_output_opening(node.idx);
+        let (opening_point, claim) = node_poly_opening;
         prover.accumulator.append_virtual(
             &mut prover.transcript,
             VirtualPolynomial::NodeOutput(node.inputs[0]),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(node.idx),
             opening_point,
             claim,
         );
-        prover
-            .accumulator
-            .cache_virtual_operand_claims(&mut prover.transcript, node);
         vec![]
     }
 
@@ -39,23 +34,16 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Identity {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        let node_poly = VirtualPolynomial::NodeOutput(node.idx);
-        let (opening_point, claim) = verifier
-            .accumulator
-            .get_virtual_polynomial_opening(node_poly, SumcheckId::Execution);
+        let (opening_point, claim) = verifier.accumulator.get_node_output_opening(node.idx);
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,
             VirtualPolynomial::NodeOutput(node.inputs[0]),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(node.idx),
             opening_point,
         );
-        verifier
-            .accumulator
-            .append_operand_claims(&mut verifier.transcript, node.idx);
-
         let (_, operand_claim) = verifier.accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::NodeOutput(node.inputs[0]),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(node.idx),
         );
 
         if operand_claim != claim {

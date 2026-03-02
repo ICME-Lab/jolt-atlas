@@ -69,10 +69,7 @@ impl<F: JoltField> BroadcastParams<F> {
     /// Create new broadcast parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_output = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(computation_node.idx),
-                SumcheckId::Execution,
-            )
+            .get_node_output_opening(computation_node.idx)
             .0
             .r;
         Self {
@@ -141,11 +138,10 @@ impl<F: JoltField> BroadcastProver<F> {
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             self.r_input.clone().into(),
             self.claim_A,
         );
-        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -196,22 +192,20 @@ impl<F: JoltField> BroadcastVerifier<F> {
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             self.r_input.clone().into(),
         );
-        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
 
         // Retrieve the claim for the input node
-        let operand_claim =
-            accumulator.get_operand_claims::<1>(self.params.computation_node.idx)[0];
+        let operand_claim = accumulator.get_node_output_claim(
+            self.params.computation_node.inputs[0],
+            self.params.computation_node.idx,
+        );
 
         let expected_claim_O = operand_claim * self.eval_I;
 
         let claim_O = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
-                SumcheckId::Execution,
-            )
+            .get_node_output_opening(self.params.computation_node.idx)
             .1;
 
         if expected_claim_O != claim_O {

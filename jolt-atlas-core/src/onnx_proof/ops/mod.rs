@@ -318,10 +318,7 @@ macro_rules! impl_standard_params {
                 accumulator: &dyn OpeningAccumulator<F>,
             ) -> Self {
                 let r_node_output = accumulator
-                    .get_virtual_polynomial_opening(
-                        VirtualPolynomial::NodeOutput(computation_node.idx),
-                        SumcheckId::Execution,
-                    )
+                    .get_node_output_opening(computation_node.idx)
                     .0
                     .r;
                 Self {
@@ -338,10 +335,7 @@ macro_rules! impl_standard_params {
 
             fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
                 accumulator
-                    .get_virtual_polynomial_opening(
-                        VirtualPolynomial::NodeOutput(self.computation_node.idx),
-                        SumcheckId::Execution,
-                    )
+                    .get_node_output_opening(self.computation_node.idx)
                     .1
             }
 

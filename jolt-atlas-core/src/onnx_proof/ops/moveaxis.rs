@@ -52,10 +52,7 @@ impl<F: JoltField> MoveAxisParams<F> {
     /// Create new moveaxis parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_output = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(computation_node.idx),
-                SumcheckId::Execution,
-            )
+            .get_node_output_opening(computation_node.idx)
             .0
             .r;
         Self {
@@ -93,20 +90,16 @@ impl<F: JoltField> MoveAxisProver<F> {
     ) {
         // For MoveAxis, claim_A == claim_O since the data doesn't change
         let claim_O = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
-                SumcheckId::Execution,
-            )
+            .get_node_output_opening(self.params.computation_node.idx)
             .1;
 
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             self.r_input.clone().into(),
             claim_O,
         );
-        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -145,20 +138,19 @@ impl<F: JoltField> MoveAxisVerifier<F> {
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             self.r_input.clone().into(),
         );
-        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
 
         // Retrieve the claim for the input node
-        let [operand_claim] = accumulator.get_operand_claims::<1>(self.params.computation_node.idx);
+        let operand_claim = accumulator.get_node_output_claim(
+            self.params.computation_node.inputs[0],
+            self.params.computation_node.idx,
+        );
 
         // For MoveAxis, the input claim should equal the output claim
         let claim_O = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
-                SumcheckId::Execution,
-            )
+            .get_node_output_opening(self.params.computation_node.idx)
             .1;
 
         if operand_claim != claim_O {

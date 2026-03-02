@@ -25,7 +25,7 @@ use joltworks::{
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{OpeningId, ProverOpeningAccumulator, SumcheckId},
+        opening_proof::{ProverOpeningAccumulator, SumcheckId},
         rlc_polynomial::build_materialized_rlc,
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
@@ -105,27 +105,14 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         // Evaluate output polynomial at r_node_output
         let output_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
 
-        // send claim to verifier
-        prover.transcript.append_scalar(&output_claim);
+        // append_virtual handles both transcript append and insertion into openings
         prover.accumulator.append_virtual(
             &mut prover.transcript,
             VirtualPolynomial::NodeOutput(output_computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(output_computation_node.idx),
             r_node_output.clone().into(),
             output_claim,
         );
-
-        // The output node has no consumer, so cache_virtual_operand_claims is never
-        // called for it. We must also insert into openings so it gets serialized
-        // into opening_claims for the verifier to read back and check against IO.
-        let output_key = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(output_computation_node.idx),
-            SumcheckId::Execution,
-        );
-        prover
-            .accumulator
-            .openings
-            .insert(output_key, (r_node_output.clone().into(), output_claim));
     }
 
     /// Iterate over computation graph in reverse topological order
@@ -194,12 +181,11 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         });
         #[cfg(not(test))]
         let debug_info = None;
-        let (opening_claims, virtual_operand_claims) = prover.accumulator.take();
+        let opening_claims = prover.accumulator.take();
         (
             Self {
                 proofs,
                 opening_claims: Claims(opening_claims),
-                virtual_operand_claims,
                 commitments,
                 reduced_opening_proof,
             },

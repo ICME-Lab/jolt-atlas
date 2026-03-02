@@ -51,10 +51,7 @@ impl<F: JoltField> BmkBknMbnParams<F> {
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
         let r_node_output = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(computation_node.idx),
-                SumcheckId::Execution,
-            )
+            .get_node_output_opening(computation_node.idx)
             .0
             .r;
         let log_b = einsum_dims.left_operand()[0].log_2();
@@ -75,10 +72,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for BmkBknMbnParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, einsum_claim) = accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(self.computation_node.idx),
-            SumcheckId::Execution,
-        );
+        let (_, einsum_claim) = accumulator.get_node_output_opening(self.computation_node.idx);
         einsum_claim
     }
 
@@ -218,7 +212,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for BmkBknMbnProv
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             left_opening_point.clone(),
             self.left_operand.final_sumcheck_claim(),
         );
@@ -228,11 +222,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for BmkBknMbnProv
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             right_opening_point,
             self.right_operand.final_sumcheck_claim(),
         );
-        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -271,8 +264,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BmkBknMbnVe
         let (_, r_bn) = self.params.r_node_output.split_at(m.log_2());
         let (r_b, _) = r_bn.split_at(b.log_2());
         let (_, r_h) = sumcheck_challenges.split_at(self.params.log_k);
-        let [left_operand_claim, right_operand_claim] =
-            accumulator.get_operand_claims::<2>(self.params.computation_node.idx);
+        let left_operand_claim = accumulator.get_node_output_claim(
+            self.params.computation_node.inputs[0],
+            self.params.computation_node.idx,
+        );
+        let right_operand_claim = accumulator.get_node_output_claim(
+            self.params.computation_node.inputs[1],
+            self.params.computation_node.idx,
+        );
         left_operand_claim * right_operand_claim * EqPolynomial::mle(r_b, r_h)
     }
 
@@ -295,7 +294,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BmkBknMbnVe
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             left_opening_point.clone(),
         );
 
@@ -304,10 +303,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BmkBknMbnVe
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             right_opening_point,
         );
-        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
     }
 }
 

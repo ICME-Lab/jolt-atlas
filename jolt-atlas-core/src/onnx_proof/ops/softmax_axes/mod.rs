@@ -171,10 +171,7 @@ impl<F: JoltField> SoftmaxAxesParams<F> {
     /// Create new parameters for softmax operation.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_output = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(computation_node.idx),
-                SumcheckId::Execution,
-            )
+            .get_node_output_opening(computation_node.idx)
             .0
             .r;
         Self {
@@ -485,11 +482,10 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             r_operand.clone().into(),
             operand_claim,
         );
-        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -571,10 +567,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
                 .evaluate(self.params.r_leading_dims());
 
         let softmax_axes_output_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
-                SumcheckId::Execution,
-            )
+            .get_node_output_opening(self.params.computation_node.idx)
             .1;
 
         if expected_softmax_axes_output_claim != softmax_axes_output_claim {
@@ -755,11 +748,13 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             r_operand.into(),
         );
-        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
-        let [operand_claim] = accumulator.get_operand_claims::<1>(self.params.computation_node.idx);
+        let operand_claim = accumulator.get_node_output_claim(
+            self.params.computation_node.inputs[0],
+            self.params.computation_node.idx,
+        );
 
         let expected_operand_claim =
             MultilinearPolynomial::from(softmax_operand_claims).evaluate(&r_leading_dims_prime);

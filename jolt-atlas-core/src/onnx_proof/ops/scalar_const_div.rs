@@ -93,10 +93,7 @@ impl<F: JoltField> ScalarConstDivParams<F> {
     /// Create new scalar constant division parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let r_node_output = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(computation_node.idx),
-                SumcheckId::Execution,
-            )
+            .get_node_output_opening(computation_node.idx)
             .0
             .r;
         let Operator::ScalarConstDiv(scalar_const_div) = &computation_node.operator else {
@@ -117,10 +114,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ScalarConstDivParams<F> {
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         let q_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.computation_node.idx),
-                SumcheckId::Execution,
-            )
+            .get_node_output_opening(self.computation_node.idx)
             .1;
         q_claim * F::from_i32(self.scalar_const_divisor)
     }
@@ -218,7 +212,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ScalarConstDi
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             opening_point.clone(),
             self.left_operand.final_sumcheck_claim(),
         );
@@ -229,7 +223,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ScalarConstDi
             opening_point.r.clone(),
             self.R.final_sumcheck_claim(),
         );
-        accumulator.cache_virtual_operand_claims(transcript, &self.params.computation_node);
     }
 }
 
@@ -263,10 +256,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ScalarConst
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
         let r_node_output = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
-                SumcheckId::Execution,
-            )
+            .get_node_output_opening(self.params.computation_node.idx)
             .0
             .r;
         let r_node_output_prime = self.params.normalize_opening_point(sumcheck_challenges).r;
@@ -277,7 +267,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ScalarConst
                 SumcheckId::Execution,
             )
             .1;
-        let [left_operand_claim] = accumulator.get_operand_claims(self.params.computation_node.idx);
+        let left_operand_claim = accumulator.get_node_output_claim(
+            self.params.computation_node.inputs[0],
+            self.params.computation_node.idx,
+        );
         eq_eval * (left_operand_claim - R_claim)
     }
 
@@ -291,7 +284,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ScalarConst
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             opening_point.clone(),
         );
         accumulator.append_dense(
@@ -300,7 +293,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ScalarConst
             SumcheckId::Execution,
             opening_point.r.clone(),
         );
-        accumulator.append_operand_claims(transcript, self.params.computation_node.idx);
     }
 }
 

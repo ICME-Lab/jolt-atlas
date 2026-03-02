@@ -295,10 +295,7 @@ impl<F: JoltField> ErfParams<F> {
     ) -> Self {
         let gamma = transcript.challenge_scalar();
         let r_node_output = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(computation_node.idx),
-                SumcheckId::Execution,
-            )
+            .get_node_output_opening(computation_node.idx)
             .0
             .r;
 
@@ -319,10 +316,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ErfParams<F> {
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         let rv_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.computation_node.idx),
-                SumcheckId::Execution,
-            )
+            .get_node_output_opening(self.computation_node.idx)
             .1;
 
         let quotient_claim = accumulator

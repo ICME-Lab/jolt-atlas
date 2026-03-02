@@ -52,9 +52,9 @@ pub enum CommittedPolynomial {
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
 pub enum VirtualPolynomial {
-    /// Fields:
+    /// The MLE of a node's output tensor.
     ///
-    /// `0` - node index
+    /// `0` - producer node index
     NodeOutput(usize),
     NodeOutputRa(usize),
     TanhRa(usize), // One-hot read addresses for Tanh lookup
@@ -380,8 +380,8 @@ impl CanonicalSerialize for VirtualPolynomial {
     fn serialized_size(&self, compress: Compress) -> usize {
         1 + match self {
             Self::HammingWeight => 0,
-            Self::NodeOutput(a)
-            | Self::NodeOutputRa(a)
+            Self::NodeOutput(a) => a.serialized_size(compress),
+            Self::NodeOutputRa(a)
             | Self::TanhRa(a)
             | Self::ErfRa(a)
             | Self::DivRangeCheckRa(a)

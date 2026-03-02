@@ -15,10 +15,8 @@ use atlas_onnx_tracer::{
     tensor::Tensor,
 };
 use joltworks::{
-    field::JoltField,
-    poly::{commitment::commitment_scheme::CommitmentScheme, opening_proof::VirtualOperandClaims},
-    subprotocols::sumcheck::SumcheckInstanceProof,
-    transcripts::Transcript,
+    field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme,
+    subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
 use std::collections::BTreeMap;
@@ -67,8 +65,6 @@ pub struct ONNXProof<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = 
     pub opening_claims: Claims<F>,
     /// Map of proof IDs to sumcheck instance proofs.
     pub proofs: BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
-    /// Claims for virtual polynomial operands.
-    pub virtual_operand_claims: VirtualOperandClaims<F>,
     /// Polynomial commitments for witness polynomials.
     pub commitments: Vec<PCS::Commitment>,
     /// Batched opening proof using reduction sum-check protocol to reduce all polynomial openings to the same point.
@@ -140,7 +136,6 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         }
 
         // Populate claims and commitments in the verifier accumulator.
-        // NodeOutput openings are derived from virtual_operand_claims (single source of truth).
         self.populate_accumulator(pp.model(), &mut verifier);
 
         // Verify output MLE at random point τ

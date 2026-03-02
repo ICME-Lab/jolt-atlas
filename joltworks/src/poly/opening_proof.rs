@@ -27,10 +27,7 @@ use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
     Write,
 };
-use atlas_onnx_tracer::node::ComputationNode;
 use common::{CommittedPolynomial, VirtualPolynomial};
-use num_derive::FromPrimitive;
-use num_traits::FromPrimitive as _;
 use rayon::prelude::*;
 
 #[cfg(any(test, feature = "test-feature"))]
@@ -47,7 +44,6 @@ pub const LITTLE_ENDIAN: Endianness = true;
 /// (point, claim)
 pub type Opening<F> = (OpeningPoint<BIG_ENDIAN, F>, F);
 pub type Openings<F> = BTreeMap<OpeningId, Opening<F>>;
-pub type VirtualOperandClaims<F> = BTreeMap<usize, Vec<Opening<F>>>;
 
 /// Accumulates openings computed by the prover over the course of Jolt,
 /// so that they can all be reduced to a single opening proof using sumcheck.
@@ -63,10 +59,6 @@ where
     #[cfg(any(test, feature = "test-feature"))]
     pub appended_virtual_openings: RefCell<Vec<OpeningId>>,
     pub cached_opening_claims: BTreeMap<CommittedPolynomial, F>,
-    pub virtual_operand_claims: VirtualOperandClaims<F>,
-    /// Staging area for NodeOutput claims. These never enter `openings`;
-    /// they are consumed by `cache_virtual_operand_claims` into `virtual_operand_claims`.
-    node_output_staging: BTreeMap<OpeningId, Opening<F>>,
 }
 
 /// Accumulates openings encountered by the verifier over the course of Jolt,
@@ -77,7 +69,6 @@ where
 {
     sumchecks: BTreeMap<CommittedPolynomial, OpeningProofReductionSumcheckVerifier<F>>,
     pub openings: Openings<F>,
-    pub virtual_operand_claims: VirtualOperandClaims<F>,
     /// In testing, the Jolt verifier may be provided the prover's openings so that we
     /// can detect any places where the openings don't match up.
     #[cfg(any(test, feature = "test-feature"))]
@@ -96,6 +87,16 @@ pub trait OpeningAccumulator<F: JoltField> {
         polynomial: CommittedPolynomial,
         sumcheck: SumcheckId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F);
+
+    /// Locate the opening for a producer's `NodeOutput`, regardless of which
+    /// consumer wrote it.  This scans for any `NodeOutput(producer_idx, _)` entry
+    /// in the openings map and returns the first match.
+    ///
+    /// TODO(#138): While we no longer overwrite fan-out entries, `.next()` returns
+    /// the entry with the smallest consumer index and we never check the remaining
+    /// entries. All per-consumer openings for the same producer should be reduced
+    /// to a single opening (PAZK 4.5.2).
+    fn get_node_output_opening(&self, producer_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F);
 }
 
 impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
@@ -105,26 +106,26 @@ impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
         sumcheck: SumcheckId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
         let key = OpeningId::Virtual(polynomial, sumcheck);
-        // NodeOutput+Execution claims live in node_output_staging, everything else in openings.
-        let (point, claim) = if matches!(polynomial, VirtualPolynomial::NodeOutput(_))
-            && matches!(sumcheck, SumcheckId::Execution)
-        {
-            self.node_output_staging.get(&key).unwrap_or_else(|| {
-                panic!("NodeOutput staging for {sumcheck:?} {polynomial:?} not found")
-            })
-        } else {
-            self.openings
-                .get(&key)
-                .unwrap_or_else(|| panic!("opening for {sumcheck:?} {polynomial:?} not found"))
-        };
-        #[cfg(any(test, feature = "test-feature"))]
-        {
-            let mut virtual_openings = self.appended_virtual_openings.borrow_mut();
-            if let Some(index) = virtual_openings.iter().position(|id| id == &key) {
-                virtual_openings.remove(index);
+        match self.openings.get(&key) {
+            Some((point, claim)) => {
+                #[cfg(any(test, feature = "test-feature"))]
+                {
+                    let mut virtual_openings = self.appended_virtual_openings.borrow_mut();
+                    if let Some(index) = virtual_openings.iter().position(|id| id == &key) {
+                        virtual_openings.remove(index);
+                    }
+                }
+                (point.clone(), *claim)
+            }
+            None => {
+                // For NodeOutput, fall back to scanning any NodeExecution entry.
+                // All per-consumer entries share the same opening point, so any match suffices.
+                if let VirtualPolynomial::NodeOutput(producer_idx) = polynomial {
+                    return self.get_node_output_opening(producer_idx);
+                }
+                panic!("opening for {sumcheck:?} {polynomial:?} not found")
             }
         }
-        (point.clone(), *claim)
     }
 
     fn get_committed_polynomial_opening(
@@ -136,6 +137,25 @@ impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
             .openings
             .get(&OpeningId::Committed(polynomial, sumcheck))
             .unwrap_or_else(|| panic!("opening for {sumcheck:?} {polynomial:?} not found"));
+        (point.clone(), *claim)
+    }
+
+    fn get_node_output_opening(&self, producer_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+        // Scan for any NodeExecution(_) entry for this producer's NodeOutput.
+        // TODO(#138): `.next()` returns the entry with the smallest consumer index;
+        // the remaining entries are never verified. See trait-level doc comment.
+        let lo = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(producer_idx),
+            SumcheckId::NodeExecution(0),
+        );
+        let hi = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(producer_idx),
+            SumcheckId::NodeExecution(usize::MAX),
+        );
+        let (_, (point, claim)) =
+            self.openings.range(lo..=hi).next().unwrap_or_else(|| {
+                panic!("No NodeOutput opening found for producer {producer_idx}")
+            });
         (point.clone(), *claim)
     }
 }
@@ -153,8 +173,6 @@ where
             #[cfg(any(test, feature = "test-feature"))]
             appended_virtual_openings: std::cell::RefCell::new(vec![]),
             cached_opening_claims: BTreeMap::new(),
-            virtual_operand_claims: BTreeMap::new(),
-            node_output_staging: BTreeMap::new(),
         }
     }
 
@@ -170,17 +188,6 @@ where
 
     /// Get the value of an opening by key
     pub fn get_opening(&self, key: OpeningId) -> F {
-        // NodeOutput+Execution claims live in node_output_staging
-        if matches!(
-            key,
-            OpeningId::Virtual(VirtualPolynomial::NodeOutput(_), SumcheckId::Execution)
-        ) {
-            return self
-                .node_output_staging
-                .get(&key)
-                .unwrap_or_else(|| panic!("NodeOutput staging should contain {key:?}"))
-                .1;
-        }
         self.openings
             .get(&key)
             .unwrap_or_else(|| panic!("opening should exist for {key:?}"))
@@ -276,77 +283,26 @@ where
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
         claim: F,
     ) {
-        // Don't add to transcript if node_output_poly as we will append in cache operand claims
-        if !matches!(polynomial, VirtualPolynomial::NodeOutput(_)) {
-            transcript.append_scalar(&claim);
-        }
-
-        // assert!(
-        //     self.openings
-        //         .insert(
-        //             OpeningId::Virtual(polynomial, sumcheck),
-        //             (opening_point, claim),
-        //         )
-        //         .is_none(),
-        //     "Key ({polynomial:?}, {sumcheck:?}) is already in opening map"
-        // );
+        transcript.append_scalar(&claim);
 
         // TODO: Allow a node to have multiple openings that need to be reduced
         //       See #138 for details
         let key = OpeningId::Virtual(polynomial, sumcheck);
-        if matches!(polynomial, VirtualPolynomial::NodeOutput(_))
-            && matches!(sumcheck, SumcheckId::Execution)
-        {
-            // NodeOutput+Execution claims never enter `openings`. They are staged here
-            // and consumed by `cache_virtual_operand_claims` into `virtual_operand_claims`.
-            self.node_output_staging.insert(key, (opening_point, claim));
-        } else {
-            self.openings.insert(key, (opening_point, claim));
-        }
+        self.openings.insert(key, (opening_point, claim));
         #[cfg(test)]
         self.appended_virtual_openings.borrow_mut().push(key);
-    }
-
-    pub fn cache_virtual_operand_claims<T: Transcript>(
-        &mut self,
-        transcript: &mut T,
-        computation_node: &ComputationNode,
-    ) {
-        let mut operand_openings = vec![];
-        for operand_node_index in computation_node.inputs.iter() {
-            let key = OpeningId::Virtual(
-                VirtualPolynomial::NodeOutput(*operand_node_index),
-                SumcheckId::Execution,
-            );
-            let (point, claim) = self
-                .node_output_staging
-                .get(&key)
-                .unwrap_or_else(|| panic!("NodeOutput staging should contain {key:?}"));
-            transcript.append_scalar(claim);
-            operand_openings.push((point.clone(), *claim));
-        }
-        self.virtual_operand_claims
-            .insert(computation_node.idx, operand_openings);
     }
 
     /// Take the openings, removing the points to reduce proof size
     ///
     /// # Returns:
     /// `Openings<F>` - The openings with points removed
-    /// `VirtualOperandClaims<F>` - The virtual operand claims that were cached separately
-    pub fn take(&mut self) -> (Openings<F>, VirtualOperandClaims<F>) {
+    pub fn take(&mut self) -> Openings<F> {
         // to reduce proof size, remove all the opening points from accumulator.openings and just leave the claims
         for (_, opening) in self.openings.iter_mut() {
             opening.0.r.clear();
         }
-        // NodeOutput+Execution claims are generally staged via node_output_staging ->
-        // virtual_operand_claims, not inserted into openings. The one exception is the
-        // output node, whose claim is explicitly inserted into openings by output_claim()
-        // so it gets serialized for the verifier to check against IO.
-        (
-            std::mem::take(&mut self.openings),
-            std::mem::take(&mut self.virtual_operand_claims),
-        )
+        std::mem::take(&mut self.openings)
     }
 
     pub fn assert_virtual_polynomial_opening_exists(
@@ -355,13 +311,7 @@ where
         sumcheck: SumcheckId,
     ) -> Option<&(OpeningPoint<false, F>, F)> {
         let key = OpeningId::Virtual(polynomial, sumcheck);
-        if matches!(polynomial, VirtualPolynomial::NodeOutput(_))
-            && matches!(sumcheck, SumcheckId::Execution)
-        {
-            self.node_output_staging.get(&key)
-        } else {
-            self.openings.get(&key)
-        }
+        self.openings.get(&key)
     }
 }
 
@@ -528,11 +478,18 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         polynomial: VirtualPolynomial,
         sumcheck: SumcheckId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        let (point, claim) = self
-            .openings
-            .get(&OpeningId::Virtual(polynomial, sumcheck))
-            .unwrap_or_else(|| panic!("No opening found for {sumcheck:?} {polynomial:?}"));
-        (point.clone(), *claim)
+        let key = OpeningId::Virtual(polynomial, sumcheck);
+        match self.openings.get(&key) {
+            Some((point, claim)) => (point.clone(), *claim),
+            None => {
+                // For NodeOutput, fall back to scanning any NodeExecution entry.
+                // All per-consumer entries share the same opening point, so any match suffices.
+                if let VirtualPolynomial::NodeOutput(producer_idx) = polynomial {
+                    return self.get_node_output_opening(producer_idx);
+                }
+                panic!("No opening found for {sumcheck:?} {polynomial:?}")
+            }
+        }
     }
 
     fn get_committed_polynomial_opening(
@@ -546,6 +503,25 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
             .unwrap_or_else(|| panic!("No opening found for {sumcheck:?} {polynomial:?}"));
         (point.clone(), *claim)
     }
+
+    fn get_node_output_opening(&self, producer_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+        // Scan for any NodeExecution(_) entry for this producer's NodeOutput.
+        // TODO(#138): `.next()` returns the entry with the smallest consumer index;
+        // the remaining entries are never verified. See trait-level doc comment.
+        let lo = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(producer_idx),
+            SumcheckId::NodeExecution(0),
+        );
+        let hi = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(producer_idx),
+            SumcheckId::NodeExecution(usize::MAX),
+        );
+        let (_, (point, claim)) =
+            self.openings.range(lo..=hi).next().unwrap_or_else(|| {
+                panic!("No NodeOutput opening found for producer {producer_idx}")
+            });
+        (point.clone(), *claim)
+    }
 }
 
 impl<F> VerifierOpeningAccumulator<F>
@@ -556,45 +532,19 @@ where
         Self {
             sumchecks: BTreeMap::new(),
             openings: BTreeMap::new(),
-            virtual_operand_claims: BTreeMap::new(),
             #[cfg(any(test, feature = "test-feature"))]
             prover_opening_accumulator: None,
         }
     }
 
-    pub fn append_operand_claims<T: Transcript>(&self, transcript: &mut T, node_index: usize) {
-        let claims = self.operand_claims(node_index);
-        claims.iter().for_each(|claim| {
-            transcript.append_scalar(claim);
-        });
-    }
-
-    pub fn get_operand_claims<const NUM_OPERANDS: usize>(
-        &self,
-        node_index: usize,
-    ) -> [F; NUM_OPERANDS] {
-        self.operand_claims(node_index)
-            .try_into()
-            .unwrap_or_else(|claims: Vec<F>| {
-                panic!("Expected {NUM_OPERANDS} operand claims for node index {node_index}, but found {}", claims.len())
-            })
-    }
-
-    /// Returns just the scalar claims for the given node's operands.
-    pub fn operand_claims(&self, node_index: usize) -> Vec<F> {
-        self.operand_openings(node_index)
-            .iter()
-            .map(|(_, claim)| *claim)
-            .collect()
-    }
-
-    /// Returns the full openings (point + claim) for the given node's operands.
-    pub fn operand_openings(&self, node_index: usize) -> &[Opening<F>] {
-        self.virtual_operand_claims
-            .get(&node_index)
-            .unwrap_or_else(|| {
-                panic!("No virtual operand claims found for node index {node_index}")
-            })
+    /// Returns the scalar claim for a NodeOutput opening, identified by
+    /// both producer and consumer.
+    pub fn get_node_output_claim(&self, producer_idx: usize, consumer_idx: usize) -> F {
+        self.get_virtual_polynomial_opening(
+            VirtualPolynomial::NodeOutput(producer_idx),
+            SumcheckId::NodeExecution(consumer_idx),
+        )
+        .1
     }
 
     /// Compare this accumulator to the corresponding `ProverOpeningAccumulator` and panic
@@ -675,10 +625,7 @@ where
     ) {
         let key = OpeningId::Virtual(polynomial, sumcheck);
         if let Some((_, claim)) = self.openings.get(&key) {
-            // Don't add to transcript if node_output_poly as we will append in append operand claims
-            if !matches!(polynomial, VirtualPolynomial::NodeOutput(_)) {
-                transcript.append_scalar(claim);
-            }
+            transcript.append_scalar(claim);
             let claim = *claim; // Copy the claim value
             self.openings.insert(key, (opening_point.clone(), claim));
         } else {
@@ -926,22 +873,12 @@ where
     }
 }
 
-#[derive(
-    Hash,
-    PartialEq,
-    Eq,
-    Copy,
-    Clone,
-    Debug,
-    PartialOrd,
-    Ord,
-    FromPrimitive,
-    Allocative,
-    strum_macros::EnumCount,
-)]
-#[repr(u8)]
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
 pub enum SumcheckId {
     Execution,
+    /// A node-execution sumcheck for a specific consumer node.
+    /// The payload is the consumer's node index.
+    NodeExecution(usize),
     Raf,
     RaVirtualization,
     RamHammingBooleanity,
@@ -953,14 +890,32 @@ pub enum SumcheckId {
 impl CanonicalSerialize for SumcheckId {
     fn serialize_with_mode<W: Write>(
         &self,
-        writer: W,
+        mut writer: W,
         compress: Compress,
     ) -> Result<(), SerializationError> {
-        (*self as u8).serialize_with_mode(writer, compress)
+        match self {
+            Self::Execution => 0u8.serialize_with_mode(&mut writer, compress)?,
+            Self::NodeExecution(idx) => {
+                1u8.serialize_with_mode(&mut writer, compress)?;
+                idx.serialize_with_mode(&mut writer, compress)?;
+            }
+            Self::Raf => 2u8.serialize_with_mode(&mut writer, compress)?,
+            Self::RaVirtualization => 3u8.serialize_with_mode(&mut writer, compress)?,
+            Self::RamHammingBooleanity => 4u8.serialize_with_mode(&mut writer, compress)?,
+            Self::RamHammingWeight => 5u8.serialize_with_mode(&mut writer, compress)?,
+            Self::Booleanity => 6u8.serialize_with_mode(&mut writer, compress)?,
+            Self::HammingWeight => 7u8.serialize_with_mode(&mut writer, compress)?,
+        }
+        Ok(())
     }
 
     fn serialized_size(&self, compress: Compress) -> usize {
-        (*self as u8).serialized_size(compress)
+        match self {
+            Self::NodeExecution(idx) => {
+                1u8.serialized_size(compress) + idx.serialized_size(compress)
+            }
+            _ => 1u8.serialized_size(compress),
+        }
     }
 }
 
@@ -972,12 +927,25 @@ impl Valid for SumcheckId {
 
 impl CanonicalDeserialize for SumcheckId {
     fn deserialize_with_mode<R: Read>(
-        reader: R,
+        mut reader: R,
         compress: Compress,
         validate: Validate,
     ) -> Result<Self, SerializationError> {
-        let v = u8::deserialize_with_mode(reader, compress, validate)?;
-        Self::from_u8(v).ok_or(SerializationError::InvalidData)
+        let tag = u8::deserialize_with_mode(&mut reader, compress, validate)?;
+        match tag {
+            0 => Ok(Self::Execution),
+            1 => {
+                let idx = usize::deserialize_with_mode(&mut reader, compress, validate)?;
+                Ok(Self::NodeExecution(idx))
+            }
+            2 => Ok(Self::Raf),
+            3 => Ok(Self::RaVirtualization),
+            4 => Ok(Self::RamHammingBooleanity),
+            5 => Ok(Self::RamHammingWeight),
+            6 => Ok(Self::Booleanity),
+            7 => Ok(Self::HammingWeight),
+            _ => Err(SerializationError::InvalidData),
+        }
     }
 }
 

@@ -460,7 +460,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::ErfRa(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             r.into(),
             self.input_onehot.final_sumcheck_claim(),
         );
@@ -520,7 +520,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ErfVerifier
         let ra_claim = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::ErfRa(self.params.computation_node.idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.computation_node.idx),
             )
             .1;
 
@@ -544,7 +544,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ErfVerifier
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::ErfRa(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             r.into(),
         );
     }
@@ -572,14 +572,14 @@ impl RaOneHotEncoding for ErfRaEncoding {
     fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
         (
             VirtualPolynomial::TeleportQuotient(self.node_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.node_idx),
         )
     }
 
     fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
         (
             VirtualPolynomial::ErfRa(self.node_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.node_idx),
         )
     }
 

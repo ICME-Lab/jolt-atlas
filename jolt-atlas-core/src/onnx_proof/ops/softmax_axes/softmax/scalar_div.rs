@@ -42,7 +42,7 @@ impl<F: JoltField> DivParams<F> {
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(softmax_index.node_idx),
             )
             .0
             .r;
@@ -65,7 +65,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for DivParams<F> {
                     self.softmax_index.node_idx,
                     self.softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.softmax_index.node_idx),
             )
             .1;
         let sum_claim = accumulator
@@ -74,7 +74,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for DivParams<F> {
                     self.softmax_index.node_idx,
                     self.softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.softmax_index.node_idx),
             )
             .1;
         q_claim * sum_claim
@@ -171,7 +171,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
             opening_point.clone(),
             self.left_operand.final_sumcheck_claim(),
         );
@@ -181,7 +181,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
             opening_point.r.clone(),
             self.R.final_sumcheck_claim(),
         );
@@ -220,7 +220,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
                     self.params.softmax_index.node_idx,
                     self.params.softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
             )
             .1;
         let R_claim = accumulator
@@ -229,7 +229,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
                     self.params.softmax_index.node_idx,
                     self.params.softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
             )
             .1;
         eq_eval * (left_operand_claim * F::from_u32(S as u32) - R_claim)
@@ -248,7 +248,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
             opening_point.clone(),
         );
         accumulator.append_dense(
@@ -257,7 +257,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
             opening_point.r.clone(),
         );
     }
@@ -319,14 +319,14 @@ mod tests {
                 softmax_index.node_idx,
                 softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(softmax_index.node_idx),
             r_feature_output.clone().into(),
             div_claim,
         );
         prover_opening_accumulator.append_virtual(
             prover_transcript,
             VirtualPolynomial::SoftmaxSumOutput(softmax_index.node_idx, softmax_index.feature_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(softmax_index.node_idx),
             vec![].into(),
             Fr::from_i32(trace.exp_sum_q),
         );
@@ -354,13 +354,13 @@ mod tests {
                 softmax_index.node_idx,
                 softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(softmax_index.node_idx),
             r_feature_output.into(),
         );
         verifier_opening_accumulator.append_virtual(
             verifier_transcript,
             VirtualPolynomial::SoftmaxSumOutput(softmax_index.node_idx, softmax_index.feature_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(softmax_index.node_idx),
             vec![].into(),
         );
 

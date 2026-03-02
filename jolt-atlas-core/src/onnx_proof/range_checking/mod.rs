@@ -199,7 +199,7 @@ where
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
         let (r_node_output, _) = accumulator.get_virtual_polynomial_opening(
             self.operands.get_input_operands()[0],
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.operands.node_idx()),
         );
         r_node_output
     }

@@ -368,7 +368,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GatherProver<
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutputRa(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             r_idx_onehot.into(),
             self.index_onehot.final_sumcheck_claim(),
         );
@@ -427,7 +427,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GatherVerif
         let ra_claim = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::NodeOutputRa(self.params.computation_node.idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.computation_node.idx),
             )
             .1;
         let int_eval =
@@ -452,7 +452,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GatherVerif
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutputRa(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             r_idx_onehot.into(),
         );
         let r_dict = [&opening_point.r, r_word].concat();

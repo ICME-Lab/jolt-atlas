@@ -208,14 +208,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TeleportDivis
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::TeleportQuotient(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             opening_point.clone(),
             self.quotient.final_sumcheck_claim(),
         );
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::TeleportRemainder(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             opening_point.clone(),
             self.remainder.final_sumcheck_claim(),
         );
@@ -266,13 +266,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TeleportDiv
         let quotient_claim = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::TeleportQuotient(self.params.computation_node.idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.computation_node.idx),
             )
             .1;
         let remainder_claim = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::TeleportRemainder(self.params.computation_node.idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.computation_node.idx),
             )
             .1;
 
@@ -296,13 +296,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TeleportDiv
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::TeleportQuotient(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             opening_point.clone(),
         );
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::TeleportRemainder(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             opening_point.clone(),
         );
     }

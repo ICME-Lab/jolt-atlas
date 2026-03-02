@@ -187,7 +187,7 @@ where
     fn ra_poly(&self) -> (VirtualPolynomial, SumcheckId) {
         (
             VirtualPolynomial::NodeOutputRa(self.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.computation_node.idx),
         )
     }
 
@@ -259,7 +259,7 @@ impl RaOneHotEncoding for OpLookupEncoding {
     fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
         (
             VirtualPolynomial::NodeOutputRa(self.node_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.node_idx),
         )
     }
 

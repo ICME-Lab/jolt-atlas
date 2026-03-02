@@ -722,7 +722,7 @@ mod tests {
                 prover_opening_accumulator.append_dense(
                     &mut prover_tr,
                     CommittedPolynomial::DivNodeQuotient(i),
-                    SumcheckId::Execution,
+                    SumcheckId::NodeExecution(0),
                     point.clone(),
                     eval,
                 );
@@ -779,7 +779,7 @@ mod tests {
             verifier_opening_accumulator.append_dense(
                 &mut verifier_tr,
                 CommittedPolynomial::DivNodeQuotient(i), // ID doesn't matter for verification
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(0),
                 data.point.clone(),
             );
         });
@@ -881,7 +881,7 @@ mod tests {
                 prover_opening_accumulator.append_dense(
                     &mut prover_tr,
                     CommittedPolynomial::DivNodeQuotient(i),
-                    SumcheckId::Execution,
+                    SumcheckId::NodeExecution(0),
                     point.clone(),
                     eval,
                 );
@@ -916,7 +916,7 @@ mod tests {
                 prover_opening_accumulator.append_sparse(
                     &mut prover_tr,
                     vec![CommittedPolynomial::NodeOutputRaD(i, 0)],
-                    SumcheckId::Execution,
+                    SumcheckId::NodeExecution(0),
                     r_address.to_vec(),
                     r_cycle.to_vec(),
                     vec![eval],
@@ -980,7 +980,7 @@ mod tests {
             verifier_opening_accumulator.append_dense(
                 &mut verifier_tr,
                 CommittedPolynomial::DivNodeQuotient(i), // ID doesn't matter for verification
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(0),
                 data.point.clone(),
             );
         });
@@ -989,7 +989,7 @@ mod tests {
             verifier_opening_accumulator.append_sparse(
                 &mut verifier_tr,
                 vec![CommittedPolynomial::NodeOutputRaD(i, 0)],
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(0),
                 data.point.clone(),
             );
         });
@@ -1095,7 +1095,7 @@ mod tests {
                 prover_opening_accumulator.append_dense(
                     &mut prover_tr,
                     CommittedPolynomial::DivNodeQuotient(i),
-                    SumcheckId::Execution,
+                    SumcheckId::NodeExecution(0),
                     point.clone(),
                     eval,
                 );
@@ -1130,7 +1130,7 @@ mod tests {
                 prover_opening_accumulator.append_sparse(
                     &mut prover_tr,
                     vec![CommittedPolynomial::NodeOutputRaD(i, 0)],
-                    SumcheckId::Execution,
+                    SumcheckId::NodeExecution(0),
                     r_address.to_vec(),
                     r_cycle.to_vec(),
                     vec![eval],
@@ -1194,7 +1194,7 @@ mod tests {
             verifier_opening_accumulator.append_dense(
                 &mut verifier_tr,
                 CommittedPolynomial::DivNodeQuotient(i), // ID doesn't matter for verification
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(0),
                 data.point.clone(),
             );
         });
@@ -1203,7 +1203,7 @@ mod tests {
             verifier_opening_accumulator.append_sparse(
                 &mut verifier_tr,
                 vec![CommittedPolynomial::NodeOutputRaD(i, 0)],
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(0),
                 data.point.clone(),
             );
         });

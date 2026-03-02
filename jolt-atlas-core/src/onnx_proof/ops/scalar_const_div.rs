@@ -219,7 +219,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ScalarConstDi
         accumulator.append_dense(
             transcript,
             CommittedPolynomial::ScalarConstDivNodeRemainder(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             opening_point.r.clone(),
             self.R.final_sumcheck_claim(),
         );
@@ -264,7 +264,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ScalarConst
         let R_claim = accumulator
             .get_committed_polynomial_opening(
                 CommittedPolynomial::ScalarConstDivNodeRemainder(self.params.computation_node.idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.computation_node.idx),
             )
             .1;
         let left_operand_claim = accumulator.get_node_output_claim(
@@ -290,7 +290,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ScalarConst
         accumulator.append_dense(
             transcript,
             CommittedPolynomial::ScalarConstDivNodeRemainder(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             opening_point.r.clone(),
         );
     }

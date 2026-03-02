@@ -285,7 +285,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
                     self.params.computation_node.idx,
                     feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.computation_node.idx),
                 self.params.r_features().to_vec().into(),
                 feature_claim,
             );
@@ -340,7 +340,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(softmax_index.node_idx),
                 vec![].into(),
                 F::from_i32(trace.exp_sum_q),
             );
@@ -352,7 +352,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(softmax_index.node_idx),
                 vec![].into(),
                 F::from_i32(trace.max_logit),
             );
@@ -362,7 +362,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(softmax_index.node_idx),
                 vec![].into(),
                 F::from_u32(trace.max_index as u32),
             );
@@ -474,7 +474,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
             transcript.challenge_vector_optimized::<F>(self.params.num_feature_vectors().log_2());
         let (r_features_prime, _) = accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::SoftmaxInputLogitsOutput(self.params.computation_node.idx, 0),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
         );
         let r_operand: Vec<F::Challenge> =
             [r_leading_dims_prime.as_slice(), &r_features_prime.r].concat();
@@ -546,7 +546,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
                     self.params.computation_node.idx,
                     feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.computation_node.idx),
                 self.params.r_features().to_vec().into(),
             );
             softmax_features_claim.push(
@@ -556,7 +556,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
                             self.params.computation_node.idx,
                             feature_idx,
                         ),
-                        SumcheckId::Execution,
+                        SumcheckId::NodeExecution(self.params.computation_node.idx),
                     )
                     .1,
             );
@@ -602,7 +602,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(softmax_index.node_idx),
                 vec![].into(),
             );
             accumulator.append_virtual(
@@ -611,7 +611,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(softmax_index.node_idx),
                 vec![].into(),
             );
             accumulator.append_virtual(
@@ -620,7 +620,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(softmax_index.node_idx),
                 vec![].into(),
             );
             let div_verifier_sumcheck = DivVerifier::new(softmax_index, accumulator);
@@ -711,21 +711,21 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(softmax_index.node_idx),
             );
             let (_, softmax_operand_claim) = accumulator.get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxInputLogitsOutput(
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(softmax_index.node_idx),
             );
             let (_, max_logit) = accumulator.get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxMaxOutput(
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(softmax_index.node_idx),
             );
             if softmax_operand_claim != (-abs_centered_logits_claim) + max_logit {
                 return Err(ProofVerifyError::InvalidOpeningProof(
@@ -740,7 +740,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
             transcript.challenge_vector_optimized::<F>(self.params.r_leading_dims().len());
         let (r_features_prime, _) = accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::SoftmaxInputLogitsOutput(self.params.computation_node.idx, 0),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
         );
         let r_operand: Vec<F::Challenge> =
             [r_leading_dims_prime.as_slice(), &r_features_prime.r].concat();
@@ -771,7 +771,10 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use atlas_onnx_tracer::{
+        model::{test::ModelBuilder, Model},
+        tensor::Tensor,
+    };
     use rand::{rngs::StdRng, SeedableRng};
 
     fn softmax_axes_model(input_shape: &[usize], axes: usize) -> Model {

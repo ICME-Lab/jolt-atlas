@@ -347,14 +347,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
         accumulator.append_dense(
             transcript,
             CommittedPolynomial::DivNodeQuotient(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             opening_point.r.clone(),
             self.q.final_sumcheck_claim(),
         );
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::DivRemainder(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             opening_point.clone(),
             self.R.final_sumcheck_claim(),
         );
@@ -399,13 +399,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
         let q_claim = accumulator
             .get_committed_polynomial_opening(
                 CommittedPolynomial::DivNodeQuotient(self.params.computation_node.idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.computation_node.idx),
             )
             .1;
         let R_claim = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::DivRemainder(self.params.computation_node.idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.computation_node.idx),
             )
             .1;
         let left_operand_claim = accumulator.get_node_output_claim(
@@ -441,13 +441,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
         accumulator.append_dense(
             transcript,
             CommittedPolynomial::DivNodeQuotient(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             opening_point.r.clone(),
         );
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::DivRemainder(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             opening_point.clone(),
         );
     }

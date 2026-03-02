@@ -114,11 +114,6 @@ impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
                 (point.clone(), *claim)
             }
             None => {
-                // For NodeOutput, fall back to scanning any NodeExecution entry.
-                // All per-consumer entries share the same opening point, so any match suffices.
-                if let VirtualPolynomial::NodeOutput(producer_idx) = polynomial {
-                    return self.get_node_output_opening(producer_idx);
-                }
                 panic!("opening for {sumcheck:?} {polynomial:?} not found")
             }
         }
@@ -478,11 +473,6 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         match self.openings.get(&key) {
             Some((point, claim)) => (point.clone(), *claim),
             None => {
-                // For NodeOutput, fall back to scanning any NodeExecution entry.
-                // All per-consumer entries share the same opening point, so any match suffices.
-                if let VirtualPolynomial::NodeOutput(producer_idx) = polynomial {
-                    return self.get_node_output_opening(producer_idx);
-                }
                 panic!("No opening found for {sumcheck:?} {polynomial:?}")
             }
         }
@@ -871,7 +861,6 @@ where
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
 pub enum SumcheckId {
-    Execution,
     /// A node-execution sumcheck for a specific consumer node.
     /// The payload is the consumer's node index.
     NodeExecution(usize),
@@ -890,17 +879,16 @@ impl CanonicalSerialize for SumcheckId {
         compress: Compress,
     ) -> Result<(), SerializationError> {
         match self {
-            Self::Execution => 0u8.serialize_with_mode(&mut writer, compress)?,
             Self::NodeExecution(idx) => {
-                1u8.serialize_with_mode(&mut writer, compress)?;
+                0u8.serialize_with_mode(&mut writer, compress)?;
                 idx.serialize_with_mode(&mut writer, compress)?;
             }
-            Self::Raf => 2u8.serialize_with_mode(&mut writer, compress)?,
-            Self::RaVirtualization => 3u8.serialize_with_mode(&mut writer, compress)?,
-            Self::RamHammingBooleanity => 4u8.serialize_with_mode(&mut writer, compress)?,
-            Self::RamHammingWeight => 5u8.serialize_with_mode(&mut writer, compress)?,
-            Self::Booleanity => 6u8.serialize_with_mode(&mut writer, compress)?,
-            Self::HammingWeight => 7u8.serialize_with_mode(&mut writer, compress)?,
+            Self::Raf => 1u8.serialize_with_mode(&mut writer, compress)?,
+            Self::RaVirtualization => 2u8.serialize_with_mode(&mut writer, compress)?,
+            Self::RamHammingBooleanity => 3u8.serialize_with_mode(&mut writer, compress)?,
+            Self::RamHammingWeight => 4u8.serialize_with_mode(&mut writer, compress)?,
+            Self::Booleanity => 5u8.serialize_with_mode(&mut writer, compress)?,
+            Self::HammingWeight => 6u8.serialize_with_mode(&mut writer, compress)?,
         }
         Ok(())
     }
@@ -929,17 +917,16 @@ impl CanonicalDeserialize for SumcheckId {
     ) -> Result<Self, SerializationError> {
         let tag = u8::deserialize_with_mode(&mut reader, compress, validate)?;
         match tag {
-            0 => Ok(Self::Execution),
-            1 => {
+            0 => {
                 let idx = usize::deserialize_with_mode(&mut reader, compress, validate)?;
                 Ok(Self::NodeExecution(idx))
             }
-            2 => Ok(Self::Raf),
-            3 => Ok(Self::RaVirtualization),
-            4 => Ok(Self::RamHammingBooleanity),
-            5 => Ok(Self::RamHammingWeight),
-            6 => Ok(Self::Booleanity),
-            7 => Ok(Self::HammingWeight),
+            1 => Ok(Self::Raf),
+            2 => Ok(Self::RaVirtualization),
+            3 => Ok(Self::RamHammingBooleanity),
+            4 => Ok(Self::RamHammingWeight),
+            5 => Ok(Self::Booleanity),
+            6 => Ok(Self::HammingWeight),
             _ => Err(SerializationError::InvalidData),
         }
     }

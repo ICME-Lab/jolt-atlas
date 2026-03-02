@@ -81,7 +81,7 @@ mod tests {
                 softmax_index.node_idx,
                 softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(softmax_index.node_idx),
             r_feature_output.clone().into(),
             div_claim,
         );
@@ -90,7 +90,7 @@ mod tests {
         prover_opening_accumulator.append_virtual(
             prover_transcript,
             VirtualPolynomial::SoftmaxSumOutput(softmax_index.node_idx, softmax_index.feature_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(softmax_index.node_idx),
             vec![].into(),
             Fr::from_i32(trace.exp_sum_q),
         );
@@ -99,14 +99,14 @@ mod tests {
         prover_opening_accumulator.append_virtual(
             prover_transcript,
             VirtualPolynomial::SoftmaxMaxOutput(softmax_index.node_idx, softmax_index.feature_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(softmax_index.node_idx),
             vec![].into(),
             Fr::from_i32(trace.max_logit),
         );
         prover_opening_accumulator.append_virtual(
             prover_transcript,
             VirtualPolynomial::SoftmaxMaxIndex(softmax_index.node_idx, softmax_index.feature_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(softmax_index.node_idx),
             vec![].into(),
             Fr::from_u32(trace.max_index as u32),
         );
@@ -188,25 +188,25 @@ mod tests {
                 softmax_index.node_idx,
                 softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(softmax_index.node_idx),
             r_feature_output.into(),
         );
         verifier_opening_accumulator.append_virtual(
             verifier_transcript,
             VirtualPolynomial::SoftmaxSumOutput(softmax_index.node_idx, softmax_index.feature_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(softmax_index.node_idx),
             vec![].into(),
         );
         verifier_opening_accumulator.append_virtual(
             verifier_transcript,
             VirtualPolynomial::SoftmaxMaxOutput(softmax_index.node_idx, softmax_index.feature_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(softmax_index.node_idx),
             vec![].into(),
         );
         verifier_opening_accumulator.append_virtual(
             verifier_transcript,
             VirtualPolynomial::SoftmaxMaxIndex(softmax_index.node_idx, softmax_index.feature_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(softmax_index.node_idx),
             vec![].into(),
         );
 
@@ -264,7 +264,7 @@ mod tests {
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(softmax_index.node_idx),
             );
         let (_, softmax_operand_claim) = verifier_opening_accumulator
             .get_virtual_polynomial_opening(
@@ -272,7 +272,7 @@ mod tests {
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(softmax_index.node_idx),
             );
         assert_eq!(
             softmax_operand_claim,

@@ -46,7 +46,7 @@ impl IndicatorParams {
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(softmax_index.node_idx),
             )
             .1;
         let max_index = f_max_index
@@ -60,7 +60,7 @@ impl IndicatorParams {
                         softmax_index.node_idx,
                         softmax_index.feature_idx,
                     ),
-                    SumcheckId::Execution,
+                    SumcheckId::NodeExecution(softmax_index.node_idx),
                 )
                 .0
                 .r
@@ -81,7 +81,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for IndicatorParams {
                 self.softmax_index.node_idx,
                 self.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.softmax_index.node_idx),
         );
         max_claim
     }
@@ -165,7 +165,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for IndicatorProv
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
             opening_point.clone(),
             self.softmax_operand.final_sumcheck_claim(),
         );
@@ -204,7 +204,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for IndicatorVe
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
         );
         let mut y =
             index_to_field_bitvector::<F>(self.params.max_index as u64, sumcheck_challenges.len());
@@ -225,7 +225,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for IndicatorVe
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
             opening_point.clone(),
         );
     }

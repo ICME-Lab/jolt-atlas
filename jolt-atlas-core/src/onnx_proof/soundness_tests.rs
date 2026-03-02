@@ -1,6 +1,6 @@
 use crate::onnx_proof::{
     malicious_prover::MaliciousONNXProof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
-    AtlasVerifierPreprocessing, ONNXProof, Verifier,
+    AtlasVerifierPreprocessing, ONNXProof,
 };
 use ark_bn254::{Bn254, Fr};
 use atlas_onnx_tracer::{
@@ -10,8 +10,13 @@ use atlas_onnx_tracer::{
     tensor::Tensor,
 };
 use common::VirtualPolynomial;
-use joltworks::poly::opening_proof::{OpeningId, SumcheckId};
-use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
+use joltworks::{
+    poly::{
+        commitment::hyperkzg::HyperKZG,
+        opening_proof::{OpeningId, SumcheckId},
+    },
+    transcripts::Blake2bTranscript,
+};
 use rand::{rngs::StdRng, SeedableRng};
 
 fn sub_model(rng: &mut StdRng, t: usize) -> Model {
@@ -71,14 +76,14 @@ fn duplicate_operand_sub_model(rng: &mut StdRng, t: usize) -> (Model, usize, usi
     (b.build(), x, y)
 }
 
-#[should_panic]
+#[should_panic = "called `Result::unwrap()` on an `Err` value: InvalidOpeningProof(\"Const claim does not match expected claim\")"]
 #[test]
 fn soundness_sub_virtual_operand_attack_is_rejected() {
     // This test demonstrates the virtual-operand-claim attack shape:
-    // 1) malicious_sub forges operand claims in proof.virtual_operand_claims
-    // 2) The verifier derives openings[NodeOutput(input)] from virtual_operand_claims
-    //    (single source of truth). The forged claim propagates to the input/constant
-    //    node verification, which detects the mismatch against the known values.
+    // 1) malicious_sub forges operand claims (writes forged values into
+    //    openings[NodeOutput(input), NodeExecution(sub_node)] via append_virtual)
+    // 2) The forged claim propagates to the input/constant node verification,
+    //    which detects the mismatch against the known values.
     let t = 1 << 12;
     let mut rng = StdRng::seed_from_u64(0xA77ACCEE);
     let input = Tensor::<i32>::random_small(&mut rng, &[t]);
@@ -91,20 +96,24 @@ fn soundness_sub_virtual_operand_attack_is_rejected() {
         MaliciousONNXProof::prove::<Fr, Blake2bTranscript, HyperKZG<Bn254>>(&prover_pp, &[input]);
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
 
-    // Confirm the malicious prover stored forged claims in virtual_operand_claims.
-    let _virtual_claims = proof
-        .virtual_operand_claims
-        .get(&sub_node.idx)
-        .expect("sub node virtual operand claims should exist");
+    // Confirm the malicious prover stored forged NodeOutput claims in opening_claims.
+    for &input_idx in sub_node.inputs.iter() {
+        let key = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(input_idx),
+            SumcheckId::NodeExecution(sub_node.idx),
+        );
+        assert!(
+            proof.opening_claims.0.contains_key(&key),
+            "sub node forged NodeOutput({input_idx}) claim should exist in opening_claims"
+        );
+    }
 
-    // The Sub node's operand NodeOutput entries come exclusively from
-    // virtual_operand_claims (single source of truth for interior nodes).
-    // The forged claims propagate to input/constant verification, which
-    // panics on mismatch.
+    // The forged NodeOutput claims propagate to input/constant verification,
+    // which panics on mismatch.
     proof.verify(&verifier_pp, &io, None).unwrap();
 }
 
-#[should_panic]
+#[should_panic = "called `Result::unwrap()` on an `Err` value: InvalidOpeningProof(\"Const claim does not match expected claim\")"]
 #[test]
 fn soundness_sub_trace_tamper_3_minus_2_becomes_0_is_rejected() {
     let model = sub_model_const_2();
@@ -126,71 +135,51 @@ fn soundness_sub_trace_tamper_3_minus_2_becomes_0_is_rejected() {
 }
 
 #[test]
-#[ignore = "Known issue tracked by #138: NodeOutput openings collapse to last-writer"]
-fn soundness_fanout_nodeoutput_opening_is_last_writer_only() {
-    // This test captures the #138 structural issue:
-    // one producer node output (x) consumed by two nodes (y, z) yields two
-    // distinct operand openings for x, but populate_accumulator materializes
-    // a single openings[NodeOutput(x)] entry using last-writer overwrite.
+#[ignore = "Known issue tracked by #138: multiple NodeOutput openings not yet reduced"]
+fn soundness_fanout_nodeoutput_openings_should_be_reduced() {
+    // #138 structural issue: one producer (x) consumed by two nodes (y, z)
+    // produces two per-consumer openings for NodeOutput(x), keyed by
+    // NodeExecution(y) and NodeExecution(z). These should be reduced to a
+    // single opening via PAZK 4.5.2, but currently are not — only one gets
+    // transitively verified against the committed polynomial.
     let t = 1 << 8;
     let mut rng = StdRng::seed_from_u64(0x138138);
     let input = Tensor::<i32>::random_small(&mut rng, &[t]);
-    let (model, x_idx, y_idx, z_idx) = fanout_sub_model(&mut rng, t);
+    let (model, x_idx, _y_idx, _z_idx) = fanout_sub_model(&mut rng, t);
 
     let pp = AtlasSharedPreprocessing::preprocess(model);
     let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
-    let (proof, io, _debug_info) =
+    let (proof, _io, _debug_info) =
         ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_pp, &[input]);
-    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
 
-    let y_claim_for_x = proof
-        .virtual_operand_claims
-        .get(&y_idx)
-        .expect("y virtual operand claims should exist")[0]
-        .clone();
-    let z_claim_for_x = proof
-        .virtual_operand_claims
-        .get(&z_idx)
-        .expect("z virtual operand claims should exist")[0]
-        .clone();
-
-    assert_ne!(
-        y_claim_for_x, z_claim_for_x,
-        "fan-out should produce two distinct openings for NodeOutput(x)"
+    // Count how many per-consumer entries exist for NodeOutput(x).
+    let lo = OpeningId::Virtual(
+        VirtualPolynomial::NodeOutput(x_idx),
+        SumcheckId::NodeExecution(0),
     );
-
-    // Run exactly the verifier pre-loading step to inspect reconstructed openings.
-    let mut verifier: Verifier<Fr, Blake2bTranscript> =
-        Verifier::new(&verifier_pp.shared, &proof.proofs, &io);
-    proof.populate_accumulator(verifier_pp.model(), &mut verifier);
-
-    let key = OpeningId::Virtual(VirtualPolynomial::NodeOutput(x_idx), SumcheckId::Execution);
-    let materialized = verifier
-        .accumulator
-        .openings
-        .get(&key)
-        .expect("NodeOutput(x) opening should be materialized")
-        .clone();
-
-    // Desired property (future fix): both consumer openings for shared x should be
-    // independently tracked/verified, rather than collapsing to a single materialized
-    // NodeOutput(x) opening. The current implementation collapses to one and should fail this check.
-    assert_ne!(
-        materialized, y_claim_for_x,
-        "bug: shared NodeOutput(x) collapsed to y's opening (last-writer behavior)"
+    let hi = OpeningId::Virtual(
+        VirtualPolynomial::NodeOutput(x_idx),
+        SumcheckId::NodeExecution(usize::MAX),
     );
-    assert_ne!(
-        materialized, z_claim_for_x,
-        "bug: shared NodeOutput(x) collapsed to z's opening (last-writer behavior)"
+    let entries: Vec<_> = proof.opening_claims.0.range(lo..=hi).collect();
+
+    // Desired property (#138): all per-consumer openings for NodeOutput(x)
+    // should be reduced to a single opening via PAZK 4.5.2.
+    // This assertion FAILS today (entries.len() == 2) because reduction is not implemented.
+    assert_eq!(
+        entries.len(),
+        1,
+        "NodeOutput(x) should have exactly one (reduced) opening, but found {}",
+        entries.len()
     );
 }
 
 #[test]
 #[ignore = "Known issue tracked by #138: duplicate-operand NodeOutput openings collapse to last-writer"]
-fn soundness_same_consumer_duplicate_operand_opening_collapses_to_last_writer() {
-    // Same-consumer duplicate-operand variant: y = sub(x, x).
-    // Two operand openings are produced for the same producer node x in the same
-    // consumer y, but openings[NodeOutput(x)] materializes as a single entry.
+fn soundness_same_consumer_duplicate_operand_should_track_both() {
+    // y = sub(x, x): both operands write NodeOutput(x) + NodeExecution(y).
+    // The second write overwrites the first, collapsing two distinct operand
+    // openings into one entry. #138 should independently track both.
     let t = 1 << 8;
     let mut rng = StdRng::seed_from_u64(0xD0011CAA);
     let input = Tensor::<i32>::random_small(&mut rng, &[t]);
@@ -198,7 +187,7 @@ fn soundness_same_consumer_duplicate_operand_opening_collapses_to_last_writer() 
 
     let pp = AtlasSharedPreprocessing::preprocess(model);
     let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
-    let (proof, io, _debug_info) =
+    let (proof, _io, _debug_info) =
         ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_pp, &[input]);
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
 
@@ -208,41 +197,25 @@ fn soundness_same_consumer_duplicate_operand_opening_collapses_to_last_writer() 
         "test precondition: y must consume x twice"
     );
 
-    let y_openings = proof
-        .virtual_operand_claims
-        .get(&y_idx)
-        .expect("y virtual operand claims should exist");
+    // Count entries for NodeOutput(x) in opening_claims.
+    let lo = OpeningId::Virtual(
+        VirtualPolynomial::NodeOutput(x_idx),
+        SumcheckId::NodeExecution(0),
+    );
+    let hi = OpeningId::Virtual(
+        VirtualPolynomial::NodeOutput(x_idx),
+        SumcheckId::NodeExecution(usize::MAX),
+    );
+    let entries: Vec<_> = proof.opening_claims.0.range(lo..=hi).collect();
+
+    // Desired property (#138): both operand openings for the same producer
+    // should be independently tracked (2 entries), not collapsed via overwrite.
+    // This assertion FAILS today (entries.len() == 1) because the second
+    // append_virtual overwrites the first for the same key.
     assert_eq!(
-        y_openings.len(),
+        entries.len(),
         2,
-        "y should expose two operand openings (left and right)"
-    );
-    assert_eq!(
-        y_openings[0].0, y_openings[1].0,
-        "duplicate operand openings should share the same opening point"
-    );
-
-    let mut verifier: Verifier<Fr, Blake2bTranscript> =
-        Verifier::new(&verifier_pp.shared, &proof.proofs, &io);
-    proof.populate_accumulator(verifier_pp.model(), &mut verifier);
-
-    let key = OpeningId::Virtual(VirtualPolynomial::NodeOutput(x_idx), SumcheckId::Execution);
-    let materialized = verifier
-        .accumulator
-        .openings
-        .get(&key)
-        .expect("NodeOutput(x) opening should be materialized")
-        .clone();
-
-    // Desired property (future fix): duplicate operand openings for the same producer
-    // should not collapse to a single materialized NodeOutput(x) opening.
-    // The current implementation collapses and should fail these checks.
-    assert_ne!(
-        materialized, y_openings[0],
-        "bug: duplicate-operand opening[0] collapsed into NodeOutput(x)"
-    );
-    assert_ne!(
-        materialized, y_openings[1],
-        "bug: duplicate-operand opening[1] collapsed into NodeOutput(x)"
+        "duplicate operand openings should be independently tracked, but found {}",
+        entries.len()
     );
 }

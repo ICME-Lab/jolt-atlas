@@ -16,7 +16,7 @@ use joltworks::{
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        opening_proof::{OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId},
+        opening_proof::{ProverOpeningAccumulator, SumcheckId},
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
     },
@@ -120,31 +120,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaliciousSubP
         sumcheck_challenges: &[F::Challenge],
     ) {
         let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::Execution,
-            opening_point.clone(),
-            self.left_operand.final_sumcheck_claim(),
-        );
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::Execution,
-            opening_point,
-            self.right_operand.final_sumcheck_claim(),
-        );
 
         // Malicious behavior: forge virtual operand claims while preserving the
         // same subtraction difference, so expected_output_claim remains unchanged.
-        let left_claim = accumulator.get_opening(OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::Execution,
-        ));
-        let right_claim = accumulator.get_opening(OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::Execution,
-        ));
+        let left_claim = self.left_operand.final_sumcheck_claim();
+        let right_claim = self.right_operand.final_sumcheck_claim();
         let final_claim = self
             .final_claim
             .expect("final_claim must be set before cache_openings");
@@ -166,16 +146,21 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaliciousSubP
         };
         debug_assert_eq!(final_claim, eq_eval * (forged_left - forged_right));
 
-        // Keep transcript in sync with what verifier will append via
-        // `append_operand_claims`.
-        transcript.append_scalar(&forged_left);
-        transcript.append_scalar(&forged_right);
-        accumulator.virtual_operand_claims.insert(
-            self.params.computation_node.idx,
-            vec![
-                (OpeningPoint::default(), forged_left),
-                (OpeningPoint::default(), forged_right),
-            ],
+        // Use append_virtual with forged claims. This inserts into openings
+        // and appends to transcript, keeping prover/verifier in sync.
+        accumulator.append_virtual(
+            transcript,
+            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
+            opening_point.clone(),
+            forged_left,
+        );
+        accumulator.append_virtual(
+            transcript,
+            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
+            opening_point,
+            forged_right,
         );
     }
 }

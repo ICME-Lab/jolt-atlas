@@ -54,7 +54,7 @@ impl<F: JoltField> ReadRafParams<F> {
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(softmax_index.node_idx),
             )
             .0
             .r;
@@ -77,14 +77,14 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReadRafParams<F> {
                 self.softmax_index.node_idx,
                 self.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.softmax_index.node_idx),
         );
         let (_, raf_checking_claim) = accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::SoftmaxAbsCenteredLogitsOutput(
                 self.softmax_index.node_idx,
                 self.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.softmax_index.node_idx),
         );
         read_checking_claim + self.gamma * raf_checking_claim
     }
@@ -123,7 +123,7 @@ impl<F: JoltField> ReadRafProver<F> {
                 params.softmax_index.node_idx,
                 params.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(params.softmax_index.node_idx),
             params.r_exponentiation_output.clone().into(),
             raf_claim,
         );
@@ -211,7 +211,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReadRafProver
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
             opening_point.into(),
             self.F.final_sumcheck_claim(),
         );
@@ -237,7 +237,7 @@ impl<F: JoltField> ReadRafVerifier<F> {
                 params.softmax_index.node_idx,
                 params.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(params.softmax_index.node_idx),
             params.r_exponentiation_output.clone().into(),
         );
         Self { params }
@@ -260,7 +260,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReadRafVeri
                     self.params.softmax_index.node_idx,
                     self.params.softmax_index.feature_idx,
                 ),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
             )
             .1;
         let val_claim =
@@ -286,7 +286,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReadRafVeri
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
             opening_point.into(),
         );
     }
@@ -317,7 +317,7 @@ impl RaOneHotEncoding for SoftmaxExpRaEncoding {
                 self.softmax_index.node_idx,
                 self.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.softmax_index.node_idx),
         )
     }
 
@@ -327,7 +327,7 @@ impl RaOneHotEncoding for SoftmaxExpRaEncoding {
                 self.softmax_index.node_idx,
                 self.softmax_index.feature_idx,
             ),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.softmax_index.node_idx),
         )
     }
 

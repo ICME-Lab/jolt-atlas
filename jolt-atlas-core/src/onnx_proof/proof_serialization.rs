@@ -14,7 +14,7 @@ use joltworks::{
     field::JoltField,
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
-        opening_proof::{OpeningId, OpeningPoint, VirtualOperandClaims},
+        opening_proof::{OpeningId, OpeningPoint},
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
@@ -129,62 +129,6 @@ impl<F: JoltField> CanonicalDeserialize for Claims<F> {
 }
 
 // ---------------------------------------------------------------------------
-// VirtualOperandClaims<F> helper (type alias for BTreeMap<usize, Vec<Opening<F>>>)
-// Only claims are serialized (points are reconstructed by the verifier).
-// ---------------------------------------------------------------------------
-
-fn serialize_virtual_operand_claims<W: Write, F: JoltField>(
-    claims: &VirtualOperandClaims<F>,
-    writer: &mut W,
-    compress: Compress,
-) -> Result<(), SerializationError> {
-    (claims.len() as u64).serialize_with_mode(&mut *writer, compress)?;
-    for (k, openings) in claims.iter() {
-        k.serialize_with_mode(&mut *writer, compress)?;
-        (openings.len() as u64).serialize_with_mode(&mut *writer, compress)?;
-        for (_, claim) in openings {
-            claim.serialize_with_mode(&mut *writer, compress)?;
-        }
-    }
-    Ok(())
-}
-
-fn serialized_size_virtual_operand_claims<F: JoltField>(
-    claims: &VirtualOperandClaims<F>,
-    compress: Compress,
-) -> usize {
-    let mut size = 0u64.serialized_size(compress);
-    for (k, openings) in claims.iter() {
-        size += k.serialized_size(compress);
-        size += 0u64.serialized_size(compress);
-        for (_, claim) in openings {
-            size += claim.serialized_size(compress);
-        }
-    }
-    size
-}
-
-fn deserialize_virtual_operand_claims<R: Read, F: JoltField>(
-    reader: &mut R,
-    compress: Compress,
-    validate: Validate,
-) -> Result<VirtualOperandClaims<F>, SerializationError> {
-    let len = u64::deserialize_with_mode(&mut *reader, compress, validate)? as usize;
-    let mut map = BTreeMap::new();
-    for _ in 0..len {
-        let k = usize::deserialize_with_mode(&mut *reader, compress, validate)?;
-        let n = u64::deserialize_with_mode(&mut *reader, compress, validate)? as usize;
-        let mut openings = Vec::with_capacity(n);
-        for _ in 0..n {
-            let claim = F::deserialize_with_mode(&mut *reader, compress, validate)?;
-            openings.push((OpeningPoint::default(), claim));
-        }
-        map.insert(k, openings);
-    }
-    Ok(map)
-}
-
-// ---------------------------------------------------------------------------
 // ReducedOpeningProof<F, T, PCS>
 // ---------------------------------------------------------------------------
 
@@ -272,10 +216,7 @@ where
         // 2. Proofs (BTreeMap<ProofId, SumcheckInstanceProof>)
         serialize_btreemap(&self.proofs, &mut writer, compress)?;
 
-        // 3. Virtual operand claims
-        serialize_virtual_operand_claims(&self.virtual_operand_claims, &mut writer, compress)?;
-
-        // 4. Commitments
+        // 3. Commitments
         self.commitments
             .serialize_with_mode(&mut writer, compress)?;
 
@@ -289,7 +230,6 @@ where
     fn serialized_size(&self, compress: Compress) -> usize {
         self.opening_claims.serialized_size(compress)
             + serialized_size_btreemap(&self.proofs, compress)
-            + serialized_size_virtual_operand_claims(&self.virtual_operand_claims, compress)
             + self.commitments.serialized_size(compress)
             + self.reduced_opening_proof.serialized_size(compress)
     }
@@ -319,15 +259,12 @@ where
     ) -> Result<Self, SerializationError> {
         let opening_claims = Claims::deserialize_with_mode(&mut reader, compress, validate)?;
         let proofs = deserialize_btreemap(&mut reader, compress, validate)?;
-        let virtual_operand_claims =
-            deserialize_virtual_operand_claims(&mut reader, compress, validate)?;
         let commitments = Vec::deserialize_with_mode(&mut reader, compress, validate)?;
         let reduced_opening_proof = Option::deserialize_with_mode(&mut reader, compress, validate)?;
 
         Ok(Self {
             opening_claims,
             proofs,
-            virtual_operand_claims,
             commitments,
             reduced_opening_proof,
         })
@@ -448,13 +385,6 @@ mod tests {
                 "sumcheck proof round count mismatch for {proof_id:?}"
             );
         }
-
-        // Check virtual operand claims match
-        assert_eq!(
-            proof.virtual_operand_claims.len(),
-            deserialized.virtual_operand_claims.len(),
-            "virtual operand claims count mismatch"
-        );
 
         // Check commitments match
         assert_eq!(

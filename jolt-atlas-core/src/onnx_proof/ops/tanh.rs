@@ -309,10 +309,7 @@ impl<F: JoltField> TanhParams<F> {
         let gamma = transcript.challenge_scalar();
 
         let r_node_output = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(computation_node.idx),
-                SumcheckId::Execution,
-            )
+            .get_node_output_opening(computation_node.idx)
             .0
             .r;
 
@@ -332,10 +329,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for TanhParams<F> {
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         let rv_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.computation_node.idx),
-                SumcheckId::Execution,
-            )
+            .get_node_output_opening(self.computation_node.idx)
             .1;
 
         // Use quotient claim instead of input claim (neural teleportation)
@@ -427,10 +421,7 @@ impl<F: JoltField> TanhProver<F> {
             let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data())
                 .evaluate(&params.r_node_output);
             let rv_claim = accumulator
-                .get_virtual_polynomial_opening(
-                    VirtualPolynomial::NodeOutput(params.computation_node.idx),
-                    SumcheckId::Execution,
-                )
+                .get_node_output_opening(params.computation_node.idx)
                 .1;
             let claim = (0..input_onehot.len())
                 .map(|i| {
@@ -507,7 +498,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TanhProver<F>
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::TanhRa(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             r.into(),
             self.input_onehot.final_sumcheck_claim(),
         );
@@ -565,7 +556,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifie
         let ra_claim = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::TanhRa(self.params.computation_node.idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.computation_node.idx),
             )
             .1;
 
@@ -589,7 +580,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifie
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::TanhRa(self.params.computation_node.idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
             r.into(),
         );
     }
@@ -617,14 +608,14 @@ impl RaOneHotEncoding for TanhRaEncoding {
     fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
         (
             VirtualPolynomial::TeleportQuotient(self.node_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.node_idx),
         )
     }
 
     fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
         (
             VirtualPolynomial::TanhRa(self.node_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.node_idx),
         )
     }
 

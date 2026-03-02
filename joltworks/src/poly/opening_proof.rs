@@ -88,10 +88,6 @@ pub trait OpeningAccumulator<F: JoltField> {
         sumcheck: SumcheckId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F);
 
-    /// Locate the opening for a producer's `NodeOutput`, regardless of which
-    /// consumer wrote it.  This scans for any `NodeOutput(producer_idx, _)` entry
-    /// in the openings map and returns the first match.
-    ///
     /// TODO(#138): While we no longer overwrite fan-out entries, `.next()` returns
     /// the entry with the smallest consumer index and we never check the remaining
     /// entries. All per-consumer openings for the same producer should be reduced

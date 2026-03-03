@@ -55,11 +55,24 @@ impl ComputationNode {
         }
     }
 
+    /// Returns output dimensions with each axis padded to the next power of two.
+    pub fn pow2_padded_output_dims(&self) -> Vec<usize> {
+        self.output_dims
+            .iter()
+            .map(|&d| d.next_power_of_two())
+            .collect()
+    }
+
     /// Computes the total number of output elements produced by this node.
     /// This is the product of the output dimensions.
     /// For example, if `output_dims` is `[2, 3]`, this returns `6`.
     pub fn num_output_elements(&self) -> usize {
         self.output_dims.iter().product()
+    }
+
+    /// Computes the total number of output elements after per-axis pow2 padding.
+    pub fn pow2_padded_num_output_elements(&self) -> usize {
+        self.pow2_padded_output_dims().iter().product()
     }
 
     /// Returns true if the output of this node is a scalar (i.e., has exactly one element).

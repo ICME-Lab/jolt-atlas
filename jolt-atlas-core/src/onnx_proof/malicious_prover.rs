@@ -50,7 +50,7 @@ impl MaliciousONNXProof {
         inputs: &[Tensor<i32>],
     ) -> ProverOutput<F, T, PCS> {
         // Generate trace and io
-        let trace = pp.model().trace(inputs);
+        let trace = pp.model().trace(inputs).into_padded_to_next_pow2();
         let io = Trace::io(&trace, pp.model());
 
         // Initialize prover state
@@ -93,7 +93,7 @@ impl MaliciousONNXProof {
         pp: &AtlasProverPreprocessing<F, PCS>,
         inputs: &[Tensor<i32>],
     ) -> ProverOutput<F, T, PCS> {
-        let mut trace = pp.model().trace(inputs);
+        let mut trace = pp.model().trace(inputs).into_padded_to_next_pow2();
         Self::tamper_first_sub_output_to_zero(&mut trace, pp.model());
         let io = Trace::io(&trace, pp.model());
 

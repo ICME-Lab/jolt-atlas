@@ -54,7 +54,7 @@ use rayon::prelude::*;
 /// Both `SoftmaxRemainder` and `SoftmaxExponentiationRaD` need identical slicing and
 /// `softmax_fixed_128` logic; this helper eliminates the duplication.
 fn softmax_chunk_trace(node: &ComputationNode, trace: &Trace, feature_idx: usize) -> SoftmaxTrace {
-    let features = node.output_dims[2];
+    let features = node.pow2_padded_output_dims()[2];
     let LayerData { operands, .. } = Trace::layer_data(trace, node);
     let operand = operands[0];
     let chunk = operand.data()[feature_idx * features..(feature_idx + 1) * features].to_vec();
@@ -306,7 +306,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     .map(|&index| Some(index as u16))
                     .collect();
                 let input_dict = &model.graph.nodes.get(&computation_node.inputs[0]).unwrap();
-                let num_words = input_dict.output_dims[0];
+                let num_words = input_dict.pow2_padded_output_dims()[0];
                 MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
                     non_zero_addresses,
                     num_words,

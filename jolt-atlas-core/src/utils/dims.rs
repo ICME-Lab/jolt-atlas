@@ -201,13 +201,15 @@ fn extract_mk_kn_mn_dims(computation_node: &ComputationNode, model: &Model) -> E
     };
     let _a_node = &model[a_idx];
     let b_node = &model[b_idx];
-    let m = if computation_node.output_dims.len() == 3 {
-        computation_node.output_dims[1]
+    let output_dims = computation_node.pow2_padded_output_dims();
+    let b_dims = b_node.pow2_padded_output_dims();
+    let m = if output_dims.len() == 3 {
+        output_dims[1]
     } else {
-        computation_node.output_dims[0]
+        output_dims[0]
     };
-    let k = b_node.output_dims[0];
-    let n = b_node.output_dims[1];
+    let k = b_dims[0];
+    let n = b_dims[1];
     EinsumDims::new(vec![m, k], vec![k, n], vec![m, n])
 }
 
@@ -217,8 +219,9 @@ fn extract_k_nk_n_dims(computation_node: &ComputationNode, model: &Model) -> Ein
     };
     let _a_node = &model[a_idx];
     let b_node = &model[b_idx];
-    let n = b_node.output_dims[0];
-    let k = b_node.output_dims[1];
+    let b_dims = b_node.pow2_padded_output_dims();
+    let n = b_dims[0];
+    let k = b_dims[1];
     EinsumDims::new(vec![k], vec![n, k], vec![n])
 }
 
@@ -228,7 +231,7 @@ fn extract_ak_k_mn_dims(computation_node: &ComputationNode, model: &Model) -> Ei
     };
     let _a_node = &model[a_idx];
     let b_node = &model[b_idx];
-    let k = b_node.output_dims[0];
+    let k = b_node.pow2_padded_output_dims()[0];
     EinsumDims::new(vec![k], vec![k], vec![1, 1])
 }
 
@@ -238,10 +241,12 @@ fn extract_mbk_nbk_bmn_dims(computation_node: &ComputationNode, model: &Model) -
     };
     let a_node = &model[a_idx];
     let b_node = &model[b_idx];
-    let m = a_node.output_dims[0];
-    let b = a_node.output_dims[1];
-    let k = a_node.output_dims[2];
-    let n = b_node.output_dims[0];
+    let a_dims = a_node.pow2_padded_output_dims();
+    let b_dims = b_node.pow2_padded_output_dims();
+    let m = a_dims[0];
+    let b = a_dims[1];
+    let k = a_dims[2];
+    let n = b_dims[0];
     EinsumDims::new(vec![m, b, k], vec![n, b, k], vec![b, m, n])
 }
 
@@ -251,11 +256,12 @@ fn extract_mbk_bnk_bmn_dims(computation_node: &ComputationNode, model: &Model) -
     };
     let a_node = &model[a_idx];
     let _b_node = &model[b_idx];
-    let m = a_node.output_dims[0];
-    let b = a_node.output_dims[1];
-    let k = a_node.output_dims[2];
-    let n = computation_node
-        .output_dims
+    let a_dims = a_node.pow2_padded_output_dims();
+    let output_dims = computation_node.pow2_padded_output_dims();
+    let m = a_dims[0];
+    let b = a_dims[1];
+    let k = a_dims[2];
+    let n = output_dims
         .last()
         .copied()
         .expect("Expected at least 1 output dimension for mbk,bnk->bmn operation");
@@ -268,10 +274,12 @@ fn extract_bmk_kbn_mbn_dims(computation_node: &ComputationNode, model: &Model) -
     };
     let _a_node = &model[a_idx];
     let b_node = &model[b_idx];
-    let m = computation_node.output_dims[0];
-    let b = computation_node.output_dims[1];
-    let n = computation_node.output_dims[2];
-    let k = b_node.output_dims[0];
+    let output_dims = computation_node.pow2_padded_output_dims();
+    let b_dims = b_node.pow2_padded_output_dims();
+    let m = output_dims[0];
+    let b = output_dims[1];
+    let n = output_dims[2];
+    let k = b_dims[0];
     EinsumDims::new(vec![b, m, k], vec![k, b, n], vec![m, b, n])
 }
 
@@ -281,11 +289,12 @@ fn extract_bmk_bkn_mbn_dims(computation_node: &ComputationNode, model: &Model) -
     };
     let a_node = &model[a_idx];
     let _b_node = &model[b_idx];
-    let m = computation_node.output_dims[0];
-    let b = computation_node.output_dims[1];
-    let n = computation_node.output_dims[2];
-    let k = a_node
-        .output_dims
+    let output_dims = computation_node.pow2_padded_output_dims();
+    let a_dims = a_node.pow2_padded_output_dims();
+    let m = output_dims[0];
+    let b = output_dims[1];
+    let n = output_dims[2];
+    let k = a_dims
         .last()
         .copied()
         .expect("Expected at least 1 dimension for a_node in bmk,bkn->mbn operation");
@@ -298,10 +307,12 @@ fn extract_mbk_bkn_amn_dims(computation_node: &ComputationNode, model: &Model) -
     };
     let a_node = &model[a_idx];
     let b_node = &model[b_idx];
-    let m = a_node.output_dims[0];
-    let b = a_node.output_dims[1];
-    let k = a_node.output_dims[2];
-    let n = b_node.output_dims[2];
+    let a_dims = a_node.pow2_padded_output_dims();
+    let b_dims = b_node.pow2_padded_output_dims();
+    let m = a_dims[0];
+    let b = a_dims[1];
+    let k = a_dims[2];
+    let n = b_dims[2];
 
     let bk = b * k;
 

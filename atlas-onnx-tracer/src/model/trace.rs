@@ -26,6 +26,21 @@ impl Trace {
         Self { node_outputs }
     }
 
+    /// Return a cloned trace where every node output tensor is padded to the
+    /// next power-of-two shape per dimension.
+    pub fn padded_to_next_pow2(&self) -> Self {
+        self.clone().into_padded_to_next_pow2()
+    }
+
+    /// Pad every node output tensor in-place to the next power-of-two shape per
+    /// dimension and return the updated trace.
+    pub fn into_padded_to_next_pow2(mut self) -> Self {
+        for tensor in self.node_outputs.values_mut() {
+            tensor.pad_next_power_of_two();
+        }
+        self
+    }
+
     /// Build a trace view of a specific node/layer -> its inputs and output.
     pub fn layer_data<'a>(&'a self, computation_node: &ComputationNode) -> LayerData<'a> {
         let output = &self[computation_node.idx];
@@ -98,4 +113,26 @@ pub struct ModelExecutionIO {
     pub input_indices: Vec<usize>,
     /// Node indices corresponding to model outputs.
     pub output_indices: Vec<usize>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_trace_pad_to_next_pow2() {
+        let mut outputs = BTreeMap::new();
+        outputs.insert(0, Tensor::new(Some(&[1, 2, 3]), &[3]).unwrap());
+        outputs.insert(1, Tensor::new(Some(&[4, 5, 6, 7]), &[2, 2]).unwrap());
+
+        let padded = Trace::new(outputs).into_padded_to_next_pow2();
+
+        let t0 = &padded.node_outputs[&0];
+        assert_eq!(t0.dims(), &[4]);
+        assert_eq!(t0.data(), &[1, 2, 3, 0]);
+
+        let t1 = &padded.node_outputs[&1];
+        assert_eq!(t1.dims(), &[2, 2]);
+        assert_eq!(t1.data(), &[4, 5, 6, 7]);
+    }
 }

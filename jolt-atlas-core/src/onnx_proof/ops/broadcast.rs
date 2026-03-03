@@ -160,17 +160,17 @@ impl<F: JoltField> BroadcastVerifier<F> {
         graph: &ComputationGraph,
     ) -> Self {
         let params = BroadcastParams::new(computation_node, accumulator);
-        let input_dims = &graph
+        let input_dims = graph
             .nodes
             .get(&params.computation_node.inputs[0])
             .expect("Broadcast node should have an input")
-            .output_dims;
-        let output_dims = &params.computation_node.output_dims;
+            .pow2_padded_output_dims();
+        let output_dims = params.computation_node.pow2_padded_output_dims();
 
-        let mut broadcast_tensor = build_broadcast_tensor(input_dims, output_dims);
+        let mut broadcast_tensor = build_broadcast_tensor(&input_dims, &output_dims);
 
         let (r_input, r_broadcast) =
-            split_broadcast_vars::<F>(output_dims, broadcast_tensor.dims(), &params.r_output);
+            split_broadcast_vars::<F>(&output_dims, broadcast_tensor.dims(), &params.r_output);
 
         broadcast_tensor.pad_next_power_of_two();
         let eval_I = MultilinearPolynomial::from(broadcast_tensor).evaluate(&r_broadcast);

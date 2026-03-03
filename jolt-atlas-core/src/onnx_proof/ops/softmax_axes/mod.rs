@@ -81,8 +81,8 @@ pub struct SoftmaxLastAxisConfig {
 impl SoftmaxLastAxisConfig {
     /// Create new configuration from computation node.
     pub fn new(computation_node: &ComputationNode) -> Self {
-        let (&feature_vector_size, dims) = computation_node
-            .output_dims
+        let padded_dims = computation_node.pow2_padded_output_dims();
+        let (&feature_vector_size, dims) = padded_dims
             .split_last()
             .expect("Softmax output dims should not be empty");
         Self {

@@ -33,7 +33,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Constant {
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         let (r_node_const, const_claim) = verifier.accumulator.get_node_output_opening(node.idx);
-        let expected_claim = MultilinearPolynomial::from(self.0.clone()).evaluate(&r_node_const.r);
+        // Prover evaluates claims on trace tensors padded to pow2 shape.
+        // Mirror that normalization on verifier-side constant tensors.
+        let mut padded_const = self.0.clone();
+        padded_const.pad_next_power_of_two();
+        let expected_claim = MultilinearPolynomial::from(padded_const).evaluate(&r_node_const.r);
         if expected_claim != const_claim {
             return Err(ProofVerifyError::InvalidOpeningProof(
                 "Const claim does not match expected claim".to_string(),

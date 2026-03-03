@@ -109,6 +109,7 @@ impl<F: JoltField> KNkNProver<F> {
                     .sum()
             })
             .collect();
+        debug_assert!(right_operand.len().is_power_of_two());
         let left_operand = MultilinearPolynomial::from(left_operand.clone());
         let right_operand = MultilinearPolynomial::from(right_operand);
         Self {

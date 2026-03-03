@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::{
     node::ComputationNode,
-    ops::{Clamp, Constant, Erf, Operator, Rsqrt, SoftmaxAxes, Tanh},
+    ops::{Clamp, Constant, Cos, Erf, Operator, Rsqrt, Sin, SoftmaxAxes, Tanh},
     tensor::ops::nonlinearities::EXP_LUT_SIZE,
     utils::{handler_builder::HandlerBuilder, parser::load_op, quantize::scale_to_multiplier},
 };
@@ -22,11 +22,13 @@ pub const NEURAL_TELEPORT_LOG_TABLE_SIZE: usize = 12;
 /// Returns a map of activation operator names to their handler functions.
 pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
     HashMap::from([
-        ("Max", handle_max as OpHandlerFn),
-        ("Tanh", handle_tanh as OpHandlerFn),
-        ("Softmax", handle_softmax as OpHandlerFn),
-        ("Rsqrt", handle_rsqrt as OpHandlerFn),
+        ("Cos", handle_cos as OpHandlerFn),
         ("Erf", handle_erf as OpHandlerFn),
+        ("Max", handle_max as OpHandlerFn),
+        ("Rsqrt", handle_rsqrt as OpHandlerFn),
+        ("Sin", handle_sin as OpHandlerFn),
+        ("Softmax", handle_softmax as OpHandlerFn),
+        ("Tanh", handle_tanh as OpHandlerFn),
     ])
 }
 
@@ -72,6 +74,26 @@ fn handle_tanh(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
             tau,
             log_table: log_table_size,
         }))
+        .build()
+}
+
+/// Cos: Cosine activation.
+fn handle_cos(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
+    let scale = scale_to_multiplier(hctx.run_args.scale).into();
+
+    HandlerBuilder::new(hctx)
+        .with_broadcast()
+        .simple_op(Operator::Cos(Cos { scale }))
+        .build()
+}
+
+/// Sin: Sine activation.
+fn handle_sin(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
+    let scale = scale_to_multiplier(hctx.run_args.scale).into();
+
+    HandlerBuilder::new(hctx)
+        .with_broadcast()
+        .simple_op(Operator::Sin(Sin { scale }))
         .build()
 }
 

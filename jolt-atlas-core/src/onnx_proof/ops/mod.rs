@@ -44,6 +44,8 @@ pub mod broadcast;
 pub mod clamp;
 /// Constant tensor nodes.
 pub mod constant;
+/// Cos activation function.
+pub mod cos;
 /// Element-wise cube (x³) operation.
 pub mod cube;
 /// Element-wise division operation.
@@ -78,6 +80,8 @@ pub mod reshape;
 pub mod rsqrt;
 /// Division by a scalar constant.
 pub mod scalar_const_div;
+/// Sin activation function.
+pub mod sin;
 /// Softmax operation along specified axes.
 pub mod softmax_axes;
 /// Element-wise square (x²) operation.
@@ -151,6 +155,7 @@ macro_rules! dispatch_operator {
             Operator::Add($inner) => $body,
             Operator::Broadcast($inner) => $body,
             Operator::Constant($inner) => $body,
+            Operator::Cos($inner) => $body,
             Operator::Cube($inner) => $body,
             Operator::Clamp($inner) => $body,
             Operator::Div($inner) => $body,
@@ -168,6 +173,7 @@ macro_rules! dispatch_operator {
             Operator::Reshape($inner) => $body,
             Operator::Rsqrt($inner) => $body,
             Operator::ScalarConstDiv($inner) => $body,
+            Operator::Sin($inner) => $body,
             Operator::SoftmaxAxes($inner) => $body,
             Operator::Square($inner) => $body,
             Operator::Sub($inner) => $body,

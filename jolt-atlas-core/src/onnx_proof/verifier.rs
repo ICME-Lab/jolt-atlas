@@ -98,7 +98,8 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,
             VirtualPolynomial::NodeOutput(output_computation_node.idx),
-            SumcheckId::NodeExecution(output_computation_node.idx),
+            // Node Output claim are generally produced by subsequent nodes proving, this is imitated here
+            SumcheckId::NodeExecution(output_computation_node.idx + 1),
             r_node_output.clone().into(),
         );
         // Read the prover's claimed value and compare against IO.

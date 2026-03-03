@@ -2,6 +2,7 @@
 
 use crate::{node::ComputationNode, ops::Operator, tensor::Tensor, utils::quantize};
 use common::consts::LOG_K_CHUNK;
+use consts::DEFAULT_SCALE;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -251,10 +252,12 @@ impl Model {
             .values()
             .map(|node| match &node.operator {
                 Operator::Tanh(_)
-                | Operator::Erf(_)
-                | &Operator::ReLU(_)
+                | Operator::Cos(_)
                 | Operator::Div(_)
-                | Operator::Rsqrt(_) => LOG_K_CHUNK + log_2(node.num_output_elements()),
+                | Operator::Erf(_)
+                | Operator::ReLU(_)
+                | Operator::Rsqrt(_)
+                | Operator::Sin(_) => LOG_K_CHUNK + log_2(node.num_output_elements()),
                 Operator::ScalarConstDiv(_) => log_2(node.num_output_elements()),
                 Operator::SoftmaxAxes(_) => {
                     LOG_K_CHUNK + log_2(*node.output_dims.last().unwrap_or(&1))
@@ -418,8 +421,16 @@ impl RunArgs {
     }
 }
 
-/// Default quantization scale (denominator in fixed-point representation).
-pub const DEFAULT_SCALE: i32 = 7;
+/// Const values used across the model and ops.
+pub mod consts {
+    /// Default quantization scale (denominator in fixed-point representation).
+    pub const DEFAULT_SCALE: i32 = 7;
+
+    /// Const used as an approximation of 8π in the zkVM with a scale factor of 128.
+    /// This allows us to wrap around a multiple of 2π, using the periodicity of the cosine function
+    /// while keeping the lookup table size reasonable.
+    pub const EIGHT_PI_APPROX: i32 = 3217;
+}
 
 #[cfg(test)]
 mod tests {

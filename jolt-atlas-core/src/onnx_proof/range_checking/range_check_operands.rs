@@ -1,5 +1,8 @@
 use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
+    model::{
+        consts::EIGHT_PI_APPROX,
+        trace::{LayerData, Trace},
+    },
     node::ComputationNode,
     ops::Operator,
     tensor::Tensor,
@@ -333,7 +336,10 @@ impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
         let tau = match &node.operator {
             Operator::Tanh(inner) => inner.tau,
             Operator::Erf(inner) => inner.tau,
-            _ => panic!("Expected Tanh or Erf operator for neural teleportation division"),
+            Operator::Cos(_) | Operator::Sin(_) => EIGHT_PI_APPROX,
+            _ => {
+                panic!("Expected Tanh, Erf, Cos, or Sin operator for neural teleportation division")
+            }
         };
 
         let (_, remainder) = compute_division(input_tensor, tau);

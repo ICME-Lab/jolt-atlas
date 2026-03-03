@@ -311,6 +311,36 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    /// Add a cosine activation node.
+    pub fn cos(&mut self, input: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&input].output_dims.clone();
+        let node = ComputationNode::new(
+            id,
+            Operator::Cos(Cos {
+                scale: F32((1 << SCALE) as f32),
+            }),
+            vec![input],
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
+    /// Add a sine activation node.
+    pub fn sin(&mut self, input: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&input].output_dims.clone();
+        let node = ComputationNode::new(
+            id,
+            Operator::Sin(Sin {
+                scale: F32((1 << SCALE) as f32),
+            }),
+            vec![input],
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
     /// Add an error function (erf) activation node.
     pub fn erf(&mut self, input: Wire) -> Wire {
         let id = self.alloc();

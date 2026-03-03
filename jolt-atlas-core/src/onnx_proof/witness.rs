@@ -334,19 +334,14 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 build_teleport_activation_rad_witness(input, inner.tau, inner.log_table, *d_idx)
             }
 
-            CommittedPolynomial::CosRaD(node_idx, d_idx)
-            | CommittedPolynomial::SinRaD(node_idx, d_idx) => {
+            CommittedPolynomial::CosRaD(node_idx, d_idx) => {
                 const COS_LOG_TABLE_SIZE: usize =
                     (EIGHT_PI_APPROX as usize).next_power_of_two().ilog2() as usize;
 
                 let computation_node = &model.graph.nodes[node_idx];
-                assert!(
-                    matches!(
-                        computation_node.operator,
-                        Operator::Cos(_) | Operator::Sin(_)
-                    ),
-                    "Expected Cos or Sin operator for CosRaD/SinRaD committed polynomial"
-                );
+                let Operator::Cos(_) = &computation_node.operator else {
+                    panic!("Expected Cos operator for CosRa committed polynomial");
+                };
                 let layer_data = Trace::layer_data(trace, computation_node);
                 let input = &layer_data.operands[0];
 
@@ -356,6 +351,37 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 let one_hot_params = OneHotParams::from_config_and_log_K(
                     &OneHotConfig::default(),
                     COS_LOG_TABLE_SIZE,
+                );
+                let h_indices = subprotocols::shout::compute_instruction_h_indices(
+                    &lookup_indices,
+                    &one_hot_params,
+                );
+                MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                    h_indices[*d_idx]
+                        .par_iter()
+                        .map(|&h| h.map(|h| h as u16))
+                        .collect(),
+                    one_hot_params.k_chunk,
+                ))
+            }
+
+            CommittedPolynomial::SinRaD(node_idx, d_idx) => {
+                const SIN_LOG_TABLE_SIZE: usize =
+                    (EIGHT_PI_APPROX as usize).next_power_of_two().ilog2() as usize;
+
+                let computation_node = &model.graph.nodes[node_idx];
+                let Operator::Sin(_) = &computation_node.operator else {
+                    panic!("Expected Sin operator for SinRa committed polynomial");
+                };
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let input = &layer_data.operands[0];
+
+                let (_quotient, remainder) = compute_division(input, EIGHT_PI_APPROX);
+                let lookup_indices: Vec<usize> =
+                    remainder.par_iter().map(|&x| x as usize).collect();
+                let one_hot_params = OneHotParams::from_config_and_log_K(
+                    &OneHotConfig::default(),
+                    SIN_LOG_TABLE_SIZE,
                 );
                 let h_indices = subprotocols::shout::compute_instruction_h_indices(
                     &lookup_indices,

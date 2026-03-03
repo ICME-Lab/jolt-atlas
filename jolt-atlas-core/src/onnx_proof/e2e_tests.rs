@@ -608,6 +608,34 @@ fn test_erf() {
 }
 
 #[test]
+fn test_cos() {
+    let working_dir = "../atlas-onnx-tracer/models/cos/";
+    let input_vector = vec![10, 40, 70, 100];
+    let input = Tensor::new(Some(&input_vector), &[4]).unwrap();
+
+    prove_and_verify(
+        working_dir,
+        &[input],
+        &Default::default(),
+        TestConfig::new().print_model().print_timing(),
+    );
+}
+
+#[test]
+fn test_sin() {
+    let working_dir = "../atlas-onnx-tracer/models/sin/";
+    let input_vector = vec![10, 40, 70, 100];
+    let input = Tensor::new(Some(&input_vector), &[4]).unwrap();
+
+    prove_and_verify(
+        working_dir,
+        &[input],
+        &Default::default(),
+        TestConfig::new().print_model().print_timing(),
+    );
+}
+
+#[test]
 fn test_positional_encoding_trig() {
     let working_dir = "../atlas-onnx-tracer/models/positional_encoding/";
 

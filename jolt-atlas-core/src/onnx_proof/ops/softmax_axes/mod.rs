@@ -43,12 +43,6 @@ use crate::onnx_proof::{
     },
     ProofId, ProofType,
 };
-use onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::SoftmaxAxes,
-    tensor::{ops::nonlinearities::softmax_fixed_128, Tensor},
-};
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
@@ -66,6 +60,12 @@ use joltworks::{
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math, thread::drop_in_background_thread},
+};
+use onnx_tracer::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
+    ops::SoftmaxAxes,
+    tensor::{ops::nonlinearities::softmax_fixed_128, Tensor},
 };
 
 /// Softmax operation implementation details including exponentiation, max, sum, and division.
@@ -293,9 +293,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
     }
 
     #[tracing::instrument(skip_all)]
-    fn generate_trace_cache(
-        &self,
-    ) -> Vec<onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace> {
+    fn generate_trace_cache(&self) -> Vec<onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace> {
         let mut cached_traces = Vec::new();
         for operand_chunk in self
             .operand

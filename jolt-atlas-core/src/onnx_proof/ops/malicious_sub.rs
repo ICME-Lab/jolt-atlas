@@ -6,10 +6,6 @@
 //! (and rejects) such attacks.
 
 use crate::onnx_proof::{malicious_prover::malicious_sumcheck_prove, ProofId, ProofType, Prover};
-use onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
@@ -25,6 +21,10 @@ use joltworks::{
         sumcheck_verifier::SumcheckInstanceParams,
     },
     transcripts::Transcript,
+};
+use onnx_tracer::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
 };
 
 use crate::onnx_proof::ops::sub::SubParams;

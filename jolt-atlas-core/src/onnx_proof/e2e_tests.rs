@@ -3,11 +3,11 @@ use crate::onnx_proof::{
     AtlasVerifierPreprocessing, ONNXProof,
 };
 use ark_bn254::{Bn254, Fr};
+use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
 use onnx_tracer::{
     model::{trace::ModelExecutionIO, Model, RunArgs},
     tensor::Tensor,
 };
-use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde_json::Value;
 use std::{collections::HashMap, fs::File, io::Read, time::Instant};

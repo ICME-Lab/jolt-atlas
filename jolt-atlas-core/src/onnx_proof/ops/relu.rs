@@ -3,7 +3,6 @@ use crate::onnx_proof::{
     ops::OperatorProofTrait,
     ProofId, ProofType, Prover, Verifier,
 };
-use onnx_tracer::{node::ComputationNode, ops::ReLU};
 use common::CommittedPolynomial;
 use joltworks::{
     self,
@@ -17,6 +16,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
+use onnx_tracer::{node::ComputationNode, ops::ReLU};
 
 use common::consts::XLEN;
 

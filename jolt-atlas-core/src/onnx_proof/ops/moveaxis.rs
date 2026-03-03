@@ -1,4 +1,3 @@
-use onnx_tracer::{node::ComputationNode, ops::MoveAxis};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
@@ -9,6 +8,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
+use onnx_tracer::{node::ComputationNode, ops::MoveAxis};
 
 use crate::onnx_proof::{
     ops::{OperatorProofTrait, Prover, Verifier},

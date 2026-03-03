@@ -1,13 +1,4 @@
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
-use onnx_tracer::{
-    model::{
-        trace::{LayerData, Trace},
-        ComputationGraph,
-    },
-    node::ComputationNode,
-    ops::{Gather, Operator},
-    tensor::Tensor,
-};
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
@@ -40,6 +31,15 @@ use joltworks::{
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math, thread::unsafe_allocate_zero_vec},
+};
+use onnx_tracer::{
+    model::{
+        trace::{LayerData, Trace},
+        ComputationGraph,
+    },
+    node::ComputationNode,
+    ops::{Gather, Operator},
+    tensor::Tensor,
 };
 use rayon::{
     iter::{

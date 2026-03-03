@@ -10,14 +10,14 @@
 //! Internal implementation details (helper methods, state structs) live in
 //! [`prover`], [`verifier`], and [`types`] submodules.
 
-use onnx_tracer::{
-    model::trace::{ModelExecutionIO, Trace},
-    tensor::Tensor,
-};
 use joltworks::{
     field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme,
     subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
     utils::errors::ProofVerifyError,
+};
+use onnx_tracer::{
+    model::trace::{ModelExecutionIO, Trace},
+    tensor::Tensor,
 };
 use std::collections::BTreeMap;
 

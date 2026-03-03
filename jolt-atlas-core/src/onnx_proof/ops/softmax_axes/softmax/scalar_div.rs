@@ -1,5 +1,4 @@
 use crate::onnx_proof::ops::softmax_axes::softmax::SoftmaxIndex;
-use onnx_tracer::tensor::{ops::nonlinearities::SoftmaxTrace, Tensor};
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
@@ -19,6 +18,7 @@ use joltworks::{
     },
     transcripts::Transcript,
 };
+use onnx_tracer::tensor::{ops::nonlinearities::SoftmaxTrace, Tensor};
 
 // TODO: Commit to R and also prove R is well formed
 
@@ -267,7 +267,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
 mod tests {
     use super::*;
     use ark_bn254::Fr;
-    use onnx_tracer::tensor::{ops::nonlinearities::softmax_fixed_128, Tensor};
     use common::VirtualPolynomial;
     use joltworks::{
         field::JoltField,
@@ -281,6 +280,7 @@ mod tests {
         subprotocols::sumcheck::Sumcheck,
         transcripts::{Blake2bTranscript, Transcript},
     };
+    use onnx_tracer::tensor::{ops::nonlinearities::softmax_fixed_128, Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

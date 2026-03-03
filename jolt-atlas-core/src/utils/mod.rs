@@ -1,8 +1,8 @@
 //! Utility modules for dimension handling and tensor operations.
 
-use onnx_tracer::tensor::Tensor;
 use common::consts::XLEN;
 use joltworks::utils::{interleave_bits, lookup_bits::LookupBits};
+use onnx_tracer::tensor::Tensor;
 use rayon::prelude::*;
 
 pub mod dims;

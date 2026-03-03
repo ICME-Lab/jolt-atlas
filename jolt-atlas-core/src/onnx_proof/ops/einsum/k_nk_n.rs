@@ -1,7 +1,3 @@
-use onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
@@ -22,6 +18,10 @@ use joltworks::{
     },
     transcripts::Transcript,
     utils::math::Math,
+};
+use onnx_tracer::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
 };
 use rayon::prelude::*;
 use std::array;

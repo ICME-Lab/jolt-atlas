@@ -308,11 +308,11 @@ mod tests {
         AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     };
     use ark_bn254::{Bn254, Fr};
+    use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
     use onnx_tracer::{
         model::{Model, RunArgs},
         tensor::Tensor,
     };
-    use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
     type TestProof = ONNXProof<Fr, Blake2bTranscript, HyperKZG<Bn254>>;

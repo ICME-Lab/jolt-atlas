@@ -5,12 +5,6 @@ use crate::onnx_proof::{
     },
     ProofId, ProofType, Prover, Verifier,
 };
-use onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Div,
-    tensor::Tensor,
-};
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
@@ -33,6 +27,12 @@ use joltworks::{
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
+};
+use onnx_tracer::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
+    ops::Div,
+    tensor::Tensor,
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {

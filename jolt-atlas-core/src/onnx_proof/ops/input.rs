@@ -1,5 +1,4 @@
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier};
-use onnx_tracer::{node::ComputationNode, ops::Input};
 use joltworks::{
     field::JoltField,
     poly::{
@@ -10,6 +9,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
+use onnx_tracer::{node::ComputationNode, ops::Input};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Input {
     #[tracing::instrument(skip_all, name = "Input::prove")]

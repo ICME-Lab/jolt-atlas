@@ -1,8 +1,8 @@
+use common::utils::logging::setup_tracing;
 use onnx_tracer::{
     model::{Model, RunArgs},
     tensor::Tensor,
 };
-use common::utils::logging::setup_tracing;
 use tokenizers::Tokenizer;
 
 /// Runs GPT-2 next-token prediction on real text.

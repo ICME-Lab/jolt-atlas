@@ -1,5 +1,4 @@
 use crate::onnx_proof::ops::softmax_axes::softmax::SoftmaxIndex;
-use onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace;
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
@@ -19,6 +18,7 @@ use joltworks::{
     },
     transcripts::Transcript,
 };
+use onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace;
 use rayon::prelude::*;
 use std::marker::PhantomData;
 

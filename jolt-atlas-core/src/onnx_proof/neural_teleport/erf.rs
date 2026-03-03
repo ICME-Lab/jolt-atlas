@@ -45,8 +45,7 @@ impl ErfTable {
             .collect();
         let indices_tensor = Tensor::new(Some(&indices), &[1, table_size])
             .expect("failed to build erf LUT input tensor");
-        let result =
-            onnx_tracer::tensor::ops::nonlinearities::erffunc(&indices_tensor, SCALE);
+        let result = onnx_tracer::tensor::ops::nonlinearities::erffunc(&indices_tensor, SCALE);
         result.data().to_vec()
     }
 }

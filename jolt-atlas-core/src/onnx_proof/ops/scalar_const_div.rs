@@ -1,10 +1,4 @@
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
-use onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::{Operator, ScalarConstDiv},
-    tensor::Tensor,
-};
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
@@ -25,6 +19,12 @@ use joltworks::{
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
+};
+use onnx_tracer::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
+    ops::{Operator, ScalarConstDiv},
+    tensor::Tensor,
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ScalarConstDiv {

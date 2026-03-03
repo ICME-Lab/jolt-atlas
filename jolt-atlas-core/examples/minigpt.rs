@@ -1,9 +1,9 @@
-use onnx_tracer::{model::Model, tensor::Tensor};
 use common::utils::logging::setup_tracing;
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
 };
+use onnx_tracer::{model::Model, tensor::Tensor};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 fn main() {

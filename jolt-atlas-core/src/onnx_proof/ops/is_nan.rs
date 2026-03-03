@@ -1,5 +1,4 @@
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier};
-use onnx_tracer::{node::ComputationNode, ops::IsNan};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
@@ -11,6 +10,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
+use onnx_tracer::{node::ComputationNode, ops::IsNan};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for IsNan {
     #[tracing::instrument(skip_all, name = "IsNan::prove")]

@@ -10,11 +10,6 @@
 //! The quotient is a virtual polynomial (proven via the lookup operation)
 //! The remainder is range-checked to be in [0, DIVISOR)
 
-use onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    tensor::Tensor,
-};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
@@ -34,6 +29,11 @@ use joltworks::{
     },
     transcripts::Transcript,
     utils::math::Math,
+};
+use onnx_tracer::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
+    tensor::Tensor,
 };
 
 const DEGREE_BOUND: usize = 2;

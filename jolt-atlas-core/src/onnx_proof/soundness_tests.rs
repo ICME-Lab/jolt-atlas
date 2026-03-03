@@ -3,12 +3,6 @@ use crate::onnx_proof::{
     AtlasVerifierPreprocessing, ONNXProof,
 };
 use ark_bn254::{Bn254, Fr};
-use onnx_tracer::{
-    model::{test::ModelBuilder, Model},
-    node::ComputationNode,
-    ops::Operator,
-    tensor::Tensor,
-};
 use common::VirtualPolynomial;
 use joltworks::{
     poly::{
@@ -16,6 +10,12 @@ use joltworks::{
         opening_proof::{OpeningId, SumcheckId},
     },
     transcripts::Blake2bTranscript,
+};
+use onnx_tracer::{
+    model::{test::ModelBuilder, Model},
+    node::ComputationNode,
+    ops::Operator,
+    tensor::Tensor,
 };
 use rand::{rngs::StdRng, SeedableRng};
 

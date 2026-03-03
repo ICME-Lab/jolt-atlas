@@ -1,3 +1,8 @@
+use common::utils::logging::setup_tracing;
+use jolt_atlas_core::onnx_proof::{
+    AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
+    Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
+};
 /// Run with tracing:
 /// ```bash
 /// # Chrome Tracing JSON output (view in chrome://tracing)
@@ -7,11 +12,6 @@
 /// cargo run --example nanoGPT -- --trace-terminal
 /// ```
 use onnx_tracer::{model::Model, tensor::Tensor};
-use common::utils::logging::setup_tracing;
-use jolt_atlas_core::onnx_proof::{
-    AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
-    Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
-};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 fn main() {

@@ -1,6 +1,6 @@
 use ark_bn254::{Bn254, Fr};
-use onnx_tracer::{model::Model, tensor::Tensor};
 use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
+use onnx_tracer::{model::Model, tensor::Tensor};
 
 use crate::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof,

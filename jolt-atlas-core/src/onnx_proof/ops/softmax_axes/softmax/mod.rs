@@ -26,7 +26,6 @@ mod tests {
         SoftmaxIndex,
     };
     use ark_bn254::Fr;
-    use onnx_tracer::tensor::{ops::nonlinearities::softmax_fixed_128, Tensor};
     use common::VirtualPolynomial;
     use joltworks::{
         field::JoltField,
@@ -40,6 +39,7 @@ mod tests {
         subprotocols::{shout, sumcheck::BatchedSumcheck, sumcheck_prover::SumcheckInstanceProver},
         transcripts::{Blake2bTranscript, Transcript},
     };
+    use onnx_tracer::tensor::{ops::nonlinearities::softmax_fixed_128, Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

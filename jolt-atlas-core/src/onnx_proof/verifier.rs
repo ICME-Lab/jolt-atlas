@@ -6,7 +6,6 @@
 
 use super::{types::ProofId, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof};
 use crate::onnx_proof::ops::OperatorVerifier;
-use onnx_tracer::model::{trace::ModelExecutionIO, Model};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
@@ -19,6 +18,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
+use onnx_tracer::model::{trace::ModelExecutionIO, Model};
 use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------

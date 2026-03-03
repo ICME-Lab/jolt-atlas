@@ -6,11 +6,6 @@ use crate::onnx_proof::{
     },
     ProofId, ProofType, Prover, Verifier,
 };
-use onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Rsqrt,
-};
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
@@ -33,6 +28,11 @@ use joltworks::{
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
+};
+use onnx_tracer::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
+    ops::Rsqrt,
 };
 
 /// Fixed-point scaling factor for reciprocal square root calculations.

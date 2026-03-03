@@ -2,7 +2,6 @@ use crate::onnx_proof::{
     ops::{OperatorProofTrait, Prover, Verifier},
     ProofId,
 };
-use onnx_tracer::{node::ComputationNode, ops::Reshape};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
@@ -13,6 +12,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
+use onnx_tracer::{node::ComputationNode, ops::Reshape};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
     #[tracing::instrument(skip_all, name = "Reshape::prove")]

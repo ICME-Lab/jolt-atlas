@@ -1,9 +1,6 @@
 use std::array;
 
 use crate::onnx_proof::ops::softmax_axes::softmax::SoftmaxIndex;
-use onnx_tracer::tensor::ops::nonlinearities::{
-    SoftmaxTrace, EXP_LUT_SCALE_128, EXP_LUT_SIZE, LOG_EXP_LUT_SIZE,
-};
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -27,6 +24,9 @@ use joltworks::{
     },
     transcripts::Transcript,
     utils::thread::unsafe_allocate_zero_vec,
+};
+use onnx_tracer::tensor::ops::nonlinearities::{
+    SoftmaxTrace, EXP_LUT_SCALE_128, EXP_LUT_SIZE, LOG_EXP_LUT_SIZE,
 };
 use rayon::prelude::*;
 

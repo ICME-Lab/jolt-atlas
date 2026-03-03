@@ -1,13 +1,4 @@
 //! Module for constructing malicious provers for ONNX proof experiments. Contains a variant of the main prover that generates proofs for tampered traces, as well as a variant of the sumcheck prover that allows the caller to control how openings are cached (for attack experiments).
-use onnx_tracer::{
-    model::{
-        trace::{ModelExecutionIO, Trace},
-        Model,
-    },
-    node::ComputationNode,
-    ops::Operator,
-    tensor::Tensor,
-};
 use joltworks::{
     field::JoltField,
     poly::{
@@ -16,6 +7,15 @@ use joltworks::{
     },
     subprotocols::{sumcheck::SumcheckInstanceProof, sumcheck_prover::SumcheckInstanceProver},
     transcripts::{AppendToTranscript, Transcript},
+};
+use onnx_tracer::{
+    model::{
+        trace::{ModelExecutionIO, Trace},
+        Model,
+    },
+    node::ComputationNode,
+    ops::Operator,
+    tensor::Tensor,
 };
 
 pub use ark_bn254::{Bn254, Fr};

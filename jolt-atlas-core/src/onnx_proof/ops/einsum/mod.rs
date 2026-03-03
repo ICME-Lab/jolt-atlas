@@ -15,11 +15,6 @@ use crate::{
     },
     utils::dims::EINSUM_REGISTRY,
 };
-use onnx_tracer::{
-    model::{trace::Trace, Model},
-    node::ComputationNode,
-    ops::{Einsum, Operator},
-};
 use joltworks::{
     field::JoltField,
     poly::opening_proof::{OpeningAccumulator, VerifierOpeningAccumulator},
@@ -30,6 +25,11 @@ use joltworks::{
     },
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
+};
+use onnx_tracer::{
+    model::{trace::Trace, Model},
+    node::ComputationNode,
+    ops::{Einsum, Operator},
 };
 
 /// Einstein summation for batch matrix-matrix multiply: bmk,bkn->mbn

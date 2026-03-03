@@ -1,4 +1,3 @@
-use onnx_tracer::{node::ComputationNode, ops::Sum};
 use joltworks::{
     self,
     field::JoltField,
@@ -6,6 +5,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
+use onnx_tracer::{node::ComputationNode, ops::Sum};
 
 use crate::{
     onnx_proof::{

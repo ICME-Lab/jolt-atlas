@@ -1,5 +1,5 @@
-use onnx_tracer::{model::Model, tensor::Tensor};
 use common::utils::logging::setup_tracing;
+use onnx_tracer::{model::Model, tensor::Tensor};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
 fn main() {

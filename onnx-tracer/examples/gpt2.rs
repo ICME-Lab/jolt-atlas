@@ -1,8 +1,8 @@
+use common::utils::logging::setup_tracing;
 use onnx_tracer::{
     model::{Model, RunArgs},
     tensor::Tensor,
 };
-use common::utils::logging::setup_tracing;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
 /// Traces GPT-2 [1] with dummy inputs.

@@ -1,14 +1,5 @@
 use core::panic;
 
-use onnx_tracer::{
-    model::{
-        trace::{LayerData, Trace},
-        ComputationGraph,
-    },
-    node::ComputationNode,
-    ops::Broadcast,
-    tensor::Tensor,
-};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
@@ -21,6 +12,15 @@ use joltworks::{
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
+};
+use onnx_tracer::{
+    model::{
+        trace::{LayerData, Trace},
+        ComputationGraph,
+    },
+    node::ComputationNode,
+    ops::Broadcast,
+    tensor::Tensor,
 };
 
 use crate::onnx_proof::{

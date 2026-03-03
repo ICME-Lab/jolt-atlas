@@ -1,14 +1,14 @@
-use onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Operator,
-    tensor::Tensor,
-};
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
     poly::opening_proof::{OpeningAccumulator, SumcheckId},
     utils::lookup_bits::LookupBits,
+};
+use onnx_tracer::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
+    ops::Operator,
+    tensor::Tensor,
 };
 
 use crate::{

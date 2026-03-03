@@ -5,7 +5,6 @@
 //! efficiently verify that remainder values are within valid bounds using lookup tables.
 
 use crate::onnx_proof::range_checking::range_check_operands::RangeCheckingOperandsTrait;
-use onnx_tracer::{model::trace::Trace, node::ComputationNode};
 use common::{
     consts::{LOG_K, XLEN},
     CommittedPolynomial, VirtualPolynomial,
@@ -31,6 +30,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::math::Math,
 };
+use onnx_tracer::{model::trace::Trace, node::ComputationNode};
 
 /// Range-checking operands definitions for operations requiring bounds-checking.
 ///

@@ -27,6 +27,14 @@ use crate::{
     },
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
 };
+use common::CommittedPolynomial;
+use joltworks::{
+    config::{OneHotConfig, OneHotParams},
+    field::JoltField,
+    poly::{multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial},
+    subprotocols,
+    utils::{lookup_bits::LookupBits, math::Math},
+};
 use onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
@@ -38,14 +46,6 @@ use onnx_tracer::{
         ops::nonlinearities::{softmax_fixed_128, SoftmaxTrace, LOG_EXP_LUT_SIZE},
         Tensor,
     },
-};
-use common::CommittedPolynomial;
-use joltworks::{
-    config::{OneHotConfig, OneHotParams},
-    field::JoltField,
-    poly::{multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial},
-    subprotocols,
-    utils::{lookup_bits::LookupBits, math::Math},
 };
 use rayon::prelude::*;
 

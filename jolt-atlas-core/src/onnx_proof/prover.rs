@@ -12,13 +12,6 @@ use crate::onnx_proof::{
     ops::{NodeCommittedPolynomials, OperatorProver},
     witness::WitnessGenerator,
 };
-use onnx_tracer::{
-    model::{
-        trace::{LayerData, ModelExecutionIO, Trace},
-        Model,
-    },
-    node::ComputationNode,
-};
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
@@ -31,6 +24,13 @@ use joltworks::{
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::math::Math,
+};
+use onnx_tracer::{
+    model::{
+        trace::{LayerData, ModelExecutionIO, Trace},
+        Model,
+    },
+    node::ComputationNode,
 };
 use std::collections::BTreeMap;
 

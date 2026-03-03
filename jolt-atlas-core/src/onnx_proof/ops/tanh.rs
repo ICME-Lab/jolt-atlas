@@ -13,15 +13,6 @@ use crate::onnx_proof::{
     },
     ProofId, ProofType, Prover, Verifier,
 };
-use onnx_tracer::{
-    model::{
-        trace::{LayerData, Trace},
-        ComputationGraph,
-    },
-    node::{handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE, ComputationNode},
-    ops::{Operator, Tanh},
-    tensor::Tensor,
-};
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -47,6 +38,15 @@ use joltworks::{
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, thread::unsafe_allocate_zero_vec},
+};
+use onnx_tracer::{
+    model::{
+        trace::{LayerData, Trace},
+        ComputationGraph,
+    },
+    node::{handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE, ComputationNode},
+    ops::{Operator, Tanh},
+    tensor::Tensor,
 };
 use rayon::{
     iter::{

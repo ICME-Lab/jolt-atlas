@@ -1,9 +1,4 @@
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
-use onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Iff,
-};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
@@ -24,6 +19,11 @@ use joltworks::{
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
+};
+use onnx_tracer::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
+    ops::Iff,
 };
 
 use crate::impl_standard_sumcheck_proof_api;

@@ -2,7 +2,7 @@ use crate::onnx_proof::{
     ops::{OperatorProofTrait, Prover, Verifier},
     ProofId,
 };
-use atlas_onnx_tracer::{node::ComputationNode, ops::Reshape};
+use onnx_tracer::{node::ComputationNode, ops::Reshape};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
@@ -154,7 +154,7 @@ impl<F: JoltField> ReshapeVerifier<F> {
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use onnx_tracer::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };

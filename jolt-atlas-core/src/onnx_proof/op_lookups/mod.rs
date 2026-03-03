@@ -6,7 +6,7 @@
 //! gamma batching for efficiency.
 
 use crate::utils::compute_lookup_indices_from_operands;
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::Operator,

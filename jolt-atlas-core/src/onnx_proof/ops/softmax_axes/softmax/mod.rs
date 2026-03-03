@@ -26,7 +26,7 @@ mod tests {
         SoftmaxIndex,
     };
     use ark_bn254::Fr;
-    use atlas_onnx_tracer::tensor::{ops::nonlinearities::softmax_fixed_128, Tensor};
+    use onnx_tracer::tensor::{ops::nonlinearities::softmax_fixed_128, Tensor};
     use common::VirtualPolynomial;
     use joltworks::{
         field::JoltField,

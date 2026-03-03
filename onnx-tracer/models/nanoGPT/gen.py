@@ -95,7 +95,7 @@ class MLP(nn.Module):
 
     def forward(self, x):
         x = self.c_fc(x)
-        x = F.relu(x)  # Replace GELU with ReLU
+        x = new_gelu(x)
         x = self.c_proj(x)
         x = self.dropout(x)
         return x

@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 # Internal
-atlas-onnx-tracer.workspace = true
+onnx-tracer.workspace = true
 common.workspace = true
 joltworks.workspace = true
 

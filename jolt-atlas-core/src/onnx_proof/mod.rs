@@ -10,7 +10,7 @@
 //! Internal implementation details (helper methods, state structs) live in
 //! [`prover`], [`verifier`], and [`types`] submodules.
 
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::trace::{ModelExecutionIO, Trace},
     tensor::Tensor,
 };

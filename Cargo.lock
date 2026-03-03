@@ -262,31 +262,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
-name = "atlas-onnx-tracer"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "colored",
- "common",
- "env_logger 0.10.2",
- "getrandom 0.2.17",
- "maybe-rayon",
- "once_cell",
- "rand 0.8.5",
- "rayon",
- "regex",
- "serde",
- "serde_json",
- "tabled",
- "thiserror 1.0.69",
- "tokenizers",
- "tracing",
- "tracing-chrome",
- "tracing-subscriber",
- "tract-onnx",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1166,7 +1141,6 @@ dependencies = [
  "ark-bn254",
  "ark-serialize",
  "ark-std",
- "atlas-onnx-tracer",
  "common",
  "derive_more",
  "itertools 0.10.5",
@@ -1174,6 +1148,7 @@ dependencies = [
  "num",
  "num-derive",
  "num-traits",
+ "onnx-tracer",
  "rand 0.8.5",
  "rand_core 0.6.4",
  "rayon",
@@ -1216,7 +1191,6 @@ dependencies = [
  "ark-ff",
  "ark-serialize",
  "ark-std",
- "atlas-onnx-tracer",
  "blake2",
  "common",
  "derive_more",
@@ -1229,6 +1203,7 @@ dependencies = [
  "num",
  "num-derive",
  "num-traits",
+ "onnx-tracer",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
@@ -1685,6 +1660,31 @@ checksum = "c7f86c6eef3d6df15f23bcfb6af487cbd2fed4e5581d58d5bf1f5f8b7f6727dc"
 dependencies = [
  "cc",
  "pkg-config",
+]
+
+[[package]]
+name = "onnx-tracer"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "colored",
+ "common",
+ "env_logger 0.10.2",
+ "getrandom 0.2.17",
+ "maybe-rayon",
+ "once_cell",
+ "rand 0.8.5",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_json",
+ "tabled",
+ "thiserror 1.0.69",
+ "tokenizers",
+ "tracing",
+ "tracing-chrome",
+ "tracing-subscriber",
+ "tract-onnx",
 ]
 
 [[package]]

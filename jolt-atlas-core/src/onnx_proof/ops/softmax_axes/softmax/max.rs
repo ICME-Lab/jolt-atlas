@@ -1,5 +1,5 @@
 use crate::onnx_proof::ops::softmax_axes::softmax::SoftmaxIndex;
-use atlas_onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace;
+use onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace;
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,

@@ -308,7 +308,7 @@ mod tests {
         AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     };
     use ark_bn254::{Bn254, Fr};
-    use atlas_onnx_tracer::{
+    use onnx_tracer::{
         model::{Model, RunArgs},
         tensor::Tensor,
     };
@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn test_proof_serialization_roundtrip_transformer() {
         // --- Setup ---
-        let working_dir = "../atlas-onnx-tracer/models/transformer/";
+        let working_dir = "../onnx-tracer/models/transformer/";
         let model = Model::load(&format!("{working_dir}network.onnx"), &RunArgs::default());
 
         let pp = AtlasSharedPreprocessing::preprocess(model);

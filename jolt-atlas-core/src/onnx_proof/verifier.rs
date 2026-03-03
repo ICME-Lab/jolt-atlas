@@ -6,7 +6,7 @@
 
 use super::{types::ProofId, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof};
 use crate::onnx_proof::ops::OperatorVerifier;
-use atlas_onnx_tracer::model::{trace::ModelExecutionIO, Model};
+use onnx_tracer::model::{trace::ModelExecutionIO, Model};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,

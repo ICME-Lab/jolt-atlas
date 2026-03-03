@@ -1,7 +1,7 @@
 use std::array;
 
 use crate::onnx_proof::ops::softmax_axes::softmax::SoftmaxIndex;
-use atlas_onnx_tracer::tensor::ops::nonlinearities::{
+use onnx_tracer::tensor::ops::nonlinearities::{
     SoftmaxTrace, EXP_LUT_SCALE_128, EXP_LUT_SIZE, LOG_EXP_LUT_SIZE,
 };
 use common::{CommittedPolynomial, VirtualPolynomial};

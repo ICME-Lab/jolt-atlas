@@ -6,7 +6,7 @@
 //! (and rejects) such attacks.
 
 use crate::onnx_proof::{malicious_prover::malicious_sumcheck_prove, ProofId, ProofType, Prover};
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
 };

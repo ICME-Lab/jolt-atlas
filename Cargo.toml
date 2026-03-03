@@ -15,12 +15,11 @@ license-file = "LICENSE"
 keywords = ["SNARK", "cryptography", "proofs", "zkML"]
 
 [workspace]
-members = ["jolt-atlas-core", "atlas-onnx-tracer", "common", "joltworks"]
-exclude = ["onnx-tracer", "zkml-jolt-core"]
+members = ["jolt-atlas-core", "onnx-tracer", "common", "joltworks"]
 
 [workspace.dependencies]
 # Internal
-atlas-onnx-tracer = { path = "./atlas-onnx-tracer" }
+onnx-tracer = { path = "./onnx-tracer" }
 common = { path = "./common" }
 joltworks = { path = "./joltworks" }
 

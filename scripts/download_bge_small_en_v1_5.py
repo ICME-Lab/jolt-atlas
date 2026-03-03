@@ -6,7 +6,7 @@ The script:
   2. Exports BAAI/bge-small-en-v1.5 to ONNX via `optimum-cli`.
   3. Renames model.onnx -> network.onnx (convention used by other models).
 
-Output directory: atlas-onnx-tracer/models/bge-small-en-v1.5/
+Output directory: onnx-tracer/models/bge-small-en-v1.5/
 """
 
 import subprocess
@@ -15,7 +15,7 @@ from pathlib import Path
 
 MODEL_ID = "BAAI/bge-small-en-v1.5"
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MODEL_DIR = REPO_ROOT / "atlas-onnx-tracer" / "models" / "bge-small-en-v1.5"
+MODEL_DIR = REPO_ROOT / "onnx-tracer" / "models" / "bge-small-en-v1.5"
 
 
 def ensure_packages():

@@ -5,7 +5,7 @@ use crate::onnx_proof::{
     },
     ProofId, ProofType, Prover, Verifier,
 };
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::Div,
@@ -456,7 +456,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use onnx_tracer::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };

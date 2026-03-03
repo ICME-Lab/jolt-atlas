@@ -6,7 +6,7 @@ use crate::{
 use allocative::Allocative;
 use ark_ff::biginteger::S128;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Valid};
-use atlas_onnx_tracer::tensor::Tensor;
+use onnx_tracer::tensor::Tensor;
 use rayon::prelude::*;
 use strum_macros::EnumIter;
 

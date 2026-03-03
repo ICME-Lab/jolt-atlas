@@ -1,6 +1,6 @@
 //! Utility modules for dimension handling and tensor operations.
 
-use atlas_onnx_tracer::tensor::Tensor;
+use onnx_tracer::tensor::Tensor;
 use common::consts::XLEN;
 use joltworks::utils::{interleave_bits, lookup_bits::LookupBits};
 use rayon::prelude::*;

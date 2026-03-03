@@ -1,282 +1,153 @@
-use crate::{
-    ops::lookup::LookupOp,
-    tensor::{Tensor, TensorError, TensorType},
-    trace_types::ONNXOpcode,
-    utils::parsing::quantize_tensor,
-};
-use log::warn;
+//! Operator definitions and implementations for ONNX operations.
+
+use crate::{tensor::Tensor, utils::f32::F32};
 use serde::{Deserialize, Serialize};
-use std::{any::Any, error::Error};
 
-///
-pub mod base;
-///
-pub mod hybrid;
-///
-pub mod lookup;
-///
-pub mod poly;
+/// Element-wise addition operator.
+pub mod add;
+/// Logical AND operator.
+pub mod and;
+/// Broadcast operator for expanding tensor dimensions.
+pub mod broadcast;
+/// Clamp operator for limiting values to a range.
+pub mod clamp;
+/// Constant tensor operator.
+pub mod constant;
+/// Element-wise cube (x^3) operator.
+pub mod cube;
+/// Element-wise division operator.
+pub mod div;
+/// Einstein summation (einsum) operator for tensor contractions.
+pub mod einsum;
+/// Error function (erf) operator.
+pub mod erf;
+/// Gather operator for indexing and embedding lookups.
+pub mod gather;
+/// Identity (pass-through) operator.
+pub mod identity;
+/// Conditional if-then-else operator.
+pub mod iff;
+/// Input placeholder operator.
+pub mod input;
+/// IsNaN check operator.
+pub mod is_nan;
+/// MoveAxis operator for transposing dimensions.
+pub mod move_axis;
+/// Element-wise multiplication operator.
+pub mod mul;
+/// Element-wise negation operator.
+pub mod neg;
+/// ReLU activation operator.
+pub mod relu;
+/// Reshape operator for changing tensor dimensions.
+pub mod reshape;
+/// Reciprocal square root operator.
+pub mod rsqrt;
+/// Division by a scalar constant operator.
+pub mod scalar_const_div;
+/// Softmax activation operator.
+pub mod softmax;
+/// Element-wise square (x^2) operator.
+pub mod square;
+/// Element-wise subtraction operator.
+pub mod sub;
+/// Sum reduction operator.
+pub mod sum;
+/// Hyperbolic tangent activation operator.
+pub mod tanh;
 
-/// A struct representing the result of a forward pass.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+macro_rules! define_operators {
+    // Internal rule to generate struct definition
+    (@struct $operator:ident) => {
+        #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+        #[doc = concat!(stringify!($operator), " operator.")]
+        pub struct $operator;
+    };
+    (@struct $operator:ident { $($field:ident : $ty:ty),* $(,)? }) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[doc = concat!(stringify!($operator), " operator.")]
+        pub struct $operator {
+            $(
+                #[doc = concat!(stringify!($field), " field.")]
+                pub $field: $ty
+            ),*
+        }
+    };
+    (@struct $operator:ident ( $($ty:ty),* $(,)? )) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[doc = concat!(stringify!($operator), " operator.")]
+        pub struct $operator($(pub $ty),*);
+    };
 
-pub struct ForwardResult<F: TensorType + PartialOrd> {
-    pub(crate) output: Tensor<F>,
-    pub(crate) intermediate_lookups: Vec<Tensor<i32>>,
+    // Main entry point
+    (operators: [$($operator:ident $({ $($field:ident : $ty:ty),* $(,)? })? $(( $($tuple_ty:ty),* $(,)? ))?),* $(,)?]) => {
+        $(
+            define_operators!(@struct $operator $({ $($field: $ty),* })? $(( $($tuple_ty),* ))?);
+        )*
+
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        /// An enum representing all supported ONNX operators.
+        pub enum Operator {
+            $(
+                #[doc = concat!(stringify!($operator), " variant.")]
+                $operator($operator),
+            )*
+        }
+
+        impl Operator {
+            /// Get a reference to the inner operator as a trait object.
+            pub fn inner(&self) -> &dyn Op {
+                match self {
+                    $(
+                        Operator::$operator(op) => op,
+                    )*
+                }
+            }
+        }
+    };
 }
 
-// /// A trait representing operations that can be represented as constraints in a
-// circuit.
-pub trait Op<F: TensorType + PartialOrd>: std::fmt::Debug + Send + Sync + Any {
-    /// Matches a [Op] to an operation in the `tensor::ops` module.     
-    fn f(&self, x: &[Tensor<F>]) -> Result<ForwardResult<F>, TensorError>;
-    /// Returns a string representation of the operation.
-    fn as_string(&self) -> String;
+define_operators! {
+    operators: [
+        Add, And, Clamp { axes: usize, max_spread: i32 },
+        Constant(Tensor<i32>), Cube, Div, Einsum { equation: String },
+        Erf { scale: F32, tau: i32, log_table: usize }, Gather { axis: usize }, Identity, Iff, Input,
+        IsNan { out_dims: Vec<usize> }, MoveAxis { source: usize, destination: usize },
+        Mul, Neg, Broadcast { shape: Vec<usize> }, ReLU, Reshape { shape:Vec<usize> },
+        Rsqrt { scale: F32 }, ScalarConstDiv {divisor: i32}, SoftmaxAxes { axes: usize, scale: F32 }, Square,
+        Sub, Sum { axes: Vec<usize> }, Tanh { scale: F32, tau: i32, log_table: usize },
+    ]
+}
 
-    /// Returns the scale of the output of the operation.
-    fn out_scale(&self, _: Vec<crate::Scale>) -> Result<crate::Scale, Box<dyn Error>>;
+/// Trait for all operators - defines how to execute the operation on input tensors.
+pub trait Op {
+    /// Execute the operator on the given input tensors.
+    fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32>;
 
-    /// Do any of the inputs to this op require homogenous input scales?
-    fn requires_homogenous_input_scales(&self) -> Vec<usize> {
-        vec![]
-    }
-
-    /// Does this op's inputs need to be equal to out_dims?
+    /// Returns true if this operator requires all inputs to have matching shapes.
+    /// When true, broadcast nodes will be automatically inserted before this operator.
     fn requires_shape_equality(&self) -> bool {
         false
     }
 
-    /// Returns the lookups required by the operation.
-    fn required_lookups(&self) -> Vec<LookupOp> {
-        vec![]
-    }
-
-    /// Returns true if the operation is an input.
-    fn is_input(&self) -> bool {
-        false
-    }
-
-    /// Returns true if the operation is a constant.
-    fn is_constant(&self) -> bool {
-        false
-    }
-
-    /// Boxes and clones
-    fn clone_dyn(&self) -> Box<dyn Op<F>>;
-
-    /// Returns a reference to the Any trait.
-    fn as_any(&self) -> &dyn Any;
-}
-
-impl<F: TensorType + PartialOrd> Clone for Box<dyn Op<F>> {
-    fn clone(&self) -> Self {
-        self.clone_dyn()
+    /// Returns the scale multiplier for rebasing after this operation.
+    /// - `None` means no rebase is needed (e.g., Add, Sub)
+    /// - `Some(1)` means divide by `1 << scale` (e.g., Mul, Square)
+    /// - `Some(2)` means divide by `1 << (scale * 2)` (e.g., Cube)
+    ///
+    /// This is used to maintain fixed-point representation after operations
+    /// that increase the scale factor.
+    fn rebase_scale_factor(&self) -> Option<usize> {
+        None
     }
 }
 
-///
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum InputType {
-    ///
-    Bool,
-    ///
-    F16,
-    ///
-    F32,
-    ///
-    F64,
-    ///
-    Int,
-    ///
-    TDim,
-}
-
-impl InputType {
-    ///
-    pub fn is_integer(&self) -> bool {
-        matches!(self, InputType::Int | InputType::TDim | InputType::Bool)
+impl Op for Operator {
+    fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
+        self.inner().f(inputs)
     }
 
-    ///
-    pub fn roundtrip<T: num::ToPrimitive + num::FromPrimitive + Clone>(&self, input: &mut T) {
-        match self {
-            InputType::Bool => {
-                let boolean_input = input.clone().to_i64().unwrap();
-                assert!(boolean_input == 0 || boolean_input == 1);
-                *input = T::from_i64(boolean_input).unwrap();
-            }
-            InputType::F16 => {
-                // TODO: implement f16
-                let f32_input = input.clone().to_f32().unwrap();
-                *input = T::from_f32(f32_input).unwrap();
-            }
-            InputType::F32 => {
-                let f32_input = input.clone().to_f32().unwrap();
-                *input = T::from_f32(f32_input).unwrap();
-            }
-            InputType::F64 => {
-                let f64_input = input.clone().to_f64().unwrap();
-                *input = T::from_f64(f64_input).unwrap();
-            }
-            InputType::Int | InputType::TDim => {
-                let int_input = input.clone().to_i128().unwrap();
-                *input = T::from_i128(int_input).unwrap();
-            }
-        }
-    }
-}
-
-///
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Input {
-    ///
-    pub scale: crate::Scale,
-    ///
-    pub datum_type: InputType,
-}
-
-impl From<&Input> for ONNXOpcode {
-    fn from(_: &Input) -> Self {
-        ONNXOpcode::Input
-    }
-}
-
-impl<F: TensorType + PartialOrd> Op<F> for Input {
-    fn out_scale(&self, _: Vec<crate::Scale>) -> Result<crate::Scale, Box<dyn Error>> {
-        Ok(self.scale)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn f(&self, x: &[Tensor<F>]) -> Result<ForwardResult<F>, TensorError> {
-        Ok(ForwardResult {
-            output: x[0].clone(),
-            intermediate_lookups: vec![],
-        })
-    }
-
-    fn as_string(&self) -> String {
-        "Input".into()
-    }
-
-    fn is_input(&self) -> bool {
-        true
-    }
-
-    fn clone_dyn(&self) -> Box<dyn Op<F>> {
-        Box::new(self.clone()) // Forward to the derive(Clone) impl
-    }
-}
-
-/// An unknown operation.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Unknown;
-
-impl<F: TensorType + PartialOrd> Op<F> for Unknown {
-    fn out_scale(&self, _: Vec<crate::Scale>) -> Result<crate::Scale, Box<dyn Error>> {
-        Ok(0)
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn f(&self, _: &[Tensor<F>]) -> Result<ForwardResult<F>, TensorError> {
-        Err(TensorError::WrongMethod)
-    }
-
-    fn as_string(&self) -> String {
-        "Unknown".into()
-    }
-
-    fn clone_dyn(&self) -> Box<dyn Op<F>> {
-        Box::new(self.clone()) // Forward to the derive(Clone) impl
-    }
-}
-
-impl From<&Unknown> for ONNXOpcode {
-    fn from(_: &Unknown) -> Self {
-        warn!("Unimplemented operation encountered, returning Noop");
-        ONNXOpcode::Noop
-    }
-}
-
-///
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct Constant<F: TensorType + PartialOrd> {
-    ///
-    pub quantized_values: Tensor<F>,
-    ///
-    pub raw_values: Tensor<f32>,
-}
-
-impl<F: TensorType + PartialOrd> From<&Constant<F>> for ONNXOpcode {
-    fn from(_: &Constant<F>) -> Self {
-        ONNXOpcode::Constant
-    }
-}
-
-impl<F: TensorType + PartialOrd + From<i32>> Constant<F> {
-    ///
-    pub fn new(mut quantized_values: Tensor<F>, mut raw_values: Tensor<f32>) -> Self {
-        // dims.len == 1 for both quantized and raw values, then reshape to [1, dims[0]]
-        // HACK: We need this as currently einsum will panic if the input tensor is not 2D.
-        if quantized_values.dims().len() == 1 {
-            let mut dims = quantized_values.dims().to_vec();
-            dims.insert(0, 1);
-            quantized_values.reshape(&dims).unwrap();
-            raw_values.reshape(&dims).unwrap();
-        }
-        // Otherwise, just return the original tensors
-        Self {
-            quantized_values,
-            raw_values,
-        }
-    }
-    /// Rebase the scale of the constant
-    pub fn rebase_scale(&mut self, new_scale: crate::Scale) -> Result<(), Box<dyn Error>> {
-        self.quantized_values = quantize_tensor(self.raw_values.clone(), new_scale)?
-            .into_iter()
-            .map(|x| x.into())
-            .collect();
-        Ok(())
-    }
-
-    /// Empty raw value
-    pub fn empty_raw_value(&mut self) {
-        self.raw_values = Tensor::new(None, &[0]).unwrap();
-    }
-}
-
-impl<F: TensorType + PartialOrd + Send + Sync> Op<F> for Constant<F> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn f(&self, _: &[Tensor<F>]) -> Result<ForwardResult<F>, TensorError> {
-        let output = self.quantized_values.clone();
-
-        Ok(ForwardResult {
-            output,
-            intermediate_lookups: vec![],
-        })
-    }
-
-    fn as_string(&self) -> String {
-        format!(
-            "CONST (scale={})",
-            self.quantized_values.scale().unwrap_or(1)
-        )
-    }
-
-    fn clone_dyn(&self) -> Box<dyn Op<F>> {
-        Box::new(self.clone()) // Forward to the derive(Clone) impl
-    }
-
-    fn out_scale(&self, _: Vec<crate::Scale>) -> Result<crate::Scale, Box<dyn Error>> {
-        Ok(self.quantized_values.scale().unwrap())
-    }
-
-    fn is_constant(&self) -> bool {
-        true
+    fn requires_shape_equality(&self) -> bool {
+        self.inner().requires_shape_equality()
     }
 }

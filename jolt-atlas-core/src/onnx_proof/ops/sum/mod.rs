@@ -1,4 +1,4 @@
-use atlas_onnx_tracer::{node::ComputationNode, ops::Sum};
+use onnx_tracer::{node::ComputationNode, ops::Sum};
 use joltworks::{
     self,
     field::JoltField,

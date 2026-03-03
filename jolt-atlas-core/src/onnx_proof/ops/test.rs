@@ -1,5 +1,5 @@
 use ark_bn254::{Bn254, Fr};
-use atlas_onnx_tracer::{model::Model, tensor::Tensor};
+use onnx_tracer::{model::Model, tensor::Tensor};
 use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
 
 use crate::onnx_proof::{

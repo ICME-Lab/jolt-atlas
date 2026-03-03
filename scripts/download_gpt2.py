@@ -6,7 +6,7 @@ The script:
   2. Exports GPT-2 to ONNX via `optimum-cli`.
   3. Renames model.onnx → network.onnx (convention used by other models).
 
-Output directory: atlas-onnx-tracer/models/gpt2/
+Output directory: onnx-tracer/models/gpt2/
 """
 
 import subprocess
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MODEL_DIR = REPO_ROOT / "atlas-onnx-tracer" / "models" / "gpt2"
+MODEL_DIR = REPO_ROOT / "onnx-tracer" / "models" / "gpt2"
 
 
 def ensure_packages():

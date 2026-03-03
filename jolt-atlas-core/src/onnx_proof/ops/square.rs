@@ -2,7 +2,7 @@ use crate::{
     impl_standard_params, impl_standard_sumcheck_proof_api,
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
 };
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::Square,
@@ -170,7 +170,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SquareVerif
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     fn square_model(T: usize) -> Model {

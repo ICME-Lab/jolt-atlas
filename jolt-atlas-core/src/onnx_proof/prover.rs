@@ -12,7 +12,7 @@ use crate::onnx_proof::{
     ops::{NodeCommittedPolynomials, OperatorProver},
     witness::WitnessGenerator,
 };
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::{
         trace::{LayerData, ModelExecutionIO, Trace},
         Model,

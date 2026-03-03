@@ -92,7 +92,7 @@ pub mod tanh;
 #[cfg(test)]
 mod test;
 
-use atlas_onnx_tracer::{node::ComputationNode, ops::Operator};
+use onnx_tracer::{node::ComputationNode, ops::Operator};
 // Re-export handler types for convenient access
 
 // Re-export operator param/prover/verifier types for the handler macro

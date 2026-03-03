@@ -1,6 +1,6 @@
 use core::panic;
 
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
         ComputationGraph,
@@ -286,7 +286,7 @@ fn split_broadcast_vars<F: JoltField>(
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     fn broadcast_model(input_shape: &[usize], output_shape: &[usize]) -> Model {

@@ -1,4 +1,4 @@
-use atlas_onnx_tracer::{node::ComputationNode, ops::MoveAxis};
+use onnx_tracer::{node::ComputationNode, ops::MoveAxis};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
@@ -167,9 +167,9 @@ impl<F: JoltField> MoveAxisVerifier<F> {
 fn permute_challenge_groups<F: JoltField>(
     output_dims: &[usize],
     r_output: &[F::Challenge],
-    operator: &atlas_onnx_tracer::ops::Operator,
+    operator: &onnx_tracer::ops::Operator,
 ) -> Vec<F::Challenge> {
-    use atlas_onnx_tracer::ops::Operator;
+    use onnx_tracer::ops::Operator;
 
     let (source, destination) = match operator {
         Operator::MoveAxis(op) => (op.source, op.destination),
@@ -198,7 +198,7 @@ fn permute_challenge_groups<F: JoltField>(
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     fn moveaxis_model(input_shape: &[usize], source: usize, destination: usize) -> Model {

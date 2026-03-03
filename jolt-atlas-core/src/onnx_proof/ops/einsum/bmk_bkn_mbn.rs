@@ -1,6 +1,6 @@
 use std::array;
 
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
 };
@@ -312,7 +312,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BmkBknMbnVe
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     fn bmk_bkn_mbn_model(rng: &mut StdRng, b: usize, m: usize, k: usize, n: usize) -> Model {

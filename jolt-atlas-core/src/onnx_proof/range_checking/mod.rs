@@ -5,7 +5,7 @@
 //! efficiently verify that remainder values are within valid bounds using lookup tables.
 
 use crate::onnx_proof::range_checking::range_check_operands::RangeCheckingOperandsTrait;
-use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode};
+use onnx_tracer::{model::trace::Trace, node::ComputationNode};
 use common::{
     consts::{LOG_K, XLEN},
     CommittedPolynomial, VirtualPolynomial,

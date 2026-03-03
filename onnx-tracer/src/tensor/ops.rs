@@ -230,6 +230,49 @@ pub fn and<
     a.clone() * b.clone()
 }
 
+/// Elementwise applies bitwise AND to two tensors.
+/// # Arguments
+/// * `tensor1` - Tensor
+/// * `tensor2` - Tensor
+/// # Examples
+/// ```
+/// use onnx_tracer::tensor::Tensor;
+/// use onnx_tracer::tensor::ops::and2;
+/// let tensor1 = Tensor::<i32>::new(
+///  Some(&[5, 3, 7, 15, 12, 8]),
+/// &[2, 3],
+/// ).unwrap();
+/// let tensor2 = Tensor::<i32>::new(
+/// Some(&[3, 5, 6, 10, 9, 7]),
+/// &[2, 3],
+/// ).unwrap();
+/// let result = and2(&tensor1, &tensor2).unwrap();
+/// let expected = Tensor::<i32>::new(Some(&[1, 1, 6, 10, 8, 0]), &[2, 3]).unwrap();
+/// assert_eq!(result, expected);
+/// ```
+pub fn and2<
+    T: TensorType + std::ops::BitAnd<Output = T> + Copy + std::marker::Send + std::marker::Sync,
+>(
+    tensor1: &Tensor<T>,
+    tensor2: &Tensor<T>,
+) -> Result<Tensor<T>, TensorError> {
+    if tensor1.dims() != tensor2.dims() {
+        return Err(TensorError::DimMismatch(format!(
+            "and2, t1.dims: {:?}, t2.dims: {:?}",
+            tensor1.dims().to_vec(),
+            tensor2.dims().to_vec(),
+        )));
+    }
+
+    let result: Vec<T> = tensor1
+        .par_iter()
+        .zip(tensor2.par_iter())
+        .map(|(a, b)| *a & *b)
+        .collect();
+
+    Tensor::new(Some(&result), tensor1.dims())
+}
+
 /// Elementwise applies equals to two tensors of integers.
 /// # Arguments
 /// * `a` - Tensor
@@ -527,7 +570,7 @@ pub fn resize<T: TensorType + Send + Sync>(
 ///   Some(&[2, 3, 2, 1, 1, 1]),
 /// &[3, 2],
 /// ).unwrap();
-/// let result = einsum("ij,jk->ik", &[x, k]).unwrap();
+/// let result = einsum("ij,jk->ik", &[&x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[8, 9, 5, 5]), &[2, 2]).unwrap();
 /// assert_eq!(result, expected);
 ///
@@ -540,7 +583,7 @@ pub fn resize<T: TensorType + Send + Sync>(
 ///    Some(&[1, 2, 3, 1, 2, 3, 1, 2, 3]),
 ///  &[3, 3],
 /// ).unwrap();
-/// let result = einsum("ij,ij->ij", &[x, k]).unwrap();
+/// let result = einsum("ij,ij->ij", &[&x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[1, 4, 9, 2, 6, 12, 3, 8, 15]), &[3, 3]).unwrap();
 /// assert_eq!(result, expected);
 ///
@@ -554,7 +597,7 @@ pub fn resize<T: TensorType + Send + Sync>(
 ///    Some(&[1, 2, 3, 1, 2, 3, 1, 2, 3]),
 ///  &[3, 3],
 /// ).unwrap();
-/// let result = einsum("ik,jk->ij", &[x, k]).unwrap();
+/// let result = einsum("ik,jk->ij", &[&x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[14, 14, 14, 20, 20, 20, 26, 26, 26]), &[3, 3]).unwrap();
 /// assert_eq!(result, expected);
 ///
@@ -567,7 +610,7 @@ pub fn resize<T: TensorType + Send + Sync>(
 ///    Some(&[1, 2, 3, 1, 2, 3, 1, 2, 3]),
 ///  &[3, 3],
 /// ).unwrap();
-/// let result = einsum("ik,ik->i", &[x, k]).unwrap();
+/// let result = einsum("ik,ik->i", &[&x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[14, 20, 26]), &[3]).unwrap();
 /// assert_eq!(result, expected);
 ///
@@ -581,7 +624,7 @@ pub fn resize<T: TensorType + Send + Sync>(
 ///    Some(&[1, 2, 3]),
 ///  &[3],
 /// ).unwrap();
-/// let result = einsum("i,i->", &[x, k]).unwrap();
+/// let result = einsum("i,i->", &[&x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[14]), &[1]).unwrap();
 /// assert_eq!(result, expected);
 ///
@@ -595,7 +638,7 @@ pub fn resize<T: TensorType + Send + Sync>(
 ///    Some(&[4, 5, 7, 8]),
 ///  &[2, 2],
 /// ).unwrap();
-/// let result = einsum("anm,bm->ba", &[x, k]).unwrap();
+/// let result = einsum("anm,bm->ba", &[&x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[68, 80, 95, 113, 134, 158]), &[2, 3]).unwrap();
 /// assert_eq!(result, expected);
 ///
@@ -613,7 +656,7 @@ pub fn resize<T: TensorType + Send + Sync>(
 ///  &[2, 3],
 /// ).unwrap();
 ///
-/// let result = einsum("bn,anm,bm->ba", &[z, x, k]).unwrap();
+/// let result = einsum("bn,anm,bm->ba", &[&z, &x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[390, 414, 534, 994, 1153, 1384]), &[2, 3]).unwrap();
 /// assert_eq!(result, expected);
 ///
@@ -627,7 +670,7 @@ pub fn resize<T: TensorType + Send + Sync>(
 ///    Some(&[4, 5, 7, 8]),
 ///  &[2, 2],
 /// ).unwrap();
-/// let result = einsum("abc,cd->", &[x, k]).unwrap();
+/// let result = einsum("abc,cd->", &[&x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[648]), &[1]).unwrap();
 /// assert_eq!(result, expected);
 ///
@@ -640,7 +683,7 @@ pub fn resize<T: TensorType + Send + Sync>(
 ///    Some(&[4, 5, 7, 8]),
 ///  &[2, 2],
 /// ).unwrap();
-/// let result = einsum("abc,ed->", &[x, k]).unwrap();
+/// let result = einsum("abc,ed->", &[&x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[1296]), &[1]).unwrap();
 /// assert_eq!(result, expected);
 ///
@@ -654,11 +697,11 @@ pub fn resize<T: TensorType + Send + Sync>(
 ///  &[2],
 /// ).unwrap();
 ///
-/// let result = einsum("mk,k->m", &[x.clone(), k.clone()]).unwrap();
+/// let result = einsum("mk,k->m", &[&x.clone(), &k.clone()]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[41, 68]), &[2]).unwrap();
 /// assert_eq!(result, expected);
 ///
-/// let result = einsum("mk,k->mn", &[x, k]).unwrap();
+/// let result = einsum("mk,k->mn", &[&x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[41, 68]), &[2, 1]).unwrap();
 /// assert_eq!(result, expected);
 ///
@@ -671,25 +714,26 @@ pub fn resize<T: TensorType + Send + Sync>(
 ///  &[4],
 /// ).unwrap();
 ///
-/// let result = einsum("mk,k->ma", &[x.clone(), k.clone()]).unwrap();
+/// let result = einsum("mk,k->ma", &[&x.clone(), &k.clone()]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[231]), &[1, 1]).unwrap();
 /// assert_eq!(result, expected);
 /// // subtle difference
-/// let result = einsum("mk,n->ma", &[x.clone(), k.clone()]).unwrap();
+/// let result = einsum("mk,n->ma", &[&x.clone(), &k.clone()]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[1773]), &[1, 1]).unwrap();
 /// assert_eq!(result, expected);
 ////// ```
+#[tracing::instrument(name = "tensor::ops::einsum", skip_all)]
 pub fn einsum<
     T: TensorType + Mul<Output = T> + Add<Output = T> + std::marker::Send + std::marker::Sync,
 >(
     equation: &str,
-    inputs: &[Tensor<T>],
+    inputs: &[&Tensor<T>],
 ) -> Result<Tensor<T>, TensorError> {
     // Parse equation into an operation
-    let mut equation = equation.split("->");
-    let inputs_eq = equation.next().unwrap();
-    let output_eq = equation.next().unwrap();
-    let inputs_eq = inputs_eq.split(',').collect::<Vec<_>>();
+    let mut equation_parts = equation.split("->");
+    let inputs_eq_str = equation_parts.next().unwrap();
+    let output_eq = equation_parts.next().unwrap();
+    let inputs_eq: Vec<&str> = inputs_eq_str.split(',').collect();
 
     // Check that the number of inputs matches the number of inputs in the equation
     if inputs.len() != inputs_eq.len() {
@@ -698,8 +742,7 @@ pub fn einsum<
 
     let mut indices_to_size = HashMap::new();
     for (i, input) in inputs.iter().enumerate() {
-        for j in 0..inputs_eq[i].len() {
-            let c = inputs_eq[i].chars().nth(j).unwrap();
+        for (j, c) in inputs_eq[i].chars().enumerate() {
             if let std::collections::hash_map::Entry::Vacant(e) = indices_to_size.entry(c) {
                 e.insert(input.dims()[j]);
             } else if indices_to_size[&c] != input.dims()[j] {
@@ -723,109 +766,145 @@ pub fn einsum<
         output_shape.push(1);
     }
 
+    // Identify summation indices (appear in inputs but not in output)
+    let output_chars: HashSet<char> = output_eq.chars().collect();
     let mut seen = HashSet::new();
-    let mut common_indices_to_inputs = vec![];
-    for input in &inputs_eq {
-        for c in input.chars() {
-            if !seen.contains(&c) {
-                seen.insert(c);
-            } else {
-                common_indices_to_inputs.push(c);
+    let mut sum_indices: Vec<char> = Vec::new();
+    for inp_eq in &inputs_eq {
+        for c in inp_eq.chars() {
+            if seen.insert(c) && !output_chars.contains(&c) {
+                sum_indices.push(c);
             }
         }
     }
+    let sum_sizes: Vec<usize> = sum_indices.iter().map(|c| indices_to_size[c]).collect();
+    let sum_total: usize = sum_sizes.iter().product::<usize>().max(1);
 
+    // Precompute strides for each input tensor (row-major)
+    let input_strides: Vec<Vec<usize>> = inputs
+        .iter()
+        .map(|inp| {
+            let dims = inp.dims();
+            let ndim = dims.len();
+            if ndim == 0 {
+                return vec![];
+            }
+            let mut strides = vec![1usize; ndim];
+            for d in (0..ndim - 1).rev() {
+                strides[d] = strides[d + 1] * dims[d + 1];
+            }
+            strides
+        })
+        .collect();
+
+    // Precompute summation strides for flat-to-coord conversion
+    let sum_ndim = sum_sizes.len();
+    let sum_strides: Vec<usize> = {
+        let mut s = vec![1usize; sum_ndim];
+        for d in (0..sum_ndim.saturating_sub(1)).rev() {
+            s[d] = s[d + 1] * sum_sizes[d + 1];
+        }
+        s
+    };
+
+    // Build per-input dimension mapping: for each input dimension, record whether it
+    // maps to an output coordinate or a summation coordinate, its position in that
+    // coordinate array, and the stride for this dimension in the input tensor.
+    // This allows us to compute flat indices directly without any get_slice calls.
+    let input_dim_maps: Vec<Vec<(bool, usize, usize)>> = inputs_eq
+        .iter()
+        .enumerate()
+        .map(|(inp_idx, &eq)| {
+            eq.chars()
+                .enumerate()
+                .map(|(dim_idx, c)| {
+                    let stride = input_strides[inp_idx][dim_idx];
+                    if let Some(out_pos) = output_eq.find(c) {
+                        (true, out_pos, stride) // is_output=true, coord_pos, stride
+                    } else {
+                        let sum_pos = sum_indices.iter().position(|&x| x == c).unwrap();
+                        (false, sum_pos, stride) // is_output=false, coord_pos, stride
+                    }
+                })
+                .collect()
+        })
+        .collect();
+
+    // Precompute all summation coordinates to avoid repeated decoding in the hot loop
+    let sum_coords: Vec<Vec<usize>> = if sum_ndim > 0 {
+        (0..sum_total)
+            .map(|s_flat| {
+                let mut coord = vec![0usize; sum_ndim];
+                let mut remaining = s_flat;
+                for d in 0..sum_ndim {
+                    coord[d] = remaining / sum_strides[d];
+                    remaining %= sum_strides[d];
+                }
+                coord
+            })
+            .collect()
+    } else {
+        vec![vec![]]
+    };
+
+    // Precompute per-input partial flat indices from summation coordinates.
+    // sum_partials[inp_idx][s_idx] = the contribution of sum_coords[s_idx] to
+    // the flat index of input inp_idx.
+    let sum_partials: Vec<Vec<usize>> = (0..inputs.len())
+        .map(|inp_idx| {
+            sum_coords
+                .iter()
+                .map(|s_coord| {
+                    let mut partial = 0usize;
+                    for &(is_output, coord_pos, stride) in &input_dim_maps[inp_idx] {
+                        if !is_output {
+                            partial += s_coord[coord_pos] * stride;
+                        }
+                    }
+                    partial
+                })
+                .collect()
+        })
+        .collect();
+
+    // Compute output coordinates via cartesian product (same structure as before,
+    // but the inner loop now uses direct index arithmetic instead of get_slice)
     let cartesian_coord = output_shape
         .iter()
         .map(|d| 0..*d)
         .multi_cartesian_product()
         .collect::<Vec<_>>();
 
-    // Compute the cartesian product of all indices
     let output: Vec<T> = cartesian_coord
         .par_iter()
-        .map(|coord| {
-            // Compute the slice of each input tensor given the current coordinate of the output
-            // tensor
-            let inputs = (0..inputs.len())
-                .map(|idx| {
-                    let mut slice = vec![];
-                    for (i, c) in inputs_eq[idx].chars().enumerate() {
-                        // If the current index is in the output equation, then the slice should be the
-                        // current coordinate
-                        if let Some(idx) = output_eq.find(c) {
-                            slice.push(coord[idx]..coord[idx] + 1);
-                        // Otherwise, the slice should be the entire dimension of the input
-                        // tensor
-                        } else {
-                            slice.push(0..inputs[idx].dims()[i]);
+        .map(|out_coord| {
+            // Precompute partial flat index for each input from output coordinates
+            let out_partials: Vec<usize> = (0..inputs.len())
+                .map(|inp_idx| {
+                    let mut partial = 0usize;
+                    for &(is_output, coord_pos, stride) in &input_dim_maps[inp_idx] {
+                        if is_output {
+                            partial += out_coord[coord_pos] * stride;
                         }
                     }
-
-                    // Get the slice of the input tensor
-                    inputs[idx].get_slice(&slice).unwrap()
+                    partial
                 })
-                .collect::<Vec<_>>();
+                .collect();
 
-            // Get the indices common across input tensors
-            let mut common_coord = common_indices_to_inputs
-                .iter()
-                .map(|d| {
-                    // If the current index is in the output equation, then the slice should be the
-                    // current coordinate
-                    if output_eq.contains(*d) {
-                        0..1
-                    // Otherwise, the slice should be the entire dimension of the input tensor
-                    } else {
-                        0..*indices_to_size.get(d).unwrap()
-                    }
-                })
-                .multi_cartesian_product()
-                .collect::<Vec<_>>();
+            let mut sum = T::zero().unwrap();
 
-            // If there are no common indices, then we need to add an empty slice to force one
-            // iteration of the loop
-            if common_coord.is_empty() {
-                common_coord.push(vec![]);
-            }
-
-            let mut prod = T::zero().unwrap();
-
-            // Compute the cartesian product of all common indices
-            for common_dim in common_coord {
-                let inputs = (0..inputs.len())
-                    .map(|idx| {
-                        let mut slice = vec![];
-                        // Iterate over all indices in the input equation
-                        for (i, c) in inputs_eq[idx].chars().enumerate() {
-                            // If the current index is common to multiple inputs, then the slice should be the
-                            // current coordinate
-                            if let Some(j) = common_indices_to_inputs.iter().position(|&r| r == c) {
-                                slice.push(common_dim[j]..common_dim[j] + 1);
-                            } else {
-                                slice.push(0..inputs[idx].dims()[i]);
-                            }
-                        }
-                        // Get the slice of the input tensor
-                        inputs[idx].get_slice(&slice).unwrap()
-                    })
-                    .collect::<Vec<_>>();
-
-                let input_pairs = inputs
-                    .iter()
-                    .map(|d| d.iter())
-                    .multi_cartesian_product()
-                    .collect::<Vec<_>>();
-
-                // Compute the product of all input tensors
-                for pair in input_pairs {
-                    prod = prod
-                        + pair
-                            .into_iter()
-                            .fold(T::one().unwrap(), |acc, x| acc * x.clone());
+            // Iterate over all summation index combinations
+            for s_idx in 0..sum_total {
+                // Compute product of all input elements at this coordinate
+                let mut product = T::one().unwrap();
+                for (inp_idx, input) in inputs.iter().enumerate() {
+                    let flat_idx = out_partials[inp_idx] + sum_partials[inp_idx][s_idx];
+                    product = product * input.inner[flat_idx].clone();
                 }
+                sum = sum + product;
             }
-            prod
+
+            sum
         })
         .collect();
 
@@ -851,7 +930,7 @@ pub fn einsum<
 ///     Some(&[2, 3, 2, 1, 1, 1]),
 ///     &[2, 3],
 /// ).unwrap();
-/// let result = add(&[x, k]).unwrap();
+/// let result = add(&[&x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[4, 4, 4, 2, 2, 2]), &[2, 3]).unwrap();
 /// assert_eq!(result, expected);
 ///
@@ -863,17 +942,18 @@ pub fn einsum<
 /// let k = Tensor::<i32>::new(
 ///     Some(&[2]),
 ///     &[1]).unwrap();
-/// let result = add(&[x, k]).unwrap();
+/// let result = add(&[&x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[4, 3, 4, 3, 3, 3]), &[2, 3]).unwrap();
 /// assert_eq!(result, expected);
 /// ```
+#[tracing::instrument(name = "tensor::ops::add", skip_all)]
 pub fn add<T: TensorType + Add<Output = T> + std::marker::Send + std::marker::Sync>(
-    t: &[Tensor<T>],
+    t: &[&Tensor<T>],
 ) -> Result<Tensor<T>, TensorError> {
     // calculate value of output
     let mut output: Tensor<T> = t[0].clone();
 
-    for e in t[1..].iter() {
+    for &e in t[1..].iter() {
         output = output.add(e.clone())?;
     }
 
@@ -897,7 +977,7 @@ pub fn add<T: TensorType + Add<Output = T> + std::marker::Send + std::marker::Sy
 ///     Some(&[2, 3, 2, 1, 1, 1]),
 ///     &[2, 3],
 /// ).unwrap();
-/// let result = sub(&[x, k]).unwrap();
+/// let result = sub(&[&x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[0, -2, 0, 0, 0, 0]), &[2, 3]).unwrap();
 /// assert_eq!(result, expected);
 ///
@@ -910,17 +990,18 @@ pub fn add<T: TensorType + Add<Output = T> + std::marker::Send + std::marker::Sy
 ///     Some(&[2]),
 ///     &[1],
 /// ).unwrap();
-/// let result = sub(&[x, k]).unwrap();
+/// let result = sub(&[&x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[0, -1, 0, -1, -1, -1]), &[2, 3]).unwrap();
 /// assert_eq!(result, expected);
 /// ```
+#[tracing::instrument(name = "tensor::ops::sub", skip_all)]
 pub fn sub<T: TensorType + Sub<Output = T> + std::marker::Send + std::marker::Sync>(
-    t: &[Tensor<T>],
+    t: &[&Tensor<T>],
 ) -> Result<Tensor<T>, TensorError> {
     // calculate value of output
     let mut output: Tensor<T> = t[0].clone();
 
-    for e in t[1..].iter() {
+    for &e in t[1..].iter() {
         output = (output - e.clone())?;
     }
 
@@ -967,7 +1048,7 @@ pub fn neg<T: TensorType + Neg<Output = T> + std::marker::Send + std::marker::Sy
 ///     Some(&[2, 3, 2, 1, 1, 1]),
 ///     &[2, 3],
 /// ).unwrap();
-/// let result = mult(&[x, k]).unwrap();
+/// let result = mult(&[&x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[4, 3, 4, 1, 1, 1]), &[2, 3]).unwrap();
 /// assert_eq!(result, expected);
 ///
@@ -979,16 +1060,17 @@ pub fn neg<T: TensorType + Neg<Output = T> + std::marker::Send + std::marker::Sy
 /// let k = Tensor::<i32>::new(
 ///     Some(&[2]),
 ///     &[1]).unwrap();
-/// let result = mult(&[x, k]).unwrap();
+/// let result = mult(&[&x, &k]).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[4, 2, 4, 2, 2, 2]), &[2, 3]).unwrap();
 /// assert_eq!(result, expected);
 /// ```
+#[tracing::instrument(name = "tensor::ops::mult", skip_all)]
 pub fn mult<T: TensorType + Mul<Output = T> + std::marker::Send + std::marker::Sync>(
-    t: &[Tensor<T>],
+    t: &[&Tensor<T>],
 ) -> Result<Tensor<T>, TensorError> {
     // calculate value of output
     let mut output: Tensor<T> = t[0].clone();
-    for e in t[1..].iter() {
+    for &e in t[1..].iter() {
         output = (output * e.clone())?;
     }
 
@@ -1168,13 +1250,21 @@ pub fn downsample<T: TensorType + Send + Sync>(
 /// let result = gather(&x, &index, 1).unwrap();
 /// let expected = Tensor::<i32>::new(Some(&[1, 2, 4, 5]), &[2, 2]).unwrap();
 /// assert_eq!(result, expected);
+///
+/// let x = Tensor::new(Some(&[1i32, 2, 3, 4, 5, 6]), &[3, 2]).unwrap();
+/// let index = Tensor::new(Some(&[0usize, 1, 2, 0, 1, 0]), &[3, 2]).unwrap();
+/// let result = gather(&x, &index, 0).unwrap();
+/// let expected = Tensor::new(Some(&[1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 1, 2]), &[3, 2, 2]).unwrap();
+/// assert_eq!(result, expected);
 /// ```
+#[tracing::instrument(name = "tensor::ops::gather", skip_all)]
 pub fn gather<T: TensorType + Send + Sync>(
     input: &Tensor<T>,
     index: &Tensor<usize>,
-    dim: usize,
+    axis: usize,
 ) -> Result<Tensor<T>, TensorError> {
     let mut index_clone = index.clone();
+    // We first flatten the index tensor so that it is easier to iterate over the lookups
     index_clone.flatten();
     // TODO: not sure what this prevents from erroring
     if index_clone.is_singleton() {
@@ -1182,12 +1272,12 @@ pub fn gather<T: TensorType + Send + Sync>(
     }
 
     // Calculate the output tensor size
-    let mut output_size = input.dims().to_vec();
-    output_size[dim] = index_clone.dims()[0];
+    let mut output_flattened_size = input.dims().to_vec();
+    output_flattened_size[axis] = index_clone.dims()[0];
 
     // Allocate memory for the output tensor
-    let mut output = Tensor::new(None, &output_size)?;
-    let cartesian_coord = output_size
+    let mut output = Tensor::new(None, &output_flattened_size)?;
+    let cartesian_coord = output_flattened_size
         .iter()
         .map(|x| 0..*x)
         .multi_cartesian_product()
@@ -1195,21 +1285,21 @@ pub fn gather<T: TensorType + Send + Sync>(
 
     output = output.par_enum_map(|i, _: T| {
         let coord = cartesian_coord[i].clone();
-        let index_val = index_clone.get(&[coord[dim]]);
+        let index_val = index_clone.get(&[coord[axis]]);
 
         // Add bounds checking here
-        if index_val >= input.dims()[dim] {
+        if index_val >= input.dims()[axis] {
             panic!(
                 "Index {} is out of bounds for dimension {} with size {}",
                 index_val,
-                dim,
-                input.dims()[dim]
+                axis,
+                input.dims()[axis]
             );
         }
         let new_coord = coord
             .iter()
             .enumerate()
-            .map(|(i, x)| if i == dim { index_val } else { *x })
+            .map(|(i, x)| if i == axis { index_val } else { *x })
             .collect::<Vec<_>>();
 
         Ok(input.get(&new_coord))
@@ -1220,8 +1310,19 @@ pub fn gather<T: TensorType + Send + Sync>(
     // if index.is_singleton() {
     //     output_size.remove(dim);
     // }
+    // Recover actual output shape
+    let output_size: Vec<usize> = {
+        let mut output_dims: Vec<Vec<usize>> = input.dims().iter().map(|&x| vec![x]).collect();
+        output_dims[axis] = index.dims().to_vec();
+        output_dims.into_iter().flatten().collect()
+    };
+
     output.reshape(&output_size)?;
 
+    debug_assert_eq!(
+        output.dims().len(),
+        index.dims().len() + input.dims().len() - 1
+    );
     Ok(output)
 }
 
@@ -1546,6 +1647,7 @@ pub fn topk_axes<T: TensorType + PartialOrd + Send + Sync>(
 /// ).unwrap();
 /// assert_eq!(result, expected);
 /// ```
+#[tracing::instrument(name = "tensor::ops::sum_axes", skip_all)]
 pub fn sum_axes<T: TensorType + Add<Output = T> + Send + Sync>(
     a: &Tensor<T>,
     axes: &[usize],
@@ -1673,14 +1775,16 @@ pub fn argmax_axes<T: TensorType + Add<Output = T> + std::cmp::Ord + From<i32> +
     dim: usize,
 ) -> Result<Tensor<T>, TensorError> {
     let argmax_fn = |a: &Tensor<T>| -> Result<Tensor<T>, TensorError> {
-        Ok(vec![a
+        Ok(vec![
+            a
         .clone()
         .into_iter()
         .enumerate()
         // we value the last index in the case of a tie
         .max_by_key(|(idx, value)| (value.clone(), *idx as i32))
         .map(|(idx, _)| T::from(idx as i32))
-        .unwrap()]
+        .unwrap(),
+        ]
         .into_iter()
         .into())
     };
@@ -1714,14 +1818,16 @@ pub fn argmin_axes<T: TensorType + Add<Output = T> + std::cmp::Ord + From<i32> +
     dim: usize,
 ) -> Result<Tensor<T>, TensorError> {
     let argmax_fn = |a: &Tensor<T>| -> Result<Tensor<T>, TensorError> {
-        Ok(vec![a
+        Ok(vec![
+            a
         .clone()
         .into_iter()
         .enumerate()
         // we value the first index in the case of a tie
         .min_by_key(|(idx, value)| (value.clone(), (*idx as i32)))
         .map(|(idx, _)| T::from(idx as i32))
-        .unwrap()]
+        .unwrap(),
+        ]
         .into_iter()
         .into())
     };
@@ -1921,6 +2027,7 @@ pub fn conv<
 
         let start_kernel_index = group * output_channels_per_group + i;
         let end_kernel_index = start_kernel_index + 1;
+        #[allow(clippy::single_range_in_vec_init)]
         let local_kernel = kernel
             .get_slice(&[start_kernel_index..end_kernel_index])
             .unwrap();
@@ -3005,41 +3112,6 @@ pub mod nonlinearities {
         .unwrap()
     }
 
-    /// Elementwise applies 2^x to a tensor of integers.
-    /// # Arguments
-    ///
-    /// * `a` - Tensor
-    /// * `scale_input` - Single value
-    /// # Examples
-    /// ```
-    /// use onnx_tracer::tensor::Tensor;
-    /// use onnx_tracer::tensor::ops::nonlinearities::exp2;
-    /// let x = Tensor::<i32>::new(
-    ///     Some(&[0, 1, 2, 3]),
-    ///     &[1, 4],
-    /// ).unwrap();
-    /// let result = exp2(&x, 1.0);
-    /// let expected = Tensor::<i32>::new(Some(&[1, 2, 4, 8]), &[1, 4]).unwrap();
-    /// assert_eq!(result, expected);
-    /// ```
-    pub fn exp2(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
-        a.par_enum_map(|_, a_i| {
-            let z_val = a_i;
-            let result = if z_val >= 0 {
-                let abs_z = z_val as u32;
-                // Use the same logic as VirtualPow2 instruction: 1u64 << (y % WORD_SIZE)
-                // For 64-bit, limit to 63 to avoid overflow
-                let power_result = 1u64.checked_shl(abs_z.min(63)).unwrap_or(u64::MAX);
-                scale_input * (power_result as f64)
-            } else {
-                // For negative z, 2^z = 1 / 2^|z| ≈ 1 for integer arithmetic to avoid total loss
-                scale_input
-            };
-            Ok::<_, TensorError>(result.round() as i32)
-        })
-        .unwrap()
-    }
-
     /// Elementwise applies exponential to a tensor of integers.
     /// # Arguments
     ///
@@ -3099,6 +3171,337 @@ pub mod nonlinearities {
             .unwrap()
     }
 
+    /// Clamps tensor values per-slice along the specified axis so that no element
+    /// is more than `max_spread` below the slice maximum.
+    ///
+    /// For each 1-D slice along `axis`, finds the max and clamps every element to
+    /// be >= max − max_spread. This guarantees that after softmax's centering step
+    /// (subtracting the max), all centered logits fit within the exp LUT.
+    ///
+    /// # Arguments
+    /// * `a` - Input tensor
+    /// * `axis` - The axis along which softmax will be applied
+    /// * `max_spread` - Maximum allowed distance from the per-slice max
+    ///                   (typically `EXP_LUT_SIZE - 1 = 2047`)
+    #[tracing::instrument(name = "tensor::ops::nonlinearities::clamp_axes", skip_all)]
+    pub fn clamp_axes(a: &Tensor<i32>, axis: usize, max_spread: i32) -> Tensor<i32> {
+        let dims = a.dims();
+
+        if dims.len() == 1 {
+            let max_val = a.iter().copied().max().unwrap_or(0);
+            let min_val = max_val - max_spread;
+            let data: Vec<i32> = a.iter().map(|&x| x.max(min_val)).collect();
+            return Tensor::new(Some(&data), dims).unwrap();
+        }
+
+        let cartesian_coord = dims[..dims.len() - 1]
+            .iter()
+            .map(|x| 0..*x)
+            .multi_cartesian_product()
+            .collect::<Vec<_>>();
+
+        let mut outputs = vec![];
+
+        for coord in cartesian_coord {
+            let mut slice_ranges = vec![];
+            for (i, c) in coord.iter().enumerate() {
+                if [axis].contains(&i) {
+                    slice_ranges.push(0..a.dims()[i]);
+                } else {
+                    slice_ranges.push(*c..*c + 1);
+                }
+            }
+
+            let slice = a.get_slice(&slice_ranges).unwrap();
+            let max_val = slice.iter().copied().max().unwrap_or(0);
+            let min_val = max_val - max_spread;
+
+            let data: Vec<i32> = slice.iter().map(|&x| x.max(min_val)).collect();
+            let clamped = Tensor::new(Some(&data), slice.dims()).unwrap();
+
+            outputs.push(clamped);
+        }
+
+        let mut res = Tensor::new(Some(&outputs), &[outputs.len()])
+            .unwrap()
+            .combine()
+            .unwrap();
+        res.reshape(dims).unwrap();
+        res
+    }
+
+    /// softmax layout
+    #[tracing::instrument(name = "tensor::ops::nonlinearities::softmax_axes", skip_all)]
+    pub fn softmax_axes(a: &Tensor<i32>, scale: f64, axes: &[usize]) -> Tensor<i32> {
+        // we want this to be as small as possible so we set the output scale to 1
+        let dims = a.dims();
+
+        if dims.len() == 1 {
+            return softmax(a, scale);
+        }
+
+        let cartesian_coord = dims[..dims.len() - 1]
+            .iter()
+            .map(|x| 0..*x)
+            .multi_cartesian_product()
+            .collect::<Vec<_>>();
+
+        let mut outputs = vec![];
+
+        for coord in cartesian_coord {
+            let mut sum_dims = vec![];
+            for (i, c) in coord.iter().enumerate() {
+                if axes.contains(&i) {
+                    sum_dims.push(0..a.dims()[i]);
+                } else {
+                    sum_dims.push(*c..*c + 1);
+                }
+            }
+
+            let softmax_input = a.get_slice(&sum_dims).unwrap();
+
+            let res = softmax(&softmax_input, scale);
+
+            outputs.push(res);
+        }
+
+        let mut res = Tensor::new(Some(&outputs), &[outputs.len()])
+            .unwrap()
+            .combine()
+            .unwrap();
+        res.reshape(dims).unwrap();
+        res
+    }
+
+    /// Applies softmax
+    /// # Arguments
+    ///
+    /// * `a` - Tensor
+    /// * `scale_input` - Single value
+    /// * `scale_output` - Single value
+    /// # Examples
+    /// ```
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::softmax;
+    /// let x = Tensor::<i32>::new(
+    ///     Some(&[2, 2, 3, 2, 2, 0]),
+    ///     &[2, 3],
+    /// ).unwrap();
+    /// let result = softmax(&x, 256.0);
+    /// // doubles the scale of the input
+    /// let expected = Tensor::<i32>::new(Some(&[10836, 10836, 10878, 10836, 10836, 10752]), &[2, 3]).unwrap();
+    /// assert_eq!(result, expected);
+    /// ```
+    pub fn softmax(a: &Tensor<i32>, scale: f64) -> Tensor<i32> {
+        if (scale - 128.0).abs() < 1e-9 {
+            softmax_fixed_128::<false>(a).0
+        } else {
+            // fallback to floating-point for other scales
+            let exp = exp(a, scale);
+            let sum = sum(&exp).unwrap();
+            let inv_denom = recip(&sum, scale * scale);
+            (exp * inv_denom).unwrap()
+        }
+    }
+
+    /// Log2 of the exponential lookup table size.
+    pub const LOG_EXP_LUT_SIZE: usize = 11;
+    /// Size of the exponential lookup table.
+    pub const EXP_LUT_SIZE: usize = 1 << LOG_EXP_LUT_SIZE;
+
+    /// Non-zero portion of the exp LUT: exp(-i / 128) * 128 for i in [0, 709].
+    /// Beyond this range the values are 0 (exp decays to negligible).
+    const EXP_LUT_NONZERO: [i32; 710] = [
+        128, 127, 126, 125, 124, 123, 122, 121, 120, 119, 118, 117, 117, 116, 115, 114, 113, 112,
+        111, 110, 109, 109, 108, 107, 106, 105, 104, 104, 103, 102, 101, 100, 100, 99, 98, 97, 97,
+        96, 95, 94, 94, 93, 92, 91, 91, 90, 89, 89, 88, 87, 87, 86, 85, 85, 84, 83, 83, 82, 81, 81,
+        80, 79, 79, 78, 78, 77, 76, 76, 75, 75, 74, 74, 73, 72, 72, 71, 71, 70, 70, 69, 69, 68, 67,
+        67, 66, 66, 65, 65, 64, 64, 63, 63, 62, 62, 61, 61, 60, 60, 60, 59, 59, 58, 58, 57, 57, 56,
+        56, 55, 55, 55, 54, 54, 53, 53, 53, 52, 52, 51, 51, 51, 50, 50, 49, 49, 49, 48, 48, 47, 47,
+        47, 46, 46, 46, 45, 45, 45, 44, 44, 44, 43, 43, 43, 42, 42, 42, 41, 41, 41, 40, 40, 40, 39,
+        39, 39, 38, 38, 38, 38, 37, 37, 37, 36, 36, 36, 36, 35, 35, 35, 34, 34, 34, 34, 33, 33, 33,
+        33, 32, 32, 32, 32, 31, 31, 31, 31, 30, 30, 30, 30, 29, 29, 29, 29, 29, 28, 28, 28, 28, 27,
+        27, 27, 27, 27, 26, 26, 26, 26, 26, 25, 25, 25, 25, 25, 24, 24, 24, 24, 24, 23, 23, 23, 23,
+        23, 23, 22, 22, 22, 22, 22, 22, 21, 21, 21, 21, 21, 21, 20, 20, 20, 20, 20, 20, 19, 19, 19,
+        19, 19, 19, 19, 18, 18, 18, 18, 18, 18, 18, 17, 17, 17, 17, 17, 17, 17, 17, 16, 16, 16, 16,
+        16, 16, 16, 16, 15, 15, 15, 15, 15, 15, 15, 15, 14, 14, 14, 14, 14, 14, 14, 14, 14, 13, 13,
+        13, 13, 13, 13, 13, 13, 13, 13, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 11, 11, 11, 11,
+        11, 11, 11, 11, 11, 11, 11, 11, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 9, 9, 9, 9,
+        9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 7, 7, 7,
+        7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+        6, 6, 6, 6, 6, 6, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+        5, 5, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    ];
+
+    /// Direct lookup table: exp(-i / 128) * 128 for i in [0, EXP_LUT_SIZE).
+    /// Built at compile time from the non-zero seed values; the tail is zero-filled.
+    /// To resize, just change `LOG_EXP_LUT_SIZE` — no manual zero-padding needed.
+    pub const EXP_LUT_SCALE_128: [i32; EXP_LUT_SIZE] = {
+        let mut lut = [0i32; EXP_LUT_SIZE];
+        let mut i = 0;
+        while i < EXP_LUT_NONZERO.len() {
+            lut[i] = EXP_LUT_NONZERO[i];
+            i += 1;
+        }
+        lut
+    };
+
+    /// Fixed-point exp for z_q <= 0 at scale=128.
+    /// Returns exp(z_q / 128) * 128.
+    /// Direct lookup with no step calculation - minimal operations for proving.
+    #[inline]
+    fn exp_fixed_lut_128(z_q: i32) -> i32 {
+        debug_assert!(z_q <= 0, "exp_fixed_lut_128 requires z_q <= 0");
+        let idx = (-z_q) as usize;
+
+        // // For very negative centered logits (e.g., masked-out attention positions),
+        // // exp(z) ≈ 0. Clamp to 0 instead of panicking.
+        // if idx >= EXP_LUT_SCALE_128.len() {
+        //     return 0
+        // }
+
+        if idx >= EXP_LUT_SCALE_128.len() {
+            panic!("exp_fixed_lut_128: z_q {z_q} is too negative for LUT (idx {idx})");
+        }
+
+        EXP_LUT_SCALE_128[idx]
+    }
+
+    /// Trace data for softmax computation, capturing all intermediate steps.
+    #[derive(Debug, Clone)]
+    pub struct SoftmaxTrace {
+        /// Original input tensor (scale 128)
+        pub input_logits: Tensor<i32>,
+
+        /// Step 1: Max value across all input logits
+        /// max_logit = max(input_logits)
+        pub max_logit: i32,
+        /// Index of the maximum logit value.
+        pub max_index: usize,
+
+        /// Step 2: Subtract max from each element for numerical stability
+        /// centered_logits[i] = input_logits[i] - max_logit
+        pub centered_logits: Tensor<i32>,
+
+        /// Step 2b: Absolute value of centered logits (for lookup indexing)
+        /// abs_centered_logits[i] = |centered_logits[i]|
+        pub abs_centered_logits: Tensor<i32>,
+
+        /// Step 3: Exponential values via lookup table at scale 128
+        /// exp_q_values[i] = exp_fixed_lut_128(centered_logits[i])
+        pub exp_q_values: Tensor<i32>,
+
+        /// Step 4: Sum of all exponential values (scale 128)
+        /// exp_sum_q = sum(exp_q_values)
+        pub exp_sum_q: i32,
+
+        /// Step 5b: Final softmax output (scale 128)
+        /// softmax_q[i] = scaled_exp_q_values[i] / exp_sum_q
+        pub softmax_q: Tensor<i32>,
+    }
+
+    /// Fixed-point softmax for scale=128, output at scale 128.
+    ///
+    /// ** Operations used:**
+    /// - Subtraction: `z = x - max` (max stability trick)
+    /// - Array lookup: `exp_lut[idx]` (1025-entry LUT, direct indexing)
+    /// - Addition: `sum(exp_values)`
+    /// - Multiplication: `e * S` (to maintain precision before division)
+    /// - Division: `(e * S) / sum` (integer division with truncation)
+    ///
+    /// **Output scaling:**
+    /// Input at scale 128 → Output at scale 128
+    /// This means: `output[i] = round(softmax(input)[i] * 128)`
+    ///
+    /// **Expected behavior:**
+    /// - Output values are non-negative
+    /// - Sum of outputs ≈ 128 (within ~10% due to integer division truncation)
+    /// - Larger input values → larger output values (monotonic property preserved)
+    ///
+    /// # Examples
+    /// ```
+    /// use onnx_tracer::tensor::Tensor;
+    /// use onnx_tracer::tensor::ops::nonlinearities::softmax_fixed_128;
+    ///
+    /// let x = Tensor::<i32>::new(Some(&[0, 128, 256]), &[3]).unwrap(); // [0.0, 1.0, 2.0] in real units
+    /// let result = softmax_fixed_128::<false>(&x).0;
+    /// // Output at scale 128: smaller values for x[0], larger for x[2]
+    /// assert!(result[0] < result[1]);
+    /// assert!(result[1] < result[2]);
+    /// ```
+    pub fn softmax_fixed_128<const TRACE: bool>(
+        a: &Tensor<i32>,
+    ) -> (Tensor<i32>, Option<SoftmaxTrace>) {
+        const S: i32 = 128;
+
+        // 1) Get max
+        let max_logit = a.iter().copied().max().unwrap_or(0);
+        let max_index = a.iter().copied().position(|x| x == max_logit).unwrap_or(0);
+
+        // 2) Subtract max from each element
+        let centered_logits = a
+            .par_enum_map(|_, x| {
+                let z = x - max_logit;
+                Ok::<_, TensorError>(z)
+            })
+            .unwrap();
+
+        let abs_centered_logits = centered_logits
+            .par_enum_map(|_, z| {
+                let abs_z = if z < 0 { -z } else { z };
+                Ok::<_, TensorError>(abs_z)
+            })
+            .unwrap();
+
+        // 3) exp(z_q) at scale S
+        let exp_q_values: Tensor<i32> = centered_logits
+            .par_enum_map(|_, z| Ok::<_, TensorError>(exp_fixed_lut_128(z)))
+            .unwrap();
+
+        // 4) sum at scale S
+        let exp_sum_q = sum(&exp_q_values).unwrap()[0];
+
+        // 5) Compute softmax: (exp_q * S) / sum_q to maintain scale S output
+        // This computes: (exp_q * 128) / sum_q
+        let scaled_exp_q_values = exp_q_values
+            .par_enum_map(|_, e| {
+                // Multiply by S first to maintain precision
+                let scaled_e = e * S;
+                Ok::<_, TensorError>(scaled_e)
+            })
+            .unwrap();
+        let softmax_q = scaled_exp_q_values
+            .par_enum_map(|_, numerator| {
+                let result = numerator / exp_sum_q;
+                Ok::<_, TensorError>(result)
+            })
+            .unwrap();
+        if TRACE {
+            let trace = SoftmaxTrace {
+                input_logits: a.clone(),
+                max_logit,
+                max_index,
+                centered_logits,
+                abs_centered_logits,
+                exp_q_values,
+                exp_sum_q,
+                softmax_q: softmax_q.clone(),
+            };
+            (softmax_q, Some(trace))
+        } else {
+            (softmax_q, None)
+        }
+    }
+
     /// Applies range_check_percent
     /// # Arguments
     ///
@@ -3118,12 +3521,12 @@ pub mod nonlinearities {
     ///    Some(&[103, 204, 303, 404, 505, 607]),
     ///   &[2, 3],
     /// ).unwrap();
-    /// let result = range_check_percent(&[x, y], 1024, 1024, 1.0); // 1% tolerance
+    /// let result = range_check_percent(&[&x, &y], 1024, 1024, 1.0); // 1% tolerance
     /// let expected = Tensor::<i32>::new(Some(&[1, 1, 0, 0, 0, 1]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
     pub fn range_check_percent(
-        t: &[Tensor<i32>],
+        t: &[&Tensor<i32>],
         input_scale: usize,
         output_scale: usize,
         tol: f32,
@@ -3132,14 +3535,15 @@ pub mod nonlinearities {
         // matches the steps in layout
         let scale = input_scale * output_scale;
         let diff: Tensor<i32> = sub(t).unwrap();
-        let recip = recip(&t[0], scale as f64);
-        let product = mult(&[diff, recip]).unwrap();
+        let recip = recip(t[0], scale as f64);
+        let product = mult(&[&diff, &recip]).unwrap();
         let _tol = ((tol / 100.0) * scale as f32).round() as f64;
         let upper_bound = greater_than(&product, _tol);
-        let neg_product = mult(&[product, Tensor::<i32>::new(Some(&[-1]), &[1]).unwrap()]).unwrap();
+        let neg_product =
+            mult(&[&product, &Tensor::<i32>::new(Some(&[-1]), &[1]).unwrap()]).unwrap();
         let lower_bound = greater_than(&neg_product, _tol);
 
-        add(&[upper_bound, lower_bound]).unwrap()
+        add(&[&upper_bound, &lower_bound]).unwrap()
     }
 
     /// Elementwise applies square root to a tensor of integers.
@@ -3188,35 +3592,17 @@ pub mod nonlinearities {
     /// let expected = Tensor::<i32>::new(Some(&[256, 128, 64, 32, 512, 1448]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
+    #[tracing::instrument(name = "tensor::ops::nonlinearities::rsqrt", skip_all)]
     pub fn rsqrt(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
         let sf_log = scale_input as i32;
         let sf = 1 << sf_log;
         // NOTE: rescale uses SRA
-        let rescale_down = |q: i32| q >> sf_log;
+        // let rescale_down = |q: i32| q >> sf_log;f
         a.par_enum_map(|_, a_i| {
-            let sqrt_2 = (2f32.sqrt() * sf as f32).round() as i32;
+            let inv = sf * sf / a_i;
+            let rsqrt = (sf * inv).isqrt();
 
-            let x = if a_i != 0 { a_i as u32 } else { 1 };
-            let d = {
-                let exp = 3 * sf_log - x.ilog2() as i32;
-                if exp < 0 {
-                    0
-                } else {
-                    2_i32.pow(exp as u32 / 2)
-                }
-            };
-            let xd = rescale_down(x as i32 * d);
-            let xd_sq_minus1 = rescale_down(d * xd) - sf;
-            let xd_cub_minusd = rescale_down(d * xd_sq_minus1);
-            let a = if xd_sq_minus1 >= 0 {
-                sqrt_2 / 2 - sf
-            } else {
-                2 * sf - 2 * sqrt_2
-            };
-            let axd_cub_minusd = rescale_down(a * xd_cub_minusd);
-            let approximation = d + axd_cub_minusd;
-
-            Ok::<_, TensorError>(approximation)
+            Ok::<_, TensorError>(rsqrt)
         })
         .unwrap()
     }
@@ -3509,6 +3895,7 @@ pub mod nonlinearities {
     /// let expected = Tensor::<i32>::new(Some(&[4, 25, 8, 1, 1, 0]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
+    #[tracing::instrument(name = "tensor::ops::nonlinearities::tanh", skip_all)]
     pub fn tanh(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
         a.par_enum_map(|_, a_i| {
             let kix = (a_i as f64) / scale_input;
@@ -3596,6 +3983,7 @@ pub mod nonlinearities {
     /// let expected = Tensor::<i32>::new(Some(&[6, 31, 10, 1, 1, 0]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
+    #[tracing::instrument(name = "tensor::ops::nonlinearities::erffunc", skip_all)]
     pub fn erffunc(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
         const NCOEF: usize = 28;
         const COF: [f64; 28] = [
@@ -3680,6 +4068,7 @@ pub mod nonlinearities {
     /// let expected = Tensor::<i32>::new(Some(&[2, 15, 2, 1, 1, -1]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
+    #[tracing::instrument(name = "tensor::ops::nonlinearities::leakyrelu", skip_all)]
     pub fn leakyrelu(a: &Tensor<i32>, slope: f64) -> Tensor<i32> {
         a.par_enum_map(|_, a_i| {
             let rounded = if a_i < 0 {
@@ -3775,6 +4164,7 @@ pub mod nonlinearities {
     /// let expected = Tensor::<i32>::new(Some(&[2, 1, 1, 3, 1, 0]), &[2, 3]).unwrap();
     /// assert_eq!(result, expected);
     /// ```
+    #[tracing::instrument(name = "tensor::ops::nonlinearities::div", skip_all)]
     pub fn div(a: &Tensor<i32>, b: &Tensor<i32>) -> Tensor<i32> {
         a.par_enum_map(|i, a_i| {
             let denom = b[i];

@@ -129,7 +129,9 @@ impl fmt::Display for F32 {
 /// either absolute or percentage
 #[derive(Clone, Default, Debug, PartialEq, PartialOrd, Serialize, Deserialize, Copy)]
 pub struct Tolerance {
+    /// The tolerance value.
     pub val: f32,
+    /// The scale factor for the tolerance.
     pub scale: F32,
 }
 

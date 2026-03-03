@@ -10,7 +10,7 @@
 //! - Normalizing multi-dimensional sum operations to 2D representations
 //! - Extracting and storing dimension information for efficient constraint generation
 
-use atlas_onnx_tracer::{model::Model, node::ComputationNode, ops::Operator};
+use onnx_tracer::{model::Model, node::ComputationNode, ops::Operator};
 use joltworks::{field::JoltField, utils::thread::unsafe_allocate_zero_vec};
 use rayon::prelude::*;
 

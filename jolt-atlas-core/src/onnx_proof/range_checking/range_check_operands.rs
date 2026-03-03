@@ -1,4 +1,4 @@
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::Operator,

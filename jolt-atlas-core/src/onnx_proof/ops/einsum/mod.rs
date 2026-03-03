@@ -15,7 +15,7 @@ use crate::{
     },
     utils::dims::EINSUM_REGISTRY,
 };
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::{trace::Trace, Model},
     node::ComputationNode,
     ops::{Einsum, Operator},

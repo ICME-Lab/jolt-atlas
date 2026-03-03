@@ -6,7 +6,7 @@ use crate::onnx_proof::{
     },
     ProofId, ProofType, Prover, Verifier,
 };
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::Rsqrt,
@@ -581,7 +581,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RsqrtVerifi
 mod tests {
     use super::Q_SQUARE;
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use onnx_tracer::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };

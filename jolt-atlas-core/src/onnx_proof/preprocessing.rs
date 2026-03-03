@@ -10,7 +10,7 @@
 //! 2. [`AtlasProverPreprocessing`]  — adds the PCS prover setup (SRS).
 //! 3. [`AtlasVerifierPreprocessing`] — adds the PCS verifier setup (VK).
 
-use atlas_onnx_tracer::model::Model;
+use onnx_tracer::model::Model;
 use common::CommittedPolynomial;
 use joltworks::{
     field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme,

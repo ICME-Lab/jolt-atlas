@@ -12,7 +12,7 @@ use crate::onnx_proof::{
     },
     ProofId, ProofType, Prover, Verifier,
 };
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
         ComputationGraph,
@@ -595,7 +595,7 @@ impl RaOneHotEncoding for ErfRaEncoding {
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use onnx_tracer::{
         model::{test::ModelBuilder, Model},
         node::handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE,
         tensor::Tensor,

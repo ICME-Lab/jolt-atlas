@@ -1,5 +1,5 @@
 use crate::onnx_proof::ops::softmax_axes::softmax::SoftmaxIndex;
-use atlas_onnx_tracer::tensor::{ops::nonlinearities::SoftmaxTrace, Tensor};
+use onnx_tracer::tensor::{ops::nonlinearities::SoftmaxTrace, Tensor};
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
@@ -267,7 +267,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
 mod tests {
     use super::*;
     use ark_bn254::Fr;
-    use atlas_onnx_tracer::tensor::{ops::nonlinearities::softmax_fixed_128, Tensor};
+    use onnx_tracer::tensor::{ops::nonlinearities::softmax_fixed_128, Tensor};
     use common::VirtualPolynomial;
     use joltworks::{
         field::JoltField,

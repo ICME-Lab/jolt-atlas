@@ -1,5 +1,5 @@
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier};
-use atlas_onnx_tracer::{node::ComputationNode, ops::Identity};
+use onnx_tracer::{node::ComputationNode, ops::Identity};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,

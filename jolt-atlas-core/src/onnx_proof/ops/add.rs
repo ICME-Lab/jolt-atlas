@@ -2,7 +2,7 @@ use crate::{
     impl_standard_params, impl_standard_sumcheck_proof_api,
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
 };
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::Add,
@@ -191,7 +191,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for AddVerifier
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use onnx_tracer::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };

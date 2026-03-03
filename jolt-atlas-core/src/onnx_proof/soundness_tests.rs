@@ -3,7 +3,7 @@ use crate::onnx_proof::{
     AtlasVerifierPreprocessing, ONNXProof,
 };
 use ark_bn254::{Bn254, Fr};
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::{test::ModelBuilder, Model},
     node::ComputationNode,
     ops::Operator,

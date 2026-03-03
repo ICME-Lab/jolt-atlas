@@ -4,7 +4,7 @@
 //! erf(x) = (2 / sqrt(pi)) * integral(exp(-t^2), t=0..x)
 
 use super::{usize_to_n_bits, SCALE};
-use atlas_onnx_tracer::tensor::Tensor;
+use onnx_tracer::tensor::Tensor;
 
 /// Error function lookup table implementation.
 ///
@@ -46,7 +46,7 @@ impl ErfTable {
         let indices_tensor = Tensor::new(Some(&indices), &[1, table_size])
             .expect("failed to build erf LUT input tensor");
         let result =
-            atlas_onnx_tracer::tensor::ops::nonlinearities::erffunc(&indices_tensor, SCALE);
+            onnx_tracer::tensor::ops::nonlinearities::erffunc(&indices_tensor, SCALE);
         result.data().to_vec()
     }
 }

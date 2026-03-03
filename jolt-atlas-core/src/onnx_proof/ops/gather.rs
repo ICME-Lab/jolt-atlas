@@ -1,5 +1,5 @@
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
         ComputationGraph,
@@ -734,7 +734,7 @@ fn ra_hamming_weight_params<F: JoltField>(
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     fn gather_model(input_shape: &[usize], dictionnary_len: usize, word_dim: usize) -> Model {

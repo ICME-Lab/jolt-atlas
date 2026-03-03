@@ -4,7 +4,7 @@
 //! tanh(x) = (e^x - e^-x) / (e^x + e^-x)
 
 use super::{usize_to_n_bits, SCALE};
-use atlas_onnx_tracer::tensor::Tensor;
+use onnx_tracer::tensor::Tensor;
 
 /// Hyperbolic tangent lookup table implementation.
 ///
@@ -48,7 +48,7 @@ impl TanhTable {
             .map(|i| usize_to_n_bits(i, self.log_table_size))
             .collect();
         let indices_tensor = Tensor::new(Some(&indices), &[1, table_size]).unwrap();
-        let result = atlas_onnx_tracer::tensor::ops::nonlinearities::tanh(&indices_tensor, SCALE);
+        let result = onnx_tracer::tensor::ops::nonlinearities::tanh(&indices_tensor, SCALE);
         result.data().to_vec()
     }
 }

@@ -78,8 +78,8 @@ jobs:
       - name: Run BGE test
         run: cargo nextest run --workspace --run-ignored ignored-only -E 'test(test_bge_small_en_v1_5)'
 
-  build-wasm-atlas-onnx-tracer:
-    name: Build Wasm - atlas-onnx-tracer
+  build-wasm-onnx-tracer:
+    name: Build Wasm - onnx-tracer
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-Adead_code -Aunused_imports -Aunused_variables -Aunused_mut"
@@ -89,4 +89,4 @@ jobs:
       - name: Install wasm32 target
         run: rustup target add wasm32-unknown-unknown
       - name: Build Wasm
-        run: cargo build -p atlas-onnx-tracer --release --target wasm32-unknown-unknown
+        run: cargo build -p onnx-tracer --release --target wasm32-unknown-unknown

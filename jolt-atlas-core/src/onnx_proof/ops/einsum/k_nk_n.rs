@@ -1,4 +1,4 @@
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
 };
@@ -247,7 +247,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for KNkNVerifie
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     fn matvec_model(rng: &mut StdRng, k: usize, n: usize) -> Model {

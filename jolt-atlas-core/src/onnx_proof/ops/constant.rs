@@ -2,7 +2,7 @@ use crate::onnx_proof::{
     ops::{OperatorProofTrait, Prover, Verifier},
     ProofId,
 };
-use atlas_onnx_tracer::{node::ComputationNode, ops::Constant};
+use onnx_tracer::{node::ComputationNode, ops::Constant};
 
 use joltworks::{
     field::JoltField,

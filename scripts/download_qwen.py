@@ -6,7 +6,7 @@ The script:
   2. Exports Qwen2-0.5B to ONNX via `optimum-cli` (without KV-cache).
   3. Renames model.onnx → network.onnx (convention used by other models).
 
-Output directory: atlas-onnx-tracer/models/qwen/
+Output directory: onnx-tracer/models/qwen/
 """
 
 import subprocess
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MODEL_DIR = REPO_ROOT / "atlas-onnx-tracer" / "models" / "qwen"
+MODEL_DIR = REPO_ROOT / "onnx-tracer" / "models" / "qwen"
 
 
 def ensure_packages():

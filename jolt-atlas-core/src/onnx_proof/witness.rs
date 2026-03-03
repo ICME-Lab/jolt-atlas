@@ -27,7 +27,7 @@ use crate::{
     },
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
 };
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
         Model,

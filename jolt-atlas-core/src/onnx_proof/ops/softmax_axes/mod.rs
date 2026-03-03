@@ -43,7 +43,7 @@ use crate::onnx_proof::{
     },
     ProofId, ProofType,
 };
-use atlas_onnx_tracer::{
+use onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::SoftmaxAxes,
@@ -295,7 +295,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
     #[tracing::instrument(skip_all)]
     fn generate_trace_cache(
         &self,
-    ) -> Vec<atlas_onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace> {
+    ) -> Vec<onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace> {
         let mut cached_traces = Vec::new();
         for operand_chunk in self
             .operand
@@ -320,7 +320,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
     /// for efficient verification.
     fn prove_div_sum_max<T: Transcript>(
         &self,
-        cached_traces: &[atlas_onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace],
+        cached_traces: &[onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace],
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> SumcheckInstanceProof<F, T> {
@@ -397,7 +397,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
     /// Verifies exponentiation using a small LUT approach (similar to zkGPT but using shout instead of lasso).
     fn prove_exponentiation<T: Transcript>(
         &self,
-        cached_traces: &[atlas_onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace],
+        cached_traces: &[onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace],
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> (SumcheckInstanceProof<F, T>, SumcheckInstanceProof<F, T>) {
@@ -771,7 +771,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use onnx_tracer::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };

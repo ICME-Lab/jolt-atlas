@@ -1,5 +1,5 @@
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
-use atlas_onnx_tracer::{node::ComputationNode, ops::And};
+use onnx_tracer::{node::ComputationNode, ops::And};
 use joltworks::{
     field::JoltField, subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
     utils::errors::ProofVerifyError,

@@ -12,7 +12,7 @@ test-feature = []
 [dependencies]
 # Internal
 common.workspace = true
-atlas-onnx-tracer.workspace = true
+onnx-tracer.workspace = true
 
 # Serialization
 serde.workspace = true

@@ -35,7 +35,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        let params = BroadcastParams::new(node.clone(), &prover.accumulator);
+        let params = BroadcastParams::new(
+            node.clone(),
+            &prover.accumulator,
+            &prover.preprocessing.model.graph,
+        );
         let broadcast_prover = BroadcastProver::initialize(&prover.trace, params);
         broadcast_prover.prove(&mut prover.accumulator, &mut prover.transcript);
         // Broadcast doesn't produce a sumcheck proof
@@ -63,18 +67,33 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
 pub struct BroadcastParams<F: JoltField> {
     r_output: Vec<F::Challenge>,
     computation_node: ComputationNode,
+    input_raw_dims: Vec<usize>,
+    output_raw_dims: Vec<usize>,
 }
 
 impl<F: JoltField> BroadcastParams<F> {
     /// Create new broadcast parameters from a computation node and opening accumulator.
-    pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
+    pub fn new(
+        computation_node: ComputationNode,
+        accumulator: &dyn OpeningAccumulator<F>,
+        graph: &ComputationGraph,
+    ) -> Self {
         let r_output = accumulator
             .get_node_output_opening(computation_node.idx)
             .0
             .r;
+        let input_raw_dims = graph
+            .nodes
+            .get(&computation_node.inputs[0])
+            .expect("Broadcast node should have an input")
+            .output_dims
+            .clone();
+        let output_raw_dims = computation_node.output_dims.clone();
         Self {
             r_output,
             computation_node,
+            input_raw_dims,
+            output_raw_dims,
         }
     }
 }
@@ -97,15 +116,16 @@ impl<F: JoltField> BroadcastProver<F> {
             panic!("Expected one operand for Broadcast operation")
         };
 
-        let input_dims = operand.dims();
+        // let input_dims = operand.dims();
         let output_dims = output.dims();
-        let broadcast_tensor = build_broadcast_tensor(input_dims, output_dims);
+        let broadcast_tensor =
+            build_broadcast_tensor(&params.input_raw_dims, &params.output_raw_dims);
 
         let (r_input, _r_broadcast) =
             split_broadcast_vars::<F>(output_dims, broadcast_tensor.dims(), &params.r_output);
 
         let mut operand = operand.clone();
-        operand.pad_next_power_of_two();
+        // operand.pad_next_power_of_two();
         let claim_A = MultilinearPolynomial::from(operand.clone()).evaluate(&r_input);
 
         #[cfg(test)]
@@ -113,10 +133,9 @@ impl<F: JoltField> BroadcastProver<F> {
             // Ensure the broadcast tensor is correctly built,
             // Tensors are correctly padded, and the spliting of r_input/r_broadcast is correct
             let mut output = output.clone();
-            output.pad_next_power_of_two();
+            // output.pad_next_power_of_two();
             let claim_O = MultilinearPolynomial::from(output.clone()).evaluate(&params.r_output);
-            let mut broadcast_tensor = broadcast_tensor;
-            broadcast_tensor.pad_next_power_of_two();
+            let broadcast_tensor = broadcast_tensor;
             let eval_I = MultilinearPolynomial::from(broadcast_tensor).evaluate(&_r_broadcast);
             assert_eq!(claim_O, claim_A * eval_I);
         }
@@ -159,20 +178,16 @@ impl<F: JoltField> BroadcastVerifier<F> {
         accumulator: &VerifierOpeningAccumulator<F>,
         graph: &ComputationGraph,
     ) -> Self {
-        let params = BroadcastParams::new(computation_node, accumulator);
-        let input_dims = graph
-            .nodes
-            .get(&params.computation_node.inputs[0])
-            .expect("Broadcast node should have an input")
-            .pow2_padded_output_dims();
+        let params = BroadcastParams::new(computation_node, accumulator, graph);
         let output_dims = params.computation_node.pow2_padded_output_dims();
-
-        let mut broadcast_tensor = build_broadcast_tensor(&input_dims, &output_dims);
+        let broadcast_tensor = build_broadcast_tensor(
+            &params.input_raw_dims,
+            &params.output_raw_dims,
+        );
 
         let (r_input, r_broadcast) =
             split_broadcast_vars::<F>(&output_dims, broadcast_tensor.dims(), &params.r_output);
 
-        broadcast_tensor.pad_next_power_of_two();
         let eval_I = MultilinearPolynomial::from(broadcast_tensor).evaluate(&r_broadcast);
 
         Self {
@@ -222,10 +237,32 @@ impl<F: JoltField> BroadcastVerifier<F> {
 ///
 /// # Returns
 /// A tensor of dimensions equal to the broadcasted dimensions, filled with ones.
-fn build_broadcast_tensor(input_dims: &[usize], target_dims: &[usize]) -> Tensor<i32> {
-    let bc_dims = get_broadcast_dims(input_dims, target_dims);
-    let num_elems: usize = bc_dims.iter().product();
-    Tensor::new(Some(&vec![1i32; num_elems]), &bc_dims).unwrap()
+fn build_broadcast_tensor(
+    input_raw_dims: &[usize],
+    output_raw_dim: &[usize],
+) -> Tensor<i32> {
+    let bc_raw_dims = get_broadcast_dims(input_raw_dims, output_raw_dim);
+    let bc_padded_dims: Vec<usize> = bc_raw_dims.iter().map(|d| d.next_power_of_two()).collect();
+    let total_elems: usize = bc_padded_dims.iter().product();
+    let mut bc_elements = Vec::with_capacity(total_elems);
+    for linear_idx in 0..total_elems {
+        // Convert row-major linear index into per-axis coordinates,
+        // then mark 1 iff the coordinate stays inside the raw (unpadded) box.
+        let mut rem = linear_idx;
+        let mut inside_raw = true;
+        for axis in (0..bc_padded_dims.len()).rev() {
+            let dim = bc_padded_dims[axis];
+            let coord = rem % dim;
+            rem /= dim;
+            if coord >= bc_raw_dims[axis] {
+                inside_raw = false;
+                break;
+            }
+        }
+        bc_elements.push(if inside_raw { 1 } else { 0 });
+    }
+
+    Tensor::new(Some(&bc_elements), &bc_padded_dims).unwrap()
 }
 
 /// Computes the broadcast dimensions
@@ -234,11 +271,11 @@ fn build_broadcast_tensor(input_dims: &[usize], target_dims: &[usize]) -> Tensor
 /// An array of dimensions, where each dimensions is either 1 if no broadcast is needed in that dimension,
 /// or the target dimension otherwise.
 ///
-fn get_broadcast_dims(input_dims: &[usize], target_dims: &[usize]) -> Vec<usize> {
-    assert!(input_dims.len() <= target_dims.len());
+fn get_broadcast_dims(input_dims: &[usize], output_dims: &[usize]) -> Vec<usize> {
+    assert!(input_dims.len() <= output_dims.len());
 
-    let mut broadcast_dims = target_dims.to_vec();
-    for ((i, &target_dim), &input_dim) in target_dims
+    let mut broadcast_dims = output_dims.to_vec();
+    for ((i, &target_dim), &input_dim) in output_dims
         .iter()
         .enumerate()
         .rev()
@@ -314,5 +351,22 @@ mod tests {
             let model = broadcast_model(&input_shape, &output_shape);
             unit_test_op(model, &[input]);
         }
+    }
+
+    #[test]
+    fn test_build_broadcast_tensor_pads_last_dim_to_pow2_with_zero_tail() {
+        let t = super::build_broadcast_tensor(&[1, 16, 1], &[1, 16, 768]);
+        assert_eq!(t.dims(), &[1, 1, 1024]);
+        assert_eq!(t.len(), 1024);
+        assert!(t.data()[..768].iter().all(|&x| x == 1));
+        assert!(t.data()[768..].iter().all(|&x| x == 0));
+    }
+
+    #[test]
+    fn test_build_broadcast_tensor_collapses_non_broadcast_axes_to_one() {
+        let t = super::build_broadcast_tensor(&[4, 1], &[4, 8]);
+        assert_eq!(t.dims(), &[1, 8]);
+        assert_eq!(t.len(), 8);
+        assert!(t.data().iter().all(|&x| x == 1));
     }
 }

@@ -443,15 +443,15 @@ pub fn sum_config(computation_node: &ComputationNode, model: &Model) -> SumConfi
     };
 
     // Get dimension information from the model
-    let input_dims = &model[input_idx].output_dims;
-    let output_dims = &computation_node.output_dims;
+    let input_dims = model[input_idx].pow2_padded_output_dims();
+    let output_dims = computation_node.pow2_padded_output_dims();
     let ndim = input_dims.len();
 
     // Validate axis is within bounds
     assert!(axis < ndim, "Axis {axis} out of bounds for {ndim}D tensor");
 
     // Normalize to 2D representation for the prover
-    let (axis, operand_dims, output_dims) = normalize_sum_to_2d(axis, input_dims, output_dims);
+    let (axis, operand_dims, output_dims) = normalize_sum_to_2d(axis, &input_dims, &output_dims);
 
     SumConfig {
         dims: SumDims::new(operand_dims, output_dims),

@@ -87,11 +87,11 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     ) -> Result<(), ProofVerifyError> {
         let output_index = model.outputs()[0];
         let output_computation_node = &model[output_index];
-        let r_node_output = verifier
-            .transcript
-            .challenge_vector_optimized::<F>(
-                output_computation_node.pow2_padded_num_output_elements().log_2(),
-            );
+        let r_node_output = verifier.transcript.challenge_vector_optimized::<F>(
+            output_computation_node
+                .pow2_padded_num_output_elements()
+                .log_2(),
+        );
         // Prover evaluates output claims on trace tensors padded to pow2 shape.
         // Mirror the same normalization for verifier-side expected output tensor.
         let mut padded_output = io.outputs[0].clone();

@@ -414,5 +414,4 @@ mod tests {
         assert!(!model.graph.inputs.is_empty());
         assert!(!model.graph.outputs.is_empty());
     }
-
 }

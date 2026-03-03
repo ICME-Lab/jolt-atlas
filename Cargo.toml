@@ -16,7 +16,6 @@ keywords = ["SNARK", "cryptography", "proofs", "zkML"]
 
 [workspace]
 members = ["jolt-atlas-core", "atlas-onnx-tracer", "common", "joltworks"]
-exclude = ["onnx-tracer", "zkml-jolt-core"]
 
 [workspace.dependencies]
 # Internal

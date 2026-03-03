@@ -282,12 +282,6 @@ pub struct ComputationGraph {
     pub inputs: Vec<usize>,
     /// Indices of output nodes
     pub outputs: Vec<usize>,
-    /// Original (unpadded) dimensions for input nodes, indexed by node index
-    /// Only populated when padding is enabled
-    pub original_input_dims: HashMap<usize, Vec<usize>>,
-    /// Original (unpadded) dimensions for output nodes, indexed by node index
-    /// Only populated when padding is enabled
-    pub original_output_dims: HashMap<usize, Vec<usize>>,
 }
 
 /// Runtime arguments for model execution and tracing.
@@ -301,9 +295,6 @@ pub struct RunArgs {
     pub variables: HashMap<String, usize>,
     /// The denominator in the fixed point representation used when quantizing the model
     pub scale: quantize::Scale,
-    /// Whether to pad all dimensions to powers of 2.
-    /// Defaults to true for optimal cryptographic performance.
-    pub pad_to_power_of_2: bool,
     /// When true, divide inputs by 1<<scale BEFORE Square/Cube (to prevent i32 overflow)
     /// instead of dividing the output AFTER (the default rebase).
     /// Enable this for large models (e.g., GPT-2) whose weight magnitudes would overflow.
@@ -317,7 +308,6 @@ impl Default for RunArgs {
         RunArgs {
             variables,
             scale: DEFAULT_SCALE,
-            pad_to_power_of_2: true, // Default to true for prover use-case
             pre_rebase_nonlinear: false,
         }
     }
@@ -343,7 +333,6 @@ impl RunArgs {
         RunArgs {
             variables,
             scale: DEFAULT_SCALE,
-            pad_to_power_of_2: true,
             pre_rebase_nonlinear: false,
         }
     }
@@ -367,7 +356,6 @@ impl RunArgs {
         RunArgs {
             variables,
             scale,
-            pad_to_power_of_2: true,
             pre_rebase_nonlinear: false,
         } // Default to true for optimal cryptographic performance
     }
@@ -395,18 +383,6 @@ impl RunArgs {
         self
     }
 
-    /// Enable or disable power-of-2 dimension padding
-    ///
-    /// # Example
-    /// ```
-    /// use atlas_onnx_tracer::model::RunArgs;
-    /// let run_args = RunArgs::default().with_padding(true);
-    /// ```
-    pub fn with_padding(mut self, enable: bool) -> Self {
-        self.pad_to_power_of_2 = enable;
-        self
-    }
-
     /// Enable pre-rebase for nonlinear ops (Square, Cube).
     ///
     /// When enabled, inputs to Square/Cube are divided by `1 << scale` BEFORE
@@ -429,7 +405,7 @@ mod tests {
     // Run with `-- --nocapture`
     // Allows to assert the model builds as expected
     fn test_load_reshape_model() {
-        let run_args = RunArgs::default().with_padding(false);
+        let run_args = RunArgs::default();
         let model = Model::load("models/reshape/network.onnx", &run_args);
 
         println!("{}", model.pretty_print());
@@ -439,36 +415,4 @@ mod tests {
         assert!(!model.graph.outputs.is_empty());
     }
 
-    #[test]
-    fn test_load_reshape_model_with_padding() {
-        let run_args = RunArgs::default().with_padding(true);
-        let model = Model::load("models/reshape/network.onnx", &run_args);
-
-        println!("{}", model.pretty_print());
-
-        assert!(!model.graph.nodes.is_empty());
-        assert!(!model.graph.inputs.is_empty());
-        assert!(!model.graph.outputs.is_empty());
-
-        // Verify that padding metadata is populated
-        assert!(
-            !model.graph.original_input_dims.is_empty(),
-            "Padded model should have original input dims stored"
-        );
-        assert!(
-            !model.graph.original_output_dims.is_empty(),
-            "Padded model should have original output dims stored"
-        );
-
-        // Verify all node output dims are powers of 2
-        for (idx, node) in &model.graph.nodes {
-            for &dim in &node.output_dims {
-                assert_eq!(
-                    dim,
-                    dim.next_power_of_two(),
-                    "Node {idx} has non-power-of-2 dimension: {dim}"
-                );
-            }
-        }
-    }
 }

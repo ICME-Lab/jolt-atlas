@@ -59,8 +59,6 @@ impl Model {
     /// Stores the initial input tensors into the node outputs map.
     ///
     /// This method maps each input tensor to its corresponding input node in the graph.
-    /// If the model was loaded with padding, input tensors are automatically padded
-    /// to match the expected padded dimensions.
     ///
     /// # Arguments
     ///
@@ -72,43 +70,12 @@ impl Model {
         inputs: &[Tensor<i32>],
         node_outputs: &mut BTreeMap<usize, Tensor<i32>>,
     ) {
-        for (i, input_tensor) in inputs.iter().enumerate() {
-            let input_node_idx = self.graph.inputs[i];
-
-            // Check if this model has padding enabled
-            let tensor_to_store =
-                if let Some(original_dims) = self.graph.original_input_dims.get(&input_node_idx) {
-                    // Verify input matches original (unpadded) dimensions
-                    assert_eq!(
-                        input_tensor.dims(),
-                        original_dims.as_slice(),
-                        "Input tensor {} has dims {:?}, expected {:?}",
-                        i,
-                        input_tensor.dims(),
-                        original_dims
-                    );
-
-                    // Pad input to match the padded node dimensions
-                    let node = self.graph.nodes.get(&input_node_idx).unwrap();
-                    let padded_dims = &node.output_dims;
-                    let mut padded_tensor = input_tensor.clone();
-                    padded_tensor
-                        .pad_to_dims(padded_dims)
-                        .expect("Failed to pad input tensor");
-                    padded_tensor
-                } else {
-                    // No padding, use tensor as-is
-                    input_tensor.clone()
-                };
-
-            node_outputs.insert(input_node_idx, tensor_to_store);
+        for (&input_node_idx, input_tensor) in self.graph.inputs.iter().zip(inputs.iter()) {
+            node_outputs.insert(input_node_idx, input_tensor.clone());
         }
     }
 
     /// Extracts the output tensors from the computed node outputs.
-    ///
-    /// If the model was loaded with padding, output tensors are automatically
-    /// cropped back to their original (unpadded) dimensions.
     ///
     /// # Arguments
     ///

@@ -20,23 +20,17 @@ impl Model {
     /// This is the main entry point for loading ONNX models.
     /// Uses a fluent builder pattern that makes each loading step explicit.
     ///
-    /// If `run_args.pad_to_power_of_2` is true, all constant tensors and node output
-    /// dimensions will be padded to the next power of 2 (e.g., [3, 7, 15, 8] → [4, 8, 16, 8]).
-    /// The original input and output dimensions are preserved for proper handling during
-    /// execution (inputs will be padded, outputs will be unpadded).
+    /// Model-level shape rewriting/padding is no longer performed at load time.
+    /// Any pow2 normalization required by the proof system is handled later in
+    /// proof-specific paths (e.g. trace-level padding).
     pub fn load_onnx_model(path: &str, run_args: &RunArgs) -> Self {
-        let mut loader = ModelLoader::new(path, run_args)
+        ModelLoader::new(path, run_args)
             .load_onnx_using_tract()
             .parse_nodes()
             .collect_input_nodes()
             .collect_outputs()
-            .prune();
-
-        if run_args.pad_to_power_of_2 {
-            loader = loader.pad();
-        }
-
-        loader.build()
+            .prune()
+            .build()
     }
 
     /// Loads and prepares an ONNX model using the Tract inference engine.
@@ -235,24 +229,6 @@ impl Model {
             .collect()
     }
 
-    /// Pads all dimensions in a shape to their next power of 2.
-    ///
-    /// # Arguments
-    /// * `dims` - The original dimensions
-    ///
-    /// # Returns
-    /// A new vector with each dimension padded to the next power of 2
-    ///
-    /// # Example
-    /// ```ignore
-    /// let dims = vec![3, 7, 15, 8];
-    /// let padded = Model::pad_dims_to_power_of_2(&dims);
-    /// assert_eq!(padded, vec![4, 8, 16, 8]);
-    /// ```
-    fn pad_dims_to_power_of_2(dims: &[usize]) -> Vec<usize> {
-        dims.iter().map(|&d| d.next_power_of_two()).collect()
-    }
-
     /// Prunes unused nodes from the computation graph and remaps indices.
     ///
     /// A node is considered "used" if it is reachable from any output node
@@ -380,8 +356,6 @@ pub struct ModelLoader<'a> {
     mapper: Option<NodeIndexMapper>,
     inputs: Option<Vec<usize>>,
     outputs: Option<Vec<usize>>,
-    original_input_dims: HashMap<usize, Vec<usize>>,
-    original_output_dims: HashMap<usize, Vec<usize>>,
 }
 
 impl<'a> ModelLoader<'a> {
@@ -396,8 +370,6 @@ impl<'a> ModelLoader<'a> {
             mapper: None,
             inputs: None,
             outputs: None,
-            original_input_dims: HashMap::new(),
-            original_output_dims: HashMap::new(),
         }
     }
 
@@ -490,75 +462,6 @@ impl<'a> ModelLoader<'a> {
         self
     }
 
-    #[tracing::instrument(name = "ModelLoader::pad", skip_all)]
-    /// Pads all constant tensors and node output dimensions to the next power of 2.
-    ///
-    /// This step:
-    /// - Stores original input and output dimensions for later use during execution
-    /// - Pads all Constant operator tensors using Tensor::pad_next_power_of_two()
-    /// - Updates all node output_dims to their padded equivalents
-    ///
-    /// # Panics
-    /// Panics if parse_nodes, collect_input_nodes, or collect_outputs have not been called.
-    #[tracing::instrument(name = "ModelLoader::pad", skip_all)]
-    pub fn pad(mut self) -> Self {
-        let nodes = self
-            .nodes
-            .as_mut()
-            .expect("parse_nodes must be called first");
-        let inputs = self
-            .inputs
-            .as_ref()
-            .expect("collect_input_nodes must be called first");
-        let outputs = self
-            .outputs
-            .as_ref()
-            .expect("collect_outputs must be called first");
-
-        // Store original input dimensions
-        for &input_idx in inputs {
-            if let Some(node) = nodes.get(&input_idx) {
-                self.original_input_dims
-                    .insert(input_idx, node.output_dims.clone());
-            }
-        }
-
-        // Store original output dimensions
-        for &output_idx in outputs {
-            if let Some(node) = nodes.get(&output_idx) {
-                self.original_output_dims
-                    .insert(output_idx, node.output_dims.clone());
-            }
-        }
-
-        // Pad all nodes: constant tensors, operator-internal shapes, and output dimensions
-        for node in nodes.values_mut() {
-            // Pad constant tensors
-            if let Operator::Constant(constant) = &mut node.operator {
-                constant.0.pad_next_power_of_two();
-            }
-
-            // Pad operator-internal shapes that must stay consistent with padded dimensions
-            match &mut node.operator {
-                Operator::Broadcast(broadcast) => {
-                    broadcast.shape = Model::pad_dims_to_power_of_2(&broadcast.shape);
-                }
-                Operator::Reshape(reshape) => {
-                    reshape.shape = Model::pad_dims_to_power_of_2(&reshape.shape);
-                }
-                Operator::IsNan(is_nan) => {
-                    is_nan.out_dims = Model::pad_dims_to_power_of_2(&is_nan.out_dims);
-                }
-                _ => {}
-            }
-
-            // Pad output dimensions for all nodes
-            node.output_dims = Model::pad_dims_to_power_of_2(&node.output_dims);
-        }
-
-        self
-    }
-
     /// Builds the final Model with the computation graph.
     ///
     /// # Panics
@@ -570,8 +473,6 @@ impl<'a> ModelLoader<'a> {
                 nodes: self.nodes.expect("parse_nodes must be called"),
                 inputs: self.inputs.expect("collect_input_nodes must be called"),
                 outputs: self.outputs.expect("collect_outputs must be called"),
-                original_input_dims: self.original_input_dims,
-                original_output_dims: self.original_output_dims,
             },
         }
     }

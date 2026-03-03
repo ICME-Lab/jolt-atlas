@@ -9,7 +9,7 @@ use crate::{
     tensor::Tensor,
     utils::f32::F32,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use super::{ComputationGraph, Model};
 
@@ -341,8 +341,6 @@ impl ModelBuilder {
                 nodes: self.nodes,
                 inputs: self.inputs,
                 outputs: self.outputs,
-                original_input_dims: HashMap::new(),
-                original_output_dims: HashMap::new(),
             },
         }
     }

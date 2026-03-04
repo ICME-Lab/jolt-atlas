@@ -92,7 +92,7 @@ pub trait OpeningAccumulator<F: JoltField> {
     /// the entry with the smallest consumer index and we never check the remaining
     /// entries. All per-consumer openings for the same producer should be reduced
     /// to a single opening (PAZK 4.5.2).
-    fn get_node_output_opening(&self, producer_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F);
+    fn get_node_output_opening(&self, node_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F);
 }
 
 impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
@@ -133,12 +133,12 @@ impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
 
     fn get_node_output_opening(&self, node_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
         // Scan for any NodeExecution(_) entry for this node's NodeOutput.
-        // TODO(#138): `.next()` returns the entry with the smallest producer index;
+        // TODO(#138): `.next()` returns the entry with the smallest consumer index;
         // the remaining entries are never verified. See trait-level doc comment.
         let lo = OpeningId::Virtual(
             VirtualPolynomial::NodeOutput(node_idx),
-            // Only consider openings for producer indices greater than node index,
-            // since NodeOutput claims only produced by later nodes
+            // Only consider openings for consumer indices greater than node index,
+            // since output is only consumed by later nodes
             SumcheckId::NodeExecution(node_idx + 1),
         );
         let hi = OpeningId::Virtual(
@@ -499,8 +499,8 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         // the remaining entries are never verified. See trait-level doc comment.
         let lo = OpeningId::Virtual(
             VirtualPolynomial::NodeOutput(node_idx),
-            // Only consider openings for producer indices greater than node index,
-            // since NodeOutput claims are only produced by later nodes
+            // Only consider openings for consumer indices greater than node index,
+            // since output is only consumed by later nodes
             SumcheckId::NodeExecution(node_idx + 1),
         );
         let hi = OpeningId::Virtual(

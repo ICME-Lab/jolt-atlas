@@ -124,16 +124,14 @@ impl<F: JoltField> BroadcastProver<F> {
         let (r_input, _r_broadcast) =
             split_broadcast_vars::<F>(output_dims, broadcast_tensor.dims(), &params.r_output);
 
-        let mut operand = operand.clone();
-        // operand.pad_next_power_of_two();
+        let operand = operand.clone();
         let claim_A = MultilinearPolynomial::from(operand.clone()).evaluate(&r_input);
 
         #[cfg(test)]
         {
             // Ensure the broadcast tensor is correctly built,
             // Tensors are correctly padded, and the spliting of r_input/r_broadcast is correct
-            let mut output = output.clone();
-            // output.pad_next_power_of_two();
+            let output = output.clone();
             let claim_O = MultilinearPolynomial::from(output.clone()).evaluate(&params.r_output);
             let broadcast_tensor = broadcast_tensor;
             let eval_I = MultilinearPolynomial::from(broadcast_tensor).evaluate(&_r_broadcast);
@@ -180,10 +178,8 @@ impl<F: JoltField> BroadcastVerifier<F> {
     ) -> Self {
         let params = BroadcastParams::new(computation_node, accumulator, graph);
         let output_dims = params.computation_node.pow2_padded_output_dims();
-        let broadcast_tensor = build_broadcast_tensor(
-            &params.input_raw_dims,
-            &params.output_raw_dims,
-        );
+        let broadcast_tensor =
+            build_broadcast_tensor(&params.input_raw_dims, &params.output_raw_dims);
 
         let (r_input, r_broadcast) =
             split_broadcast_vars::<F>(&output_dims, broadcast_tensor.dims(), &params.r_output);
@@ -237,10 +233,7 @@ impl<F: JoltField> BroadcastVerifier<F> {
 ///
 /// # Returns
 /// A tensor of dimensions equal to the broadcasted dimensions, filled with ones.
-fn build_broadcast_tensor(
-    input_raw_dims: &[usize],
-    output_raw_dim: &[usize],
-) -> Tensor<i32> {
+fn build_broadcast_tensor(input_raw_dims: &[usize], output_raw_dim: &[usize]) -> Tensor<i32> {
     let bc_raw_dims = get_broadcast_dims(input_raw_dims, output_raw_dim);
     let bc_padded_dims: Vec<usize> = bc_raw_dims.iter().map(|d| d.next_power_of_two()).collect();
     let total_elems: usize = bc_padded_dims.iter().product();
@@ -322,8 +315,8 @@ fn split_broadcast_vars<F: JoltField>(
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::Fr;
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::onnx_proof::Fr;
     use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use joltworks::field::JoltField;
     use rand::{rngs::StdRng, SeedableRng};

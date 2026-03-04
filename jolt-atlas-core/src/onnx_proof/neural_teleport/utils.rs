@@ -6,12 +6,13 @@
 use super::n_bits_to_usize;
 use atlas_onnx_tracer::tensor::Tensor;
 use joltworks::{
-    field::JoltField,
-    poly::eq_poly::EqPolynomial,
-    utils::thread::unsafe_allocate_zero_vec,
+    field::JoltField, poly::eq_poly::EqPolynomial, utils::thread::unsafe_allocate_zero_vec,
 };
 use rayon::{
-    iter::{IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator},
+    iter::{
+        IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator,
+        ParallelIterator,
+    },
     slice::ParallelSlice,
 };
 
@@ -27,7 +28,10 @@ pub fn compute_ra_evals_direct<F>(
 where
     F: JoltField,
 {
-    let indexes_usize = indexes.par_iter().map(|&x| x as usize).collect::<Vec<usize>>();
+    let indexes_usize = indexes
+        .par_iter()
+        .map(|&x| x as usize)
+        .collect::<Vec<usize>>();
     compute_ra_evals_from_usize_indices(r, &indexes_usize, table_size)
 }
 

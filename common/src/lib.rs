@@ -15,8 +15,10 @@ pub enum CommittedPolynomial {
     ///
     /// `1` - d
     NodeOutputRaD(usize, usize),
-    TanhRaD(usize, usize), // One-hot read addresses for Tanh lookup
+    CosRaD(usize, usize),  // One-hot read addresses for Cos lookup
     ErfRaD(usize, usize),  // One-hot read addresses for Erf lookup
+    SinRaD(usize, usize),  // One-hot read addresses for Sin lookup
+    TanhRaD(usize, usize), // One-hot read addresses for Tanh lookup
 
     /// Fields:
     ///
@@ -57,8 +59,10 @@ pub enum VirtualPolynomial {
     /// `0` - producer node index
     NodeOutput(usize),
     NodeOutputRa(usize),
-    TanhRa(usize), // One-hot read addresses for Tanh lookup
+    CosRa(usize),  // One-hot read addresses for Cos lookup
     ErfRa(usize),  // One-hot read addresses for Erf lookup
+    SinRa(usize),  // One-hot read addresses for Sin lookup
+    TanhRa(usize), // One-hot read addresses for Tanh lookup
 
     /// Fields:
     ///
@@ -166,6 +170,16 @@ impl CanonicalSerialize for CommittedPolynomial {
                 a.serialize_with_mode(&mut writer, compress)?;
                 b.serialize_with_mode(&mut writer, compress)?;
             }
+            Self::CosRaD(a, b) => {
+                14u8.serialize_with_mode(&mut writer, compress)?;
+                a.serialize_with_mode(&mut writer, compress)?;
+                b.serialize_with_mode(&mut writer, compress)?;
+            }
+            Self::SinRaD(a, b) => {
+                15u8.serialize_with_mode(&mut writer, compress)?;
+                a.serialize_with_mode(&mut writer, compress)?;
+                b.serialize_with_mode(&mut writer, compress)?;
+            }
         }
         Ok(())
     }
@@ -175,6 +189,8 @@ impl CanonicalSerialize for CommittedPolynomial {
             Self::NodeOutputRaD(a, b)
             | Self::TanhRaD(a, b)
             | Self::ErfRaD(a, b)
+            | Self::CosRaD(a, b)
+            | Self::SinRaD(a, b)
             | Self::SoftmaxRemainder(a, b)
             | Self::DivRangeCheckRaD(a, b)
             | Self::SqrtDivRangeCheckRaD(a, b)
@@ -267,6 +283,14 @@ impl CanonicalDeserialize for CommittedPolynomial {
                 validate,
             )?)),
             13 => Ok(Self::ErfRaD(
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+            )),
+            14 => Ok(Self::CosRaD(
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+            )),
+            15 => Ok(Self::SinRaD(
                 usize::deserialize_with_mode(&mut reader, compress, validate)?,
                 usize::deserialize_with_mode(&mut reader, compress, validate)?,
             )),
@@ -373,6 +397,14 @@ impl CanonicalSerialize for VirtualPolynomial {
                 19u8.serialize_with_mode(&mut writer, compress)?;
                 a.serialize_with_mode(&mut writer, compress)?;
             }
+            Self::CosRa(a) => {
+                20u8.serialize_with_mode(&mut writer, compress)?;
+                a.serialize_with_mode(&mut writer, compress)?;
+            }
+            Self::SinRa(a) => {
+                21u8.serialize_with_mode(&mut writer, compress)?;
+                a.serialize_with_mode(&mut writer, compress)?;
+            }
         }
         Ok(())
     }
@@ -382,8 +414,10 @@ impl CanonicalSerialize for VirtualPolynomial {
             Self::HammingWeight => 0,
             Self::NodeOutput(a) => a.serialized_size(compress),
             Self::NodeOutputRa(a)
-            | Self::TanhRa(a)
+            | Self::CosRa(a)
             | Self::ErfRa(a)
+            | Self::SinRa(a)
+            | Self::TanhRa(a)
             | Self::DivRangeCheckRa(a)
             | Self::SqrtRangeCheckRa(a)
             | Self::TeleportRangeCheckRa(a)
@@ -503,6 +537,16 @@ impl CanonicalDeserialize for VirtualPolynomial {
                 validate,
             )?)),
             19 => Ok(Self::ErfRa(usize::deserialize_with_mode(
+                &mut reader,
+                compress,
+                validate,
+            )?)),
+            20 => Ok(Self::CosRa(usize::deserialize_with_mode(
+                &mut reader,
+                compress,
+                validate,
+            )?)),
+            21 => Ok(Self::SinRa(usize::deserialize_with_mode(
                 &mut reader,
                 compress,
                 validate,

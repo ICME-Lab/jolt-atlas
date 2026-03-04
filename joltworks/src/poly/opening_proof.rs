@@ -92,7 +92,7 @@ pub trait OpeningAccumulator<F: JoltField> {
     /// the entry with the smallest consumer index and we never check the remaining
     /// entries. All per-consumer openings for the same producer should be reduced
     /// to a single opening (PAZK 4.5.2).
-    fn get_node_output_opening(&self, producer_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F);
+    fn get_node_output_opening(&self, node_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F);
 }
 
 impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
@@ -131,22 +131,25 @@ impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
         (point.clone(), *claim)
     }
 
-    fn get_node_output_opening(&self, producer_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        // Scan for any NodeExecution(_) entry for this producer's NodeOutput.
+    fn get_node_output_opening(&self, node_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+        // Scan for any NodeExecution(_) entry for this node's NodeOutput.
         // TODO(#138): `.next()` returns the entry with the smallest consumer index;
         // the remaining entries are never verified. See trait-level doc comment.
         let lo = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(producer_idx),
-            SumcheckId::NodeExecution(0),
+            VirtualPolynomial::NodeOutput(node_idx),
+            // Only consider openings for consumer indices greater than node index,
+            // since output is only consumed by later nodes
+            SumcheckId::NodeExecution(node_idx + 1),
         );
         let hi = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(producer_idx),
+            VirtualPolynomial::NodeOutput(node_idx),
             SumcheckId::NodeExecution(usize::MAX),
         );
-        let (_, (point, claim)) =
-            self.openings.range(lo..=hi).next().unwrap_or_else(|| {
-                panic!("No NodeOutput opening found for producer {producer_idx}")
-            });
+        let (_, (point, claim)) = self
+            .openings
+            .range(lo..=hi)
+            .next()
+            .unwrap_or_else(|| panic!("No NodeOutput opening found for node {node_idx}"));
         (point.clone(), *claim)
     }
 }
@@ -490,22 +493,25 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         (point.clone(), *claim)
     }
 
-    fn get_node_output_opening(&self, producer_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        // Scan for any NodeExecution(_) entry for this producer's NodeOutput.
+    fn get_node_output_opening(&self, node_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+        // Scan for any NodeExecution(_) entry for this node's NodeOutput.
         // TODO(#138): `.next()` returns the entry with the smallest consumer index;
         // the remaining entries are never verified. See trait-level doc comment.
         let lo = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(producer_idx),
-            SumcheckId::NodeExecution(0),
+            VirtualPolynomial::NodeOutput(node_idx),
+            // Only consider openings for consumer indices greater than node index,
+            // since output is only consumed by later nodes
+            SumcheckId::NodeExecution(node_idx + 1),
         );
         let hi = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(producer_idx),
+            VirtualPolynomial::NodeOutput(node_idx),
             SumcheckId::NodeExecution(usize::MAX),
         );
-        let (_, (point, claim)) =
-            self.openings.range(lo..=hi).next().unwrap_or_else(|| {
-                panic!("No NodeOutput opening found for producer {producer_idx}")
-            });
+        let (_, (point, claim)) = self
+            .openings
+            .range(lo..=hi)
+            .next()
+            .unwrap_or_else(|| panic!("No NodeOutput opening found for node {node_idx}"));
         (point.clone(), *claim)
     }
 }

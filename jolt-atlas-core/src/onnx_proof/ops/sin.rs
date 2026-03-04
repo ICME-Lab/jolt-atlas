@@ -2,9 +2,8 @@ use crate::onnx_proof::neural_teleport::{
     division::{
         compute_division, TeleportDivisionParams, TeleportDivisionProver, TeleportDivisionVerifier,
     },
-    erf::ErfTable,
-    n_bits_to_usize,
-    utils::compute_ra_evals_nbits_2comp,
+    sin::{SinTable, SIN_LOG_TABLE_SIZE},
+    utils::compute_ra_evals_direct,
 };
 use crate::onnx_proof::{
     ops::OperatorProofTrait,
@@ -15,11 +14,12 @@ use crate::onnx_proof::{
 };
 use atlas_onnx_tracer::{
     model::{
+        consts::EIGHT_PI_APPROX,
         trace::{LayerData, Trace},
         ComputationGraph,
     },
-    node::{handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE, ComputationNode},
-    ops::Erf,
+    node::ComputationNode,
+    ops::Sin,
 };
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
@@ -27,6 +27,7 @@ use joltworks::{
     field::JoltField,
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
+        identity_poly::IdentityPolynomial,
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
@@ -34,13 +35,11 @@ use joltworks::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        teleport_id_poly::TeleportIdPolynomial,
         unipoly::UniPoly,
     },
     subprotocols::{
         shout::{self, RaOneHotEncoding},
-        sumcheck::BatchedSumcheck,
-        sumcheck::{Sumcheck, SumcheckInstanceProof},
+        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -49,7 +48,7 @@ use joltworks::{
 };
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
+impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
     fn prove(
         &self,
         node: &ComputationNode,
@@ -57,9 +56,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
         let mut results = Vec::new();
 
-        // Stage 1a: Neural teleportation division proof
-        let div_params = TeleportDivisionParams::new(node.clone(), &prover.accumulator, self.tau);
+        // Stage 1a: Neural teleportation remainder proof
+        let div_params =
+            TeleportDivisionParams::new(node.clone(), &prover.accumulator, EIGHT_PI_APPROX);
         let mut div_sumcheck = TeleportDivisionProver::new(&prover.trace, div_params);
+
+        // Prove the division sumcheck for the teleportation remainder
         let (div_proof, _) = Sumcheck::prove(
             &mut div_sumcheck,
             &mut prover.accumulator,
@@ -67,15 +69,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
         );
         results.push((ProofId(node.idx, ProofType::NeuralTeleport), div_proof));
 
-        // Stage 1b: Erf lookup proof
-        let params = ErfParams::new(
+        // Stage 1b: Execution proof for the sin layer
+        let params = SinParams::new(
             node.clone(),
             &prover.preprocessing.model.graph,
             &prover.accumulator,
             &mut prover.transcript,
-            self.clone(),
         );
-        let mut exec_sumcheck = ErfProver::initialize(
+        let mut exec_sumcheck = SinProver::initialize(
             &prover.trace,
             params,
             &mut prover.accumulator,
@@ -91,14 +92,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
         let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
         let input = operands[0];
 
-        // Compute quotient for neural teleportation
-        let (quotient, _remainder) = compute_division(input, self.tau);
-        let lookup_indices = quotient
+        // Compute remainder for neural teleportation
+        let (_, remainder) = compute_division(input, EIGHT_PI_APPROX);
+        let lookup_indices = remainder
             .par_iter()
-            .map(|&x| n_bits_to_usize(x, self.log_table))
+            .map(|&x| x as usize)
             .collect::<Vec<usize>>();
 
-        // Stage 2: Range check proof for division and first One-Hot checks for ErfRa
+        // Stage 2: Range check proof for teleportation and first one-hot checks for SinRa
         let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
         let (rangecheck_sumcheck, rc_lookup_indices) = rangecheck_provider
             .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
@@ -106,28 +107,26 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
                 &mut prover.accumulator,
                 &mut prover.transcript,
             );
-        let erf_encoding = ErfRaEncoding {
-            node_idx: node.idx,
-            log_table: self.log_table,
-        };
+        let sin_encoding = SinRaEncoding { node_idx: node.idx };
         let ra_onehot_provers = shout::ra_onehot_provers(
-            &erf_encoding,
+            &sin_encoding,
             &lookup_indices,
             &prover.accumulator,
             &mut prover.transcript,
         );
+
         let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
             vec![Box::new(rangecheck_sumcheck)];
         instances.extend(ra_onehot_provers);
 
-        let (erf_ra_one_hot_proof, _) = BatchedSumcheck::prove(
+        let (sin_ra_one_hot_proof, _) = BatchedSumcheck::prove(
             instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
             &mut prover.transcript,
         );
         results.push((
             ProofId(node.idx, ProofType::RaOneHotChecks),
-            erf_ra_one_hot_proof,
+            sin_ra_one_hot_proof,
         ));
 
         // Stage 3: one-hot checks for division
@@ -138,7 +137,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
             &prover.accumulator,
             &mut prover.transcript,
         );
-
         let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![rc_ra, rc_hw, rc_bool];
         let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
             instances.iter_mut().map(|v| &mut **v as _).collect(),
@@ -158,14 +156,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        // Stage 1a: Division verification
+        // Stage 1a: Neural teleportation remainder verification
         let div_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::NeuralTeleport))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
 
         let div_verifier =
-            TeleportDivisionVerifier::new(node.clone(), &verifier.accumulator, self.tau);
+            TeleportDivisionVerifier::new(node.clone(), &verifier.accumulator, EIGHT_PI_APPROX);
         Sumcheck::verify(
             div_proof,
             &div_verifier,
@@ -173,28 +171,27 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
             &mut verifier.transcript,
         )?;
 
-        // Stage 1b: Erf verification
-        let erf_proof = verifier
+        // Stage 1b: Execution verification for the sin layer
+        let sin_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
 
-        let exec_sumcheck = ErfVerifier::new(
+        let exec_sumcheck = SinVerifier::new(
             node.clone(),
             &verifier.preprocessing.model.graph,
             &mut verifier.accumulator,
             &mut verifier.transcript,
-            self.clone(),
         );
         Sumcheck::verify(
-            erf_proof,
+            sin_proof,
             &exec_sumcheck,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
 
-        // Stage 2: Range check verification for division and first One-Hot checks for ErfRa
-        let erf_ra_one_hot_proof = verifier
+        // Stage 2: Range check verification for teleportation and first one-hot checks for SinRa
+        let sin_ra_one_hot_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
@@ -205,12 +202,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
                 &mut verifier.accumulator,
                 &mut verifier.transcript,
             );
-        let erf_encoding = ErfRaEncoding {
-            node_idx: node.idx,
-            log_table: self.log_table,
-        };
+        let sin_encoding = SinRaEncoding { node_idx: node.idx };
         let ra_onehot_verifier = shout::ra_onehot_verifiers(
-            &erf_encoding,
+            &sin_encoding,
             &verifier.accumulator,
             &mut verifier.transcript,
         );
@@ -219,13 +213,13 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
         let mut instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = vec![&rangecheck_verifier];
         instances.extend(ra_onehot_verifier);
         BatchedSumcheck::verify(
-            erf_ra_one_hot_proof,
+            sin_ra_one_hot_proof,
             instances,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
 
-        // Stage 3: one-hot check verification for division
+        // Stage 3: One-hot checks for division
         let ra_one_hot_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::RaHammingWeight))
@@ -248,55 +242,44 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
-        let erf_encoding = ErfRaEncoding {
-            node_idx: node.idx,
-            log_table: NEURAL_TELEPORT_LOG_TABLE_SIZE,
-        };
+        let sin_encoding = SinRaEncoding { node_idx: node.idx };
         let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-        let erf_d = erf_encoding.one_hot_params().instruction_d;
+        let sin_d = sin_encoding.one_hot_params().instruction_d;
         let rc_d = rc_encoding.one_hot_params().instruction_d;
         let mut polys = vec![];
-        polys.extend((0..erf_d).map(|i| CommittedPolynomial::ErfRaD(node.idx, i)));
+        polys.extend((0..sin_d).map(|i| CommittedPolynomial::SinRaD(node.idx, i)));
         polys.extend((0..rc_d).map(|i| CommittedPolynomial::TeleportRangeCheckRaD(node.idx, i)));
         polys
     }
 }
 
-const DEGREE_BOUND: usize = 2; // TODO
+const DEGREE_BOUND: usize = 2;
 
-/// Parameters for proving error function (erf) activation operations.
-///
-/// Mirrors the parameter layout used by `ErfParams` so both lookup-style
-/// activations follow the same transcript/challenge flow.
 #[derive(Clone)]
-pub struct ErfParams<F: JoltField> {
-    /// Folding challenge used to combine multiple checks into one claim.
-    pub gamma: F,
-    /// Opening point sampled from the output claim of this node.
-    pub r_node_output: Vec<F::Challenge>,
-    /// Computation node currently being proven.
-    pub computation_node: ComputationNode,
-    /// Operator parameters (e.g. fixed-point scale for erf).
-    pub op: Erf,
-    /// Phantom marker for the field type.
-    pub _marker: core::marker::PhantomData<F>,
+/// Parameters for the sine trigonometric function.
+///
+/// Sin uses a lookup table preceded by a teleportation step that
+/// reduces the input domain.
+pub struct SinParams<F: JoltField> {
+    gamma: F,
+    r_node_output: Vec<F::Challenge>,
+    computation_node: ComputationNode,
 }
 
-impl<F: JoltField> ErfParams<F> {
-    /// Build erf parameters from the current accumulator/transcript state.
-    ///
-    /// This samples a fresh folding challenge and reuses the node-output opening
-    /// point already present in the accumulator, matching the erf flow.
+impl<F: JoltField> SinParams<F> {
+    /// Create a new SinParams instance for the given computation node.
     pub fn new(
         computation_node: ComputationNode,
         _graph: &ComputationGraph,
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut impl Transcript,
-        op: Erf,
     ) -> Self {
         let gamma = transcript.challenge_scalar();
         let r_node_output = accumulator
-            .get_node_output_opening(computation_node.idx)
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::TeleportRemainder(computation_node.idx),
+                SumcheckId::NodeExecution(computation_node.idx),
+            )
             .0
             .r;
 
@@ -304,30 +287,31 @@ impl<F: JoltField> ErfParams<F> {
             gamma,
             r_node_output,
             computation_node,
-            op,
-            _marker: core::marker::PhantomData,
         }
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for ErfParams<F> {
+impl<F: JoltField> SumcheckInstanceParams<F> for SinParams<F> {
     fn degree(&self) -> usize {
         DEGREE_BOUND
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         let rv_claim = accumulator
-            .get_node_output_opening(self.computation_node.idx)
-            .1;
-
-        let quotient_claim = accumulator
             .get_virtual_polynomial_opening(
-                VirtualPolynomial::TeleportQuotient(self.computation_node.idx),
-                SumcheckId::Raf,
+                VirtualPolynomial::NodeOutput(self.computation_node.idx),
+                SumcheckId::NodeExecution(self.computation_node.idx),
             )
             .1;
 
-        rv_claim + self.gamma * quotient_claim
+        let remainder_claim = accumulator
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::TeleportRemainder(self.computation_node.idx),
+                SumcheckId::NodeExecution(self.computation_node.idx),
+            )
+            .1;
+
+        rv_claim + self.gamma * remainder_claim
     }
 
     fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -335,83 +319,98 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ErfParams<F> {
     }
 
     fn num_rounds(&self) -> usize {
-        self.op.log_table
+        SIN_LOG_TABLE_SIZE
     }
 }
 
-/// Prover state for erf activation sumcheck protocol.
+/// Prover state for sin execution sumcheck instance.
 ///
-/// Implements a Read-Raf sumcheck for Erf lookup:
-/// output[i] = ErfTable[input[i]], where input is encoded via Ra * Int.
-pub struct ErfProver<F: JoltField> {
-    /// Parameters shared across rounds (gamma, node, opening point, op config).
-    pub params: ErfParams<F>,
-    /// Materialized erf lookup table as a multilinear polynomial.
-    pub erf_table: MultilinearPolynomial<F>,
-    /// One-hot Ra evaluations over lookup indices.
-    pub input_onehot: MultilinearPolynomial<F>,
-    /// Identity polynomial used for index folding in the lookup relation.
-    pub identity: TeleportIdPolynomial<F>,
+/// This implements a Read-Raf sumcheck for Sin lookup, asserting that each output[i] = SinTable[input[i]],
+/// and that input[i] = ∑ Ra[k] * Int[k].
+pub struct SinProver<F: JoltField> {
+    params: SinParams<F>,
+    sin_table: MultilinearPolynomial<F>,
+    input_onehot: MultilinearPolynomial<F>,
+    identity: IdentityPolynomial<F>,
 }
 
-impl<F: JoltField> ErfProver<F> {
-    /// Initialize the prover with trace data, parameters, accumulator, and transcript.
+impl<F: JoltField> SinProver<F> {
+    /// Initialize the prover state.
     pub fn initialize(
         trace: &Trace,
-        params: ErfParams<F>,
+        params: SinParams<F>,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
         let input = operands[0];
+        let (_quotient_tensor, remainder_tensor) = compute_division(input, EIGHT_PI_APPROX);
 
-        let (quotient_tensor, _remainder) = compute_division(input, params.op.tau);
+        assert!(remainder_tensor
+            .iter()
+            .all(|&x| (0..EIGHT_PI_APPROX).contains(&x)));
 
-        // Ensure input is within expected range for table size: 2^(log_table_size - 1) <= input < 2^(log_table_size - 1)
-        // Inputs outside this range will error
-        // TODO: Same as tanh.rs
-        assert!(quotient_tensor.iter().all(|&x| {
-            let lower_bound = -(1 << (params.op.log_table - 1));
-            let upper_bound = (1 << (params.op.log_table - 1)) - 1;
-            x >= lower_bound && x <= upper_bound
-        }));
-
-        // Create and materialize the erf lookup table (reduced size)
-        let erf_table = ErfTable::new(params.op.log_table);
-        let erf_table = MultilinearPolynomial::from(erf_table.materialize());
-
-        // Use the compute_ra_evals in tanh.rs
-        let input_onehot: Vec<F> = compute_ra_evals_nbits_2comp(
+        let sin_table = MultilinearPolynomial::from(SinTable::materialize());
+        let input_onehot: Vec<F> = compute_ra_evals_direct(
             &params.r_node_output,
-            &quotient_tensor,
-            params.op.log_table,
+            &remainder_tensor,
+            1 << SIN_LOG_TABLE_SIZE,
         );
 
-        // TODO(ClankPan): Follow up on the TODOs in tanh.rs.
-        let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data())
-            .evaluate(&params.r_node_output);
+        let output_claim =
+            MultilinearPolynomial::from(output.clone()).evaluate(&params.r_node_output);
+        // Special case where we add a new opening for the node output at node's own index,
+        // This is due to the fact that `remainder` poly claim is used as input claim for sin lookup sumcheck, together with a node output claim.
+        // Both claims are derived from a different opening point, so we need to derive a new claim for one of (`output`, `remainder`).
+        // We chose `output` to prevent us from having to use n-to-1 reductions on the `remainder` and rather only implement it on NodeOutput.
+        // Making further work for Issue#138 easier.
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::TeleportQuotient(params.computation_node.idx),
-            SumcheckId::Raf,
+            VirtualPolynomial::NodeOutput(params.computation_node.idx),
+            SumcheckId::NodeExecution(params.computation_node.idx),
             params.r_node_output.clone().into(),
-            quotient_claim,
+            output_claim,
         );
 
         let input_onehot = MultilinearPolynomial::from(input_onehot);
-        assert_eq!(input_onehot.len(), erf_table.len());
-        let identity = TeleportIdPolynomial::new(params.op.log_table);
+        assert_eq!(input_onehot.len(), sin_table.len());
+        let identity = IdentityPolynomial::new(SIN_LOG_TABLE_SIZE);
+
+        #[cfg(test)]
+        {
+            let remainder_claim = accumulator
+                .get_virtual_polynomial_opening(
+                    VirtualPolynomial::TeleportRemainder(params.computation_node.idx),
+                    SumcheckId::NodeExecution(params.computation_node.idx),
+                )
+                .1;
+            let rv_claim = accumulator
+                .get_virtual_polynomial_opening(
+                    VirtualPolynomial::NodeOutput(params.computation_node.idx),
+                    SumcheckId::NodeExecution(params.computation_node.idx),
+                )
+                .1;
+            let claim = (0..input_onehot.len())
+                .map(|i| {
+                    let a = input_onehot.get_bound_coeff(i);
+                    let b = sin_table.get_bound_coeff(i);
+                    let int = F::from_u32(i as u32);
+                    a * (b + params.gamma * int)
+                })
+                .sum();
+            assert_eq!(rv_claim + params.gamma * remainder_claim, claim)
+        }
 
         Self {
             params,
-            erf_table,
+            sin_table,
             input_onehot,
             identity,
         }
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> {
+impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SinProver<F> {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
@@ -419,7 +418,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         let Self {
             input_onehot,
-            erf_table,
+            sin_table,
             identity,
             ..
         } = self;
@@ -430,7 +429,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
                 let ra_evals =
                     input_onehot.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
                 let table_evals =
-                    erf_table.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+                    sin_table.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
                 let id_evals = identity.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
 
                 [
@@ -449,7 +448,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
     fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
         self.input_onehot
             .bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.erf_table.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.sin_table.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.identity.bind_parallel(r_j, BindingOrder::LowToHigh);
     }
 
@@ -463,7 +462,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
         let r = [opening_point.r.as_slice(), &self.params.r_node_output].concat();
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::ErfRa(self.params.computation_node.idx),
+            VirtualPolynomial::SinRa(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
             r.into(),
             self.input_onehot.final_sumcheck_claim(),
@@ -471,45 +470,38 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
     }
 }
 
-/// Verifier state for erf activation sumcheck protocol.
+/// Verifier state for sin execution sumcheck instance.
 ///
-/// Reconstructs the same lookup relation checked by `ErfProver`.
-pub struct ErfVerifier<F: JoltField> {
-    /// Parameters shared across rounds (gamma, node, opening point, op config).
-    pub params: ErfParams<F>,
-    /// Materialized erf lookup table used for expected-claim evaluation.
-    pub erf_table: MultilinearPolynomial<F>,
+/// Verifies that the prover correctly evaluated the Sin lookup table at the teleported remainders,
+/// And that the one-hot encoding of the input is correct.
+pub struct SinVerifier<F: JoltField> {
+    params: SinParams<F>,
+    sin_table: MultilinearPolynomial<F>,
 }
 
-impl<F: JoltField> ErfVerifier<F> {
-    /// Create a verifier instance for erf lookup proof.
-    ///
-    /// Samples verifier-side parameters from transcript/accumulator,
-    /// registers required virtual openings, and materializes the erf table.
+impl<F: JoltField> SinVerifier<F> {
+    /// Initialize the verifier state.
     pub fn new(
         computation_node: ComputationNode,
         graph: &ComputationGraph,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
-        op: Erf,
     ) -> Self {
-        let params = ErfParams::new(computation_node, graph, accumulator, transcript, op);
+        let params = SinParams::new(computation_node, graph, accumulator, transcript);
 
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::TeleportQuotient(params.computation_node.idx),
-            SumcheckId::Raf,
+            VirtualPolynomial::NodeOutput(params.computation_node.idx),
+            SumcheckId::NodeExecution(params.computation_node.idx),
             params.r_node_output.clone().into(),
         );
 
-        let erf_table = ErfTable::new(params.op.log_table);
-        let erf_table = MultilinearPolynomial::from(erf_table.materialize());
-
-        Self { params, erf_table }
+        let sin_table = MultilinearPolynomial::from(SinTable::materialize());
+        Self { params, sin_table }
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ErfVerifier<F> {
+impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SinVerifier<F> {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
@@ -523,16 +515,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ErfVerifier
 
         let ra_claim = accumulator
             .get_virtual_polynomial_opening(
-                VirtualPolynomial::ErfRa(self.params.computation_node.idx),
+                VirtualPolynomial::SinRa(self.params.computation_node.idx),
                 SumcheckId::NodeExecution(self.params.computation_node.idx),
             )
             .1;
-
-        // Evaluate erf table at the opening point
-        let table_claim = self.erf_table.evaluate(&opening_point.r);
-
-        let int_eval =
-            TeleportIdPolynomial::new(self.params.op.log_table).evaluate(&opening_point.r);
+        let table_claim = self.sin_table.evaluate(&opening_point.r);
+        let int_eval = IdentityPolynomial::new(SIN_LOG_TABLE_SIZE).evaluate(&opening_point.r);
 
         ra_claim * (table_claim + self.params.gamma * int_eval)
     }
@@ -547,52 +535,46 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ErfVerifier
         let r = [opening_point.r.as_slice(), &self.params.r_node_output].concat();
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::ErfRa(self.params.computation_node.idx),
+            VirtualPolynomial::SinRa(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
             r.into(),
         );
     }
 }
 
-// ---------------------------------------------------------------------------
-// ErfRaEncoding — implements RaOneHotEncoding for Erf's stage-2 one-hot checks
-// ---------------------------------------------------------------------------
-
-/// Encoding impl for erf one-hot checking.
+/// Encoding impl for Sin one-hot read-address checks.
 ///
-/// Used in the stage-2 one-hot checks for erf lookup table accesses.
-pub struct ErfRaEncoding {
-    /// Index of the computation node this encoding belongs to.
+/// This encodes the relation between the teleportation remainder and the sin lookup table index,
+pub struct SinRaEncoding {
+    /// Index of the computation node in the trace.
     pub node_idx: usize,
-    /// Log2 of the lookup table size.
-    pub log_table: usize,
 }
 
-impl RaOneHotEncoding for ErfRaEncoding {
+impl RaOneHotEncoding for SinRaEncoding {
     fn committed_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::ErfRaD(self.node_idx, d)
+        CommittedPolynomial::SinRaD(self.node_idx, d)
     }
 
     fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
         (
-            VirtualPolynomial::TeleportQuotient(self.node_idx),
+            VirtualPolynomial::TeleportRemainder(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
 
     fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
         (
-            VirtualPolynomial::ErfRa(self.node_idx),
+            VirtualPolynomial::SinRa(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
 
     fn log_k(&self) -> usize {
-        self.log_table
+        SIN_LOG_TABLE_SIZE
     }
 
     fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.log_table)
+        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), SIN_LOG_TABLE_SIZE)
     }
 }
 
@@ -601,27 +583,46 @@ mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
     use atlas_onnx_tracer::{
         model::{test::ModelBuilder, Model},
-        node::handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE,
         tensor::Tensor,
     };
     use rand::{rngs::StdRng, SeedableRng};
 
-    fn erf_model(input_shape: &[usize]) -> Model {
+    use super::EIGHT_PI_APPROX;
+
+    fn sin_model(input_shape: &[usize]) -> Model {
         let mut b = ModelBuilder::new();
         let i = b.input(input_shape.to_vec());
-        let res = b.erf(i);
+        let res = b.sin(i);
         b.mark_output(res);
         b.build()
     }
 
     #[test]
-    fn test_erf() {
-        let t = 1 << 14;
-        const MIN_INPUT_VALUE: i32 = -(1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1));
-        const MAX_INPUT_VALUE: i32 = 1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1);
-        let mut rng = StdRng::seed_from_u64(0x889);
-        let input = Tensor::random_range(&mut rng, &[t], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
-        let model = erf_model(&[t]);
+    fn test_sin_random_inputs() {
+        let t = 1 << 13;
+        let mut rng = StdRng::seed_from_u64(0xC05);
+        let input = Tensor::random_range(&mut rng, &[t], -50000..50000);
+        let model = sin_model(&[t]);
+        unit_test_op(model, &[input]);
+    }
+
+    #[test]
+    fn test_sin_periodic_boundary_inputs() {
+        let input = Tensor::new(
+            Some(&[
+                -EIGHT_PI_APPROX - 1,
+                -EIGHT_PI_APPROX,
+                -1,
+                0,
+                1,
+                EIGHT_PI_APPROX - 1,
+                EIGHT_PI_APPROX,
+                EIGHT_PI_APPROX + 1,
+            ]),
+            &[8],
+        )
+        .unwrap();
+        let model = sin_model(&[8]);
         unit_test_op(model, &[input]);
     }
 }

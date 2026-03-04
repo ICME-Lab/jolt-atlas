@@ -4212,6 +4212,35 @@ pub mod nonlinearities {
         .unwrap()
     }
 
+    /// Elementwise takes the remainder of the division by a const element.
+    /// # Arguments
+    ///
+    /// * `a` - Tensor
+    /// * `b` - Single value
+    /// # Examples
+    /// ```
+    /// use atlas_onnx_tracer::tensor::Tensor;
+    /// use atlas_onnx_tracer::tensor::ops::nonlinearities::const_rem;
+    /// let x = Tensor::<i32>::new(
+    ///     Some(&[2, 6, 2, 7, 1, 1]),
+    ///     &[2, 3],
+    /// ).unwrap();
+    /// let k = 5;
+    /// let result = const_rem(&x, k);
+    /// let expected = Tensor::<i32>::new(Some(&[2, 1, 2, 2, 1, 1]), &[2, 3]).unwrap();
+    /// assert_eq!(result, expected);
+    /// ```
+    pub fn const_rem(a: &Tensor<i32>, denom: i32) -> Tensor<i32> {
+        a.par_enum_map(|_, a_i| {
+            let mut rem = a_i % denom;
+            if (rem < 0 && denom > 0) || (rem > 0 && denom < 0) {
+                rem += denom;
+            }
+            Ok::<_, TensorError>(rem)
+        })
+        .unwrap()
+    }
+
     /*  Alternative implementation using rounding for division
 
         This commented-out version applies `.round()` to the division result,

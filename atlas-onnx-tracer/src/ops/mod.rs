@@ -13,6 +13,8 @@ pub mod broadcast;
 pub mod clamp;
 /// Constant tensor operator.
 pub mod constant;
+/// Element-wise cosine operator.
+pub mod cos;
 /// Element-wise cube (x^3) operator.
 pub mod cube;
 /// Element-wise division operator.
@@ -45,6 +47,8 @@ pub mod reshape;
 pub mod rsqrt;
 /// Division by a scalar constant operator.
 pub mod scalar_const_div;
+/// Element-wise sine operator.
+pub mod sin;
 /// Softmax activation operator.
 pub mod softmax;
 /// Element-wise square (x^2) operator.
@@ -109,13 +113,34 @@ macro_rules! define_operators {
 
 define_operators! {
     operators: [
-        Add, And, Clamp { axes: usize, max_spread: i32 },
-        Constant(Tensor<i32>), Cube, Div, Einsum { equation: String },
-        Erf { scale: F32, tau: i32, log_table: usize }, Gather { axis: usize }, Identity, Iff, Input,
-        IsNan { out_dims: Vec<usize> }, MoveAxis { source: usize, destination: usize },
-        Mul, Neg, Broadcast { shape: Vec<usize> }, ReLU, Reshape { shape:Vec<usize> },
-        Rsqrt { scale: F32 }, ScalarConstDiv {divisor: i32}, SoftmaxAxes { axes: usize, scale: F32 }, Square,
-        Sub, Sum { axes: Vec<usize> }, Tanh { scale: F32, tau: i32, log_table: usize },
+        Add,
+        Broadcast { shape: Vec<usize> },
+        And,
+        Clamp { axes: usize, max_spread: i32 },
+        Constant(Tensor<i32>),
+        Cos { scale: F32 },
+        Cube,
+        Div,
+        Einsum { equation: String },
+        Erf { scale: F32, tau: i32, log_table: usize },
+        Gather { axis: usize },
+        Identity,
+        Iff,
+        Input,
+        IsNan { out_dims: Vec<usize> },
+        MoveAxis { source: usize, destination: usize },
+        Mul,
+        Neg,
+        ReLU,
+        Reshape { shape:Vec<usize> },
+        Rsqrt { scale: F32 },
+        ScalarConstDiv {divisor: i32},
+        Sin { scale: F32 },
+        SoftmaxAxes { axes: usize, scale: F32 },
+        Square,
+        Sub,
+        Sum { axes: Vec<usize> },
+        Tanh { scale: F32, tau: i32, log_table: usize },
     ]
 }
 

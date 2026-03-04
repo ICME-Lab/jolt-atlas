@@ -6,6 +6,7 @@ use crate::onnx_proof::{
         },
         n_bits_to_usize,
         tanh::TanhTable,
+        utils::compute_ra_evals_nbits_2comp,
     },
     ops::OperatorProofTrait,
     range_checking::{
@@ -20,7 +21,6 @@ use atlas_onnx_tracer::{
     },
     node::{handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE, ComputationNode},
     ops::{Operator, Tanh},
-    tensor::Tensor,
 };
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
@@ -28,7 +28,6 @@ use joltworks::{
     field::JoltField,
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
-        eq_poly::EqPolynomial,
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
@@ -46,15 +45,9 @@ use joltworks::{
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, thread::unsafe_allocate_zero_vec},
+    utils::errors::ProofVerifyError,
 };
-use rayon::{
-    iter::{
-        IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
-        IntoParallelRefMutIterator, ParallelIterator,
-    },
-    slice::ParallelSlice,
-};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
     #[tracing::instrument(skip_all, name = "Tanh::prove")]
@@ -391,8 +384,11 @@ impl<F: JoltField> TanhProver<F> {
         let tanh_table = MultilinearPolynomial::from(tanh_table.materialize());
 
         // Compute one-hot encoding of QUOTIENT values (not input)
-        let input_onehot: Vec<F> =
-            compute_ra_evals(&params.r_node_output, &quotient_tensor, params.op.log_table);
+        let input_onehot: Vec<F> = compute_ra_evals_nbits_2comp(
+            &params.r_node_output,
+            &quotient_tensor,
+            params.op.log_table,
+        );
 
         // Cache quotient claim (used in tanh lookup)
         // We do not reuse the claim from the division sumcheck, because the opening point is different
@@ -626,48 +622,6 @@ impl RaOneHotEncoding for TanhRaEncoding {
     fn one_hot_params(&self) -> OneHotParams {
         OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.log_table)
     }
-}
-
-// From the input values, computes the one-hot read address vector
-pub(crate) fn compute_ra_evals<F>(
-    r: &[F::Challenge],
-    input: &Tensor<i32>,
-    log_table_size: usize,
-) -> Vec<F>
-where
-    F: JoltField,
-{
-    let E = EqPolynomial::evals(r);
-    let num_threads = rayon::current_num_threads();
-    let chunk_size = input.len().div_ceil(num_threads);
-
-    let table_size = 1 << log_table_size;
-    let input_usize = input
-        .par_iter()
-        .map(|&x| n_bits_to_usize(x, log_table_size))
-        .collect::<Vec<usize>>();
-
-    let partial_results: Vec<Vec<F>> = input_usize
-        .par_chunks(chunk_size)
-        .enumerate()
-        .map(|(chunk_idx, chunk)| {
-            let mut local_ra = unsafe_allocate_zero_vec::<F>(table_size);
-            let base_idx = chunk_idx * chunk_size;
-            chunk.iter().enumerate().for_each(|(local_j, &k)| {
-                let global_j = base_idx + local_j;
-                local_ra[k] += E[global_j];
-            });
-            local_ra
-        })
-        .collect();
-
-    let mut ra = unsafe_allocate_zero_vec::<F>(table_size);
-    for partial in partial_results {
-        ra.par_iter_mut()
-            .zip(partial.par_iter())
-            .for_each(|(dest, &src)| *dest += src);
-    }
-    ra
 }
 
 #[cfg(test)]

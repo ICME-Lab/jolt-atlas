@@ -5,9 +5,12 @@
 //! these don't use prefix-suffix decomposition and are designed for smaller
 //! table sizes typical of activation functions.
 
+pub mod cos;
 pub mod division;
 pub mod erf;
+pub mod sin;
 pub mod tanh;
+pub mod utils;
 
 /// Fixed-point scale factor: maps [-1, 1] to [-128, 128]
 pub const SCALE: f64 = 128.0;

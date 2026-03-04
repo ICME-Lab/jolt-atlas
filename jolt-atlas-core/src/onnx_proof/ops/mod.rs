@@ -44,7 +44,7 @@ pub mod broadcast;
 pub mod clamp;
 /// Constant tensor nodes.
 pub mod constant;
-/// Cos activation function.
+/// Cos trigonometric function.
 pub mod cos;
 /// Element-wise cube (x³) operation.
 pub mod cube;
@@ -80,7 +80,7 @@ pub mod reshape;
 pub mod rsqrt;
 /// Division by a scalar constant.
 pub mod scalar_const_div;
-/// Sin activation function.
+/// Sin trigonometric function.
 pub mod sin;
 /// Softmax operation along specified axes.
 pub mod softmax_axes;

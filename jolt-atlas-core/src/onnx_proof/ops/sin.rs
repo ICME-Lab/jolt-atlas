@@ -1,10 +1,9 @@
-#![allow(missing_docs)]
-
 use crate::onnx_proof::neural_teleport::{
     division::{
         compute_division, TeleportDivisionParams, TeleportDivisionProver, TeleportDivisionVerifier,
     },
-    SCALE,
+    sin::{SinTable, SIN_LOG_TABLE_SIZE},
+    utils::compute_ra_evals_direct,
 };
 use crate::onnx_proof::{
     ops::OperatorProofTrait,
@@ -21,7 +20,6 @@ use atlas_onnx_tracer::{
     },
     node::ComputationNode,
     ops::Sin,
-    tensor::Tensor,
 };
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
@@ -29,7 +27,6 @@ use joltworks::{
     field::JoltField,
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
-        eq_poly::EqPolynomial,
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
@@ -47,31 +44,9 @@ use joltworks::{
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, thread::unsafe_allocate_zero_vec},
+    utils::errors::ProofVerifyError,
 };
-use rayon::{
-    iter::{
-        IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
-        IntoParallelRefMutIterator, ParallelIterator,
-    },
-    slice::ParallelSlice,
-};
-
-const SIN_LOG_TABLE_SIZE: usize = (EIGHT_PI_APPROX as usize).next_power_of_two().ilog2() as usize;
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SinTable;
-
-impl SinTable {
-    pub fn materialize() -> Vec<i32> {
-        let table_size = 1 << SIN_LOG_TABLE_SIZE;
-        let indices: Vec<i32> = (0..table_size).map(|i| i as i32).collect();
-        let indices_tensor = Tensor::new(Some(&indices), &[1, table_size])
-            .expect("failed to build sin LUT input tensor");
-        let result = atlas_onnx_tracer::tensor::ops::nonlinearities::sin(&indices_tensor, SCALE);
-        result.data().to_vec()
-    }
-}
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
     fn prove(
@@ -281,6 +256,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
 const DEGREE_BOUND: usize = 2;
 
 #[derive(Clone)]
+/// Parameters for the sine trigonometric function.
+///
+/// Sin uses a lookup table preceded by a teleportation step that
+/// reduces the input domain.
 pub struct SinParams<F: JoltField> {
     gamma: F,
     r_node_output: Vec<F::Challenge>,
@@ -288,6 +267,7 @@ pub struct SinParams<F: JoltField> {
 }
 
 impl<F: JoltField> SinParams<F> {
+    /// Create a new SinParams instance for the given computation node.
     pub fn new(
         computation_node: ComputationNode,
         _graph: &ComputationGraph,
@@ -343,6 +323,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SinParams<F> {
     }
 }
 
+/// Prover state for sin execution sumcheck instance.
+///
+/// This implements a Read-Raf sumcheck for Sin lookup, asserting that each output[i] = SinTable[input[i]],
+/// and that input[i] = ∑ Ra[k] * Int[k].
 pub struct SinProver<F: JoltField> {
     params: SinParams<F>,
     sin_table: MultilinearPolynomial<F>,
@@ -351,6 +335,7 @@ pub struct SinProver<F: JoltField> {
 }
 
 impl<F: JoltField> SinProver<F> {
+    /// Initialize the prover state.
     pub fn initialize(
         trace: &Trace,
         params: SinParams<F>,
@@ -366,7 +351,7 @@ impl<F: JoltField> SinProver<F> {
             .all(|&x| (0..EIGHT_PI_APPROX).contains(&x)));
 
         let sin_table = MultilinearPolynomial::from(SinTable::materialize());
-        let input_onehot: Vec<F> = compute_ra_evals(
+        let input_onehot: Vec<F> = compute_ra_evals_direct(
             &params.r_node_output,
             &remainder_tensor,
             1 << SIN_LOG_TABLE_SIZE,
@@ -485,12 +470,17 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SinProver<F> 
     }
 }
 
+/// Verifier state for sin execution sumcheck instance.
+///
+/// Verifies that the prover correctly evaluated the Sin lookup table at the teleported remainders,
+/// And that the one-hot encoding of the input is correct.
 pub struct SinVerifier<F: JoltField> {
     params: SinParams<F>,
     sin_table: MultilinearPolynomial<F>,
 }
 
 impl<F: JoltField> SinVerifier<F> {
+    /// Initialize the verifier state.
     pub fn new(
         computation_node: ComputationNode,
         graph: &ComputationGraph,
@@ -552,42 +542,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SinVerifier
     }
 }
 
-fn compute_ra_evals<F>(r: &[F::Challenge], indexes: &Tensor<i32>, table_size: usize) -> Vec<F>
-where
-    F: JoltField,
-{
-    let E = EqPolynomial::evals(r);
-    let num_threads = rayon::current_num_threads();
-    let chunk_size = indexes.len().div_ceil(num_threads);
-
-    let indexes_usize = indexes
-        .par_iter()
-        .map(|&x| x as usize)
-        .collect::<Vec<usize>>();
-
-    let partial_results: Vec<Vec<F>> = indexes_usize
-        .par_chunks(chunk_size)
-        .enumerate()
-        .map(|(chunk_idx, chunk)| {
-            let mut local_ra = unsafe_allocate_zero_vec::<F>(table_size);
-            let base_idx = chunk_idx * chunk_size;
-            chunk.iter().enumerate().for_each(|(local_j, &k)| {
-                let global_j = base_idx + local_j;
-                local_ra[k] += E[global_j];
-            });
-            local_ra
-        })
-        .collect();
-    let mut ra = unsafe_allocate_zero_vec::<F>(table_size);
-    for partial in partial_results {
-        ra.par_iter_mut()
-            .zip(partial.par_iter())
-            .for_each(|(dest, &src)| *dest += src);
-    }
-    ra
-}
-
+/// Encoding impl for Sin one-hot read-address checks.
+///
+/// This encodes the relation between the teleportation remainder and the sin lookup table index,
 pub struct SinRaEncoding {
+    /// Index of the computation node in the trace.
     pub node_idx: usize,
 }
 

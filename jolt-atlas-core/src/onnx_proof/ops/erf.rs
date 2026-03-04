@@ -4,9 +4,10 @@ use crate::onnx_proof::neural_teleport::{
     },
     erf::ErfTable,
     n_bits_to_usize,
+    utils::compute_ra_evals_nbits_2comp,
 };
 use crate::onnx_proof::{
-    ops::{tanh::compute_ra_evals, OperatorProofTrait},
+    ops::OperatorProofTrait,
     range_checking::{
         range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
     },
@@ -380,8 +381,11 @@ impl<F: JoltField> ErfProver<F> {
         let erf_table = MultilinearPolynomial::from(erf_table.materialize());
 
         // Use the compute_ra_evals in tanh.rs
-        let input_onehot: Vec<F> =
-            compute_ra_evals(&params.r_node_output, &quotient_tensor, params.op.log_table);
+        let input_onehot: Vec<F> = compute_ra_evals_nbits_2comp(
+            &params.r_node_output,
+            &quotient_tensor,
+            params.op.log_table,
+        );
 
         // TODO(ClankPan): Follow up on the TODOs in tanh.rs.
         let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data())

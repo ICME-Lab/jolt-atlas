@@ -85,7 +85,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         inputs: &[Tensor<i32>],
     ) -> (Self, ModelExecutionIO, Option<ProverDebugInfo<F, T>>) {
         // Generate trace and io
-        let trace = pp.model().trace(inputs).into_padded_to_next_pow2();
+        let trace = pp.model().trace(inputs).into_padded_to_next_pow2_with_0();
         let io = Trace::io(&trace, pp.model());
 
         // Initialize prover state

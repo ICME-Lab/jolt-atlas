@@ -513,6 +513,20 @@ impl<T: Clone + TensorType> Tensor<T> {
         );
     }
 
+    /// Pads the tensor to power-of-two dimensions, always using zero padding.
+    pub fn pad_next_power_of_two_with_0(&mut self)
+    where
+        T: Send + Sync,
+    {
+        let padded_dims: Vec<usize> = self
+            .dims()
+            .iter()
+            .map(|dim| dim.next_power_of_two())
+            .collect();
+        self.pad_to_dims(&padded_dims)
+            .expect("Unexpected internal error while zero-padding to power-of-two dimensions");
+    }
+
     /// Pads the tensor to specific target dimensions with zeros.
     /// Only supports growing dimensions (target must be >= current for each dimension).
     ///

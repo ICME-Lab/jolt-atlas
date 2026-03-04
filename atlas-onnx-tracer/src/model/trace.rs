@@ -32,11 +32,26 @@ impl Trace {
         self.clone().into_padded_to_next_pow2()
     }
 
+    /// Return a cloned trace where every node output tensor is zero-padded to
+    /// the next power-of-two shape per dimension.
+    pub fn padded_to_next_pow2_with_0(&self) -> Self {
+        self.clone().into_padded_to_next_pow2_with_0()
+    }
+
     /// Pad every node output tensor in-place to the next power-of-two shape per
     /// dimension and return the updated trace.
     pub fn into_padded_to_next_pow2(mut self) -> Self {
         for tensor in self.node_outputs.values_mut() {
             tensor.pad_next_power_of_two();
+        }
+        self
+    }
+
+    /// Zero-pad every node output tensor in-place to the next power-of-two
+    /// shape per dimension and return the updated trace.
+    pub fn into_padded_to_next_pow2_with_0(mut self) -> Self {
+        for tensor in self.node_outputs.values_mut() {
+            tensor.pad_next_power_of_two_with_0();
         }
         self
     }

@@ -322,8 +322,10 @@ fn split_broadcast_vars<F: JoltField>(
 
 #[cfg(test)]
 mod tests {
+    use crate::onnx_proof::Fr;
     use crate::onnx_proof::ops::test::unit_test_op;
     use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use joltworks::field::JoltField;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn broadcast_model(input_shape: &[usize], output_shape: &[usize]) -> Model {
@@ -368,5 +370,21 @@ mod tests {
         assert_eq!(t.dims(), &[1, 8]);
         assert_eq!(t.len(), 8);
         assert!(t.data().iter().all(|&x| x == 1));
+    }
+
+    #[test]
+    fn test_split_broadcast_vars_with_raw_output_and_padded_mask_still_partitions_vars() {
+        // Even when broadcast tensor dims are pow2-padded (1024) while raw output uses 768,
+        // split_broadcast_vars itself still partitions all output challenges.
+        let output_raw_dims = vec![1, 16, 768];
+        let bc = super::build_broadcast_tensor(&[1, 16, 1], &output_raw_dims);
+        assert_eq!(bc.dims(), &[1, 1, 1024]);
+
+        // Challenges are sampled for the padded output space: 1*16*1024 => 14 vars.
+        let r_output: Vec<<Fr as JoltField>::Challenge> = vec![Default::default(); 14];
+        let (r_input, r_broadcast) =
+            super::split_broadcast_vars::<Fr>(&output_raw_dims, bc.dims(), &r_output);
+
+        assert_eq!(r_input.len() + r_broadcast.len(), r_output.len());
     }
 }

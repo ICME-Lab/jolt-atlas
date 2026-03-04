@@ -608,24 +608,16 @@ fn test_erf() {
 }
 
 #[test]
-fn test_cos() {
-    let working_dir = "../atlas-onnx-tracer/models/cos/";
-    let input_vector = vec![10, 40, 70, 100];
-    let input = Tensor::new(Some(&input_vector), &[4]).unwrap();
+fn test_positional_encoding_trig() {
+    let working_dir = "../atlas-onnx-tracer/models/positional_encoding/";
 
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().print_timing(),
-    );
-}
-
-#[test]
-fn test_sin() {
-    let working_dir = "../atlas-onnx-tracer/models/sin/";
-    let input_vector = vec![10, 40, 70, 100];
-    let input = Tensor::new(Some(&input_vector), &[4]).unwrap();
+    // Positional-encoding-style angle tensor: [batch=1, sequence_length=8, half_dim=4].
+    // Values are fixed-point quantized with SCALE=128.
+    let input_vector = vec![
+        0, 0, 0, 0, 128, 13, 1, 0, 256, 26, 3, 0, 384, 38, 4, 0, 512, 51, 5, 1, 640, 64, 6, 1, 768,
+        77, 8, 1, 896, 90, 9, 1,
+    ];
+    let input = Tensor::new(Some(&input_vector), &[1, 8, 4]).unwrap();
 
     prove_and_verify(
         working_dir,

@@ -55,7 +55,7 @@ impl<F: JoltField> SquareProver<F> {
         let [operand] = operands[..] else {
             panic!("Expected one operand for Square operation")
         };
-        let operand = MultilinearPolynomial::from(operand.clone());
+        let operand = MultilinearPolynomial::from(operand.padded_next_power_of_two());
         Self {
             params,
             eq_r_node_output,
@@ -191,7 +191,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "non-power-of-two path not fully supported yet"]
     fn test_square_non_power_of_two_input_len() {
         let t = 1000;
         let mut rng = StdRng::seed_from_u64(0x889);

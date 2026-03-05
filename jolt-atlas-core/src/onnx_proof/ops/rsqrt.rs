@@ -603,4 +603,14 @@ mod tests {
         let model = rsqrt_model(T);
         unit_test_op(model, &[input]);
     }
+
+    #[test]
+    #[ignore = "non-power-of-two path not fully supported yet"]
+    fn test_rsqrt_non_power_of_two_input_len() {
+        let t = 1000;
+        let mut rng = StdRng::seed_from_u64(0x889);
+        let input = Tensor::<i32>::random_range(&mut rng, &[t], 1..Q_SQUARE);
+        let model = rsqrt_model(t);
+        unit_test_op(model, &[input]);
+    }
 }

@@ -309,4 +309,14 @@ mod tests {
         let model = iff_model(&mut rng, T);
         unit_test_op(model, &[input]);
     }
+
+    #[test]
+    #[ignore = "TODO: non-power-of-two iff path not fully validated yet"]
+    fn test_iff_non_power_of_two_input_len() {
+        let t = 1000;
+        let mut rng = StdRng::seed_from_u64(0x89A);
+        let input = Tensor::<i32>::random(&mut rng, &[t]);
+        let model = iff_model(&mut rng, t);
+        unit_test_op(model, &[input]);
+    }
 }

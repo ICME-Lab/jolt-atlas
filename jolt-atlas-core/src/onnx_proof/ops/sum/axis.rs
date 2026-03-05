@@ -280,4 +280,15 @@ mod tests {
     fn test_sum_axis_1_1d() {
         test_sum_axis_generic(4, 0, 0x844, 1);
     }
+
+    #[test]
+    #[ignore = "TODO: non-power-of-two sum(axis) path not fully validated yet"]
+    fn test_sum_axis_non_power_of_two_input_len() {
+        let mut rng = StdRng::seed_from_u64(0x845);
+        let m = 33;
+        let n = 65;
+        let input = Tensor::<i32>::random_small(&mut rng, &[m, n]);
+        let model = sum_model::<1>(m, n);
+        unit_test_op(model, &[input]);
+    }
 }

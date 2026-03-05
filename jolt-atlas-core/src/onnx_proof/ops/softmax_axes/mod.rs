@@ -793,4 +793,14 @@ mod tests {
         let model = softmax_axes_model(&input_shape, 2);
         unit_test_op(model, &[input]);
     }
+
+    #[test]
+    #[ignore = "TODO: non-power-of-two softmax_axes path not fully validated yet"]
+    fn test_softmax_axes_non_power_of_two_input_len() {
+        let input_shape = vec![3, 65, 33];
+        let mut rng = StdRng::seed_from_u64(0x859);
+        let input = Tensor::<i32>::random_small(&mut rng, &input_shape);
+        let model = softmax_axes_model(&input_shape, 2);
+        unit_test_op(model, &[input]);
+    }
 }

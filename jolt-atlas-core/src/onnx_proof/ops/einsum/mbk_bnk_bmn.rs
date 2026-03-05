@@ -333,4 +333,14 @@ mod tests {
         let model = mbk_bnk_bmn_model(&mut rng, m, b, k, n);
         unit_test_op(model, &[input]);
     }
+
+    #[test]
+    #[ignore = "TODO: non-power-of-two einsum path not fully validated yet"]
+    fn test_mbk_bnk_bmn_non_power_of_two_input_len() {
+        let (m, b, k, n) = (5, 3, 9, 7);
+        let mut rng = StdRng::seed_from_u64(0x86079);
+        let input = Tensor::<i32>::random_small(&mut rng, &[m, b, k]);
+        let model = mbk_bnk_bmn_model(&mut rng, m, b, k, n);
+        unit_test_op(model, &[input]);
+    }
 }

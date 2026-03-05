@@ -624,4 +624,16 @@ mod tests {
         let model = erf_model(&[t]);
         unit_test_op(model, &[input]);
     }
+
+    #[test]
+    #[ignore = "TODO: non-power-of-two erf path not fully validated yet"]
+    fn test_erf_non_power_of_two_input_len() {
+        let t = 1000;
+        const MIN_INPUT_VALUE: i32 = -(1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1));
+        const MAX_INPUT_VALUE: i32 = 1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1);
+        let mut rng = StdRng::seed_from_u64(0x88A);
+        let input = Tensor::random_range(&mut rng, &[t], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
+        let model = erf_model(&[t]);
+        unit_test_op(model, &[input]);
+    }
 }

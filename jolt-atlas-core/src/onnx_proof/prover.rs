@@ -100,7 +100,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         // Sample challenge from verifier
         let r_node_output = prover
             .transcript
-            .challenge_vector_optimized::<F>(output.len().log_2());
+            .challenge_vector_optimized::<F>(output.len().ceil_log_2());
 
         // Evaluate output polynomial at r_node_output
         let output_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);

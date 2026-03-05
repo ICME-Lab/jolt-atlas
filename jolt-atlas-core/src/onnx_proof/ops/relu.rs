@@ -146,7 +146,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "non-power-of-two path not fully supported yet"]
     fn test_relu_non_power_of_two_input_len() {
         let t = 1000;
         let mut rng = StdRng::seed_from_u64(0x889);

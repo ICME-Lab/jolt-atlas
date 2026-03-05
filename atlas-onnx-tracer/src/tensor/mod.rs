@@ -493,6 +493,16 @@ impl<T: Clone + TensorType> Tensor<T> {
         );
     }
 
+    /// Returns a cloned tensor padded to power-of-two dimensions with zeros.
+    pub fn padded_next_power_of_two(&self) -> Self
+    where
+        T: Send + Sync,
+    {
+        let mut padded = self.clone();
+        padded.pad_next_power_of_two();
+        padded
+    }
+
     /// Pads the tensor to specific target dimensions with zeros.
     /// Only supports growing dimensions (target must be >= current for each dimension).
     ///

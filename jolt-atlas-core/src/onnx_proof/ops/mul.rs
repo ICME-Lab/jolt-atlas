@@ -56,8 +56,8 @@ impl<F: JoltField> MulProver<F> {
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for Mul operation")
         };
-        let left_operand = MultilinearPolynomial::from(left_operand.clone());
-        let right_operand = MultilinearPolynomial::from(right_operand.clone());
+        let left_operand = MultilinearPolynomial::from(left_operand.padded_next_power_of_two());
+        let right_operand = MultilinearPolynomial::from(right_operand.padded_next_power_of_two());
         Self {
             params,
             eq_r_node_output,

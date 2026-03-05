@@ -55,7 +55,7 @@ impl<F: JoltField> NegProver<F> {
         let [operand] = operands[..] else {
             panic!("Expected one operand for Neg operation")
         };
-        let operand = MultilinearPolynomial::from(operand.clone());
+        let operand = MultilinearPolynomial::from(operand.padded_next_power_of_two());
         Self {
             params,
             eq_r_node_output,

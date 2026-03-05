@@ -97,6 +97,9 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             output,
         } = Trace::layer_data(&prover.trace, output_computation_node);
 
+        // Pad output tensor to power of 2 with 0 for MLE constructions
+        let output = output.padded_next_power_of_two();
+
         // Sample challenge from verifier
         let r_node_output = prover
             .transcript

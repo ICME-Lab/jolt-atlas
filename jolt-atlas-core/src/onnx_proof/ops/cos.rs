@@ -625,4 +625,14 @@ mod tests {
         let model = cos_model(&[8]);
         unit_test_op(model, &[input]);
     }
+
+    #[test]
+    #[ignore = "TODO: non-power-of-two cos path not fully validated yet"]
+    fn test_cos_non_power_of_two_input_len() {
+        let t = 1000;
+        let mut rng = StdRng::seed_from_u64(0xC06);
+        let input = Tensor::random_range(&mut rng, &[t], -50000..50000);
+        let model = cos_model(&[t]);
+        unit_test_op(model, &[input]);
+    }
 }

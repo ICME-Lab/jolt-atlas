@@ -308,9 +308,12 @@ fn append_raf_claims_prover<F: JoltField, LUT>(
     } = Trace::layer_data(trace, &provider.computation_node);
     let is_interleaved_operands = provider.computation_node.is_interleaved_operands();
     if is_interleaved_operands {
-        let [left_operand_tensor, right_operand_tensor] = operands[..] else {
+        let [ left_operand_tensor, right_operand_tensor] = operands[..] else {
             panic!("Expected exactly two input tensors")
         };
+
+        let left_operand_tensor=  left_operand_tensor.padded_next_power_of_two();
+        let right_operand_tensor = right_operand_tensor.padded_next_power_of_two();
 
         // Cache left/right operand claims.
         let left_operand_claim =
@@ -354,7 +357,7 @@ fn append_raf_claims_prover<F: JoltField, LUT>(
             right_operand_claim,
         );
     } else {
-        let right_operand_tensor = operands[0];
+        let right_operand_tensor = operands[0].padded_next_power_of_two();
         let right_operand_claim =
             MultilinearPolynomial::from(right_operand_tensor.into_container_data())
                 .evaluate(&r_cycle.r);

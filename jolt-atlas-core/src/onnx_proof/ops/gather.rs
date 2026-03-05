@@ -767,4 +767,16 @@ mod tests {
         let model = gather_model(&indices_dims, dict_len, word_dim);
         unit_test_op(model, &[input]);
     }
+
+    #[test]
+    #[ignore = "TODO: non-power-of-two gather path not fully validated yet"]
+    fn test_gather_non_power_of_two_input_len() {
+        let indices_dims = vec![5, 7];
+        let dict_len = 33;
+        let word_dim = 5;
+        let mut rng = StdRng::seed_from_u64(0x889);
+        let input = Tensor::<i32>::random_range(&mut rng, &indices_dims, 0..dict_len as i32);
+        let model = gather_model(&indices_dims, dict_len, word_dim);
+        unit_test_op(model, &[input]);
+    }
 }

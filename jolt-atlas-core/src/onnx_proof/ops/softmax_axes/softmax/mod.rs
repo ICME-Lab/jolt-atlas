@@ -308,4 +308,43 @@ mod tests {
             "Sum should be approximately 128, got {sum}"
         );
     }
+
+    #[test]
+    #[ignore = "TODO: non-power-of-two softmax subprotocol path not fully validated yet"]
+    fn test_softmax_non_power_of_two_input_len() {
+        let n_elems: usize = 1000;
+        let n: usize = n_elems.next_power_of_two().ilog2() as usize;
+
+        let mut rng = StdRng::seed_from_u64(0x100082);
+        let input = Tensor::random_small(&mut rng, &[n_elems]);
+        let (_, trace) = softmax_fixed_128::<true>(&input);
+        let trace = trace.unwrap();
+
+        let prover_transcript = &mut Blake2bTranscript::new(&[]);
+        let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
+            ProverOpeningAccumulator::new();
+        let verifier_transcript = &mut Blake2bTranscript::new(&[]);
+        let _r_feature_output: Vec<<Fr as JoltField>::Challenge> =
+            prover_transcript.challenge_vector_optimized::<Fr>(n);
+        let r_feature_output: Vec<<Fr as JoltField>::Challenge> =
+            verifier_transcript.challenge_vector_optimized::<Fr>(n);
+
+        let softmax_index = SoftmaxIndex {
+            node_idx: 0,
+            feature_idx: 0,
+        };
+
+        let div_claim =
+            MultilinearPolynomial::from(trace.softmax_q.clone()).evaluate(&r_feature_output);
+        prover_opening_accumulator.append_virtual(
+            prover_transcript,
+            VirtualPolynomial::SoftmaxFeatureOutput(
+                softmax_index.node_idx,
+                softmax_index.feature_idx,
+            ),
+            SumcheckId::NodeExecution(softmax_index.node_idx),
+            r_feature_output.clone().into(),
+            div_claim,
+        );
+    }
 }

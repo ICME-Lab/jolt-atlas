@@ -318,4 +318,14 @@ mod tests {
         let model = scalar_const_div_model(T, 128);
         unit_test_op(model, &[input]);
     }
+
+    #[test]
+    #[ignore = "non-power-of-two path not fully supported yet"]
+    fn test_scalar_const_div_non_power_of_two_input_len() {
+        let t = 1000;
+        let mut rng = StdRng::seed_from_u64(0x889);
+        let input = Tensor::<i32>::random_small(&mut rng, &[t]);
+        let model = scalar_const_div_model(t, 128);
+        unit_test_op(model, &[input]);
+    }
 }

@@ -52,8 +52,8 @@ pub fn compute_lookup_indices_from_operands(
             operand_tensors.len()
         );
 
-        let left_operand = operand_tensors[0];
-        let right_operand = operand_tensors[1];
+        let left_operand = operand_tensors[0].padded_next_power_of_two();
+        let right_operand = operand_tensors[1].padded_next_power_of_two();
 
         // Validate that both tensors have the same length
         assert_eq!(
@@ -86,7 +86,7 @@ pub fn compute_lookup_indices_from_operands(
             operand_tensors.len()
         );
 
-        let operand = operand_tensors[0];
+        let operand = operand_tensors[0].padded_next_power_of_two();
 
         // Use tensor values directly as lookup indices
         operand

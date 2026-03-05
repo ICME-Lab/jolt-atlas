@@ -315,4 +315,15 @@ mod tests {
             unit_test_op(model, &[input]);
         }
     }
+
+    #[test]
+    #[ignore = "TODO: non-power-of-two broadcast path not fully validated yet"]
+    fn test_broadcast_non_power_of_two_input_len() {
+        let mut rng = StdRng::seed_from_u64(0x889);
+        let input_shape = vec![5];
+        let output_shape = vec![3, 5];
+        let input = Tensor::<i32>::random_small(&mut rng, &input_shape);
+        let model = broadcast_model(&input_shape, &output_shape);
+        unit_test_op(model, &[input]);
+    }
 }

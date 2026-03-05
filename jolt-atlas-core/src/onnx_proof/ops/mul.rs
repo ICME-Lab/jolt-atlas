@@ -56,8 +56,8 @@ impl<F: JoltField> MulProver<F> {
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for Mul operation")
         };
-        let left_operand = MultilinearPolynomial::from(left_operand.clone());
-        let right_operand = MultilinearPolynomial::from(right_operand.clone());
+        let left_operand = MultilinearPolynomial::from(left_operand.padded_next_power_of_two());
+        let right_operand = MultilinearPolynomial::from(right_operand.padded_next_power_of_two());
         Self {
             params,
             eq_r_node_output,
@@ -216,6 +216,15 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x888);
         let input = Tensor::<i32>::random_small(&mut rng, &[T]);
         let model = mul_model(&mut rng, T);
+        unit_test_op(model, &[input]);
+    }
+
+    #[test]
+    fn test_mul_non_power_of_two_input_len() {
+        let t = 1000;
+        let mut rng = StdRng::seed_from_u64(0x889);
+        let input = Tensor::<i32>::random_small(&mut rng, &[t]);
+        let model = mul_model(&mut rng, t);
         unit_test_op(model, &[input]);
     }
 }

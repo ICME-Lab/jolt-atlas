@@ -305,7 +305,7 @@ pub struct RunArgs {
     /// The denominator in the fixed point representation used when quantizing the model
     pub scale: quantize::Scale,
     /// Whether to pad all dimensions to powers of 2.
-    /// Defaults to true for optimal cryptographic performance.
+    /// Defaults to false.
     pub pad_to_power_of_2: bool,
     /// When true, divide inputs by 1<<scale BEFORE Square/Cube (to prevent i32 overflow)
     /// instead of dividing the output AFTER (the default rebase).
@@ -320,7 +320,7 @@ impl Default for RunArgs {
         RunArgs {
             variables,
             scale: DEFAULT_SCALE,
-            pad_to_power_of_2: true, // Default to true for prover use-case
+            pad_to_power_of_2: false,
             pre_rebase_nonlinear: false,
         }
     }
@@ -346,7 +346,7 @@ impl RunArgs {
         RunArgs {
             variables,
             scale: DEFAULT_SCALE,
-            pad_to_power_of_2: true,
+            pad_to_power_of_2: false,
             pre_rebase_nonlinear: false,
         }
     }
@@ -370,9 +370,9 @@ impl RunArgs {
         RunArgs {
             variables,
             scale,
-            pad_to_power_of_2: true,
+            pad_to_power_of_2: false,
             pre_rebase_nonlinear: false,
-        } // Default to true for optimal cryptographic performance
+        }
     }
 
     /// Add a variable to the RunArgs

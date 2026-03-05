@@ -91,7 +91,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             .transcript
             .challenge_vector_optimized::<F>(output_computation_node.num_output_elements().log_2());
         let expected_output_claim =
-            MultilinearPolynomial::from(io.outputs[0].clone()).evaluate(&r_node_output);
+            MultilinearPolynomial::from(io.outputs[0].padded_next_power_of_two()).evaluate(&r_node_output);
 
         // append_virtual now handles both transcript append and opening point update.
         // The claim was loaded from opening_claims in populate_accumulator.

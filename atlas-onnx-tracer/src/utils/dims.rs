@@ -34,4 +34,3 @@ mod tests {
         assert_eq!(dims.map_next_power_of_two(), vec![2, 8, 8]);
     }
 }
-

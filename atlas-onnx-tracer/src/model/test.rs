@@ -277,6 +277,35 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    /// Add a concat node.
+    pub fn concat(&mut self, a: Wire, b: Wire, axis: isize) -> Wire {
+        let id = self.alloc();
+        let a_dims = self.nodes[&a].output_dims.clone();
+        let b_dims = self.nodes[&b].output_dims.clone();
+        assert_eq!(
+            a_dims.len(),
+            b_dims.len(),
+            "Concat expects inputs with same rank"
+        );
+
+        let rank = a_dims.len();
+        let axis_norm = if axis < 0 {
+            (axis + rank as isize) as usize
+        } else {
+            axis as usize
+        };
+        let mut output_dims = a_dims.clone();
+        output_dims[axis_norm] += b_dims[axis_norm];
+
+        let node = ComputationNode::new(
+            id,
+            Operator::Concat(Concat { axis }),
+            vec![a, b],
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
     /// Add a softmax node.
     pub fn softmax(&mut self, axes: usize, input: Wire) -> Wire {
         let id = self.alloc();

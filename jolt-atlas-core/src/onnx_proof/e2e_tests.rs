@@ -293,6 +293,26 @@ fn test_multihead_attention() {
     );
 }
 
+// Anytime we get some structure closer to realistic transformer blocks,
+// the tracer optimizes it and no Concat nodes remain in traced model.
+// So we keep a simpler .onnx model to ensure the concat node remains.
+#[test]
+fn test_concat_transformer_block_e2e() {
+    let working_dir = "../atlas-onnx-tracer/models/concat_transformer_block/";
+    let mut rng = StdRng::seed_from_u64(0xC07CA7);
+
+    // Matches models/concat_transformer_block/gen.py static input shapes.
+    let head_0 = Tensor::random_range(&mut rng, &[1, 4, 16], (SCALE - 16)..(SCALE + 16));
+    let head_1 = Tensor::random_range(&mut rng, &[1, 4, 16], (SCALE - 16)..(SCALE + 16));
+
+    prove_and_verify(
+        working_dir,
+        &[head_0, head_1],
+        &Default::default(),
+        TestConfig::new().print_timing().print_model(),
+    );
+}
+
 #[test]
 fn test_self_attention_layer() {
     let working_dir = "../atlas-onnx-tracer/models/self_attention_layer/";
@@ -598,6 +618,26 @@ fn test_erf() {
     let working_dir = "../atlas-onnx-tracer/models/erf/";
     let input_vector = vec![10, 40, 70, 100];
     let input = Tensor::new(Some(&input_vector), &[4]).unwrap();
+
+    prove_and_verify(
+        working_dir,
+        &[input],
+        &Default::default(),
+        TestConfig::new().print_model().print_timing(),
+    );
+}
+
+#[test]
+fn test_positional_encoding_trig() {
+    let working_dir = "../atlas-onnx-tracer/models/positional_encoding/";
+
+    // Positional-encoding-style angle tensor: [batch=1, sequence_length=8, half_dim=4].
+    // Values are fixed-point quantized with SCALE=128.
+    let input_vector = vec![
+        0, 0, 0, 0, 128, 13, 1, 0, 256, 26, 3, 0, 384, 38, 4, 0, 512, 51, 5, 1, 640, 64, 6, 1, 768,
+        77, 8, 1, 896, 90, 9, 1,
+    ];
+    let input = Tensor::new(Some(&input_vector), &[1, 8, 4]).unwrap();
 
     prove_and_verify(
         working_dir,

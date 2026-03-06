@@ -6,13 +6,13 @@
 use std::collections::HashMap;
 
 use tract_onnx::{
-    tract_core::ops::array::MultiBroadcastTo,
+    tract_core::ops::array::{MultiBroadcastTo, TypedConcat},
     tract_hir::internal::{AxisOp, DimLike},
 };
 
 use crate::{
     node::ComputationNode,
-    ops::{Broadcast, MoveAxis, Operator, Reshape},
+    ops::{Broadcast, Concat, MoveAxis, Operator, Reshape},
     utils::{handler_builder::HandlerBuilder, parser::load_op},
 };
 
@@ -26,6 +26,8 @@ pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
         ("AddAxis", handle_reshape as OpHandlerFn),
         ("MoveAxis", handle_move_axis as OpHandlerFn),
         ("MultiBroadcastTo", handle_broadcast as OpHandlerFn),
+        ("Concat", handle_concat as OpHandlerFn),
+        ("InferenceConcat", handle_concat as OpHandlerFn),
     ])
 }
 
@@ -69,5 +71,16 @@ fn handle_broadcast(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
     HandlerBuilder::new(hctx)
         .simple_op(Operator::Broadcast(Broadcast { shape }))
+        .build()
+}
+
+/// Concat: Concatenates tensors along a specified axis.
+fn handle_concat(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
+    let op = load_op::<TypedConcat>(hctx.node.op(), hctx.node.op().name().to_string());
+
+    HandlerBuilder::new(hctx)
+        .simple_op(Operator::Concat(Concat {
+            axis: op.axis as isize,
+        }))
         .build()
 }

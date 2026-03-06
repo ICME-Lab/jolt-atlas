@@ -42,6 +42,8 @@ pub mod and;
 pub mod broadcast;
 /// Clamp values to a specified range.
 pub mod clamp;
+/// Concatenate tensors along an axis.
+pub mod concat;
 /// Constant tensor nodes.
 pub mod constant;
 /// Cos trigonometric function.
@@ -158,6 +160,7 @@ macro_rules! dispatch_operator {
             Operator::Cos($inner) => $body,
             Operator::Cube($inner) => $body,
             Operator::Clamp($inner) => $body,
+            Operator::Concat($inner) => $body,
             Operator::Div($inner) => $body,
             Operator::Erf($inner) => $body,
             Operator::Einsum($inner) => $body,

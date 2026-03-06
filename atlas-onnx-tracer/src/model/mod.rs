@@ -293,6 +293,33 @@ pub struct ComputationGraph {
     pub original_output_dims: HashMap<usize, Vec<usize>>,
 }
 
+impl ComputationGraph {
+    /// Get a reference to a node by its index.
+    ///
+    /// # Arguments
+    /// * `idx` - The index of the node to retrieve
+    ///
+    /// # Returns
+    /// An `Option` containing a reference to the `ComputationNode` if it exists, or `None` if it does not.
+    pub fn get_node(&self, idx: usize) -> Option<&ComputationNode> {
+        self.nodes.get(&idx)
+    }
+
+    /// Get references to the input nodes of a given node.
+    ///
+    /// # Arguments
+    /// * `node` - The `ComputationNode` for which to retrieve input nodes
+    ///
+    /// # Returns
+    /// A vector of references to the input `ComputationNode`s. If an input node index does not exist in the graph, it exits with error.
+    pub fn get_input_nodes(&self, node: &ComputationNode) -> Vec<&ComputationNode> {
+        node.inputs
+            .iter()
+            .map(|idx| self.get_node(*idx).expect("Input node missing in graph"))
+            .collect()
+    }
+}
+
 /// Runtime arguments for model execution and tracing.
 ///
 /// `RunArgs` encapsulates configuration parameters needed to load and execute

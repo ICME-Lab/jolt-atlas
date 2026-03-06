@@ -38,7 +38,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Input {
             .position(|&idx| idx == node.idx)
             .unwrap()]
         .clone();
-        let expected_claim = MultilinearPolynomial::from(input).evaluate(&r_node_input.r);
+
+        let mut padded_input = input.clone();
+        padded_input.pad_next_power_of_two();
+
+        let expected_claim = MultilinearPolynomial::from(padded_input).evaluate(&r_node_input.r);
         if expected_claim != input_claim {
             return Err(ProofVerifyError::InvalidOpeningProof(
                 "Input claim does not match expected claim".to_string(),

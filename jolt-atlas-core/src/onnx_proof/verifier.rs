@@ -87,11 +87,22 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     ) -> Result<(), ProofVerifyError> {
         let output_index = model.outputs()[0];
         let output_computation_node = &model[output_index];
+
+        // Pad output to power of two dims
+        let mut output_node_padded = output_computation_node.clone();
+        output_node_padded
+            .output_dims
+            .iter_mut()
+            .for_each(|dim| *dim = dim.next_power_of_two());
+
+        let mut output_padded = io.outputs[0].clone();
+        output_padded.pad_next_power_of_two();
+
         let r_node_output = verifier
             .transcript
-            .challenge_vector_optimized::<F>(output_computation_node.num_output_elements().log_2());
+            .challenge_vector_optimized::<F>(output_node_padded.num_output_elements().log_2());
         let expected_output_claim =
-            MultilinearPolynomial::from(io.outputs[0].clone()).evaluate(&r_node_output);
+            MultilinearPolynomial::from(output_padded.clone()).evaluate(&r_node_output);
 
         // append_virtual now handles both transcript append and opening point update.
         // The claim was loaded from opening_claims in populate_accumulator.

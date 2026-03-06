@@ -97,13 +97,18 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             output,
         } = Trace::layer_data(&prover.trace, output_computation_node);
 
+        // Pad output to power of two dims
+        let mut padded_output = output.clone();
+        padded_output.pad_next_power_of_two();
+
         // Sample challenge from verifier
         let r_node_output = prover
             .transcript
-            .challenge_vector_optimized::<F>(output.len().log_2());
+            .challenge_vector_optimized::<F>(padded_output.len().log_2());
 
         // Evaluate output polynomial at r_node_output
-        let output_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
+        let output_claim =
+            MultilinearPolynomial::from(padded_output.clone()).evaluate(&r_node_output);
 
         // append_virtual handles both transcript append and insertion into openings
         prover.accumulator.append_virtual(

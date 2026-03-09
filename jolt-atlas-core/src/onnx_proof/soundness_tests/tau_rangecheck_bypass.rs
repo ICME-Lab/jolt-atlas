@@ -319,6 +319,8 @@ fn build_tau_bypass_rangecheck_rad_witness(
 
 fn tau_override(node: &ComputationNode) -> i32 {
     match &node.operator {
+        // The PoC forges the teleport range-check bound by using tau + 1 instead of
+        // the operator's real tau. Only the range-check path uses this override.
         Operator::Tanh(op) => op.tau + 1,
         _ => panic!("tau override only implemented for tanh in this PoC"),
     }
@@ -345,6 +347,12 @@ fn find_tanh_node(model: &Model) -> ComputationNode {
 #[test]
 #[ignore = "Known soundness issue: verifier does not independently bind teleport range-check tau"]
 fn soundness_tanh_tau_rangecheck_bypass_is_rejected() {
+    // This regression test builds a malicious prover that only changes the
+    // teleport range-check path: inside get_operands_tensors, tau_override
+    // returns tau + 1, so the prover effectively proves the bound with a forged
+    // tau. The proof is then checked by the normal verifier implementation.
+    //
+    // If soundness is correct, the honest verifier must reject this proof.
     let model = tanh_model();
     let tanh_node = find_tanh_node(&model);
     let input_idx = tanh_node.inputs[0];

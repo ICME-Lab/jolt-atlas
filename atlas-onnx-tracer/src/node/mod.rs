@@ -68,13 +68,13 @@ impl ComputationNode {
             .product()
     }
 
-    /// Backward-compatible alias for [`Self::pow2_padded_num_output_elements`].
+    /// Computes the total number of output elements produced by this node
+    /// without applying power-of-two padding.
     pub fn num_output_elements(&self) -> usize {
-        self.pow2_padded_num_output_elements()
+        self.output_dims.iter().product()
     }
-
     /// Returns true if the output of this node is a scalar (i.e., has exactly one element).
     pub fn is_scalar(&self) -> bool {
-        self.pow2_padded_num_output_elements() == 1
+        self.num_output_elements() == 1
     }
 }

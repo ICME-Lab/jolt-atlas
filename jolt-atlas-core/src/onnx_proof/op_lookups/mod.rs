@@ -10,7 +10,6 @@ use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::Operator,
-    tensor::Tensor,
 };
 use common::{
     consts::{LOG_K, XLEN},

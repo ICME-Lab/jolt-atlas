@@ -222,7 +222,7 @@ impl Model {
         self.graph
             .nodes
             .values()
-            .map(|node| node.num_output_elements().next_power_of_two())
+            .map(|node| node.pow2_padded_num_output_elements().next_power_of_two())
             .max()
             .unwrap_or(0)
     }
@@ -257,15 +257,15 @@ impl Model {
                 | Operator::Erf(_)
                 | Operator::ReLU(_)
                 | Operator::Rsqrt(_)
-                | Operator::Sin(_) => LOG_K_CHUNK + log_2(node.num_output_elements()),
-                Operator::ScalarConstDiv(_) => log_2(node.num_output_elements()),
+                | Operator::Sin(_) => LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements()),
+                Operator::ScalarConstDiv(_) => log_2(node.pow2_padded_num_output_elements()),
                 Operator::SoftmaxAxes(_) => {
                     LOG_K_CHUNK + log_2(*node.output_dims.last().unwrap_or(&1))
                 }
                 Operator::Gather(_) => {
                     let input_nodes = self.get_input_nodes(node);
                     let num_words = input_nodes[0].output_dims[0];
-                    let num_indices = input_nodes[1].num_output_elements();
+                    let num_indices = input_nodes[1].pow2_padded_num_output_elements();
                     log_2(num_words) + log_2(num_indices) // TODO: Gather ra virtualization
                 }
                 _ => 1,

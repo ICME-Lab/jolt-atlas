@@ -56,20 +56,25 @@ impl ComputationNode {
         }
     }
 
-    /// Computes the total number of output elements produced by this node,
+    /// Computes the total number of output elements produced by this node
     /// after mapping each output dimension to its next power of two.
     ///
     /// For example, if `output_dims` is `[2, 3]`, this returns `8`
     /// because dimensions are normalized to `[2, 4]` before taking the product.
-    pub fn num_output_elements(&self) -> usize {
+    pub fn pow2_padded_num_output_elements(&self) -> usize {
         self.output_dims
             .map_next_power_of_two()
             .into_iter()
             .product()
     }
 
+    /// Backward-compatible alias for [`Self::pow2_padded_num_output_elements`].
+    pub fn num_output_elements(&self) -> usize {
+        self.pow2_padded_num_output_elements()
+    }
+
     /// Returns true if the output of this node is a scalar (i.e., has exactly one element).
     pub fn is_scalar(&self) -> bool {
-        self.num_output_elements() == 1
+        self.pow2_padded_num_output_elements() == 1
     }
 }

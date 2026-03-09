@@ -215,7 +215,9 @@ impl<F: JoltField> SumcheckInstanceParams<F> for DivParams<F> {
     }
 
     fn num_rounds(&self) -> usize {
-        self.computation_node.num_output_elements().log_2()
+        self.computation_node
+            .pow2_padded_num_output_elements()
+            .log_2()
     }
 }
 

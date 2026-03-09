@@ -197,7 +197,7 @@ impl<F: JoltField> GatherParams<F> {
         let input_dict = &graph.nodes.get(&computation_node.inputs[0]).unwrap();
         let input_indices = &graph.nodes.get(&computation_node.inputs[1]).unwrap();
         let num_words = input_dict.output_dims[gather_op.axis];
-        let lookup_vars = input_indices.num_output_elements().log_2();
+        let lookup_vars = input_indices.pow2_padded_num_output_elements().log_2();
 
         let r_node_output = accumulator
             .get_node_output_opening(computation_node.idx)
@@ -579,7 +579,7 @@ fn build_stage2_verifiers<F: JoltField>(
     let indices = graph.nodes.get(&computation_node.inputs[1]).unwrap();
 
     let num_words = dict.output_dims[gather_op.axis];
-    let num_lookups = indices.num_output_elements();
+    let num_lookups = indices.pow2_padded_num_output_elements();
 
     let hb_params = ra_hamming_bool_params::<F>(
         computation_node,

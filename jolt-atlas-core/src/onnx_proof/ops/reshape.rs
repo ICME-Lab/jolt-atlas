@@ -19,7 +19,10 @@ use crate::onnx_proof::{
     ProofId, ProofType,
 };
 use atlas_onnx_tracer::{
-    model::{trace::{LayerData, Trace}, ComputationGraph},
+    model::{
+        trace::{LayerData, Trace},
+        ComputationGraph,
+    },
     node::ComputationNode,
     ops::Reshape,
 };
@@ -30,11 +33,11 @@ use joltworks::{
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
-        unipoly::UniPoly,
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
+        unipoly::UniPoly,
     },
     subprotocols::{
         sumcheck::Sumcheck,
@@ -179,7 +182,10 @@ impl<F: JoltField> ReshapeSumcheckParams<F> {
         graph: &ComputationGraph,
         gamma: F,
     ) -> Self {
-        let r_output = accumulator.get_node_output_opening(computation_node.idx).0.r;
+        let r_output = accumulator
+            .get_node_output_opening(computation_node.idx)
+            .0
+            .r;
         let input_raw_dims = graph
             .nodes
             .get(&computation_node.inputs[0])
@@ -207,15 +213,14 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeSumcheckParams<F> {
         F::zero()
     }
 
-    fn normalize_opening_point(
-        &self,
-        challenges: &[F::Challenge],
-    ) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
     fn num_rounds(&self) -> usize {
-        self.computation_node.num_output_elements().log_2()
+        self.computation_node
+            .pow2_padded_num_output_elements()
+            .log_2()
     }
 }
 
@@ -297,8 +302,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReshapeSumche
     fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
         self.input_mle.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.output_mle.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.selector_a_mle.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.selector_b_mle.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.selector_a_mle
+            .bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.selector_b_mle
+            .bind_parallel(r_j, BindingOrder::LowToHigh);
     }
 
     fn cache_openings(
@@ -368,10 +375,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumc
             self.params.computation_node.idx,
         );
 
-        let selector_a =
-            build_reshape_selectors(&self.params.input_raw_dims, |t| gamma_power(self.params.gamma, t));
-        let selector_b =
-            build_reshape_selectors(&self.params.output_raw_dims, |t| gamma_power(self.params.gamma, t));
+        let selector_a = build_reshape_selectors(&self.params.input_raw_dims, |t| {
+            gamma_power(self.params.gamma, t)
+        });
+        let selector_b = build_reshape_selectors(&self.params.output_raw_dims, |t| {
+            gamma_power(self.params.gamma, t)
+        });
         let selector_a_claim =
             MultilinearPolynomial::from(selector_a).evaluate(&r_node_output_prime);
         let selector_b_claim =
@@ -411,7 +420,7 @@ fn gamma_power<F: JoltField>(gamma: F, exponent: usize) -> F {
     }
     acc
 }
- 
+
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;

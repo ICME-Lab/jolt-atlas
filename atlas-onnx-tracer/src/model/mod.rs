@@ -228,11 +228,18 @@ impl Model {
             .unwrap_or(0)
     }
 
-    /// Get a nodes input nodes
+    /// Get a node's input nodes
+    ///
+    /// Panics if any input node index is missing from the graph.
     pub fn get_input_nodes(&self, node: &ComputationNode) -> Vec<&ComputationNode> {
         node.inputs
             .iter()
-            .filter_map(|idx| self.graph.nodes.get(idx))
+            .map(|idx| {
+                self.graph
+                    .nodes
+                    .get(idx)
+                    .expect("Expected node input missing in graph")
+            })
             .collect()
     }
 
@@ -316,7 +323,10 @@ impl ComputationGraph {
     pub fn get_input_nodes(&self, node: &ComputationNode) -> Vec<&ComputationNode> {
         node.inputs
             .iter()
-            .map(|idx| self.get_node(*idx).expect("Input node missing in graph"))
+            .map(|idx| {
+                self.get_node(*idx)
+                    .expect("Expected node input missing in graph")
+            })
             .collect()
     }
 }

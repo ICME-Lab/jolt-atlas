@@ -23,8 +23,7 @@ fn main() {
         ("batch_size", 1),
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
-    ])
-    .with_pre_rebase_nonlinear(true);
+    ]);
     let model = Model::load(
         "atlas-onnx-tracer/models/bge-small-en-v1.5/network.onnx",
         &run_args,

@@ -78,6 +78,7 @@ lto = "off"
 
 [profile.release]
 debug = 1
+overflow-checks = true
 lto = "fat"
 
 [profile.build-fast]

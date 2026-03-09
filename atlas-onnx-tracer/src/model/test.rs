@@ -121,7 +121,14 @@ impl ModelBuilder {
     pub fn mul(&mut self, a: Wire, b: Wire) -> Wire {
         let id = self.alloc();
         let output_dims = self.nodes[&a].output_dims.clone();
-        let node = ComputationNode::new(id, Operator::Mul(Mul), vec![a, b], output_dims);
+        let node = ComputationNode::new(
+            id,
+            Operator::Mul(Mul {
+                scale: SCALE as i32, // TODO: Pass in scale from runtime args instead of hardcoding here.
+            }),
+            vec![a, b],
+            output_dims,
+        );
         self.insert_node(node)
     }
 
@@ -215,6 +222,7 @@ impl ModelBuilder {
             id,
             Operator::Einsum(Einsum {
                 equation: equation.to_string(),
+                scale: SCALE as i32, // TODO: Pass in scale from runtime args instead of hardcoding here.
             }),
             inputs,
             output_dims,
@@ -252,10 +260,11 @@ impl ModelBuilder {
     }
 
     /// Add a cube node.
-    pub fn cube(&mut self, input: Wire) -> Wire {
+    pub fn cube(&mut self, input: Wire, scale: i32) -> Wire {
         let id = self.alloc();
         let output_dims = self.nodes[&input].output_dims.clone();
-        let node = ComputationNode::new(id, Operator::Cube(Cube), vec![input], output_dims);
+        let node =
+            ComputationNode::new(id, Operator::Cube(Cube { scale }), vec![input], output_dims);
         self.insert_node(node)
     }
 

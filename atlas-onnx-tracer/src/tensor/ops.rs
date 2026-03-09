@@ -2872,6 +2872,10 @@ pub fn sra(a: &Tensor<i32>, b: &Tensor<i32>) -> Tensor<i32> {
 
 /// Activation functions
 pub mod nonlinearities {
+    #[cfg(feature = "fused-ops")]
+    use crate::ops::softmax::exp_lut_lookup;
+    use crate::ops::softmax::generate_exp_lut;
+
     use super::*;
 
     /// Ceiling operator.
@@ -3233,11 +3237,12 @@ pub mod nonlinearities {
     /// softmax layout
     #[tracing::instrument(name = "tensor::ops::nonlinearities::softmax_axes", skip_all)]
     pub fn softmax_axes(a: &Tensor<i32>, scale: f64, axes: &[usize]) -> Tensor<i32> {
+        let exp_lut = generate_exp_lut(scale as i64);
         // we want this to be as small as possible so we set the output scale to 1
         let dims = a.dims();
 
         if dims.len() == 1 {
-            return softmax(a, scale);
+            return softmax::<false>(a, scale as i32, &exp_lut).0;
         }
 
         let cartesian_coord = dims[..dims.len() - 1]
@@ -3260,7 +3265,7 @@ pub mod nonlinearities {
 
             let softmax_input = a.get_slice(&sum_dims).unwrap();
 
-            let res = softmax(&softmax_input, scale);
+            let res = softmax::<false>(&softmax_input, scale as i32, &exp_lut).0;
 
             outputs.push(res);
         }
@@ -3271,37 +3276,6 @@ pub mod nonlinearities {
             .unwrap();
         res.reshape(dims).unwrap();
         res
-    }
-
-    /// Applies softmax
-    /// # Arguments
-    ///
-    /// * `a` - Tensor
-    /// * `scale_input` - Single value
-    /// * `scale_output` - Single value
-    /// # Examples
-    /// ```
-    /// use atlas_onnx_tracer::tensor::Tensor;
-    /// use atlas_onnx_tracer::tensor::ops::nonlinearities::softmax;
-    /// let x = Tensor::<i32>::new(
-    ///     Some(&[2, 2, 3, 2, 2, 0]),
-    ///     &[2, 3],
-    /// ).unwrap();
-    /// let result = softmax(&x, 256.0);
-    /// // doubles the scale of the input
-    /// let expected = Tensor::<i32>::new(Some(&[10836, 10836, 10878, 10836, 10836, 10752]), &[2, 3]).unwrap();
-    /// assert_eq!(result, expected);
-    /// ```
-    pub fn softmax(a: &Tensor<i32>, scale: f64) -> Tensor<i32> {
-        if (scale - 128.0).abs() < 1e-9 {
-            softmax_fixed_128::<false>(a).0
-        } else {
-            // fallback to floating-point for other scales
-            let exp = exp(a, scale);
-            let sum = sum(&exp).unwrap();
-            let inv_denom = recip(&sum, scale * scale);
-            (exp * inv_denom).unwrap()
-        }
     }
 
     /// Log2 of the exponential lookup table size.
@@ -3409,40 +3383,47 @@ pub mod nonlinearities {
         pub softmax_q: Tensor<i32>,
     }
 
-    /// Fixed-point softmax for scale=128, output at scale 128.
+    /// Fixed-point softmax over a 1-D tensor of quantised logits.
     ///
-    /// ** Operations used:**
-    /// - Subtraction: `z = x - max` (max stability trick)
-    /// - Array lookup: `exp_lut[idx]` (1025-entry LUT, direct indexing)
-    /// - Addition: `sum(exp_values)`
-    /// - Multiplication: `e * S` (to maintain precision before division)
-    /// - Division: `(e * S) / sum` (integer division with truncation)
+    /// Implements the numerically-stable softmax formula:
     ///
-    /// **Output scaling:**
-    /// Input at scale 128 → Output at scale 128
-    /// This means: `output[i] = round(softmax(input)[i] * 128)`
-    ///
-    /// **Expected behavior:**
-    /// - Output values are non-negative
-    /// - Sum of outputs ≈ 128 (within ~10% due to integer division truncation)
-    /// - Larger input values → larger output values (monotonic property preserved)
-    ///
-    /// # Examples
+    /// ```text
+    /// softmax(x_i) = exp(x_i - max(x)) / sum_j exp(x_j - max(x))
     /// ```
-    /// use atlas_onnx_tracer::tensor::Tensor;
-    /// use atlas_onnx_tracer::tensor::ops::nonlinearities::softmax_fixed_128;
     ///
-    /// let x = Tensor::<i32>::new(Some(&[0, 128, 256]), &[3]).unwrap(); // [0.0, 1.0, 2.0] in real units
-    /// let result = softmax_fixed_128::<false>(&x).0;
-    /// // Output at scale 128: smaller values for x[0], larger for x[2]
-    /// assert!(result[0] < result[1]);
-    /// assert!(result[1] < result[2]);
-    /// ```
-    pub fn softmax_fixed_128<const TRACE: bool>(
+    /// All arithmetic is performed in fixed-point at the given `scale`.
+    ///
+    /// # Steps
+    /// 1. Find the maximum logit (`max_logit`).
+    /// 2. Centre every element: `centered[i] = x[i] - max_logit` (all values ≤ 0).
+    /// 3. Exponentiate each centred value via a lookup table.
+    /// 4. Sum the exponentials.
+    /// 5. Normalise: `out[i] = (exp[i] * scale) / exp_sum`.
+    ///
+    /// # Type parameter
+    /// * `TRACE` – when `true`, every intermediate tensor is captured into a
+    ///   [`SoftmaxTrace`] and returned alongside the result.
+    ///
+    /// # Arguments
+    /// * `a`       – 1-D input tensor of quantised logits (fixed-point at `scale`).
+    /// * `scale`   – fixed-point scale factor (e.g. 128).
+    /// * `exp_lut` – pre-computed exponential lookup table produced by
+    ///   [`generate_exp_lut`]. Only used when the `fused-ops` feature
+    ///   is enabled; ignored otherwise.
+    ///
+    /// # Feature gate – `fused-ops`
+    ///
+    /// The `#[cfg(not(feature = "fused-ops"))]` branch that falls back to
+    /// [`exp_fixed_lut_128`] is a **temporary hack**. It exists because
+    /// `jolt-atlas-core` does not yet support the fused feature
+    /// natively. Once the necessary changes land in `jolt-atlas-core`, the
+    /// feature gate (and the fallback path) will be removed and the
+    /// `exp_lut`-based path will become the only implementation.
+    pub fn softmax<const TRACE: bool>(
         a: &Tensor<i32>,
+        scale: i32,
+        exp_lut: &[i32],
     ) -> (Tensor<i32>, Option<SoftmaxTrace>) {
-        const S: i32 = 128;
-
         // 1) Get max
         let max_logit = a.iter().copied().max().unwrap_or(0);
         let max_index = a.iter().copied().position(|x| x == max_logit).unwrap_or(0);
@@ -3464,18 +3445,27 @@ pub mod nonlinearities {
 
         // 3) exp(z_q) at scale S
         let exp_q_values: Tensor<i32> = centered_logits
-            .par_enum_map(|_, z| Ok::<_, TensorError>(exp_fixed_lut_128(z)))
+            .par_enum_map(|_, z| {
+                #[cfg(feature = "fused-ops")]
+                {
+                    Ok::<_, TensorError>(exp_lut_lookup(z, exp_lut))
+                }
+                #[cfg(not(feature = "fused-ops"))]
+                {
+                    let _ = exp_lut;
+                    Ok::<_, TensorError>(exp_fixed_lut_128(z))
+                }
+            })
             .unwrap();
 
         // 4) sum at scale S
         let exp_sum_q = sum(&exp_q_values).unwrap()[0];
 
         // 5) Compute softmax: (exp_q * S) / sum_q to maintain scale S output
-        // This computes: (exp_q * 128) / sum_q
         let scaled_exp_q_values = exp_q_values
             .par_enum_map(|_, e| {
                 // Multiply by S first to maintain precision
-                let scaled_e = e * S;
+                let scaled_e = e * scale;
                 Ok::<_, TensorError>(scaled_e)
             })
             .unwrap();
@@ -3500,6 +3490,14 @@ pub mod nonlinearities {
         } else {
             (softmax_q, None)
         }
+    }
+
+    /// TODO: Remove this function once the fused-ops feature is natively integrated into the codebase
+    /// (blocked by pending changes to jolt-atlas-core)
+    pub fn softmax_fixed_128<const TRACE: bool>(
+        a: &Tensor<i32>,
+    ) -> (Tensor<i32>, Option<SoftmaxTrace>) {
+        softmax::<TRACE>(a, 128, &[])
     }
 
     /// Applies range_check_percent

@@ -101,13 +101,16 @@ fn handle_einsum(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         hctx.node.op().name().to_string(),
     );
     let tract_string = op.axes.to_string();
+    let scale = hctx.run_args.scale;
+    let builder = HandlerBuilder::new(hctx).simple_op(Operator::Einsum(Einsum {
+        equation: tract_string,
+        scale,
+    }));
 
-    HandlerBuilder::new(hctx)
-        .simple_op(Operator::Einsum(Einsum {
-            equation: tract_string,
-        }))
-        .with_auto_rebase()
-        .build()
+    #[cfg(not(feature = "fused-ops"))]
+    let builder = builder.with_auto_rebase();
+
+    builder.build()
 }
 
 /// Iff: Conditional selection (if-then-else).

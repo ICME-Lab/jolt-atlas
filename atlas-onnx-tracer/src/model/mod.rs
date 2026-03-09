@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 pub mod execute;
 /// Functions for loading models from ONNX files.
 pub mod load;
+pub mod shadow_trace;
 pub mod test;
 pub mod trace;
 
@@ -307,9 +308,10 @@ pub struct RunArgs {
     /// Whether to pad all dimensions to powers of 2.
     /// Defaults to true for optimal cryptographic performance.
     pub pad_to_power_of_2: bool,
-    /// When true, divide inputs by 1<<scale BEFORE Square/Cube (to prevent i32 overflow)
-    /// instead of dividing the output AFTER (the default rebase).
-    /// Enable this for large models (e.g., GPT-2) whose weight magnitudes would overflow.
+    /// HACK: When true, divide inputs by 1<<scale BEFORE Square/Cube to prevent
+    /// i32 overflow, instead of dividing the output AFTER (the default rebase).
+    /// Enable for large models (GPT-2, BGE) whose weight magnitudes would overflow.
+    /// TODO: Remove this once fused i64-precision ops are the default path.
     pub pre_rebase_nonlinear: bool,
 }
 
@@ -372,7 +374,7 @@ impl RunArgs {
             scale,
             pad_to_power_of_2: true,
             pre_rebase_nonlinear: false,
-        } // Default to true for optimal cryptographic performance
+        }
     }
 
     /// Add a variable to the RunArgs
@@ -410,11 +412,9 @@ impl RunArgs {
         self
     }
 
-    /// Enable pre-rebase for nonlinear ops (Square, Cube).
-    ///
-    /// When enabled, inputs to Square/Cube are divided by `1 << scale` BEFORE
-    /// the operation instead of dividing the output AFTER. This prevents i32
-    /// overflow for large models (e.g., GPT-2) at the cost of some precision.
+    /// HACK: Enable pre-rebase nonlinear decomposition for large models.
+    /// Divides by scale BEFORE Square/Cube to prevent i32 overflow.
+    /// TODO: Remove once fused i64-precision ops are the default path.
     pub fn with_pre_rebase_nonlinear(mut self, enable: bool) -> Self {
         self.pre_rebase_nonlinear = enable;
         self

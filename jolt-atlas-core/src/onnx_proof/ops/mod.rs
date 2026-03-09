@@ -179,7 +179,7 @@ macro_rules! dispatch_operator {
             Operator::Sub($inner) => $body,
             Operator::Sum($inner) => $body,
             Operator::Tanh($inner) => $body,
-            // _ => $fallback,
+            _ => $fallback, // TODO: comment out once MeanOfSquares is implemented
         }
     };
 }

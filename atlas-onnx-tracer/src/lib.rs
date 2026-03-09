@@ -5,7 +5,7 @@
 //! arithmetic suitable for zero-knowledge proof systems.
 
 #![warn(missing_docs)]
-#![allow(non_snake_case)]
+#![allow(non_snake_case, clippy::needless_range_loop)]
 
 pub mod model;
 pub mod node;

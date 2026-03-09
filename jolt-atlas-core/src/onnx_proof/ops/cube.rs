@@ -165,13 +165,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for CubeVerifie
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use atlas_onnx_tracer::{
+        model::{test::ModelBuilder, Model},
+        tensor::Tensor,
+    };
     use rand::{rngs::StdRng, SeedableRng};
 
     fn cube_model(T: usize) -> Model {
         let mut b = ModelBuilder::new();
         let i = b.input(vec![T]);
-        let res = b.cube(i);
+        let res = b.cube(i, 12); // TODO: Pass in scale from runtime args instead of hardcoding here.
         b.mark_output(res);
         b.build()
     }

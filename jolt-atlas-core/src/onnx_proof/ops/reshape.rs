@@ -158,7 +158,6 @@ pub(crate) fn build_reshape_selectors<F: JoltField>(
 ///
 /// Intended claim shape:
 /// sum_i (A(i) * Sa(i) - B(i) * Sb(i)) = 0
-#[allow(dead_code)]
 #[derive(Clone)]
 pub struct ReshapeSumcheckParams<F: JoltField> {
     /// Reshape computation node being proven.
@@ -173,7 +172,6 @@ pub struct ReshapeSumcheckParams<F: JoltField> {
     pub gamma: F,
 }
 
-#[allow(dead_code)]
 impl<F: JoltField> ReshapeSumcheckParams<F> {
     /// Build reshape sumcheck parameters from node/opening context and graph metadata.
     pub fn new(
@@ -203,7 +201,6 @@ impl<F: JoltField> ReshapeSumcheckParams<F> {
     }
 }
 
-#[allow(dead_code)]
 impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeSumcheckParams<F> {
     fn degree(&self) -> usize {
         2
@@ -225,7 +222,6 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeSumcheckParams<F> {
 }
 
 /// Prover skeleton for reshape sumcheck.
-#[allow(dead_code)]
 pub struct ReshapeSumcheckProver<F: JoltField> {
     /// Static sumcheck parameters.
     pub params: ReshapeSumcheckParams<F>,
@@ -239,7 +235,6 @@ pub struct ReshapeSumcheckProver<F: JoltField> {
     pub selector_b_mle: MultilinearPolynomial<F>,
 }
 
-#[allow(dead_code)]
 impl<F: JoltField> ReshapeSumcheckProver<F> {
     /// Initialize reshape prover state from trace tensors and prepared parameters.
     pub fn initialize(trace: &Trace, params: ReshapeSumcheckParams<F>) -> Self {
@@ -270,7 +265,6 @@ impl<F: JoltField> ReshapeSumcheckProver<F> {
     }
 }
 
-#[allow(dead_code)]
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReshapeSumcheckProver<F> {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
@@ -333,13 +327,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReshapeSumche
 }
 
 /// Verifier skeleton for reshape sumcheck.
-#[allow(dead_code)]
 pub struct ReshapeSumcheckVerifier<F: JoltField> {
     /// Static sumcheck parameters.
     pub params: ReshapeSumcheckParams<F>,
 }
 
-#[allow(dead_code)]
 impl<F: JoltField> ReshapeSumcheckVerifier<F> {
     /// Build the reshape sumcheck verifier from node/opening context and graph metadata.
     pub fn new(
@@ -353,7 +345,6 @@ impl<F: JoltField> ReshapeSumcheckVerifier<F> {
     }
 }
 
-#[allow(dead_code)]
 impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumcheckVerifier<F> {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params

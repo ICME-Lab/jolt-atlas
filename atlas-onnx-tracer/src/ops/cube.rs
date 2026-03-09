@@ -26,7 +26,7 @@ impl Op for Cube {
 }
 
 /// Element-wise cube an i32 tensor using i64 intermediate precision,
-/// with fused round-to-nearest rebase by `1 << (scale * 2)` and saturating cast.
+/// with fused rebase by `1 << (scale * 2)` and saturating cast.
 ///
 /// Handles i64 overflow in x³ (possible for |x| > 2^21) via checked_mul,
 /// and saturates i32 output for rare outliers.

@@ -297,6 +297,26 @@ fn test_multihead_attention() {
     );
 }
 
+// Anytime we get some structure closer to realistic transformer blocks,
+// the tracer optimizes it and no Concat nodes remain in traced model.
+// So we keep a simpler .onnx model to ensure the concat node remains.
+#[test]
+fn test_concat_transformer_block_e2e() {
+    let working_dir = "../atlas-onnx-tracer/models/concat_transformer_block/";
+    let mut rng = StdRng::seed_from_u64(0xC07CA7);
+
+    // Matches models/concat_transformer_block/gen.py static input shapes.
+    let head_0 = Tensor::random_range(&mut rng, &[1, 4, 16], (SCALE - 16)..(SCALE + 16));
+    let head_1 = Tensor::random_range(&mut rng, &[1, 4, 16], (SCALE - 16)..(SCALE + 16));
+
+    prove_and_verify(
+        working_dir,
+        &[head_0, head_1],
+        &Default::default(),
+        TestConfig::new().print_timing().print_model(),
+    );
+}
+
 #[test]
 fn test_self_attention_layer() {
     let working_dir = "../atlas-onnx-tracer/models/self_attention_layer/";

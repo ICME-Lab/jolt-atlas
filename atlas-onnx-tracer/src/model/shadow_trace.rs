@@ -495,6 +495,15 @@ fn shadow_f64(op: &Operator, inputs: Vec<&Tensor<f64>>, scale: Scale) -> Tensor<
             .move_axis(m.source, m.destination)
             .unwrap(),
         Operator::Identity(_) => inputs[0].clone(),
+        Operator::Concat(c) => {
+            let rank = inputs[0].dims().len();
+            let axis = if c.axis < 0 {
+                (rank as isize + c.axis) as usize
+            } else {
+                c.axis as usize
+            };
+            tensor::ops::concat(&inputs, axis).unwrap()
+        }
 
         // ── Constant ────────────────────────────────────────────────────
         Operator::Constant(c) => dequantize_tensor(&c.0, scale),

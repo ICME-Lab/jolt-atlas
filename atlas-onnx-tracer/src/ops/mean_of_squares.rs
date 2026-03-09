@@ -12,7 +12,7 @@ impl Op for MeanOfSquares {
 }
 
 /// Fused mean-of-squares reduction: squares each element in i64, accumulates
-/// x²/S in i64, then divides by the reduction count (round-to-nearest).
+/// x²/S in i64, then divides by the reduction count.
 ///
 /// This avoids an i32 intermediate for the squared values. The per-element
 /// Square in the unfused path can saturate at i32::MAX (~2.1B) when

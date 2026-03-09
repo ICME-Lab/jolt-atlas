@@ -20,8 +20,8 @@ use crate::{
 };
 use atlas_onnx_tracer::{
     model::{
-        trace::{ModelExecutionIO, Trace},
         test::ModelBuilder,
+        trace::{ModelExecutionIO, Trace},
         Model,
     },
     node::ComputationNode,
@@ -97,14 +97,22 @@ impl RangeCheckingOperandsTrait for TauBypassTeleportRangeCheckOperands {
 }
 
 impl TauRangecheckBypassProof {
-    fn prove(pp: &AtlasProverPreprocessing<TestField, TestPCS>, inputs: &[Tensor<i32>]) -> ProofOutput {
+    fn prove(
+        pp: &AtlasProverPreprocessing<TestField, TestPCS>,
+        inputs: &[Tensor<i32>],
+    ) -> ProofOutput {
         let trace = pp.model().trace(inputs);
         let io = Trace::io(&trace, pp.model());
 
         let mut prover: Prover<TestField, TestTranscript> = Prover::new(pp.shared.clone(), trace);
         let mut proofs = BTreeMap::new();
 
-        let (poly_map, commitments) = Self::commit_witness_polynomials(pp.model(), &prover.trace, &pp.generators, &mut prover.transcript);
+        let (poly_map, commitments) = Self::commit_witness_polynomials(
+            pp.model(),
+            &prover.trace,
+            &pp.generators,
+            &mut prover.transcript,
+        );
         ONNXProof::<TestField, TestTranscript, TestPCS>::output_claim(&mut prover);
         Self::iop(pp.model().nodes(), &mut prover, &mut proofs);
         let reduced_opening_proof =
@@ -130,7 +138,7 @@ impl TauRangecheckBypassProof {
     ) -> (
         BTreeMap<CommittedPolynomial, MultilinearPolynomial<TestField>>,
         Vec<<TestPCS as joltworks::poly::commitment::commitment_scheme::CommitmentScheme>::Commitment>,
-    ) {
+    ){
         let poly_map = Self::polynomial_map(model, trace);
         let commitments = poly_map
             .values()
@@ -151,7 +159,11 @@ impl TauRangecheckBypassProof {
             .graph
             .nodes
             .values()
-            .flat_map(|node| NodeCommittedPolynomials::get_committed_polynomials::<TestField, TestTranscript>(node))
+            .flat_map(|node| {
+                NodeCommittedPolynomials::get_committed_polynomials::<TestField, TestTranscript>(
+                    node,
+                )
+            })
             .map(|poly| {
                 let witness = match poly {
                     CommittedPolynomial::TeleportRangeCheckRaD(node_idx, d)
@@ -174,7 +186,11 @@ impl TauRangecheckBypassProof {
         for (_, computation_node) in computation_nodes.iter().rev() {
             match &computation_node.operator {
                 Operator::Tanh(op) => {
-                    proofs.extend(malicious_tanh_tau_rangecheck_prove(computation_node, op, prover));
+                    proofs.extend(malicious_tanh_tau_rangecheck_prove(
+                        computation_node,
+                        op,
+                        prover,
+                    ));
                 }
                 _ => proofs.extend(OperatorProver::prove(computation_node, prover)),
             }
@@ -271,7 +287,10 @@ fn malicious_tanh_tau_rangecheck_prove(
         &mut prover.accumulator,
         &mut prover.transcript,
     );
-    results.push((ProofId(node.idx, ProofType::RaHammingWeight), ra_one_hot_proof));
+    results.push((
+        ProofId(node.idx, ProofType::RaHammingWeight),
+        ra_one_hot_proof,
+    ));
 
     results
 }
@@ -288,7 +307,9 @@ fn build_tau_bypass_rangecheck_rad_witness(
     let one_hot_params = joltworks::config::OneHotParams::new(lookup_indices.len().log_2());
     let addresses: Vec<_> = lookup_indices
         .par_iter()
-        .map(|lookup_index| Some(one_hot_params.lookup_index_chunk((*lookup_index).into(), d) as u16))
+        .map(|lookup_index| {
+            Some(one_hot_params.lookup_index_chunk((*lookup_index).into(), d) as u16)
+        })
         .collect();
     MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
         addresses,
@@ -335,14 +356,14 @@ fn soundness_tanh_tau_rangecheck_bypass_is_rejected() {
     let verifier_pp = AtlasVerifierPreprocessing::<TestField, TestPCS>::from(&prover_pp);
 
     let (honest_proof, _honest_io, _honest_debug) =
-        ONNXProof::<TestField, TestTranscript, TestPCS>::prove(&prover_pp, std::slice::from_ref(&input));
+        ONNXProof::<TestField, TestTranscript, TestPCS>::prove(
+            &prover_pp,
+            std::slice::from_ref(&input),
+        );
     let (malicious_proof, io, _debug) =
         TauRangecheckBypassProof::prove(&prover_pp, std::slice::from_ref(&input));
 
-    let key = OpeningId::Virtual(
-        VirtualPolynomial::NodeOutput(input_idx),
-        SumcheckId::Raf,
-    );
+    let key = OpeningId::Virtual(VirtualPolynomial::NodeOutput(input_idx), SumcheckId::Raf);
     let honest_bound_claim = honest_proof
         .opening_claims
         .0

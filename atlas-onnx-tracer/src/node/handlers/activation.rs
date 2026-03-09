@@ -7,15 +7,21 @@ use std::collections::HashMap;
 
 use crate::{
     node::ComputationNode,
-    ops::{Clamp, Constant, Cos, Erf, Operator, Rsqrt, Sin, SoftmaxAxes, Tanh},
-    tensor::ops::nonlinearities::EXP_LUT_SIZE,
+    ops::{Constant, Cos, Erf, Operator, Rsqrt, Sin, SoftmaxAxes, Tanh},
     utils::{handler_builder::HandlerBuilder, parser::load_op, quantize::scale_to_multiplier},
 };
+#[cfg(not(feature = "fused-ops"))]
+use crate::{ops::Clamp, tensor::ops::nonlinearities::EXP_LUT_SIZE};
 
 use super::{HandlerContext, OpHandlerFn};
 
+#[cfg(feature = "fused-ops")]
+const NEURAL_TELEPORT_TAU: i32 = 1;
+
 // TODO: These values should be finetuned based on input ranges and desired output precision.
+#[cfg(not(feature = "fused-ops"))]
 const NEURAL_TELEPORT_TAU: i32 = 2;
+
 /// Log2 of the lookup table size used for activation functions.
 pub const NEURAL_TELEPORT_LOG_TABLE_SIZE: usize = 12;
 
@@ -113,7 +119,9 @@ fn handle_erf(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         .build()
 }
 
-/// Softmax: Clamp inputs to fit the exp LUT, then apply softmax along specified axis.
+/// Softmax: Apply softmax along specified axis.
+/// With `fused-ops`, softmax handles centering internally.
+/// Without, a Clamp node is prepended to fit the exp LUT range.
 fn handle_softmax(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let op = load_op::<tract_onnx::tract_core::ops::nn::Softmax>(
         hctx.node.op(),
@@ -124,17 +132,34 @@ fn handle_softmax(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
     let scale = scale_to_multiplier(hctx.run_args.scale).into();
 
-    HandlerBuilder::new(hctx)
-        .with_broadcast()
-        .simple_op(Operator::Clamp(Clamp {
-            axes: axes[0],
-            max_spread: (EXP_LUT_SIZE as i32 - 1),
-        }))
-        .pipe(Operator::SoftmaxAxes(SoftmaxAxes {
-            axes: axes[0],
-            scale,
-        }))
-        .build()
+    #[cfg(feature = "fused-ops")]
+    {
+        HandlerBuilder::new(hctx)
+            .with_broadcast()
+            .simple_op(Operator::SoftmaxAxes(SoftmaxAxes {
+                axes: axes[0],
+                scale,
+            }))
+            .build()
+    }
+
+    #[cfg(not(feature = "fused-ops"))]
+    {
+        HandlerBuilder::new(hctx)
+            .with_broadcast()
+            // HACK: Clamp to fit exp LUT range.
+            // TODO: Remove once prover supports full range.
+            .simple_op(Operator::Clamp(Clamp {
+
+                axes: axes[0],
+                max_spread: (EXP_LUT_SIZE as i32 - 1),
+            }))
+            .pipe(Operator::SoftmaxAxes(SoftmaxAxes {
+                axes: axes[0],
+                scale,
+            }))
+            .build()
+    }
 }
 
 /// Rsqrt: Reciprocal square root.

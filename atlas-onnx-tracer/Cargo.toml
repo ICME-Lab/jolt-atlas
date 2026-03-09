@@ -38,6 +38,14 @@ maybe-rayon = { version = "0.1.1" }
 [dev-dependencies]
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 
+[features]
+default = []
+# TODO: make this default once jolt-atlas-core supports fused i64-precision ops in proofs.
+## Use fused i64-precision rebase inside Op::f() and handlers.
+## When OFF (default) the old decomposed-rebase path is used,
+## keeping jolt-atlas-core proofs compatible.
+fused-ops = []
+
 [target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
 colored = { version = "2.0.0", default-features = false }
 env_logger = { version = "0.10.0", default-features = false }

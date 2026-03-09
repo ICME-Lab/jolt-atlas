@@ -33,6 +33,8 @@ pub mod iff;
 pub mod input;
 /// IsNaN check operator.
 pub mod is_nan;
+/// Fused mean-of-squares reduction operator.
+pub mod mean_of_squares;
 /// MoveAxis operator for transposing dimensions.
 pub mod move_axis;
 /// Element-wise multiplication operator.
@@ -110,7 +112,7 @@ macro_rules! define_operators {
         }
     };
 }
-
+// TODO: Pass in runtime args to Op::f() so we can rm these scale fields and just use the global run_args.scale instead.
 define_operators! {
     operators: [
         Add,
@@ -119,17 +121,18 @@ define_operators! {
         Clamp { axes: usize, max_spread: i32 },
         Constant(Tensor<i32>),
         Cos { scale: F32 },
-        Cube,
+        Cube { scale: i32 },
         Div,
-        Einsum { equation: String },
+        Einsum { equation: String, scale: i32 },
         Erf { scale: F32, tau: i32, log_table: usize },
         Gather { axis: usize },
         Identity,
         Iff,
         Input,
         IsNan { out_dims: Vec<usize> },
+        MeanOfSquares { axes: Vec<usize>, scale: i32 },
         MoveAxis { source: usize, destination: usize },
-        Mul,
+        Mul { scale: i32 },
         Neg,
         ReLU,
         Reshape { shape:Vec<usize> },

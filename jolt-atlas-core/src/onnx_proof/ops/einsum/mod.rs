@@ -108,7 +108,7 @@ impl EinsumProver {
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Box<dyn SumcheckInstanceProver<F, T>> {
         let config = match &computation_node.operator {
-            Operator::Einsum(Einsum { equation }) => EINSUM_REGISTRY
+            Operator::Einsum(Einsum { equation, .. }) => EINSUM_REGISTRY
                 .iter()
                 .find(|(pattern, _)| pattern == &equation.as_str())
                 .map(|(_, config)| config)
@@ -164,7 +164,7 @@ impl EinsumVerifier {
         accumulator: &VerifierOpeningAccumulator<F>,
     ) -> Box<dyn SumcheckInstanceVerifier<F, T>> {
         let config = match &computation_node.operator {
-            Operator::Einsum(Einsum { equation }) => EINSUM_REGISTRY
+            Operator::Einsum(Einsum { equation, .. }) => EINSUM_REGISTRY
                 .iter()
                 .find(|(pattern, _)| pattern == &equation.as_str())
                 .map(|(_, config)| config)

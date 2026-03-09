@@ -128,6 +128,10 @@ macro_rules! tensor_type {
 }
 
 impl TensorType for f32 {
+    fn one() -> Option<Self> {
+        Some(1.0)
+    }
+
     fn zero() -> Option<Self> {
         Some(0.0)
     }
@@ -151,6 +155,10 @@ impl TensorType for f32 {
 }
 
 impl TensorType for f64 {
+    fn one() -> Option<Self> {
+        Some(1.0)
+    }
+
     fn zero() -> Option<Self> {
         Some(0.0)
     }

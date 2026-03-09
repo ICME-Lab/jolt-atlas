@@ -129,6 +129,8 @@ fn test_gpt2() {
     let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
 
     // Configure RunArgs for GPT-2
+    // HACK: pre_rebase_nonlinear prevents i32 overflow in Square/Cube for large models.
+    // TODO: Remove once fused i64-precision ops are the default path.
     let run_args = RunArgs::new([
         ("batch_size", 1),
         ("sequence_length", seq_len),
@@ -165,6 +167,8 @@ fn test_bge_small_en_v1_5() {
     let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
 
     // Configure RunArgs for BGE
+    // HACK: pre_rebase_nonlinear prevents i32 overflow in Square/Cube for large models.
+    // TODO: Remove once fused i64-precision ops are the default path.
     let run_args = RunArgs::new([
         ("batch_size", 1),
         ("sequence_length", seq_len),

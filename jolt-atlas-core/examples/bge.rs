@@ -27,6 +27,8 @@ fn main() {
 
     // Reduce sequence_length for faster tracing; increase as needed.
     let seq_len: usize = 16;
+    // HACK: pre_rebase_nonlinear prevents i32 overflow in Square/Cube for large models.
+    // TODO: Remove once fused i64-precision ops are the default path.
     let run_args = RunArgs::new([
         ("batch_size", 1),
         ("sequence_length", seq_len),

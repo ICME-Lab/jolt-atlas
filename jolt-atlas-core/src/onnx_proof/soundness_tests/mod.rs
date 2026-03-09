@@ -13,6 +13,7 @@ pub(super) type TestField = Fr;
 pub(super) type TestTranscript = Blake2bTranscript;
 
 mod nodeoutput_opening_collapse;
+mod tau_rangecheck_bypass;
 mod virtual_operand_claim_tamper;
 
 pub(super) fn sub_model(rng: &mut StdRng, t: usize) -> Model {

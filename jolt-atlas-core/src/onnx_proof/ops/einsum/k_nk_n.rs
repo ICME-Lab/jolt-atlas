@@ -268,4 +268,15 @@ mod tests {
         let model = matvec_model(&mut rng, k, n);
         unit_test_op(model, &[input]);
     }
+
+    #[test]
+    #[ignore = "TODO: non-power-of-two einsum path not fully validated yet"]
+    fn test_k_nk_n_non_power_of_two_input_len() {
+        let k = 65;
+        let n = 33;
+        let mut rng = StdRng::seed_from_u64(0x879);
+        let input = Tensor::<i32>::random_small(&mut rng, &[k]);
+        let model = matvec_model(&mut rng, k, n);
+        unit_test_op(model, &[input]);
+    }
 }

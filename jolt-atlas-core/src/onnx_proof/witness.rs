@@ -182,10 +182,14 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 let computation_node = &model.graph.nodes[node_idx];
                 let layer_data = Trace::layer_data(trace, computation_node);
                 let is_interleaved_operands = computation_node.is_interleaved_operands();
-                let lookup_indices = compute_lookup_indices_from_operands(
-                    &layer_data.operands,
-                    is_interleaved_operands,
-                );
+                let padded_operands: Vec<_> = layer_data
+                    .operands
+                    .iter()
+                    .map(|tensor| tensor.padded_next_power_of_two())
+                    .collect();
+                let operand_refs: Vec<_> = padded_operands.iter().collect();
+                let lookup_indices =
+                    compute_lookup_indices_from_operands(&operand_refs, is_interleaved_operands);
                 build_one_hot_rad_witness(&lookup_indices, *d)
             }
             CommittedPolynomial::DivNodeQuotient(node_idx) => {

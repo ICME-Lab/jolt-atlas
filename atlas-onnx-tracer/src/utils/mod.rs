@@ -1,5 +1,6 @@
 //! Utility functions and helper modules for the ONNX tracer.
 
+pub mod dims;
 pub mod f32;
 pub mod handler_builder;
 pub mod metrics;

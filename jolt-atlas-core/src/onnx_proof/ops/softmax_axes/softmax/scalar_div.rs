@@ -375,4 +375,92 @@ mod tests {
         let r_sumcheck_verif = res.unwrap();
         assert_eq!(r_sumcheck, r_sumcheck_verif);
     }
+
+    #[test]
+    #[ignore = "TODO: non-power-of-two softmax scalar_div path not fully validated yet"]
+    fn test_div_non_power_of_two_input_len() {
+        let n_elems: usize = 1000;
+        let n: usize = n_elems.next_power_of_two().ilog2() as usize;
+
+        let mut rng = StdRng::seed_from_u64(0x100082);
+        let input = Tensor::random_small(&mut rng, &[n_elems]);
+        let (_, trace) = softmax_fixed_128::<true>(&input);
+        let trace = trace.unwrap();
+
+        let prover_transcript = &mut Blake2bTranscript::new(&[]);
+        let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
+            ProverOpeningAccumulator::new();
+        let verifier_transcript = &mut Blake2bTranscript::new(&[]);
+        let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
+            VerifierOpeningAccumulator::new();
+
+        let _r_feature_output: Vec<<Fr as JoltField>::Challenge> =
+            prover_transcript.challenge_vector_optimized::<Fr>(n);
+        let r_feature_output: Vec<<Fr as JoltField>::Challenge> =
+            verifier_transcript.challenge_vector_optimized::<Fr>(n);
+
+        let softmax_index = SoftmaxIndex {
+            node_idx: 0,
+            feature_idx: 0,
+        };
+
+        let div_claim =
+            MultilinearPolynomial::from(trace.softmax_q.clone()).evaluate(&r_feature_output);
+        prover_opening_accumulator.append_virtual(
+            prover_transcript,
+            VirtualPolynomial::SoftmaxFeatureOutput(
+                softmax_index.node_idx,
+                softmax_index.feature_idx,
+            ),
+            SumcheckId::NodeExecution(softmax_index.node_idx),
+            r_feature_output.clone().into(),
+            div_claim,
+        );
+        prover_opening_accumulator.append_virtual(
+            prover_transcript,
+            VirtualPolynomial::SoftmaxSumOutput(softmax_index.node_idx, softmax_index.feature_idx),
+            SumcheckId::NodeExecution(softmax_index.node_idx),
+            vec![].into(),
+            Fr::from_i32(trace.exp_sum_q),
+        );
+
+        let params: DivParams<Fr> = DivParams::new(softmax_index, &prover_opening_accumulator);
+        let mut prover_sumcheck = DivProver::initialize(&trace, params);
+        let (proof, _r_sumcheck) = Sumcheck::prove(
+            &mut prover_sumcheck,
+            &mut prover_opening_accumulator,
+            prover_transcript,
+        );
+
+        for (key, (_, value)) in &prover_opening_accumulator.openings {
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
+            verifier_opening_accumulator
+                .openings
+                .insert(*key, (empty_point, *value));
+        }
+
+        verifier_opening_accumulator.append_virtual(
+            verifier_transcript,
+            VirtualPolynomial::SoftmaxFeatureOutput(
+                softmax_index.node_idx,
+                softmax_index.feature_idx,
+            ),
+            SumcheckId::NodeExecution(softmax_index.node_idx),
+            r_feature_output.into(),
+        );
+        verifier_opening_accumulator.append_virtual(
+            verifier_transcript,
+            VirtualPolynomial::SoftmaxSumOutput(softmax_index.node_idx, softmax_index.feature_idx),
+            SumcheckId::NodeExecution(softmax_index.node_idx),
+            vec![].into(),
+        );
+
+        let verifier_sumcheck = DivVerifier::new(softmax_index, &verifier_opening_accumulator);
+        let _ = Sumcheck::verify(
+            &proof,
+            &verifier_sumcheck,
+            &mut verifier_opening_accumulator,
+            verifier_transcript,
+        );
+    }
 }

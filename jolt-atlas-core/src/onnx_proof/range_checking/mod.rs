@@ -239,7 +239,7 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckEncoding<H> {
     pub fn new(computation_node: &ComputationNode) -> Self {
         Self {
             operands: H::new(computation_node),
-            log_t: computation_node.num_output_elements().log_2(),
+            log_t: computation_node.pow2_padded_num_output_elements().log_2(),
         }
     }
 }

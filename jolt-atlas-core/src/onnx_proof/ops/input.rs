@@ -37,7 +37,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Input {
             .iter()
             .position(|&idx| idx == node.idx)
             .unwrap()]
-        .clone();
+        .padded_next_power_of_two();
         let expected_claim = MultilinearPolynomial::from(input).evaluate(&r_node_input.r);
         if expected_claim != input_claim {
             return Err(ProofVerifyError::InvalidOpeningProof(
@@ -45,5 +45,31 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Input {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::onnx_proof::ops::test::unit_test_op;
+    use atlas_onnx_tracer::{
+        model::{test::ModelBuilder, Model},
+        tensor::Tensor,
+    };
+    use rand::{rngs::StdRng, SeedableRng};
+
+    fn input_only_model(input_shape: &[usize]) -> Model {
+        let mut b = ModelBuilder::new();
+        let i = b.input(input_shape.to_vec());
+        b.mark_output(i);
+        b.build()
+    }
+
+    #[test]
+    fn test_input_non_power_of_two_input_len() {
+        let t = 1000;
+        let mut rng = StdRng::seed_from_u64(0x991);
+        let input = Tensor::<i32>::random_small(&mut rng, &[t]);
+        let model = input_only_model(&[t]);
+        unit_test_op(model, &[input]);
     }
 }

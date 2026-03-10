@@ -215,7 +215,9 @@ impl<F: JoltField> SumcheckInstanceParams<F> for DivParams<F> {
     }
 
     fn num_rounds(&self) -> usize {
-        self.computation_node.num_output_elements().log_2()
+        self.computation_node
+            .pow2_padded_num_output_elements()
+            .log_2()
     }
 }
 
@@ -502,6 +504,21 @@ mod tests {
                 *v = 1
             }
         });
+        unit_test_op(model, &[input]);
+    }
+
+    #[test]
+    #[ignore = "non-power-of-two path not fully supported yet"]
+    fn test_div_non_power_of_two_input_len() {
+        let t = 1000;
+        let mut rng = StdRng::seed_from_u64(0x889);
+        let mut input = Tensor::<i32>::random_range(&mut rng, &[t], 1..SCALE * SCALE);
+        input.iter_mut().for_each(|v| {
+            if *v == 0 {
+                *v = 1
+            }
+        });
+        let model = div_model(t);
         unit_test_op(model, &[input]);
     }
 }

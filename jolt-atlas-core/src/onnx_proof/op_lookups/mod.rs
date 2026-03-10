@@ -117,8 +117,15 @@ impl OpLookupProvider {
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
         append_raf_claims_prover::<F, LUT>(self, trace, accumulator, transcript);
+        let padded_operands: Vec<_> = trace
+            .layer_data(&self.computation_node)
+            .operands
+            .iter()
+            .map(|tensor| tensor.padded_next_power_of_two())
+            .collect();
+        let operand_refs: Vec<_> = padded_operands.iter().collect();
         let lookup_bits = compute_lookup_indices_from_operands(
-            &trace.layer_data(&self.computation_node).operands,
+            &operand_refs,
             self.computation_node.is_interleaved_operands(),
         );
         let lookup_indices: Vec<usize> = lookup_bits.iter().map(|&x| x.into()).collect();
@@ -239,7 +246,7 @@ impl OpLookupEncoding {
         use joltworks::utils::math::Math;
         Self {
             node_idx: computation_node.idx,
-            log_t: computation_node.num_output_elements().log_2(),
+            log_t: computation_node.pow2_padded_num_output_elements().log_2(),
         }
     }
 }
@@ -312,6 +319,9 @@ fn append_raf_claims_prover<F: JoltField, LUT>(
             panic!("Expected exactly two input tensors")
         };
 
+        let left_operand_tensor = left_operand_tensor.padded_next_power_of_two();
+        let right_operand_tensor = right_operand_tensor.padded_next_power_of_two();
+
         // Cache left/right operand claims.
         let left_operand_claim =
             MultilinearPolynomial::from(left_operand_tensor.into_container_data()) // TODO: make this work with from_i32
@@ -354,7 +364,7 @@ fn append_raf_claims_prover<F: JoltField, LUT>(
             right_operand_claim,
         );
     } else {
-        let right_operand_tensor = operands[0];
+        let right_operand_tensor = operands[0].padded_next_power_of_two();
         let right_operand_claim =
             MultilinearPolynomial::from(right_operand_tensor.into_container_data())
                 .evaluate(&r_cycle.r);

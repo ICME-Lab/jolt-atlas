@@ -55,7 +55,7 @@ impl<F: JoltField> NegProver<F> {
         let [operand] = operands[..] else {
             panic!("Expected one operand for Neg operation")
         };
-        let operand = MultilinearPolynomial::from(operand.clone());
+        let operand = MultilinearPolynomial::from(operand.padded_next_power_of_two());
         Self {
             params,
             eq_r_node_output,
@@ -186,6 +186,15 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x888);
         let input = Tensor::<i32>::random_small(&mut rng, &[T]);
         let model = neg_model(T);
+        unit_test_op(model, &[input]);
+    }
+
+    #[test]
+    fn test_neg_non_power_of_two_input_len() {
+        let t = 1000;
+        let mut rng = StdRng::seed_from_u64(0x889);
+        let input = Tensor::<i32>::random_small(&mut rng, &[t]);
+        let model = neg_model(t);
         unit_test_op(model, &[input]);
     }
 }

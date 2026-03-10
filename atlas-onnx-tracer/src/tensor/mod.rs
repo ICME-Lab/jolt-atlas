@@ -482,43 +482,33 @@ impl<T: Clone + TensorType> Tensor<T> {
 
     /// Pads the tensor to power of 2 dimensions.
     ///
-    /// For tensors where all values are identical (broadcast constants),
-    /// fills padding with the same value. Otherwise, pads with zeros.
+    /// Always pads with zeros.
     pub fn pad_next_power_of_two(&mut self)
     where
-        T: Send + Sync + PartialEq,
+        T: Send + Sync,
     {
         let padded_dims: Vec<usize> = self
             .dims()
             .iter()
             .map(|dim| dim.next_power_of_two())
             .collect();
-
-        // Check if this is a constant that comes from a scalar(all values are the same)
-        let is_scalar_const_tensor = if !self.inner.is_empty() {
-            let first_val = &self.inner[0];
-            self.inner.iter().all(|v| v == first_val)
-        } else {
-            false
-        };
-
-        let result = if is_scalar_const_tensor {
-            // For scalar constant tensors, just resize and update dims — no copy needed
-            // since every element (old and new) should be the same value
-            let target_len: usize = padded_dims.iter().product();
-            let fill_value = self.inner[0].clone();
-            self.inner.resize(target_len, fill_value);
-            self.dims = padded_dims;
-            Ok(())
-        } else {
-            self.pad_to_dims(&padded_dims)
-        };
+        let result = self.pad_to_dims(&padded_dims);
 
         assert!(
             result.is_ok(),
             "Unexpected internal error: {:?}",
             result.err()
         );
+    }
+
+    /// Returns a cloned tensor padded to power-of-two dimensions with zeros.
+    pub fn padded_next_power_of_two(&self) -> Self
+    where
+        T: Send + Sync,
+    {
+        let mut padded = self.clone();
+        padded.pad_next_power_of_two();
+        padded
     }
 
     /// Pads the tensor to specific target dimensions with zeros.

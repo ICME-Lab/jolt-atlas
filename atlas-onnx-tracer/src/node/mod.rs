@@ -1,6 +1,7 @@
 //! Node representation and helpers used by the ONNX tracer.
 //! A `ComputationNode` models a single operation in the graph.
 use crate::ops::Operator;
+use crate::utils::dims::UsizeDimsExt;
 use serde::{Deserialize, Serialize};
 
 /// Node-specific handler functions and utilities.
@@ -55,13 +56,23 @@ impl ComputationNode {
         }
     }
 
-    /// Computes the total number of output elements produced by this node.
-    /// This is the product of the output dimensions.
-    /// For example, if `output_dims` is `[2, 3]`, this returns `6`.
+    /// Computes the total number of output elements produced by this node
+    /// after mapping each output dimension to its next power of two.
+    ///
+    /// For example, if `output_dims` is `[2, 3]`, this returns `8`
+    /// because dimensions are normalized to `[2, 4]` before taking the product.
+    pub fn pow2_padded_num_output_elements(&self) -> usize {
+        self.output_dims
+            .map_next_power_of_two()
+            .into_iter()
+            .product()
+    }
+
+    /// Computes the total number of output elements produced by this node
+    /// without applying power-of-two padding.
     pub fn num_output_elements(&self) -> usize {
         self.output_dims.iter().product()
     }
-
     /// Returns true if the output of this node is a scalar (i.e., has exactly one element).
     pub fn is_scalar(&self) -> bool {
         self.num_output_elements() == 1

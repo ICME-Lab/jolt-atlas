@@ -71,7 +71,9 @@ impl<F: JoltField> SumcheckInstanceParams<F> for IffParams<F> {
     }
 
     fn num_rounds(&self) -> usize {
-        self.computation_node.num_output_elements().log_2()
+        self.computation_node
+            .pow2_padded_num_output_elements()
+            .log_2()
     }
 }
 
@@ -307,6 +309,16 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x899);
         let input = Tensor::<i32>::random(&mut rng, &[T]);
         let model = iff_model(&mut rng, T);
+        unit_test_op(model, &[input]);
+    }
+
+    #[test]
+    #[ignore = "TODO: non-power-of-two iff path not fully validated yet"]
+    fn test_iff_non_power_of_two_input_len() {
+        let t = 1000;
+        let mut rng = StdRng::seed_from_u64(0x89A);
+        let input = Tensor::<i32>::random(&mut rng, &[t]);
+        let model = iff_model(&mut rng, t);
         unit_test_op(model, &[input]);
     }
 }

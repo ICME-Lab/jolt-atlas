@@ -110,10 +110,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
 /// All padding cells remain zero.
 ///
 /// This lets us compare two differently padded layouts (e.g. input/output of
-/// reshape) under the same extraction order by using the same `rho(t)` sequence.
+/// reshape) under the same extraction order by using the same `rho(t)=gamma^t`
+/// sequence on both sides.
 pub(crate) fn build_reshape_selectors<F: JoltField>(
     dims: &[usize],
-    rho: impl Fn(usize) -> F,
+    gamma: F,
 ) -> Vec<F> {
     fn linear_to_coord(mut index: usize, dims: &[usize]) -> Vec<usize> {
         let mut coord = vec![0; dims.len()];
@@ -144,11 +145,11 @@ pub(crate) fn build_reshape_selectors<F: JoltField>(
     // For each raw linear position t, compute its padded linear position by:
     // 1) converting t to a raw coordinate
     // 2) re-encoding that coordinate under padded strides
-    // Then store rho(t) at that padded position.
+    // Then store rho(t)=gamma^t at that padded position.
     for t in 0..raw_len {
         let raw_coord = linear_to_coord(t, dims);
         let padded_index = coord_to_linear(&raw_coord, &padded_dims);
-        selector[padded_index] = rho(t);
+        selector[padded_index] = gamma_power(gamma, t);
     }
 
     selector
@@ -246,8 +247,8 @@ impl<F: JoltField> ReshapeSumcheckProver<F> {
         let input_mle = MultilinearPolynomial::from(input.padded_next_power_of_two());
         let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
 
-        let selector_a = build_reshape_selectors(input.dims(), |t| gamma_power(params.gamma, t));
-        let selector_b = build_reshape_selectors(output.dims(), |t| gamma_power(params.gamma, t));
+        let selector_a = build_reshape_selectors(input.dims(), params.gamma);
+        let selector_b = build_reshape_selectors(output.dims(), params.gamma);
 
         let selector_a_mle = MultilinearPolynomial::from(selector_a);
         let selector_b_mle = MultilinearPolynomial::from(selector_b);
@@ -366,12 +367,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumc
             self.params.computation_node.idx,
         );
 
-        let selector_a = build_reshape_selectors(&self.params.input_raw_dims, |t| {
-            gamma_power(self.params.gamma, t)
-        });
-        let selector_b = build_reshape_selectors(&self.params.output_raw_dims, |t| {
-            gamma_power(self.params.gamma, t)
-        });
+        let selector_a = build_reshape_selectors(&self.params.input_raw_dims, self.params.gamma);
+        let selector_b = build_reshape_selectors(&self.params.output_raw_dims, self.params.gamma);
         let selector_a_claim =
             MultilinearPolynomial::from(selector_a).evaluate(&r_node_output_prime);
         let selector_b_claim =

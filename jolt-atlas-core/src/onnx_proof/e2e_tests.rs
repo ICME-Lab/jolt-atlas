@@ -308,11 +308,14 @@ fn test_concat_transformer_block_e2e() {
     // Matches models/concat_transformer_block/gen.py static input shapes.
     let head_0 = Tensor::random_range(&mut rng, &[1, 4, 16], (SCALE - 16)..(SCALE + 16));
     let head_1 = Tensor::random_range(&mut rng, &[1, 4, 16], (SCALE - 16)..(SCALE + 16));
+    let head_2 = Tensor::random_range(&mut rng, &[1, 4, 16], (SCALE - 16)..(SCALE + 16));
+    let head_3 = Tensor::random_range(&mut rng, &[1, 4, 16], (SCALE - 16)..(SCALE + 16));
+    let head_4 = Tensor::random_range(&mut rng, &[1, 4, 16], (SCALE - 16)..(SCALE + 16));
 
     prove_and_verify(
         working_dir,
-        &[head_0, head_1],
-        &Default::default(),
+        &[head_0, head_1, head_2, head_3, head_4],
+        &RunArgs::default().with_padding(false),
         TestConfig::new().print_timing().print_model(),
     );
 }

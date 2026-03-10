@@ -2,6 +2,7 @@ use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::{Concat, Operator},
+    tensor::Tensor,
     utils::dims::UsizeDimsExt,
 };
 use common::VirtualPolynomial;
@@ -42,73 +43,35 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
             panic!("Expected Concat operator")
         };
 
-        let LayerData { operands, output } = Trace::layer_data(&prover.trace, node);
-        let [a_tensor, b_tensor] = operands[..] else {
-            panic!(
-                "Concat currently supports exactly 2 operands (N-input support is work in progress)"
-            )
-        };
         let gamma: F = prover.transcript.challenge_scalar();
 
-        let axis = normalize_axis(concat_op.axis, output.dims().len());
-        let raw_inputs_dims: Vec<&[usize]> = vec![a_tensor.dims(), b_tensor.dims()];
-        validate_concat_shapes(&raw_inputs_dims, output.dims(), axis);
-        let padded_output_dims = output.dims().map_next_power_of_two();
+        let raw_inputs_dims = {
+            let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+            operands
+                .iter()
+                .map(|tensor| tensor.dims())
+                .collect::<Vec<_>>()
+        };
+        let input_count = raw_inputs_dims.len();
+        assert!(input_count > 0, "Concat expects at least one operand");
+
+        let axis = normalize_axis(concat_op.axis, node.output_dims.len());
+        validate_concat_shapes(&raw_inputs_dims, &node.output_dims, axis);
+        let padded_output_dims = node.pow2_padded_output_dims();
 
         let ctx =
             ConcatGammaWeightsContext::new(&raw_inputs_dims, &padded_output_dims, axis, gamma);
-        let output_weights = ctx.output_gamma_weights().to_vec();
-        let poly_c = MultilinearPolynomial::from(output.padded_next_power_of_two());
-        let claim_c = fold_poly_with_weights(&poly_c, &output_weights);
-
-        let a_weights = ctx.gamma_weights(0);
-        let poly_a = MultilinearPolynomial::from(a_tensor.padded_next_power_of_two());
-        let claim_a = fold_poly_with_weights(&poly_a, &a_weights);
-
-        let b_weights = ctx.gamma_weights(1);
-        let poly_b = MultilinearPolynomial::from(b_tensor.padded_next_power_of_two());
-        let claim_b = fold_poly_with_weights(&poly_b, &b_weights);
-
-        prover.accumulator.append_virtual(
-            &mut prover.transcript,
-            claim_poly_c(node),
-            SumcheckId::RLC,
-            vec![].into(),
-            claim_c,
-        );
-        prover.accumulator.append_virtual(
-            &mut prover.transcript,
-            claim_poly_a(node),
-            SumcheckId::RLC,
-            vec![].into(),
-            claim_a,
-        );
-        prover.accumulator.append_virtual(
-            &mut prover.transcript,
-            claim_poly_b(node),
-            SumcheckId::RLC,
-            vec![].into(),
-            claim_b,
-        );
-
-        let c_prover = GammaFoldProver::new(
-            GammaFoldParams::new(node.idx, claim_poly_c(node), poly_c.len().log_2()),
-            poly_c,
-            output_weights,
-        );
-        let a_prover = GammaFoldProver::new(
-            GammaFoldParams::new(node.idx, claim_poly_a(node), poly_a.len().log_2()),
-            poly_a,
-            a_weights,
-        );
-        let b_prover = GammaFoldProver::new(
-            GammaFoldParams::new(node.idx, claim_poly_b(node), poly_b.len().log_2()),
-            poly_b,
-            b_weights,
-        );
 
         let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-            vec![Box::new(c_prover), Box::new(a_prover), Box::new(b_prover)];
+            Vec::with_capacity(1 + input_count);
+        instances.push(Box::new(GammaFoldProver::initialize_output(
+            node, &ctx, prover,
+        )));
+        for input_idx in 0..input_count {
+            instances.push(Box::new(GammaFoldProver::initialize_input(
+                node, input_idx, &ctx, prover,
+            )));
+        }
         let (proof, _) = BatchedSumcheck::prove(
             instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
@@ -133,58 +96,37 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
             panic!("Expected Concat operator")
         };
 
-        let graph = &verifier.preprocessing.model.graph;
-        let [a_node, b_node] = graph.get_input_nodes(node)[..] else {
-            panic!("Concat currently supports exactly 2 operands")
-        };
-
         let gamma: F = verifier.transcript.challenge_scalar();
 
+        let raw_inputs_dims = {
+            let graph = &verifier.preprocessing.model.graph;
+            let input_nodes = graph.get_input_nodes(node);
+            input_nodes
+                .iter()
+                .map(|input_node| input_node.output_dims.as_slice())
+                .collect::<Vec<&[usize]>>()
+        };
+        let input_count = raw_inputs_dims.len();
+        assert!(input_count > 0, "Concat expects at least one input node");
+
         let axis = normalize_axis(concat_op.axis, node.output_dims.len());
-        let raw_inputs_dims: Vec<&[usize]> = vec![&a_node.output_dims, &b_node.output_dims];
         validate_concat_shapes(&raw_inputs_dims, &node.output_dims, axis);
         let padded_output = node.pow2_padded_output_dims();
 
         let ctx = ConcatGammaWeightsContext::new(&raw_inputs_dims, &padded_output, axis, gamma);
 
-        verifier.accumulator.append_virtual(
-            &mut verifier.transcript,
-            claim_poly_c(node),
-            SumcheckId::RLC,
-            vec![].into(),
-        );
-        verifier.accumulator.append_virtual(
-            &mut verifier.transcript,
-            claim_poly_a(node),
-            SumcheckId::RLC,
-            vec![].into(),
-        );
-        verifier.accumulator.append_virtual(
-            &mut verifier.transcript,
-            claim_poly_b(node),
-            SumcheckId::RLC,
-            vec![].into(),
-        );
+        let mut verifiers = Vec::with_capacity(1 + input_count);
+        verifiers.push(GammaFoldVerifier::initialize_output(node, &ctx, verifier));
+        for input_idx in 0..input_count {
+            verifiers.push(GammaFoldVerifier::initialize_input(
+                node, input_idx, &ctx, verifier,
+            ));
+        }
 
-        let len_a: usize = a_node.pow2_padded_num_output_elements();
-        let len_b: usize = b_node.pow2_padded_num_output_elements();
-        let len_c: usize = node.pow2_padded_num_output_elements();
-
-        let c_verifier = GammaFoldVerifier::new(
-            GammaFoldParams::new(node.idx, claim_poly_c(node), len_c.log_2()),
-            ctx.output_gamma_weights().to_vec(),
-        );
-        let a_verifier = GammaFoldVerifier::new(
-            GammaFoldParams::new(node.idx, claim_poly_a(node), len_a.log_2()),
-            ctx.gamma_weights(0),
-        );
-        let b_verifier = GammaFoldVerifier::new(
-            GammaFoldParams::new(node.idx, claim_poly_b(node), len_b.log_2()),
-            ctx.gamma_weights(1),
-        );
-
-        let instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
-            vec![&c_verifier, &a_verifier, &b_verifier];
+        let instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = verifiers
+            .iter()
+            .map(|instance| instance as &dyn SumcheckInstanceVerifier<F, T>)
+            .collect();
         BatchedSumcheck::verify(
             proof,
             instances,
@@ -194,18 +136,15 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
 
         let claim_c = verifier
             .accumulator
-            .get_virtual_polynomial_opening(claim_poly_c(node), SumcheckId::RLC)
+            .get_virtual_polynomial_opening(claim_poly_output(node), SumcheckId::RLC)
             .1;
-        let claim_a = verifier
-            .accumulator
-            .get_virtual_polynomial_opening(claim_poly_a(node), SumcheckId::RLC)
-            .1;
-        let claim_b = verifier
-            .accumulator
-            .get_virtual_polynomial_opening(claim_poly_b(node), SumcheckId::RLC)
-            .1;
-
-        let expected_claim_c = claim_a + claim_b;
+        let expected_claim_c = (0..input_count).fold(F::zero(), |running, input_idx| {
+            let input_claim = verifier
+                .accumulator
+                .get_virtual_polynomial_opening(claim_poly_input(node, input_idx), SumcheckId::RLC)
+                .1;
+            running + input_claim
+        });
         if claim_c != expected_claim_c {
             return Err(ProofVerifyError::InvalidOpeningProof(
                 "Concat folded-claim relation failed".to_string(),
@@ -266,6 +205,66 @@ pub struct GammaFoldProver<F: JoltField> {
 }
 
 impl<F: JoltField> GammaFoldProver<F> {
+    fn initialize<T: Transcript>(
+        node: &ComputationNode,
+        claim_poly: VirtualPolynomial,
+        input_tensor: &Tensor<i32>,
+        weight_values: Vec<F>,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+    ) -> Self {
+        let tensor = MultilinearPolynomial::from(input_tensor.padded_next_power_of_two());
+        let claim = fold_poly_with_weights(&tensor, &weight_values);
+        accumulator.append_virtual(
+            transcript,
+            claim_poly,
+            SumcheckId::RLC,
+            vec![].into(),
+            claim,
+        );
+
+        let params = GammaFoldParams::new(node.idx, claim_poly, tensor.len().log_2());
+        Self::new(params, tensor, weight_values)
+    }
+
+    fn initialize_output<T: Transcript>(
+        node: &ComputationNode,
+        ctx: &ConcatGammaWeightsContext<'_, F>,
+        prover: &mut Prover<F, T>,
+    ) -> Self {
+        let LayerData { output, .. } = Trace::layer_data(&prover.trace, node);
+
+        Self::initialize(
+            node,
+            claim_poly_output(node),
+            output,
+            ctx.output_gamma_weights().to_vec(),
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        )
+    }
+
+    fn initialize_input<T: Transcript>(
+        node: &ComputationNode,
+        input_idx: usize,
+        ctx: &ConcatGammaWeightsContext<'_, F>,
+        prover: &mut Prover<F, T>,
+    ) -> Self {
+        let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+        let input_tensor = operands
+            .get(input_idx)
+            .unwrap_or_else(|| panic!("Concat input_idx {input_idx} out of range"));
+
+        Self::initialize(
+            node,
+            claim_poly_input(node, input_idx),
+            input_tensor,
+            ctx.gamma_weights(input_idx),
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        )
+    }
+
     fn new(
         params: GammaFoldParams<F>,
         tensor: MultilinearPolynomial<F>,
@@ -338,6 +337,59 @@ pub struct GammaFoldVerifier<F: JoltField> {
 }
 
 impl<F: JoltField> GammaFoldVerifier<F> {
+    fn initialize<T: Transcript>(
+        node: &ComputationNode,
+        claim_poly: VirtualPolynomial,
+        num_elements: usize,
+        weight_values: Vec<F>,
+        verifier: &mut Verifier<'_, F, T>,
+    ) -> Self {
+        verifier.accumulator.append_virtual(
+            &mut verifier.transcript,
+            claim_poly,
+            SumcheckId::RLC,
+            vec![].into(),
+        );
+
+        let params = GammaFoldParams::new(node.idx, claim_poly, num_elements.log_2());
+        Self::new(params, weight_values)
+    }
+
+    fn initialize_output<T: Transcript>(
+        node: &ComputationNode,
+        ctx: &ConcatGammaWeightsContext<'_, F>,
+        verifier: &mut Verifier<'_, F, T>,
+    ) -> Self {
+        let output_num_elements = node.pow2_padded_num_output_elements();
+
+        Self::initialize(
+            node,
+            claim_poly_output(node),
+            output_num_elements,
+            ctx.output_gamma_weights().to_vec(),
+            verifier,
+        )
+    }
+
+    fn initialize_input<T: Transcript>(
+        node: &ComputationNode,
+        input_idx: usize,
+        ctx: &ConcatGammaWeightsContext<'_, F>,
+        verifier: &mut Verifier<'_, F, T>,
+    ) -> Self {
+        let graph = &verifier.preprocessing.model.graph;
+        let input_nodes = graph.get_input_nodes(node);
+        let input_num_elements = input_nodes[input_idx].pow2_padded_num_output_elements();
+
+        Self::initialize(
+            node,
+            claim_poly_input(node, input_idx),
+            input_num_elements,
+            ctx.gamma_weights(input_idx),
+            verifier,
+        )
+    }
+
     fn new(params: GammaFoldParams<F>, weight_values: Vec<F>) -> Self {
         Self {
             params,
@@ -574,16 +626,16 @@ impl<'a, F: JoltField> ConcatGammaWeightsContext<'a, F> {
     }
 }
 
-fn claim_poly_c(node: &ComputationNode) -> VirtualPolynomial {
+fn claim_poly_output(node: &ComputationNode) -> VirtualPolynomial {
     VirtualPolynomial::NodeOutput(node.idx)
 }
 
-fn claim_poly_a(node: &ComputationNode) -> VirtualPolynomial {
-    VirtualPolynomial::NodeOutput(node.inputs[0])
-}
-
-fn claim_poly_b(node: &ComputationNode) -> VirtualPolynomial {
-    VirtualPolynomial::NodeOutput(node.inputs[1])
+fn claim_poly_input(node: &ComputationNode, input_idx: usize) -> VirtualPolynomial {
+    let input_node_idx = *node
+        .inputs
+        .get(input_idx)
+        .unwrap_or_else(|| panic!("Concat input_idx {input_idx} out of range"));
+    VirtualPolynomial::NodeOutput(input_node_idx)
 }
 
 #[cfg(test)]
@@ -597,11 +649,13 @@ mod tests {
     use joltworks::field::JoltField;
     use rand::{rngs::StdRng, SeedableRng};
 
-    fn concat_model(a_shape: Vec<usize>, b_shape: Vec<usize>, axis: isize) -> Model {
+    fn concat_model(input_shapes: Vec<Vec<usize>>, axis: isize) -> Model {
         let mut b = ModelBuilder::new();
-        let a = b.input(a_shape);
-        let c = b.input(b_shape);
-        let out = b.concat(a, c, axis);
+        let inputs: Vec<_> = input_shapes
+            .into_iter()
+            .map(|shape| b.input(shape))
+            .collect();
+        let out = b.concat(&inputs, axis);
         b.mark_output(out);
         b.build()
     }
@@ -633,7 +687,7 @@ mod tests {
             let mut rng = StdRng::seed_from_u64(0xC0D2 + idx as u64);
             let a = Tensor::<i32>::random_small(&mut rng, &a_shape);
             let b = Tensor::<i32>::random_small(&mut rng, &b_shape);
-            let model = concat_model(a_shape, b_shape, axis);
+            let model = concat_model(vec![a_shape, b_shape], axis);
             unit_test_op(model, &[a, b]);
         }
     }
@@ -657,9 +711,40 @@ mod tests {
             let mut rng = StdRng::seed_from_u64(0xC0C2 + idx as u64);
             let a = Tensor::<i32>::random_small(&mut rng, &a_shape);
             let b = Tensor::<i32>::random_small(&mut rng, &b_shape);
-            let model = concat_model(a_shape, b_shape, axis);
+            let model = concat_model(vec![a_shape, b_shape], axis);
             unit_test_op(model, &[a, b]);
         }
+    }
+
+    #[test]
+    fn test_concat_multi_input_shapes() {
+        let cases: Vec<(Vec<Vec<usize>>, isize)> = vec![
+            (vec![vec![2, 3], vec![2, 1], vec![2, 4]], 1),
+            (vec![vec![1, 2, 4], vec![3, 2, 4], vec![2, 2, 4]], 0),
+            (
+                vec![vec![2, 2, 1], vec![2, 2, 3], vec![2, 2, 2], vec![2, 2, 2]],
+                -1,
+            ),
+        ];
+
+        for (idx, (shapes, axis)) in cases.into_iter().enumerate() {
+            let mut rng = StdRng::seed_from_u64(0xC0F0 + idx as u64);
+            let inputs: Vec<Tensor<i32>> = shapes
+                .iter()
+                .map(|shape| Tensor::<i32>::random_small(&mut rng, shape))
+                .collect();
+            let model = concat_model(shapes, axis);
+            unit_test_op(model, &inputs);
+        }
+    }
+
+    #[test]
+    fn test_concat_single_input_identity() {
+        let mut rng = StdRng::seed_from_u64(0xC011);
+        let shape = vec![3, 5, 2];
+        let input = Tensor::<i32>::random_small(&mut rng, &shape);
+        let model = concat_model(vec![shape], 1);
+        unit_test_op(model, &[input]);
     }
 
     #[test]

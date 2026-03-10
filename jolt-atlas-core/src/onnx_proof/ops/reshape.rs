@@ -112,10 +112,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
 /// This lets us compare two differently padded layouts (e.g. input/output of
 /// reshape) under the same extraction order by using the same `rho(t)=gamma^t`
 /// sequence on both sides.
-pub(crate) fn build_reshape_selectors<F: JoltField>(
-    dims: &[usize],
-    gamma: F,
-) -> Vec<F> {
+pub(crate) fn build_reshape_selectors<F: JoltField>(dims: &[usize], gamma: F) -> Vec<F> {
     fn linear_to_coord(mut index: usize, dims: &[usize]) -> Vec<usize> {
         let mut coord = vec![0; dims.len()];
         for axis in (0..dims.len()).rev() {

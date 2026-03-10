@@ -54,16 +54,16 @@ pub fn compute_lookup_indices_from_operands(
 
         let left_operand = operand_tensors[0];
         let right_operand = operand_tensors[1];
- 
-         debug_assert!(
-             left_operand.dims().iter().all(|d| d.is_power_of_two()),
-             "left operand dims must all be power-of-two, got {:?}",
-             left_operand.dims()
-         );
-         debug_assert!(
-             right_operand.dims().iter().all(|d| d.is_power_of_two()),
-             "right operand dims must all be power-of-two, got {:?}",
-             right_operand.dims()
+
+        debug_assert!(
+            left_operand.dims().iter().all(|d| d.is_power_of_two()),
+            "left operand dims must all be power-of-two, got {:?}",
+            left_operand.dims()
+        );
+        debug_assert!(
+            right_operand.dims().iter().all(|d| d.is_power_of_two()),
+            "right operand dims must all be power-of-two, got {:?}",
+            right_operand.dims()
         );
 
         // Validate that both tensors have the same length
@@ -98,11 +98,11 @@ pub fn compute_lookup_indices_from_operands(
         );
 
         let operand = operand_tensors[0];
- 
-         debug_assert!(
-             operand.dims().iter().all(|d| d.is_power_of_two()),
-             "operand dims must all be power-of-two, got {:?}",
-             operand.dims()
+
+        debug_assert!(
+            operand.dims().iter().all(|d| d.is_power_of_two()),
+            "operand dims must all be power-of-two, got {:?}",
+            operand.dims()
         );
 
         // Use tensor values directly as lookup indices

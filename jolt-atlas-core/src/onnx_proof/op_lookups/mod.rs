@@ -117,8 +117,15 @@ impl OpLookupProvider {
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
         append_raf_claims_prover::<F, LUT>(self, trace, accumulator, transcript);
+        let padded_operands: Vec<_> = trace
+            .layer_data(&self.computation_node)
+            .operands
+            .iter()
+            .map(|tensor| tensor.padded_next_power_of_two())
+            .collect();
+        let operand_refs: Vec<_> = padded_operands.iter().collect();
         let lookup_bits = compute_lookup_indices_from_operands(
-            &trace.layer_data(&self.computation_node).operands,
+            &operand_refs,
             self.computation_node.is_interleaved_operands(),
         );
         let lookup_indices: Vec<usize> = lookup_bits.iter().map(|&x| x.into()).collect();

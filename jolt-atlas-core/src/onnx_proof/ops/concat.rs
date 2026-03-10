@@ -2,6 +2,7 @@ use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::{Concat, Operator},
+    utils::dims::UsizeDimsExt,
 };
 use common::VirtualPolynomial;
 use joltworks::{
@@ -50,37 +51,22 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
         let gamma: F = prover.transcript.challenge_scalar();
 
         let axis = normalize_axis(concat_op.axis, output.dims().len());
-        validate_concat_shapes(&[a_tensor.dims(), b_tensor.dims()], output.dims(), axis);
-
-        // TODO(#185): Add a one-line method to Tensor to get the padded version.
-        let mut a_tensor_padded = a_tensor.clone();
-        let mut b_tensor_padded = b_tensor.clone();
-        let mut output_padded = output.clone();
-        a_tensor_padded.pad_next_power_of_two();
-        b_tensor_padded.pad_next_power_of_two();
-        output_padded.pad_next_power_of_two();
-
         let raw_inputs_dims: Vec<&[usize]> = vec![a_tensor.dims(), b_tensor.dims()];
-        let padded_inputs_dims: Vec<&[usize]> =
-            vec![a_tensor_padded.dims(), b_tensor_padded.dims()];
+        validate_concat_shapes(&raw_inputs_dims, output.dims(), axis);
+        let padded_output_dims = output.dims().map_next_power_of_two();
 
-        let ctx = ConcatGammaWeightsContext::new(
-            &raw_inputs_dims,
-            &padded_inputs_dims,
-            output_padded.dims(),
-            axis,
-            gamma,
-        );
+        let ctx =
+            ConcatGammaWeightsContext::new(&raw_inputs_dims, &padded_output_dims, axis, gamma);
         let output_weights = ctx.output_gamma_weights().to_vec();
-        let poly_c = MultilinearPolynomial::from(output_padded.clone());
+        let poly_c = MultilinearPolynomial::from(output.padded_next_power_of_two());
         let claim_c = fold_poly_with_weights(&poly_c, &output_weights);
 
         let a_weights = ctx.gamma_weights(0);
-        let poly_a = MultilinearPolynomial::from(a_tensor_padded.clone());
+        let poly_a = MultilinearPolynomial::from(a_tensor.padded_next_power_of_two());
         let claim_a = fold_poly_with_weights(&poly_a, &a_weights);
 
         let b_weights = ctx.gamma_weights(1);
-        let poly_b = MultilinearPolynomial::from(b_tensor_padded.clone());
+        let poly_b = MultilinearPolynomial::from(b_tensor.padded_next_power_of_two());
         let claim_b = fold_poly_with_weights(&poly_b, &b_weights);
 
         prover.accumulator.append_virtual(
@@ -155,69 +141,45 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
         let gamma: F = verifier.transcript.challenge_scalar();
 
         let axis = normalize_axis(concat_op.axis, node.output_dims.len());
-        validate_concat_shapes(
-            &[&a_node.output_dims, &b_node.output_dims],
-            &node.output_dims,
-            axis,
-        );
-
-        // TODO(#185): Add a one-line method to ComputationNode to get the padded version.
-        let pad_node = |node: &ComputationNode| {
-            let mut padded_node = node.clone();
-            for dim in &mut padded_node.output_dims {
-                *dim = dim.next_power_of_two();
-            }
-            padded_node
-        };
-
-        let a_padded = pad_node(a_node);
-        let b_padded = pad_node(b_node);
-        let node_padded = pad_node(node);
-
-        let len_a: usize = a_padded.num_output_elements();
-        let len_b: usize = b_padded.num_output_elements();
-        let len_c: usize = node_padded.num_output_elements();
-
         let raw_inputs_dims: Vec<&[usize]> = vec![&a_node.output_dims, &b_node.output_dims];
-        let padded_inputs_dims: Vec<&[usize]> = vec![&a_padded.output_dims, &b_padded.output_dims];
+        validate_concat_shapes(&raw_inputs_dims, &node.output_dims, axis);
+        let padded_output = node.pow2_padded_output_dims();
 
-        let ctx = ConcatGammaWeightsContext::new(
-            &raw_inputs_dims,
-            &padded_inputs_dims,
-            &node_padded.output_dims,
-            axis,
-            gamma,
-        );
+        let ctx = ConcatGammaWeightsContext::new(&raw_inputs_dims, &padded_output, axis, gamma);
 
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,
-            claim_poly_c(&node_padded),
+            claim_poly_c(node),
             SumcheckId::RLC,
             vec![].into(),
         );
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,
-            claim_poly_a(&node_padded),
+            claim_poly_a(node),
             SumcheckId::RLC,
             vec![].into(),
         );
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,
-            claim_poly_b(&node_padded),
+            claim_poly_b(node),
             SumcheckId::RLC,
             vec![].into(),
         );
+
+        let len_a: usize = a_node.pow2_padded_num_output_elements();
+        let len_b: usize = b_node.pow2_padded_num_output_elements();
+        let len_c: usize = node.pow2_padded_num_output_elements();
 
         let c_verifier = GammaFoldVerifier::new(
-            GammaFoldParams::new(node_padded.idx, claim_poly_c(&node_padded), len_c.log_2()),
+            GammaFoldParams::new(node.idx, claim_poly_c(node), len_c.log_2()),
             ctx.output_gamma_weights().to_vec(),
         );
         let a_verifier = GammaFoldVerifier::new(
-            GammaFoldParams::new(node_padded.idx, claim_poly_a(&node_padded), len_a.log_2()),
+            GammaFoldParams::new(node.idx, claim_poly_a(node), len_a.log_2()),
             ctx.gamma_weights(0),
         );
         let b_verifier = GammaFoldVerifier::new(
-            GammaFoldParams::new(node_padded.idx, claim_poly_b(&node_padded), len_b.log_2()),
+            GammaFoldParams::new(node.idx, claim_poly_b(node), len_b.log_2()),
             ctx.gamma_weights(1),
         );
 
@@ -232,15 +194,15 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
 
         let claim_c = verifier
             .accumulator
-            .get_virtual_polynomial_opening(claim_poly_c(&node_padded), SumcheckId::RLC)
+            .get_virtual_polynomial_opening(claim_poly_c(node), SumcheckId::RLC)
             .1;
         let claim_a = verifier
             .accumulator
-            .get_virtual_polynomial_opening(claim_poly_a(&node_padded), SumcheckId::RLC)
+            .get_virtual_polynomial_opening(claim_poly_a(node), SumcheckId::RLC)
             .1;
         let claim_b = verifier
             .accumulator
-            .get_virtual_polynomial_opening(claim_poly_b(&node_padded), SumcheckId::RLC)
+            .get_virtual_polynomial_opening(claim_poly_b(node), SumcheckId::RLC)
             .1;
 
         let expected_claim_c = claim_a + claim_b;
@@ -494,7 +456,7 @@ fn gamma_powers<F: JoltField>(poly_len: usize, gamma: F) -> Vec<F> {
 /// Context for generating concat-aware gamma weights for each input polynomial.
 struct ConcatGammaWeightsContext<'a, F: JoltField> {
     /// Padded input dims, used for weight layout.
-    padded_inputs: &'a [&'a [usize]],
+    padded_inputs: Vec<Vec<usize>>,
     /// Padded output dims, used for stride computation.
     padded_output_dims: &'a [usize],
     axis: usize,
@@ -506,14 +468,17 @@ struct ConcatGammaWeightsContext<'a, F: JoltField> {
 impl<'a, F: JoltField> ConcatGammaWeightsContext<'a, F> {
     fn new(
         raw_inputs: &[&[usize]],
-        padded_inputs: &'a [&'a [usize]],
         padded_output_dims: &'a [usize],
         axis: usize,
         gamma: F,
     ) -> Self {
+        let padded_inputs = raw_inputs
+            .iter()
+            .map(|&dims| dims.map_next_power_of_two())
+            .collect();
+        let dims_at_axis: Vec<usize> = raw_inputs.iter().map(|dims| dims[axis]).collect();
         let output_len: usize = padded_output_dims.iter().product();
         let gamma_powers = gamma_powers(output_len, gamma);
-        let dims_at_axis: Vec<usize> = raw_inputs.iter().map(|dims| dims[axis]).collect();
 
         Self {
             padded_inputs,
@@ -529,10 +494,9 @@ impl<'a, F: JoltField> ConcatGammaWeightsContext<'a, F> {
         &self.gamma_powers
     }
 
-    fn input_dims(&self, input_idx: usize) -> &'a [usize] {
+    fn input_dims(&self, input_idx: usize) -> &[usize] {
         self.padded_inputs
             .get(input_idx)
-            .copied()
             .unwrap_or_else(|| panic!("Concat input_idx {input_idx} out of range"))
     }
 
@@ -704,13 +668,8 @@ mod tests {
         // Concat inputs [2,3,2] and [2,1,2] along axis 1.
         // Raw output [2,4,2] (3+1=4, already pow2).
         // Padded input A [2,4,2], padded input B [2,1,2], padded output [2,4,2].
-        let ctx = super::ConcatGammaWeightsContext::new(
-            &[&[2, 3, 2], &[2, 1, 2]],
-            &[&[2, 4, 2], &[2, 1, 2]],
-            &[2, 4, 2],
-            1,
-            gamma,
-        );
+        let ctx =
+            super::ConcatGammaWeightsContext::new(&[&[2, 3, 2], &[2, 1, 2]], &[2, 4, 2], 1, gamma);
 
         let output_weights = ctx.output_gamma_weights();
         let a_weights = ctx.gamma_weights(0);

@@ -286,6 +286,50 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    /// Add a concat node with an arbitrary number of inputs.
+    pub fn concat(&mut self, inputs: &[Wire], axis: isize) -> Wire {
+        assert!(!inputs.is_empty(), "Concat expects at least one input wire");
+        let id = self.alloc();
+        let first_dims = self.nodes[&inputs[0]].output_dims.clone();
+        let rank = first_dims.len();
+
+        let axis_norm = if axis < 0 {
+            (axis + rank as isize) as usize
+        } else {
+            axis as usize
+        };
+        assert!(axis_norm < rank, "Concat axis out of bounds");
+
+        let mut output_dims = first_dims;
+        for input in inputs.iter().skip(1) {
+            let input_dims = &self.nodes[input].output_dims;
+            assert_eq!(
+                input_dims.len(),
+                rank,
+                "Concat expects inputs with same rank"
+            );
+
+            for dim in 0..rank {
+                if dim == axis_norm {
+                    output_dims[dim] += input_dims[dim];
+                } else {
+                    assert_eq!(
+                        output_dims[dim], input_dims[dim],
+                        "Concat non-axis dimensions must match"
+                    );
+                }
+            }
+        }
+
+        let node = ComputationNode::new(
+            id,
+            Operator::Concat(Concat { axis }),
+            inputs.to_vec(),
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
     /// Add a softmax node.
     pub fn softmax(&mut self, axes: usize, input: Wire) -> Wire {
         let id = self.alloc();

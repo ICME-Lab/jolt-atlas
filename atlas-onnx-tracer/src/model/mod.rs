@@ -228,11 +228,18 @@ impl Model {
             .unwrap_or(0)
     }
 
-    /// Get a nodes input nodes
+    /// Get a node's input nodes
+    ///
+    /// Panics if any input node index is missing from the graph.
     pub fn get_input_nodes(&self, node: &ComputationNode) -> Vec<&ComputationNode> {
         node.inputs
             .iter()
-            .filter_map(|idx| self.graph.nodes.get(idx))
+            .map(|idx| {
+                self.graph
+                    .nodes
+                    .get(idx)
+                    .expect("Expected node input missing in graph")
+            })
             .collect()
     }
 
@@ -292,6 +299,37 @@ pub struct ComputationGraph {
     /// Original (unpadded) dimensions for output nodes, indexed by node index
     /// Only populated when padding is enabled
     pub original_output_dims: HashMap<usize, Vec<usize>>,
+}
+
+impl ComputationGraph {
+    /// Get a reference to a node by its index.
+    ///
+    /// # Arguments
+    /// * `idx` - The index of the node to retrieve
+    ///
+    /// # Returns
+    /// An `Option` containing a reference to the `ComputationNode` if it exists, or `None` if it does not.
+    pub fn get_node(&self, idx: usize) -> Option<&ComputationNode> {
+        self.nodes.get(&idx)
+    }
+
+    /// Get references to the input nodes of a given node.
+    ///
+    /// # Arguments
+    /// * `node` - The `ComputationNode` for which to retrieve input nodes
+    ///
+    /// # Returns
+    /// A vector of references to the input `ComputationNode`s.
+    /// Panics if an input node index does not exist in the graph.
+    pub fn get_input_nodes(&self, node: &ComputationNode) -> Vec<&ComputationNode> {
+        node.inputs
+            .iter()
+            .map(|idx| {
+                self.get_node(*idx)
+                    .expect("Expected node input missing in graph")
+            })
+            .collect()
+    }
 }
 
 /// Runtime arguments for model execution and tracing.

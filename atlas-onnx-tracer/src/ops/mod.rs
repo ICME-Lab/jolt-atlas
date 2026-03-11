@@ -11,6 +11,8 @@ pub mod and;
 pub mod broadcast;
 /// Clamp operator for limiting values to a range.
 pub mod clamp;
+/// Concatenation operator.
+pub mod concat;
 /// Constant tensor operator.
 pub mod constant;
 /// Element-wise cosine operator.
@@ -119,6 +121,7 @@ define_operators! {
         Broadcast { shape: Vec<usize> },
         And,
         Clamp { axes: usize, max_spread: i32 },
+        Concat { axis: isize },
         Constant(Tensor<i32>),
         Cos { scale: F32 },
         Cube { scale: i32 },

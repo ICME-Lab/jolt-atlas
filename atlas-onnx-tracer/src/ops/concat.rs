@@ -5,6 +5,7 @@ use crate::{
 
 impl Op for Concat {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
+        assert!(!inputs.is_empty(), "Concat requires at least one input");
         let rank = inputs.first().map(|t| t.dims().len()).unwrap_or(0) as isize;
         assert!(
             self.axis >= -rank && self.axis < rank,

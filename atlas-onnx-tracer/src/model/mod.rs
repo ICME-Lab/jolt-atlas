@@ -319,7 +319,8 @@ impl ComputationGraph {
     /// * `node` - The `ComputationNode` for which to retrieve input nodes
     ///
     /// # Returns
-    /// A vector of references to the input `ComputationNode`s. If an input node index does not exist in the graph, it exits with error.
+    /// A vector of references to the input `ComputationNode`s.
+    /// Panics if an input node index does not exist in the graph.
     pub fn get_input_nodes(&self, node: &ComputationNode) -> Vec<&ComputationNode> {
         node.inputs
             .iter()

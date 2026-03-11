@@ -4,6 +4,7 @@
 use crate::utils::parallel_utils::IndexedParallelIterator;
 use crate::utils::{
     self,
+    dims::copy_strided,
     parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelSliceMut},
     quantize,
 };
@@ -19,39 +20,6 @@ use std::{
 };
 use thiserror::Error;
 use tract_onnx::prelude::tract_itertools::Itertools;
-
-/// Recursively copies data from a source tensor layout to a (larger) destination layout,
-/// preserving multi-dimensional structure. Copies contiguous slices along the innermost
-/// dimension for efficiency, avoiding per-element coordinate generation.
-fn copy_strided<T: Clone>(
-    src: &[T],
-    dst: &mut [T],
-    old_dims: &[usize],
-    new_dims: &[usize],
-    depth: usize,
-    src_base: usize,
-    dst_base: usize,
-) {
-    if depth == old_dims.len() - 1 {
-        // Innermost dimension: copy contiguous row
-        let count = old_dims[depth];
-        dst[dst_base..dst_base + count].clone_from_slice(&src[src_base..src_base + count]);
-    } else {
-        let src_stride: usize = old_dims[depth + 1..].iter().product();
-        let dst_stride: usize = new_dims[depth + 1..].iter().product();
-        for i in 0..old_dims[depth] {
-            copy_strided(
-                src,
-                dst,
-                old_dims,
-                new_dims,
-                depth + 1,
-                src_base + i * src_stride,
-                dst_base + i * dst_stride,
-            );
-        }
-    }
-}
 
 /// Implementations of common operations on tensors.
 pub mod ops;

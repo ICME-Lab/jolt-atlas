@@ -3,7 +3,7 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
     ops::{Concat, Operator},
     tensor::Tensor,
-    utils::dims::UsizeDimsExt,
+    utils::dims::Pad,
 };
 use common::VirtualPolynomial;
 use joltworks::{
@@ -57,10 +57,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
 
         let axis = normalize_axis(concat_op.axis, node.output_dims.len());
         validate_concat_shapes(&raw_inputs_dims, &node.output_dims, axis);
-        let padded_output_dims = node.pow2_padded_output_dims();
-
-        let ctx =
-            ConcatGammaWeightsContext::new(&raw_inputs_dims, &padded_output_dims, axis, gamma);
+        let ctx = ConcatGammaWeightsContext::new(&raw_inputs_dims, &node.output_dims, axis, gamma);
 
         let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
             Vec::with_capacity(1 + input_count);
@@ -111,9 +108,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
 
         let axis = normalize_axis(concat_op.axis, node.output_dims.len());
         validate_concat_shapes(&raw_inputs_dims, &node.output_dims, axis);
-        let padded_output = node.pow2_padded_output_dims();
-
-        let ctx = ConcatGammaWeightsContext::new(&raw_inputs_dims, &padded_output, axis, gamma);
+        let ctx = ConcatGammaWeightsContext::new(&raw_inputs_dims, &node.output_dims, axis, gamma);
 
         let mut verifiers = Vec::with_capacity(1 + input_count);
         verifiers.push(GammaFoldVerifier::initialize_output(node, &ctx, verifier));
@@ -229,7 +224,7 @@ impl<F: JoltField> GammaFoldProver<F> {
 
     fn initialize_output<T: Transcript>(
         node: &ComputationNode,
-        ctx: &ConcatGammaWeightsContext<'_, F>,
+        ctx: &ConcatGammaWeightsContext<F>,
         prover: &mut Prover<F, T>,
     ) -> Self {
         let LayerData { output, .. } = Trace::layer_data(&prover.trace, node);
@@ -238,7 +233,7 @@ impl<F: JoltField> GammaFoldProver<F> {
             node,
             claim_poly_output(node),
             output,
-            ctx.output_gamma_weights().to_vec(),
+            ctx.output_gamma_weights(),
             &mut prover.accumulator,
             &mut prover.transcript,
         )
@@ -247,7 +242,7 @@ impl<F: JoltField> GammaFoldProver<F> {
     fn initialize_input<T: Transcript>(
         node: &ComputationNode,
         input_idx: usize,
-        ctx: &ConcatGammaWeightsContext<'_, F>,
+        ctx: &ConcatGammaWeightsContext<F>,
         prover: &mut Prover<F, T>,
     ) -> Self {
         let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
@@ -357,7 +352,7 @@ impl<F: JoltField> GammaFoldVerifier<F> {
 
     fn initialize_output<T: Transcript>(
         node: &ComputationNode,
-        ctx: &ConcatGammaWeightsContext<'_, F>,
+        ctx: &ConcatGammaWeightsContext<F>,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Self {
         let output_num_elements = node.pow2_padded_num_output_elements();
@@ -366,7 +361,7 @@ impl<F: JoltField> GammaFoldVerifier<F> {
             node,
             claim_poly_output(node),
             output_num_elements,
-            ctx.output_gamma_weights().to_vec(),
+            ctx.output_gamma_weights(),
             verifier,
         )
     }
@@ -374,7 +369,7 @@ impl<F: JoltField> GammaFoldVerifier<F> {
     fn initialize_input<T: Transcript>(
         node: &ComputationNode,
         input_idx: usize,
-        ctx: &ConcatGammaWeightsContext<'_, F>,
+        ctx: &ConcatGammaWeightsContext<F>,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Self {
         let graph = &verifier.preprocessing.model.graph;
@@ -506,63 +501,55 @@ fn gamma_powers<F: JoltField>(poly_len: usize, gamma: F) -> Vec<F> {
 }
 
 /// Context for generating concat-aware gamma weights for each input polynomial.
-struct ConcatGammaWeightsContext<'a, F: JoltField> {
-    /// Padded input dims, used for weight layout.
-    padded_inputs: Vec<Vec<usize>>,
-    /// Padded output dims, used for stride computation.
-    padded_output_dims: &'a [usize],
+struct ConcatGammaWeightsContext<F: JoltField> {
+    /// Raw input dims, the source of truth for concat indexing.
+    inputs_dims: Vec<Vec<usize>>,
+    /// Raw output dims are used for stride computation.
+    output_dims: Vec<usize>,
+    /// Concat axis index.
     axis: usize,
-    /// Raw axis dimension per input, used to compute correct axis offsets.
-    dims_at_axis: Vec<usize>,
+    /// Gamma powers over raw output linear indices.
     gamma_powers: Vec<F>,
 }
 
-impl<'a, F: JoltField> ConcatGammaWeightsContext<'a, F> {
-    fn new(
-        raw_inputs: &[&[usize]],
-        padded_output_dims: &'a [usize],
-        axis: usize,
-        gamma: F,
-    ) -> Self {
-        let padded_inputs = raw_inputs
-            .iter()
-            .map(|&dims| dims.map_next_power_of_two())
-            .collect();
-        let dims_at_axis: Vec<usize> = raw_inputs.iter().map(|dims| dims[axis]).collect();
-        let output_len: usize = padded_output_dims.iter().product();
+impl<F: JoltField> ConcatGammaWeightsContext<F> {
+    fn new(raw_inputs: &[&[usize]], raw_output_dims: &[usize], axis: usize, gamma: F) -> Self {
+        let raw_inputs = raw_inputs.iter().map(|dims| dims.to_vec()).collect();
+        let output_len: usize = raw_output_dims.iter().product();
         let gamma_powers = gamma_powers(output_len, gamma);
 
         Self {
-            padded_inputs,
-            padded_output_dims,
+            inputs_dims: raw_inputs,
+            output_dims: raw_output_dims.to_vec(),
             axis,
-            dims_at_axis,
             gamma_powers,
         }
     }
 
     /// Returns the linearized gamma weights for the concat output polynomial.
-    fn output_gamma_weights(&self) -> &[F] {
-        &self.gamma_powers
+    fn output_gamma_weights(&self) -> Vec<F> {
+        self.gamma_powers.pad_next_power_of_two(&self.output_dims)
     }
 
     fn input_dims(&self, input_idx: usize) -> &[usize] {
-        self.padded_inputs
+        self.inputs_dims
             .get(input_idx)
             .unwrap_or_else(|| panic!("Concat input_idx {input_idx} out of range"))
     }
 
     /// Returns the axis offset (in output coordinates) for the given input.
-    ///
-    /// Uses raw axis dims to avoid inflated offsets from padding.
     fn axis_offset(&self, input_idx: usize) -> usize {
-        self.dims_at_axis[..input_idx].iter().sum()
+        self.inputs_dims[..input_idx]
+            .iter()
+            .map(|dims| dims[self.axis])
+            .sum()
     }
 
     /// Builds concat-aware gamma weights for one input tensor.
     ///
-    /// The produced vector aligns with row-major linearization of the (possibly padded) input.
-    /// The exponent for each index in the given input corresponds to its position in the concatenated output
+    /// The produced vector aligns with row-major linearization of the padded input.
+    /// Weights are built directly in unpadded layout using concat recursion,
+    /// And then padded with 0s.
     ///
     /// Example
     /// ```ignore
@@ -572,10 +559,6 @@ impl<'a, F: JoltField> ConcatGammaWeightsContext<'a, F> {
     /// // Complete weight vector for input 1 is [gamma^2, gamma^5]
     /// ```
     ///
-    /// ### Note:
-    /// For non-power of two tensors, the padded input is used for layout, so padding tensor elements will be mapped to a non-zero weight.
-    /// However we should ensure that every node's output has all padding value set to 0,
-    /// So the non-zero weights are effectively ignored in the proof.
     fn gamma_weights(&self, input_idx: usize) -> Vec<F> {
         let input_dims = self.input_dims(input_idx);
         let poly_len: usize = input_dims.iter().product();
@@ -590,7 +573,8 @@ impl<'a, F: JoltField> ConcatGammaWeightsContext<'a, F> {
         let weights_slice = self.build_weights_recursive(rank - 1, vec![F::one()], input_idx);
 
         debug_assert_eq!(weights_slice.len(), poly_len);
-        weights_slice
+
+        weights_slice.pad_next_power_of_two(input_dims)
     }
 
     /// Recursively expands an inner weight slice to outer dimensions.
@@ -609,11 +593,16 @@ impl<'a, F: JoltField> ConcatGammaWeightsContext<'a, F> {
         } else {
             0
         };
-        let output_linear_factor: usize = self.padded_output_dims.iter().skip(dim + 1).product();
+        let output_linear_factor: usize = self.output_dims.iter().skip(dim + 1).product();
 
         let mut outer_slice = Vec::with_capacity(input_dims[dim] * current_slice.len());
         for i in 0..input_dims[dim] {
             let exp = (i + dim_offset) * output_linear_factor;
+            assert!(
+                exp < self.gamma_powers.len(),
+                "Concat gamma exponent index {exp} out of range (len={})",
+                self.gamma_powers.len()
+            );
             let dim_factor = self.gamma_powers[exp];
             outer_slice.extend(current_slice.iter().map(|w| *w * dim_factor));
         }
@@ -645,6 +634,7 @@ mod tests {
     use atlas_onnx_tracer::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
+        utils::dims::Pad,
     };
     use joltworks::field::JoltField;
     use rand::{rngs::StdRng, SeedableRng};
@@ -767,15 +757,8 @@ mod tests {
         );
         assert_eq!(output_weights, expected_output.as_slice());
 
-        // Input A raw [2,3,2] padded to [2,4,2], axis-1 offset 0.
-        // All 4 padded axis-1 slots get sequential output exponents (offset=0 so no shift).
-        // d0=0: [γ^0..γ^7], d0=1: [γ^8..γ^15]
-        // Note: since inputs values at index 6, 7, 14, 15 are padding and equal 0,
-        // the weight 2^6, 2^7, 2^14, 2^15 are multiplied by 0 and disappear.
-        let expected_a = weights_from_exponents(
-            gamma,
-            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-        );
+        let expected_a = weights_from_exponents(gamma, &[0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13])
+            .pad_next_power_of_two(&[2, 3, 2]);
         assert_eq!(a_weights, expected_a);
 
         // Input B raw [2,1,2] padded to [2,1,2], axis-1 offset 3.

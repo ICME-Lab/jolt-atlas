@@ -496,9 +496,14 @@ fn shadow_f64(op: &Operator, inputs: Vec<&Tensor<f64>>, scale: Scale) -> Tensor<
             .unwrap(),
         Operator::Identity(_) => inputs[0].clone(),
         Operator::Concat(c) => {
-            let rank = inputs[0].dims().len();
+            assert!(!inputs.is_empty(), "Concat requires at least one input");
+            let rank = inputs[0].dims().len() as isize;
+            assert!(
+                (-rank..rank).contains(&c.axis),
+                "Axis out of bounds for Concat"
+            );
             let axis = if c.axis < 0 {
-                (rank as isize + c.axis) as usize
+                (rank + c.axis) as usize
             } else {
                 c.axis as usize
             };

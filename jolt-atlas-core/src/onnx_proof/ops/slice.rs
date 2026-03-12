@@ -56,6 +56,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
         let ctx =
             SliceGammaWeightsContext::new(&input_dims, &node.output_dims, slice_op.clone(), gamma);
 
+        // TODO(#138): Implement N-to-1 reduction to constrain both claims coming from consumer nodes and this claim
         let output_prover = GammaFoldProver::initialize_output(node, &ctx, prover);
         let input_prover = GammaFoldProver::initialize_input(node, &ctx, prover);
 

@@ -35,7 +35,7 @@ fn handle_gather(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         .build()
 }
 
-/// Slice: Slices values using starts/ends/axes/steps inputs.
+/// Slice: Single-axis slice using axis, start and end parameters.
 fn handle_slice(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let op = load_op::<tract_onnx::tract_core::ops::array::Slice>(
         hctx.node.op(),

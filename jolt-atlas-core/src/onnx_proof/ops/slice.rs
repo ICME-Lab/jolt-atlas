@@ -2,35 +2,23 @@ use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::{Operator, Slice},
-    tensor::Tensor,
     utils::dims::Pad,
 };
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
-    poly::{
-        multilinear_polynomial::{
-            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
-        },
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
-        },
-        unipoly::UniPoly,
-    },
+    poly::opening_proof::{OpeningAccumulator, SumcheckId},
     subprotocols::{
+        gamma_fold::{gamma_powers, GammaFoldProver, GammaFoldVerifier},
         sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        sumcheck_verifier::SumcheckInstanceVerifier,
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math},
+    utils::errors::ProofVerifyError,
 };
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
-
-const DEGREE_BOUND: usize = 2;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
     #[tracing::instrument(skip_all, name = "Slice::prove")]
@@ -57,8 +45,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
             SliceGammaWeightsContext::new(&input_dims, &node.output_dims, slice_op.clone(), gamma);
 
         // TODO(#138): Implement N-to-1 reduction to constrain both claims coming from consumer nodes and this claim
-        let output_prover = GammaFoldProver::initialize_output(node, &ctx, prover);
-        let input_prover = GammaFoldProver::initialize_input(node, &ctx, prover);
+        let output_prover = initialize_output_prover(node, &ctx, prover);
+        let input_prover = initialize_input_prover(node, &ctx, prover);
 
         let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
             vec![Box::new(output_prover), Box::new(input_prover)];
@@ -102,8 +90,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
             SliceGammaWeightsContext::new(&input_dims, &node.output_dims, slice_op.clone(), gamma);
 
         let verifiers: Vec<GammaFoldVerifier<F>> = vec![
-            GammaFoldVerifier::initialize_output(node, &ctx, verifier),
-            GammaFoldVerifier::initialize_input(node, &ctx, verifier),
+            initialize_output_verifier(node, &ctx, verifier),
+            initialize_input_verifier(node, &ctx, verifier),
         ];
         let instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = verifiers
             .iter()
@@ -134,277 +122,77 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
     }
 }
 
-#[derive(Clone)]
-/// Parameters for proving a gamma-folded claim over a tensor polynomial.
-pub struct GammaFoldParams<F: JoltField> {
-    node_exec_idx: usize,
-    claim_poly: VirtualPolynomial,
-    num_rounds: usize,
-    _marker: core::marker::PhantomData<F>,
+fn initialize_output_prover<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    ctx: &SliceGammaWeightsContext<F>,
+    prover: &mut Prover<F, T>,
+) -> GammaFoldProver<F> {
+    let LayerData { output, .. } = Trace::layer_data(&prover.trace, node);
+
+    GammaFoldProver::initialize(
+        node.idx,
+        claim_poly_output(node),
+        output,
+        ctx.output_gamma_weights(),
+        &mut prover.accumulator,
+        &mut prover.transcript,
+    )
 }
 
-impl<F: JoltField> GammaFoldParams<F> {
-    fn new(node_exec_idx: usize, claim_poly: VirtualPolynomial, num_rounds: usize) -> Self {
-        Self {
-            node_exec_idx,
-            claim_poly,
-            num_rounds,
-            _marker: core::marker::PhantomData,
-        }
-    }
+fn initialize_input_prover<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    ctx: &SliceGammaWeightsContext<F>,
+    prover: &mut Prover<F, T>,
+) -> GammaFoldProver<F> {
+    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+    let [input_tensor] = operands[..] else {
+        panic!("Slice expects exactly one operand")
+    };
+
+    GammaFoldProver::initialize(
+        node.idx,
+        claim_poly_input(node),
+        input_tensor,
+        ctx.input_gamma_weights(),
+        &mut prover.accumulator,
+        &mut prover.transcript,
+    )
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for GammaFoldParams<F> {
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        accumulator
-            .get_virtual_polynomial_opening(self.claim_poly, SumcheckId::RLC(self.node_exec_idx))
-            .1
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.num_rounds
-    }
+fn initialize_output_verifier<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    ctx: &SliceGammaWeightsContext<F>,
+    verifier: &mut Verifier<'_, F, T>,
+) -> GammaFoldVerifier<F> {
+    GammaFoldVerifier::initialize(
+        node.idx,
+        claim_poly_output(node),
+        node.pow2_padded_num_output_elements(),
+        ctx.output_gamma_weights(),
+        &mut verifier.accumulator,
+        &mut verifier.transcript,
+    )
 }
 
-/// Prover state for the Slice gamma-folding sumcheck instances.
-pub struct GammaFoldProver<F: JoltField> {
-    params: GammaFoldParams<F>,
-    tensor: MultilinearPolynomial<F>,
-    weights: MultilinearPolynomial<F>,
-}
+fn initialize_input_verifier<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    ctx: &SliceGammaWeightsContext<F>,
+    verifier: &mut Verifier<'_, F, T>,
+) -> GammaFoldVerifier<F> {
+    let graph = &verifier.preprocessing.model.graph;
+    let input_nodes = graph.get_input_nodes(node);
+    let [input_node] = input_nodes[..] else {
+        panic!("Slice expects exactly one input node")
+    };
 
-impl<F: JoltField> GammaFoldProver<F> {
-    fn initialize<T: Transcript>(
-        node: &ComputationNode,
-        claim_poly: VirtualPolynomial,
-        tensor_values: &Tensor<i32>,
-        weight_values: Vec<F>,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-    ) -> Self {
-        let tensor = MultilinearPolynomial::from(tensor_values.padded_next_power_of_two());
-        let claim = tensor.dot_product(&weight_values);
-        let weights = MultilinearPolynomial::from(weight_values);
-        accumulator.append_virtual(
-            transcript,
-            claim_poly,
-            SumcheckId::RLC(node.idx),
-            vec![].into(),
-            claim,
-        );
-
-        let params = GammaFoldParams::new(node.idx, claim_poly, tensor.len().log_2());
-        Self::new(params, tensor, weights)
-    }
-
-    fn initialize_output<T: Transcript>(
-        node: &ComputationNode,
-        ctx: &SliceGammaWeightsContext<F>,
-        prover: &mut Prover<F, T>,
-    ) -> Self {
-        let LayerData { output, .. } = Trace::layer_data(&prover.trace, node);
-
-        Self::initialize(
-            node,
-            claim_poly_output(node),
-            output,
-            ctx.output_gamma_weights(),
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        )
-    }
-
-    fn initialize_input<T: Transcript>(
-        node: &ComputationNode,
-        ctx: &SliceGammaWeightsContext<F>,
-        prover: &mut Prover<F, T>,
-    ) -> Self {
-        let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
-        let [input_tensor] = operands[..] else {
-            panic!("Slice expects exactly one operand")
-        };
-
-        Self::initialize(
-            node,
-            claim_poly_input(node),
-            input_tensor,
-            ctx.input_gamma_weights(),
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        )
-    }
-
-    fn new(
-        params: GammaFoldParams<F>,
-        tensor: MultilinearPolynomial<F>,
-        weights: MultilinearPolynomial<F>,
-    ) -> Self {
-        Self {
-            params,
-            tensor,
-            weights,
-        }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GammaFoldProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        let univariate_poly_evals: [F; DEGREE_BOUND] = (0..self.tensor.len() / 2)
-            .into_par_iter()
-            .map(|i| {
-                let tensor_evals =
-                    self.tensor
-                        .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-                let weight_evals =
-                    self.weights
-                        .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-                [
-                    tensor_evals[0] * weight_evals[0],
-                    tensor_evals[1] * weight_evals[1],
-                ]
-            })
-            .reduce(
-                || [F::zero(); DEGREE_BOUND],
-                |running, new| [running[0] + new[0], running[1] + new[1]],
-            );
-
-        UniPoly::from_evals_and_hint(previous_claim, &univariate_poly_evals)
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        self.tensor.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.weights.bind_parallel(r_j, BindingOrder::LowToHigh);
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
-        accumulator.append_virtual(
-            transcript,
-            self.params.claim_poly,
-            SumcheckId::NodeExecution(self.params.node_exec_idx),
-            opening_point,
-            self.tensor.final_sumcheck_claim(),
-        );
-    }
-}
-
-/// Verifier state for the Slice gamma-folding sumcheck instances.
-pub struct GammaFoldVerifier<F: JoltField> {
-    params: GammaFoldParams<F>,
-    weights: MultilinearPolynomial<F>,
-}
-
-impl<F: JoltField> GammaFoldVerifier<F> {
-    fn initialize<T: Transcript>(
-        node: &ComputationNode,
-        claim_poly: VirtualPolynomial,
-        num_elements: usize,
-        weight_values: Vec<F>,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Self {
-        let weights = MultilinearPolynomial::from(weight_values);
-        verifier.accumulator.append_virtual(
-            &mut verifier.transcript,
-            claim_poly,
-            SumcheckId::RLC(node.idx),
-            vec![].into(),
-        );
-
-        let params = GammaFoldParams::new(node.idx, claim_poly, num_elements.log_2());
-        Self::new(params, weights)
-    }
-
-    fn initialize_output<T: Transcript>(
-        node: &ComputationNode,
-        ctx: &SliceGammaWeightsContext<F>,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Self {
-        Self::initialize(
-            node,
-            claim_poly_output(node),
-            node.pow2_padded_num_output_elements(),
-            ctx.output_gamma_weights(),
-            verifier,
-        )
-    }
-
-    fn initialize_input<T: Transcript>(
-        node: &ComputationNode,
-        ctx: &SliceGammaWeightsContext<F>,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Self {
-        let graph = &verifier.preprocessing.model.graph;
-        let input_nodes = graph.get_input_nodes(node);
-        let [input_node] = input_nodes[..] else {
-            panic!("Slice expects exactly one input node")
-        };
-
-        Self::initialize(
-            node,
-            claim_poly_input(node),
-            input_node.pow2_padded_num_output_elements(),
-            ctx.input_gamma_weights(),
-            verifier,
-        )
-    }
-
-    fn new(params: GammaFoldParams<F>, weights: MultilinearPolynomial<F>) -> Self {
-        Self { params, weights }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GammaFoldVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
-        let weight_eval = self.weights.evaluate(&opening_point.r);
-        let tensor_claim = accumulator
-            .get_virtual_polynomial_opening(
-                self.params.claim_poly,
-                SumcheckId::NodeExecution(self.params.node_exec_idx),
-            )
-            .1;
-        weight_eval * tensor_claim
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
-        accumulator.append_virtual(
-            transcript,
-            self.params.claim_poly,
-            SumcheckId::NodeExecution(self.params.node_exec_idx),
-            opening_point,
-        );
-    }
+    GammaFoldVerifier::initialize(
+        node.idx,
+        claim_poly_input(node),
+        input_node.pow2_padded_num_output_elements(),
+        ctx.input_gamma_weights(),
+        &mut verifier.accumulator,
+        &mut verifier.transcript,
+    )
 }
 
 fn validate_slice_shapes(input_dims: &[usize], output_dims: &[usize], op: &Slice) {
@@ -424,19 +212,6 @@ fn validate_slice_shapes(input_dims: &[usize], output_dims: &[usize], op: &Slice
             "Slice output shape mismatch at axis {dim}"
         );
     }
-}
-
-fn gamma_powers<F: JoltField>(poly_len: usize, gamma: F) -> Vec<F> {
-    if poly_len == 0 {
-        return Vec::new();
-    }
-
-    let mut weights = vec![F::zero(); poly_len];
-    weights[0] = F::one();
-    for i in 1..poly_len {
-        weights[i] = weights[i - 1] * gamma;
-    }
-    weights
 }
 
 struct SliceGammaWeightsContext<F: JoltField> {

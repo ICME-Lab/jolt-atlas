@@ -84,6 +84,8 @@ pub mod rsqrt;
 pub mod scalar_const_div;
 /// Sin trigonometric function.
 pub mod sin;
+/// Slice tensor along one axis.
+pub mod slice;
 /// Softmax operation along specified axes.
 pub mod softmax_axes;
 /// Element-wise square (x²) operation.
@@ -177,6 +179,7 @@ macro_rules! dispatch_operator {
             Operator::Rsqrt($inner) => $body,
             Operator::ScalarConstDiv($inner) => $body,
             Operator::Sin($inner) => $body,
+            Operator::Slice($inner) => $body,
             Operator::SoftmaxAxes($inner) => $body,
             Operator::Square($inner) => $body,
             Operator::Sub($inner) => $body,

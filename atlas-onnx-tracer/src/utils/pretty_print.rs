@@ -32,6 +32,7 @@ impl From<&ComputationNode> for NodeRow {
             Operator::Clamp(op) => format!("axes: {}, spread: {}", op.axes, op.max_spread),
             Operator::Einsum(op) => format!("eq: {}", op.equation),
             Operator::Gather(op) => format!("axis: {}", op.axis),
+            Operator::Slice(op) => format!("axis: {}, {}..{}", op.axis, op.start, op.end),
             Operator::SoftmaxAxes(op) => format!("axes: {}", op.axes),
             Operator::Sum(op) => format!("axes: {:?}", op.axes),
             Operator::MoveAxis(op) => format!("src: {} → dst: {}", op.source, op.destination),

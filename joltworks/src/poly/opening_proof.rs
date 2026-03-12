@@ -876,7 +876,8 @@ pub enum SumcheckId {
     RamHammingWeight,
     Booleanity,
     HammingWeight,
-    RLC,
+    /// RLC sumcheck for the execution of a specific node.
+    RLC(usize),
 }
 
 impl CanonicalSerialize for SumcheckId {
@@ -896,14 +897,17 @@ impl CanonicalSerialize for SumcheckId {
             Self::RamHammingWeight => 4u8.serialize_with_mode(&mut writer, compress)?,
             Self::Booleanity => 5u8.serialize_with_mode(&mut writer, compress)?,
             Self::HammingWeight => 6u8.serialize_with_mode(&mut writer, compress)?,
-            Self::RLC => 7u8.serialize_with_mode(&mut writer, compress)?,
+            Self::RLC(idx) => {
+                7u8.serialize_with_mode(&mut writer, compress)?;
+                idx.serialize_with_mode(&mut writer, compress)?;
+            }
         }
         Ok(())
     }
 
     fn serialized_size(&self, compress: Compress) -> usize {
         match self {
-            Self::NodeExecution(idx) => {
+            Self::NodeExecution(idx) | Self::RLC(idx) => {
                 1u8.serialized_size(compress) + idx.serialized_size(compress)
             }
             _ => 1u8.serialized_size(compress),
@@ -935,7 +939,10 @@ impl CanonicalDeserialize for SumcheckId {
             4 => Ok(Self::RamHammingWeight),
             5 => Ok(Self::Booleanity),
             6 => Ok(Self::HammingWeight),
-            7 => Ok(Self::RLC),
+            7 => {
+                let idx = usize::deserialize_with_mode(&mut reader, compress, validate)?;
+                Ok(Self::RLC(idx))
+            }
             _ => Err(SerializationError::InvalidData),
         }
     }

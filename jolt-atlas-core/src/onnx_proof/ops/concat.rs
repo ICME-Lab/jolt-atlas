@@ -56,7 +56,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
         assert!(input_count > 0, "Concat expects at least one operand");
 
         let axis = normalize_axis(concat_op.axis, node.output_dims.len());
-        validate_concat_shapes(&raw_inputs_dims, &node.output_dims, axis);
         let ctx = ConcatGammaWeightsContext::new(&raw_inputs_dims, &node.output_dims, axis, gamma);
 
         let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
@@ -108,7 +107,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
         assert!(input_count > 0, "Concat expects at least one input node");
 
         let axis = normalize_axis(concat_op.axis, node.output_dims.len());
-        validate_concat_shapes(&raw_inputs_dims, &node.output_dims, axis);
         let ctx = ConcatGammaWeightsContext::new(&raw_inputs_dims, &node.output_dims, axis, gamma);
 
         let mut verifiers = Vec::with_capacity(1 + input_count);
@@ -132,12 +130,15 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
 
         let claim_c = verifier
             .accumulator
-            .get_virtual_polynomial_opening(claim_poly_output(node), SumcheckId::RLC)
+            .get_virtual_polynomial_opening(claim_poly_output(node), SumcheckId::RLC(node.idx))
             .1;
         let expected_claim_c = (0..input_count).fold(F::zero(), |running, input_idx| {
             let input_claim = verifier
                 .accumulator
-                .get_virtual_polynomial_opening(claim_poly_input(node, input_idx), SumcheckId::RLC)
+                .get_virtual_polynomial_opening(
+                    claim_poly_input(node, input_idx),
+                    SumcheckId::RLC(node.idx),
+                )
                 .1;
             running + input_claim
         });
@@ -154,16 +155,16 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
 #[derive(Clone)]
 /// Parameters for computing the RLC folding of a tensor polynomial.
 pub struct GammaFoldParams<F: JoltField> {
-    consumer_node_idx: usize,
+    node_exec_idx: usize,
     claim_poly: VirtualPolynomial,
     num_rounds: usize,
     _marker: core::marker::PhantomData<F>,
 }
 
 impl<F: JoltField> GammaFoldParams<F> {
-    fn new(consumer_node_idx: usize, claim_poly: VirtualPolynomial, num_rounds: usize) -> Self {
+    fn new(node_exec_idx: usize, claim_poly: VirtualPolynomial, num_rounds: usize) -> Self {
         Self {
-            consumer_node_idx,
+            node_exec_idx,
             claim_poly,
             num_rounds,
             _marker: core::marker::PhantomData,
@@ -178,7 +179,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for GammaFoldParams<F> {
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         accumulator
-            .get_virtual_polynomial_opening(self.claim_poly, SumcheckId::RLC)
+            .get_virtual_polynomial_opening(self.claim_poly, SumcheckId::RLC(self.node_exec_idx))
             .1
     }
 
@@ -210,17 +211,18 @@ impl<F: JoltField> GammaFoldProver<F> {
         transcript: &mut T,
     ) -> Self {
         let tensor = MultilinearPolynomial::from(input_tensor.padded_next_power_of_two());
-        let claim = fold_poly_with_weights(&tensor, &weight_values);
+        let claim = tensor.dot_product(&weight_values);
+        let weights = MultilinearPolynomial::from(weight_values);
         accumulator.append_virtual(
             transcript,
             claim_poly,
-            SumcheckId::RLC,
+            SumcheckId::RLC(node.idx),
             vec![].into(),
             claim,
         );
 
         let params = GammaFoldParams::new(node.idx, claim_poly, tensor.len().log_2());
-        Self::new(params, tensor, weight_values)
+        Self::new(params, tensor, weights)
     }
 
     fn initialize_output<T: Transcript>(
@@ -264,12 +266,12 @@ impl<F: JoltField> GammaFoldProver<F> {
     fn new(
         params: GammaFoldParams<F>,
         tensor: MultilinearPolynomial<F>,
-        weight_values: Vec<F>,
+        weights: MultilinearPolynomial<F>,
     ) -> Self {
         Self {
             params,
             tensor,
-            weights: MultilinearPolynomial::from(weight_values),
+            weights,
         }
     }
 }
@@ -317,7 +319,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GammaFoldProv
         accumulator.append_virtual(
             transcript,
             self.params.claim_poly,
-            SumcheckId::NodeExecution(self.params.consumer_node_idx),
+            SumcheckId::NodeExecution(self.params.node_exec_idx),
             opening_point,
             self.tensor.final_sumcheck_claim(),
         );
@@ -340,15 +342,16 @@ impl<F: JoltField> GammaFoldVerifier<F> {
         weight_values: Vec<F>,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Self {
+        let weights = MultilinearPolynomial::from(weight_values);
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,
             claim_poly,
-            SumcheckId::RLC,
+            SumcheckId::RLC(node.idx),
             vec![].into(),
         );
 
         let params = GammaFoldParams::new(node.idx, claim_poly, num_elements.log_2());
-        Self::new(params, weight_values)
+        Self::new(params, weights)
     }
 
     fn initialize_output<T: Transcript>(
@@ -386,11 +389,8 @@ impl<F: JoltField> GammaFoldVerifier<F> {
         )
     }
 
-    fn new(params: GammaFoldParams<F>, weight_values: Vec<F>) -> Self {
-        Self {
-            params,
-            weights: MultilinearPolynomial::from(weight_values),
-        }
+    fn new(params: GammaFoldParams<F>, weights: MultilinearPolynomial<F>) -> Self {
+        Self { params, weights }
     }
 }
 
@@ -409,7 +409,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GammaFoldVe
         let tensor_claim = accumulator
             .get_virtual_polynomial_opening(
                 self.params.claim_poly,
-                SumcheckId::NodeExecution(self.params.consumer_node_idx),
+                SumcheckId::NodeExecution(self.params.node_exec_idx),
             )
             .1;
         weight_eval * tensor_claim
@@ -425,7 +425,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GammaFoldVe
         accumulator.append_virtual(
             transcript,
             self.params.claim_poly,
-            SumcheckId::NodeExecution(self.params.consumer_node_idx),
+            SumcheckId::NodeExecution(self.params.node_exec_idx),
             opening_point,
         );
     }
@@ -475,18 +475,6 @@ fn validate_concat_shapes(inputs_dims: &[&[usize]], out_dims: &[usize], axis: us
     }
 }
 
-/// Computes a folded claim `sum_i poly[i] * weights[i]` for an already built polynomial.
-fn fold_poly_with_weights<F: JoltField>(poly: &MultilinearPolynomial<F>, weights: &[F]) -> F {
-    assert_eq!(
-        poly.len(),
-        weights.len(),
-        "weights length must match polynomial length"
-    );
-    (0..poly.len())
-        .map(|i| poly.get_bound_coeff(i) * weights[i])
-        .sum()
-}
-
 /// Builds the standard geometric gamma-powers vector `[1, gamma, gamma^2, ...]`.
 fn gamma_powers<F: JoltField>(poly_len: usize, gamma: F) -> Vec<F> {
     if poly_len == 0 {
@@ -515,6 +503,8 @@ struct ConcatGammaWeightsContext<F: JoltField> {
 
 impl<F: JoltField> ConcatGammaWeightsContext<F> {
     fn new(raw_inputs: &[&[usize]], raw_output_dims: &[usize], axis: usize, gamma: F) -> Self {
+        validate_concat_shapes(raw_inputs, raw_output_dims, axis);
+
         let raw_inputs = raw_inputs.iter().map(|dims| dims.to_vec()).collect();
         let output_len: usize = raw_output_dims.iter().product();
         let gamma_powers = gamma_powers(output_len, gamma);
@@ -599,11 +589,7 @@ impl<F: JoltField> ConcatGammaWeightsContext<F> {
         let mut outer_slice = Vec::with_capacity(input_dims[dim] * current_slice.len());
         for i in 0..input_dims[dim] {
             let exp = (i + dim_offset) * output_linear_factor;
-            assert!(
-                exp < self.gamma_powers.len(),
-                "Concat gamma exponent index {exp} out of range (len={})",
-                self.gamma_powers.len()
-            );
+
             let dim_factor = self.gamma_powers[exp];
             outer_slice.extend(current_slice.iter().map(|w| *w * dim_factor));
         }

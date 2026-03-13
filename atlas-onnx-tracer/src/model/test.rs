@@ -330,6 +330,26 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    /// Add a slice node over one axis.
+    pub fn slice(&mut self, input: Wire, axis: usize, start: usize, end: usize) -> Wire {
+        let id = self.alloc();
+        let input_dims = self.nodes[&input].output_dims.clone();
+        assert!(axis < input_dims.len(), "Slice axis out of bounds");
+        assert!(start <= end, "Slice start must be <= end");
+        assert!(end <= input_dims[axis], "Slice end out of bounds");
+
+        let mut output_dims = input_dims;
+        output_dims[axis] = end - start;
+
+        let node = ComputationNode::new(
+            id,
+            Operator::Slice(Slice { axis, start, end }),
+            vec![input],
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
     /// Add a softmax node.
     pub fn softmax(&mut self, axes: usize, input: Wire) -> Wire {
         let id = self.alloc();

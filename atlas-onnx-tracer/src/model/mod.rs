@@ -489,6 +489,18 @@ mod tests {
     }
 
     #[test]
+    fn test_load_slice_model() {
+        let run_args = RunArgs::default().with_padding(false);
+        let model = Model::load("models/slice/network.onnx", &run_args);
+
+        println!("{}", model.pretty_print());
+
+        assert!(!model.graph.nodes.is_empty());
+        assert!(!model.graph.inputs.is_empty());
+        assert!(!model.graph.outputs.is_empty());
+    }
+
+    #[test]
     fn test_load_reshape_model_with_padding() {
         let run_args = RunArgs::default().with_padding(true);
         let model = Model::load("models/reshape/network.onnx", &run_args);

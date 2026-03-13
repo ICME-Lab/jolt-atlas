@@ -482,6 +482,12 @@ fn shadow_f64(op: &Operator, inputs: Vec<&Tensor<f64>>, scale: Scale) -> Tensor<
             let indices: Tensor<usize> = inputs[1].map(|v| v as usize);
             tensor::ops::gather(inputs[0], &indices, g.axis).unwrap()
         }
+        Operator::Slice(s) => {
+            let mut ranges: Vec<std::ops::Range<usize>> =
+                inputs[0].dims().iter().map(|&d| 0..d).collect::<Vec<_>>();
+            ranges[s.axis] = s.start..s.end;
+            inputs[0].get_slice(&ranges).unwrap()
+        }
 
         // ── Shape manipulation ──────────────────────────────────────────
         Operator::Broadcast(b) => inputs[0].expand(&b.shape).unwrap(),

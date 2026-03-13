@@ -592,6 +592,21 @@ fn test_moveaxis() {
 }
 
 #[test]
+fn test_slice_e2e() {
+    let working_dir = "../atlas-onnx-tracer/models/slice/";
+    let input_vector: Vec<i32> = (1..=64).collect();
+    let input = Tensor::construct(input_vector, vec![2, 4, 8]);
+
+    let io = prove_and_verify(
+        working_dir,
+        &[input],
+        &RunArgs::default().with_padding(false),
+        TestConfig::new().print_model().print_timing(),
+    );
+    println!("Output shape: {:?}", io.outputs[0].dims());
+}
+
+#[test]
 fn test_gather() {
     let working_dir = "../atlas-onnx-tracer/models/gather/";
     let mut rng = StdRng::seed_from_u64(0x100);

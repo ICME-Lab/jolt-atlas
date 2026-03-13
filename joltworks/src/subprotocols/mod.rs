@@ -1,4 +1,5 @@
 pub mod booleanity;
+pub mod gamma_fold;
 pub mod hamming_booleanity;
 pub mod hamming_weight;
 pub mod mles_product_sum;

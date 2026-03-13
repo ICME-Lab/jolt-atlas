@@ -53,6 +53,8 @@ pub mod rsqrt;
 pub mod scalar_const_div;
 /// Element-wise sine operator.
 pub mod sin;
+/// Slice operator for extracting tensor subregions.
+pub mod slice;
 /// Softmax activation operator.
 pub mod softmax;
 /// Element-wise square (x^2) operator.
@@ -142,6 +144,7 @@ define_operators! {
         Rsqrt { scale: F32 },
         ScalarConstDiv {divisor: i32},
         Sin { scale: F32 },
+        Slice { axis: usize, start: usize, end: usize},
         SoftmaxAxes { axes: usize, scale: F32 },
         Square,
         Sub,

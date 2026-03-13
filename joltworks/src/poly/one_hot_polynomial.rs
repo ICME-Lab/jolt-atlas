@@ -96,15 +96,21 @@ impl<F: JoltField> OneHotPolynomial<F> {
         poly.evaluate(r_cycle)
     }
 
-    #[cfg(test)]
-    fn to_dense_poly(&self) -> DensePolynomial<F> {
+    pub fn coeffs(&self) -> Vec<F> {
         let T = self.nonzero_indices.len();
-        let mut dense_coeffs: Vec<F> = vec![F::zero(); self.K * T];
+        let mut coeffs = vec![F::zero(); self.K * T];
         for (t, k) in self.nonzero_indices.iter().enumerate() {
             if let Some(k) = k {
-                dense_coeffs[*k as usize * T + t] = F::one();
+                coeffs[*k as usize * T + t] = F::one();
             }
         }
+        coeffs
+    }
+
+    #[cfg(test)]
+    fn to_dense_poly(&self) -> DensePolynomial<F> {
+        let dense_coeffs = self.coeffs();
+
         DensePolynomial::new(dense_coeffs)
     }
 }

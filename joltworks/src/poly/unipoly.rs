@@ -16,7 +16,9 @@ use crate::utils::small_scalar::SmallScalar;
 
 // ax^2 + bx + c stored as vec![c,b,a]
 // ax^3 + bx^2 + cx + d stored as vec![d,c,b,a]
-#[derive(CanonicalSerialize, CanonicalDeserialize, Debug, Clone, PartialEq, Allocative)]
+#[derive(
+    CanonicalSerialize, CanonicalDeserialize, Debug, Default, Clone, PartialEq, Allocative,
+)]
 pub struct UniPoly<F: CanonicalSerialize + CanonicalDeserialize> {
     pub coeffs: Vec<F>,
 }
@@ -29,7 +31,12 @@ pub struct CompressedUniPoly<F: JoltField> {
 }
 
 impl<F: JoltField> UniPoly<F> {
-    pub fn from_coeff(coeffs: Vec<F>) -> Self {
+    pub fn from_coeff(mut coeffs: Vec<F>) -> Self {
+        // Remove any leading coefficients that are zero
+        while Some(&F::zero()) == coeffs.last() {
+            coeffs.pop();
+        }
+
         UniPoly { coeffs }
     }
 
@@ -352,10 +359,10 @@ impl<F: JoltField> AddAssign<&Self> for UniPoly<F> {
     }
 }
 
-impl<F: JoltField> Add for &UniPoly<F> {
+impl<F: JoltField> Add<&UniPoly<F>> for &UniPoly<F> {
     type Output = UniPoly<F>;
 
-    fn add(self, rhs: Self) -> UniPoly<F> {
+    fn add(self, rhs: &UniPoly<F>) -> UniPoly<F> {
         let mut coeffs = vec![F::zero(); self.coeffs.len().max(rhs.coeffs.len())];
         zip(&mut coeffs, &self.coeffs).for_each(|(acc, lhs)| *acc += *lhs);
         zip(&mut coeffs, &rhs.coeffs).for_each(|(acc, rhs)| *acc += *rhs);
@@ -363,20 +370,14 @@ impl<F: JoltField> Add for &UniPoly<F> {
     }
 }
 
-impl<F: JoltField> Sub for UniPoly<F> {
-    type Output = Self;
+impl<F: JoltField> Sub<&UniPoly<F>> for &UniPoly<F> {
+    type Output = UniPoly<F>;
 
-    fn sub(mut self, rhs: Self) -> Self::Output {
-        let ordering = self.coeffs.len().cmp(&rhs.coeffs.len());
-        #[allow(clippy::disallowed_methods)]
-        for (lhs, rhs) in self.coeffs.iter_mut().zip(&rhs.coeffs) {
-            *lhs -= *rhs;
-        }
-        if matches!(ordering, Ordering::Less) {
-            self.coeffs
-                .extend(rhs.coeffs[self.coeffs.len()..].iter().map(|v| v.neg()));
-        }
-        self
+    fn sub(self, rhs: &UniPoly<F>) -> Self::Output {
+        let mut coeffs = vec![F::zero(); self.coeffs.len().max(rhs.coeffs.len())];
+        zip(&mut coeffs, &self.coeffs).for_each(|(acc, lhs)| *acc += *lhs);
+        zip(&mut coeffs, &rhs.coeffs).for_each(|(acc, rhs)| *acc -= *rhs);
+        UniPoly { coeffs }
     }
 }
 
@@ -403,6 +404,21 @@ impl<F: JoltField> Mul<F> for &UniPoly<F> {
 
     fn mul(self, rhs: F) -> UniPoly<F> {
         UniPoly::from_coeff(self.coeffs.iter().map(|c| *c * rhs).collect::<Vec<_>>())
+    }
+}
+
+impl<F: JoltField> Mul<&UniPoly<F>> for &UniPoly<F> {
+    type Output = UniPoly<F>;
+
+    fn mul(self, rhs: &UniPoly<F>) -> Self::Output {
+        let mut coeffs = vec![F::zero(); self.degree() + rhs.degree() + 1];
+        for (i, lhs_coeff) in self.coeffs.iter().enumerate() {
+            for (j, rhs_coeff) in rhs.coeffs.iter().enumerate() {
+                coeffs[i + j] += *lhs_coeff * *rhs_coeff;
+            }
+        }
+
+        UniPoly::from_coeff(coeffs)
     }
 }
 
@@ -485,10 +501,46 @@ impl<F: JoltField> AppendToTranscript for CompressedUniPoly<F> {
     }
 }
 
+macro_rules! impl_op {
+    ($struct: ident, $trait:ident, $method:ident, $field_bound:ident) => {
+        impl<F: $field_bound> $trait<$struct<F>> for $struct<F> {
+            type Output = $struct<F>;
+
+            #[inline]
+            fn $method(self, other: $struct<F>) -> $struct<F> {
+                (&self).$method(&other)
+            }
+        }
+
+        impl<'a, F: $field_bound> $trait<&'a $struct<F>> for $struct<F> {
+            type Output = $struct<F>;
+
+            #[inline]
+            fn $method(self, other: &'a $struct<F>) -> $struct<F> {
+                (&self).$method(other)
+            }
+        }
+
+        impl<'a, F: $field_bound> $trait<$struct<F>> for &'a $struct<F> {
+            type Output = $struct<F>;
+
+            #[inline]
+            fn $method(self, other: $struct<F>) -> $struct<F> {
+                self.$method(&other)
+            }
+        }
+    };
+}
+
+impl_op!(UniPoly, Add, add, JoltField);
+impl_op!(UniPoly, Sub, sub, JoltField);
+impl_op!(UniPoly, Mul, mul, JoltField);
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ark_bn254::Fr;
+    use num::Zero;
     use rand_chacha::ChaCha20Rng;
     use rand_core::SeedableRng;
 
@@ -626,5 +678,46 @@ mod tests {
             hint,
         );
         assert_eq!(poly.coeffs, true_poly.coeffs);
+    }
+
+    #[test]
+    fn test_from_coeff_trims_leading_zeros() {
+        let poly = UniPoly::<Fr>::from_coeff(vec![
+            Fr::from_u64(7u64),
+            Fr::from_u64(3u64),
+            Fr::zero(),
+            Fr::zero(),
+        ]);
+
+        assert_eq!(poly.coeffs, vec![Fr::from_u64(7u64), Fr::from_u64(3u64)]);
+    }
+
+    #[test]
+    fn test_from_coeff_all_zeros_is_zero_poly() {
+        let poly = UniPoly::<Fr>::from_coeff(vec![Fr::zero(), Fr::zero(), Fr::zero()]);
+        assert!(poly.is_zero());
+        assert!(poly.coeffs.is_empty());
+    }
+
+    #[test]
+    fn test_mul_unipoly_matches_expected_coefficients() {
+        // (1 + 2x) * (3 + 4x) = 3 + 10x + 8x^2
+        let lhs = UniPoly::<Fr>::from_coeff(vec![Fr::from_u64(1u64), Fr::from_u64(2u64)]);
+        let rhs = UniPoly::<Fr>::from_coeff(vec![Fr::from_u64(3u64), Fr::from_u64(4u64)]);
+
+        let product = &lhs * &rhs;
+        assert_eq!(
+            product.coeffs,
+            vec![Fr::from_u64(3u64), Fr::from_u64(10u64), Fr::from_u64(8u64)]
+        );
+    }
+
+    #[test]
+    fn test_mul_unipoly_normalizes_trailing_zeros() {
+        let lhs = UniPoly::<Fr>::from_coeff(vec![Fr::from_u64(5u64), Fr::zero()]);
+        let rhs = UniPoly::<Fr>::from_coeff(vec![Fr::from_u64(2u64), Fr::zero(), Fr::zero()]);
+
+        let product = &lhs * &rhs;
+        assert_eq!(product.coeffs, vec![Fr::from_u64(10u64)]);
     }
 }

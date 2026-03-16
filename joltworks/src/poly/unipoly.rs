@@ -37,6 +37,12 @@ impl<F: JoltField> UniPoly<F> {
             coeffs.pop();
         }
 
+        // Ensure that the zero polynomial is represented by a constant term of zero,
+        // rather than an empty vector.
+        if coeffs.is_empty() {
+            coeffs.push(F::zero());
+        }
+
         UniPoly { coeffs }
     }
 

@@ -377,7 +377,7 @@ impl<F: JoltField> SigmoidProver<F> {
         }));
 
         // Create and materialize the sigmoid lookup table (reduced size)
-        let sigmoid_table = SigmoidTable::new(params.op.log_table);
+        let sigmoid_table = SigmoidTable::new(params.op.log_table, params.op.tau);
         let sigmoid_table = MultilinearPolynomial::from(sigmoid_table.materialize());
 
         // Use the compute_ra_evals in tanh.rs
@@ -503,7 +503,7 @@ impl<F: JoltField> SigmoidVerifier<F> {
             params.r_node_output.clone().into(),
         );
 
-        let sigmoid_table = SigmoidTable::new(params.op.log_table);
+        let sigmoid_table = SigmoidTable::new(params.op.log_table, params.op.tau);
         let sigmoid_table = MultilinearPolynomial::from(sigmoid_table.materialize());
 
         Self {

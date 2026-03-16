@@ -1,3 +1,5 @@
+use std::ops::Mul;
+
 use crate::{
     ops::{Op, Sigmoid},
     tensor::{self, Tensor},
@@ -7,7 +9,9 @@ impl Op for Sigmoid {
     #[tracing::instrument(name = "Sigmoid::f", skip_all)]
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         let input = tensor::ops::nonlinearities::const_div(inputs[0], self.tau as f64);
-        tensor::ops::nonlinearities::sigmoid(&input, self.scale.into())
+        let teleport_recip = input.mul(self.tau).unwrap();
+
+        tensor::ops::nonlinearities::sigmoid(&teleport_recip, self.scale.into())
     }
 
     fn requires_shape_equality(&self) -> bool {
@@ -26,7 +30,6 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng};
 
     #[test]
-    #[ignore = "Precision mismatch between optimized teleportation path and direct sigmoid reference"]
     fn test_sigmoid_precision_stats() {
         const SCALE: f64 = 128.0;
         const TAU: i32 = 2;

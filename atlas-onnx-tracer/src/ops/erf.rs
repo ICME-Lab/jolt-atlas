@@ -1,3 +1,5 @@
+use std::ops::Mul;
+
 use crate::{
     ops::{Erf, Op},
     tensor::{self, Tensor},
@@ -7,7 +9,11 @@ impl Op for Erf {
     #[tracing::instrument(name = "Erf::f", skip_all)]
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         let input = tensor::ops::nonlinearities::const_div(inputs[0], self.tau as f64);
-        tensor::ops::nonlinearities::erffunc(&input, self.scale.into())
+
+        // `Erf` lookup table is built the following way: `Erf[x] = erf(x * τ)`, to reciprocate division by τ.
+        // Hence we get the output by multiplying the teleported input by τ.
+        let teleport_recip = input.mul(self.tau).unwrap();
+        tensor::ops::nonlinearities::erffunc(&teleport_recip, self.scale.into())
     }
 
     fn requires_shape_equality(&self) -> bool {
@@ -26,7 +32,6 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng};
 
     #[test]
-    #[ignore = "Precision mismatch between optimized teleportation path and direct erf reference"]
     fn test_erf_precision_stats() {
         const SCALE: f64 = 128.0;
         const TAU: i32 = 2;

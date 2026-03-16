@@ -1417,6 +1417,36 @@ impl<T: TensorType + Mul<Output = T> + std::marker::Send + std::marker::Sync> Mu
     }
 }
 
+impl<T: TensorType + Mul<T, Output = T> + std::marker::Send + std::marker::Sync + Copy> Mul<T>
+    for Tensor<T>
+{
+    type Output = Result<Tensor<T>, TensorError>;
+    /// Elementwise multiplies a tensor with a scalar.
+    /// # Arguments
+    ///
+    /// * `self` - Tensor
+    /// * `rhs` - Single value
+    /// # Examples
+    /// ```
+    /// use atlas_onnx_tracer::tensor::Tensor;
+    /// use std::ops::Mul;
+    /// let x = Tensor::<i32>::new(
+    ///     Some(&[2, 1, 2, 1, 1, 1]),
+    ///     &[2, 3],
+    /// ).unwrap();
+    /// let result = x.mul(2).unwrap();
+    /// let expected = Tensor::<i32>::new(Some(&[4, 2, 4, 2, 2, 2]), &[2, 3]).unwrap();
+    /// assert_eq!(result, expected);
+    /// ```
+    fn mul(self, rhs: T) -> Self::Output {
+        let mut output = self;
+        output.par_iter_mut().for_each(|x| {
+            *x = *x * rhs;
+        });
+        Ok(output)
+    }
+}
+
 impl<T: TensorType + Mul<Output = T> + std::marker::Send + std::marker::Sync> Tensor<T> {
     /// Elementwise raise a tensor to the nth power.
     /// # Arguments

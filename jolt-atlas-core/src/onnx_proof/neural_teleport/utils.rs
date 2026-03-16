@@ -59,13 +59,19 @@ where
 ///
 /// The table domain is `[-2^(n-1), 2^(n-1))` encoded in two's complement, and
 /// outputs are quantized using the shared neural-teleport `SCALE`.
+/// Each lookup to the table at index `x` corresponds to the activation of `x * τ`.
 pub fn materialize_signed_activation_table(
     log_table_size: usize,
+    tau: i32,
     activation: fn(&Tensor<i32>, f64) -> Tensor<i32>,
 ) -> Vec<i32> {
     let table_size = 1 << log_table_size;
     let indices: Vec<i32> = (0..table_size)
-        .map(|i| usize_to_n_bits(i, log_table_size))
+        .map(|i| {
+            usize_to_n_bits(i, log_table_size)
+                .checked_mul(tau)
+                .expect("overflow in activation table index")
+        })
         .collect();
     let indices_tensor = Tensor::new(Some(&indices), &[1, table_size])
         .expect("failed to build activation LUT input tensor");
@@ -76,15 +82,19 @@ pub fn materialize_signed_activation_table(
 macro_rules! define_signed_activation_table {
     ($table:ident, $activation:path) => {
         #[doc = "Lookup table for a signed neural-teleport activation."]
-        #[derive(Debug, Clone, Copy, Default)]
+        #[derive(Debug, Clone, Copy)]
         pub struct $table {
             log_table_size: usize,
+            tau: i32,
         }
 
         impl $table {
             /// Create a new lookup table with the specified bit width.
-            pub fn new(log_table_size: usize) -> Self {
-                Self { log_table_size }
+            pub fn new(log_table_size: usize, tau: i32) -> Self {
+                Self {
+                    log_table_size,
+                    tau,
+                }
             }
 
             /// Returns the size of the table (2^log_table_size).
@@ -101,6 +111,7 @@ macro_rules! define_signed_activation_table {
             pub fn materialize(&self) -> Vec<i32> {
                 crate::onnx_proof::neural_teleport::utils::materialize_signed_activation_table(
                     self.log_table_size,
+                    self.tau,
                     $activation,
                 )
             }

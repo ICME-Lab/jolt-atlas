@@ -377,7 +377,7 @@ impl<F: JoltField> ErfProver<F> {
         }));
 
         // Create and materialize the erf lookup table (reduced size)
-        let erf_table = ErfTable::new(params.op.log_table);
+        let erf_table = ErfTable::new(params.op.log_table, params.op.tau);
         let erf_table = MultilinearPolynomial::from(erf_table.materialize());
 
         // Use the compute_ra_evals in tanh.rs
@@ -502,7 +502,7 @@ impl<F: JoltField> ErfVerifier<F> {
             params.r_node_output.clone().into(),
         );
 
-        let erf_table = ErfTable::new(params.op.log_table);
+        let erf_table = ErfTable::new(params.op.log_table, params.op.tau);
         let erf_table = MultilinearPolynomial::from(erf_table.materialize());
 
         Self { params, erf_table }

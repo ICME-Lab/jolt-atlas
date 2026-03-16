@@ -4,11 +4,13 @@ use crate::{
     ops::{Op, Tanh},
     tensor::{self, Tensor},
 };
+use std::ops::Mul;
 
 impl Op for Tanh {
     #[tracing::instrument(name = "Tanh::f", skip_all)]
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         let input = tensor::ops::nonlinearities::const_div(inputs[0], self.tau as f64);
+
         #[cfg(feature = "fused-ops")]
         {
             let scale_i = self.scale.0 as i64;
@@ -21,7 +23,11 @@ impl Op for Tanh {
         }
         #[cfg(not(feature = "fused-ops"))]
         {
-            crate::tensor::ops::nonlinearities::tanh(&input, self.scale.into())
+            // `Tanh` lookup table is built as: Tanh[x] = tanh(x * tau),
+            // so we multiply by tau to reciprocate teleportation division.
+            let teleport_recip = input.mul(self.tau).unwrap();
+
+            crate::tensor::ops::nonlinearities::tanh(&teleport_recip, self.scale.into())
         }
     }
 
@@ -76,7 +82,6 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng};
 
     #[test]
-    #[ignore = "Precision mismatch between optimized teleportation path and direct tanh reference"]
     fn test_tanh_precision_stats() {
         const SCALE: f64 = 128.0;
         const TAU: i32 = 2;

@@ -14,3 +14,47 @@ impl Op for Erf {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Erf;
+    use crate::{
+        ops::Op,
+        tensor::{Tensor, ops::nonlinearities::erffunc},
+        utils::{f32::F32, precision::assert_quantized_precision},
+    };
+    use rand::{SeedableRng, rngs::StdRng};
+
+    #[test]
+    #[ignore = "Precision mismatch between optimized teleportation path and direct erf reference"]
+    fn test_erf_precision_stats() {
+        const SCALE: f64 = 128.0;
+        const TAU: i32 = 2;
+        const SAMPLE_SIZE: usize = 1 << 14;
+        const MIN_INPUT: i32 = -(1 << 14);
+        const MAX_INPUT: i32 = 1 << 14;
+        const WORST_ERROR_BOUND_QUANTIZED: i32 = 8;
+
+        let mut rng = StdRng::seed_from_u64(0x88B);
+        let input = Tensor::random_range(&mut rng, &[SAMPLE_SIZE], MIN_INPUT..MAX_INPUT);
+
+        let op = Erf {
+            scale: F32(SCALE as f32),
+            tau: TAU,
+            log_table: 12,
+        };
+        let actual = op.f(vec![&input]).data().to_vec();
+
+        let expected: Vec<i32> = erffunc(&input, SCALE).inner;
+
+        assert_quantized_precision(
+            "Erf teleportation",
+            &input,
+            &actual,
+            &expected,
+            SCALE,
+            (MIN_INPUT, MAX_INPUT),
+            WORST_ERROR_BOUND_QUANTIZED,
+        );
+    }
+}

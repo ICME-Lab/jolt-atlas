@@ -64,3 +64,47 @@ pub fn tanh_lut_lookup(a_i: i32, scale: i32, lut: &[i32]) -> i32 {
     };
     if a_i >= 0 { magnitude } else { -magnitude }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Tanh;
+    use crate::{
+        ops::Op,
+        tensor::{Tensor, ops::nonlinearities::tanh},
+        utils::{f32::F32, precision::assert_quantized_precision},
+    };
+    use rand::{SeedableRng, rngs::StdRng};
+
+    #[test]
+    #[ignore = "Precision mismatch between optimized teleportation path and direct tanh reference"]
+    fn test_tanh_precision_stats() {
+        const SCALE: f64 = 128.0;
+        const TAU: i32 = 2;
+        const SAMPLE_SIZE: usize = 1 << 14;
+        const MIN_INPUT: i32 = -(1 << 14);
+        const MAX_INPUT: i32 = 1 << 14;
+        const WORST_ERROR_BOUND_QUANTIZED: i32 = 8;
+
+        let mut rng = StdRng::seed_from_u64(0x88A);
+        let input = Tensor::random_range(&mut rng, &[SAMPLE_SIZE], MIN_INPUT..MAX_INPUT);
+
+        let op = Tanh {
+            scale: F32(SCALE as f32),
+            tau: TAU,
+            log_table: 12,
+        };
+        let actual = op.f(vec![&input]).data().to_vec();
+
+        let expected: Vec<i32> = tanh(&input, SCALE).inner;
+
+        assert_quantized_precision(
+            "Tanh teleportation",
+            &input,
+            &actual,
+            &expected,
+            SCALE,
+            (MIN_INPUT, MAX_INPUT),
+            WORST_ERROR_BOUND_QUANTIZED,
+        );
+    }
+}

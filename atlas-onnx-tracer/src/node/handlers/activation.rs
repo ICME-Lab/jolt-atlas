@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::{
     node::ComputationNode,
-    ops::{Constant, Cos, Erf, Operator, Rsqrt, Sin, SoftmaxAxes, Tanh},
+    ops::{Constant, Cos, Erf, Operator, Rsqrt, Sigmoid, Sin, SoftmaxAxes, Tanh},
     utils::{handler_builder::HandlerBuilder, parser::load_op, quantize::scale_to_multiplier},
 };
 #[cfg(not(feature = "fused-ops"))]
@@ -32,6 +32,7 @@ pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
         ("Erf", handle_erf as OpHandlerFn),
         ("Max", handle_max as OpHandlerFn),
         ("Rsqrt", handle_rsqrt as OpHandlerFn),
+        ("Sigmoid", handle_sigmoid as OpHandlerFn),
         ("Sin", handle_sin as OpHandlerFn),
         ("Softmax", handle_softmax as OpHandlerFn),
         ("Tanh", handle_tanh as OpHandlerFn),
@@ -112,6 +113,22 @@ fn handle_erf(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     HandlerBuilder::new(hctx)
         .with_broadcast()
         .simple_op(Operator::Erf(Erf {
+            scale,
+            tau,
+            log_table: log_table_size,
+        }))
+        .build()
+}
+
+/// Sigmoid activation.
+fn handle_sigmoid(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
+    let scale = scale_to_multiplier(hctx.run_args.scale).into();
+    let tau = NEURAL_TELEPORT_TAU;
+    let log_table_size = NEURAL_TELEPORT_LOG_TABLE_SIZE;
+
+    HandlerBuilder::new(hctx)
+        .with_broadcast()
+        .simple_op(Operator::Sigmoid(Sigmoid {
             scale,
             tau,
             log_table: log_table_size,

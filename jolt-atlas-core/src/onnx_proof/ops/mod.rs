@@ -82,6 +82,8 @@ pub mod reshape;
 pub mod rsqrt;
 /// Division by a scalar constant.
 pub mod scalar_const_div;
+/// Sigmoid activation function.
+pub mod sigmoid;
 /// Sin trigonometric function.
 pub mod sin;
 /// Slice tensor along one axis.
@@ -178,6 +180,7 @@ macro_rules! dispatch_operator {
             Operator::Reshape($inner) => $body,
             Operator::Rsqrt($inner) => $body,
             Operator::ScalarConstDiv($inner) => $body,
+            Operator::Sigmoid($inner) => $body,
             Operator::Sin($inner) => $body,
             Operator::Slice($inner) => $body,
             Operator::SoftmaxAxes($inner) => $body,

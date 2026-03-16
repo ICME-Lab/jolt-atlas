@@ -51,6 +51,8 @@ pub mod reshape;
 pub mod rsqrt;
 /// Division by a scalar constant operator.
 pub mod scalar_const_div;
+/// Sigmoid activation operator.
+pub mod sigmoid;
 /// Element-wise sine operator.
 pub mod sin;
 /// Slice operator for extracting tensor subregions.
@@ -143,6 +145,7 @@ define_operators! {
         Reshape { shape:Vec<usize> },
         Rsqrt { scale: F32 },
         ScalarConstDiv {divisor: i32},
+        Sigmoid { scale: F32, tau: i32, log_table: usize },
         Sin { scale: F32 },
         Slice { axis: usize, start: usize, end: usize},
         SoftmaxAxes { axes: usize, scale: F32 },

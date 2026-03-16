@@ -15,10 +15,11 @@ pub enum CommittedPolynomial {
     ///
     /// `1` - d
     NodeOutputRaD(usize, usize),
-    CosRaD(usize, usize),  // One-hot read addresses for Cos lookup
-    ErfRaD(usize, usize),  // One-hot read addresses for Erf lookup
-    SinRaD(usize, usize),  // One-hot read addresses for Sin lookup
-    TanhRaD(usize, usize), // One-hot read addresses for Tanh lookup
+    CosRaD(usize, usize),     // One-hot read addresses for Cos lookup
+    ErfRaD(usize, usize),     // One-hot read addresses for Erf lookup
+    SigmoidRaD(usize, usize), // One-hot read addresses for Sigmoid lookup
+    SinRaD(usize, usize),     // One-hot read addresses for Sin lookup
+    TanhRaD(usize, usize),    // One-hot read addresses for Tanh lookup
 
     /// Fields:
     ///
@@ -59,10 +60,11 @@ pub enum VirtualPolynomial {
     /// `0` - producer node index
     NodeOutput(usize),
     NodeOutputRa(usize),
-    CosRa(usize),  // One-hot read addresses for Cos lookup
-    ErfRa(usize),  // One-hot read addresses for Erf lookup
-    SinRa(usize),  // One-hot read addresses for Sin lookup
-    TanhRa(usize), // One-hot read addresses for Tanh lookup
+    CosRa(usize),     // One-hot read addresses for Cos lookup
+    ErfRa(usize),     // One-hot read addresses for Erf lookup
+    SigmoidRa(usize), // One-hot read addresses for Sigmoid lookup
+    SinRa(usize),     // One-hot read addresses for Sin lookup
+    TanhRa(usize),    // One-hot read addresses for Tanh lookup
 
     /// Fields:
     ///
@@ -180,6 +182,11 @@ impl CanonicalSerialize for CommittedPolynomial {
                 a.serialize_with_mode(&mut writer, compress)?;
                 b.serialize_with_mode(&mut writer, compress)?;
             }
+            Self::SigmoidRaD(a, b) => {
+                16u8.serialize_with_mode(&mut writer, compress)?;
+                a.serialize_with_mode(&mut writer, compress)?;
+                b.serialize_with_mode(&mut writer, compress)?;
+            }
         }
         Ok(())
     }
@@ -189,6 +196,7 @@ impl CanonicalSerialize for CommittedPolynomial {
             Self::NodeOutputRaD(a, b)
             | Self::TanhRaD(a, b)
             | Self::ErfRaD(a, b)
+            | Self::SigmoidRaD(a, b)
             | Self::CosRaD(a, b)
             | Self::SinRaD(a, b)
             | Self::SoftmaxRemainder(a, b)
@@ -291,6 +299,10 @@ impl CanonicalDeserialize for CommittedPolynomial {
                 usize::deserialize_with_mode(&mut reader, compress, validate)?,
             )),
             15 => Ok(Self::SinRaD(
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+            )),
+            16 => Ok(Self::SigmoidRaD(
                 usize::deserialize_with_mode(&mut reader, compress, validate)?,
                 usize::deserialize_with_mode(&mut reader, compress, validate)?,
             )),
@@ -405,6 +417,10 @@ impl CanonicalSerialize for VirtualPolynomial {
                 21u8.serialize_with_mode(&mut writer, compress)?;
                 a.serialize_with_mode(&mut writer, compress)?;
             }
+            Self::SigmoidRa(a) => {
+                22u8.serialize_with_mode(&mut writer, compress)?;
+                a.serialize_with_mode(&mut writer, compress)?;
+            }
         }
         Ok(())
     }
@@ -416,6 +432,7 @@ impl CanonicalSerialize for VirtualPolynomial {
             Self::NodeOutputRa(a)
             | Self::CosRa(a)
             | Self::ErfRa(a)
+            | Self::SigmoidRa(a)
             | Self::SinRa(a)
             | Self::TanhRa(a)
             | Self::DivRangeCheckRa(a)
@@ -547,6 +564,11 @@ impl CanonicalDeserialize for VirtualPolynomial {
                 validate,
             )?)),
             21 => Ok(Self::SinRa(usize::deserialize_with_mode(
+                &mut reader,
+                compress,
+                validate,
+            )?)),
+            22 => Ok(Self::SigmoidRa(usize::deserialize_with_mode(
                 &mut reader,
                 compress,
                 validate,

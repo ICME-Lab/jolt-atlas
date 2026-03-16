@@ -7,10 +7,16 @@
 
 pub mod cos;
 pub mod division;
-pub mod erf;
 pub mod sin;
-pub mod tanh;
 pub mod utils;
+
+use atlas_onnx_tracer::tensor::ops::nonlinearities;
+use utils::define_signed_activation_table;
+
+// Define the small-length lookup tables for nonlinear operators
+define_signed_activation_table!(TanhTable, nonlinearities::tanh);
+define_signed_activation_table!(ErfTable, nonlinearities::erffunc);
+define_signed_activation_table!(SigmoidTable, nonlinearities::sigmoid);
 
 /// Fixed-point scale factor: maps [-1, 1] to [-128, 128]
 pub const SCALE: f64 = 128.0;

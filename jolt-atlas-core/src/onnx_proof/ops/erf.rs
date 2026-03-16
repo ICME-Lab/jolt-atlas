@@ -2,9 +2,9 @@ use crate::onnx_proof::neural_teleport::{
     division::{
         compute_division, TeleportDivisionParams, TeleportDivisionProver, TeleportDivisionVerifier,
     },
-    erf::ErfTable,
     n_bits_to_usize,
     utils::compute_ra_evals_nbits_2comp,
+    ErfTable,
 };
 use crate::onnx_proof::{
     ops::OperatorProofTrait,

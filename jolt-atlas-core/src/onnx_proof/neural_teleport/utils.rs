@@ -3,7 +3,7 @@
 //! This module centralizes helper functions used by activation ops (erf, tanh,
 //! cos, sin) to build read-address one-hot evaluations.
 
-use super::n_bits_to_usize;
+use super::{n_bits_to_usize, usize_to_n_bits, SCALE};
 use atlas_onnx_tracer::tensor::Tensor;
 use joltworks::{
     field::JoltField, poly::eq_poly::EqPolynomial, utils::thread::unsafe_allocate_zero_vec,
@@ -55,6 +55,61 @@ where
 
     compute_ra_evals_from_usize_indices(r, &input_usize, table_size)
 }
+
+/// Build a signed two's-complement lookup table for a unary activation.
+///
+/// The table domain is `[-2^(n-1), 2^(n-1))` encoded in two's complement, and
+/// outputs are quantized using the shared neural-teleport `SCALE`.
+pub fn materialize_signed_activation_table(
+    log_table_size: usize,
+    activation: fn(&Tensor<i32>, f64) -> Tensor<i32>,
+) -> Vec<i32> {
+    let table_size = 1 << log_table_size;
+    let indices: Vec<i32> = (0..table_size)
+        .map(|i| usize_to_n_bits(i, log_table_size))
+        .collect();
+    let indices_tensor = Tensor::new(Some(&indices), &[1, table_size])
+        .expect("failed to build activation LUT input tensor");
+    let result = activation(&indices_tensor, SCALE);
+    result.data().to_vec()
+}
+
+macro_rules! define_signed_activation_table {
+    ($table:ident, $activation:path) => {
+        #[doc = "Lookup table for a signed neural-teleport activation."]
+        #[derive(Debug, Clone, Copy, Default)]
+        pub struct $table {
+            log_table_size: usize,
+        }
+
+        impl $table {
+            /// Create a new lookup table with the specified bit width.
+            pub fn new(log_table_size: usize) -> Self {
+                Self { log_table_size }
+            }
+
+            /// Returns the size of the table (2^log_table_size).
+            pub fn table_size(&self) -> usize {
+                1 << self.log_table_size
+            }
+
+            /// Returns the log2 of the table size.
+            pub fn log_table_size(&self) -> usize {
+                self.log_table_size
+            }
+
+            /// Materialize the lookup table values.
+            pub fn materialize(&self) -> Vec<i32> {
+                crate::onnx_proof::neural_teleport::utils::materialize_signed_activation_table(
+                    self.log_table_size,
+                    $activation,
+                )
+            }
+        }
+    };
+}
+
+pub(crate) use define_signed_activation_table;
 
 fn compute_ra_evals_from_usize_indices<F>(
     r: &[F::Challenge],

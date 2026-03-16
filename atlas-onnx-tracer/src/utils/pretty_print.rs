@@ -29,16 +29,17 @@ impl From<&ComputationNode> for NodeRow {
 
         // Extract operator-specific details
         let details = match &node.operator {
+            Operator::Broadcast(op) => format!("shape: {:?}", op.shape),
             Operator::Clamp(op) => format!("axes: {}, spread: {}", op.axes, op.max_spread),
             Operator::Einsum(op) => format!("eq: {}", op.equation),
             Operator::Gather(op) => format!("axis: {}", op.axis),
+            Operator::MoveAxis(op) => format!("src: {} → dst: {}", op.source, op.destination),
+            Operator::Reshape(op) => format!("shape: {:?}", op.shape),
+            Operator::Rsqrt(op) => format!("scale: {}", op.scale),
+            Operator::Sigmoid(op) => format!("scale: {}", op.scale),
             Operator::Slice(op) => format!("axis: {}, {}..{}", op.axis, op.start, op.end),
             Operator::SoftmaxAxes(op) => format!("axes: {}", op.axes),
             Operator::Sum(op) => format!("axes: {:?}", op.axes),
-            Operator::MoveAxis(op) => format!("src: {} → dst: {}", op.source, op.destination),
-            Operator::Reshape(op) => format!("shape: {:?}", op.shape),
-            Operator::Broadcast(op) => format!("shape: {:?}", op.shape),
-            Operator::Rsqrt(op) => format!("scale: {}", op.scale),
             Operator::Tanh(op) => format!("scale: {}", op.scale),
             _ => "-".to_string(),
         };

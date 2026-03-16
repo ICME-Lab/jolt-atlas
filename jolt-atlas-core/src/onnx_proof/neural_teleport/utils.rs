@@ -68,7 +68,11 @@ pub fn materialize_signed_activation_table(
 ) -> Vec<i32> {
     let table_size = 1 << log_table_size;
     let indices: Vec<i32> = (0..table_size)
-        .map(|i| usize_to_n_bits(i, log_table_size) * tau)
+        .map(|i| {
+            usize_to_n_bits(i, log_table_size)
+                .checked_mul(tau)
+                .expect("overflow in activation table index")
+        })
         .collect();
     let indices_tensor = Tensor::new(Some(&indices), &[1, table_size])
         .expect("failed to build activation LUT input tensor");
@@ -79,7 +83,7 @@ pub fn materialize_signed_activation_table(
 macro_rules! define_signed_activation_table {
     ($table:ident, $activation:path) => {
         #[doc = "Lookup table for a signed neural-teleport activation."]
-        #[derive(Debug, Clone, Copy, Default)]
+        #[derive(Debug, Clone, Copy)]
         pub struct $table {
             log_table_size: usize,
             tau: i32,

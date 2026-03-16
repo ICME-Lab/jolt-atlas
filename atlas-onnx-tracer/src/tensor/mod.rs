@@ -1435,7 +1435,8 @@ impl<T: TensorType + Mul<T, Output = T> + std::marker::Send + std::marker::Sync 
     ///     &[2, 3],
     /// ).unwrap();
     /// let result = x.mul(2).unwrap();
-    /// let expected = Tensor::<i32>::new(Some(&[4, 2, 4, 2, 2, 2]), &[2, 3]).unwrap();     /// assert_eq!(result, expected);
+    /// let expected = Tensor::<i32>::new(Some(&[4, 2, 4, 2, 2, 2]), &[2, 3]).unwrap();
+    /// assert_eq!(result, expected);
     /// ```
     fn mul(self, rhs: T) -> Self::Output {
         let mut output = self;

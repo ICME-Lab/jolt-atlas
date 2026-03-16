@@ -26,7 +26,6 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng};
 
     #[test]
-    #[ignore = "Precision mismatch between optimized teleportation path and direct sin reference"]
     fn test_sin_precision_stats() {
         const SCALE: f64 = 128.0;
         const SAMPLE_SIZE: usize = 1 << 14;

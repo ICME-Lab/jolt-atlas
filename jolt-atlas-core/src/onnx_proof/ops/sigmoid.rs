@@ -264,10 +264,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sigmoid {
 
 const DEGREE_BOUND: usize = 2; // TODO
 
-/// Parameters for proving error function (sigmoid) activation operations.
+/// Parameters for proving Sigmoid activation operations.
 ///
-/// Mirrors the parameter layout used by `SigmoidParams` so both lookup-style
-/// activations follow the same transcript/challenge flow.
+/// Implements a Read-Raf sumcheck for Sigmoid lookup, to prove correct construction of a one-hot encoding.
+/// The claim combines the output claim and the teleportation quotient claim using a folding challenge gamma.
 #[derive(Clone)]
 pub struct SigmoidParams<F: JoltField> {
     /// Folding challenge used to combine multiple checks into one claim.
@@ -367,7 +367,7 @@ impl<F: JoltField> SigmoidProver<F> {
 
         let (quotient_tensor, _remainder) = compute_division(input, params.op.tau);
 
-        // Ensure input is within expected range for table size: 2^(log_table_size - 1) <= input < 2^(log_table_size - 1)
+        // Ensure input is within expected range for table size: -2^(log_table_size - 1) <= input < 2^(log_table_size - 1) - 1
         // Inputs outside this range will error
         // TODO: Same as tanh.rs
         assert!(quotient_tensor.iter().all(|&x| {

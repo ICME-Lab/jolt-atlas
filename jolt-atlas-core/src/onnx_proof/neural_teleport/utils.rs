@@ -1,7 +1,6 @@
 //! Shared utilities for neural teleportation operations.
 //!
-//! This module centralizes helper functions used by activation ops (erf, tanh,
-//! cos, sin) to build read-address one-hot evaluations.
+//! This module centralizes helper functions used by activation ops, and periodic functions.
 
 use super::{n_bits_to_usize, usize_to_n_bits, SCALE};
 use atlas_onnx_tracer::tensor::Tensor;
@@ -37,7 +36,7 @@ where
 
 /// Compute one-hot read-address evaluations from signed n-bit two's-complement values.
 ///
-/// This variant is used by lookup-table ops (`erf` and `tanh`), where signed
+/// This variant is used by lookup-table ops where signed
 /// quotient values are mapped into `[0, 2^log_table_size)` via two's-complement.
 pub fn compute_ra_evals_nbits_2comp<F>(
     r: &[F::Challenge],

@@ -15,8 +15,12 @@ use atlas_onnx_tracer::{
     tensor::Tensor,
 };
 use joltworks::{
-    field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme,
-    subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
+    field::JoltField,
+    poly::{
+        commitment::commitment_scheme::CommitmentScheme, opening_proof::OpeningId, unipoly::UniPoly,
+    },
+    subprotocols::sumcheck::SumcheckInstanceProof,
+    transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
 use std::collections::BTreeMap;
@@ -67,6 +71,8 @@ pub struct ONNXProof<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = 
     pub proofs: BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
     /// Polynomial commitments for witness polynomials.
     pub commitments: Vec<PCS::Commitment>,
+    /// Evaluation reduction proofs h polynomials for each opening claim.
+    pub eval_reduction_h_polys: BTreeMap<OpeningId, UniPoly<F>>,
     /// Batched opening proof using reduction sum-check protocol to reduce all polynomial openings to the same point.
     reduced_opening_proof: Option<ReducedOpeningProof<F, T, PCS>>,
 }
@@ -139,7 +145,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         self.populate_accumulator(&mut verifier);
 
         // Verify output MLE at random point τ
-        Self::verify_output_claim(pp.model(), io, &mut verifier)?;
+        Self::verify_output_claim(pp.model(), &mut verifier)?;
 
         // Verify each operation in reverse topological order
         Self::verify_iop(pp.model(), &mut verifier)?;

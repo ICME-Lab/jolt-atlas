@@ -23,104 +23,138 @@ use crate::{
 };
 use allocative::Allocative;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use atlas_onnx_tracer::tensor::Tensor;
 
-/// Reduced claim produced by the 2-to-1 evaluation reduction.
-/// TODO: Should be used to populate a new opening for given polynomial once eval reduction occured, so that prover proves P(r') = v'
+/// Public instance for one 2-to-1 evaluation reduction round.
 #[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
-pub struct ReducedEvaluationClaim<F: JoltField> {
-    /// Reduced opening point in the base field.
-    pub r_prime: Vec<F>,
-    /// Reduced evaluation value.
-    pub v_prime: F,
+pub struct EvalReductionInstance<F: JoltField> {
+    /// First opening point of the same polynomial.
+    pub r1: Vec<F>,
+    /// First opening claim v1 = P(r1).
+    pub v1: F,
+    /// Second opening point of the same polynomial.
+    pub r2: Vec<F>,
+    /// Second opening claim v2 = P(r2).
+    pub v2: F,
 }
 
-/// Proof object for a single 2-to-1 evaluation reduction round.
+impl<F: JoltField> EvalReductionInstance<F> {
+    pub fn new(opening1: &Opening<F>, opening2: &Opening<F>) -> Result<Self, ProofVerifyError> {
+        let r1: Vec<F> = opening1.0.r.iter().map(|&c| c.into()).collect();
+        let r2: Vec<F> = opening2.0.r.iter().map(|&c| c.into()).collect();
+        if r1.len() != r2.len() {
+            return Err(ProofVerifyError::InvalidInputLength(r1.len(), r2.len()));
+        }
+
+        Ok(Self {
+            r1,
+            r2,
+            v1: opening1.1,
+            v2: opening2.1,
+        })
+    }
+}
+
+/// Witness for one 2-to-1 evaluation reduction round.
 #[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
-pub struct EvaluationReduction2To1Proof<F: JoltField> {
+pub struct EvalReductionWitness<F: JoltField> {
+    pub mle: MultilinearPolynomial<F>,
+}
+
+impl<F: JoltField> EvalReductionWitness<F> {
+    /// Build a witness directly from an already-materialized MLE.
+    pub fn new(mle: MultilinearPolynomial<F>) -> Self {
+        Self { mle }
+    }
+
+    /// Build a witness from an integer tensor by padding to next power of two,
+    /// then interpreting it as the coefficient vector of an MLE.
+    pub fn from_tensor(tensor: &Tensor<i32>) -> Self {
+        Self {
+            mle: MultilinearPolynomial::from(tensor.padded_next_power_of_two()),
+        }
+    }
+}
+
+/// Proof for one 2-to-1 evaluation reduction round.
+#[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
+pub struct EvalReductionProof<F: JoltField> {
     /// Restriction polynomial h(t) = P(l(t)).
     pub h: UniPoly<F>,
 }
 
-/// Prover-side 2-to-1 evaluation reduction.
-///
-/// Returns the reduction proof and the reduced claim `(r', v')`.
-pub fn prove_two_to_one<F: JoltField, T: Transcript>(
-    transcript: &mut T,
-    mle: MultilinearPolynomial<F>,
-    opening1: &Opening<F>,
-    opening2: &Opening<F>,
-) -> Result<(EvaluationReduction2To1Proof<F>, ReducedEvaluationClaim<F>), ProofVerifyError> {
-    let r1: Vec<F> = opening1.0.r.iter().map(|&c| c.into()).collect();
-    let r2: Vec<F> = opening2.0.r.iter().map(|&c| c.into()).collect();
-    if r1.len() != r2.len() || r1.len() != mle.get_num_vars() {
-        return Err(ProofVerifyError::InvalidInputLength(r1.len(), r2.len()));
-    }
-
-    let r2_sub_r1: Vec<F> = zip(&r1, &r2).map(|(&x, &y)| y - x).collect();
-
-    let h = compute_h(&mle, &r1, &r2_sub_r1);
-
-    #[cfg(test)]
-    {
-        // Sanity check: h(0) should match opening1 claim, h(1) should match opening2 claim.
-        assert_eq!(h.eval_at_zero(), opening1.1);
-        assert_eq!(h.eval_at_one(), opening2.1);
-    }
-
-    h.append_to_transcript(transcript);
-    let x_prime: F::Challenge = transcript.challenge_scalar_optimized::<F>();
-
-    let reduced_point = compute_l(&r1, &r2_sub_r1, x_prime.into());
-    let reduced_value = h.evaluate(&x_prime);
-
-    let proof = EvaluationReduction2To1Proof { h };
-    let reduced_claim = ReducedEvaluationClaim {
-        r_prime: reduced_point,
-        v_prime: reduced_value,
-    };
-
-    Ok((proof, reduced_claim))
+/// Reduced instance produced by the 2-to-1 evaluation reduction.
+#[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
+pub struct ReducedInstance<F: JoltField> {
+    pub r: Vec<F>,
+    pub claim: F,
 }
 
-/// Verifier-side 2-to-1 evaluation reduction.
-///
-/// Validates boundary checks and transcript-consistency, then outputs reduced
-/// claim `(r', v')`.
-pub fn verify_two_to_one<F: JoltField, T: Transcript>(
-    transcript: &mut T,
-    opening1: &Opening<F>,
-    opening2: &Opening<F>,
-    proof: &EvaluationReduction2To1Proof<F>,
-    reduced_opening: F,
-) -> Result<ReducedEvaluationClaim<F>, ProofVerifyError> {
-    let r1: Vec<F> = opening1.0.r.iter().map(|&c| c.into()).collect();
-    let r2: Vec<F> = opening2.0.r.iter().map(|&c| c.into()).collect();
-    if r1.len() != r2.len() {
-        return Err(ProofVerifyError::InvalidInputLength(r1.len(), r2.len()));
+impl<F: JoltField> EvalReductionInstance<F> {
+    pub fn prove<T: Transcript>(
+        &self,
+        witness: &EvalReductionWitness<F>,
+        transcript: &mut T,
+    ) -> Result<(EvalReductionProof<F>, ReducedInstance<F>), ProofVerifyError> {
+        if self.r1.len() != witness.mle.get_num_vars() {
+            return Err(ProofVerifyError::InvalidInputLength(
+                self.r1.len(),
+                witness.mle.get_num_vars(),
+            ));
+        }
+
+        let r2_sub_r1: Vec<F> = zip(&self.r1, &self.r2).map(|(&x, &y)| y - x).collect();
+        let h = compute_h(&witness.mle, &self.r1, &r2_sub_r1);
+
+        #[cfg(test)]
+        {
+            // Sanity check: h(0) should match opening1 claim, h(1) should match opening2 claim.
+            assert_eq!(h.eval_at_zero(), self.v1);
+            assert_eq!(h.eval_at_one(), self.v2);
+        }
+
+        h.append_to_transcript(transcript);
+        let x_prime: F::Challenge = transcript.challenge_scalar_optimized::<F>();
+
+        let proof = EvalReductionProof { h };
+        let reduced_instance = ReducedInstance {
+            r: compute_l(&self.r1, &r2_sub_r1, x_prime.into()),
+            claim: proof.h.evaluate(&x_prime),
+        };
+
+        Ok((proof, reduced_instance))
     }
 
-    if proof.h.eval_at_zero() != opening1.1 || proof.h.eval_at_one() != opening2.1 {
-        return Err(ProofVerifyError::InvalidOpeningProof(
-            "2-to-1 evaluation reduction boundary check failed".to_string(),
-        ));
+    pub fn verify<T: Transcript>(
+        &self,
+        proof: &EvalReductionProof<F>,
+        transcript: &mut T,
+    ) -> Result<ReducedInstance<F>, ProofVerifyError> {
+        if proof.h.eval_at_zero() != self.v1 || proof.h.eval_at_one() != self.v2 {
+            return Err(ProofVerifyError::InvalidOpeningProof(
+                "2-to-1 evaluation reduction boundary check failed".to_string(),
+            ));
+        }
+
+        if self.r1.len() != self.r2.len() {
+            return Err(ProofVerifyError::InvalidInputLength(
+                self.r1.len(),
+                self.r2.len(),
+            ));
+        }
+
+        proof.h.append_to_transcript(transcript);
+        let x_prime = transcript.challenge_scalar_optimized::<F>();
+
+        let expected_reduced_value = proof.h.evaluate::<F>(&x_prime.into());
+        let r2_sub_r1: Vec<F> = zip(&self.r1, &self.r2).map(|(&x, &y)| y - x).collect();
+        let expected_r = compute_l::<F>(&self.r1, &r2_sub_r1, x_prime.into());
+
+        Ok(ReducedInstance {
+            r: expected_r,
+            claim: expected_reduced_value,
+        })
     }
-
-    proof.h.append_to_transcript(transcript);
-    let x_prime = transcript.challenge_scalar_optimized::<F>();
-
-    let expected_reduced_value = proof.h.evaluate::<F>(&x_prime.into());
-    if expected_reduced_value != reduced_opening {
-        return Err(ProofVerifyError::InvalidOpeningProof(
-            "2-to-1 evaluation reduction reduced-value mismatch".to_string(),
-        ));
-    }
-
-    let r2_sub_r1: Vec<F> = zip(&r1, &r2).map(|(&x, &y)| y - x).collect();
-    let reduced_point = compute_l::<F>(&r1, &r2_sub_r1, x_prime.into());
-    Ok(ReducedEvaluationClaim {
-        r_prime: reduced_point,
-        v_prime: reduced_opening,
-    })
 }
 
 fn compute_l<F: JoltField>(r1: &[F], r2_sub_r1: &[F], x: F) -> Vec<F> {
@@ -202,26 +236,24 @@ mod tests {
         let opening1: Opening<Fr> = (r1.clone().into(), v1);
         let opening2: Opening<Fr> = (r2.clone().into(), v2);
 
+        let witness = EvalReductionWitness { mle };
+
         let mut prover_tr = Blake2bTranscript::new(b"eval-reduction-test");
-        let (proof, reduced_prover) =
-            prove_two_to_one::<Fr, _>(&mut prover_tr, mle, &opening1, &opening2)
-                .expect("prover should succeed");
+        let instance = EvalReductionInstance::new(&opening1, &opening2)
+            .expect("instance should be valid for matching witness/openings");
+        let (proof, reduced_prover) = instance
+            .prove(&witness, &mut prover_tr)
+            .expect("prover should succeed");
 
         let mut verifier_tr = Blake2bTranscript::new(b"eval-reduction-test");
-        let reduced_verifier = verify_two_to_one::<Fr, _>(
-            &mut verifier_tr,
-            &opening1,
-            &opening2,
-            &proof,
-            reduced_prover.v_prime,
-        )
-        .expect("verifier should accept valid reduction proof");
-
-        assert_eq!(reduced_prover, reduced_verifier);
+        let reduced_verifier = instance
+            .verify(&proof, &mut verifier_tr)
+            .expect("verifier should accept valid reduction proof");
+        assert_eq!(reduced_verifier, reduced_prover);
     }
 
     #[test]
-    fn eval_reduction_2to1_rejects_wrong_boundary() {
+    fn eval_reduction_2to1_rejects_tampered_h() {
         let mle = MultilinearPolynomial::<Fr>::from(vec![f(1), f(2), f(3), f(4)]);
         let r1 = vec![ch(1), ch(2)];
         let r2 = vec![ch(3), ch(4)];
@@ -232,26 +264,23 @@ mod tests {
         let opening1: Opening<Fr> = (r1.clone().into(), v1);
         let opening2: Opening<Fr> = (r2.clone().into(), v2);
 
-        let mut prover_tr = Blake2bTranscript::new(b"eval-reduction-test");
-        let (proof, reduced) =
-            prove_two_to_one::<Fr, _>(&mut prover_tr, mle, &opening1, &opening2).unwrap();
+        let witness = EvalReductionWitness { mle };
 
-        // Create a fake opening with wrong boundary values
-        let fake_opening1: Opening<Fr> = (r1.clone().into(), v1 + Fr::from(1u64));
+        let mut prover_tr = Blake2bTranscript::new(b"eval-reduction-test");
+        let instance = EvalReductionInstance::new(&opening1, &opening2).unwrap();
+        let (mut proof, _reduced) = instance.prove(&witness, &mut prover_tr).unwrap();
+
+        // Tamper h so boundary checks fail.
+        proof.h.coeffs[0] += Fr::from(1u64);
         let mut verifier_tr = Blake2bTranscript::new(b"eval-reduction-test");
-        let err = verify_two_to_one(
-            &mut verifier_tr,
-            &fake_opening1,
-            &opening2,
-            &proof,
-            reduced.v_prime,
-        )
-        .expect_err("verifier should reject when boundary checks fail");
+        let err = instance
+            .verify(&proof, &mut verifier_tr)
+            .expect_err("verifier should reject when h is tampered");
         assert!(matches!(err, ProofVerifyError::InvalidOpeningProof(_)));
     }
 
     #[test]
-    fn eval_reduction_2to1_rejects_transcript_mismatch() {
+    fn eval_reduction_2to1_transcript_mismatch_changes_reduced_instance() {
         let mle = MultilinearPolynomial::<Fr>::from(vec![f(1), f(2), f(3), f(4)]);
         let r1 = vec![ch(10), ch(11)];
         let r2 = vec![ch(12), ch(13)];
@@ -261,23 +290,20 @@ mod tests {
         let opening1: Opening<Fr> = (r1.clone().into(), v1);
         let opening2: Opening<Fr> = (r2.clone().into(), v2);
 
+        let witness = EvalReductionWitness { mle };
+
         let mut prover_tr = Blake2bTranscript::new(b"eval-reduction-test");
-        let (proof, reduced) =
-            prove_two_to_one::<Fr, _>(&mut prover_tr, mle, &opening1, &opening2).unwrap();
+        let instance = EvalReductionInstance::new(&opening1, &opening2).unwrap();
+        let (proof, reduced) = instance.prove(&witness, &mut prover_tr).unwrap();
 
         let mut verifier_tr = Blake2bTranscript::new(b"eval-reduction-test");
         // Force transcript divergence before verification starts.
         verifier_tr.append_message(b"desync");
 
-        let err = verify_two_to_one::<Fr, _>(
-            &mut verifier_tr,
-            &opening1,
-            &opening2,
-            &proof,
-            reduced.v_prime,
-        )
-        .expect_err("verifier should reject when transcript challenges diverge");
-        assert!(matches!(err, ProofVerifyError::InvalidOpeningProof(_)));
+        let reduced_verifier = instance
+            .verify(&proof, &mut verifier_tr)
+            .expect("reduction verify still succeeds but yields a different reduced claim");
+        assert_ne!(reduced_verifier, reduced);
     }
 
     #[test]

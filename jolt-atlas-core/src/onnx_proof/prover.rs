@@ -25,9 +25,10 @@ use joltworks::{
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{ProverOpeningAccumulator, SumcheckId},
+        opening_proof::{Opening, OpeningId, ProverOpeningAccumulator, SumcheckId},
         rlc_polynomial::build_materialized_rlc,
     },
+    subprotocols::evaluation_reduction::{EvalReductionInstance, EvalReductionWitness},
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::math::Math,
@@ -60,6 +61,61 @@ impl<F: JoltField, T: Transcript> Prover<F, T> {
             accumulator: ProverOpeningAccumulator::new(),
             transcript: T::new(b"ONNXProof"),
         }
+    }
+
+    /// Reduce dual NodeOutput openings for a producer node before proving that node.
+    ///
+    /// This is the first integration step for PAZK 4.5.2 (2-to-1 only).
+    pub(super) fn perform_eval_reduction(&mut self, computation_node: &ComputationNode) {
+        let producer_idx = computation_node.idx;
+        let lo = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(producer_idx),
+            SumcheckId::NodeExecution(producer_idx + 1),
+        );
+        let hi = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(producer_idx),
+            SumcheckId::NodeExecution(usize::MAX),
+        );
+
+        let entries: Vec<(OpeningId, Opening<F>)> = self
+            .accumulator
+            .openings
+            .range(lo..=hi)
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+
+        if entries.len() < 2 {
+            return;
+        }
+
+        // Current scope is strictly 2-to-1 reduction.
+        if entries.len() != 2 {
+            // TODO(#138): Extend to iterative n-to-1 reduction when fanout > 2.
+            return;
+        }
+
+        let (key1, opening1) = entries[0].clone();
+        let (key2, opening2) = entries[1].clone();
+
+        let output = Trace::layer_data(&self.trace, computation_node).output;
+        let witness = EvalReductionWitness::from_tensor(output);
+
+        let instance = EvalReductionInstance::new(&opening1, &opening2)
+            .expect("evaluation reduction instance should be constructible for matching openings");
+        let (proof, _reduced) = instance
+            .prove(&witness, &mut self.transcript)
+            .expect("evaluation reduction should succeed for consistent node output openings");
+
+        // NOTE: We only record reduction artifacts in this first integration step.
+        // Applying the reduced opening point back into accumulator openings is deferred
+        // because reduced points live in the base field, while opening points are stored
+        // in challenge representation for the default challenge type.
+
+        let h = proof.h;
+        self.accumulator
+            .eval_reduction_h_polys
+            .insert(key1, h.clone());
+        self.accumulator.eval_reduction_h_polys.insert(key2, h);
     }
 }
 
@@ -128,6 +184,10 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
     ) {
         for (_, computation_node) in computation_nodes.iter().rev() {
+            // Before each node is proven,
+            // perform eval reduction to reduce openings to a unique claim for the node output.
+
+            // prover.perform_eval_reduction(computation_node);
             proofs.extend(OperatorProver::prove(computation_node, prover));
         }
     }
@@ -185,12 +245,14 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         });
         #[cfg(not(test))]
         let debug_info = None;
+        let eval_reduction_h_polys = std::mem::take(&mut prover.accumulator.eval_reduction_h_polys);
         let opening_claims = prover.accumulator.take();
         (
             Self {
                 proofs,
                 opening_claims: Claims(opening_claims),
                 commitments,
+                eval_reduction_h_polys,
                 reduced_opening_proof,
             },
             io,

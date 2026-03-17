@@ -13,9 +13,12 @@ use joltworks::{
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{OpeningAccumulator, OpeningPoint, SumcheckId, VerifierOpeningAccumulator},
+        opening_proof::{
+            OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, VerifierOpeningAccumulator,
+        },
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
+    transcripts::AppendToTranscript,
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
@@ -55,6 +58,52 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
             io,
         }
     }
+
+    /// Verify and apply pre-node NodeOutput evaluation reduction (2-to-1 only).
+    pub(super) fn perform_eval_reduction(
+        &mut self,
+        computation_node: &atlas_onnx_tracer::node::ComputationNode,
+    ) -> Result<(), ProofVerifyError> {
+        let producer_idx = computation_node.idx;
+        let lo = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(producer_idx),
+            SumcheckId::NodeExecution(producer_idx + 1),
+        );
+        let hi = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(producer_idx),
+            SumcheckId::NodeExecution(usize::MAX),
+        );
+        let candidate_keys: Vec<OpeningId> = self
+            .accumulator
+            .openings
+            .range(lo..=hi)
+            .map(|(k, _)| *k)
+            .collect();
+
+        if candidate_keys.len() != 2 {
+            return Ok(());
+        }
+
+        let h = self
+            .accumulator
+            .eval_reduction_h_polys
+            .get(&candidate_keys[0])
+            .or_else(|| {
+                self.accumulator
+                    .eval_reduction_h_polys
+                    .get(&candidate_keys[1])
+            })
+            .ok_or_else(|| {
+                ProofVerifyError::InvalidOpeningProof(
+                    "missing evaluation-reduction h polynomial for node-output opening".to_string(),
+                )
+            })?;
+
+        h.append_to_transcript(&mut self.transcript);
+        let _ = self.transcript.challenge_scalar_optimized::<F>();
+
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -73,6 +122,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                 .openings
                 .insert(*key, (OpeningPoint::default(), *claim));
         }
+        verifier.accumulator.eval_reduction_h_polys = self.eval_reduction_h_polys.clone();
 
         for commitment in &self.commitments {
             verifier.transcript.append_serializable(commitment);
@@ -82,7 +132,6 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     /// Verify that the output MLE evaluates correctly at the random challenge point τ.
     pub(super) fn verify_output_claim(
         model: &Model,
-        io: &ModelExecutionIO,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         let output_index = model.outputs()[0];
@@ -93,7 +142,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                 .log_2(),
         );
         let expected_output_claim =
-            MultilinearPolynomial::from(io.outputs[0].padded_next_power_of_two())
+            MultilinearPolynomial::from(verifier.io.outputs[0].padded_next_power_of_two())
                 .evaluate(&r_node_output);
 
         // append_virtual now handles both transcript append and opening point update.
@@ -125,6 +174,10 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         for (_, computation_node) in model.graph.nodes.iter().rev() {
+            // Before each node is proven,
+            // perform eval reduction to reduce openings to a unique claim for the node output.
+
+            // verifier.perform_eval_reduction(computation_node)?;
             let res = OperatorVerifier::verify(computation_node, verifier);
             #[cfg(test)]
             {

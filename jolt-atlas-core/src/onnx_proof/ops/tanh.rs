@@ -5,8 +5,8 @@ use crate::onnx_proof::{
             TeleportDivisionVerifier,
         },
         n_bits_to_usize,
-        tanh::TanhTable,
         utils::compute_ra_evals_nbits_2comp,
+        TanhTable,
     },
     ops::OperatorProofTrait,
     range_checking::{
@@ -380,7 +380,7 @@ impl<F: JoltField> TanhProver<F> {
         }));
 
         // Create and materialize the tanh lookup table (reduced size)
-        let tanh_table = TanhTable::new(params.op.log_table);
+        let tanh_table = TanhTable::new(params.op.log_table, params.op.tau);
         let tanh_table = MultilinearPolynomial::from(tanh_table.materialize());
 
         // Compute one-hot encoding of QUOTIENT values (not input)
@@ -530,7 +530,7 @@ impl<F: JoltField> TanhVerifier<F> {
         );
 
         // Materialize the tanh table for verification
-        let tanh_table = TanhTable::new(params.op.log_table);
+        let tanh_table = TanhTable::new(params.op.log_table, params.op.tau);
         let tanh_table = MultilinearPolynomial::from(tanh_table.materialize());
 
         Self { params, tanh_table }

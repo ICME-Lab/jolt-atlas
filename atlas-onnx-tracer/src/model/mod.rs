@@ -265,6 +265,7 @@ impl Model {
                 | Operator::Erf(_)
                 | Operator::ReLU(_)
                 | Operator::Rsqrt(_)
+                | Operator::Sigmoid(_)
                 | Operator::Sin(_) => LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements()),
                 Operator::ScalarConstDiv(_) => log_2(node.pow2_padded_num_output_elements()),
                 Operator::SoftmaxAxes(_) => {

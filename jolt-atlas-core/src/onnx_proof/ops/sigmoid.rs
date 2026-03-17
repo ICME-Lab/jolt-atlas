@@ -4,7 +4,7 @@ use crate::onnx_proof::neural_teleport::{
     },
     n_bits_to_usize,
     utils::compute_ra_evals_nbits_2comp,
-    ErfTable,
+    SigmoidTable,
 };
 use crate::onnx_proof::{
     ops::OperatorProofTrait,
@@ -19,7 +19,7 @@ use atlas_onnx_tracer::{
         ComputationGraph,
     },
     node::{handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE, ComputationNode},
-    ops::Erf,
+    ops::Sigmoid,
 };
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
@@ -49,7 +49,7 @@ use joltworks::{
 };
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
+impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sigmoid {
     fn prove(
         &self,
         node: &ComputationNode,
@@ -67,15 +67,15 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
         );
         results.push((ProofId(node.idx, ProofType::NeuralTeleport), div_proof));
 
-        // Stage 1b: Erf lookup proof
-        let params = ErfParams::new(
+        // Stage 1b: Sigmoid lookup proof
+        let params = SigmoidParams::new(
             node.clone(),
             &prover.preprocessing.model.graph,
             &prover.accumulator,
             &mut prover.transcript,
             self.clone(),
         );
-        let mut exec_sumcheck = ErfProver::initialize(
+        let mut exec_sumcheck = SigmoidProver::initialize(
             &prover.trace,
             params,
             &mut prover.accumulator,
@@ -98,7 +98,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
             .map(|&x| n_bits_to_usize(x, self.log_table))
             .collect::<Vec<usize>>();
 
-        // Stage 2: Range check proof for division and first One-Hot checks for ErfRa
+        // Stage 2: Range check proof for division and first One-Hot checks for SigmoidRa
         let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
         let (rangecheck_sumcheck, rc_lookup_indices) = rangecheck_provider
             .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
@@ -106,12 +106,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
                 &mut prover.accumulator,
                 &mut prover.transcript,
             );
-        let erf_encoding = ErfRaEncoding {
+        let sigmoid_encoding = SigmoidRaEncoding {
             node_idx: node.idx,
             log_table: self.log_table,
         };
         let ra_onehot_provers = shout::ra_onehot_provers(
-            &erf_encoding,
+            &sigmoid_encoding,
             &lookup_indices,
             &prover.accumulator,
             &mut prover.transcript,
@@ -120,14 +120,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
             vec![Box::new(rangecheck_sumcheck)];
         instances.extend(ra_onehot_provers);
 
-        let (erf_ra_one_hot_proof, _) = BatchedSumcheck::prove(
+        let (sigmoid_ra_one_hot_proof, _) = BatchedSumcheck::prove(
             instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
             &mut prover.transcript,
         );
         results.push((
             ProofId(node.idx, ProofType::RaOneHotChecks),
-            erf_ra_one_hot_proof,
+            sigmoid_ra_one_hot_proof,
         ));
 
         // Stage 3: one-hot checks for division
@@ -173,13 +173,13 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
             &mut verifier.transcript,
         )?;
 
-        // Stage 1b: Erf verification
-        let erf_proof = verifier
+        // Stage 1b: Sigmoid verification
+        let sigmoid_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
 
-        let exec_sumcheck = ErfVerifier::new(
+        let exec_sumcheck = SigmoidVerifier::new(
             node.clone(),
             &verifier.preprocessing.model.graph,
             &mut verifier.accumulator,
@@ -187,14 +187,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
             self.clone(),
         );
         Sumcheck::verify(
-            erf_proof,
+            sigmoid_proof,
             &exec_sumcheck,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
 
-        // Stage 2: Range check verification for division and first One-Hot checks for ErfRa
-        let erf_ra_one_hot_proof = verifier
+        // Stage 2: Range check verification for division and first One-Hot checks for SigmoidRa
+        let sigmoid_ra_one_hot_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
@@ -205,12 +205,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
                 &mut verifier.accumulator,
                 &mut verifier.transcript,
             );
-        let erf_encoding = ErfRaEncoding {
+        let sigmoid_encoding = SigmoidRaEncoding {
             node_idx: node.idx,
             log_table: self.log_table,
         };
         let ra_onehot_verifier = shout::ra_onehot_verifiers(
-            &erf_encoding,
+            &sigmoid_encoding,
             &verifier.accumulator,
             &mut verifier.transcript,
         );
@@ -219,7 +219,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
         let mut instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = vec![&rangecheck_verifier];
         instances.extend(ra_onehot_verifier);
         BatchedSumcheck::verify(
-            erf_ra_one_hot_proof,
+            sigmoid_ra_one_hot_proof,
             instances,
             &mut verifier.accumulator,
             &mut verifier.transcript,
@@ -248,15 +248,15 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
-        let erf_encoding = ErfRaEncoding {
+        let sigmoid_encoding = SigmoidRaEncoding {
             node_idx: node.idx,
             log_table: NEURAL_TELEPORT_LOG_TABLE_SIZE,
         };
         let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-        let erf_d = erf_encoding.one_hot_params().instruction_d;
+        let sigmoid_d = sigmoid_encoding.one_hot_params().instruction_d;
         let rc_d = rc_encoding.one_hot_params().instruction_d;
         let mut polys = vec![];
-        polys.extend((0..erf_d).map(|i| CommittedPolynomial::ErfRaD(node.idx, i)));
+        polys.extend((0..sigmoid_d).map(|i| CommittedPolynomial::SigmoidRaD(node.idx, i)));
         polys.extend((0..rc_d).map(|i| CommittedPolynomial::TeleportRangeCheckRaD(node.idx, i)));
         polys
     }
@@ -264,35 +264,35 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
 
 const DEGREE_BOUND: usize = 2; // TODO
 
-/// Parameters for proving error function (erf) activation operations.
+/// Parameters for proving Sigmoid activation operations.
 ///
-/// Mirrors the parameter layout used by `ErfParams` so both lookup-style
-/// activations follow the same transcript/challenge flow.
+/// Implements a Read-Raf sumcheck for Sigmoid lookup, to prove correct construction of a one-hot encoding.
+/// The claim combines the output claim and the teleportation quotient claim using a folding challenge gamma.
 #[derive(Clone)]
-pub struct ErfParams<F: JoltField> {
+pub struct SigmoidParams<F: JoltField> {
     /// Folding challenge used to combine multiple checks into one claim.
     pub gamma: F,
     /// Opening point sampled from the output claim of this node.
     pub r_node_output: Vec<F::Challenge>,
     /// Computation node currently being proven.
     pub computation_node: ComputationNode,
-    /// Operator parameters (e.g. fixed-point scale for erf).
-    pub op: Erf,
+    /// Operator parameters (e.g. fixed-point scale for sigmoid).
+    pub op: Sigmoid,
     /// Phantom marker for the field type.
     pub _marker: core::marker::PhantomData<F>,
 }
 
-impl<F: JoltField> ErfParams<F> {
-    /// Build erf parameters from the current accumulator/transcript state.
+impl<F: JoltField> SigmoidParams<F> {
+    /// Build sigmoid parameters from the current accumulator/transcript state.
     ///
     /// This samples a fresh folding challenge and reuses the node-output opening
-    /// point already present in the accumulator, matching the erf flow.
+    /// point already present in the accumulator, matching the sigmoid flow.
     pub fn new(
         computation_node: ComputationNode,
         _graph: &ComputationGraph,
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut impl Transcript,
-        op: Erf,
+        op: Sigmoid,
     ) -> Self {
         let gamma = transcript.challenge_scalar();
         let r_node_output = accumulator
@@ -310,7 +310,7 @@ impl<F: JoltField> ErfParams<F> {
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for ErfParams<F> {
+impl<F: JoltField> SumcheckInstanceParams<F> for SigmoidParams<F> {
     fn degree(&self) -> usize {
         DEGREE_BOUND
     }
@@ -339,26 +339,26 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ErfParams<F> {
     }
 }
 
-/// Prover state for erf activation sumcheck protocol.
+/// Prover state for sigmoid activation sumcheck protocol.
 ///
-/// Implements a Read-Raf sumcheck for Erf lookup:
-/// output[i] = ErfTable[input[i]], where input is encoded via Ra * Int.
-pub struct ErfProver<F: JoltField> {
+/// Implements a Read-Raf sumcheck for Sigmoid lookup:
+/// output[i] = SigmoidTable[input[i]], where input is encoded via Ra * Int.
+pub struct SigmoidProver<F: JoltField> {
     /// Parameters shared across rounds (gamma, node, opening point, op config).
-    pub params: ErfParams<F>,
-    /// Materialized erf lookup table as a multilinear polynomial.
-    pub erf_table: MultilinearPolynomial<F>,
+    pub params: SigmoidParams<F>,
+    /// Materialized sigmoid lookup table as a multilinear polynomial.
+    pub sigmoid_table: MultilinearPolynomial<F>,
     /// One-hot Ra evaluations over lookup indices.
     pub input_onehot: MultilinearPolynomial<F>,
     /// Identity polynomial used for index folding in the lookup relation.
     pub identity: TeleportIdPolynomial<F>,
 }
 
-impl<F: JoltField> ErfProver<F> {
+impl<F: JoltField> SigmoidProver<F> {
     /// Initialize the prover with trace data, parameters, accumulator, and transcript.
     pub fn initialize(
         trace: &Trace,
-        params: ErfParams<F>,
+        params: SigmoidParams<F>,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
@@ -367,7 +367,7 @@ impl<F: JoltField> ErfProver<F> {
 
         let (quotient_tensor, _remainder) = compute_division(input, params.op.tau);
 
-        // Ensure input is within expected range for table size: 2^(log_table_size - 1) <= input < 2^(log_table_size - 1)
+        // Ensure input is within expected range for table size: -2^(log_table_size - 1) <= input < 2^(log_table_size - 1) - 1
         // Inputs outside this range will error
         // TODO: Same as tanh.rs
         assert!(quotient_tensor.iter().all(|&x| {
@@ -376,9 +376,9 @@ impl<F: JoltField> ErfProver<F> {
             x >= lower_bound && x <= upper_bound
         }));
 
-        // Create and materialize the erf lookup table (reduced size)
-        let erf_table = ErfTable::new(params.op.log_table, params.op.tau);
-        let erf_table = MultilinearPolynomial::from(erf_table.materialize());
+        // Create and materialize the sigmoid lookup table (reduced size)
+        let sigmoid_table = SigmoidTable::new(params.op.log_table, params.op.tau);
+        let sigmoid_table = MultilinearPolynomial::from(sigmoid_table.materialize());
 
         // Use the compute_ra_evals in tanh.rs
         let input_onehot: Vec<F> = compute_ra_evals_nbits_2comp(
@@ -399,19 +399,19 @@ impl<F: JoltField> ErfProver<F> {
         );
 
         let input_onehot = MultilinearPolynomial::from(input_onehot);
-        assert_eq!(input_onehot.len(), erf_table.len());
+        assert_eq!(input_onehot.len(), sigmoid_table.len());
         let identity = TeleportIdPolynomial::new(params.op.log_table);
 
         Self {
             params,
-            erf_table,
+            sigmoid_table,
             input_onehot,
             identity,
         }
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> {
+impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SigmoidProver<F> {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
@@ -419,7 +419,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         let Self {
             input_onehot,
-            erf_table,
+            sigmoid_table,
             identity,
             ..
         } = self;
@@ -430,7 +430,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
                 let ra_evals =
                     input_onehot.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
                 let table_evals =
-                    erf_table.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+                    sigmoid_table.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
                 let id_evals = identity.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
 
                 [
@@ -449,7 +449,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
     fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
         self.input_onehot
             .bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.erf_table.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.sigmoid_table
+            .bind_parallel(r_j, BindingOrder::LowToHigh);
         self.identity.bind_parallel(r_j, BindingOrder::LowToHigh);
     }
 
@@ -463,7 +464,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
         let r = [opening_point.r.as_slice(), &self.params.r_node_output].concat();
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::ErfRa(self.params.computation_node.idx),
+            VirtualPolynomial::SigmoidRa(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
             r.into(),
             self.input_onehot.final_sumcheck_claim(),
@@ -471,29 +472,29 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
     }
 }
 
-/// Verifier state for erf activation sumcheck protocol.
+/// Verifier state for sigmoid activation sumcheck protocol.
 ///
-/// Reconstructs the same lookup relation checked by `ErfProver`.
-pub struct ErfVerifier<F: JoltField> {
+/// Reconstructs the same lookup relation checked by `SigmoidProver`.
+pub struct SigmoidVerifier<F: JoltField> {
     /// Parameters shared across rounds (gamma, node, opening point, op config).
-    pub params: ErfParams<F>,
-    /// Materialized erf lookup table used for expected-claim evaluation.
-    pub erf_table: MultilinearPolynomial<F>,
+    pub params: SigmoidParams<F>,
+    /// Materialized sigmoid lookup table used for expected-claim evaluation.
+    pub sigmoid_table: MultilinearPolynomial<F>,
 }
 
-impl<F: JoltField> ErfVerifier<F> {
-    /// Create a verifier instance for erf lookup proof.
+impl<F: JoltField> SigmoidVerifier<F> {
+    /// Create a verifier instance for sigmoid lookup proof.
     ///
     /// Samples verifier-side parameters from transcript/accumulator,
-    /// registers required virtual openings, and materializes the erf table.
+    /// registers required virtual openings, and materializes the sigmoid table.
     pub fn new(
         computation_node: ComputationNode,
         graph: &ComputationGraph,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
-        op: Erf,
+        op: Sigmoid,
     ) -> Self {
-        let params = ErfParams::new(computation_node, graph, accumulator, transcript, op);
+        let params = SigmoidParams::new(computation_node, graph, accumulator, transcript, op);
 
         accumulator.append_virtual(
             transcript,
@@ -502,14 +503,17 @@ impl<F: JoltField> ErfVerifier<F> {
             params.r_node_output.clone().into(),
         );
 
-        let erf_table = ErfTable::new(params.op.log_table, params.op.tau);
-        let erf_table = MultilinearPolynomial::from(erf_table.materialize());
+        let sigmoid_table = SigmoidTable::new(params.op.log_table, params.op.tau);
+        let sigmoid_table = MultilinearPolynomial::from(sigmoid_table.materialize());
 
-        Self { params, erf_table }
+        Self {
+            params,
+            sigmoid_table,
+        }
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ErfVerifier<F> {
+impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SigmoidVerifier<F> {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
@@ -523,13 +527,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ErfVerifier
 
         let ra_claim = accumulator
             .get_virtual_polynomial_opening(
-                VirtualPolynomial::ErfRa(self.params.computation_node.idx),
+                VirtualPolynomial::SigmoidRa(self.params.computation_node.idx),
                 SumcheckId::NodeExecution(self.params.computation_node.idx),
             )
             .1;
 
-        // Evaluate erf table at the opening point
-        let table_claim = self.erf_table.evaluate(&opening_point.r);
+        // Evaluate sigmoid table at the opening point
+        let table_claim = self.sigmoid_table.evaluate(&opening_point.r);
 
         let int_eval =
             TeleportIdPolynomial::new(self.params.op.log_table).evaluate(&opening_point.r);
@@ -547,7 +551,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ErfVerifier
         let r = [opening_point.r.as_slice(), &self.params.r_node_output].concat();
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::ErfRa(self.params.computation_node.idx),
+            VirtualPolynomial::SigmoidRa(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
             r.into(),
         );
@@ -555,22 +559,22 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ErfVerifier
 }
 
 // ---------------------------------------------------------------------------
-// ErfRaEncoding — implements RaOneHotEncoding for Erf's stage-2 one-hot checks
+// SigmoidRaEncoding — implements RaOneHotEncoding for Sigmoid's stage-2 one-hot checks
 // ---------------------------------------------------------------------------
 
-/// Encoding impl for erf one-hot checking.
+/// Encoding impl for sigmoid one-hot checking.
 ///
-/// Used in the stage-2 one-hot checks for erf lookup table accesses.
-pub struct ErfRaEncoding {
+/// Used in the stage-2 one-hot checks for sigmoid lookup table accesses.
+pub struct SigmoidRaEncoding {
     /// Index of the computation node this encoding belongs to.
     pub node_idx: usize,
     /// Log2 of the lookup table size.
     pub log_table: usize,
 }
 
-impl RaOneHotEncoding for ErfRaEncoding {
+impl RaOneHotEncoding for SigmoidRaEncoding {
     fn committed_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::ErfRaD(self.node_idx, d)
+        CommittedPolynomial::SigmoidRaD(self.node_idx, d)
     }
 
     fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
@@ -582,7 +586,7 @@ impl RaOneHotEncoding for ErfRaEncoding {
 
     fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
         (
-            VirtualPolynomial::ErfRa(self.node_idx),
+            VirtualPolynomial::SigmoidRa(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
@@ -606,34 +610,34 @@ mod tests {
     };
     use rand::{rngs::StdRng, SeedableRng};
 
-    fn erf_model(input_shape: &[usize]) -> Model {
+    fn sigmoid_model(input_shape: &[usize]) -> Model {
         let mut b = ModelBuilder::new();
         let i = b.input(input_shape.to_vec());
-        let res = b.erf(i);
+        let res = b.sigmoid(i);
         b.mark_output(res);
         b.build()
     }
 
     #[test]
-    fn test_erf() {
+    fn test_sigmoid() {
         let t = 1 << 14;
         const MIN_INPUT_VALUE: i32 = -(1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1));
         const MAX_INPUT_VALUE: i32 = 1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1);
         let mut rng = StdRng::seed_from_u64(0x889);
         let input = Tensor::random_range(&mut rng, &[t], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
-        let model = erf_model(&[t]);
+        let model = sigmoid_model(&[t]);
         unit_test_op(model, &[input]);
     }
 
     #[test]
-    #[ignore = "TODO: non-power-of-two erf path not fully validated yet"]
-    fn test_erf_non_power_of_two_input_len() {
+    #[ignore = "TODO: non-power-of-two sigmoid path not fully validated yet"]
+    fn test_sigmoid_non_power_of_two_input_len() {
         let t = 1000;
         const MIN_INPUT_VALUE: i32 = -(1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1));
         const MAX_INPUT_VALUE: i32 = 1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1);
         let mut rng = StdRng::seed_from_u64(0x88A);
         let input = Tensor::random_range(&mut rng, &[t], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
-        let model = erf_model(&[t]);
+        let model = sigmoid_model(&[t]);
         unit_test_op(model, &[input]);
     }
 }

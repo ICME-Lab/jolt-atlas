@@ -338,6 +338,16 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 build_teleport_activation_rad_witness(input, inner.tau, inner.log_table, *d_idx)
             }
 
+            CommittedPolynomial::SigmoidRaD(node_idx, d_idx) => {
+                let computation_node = &model.graph.nodes[node_idx];
+                let Operator::Sigmoid(inner) = &computation_node.operator else {
+                    panic!("Expected Sigmoid operator for SigmoidRa committed polynomial");
+                };
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let input = &layer_data.operands[0];
+                build_teleport_activation_rad_witness(input, inner.tau, inner.log_table, *d_idx)
+            }
+
             CommittedPolynomial::CosRaD(node_idx, d_idx)
             | CommittedPolynomial::SinRaD(node_idx, d_idx) => {
                 const COS_LOG_TABLE_SIZE: usize =

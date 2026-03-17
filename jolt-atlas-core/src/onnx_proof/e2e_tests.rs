@@ -650,6 +650,20 @@ fn test_erf() {
 }
 
 #[test]
+fn test_sigmoid() {
+    let working_dir = "../atlas-onnx-tracer/models/sigmoid_encoder/";
+    let mut rng = StdRng::seed_from_u64(0x100);
+    let input = Tensor::random_range(&mut rng, &[1, 4, 16], -(SCALE * 100)..(SCALE * 100));
+
+    prove_and_verify(
+        working_dir,
+        &[input],
+        &Default::default(),
+        TestConfig::new().print_model().print_timing(),
+    );
+}
+
+#[test]
 fn test_positional_encoding_trig() {
     let working_dir = "../atlas-onnx-tracer/models/positional_encoding/";
 

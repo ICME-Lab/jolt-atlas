@@ -336,9 +336,12 @@ impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
         let tau = match &node.operator {
             Operator::Tanh(inner) => inner.tau,
             Operator::Erf(inner) => inner.tau,
+            Operator::Sigmoid(inner) => inner.tau,
             Operator::Cos(_) | Operator::Sin(_) => EIGHT_PI_APPROX,
             _ => {
-                panic!("Expected Tanh, Erf, Cos, or Sin operator for neural teleportation division")
+                panic!(
+                    "Expected Tanh, Erf, Sigmoid, Cos, or Sin operator for neural teleportation division"
+                )
             }
         };
 

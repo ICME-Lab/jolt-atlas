@@ -450,6 +450,7 @@ fn shadow_f64(op: &Operator, inputs: Vec<&Tensor<f64>>, scale: Scale) -> Tensor<
         Operator::SoftmaxAxes(s) => softmax_f64(inputs[0], s.axes),
         Operator::Clamp(_) => inputs[0].clone(), // quantization artifact — identity in f64
         Operator::Erf(_) => elementwise_f64(inputs[0], erf_f64),
+        Operator::Sigmoid(_) => elementwise_f64(inputs[0], |x| 1.0 / (1.0 + (-x).exp())),
         Operator::Tanh(_) => elementwise_f64(inputs[0], |x| (x).tanh()),
         Operator::Rsqrt(_) => {
             elementwise_f64(inputs[0], |x| if x > 0.0 { 1.0 / x.sqrt() } else { 0.0 })

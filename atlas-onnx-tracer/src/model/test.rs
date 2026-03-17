@@ -432,6 +432,24 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    /// Add a sigmoid activation node.
+    pub fn sigmoid(&mut self, input: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&input].output_dims.clone();
+        let tau = 2;
+        let node = ComputationNode::new(
+            id,
+            Operator::Sigmoid(Sigmoid {
+                scale: F32((1 << SCALE) as f32),
+                tau,
+                log_table: NEURAL_TELEPORT_LOG_TABLE_SIZE,
+            }),
+            vec![input],
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
     /// Mark a wire as an output of the model.
     pub fn mark_output(&mut self, wire: Wire) {
         self.outputs.push(wire);

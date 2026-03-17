@@ -9,7 +9,7 @@ use crate::{
     field::JoltField,
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
-        multilinear_polynomial::MultilinearPolynomial,
+        multilinear_polynomial::MultilinearPolynomial, unipoly::UniPoly,
     },
     subprotocols::{
         opening_reduction::{
@@ -54,6 +54,8 @@ where
 {
     pub sumchecks: BTreeMap<CommittedPolynomial, OpeningProofReductionSumcheckProver<F>>,
     pub openings: Openings<F>,
+    /// Mapping from reduced source opening keys to evaluation-reduction line restriction `h`.
+    pub eval_reduction_h_polys: BTreeMap<OpeningId, UniPoly<F>>,
     dense_polynomial_map: HashMap<CommittedPolynomial, Arc<RwLock<SharedDensePolynomial<F>>>>,
     eq_cycle_map: HashMap<Vec<F::Challenge>, Arc<RwLock<EqCycleState<F>>>>,
     #[cfg(any(test, feature = "test-feature"))]
@@ -69,6 +71,8 @@ where
 {
     sumchecks: BTreeMap<CommittedPolynomial, OpeningProofReductionSumcheckVerifier<F>>,
     pub openings: Openings<F>,
+    /// Mapping from reduced source opening keys to evaluation-reduction line restriction `h`.
+    pub eval_reduction_h_polys: BTreeMap<OpeningId, UniPoly<F>>,
     /// In testing, the Jolt verifier may be provided the prover's openings so that we
     /// can detect any places where the openings don't match up.
     #[cfg(any(test, feature = "test-feature"))]
@@ -162,6 +166,7 @@ where
         Self {
             sumchecks: BTreeMap::new(),
             openings: BTreeMap::new(),
+            eval_reduction_h_polys: BTreeMap::new(),
             eq_cycle_map: HashMap::new(),
             dense_polynomial_map: HashMap::new(),
             #[cfg(any(test, feature = "test-feature"))]
@@ -524,6 +529,7 @@ where
         Self {
             sumchecks: BTreeMap::new(),
             openings: BTreeMap::new(),
+            eval_reduction_h_polys: BTreeMap::new(),
             #[cfg(any(test, feature = "test-feature"))]
             prover_opening_accumulator: None,
         }

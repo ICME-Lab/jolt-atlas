@@ -702,7 +702,7 @@ mod tests {
     fn test_from_coeff_all_zeros_is_zero_poly() {
         let poly = UniPoly::<Fr>::from_coeff(vec![Fr::zero(), Fr::zero(), Fr::zero()]);
         assert!(poly.is_zero());
-        assert!(poly.coeffs.is_empty());
+        assert_eq!(poly.coeffs, vec![Fr::zero()]);
     }
 
     #[test]

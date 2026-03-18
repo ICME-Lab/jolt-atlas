@@ -25,11 +25,13 @@ use joltworks::{
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{Opening, OpeningId, ProverOpeningAccumulator, SumcheckId},
+        opening_proof::{ProverOpeningAccumulator, SumcheckId},
         rlc_polynomial::build_materialized_rlc,
     },
-    subprotocols::evaluation_reduction::{EvalReductionInstance, EvalReductionWitness},
-    subprotocols::sumcheck::SumcheckInstanceProof,
+    subprotocols::{
+        evaluation_reduction::{EvalReductionProof, EvalReductionProtocol},
+        sumcheck::SumcheckInstanceProof,
+    },
     transcripts::Transcript,
     utils::math::Math,
 };
@@ -61,61 +63,6 @@ impl<F: JoltField, T: Transcript> Prover<F, T> {
             accumulator: ProverOpeningAccumulator::new(),
             transcript: T::new(b"ONNXProof"),
         }
-    }
-
-    /// Reduce dual NodeOutput openings for a producer node before proving that node.
-    ///
-    /// This is the first integration step for PAZK 4.5.2 (2-to-1 only).
-    pub(super) fn perform_eval_reduction(&mut self, computation_node: &ComputationNode) {
-        let producer_idx = computation_node.idx;
-        let lo = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(producer_idx),
-            SumcheckId::NodeExecution(producer_idx + 1),
-        );
-        let hi = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(producer_idx),
-            SumcheckId::NodeExecution(usize::MAX),
-        );
-
-        let entries: Vec<(OpeningId, Opening<F>)> = self
-            .accumulator
-            .openings
-            .range(lo..=hi)
-            .map(|(k, v)| (*k, v.clone()))
-            .collect();
-
-        if entries.len() < 2 {
-            return;
-        }
-
-        // Current scope is strictly 2-to-1 reduction.
-        if entries.len() != 2 {
-            // TODO(#138): Extend to iterative n-to-1 reduction when fanout > 2.
-            return;
-        }
-
-        let (key1, opening1) = entries[0].clone();
-        let (key2, opening2) = entries[1].clone();
-
-        let output = Trace::layer_data(&self.trace, computation_node).output;
-        let witness = EvalReductionWitness::from_tensor(output);
-
-        let instance = EvalReductionInstance::new(&opening1, &opening2)
-            .expect("evaluation reduction instance should be constructible for matching openings");
-        let (proof, _reduced) = instance
-            .prove(&witness, &mut self.transcript)
-            .expect("evaluation reduction should succeed for consistent node output openings");
-
-        // NOTE: We only record reduction artifacts in this first integration step.
-        // Applying the reduced opening point back into accumulator openings is deferred
-        // because reduced points live in the base field, while opening points are stored
-        // in challenge representation for the default challenge type.
-
-        let h = proof.h;
-        self.accumulator
-            .eval_reduction_h_polys
-            .insert(key1, h.clone());
-        self.accumulator.eval_reduction_h_polys.insert(key2, h);
     }
 }
 
@@ -182,13 +129,14 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         computation_nodes: &BTreeMap<usize, ComputationNode>,
         prover: &mut Prover<F, T>,
         proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+        eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
     ) {
-        for (_, computation_node) in computation_nodes.iter().rev() {
+        for (_, node) in computation_nodes.iter().rev() {
             // Before each node is proven,
             // perform eval reduction to reduce openings to a unique claim for the node output.
+            // eval_reduction_proofs.insert(node.idx, EvalReductionProver::prove(prover, node));
 
-            // prover.perform_eval_reduction(computation_node);
-            proofs.extend(OperatorProver::prove(computation_node, prover));
+            proofs.extend(OperatorProver::prove(node, prover));
         }
     }
 
@@ -236,6 +184,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         io: ModelExecutionIO,
         commitments: Vec<PCS::Commitment>,
         proofs: BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+        eval_reduction_proofs: BTreeMap<usize, EvalReductionProof<F>>,
         reduced_opening_proof: Option<ReducedOpeningProof<F, T, PCS>>,
     ) -> (Self, ModelExecutionIO, Option<ProverDebugInfo<F, T>>) {
         #[cfg(test)]
@@ -245,14 +194,13 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         });
         #[cfg(not(test))]
         let debug_info = None;
-        let eval_reduction_h_polys = std::mem::take(&mut prover.accumulator.eval_reduction_h_polys);
         let opening_claims = prover.accumulator.take();
         (
             Self {
                 proofs,
                 opening_claims: Claims(opening_claims),
                 commitments,
-                eval_reduction_h_polys,
+                eval_reduction_proofs,
                 reduced_opening_proof,
             },
             io,
@@ -286,5 +234,108 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             .values()
             .map(|poly| PCS::commit(poly, pcs).0)
             .collect()
+    }
+}
+
+struct EvalReductionProver;
+
+impl EvalReductionProver {
+    /// Reduce dual NodeOutput openings for a producer node before proving that node.
+    ///
+    /// This is the first integration step for PAZK 4.5.2 (2-to-1 only).
+    pub(super) fn prove<F: JoltField, T: Transcript>(
+        prover: &mut Prover<F, T>,
+        computation_node: &ComputationNode,
+    ) -> EvalReductionProof<F> {
+        let node_idx = computation_node.idx;
+        let openings = &prover.accumulator.openings;
+
+        let LayerData {
+            operands: _,
+            output,
+        } = Trace::layer_data(&prover.trace, computation_node);
+        let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
+
+        let (proof, reduced) =
+            EvalReductionProtocol::prove(openings, output_mle, node_idx, &mut prover.transcript)
+                .unwrap();
+
+        prover
+            .accumulator
+            .reduced_evaluations
+            .insert(node_idx, reduced);
+
+        proof
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::onnx_proof::AtlasSharedPreprocessing;
+    use ark_bn254::Fr;
+    use atlas_onnx_tracer::{
+        model::Model,
+        ops::{Add, Operator},
+        tensor::Tensor,
+    };
+    use common::VirtualPolynomial;
+    use joltworks::{
+        poly::{
+            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+            opening_proof::{OpeningPoint, SumcheckId},
+        },
+        transcripts::Blake2bTranscript,
+    };
+
+    #[test]
+    fn eval_reduction_adds_reduced_evaluations() {
+        let n = 1 << 3; // 8 points, i.e. 3 variables
+        let output: Tensor<i32> = Tensor::construct((0..n).map(|n| n as i32).collect(), vec![n]);
+        let model = Model::default();
+        let producer_idx = 0;
+        let consumer1 = 1;
+        let consumer2 = 2;
+
+        let preprocessing = AtlasSharedPreprocessing::preprocess(model);
+        let mut trace = preprocessing.model().trace(&[]);
+        trace.node_outputs.insert(0, output.clone());
+        let mut prover = Prover::<Fr, Blake2bTranscript>::new(preprocessing, trace);
+
+        let producer_node = ComputationNode::new(0, Operator::Add(Add), vec![], vec![n]);
+
+        let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
+        let num_vars = output_mle.get_num_vars();
+
+        let point1 = prover.transcript.challenge_vector_optimized::<Fr>(num_vars);
+        let point2 = prover.transcript.challenge_vector_optimized::<Fr>(num_vars);
+        let claim1 = output_mle.evaluate(&point1);
+        let claim2 = output_mle.evaluate(&point2);
+
+        prover.accumulator.append_virtual(
+            &mut prover.transcript,
+            VirtualPolynomial::NodeOutput(producer_idx),
+            SumcheckId::NodeExecution(consumer1),
+            OpeningPoint::new(point1),
+            claim1,
+        );
+        prover.accumulator.append_virtual(
+            &mut prover.transcript,
+            VirtualPolynomial::NodeOutput(producer_idx),
+            SumcheckId::NodeExecution(consumer2),
+            OpeningPoint::new(point2),
+            claim2,
+        );
+
+        let _ = EvalReductionProver::prove(&mut prover, &producer_node);
+
+        let entries: Vec<_> = prover.accumulator.get_node_openings(producer_idx);
+
+        // We only seed two per-consumer openings and run eval-reduction proving.
+        assert_eq!(entries.len(), 2);
+        assert!(prover
+            .accumulator
+            .reduced_evaluations
+            .contains_key(&producer_idx));
     }
 }

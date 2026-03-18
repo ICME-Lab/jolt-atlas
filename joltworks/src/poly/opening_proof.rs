@@ -9,9 +9,10 @@ use crate::{
     field::JoltField,
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
-        multilinear_polynomial::MultilinearPolynomial, unipoly::UniPoly,
+        multilinear_polynomial::MultilinearPolynomial,
     },
     subprotocols::{
+        evaluation_reduction::ReducedInstance,
         opening_reduction::{
             EqAddressState, EqCycleState, OpeningProofReductionSumcheckProver,
             OpeningProofReductionSumcheckVerifier, ProverOpening, SharedDensePolynomial,
@@ -55,7 +56,7 @@ where
     pub sumchecks: BTreeMap<CommittedPolynomial, OpeningProofReductionSumcheckProver<F>>,
     pub openings: Openings<F>,
     /// Mapping from reduced source opening keys to evaluation-reduction line restriction `h`.
-    pub eval_reduction_h_polys: BTreeMap<OpeningId, UniPoly<F>>,
+    pub reduced_evaluations: BTreeMap<usize, ReducedInstance<F>>,
     dense_polynomial_map: HashMap<CommittedPolynomial, Arc<RwLock<SharedDensePolynomial<F>>>>,
     eq_cycle_map: HashMap<Vec<F::Challenge>, Arc<RwLock<EqCycleState<F>>>>,
     #[cfg(any(test, feature = "test-feature"))]
@@ -71,8 +72,8 @@ where
 {
     sumchecks: BTreeMap<CommittedPolynomial, OpeningProofReductionSumcheckVerifier<F>>,
     pub openings: Openings<F>,
-    /// Mapping from reduced source opening keys to evaluation-reduction line restriction `h`.
-    pub eval_reduction_h_polys: BTreeMap<OpeningId, UniPoly<F>>,
+    /// Mapping for nodes reduced opening points
+    pub reduced_evaluations: BTreeMap<usize, ReducedInstance<F>>,
     /// In testing, the Jolt verifier may be provided the prover's openings so that we
     /// can detect any places where the openings don't match up.
     #[cfg(any(test, feature = "test-feature"))]
@@ -139,22 +140,10 @@ impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
         // Scan for any NodeExecution(_) entry for this node's NodeOutput.
         // TODO(#138): `.next()` returns the entry with the smallest consumer index;
         // the remaining entries are never verified. See trait-level doc comment.
-        let lo = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(node_idx),
-            // Only consider openings for consumer indices greater than node index,
-            // since output is only consumed by later nodes
-            SumcheckId::NodeExecution(node_idx + 1),
-        );
-        let hi = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(node_idx),
-            SumcheckId::NodeExecution(usize::MAX),
-        );
-        let (_, (point, claim)) = self
-            .openings
-            .range(lo..=hi)
-            .next()
-            .unwrap_or_else(|| panic!("No NodeOutput opening found for node {node_idx}"));
-        (point.clone(), *claim)
+
+        let node_openings = self.get_node_openings(node_idx);
+
+        node_openings[0].clone()
     }
 }
 
@@ -166,7 +155,7 @@ where
         Self {
             sumchecks: BTreeMap::new(),
             openings: BTreeMap::new(),
-            eval_reduction_h_polys: BTreeMap::new(),
+            reduced_evaluations: BTreeMap::new(),
             eq_cycle_map: HashMap::new(),
             dense_polynomial_map: HashMap::new(),
             #[cfg(any(test, feature = "test-feature"))]
@@ -191,6 +180,24 @@ where
             .get(&key)
             .unwrap_or_else(|| panic!("opening should exist for {key:?}"))
             .1
+    }
+
+    pub fn get_node_openings(&self, node_idx: usize) -> Vec<Opening<F>> {
+        let lo = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(node_idx),
+            // Only consider openings for consumer indices greater than node index,
+            // since output is only consumed by later nodes
+            SumcheckId::NodeExecution(node_idx + 1),
+        );
+        let hi = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(node_idx),
+            SumcheckId::NodeExecution(usize::MAX),
+        );
+
+        self.openings
+            .range(lo..=hi)
+            .map(|(_, opening)| opening.clone())
+            .collect()
     }
 
     /// Adds an opening of a dense polynomial to the accumulator.
@@ -502,22 +509,9 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         // Scan for any NodeExecution(_) entry for this node's NodeOutput.
         // TODO(#138): `.next()` returns the entry with the smallest consumer index;
         // the remaining entries are never verified. See trait-level doc comment.
-        let lo = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(node_idx),
-            // Only consider openings for consumer indices greater than node index,
-            // since output is only consumed by later nodes
-            SumcheckId::NodeExecution(node_idx + 1),
-        );
-        let hi = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(node_idx),
-            SumcheckId::NodeExecution(usize::MAX),
-        );
-        let (_, (point, claim)) = self
-            .openings
-            .range(lo..=hi)
-            .next()
-            .unwrap_or_else(|| panic!("No NodeOutput opening found for node {node_idx}"));
-        (point.clone(), *claim)
+        let node_openings = self.get_node_openings(node_idx);
+
+        node_openings[0].clone()
     }
 }
 
@@ -529,7 +523,7 @@ where
         Self {
             sumchecks: BTreeMap::new(),
             openings: BTreeMap::new(),
-            eval_reduction_h_polys: BTreeMap::new(),
+            reduced_evaluations: BTreeMap::new(),
             #[cfg(any(test, feature = "test-feature"))]
             prover_opening_accumulator: None,
         }
@@ -543,6 +537,23 @@ where
             SumcheckId::NodeExecution(consumer_idx),
         )
         .1
+    }
+
+    pub fn get_node_openings(&self, node_idx: usize) -> Vec<Opening<F>> {
+        let lo = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(node_idx),
+            // Only consider openings for consumer indices greater than node index,
+            // since output is only consumed by later nodes
+            SumcheckId::NodeExecution(node_idx + 1),
+        );
+        let hi = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(node_idx),
+            SumcheckId::NodeExecution(usize::MAX),
+        );
+        self.openings
+            .range(lo..=hi)
+            .map(|(_, opening)| opening.clone())
+            .collect()
     }
 
     /// Compare this accumulator to the corresponding `ProverOpeningAccumulator` and panic

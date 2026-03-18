@@ -79,6 +79,8 @@ impl MaliciousONNXProof {
             io,
             commitments,
             proofs,
+            // TODO(AntoineF4C5): re-implement
+            BTreeMap::new(),
             reduced_opening_proof,
         )
     }
@@ -115,6 +117,7 @@ impl MaliciousONNXProof {
             io,
             commitments,
             proofs,
+            BTreeMap::new(),
             reduced_opening_proof,
         )
     }

@@ -16,7 +16,9 @@ use std::iter::zip;
 use crate::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::MultilinearPolynomial, opening_proof::Opening, unipoly::UniPoly,
+        multilinear_polynomial::MultilinearPolynomial,
+        opening_proof::{Opening, OpeningId, Openings, SumcheckId},
+        unipoly::UniPoly,
     },
     transcripts::{AppendToTranscript, Transcript},
     utils::errors::ProofVerifyError,
@@ -24,6 +26,7 @@ use crate::{
 use allocative::Allocative;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use atlas_onnx_tracer::tensor::Tensor;
+use common::VirtualPolynomial;
 
 /// Public instance for one 2-to-1 evaluation reduction round.
 #[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
@@ -167,8 +170,7 @@ fn compute_l<F: JoltField>(r1: &[F], r2_sub_r1: &[F], x: F) -> Vec<F> {
     }
 
     // l(x) = r1 + x * (r2 - r1)
-    r1.iter()
-        .zip(r2_sub_r1.iter())
+    zip(r1, r2_sub_r1)
         .map(|(r1_i, delta_i)| *r1_i + x * *delta_i)
         .collect()
 }
@@ -200,6 +202,102 @@ fn compute_h<F: JoltField>(
     }
 
     std::mem::take(&mut mle_polys[0])
+}
+
+pub struct EvalReductionProtocol;
+
+impl EvalReductionProtocol {
+    pub fn prove<F: JoltField, T: Transcript>(
+        openings: &Openings<F>,
+        output_mle: MultilinearPolynomial<F>,
+        idx: usize,
+        transcript: &mut T,
+    ) -> Result<(EvalReductionProof<F>, ReducedInstance<F>), ProofVerifyError> {
+        let lo = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(idx),
+            SumcheckId::NodeExecution(idx + 1),
+        );
+        let hi = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(idx),
+            SumcheckId::NodeExecution(usize::MAX),
+        );
+
+        let entries: Vec<(OpeningId, Opening<F>)> = openings
+            .range(lo..=hi)
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+
+        if entries.len() < 2 {
+            return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                "should be at least 2 openings for eval reduction, found {}",
+                entries.len()
+            )));
+        }
+
+        // Current scope is strictly 2-to-1 reduction.
+        if entries.len() != 2 {
+            // TODO(#138): Extend to iterative n-to-1 reduction when fanout > 2.
+            return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                "more than 2 openings found for eval reduction; n-to-1 reduction not yet implemented, found {}",
+                entries.len()
+            )));
+        }
+
+        let opening1 = entries[0].clone().1;
+        let opening2 = entries[1].clone().1;
+
+        let witness = EvalReductionWitness::new(output_mle);
+
+        let instance = EvalReductionInstance::new(&opening1, &opening2)
+            .expect("evaluation reduction instance should be constructible for matching openings");
+
+        instance.prove(&witness, transcript)
+    }
+
+    pub fn verify<F: JoltField, T: Transcript>(
+        openings: &Openings<F>,
+        proof: &EvalReductionProof<F>,
+        idx: usize,
+        transcript: &mut T,
+    ) -> Result<ReducedInstance<F>, ProofVerifyError> {
+        let lo = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(idx),
+            SumcheckId::NodeExecution(idx + 1),
+        );
+        let hi = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(idx),
+            SumcheckId::NodeExecution(usize::MAX),
+        );
+
+        let entries: Vec<(OpeningId, Opening<F>)> = openings
+            .range(lo..=hi)
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+
+        if entries.len() < 2 {
+            return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                "should be at least 2 openings for eval reduction, found {}",
+                entries.len()
+            )));
+        }
+
+        // Current scope is strictly 2-to-1 reduction.
+        if entries.len() != 2 {
+            // TODO(#138): Extend to iterative n-to-1 reduction when fanout > 2.
+            return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                "more than 2 openings found for eval reduction; n-to-1 reduction not yet implemented, found {}",
+                entries.len()
+            )));
+        }
+
+        let opening1 = entries[0].clone().1;
+        let opening2 = entries[1].clone().1;
+
+        let instance = EvalReductionInstance::new(&opening1, &opening2)
+            .expect("evaluation reduction instance should be constructible for matching openings");
+
+        instance.verify(proof, transcript)
+    }
 }
 
 #[cfg(test)]

@@ -221,7 +221,7 @@ where
             .serialize_with_mode(&mut writer, compress)?;
 
         // 4. In-IOP evaluation reduction artifacts
-        serialize_btreemap(&self.eval_reduction_h_polys, &mut writer, compress)?;
+        serialize_btreemap(&self.eval_reduction_proofs, &mut writer, compress)?;
 
         // 5. Reduced opening proof (Option)
         self.reduced_opening_proof
@@ -234,7 +234,7 @@ where
         self.opening_claims.serialized_size(compress)
             + serialized_size_btreemap(&self.proofs, compress)
             + self.commitments.serialized_size(compress)
-            + serialized_size_btreemap(&self.eval_reduction_h_polys, compress)
+            + serialized_size_btreemap(&self.eval_reduction_proofs, compress)
             + self.reduced_opening_proof.serialized_size(compress)
     }
 }
@@ -271,7 +271,7 @@ where
             opening_claims,
             proofs,
             commitments,
-            eval_reduction_h_polys,
+            eval_reduction_proofs: eval_reduction_h_polys,
             reduced_opening_proof,
         })
     }

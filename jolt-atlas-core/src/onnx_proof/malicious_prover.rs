@@ -79,6 +79,8 @@ impl MaliciousONNXProof {
             io,
             commitments,
             proofs,
+            // TODO(AntoineF4C5): re-implement
+            BTreeMap::new(),
             reduced_opening_proof,
         )
     }
@@ -115,6 +117,7 @@ impl MaliciousONNXProof {
             io,
             commitments,
             proofs,
+            BTreeMap::new(),
             reduced_opening_proof,
         )
     }
@@ -142,6 +145,7 @@ impl MaliciousONNXProof {
         proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
     ) {
         for (_, computation_node) in computation_nodes.iter().rev() {
+            // prover.perform_eval_reduction(computation_node);
             if matches!(computation_node.operator, Operator::Sub(_)) {
                 proofs.extend(malicious_sub_prove(computation_node, prover));
             } else {

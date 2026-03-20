@@ -7,7 +7,7 @@ use atlas_onnx_tracer::tensor::ops::nonlinearities::{
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         identity_poly::IdentityPolynomial,
@@ -35,7 +35,7 @@ const READ_RAF_DEGREE_BOUND: usize = 2;
 /// Shared prover/verifier parameters for Shout.
 #[derive(Clone)]
 pub struct ReadRafParams<F: JoltField> {
-    r_exponentiation_output: Vec<F::Challenge>,
+    r_exponentiation_output: OpeningPoint<BIG_ENDIAN, F>,
     softmax_index: SoftmaxIndex,
     gamma: F,
 }
@@ -59,7 +59,7 @@ impl<F: JoltField> ReadRafParams<F> {
             .0
             .r;
         Self {
-            r_exponentiation_output,
+            r_exponentiation_output: r_exponentiation_output.into(),
             softmax_index,
             gamma,
         }
@@ -89,7 +89,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReadRafParams<F> {
         read_checking_claim + self.gamma * raf_checking_claim
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
@@ -116,7 +116,7 @@ impl<F: JoltField> ReadRafProver<F> {
     ) -> Self {
         // Add raf claim and implicitly sub claim
         let raf_claim = MultilinearPolynomial::from(trace.abs_centered_logits.to_vec())
-            .evaluate(&params.r_exponentiation_output);
+            .evaluate(&params.r_exponentiation_output.r);
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SoftmaxAbsCenteredLogitsOutput(
@@ -124,11 +124,11 @@ impl<F: JoltField> ReadRafProver<F> {
                 params.softmax_index.feature_idx,
             ),
             SumcheckId::NodeExecution(params.softmax_index.node_idx),
-            params.r_exponentiation_output.clone().into(),
+            params.r_exponentiation_output.clone(),
             raf_claim,
         );
 
-        let E = EqPolynomial::evals(&params.r_exponentiation_output);
+        let e = EqPolynomial::evals(&params.r_exponentiation_output.r);
         let lookup_indices = &trace.abs_centered_logits;
         let F = lookup_indices
             .data()
@@ -137,7 +137,7 @@ impl<F: JoltField> ReadRafProver<F> {
             .fold(
                 || unsafe_allocate_zero_vec::<F>(EXP_LUT_SIZE),
                 |mut local_F, (j, &lookup_index)| {
-                    local_F[lookup_index as usize] += E[j];
+                    local_F[lookup_index as usize] += e[j];
                     local_F
                 },
             )
@@ -200,9 +200,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReadRafProver
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let sumcheck_opening = sumcheck_challenges.into_opening();
         let opening_point = [
-            sumcheck_challenges,
-            self.params.r_exponentiation_output.as_slice(),
+            sumcheck_opening.as_slice(),
+            self.params.r_exponentiation_output.r.as_slice(),
         ]
         .concat();
         accumulator.append_virtual(
@@ -238,7 +239,7 @@ impl<F: JoltField> ReadRafVerifier<F> {
                 params.softmax_index.feature_idx,
             ),
             SumcheckId::NodeExecution(params.softmax_index.node_idx),
-            params.r_exponentiation_output.clone().into(),
+            params.r_exponentiation_output.clone(),
         );
         Self { params }
     }
@@ -263,9 +264,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReadRafVeri
                 SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
             )
             .1;
-        let val_claim =
-            MultilinearPolynomial::from(EXP_LUT_SCALE_128.to_vec()).evaluate(sumcheck_challenges);
-        let int_claim = IdentityPolynomial::new(LOG_EXP_LUT_SIZE).evaluate(sumcheck_challenges);
+        let sumcheck_opening = sumcheck_challenges.into_opening();
+        let val_claim = MultilinearPolynomial::from(EXP_LUT_SCALE_128.to_vec())
+            .evaluate(&sumcheck_opening);
+        let int_claim = IdentityPolynomial::new(LOG_EXP_LUT_SIZE).evaluate(&sumcheck_opening);
         ra_claim * (val_claim + self.params.gamma * int_claim)
     }
 
@@ -275,9 +277,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReadRafVeri
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let sumcheck_opening = sumcheck_challenges.into_opening();
         let opening_point = [
-            sumcheck_challenges,
-            self.params.r_exponentiation_output.as_slice(),
+            sumcheck_opening.as_slice(),
+            self.params.r_exponentiation_output.r.as_slice(),
         ]
         .concat();
         accumulator.append_virtual(

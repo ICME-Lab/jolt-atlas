@@ -4,7 +4,7 @@ use atlas_onnx_tracer::{
 };
 use common::VirtualPolynomial;
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
@@ -30,7 +30,7 @@ const DEGREE_BOUND: usize = 1;
 /// Parameters for proving sum operations along an axis.
 #[derive(Clone)]
 pub struct SumAxisParams<F: JoltField> {
-    r_node_output: Vec<F::Challenge>,
+    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
     sum_config: SumConfig,
 }
@@ -47,7 +47,7 @@ impl<F: JoltField> SumAxisParams<F> {
             .0
             .r;
         Self {
-            r_node_output,
+            r_node_output: r_node_output.into(),
             computation_node,
             sum_config,
         }
@@ -64,7 +64,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SumAxisParams<F> {
         sum_claim
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::new(challenges.to_vec())
     }
 
@@ -102,8 +102,8 @@ impl<F: JoltField> SumAxisProver<F> {
 
         let operand: Vec<F> = match params.sum_config.axis() {
             SumAxis::Axis0 => {
-                debug_assert_eq!(n.log_2(), params.r_node_output.len());
-                let eq_r_node_output = EqPolynomial::evals(&params.r_node_output);
+                debug_assert_eq!(n.log_2(), params.r_node_output.r.len());
+                let eq_r_node_output = EqPolynomial::evals(&params.r_node_output.r);
                 (0..m)
                     .into_par_iter()
                     .map(|h| {
@@ -114,8 +114,8 @@ impl<F: JoltField> SumAxisProver<F> {
                     .collect()
             }
             SumAxis::Axis1 => {
-                debug_assert_eq!(m.log_2(), params.r_node_output.len());
-                let eq_r_node_output = EqPolynomial::evals(&params.r_node_output);
+                debug_assert_eq!(m.log_2(), params.r_node_output.r.len());
+                let eq_r_node_output = EqPolynomial::evals(&params.r_node_output.r);
                 (0..n)
                     .into_par_iter()
                     .map(|j| {
@@ -164,9 +164,18 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SumAxisProver
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let sumcheck_challenges = sumcheck_challenges.into_opening();
         let opening_point = match self.params.sum_config.axis() {
-            SumAxis::Axis0 => [sumcheck_challenges, &self.params.r_node_output].concat(),
-            SumAxis::Axis1 => [&self.params.r_node_output, sumcheck_challenges].concat(),
+            SumAxis::Axis0 => [
+                sumcheck_challenges.as_slice(),
+                self.params.r_node_output.r.as_slice(),
+            ]
+            .concat(),
+            SumAxis::Axis1 => [
+                self.params.r_node_output.r.as_slice(),
+                sumcheck_challenges.as_slice(),
+            ]
+            .concat(),
         };
         accumulator.append_virtual(
             transcript,
@@ -217,9 +226,18 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVeri
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let sumcheck_challenges = sumcheck_challenges.into_opening();
         let opening_point = match self.params.sum_config.axis() {
-            SumAxis::Axis0 => [sumcheck_challenges, &self.params.r_node_output].concat(),
-            SumAxis::Axis1 => [&self.params.r_node_output, sumcheck_challenges].concat(),
+            SumAxis::Axis0 => [
+                sumcheck_challenges.as_slice(),
+                self.params.r_node_output.r.as_slice(),
+            ]
+            .concat(),
+            SumAxis::Axis1 => [
+                self.params.r_node_output.r.as_slice(),
+                sumcheck_challenges.as_slice(),
+            ]
+            .concat(),
         };
         accumulator.append_virtual(
             transcript,

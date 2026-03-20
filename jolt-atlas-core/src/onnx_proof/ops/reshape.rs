@@ -28,7 +28,7 @@ use atlas_onnx_tracer::{
 };
 use common::VirtualPolynomial;
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
@@ -161,7 +161,7 @@ pub struct ReshapeSumcheckParams<F: JoltField> {
     /// Reshape computation node being proven.
     pub computation_node: ComputationNode,
     /// Output opening point challenge vector for this node.
-    pub r_output: Vec<F::Challenge>,
+    pub r_output: OpeningPoint<BIG_ENDIAN, F>,
     /// Original (unpadded) input shape used to build selector `Sa`.
     pub input_raw_dims: Vec<usize>,
     /// Original (unpadded) output shape used to build selector `Sb`.
@@ -191,7 +191,7 @@ impl<F: JoltField> ReshapeSumcheckParams<F> {
         let output_raw_dims = computation_node.output_dims.clone();
         Self {
             computation_node,
-            r_output,
+            r_output: r_output.into(),
             input_raw_dims,
             output_raw_dims,
             gamma,
@@ -208,7 +208,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeSumcheckParams<F> {
         F::zero()
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
@@ -306,7 +306,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReshapeSumche
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
@@ -353,7 +355,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumc
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let r_node_output_prime = self.params.normalize_opening_point(sumcheck_challenges).r;
+        let r_node_output_prime = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
 
         let input_claim = accumulator.get_node_output_claim(
             self.params.computation_node.inputs[0],
@@ -380,7 +385,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumc
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),

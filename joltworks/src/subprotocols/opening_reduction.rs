@@ -37,6 +37,7 @@ use rayon::prelude::*;
 use std::{
     collections::{BTreeMap, HashMap},
     mem,
+    ops::Mul,
     sync::{Arc, RwLock},
 };
 
@@ -62,13 +63,16 @@ impl<F> OpeningProofReductionSumcheckProver<F>
 where
     F: JoltField,
 {
-    pub fn new_dense(
+    pub fn new_dense<U>(
         polynomial: CommittedPolynomial,
         sumcheck_id: SumcheckId,
         eq_poly: Arc<RwLock<EqCycleState<F>>>,
-        opening_point: Vec<F::Challenge>,
+        opening_point: Vec<U>,
         claim: F,
-    ) -> Self {
+    ) -> Self
+    where
+        U: Copy + Send + Sync + Into<F>,
+    {
         let opening = DensePolynomialProverOpening {
             polynomial: None, // Defer initialization until opening proof reduction sumcheck
             eq_poly,
@@ -82,14 +86,17 @@ where
         }
     }
 
-    pub fn new_one_hot(
+    pub fn new_one_hot<U>(
         polynomial: CommittedPolynomial,
         sumcheck_id: SumcheckId,
         eq_address: Arc<RwLock<EqAddressState<F>>>,
         eq_cycle: Arc<RwLock<EqCycleState<F>>>,
-        opening_point: Vec<F::Challenge>,
+        opening_point: Vec<U>,
         claim: F,
-    ) -> Self {
+    ) -> Self
+    where
+        U: Copy + Send + Sync + Into<F>,
+    {
         let opening = OneHotPolynomialProverOpening::new(eq_address, eq_cycle);
         Self {
             polynomial,
@@ -171,10 +178,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for Opening<F> {
         self.1
     }
 
-    fn normalize_opening_point(
-        &self,
-        _: &[<F as JoltField>::Challenge],
-    ) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, _: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         unimplemented!("Unused")
     }
 }
@@ -228,11 +232,10 @@ where
 }
 
 impl<F: JoltField> OpeningProofReductionSumcheckVerifier<F> {
-    pub fn new(
-        polynomial: CommittedPolynomial,
-        opening_point: Vec<F::Challenge>,
-        input_claim: F,
-    ) -> Self {
+    pub fn new<U>(polynomial: CommittedPolynomial, opening_point: Vec<U>, input_claim: F) -> Self
+    where
+        U: Copy + Send + Sync + Into<F>,
+    {
         Self {
             polynomial,
             opening: (opening_point.into(), input_claim),
@@ -405,7 +408,11 @@ pub struct EqCycleState<F: JoltField> {
 
 impl<F: JoltField> EqAddressState<F> {
     #[tracing::instrument(skip_all, name = "EqAddressState::new")]
-    pub fn new(r_address: &[F::Challenge]) -> Self {
+    pub fn new<U>(r_address: &[U]) -> Self
+    where
+        U: Copy + Send + Sync + Into<F>,
+        F: Mul<U, Output = F>,
+    {
         let K = 1 << r_address.len();
         // F will maintain an array that, at the end of sumcheck round m, has size 2^m
         // and stores all 2^m values eq((k_1, ..., k_m), (r_1, ..., r_m))
@@ -422,7 +429,11 @@ impl<F: JoltField> EqAddressState<F> {
 
 impl<F: JoltField> EqCycleState<F> {
     #[tracing::instrument(skip_all, name = "EqCycleState::new")]
-    pub fn new(r_cycle: &[F::Challenge]) -> Self {
+    pub fn new<U>(r_cycle: &[U]) -> Self
+    where
+        U: Copy + Send + Sync + Into<F>,
+        F: Mul<U, Output = F>,
+    {
         let D = GruenSplitEqPolynomial::new(r_cycle, BindingOrder::HighToLow);
         Self {
             D,
@@ -769,7 +780,7 @@ mod tests {
             VerifierOpeningAccumulator::new();
         // Take claims
         for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new::<Fr>(vec![]);
             verifier_opening_accumulator
                 .openings
                 .insert(*key, (empty_point, *value));
@@ -970,7 +981,7 @@ mod tests {
             VerifierOpeningAccumulator::new();
         // Take claims
         for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new::<Fr>(vec![]);
             verifier_opening_accumulator
                 .openings
                 .insert(*key, (empty_point, *value));
@@ -1184,7 +1195,7 @@ mod tests {
             VerifierOpeningAccumulator::new();
         // Take claims
         for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new::<Fr>(vec![]);
             verifier_opening_accumulator
                 .openings
                 .insert(*key, (empty_point, *value));

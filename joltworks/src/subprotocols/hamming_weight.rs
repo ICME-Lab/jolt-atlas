@@ -7,7 +7,7 @@ use rayon::prelude::*;
 use std::iter::zip;
 
 use crate::{
-    field::{JoltField, MulTrunc},
+    field::{IntoOpening, JoltField, MulTrunc},
     poly::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
@@ -32,7 +32,7 @@ pub struct HammingWeightSumcheckParams<F: JoltField> {
     pub gamma_powers: Vec<F>,
     pub polynomial_types: Vec<CommittedPolynomial>,
     pub sumcheck_id: SumcheckId,
-    pub r_cycle: Vec<F::Challenge>,
+    pub r_cycle: Vec<F>,
 }
 
 impl<F: JoltField> SumcheckInstanceParams<F> for HammingWeightSumcheckParams<F> {
@@ -56,10 +56,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for HammingWeightSumcheckParams<F> 
         DEGREE_BOUND
     }
 
-    fn normalize_opening_point(
-        &self,
-        challenges: &[<F as JoltField>::Challenge],
-    ) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 }
@@ -118,7 +115,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for HammingWeight
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         let claims: Vec<F> = self.ra.iter().map(|ra| ra.final_sumcheck_claim()).collect();
 
         accumulator.append_sparse(
@@ -182,7 +181,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
     ) {
         let r = self
             .params
-            .normalize_opening_point(sumcheck_challenges)
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r
             .iter()
             .cloned()

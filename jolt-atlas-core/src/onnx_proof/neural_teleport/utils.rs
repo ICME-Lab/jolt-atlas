@@ -20,7 +20,7 @@ use rayon::{
 /// This variant is used by trigonometric teleportation ops (`cos` and `sin`),
 /// where inputs are remainders already in `[0, table_size)`.
 pub fn compute_ra_evals_direct<F>(
-    r: &[F::Challenge],
+    r: &[F],
     indexes: &Tensor<i32>,
     table_size: usize,
 ) -> Vec<F>
@@ -39,7 +39,7 @@ where
 /// This variant is used by lookup-table ops where signed
 /// quotient values are mapped into `[0, 2^log_table_size)` via two's-complement.
 pub fn compute_ra_evals_nbits_2comp<F>(
-    r: &[F::Challenge],
+    r: &[F],
     input: &Tensor<i32>,
     log_table_size: usize,
 ) -> Vec<F>
@@ -122,7 +122,7 @@ macro_rules! define_signed_activation_table {
 pub(crate) use define_signed_activation_table;
 
 fn compute_ra_evals_from_usize_indices<F>(
-    r: &[F::Challenge],
+    r: &[F],
     indices_usize: &[usize],
     table_size: usize,
 ) -> Vec<F>

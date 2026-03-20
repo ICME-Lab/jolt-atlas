@@ -6,7 +6,7 @@ use rayon::prelude::*;
 use std::iter::zip;
 
 use crate::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
@@ -33,7 +33,7 @@ pub struct HammingBooleanitySumcheckParams<F: JoltField> {
     pub gamma_powers: Vec<F>,
     pub polynomial_types: Vec<VirtualPolynomial>,
     pub sumcheck_id: SumcheckId,
-    pub r_cycle: Vec<F::Challenge>,
+    pub r_cycle: Vec<F>,
 }
 
 impl<F: JoltField> SumcheckInstanceParams<F> for HammingBooleanitySumcheckParams<F> {
@@ -49,10 +49,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for HammingBooleanitySumcheckParams
         DEGREE_BOUND
     }
 
-    fn normalize_opening_point(
-        &self,
-        challenges: &[<F as JoltField>::Challenge],
-    ) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 }
@@ -122,7 +119,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T>
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         let claims: Vec<F> = self.hw.iter().map(|hw| hw.final_sumcheck_claim()).collect();
 
         self.params
@@ -177,7 +176,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
                 .1
         });
 
-        let r = self.params.normalize_opening_point(sumcheck_challenges);
+        let r = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         // Compute batched claim: eq(r_cycle, r) * sum_{i=0}^{d-1} gamma^i * ( hw_i * (hw_i - 1) )
         EqPolynomial::mle(&self.params.r_cycle, &r.r)
             * zip(hw_claim, &self.params.gamma_powers)
@@ -191,7 +192,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let r = self.params.normalize_opening_point(sumcheck_challenges);
+        let r = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
 
         self.params.polynomial_types.iter().for_each(|&poly_type| {
             accumulator.append_virtual(transcript, poly_type, self.params.sumcheck_id, r.clone());
@@ -219,8 +222,9 @@ mod tests {
 
         let mut prover_transcript = Blake2bTranscript::default();
         let mut prover_accumulator = ProverOpeningAccumulator::new();
-        let r_cycle: Vec<<Fr as JoltField>::Challenge> =
-            prover_transcript.challenge_vector_optimized::<Fr>(log_T);
+        let r_cycle = prover_transcript
+            .challenge_vector_optimized::<Fr>(log_T)
+            .into_opening();
 
         let params = HammingBooleanitySumcheckParams {
             d: 1,
@@ -240,12 +244,13 @@ mod tests {
 
         let mut verifier_transcript = Blake2bTranscript::default();
         let mut verifier_accumulator = VerifierOpeningAccumulator::new();
-        let _r_cycle: Vec<<Fr as JoltField>::Challenge> =
-            verifier_transcript.challenge_vector_optimized::<Fr>(log_T);
+        let _r_cycle: Vec<Fr> = verifier_transcript
+            .challenge_vector_optimized::<Fr>(log_T)
+            .into_opening();
 
         // Take claims
         for (key, (_, value)) in &prover_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::default();
             verifier_accumulator
                 .openings
                 .insert(*key, (empty_point, *value));

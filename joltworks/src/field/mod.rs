@@ -47,6 +47,28 @@ pub trait FieldChallengeOps<C>:
 {
 }
 
+pub trait IntoOpening<F> {
+    fn into_opening(self) -> Vec<F>;
+}
+
+impl<F, C> IntoOpening<F> for Vec<C>
+where
+    C: Into<F>,
+{
+    fn into_opening(self) -> Vec<F> {
+        self.into_iter().map(|c| c.into()).collect()
+    }
+}
+
+impl<F, C> IntoOpening<F> for &[C]
+where
+    C: Into<F> + Copy,
+{
+    fn into_opening(self) -> Vec<F> {
+        self.iter().map(|&c| c.into()).collect()
+    }
+}
+
 impl<F, C> ChallengeFieldOps<F> for C where
     C: Copy
         + Send
@@ -104,6 +126,8 @@ pub trait JoltField:
     + CanonicalDeserialize
     + Hash
     + MaybeAllocative
+    + ChallengeFieldOps<Self>
+    + FieldChallengeOps<Self>
     + FieldChallengeOps<Self::Challenge>
 {
     /// Number of bytes occupied by a single field element.

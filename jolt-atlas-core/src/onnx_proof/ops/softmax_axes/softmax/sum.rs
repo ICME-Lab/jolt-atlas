@@ -2,7 +2,7 @@ use crate::onnx_proof::ops::softmax_axes::softmax::SoftmaxIndex;
 use atlas_onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace;
 use common::VirtualPolynomial;
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
@@ -70,7 +70,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SumParams {
         sum_claim
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
@@ -121,7 +121,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SumProver<F> 
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SoftmaxExponentiationOutput(
@@ -179,7 +181,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumVerifier
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SoftmaxExponentiationOutput(

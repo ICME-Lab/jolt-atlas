@@ -68,8 +68,8 @@ impl<F: JoltField> PolynomialBinding<F> for IdentityPolynomial<F> {
 impl<F: JoltField> PolynomialEvaluation<F> for IdentityPolynomial<F> {
     fn evaluate<C>(&self, r: &[C]) -> F
     where
-        C: Copy + Send + Sync + Into<F>,
-        F: std::ops::Mul<C, Output = F> + std::ops::SubAssign<F>,
+        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
+        F: FieldChallengeOps<C>,
     {
         let len = r.len();
         debug_assert_eq!(len, self.num_vars);
@@ -238,8 +238,8 @@ impl<F: JoltField> PolynomialBinding<F> for OperandPolynomial<F> {
 impl<F: JoltField> PolynomialEvaluation<F> for OperandPolynomial<F> {
     fn evaluate<C>(&self, r: &[C]) -> F
     where
-        C: Copy + Send + Sync + Into<F>,
-        F: std::ops::Mul<C, Output = F> + std::ops::SubAssign<F>,
+        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
+        F: FieldChallengeOps<C>,
     {
         let len = r.len();
         debug_assert_eq!(len, self.num_vars);

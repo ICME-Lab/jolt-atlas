@@ -2,7 +2,7 @@ use crate::onnx_proof::ops::softmax_axes::softmax::SoftmaxIndex;
 use atlas_onnx_tracer::tensor::ops::nonlinearities::SoftmaxTrace;
 use common::VirtualPolynomial;
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{
@@ -86,7 +86,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for IndicatorParams {
         max_claim
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
@@ -158,7 +158,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for IndicatorProv
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SoftmaxInputLogitsOutput(
@@ -206,10 +208,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for IndicatorVe
             ),
             SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
         );
+        let sumcheck_opening = sumcheck_challenges.into_opening();
         let mut y =
-            index_to_field_bitvector::<F>(self.params.max_index as u64, sumcheck_challenges.len());
+            index_to_field_bitvector::<F>(self.params.max_index as u64, sumcheck_opening.len());
         y.reverse();
-        softmax_operand_claim * EqPolynomial::mle(sumcheck_challenges, &y)
+        softmax_operand_claim * EqPolynomial::mle(&sumcheck_opening, &y)
     }
 
     fn cache_openings(
@@ -218,7 +221,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for IndicatorVe
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SoftmaxInputLogitsOutput(

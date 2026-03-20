@@ -1,7 +1,7 @@
 use allocative::Allocative;
 use rayon::prelude::*;
 
-use crate::field::JoltField;
+use crate::field::{FieldChallengeOps, JoltField};
 use crate::poly::eq_poly::EqPolynomial;
 use crate::poly::opening_proof::{OpeningPoint, BIG_ENDIAN};
 use crate::utils::math::Math;
@@ -9,18 +9,27 @@ use crate::utils::thread::unsafe_allocate_zero_vec;
 
 /// Polynomial evaluating to eq+1(x, y) for x in [0, 2^l - 2]
 pub struct EqPlusOnePolynomial<F: JoltField> {
-    pub x: Vec<F::Challenge>,
+    pub x: Vec<F>,
 }
 
 impl<F: JoltField> EqPlusOnePolynomial<F> {
-    pub fn new(x: Vec<F::Challenge>) -> Self {
-        EqPlusOnePolynomial { x }
+    pub fn new<U>(x: Vec<U>) -> Self
+    where
+        U: Into<F>,
+    {
+        EqPlusOnePolynomial {
+            x: x.into_iter().map(|u| u.into()).collect(),
+        }
     }
 
     /* This MLE is 1 if y = x + 1 for x in the range [0... 2^l-2].
     That is, it ignores the case where x is all 1s, outputting 0.
     Assumes x and y are provided big-endian. */
-    pub fn evaluate(&self, y: &[F::Challenge]) -> F {
+    pub fn evaluate<U>(&self, y: &[U]) -> F
+    where
+        U: Into<F> + Send + Sync + Copy,
+        F: FieldChallengeOps<U>,
+    {
         let l = self.x.len();
         let x = &self.x;
         assert!(y.len() == l);
@@ -50,14 +59,18 @@ impl<F: JoltField> EqPlusOnePolynomial<F> {
     }
 
     #[tracing::instrument(skip_all, "EqPlusOnePolynomial::evals")]
-    pub fn evals(r: &[F::Challenge], scaling_factor: Option<F>) -> (Vec<F>, Vec<F>) {
+    pub fn evals<U>(r: &[U], scaling_factor: Option<F>) -> (Vec<F>, Vec<F>)
+    where
+        U: Into<F> + Send + Sync + Copy,
+        F: FieldChallengeOps<U>,
+    {
         let ell = r.len();
         let mut eq_evals: Vec<F> = unsafe_allocate_zero_vec(ell.pow2());
         eq_evals[0] = scaling_factor.unwrap_or(F::one());
         let mut eq_plus_one_evals: Vec<F> = unsafe_allocate_zero_vec(ell.pow2());
 
         // i indicates the LENGTH of the prefix of r for which the eq_table is calculated
-        let eq_evals_helper = |eq_evals: &mut Vec<F>, r: &[F::Challenge], i: usize| {
+        let eq_evals_helper = |eq_evals: &mut Vec<F>, r: &[U], i: usize| {
             debug_assert!(i != 0);
             let step = 1 << (ell - i); // step = (full / size)/2
 
@@ -147,18 +160,21 @@ impl<F: JoltField> EqPlusOnePrefixSuffixPoly<F> {
 mod tests {
     use ark_bn254::Fr;
 
-    use crate::poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{OpeningPoint, BIG_ENDIAN},
+    use crate::{
+        field::JoltField,
+        poly::{
+            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+            opening_proof::{OpeningPoint, BIG_ENDIAN},
+        },
     };
 
     use super::{EqPlusOnePolynomial, EqPlusOnePrefixSuffixPoly};
 
     #[test]
     fn test_eq_prefix_suffix() {
-        let r = OpeningPoint::<BIG_ENDIAN, Fr>::new([9, 2, 3, 7].map(<_>::into).to_vec());
+        let r = OpeningPoint::<BIG_ENDIAN, Fr>::new([9, 2, 3, 7].map(Fr::from_i32).to_vec());
         let eq_plus_one_gt = EqPlusOnePolynomial::new(r.r.clone());
-        let r_prime = OpeningPoint::<BIG_ENDIAN, Fr>::new([4, 3, 2, 8].map(<_>::into).to_vec());
+        let r_prime = OpeningPoint::<BIG_ENDIAN, Fr>::new([4, 3, 2, 8].map(Fr::from_i32).to_vec());
         let (r_prime_hi, r_prime_lo) = r_prime.split_at(2);
 
         let EqPlusOnePrefixSuffixPoly {

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     config::OneHotParams,
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, PolynomialBinding},
@@ -55,10 +55,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for RaSumcheckParams<F> {
         self.one_hot_params.instruction_d + 1
     }
 
-    fn normalize_opening_point(
-        &self,
-        challenges: &[<F as JoltField>::Challenge],
-    ) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 }
@@ -75,7 +72,7 @@ impl<F: JoltField> RaSumcheckProver<F> {
         // Compute r_address_chunks with proper padding
         let r_address_chunks = params
             .one_hot_params
-            .compute_r_address_chunks::<F>(&params.r_address.r);
+            .compute_r_address_chunks(&params.r_address.r);
 
         let ra_i_polys = H_indices
             .into_par_iter()
@@ -120,13 +117,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RaSumcheckPro
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let r_cycle = self.params.normalize_opening_point(sumcheck_challenges);
+        let r_cycle = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
 
         // Compute r_address_chunks with proper padding
         let r_address_chunks = self
             .params
             .one_hot_params
-            .compute_r_address_chunks::<F>(&self.params.r_address.r);
+            .compute_r_address_chunks(&self.params.r_address.r);
 
         for (i, r_address) in r_address_chunks.into_iter().enumerate() {
             let claim = self.ra_i_polys[i].final_sumcheck_claim();
@@ -162,7 +161,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RaSumcheckV
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let r = self.params.normalize_opening_point(sumcheck_challenges);
+        let r = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         let eq_eval = EqPolynomial::mle_endian(&self.params.r_cycle, &r);
         let ra_claim_prod: F = (0..self.params.one_hot_params.instruction_d)
             .map(|i| {
@@ -183,13 +184,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RaSumcheckV
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let r_cycle = self.params.normalize_opening_point(sumcheck_challenges);
+        let r_cycle = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
 
         // Compute r_address_chunks with proper padding
         let r_address_chunks = self
             .params
             .one_hot_params
-            .compute_r_address_chunks::<F>(&self.params.r_address.r);
+            .compute_r_address_chunks(&self.params.r_address.r);
 
         for (i, r_address) in r_address_chunks.iter().enumerate() {
             let opening_point = [r_address.as_slice(), r_cycle.r.as_slice()].concat();
@@ -320,7 +323,7 @@ mod tests {
 
         // Take claims
         for (key, (_, value)) in &prover_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::default();
             verifier_accumulator
                 .openings
                 .insert(*key, (empty_point, *value));

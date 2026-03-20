@@ -29,7 +29,7 @@ mod tests {
     use atlas_onnx_tracer::tensor::{ops::nonlinearities::softmax_fixed_128, Tensor};
     use common::VirtualPolynomial;
     use joltworks::{
-        field::JoltField,
+        field::{IntoOpening, JoltField},
         poly::{
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
             opening_proof::{
@@ -61,10 +61,12 @@ mod tests {
         let verifier_transcript = &mut Blake2bTranscript::new(&[]);
         let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
             VerifierOpeningAccumulator::new();
-        let _r_feature_output: Vec<<Fr as JoltField>::Challenge> =
-            prover_transcript.challenge_vector_optimized::<Fr>(n);
-        let r_feature_output: Vec<<Fr as JoltField>::Challenge> =
-            verifier_transcript.challenge_vector_optimized::<Fr>(n);
+        let _r_feature_output: Vec<Fr> = prover_transcript
+            .challenge_vector_optimized::<Fr>(n)
+            .into_opening();
+        let r_feature_output: Vec<Fr> = verifier_transcript
+            .challenge_vector_optimized::<Fr>(n)
+            .into_opening();
 
         // Setup index for sumcheck claims
         let softmax_index = SoftmaxIndex {
@@ -91,7 +93,7 @@ mod tests {
             prover_transcript,
             VirtualPolynomial::SoftmaxSumOutput(softmax_index.node_idx, softmax_index.feature_idx),
             SumcheckId::NodeExecution(softmax_index.node_idx),
-            vec![].into(),
+            OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
             Fr::from_i32(trace.exp_sum_q),
         );
 
@@ -100,14 +102,14 @@ mod tests {
             prover_transcript,
             VirtualPolynomial::SoftmaxMaxOutput(softmax_index.node_idx, softmax_index.feature_idx),
             SumcheckId::NodeExecution(softmax_index.node_idx),
-            vec![].into(),
+            OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
             Fr::from_i32(trace.max_logit),
         );
         prover_opening_accumulator.append_virtual(
             prover_transcript,
             VirtualPolynomial::SoftmaxMaxIndex(softmax_index.node_idx, softmax_index.feature_idx),
             SumcheckId::NodeExecution(softmax_index.node_idx),
-            vec![].into(),
+            OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
             Fr::from_u32(trace.max_index as u32),
         );
 
@@ -175,7 +177,7 @@ mod tests {
 
         // Take claims
         for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new());
             verifier_opening_accumulator
                 .openings
                 .insert(*key, (empty_point, *value));
@@ -195,19 +197,19 @@ mod tests {
             verifier_transcript,
             VirtualPolynomial::SoftmaxSumOutput(softmax_index.node_idx, softmax_index.feature_idx),
             SumcheckId::NodeExecution(softmax_index.node_idx),
-            vec![].into(),
+            OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
         );
         verifier_opening_accumulator.append_virtual(
             verifier_transcript,
             VirtualPolynomial::SoftmaxMaxOutput(softmax_index.node_idx, softmax_index.feature_idx),
             SumcheckId::NodeExecution(softmax_index.node_idx),
-            vec![].into(),
+            OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
         );
         verifier_opening_accumulator.append_virtual(
             verifier_transcript,
             VirtualPolynomial::SoftmaxMaxIndex(softmax_index.node_idx, softmax_index.feature_idx),
             SumcheckId::NodeExecution(softmax_index.node_idx),
-            vec![].into(),
+            OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
         );
 
         // Verify div/sum/max sumcheck

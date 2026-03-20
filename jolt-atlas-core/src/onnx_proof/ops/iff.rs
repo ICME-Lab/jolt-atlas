@@ -6,7 +6,7 @@ use atlas_onnx_tracer::{
 };
 use common::VirtualPolynomial;
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
@@ -38,7 +38,7 @@ const DEGREE_BOUND: usize = 3;
 /// Stores the opening point and computation node information needed for the sumcheck protocol.
 #[derive(Clone)]
 pub struct IffParams<F: JoltField> {
-    r_node_output: Vec<F::Challenge>,
+    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
 }
 
@@ -50,7 +50,7 @@ impl<F: JoltField> IffParams<F> {
             .0
             .r;
         Self {
-            r_node_output,
+            r_node_output: r_node_output.into(),
             computation_node,
         }
     }
@@ -66,7 +66,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for IffParams<F> {
         iff_claim
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
@@ -94,7 +94,7 @@ impl<F: JoltField> IffProver<F> {
     #[tracing::instrument(skip_all, name = "IffProver::initialize")]
     pub fn initialize(trace: &Trace, params: IffParams<F>) -> Self {
         let eq_r_node_output =
-            GruenSplitEqPolynomial::new(&params.r_node_output, BindingOrder::LowToHigh);
+            GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
         let LayerData {
             operands,
             output: _output,
@@ -109,7 +109,7 @@ impl<F: JoltField> IffProver<F> {
         #[cfg(test)]
         {
             use joltworks::poly::multilinear_polynomial::PolynomialEvaluation;
-            let eq = EqPolynomial::evals(&params.r_node_output);
+            let eq = EqPolynomial::evals(&params.r_node_output.r);
             let output = MultilinearPolynomial::from(_output.clone());
             let claim = (0..a_operand.len())
                 .map(|i| {
@@ -121,7 +121,7 @@ impl<F: JoltField> IffProver<F> {
                 })
                 .sum();
 
-            assert_eq!(output.evaluate(&params.r_node_output), claim)
+            assert_eq!(output.evaluate(&params.r_node_output.r), claim)
         }
         Self {
             params,
@@ -181,7 +181,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for IffProver<F> 
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
@@ -240,7 +242,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for IffVerifier
             .get_node_output_opening(self.params.computation_node.idx)
             .0
             .r;
-        let r_node_output_prime = self.params.normalize_opening_point(sumcheck_challenges).r;
+        let r_node_output_prime = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
         let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
         let mask_operand_claim = accumulator.get_node_output_claim(
             self.params.computation_node.inputs[0],
@@ -265,7 +270,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for IffVerifier
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),

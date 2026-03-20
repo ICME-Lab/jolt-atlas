@@ -24,7 +24,7 @@ use atlas_onnx_tracer::{
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
         identity_poly::IdentityPolynomial,
@@ -262,7 +262,7 @@ const DEGREE_BOUND: usize = 2;
 /// reduces the input domain.
 pub struct SinParams<F: JoltField> {
     gamma: F,
-    r_node_output: Vec<F::Challenge>,
+    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
 }
 
@@ -285,7 +285,7 @@ impl<F: JoltField> SinParams<F> {
 
         Self {
             gamma,
-            r_node_output,
+            r_node_output: r_node_output.into(),
             computation_node,
         }
     }
@@ -314,7 +314,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SinParams<F> {
         rv_claim + self.gamma * remainder_claim
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
@@ -352,13 +352,13 @@ impl<F: JoltField> SinProver<F> {
 
         let sin_table = MultilinearPolynomial::from(SinTable::materialize());
         let input_onehot: Vec<F> = compute_ra_evals_direct(
-            &params.r_node_output,
+            &params.r_node_output.r,
             &remainder_tensor,
             1 << SIN_LOG_TABLE_SIZE,
         );
 
         let output_claim =
-            MultilinearPolynomial::from(output.clone()).evaluate(&params.r_node_output);
+            MultilinearPolynomial::from(output.clone()).evaluate(&params.r_node_output.r);
         // Special case where we add a new opening for the node output at node's own index,
         // This is due to the fact that `remainder` poly claim is used as input claim for sin lookup sumcheck, together with a node output claim.
         // Both claims are derived from a different opening point, so we need to derive a new claim for one of (`output`, `remainder`).
@@ -368,7 +368,7 @@ impl<F: JoltField> SinProver<F> {
             transcript,
             VirtualPolynomial::NodeOutput(params.computation_node.idx),
             SumcheckId::NodeExecution(params.computation_node.idx),
-            params.r_node_output.clone().into(),
+            params.r_node_output.clone(),
             output_claim,
         );
 
@@ -458,8 +458,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SinProver<F> 
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
-        let r = [opening_point.r.as_slice(), &self.params.r_node_output].concat();
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let r = [opening_point.r.as_slice(), self.params.r_node_output.r.as_slice()].concat();
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SinRa(self.params.computation_node.idx),
@@ -493,7 +495,7 @@ impl<F: JoltField> SinVerifier<F> {
             transcript,
             VirtualPolynomial::NodeOutput(params.computation_node.idx),
             SumcheckId::NodeExecution(params.computation_node.idx),
-            params.r_node_output.clone().into(),
+            params.r_node_output.clone(),
         );
 
         let sin_table = MultilinearPolynomial::from(SinTable::materialize());
@@ -511,7 +513,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SinVerifier
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
 
         let ra_claim = accumulator
             .get_virtual_polynomial_opening(
@@ -531,8 +535,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SinVerifier
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
-        let r = [opening_point.r.as_slice(), &self.params.r_node_output].concat();
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let r = [opening_point.r.as_slice(), self.params.r_node_output.r.as_slice()].concat();
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SinRa(self.params.computation_node.idx),

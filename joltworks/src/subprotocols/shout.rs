@@ -1,6 +1,6 @@
 use crate::{
     config::OneHotParams,
-    field::JoltField,
+    field::{FieldChallengeOps, IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         opening_proof::{OpeningAccumulator, OpeningPoint, SumcheckId, BIG_ENDIAN},
@@ -113,7 +113,7 @@ pub fn ra_onehot_provers<F: JoltField, T: Transcript>(
         log_k_chunk: one_hot_params.log_k_chunk,
         log_t: r_cycle_bool.r.len(),
         r_cycle: r_cycle_bool.r,
-        r_address,
+        r_address: r_address.into_opening(),
         gammas,
         polynomial_types: polynomial_types.clone(),
         sumcheck_id: SumcheckId::Booleanity,
@@ -189,7 +189,7 @@ pub fn ra_onehot_verifiers<F: JoltField, T: Transcript>(
         log_k_chunk: one_hot_params.log_k_chunk,
         log_t: r_cycle_bool.r.len(),
         r_cycle: r_cycle_bool.r,
-        r_address,
+        r_address: r_address.into_opening(),
         gammas,
         polynomial_types: polynomial_types.clone(),
         sumcheck_id: SumcheckId::Booleanity,
@@ -232,11 +232,15 @@ pub fn compute_instruction_h_indices(
 }
 
 #[tracing::instrument(skip_all, name = "compute_ra_evals")]
-pub fn compute_ra_evals<F: JoltField>(
+pub fn compute_ra_evals<F, U>(
     trace: &[usize],
     one_hot_params: &OneHotParams,
-    r_cycle: &[F::Challenge],
-) -> Vec<Vec<F>> {
+    r_cycle: &[U],
+) -> Vec<Vec<F>>
+where
+    U: Copy + Send + Sync + Into<F>,
+    F: JoltField + FieldChallengeOps<U>,
+{
     let eq_r_cycle = EqPolynomial::evals(r_cycle);
 
     let T = trace.len();

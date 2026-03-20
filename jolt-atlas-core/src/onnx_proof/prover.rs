@@ -134,7 +134,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         for (_, node) in computation_nodes.iter().rev() {
             // Before each node is proven,
             // perform eval reduction to reduce openings to a unique claim for the node output.
-            // eval_reduction_proofs.insert(node.idx, EvalReductionProver::prove(prover, node));
+            eval_reduction_proofs.insert(node.idx, EvalReductionProver::prove(prover, node));
 
             proofs.extend(OperatorProver::prove(node, prover));
         }
@@ -248,7 +248,7 @@ impl EvalReductionProver {
         computation_node: &ComputationNode,
     ) -> EvalReductionProof<F> {
         let node_idx = computation_node.idx;
-        let openings = &prover.accumulator.openings;
+        let openings = prover.accumulator.get_node_openings(node_idx);
 
         let LayerData {
             operands: _,
@@ -257,8 +257,7 @@ impl EvalReductionProver {
         let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
 
         let (proof, reduced) =
-            EvalReductionProtocol::prove(openings, output_mle, node_idx, &mut prover.transcript)
-                .unwrap();
+            EvalReductionProtocol::prove(&openings, output_mle, &mut prover.transcript).unwrap();
 
         prover
             .accumulator
@@ -272,10 +271,10 @@ impl EvalReductionProver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::onnx_proof::AtlasSharedPreprocessing;
-    use ark_bn254::Fr;
+    use crate::onnx_proof::{AtlasSharedPreprocessing, HyperKZG};
+    use ark_bn254::{Bn254, Fr};
     use atlas_onnx_tracer::{
-        model::Model,
+        model::{test::ModelBuilder, Model},
         ops::{Add, Operator},
         tensor::Tensor,
     };
@@ -287,6 +286,19 @@ mod tests {
         },
         transcripts::Blake2bTranscript,
     };
+    use rand::{rngs::StdRng, SeedableRng};
+    use std::collections::BTreeMap;
+
+    // All node output is used 1 to 2 times.
+    fn one_sub_model(rng: &mut StdRng, t: usize) -> Model {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![t]);
+        let c = b.constant(Tensor::random_small(rng, &[t]));
+        let z = b.sub(i, c);
+        let out = b.sub(z, c);
+        b.mark_output(out);
+        b.build()
+    }
 
     #[test]
     fn eval_reduction_adds_reduced_evaluations() {
@@ -337,5 +349,81 @@ mod tests {
             .accumulator
             .reduced_evaluations
             .contains_key(&producer_idx));
+    }
+
+    #[test]
+    fn eval_reduction_single_opening_is_propagated() {
+        let n = 1 << 3; // 8 points, i.e. 3 variables
+        let output: Tensor<i32> = Tensor::construct((0..n).map(|n| n as i32).collect(), vec![n]);
+        let model = Model::default();
+        let producer_idx = 0;
+        let consumer = 1;
+
+        let preprocessing = AtlasSharedPreprocessing::preprocess(model);
+        let mut trace = preprocessing.model().trace(&[]);
+        trace.node_outputs.insert(producer_idx, output.clone());
+        let mut prover = Prover::<Fr, Blake2bTranscript>::new(preprocessing, trace);
+
+        let producer_node = ComputationNode::new(producer_idx, Operator::Add(Add), vec![], vec![n]);
+
+        let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
+        let num_vars = output_mle.get_num_vars();
+
+        let point = prover.transcript.challenge_vector_optimized::<Fr>(num_vars);
+        let claim = output_mle.evaluate(&point);
+
+        prover.accumulator.append_virtual(
+            &mut prover.transcript,
+            VirtualPolynomial::NodeOutput(producer_idx),
+            SumcheckId::NodeExecution(consumer),
+            OpeningPoint::new(point.clone()),
+            claim,
+        );
+
+        let _ = EvalReductionProver::prove(&mut prover, &producer_node);
+
+        let reduced = prover
+            .accumulator
+            .reduced_evaluations
+            .get(&producer_idx)
+            .expect("single opening should be propagated to reduced_evaluations");
+
+        assert_eq!(
+            reduced.r,
+            point.iter().map(|&c| c.into()).collect::<Vec<_>>()
+        );
+        assert_eq!(reduced.claim, claim);
+    }
+
+    #[test]
+    fn iop_runs_in_isolation_after_output_claim() {
+        let t = 1 << 4;
+        let mut rng = StdRng::seed_from_u64(0x1010);
+        let input = Tensor::<i32>::random_small(&mut rng, &[t]);
+        let model = one_sub_model(&mut rng, t);
+
+        let preprocessing = AtlasSharedPreprocessing::preprocess(model);
+        let trace = preprocessing.model().trace(&[input]);
+        let mut prover = Prover::<Fr, Blake2bTranscript>::new(preprocessing, trace);
+
+        let mut proofs: BTreeMap<ProofId, SumcheckInstanceProof<Fr, Blake2bTranscript>> =
+            BTreeMap::new();
+        let mut eval_reduction_proofs = BTreeMap::new();
+
+        ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::output_claim(&mut prover);
+
+        let output_idx = prover.preprocessing.model().outputs()[0];
+        assert_eq!(prover.accumulator.get_node_openings(output_idx).len(), 1);
+        let computation_nodes = prover.preprocessing.model().nodes().clone();
+
+        ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::iop(
+            &computation_nodes,
+            &mut prover,
+            &mut proofs,
+            &mut eval_reduction_proofs,
+        );
+
+        assert!(!proofs.is_empty());
+        assert!(eval_reduction_proofs.contains_key(&output_idx));
     }
 }

@@ -9,7 +9,7 @@ use atlas_onnx_tracer::{
 };
 use common::VirtualPolynomial;
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
@@ -47,7 +47,7 @@ impl<F: JoltField> SquareProver<F> {
     #[tracing::instrument(skip_all, name = "SquareProver::initialize")]
     pub fn initialize(trace: &Trace, params: SquareParams<F>) -> Self {
         let eq_r_node_output =
-            GruenSplitEqPolynomial::new(&params.r_node_output, BindingOrder::LowToHigh);
+            GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
         let LayerData {
             operands,
             output: _,
@@ -97,7 +97,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SquareProver<
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
@@ -142,7 +144,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SquareVerif
             .get_node_output_opening(self.params.computation_node.idx)
             .0
             .r;
-        let r_node_output_prime = self.params.normalize_opening_point(sumcheck_challenges).r;
+        let r_node_output_prime = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
         let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
         let operand_claim = accumulator.get_node_output_claim(
             self.params.computation_node.inputs[0],
@@ -157,7 +162,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SquareVerif
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),

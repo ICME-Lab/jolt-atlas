@@ -2,7 +2,7 @@ use crate::onnx_proof::ops::softmax_axes::softmax::SoftmaxIndex;
 use atlas_onnx_tracer::tensor::{ops::nonlinearities::SoftmaxTrace, Tensor};
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
@@ -29,7 +29,7 @@ pub const S: usize = 128;
 /// Parameters for proving division by sum in softmax.
 #[derive(Clone)]
 pub struct DivParams<F: JoltField> {
-    r_feature_output: Vec<F::Challenge>,
+    r_feature_output: OpeningPoint<BIG_ENDIAN, F>,
     softmax_index: SoftmaxIndex,
 }
 
@@ -47,7 +47,7 @@ impl<F: JoltField> DivParams<F> {
             .0
             .r;
         Self {
-            r_feature_output,
+            r_feature_output: r_feature_output.into(),
             softmax_index,
         }
     }
@@ -80,12 +80,12 @@ impl<F: JoltField> SumcheckInstanceParams<F> for DivParams<F> {
         q_claim * sum_claim
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
     fn num_rounds(&self) -> usize {
-        self.r_feature_output.len()
+        self.r_feature_output.r.len()
     }
 }
 
@@ -101,7 +101,7 @@ impl<F: JoltField> DivProver<F> {
     /// Initialize the prover for division operation.
     pub fn initialize(trace: &SoftmaxTrace, params: DivParams<F>) -> Self {
         let eq_r_feature_output =
-            GruenSplitEqPolynomial::new(&params.r_feature_output, BindingOrder::LowToHigh);
+            GruenSplitEqPolynomial::new(&params.r_feature_output.r, BindingOrder::LowToHigh);
         let left_operand = &trace.exp_q_values;
         let right_operand = trace.exp_sum_q;
         let R_tensor = {
@@ -164,7 +164,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SoftmaxExponentiationOutput(
@@ -211,8 +213,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let r_feature_output = self.params.r_feature_output.clone();
-        let r_feature_output_prime = self.params.normalize_opening_point(sumcheck_challenges).r;
+        let r_feature_output = self.params.r_feature_output.r.clone();
+        let r_feature_output_prime = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
         let eq_eval = EqPolynomial::mle(&r_feature_output, &r_feature_output_prime);
         let left_operand_claim = accumulator
             .get_virtual_polynomial_opening(
@@ -241,7 +246,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SoftmaxExponentiationOutput(
@@ -301,10 +308,12 @@ mod tests {
         let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
             VerifierOpeningAccumulator::new();
 
-        let _r_feature_output: Vec<<Fr as JoltField>::Challenge> =
-            prover_transcript.challenge_vector_optimized::<Fr>(n);
-        let r_feature_output: Vec<<Fr as JoltField>::Challenge> =
-            verifier_transcript.challenge_vector_optimized::<Fr>(n);
+        let _r_feature_output: Vec<Fr> = prover_transcript
+            .challenge_vector_optimized::<Fr>(n)
+            .into_opening();
+        let r_feature_output: Vec<Fr> = verifier_transcript
+            .challenge_vector_optimized::<Fr>(n)
+            .into_opening();
 
         let softmax_index = SoftmaxIndex {
             node_idx: 0,
@@ -327,7 +336,7 @@ mod tests {
             prover_transcript,
             VirtualPolynomial::SoftmaxSumOutput(softmax_index.node_idx, softmax_index.feature_idx),
             SumcheckId::NodeExecution(softmax_index.node_idx),
-            vec![].into(),
+            OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
             Fr::from_i32(trace.exp_sum_q),
         );
 
@@ -342,7 +351,7 @@ mod tests {
 
         // Take claims
         for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new());
             verifier_opening_accumulator
                 .openings
                 .insert(*key, (empty_point, *value));
@@ -361,7 +370,7 @@ mod tests {
             verifier_transcript,
             VirtualPolynomial::SoftmaxSumOutput(softmax_index.node_idx, softmax_index.feature_idx),
             SumcheckId::NodeExecution(softmax_index.node_idx),
-            vec![].into(),
+            OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
         );
 
         let verifier_sumcheck = DivVerifier::new(softmax_index, &verifier_opening_accumulator);
@@ -394,10 +403,12 @@ mod tests {
         let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
             VerifierOpeningAccumulator::new();
 
-        let _r_feature_output: Vec<<Fr as JoltField>::Challenge> =
-            prover_transcript.challenge_vector_optimized::<Fr>(n);
-        let r_feature_output: Vec<<Fr as JoltField>::Challenge> =
-            verifier_transcript.challenge_vector_optimized::<Fr>(n);
+        let _r_feature_output: Vec<Fr> = prover_transcript
+            .challenge_vector_optimized::<Fr>(n)
+            .into_opening();
+        let r_feature_output: Vec<Fr> = verifier_transcript
+            .challenge_vector_optimized::<Fr>(n)
+            .into_opening();
 
         let softmax_index = SoftmaxIndex {
             node_idx: 0,
@@ -420,7 +431,7 @@ mod tests {
             prover_transcript,
             VirtualPolynomial::SoftmaxSumOutput(softmax_index.node_idx, softmax_index.feature_idx),
             SumcheckId::NodeExecution(softmax_index.node_idx),
-            vec![].into(),
+            OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
             Fr::from_i32(trace.exp_sum_q),
         );
 
@@ -433,7 +444,7 @@ mod tests {
         );
 
         for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![]);
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new());
             verifier_opening_accumulator
                 .openings
                 .insert(*key, (empty_point, *value));
@@ -452,7 +463,7 @@ mod tests {
             verifier_transcript,
             VirtualPolynomial::SoftmaxSumOutput(softmax_index.node_idx, softmax_index.feature_idx),
             SumcheckId::NodeExecution(softmax_index.node_idx),
-            vec![].into(),
+            OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
         );
 
         let verifier_sumcheck = DivVerifier::new(softmax_index, &verifier_opening_accumulator);

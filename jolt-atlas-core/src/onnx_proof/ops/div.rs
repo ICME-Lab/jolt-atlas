@@ -13,7 +13,7 @@ use atlas_onnx_tracer::{
 };
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
         eq_poly::EqPolynomial,
@@ -183,7 +183,7 @@ const DEGREE_BOUND: usize = 3;
 /// Stores the opening point and computation node information needed for the sumcheck protocol.
 #[derive(Clone)]
 pub struct DivParams<F: JoltField> {
-    r_node_output: Vec<F::Challenge>,
+    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
 }
 
@@ -195,7 +195,7 @@ impl<F: JoltField> DivParams<F> {
             .0
             .r;
         Self {
-            r_node_output,
+            r_node_output: r_node_output.into(),
             computation_node,
         }
     }
@@ -210,7 +210,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for DivParams<F> {
         F::zero()
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
@@ -239,7 +239,7 @@ impl<F: JoltField> DivProver<F> {
     #[tracing::instrument(skip_all)]
     pub fn initialize(trace: &Trace, params: DivParams<F>) -> Self {
         let eq_r_node_output =
-            GruenSplitEqPolynomial::new(&params.r_node_output, BindingOrder::LowToHigh);
+            GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
         let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for Div operation")
@@ -331,7 +331,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
@@ -396,7 +398,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
             .get_node_output_opening(self.params.computation_node.idx)
             .0
             .r;
-        let r_node_output_prime = self.params.normalize_opening_point(sumcheck_challenges).r;
+        let r_node_output_prime = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
         let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
         let q_claim = accumulator
             .get_committed_polynomial_opening(
@@ -427,7 +432,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),

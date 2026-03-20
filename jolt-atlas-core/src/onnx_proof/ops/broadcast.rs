@@ -61,7 +61,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
 /// Broadcasting expands tensors to larger shapes by replicating elements.
 #[derive(Clone)]
 pub struct BroadcastParams<F: JoltField> {
-    r_output: Vec<F::Challenge>,
+    r_output: Vec<F>,
     computation_node: ComputationNode,
 }
 
@@ -84,7 +84,7 @@ impl<F: JoltField> BroadcastParams<F> {
 /// Maintains transformed input variables and claims for proving the broadcast relation.
 pub struct BroadcastProver<F: JoltField> {
     params: BroadcastParams<F>,
-    r_input: Vec<F::Challenge>,
+    r_input: Vec<F>,
     claim_A: F,
 }
 
@@ -148,7 +148,7 @@ impl<F: JoltField> BroadcastProver<F> {
 /// Verifier for broadcast operation sumcheck protocol.
 pub struct BroadcastVerifier<F: JoltField> {
     params: BroadcastParams<F>,
-    r_input: Vec<F::Challenge>,
+    r_input: Vec<F>,
     eval_I: F,
 }
 
@@ -262,10 +262,10 @@ fn get_broadcast_dims(input_dims: &[usize], target_dims: &[usize]) -> Vec<usize>
 fn split_broadcast_vars<F: JoltField>(
     output_dims: &[usize],
     broadcast_dims: &[usize],
-    r_output: &[F::Challenge],
-) -> (Vec<F::Challenge>, Vec<F::Challenge>) {
-    let mut r_input: Vec<F::Challenge> = Vec::new();
-    let mut r_broadcast: Vec<F::Challenge> = Vec::new();
+    r_output: &[F],
+) -> (Vec<F>, Vec<F>) {
+    let mut r_input: Vec<F> = Vec::new();
+    let mut r_broadcast: Vec<F> = Vec::new();
     let mut idx = 0;
     for (&output_dim, &broadcast_dim) in output_dims.iter().zip(broadcast_dims.iter()) {
         let dim_vars = output_dim.log_2();

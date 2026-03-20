@@ -12,7 +12,7 @@ use atlas_onnx_tracer::{
 };
 use common::VirtualPolynomial;
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
@@ -65,7 +65,7 @@ impl<F: JoltField> MaliciousSubProver<F> {
     /// Initialize the prover with trace data and parameters.
     fn initialize(trace: &Trace, params: SubParams<F>) -> Self {
         let eq_r_node_output =
-            GruenSplitEqPolynomial::new(&params.r_node_output, BindingOrder::LowToHigh);
+            GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
         let LayerData {
             operands,
             output: _,
@@ -119,7 +119,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaliciousSubP
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
 
         // Malicious behavior: forge virtual operand claims while preserving the
         // same subtraction difference, so expected_output_claim remains unchanged.
@@ -128,8 +130,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaliciousSubP
         let final_claim = self
             .final_claim
             .expect("final_claim must be set before cache_openings");
-        let r_node_output_prime = self.params.normalize_opening_point(sumcheck_challenges).r;
-        let eq_eval = EqPolynomial::mle(&self.params.r_node_output, &r_node_output_prime);
+        let r_node_output_prime = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
+        let eq_eval = EqPolynomial::mle(&self.params.r_node_output.r, &r_node_output_prime);
 
         // Choose forged claims so that:
         // final_claim == eq_eval * (forged_left - forged_right)

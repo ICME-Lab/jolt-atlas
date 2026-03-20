@@ -51,11 +51,12 @@ use atlas_onnx_tracer::{
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
         opening_proof::{
-            OpeningAccumulator, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            VerifierOpeningAccumulator, BIG_ENDIAN,
         },
     },
     subprotocols::{
@@ -162,7 +163,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxAxes {
 /// Parameters for proving softmax operations along last axis.
 #[derive(Clone)]
 pub struct SoftmaxAxesParams<F: JoltField> {
-    r_output: Vec<F::Challenge>,
+    r_output: Vec<F>,
     computation_node: ComputationNode,
     config: SoftmaxLastAxisConfig,
 }
@@ -182,12 +183,12 @@ impl<F: JoltField> SoftmaxAxesParams<F> {
     }
 
     /// Get the random challenges for feature dimensions.
-    pub fn r_features(&self) -> &[F::Challenge] {
+    pub fn r_features(&self) -> &[F] {
         &self.r_output[self.config.num_feature_vectors.log_2()..]
     }
 
     /// Get the random challenges for leading dimensions.
-    pub fn r_leading_dims(&self) -> &[F::Challenge] {
+    pub fn r_leading_dims(&self) -> &[F] {
         &self.r_output[..self.config.num_feature_vectors.log_2()]
     }
 
@@ -341,7 +342,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
                     softmax_index.feature_idx,
                 ),
                 SumcheckId::NodeExecution(softmax_index.node_idx),
-                vec![].into(),
+                OpeningPoint::<BIG_ENDIAN, F>::new(Vec::<F>::new()),
                 F::from_i32(trace.exp_sum_q),
             );
 
@@ -353,7 +354,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
                     softmax_index.feature_idx,
                 ),
                 SumcheckId::NodeExecution(softmax_index.node_idx),
-                vec![].into(),
+                OpeningPoint::<BIG_ENDIAN, F>::new(Vec::<F>::new()),
                 F::from_i32(trace.max_logit),
             );
             accumulator.append_virtual(
@@ -363,7 +364,7 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
                     softmax_index.feature_idx,
                 ),
                 SumcheckId::NodeExecution(softmax_index.node_idx),
-                vec![].into(),
+                OpeningPoint::<BIG_ENDIAN, F>::new(Vec::<F>::new()),
                 F::from_u32(trace.max_index as u32),
             );
 
@@ -471,12 +472,14 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
         transcript: &mut T,
     ) {
         let r_leading_dims_prime =
-            transcript.challenge_vector_optimized::<F>(self.params.num_feature_vectors().log_2());
+            transcript
+                .challenge_vector_optimized::<F>(self.params.num_feature_vectors().log_2())
+                .into_opening();
         let (r_features_prime, _) = accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::SoftmaxInputLogitsOutput(self.params.computation_node.idx, 0),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
         );
-        let r_operand: Vec<F::Challenge> =
+        let r_operand: Vec<F> =
             [r_leading_dims_prime.as_slice(), &r_features_prime.r].concat();
         let operand_claim = MultilinearPolynomial::from(self.operand.clone()).evaluate(&r_operand); // TODO: rm clone
         accumulator.append_virtual(
@@ -603,7 +606,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
                     softmax_index.feature_idx,
                 ),
                 SumcheckId::NodeExecution(softmax_index.node_idx),
-                vec![].into(),
+                OpeningPoint::<BIG_ENDIAN, F>::new(Vec::<F>::new()),
             );
             accumulator.append_virtual(
                 transcript,
@@ -612,7 +615,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
                     softmax_index.feature_idx,
                 ),
                 SumcheckId::NodeExecution(softmax_index.node_idx),
-                vec![].into(),
+                OpeningPoint::<BIG_ENDIAN, F>::new(Vec::<F>::new()),
             );
             accumulator.append_virtual(
                 transcript,
@@ -621,7 +624,7 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
                     softmax_index.feature_idx,
                 ),
                 SumcheckId::NodeExecution(softmax_index.node_idx),
-                vec![].into(),
+                OpeningPoint::<BIG_ENDIAN, F>::new(Vec::<F>::new()),
             );
             let div_verifier_sumcheck = DivVerifier::new(softmax_index, accumulator);
             let sum_verifier_sumcheck = SumVerifier::new(softmax_index, accumulator);
@@ -737,12 +740,14 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
 
         // Stage 4: Link per-feature softmax operand claims to main operand claim
         let r_leading_dims_prime =
-            transcript.challenge_vector_optimized::<F>(self.params.r_leading_dims().len());
+            transcript
+                .challenge_vector_optimized::<F>(self.params.r_leading_dims().len())
+                .into_opening();
         let (r_features_prime, _) = accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::SoftmaxInputLogitsOutput(self.params.computation_node.idx, 0),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
         );
-        let r_operand: Vec<F::Challenge> =
+        let r_operand: Vec<F> =
             [r_leading_dims_prime.as_slice(), &r_features_prime.r].concat();
 
         accumulator.append_virtual(

@@ -780,7 +780,7 @@ mod tests {
             VerifierOpeningAccumulator::new();
         // Take claims
         for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new::<Fr>(vec![]);
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::default();
             verifier_opening_accumulator
                 .openings
                 .insert(*key, (empty_point, *value));
@@ -981,7 +981,7 @@ mod tests {
             VerifierOpeningAccumulator::new();
         // Take claims
         for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new::<Fr>(vec![]);
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::default();
             verifier_opening_accumulator
                 .openings
                 .insert(*key, (empty_point, *value));
@@ -1195,7 +1195,7 @@ mod tests {
             VerifierOpeningAccumulator::new();
         // Take claims
         for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new::<Fr>(vec![]);
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::default();
             verifier_opening_accumulator
                 .openings
                 .insert(*key, (empty_point, *value));

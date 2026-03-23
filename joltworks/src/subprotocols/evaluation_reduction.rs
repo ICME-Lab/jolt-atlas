@@ -10,8 +10,7 @@
 //! `h(1) = v2`, derives a Fiat-Shamir challenge `x'`, and reduces to one claim:
 //! `P(r') = v'` with `r' = l(x')` and `v' = h(x')`.
 
-use core::panic;
-use std::iter::zip;
+use std::fmt::Debug;
 
 use crate::{
     field::JoltField,
@@ -83,6 +82,15 @@ pub struct ReducedInstance<F: JoltField> {
     pub claim: F,
 }
 
+impl<F: JoltField> From<Opening<F>> for ReducedInstance<F> {
+    fn from(opening: Opening<F>) -> Self {
+        Self {
+            r: opening.0.into(),
+            claim: opening.1,
+        }
+    }
+}
+
 impl<F: JoltField> EvalReductionInstance<F> {
     pub fn prove<T: Transcript>(
         &self,
@@ -96,27 +104,19 @@ impl<F: JoltField> EvalReductionInstance<F> {
             ));
         }
 
-        if self.openings.len() > 2 {
-            // TODO(#138): Extend to iterative n-to-1 reduction when fanout > 2.
-            return Err(ProofVerifyError::InvalidOpeningProof(format!(
-                "more than 2 openings found for eval reduction; n-to-1 reduction not yet implemented, found {}",
-                self.openings.len()
-            )));
-        }
+        let opening_points = self.openings.iter().map(|(r, _)| r).collect::<Vec<_>>();
 
-        let r1 = &self.openings[0].0;
-        let r2 = &self.openings[1].0;
+        // i'th vector of this Vec<Vec<F>> is the vector of i'th variables across all evaluation points.
+        let r_i_vec = group_by_variable(&opening_points);
 
-        let r2_sub_r1: Vec<F> = zip(r1, r2).map(|(&x, &y)| y - x).collect();
-        let h = compute_h(&witness.mle, r1, &r2_sub_r1);
+        let h = compute_h(&witness.mle, &r_i_vec);
 
         #[cfg(test)]
         {
-            let v1 = self.openings[0].1;
-            let v2 = self.openings[1].1;
-            // Sanity check: h(0) should match opening1 claim, h(1) should match opening2 claim.
-            assert_eq!(h.eval_at_zero(), v1);
-            assert_eq!(h.eval_at_one(), v2);
+            for (i, (_, claim)) in self.openings.iter().enumerate() {
+                let eval_at_i = h.evaluate(&F::from_u32(i as u32));
+                assert_eq!(eval_at_i, *claim, "h does not match opening claim at t={i}");
+            }
         }
 
         h.append_to_transcript(transcript);
@@ -124,7 +124,7 @@ impl<F: JoltField> EvalReductionInstance<F> {
 
         let proof = EvalReductionProof { h };
         let reduced_instance = ReducedInstance {
-            r: compute_l(r1, &r2_sub_r1, x_prime.into()),
+            r: eval_on_l(&r_i_vec, x_prime.into()),
             claim: proof.h.evaluate(&x_prime),
         };
 
@@ -136,19 +136,10 @@ impl<F: JoltField> EvalReductionInstance<F> {
         proof: &EvalReductionProof<F>,
         transcript: &mut T,
     ) -> Result<ReducedInstance<F>, ProofVerifyError> {
-        if self.openings.len() > 2 {
-            return Err(ProofVerifyError::InvalidOpeningProof(format!(
-                "more than 2 openings found for eval reduction; n-to-1 reduction not yet implemented, found {}",
-                self.openings.len()
-            )));
-        }
+        let opening_points = self.openings.iter().map(|(r, _)| r).collect::<Vec<_>>();
+        let r_i_vec = group_by_variable(&opening_points);
 
-        let r1 = &self.openings[0].0;
-        let v1 = self.openings[0].1;
-        let r2 = &self.openings[1].0;
-        let v2 = self.openings[1].1;
-
-        let n_vars = r1.len();
+        let n_vars = opening_points[0].len();
         let n_openings = self.openings.len();
         assert!(
             proof.h.degree() <= n_vars * (n_openings - 1),
@@ -156,18 +147,20 @@ impl<F: JoltField> EvalReductionInstance<F> {
             expected degree <= num_vars * (num_openings - 1)",
         );
 
-        if proof.h.eval_at_zero() != v1 || proof.h.eval_at_one() != v2 {
-            return Err(ProofVerifyError::InvalidOpeningProof(
-                "2-to-1 evaluation reduction boundary check failed".to_string(),
-            ));
+        for (i, (_, claim)) in self.openings.iter().enumerate() {
+            let eval_at_i = proof.h.evaluate(&F::from_u32(i as u32));
+            if eval_at_i != *claim {
+                return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                    "h does not match opening claim at t={i}: expected h({i}) = {claim}, got {eval_at_i}"
+                )));
+            }
         }
 
         proof.h.append_to_transcript(transcript);
         let x_prime = transcript.challenge_scalar_optimized::<F>();
 
         let expected_reduced_value = proof.h.evaluate::<F>(&x_prime.into());
-        let r2_sub_r1: Vec<F> = zip(r1, r2).map(|(&x, &y)| y - x).collect();
-        let expected_r = compute_l::<F>(r1, &r2_sub_r1, x_prime.into());
+        let expected_r = eval_on_l(&r_i_vec, x_prime.into());
 
         Ok(ReducedInstance {
             r: expected_r,
@@ -176,27 +169,21 @@ impl<F: JoltField> EvalReductionInstance<F> {
     }
 }
 
-fn compute_l<F: JoltField>(r1: &[F], r2_sub_r1: &[F], x: F) -> Vec<F> {
-    if r1.len() != r2_sub_r1.len() {
-        panic!(
-            "compute_l input length mismatch: left: {}, right: {}",
-            r1.len(),
-            r2_sub_r1.len()
-        );
-    }
-
-    // l(x) = r1 + x * (r2 - r1)
-    zip(r1, r2_sub_r1)
-        .map(|(r1_i, delta_i)| *r1_i + x * *delta_i)
+fn eval_on_l<F: JoltField, Ref: AsRef<[F]>>(r_i_vec: &[Ref], x: F) -> Vec<F> {
+    r_i_vec
+        .iter()
+        .map(|r_i| {
+            let variable_poly = UniPoly::from_evals(r_i.as_ref());
+            variable_poly.evaluate(&x)
+        })
         .collect()
 }
 
-fn compute_h<F: JoltField>(
+fn compute_h<F: JoltField, Ref: AsRef<[F]>>(
     mle: &MultilinearPolynomial<F>,
-    r1: &[F],
-    r2_sub_r1: &[F],
+    r_i_vec: &[Ref],
 ) -> UniPoly<F> {
-    let num_vars = r1.len();
+    let num_vars = r_i_vec.len();
 
     let mut mle_polys: Vec<UniPoly<F>> = mle
         .coeffs()
@@ -206,10 +193,10 @@ fn compute_h<F: JoltField>(
         })
         .collect();
 
-    for (i, (r1_i, delta_i)) in zip(r1, r2_sub_r1).enumerate() {
+    for (i, r_i) in r_i_vec.iter().enumerate() {
         let var_weight = num_vars - i - 1;
         let half_len = 1 << var_weight;
-        let var_poly = UniPoly::from_coeff(vec![*r1_i, *delta_i]); // r1_i + t * delta_i
+        let var_poly = UniPoly::from_evals(r_i.as_ref()); // r1_i + t * delta_i
         for j in 0..half_len {
             let left = std::mem::take(&mut mle_polys[j]);
             let right = std::mem::take(&mut mle_polys[j + half_len]);
@@ -220,6 +207,21 @@ fn compute_h<F: JoltField>(
     std::mem::take(&mut mle_polys[0])
 }
 
+fn group_by_variable<F: JoltField, Ref: AsRef<[F]>>(evaluation_points: &[Ref]) -> Vec<Vec<F>> {
+    assert!(evaluation_points
+        .windows(2)
+        .all(|window| window[0].as_ref().len() == window[1].as_ref().len()));
+
+    let num_vars = evaluation_points[0].as_ref().len();
+    let mut r_i_vec: Vec<Vec<F>> = vec![vec![]; num_vars];
+    for p_i in evaluation_points {
+        for (i, &r_i) in p_i.as_ref().iter().enumerate() {
+            r_i_vec[i].push(r_i);
+        }
+    }
+    r_i_vec
+}
+
 pub struct EvalReductionProtocol;
 
 impl EvalReductionProtocol {
@@ -228,24 +230,9 @@ impl EvalReductionProtocol {
         output_mle: MultilinearPolynomial<F>,
         transcript: &mut T,
     ) -> Result<(EvalReductionProof<F>, ReducedInstance<F>), ProofVerifyError> {
-        assert!(
-            !openings.is_empty(),
-            "at least one opening is required for eval reduction"
-        );
-
-        if openings.len() == 1 {
-            // Degenerate case: only one opening, no reduction needed. Just return the original claim as the "reduced instance".
-            let opening = openings[0];
-            let claim = opening.1;
-            let reduced_instance = ReducedInstance {
-                r: opening.0.clone().into(),
-                claim,
-            };
-            return Ok((
-                EvalReductionProof {
-                    h: UniPoly::default(), // Empty proof since no reduction is needed
-                },
-                reduced_instance,
+        if openings.is_empty() {
+            return Err(ProofVerifyError::InvalidOpeningProof(
+                "at least one opening is required for eval reduction".to_string(),
             ));
         }
 
@@ -267,17 +254,6 @@ impl EvalReductionProtocol {
             "at least one opening is required for eval reduction verification"
         );
 
-        if openings.len() == 1 {
-            // Degenerate case: only one opening, no reduction was done. Just propagate the original claim.
-            let opening = openings[0];
-            let claim = opening.1;
-            let reduced_instance = ReducedInstance {
-                r: opening.0.clone().into(),
-                claim,
-            };
-            return Ok(reduced_instance);
-        }
-
         let instance = EvalReductionInstance::new(openings)
             .expect("evaluation reduction instance should be constructible for matching openings");
 
@@ -287,7 +263,6 @@ impl EvalReductionProtocol {
 
 #[cfg(test)]
 mod tests {
-    use std::iter::zip;
 
     use super::*;
     use crate::{
@@ -305,6 +280,162 @@ mod tests {
 
     fn ch(x: u128) -> <Fr as JoltField>::Challenge {
         <Fr as JoltField>::Challenge::from(x)
+    }
+
+    #[test]
+    // Asserts that the helper performing the grouping of evaluation points by variable works correctly.
+    fn correctly_groups_by_variable() {
+        let evaluation_points = [
+            vec![f(1), f(2), f(3)],
+            vec![f(4), f(5), f(6)],
+            vec![f(7), f(8), f(9)],
+        ];
+        let grouped = group_by_variable(&evaluation_points);
+        assert_eq!(
+            grouped,
+            vec![
+                vec![f(1), f(4), f(7)],
+                vec![f(2), f(5), f(8)],
+                vec![f(3), f(6), f(9)],
+            ]
+        );
+    }
+
+    #[test]
+    // Use different openings on which we know the univariate relation on each variable,
+    // and assert the `l` evaluation on randomly generated points, for 2, and 3 openings.
+    fn eval_reduction_compute_l_matches_expected() {
+        let mut rng = StdRng::seed_from_u64(0x888);
+
+        for _ in 0..100 {
+            // 2-eval points
+            let r1 = vec![f(1), f(2), f(3)];
+            let r2 = vec![f(3), f(6), f(9)];
+            let x = Fr::random(&mut rng);
+
+            // each var equals r1_i + x * (r2_i - r1_i)
+            let expected = vec![f(1) + x * f(2), f(2) + x * f(4), f(3) + x * f(6)];
+
+            let r_i_vec = group_by_variable(&[&r1, &r2]);
+            let result = eval_on_l(&r_i_vec, x);
+            assert_eq!(result, expected);
+
+            // 3-eval points
+            // r3 = [
+            //  1 + 2 * 1 + 2² * 1 = 7,
+            //  2 + 2 * 2 + 2² * 2 = 14,
+            //  3 + 2 * 3 + 2² * 3 = 21,
+            //]
+            let r3 = vec![f(7), f(14), f(21)];
+            let r_i_vec = group_by_variable(&[&r1, &r2, &r3]);
+            let result = eval_on_l(&r_i_vec, x);
+            let expected = vec![
+                f(1) + x * f(1) + x * x * f(1),
+                f(2) + x * f(2) + x * x * f(2),
+                f(3) + x * f(3) + x * x * f(3),
+            ];
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    // Asserts that the evaluation of l defined from randomly generated openings,
+    // evaluated at the index of one of those openings.
+    fn test_l_evaluation() {
+        let mut rng = StdRng::seed_from_u64(0x888);
+
+        for _ in 0..100 {
+            let num_vars = rng.sample(Uniform::from(2..10));
+            let num_openings = rng.sample(Uniform::from(1..10));
+            let openings_vec: Vec<Vec<Fr>> = (0..num_openings)
+                .map(|_| {
+                    (0..num_vars)
+                        .map(|_| Fr::random(&mut rng))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+
+            // Hard to compute a completely random evaluation of l, so we just test that we
+            // indeed recover any of the points that are guaranteed to be on the line.
+            let x = rng.sample(Uniform::from(0..num_openings));
+            let ri_vec = group_by_variable(&openings_vec);
+
+            let l_eval = eval_on_l(&ri_vec, Fr::from(x));
+            let l_direct: Vec<Fr> = openings_vec[x as usize].clone();
+
+            assert_eq!(l_eval, l_direct);
+        }
+    }
+
+    #[test]
+    // Asserts the correct computation of restriction h of mle to the line l; h = mle ∘ l
+    // In this test we assert that h(r1) = v1 and h(r2) = v2,
+    // and that degree of h is at most the number of variables in the original MLE.
+    fn test_h_computation() {
+        let mut rng = StdRng::seed_from_u64(0x888);
+
+        for _ in 0..100 {
+            let num_vars = rng.sample(Uniform::from(2..10));
+            let num_openings = rng.sample(Uniform::from(1..10));
+            let mle = MultilinearPolynomial::from(
+                (0..1 << num_vars)
+                    .map(|_| Fr::random(&mut rng))
+                    .collect::<Vec<_>>(),
+            );
+
+            let openings_vec: Vec<Vec<Fr>> = (0..num_openings)
+                .map(|_| {
+                    (0..num_vars)
+                        .map(|_| Fr::random(&mut rng))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+
+            let ri_vec = group_by_variable(&openings_vec);
+            let h = compute_h(&mle, &ri_vec);
+
+            assert!(h.degree() <= num_vars * (num_openings - 1));
+            for (i, opening) in openings_vec.iter().enumerate() {
+                let v = mle.evaluate(opening);
+                assert_eq!(h.evaluate(&Fr::from(i as u64)), v);
+            }
+        }
+    }
+
+    #[test]
+    // Asserts that with a random generated challenge t_f,
+    // the evaluation of h at t_f matches the evaluation of the original MLE at the corresponding l(t_f).
+    fn h_restr_l_matches_expected() {
+        let mut rng = StdRng::seed_from_u64(0x888);
+
+        for _ in 0..100 {
+            let num_vars = rng.sample(Uniform::from(2..10));
+            let num_openings = rng.sample(Uniform::from(1..10));
+
+            let mle = MultilinearPolynomial::from(
+                (0..1 << num_vars)
+                    .map(|_| Fr::random(&mut rng))
+                    .collect::<Vec<_>>(),
+            );
+            let openings_vec: Vec<Vec<Fr>> = (0..num_openings)
+                .map(|_| {
+                    (0..num_vars)
+                        .map(|_| Fr::random(&mut rng))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            let r_i_vec = group_by_variable(&openings_vec);
+            let h = compute_h(&mle, &r_i_vec);
+
+            // Verify random challenges
+            for _ in 0..10 {
+                let t_f: Fr = rng.gen();
+                let l_eval = eval_on_l(&r_i_vec, t_f);
+                let h_eval = h.evaluate(&t_f);
+                let mle_eval = mle.evaluate(&l_eval);
+                assert_eq!(h_eval, mle_eval);
+            }
+        }
     }
 
     #[test]
@@ -350,7 +481,10 @@ mod tests {
 
         assert_eq!(reduced_prover.r, r.into_opening());
         assert_eq!(reduced_prover.claim, v);
-        assert!(proof.h.coeffs.is_empty());
+        assert!(
+            proof.h.degree() == 0,
+            "h should be constant for single opening case"
+        );
 
         let mut verifier_tr = Blake2bTranscript::new(b"eval-red-single");
         let reduced_verifier =
@@ -415,108 +549,28 @@ mod tests {
     }
 
     #[test]
-    fn eval_reduction_compute_l_matches_expected() {
-        let r1 = vec![f(1), f(2), f(3)];
-        let r2_sub_r1 = vec![f(4), f(5), f(6)];
-        let x = f(2);
+    fn eval_reduction_nto1() {
+        let mle =
+            MultilinearPolynomial::<Fr>::from(vec![f(1), f(2), f(3), f(4), f(5), f(6), f(7), f(8)]);
+        let r1 = vec![ch(1), ch(2), ch(3)];
+        let r2 = vec![ch(4), ch(6), ch(8)];
+        let r3 = vec![ch(7), ch(14), ch(21)];
 
-        let expected = vec![f(1) + f(2) * f(4), f(2) + f(2) * f(5), f(3) + f(2) * f(6)];
+        let v1 = mle.evaluate(&r1);
+        let v2 = mle.evaluate(&r2);
+        let v3 = mle.evaluate(&r3);
 
-        let result = compute_l::<Fr>(&r1, &r2_sub_r1, x);
-        assert_eq!(result, expected);
-    }
+        let opening1: Opening<Fr> = (r1.clone().into(), v1);
+        let opening2: Opening<Fr> = (r2.clone().into(), v2);
+        let opening3: Opening<Fr> = (r3.clone().into(), v3);
 
-    #[test]
-    // Asserts that the evaluation of l at a random point x matches the expected evaluation of the line,
-    // defined by l(0) = r1 and l(1) = r2.
-    fn test_l_evaluation() {
-        let mut rng = StdRng::seed_from_u64(0x888);
+        let witness = EvalReductionWitness { mle };
 
-        for _ in 0..10 {
-            let num_vars = rng.sample(Uniform::from(1..10));
-            let r1 = (0..num_vars)
-                .map(|_| Fr::random(&mut rng))
-                .collect::<Vec<_>>();
-            let r2 = (0..num_vars)
-                .map(|_| Fr::random(&mut rng))
-                .collect::<Vec<_>>();
-            let r2_sub_r1: Vec<Fr> = r2
-                .iter()
-                .zip(r1.iter())
-                .map(|(r2_i, r1_i)| *r2_i - *r1_i)
-                .collect();
-            let x = Fr::random(&mut rng);
-
-            let l_eval = compute_l::<Fr>(&r1, &r2_sub_r1, x);
-            let l_direct: Vec<Fr> = r1
-                .iter()
-                .zip(r2.iter())
-                .map(|(r1_i, r2_i)| *r1_i + x * (*r2_i - *r1_i))
-                .collect();
-
-            assert_eq!(l_eval, l_direct);
-        }
-    }
-
-    #[test]
-    // Asserts the correct computation of restriction h of mle to the line l; h = mle ∘ l
-    // In this test we assert that h(r1) = v1 and h(r2) = v2,
-    // and that degree of h is at most the number of variables in the original MLE.
-    fn test_h_computation() {
-        let mut rng = StdRng::seed_from_u64(0x888);
-
-        for _ in 0..10 {
-            let num_vars = rng.sample(Uniform::from(1..10));
-            let mle = MultilinearPolynomial::from(
-                (0..1 << num_vars)
-                    .map(|_| Fr::random(&mut rng))
-                    .collect::<Vec<_>>(),
-            );
-            let r1 = (0..num_vars)
-                .map(|_| Fr::random(&mut rng))
-                .collect::<Vec<_>>();
-            let r2 = (0..num_vars)
-                .map(|_| Fr::random(&mut rng))
-                .collect::<Vec<_>>();
-            let r2_sub_r1 = zip(&r1, &r2).map(|(x, y)| y - x).collect::<Vec<_>>();
-            let h = compute_h(&mle, &r1, &r2_sub_r1);
-
-            assert!(h.degree() <= num_vars);
-            assert_eq!(h.eval_at_zero(), mle.evaluate(&r1));
-            assert_eq!(h.eval_at_one(), mle.evaluate(&r2));
-        }
-    }
-
-    #[test]
-    // Asserts that with a random generated challenge t_f,
-    // the evaluation of h at t_f matches the evaluation of the original MLE at the corresponding l(t_f).
-    fn h_restr_l_matches_expected() {
-        let mut rng = StdRng::seed_from_u64(0x888);
-
-        for _ in 0..10 {
-            let num_vars = rng.sample(Uniform::from(1..10));
-            let mle = MultilinearPolynomial::from(
-                (0..1 << num_vars)
-                    .map(|_| Fr::random(&mut rng))
-                    .collect::<Vec<_>>(),
-            );
-            let r1 = (0..num_vars)
-                .map(|_| Fr::random(&mut rng))
-                .collect::<Vec<_>>();
-            let r2 = (0..num_vars)
-                .map(|_| Fr::random(&mut rng))
-                .collect::<Vec<_>>();
-            let r2_sub_r1 = zip(&r1, &r2).map(|(x, y)| y - x).collect::<Vec<_>>();
-            let h = compute_h(&mle, &r1, &r2_sub_r1);
-
-            // Verify random challenges
-            for _ in 0..10 {
-                let t_f: Fr = rng.gen();
-                let l_eval = compute_l::<Fr>(&r1, &r2_sub_r1, t_f);
-                let h_eval = h.evaluate(&t_f);
-                let mle_eval = mle.evaluate(&l_eval);
-                assert_eq!(h_eval, mle_eval);
-            }
-        }
+        let mut prover_tr = Blake2bTranscript::new(b"eval-reduction-test");
+        let instance = EvalReductionInstance::new(&[&opening1, &opening2, &opening3]).unwrap();
+        let (proof, reduced) = instance.prove(&witness, &mut prover_tr).unwrap();
+        let mut verifier_tr = Blake2bTranscript::new(b"eval-reduction-test");
+        let reduced_verifier = instance.verify(&proof, &mut verifier_tr).unwrap();
+        assert_eq!(reduced_verifier, reduced);
     }
 }

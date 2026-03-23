@@ -113,7 +113,10 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         // Read the prover's claimed value and compare against IO.
         let output_claim = verifier
             .accumulator
-            .get_node_output_opening(output_computation_node.idx)
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::NodeOutput(output_computation_node.idx),
+                SumcheckId::NodeExecution(output_computation_node.idx + 1),
+            )
             .1;
         if expected_output_claim != output_claim {
             return Err(ProofVerifyError::InvalidOpeningProof(
@@ -134,19 +137,15 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             // Before each node is proven,
             // perform eval reduction to reduce openings to a unique claim for the node output.
 
-            let eval_reduction_res =
-                EvalReductionVerifier::verify(verifier, node, &self.eval_reduction_proofs);
+            EvalReductionVerifier::verify(verifier, node, &self.eval_reduction_proofs)?;
             let res = OperatorVerifier::verify(node, verifier);
             #[cfg(test)]
             {
-                if let Err(e) = &eval_reduction_res {
-                    println!("Evaluation reduction failed at node {node:#?}: {e:?}");
-                }
                 if let Err(e) = &res {
                     println!("Verification failed at node {node:#?}: {e:?}");
                 }
             }
-            eval_reduction_res?;
+
             res?;
         }
         Ok(())

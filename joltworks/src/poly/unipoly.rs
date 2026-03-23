@@ -16,9 +16,7 @@ use crate::utils::small_scalar::SmallScalar;
 
 // ax^2 + bx + c stored as vec![c,b,a]
 // ax^3 + bx^2 + cx + d stored as vec![d,c,b,a]
-#[derive(
-    CanonicalSerialize, CanonicalDeserialize, Debug, Default, Clone, PartialEq, Allocative,
-)]
+#[derive(CanonicalSerialize, CanonicalDeserialize, Debug, Clone, PartialEq, Allocative)]
 pub struct UniPoly<F: CanonicalSerialize + CanonicalDeserialize> {
     pub coeffs: Vec<F>,
 }
@@ -28,6 +26,12 @@ pub struct UniPoly<F: CanonicalSerialize + CanonicalDeserialize> {
 #[derive(CanonicalSerialize, CanonicalDeserialize, Debug, Clone)]
 pub struct CompressedUniPoly<F: JoltField> {
     pub coeffs_except_linear_term: Vec<F>,
+}
+
+impl<F: CanonicalSerialize + CanonicalDeserialize + JoltField> Default for UniPoly<F> {
+    fn default() -> Self {
+        Self::zero()
+    }
 }
 
 impl<F: JoltField> UniPoly<F> {
@@ -48,9 +52,8 @@ impl<F: JoltField> UniPoly<F> {
 
     /// Interpolate a polynomial from its evaluations at the points 0, 1, 2, ..., n-1.
     pub fn from_evals(evals: &[F]) -> Self {
-        UniPoly {
-            coeffs: Self::vandermonde_interpolation(evals),
-        }
+        let coeffs = Self::vandermonde_interpolation(evals);
+        Self::from_coeff(coeffs)
     }
 
     /// Interpolate a polynomial `p(x)` from its evaluations at even points `0, 2, 3, ..., n-1`
@@ -97,15 +100,14 @@ impl<F: JoltField> UniPoly<F> {
 
     fn vandermonde_interpolation(evals: &[F]) -> Vec<F> {
         let n = evals.len();
-        let xs: Vec<F> = (0..evals.len()).map(|x| F::from_u64(x as u64)).collect();
+        let xs: Vec<F> = (0..n).map(|x| F::from_u64(x as u64)).collect();
 
         let mut vandermonde: Vec<Vec<F>> = Vec::with_capacity(n);
         for i in 0..n {
             let mut row = Vec::with_capacity(n);
             let x = xs[i];
             row.push(F::one());
-            row.push(x);
-            for j in 2..n {
+            for j in 1..n {
                 row.push(row[j - 1] * x);
             }
             row.push(evals[i]);
@@ -148,7 +150,7 @@ impl<F: JoltField> UniPoly<F> {
         }
     }
 
-    fn is_zero(&self) -> bool {
+    pub fn is_zero(&self) -> bool {
         self.coeffs.is_empty() || self.coeffs.iter().all(|c| c == &F::zero())
     }
 
@@ -157,7 +159,9 @@ impl<F: JoltField> UniPoly<F> {
     }
 
     pub fn zero() -> Self {
-        Self::from_coeff(Vec::new())
+        UniPoly {
+            coeffs: vec![F::zero()],
+        }
     }
 
     pub fn degree(&self) -> usize {
@@ -266,6 +270,11 @@ impl<F: JoltField> UniPoly<F> {
     }
 
     pub fn compress(&self) -> CompressedUniPoly<F> {
+        if self.coeffs.len() < 2 {
+            return CompressedUniPoly {
+                coeffs_except_linear_term: self.coeffs.clone(),
+            };
+        }
         let coeffs_except_linear_term = [&self.coeffs[..1], &self.coeffs[2..]].concat();
         debug_assert_eq!(coeffs_except_linear_term.len() + 1, self.coeffs.len());
         CompressedUniPoly {
@@ -564,6 +573,27 @@ mod tests {
         let poly = UniPoly::from_evals_toom(&toom_evals);
 
         assert_eq!(gt_poly, poly);
+    }
+
+    #[test]
+    fn test_from_evals_edge_cases() {
+        // Test the zero polynomial
+        let evals = vec![Fr::zero()];
+        let poly = UniPoly::from_evals(&evals);
+        let zero_poly = UniPoly::<Fr>::zero();
+        assert_eq!(zero_poly, poly);
+
+        // Test a constant polynomial
+        let constant_poly = UniPoly::<Fr>::from_coeff(vec![42.into()]);
+        let evals = vec![42.into()];
+        let poly = UniPoly::from_evals(&evals);
+        assert_eq!(constant_poly, poly);
+
+        // Test where evals.len() > DEGREE + 1, i.e. more evals than needed to determine the polynomial.
+        let evals = vec![0.into(), 1.into(), 4.into(), 9.into()]; // evals of x^2 at 0, 1, 2, 3
+        let poly = UniPoly::from_evals(&evals);
+        let expected_poly = UniPoly::<Fr>::from_coeff(vec![0.into(), 0.into(), 1.into()]); // x^2
+        assert_eq!(expected_poly, poly);
     }
 
     #[test]

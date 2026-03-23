@@ -444,7 +444,7 @@ mod tests {
 
         // Take claims
         for (key, (_, value)) in &prover_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::new::<Fr>(vec![]);
+            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::default();
             verifier_accumulator
                 .openings
                 .insert(*key, (empty_point, *value));

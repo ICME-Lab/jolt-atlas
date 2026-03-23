@@ -14,7 +14,10 @@ use joltworks::{
         commitment::commitment_scheme::CommitmentScheme, opening_proof::ProverOpeningAccumulator,
         unipoly::CompressedUniPoly,
     },
-    subprotocols::{sumcheck::SumcheckInstanceProof, sumcheck_prover::SumcheckInstanceProver},
+    subprotocols::{
+        evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof,
+        sumcheck_prover::SumcheckInstanceProver,
+    },
     transcripts::{AppendToTranscript, Transcript},
 };
 
@@ -23,6 +26,7 @@ pub use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTr
 
 use crate::onnx_proof::{
     ops::{malicious_sub::malicious_sub_prove, OperatorProver},
+    prover::EvalReductionProver,
     AtlasProverPreprocessing, ONNXProof, ProofId, Prover, ProverDebugInfo,
 };
 use std::collections::BTreeMap;
@@ -69,7 +73,13 @@ impl MaliciousONNXProof {
         ONNXProof::<F, T, PCS>::output_claim(&mut prover);
 
         // IOP portion
-        Self::iop(pp.model().nodes(), &mut prover, &mut proofs);
+        let mut eval_reduction_proofs = BTreeMap::new();
+        Self::iop(
+            pp.model().nodes(),
+            &mut prover,
+            &mut proofs,
+            &mut eval_reduction_proofs,
+        );
 
         // Reduction sum-check + PCS::prove
         let reduced_opening_proof =
@@ -79,8 +89,7 @@ impl MaliciousONNXProof {
             io,
             commitments,
             proofs,
-            // TODO(AntoineF4C5): re-implement
-            BTreeMap::new(),
+            eval_reduction_proofs,
             reduced_opening_proof,
         )
     }
@@ -109,7 +118,14 @@ impl MaliciousONNXProof {
             &mut prover.transcript,
         );
         ONNXProof::<F, T, PCS>::output_claim(&mut prover);
-        Self::iop(pp.model().nodes(), &mut prover, &mut proofs);
+
+        let mut eval_reduction_proofs = BTreeMap::new();
+        Self::iop(
+            pp.model().nodes(),
+            &mut prover,
+            &mut proofs,
+            &mut eval_reduction_proofs,
+        );
         let reduced_opening_proof =
             ONNXProof::<F, T, PCS>::prove_reduced_openings(&mut prover, &poly_map, &pp.generators);
         ONNXProof::<F, T, PCS>::finalize_proof(
@@ -117,7 +133,7 @@ impl MaliciousONNXProof {
             io,
             commitments,
             proofs,
-            BTreeMap::new(),
+            eval_reduction_proofs,
             reduced_opening_proof,
         )
     }
@@ -143,9 +159,13 @@ impl MaliciousONNXProof {
         computation_nodes: &BTreeMap<usize, ComputationNode>,
         prover: &mut Prover<F, T>,
         proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+        eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
     ) {
         for (_, computation_node) in computation_nodes.iter().rev() {
-            // prover.perform_eval_reduction(computation_node);
+            eval_reduction_proofs.insert(
+                computation_node.idx,
+                EvalReductionProver::prove(prover, computation_node).unwrap(),
+            );
             if matches!(computation_node.operator, Operator::Sub(_)) {
                 proofs.extend(malicious_sub_prove(computation_node, prover));
             } else {

@@ -11,11 +11,13 @@ use atlas_onnx_tracer::{
 use joltworks::{
     field::JoltField,
     poly::{
-        commitment::commitment_scheme::CommitmentScheme, opening_proof::ProverOpeningAccumulator,
-        unipoly::CompressedUniPoly,
+        commitment::commitment_scheme::CommitmentScheme,
+        opening_proof::ProverOpeningAccumulator,
+        unipoly::{CompressedUniPoly, UniPoly},
     },
     subprotocols::{
-        evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof,
+        evaluation_reduction::{EvalReductionProof, ReducedInstance},
+        sumcheck::SumcheckInstanceProof,
         sumcheck_prover::SumcheckInstanceProver,
     },
     transcripts::{AppendToTranscript, Transcript},
@@ -26,7 +28,6 @@ pub use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTr
 
 use crate::onnx_proof::{
     ops::{malicious_sub::malicious_sub_prove, OperatorProver},
-    prover::EvalReductionProver,
     AtlasProverPreprocessing, ONNXProof, ProofId, Prover, ProverDebugInfo,
 };
 use std::collections::BTreeMap;
@@ -164,7 +165,7 @@ impl MaliciousONNXProof {
         for (_, computation_node) in computation_nodes.iter().rev() {
             eval_reduction_proofs.insert(
                 computation_node.idx,
-                EvalReductionProver::prove(prover, computation_node).unwrap(),
+                malicious_eval_reduction_prove(computation_node, prover),
             );
             if matches!(computation_node.operator, Operator::Sub(_)) {
                 proofs.extend(malicious_sub_prove(computation_node, prover));
@@ -222,4 +223,35 @@ pub fn malicious_sumcheck_prove<F: JoltField, ProofTranscript: Transcript>(
         r_sumcheck,
         final_claim,
     )
+}
+
+/// Simulate the evaluation reduction protocol, only we just consider the case where num_use = 1 for simplicity.
+pub fn malicious_eval_reduction_prove<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    prover: &mut Prover<F, T>,
+) -> EvalReductionProof<F> {
+    // Recover existing opening for this node
+    let existing_opening = prover.accumulator.get_node_openings(node.idx);
+    assert!(
+        existing_opening.len() == 1,
+        "Expected exactly one existing opening for node {}",
+        node.idx
+    );
+    let opening = existing_opening[0].clone();
+
+    let h = UniPoly::from_coeff(vec![opening.1]);
+    h.append_to_transcript(&mut prover.transcript);
+    let _ = prover.transcript.challenge_scalar_optimized::<F>();
+
+    let reduced = ReducedInstance {
+        r: opening.0.clone().into(),
+        claim: opening.1,
+    };
+
+    prover
+        .accumulator
+        .reduced_evaluations
+        .insert(node.idx, reduced);
+
+    EvalReductionProof { h }
 }

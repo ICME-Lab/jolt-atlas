@@ -94,10 +94,9 @@ pub trait OpeningAccumulator<F: JoltField> {
         sumcheck: SumcheckId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F);
 
-    /// TODO(#138): While we no longer overwrite fan-out entries, `.next()` returns
-    /// the entry with the smallest consumer index and we never check the remaining
-    /// entries. All per-consumer openings for the same producer should be reduced
-    /// to a single opening (PAZK 4.5.2).
+    /// Gets the reduced opening claim for the given node index.
+    /// The reduced opening claim is either the unique existing opening claim,
+    /// Or obtained from the evaluation reduction protocol if multiple openings need to be reduced.
     fn get_node_output_opening(&self, node_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F);
 }
 
@@ -138,10 +137,6 @@ impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
     }
 
     fn get_node_output_opening(&self, node_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        // Scan for any NodeExecution(_) entry for this node's NodeOutput.
-        // TODO(#138): `.next()` returns the entry with the smallest consumer index;
-        // the remaining entries are never verified. See trait-level doc comment.
-
         let reduced_instance = self
             .reduced_evaluations
             .get(&node_idx)
@@ -519,9 +514,6 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
     }
 
     fn get_node_output_opening(&self, node_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        // Scan for any NodeExecution(_) entry for this node's NodeOutput.
-        // TODO(#138): `.next()` returns the entry with the smallest consumer index;
-        // the remaining entries are never verified. See trait-level doc comment.
         let reduced_instance = self
             .reduced_evaluations
             .get(&node_idx)

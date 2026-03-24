@@ -238,7 +238,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     }
 }
 
-pub struct EvalReductionProver;
+struct EvalReductionProver;
 
 impl EvalReductionProver {
     /// Reduce dual NodeOutput openings for a producer node before proving that node.

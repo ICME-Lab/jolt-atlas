@@ -137,15 +137,18 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             // Before each node is proven,
             // perform eval reduction to reduce openings to a unique claim for the node output.
 
-            EvalReductionVerifier::verify(verifier, node, &self.eval_reduction_proofs)?;
+            let eval_red_res =
+                EvalReductionVerifier::verify(verifier, node, &self.eval_reduction_proofs);
+            #[cfg(test)]
+            if let Err(e) = &eval_red_res {
+                println!("Verification failed at node {node:#?}: {e:?}");
+            }
+            eval_red_res?;
             let res = OperatorVerifier::verify(node, verifier);
             #[cfg(test)]
-            {
-                if let Err(e) = &res {
-                    println!("Verification failed at node {node:#?}: {e:?}");
-                }
+            if let Err(e) = &res {
+                println!("Verification failed at node {node:#?}: {e:?}");
             }
-
             res?;
         }
         Ok(())

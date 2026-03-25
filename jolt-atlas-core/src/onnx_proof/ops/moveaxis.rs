@@ -1,18 +1,20 @@
 use atlas_onnx_tracer::{node::ComputationNode, ops::MoveAxis};
-use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
     poly::opening_proof::{
-        OpeningAccumulator, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
+        OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
 
-use crate::onnx_proof::{
-    ops::{OperatorProofTrait, Prover, Verifier},
-    ProofId,
+use crate::{
+    onnx_proof::{
+        ops::{OperatorProofTrait, Prover, Verifier},
+        ProofId,
+    },
+    utils::opening_id_builder::{OpeningIdBuilder, OpeningTarget},
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MoveAxis {
@@ -88,16 +90,17 @@ impl<F: JoltField> MoveAxisProver<F> {
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) {
+        let node = &self.params.computation_node;
         // For MoveAxis, claim_A == claim_O since the data doesn't change
         let claim_O = accumulator
             .get_node_output_opening(self.params.computation_node.idx)
             .1;
 
+        let opening_id = node.build_opening_id(OpeningTarget::Input(0));
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            self.r_input.clone().into(),
+            opening_id,
+            OpeningPoint::new(self.r_input.clone()),
             claim_O,
         );
     }
@@ -135,11 +138,12 @@ impl<F: JoltField> MoveAxisVerifier<F> {
         transcript: &mut impl Transcript,
     ) -> Result<(), ProofVerifyError> {
         // Cache the opening point for the input node
+        let node = &self.params.computation_node;
+        let opening_id = node.build_opening_id(OpeningTarget::Input(0));
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            self.r_input.clone().into(),
+            opening_id,
+            OpeningPoint::new(self.r_input.clone()),
         );
 
         // Retrieve the claim for the input node

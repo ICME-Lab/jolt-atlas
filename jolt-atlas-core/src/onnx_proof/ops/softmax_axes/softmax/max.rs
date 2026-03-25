@@ -10,7 +10,7 @@ use joltworks::{
         },
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -40,28 +40,27 @@ impl IndicatorParams {
         softmax_index: SoftmaxIndex,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
-        let f_max_index = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::SoftmaxMaxIndex(
-                    softmax_index.node_idx,
-                    softmax_index.feature_idx,
-                ),
-                SumcheckId::NodeExecution(softmax_index.node_idx),
-            )
-            .1;
+        let max_index_id = VirtualOpeningId::new(
+            VirtualPolynomial::SoftmaxMaxIndex(
+                softmax_index.node_idx,
+                softmax_index.feature_idx,
+            ),
+            SumcheckId::NodeExecution(softmax_index.node_idx),
+        );
+        let f_max_index = accumulator.get_virtual_polynomial_opening(max_index_id).1;
         let max_index = f_max_index
             .to_u64()
             .expect("max index should fit in 64 bits") as usize;
         Self {
             softmax_index,
             num_rounds: accumulator
-                .get_virtual_polynomial_opening(
+                .get_virtual_polynomial_opening(VirtualOpeningId::new(
                     VirtualPolynomial::SoftmaxFeatureOutput(
                         softmax_index.node_idx,
                         softmax_index.feature_idx,
                     ),
                     SumcheckId::NodeExecution(softmax_index.node_idx),
-                )
+                ))
                 .0
                 .r
                 .len(),
@@ -76,13 +75,14 @@ impl<F: JoltField> SumcheckInstanceParams<F> for IndicatorParams {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, max_claim) = accumulator.get_virtual_polynomial_opening(
+        let max_output_id = VirtualOpeningId::new(
             VirtualPolynomial::SoftmaxMaxOutput(
                 self.softmax_index.node_idx,
                 self.softmax_index.feature_idx,
             ),
             SumcheckId::NodeExecution(self.softmax_index.node_idx),
         );
+        let (_, max_claim) = accumulator.get_virtual_polynomial_opening(max_output_id);
         max_claim
     }
 
@@ -161,13 +161,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for IndicatorProv
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
+        let input_logits_id = VirtualOpeningId::new(
             VirtualPolynomial::SoftmaxInputLogitsOutput(
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
             SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
+        );
+        accumulator.append_virtual(
+            transcript,
+            input_logits_id,
             opening_point.clone(),
             self.softmax_operand.final_sumcheck_claim(),
         );
@@ -201,13 +204,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for IndicatorVe
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let (_, softmax_operand_claim) = accumulator.get_virtual_polynomial_opening(
+        let input_logits_id = VirtualOpeningId::new(
             VirtualPolynomial::SoftmaxInputLogitsOutput(
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
             SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
         );
+        let (_, softmax_operand_claim) = accumulator.get_virtual_polynomial_opening(input_logits_id);
         let sumcheck_opening = sumcheck_challenges.into_opening();
         let mut y =
             index_to_field_bitvector::<F>(self.params.max_index as u64, sumcheck_opening.len());
@@ -224,13 +228,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for IndicatorVe
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
+        let input_logits_id = VirtualOpeningId::new(
             VirtualPolynomial::SoftmaxInputLogitsOutput(
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
             SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
+        );
+        accumulator.append_virtual(
+            transcript,
+            input_logits_id,
             opening_point.clone(),
         );
     }

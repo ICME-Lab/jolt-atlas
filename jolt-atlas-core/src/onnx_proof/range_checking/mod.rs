@@ -18,7 +18,7 @@ use joltworks::{
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN,
+            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN,
         },
     },
     subprotocols::{
@@ -197,10 +197,11 @@ where
     }
 
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
-        let (r_node_output, _) = accumulator.get_virtual_polynomial_opening(
+        let id = VirtualOpeningId::new(
             self.operands.get_input_operands()[0],
             SumcheckId::NodeExecution(self.operands.node_idx()),
         );
+        let (r_node_output, _) = accumulator.get_virtual_polynomial_opening(id);
         r_node_output
     }
 
@@ -249,15 +250,15 @@ impl<H: RangeCheckingOperandsTrait> RaOneHotEncoding for RangeCheckEncoding<H> {
         self.operands.rad_poly(d)
     }
 
-    fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (
+    fn r_cycle_source(&self) -> VirtualOpeningId {
+        VirtualOpeningId::new(
             VirtualPolynomial::NodeOutput(self.operands.node_idx()),
             SumcheckId::NodeExecution(self.operands.node_idx()),
         )
     }
 
-    fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (self.operands.get_output_operand(), SumcheckId::Raf)
+    fn ra_source(&self) -> VirtualOpeningId {
+        VirtualOpeningId::new(self.operands.get_output_operand(), SumcheckId::Raf)
     }
 
     fn log_k(&self) -> usize {
@@ -296,7 +297,8 @@ fn append_raf_claims_prover<F: JoltField, LUT, H>(
     for (tensor, (poly, sumcheck_id)) in operand_tensors.into_iter().zip(raf_specs) {
         let claim = MultilinearPolynomial::from(tensor.into_container_data()) // TODO: make this work with from_i32
             .evaluate(&r_cycle.r);
-        opening_accumulator.append_virtual(transcript, poly, sumcheck_id, r_cycle.clone(), claim);
+        let id = VirtualOpeningId::new(poly, sumcheck_id);
+        opening_accumulator.append_virtual(transcript, id, r_cycle.clone(), claim);
     }
 }
 
@@ -315,6 +317,7 @@ fn append_raf_claims_verifier<F: JoltField, LUT, H>(
     for (poly, sumcheck_id) in
         <RangeCheckProvider<H> as PrefixSuffixShoutProvider<F, LUT>>::raf_claim_specs(provider)
     {
-        opening_accumulator.append_virtual(transcript, poly, sumcheck_id, r_cycle.clone());
+        let id = VirtualOpeningId::new(poly, sumcheck_id);
+        opening_accumulator.append_virtual(transcript, id, r_cycle.clone());
     }
 }

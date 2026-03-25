@@ -13,7 +13,7 @@ use crate::{
         },
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN,
+            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN,
         },
         prefix_suffix::{Prefix, PrefixRegistry, PrefixSuffixDecomposition},
         split_eq_poly::GruenSplitEqPolynomial,
@@ -676,10 +676,10 @@ where
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let id = VirtualOpeningId::new(self.params.polynomial_type, self.params.sumcheck_id);
         accumulator.append_virtual(
             transcript,
-            self.params.polynomial_type,
-            self.params.sumcheck_id,
+            id,
             opening_point,
             self.ra.as_ref().unwrap().final_sumcheck_claim(),
         );
@@ -724,8 +724,8 @@ where
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let (r_address_prime, r_node_output_prime) = opening_point.split_at(LOG_K);
-        let (_, ra_claim) = accumulator
-            .get_virtual_polynomial_opening(self.params.polynomial_type, self.params.sumcheck_id);
+        let id = VirtualOpeningId::new(self.params.polynomial_type, self.params.sumcheck_id);
+        let (_, ra_claim) = accumulator.get_virtual_polynomial_opening(id);
         let val_claim = self.params.table.evaluate_mle(&r_address_prime.r);
         let eq_eval = EqPolynomial::mle(&self.params.r_node_output.r, &r_node_output_prime.r);
 
@@ -752,12 +752,8 @@ where
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            self.params.polynomial_type,
-            self.params.sumcheck_id,
-            opening_point,
-        );
+        let id = VirtualOpeningId::new(self.params.polynomial_type, self.params.sumcheck_id);
+        accumulator.append_virtual(transcript, id, opening_point);
     }
 }
 

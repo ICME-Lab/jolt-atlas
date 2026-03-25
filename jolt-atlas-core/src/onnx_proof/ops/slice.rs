@@ -7,7 +7,7 @@ use atlas_onnx_tracer::{
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, SumcheckId},
+    poly::opening_proof::{OpeningAccumulator, SumcheckId, VirtualOpeningId},
     subprotocols::{
         gamma_fold::{gamma_powers, GammaFoldProver, GammaFoldVerifier},
         sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
@@ -125,11 +125,17 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
 
         let output_claim = verifier
             .accumulator
-            .get_virtual_polynomial_opening(claim_poly_output(node), SumcheckId::RLC(node.idx))
+            .get_virtual_polynomial_opening(VirtualOpeningId::new(
+                claim_poly_output(node),
+                SumcheckId::RLC(node.idx),
+            ))
             .1;
         let input_claim = verifier
             .accumulator
-            .get_virtual_polynomial_opening(claim_poly_input(node), SumcheckId::RLC(node.idx))
+            .get_virtual_polynomial_opening(VirtualOpeningId::new(
+                claim_poly_input(node),
+                SumcheckId::RLC(node.idx),
+            ))
             .1;
         if output_claim != input_claim {
             return Err(ProofVerifyError::InvalidOpeningProof(

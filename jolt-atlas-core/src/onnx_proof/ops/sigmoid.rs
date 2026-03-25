@@ -32,7 +32,7 @@ use joltworks::{
         },
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         teleport_id_poly::TeleportIdPolynomial,
         unipoly::UniPoly,
@@ -319,12 +319,11 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SigmoidParams<F> {
             .get_node_output_opening(self.computation_node.idx)
             .1;
 
-        let quotient_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::TeleportQuotient(self.computation_node.idx),
-                SumcheckId::Raf,
-            )
-            .1;
+        let quotient_id = VirtualOpeningId::new(
+            VirtualPolynomial::TeleportQuotient(self.computation_node.idx),
+            SumcheckId::Raf,
+        );
+        let quotient_claim = accumulator.get_virtual_polynomial_opening(quotient_id).1;
 
         rv_claim + self.gamma * quotient_claim
     }
@@ -389,13 +388,11 @@ impl<F: JoltField> SigmoidProver<F> {
         // TODO(ClankPan): Follow up on the TODOs in tanh.rs.
         let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data())
             .evaluate(&params.r_node_output.r);
-        accumulator.append_virtual(
-            transcript,
+        let quotient_id = VirtualOpeningId::new(
             VirtualPolynomial::TeleportQuotient(params.computation_node.idx),
             SumcheckId::Raf,
-            params.r_node_output.clone(),
-            quotient_claim,
         );
+        accumulator.append_virtual(transcript, quotient_id, params.r_node_output.clone(), quotient_claim);
 
         let input_onehot = MultilinearPolynomial::from(input_onehot);
         assert_eq!(input_onehot.len(), sigmoid_table.len());
@@ -463,11 +460,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SigmoidProver
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let r = [opening_point.r.as_slice(), &self.params.r_node_output.r].concat();
-        accumulator.append_virtual(
-            transcript,
+        let sigmoid_ra_id = VirtualOpeningId::new(
             VirtualPolynomial::SigmoidRa(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
-            r.into(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            sigmoid_ra_id,
+            OpeningPoint::new(r),
             self.input_onehot.final_sumcheck_claim(),
         );
     }
@@ -497,12 +497,11 @@ impl<F: JoltField> SigmoidVerifier<F> {
     ) -> Self {
         let params = SigmoidParams::new(computation_node, graph, accumulator, transcript, op);
 
-        accumulator.append_virtual(
-            transcript,
+        let quotient_id = VirtualOpeningId::new(
             VirtualPolynomial::TeleportQuotient(params.computation_node.idx),
             SumcheckId::Raf,
-            params.r_node_output.clone(),
         );
+        accumulator.append_virtual(transcript, quotient_id, params.r_node_output.clone());
 
         let sigmoid_table = SigmoidTable::new(params.op.log_table, params.op.tau);
         let sigmoid_table = MultilinearPolynomial::from(sigmoid_table.materialize());
@@ -528,12 +527,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SigmoidVeri
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
 
-        let ra_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::SigmoidRa(self.params.computation_node.idx),
-                SumcheckId::NodeExecution(self.params.computation_node.idx),
-            )
-            .1;
+        let sigmoid_ra_id = VirtualOpeningId::new(
+            VirtualPolynomial::SigmoidRa(self.params.computation_node.idx),
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
+        );
+        let ra_claim = accumulator.get_virtual_polynomial_opening(sigmoid_ra_id).1;
 
         // Evaluate sigmoid table at the opening point
         let table_claim = self.sigmoid_table.evaluate(&opening_point.r);
@@ -554,12 +552,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SigmoidVeri
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let r = [opening_point.r.as_slice(), &self.params.r_node_output.r].concat();
-        accumulator.append_virtual(
-            transcript,
+        let sigmoid_ra_id = VirtualOpeningId::new(
             VirtualPolynomial::SigmoidRa(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
-            r.into(),
         );
+        accumulator.append_virtual(transcript, sigmoid_ra_id, OpeningPoint::new(r));
     }
 }
 
@@ -582,15 +579,15 @@ impl RaOneHotEncoding for SigmoidRaEncoding {
         CommittedPolynomial::SigmoidRaD(self.node_idx, d)
     }
 
-    fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (
+    fn r_cycle_source(&self) -> VirtualOpeningId {
+        VirtualOpeningId::new(
             VirtualPolynomial::TeleportQuotient(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
 
-    fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (
+    fn ra_source(&self) -> VirtualOpeningId {
+        VirtualOpeningId::new(
             VirtualPolynomial::SigmoidRa(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )

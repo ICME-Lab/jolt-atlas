@@ -1,4 +1,7 @@
-use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
+use crate::{
+    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
+    utils::opening_id_builder::{OpeningIdBuilder, OpeningTarget},
+};
 use atlas_onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
@@ -19,7 +22,7 @@ use joltworks::{
         },
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -219,16 +222,11 @@ impl<F: JoltField> SumcheckInstanceParams<F> for GatherParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let rv_claim = accumulator
-            .get_node_output_opening(self.computation_node.idx)
-            .1;
+        let node = &self.computation_node;
+        let rv_claim = accumulator.get_node_output_opening(node.idx).1;
 
-        let index_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.computation_node.inputs[1]),
-                SumcheckId::NodeExecution(self.computation_node.idx),
-            )
-            .1;
+        let index_id = node.build_opening_id(OpeningTarget::Input(1));
+        let index_claim = accumulator.get_virtual_polynomial_opening(index_id).1;
 
         rv_claim + self.gamma * index_claim
     }
@@ -272,11 +270,14 @@ impl<F: JoltField> GatherProver<F> {
         assert_eq!(r_word.len(), word_dim.log_2(),);
 
         let index_claim = MultilinearPolynomial::from(indexes.clone()).evaluate(r_index);
-        accumulator.append_virtual(
-            transcript,
+        let index_id = VirtualOpeningId::new(
             VirtualPolynomial::NodeOutput(params.computation_node.inputs[1]),
             SumcheckId::NodeExecution(params.computation_node.idx),
-            r_index.to_vec().into(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            index_id,
+            OpeningPoint::new(r_index.to_vec()),
             index_claim,
         );
 
@@ -360,6 +361,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GatherProver<
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let node = &self.params.computation_node;
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
@@ -371,19 +373,22 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GatherProver<
             .split_at(self.params.lookup_vars);
 
         let r_idx_onehot = [r_index, &opening_point.r].concat();
-        accumulator.append_virtual(
-            transcript,
+        let ra_id = VirtualOpeningId::new(
             VirtualPolynomial::NodeOutputRa(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
-            r_idx_onehot.into(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            ra_id,
+            OpeningPoint::new(r_idx_onehot),
             self.index_onehot.final_sumcheck_claim(),
         );
         let r_dict = [&opening_point.r, r_word].concat();
+        let dictionary_id = node.build_opening_id(OpeningTarget::Input(0));
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            r_dict.into(),
+            dictionary_id,
+            OpeningPoint::new(r_dict),
             self.dictionary.final_sumcheck_claim(),
         );
     }
@@ -407,12 +412,11 @@ impl<F: JoltField> GatherVerifier<F> {
         let params = GatherParams::new(computation_node, graph, accumulator, transcript);
 
         let (r_index, _) = params.r_node_output.r.split_at(params.lookup_vars);
-        accumulator.append_virtual(
-            transcript,
+        let index_id = VirtualOpeningId::new(
             VirtualPolynomial::NodeOutput(params.computation_node.inputs[1]),
             SumcheckId::NodeExecution(params.computation_node.idx),
-            r_index.to_vec().into(),
         );
+        accumulator.append_virtual(transcript, index_id, OpeningPoint::new(r_index.to_vec()));
 
         Self { params }
     }
@@ -432,12 +436,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GatherVerif
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
 
-        let ra_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutputRa(self.params.computation_node.idx),
-                SumcheckId::NodeExecution(self.params.computation_node.idx),
-            )
-            .1;
+        let ra_id = VirtualOpeningId::new(
+            VirtualPolynomial::NodeOutputRa(self.params.computation_node.idx),
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
+        );
+        let ra_claim = accumulator.get_virtual_polynomial_opening(ra_id).1;
         let int_eval =
             IdentityPolynomial::new(self.params.num_words.log_2()).evaluate(&opening_point.r);
         let dict_claim = accumulator.get_node_output_claim(
@@ -453,6 +456,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GatherVerif
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let node = &self.params.computation_node;
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
@@ -463,19 +467,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GatherVerif
             .r
             .split_at(self.params.lookup_vars);
         let r_idx_onehot = [r_index, &opening_point.r].concat();
-        accumulator.append_virtual(
-            transcript,
+        let ra_id = VirtualOpeningId::new(
             VirtualPolynomial::NodeOutputRa(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
-            r_idx_onehot.into(),
         );
+        accumulator.append_virtual(transcript, ra_id, OpeningPoint::new(r_idx_onehot));
         let r_dict = [&opening_point.r, r_word].concat();
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            r_dict.into(),
-        );
+        let dictionary_id = node.build_opening_id(OpeningTarget::Input(0));
+        accumulator.append_virtual(transcript, dictionary_id, OpeningPoint::new(r_dict));
     }
 }
 
@@ -623,11 +622,12 @@ fn ra_hamming_bool_params<F: JoltField>(
 ) -> HammingBooleanitySumcheckParams<F> {
     let polynomial_types = vec![VirtualPolynomial::HammingWeight];
 
+    let lookup_id = VirtualOpeningId::new(
+        VirtualPolynomial::NodeOutput(computation_node.inputs[1]),
+        SumcheckId::NodeExecution(computation_node.idx),
+    );
     let r_lookup = opening_accumulator
-        .get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(computation_node.inputs[1]),
-            SumcheckId::NodeExecution(computation_node.idx),
-        )
+        .get_virtual_polynomial_opening(lookup_id)
         .0
         .r;
 
@@ -651,11 +651,12 @@ fn ra_booleanity_params<F: JoltField>(
 ) -> BooleanitySumcheckParams<F> {
     let polynomial_type = CommittedPolynomial::GatherRa(computation_node.idx);
 
+    let lookup_id = VirtualOpeningId::new(
+        VirtualPolynomial::NodeOutput(computation_node.inputs[1]),
+        SumcheckId::NodeExecution(computation_node.idx),
+    );
     let r_lookup = opening_accumulator
-        .get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(computation_node.inputs[1]),
-            SumcheckId::NodeExecution(computation_node.idx),
-        )
+        .get_virtual_polynomial_opening(lookup_id)
         .0
         .r;
     let r_address = transcript
@@ -729,11 +730,12 @@ fn ra_hamming_weight_params<F: JoltField>(
 ) -> HammingWeightSumcheckParams<F> {
     let polynomial_types = vec![CommittedPolynomial::GatherRa(computation_node.idx)];
 
+    let lookup_id = VirtualOpeningId::new(
+        VirtualPolynomial::NodeOutput(computation_node.inputs[1]),
+        SumcheckId::NodeExecution(computation_node.idx),
+    );
     let r_lookup = opening_accumulator
-        .get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(computation_node.inputs[1]),
-            SumcheckId::NodeExecution(computation_node.idx),
-        )
+        .get_virtual_polynomial_opening(lookup_id)
         .0
         .r;
 

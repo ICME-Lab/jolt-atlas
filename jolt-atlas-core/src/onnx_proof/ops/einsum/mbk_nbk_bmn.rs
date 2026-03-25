@@ -1,18 +1,18 @@
 use std::array;
 
+use crate::utils::opening_id_builder::{OpeningIdBuilder, OpeningTarget};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
 };
-use common::VirtualPolynomial;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
+            BIG_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -204,6 +204,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MbkNbkBmnProv
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let node = &self.params.computation_node;
         let sumcheck_challenges = sumcheck_challenges.into_opening();
         let (m, b) = (
             self.params.einsum_dims.left_operand()[0],
@@ -214,20 +215,20 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MbkNbkBmnProv
 
         let r_left_node_output = [r_m.r.as_slice(), &sumcheck_challenges].concat();
         let left_opening_point = self.params.normalize_opening_point(&r_left_node_output);
+        let left_opening_id = node.build_opening_id(OpeningTarget::Input(0));
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
+            left_opening_id,
             left_opening_point.clone(),
             self.left_operand.final_sumcheck_claim(),
         );
 
         let r_right_node_output = [r_n.r.as_slice(), &sumcheck_challenges].concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right_node_output);
+        let right_opening_id = node.build_opening_id(OpeningTarget::Input(1));
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
+            right_opening_id,
             right_opening_point,
             self.right_operand.final_sumcheck_claim(),
         );
@@ -282,6 +283,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MbkNbkBmnVe
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let node = &self.params.computation_node;
         let sumcheck_challenges = sumcheck_challenges.into_opening();
         let (m, b) = (
             self.params.einsum_dims.left_operand()[0],
@@ -292,21 +294,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MbkNbkBmnVe
 
         let r_left_node_output = [r_m.r.as_slice(), &sumcheck_challenges].concat();
         let left_opening_point = self.params.normalize_opening_point(&r_left_node_output);
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            left_opening_point.clone(),
-        );
+        let left_opening_id = node.build_opening_id(OpeningTarget::Input(0));
+        accumulator.append_virtual(transcript, left_opening_id, left_opening_point.clone());
 
         let r_right_node_output = [r_n.r.as_slice(), &sumcheck_challenges].concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right_node_output);
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            right_opening_point,
-        );
+        let right_opening_id = node.build_opening_id(OpeningTarget::Input(1));
+        accumulator.append_virtual(transcript, right_opening_id, right_opening_point);
     }
 }
 

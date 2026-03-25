@@ -7,7 +7,7 @@ use atlas_onnx_tracer::{
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, SumcheckId},
+    poly::opening_proof::{OpeningAccumulator, SumcheckId, VirtualOpeningId},
     subprotocols::{
         gamma_fold::{gamma_powers, GammaFoldProver, GammaFoldVerifier},
         sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
@@ -134,15 +134,18 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
 
         let claim_c = verifier
             .accumulator
-            .get_virtual_polynomial_opening(claim_poly_output(node), SumcheckId::RLC(node.idx))
+            .get_virtual_polynomial_opening(VirtualOpeningId::new(
+                claim_poly_output(node),
+                SumcheckId::RLC(node.idx),
+            ))
             .1;
         let expected_claim_c = (0..input_count).fold(F::zero(), |running, input_idx| {
             let input_claim = verifier
                 .accumulator
-                .get_virtual_polynomial_opening(
+                .get_virtual_polynomial_opening(VirtualOpeningId::new(
                     claim_poly_input(node, input_idx),
                     SumcheckId::RLC(node.idx),
-                )
+                ))
                 .1;
             running + input_claim
         });

@@ -265,8 +265,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReadRafVeri
             )
             .1;
         let sumcheck_opening = sumcheck_challenges.into_opening();
-        let val_claim = MultilinearPolynomial::from(EXP_LUT_SCALE_128.to_vec())
-            .evaluate(&sumcheck_opening);
+        let val_claim =
+            MultilinearPolynomial::from(EXP_LUT_SCALE_128.to_vec()).evaluate(&sumcheck_opening);
         let int_claim = IdentityPolynomial::new(LOG_EXP_LUT_SIZE).evaluate(&sumcheck_opening);
         ra_claim * (val_claim + self.params.gamma * int_claim)
     }

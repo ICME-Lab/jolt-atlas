@@ -364,7 +364,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GatherProver<
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
 
-        let (r_index, r_word) = self.params.r_node_output.r.split_at(self.params.lookup_vars);
+        let (r_index, r_word) = self
+            .params
+            .r_node_output
+            .r
+            .split_at(self.params.lookup_vars);
 
         let r_idx_onehot = [r_index, &opening_point.r].concat();
         accumulator.append_virtual(
@@ -453,7 +457,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GatherVerif
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
 
-        let (r_index, r_word) = self.params.r_node_output.r.split_at(self.params.lookup_vars);
+        let (r_index, r_word) = self
+            .params
+            .r_node_output
+            .r
+            .split_at(self.params.lookup_vars);
         let r_idx_onehot = [r_index, &opening_point.r].concat();
         accumulator.append_virtual(
             transcript,

@@ -47,9 +47,7 @@ impl<F: JoltField> KNkNParams<F> {
         einsum_dims: EinsumDims,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
-        let r_node_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0;
+        let r_node_output = accumulator.get_node_output_opening(computation_node.idx).0;
         Self {
             r_node_output,
             computation_node,

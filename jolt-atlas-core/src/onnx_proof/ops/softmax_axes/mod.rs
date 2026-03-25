@@ -471,16 +471,14 @@ impl<F: JoltField> SoftmaxAxesProver<F> {
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
     ) {
-        let r_leading_dims_prime =
-            transcript
-                .challenge_vector_optimized::<F>(self.params.num_feature_vectors().log_2())
-                .into_opening();
+        let r_leading_dims_prime = transcript
+            .challenge_vector_optimized::<F>(self.params.num_feature_vectors().log_2())
+            .into_opening();
         let (r_features_prime, _) = accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::SoftmaxInputLogitsOutput(self.params.computation_node.idx, 0),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
         );
-        let r_operand: Vec<F> =
-            [r_leading_dims_prime.as_slice(), &r_features_prime.r].concat();
+        let r_operand: Vec<F> = [r_leading_dims_prime.as_slice(), &r_features_prime.r].concat();
         let operand_claim = MultilinearPolynomial::from(self.operand.clone()).evaluate(&r_operand); // TODO: rm clone
         accumulator.append_virtual(
             transcript,
@@ -739,16 +737,14 @@ impl<F: JoltField> SoftmaxAxesVerifier<F> {
         }
 
         // Stage 4: Link per-feature softmax operand claims to main operand claim
-        let r_leading_dims_prime =
-            transcript
-                .challenge_vector_optimized::<F>(self.params.r_leading_dims().len())
-                .into_opening();
+        let r_leading_dims_prime = transcript
+            .challenge_vector_optimized::<F>(self.params.r_leading_dims().len())
+            .into_opening();
         let (r_features_prime, _) = accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::SoftmaxInputLogitsOutput(self.params.computation_node.idx, 0),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
         );
-        let r_operand: Vec<F> =
-            [r_leading_dims_prime.as_slice(), &r_features_prime.r].concat();
+        let r_operand: Vec<F> = [r_leading_dims_prime.as_slice(), &r_features_prime.r].concat();
 
         accumulator.append_virtual(
             transcript,

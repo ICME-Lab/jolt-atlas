@@ -492,7 +492,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TanhProver<F>
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let r = [opening_point.r.as_slice(), self.params.r_node_output.r.as_slice()].concat();
+        let r = [
+            opening_point.r.as_slice(),
+            self.params.r_node_output.r.as_slice(),
+        ]
+        .concat();
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::TanhRa(self.params.computation_node.idx),
@@ -578,7 +582,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifie
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let r = [opening_point.r.as_slice(), self.params.r_node_output.r.as_slice()].concat();
+        let r = [
+            opening_point.r.as_slice(),
+            self.params.r_node_output.r.as_slice(),
+        ]
+        .concat();
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::TanhRa(self.params.computation_node.idx),

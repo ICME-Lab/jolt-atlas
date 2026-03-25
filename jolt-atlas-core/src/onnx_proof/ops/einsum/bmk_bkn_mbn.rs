@@ -50,9 +50,7 @@ impl<F: JoltField> BmkBknMbnParams<F> {
         einsum_dims: EinsumDims,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
-        let r_node_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0;
+        let r_node_output = accumulator.get_node_output_opening(computation_node.idx).0;
         let log_b = einsum_dims.left_operand()[0].log_2();
         let log_k = einsum_dims.left_operand()[2].log_2();
         Self {

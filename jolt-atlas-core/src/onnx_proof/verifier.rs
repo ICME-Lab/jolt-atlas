@@ -6,10 +6,7 @@
 
 use super::{types::ProofId, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof};
 use crate::onnx_proof::ops::OperatorVerifier;
-use atlas_onnx_tracer::{
-    model::{trace::ModelExecutionIO, Model},
-    node::ComputationNode,
-};
+use atlas_onnx_tracer::model::{trace::ModelExecutionIO, Model};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
@@ -18,10 +15,7 @@ use joltworks::{
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
         opening_proof::{OpeningAccumulator, OpeningPoint, SumcheckId, VerifierOpeningAccumulator},
     },
-    subprotocols::{
-        evaluation_reduction::{EvalReductionProof, EvalReductionProtocol},
-        sumcheck::SumcheckInstanceProof,
-    },
+    subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
@@ -86,7 +80,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     }
 
     /// Verify that the output MLE evaluates correctly at the random challenge point τ.
-    pub(super) fn verify_output_claim(
+    pub(crate) fn verify_output_claim(
         model: &Model,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
@@ -128,23 +122,13 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
 
     /// Iterate over computation graph in reverse topological order and verify each operation.
     #[tracing::instrument(skip_all, name = "ONNXProof::verify_iop")]
-    pub(super) fn verify_iop(
+    pub(crate) fn verify_iop(
         &self,
         model: &Model,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         for (_, node) in model.graph.nodes.iter().rev() {
-            // Before each node is proven,
-            // perform eval reduction to reduce openings to a unique claim for the node output.
-
-            let eval_red_res =
-                EvalReductionVerifier::verify(verifier, node, &self.eval_reduction_proofs);
-            #[cfg(test)]
-            if let Err(e) = &eval_red_res {
-                println!("Verification failed at node {node:#?}: {e:?}");
-            }
-            eval_red_res?;
-            let res = OperatorVerifier::verify(node, verifier);
+            let res = OperatorVerifier::verify(node, verifier, &self.eval_reduction_proofs);
             #[cfg(test)]
             if let Err(e) = &res {
                 println!("Verification failed at node {node:#?}: {e:?}");
@@ -201,213 +185,5 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             }
         }
         Ok(())
-    }
-}
-
-struct EvalReductionVerifier;
-
-impl EvalReductionVerifier {
-    /// Verify and apply pre-node NodeOutput evaluation reduction (2-to-1 only).
-    ///
-    /// # Assumptions
-    /// - The openings mapping only has entries for legitimate claims made by the prover.
-    ///   The prover might fake those claims, which will be caught, but it cannot add arbitrary claims.
-    ///   Concretely, the verifier only fills the opening points for legitimately cached openings,
-    ///   so if the prover tries to fake extra claims, those will also get caught due to still having empty opening point.
-    // TODO: Verify this assumption
-    pub(super) fn verify<F: JoltField, T: Transcript>(
-        verifier: &mut Verifier<'_, F, T>,
-        computation_node: &ComputationNode,
-        eval_reduction_proofs: &BTreeMap<usize, EvalReductionProof<F>>,
-    ) -> Result<(), ProofVerifyError> {
-        let node_idx = computation_node.idx;
-        let eval_reduction_proof = eval_reduction_proofs.get(&node_idx).ok_or_else(|| {
-            ProofVerifyError::InvalidOpeningProof(format!(
-                "Missing evaluation reduction proof for node index {node_idx}"
-            ))
-        })?;
-        let openings = verifier.accumulator.get_node_openings(node_idx);
-
-        let reduced_instance = EvalReductionProtocol::verify(
-            &openings,
-            eval_reduction_proof,
-            &mut verifier.transcript,
-        )?;
-
-        verifier
-            .accumulator
-            .reduced_evaluations
-            .insert(node_idx, reduced_instance);
-
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::onnx_proof::{AtlasSharedPreprocessing, Claims, HyperKZG, ONNXProof, Prover};
-    use ark_bn254::{Bn254, Fr};
-    use atlas_onnx_tracer::{
-        model::{test::ModelBuilder, trace::Trace, Model},
-        ops::{Add, Operator},
-        tensor::Tensor,
-    };
-    use common::VirtualPolynomial;
-    use joltworks::{
-        poly::{
-            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-            opening_proof::{OpeningId, OpeningPoint, SumcheckId},
-        },
-        subprotocols::evaluation_reduction::EvalReductionProtocol,
-        transcripts::Blake2bTranscript,
-        utils::errors::ProofVerifyError,
-    };
-    use rand::{rngs::StdRng, SeedableRng};
-    use std::collections::BTreeMap;
-
-    // All node output is used 1 to 2 times.
-    fn one_sub_model(rng: &mut StdRng, t: usize) -> Model {
-        let mut b = ModelBuilder::new();
-        let i = b.input(vec![t]);
-        let c = b.constant(Tensor::random_small(rng, &[t]));
-        let z = b.sub(i, c);
-        let out = b.sub(z, c);
-        b.mark_output(out);
-        b.build()
-    }
-
-    #[test]
-    fn eval_reduction_verifier_rejects_missing_artifact() {
-        let n = 1 << 3; // 8 points, i.e. 3 variables
-        let model = Model::default();
-        let producer_idx = 0;
-
-        let preprocessing = AtlasSharedPreprocessing::preprocess(model);
-        let trace = preprocessing.model().trace(&[]);
-        let io = Trace::io(&trace, preprocessing.model());
-
-        let proofs = BTreeMap::new();
-        let mut verifier = Verifier::<Fr, Blake2bTranscript>::new(&preprocessing, &proofs, &io);
-
-        let producer_node = ComputationNode::new(producer_idx, Operator::Add(Add), vec![], vec![n]);
-        let eval_reduction_proofs = BTreeMap::new();
-
-        let err =
-            EvalReductionVerifier::verify(&mut verifier, &producer_node, &eval_reduction_proofs)
-                .expect_err("verification should fail when eval-reduction artifact is missing");
-
-        assert!(matches!(
-            err,
-            ProofVerifyError::InvalidOpeningProof(msg)
-            if msg.contains("Missing evaluation reduction proof for node index")
-        ));
-    }
-
-    #[test]
-    fn eval_reduction_verifier_single_opening_is_propagated() {
-        let n = 1 << 3; // 8 points, i.e. 3 variables
-        let output: Tensor<i32> = Tensor::construct((0..n).map(|i| i as i32).collect(), vec![n]);
-        let model = Model::default();
-        let producer_idx = 0;
-        let consumer = 1;
-
-        let preprocessing = AtlasSharedPreprocessing::preprocess(model);
-        let trace = preprocessing.model().trace(&[]);
-        let io = Trace::io(&trace, preprocessing.model());
-
-        let proofs = BTreeMap::new();
-        let mut verifier = Verifier::<Fr, Blake2bTranscript>::new(&preprocessing, &proofs, &io);
-
-        let producer_node = ComputationNode::new(producer_idx, Operator::Add(Add), vec![], vec![n]);
-
-        let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
-        let num_vars = output_mle.get_num_vars();
-
-        let point = verifier
-            .transcript
-            .challenge_vector_optimized::<Fr>(num_vars);
-        let claim = output_mle.evaluate(&point);
-        let key = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(producer_idx),
-            SumcheckId::NodeExecution(consumer),
-        );
-        let opening = (OpeningPoint::new(point.clone()), claim);
-        verifier.accumulator.openings.insert(key, opening);
-
-        let mut prover_transcript = Blake2bTranscript::new(b"ONNXProof");
-        let (proof, _reduced_prover) = EvalReductionProtocol::prove(
-            &verifier.accumulator.get_node_openings(producer_idx),
-            output_mle,
-            &mut prover_transcript,
-        )
-        .expect("single opening should be propagated by prover-side protocol");
-
-        let mut eval_reduction_proofs = BTreeMap::new();
-        eval_reduction_proofs.insert(producer_idx, proof);
-
-        EvalReductionVerifier::verify(&mut verifier, &producer_node, &eval_reduction_proofs)
-            .expect("single opening should be accepted and propagated by verifier");
-
-        let reduced = verifier
-            .accumulator
-            .reduced_evaluations
-            .get(&producer_idx)
-            .expect("single opening should be propagated to reduced_evaluations");
-
-        assert_eq!(
-            reduced.r,
-            point.iter().map(|&c| c.into()).collect::<Vec<_>>()
-        );
-        assert_eq!(reduced.claim, claim);
-    }
-
-    #[test]
-    fn verify_iop_runs_in_isolation_after_verify_output_claim() {
-        let t = 1 << 4;
-        let mut rng = StdRng::seed_from_u64(0x2020);
-        let input = Tensor::<i32>::random_small(&mut rng, &[t]);
-        let model = one_sub_model(&mut rng, t);
-
-        let shared = AtlasSharedPreprocessing::preprocess(model);
-        let trace = shared.model().trace(&[input]);
-        let io = Trace::io(&trace, shared.model());
-
-        // Build just enough prover state for (opening_claims, proofs, eval_reduction_proofs)
-        // using output_claim + iop (no commitments, no reduced opening proof stage).
-        let mut prover = Prover::<_, Blake2bTranscript>::new(shared.clone(), trace);
-        let mut proofs = BTreeMap::new();
-        let mut eval_reduction_proofs = BTreeMap::new();
-
-        ONNXProof::<_, _, HyperKZG<Bn254>>::output_claim(&mut prover);
-        ONNXProof::<_, _, HyperKZG<Bn254>>::iop(
-            shared.model().nodes(),
-            &mut prover,
-            &mut proofs,
-            &mut eval_reduction_proofs,
-        );
-
-        let opening_claims = Claims(prover.accumulator.take());
-        let partial_proof = ONNXProof::<_, _, HyperKZG<Bn254>> {
-            opening_claims,
-            proofs,
-            commitments: vec![],
-            eval_reduction_proofs,
-            reduced_opening_proof: None,
-        };
-
-        let mut verifier = Verifier::new(&shared, &partial_proof.proofs, &io);
-        partial_proof.populate_accumulator(&mut verifier);
-        ONNXProof::<_, _, HyperKZG<Bn254>>::verify_output_claim(shared.model(), &mut verifier)
-            .expect("verify_output_claim should succeed for consistent partial proof state");
-        partial_proof
-            .verify_iop(shared.model(), &mut verifier)
-            .expect("verify_iop should succeed in isolation after output-claim initialization");
-
-        let output_idx = shared.model().outputs()[0];
-        assert!(verifier
-            .accumulator
-            .reduced_evaluations
-            .contains_key(&output_idx));
     }
 }

@@ -297,6 +297,13 @@ where
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
         claim: F,
     ) {
+        if let VirtualPolynomial::NodeOutput(node_idx) = polynomial {
+            debug_assert!(
+                !self.reduced_evaluations.contains_key(&node_idx),
+                "cannot append opening for node {node_idx} after evaluation reduction"
+            );
+        }
+
         transcript.append_scalar(&claim);
 
         // TODO: Allow a node to have multiple openings that need to be reduced
@@ -647,6 +654,13 @@ where
         sumcheck: SumcheckId,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
     ) {
+        if let VirtualPolynomial::NodeOutput(node_idx) = polynomial {
+            debug_assert!(
+                !self.reduced_evaluations.contains_key(&node_idx),
+                "cannot append opening for node {node_idx} after evaluation reduction"
+            );
+        }
+
         let key = OpeningId::Virtual(polynomial, sumcheck);
         if let Some((_, claim)) = self.openings.get(&key) {
             transcript.append_scalar(claim);
@@ -1053,5 +1067,45 @@ impl CanonicalDeserialize for OpeningId {
             }
             _ => Err(SerializationError::InvalidData),
         }
+    }
+}
+
+#[cfg(test)]
+mod guardrail_tests {
+    use super::{OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId};
+    use crate::{
+        subprotocols::evaluation_reduction::ReducedInstance,
+        transcripts::{Blake2bTranscript, Transcript},
+    };
+    use ark_bn254::Fr;
+    use common::VirtualPolynomial;
+
+    #[test]
+    #[should_panic(expected = "reduced evaluation for node 7 not found")]
+    fn get_node_output_opening_panics_before_reduction() {
+        let acc = ProverOpeningAccumulator::<Fr>::new();
+        let _ = acc.get_node_output_opening(7);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot append opening for node 3 after evaluation reduction")]
+    fn append_virtual_panics_after_reduction() {
+        let mut acc = ProverOpeningAccumulator::<Fr>::new();
+        acc.reduced_evaluations.insert(
+            3,
+            ReducedInstance {
+                r: vec![Fr::from(1u64)],
+                claim: Fr::from(2u64),
+            },
+        );
+
+        let mut transcript = Blake2bTranscript::new(b"guardrail_test");
+        acc.append_virtual(
+            &mut transcript,
+            VirtualPolynomial::NodeOutput(3),
+            SumcheckId::NodeExecution(9),
+            OpeningPoint::new(vec![Fr::from(1u64)]),
+            Fr::from(2u64),
+        );
     }
 }

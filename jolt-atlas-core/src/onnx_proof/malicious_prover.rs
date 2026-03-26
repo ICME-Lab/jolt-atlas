@@ -170,7 +170,8 @@ impl MaliciousONNXProof {
             if matches!(computation_node.operator, Operator::Sub(_)) {
                 proofs.extend(malicious_sub_prove(computation_node, prover));
             } else {
-                proofs.extend(OperatorProver::prove(computation_node, prover));
+                let (_, execution_proofs) = OperatorProver::prove(computation_node, prover);
+                proofs.extend(execution_proofs);
             }
         }
     }

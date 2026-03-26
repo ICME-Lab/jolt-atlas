@@ -33,7 +33,7 @@ use joltworks::{
         sumcheck::SumcheckInstanceProof,
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math},
+    utils::math::Math,
 };
 use std::collections::BTreeMap;
 
@@ -134,8 +134,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         for (_, node) in computation_nodes.iter().rev() {
             // Before each node is proven,
             // perform eval reduction to reduce openings to a unique claim for the node output.
-            eval_reduction_proofs
-                .insert(node.idx, EvalReductionProver::prove(prover, node).unwrap());
+            eval_reduction_proofs.insert(node.idx, EvalReductionProver::prove(prover, node));
 
             proofs.extend(OperatorProver::prove(node, prover));
         }
@@ -247,7 +246,7 @@ impl EvalReductionProver {
     pub(super) fn prove<F: JoltField, T: Transcript>(
         prover: &mut Prover<F, T>,
         computation_node: &ComputationNode,
-    ) -> Result<EvalReductionProof<F>, ProofVerifyError> {
+    ) -> EvalReductionProof<F> {
         let node_idx = computation_node.idx;
         let openings = prover.accumulator.get_node_openings(node_idx);
 
@@ -258,14 +257,15 @@ impl EvalReductionProver {
         let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
 
         let (proof, reduced) =
-            EvalReductionProtocol::prove(&openings, output_mle, &mut prover.transcript)?;
+            EvalReductionProtocol::prove(&openings, output_mle, &mut prover.transcript)
+                .expect("Proving evaluation reduction should not fail");
 
         prover
             .accumulator
             .reduced_evaluations
             .insert(node_idx, reduced);
 
-        Ok(proof)
+        proof
     }
 }
 

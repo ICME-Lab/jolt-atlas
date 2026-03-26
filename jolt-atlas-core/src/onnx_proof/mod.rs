@@ -9,7 +9,6 @@
 //!
 //! Internal implementation details (helper methods, state structs) live in
 //! [`prover`], [`verifier`], and [`types`] submodules.
-// Dummy preview comment: safe to remove.
 
 use atlas_onnx_tracer::{
     model::trace::{ModelExecutionIO, Trace},

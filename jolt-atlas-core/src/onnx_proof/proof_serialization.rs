@@ -264,14 +264,14 @@ where
         let opening_claims = Claims::deserialize_with_mode(&mut reader, compress, validate)?;
         let proofs = deserialize_btreemap(&mut reader, compress, validate)?;
         let commitments = Vec::deserialize_with_mode(&mut reader, compress, validate)?;
-        let eval_reduction_h_polys = deserialize_btreemap(&mut reader, compress, validate)?;
+        let eval_reduction_proofs = deserialize_btreemap(&mut reader, compress, validate)?;
         let reduced_opening_proof = Option::deserialize_with_mode(&mut reader, compress, validate)?;
 
         Ok(Self {
             opening_claims,
             proofs,
             commitments,
-            eval_reduction_proofs: eval_reduction_h_polys,
+            eval_reduction_proofs,
             reduced_opening_proof,
         })
     }

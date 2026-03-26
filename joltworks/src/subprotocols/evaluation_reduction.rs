@@ -1,13 +1,15 @@
 //! Two-to-one evaluation reduction without sumcheck.
 //!
 //! This module implements the PAZK-style line-restriction reduction for a
-//! *single polynomial* with two opening claims:
+//! *single polynomial* with N opening claims:
 //! - `P(r1) = v1`
 //! - `P(r2) = v2`
+//! - ...
+//! - `P(rN) = vN`
 //!
 //! The prover sends the univariate restriction `h(t) = P(l(t))`, where
-//! `l(0) = r1` and `l(1) = r2`. The verifier checks `h(0) = v1` and
-//! `h(1) = v2`, derives a Fiat-Shamir challenge `x'`, and reduces to one claim:
+//! for all i in 0..N, `l(i) = ri`. The verifier checks for all i in 0..N, `h(i) = vi`,
+//! derives a Fiat-Shamir challenge `x'`, and reduces to one claim:
 //! `P(r') = v'` with `r' = l(x')` and `v' = h(x')`.
 
 use std::fmt::Debug;
@@ -18,39 +20,47 @@ use crate::{
         multilinear_polynomial::MultilinearPolynomial, opening_proof::Opening, unipoly::UniPoly,
     },
     transcripts::{AppendToTranscript, Transcript},
-    utils::errors::ProofVerifyError,
+    utils::errors::{ProofVerifyError, ProvingError},
 };
 use allocative::Allocative;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use atlas_onnx_tracer::tensor::Tensor;
 
-/// Public instance for one 2-to-1 evaluation reduction round.
+/// Public instance for one N-to-1 evaluation reduction round.
 #[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
 pub struct EvalReductionInstance<F: JoltField> {
     openings: Vec<(Vec<F>, F)>, // Vec of (r, v) pairs for each opening claim
 }
 
+/// Witness for one N-to-1 evaluation reduction round.
+#[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
+pub struct EvalReductionWitness<F: JoltField> {
+    pub mle: MultilinearPolynomial<F>,
+}
+
+/// Proof for one N-to-1 evaluation reduction round.
+#[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
+pub struct EvalReductionProof<F: JoltField> {
+    /// Restriction polynomial h(t) = P(l(t)).
+    pub h: UniPoly<F>,
+}
+
+/// Reduced instance produced by the N-to-1 evaluation reduction.
+#[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
+pub struct ReducedInstance<F: JoltField> {
+    pub r: Vec<F>,
+    pub claim: F,
+}
+
 impl<F: JoltField> EvalReductionInstance<F> {
-    pub fn new(openings: &[&Opening<F>]) -> Result<Self, ProofVerifyError> {
+    pub fn new(openings: &[&Opening<F>]) -> Self {
         let openings: Vec<(Vec<F>, F)> = openings
             .iter()
             .map(|&opening| (opening.0.clone().into(), opening.1))
             .collect::<Vec<_>>();
 
-        let r1_len = openings[0].0.len();
-        assert!(
-            openings.iter().all(|(r, _)| r.len() == r1_len),
-            "all opening r vectors must have the same length"
-        );
-
-        Ok(Self { openings })
+        Self { openings }
     }
-}
-
-/// Witness for one 2-to-1 evaluation reduction round.
-#[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
-pub struct EvalReductionWitness<F: JoltField> {
-    pub mle: MultilinearPolynomial<F>,
 }
 
 impl<F: JoltField> EvalReductionWitness<F> {
@@ -68,20 +78,6 @@ impl<F: JoltField> EvalReductionWitness<F> {
     }
 }
 
-/// Proof for one 2-to-1 evaluation reduction round.
-#[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
-pub struct EvalReductionProof<F: JoltField> {
-    /// Restriction polynomial h(t) = P(l(t)).
-    pub h: UniPoly<F>,
-}
-
-/// Reduced instance produced by the 2-to-1 evaluation reduction.
-#[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
-pub struct ReducedInstance<F: JoltField> {
-    pub r: Vec<F>,
-    pub claim: F,
-}
-
 impl<F: JoltField> From<Opening<F>> for ReducedInstance<F> {
     fn from(opening: Opening<F>) -> Self {
         Self {
@@ -96,20 +92,25 @@ impl<F: JoltField> EvalReductionInstance<F> {
         &self,
         witness: &EvalReductionWitness<F>,
         transcript: &mut T,
-    ) -> Result<(EvalReductionProof<F>, ReducedInstance<F>), ProofVerifyError> {
-        if self.openings[0].0.len() != witness.mle.get_num_vars() {
-            return Err(ProofVerifyError::InvalidInputLength(
+    ) -> Result<(EvalReductionProof<F>, ReducedInstance<F>), ProvingError> {
+        if self.openings.is_empty() {
+            return Err(ProvingError::EmptyInput);
+        }
+
+        let opening_points = self.openings.iter().map(|(r, _)| r).collect::<Vec<_>>();
+        let num_vars = witness.mle.get_num_vars();
+
+        if !opening_points.iter().all(|r| r.len() == num_vars) {
+            return Err(ProvingError::InvalidInputLength(
                 self.openings[0].0.len(),
                 witness.mle.get_num_vars(),
             ));
         }
 
-        let opening_points = self.openings.iter().map(|(r, _)| r).collect::<Vec<_>>();
-
         // i'th vector of this Vec<Vec<F>> is the vector of i'th variables across all evaluation points.
-        let r_i_vec = group_by_variable(&opening_points);
-
-        let h = compute_h(&witness.mle, &r_i_vec);
+        let ri_vec = group_by_variable(&opening_points);
+        // h = mle ∘ l, where l is the line defined by the opening points.
+        let h = compute_h(&witness.mle, &ri_vec);
 
         #[cfg(test)]
         {
@@ -124,7 +125,7 @@ impl<F: JoltField> EvalReductionInstance<F> {
 
         let proof = EvalReductionProof { h };
         let reduced_instance = ReducedInstance {
-            r: eval_on_l(&r_i_vec, x_prime.into()),
+            r: eval_on_l(&ri_vec, x_prime.into()),
             claim: proof.h.evaluate(&x_prime),
         };
 
@@ -136,16 +137,32 @@ impl<F: JoltField> EvalReductionInstance<F> {
         proof: &EvalReductionProof<F>,
         transcript: &mut T,
     ) -> Result<ReducedInstance<F>, ProofVerifyError> {
-        let opening_points = self.openings.iter().map(|(r, _)| r).collect::<Vec<_>>();
-        let r_i_vec = group_by_variable(&opening_points);
+        if self.openings.is_empty() {
+            return Err(ProofVerifyError::EmptyInput);
+        }
 
+        let opening_points = self.openings.iter().map(|(r, _)| r).collect::<Vec<_>>();
         let n_vars = opening_points[0].len();
+
+        if !opening_points.iter().all(|r| r.len() == n_vars) {
+            return Err(ProofVerifyError::InvalidInputLength(
+                self.openings[0].0.len(),
+                n_vars,
+            ));
+        }
+
+        let ri_vec = group_by_variable(&opening_points);
+
         let n_openings = self.openings.len();
-        assert!(
-            proof.h.degree() <= n_vars * (n_openings - 1),
-            "Degree of h should be bounded by number of variables in original MLE and number of openings; \
-            expected degree <= num_vars * (num_openings - 1)",
-        );
+
+        if proof.h.degree() > n_vars * (n_openings - 1) {
+            return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                "Degree of h should be bounded by number of variables in original MLE and number of openings; \
+                expected degree <= num_vars * (num_openings - 1), got {} > {}",
+                proof.h.degree(),
+                n_vars * (n_openings - 1)
+            )));
+        }
 
         for (i, (_, claim)) in self.openings.iter().enumerate() {
             let eval_at_i = proof.h.evaluate(&F::from_u32(i as u32));
@@ -160,7 +177,7 @@ impl<F: JoltField> EvalReductionInstance<F> {
         let x_prime = transcript.challenge_scalar_optimized::<F>();
 
         let expected_reduced_value = proof.h.evaluate::<F>(&x_prime.into());
-        let expected_r = eval_on_l(&r_i_vec, x_prime.into());
+        let expected_r = eval_on_l(&ri_vec, x_prime.into());
 
         Ok(ReducedInstance {
             r: expected_r,
@@ -169,8 +186,8 @@ impl<F: JoltField> EvalReductionInstance<F> {
     }
 }
 
-fn eval_on_l<F: JoltField, Ref: AsRef<[F]>>(r_i_vec: &[Ref], x: F) -> Vec<F> {
-    r_i_vec
+fn eval_on_l<F: JoltField, Ref: AsRef<[F]>>(ri_vec: &[Ref], x: F) -> Vec<F> {
+    ri_vec
         .iter()
         .map(|r_i| {
             let variable_poly = UniPoly::from_evals(r_i.as_ref());
@@ -181,19 +198,19 @@ fn eval_on_l<F: JoltField, Ref: AsRef<[F]>>(r_i_vec: &[Ref], x: F) -> Vec<F> {
 
 fn compute_h<F: JoltField, Ref: AsRef<[F]>>(
     mle: &MultilinearPolynomial<F>,
-    r_i_vec: &[Ref],
+    ri_vec: &[Ref],
 ) -> UniPoly<F> {
-    let num_vars = r_i_vec.len();
+    let num_vars = ri_vec.len();
 
     let mut mle_polys: Vec<UniPoly<F>> = mle
         .coeffs()
-        .iter()
-        .map(|&coeff| {
+        .into_iter()
+        .map(|coeff| {
             UniPoly::from_coeff(vec![coeff]) // Start with constant polynomial for each coeff
         })
         .collect();
 
-    for (i, r_i) in r_i_vec.iter().enumerate() {
+    for (i, r_i) in ri_vec.iter().enumerate() {
         let var_weight = num_vars - i - 1;
         let half_len = 1 << var_weight;
         let var_poly = UniPoly::from_evals(r_i.as_ref()); // r1_i + t * delta_i
@@ -208,11 +225,16 @@ fn compute_h<F: JoltField, Ref: AsRef<[F]>>(
 }
 
 fn group_by_variable<F: JoltField, Ref: AsRef<[F]>>(evaluation_points: &[Ref]) -> Vec<Vec<F>> {
-    assert!(evaluation_points
-        .windows(2)
-        .all(|window| window[0].as_ref().len() == window[1].as_ref().len()));
-
     let num_vars = evaluation_points[0].as_ref().len();
+    debug_assert!(
+        evaluation_points
+            .iter()
+            .all(|p| p.as_ref().len() == num_vars),
+        "All evaluation points should have the same number of variables"
+    );
+
+    // Create a vector of vector where ri_vec[k][j] = evaluation_points[j][k],
+    // i.e. the vector of i'th variables across all evaluation points.
     let mut r_i_vec: Vec<Vec<F>> = vec![vec![]; num_vars];
     for p_i in evaluation_points {
         for (i, &r_i) in p_i.as_ref().iter().enumerate() {
@@ -229,17 +251,9 @@ impl EvalReductionProtocol {
         openings: &[&Opening<F>],
         output_mle: MultilinearPolynomial<F>,
         transcript: &mut T,
-    ) -> Result<(EvalReductionProof<F>, ReducedInstance<F>), ProofVerifyError> {
-        if openings.is_empty() {
-            return Err(ProofVerifyError::InvalidOpeningProof(
-                "at least one opening is required for eval reduction".to_string(),
-            ));
-        }
-
+    ) -> Result<(EvalReductionProof<F>, ReducedInstance<F>), ProvingError> {
         let witness = EvalReductionWitness::new(output_mle);
-
-        let instance = EvalReductionInstance::new(openings)
-            .expect("evaluation reduction instance should be constructible for matching openings");
+        let instance = EvalReductionInstance::new(openings);
 
         instance.prove(&witness, transcript)
     }
@@ -249,13 +263,7 @@ impl EvalReductionProtocol {
         proof: &EvalReductionProof<F>,
         transcript: &mut T,
     ) -> Result<ReducedInstance<F>, ProofVerifyError> {
-        assert!(
-            !openings.is_empty(),
-            "at least one opening is required for eval reduction verification"
-        );
-
-        let instance = EvalReductionInstance::new(openings)
-            .expect("evaluation reduction instance should be constructible for matching openings");
+        let instance = EvalReductionInstance::new(openings);
 
         instance.verify(proof, transcript)
     }
@@ -454,8 +462,7 @@ mod tests {
         let witness = EvalReductionWitness { mle };
 
         let mut prover_tr = Blake2bTranscript::new(b"eval-reduction-test");
-        let instance = EvalReductionInstance::new(&[&opening1, &opening2])
-            .expect("instance should be valid for matching witness/openings");
+        let instance = EvalReductionInstance::new(&[&opening1, &opening2]);
         let (proof, reduced_prover) = instance
             .prove(&witness, &mut prover_tr)
             .expect("prover should succeed");
@@ -509,7 +516,7 @@ mod tests {
         let witness = EvalReductionWitness { mle };
 
         let mut prover_tr = Blake2bTranscript::new(b"eval-reduction-test");
-        let instance = EvalReductionInstance::new(&[&opening1, &opening2]).unwrap();
+        let instance = EvalReductionInstance::new(&[&opening1, &opening2]);
         let (mut proof, _reduced) = instance.prove(&witness, &mut prover_tr).unwrap();
 
         // Tamper h so boundary checks fail.
@@ -535,7 +542,7 @@ mod tests {
         let witness = EvalReductionWitness { mle };
 
         let mut prover_tr = Blake2bTranscript::new(b"eval-reduction-test");
-        let instance = EvalReductionInstance::new(&[&opening1, &opening2]).unwrap();
+        let instance = EvalReductionInstance::new(&[&opening1, &opening2]);
         let (proof, reduced) = instance.prove(&witness, &mut prover_tr).unwrap();
 
         let mut verifier_tr = Blake2bTranscript::new(b"eval-reduction-test");
@@ -567,7 +574,7 @@ mod tests {
         let witness = EvalReductionWitness { mle };
 
         let mut prover_tr = Blake2bTranscript::new(b"eval-reduction-test");
-        let instance = EvalReductionInstance::new(&[&opening1, &opening2, &opening3]).unwrap();
+        let instance = EvalReductionInstance::new(&[&opening1, &opening2, &opening3]);
         let (proof, reduced) = instance.prove(&witness, &mut prover_tr).unwrap();
         let mut verifier_tr = Blake2bTranscript::new(b"eval-reduction-test");
         let reduced_verifier = instance.verify(&proof, &mut verifier_tr).unwrap();

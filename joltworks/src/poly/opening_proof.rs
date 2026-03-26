@@ -6,7 +6,7 @@
 //! necessarily of the same size, each opened at a different point) into a single opening.
 
 use crate::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::MultilinearPolynomial,
@@ -265,7 +265,7 @@ where
         let shared_eq_address = Arc::new(RwLock::new(EqAddressState::new(&r_address)));
         let shared_eq_cycle = self
             .eq_cycle_map
-            .entry(r_cycle.iter().map(|&u| u.into()).collect())
+            .entry(r_cycle.clone().into_opening())
             .or_insert(Arc::new(RwLock::new(EqCycleState::new(&r_cycle))));
 
         // Add openings to map

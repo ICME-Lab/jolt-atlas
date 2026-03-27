@@ -10,7 +10,7 @@ use joltworks::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN,
+            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -177,11 +177,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SumAxisProver
             ]
             .concat(),
         };
-        accumulator.append_virtual(
-            transcript,
+        let operand_id = VirtualOpeningId::new(
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.into(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            operand_id,
+            OpeningPoint::new(opening_point),
             self.operand.final_sumcheck_claim(),
         );
     }
@@ -239,11 +242,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVeri
             ]
             .concat(),
         };
-        accumulator.append_virtual(
-            transcript,
+        let operand_id = VirtualOpeningId::new(
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.into(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            operand_id,
+            OpeningPoint::new(opening_point),
         );
     }
 }

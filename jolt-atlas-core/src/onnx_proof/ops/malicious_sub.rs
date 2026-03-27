@@ -5,18 +5,20 @@
 //! by [`MaliciousONNXProof`] to test that the verifier correctly handles
 //! (and rejects) such attacks.
 
-use crate::onnx_proof::{malicious_prover::malicious_sumcheck_prove, ProofId, ProofType, Prover};
+use crate::{
+    onnx_proof::{malicious_prover::malicious_sumcheck_prove, ProofId, ProofType, Prover},
+    utils::opening_id_builder::{OpeningIdBuilder, OpeningTarget},
+};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
 };
-use common::VirtualPolynomial;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        opening_proof::{ProverOpeningAccumulator, SumcheckId},
+        opening_proof::ProverOpeningAccumulator,
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
     },
@@ -119,6 +121,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaliciousSubP
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let node = &self.params.computation_node;
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
@@ -150,22 +153,17 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaliciousSubP
             forged_left - final_claim * inv
         };
         debug_assert_eq!(final_claim, eq_eval * (forged_left - forged_right));
+        let left_opening_id = node.build_opening_id(OpeningTarget::Input(0));
+        let right_opening_id = node.build_opening_id(OpeningTarget::Input(1));
 
         // Use append_virtual with forged claims. This inserts into openings
         // and appends to transcript, keeping prover/verifier in sync.
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
+            left_opening_id,
             opening_point.clone(),
             forged_left,
         );
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point,
-            forged_right,
-        );
+        accumulator.append_virtual(transcript, right_opening_id, opening_point, forged_right);
     }
 }

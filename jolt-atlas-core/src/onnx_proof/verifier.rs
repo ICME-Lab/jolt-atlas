@@ -13,7 +13,10 @@ use joltworks::{
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{OpeningAccumulator, OpeningPoint, SumcheckId, VerifierOpeningAccumulator},
+        opening_proof::{
+            OpeningAccumulator, OpeningPoint, SumcheckId, VerifierOpeningAccumulator,
+            VirtualOpeningId,
+        },
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
@@ -94,23 +97,27 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         let expected_output_claim =
             MultilinearPolynomial::from(verifier.io.outputs[0].padded_next_power_of_two())
                 .evaluate(&r_node_output);
+        let output_opening_id = VirtualOpeningId::new(
+            VirtualPolynomial::NodeOutput(output_computation_node.idx),
+            // NodeOutput claims are generally produced by subsequent nodes during proving; emulate that here.
+            SumcheckId::NodeExecution(output_computation_node.idx + 1),
+        );
 
         // append_virtual now handles both transcript append and opening point update.
         // The claim was loaded from opening_claims in populate_accumulator.
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,
-            VirtualPolynomial::NodeOutput(output_computation_node.idx),
-            // NodeOutput claims are generally produced by subsequent nodes during proving; emulate that here.
-            SumcheckId::NodeExecution(output_computation_node.idx + 1),
-            r_node_output.clone().into(),
+            output_opening_id,
+            OpeningPoint::new(r_node_output.clone()),
         );
         // Read the prover's claimed value and compare against IO.
+        let output_claim_id = VirtualOpeningId::new(
+            VirtualPolynomial::NodeOutput(output_computation_node.idx),
+            SumcheckId::NodeExecution(output_computation_node.idx + 1),
+        );
         let output_claim = verifier
             .accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(output_computation_node.idx),
-                SumcheckId::NodeExecution(output_computation_node.idx + 1),
-            )
+            .get_virtual_polynomial_opening(output_claim_id)
             .1;
         if expected_output_claim != output_claim {
             return Err(ProofVerifyError::InvalidOpeningProof(

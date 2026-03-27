@@ -90,6 +90,23 @@ impl<F: JoltField> TeleportDivisionParams<F> {
             tau,
         }
     }
+
+    /// Creates new division parameters by sampling the opening point from transcript.
+    /// The opening point is sampled from the transcript
+    pub fn new_from_transcript(
+        computation_node: ComputationNode,
+        transcript: &mut impl Transcript,
+        tau: i32,
+    ) -> Self {
+        let num_vars = computation_node.pow2_padded_num_output_elements().log_2();
+        let r_node_output = transcript.challenge_vector_optimized::<F>(num_vars);
+
+        Self {
+            r_node_output: r_node_output.into(),
+            computation_node,
+            tau,
+        }
+    }
 }
 
 impl<F: JoltField> SumcheckInstanceParams<F> for TeleportDivisionParams<F> {
@@ -244,6 +261,16 @@ impl<F: JoltField> TeleportDivisionVerifier<F> {
         let params = TeleportDivisionParams::new(computation_node, accumulator, tau);
         Self { params }
     }
+
+    /// Creates a new verifier for transcript-sampled teleport-division parameters.
+    pub fn new_from_transcript(
+        computation_node: ComputationNode,
+        tau: i32,
+        transcript: &mut impl Transcript,
+    ) -> Self {
+        let params = TeleportDivisionParams::new_from_transcript(computation_node, transcript, tau);
+        Self { params }
+    }
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TeleportDivisionVerifier<F> {
@@ -256,10 +283,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TeleportDiv
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let r_node_output = accumulator
-            .get_node_output_opening(self.params.computation_node.idx)
-            .0
-            .r;
+        let r_node_output = self.params.r_node_output.r.clone();
         let r_node_output_prime = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening())

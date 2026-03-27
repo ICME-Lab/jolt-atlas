@@ -49,7 +49,7 @@ pub enum CommittedPolynomial {
     DivNodeQuotient(usize), // Advice for `quotient` in Div
     ScalarConstDivNodeRemainder(usize), // Advice for `remainder` in Div
     RsqrtNodeInv(usize),                // Advice for `inv` in Rsqrt
-    RsqrtNodeRsqrt(usize),              // Advice for `rsqrt` in Rsqrt
+    TeleportNodeQuotient(usize),        // Used for neural teleport
     GatherRa(usize),
 }
 
@@ -159,7 +159,7 @@ impl CanonicalSerialize for CommittedPolynomial {
                 10u8.serialize_with_mode(&mut writer, compress)?;
                 a.serialize_with_mode(&mut writer, compress)?;
             }
-            Self::RsqrtNodeRsqrt(a) => {
+            Self::TeleportNodeQuotient(a) => {
                 11u8.serialize_with_mode(&mut writer, compress)?;
                 a.serialize_with_mode(&mut writer, compress)?;
             }
@@ -214,7 +214,7 @@ impl CanonicalSerialize for CommittedPolynomial {
             Self::DivNodeQuotient(a)
             | Self::ScalarConstDivNodeRemainder(a)
             | Self::RsqrtNodeInv(a)
-            | Self::RsqrtNodeRsqrt(a)
+            | Self::TeleportNodeQuotient(a)
             | Self::GatherRa(a) => a.serialized_size(compress),
         }
     }
@@ -280,7 +280,7 @@ impl CanonicalDeserialize for CommittedPolynomial {
                 compress,
                 validate,
             )?)),
-            11 => Ok(Self::RsqrtNodeRsqrt(usize::deserialize_with_mode(
+            11 => Ok(Self::TeleportNodeQuotient(usize::deserialize_with_mode(
                 &mut reader,
                 compress,
                 validate,

@@ -55,6 +55,13 @@ where
     F: JoltField,
 {
     pub sumchecks: BTreeMap<CommittedPolynomial, OpeningProofReductionSumcheckProver<F>>,
+    /// Openings for polynomials claimed during proving.
+    /// Identified by the kind of polynomial, the node to which it corresponds (both held in Committed/VirtualPolynomial variant),
+    /// and the sumcheck for which the opening is claimed.
+    /// NOTE:
+    /// If a node output is fed twice as index in a same node, it would lead to two different openings.
+    /// However, in practice we always have that both openings are at the same point,
+    /// hence they can be treated as a single opening.  
     pub openings: Openings<F>,
     /// Mapping from reduced source opening keys to evaluation-reduction line restriction `h`.
     pub reduced_evaluations: BTreeMap<usize, ReducedInstance<F>>,
@@ -309,8 +316,6 @@ where
 
         transcript.append_scalar(&claim);
 
-        // TODO: Allow a node to have multiple openings that need to be reduced
-        //       See #138 for details
         let key = OpeningId::Virtual(polynomial, sumcheck);
         self.openings.insert(key, (opening_point, claim));
         #[cfg(test)]

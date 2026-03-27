@@ -15,8 +15,8 @@
 //! reshape consistency via one sumcheck instance.
 
 use crate::onnx_proof::{
-    ops::{OperatorProofTrait, Prover, Verifier},
-    ProofId, ProofType,
+    ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
+    ProofId, ProofType, Prover, Verifier,
 };
 use atlas_onnx_tracer::{
     model::{
@@ -50,6 +50,10 @@ use joltworks::{
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
+    fn reduction_flow(&self) -> ReductionFlow {
+        ReductionFlow::Custom
+    }
+
     #[tracing::instrument(skip_all, name = "Reshape::prove")]
     fn prove(
         &self,
@@ -61,9 +65,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
         let gamma = prover.transcript.challenge_scalar_optimized::<F>();
         let params = ReshapeSumcheckParams::<F>::new(
             node.clone(),
-            &prover.accumulator,
             &prover.preprocessing.model.graph,
             gamma.into(),
+            &mut prover.transcript,
         );
         let mut prover_sumcheck = ReshapeSumcheckProver::initialize(&prover.trace, params);
         let (proof, _) = Sumcheck::prove(
@@ -72,6 +76,19 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
             &mut prover.transcript,
         );
         vec![(ProofId(node.idx, ProofType::Execution), proof)]
+    }
+
+    fn prove_with_reduction(
+        &self,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> (
+        joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+        Vec<(ProofId, SumcheckInstanceProof<F, T>)>,
+    ) {
+        let execution_proofs = self.prove(node, prover);
+        let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
+        (eval_reduction_proof, execution_proofs)
     }
 
     #[tracing::instrument(skip_all, name = "Reshape::verify")]
@@ -89,9 +106,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         let verifier_sumcheck = ReshapeSumcheckVerifier::new(
             node.clone(),
-            &verifier.accumulator,
             &verifier.preprocessing.model.graph,
             gamma.into(),
+            &mut verifier.transcript,
         );
         Sumcheck::verify(
             proof,
@@ -100,6 +117,16 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
             &mut verifier.transcript,
         )?;
         Ok(())
+    }
+
+    fn verify_with_reduction(
+        &self,
+        node: &ComputationNode,
+        verifier: &mut Verifier<'_, F, T>,
+        eval_reduction_proof: &joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+    ) -> Result<(), ProofVerifyError> {
+        self.verify(node, verifier)?;
+        NodeEvalReduction::verify(verifier, node, eval_reduction_proof)
     }
 }
 
@@ -174,14 +201,12 @@ impl<F: JoltField> ReshapeSumcheckParams<F> {
     /// Build reshape sumcheck parameters from node/opening context and graph metadata.
     pub fn new(
         computation_node: ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
         graph: &ComputationGraph,
         gamma: F,
+        transcript: &mut impl Transcript,
     ) -> Self {
-        let r_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+        let num_vars = computation_node.pow2_padded_num_output_elements().log_2();
+        let r_output = transcript.challenge_vector_optimized::<F>(num_vars);
         let input_raw_dims = graph
             .nodes
             .get(&computation_node.inputs[0])
@@ -336,11 +361,11 @@ impl<F: JoltField> ReshapeSumcheckVerifier<F> {
     /// Build the reshape sumcheck verifier from node/opening context and graph metadata.
     pub fn new(
         computation_node: ComputationNode,
-        accumulator: &VerifierOpeningAccumulator<F>,
         graph: &ComputationGraph,
         gamma: F,
+        transcript: &mut impl Transcript,
     ) -> Self {
-        let params = ReshapeSumcheckParams::new(computation_node, accumulator, graph, gamma);
+        let params = ReshapeSumcheckParams::new(computation_node, graph, gamma, transcript);
         Self { params }
     }
 }

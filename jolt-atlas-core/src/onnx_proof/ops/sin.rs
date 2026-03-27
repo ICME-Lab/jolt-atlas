@@ -6,7 +6,7 @@ use crate::onnx_proof::neural_teleport::{
     utils::compute_ra_evals_direct,
 };
 use crate::onnx_proof::{
-    ops::OperatorProofTrait,
+    ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
     range_checking::{
         range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
     },
@@ -49,6 +49,10 @@ use joltworks::{
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
+    fn reduction_flow(&self) -> ReductionFlow {
+        ReductionFlow::Custom
+    }
+
     fn prove(
         &self,
         node: &ComputationNode,
@@ -57,8 +61,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
         let mut results = Vec::new();
 
         // Stage 1a: Neural teleportation remainder proof
-        let div_params =
-            TeleportDivisionParams::new(node.clone(), &prover.accumulator, EIGHT_PI_APPROX);
+        let div_params = TeleportDivisionParams::new_from_transcript(
+            node.clone(),
+            &mut prover.transcript,
+            EIGHT_PI_APPROX,
+        );
         let mut div_sumcheck = TeleportDivisionProver::new(&prover.trace, div_params);
 
         // Prove the division sumcheck for the teleportation remainder
@@ -89,66 +96,35 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
         );
         results.push((ProofId(node.idx, ProofType::Execution), exec_proof));
 
-        let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
-        let input = operands[0];
-
-        // Compute remainder for neural teleportation
-        let (_, remainder) = compute_division(input, EIGHT_PI_APPROX);
-        let lookup_indices = remainder
-            .par_iter()
-            .map(|&x| x as usize)
-            .collect::<Vec<usize>>();
-
-        // Stage 2: Range check proof for teleportation and first one-hot checks for SinRa
-        let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-        let (rangecheck_sumcheck, rc_lookup_indices) = rangecheck_provider
-            .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
-                &prover.trace,
-                &mut prover.accumulator,
-                &mut prover.transcript,
-            );
-        let sin_encoding = SinRaEncoding { node_idx: node.idx };
-        let ra_onehot_provers = shout::ra_onehot_provers(
-            &sin_encoding,
-            &lookup_indices,
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-            vec![Box::new(rangecheck_sumcheck)];
-        instances.extend(ra_onehot_provers);
-
-        let (sin_ra_one_hot_proof, _) = BatchedSumcheck::prove(
-            instances.iter_mut().map(|v| &mut **v as _).collect(),
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        results.push((
-            ProofId(node.idx, ProofType::RaOneHotChecks),
-            sin_ra_one_hot_proof,
-        ));
-
-        // Stage 3: one-hot checks for division
-        let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-        let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_provers(
-            &rc_encoding,
-            &rc_lookup_indices,
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![rc_ra, rc_hw, rc_bool];
-        let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
-            instances.iter_mut().map(|v| &mut **v as _).collect(),
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        results.push((
-            ProofId(node.idx, ProofType::RaHammingWeight),
-            ra_one_hot_proof,
-        ));
-
         results
+    }
+
+    fn prove_with_reduction(
+        &self,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> (
+        joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+        Vec<(ProofId, SumcheckInstanceProof<F, T>)>,
+    ) {
+        let mut execution_proofs = self.prove(node, prover);
+
+        // teleportation quotient is never virtualized, so we need to commit to it.
+        let teleport_q = prover.accumulator.get_virtual_polynomial_opening(
+            VirtualPolynomial::TeleportQuotient(node.idx),
+            SumcheckId::NodeExecution(node.idx),
+        );
+        prover.accumulator.append_dense(
+            &mut prover.transcript,
+            CommittedPolynomial::TeleportNodeQuotient(node.idx),
+            SumcheckId::NodeExecution(node.idx),
+            teleport_q.0.r.clone(),
+            teleport_q.1,
+        );
+
+        let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
+        execution_proofs.extend(prove_post_reduction_checks(node, prover));
+        (eval_reduction_proof, execution_proofs)
     }
 
     fn verify(
@@ -162,8 +138,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
             .get(&ProofId(node.idx, ProofType::NeuralTeleport))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
 
-        let div_verifier =
-            TeleportDivisionVerifier::new(node.clone(), &verifier.accumulator, EIGHT_PI_APPROX);
+        let div_verifier = TeleportDivisionVerifier::new_from_transcript(
+            node.clone(),
+            EIGHT_PI_APPROX,
+            &mut verifier.transcript,
+        );
         Sumcheck::verify(
             div_proof,
             &div_verifier,
@@ -190,55 +169,42 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
             &mut verifier.transcript,
         )?;
 
-        // Stage 2: Range check verification for teleportation and first one-hot checks for SinRa
-        let sin_ra_one_hot_proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-
-        let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-        let rangecheck_verifier = rangecheck_provider
-            .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
-                &mut verifier.accumulator,
-                &mut verifier.transcript,
-            );
-        let sin_encoding = SinRaEncoding { node_idx: node.idx };
-        let ra_onehot_verifier = shout::ra_onehot_verifiers(
-            &sin_encoding,
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        );
-        let ra_onehot_verifier: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
-            ra_onehot_verifier.iter().map(|v| &**v as _).collect();
-        let mut instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = vec![&rangecheck_verifier];
-        instances.extend(ra_onehot_verifier);
-        BatchedSumcheck::verify(
-            sin_ra_one_hot_proof,
-            instances,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        // Stage 3: One-hot checks for division
-        let ra_one_hot_proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::RaHammingWeight))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-
-        let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-        let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_verifiers(
-            &rc_encoding,
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        );
-        BatchedSumcheck::verify(
-            ra_one_hot_proof,
-            vec![&*rc_ra, &*rc_hw, &*rc_bool],
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
         Ok(())
+    }
+
+    fn verify_with_reduction(
+        &self,
+        node: &ComputationNode,
+        verifier: &mut Verifier<'_, F, T>,
+        eval_reduction_proof: &joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+    ) -> Result<(), ProofVerifyError> {
+        self.verify(node, verifier)?;
+
+        let teleport_q = verifier.accumulator.get_virtual_polynomial_opening(
+            VirtualPolynomial::TeleportQuotient(node.idx),
+            SumcheckId::NodeExecution(node.idx),
+        );
+        verifier.accumulator.append_dense(
+            &mut verifier.transcript,
+            CommittedPolynomial::TeleportNodeQuotient(node.idx),
+            SumcheckId::NodeExecution(node.idx),
+            teleport_q.0.r.clone(),
+        );
+        let committed_q = verifier
+            .accumulator
+            .get_committed_polynomial_opening(
+                CommittedPolynomial::TeleportNodeQuotient(node.idx),
+                SumcheckId::NodeExecution(node.idx),
+            )
+            .1;
+        if committed_q != teleport_q.1 {
+            return Err(ProofVerifyError::InvalidOpeningProof(
+                "Teleport quotient claim does not match committed quotient claim".to_string(),
+            ));
+        }
+
+        NodeEvalReduction::verify(verifier, node, eval_reduction_proof)?;
+        verify_post_reduction_checks(node, verifier)
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
@@ -246,11 +212,131 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
         let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
         let sin_d = sin_encoding.one_hot_params().instruction_d;
         let rc_d = rc_encoding.one_hot_params().instruction_d;
-        let mut polys = vec![];
+        let mut polys = vec![CommittedPolynomial::TeleportNodeQuotient(node.idx)];
         polys.extend((0..sin_d).map(|i| CommittedPolynomial::SinRaD(node.idx, i)));
         polys.extend((0..rc_d).map(|i| CommittedPolynomial::TeleportRangeCheckRaD(node.idx, i)));
         polys
     }
+}
+
+fn prove_post_reduction_checks<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    prover: &mut Prover<F, T>,
+) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    let mut proofs = Vec::new();
+
+    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+    let input = operands[0];
+    let (_, remainder) = compute_division(input, EIGHT_PI_APPROX);
+    let sin_lookup_indices = remainder
+        .par_iter()
+        .map(|&x| x as usize)
+        .collect::<Vec<usize>>();
+
+    let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
+    let (rangecheck_sumcheck, rc_lookup_indices) = rangecheck_provider
+        .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
+            &prover.trace,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+
+    let sin_encoding = SinRaEncoding { node_idx: node.idx };
+    let sin_ra_onehot_provers = shout::ra_onehot_provers(
+        &sin_encoding,
+        &sin_lookup_indices,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let mut range_and_sin_instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
+        vec![Box::new(rangecheck_sumcheck)];
+    range_and_sin_instances.extend(sin_ra_onehot_provers);
+    let (sin_ra_one_hot_proof, _) = BatchedSumcheck::prove(
+        range_and_sin_instances
+            .iter_mut()
+            .map(|v| &mut **v as _)
+            .collect(),
+        &mut prover.accumulator,
+        &mut prover.transcript,
+    );
+    proofs.push((
+        ProofId(node.idx, ProofType::RaOneHotChecks),
+        sin_ra_one_hot_proof,
+    ));
+
+    let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+    let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_provers(
+        &rc_encoding,
+        &rc_lookup_indices,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![rc_ra, rc_hw, rc_bool];
+    let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
+        instances.iter_mut().map(|v| &mut **v as _).collect(),
+        &mut prover.accumulator,
+        &mut prover.transcript,
+    );
+    proofs.push((
+        ProofId(node.idx, ProofType::RaHammingWeight),
+        ra_one_hot_proof,
+    ));
+
+    proofs
+}
+
+fn verify_post_reduction_checks<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    verifier: &mut Verifier<'_, F, T>,
+) -> Result<(), ProofVerifyError> {
+    let sin_ra_one_hot_proof = verifier
+        .proofs
+        .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
+        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+
+    let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
+    let rangecheck_verifier = rangecheck_provider
+        .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        );
+    let sin_encoding = SinRaEncoding { node_idx: node.idx };
+    let sin_ra_onehot_verifier = shout::ra_onehot_verifiers(
+        &sin_encoding,
+        &verifier.accumulator,
+        &mut verifier.transcript,
+    );
+    let sin_ra_onehot_verifier: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
+        sin_ra_onehot_verifier.iter().map(|v| &**v as _).collect();
+    let mut range_and_sin_instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
+        vec![&rangecheck_verifier];
+    range_and_sin_instances.extend(sin_ra_onehot_verifier);
+    BatchedSumcheck::verify(
+        sin_ra_one_hot_proof,
+        range_and_sin_instances,
+        &mut verifier.accumulator,
+        &mut verifier.transcript,
+    )?;
+
+    let ra_one_hot_proof = verifier
+        .proofs
+        .get(&ProofId(node.idx, ProofType::RaHammingWeight))
+        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+
+    let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+    let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_verifiers(
+        &rc_encoding,
+        &verifier.accumulator,
+        &mut verifier.transcript,
+    );
+    BatchedSumcheck::verify(
+        ra_one_hot_proof,
+        vec![&*rc_ra, &*rc_hw, &*rc_bool],
+        &mut verifier.accumulator,
+        &mut verifier.transcript,
+    )?;
+
+    Ok(())
 }
 
 const DEGREE_BOUND: usize = 2;
@@ -363,7 +449,6 @@ impl<F: JoltField> SinProver<F> {
         // This is due to the fact that `remainder` poly claim is used as input claim for sin lookup sumcheck, together with a node output claim.
         // Both claims are derived from a different opening point, so we need to derive a new claim for one of (`output`, `remainder`).
         // We chose `output` to prevent us from having to use n-to-1 reductions on the `remainder` and rather only implement it on NodeOutput.
-        // Making further work for Issue#138 easier.
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(params.computation_node.idx),

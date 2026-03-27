@@ -55,7 +55,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
 
         let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
             Vec::with_capacity(1 + input_count);
-        // TODO(#138): Implement N-to-1 reduction to constrain both claims coming from consumer nodes and this claim
+
         instances.push(Box::new(initialize_output_prover(node, &ctx, prover)));
         for input_idx in 0..input_count {
             instances.push(Box::new(initialize_input_prover(

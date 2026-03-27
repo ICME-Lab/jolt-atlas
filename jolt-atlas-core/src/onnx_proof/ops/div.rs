@@ -1,5 +1,5 @@
 use crate::onnx_proof::{
-    ops::OperatorProofTrait,
+    ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
     range_checking::{
         range_check_operands::DivRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
     },
@@ -36,6 +36,10 @@ use joltworks::{
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
+    fn reduction_flow(&self) -> ReductionFlow {
+        ReductionFlow::Custom
+    }
+
     #[tracing::instrument(skip_all, name = "Div::prove")]
     fn prove(
         &self,
@@ -45,7 +49,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         let mut results = Vec::new();
 
         // Execution proof
-        let params = DivParams::new(node.clone(), &prover.accumulator);
+        let params = DivParams::new(node.clone(), &mut prover.transcript);
         let mut exec_sumcheck = DivProver::initialize(&prover.trace, params);
         let (proof, _) = Sumcheck::prove(
             &mut exec_sumcheck,
@@ -54,50 +58,38 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         );
         results.push((ProofId(node.idx, ProofType::Execution), proof));
 
+        results
+    }
+
+    fn prove_with_reduction(
+        &self,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> (
+        joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+        Vec<(ProofId, SumcheckInstanceProof<F, T>)>,
+    ) {
+        let mut proofs = self.prove(node, prover);
+
+        // Reduce node-output openings first, then bind the reduced output claim
+        // as the committed Div quotient opening used by PCS opening verification.
+        let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
+        let reduced = prover.accumulator.get_node_output_opening(node.idx);
+
+        prover.accumulator.append_dense(
+            &mut prover.transcript,
+            CommittedPolynomial::DivNodeQuotient(node.idx),
+            SumcheckId::NodeExecution(node.idx),
+            reduced.0.r.clone(),
+            reduced.1,
+        );
+
         if node.is_scalar() {
-            // Skip range check for single output element since verifier can do div check on its own
-            return results;
+            return (eval_reduction_proof, proofs);
         }
 
-        // Range check proof
-        let rangecheck_provider = RangeCheckProvider::<DivRangeCheckOperands>::new(node);
-        let (mut rangecheck_sumcheck, lookup_indices) = rangecheck_provider
-            .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
-                &prover.trace,
-                &mut prover.accumulator,
-                &mut prover.transcript,
-            );
-        let (rangecheck_proof, _) = Sumcheck::prove(
-            &mut rangecheck_sumcheck,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-
-        results.push((ProofId(node.idx, ProofType::RangeCheck), rangecheck_proof));
-
-        // RaOneHotChecks proof
-        let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
-
-        let [ra_sumcheck, hw_sumcheck, bool_sumcheck] = shout::ra_onehot_provers(
-            &encoding,
-            &lookup_indices,
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-            vec![ra_sumcheck, hw_sumcheck, bool_sumcheck];
-        let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
-            instances.iter_mut().map(|v| &mut **v as _).collect(),
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        results.push((
-            ProofId(node.idx, ProofType::RaOneHotChecks),
-            ra_one_hot_proof,
-        ));
-
-        results
+        proofs.extend(prove_range_and_onehot(node, prover));
+        (eval_reduction_proof, proofs)
     }
 
     #[tracing::instrument(skip_all, name = "Div::verify")]
@@ -111,7 +103,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let exec_sumcheck = DivVerifier::new(node.clone(), &verifier.accumulator);
+        let exec_sumcheck = DivVerifier::new(node.clone(), &mut verifier.transcript);
         Sumcheck::verify(
             proof,
             &exec_sumcheck,
@@ -119,45 +111,46 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
             &mut verifier.transcript,
         )?;
 
+        Ok(())
+    }
+
+    fn verify_with_reduction(
+        &self,
+        node: &ComputationNode,
+        verifier: &mut Verifier<'_, F, T>,
+        eval_reduction_proof: &joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+    ) -> Result<(), ProofVerifyError> {
+        self.verify(node, verifier)?;
+
+        NodeEvalReduction::verify(verifier, node, eval_reduction_proof)?;
+        let reduced = verifier.accumulator.get_node_output_opening(node.idx);
+
+        verifier.accumulator.append_dense(
+            &mut verifier.transcript,
+            CommittedPolynomial::DivNodeQuotient(node.idx),
+            SumcheckId::NodeExecution(node.idx),
+            reduced.0.r.clone(),
+        );
+
+        let quotient_claim = verifier
+            .accumulator
+            .get_committed_polynomial_opening(
+                CommittedPolynomial::DivNodeQuotient(node.idx),
+                SumcheckId::NodeExecution(node.idx),
+            )
+            .1;
+
+        if quotient_claim != reduced.1 {
+            return Err(ProofVerifyError::InvalidOpeningProof(
+                "Div quotient claim does not match reduced node-output claim".to_string(),
+            ));
+        }
+
         if node.is_scalar() {
-            // Skip range check for single output element since verifier can do div check on its own
             return Ok(());
         }
 
-        // Range check verification
-        let rangecheck_proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::RangeCheck))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-
-        let rangecheck_provider = RangeCheckProvider::<DivRangeCheckOperands>::new(node);
-        let rangecheck_verifier = rangecheck_provider
-            .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
-                &mut verifier.accumulator,
-                &mut verifier.transcript,
-            );
-        Sumcheck::verify(
-            rangecheck_proof,
-            &rangecheck_verifier,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        // Verify RaOneHotChecks
-        let ra_one_hot_proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
-        let [ra_sumcheck, hw_sumcheck, bool_sumcheck] =
-            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
-        BatchedSumcheck::verify(
-            ra_one_hot_proof,
-            vec![&*ra_sumcheck, &*hw_sumcheck, &*bool_sumcheck],
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
+        verify_range_and_onehot(node, verifier)?;
         Ok(())
     }
 
@@ -188,12 +181,11 @@ pub struct DivParams<F: JoltField> {
 }
 
 impl<F: JoltField> DivParams<F> {
-    /// Create new division parameters from a computation node and opening accumulator.
-    pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let r_node_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+    /// Create new division parameters from a computation node and transcript.
+    pub fn new<T: Transcript>(computation_node: ComputationNode, transcript: &mut T) -> Self {
+        let num_vars = computation_node.pow2_padded_num_output_elements().log_2();
+        let r_node_output = transcript.challenge_vector_optimized::<F>(num_vars);
+
         Self {
             r_node_output: r_node_output.into(),
             computation_node,
@@ -348,11 +340,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
             opening_point.clone(),
             self.right_operand.final_sumcheck_claim(),
         );
-        accumulator.append_dense(
+        accumulator.append_virtual(
             transcript,
-            CommittedPolynomial::DivNodeQuotient(self.params.computation_node.idx),
+            VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.r.clone(),
+            opening_point.clone(),
             self.q.final_sumcheck_claim(),
         );
         accumulator.append_virtual(
@@ -375,11 +367,8 @@ pub struct DivVerifier<F: JoltField> {
 
 impl<F: JoltField> DivVerifier<F> {
     /// Create a new verifier for the division operation.
-    pub fn new(
-        computation_node: ComputationNode,
-        accumulator: &VerifierOpeningAccumulator<F>,
-    ) -> Self {
-        let params = DivParams::new(computation_node, accumulator);
+    pub fn new<T: Transcript>(computation_node: ComputationNode, transcript: &mut T) -> Self {
+        let params = DivParams::new(computation_node, transcript);
         Self { params }
     }
 }
@@ -394,18 +383,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let r_node_output = accumulator
-            .get_node_output_opening(self.params.computation_node.idx)
-            .0
-            .r;
+        let r_node_output = self.params.r_node_output.r.clone();
         let r_node_output_prime = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
         let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
         let q_claim = accumulator
-            .get_committed_polynomial_opening(
-                CommittedPolynomial::DivNodeQuotient(self.params.computation_node.idx),
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
                 SumcheckId::NodeExecution(self.params.computation_node.idx),
             )
             .1;
@@ -447,11 +433,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
             SumcheckId::NodeExecution(self.params.computation_node.idx),
             opening_point.clone(),
         );
-        accumulator.append_dense(
+        accumulator.append_virtual(
             transcript,
-            CommittedPolynomial::DivNodeQuotient(self.params.computation_node.idx),
+            VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.r.clone(),
+            opening_point.clone(),
         );
         accumulator.append_virtual(
             transcript,
@@ -460,6 +446,90 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
             opening_point.clone(),
         );
     }
+}
+
+fn prove_range_and_onehot<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    prover: &mut Prover<F, T>,
+) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    let mut results = Vec::new();
+
+    let rangecheck_provider = RangeCheckProvider::<DivRangeCheckOperands>::new(node);
+    let (mut rangecheck_sumcheck, lookup_indices) = rangecheck_provider
+        .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
+            &prover.trace,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+    let (rangecheck_proof, _) = Sumcheck::prove(
+        &mut rangecheck_sumcheck,
+        &mut prover.accumulator,
+        &mut prover.transcript,
+    );
+
+    results.push((ProofId(node.idx, ProofType::RangeCheck), rangecheck_proof));
+
+    let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+
+    let [ra_sumcheck, hw_sumcheck, bool_sumcheck] = shout::ra_onehot_provers(
+        &encoding,
+        &lookup_indices,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+
+    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
+        vec![ra_sumcheck, hw_sumcheck, bool_sumcheck];
+    let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
+        instances.iter_mut().map(|v| &mut **v as _).collect(),
+        &mut prover.accumulator,
+        &mut prover.transcript,
+    );
+    results.push((
+        ProofId(node.idx, ProofType::RaOneHotChecks),
+        ra_one_hot_proof,
+    ));
+
+    results
+}
+
+fn verify_range_and_onehot<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    verifier: &mut Verifier<'_, F, T>,
+) -> Result<(), ProofVerifyError> {
+    let rangecheck_proof = verifier
+        .proofs
+        .get(&ProofId(node.idx, ProofType::RangeCheck))
+        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+
+    let rangecheck_provider = RangeCheckProvider::<DivRangeCheckOperands>::new(node);
+    let rangecheck_verifier = rangecheck_provider
+        .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        );
+    Sumcheck::verify(
+        rangecheck_proof,
+        &rangecheck_verifier,
+        &mut verifier.accumulator,
+        &mut verifier.transcript,
+    )?;
+
+    let ra_one_hot_proof = verifier
+        .proofs
+        .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
+        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+    let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+    let [ra_sumcheck, hw_sumcheck, bool_sumcheck] =
+        shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
+    BatchedSumcheck::verify(
+        ra_one_hot_proof,
+        vec![&*ra_sumcheck, &*hw_sumcheck, &*bool_sumcheck],
+        &mut verifier.accumulator,
+        &mut verifier.transcript,
+    )?;
+
+    Ok(())
 }
 
 #[cfg(test)]

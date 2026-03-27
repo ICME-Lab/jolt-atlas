@@ -1,4 +1,4 @@
-use crate::field::JoltField;
+use crate::field::{IntoOpening, JoltField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use common::consts::{LOG_K_CHUNK, XLEN};
 
@@ -76,24 +76,22 @@ impl OneHotParams {
         ((index >> self.instruction_shifts[idx]) & (self.k_chunk - 1) as u64) as u8
     }
 
-    pub fn compute_r_address_chunks<F: JoltField>(
-        &self,
-        r_address: &[F::Challenge],
-    ) -> Vec<Vec<F::Challenge>> {
+    pub fn compute_r_address_chunks<F, U>(&self, r_address: &[U]) -> Vec<Vec<F>>
+    where
+        U: Copy + Send + Sync + Into<F>,
+        F: JoltField,
+    {
         let r_address = if r_address.len().is_multiple_of(self.log_k_chunk) {
-            r_address.to_vec()
+            r_address.into_opening()
         } else {
             [
-                &vec![
-                    F::Challenge::from(0_u128);
-                    self.log_k_chunk - (r_address.len() & (self.log_k_chunk - 1))
-                ],
-                r_address,
+                &vec![F::zero(); self.log_k_chunk - (r_address.len() & (self.log_k_chunk - 1))],
+                r_address.into_opening().as_slice(),
             ]
             .concat()
         };
 
-        let r_address_chunks: Vec<Vec<F::Challenge>> = r_address
+        let r_address_chunks: Vec<Vec<F>> = r_address
             .chunks(self.log_k_chunk)
             .map(|chunk| chunk.to_vec())
             .collect();

@@ -44,7 +44,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MoveAxis {
 /// MoveAxis reorders tensor dimensions (axes) without changing the underlying data.
 #[derive(Clone)]
 pub struct MoveAxisParams<F: JoltField> {
-    r_output: Vec<F::Challenge>,
+    r_output: Vec<F>,
     computation_node: ComputationNode,
 }
 
@@ -67,7 +67,7 @@ impl<F: JoltField> MoveAxisParams<F> {
 /// Maintains permuted input challenge variables that correspond to the reordered axes.
 pub struct MoveAxisProver<F: JoltField> {
     params: MoveAxisParams<F>,
-    r_input: Vec<F::Challenge>,
+    r_input: Vec<F>,
 }
 
 impl<F: JoltField> MoveAxisProver<F> {
@@ -108,7 +108,7 @@ impl<F: JoltField> MoveAxisProver<F> {
 /// Verifies that input and output claims match with appropriately permuted challenge variables.
 pub struct MoveAxisVerifier<F: JoltField> {
     params: MoveAxisParams<F>,
-    r_input: Vec<F::Challenge>,
+    r_input: Vec<F>,
 }
 
 impl<F: JoltField> MoveAxisVerifier<F> {
@@ -166,9 +166,9 @@ impl<F: JoltField> MoveAxisVerifier<F> {
 /// Permutes challenge variable groups to reverse the moveaxis transformation
 fn permute_challenge_groups<F: JoltField>(
     output_dims: &[usize],
-    r_output: &[F::Challenge],
+    r_output: &[F],
     operator: &atlas_onnx_tracer::ops::Operator,
-) -> Vec<F::Challenge> {
+) -> Vec<F> {
     use atlas_onnx_tracer::ops::Operator;
 
     let (source, destination) = match operator {
@@ -177,7 +177,7 @@ fn permute_challenge_groups<F: JoltField>(
     };
 
     // Split r_output into groups, one for each axis in output_dims
-    let mut challenge_groups: Vec<Vec<F::Challenge>> = Vec::new();
+    let mut challenge_groups: Vec<Vec<F>> = Vec::new();
     let mut offset = 0;
 
     for &dim in output_dims.iter() {

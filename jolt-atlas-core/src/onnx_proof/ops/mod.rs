@@ -56,6 +56,8 @@ pub mod div;
 pub mod einsum;
 /// Erf activation function.
 pub mod erf;
+/// Operator-scoped evaluation reduction helpers.
+pub mod eval_reduction;
 /// Gather elements from input tensor using indices.
 pub mod gather;
 /// Identity operation (pass-through).
@@ -110,18 +112,36 @@ pub use add::{AddParams, AddProver, AddVerifier};
 use common::CommittedPolynomial;
 pub use cube::{CubeParams, CubeProver, CubeVerifier};
 pub use div::{DivParams, DivProver, DivVerifier};
+use eval_reduction::NodeEvalReduction;
 pub use iff::{IffParams, IffProver, IffVerifier};
 use joltworks::{
-    field::JoltField, subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
+    field::JoltField,
+    subprotocols::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof},
+    transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
 pub use mul::{MulParams, MulProver, MulVerifier};
 pub use neg::{NegParams, NegProver, NegVerifier};
 pub use rsqrt::{RsqrtParams, RsqrtProver, RsqrtVerifier};
 pub use square::{SquareParams, SquareProver, SquareVerifier};
+use std::collections::BTreeMap;
 pub use sub::{SubParams, SubProver, SubVerifier};
 
 use crate::onnx_proof::{ProofId, Prover, Verifier};
+
+/// Standard execution proofs emitted by an operator.
+type ExecutionProofs<F, T> = Vec<(ProofId, SumcheckInstanceProof<F, T>)>;
+
+/// Eval-reduction flow mode for an operator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReductionFlow {
+    /// Use `prove` and run eval-reduction at the beginning (default behavior).
+    Default,
+    /// Use custom `prove_with_reduction` to control reduction timing.
+    ///
+    /// Used for operators that insert an additional opening to their output during proving
+    Custom,
+}
 
 /// Trait for handling operator proving and verification.
 ///
@@ -129,22 +149,63 @@ use crate::onnx_proof::{ProofId, Prover, Verifier};
 /// proving and verification logic, which is then dispatched from the main
 /// proof module.
 pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
+    /// Select the eval-reduction flow for this operator.
+    ///
+    /// `Default` uses `prove`/`verify` with reduction at the beginning.
+    /// `Custom` uses `prove_with_reduction`/`verify_with_reduction`.
+    fn reduction_flow(&self) -> ReductionFlow {
+        ReductionFlow::Default
+    }
+
     /// Prove the operation for the given computation node.
     ///
     /// Returns a vector of (ProofId, Proof) pairs. Most operators return a single
     /// proof, but some (like ReLU) return multiple proofs.
-    fn prove(
+    fn prove(&self, _node: &ComputationNode, _prover: &mut Prover<F, T>) -> ExecutionProofs<F, T> {
+        panic!(
+            "Operator selected default reduction flow but did not implement prove; either implement prove or switch reduction_flow to Custom and implement prove_with_reduction"
+        )
+    }
+
+    /// Prove the operation and produce its node eval-reduction proof.
+    ///
+    /// Default behavior performs eval reduction before operator proving.
+    /// Operators that need additional openings (e.g. Concat/Cos) can override this
+    /// method and place `NodeEvalReduction::prove` at the required point in their flow.
+    fn prove_with_reduction(
         &self,
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)>;
+        _node: &ComputationNode,
+        _prover: &mut Prover<F, T>,
+    ) -> (EvalReductionProof<F>, ExecutionProofs<F, T>) {
+        panic!("Operator selected custom reduction flow but did not implement prove_with_reduction")
+    }
 
     /// Verify the operation for the given computation node.
     fn verify(
         &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError>;
+        _node: &ComputationNode,
+        _verifier: &mut Verifier<'_, F, T>,
+    ) -> Result<(), ProofVerifyError> {
+        panic!(
+            "Operator selected default reduction flow but did not implement verify; either implement verify or switch reduction_flow to Custom and implement verify_with_reduction"
+        )
+    }
+
+    /// Verify the operation and its node eval-reduction proof.
+    ///
+    /// Default behavior verifies eval reduction before operator verification.
+    /// Operators that need additional openings can override this method and place
+    /// `NodeEvalReduction::verify` at the matching verifier step.
+    fn verify_with_reduction(
+        &self,
+        _node: &ComputationNode,
+        _verifier: &mut Verifier<'_, F, T>,
+        _eval_reduction_proof: &EvalReductionProof<F>,
+    ) -> Result<(), ProofVerifyError> {
+        panic!(
+            "Operator selected custom reduction flow but did not implement verify_with_reduction"
+        )
+    }
 
     /// Get the committed polynomials involved in this operator's proof.
     fn get_committed_polynomials(&self, _node: &ComputationNode) -> Vec<CommittedPolynomial> {
@@ -242,20 +303,42 @@ impl OperatorProver {
     ///
     /// # Returns
     ///
-    /// A vector of (ProofId, SumcheckInstanceProof) pairs
+    /// A tuple containing the node's evaluation-reduction proof and the
+    /// execution proof vector.
     pub fn prove<F, T>(
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)>
+    ) -> (EvalReductionProof<F>, ExecutionProofs<F, T>)
     where
         F: JoltField,
         T: Transcript,
     {
         dispatch_operator!(
             node,
-            |inner| inner.prove(node, prover),
+            |inner| Self::prove_and_reduce_node(inner, node, prover),
             _ => panic!("Unhandled operator in graph: {node:#?}")
         )
+    }
+
+    fn prove_and_reduce_node<F, T, Op>(
+        operator: &Op,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> (EvalReductionProof<F>, ExecutionProofs<F, T>)
+    where
+        F: JoltField,
+        T: Transcript,
+        Op: OperatorProofTrait<F, T>,
+    {
+        match operator.reduction_flow() {
+            ReductionFlow::Default => {
+                let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
+                let execution_proofs = operator.prove(node, prover);
+                // Store eval reduction proof and execution proofs as needed
+                (eval_reduction_proof, execution_proofs)
+            }
+            ReductionFlow::Custom => operator.prove_with_reduction(node, prover),
+        }
     }
 }
 
@@ -282,16 +365,46 @@ impl OperatorVerifier {
     pub fn verify<F, T>(
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
+        eval_reduction_proofs: &BTreeMap<usize, EvalReductionProof<F>>,
     ) -> Result<(), ProofVerifyError>
     where
         F: JoltField,
         T: Transcript,
     {
+        let eval_reduction_proof = eval_reduction_proofs.get(&node.idx).ok_or_else(|| {
+            ProofVerifyError::InvalidOpeningProof(format!(
+                "Missing evaluation reduction proof for node index {}",
+                node.idx
+            ))
+        })?;
+
         dispatch_operator!(
             node,
-            |inner| inner.verify(node, verifier),
+            |inner| Self::verify_and_reduce_node(inner, node, verifier, eval_reduction_proof),
             _ => Err(ProofVerifyError::MissingProof(node.idx))
         )
+    }
+
+    fn verify_and_reduce_node<F, T, Op>(
+        operator: &Op,
+        node: &ComputationNode,
+        verifier: &mut Verifier<'_, F, T>,
+        eval_reduction_proof: &EvalReductionProof<F>,
+    ) -> Result<(), ProofVerifyError>
+    where
+        F: JoltField,
+        T: Transcript,
+        Op: OperatorProofTrait<F, T>,
+    {
+        match operator.reduction_flow() {
+            ReductionFlow::Default => {
+                NodeEvalReduction::verify(verifier, node, eval_reduction_proof)?;
+                operator.verify(node, verifier)
+            }
+            ReductionFlow::Custom => {
+                operator.verify_with_reduction(node, verifier, eval_reduction_proof)
+            }
+        }
     }
 }
 
@@ -322,7 +435,7 @@ macro_rules! impl_standard_params {
         /// and drive the sumcheck protocol. Generated by [`impl_standard_params!`].
         #[derive(Clone)]
         pub struct $params_ty<F: JoltField> {
-            pub(crate) r_node_output: Vec<F::Challenge>,
+            pub(crate) r_node_output: OpeningPoint<BIG_ENDIAN, F>,
             pub(crate) computation_node: ComputationNode,
         }
 
@@ -337,7 +450,7 @@ macro_rules! impl_standard_params {
                     .0
                     .r;
                 Self {
-                    r_node_output,
+                    r_node_output: r_node_output.into(),
                     computation_node,
                 }
             }
@@ -354,10 +467,7 @@ macro_rules! impl_standard_params {
                     .1
             }
 
-            fn normalize_opening_point(
-                &self,
-                challenges: &[F::Challenge],
-            ) -> OpeningPoint<BIG_ENDIAN, F> {
+            fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
                 OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
             }
 

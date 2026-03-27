@@ -10,7 +10,7 @@ use atlas_onnx_tracer::{
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         identity_poly::IdentityPolynomial,
@@ -174,7 +174,7 @@ const DEGREE_BOUND: usize = 2;
 #[derive(Clone)]
 pub struct GatherParams<F: JoltField> {
     gamma: F,
-    r_node_output: Vec<F::Challenge>,
+    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
     lookup_vars: usize,
     num_words: usize,
@@ -205,7 +205,7 @@ impl<F: JoltField> GatherParams<F> {
             .r;
         Self {
             gamma,
-            r_node_output,
+            r_node_output: r_node_output.into(),
             computation_node,
             num_words,
             lookup_vars,
@@ -233,7 +233,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for GatherParams<F> {
         rv_claim + self.gamma * index_claim
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
@@ -268,7 +268,7 @@ impl<F: JoltField> GatherProver<F> {
 
         let word_dim = dictionary.dims().iter().product::<usize>() / params.num_words;
 
-        let (r_index, r_word) = params.r_node_output.split_at(params.lookup_vars);
+        let (r_index, r_word) = params.r_node_output.r.split_at(params.lookup_vars);
         assert_eq!(r_word.len(), word_dim.log_2(),);
 
         let index_claim = MultilinearPolynomial::from(indexes.clone()).evaluate(r_index);
@@ -360,9 +360,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GatherProver<
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
 
-        let (r_index, r_word) = self.params.r_node_output.split_at(self.params.lookup_vars);
+        let (r_index, r_word) = self
+            .params
+            .r_node_output
+            .r
+            .split_at(self.params.lookup_vars);
 
         let r_idx_onehot = [r_index, &opening_point.r].concat();
         accumulator.append_virtual(
@@ -400,7 +406,7 @@ impl<F: JoltField> GatherVerifier<F> {
     ) -> Self {
         let params = GatherParams::new(computation_node, graph, accumulator, transcript);
 
-        let (r_index, _) = params.r_node_output.split_at(params.lookup_vars);
+        let (r_index, _) = params.r_node_output.r.split_at(params.lookup_vars);
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(params.computation_node.inputs[1]),
@@ -422,7 +428,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GatherVerif
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
 
         let ra_claim = accumulator
             .get_virtual_polynomial_opening(
@@ -445,9 +453,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GatherVerif
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
 
-        let (r_index, r_word) = self.params.r_node_output.split_at(self.params.lookup_vars);
+        let (r_index, r_word) = self
+            .params
+            .r_node_output
+            .r
+            .split_at(self.params.lookup_vars);
         let r_idx_onehot = [r_index, &opening_point.r].concat();
         accumulator.append_virtual(
             transcript,
@@ -466,11 +480,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GatherVerif
 }
 
 // From the read indexes, computes the bound ra vector.
-fn compute_ra_evals<F>(r: &[F::Challenge], indexes: &Tensor<i32>, num_words: usize) -> Vec<F>
+fn compute_ra_evals<F>(r: &[F], indexes: &Tensor<i32>, num_words: usize) -> Vec<F>
 where
     F: JoltField,
 {
-    let E = EqPolynomial::evals(r);
+    let e = EqPolynomial::evals(r);
     let num_threads = rayon::current_num_threads();
     let chunk_size = indexes.len().div_ceil(num_threads);
 
@@ -487,7 +501,7 @@ where
             let base_idx = chunk_idx * chunk_size;
             chunk.iter().enumerate().for_each(|(local_j, &k)| {
                 let global_j = base_idx + local_j;
-                local_ra[k] += E[global_j];
+                local_ra[k] += e[global_j];
             });
             local_ra
         })
@@ -502,7 +516,7 @@ where
 }
 
 // TODO: Assert correct behavior for axis != 0
-fn fold_dictionary<F: JoltField>(r: &[F::Challenge], dictionary: &Tensor<i32>) -> Vec<F> {
+fn fold_dictionary<F: JoltField>(r: &[F], dictionary: &Tensor<i32>) -> Vec<F> {
     let E = EqPolynomial::evals(r);
 
     dictionary
@@ -644,7 +658,9 @@ fn ra_booleanity_params<F: JoltField>(
         )
         .0
         .r;
-    let r_address = transcript.challenge_vector_optimized::<F>(num_words.log_2());
+    let r_address = transcript
+        .challenge_vector_optimized::<F>(num_words.log_2())
+        .into_opening();
 
     BooleanitySumcheckParams {
         d: 1,

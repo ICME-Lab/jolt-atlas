@@ -269,6 +269,10 @@ impl<H: RangeCheckingOperandsTrait> RaOneHotEncoding for RangeCheckEncoding<H> {
     }
 }
 
+/// Temporary method to append RAF claims for range-checking operations
+/// It takes existing opening claims from tensors (as i32 values),
+/// and re-evaluates them at the same point as unsigned tensors.
+/// TODO(AntoineF4C5) Use directly the i32 claims, see #208
 fn append_raf_claims_prover<F: JoltField, LUT, H>(
     computation_node: &ComputationNode,
     provider: &RangeCheckProvider<H>,

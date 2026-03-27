@@ -1,6 +1,8 @@
 //! Implements the Dao-Thaler + Gruen optimization for EQ polynomial evaluations
 //! https://eprint.iacr.org/2024/1210.pdf
 
+use std::ops::Mul;
+
 use allocative::Allocative;
 use ark_ff::Zero;
 use rayon::prelude::*;
@@ -67,7 +69,7 @@ pub struct GruenSplitEqPolynomial<F: JoltField> {
     /// Accumulated eq(w_bound, r_bound) from already-bound variables.
     pub(crate) current_scalar: F,
     /// The full challenge vector w.
-    pub(crate) w: Vec<F::Challenge>,
+    pub(crate) w: Vec<F>,
     /// Prefix eq tables for w_in. E_in_vec[k] = eq(w_in[..k], ·) over {0,1}^k.
     /// Invariant: always non-empty; E_in_vec[0] = [1].
     pub(crate) E_in_vec: Vec<Vec<F>>,
@@ -80,11 +82,15 @@ pub struct GruenSplitEqPolynomial<F: JoltField> {
 
 impl<F: JoltField> GruenSplitEqPolynomial<F> {
     #[tracing::instrument(skip_all, name = "GruenSplitEqPolynomial::new_with_scaling")]
-    pub fn new_with_scaling(
-        w: &[F::Challenge],
+    pub fn new_with_scaling<U>(
+        w: &[U],
         binding_order: BindingOrder,
         scaling_factor: Option<F>,
-    ) -> Self {
+    ) -> Self
+    where
+        U: Copy + Send + Sync + Into<F>,
+        F: Mul<U, Output = F>,
+    {
         match binding_order {
             BindingOrder::LowToHigh => {
                 let m = w.len() / 2;
@@ -105,7 +111,7 @@ impl<F: JoltField> GruenSplitEqPolynomial<F> {
                 Self {
                     current_index: w.len(),
                     current_scalar: scaling_factor.unwrap_or(F::one()),
-                    w: w.to_vec(),
+                    w: w.iter().map(|&u| u.into()).collect(),
                     E_in_vec,
                     E_out_vec,
                     binding_order,
@@ -128,7 +134,7 @@ impl<F: JoltField> GruenSplitEqPolynomial<F> {
                 Self {
                     current_index: 0, // Start from 0 for high-to-low up to w.len() - 1
                     current_scalar: scaling_factor.unwrap_or(F::one()),
-                    w: w.to_vec(),
+                    w: w.iter().map(|&u| u.into()).collect(),
                     E_in_vec,
                     E_out_vec,
                     binding_order,
@@ -138,7 +144,11 @@ impl<F: JoltField> GruenSplitEqPolynomial<F> {
     }
 
     #[tracing::instrument(skip_all, name = "GruenSplitEqPolynomial::new")]
-    pub fn new(w: &[F::Challenge], binding_order: BindingOrder) -> Self {
+    pub fn new<U>(w: &[U], binding_order: BindingOrder) -> Self
+    where
+        U: Copy + Send + Sync + Into<F>,
+        F: Mul<U, Output = F>,
+    {
         if w.is_empty() {
             // Sum-check num_rounds is 0 for zero variables, so we won't call bind() and can skip precomputation.
             Self::default()
@@ -485,7 +495,7 @@ impl<F: JoltField> GruenSplitEqPolynomial<F> {
         self.current_scalar
     }
 
-    pub fn get_current_w(&self) -> F::Challenge {
+    pub fn get_current_w(&self) -> F {
         match self.binding_order {
             BindingOrder::LowToHigh => self.w[self.current_index - 1],
             BindingOrder::HighToLow => self.w[self.current_index],

@@ -1,5 +1,5 @@
 use crate::{
-    field::{JoltField, MulTrunc},
+    field::{IntoOpening, JoltField, MulTrunc},
     lookup_tables::{
         prefixes::{PrefixCheckpoint, PrefixEval, Prefixes},
         JoltLookupTable, PrefixSuffixDecompositionTrait,
@@ -133,10 +133,7 @@ where
         DEGREE_BOUND
     }
 
-    fn normalize_opening_point(
-        &self,
-        challenges: &[<F as JoltField>::Challenge],
-    ) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         let (r_address_prime, r_node_output_prime) = challenges.split_at(LOG_K);
         let r_node_output_prime = r_node_output_prime
             .iter()
@@ -676,7 +673,9 @@ where
         transcript: &mut FS,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             self.params.polynomial_type,
@@ -721,7 +720,9 @@ where
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         let (r_address_prime, r_node_output_prime) = opening_point.split_at(LOG_K);
         let (_, ra_claim) = accumulator
             .get_virtual_polynomial_opening(self.params.polynomial_type, self.params.sumcheck_id);
@@ -748,7 +749,9 @@ where
         transcript: &mut FS,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             self.params.polynomial_type,

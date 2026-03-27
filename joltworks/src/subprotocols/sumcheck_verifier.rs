@@ -53,5 +53,5 @@ pub trait SumcheckInstanceParams<F: JoltField> {
     /// Returns the initial claim of this sumcheck instance.
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F;
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F>;
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F>;
 }

@@ -18,9 +18,16 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 
-use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
+use crate::onnx_proof::{
+    ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
+    ProofId, ProofType, Prover, Verifier,
+};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
+    fn reduction_flow(&self) -> ReductionFlow {
+        ReductionFlow::Custom
+    }
+
     #[tracing::instrument(skip_all, name = "Slice::prove")]
     fn prove(
         &self,
@@ -44,7 +51,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
         let ctx =
             SliceGammaWeightsContext::new(&input_dims, &node.output_dims, slice_op.clone(), gamma);
 
-        // TODO(#138): Implement N-to-1 reduction to constrain both claims coming from consumer nodes and this claim
         let output_prover = initialize_output_prover(node, &ctx, prover);
         let input_prover = initialize_input_prover(node, &ctx, prover);
 
@@ -58,6 +64,19 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
         );
 
         vec![(ProofId(node.idx, ProofType::Execution), proof)]
+    }
+
+    fn prove_with_reduction(
+        &self,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> (
+        joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+        Vec<(ProofId, SumcheckInstanceProof<F, T>)>,
+    ) {
+        let proofs = self.prove(node, prover);
+        let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
+        (eval_reduction_proof, proofs)
     }
 
     #[tracing::instrument(skip_all, name = "Slice::verify")]
@@ -119,6 +138,16 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
         }
 
         Ok(())
+    }
+
+    fn verify_with_reduction(
+        &self,
+        node: &ComputationNode,
+        verifier: &mut Verifier<'_, F, T>,
+        eval_reduction_proof: &joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+    ) -> Result<(), ProofVerifyError> {
+        self.verify(node, verifier)?;
+        NodeEvalReduction::verify(verifier, node, eval_reduction_proof)
     }
 }
 

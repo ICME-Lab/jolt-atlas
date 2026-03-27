@@ -15,8 +15,10 @@ use atlas_onnx_tracer::{
     tensor::Tensor,
 };
 use joltworks::{
-    field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme,
-    subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
+    field::JoltField,
+    poly::commitment::commitment_scheme::CommitmentScheme,
+    subprotocols::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof},
+    transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
 use std::collections::BTreeMap;
@@ -67,6 +69,8 @@ pub struct ONNXProof<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = 
     pub proofs: BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
     /// Polynomial commitments for witness polynomials.
     pub commitments: Vec<PCS::Commitment>,
+    /// Evaluation reduction proofs h polynomials for each opening claim.
+    pub eval_reduction_proofs: BTreeMap<usize, EvalReductionProof<F>>,
     /// Batched opening proof using reduction sum-check protocol to reduce all polynomial openings to the same point.
     reduced_opening_proof: Option<ReducedOpeningProof<F, T, PCS>>,
 }
@@ -89,6 +93,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         let io = Trace::io(&trace, pp.model());
 
         // Initialize prover state
+        // TODO: Deduplicate shared preprocessing, which is present in both AtlasProverPreprocessing and Prover state
         let mut prover: Prover<F, T> = Prover::new(pp.shared.clone(), trace);
         let mut proofs = BTreeMap::new();
 
@@ -104,12 +109,25 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         Self::output_claim(&mut prover);
 
         // IOP portion
-        Self::iop(pp.model().nodes(), &mut prover, &mut proofs);
+        let mut eval_reduction_proofs = BTreeMap::new();
+        Self::iop(
+            pp.model().nodes(),
+            &mut prover,
+            &mut proofs,
+            &mut eval_reduction_proofs,
+        );
 
         // Reduction sum-check + PCS::prove
         let reduced_opening_proof =
             Self::prove_reduced_openings(&mut prover, &poly_map, &pp.generators);
-        Self::finalize_proof(prover, io, commitments, proofs, reduced_opening_proof)
+        Self::finalize_proof(
+            prover,
+            io,
+            commitments,
+            proofs,
+            eval_reduction_proofs,
+            reduced_opening_proof,
+        )
     }
 
     /// Verify a proof for an ONNX neural network computation.
@@ -139,10 +157,10 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         self.populate_accumulator(&mut verifier);
 
         // Verify output MLE at random point τ
-        Self::verify_output_claim(pp.model(), io, &mut verifier)?;
+        Self::verify_output_claim(pp.model(), &mut verifier)?;
 
         // Verify each operation in reverse topological order
-        Self::verify_iop(pp.model(), &mut verifier)?;
+        self.verify_iop(pp.model(), &mut verifier)?;
 
         // Verify reduced opening proof
         self.verify_reduced_openings(pp, &mut verifier)

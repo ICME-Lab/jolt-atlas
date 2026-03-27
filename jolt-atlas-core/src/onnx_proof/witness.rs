@@ -199,6 +199,25 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 let q = layer_data.output;
                 MultilinearPolynomial::from(q.clone())
             }
+            CommittedPolynomial::TeleportNodeQuotient(node_idx) => {
+                let computation_node = &model.graph.nodes[node_idx];
+                // For nodes that use the quotient for a lookup (erf/sigmoid ...),
+                // the quotient is virtualized from a one-hot encoding.
+                assert!(matches!(
+                    computation_node.operator,
+                    Operator::Cos(_) | Operator::Sin(_)
+                ));
+                let tau = match &computation_node.operator {
+                    Operator::Cos(_) | Operator::Sin(_) => EIGHT_PI_APPROX,
+                    _ => unreachable!(
+                        "teleport quotient witness requested for non-teleport operator"
+                    ),
+                };
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let input = &layer_data.operands[0];
+                let (quotient, _remainder) = compute_division(input, tau);
+                MultilinearPolynomial::from(quotient)
+            }
             CommittedPolynomial::ScalarConstDivNodeRemainder(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 let Operator::ScalarConstDiv(op) = &computation_node.operator else {
@@ -217,13 +236,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     remainder_data,
                     left_operand.dims().to_vec(),
                 ))
-            }
-            CommittedPolynomial::RsqrtNodeRsqrt(node_idx) => {
-                let computation_node = &model.graph.nodes[node_idx];
-                assert!(matches!(computation_node.operator, Operator::Rsqrt(_)));
-                let layer_data = Trace::layer_data(trace, computation_node);
-                let rsqrt = layer_data.output;
-                MultilinearPolynomial::from(rsqrt.clone())
             }
             CommittedPolynomial::RsqrtNodeInv(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];

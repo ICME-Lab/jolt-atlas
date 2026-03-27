@@ -80,9 +80,8 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     }
 
     /// Verify that the output MLE evaluates correctly at the random challenge point τ.
-    pub(super) fn verify_output_claim(
+    pub(crate) fn verify_output_claim(
         model: &Model,
-        io: &ModelExecutionIO,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         let output_index = model.outputs()[0];
@@ -93,7 +92,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                 .log_2(),
         );
         let expected_output_claim =
-            MultilinearPolynomial::from(io.outputs[0].padded_next_power_of_two())
+            MultilinearPolynomial::from(verifier.io.outputs[0].padded_next_power_of_two())
                 .evaluate(&r_node_output);
 
         // append_virtual now handles both transcript append and opening point update.
@@ -108,7 +107,10 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         // Read the prover's claimed value and compare against IO.
         let output_claim = verifier
             .accumulator
-            .get_node_output_opening(output_computation_node.idx)
+            .get_virtual_polynomial_opening(
+                VirtualPolynomial::NodeOutput(output_computation_node.idx),
+                SumcheckId::NodeExecution(output_computation_node.idx + 1),
+            )
             .1;
         if expected_output_claim != output_claim {
             return Err(ProofVerifyError::InvalidOpeningProof(
@@ -120,17 +122,16 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
 
     /// Iterate over computation graph in reverse topological order and verify each operation.
     #[tracing::instrument(skip_all, name = "ONNXProof::verify_iop")]
-    pub(super) fn verify_iop(
+    pub(crate) fn verify_iop(
+        &self,
         model: &Model,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        for (_, computation_node) in model.graph.nodes.iter().rev() {
-            let res = OperatorVerifier::verify(computation_node, verifier);
+        for (_, node) in model.graph.nodes.iter().rev() {
+            let res = OperatorVerifier::verify(node, verifier, &self.eval_reduction_proofs);
             #[cfg(test)]
-            {
-                if let Err(e) = &res {
-                    println!("Verification failed at node {computation_node:#?}: {e:?}");
-                }
+            if let Err(e) = &res {
+                println!("Verification failed at node {node:#?}: {e:?}");
             }
             res?;
         }

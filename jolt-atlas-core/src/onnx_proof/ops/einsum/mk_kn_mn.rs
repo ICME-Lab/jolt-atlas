@@ -6,7 +6,7 @@ use atlas_onnx_tracer::{
 };
 use common::VirtualPolynomial;
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{
@@ -36,7 +36,7 @@ const DEGREE_BOUND: usize = 2;
 /// This implements standard matrix multiplication.
 #[derive(Clone)]
 pub struct MkKnMnParams<F: JoltField> {
-    r_node_output: Vec<F::Challenge>,
+    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
     einsum_dims: EinsumDims,
 }
@@ -53,7 +53,7 @@ impl<F: JoltField> MkKnMnParams<F> {
             .0
             .r;
         Self {
-            r_node_output,
+            r_node_output: r_node_output.into(),
             computation_node,
             einsum_dims,
         }
@@ -70,7 +70,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MkKnMnParams<F> {
         einsum_claim
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::new(challenges.to_vec())
     }
 
@@ -103,7 +103,7 @@ impl<F: JoltField> MkKnMnProver<F> {
             params.einsum_dims.right_operand()[0],
         );
         let (r_m, r_n) = params.r_node_output.split_at(m.log_2());
-        let (eq_r_m, eq_r_n) = (EqPolynomial::evals(r_m), EqPolynomial::evals(r_n));
+        let (eq_r_m, eq_r_n) = (EqPolynomial::evals(&r_m.r), EqPolynomial::evals(&r_n.r));
         let left_operand: Vec<F> = (0..k)
             .into_par_iter()
             .map(|j| {
@@ -170,11 +170,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MkKnMnProver<
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let sumcheck_challenges = sumcheck_challenges.into_opening();
         let (r_m, r_n) = self
             .params
             .r_node_output
             .split_at(self.params.einsum_dims.output()[0].log_2());
-        let r_left_node_output = [r_m, sumcheck_challenges].concat();
+        let r_left_node_output = [r_m.r.as_slice(), &sumcheck_challenges].concat();
         let left_opening_point = self.params.normalize_opening_point(&r_left_node_output);
         accumulator.append_virtual(
             transcript,
@@ -184,7 +185,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MkKnMnProver<
             self.left_operand.final_sumcheck_claim(),
         );
 
-        let r_right_node_output = [sumcheck_challenges, r_n].concat();
+        let r_right_node_output = [sumcheck_challenges.as_slice(), &r_n.r].concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right_node_output);
         accumulator.append_virtual(
             transcript,
@@ -241,11 +242,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MkKnMnVerif
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let sumcheck_challenges = sumcheck_challenges.into_opening();
         let (r_m, r_n) = self
             .params
             .r_node_output
             .split_at(self.params.einsum_dims.output()[0].log_2());
-        let r_left_node_output = [r_m, sumcheck_challenges].concat();
+        let r_left_node_output = [r_m.r.as_slice(), &sumcheck_challenges].concat();
         let left_opening_point = self.params.normalize_opening_point(&r_left_node_output);
         accumulator.append_virtual(
             transcript,
@@ -253,7 +255,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MkKnMnVerif
             SumcheckId::NodeExecution(self.params.computation_node.idx),
             left_opening_point.clone(),
         );
-        let r_right_node_output = [sumcheck_challenges, r_n].concat();
+        let r_right_node_output = [sumcheck_challenges.as_slice(), &r_n.r].concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right_node_output);
         accumulator.append_virtual(
             transcript,

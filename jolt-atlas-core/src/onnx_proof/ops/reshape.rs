@@ -15,8 +15,8 @@
 //! reshape consistency via one sumcheck instance.
 
 use crate::onnx_proof::{
-    ops::{OperatorProofTrait, Prover, Verifier},
-    ProofId, ProofType,
+    ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
+    ProofId, ProofType, Prover, Verifier,
 };
 use atlas_onnx_tracer::{
     model::{
@@ -28,7 +28,7 @@ use atlas_onnx_tracer::{
 };
 use common::VirtualPolynomial;
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
@@ -50,6 +50,10 @@ use joltworks::{
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
+    fn reduction_flow(&self) -> ReductionFlow {
+        ReductionFlow::Custom
+    }
+
     #[tracing::instrument(skip_all, name = "Reshape::prove")]
     fn prove(
         &self,
@@ -61,9 +65,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
         let gamma = prover.transcript.challenge_scalar_optimized::<F>();
         let params = ReshapeSumcheckParams::<F>::new(
             node.clone(),
-            &prover.accumulator,
             &prover.preprocessing.model.graph,
             gamma.into(),
+            &mut prover.transcript,
         );
         let mut prover_sumcheck = ReshapeSumcheckProver::initialize(&prover.trace, params);
         let (proof, _) = Sumcheck::prove(
@@ -72,6 +76,19 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
             &mut prover.transcript,
         );
         vec![(ProofId(node.idx, ProofType::Execution), proof)]
+    }
+
+    fn prove_with_reduction(
+        &self,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> (
+        joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+        Vec<(ProofId, SumcheckInstanceProof<F, T>)>,
+    ) {
+        let execution_proofs = self.prove(node, prover);
+        let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
+        (eval_reduction_proof, execution_proofs)
     }
 
     #[tracing::instrument(skip_all, name = "Reshape::verify")]
@@ -89,9 +106,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         let verifier_sumcheck = ReshapeSumcheckVerifier::new(
             node.clone(),
-            &verifier.accumulator,
             &verifier.preprocessing.model.graph,
             gamma.into(),
+            &mut verifier.transcript,
         );
         Sumcheck::verify(
             proof,
@@ -100,6 +117,16 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
             &mut verifier.transcript,
         )?;
         Ok(())
+    }
+
+    fn verify_with_reduction(
+        &self,
+        node: &ComputationNode,
+        verifier: &mut Verifier<'_, F, T>,
+        eval_reduction_proof: &joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+    ) -> Result<(), ProofVerifyError> {
+        self.verify(node, verifier)?;
+        NodeEvalReduction::verify(verifier, node, eval_reduction_proof)
     }
 }
 
@@ -161,7 +188,7 @@ pub struct ReshapeSumcheckParams<F: JoltField> {
     /// Reshape computation node being proven.
     pub computation_node: ComputationNode,
     /// Output opening point challenge vector for this node.
-    pub r_output: Vec<F::Challenge>,
+    pub r_output: OpeningPoint<BIG_ENDIAN, F>,
     /// Original (unpadded) input shape used to build selector `Sa`.
     pub input_raw_dims: Vec<usize>,
     /// Original (unpadded) output shape used to build selector `Sb`.
@@ -174,14 +201,12 @@ impl<F: JoltField> ReshapeSumcheckParams<F> {
     /// Build reshape sumcheck parameters from node/opening context and graph metadata.
     pub fn new(
         computation_node: ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
         graph: &ComputationGraph,
         gamma: F,
+        transcript: &mut impl Transcript,
     ) -> Self {
-        let r_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+        let num_vars = computation_node.pow2_padded_num_output_elements().log_2();
+        let r_output = transcript.challenge_vector_optimized::<F>(num_vars);
         let input_raw_dims = graph
             .nodes
             .get(&computation_node.inputs[0])
@@ -191,7 +216,7 @@ impl<F: JoltField> ReshapeSumcheckParams<F> {
         let output_raw_dims = computation_node.output_dims.clone();
         Self {
             computation_node,
-            r_output,
+            r_output: r_output.into(),
             input_raw_dims,
             output_raw_dims,
             gamma,
@@ -208,7 +233,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeSumcheckParams<F> {
         F::zero()
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
@@ -306,7 +331,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReshapeSumche
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
@@ -334,11 +361,11 @@ impl<F: JoltField> ReshapeSumcheckVerifier<F> {
     /// Build the reshape sumcheck verifier from node/opening context and graph metadata.
     pub fn new(
         computation_node: ComputationNode,
-        accumulator: &VerifierOpeningAccumulator<F>,
         graph: &ComputationGraph,
         gamma: F,
+        transcript: &mut impl Transcript,
     ) -> Self {
-        let params = ReshapeSumcheckParams::new(computation_node, accumulator, graph, gamma);
+        let params = ReshapeSumcheckParams::new(computation_node, graph, gamma, transcript);
         Self { params }
     }
 }
@@ -353,7 +380,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumc
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let r_node_output_prime = self.params.normalize_opening_point(sumcheck_challenges).r;
+        let r_node_output_prime = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
 
         let input_claim = accumulator.get_node_output_claim(
             self.params.computation_node.inputs[0],
@@ -380,7 +410,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumc
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),

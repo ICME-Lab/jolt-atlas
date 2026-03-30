@@ -100,11 +100,26 @@ impl<F: JoltField> EvalReductionInstance<F> {
         let opening_points = self.openings.iter().map(|(r, _)| r).collect::<Vec<_>>();
         let num_vars = witness.mle.get_num_vars();
 
-        if !opening_points.iter().all(|r| r.len() == num_vars) {
+        if let Some(opening) = opening_points.iter().find(|r| r.len() != num_vars) {
             return Err(ProvingError::InvalidInputLength(
-                self.openings[0].0.len(),
                 witness.mle.get_num_vars(),
+                opening.len(),
             ));
+        }
+
+        if opening_points.len() == 1 {
+            // Short path:
+            // If there's only one opening, we can skip the reduction and directly return the claim as the reduced instance.
+            let (r, claim) = &self.openings[0];
+            let reduced_instance = ReducedInstance {
+                r: r.clone(),
+                claim: *claim,
+            };
+            let proof = EvalReductionProof {
+                h: UniPoly::from_coeff(vec![*claim]), // h is just the constant polynomial equal to the claim
+            };
+
+            return Ok((proof, reduced_instance));
         }
 
         // i'th vector of this Vec<Vec<F>> is the vector of i'th variables across all evaluation points.
@@ -144,11 +159,20 @@ impl<F: JoltField> EvalReductionInstance<F> {
         let opening_points = self.openings.iter().map(|(r, _)| r).collect::<Vec<_>>();
         let n_vars = opening_points[0].len();
 
-        if !opening_points.iter().all(|r| r.len() == n_vars) {
-            return Err(ProofVerifyError::InvalidInputLength(
-                self.openings[0].0.len(),
-                n_vars,
-            ));
+        if let Some(opening) = opening_points.iter().find(|r| r.len() != n_vars) {
+            return Err(ProofVerifyError::InvalidInputLength(n_vars, opening.len()));
+        }
+
+        if opening_points.len() == 1 {
+            // Short path:
+            // If there's only one opening, we can skip the reduction and directly return the claim as the reduced instance.
+            let (r, claim) = &self.openings[0];
+            let reduced_instance = ReducedInstance {
+                r: r.clone(),
+                claim: *claim,
+            };
+
+            return Ok(reduced_instance);
         }
 
         let ri_vec = group_by_variable(&opening_points);

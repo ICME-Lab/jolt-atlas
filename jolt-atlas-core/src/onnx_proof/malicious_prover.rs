@@ -241,8 +241,6 @@ pub fn malicious_eval_reduction_prove<F: JoltField, T: Transcript>(
     let opening = existing_opening[0].clone();
 
     let h = UniPoly::from_coeff(vec![opening.1]);
-    h.append_to_transcript(&mut prover.transcript);
-    let _ = prover.transcript.challenge_scalar_optimized::<F>();
 
     let reduced = ReducedInstance {
         r: opening.0.clone().into(),

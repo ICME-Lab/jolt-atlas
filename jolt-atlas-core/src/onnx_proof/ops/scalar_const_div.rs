@@ -1,19 +1,22 @@
-use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
+use crate::{
+    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
+    utils::opening_id_builder::{OpeningIdBuilder, OpeningTarget},
+};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::{Operator, ScalarConstDiv},
     tensor::Tensor,
 };
-use common::{CommittedPolynomial, VirtualPolynomial};
+use common::CommittedPolynomial;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            CommittedOpeningId, OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator,
+            SumcheckId, VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
@@ -210,20 +213,24 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ScalarConstDi
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let node = &self.params.computation_node;
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let input_opening_id = node.build_opening_id(OpeningTarget::Input(0));
+        let remainder_opening_id = CommittedOpeningId::new(
+            CommittedPolynomial::ScalarConstDivNodeRemainder(self.params.computation_node.idx),
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
+        );
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
+            input_opening_id,
             opening_point.clone(),
             self.left_operand.final_sumcheck_claim(),
         );
         accumulator.append_dense(
             transcript,
-            CommittedPolynomial::ScalarConstDivNodeRemainder(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
+            remainder_opening_id,
             opening_point.r.clone(),
             self.R.final_sumcheck_claim(),
         );
@@ -268,11 +275,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ScalarConst
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
         let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
+        let remainder_opening_id = CommittedOpeningId::new(
+            CommittedPolynomial::ScalarConstDivNodeRemainder(self.params.computation_node.idx),
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
+        );
         let R_claim = accumulator
-            .get_committed_polynomial_opening(
-                CommittedPolynomial::ScalarConstDivNodeRemainder(self.params.computation_node.idx),
-                SumcheckId::NodeExecution(self.params.computation_node.idx),
-            )
+            .get_committed_polynomial_opening(remainder_opening_id)
             .1;
         let left_operand_claim = accumulator.get_node_output_claim(
             self.params.computation_node.inputs[0],
@@ -287,21 +295,17 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ScalarConst
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let node = &self.params.computation_node;
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.clone(),
-        );
-        accumulator.append_dense(
-            transcript,
+        let input_opening_id = node.build_opening_id(OpeningTarget::Input(0));
+        let remainder_opening_id = CommittedOpeningId::new(
             CommittedPolynomial::ScalarConstDivNodeRemainder(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.r.clone(),
         );
+        accumulator.append_virtual(transcript, input_opening_id, opening_point.clone());
+        accumulator.append_dense(transcript, remainder_opening_id, opening_point.r.clone());
     }
 }
 

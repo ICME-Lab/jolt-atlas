@@ -32,8 +32,8 @@ use joltworks::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            CommittedOpeningId, OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator,
+            SumcheckId, VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -109,14 +109,21 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
     ) {
         let mut execution_proofs = self.prove(node, prover);
 
-        let teleport_q = prover.accumulator.get_virtual_polynomial_opening(
+        let quotient_vid = VirtualOpeningId::new(
             VirtualPolynomial::TeleportQuotient(node.idx),
+            SumcheckId::NodeExecution(node.idx),
+        );
+        let teleport_q = prover
+            .accumulator
+            .get_virtual_polynomial_opening(quotient_vid);
+
+        let quotient_cid = CommittedOpeningId::new(
+            CommittedPolynomial::TeleportNodeQuotient(node.idx),
             SumcheckId::NodeExecution(node.idx),
         );
         prover.accumulator.append_dense(
             &mut prover.transcript,
-            CommittedPolynomial::TeleportNodeQuotient(node.idx),
-            SumcheckId::NodeExecution(node.idx),
+            quotient_cid,
             teleport_q.0.r.clone(),
             teleport_q.1,
         );
@@ -179,22 +186,26 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
     ) -> Result<(), ProofVerifyError> {
         self.verify(node, verifier)?;
 
-        let teleport_q = verifier.accumulator.get_virtual_polynomial_opening(
+        let quotient_vid = VirtualOpeningId::new(
             VirtualPolynomial::TeleportQuotient(node.idx),
+            SumcheckId::NodeExecution(node.idx),
+        );
+        let teleport_q = verifier
+            .accumulator
+            .get_virtual_polynomial_opening(quotient_vid);
+
+        let quotient_cid = CommittedOpeningId::new(
+            CommittedPolynomial::TeleportNodeQuotient(node.idx),
             SumcheckId::NodeExecution(node.idx),
         );
         verifier.accumulator.append_dense(
             &mut verifier.transcript,
-            CommittedPolynomial::TeleportNodeQuotient(node.idx),
-            SumcheckId::NodeExecution(node.idx),
+            quotient_cid,
             teleport_q.0.r.clone(),
         );
         let committed_q = verifier
             .accumulator
-            .get_committed_polynomial_opening(
-                CommittedPolynomial::TeleportNodeQuotient(node.idx),
-                SumcheckId::NodeExecution(node.idx),
-            )
+            .get_committed_polynomial_opening(quotient_cid)
             .1;
         if committed_q != teleport_q.1 {
             return Err(ProofVerifyError::InvalidOpeningProof(
@@ -360,13 +371,11 @@ impl<F: JoltField> CosParams<F> {
         transcript: &mut impl Transcript,
     ) -> Self {
         let gamma = transcript.challenge_scalar();
-        let r_node_output = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::TeleportRemainder(computation_node.idx),
-                SumcheckId::NodeExecution(computation_node.idx),
-            )
-            .0
-            .r;
+        let remainder_id = VirtualOpeningId::new(
+            VirtualPolynomial::TeleportRemainder(computation_node.idx),
+            SumcheckId::NodeExecution(computation_node.idx),
+        );
+        let r_node_output = accumulator.get_virtual_polynomial_opening(remainder_id).0.r;
 
         Self {
             gamma,
@@ -382,19 +391,17 @@ impl<F: JoltField> SumcheckInstanceParams<F> for CosParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let rv_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.computation_node.idx),
-                SumcheckId::NodeExecution(self.computation_node.idx),
-            )
-            .1;
+        let output_id = VirtualOpeningId::new(
+            VirtualPolynomial::NodeOutput(self.computation_node.idx),
+            SumcheckId::NodeExecution(self.computation_node.idx),
+        );
+        let rv_claim = accumulator.get_virtual_polynomial_opening(output_id).1;
 
-        let remainder_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::TeleportRemainder(self.computation_node.idx),
-                SumcheckId::NodeExecution(self.computation_node.idx),
-            )
-            .1;
+        let remainder_id = VirtualOpeningId::new(
+            VirtualPolynomial::TeleportRemainder(self.computation_node.idx),
+            SumcheckId::NodeExecution(self.computation_node.idx),
+        );
+        let remainder_claim = accumulator.get_virtual_polynomial_opening(remainder_id).1;
 
         rv_claim + self.gamma * remainder_claim
     }
@@ -448,10 +455,14 @@ impl<F: JoltField> CosProver<F> {
         // This is due to the fact that `remainder` poly claim is used as input claim for cos lookup sumcheck, together with a node output claim.
         // Both claims are derived from a different opening point, so we need to derive a new claim for one of (`output`, `remainder`).
         // We chose `output` to prevent us from having to use n-to-1 reductions on the `remainder` and rather only implement it on NodeOutput.
-        accumulator.append_virtual(
-            transcript,
+        // Making further work for Issue#138 easier.
+        let output_id = VirtualOpeningId::new(
             VirtualPolynomial::NodeOutput(params.computation_node.idx),
             SumcheckId::NodeExecution(params.computation_node.idx),
+        );
+        accumulator.append_virtual(
+            transcript,
+            output_id,
             params.r_node_output.clone(),
             output_claim,
         );
@@ -462,18 +473,16 @@ impl<F: JoltField> CosProver<F> {
 
         #[cfg(test)]
         {
-            let remainder_claim = accumulator
-                .get_virtual_polynomial_opening(
-                    VirtualPolynomial::TeleportRemainder(params.computation_node.idx),
-                    SumcheckId::NodeExecution(params.computation_node.idx),
-                )
-                .1;
-            let rv_claim = accumulator
-                .get_virtual_polynomial_opening(
-                    VirtualPolynomial::NodeOutput(params.computation_node.idx),
-                    SumcheckId::NodeExecution(params.computation_node.idx),
-                )
-                .1;
+            let remainder_id = VirtualOpeningId::new(
+                VirtualPolynomial::TeleportRemainder(params.computation_node.idx),
+                SumcheckId::NodeExecution(params.computation_node.idx),
+            );
+            let output_id = VirtualOpeningId::new(
+                VirtualPolynomial::NodeOutput(params.computation_node.idx),
+                SumcheckId::NodeExecution(params.computation_node.idx),
+            );
+            let remainder_claim = accumulator.get_virtual_polynomial_opening(remainder_id).1;
+            let rv_claim = accumulator.get_virtual_polynomial_opening(output_id).1;
             let claim = (0..input_onehot.len())
                 .map(|i| {
                     let a = input_onehot.get_bound_coeff(i);
@@ -550,11 +559,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for CosProver<F> 
             self.params.r_node_output.r.as_slice(),
         ]
         .concat();
-        accumulator.append_virtual(
-            transcript,
+        let cos_ra_id = VirtualOpeningId::new(
             VirtualPolynomial::CosRa(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
-            r.into(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            cos_ra_id,
+            OpeningPoint::new(r),
             self.input_onehot.final_sumcheck_claim(),
         );
     }
@@ -579,12 +591,11 @@ impl<F: JoltField> CosVerifier<F> {
     ) -> Self {
         let params = CosParams::new(computation_node, graph, accumulator, transcript);
 
-        accumulator.append_virtual(
-            transcript,
+        let output_id = VirtualOpeningId::new(
             VirtualPolynomial::NodeOutput(params.computation_node.idx),
             SumcheckId::NodeExecution(params.computation_node.idx),
-            params.r_node_output.clone(),
         );
+        accumulator.append_virtual(transcript, output_id, params.r_node_output.clone());
 
         let cos_table = MultilinearPolynomial::from(CosTable::materialize());
         Self { params, cos_table }
@@ -605,12 +616,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for CosVerifier
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
 
-        let ra_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::CosRa(self.params.computation_node.idx),
-                SumcheckId::NodeExecution(self.params.computation_node.idx),
-            )
-            .1;
+        let cos_ra_id = VirtualOpeningId::new(
+            VirtualPolynomial::CosRa(self.params.computation_node.idx),
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
+        );
+        let ra_claim = accumulator.get_virtual_polynomial_opening(cos_ra_id).1;
         let table_claim = self.cos_table.evaluate(&opening_point.r);
         let int_eval = IdentityPolynomial::new(COS_LOG_TABLE_SIZE).evaluate(&opening_point.r);
 
@@ -631,12 +641,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for CosVerifier
             self.params.r_node_output.r.as_slice(),
         ]
         .concat();
-        accumulator.append_virtual(
-            transcript,
+        let cos_ra_id = VirtualOpeningId::new(
             VirtualPolynomial::CosRa(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
-            r.into(),
         );
+        accumulator.append_virtual(transcript, cos_ra_id, OpeningPoint::new(r));
     }
 }
 
@@ -653,15 +662,15 @@ impl RaOneHotEncoding for CosRaEncoding {
         CommittedPolynomial::CosRaD(self.node_idx, d)
     }
 
-    fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (
+    fn r_cycle_source(&self) -> VirtualOpeningId {
+        VirtualOpeningId::new(
             VirtualPolynomial::TeleportRemainder(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
 
-    fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (
+    fn ra_source(&self) -> VirtualOpeningId {
+        VirtualOpeningId::new(
             VirtualPolynomial::CosRa(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )

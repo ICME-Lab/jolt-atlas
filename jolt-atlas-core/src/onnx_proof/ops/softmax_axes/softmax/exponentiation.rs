@@ -16,7 +16,7 @@ use joltworks::{
         },
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -48,14 +48,15 @@ impl<F: JoltField> ReadRafParams<F> {
         transcript: &mut impl Transcript,
     ) -> Self {
         let gamma = transcript.challenge_scalar();
+        let exponentiation_output_id = VirtualOpeningId::new(
+            VirtualPolynomial::SoftmaxExponentiationOutput(
+                softmax_index.node_idx,
+                softmax_index.feature_idx,
+            ),
+            SumcheckId::NodeExecution(softmax_index.node_idx),
+        );
         let r_exponentiation_output = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::SoftmaxExponentiationOutput(
-                    softmax_index.node_idx,
-                    softmax_index.feature_idx,
-                ),
-                SumcheckId::NodeExecution(softmax_index.node_idx),
-            )
+            .get_virtual_polynomial_opening(exponentiation_output_id)
             .0
             .r;
         Self {
@@ -72,20 +73,22 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReadRafParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, read_checking_claim) = accumulator.get_virtual_polynomial_opening(
+        let read_checking_id = VirtualOpeningId::new(
             VirtualPolynomial::SoftmaxExponentiationOutput(
                 self.softmax_index.node_idx,
                 self.softmax_index.feature_idx,
             ),
             SumcheckId::NodeExecution(self.softmax_index.node_idx),
         );
-        let (_, raf_checking_claim) = accumulator.get_virtual_polynomial_opening(
+        let raf_checking_id = VirtualOpeningId::new(
             VirtualPolynomial::SoftmaxAbsCenteredLogitsOutput(
                 self.softmax_index.node_idx,
                 self.softmax_index.feature_idx,
             ),
             SumcheckId::NodeExecution(self.softmax_index.node_idx),
         );
+        let (_, read_checking_claim) = accumulator.get_virtual_polynomial_opening(read_checking_id);
+        let (_, raf_checking_claim) = accumulator.get_virtual_polynomial_opening(raf_checking_id);
         read_checking_claim + self.gamma * raf_checking_claim
     }
 
@@ -117,13 +120,16 @@ impl<F: JoltField> ReadRafProver<F> {
         // Add raf claim and implicitly sub claim
         let raf_claim = MultilinearPolynomial::from(trace.abs_centered_logits.to_vec())
             .evaluate(&params.r_exponentiation_output.r);
-        accumulator.append_virtual(
-            transcript,
+        let abs_centered_logits_id = VirtualOpeningId::new(
             VirtualPolynomial::SoftmaxAbsCenteredLogitsOutput(
                 params.softmax_index.node_idx,
                 params.softmax_index.feature_idx,
             ),
             SumcheckId::NodeExecution(params.softmax_index.node_idx),
+        );
+        accumulator.append_virtual(
+            transcript,
+            abs_centered_logits_id,
             params.r_exponentiation_output.clone(),
             raf_claim,
         );
@@ -206,14 +212,17 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReadRafProver
             self.params.r_exponentiation_output.r.as_slice(),
         ]
         .concat();
-        accumulator.append_virtual(
-            transcript,
+        let exponentiation_ra_id = VirtualOpeningId::new(
             VirtualPolynomial::SoftmaxExponentiationRa(
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
             SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
-            opening_point.into(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            exponentiation_ra_id,
+            OpeningPoint::new(opening_point),
             self.F.final_sumcheck_claim(),
         );
     }
@@ -232,13 +241,16 @@ impl<F: JoltField> ReadRafVerifier<F> {
         transcript: &mut impl Transcript,
     ) -> Self {
         let params = ReadRafParams::new(softmax_index, accumulator, transcript);
-        accumulator.append_virtual(
-            transcript,
+        let abs_centered_logits_id = VirtualOpeningId::new(
             VirtualPolynomial::SoftmaxAbsCenteredLogitsOutput(
                 params.softmax_index.node_idx,
                 params.softmax_index.feature_idx,
             ),
             SumcheckId::NodeExecution(params.softmax_index.node_idx),
+        );
+        accumulator.append_virtual(
+            transcript,
+            abs_centered_logits_id,
             params.r_exponentiation_output.clone(),
         );
         Self { params }
@@ -255,15 +267,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReadRafVeri
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let ra_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::SoftmaxExponentiationRa(
-                    self.params.softmax_index.node_idx,
-                    self.params.softmax_index.feature_idx,
-                ),
-                SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
-            )
-            .1;
+        let exponentiation_ra_id = VirtualOpeningId::new(
+            VirtualPolynomial::SoftmaxExponentiationRa(
+                self.params.softmax_index.node_idx,
+                self.params.softmax_index.feature_idx,
+            ),
+            SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
+        );
+        let ra_claim = accumulator.get_virtual_polynomial_opening(exponentiation_ra_id).1;
         let sumcheck_opening = sumcheck_challenges.into_opening();
         let val_claim =
             MultilinearPolynomial::from(EXP_LUT_SCALE_128.to_vec()).evaluate(&sumcheck_opening);
@@ -283,14 +294,17 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReadRafVeri
             self.params.r_exponentiation_output.r.as_slice(),
         ]
         .concat();
-        accumulator.append_virtual(
-            transcript,
+        let exponentiation_ra_id = VirtualOpeningId::new(
             VirtualPolynomial::SoftmaxExponentiationRa(
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
             SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
-            opening_point.into(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            exponentiation_ra_id,
+            OpeningPoint::new(opening_point),
         );
     }
 }
@@ -314,8 +328,8 @@ impl RaOneHotEncoding for SoftmaxExpRaEncoding {
         )
     }
 
-    fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (
+    fn r_cycle_source(&self) -> VirtualOpeningId {
+        VirtualOpeningId::new(
             VirtualPolynomial::SoftmaxExponentiationOutput(
                 self.softmax_index.node_idx,
                 self.softmax_index.feature_idx,
@@ -324,8 +338,8 @@ impl RaOneHotEncoding for SoftmaxExpRaEncoding {
         )
     }
 
-    fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (
+    fn ra_source(&self) -> VirtualOpeningId {
+        VirtualOpeningId::new(
             VirtualPolynomial::SoftmaxExponentiationRa(
                 self.softmax_index.node_idx,
                 self.softmax_index.feature_idx,

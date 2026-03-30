@@ -34,7 +34,7 @@ mod tests {
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
             opening_proof::{
                 OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-                VerifierOpeningAccumulator, BIG_ENDIAN,
+                VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN,
             },
         },
         subprotocols::{shout, sumcheck::BatchedSumcheck, sumcheck_prover::SumcheckInstanceProver},
@@ -79,20 +79,27 @@ mod tests {
             MultilinearPolynomial::from(trace.softmax_q.clone()).evaluate(&r_feature_output);
         prover_opening_accumulator.append_virtual(
             prover_transcript,
-            VirtualPolynomial::SoftmaxFeatureOutput(
-                softmax_index.node_idx,
-                softmax_index.feature_idx,
+            VirtualOpeningId::new(
+                VirtualPolynomial::SoftmaxFeatureOutput(
+                    softmax_index.node_idx,
+                    softmax_index.feature_idx,
+                ),
+                SumcheckId::NodeExecution(softmax_index.node_idx),
             ),
-            SumcheckId::NodeExecution(softmax_index.node_idx),
-            r_feature_output.clone().into(),
+            OpeningPoint::new(r_feature_output.clone()),
             div_claim,
         );
 
         // Send verifier sum claim
         prover_opening_accumulator.append_virtual(
             prover_transcript,
-            VirtualPolynomial::SoftmaxSumOutput(softmax_index.node_idx, softmax_index.feature_idx),
-            SumcheckId::NodeExecution(softmax_index.node_idx),
+            VirtualOpeningId::new(
+                VirtualPolynomial::SoftmaxSumOutput(
+                    softmax_index.node_idx,
+                    softmax_index.feature_idx,
+                ),
+                SumcheckId::NodeExecution(softmax_index.node_idx),
+            ),
             OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
             Fr::from_i32(trace.exp_sum_q),
         );
@@ -100,15 +107,25 @@ mod tests {
         // Send max value and index claims
         prover_opening_accumulator.append_virtual(
             prover_transcript,
-            VirtualPolynomial::SoftmaxMaxOutput(softmax_index.node_idx, softmax_index.feature_idx),
-            SumcheckId::NodeExecution(softmax_index.node_idx),
+            VirtualOpeningId::new(
+                VirtualPolynomial::SoftmaxMaxOutput(
+                    softmax_index.node_idx,
+                    softmax_index.feature_idx,
+                ),
+                SumcheckId::NodeExecution(softmax_index.node_idx),
+            ),
             OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
             Fr::from_i32(trace.max_logit),
         );
         prover_opening_accumulator.append_virtual(
             prover_transcript,
-            VirtualPolynomial::SoftmaxMaxIndex(softmax_index.node_idx, softmax_index.feature_idx),
-            SumcheckId::NodeExecution(softmax_index.node_idx),
+            VirtualOpeningId::new(
+                VirtualPolynomial::SoftmaxMaxIndex(
+                    softmax_index.node_idx,
+                    softmax_index.feature_idx,
+                ),
+                SumcheckId::NodeExecution(softmax_index.node_idx),
+            ),
             OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
             Fr::from_u32(trace.max_index as u32),
         );
@@ -186,29 +203,46 @@ mod tests {
         // Add verifier opening points (and implicitly append claims to transcript)
         verifier_opening_accumulator.append_virtual(
             verifier_transcript,
-            VirtualPolynomial::SoftmaxFeatureOutput(
-                softmax_index.node_idx,
-                softmax_index.feature_idx,
+            VirtualOpeningId::new(
+                VirtualPolynomial::SoftmaxFeatureOutput(
+                    softmax_index.node_idx,
+                    softmax_index.feature_idx,
+                ),
+                SumcheckId::NodeExecution(softmax_index.node_idx),
             ),
-            SumcheckId::NodeExecution(softmax_index.node_idx),
-            r_feature_output.into(),
+            OpeningPoint::new(r_feature_output),
         );
         verifier_opening_accumulator.append_virtual(
             verifier_transcript,
-            VirtualPolynomial::SoftmaxSumOutput(softmax_index.node_idx, softmax_index.feature_idx),
-            SumcheckId::NodeExecution(softmax_index.node_idx),
+            VirtualOpeningId::new(
+                VirtualPolynomial::SoftmaxSumOutput(
+                    softmax_index.node_idx,
+                    softmax_index.feature_idx,
+                ),
+                SumcheckId::NodeExecution(softmax_index.node_idx),
+            ),
             OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
         );
         verifier_opening_accumulator.append_virtual(
             verifier_transcript,
-            VirtualPolynomial::SoftmaxMaxOutput(softmax_index.node_idx, softmax_index.feature_idx),
-            SumcheckId::NodeExecution(softmax_index.node_idx),
+            VirtualOpeningId::new(
+                VirtualPolynomial::SoftmaxMaxOutput(
+                    softmax_index.node_idx,
+                    softmax_index.feature_idx,
+                ),
+                SumcheckId::NodeExecution(softmax_index.node_idx),
+            ),
             OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
         );
         verifier_opening_accumulator.append_virtual(
             verifier_transcript,
-            VirtualPolynomial::SoftmaxMaxIndex(softmax_index.node_idx, softmax_index.feature_idx),
-            SumcheckId::NodeExecution(softmax_index.node_idx),
+            VirtualOpeningId::new(
+                VirtualPolynomial::SoftmaxMaxIndex(
+                    softmax_index.node_idx,
+                    softmax_index.feature_idx,
+                ),
+                SumcheckId::NodeExecution(softmax_index.node_idx),
+            ),
             OpeningPoint::<BIG_ENDIAN, Fr>::new(Vec::<Fr>::new()),
         );
 
@@ -260,22 +294,24 @@ mod tests {
         .unwrap();
 
         //  Check input from raf
-        let (_, abs_centered_logits_claim) = verifier_opening_accumulator
-            .get_virtual_polynomial_opening(
+        let (_, abs_centered_logits_claim) = verifier_opening_accumulator.get_virtual_polynomial_opening(
+            VirtualOpeningId::new(
                 VirtualPolynomial::SoftmaxAbsCenteredLogitsOutput(
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
                 SumcheckId::NodeExecution(softmax_index.node_idx),
-            );
-        let (_, softmax_operand_claim) = verifier_opening_accumulator
-            .get_virtual_polynomial_opening(
+            ),
+        );
+        let (_, softmax_operand_claim) = verifier_opening_accumulator.get_virtual_polynomial_opening(
+            VirtualOpeningId::new(
                 VirtualPolynomial::SoftmaxInputLogitsOutput(
                     softmax_index.node_idx,
                     softmax_index.feature_idx,
                 ),
                 SumcheckId::NodeExecution(softmax_index.node_idx),
-            );
+            ),
+        );
         assert_eq!(
             softmax_operand_claim,
             (-abs_centered_logits_claim) + Fr::from_i32(trace.max_logit)
@@ -326,10 +362,12 @@ mod tests {
         let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
             ProverOpeningAccumulator::new();
         let verifier_transcript = &mut Blake2bTranscript::new(&[]);
-        let _r_feature_output: Vec<<Fr as JoltField>::Challenge> =
-            prover_transcript.challenge_vector_optimized::<Fr>(n);
-        let r_feature_output: Vec<<Fr as JoltField>::Challenge> =
-            verifier_transcript.challenge_vector_optimized::<Fr>(n);
+        let _r_feature_output: Vec<Fr> = prover_transcript
+            .challenge_vector_optimized::<Fr>(n)
+            .into_opening();
+        let r_feature_output: Vec<Fr> = verifier_transcript
+            .challenge_vector_optimized::<Fr>(n)
+            .into_opening();
 
         let softmax_index = SoftmaxIndex {
             node_idx: 0,
@@ -340,12 +378,14 @@ mod tests {
             MultilinearPolynomial::from(trace.softmax_q.clone()).evaluate(&r_feature_output);
         prover_opening_accumulator.append_virtual(
             prover_transcript,
-            VirtualPolynomial::SoftmaxFeatureOutput(
-                softmax_index.node_idx,
-                softmax_index.feature_idx,
+            VirtualOpeningId::new(
+                VirtualPolynomial::SoftmaxFeatureOutput(
+                    softmax_index.node_idx,
+                    softmax_index.feature_idx,
+                ),
+                SumcheckId::NodeExecution(softmax_index.node_idx),
             ),
-            SumcheckId::NodeExecution(softmax_index.node_idx),
-            r_feature_output.clone().into(),
+            OpeningPoint::<BIG_ENDIAN, Fr>::new(r_feature_output.clone()),
             div_claim,
         );
     }

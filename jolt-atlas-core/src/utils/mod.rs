@@ -6,6 +6,7 @@ use joltworks::utils::{interleave_bits, lookup_bits::LookupBits};
 use rayon::prelude::*;
 
 pub mod dims;
+pub mod opening_id_builder;
 
 /// Computes the floored (Euclidean-style) remainder of `a / b`.
 ///

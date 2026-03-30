@@ -11,8 +11,8 @@ use crate::{
     poly::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            CommittedOpeningId, OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator,
+            SumcheckId, VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -42,10 +42,11 @@ impl<F: JoltField> SumcheckInstanceParams<F> for HammingWeightSumcheckParams<F> 
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         if self.sumcheck_id == SumcheckId::RamHammingWeight {
-            let (_, hamming_booleanity_claim) = accumulator.get_virtual_polynomial_opening(
+            let id = VirtualOpeningId::new(
                 VirtualPolynomial::HammingWeight,
                 SumcheckId::RamHammingBooleanity,
             );
+            let (_, hamming_booleanity_claim) = accumulator.get_virtual_polynomial_opening(id);
             hamming_booleanity_claim * self.gamma_powers.iter().sum::<F>()
         } else {
             self.gamma_powers.iter().sum()
@@ -159,12 +160,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
         _sumcheck_challenges: &[F::Challenge],
     ) -> F {
         let ra_claims = (0..self.params.d).map(|i| {
-            accumulator
-                .get_committed_polynomial_opening(
-                    self.params.polynomial_types[i],
-                    self.params.sumcheck_id,
-                )
-                .1
+            let id =
+                CommittedOpeningId::new(self.params.polynomial_types[i], self.params.sumcheck_id);
+            accumulator.get_committed_polynomial_opening(id).1
         });
 
         // Compute batched claim: sum_{i=0}^{d-1} gamma^i * ra_i

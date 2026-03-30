@@ -9,7 +9,7 @@ use joltworks::{
         },
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -37,16 +37,17 @@ impl SumParams {
         softmax_index: SoftmaxIndex,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
+        let feature_output_id = VirtualOpeningId::new(
+            VirtualPolynomial::SoftmaxFeatureOutput(
+                softmax_index.node_idx,
+                softmax_index.feature_idx,
+            ),
+            SumcheckId::NodeExecution(softmax_index.node_idx),
+        );
         Self {
             softmax_index,
             num_rounds: accumulator
-                .get_virtual_polynomial_opening(
-                    VirtualPolynomial::SoftmaxFeatureOutput(
-                        softmax_index.node_idx,
-                        softmax_index.feature_idx,
-                    ),
-                    SumcheckId::NodeExecution(softmax_index.node_idx),
-                )
+                .get_virtual_polynomial_opening(feature_output_id)
                 .0
                 .r
                 .len(),
@@ -60,13 +61,14 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SumParams {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, sum_claim) = accumulator.get_virtual_polynomial_opening(
+        let sum_output_id = VirtualOpeningId::new(
             VirtualPolynomial::SoftmaxSumOutput(
                 self.softmax_index.node_idx,
                 self.softmax_index.feature_idx,
             ),
             SumcheckId::NodeExecution(self.softmax_index.node_idx),
         );
+        let (_, sum_claim) = accumulator.get_virtual_polynomial_opening(sum_output_id);
         sum_claim
     }
 
@@ -124,13 +126,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SumProver<F> 
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
+        let exponentiation_output_id = VirtualOpeningId::new(
             VirtualPolynomial::SoftmaxExponentiationOutput(
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
             SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
+        );
+        accumulator.append_virtual(
+            transcript,
+            exponentiation_output_id,
             opening_point.clone(),
             self.operand.final_sumcheck_claim(),
         );
@@ -164,14 +169,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumVerifier
         accumulator: &VerifierOpeningAccumulator<F>,
         _sumcheck_challenges: &[F::Challenge],
     ) -> F {
+        let exponentiation_output_id = VirtualOpeningId::new(
+            VirtualPolynomial::SoftmaxExponentiationOutput(
+                self.params.softmax_index.node_idx,
+                self.params.softmax_index.feature_idx,
+            ),
+            SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
+        );
         accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::SoftmaxExponentiationOutput(
-                    self.params.softmax_index.node_idx,
-                    self.params.softmax_index.feature_idx,
-                ),
-                SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
-            )
+            .get_virtual_polynomial_opening(exponentiation_output_id)
             .1
     }
 
@@ -184,13 +190,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumVerifier
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
+        let exponentiation_output_id = VirtualOpeningId::new(
             VirtualPolynomial::SoftmaxExponentiationOutput(
                 self.params.softmax_index.node_idx,
                 self.params.softmax_index.feature_idx,
             ),
             SumcheckId::NodeExecution(self.params.softmax_index.node_idx),
+        );
+        accumulator.append_virtual(
+            transcript,
+            exponentiation_output_id,
             opening_point.clone(),
         );
     }

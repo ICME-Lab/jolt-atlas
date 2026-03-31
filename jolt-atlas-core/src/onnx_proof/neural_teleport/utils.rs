@@ -5,7 +5,9 @@
 use super::{n_bits_to_usize, usize_to_n_bits, SCALE};
 use atlas_onnx_tracer::tensor::Tensor;
 use joltworks::{
-    field::JoltField, poly::eq_poly::EqPolynomial, utils::thread::unsafe_allocate_zero_vec,
+    field::{FieldChallengeOps, JoltField},
+    poly::eq_poly::EqPolynomial,
+    utils::thread::unsafe_allocate_zero_vec,
 };
 use rayon::{
     iter::{
@@ -19,13 +21,10 @@ use rayon::{
 ///
 /// This variant is used by trigonometric teleportation ops (`cos` and `sin`),
 /// where inputs are remainders already in `[0, table_size)`.
-pub fn compute_ra_evals_direct<F>(
-    r: &[F::Challenge],
-    indexes: &Tensor<i32>,
-    table_size: usize,
-) -> Vec<F>
+pub fn compute_ra_evals_direct<F, U>(r: &[U], indexes: &Tensor<i32>, table_size: usize) -> Vec<F>
 where
-    F: JoltField,
+    U: Copy + Send + Sync + Into<F>,
+    F: JoltField + FieldChallengeOps<U>,
 {
     let indexes_usize = indexes
         .par_iter()
@@ -38,13 +37,14 @@ where
 ///
 /// This variant is used by lookup-table ops where signed
 /// quotient values are mapped into `[0, 2^log_table_size)` via two's-complement.
-pub fn compute_ra_evals_nbits_2comp<F>(
-    r: &[F::Challenge],
+pub fn compute_ra_evals_nbits_2comp<F, U>(
+    r: &[U],
     input: &Tensor<i32>,
     log_table_size: usize,
 ) -> Vec<F>
 where
-    F: JoltField,
+    U: Copy + Send + Sync + Into<F>,
+    F: JoltField + FieldChallengeOps<U>,
 {
     let table_size = 1 << log_table_size;
     let input_usize = input
@@ -121,13 +121,14 @@ macro_rules! define_signed_activation_table {
 
 pub(crate) use define_signed_activation_table;
 
-fn compute_ra_evals_from_usize_indices<F>(
-    r: &[F::Challenge],
+fn compute_ra_evals_from_usize_indices<F, U>(
+    r: &[U],
     indices_usize: &[usize],
     table_size: usize,
 ) -> Vec<F>
 where
-    F: JoltField,
+    U: Copy + Send + Sync + Into<F>,
+    F: JoltField + FieldChallengeOps<U>,
 {
     let e = EqPolynomial::evals(r);
     let num_threads = rayon::current_num_threads();

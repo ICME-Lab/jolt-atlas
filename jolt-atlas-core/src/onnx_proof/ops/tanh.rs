@@ -25,7 +25,7 @@ use atlas_onnx_tracer::{
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
         multilinear_polynomial::{
@@ -285,7 +285,7 @@ const DEGREE_BOUND: usize = 2;
 #[derive(Clone)]
 pub struct TanhParams<F: JoltField> {
     gamma: F,
-    r_node_output: Vec<F::Challenge>,
+    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
     op: Tanh,
 }
@@ -308,7 +308,7 @@ impl<F: JoltField> TanhParams<F> {
 
         Self {
             gamma,
-            r_node_output,
+            r_node_output: r_node_output.into(),
             computation_node,
             op,
         }
@@ -336,7 +336,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for TanhParams<F> {
         rv_claim + self.gamma * quotient_claim
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
@@ -385,7 +385,7 @@ impl<F: JoltField> TanhProver<F> {
 
         // Compute one-hot encoding of QUOTIENT values (not input)
         let input_onehot: Vec<F> = compute_ra_evals_nbits_2comp(
-            &params.r_node_output,
+            &params.r_node_output.r,
             &quotient_tensor,
             params.op.log_table,
         );
@@ -399,12 +399,12 @@ impl<F: JoltField> TanhProver<F> {
         // - Handling the difference between polynomials built from u32 and i32 tensors,
         //   Namely we currently always use polynomials built from i32 tensors, except for raf-checking.
         let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data()) // TODO: unify tensor representations (always i32 or always u32)
-            .evaluate(&params.r_node_output);
+            .evaluate(&params.r_node_output.r);
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::TeleportQuotient(params.computation_node.idx),
             SumcheckId::Raf,
-            params.r_node_output.clone().into(),
+            params.r_node_output.clone(),
             quotient_claim,
         );
 
@@ -415,7 +415,7 @@ impl<F: JoltField> TanhProver<F> {
         #[cfg(test)]
         {
             let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data())
-                .evaluate(&params.r_node_output);
+                .evaluate(&params.r_node_output.r);
             let rv_claim = accumulator
                 .get_node_output_opening(params.computation_node.idx)
                 .1;
@@ -489,8 +489,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TanhProver<F>
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
-        let r = [opening_point.r.as_slice(), &self.params.r_node_output].concat();
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let r = [
+            opening_point.r.as_slice(),
+            self.params.r_node_output.r.as_slice(),
+        ]
+        .concat();
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::TanhRa(self.params.computation_node.idx),
@@ -526,7 +532,7 @@ impl<F: JoltField> TanhVerifier<F> {
             transcript,
             VirtualPolynomial::TeleportQuotient(params.computation_node.idx),
             SumcheckId::Raf,
-            params.r_node_output.clone().into(),
+            params.r_node_output.clone(),
         );
 
         // Materialize the tanh table for verification
@@ -547,7 +553,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifie
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
 
         let ra_claim = accumulator
             .get_virtual_polynomial_opening(
@@ -571,8 +579,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifie
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
-        let r = [opening_point.r.as_slice(), &self.params.r_node_output].concat();
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let r = [
+            opening_point.r.as_slice(),
+            self.params.r_node_output.r.as_slice(),
+        ]
+        .concat();
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::TanhRa(self.params.computation_node.idx),

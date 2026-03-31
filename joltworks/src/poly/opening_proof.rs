@@ -6,12 +6,13 @@
 //! necessarily of the same size, each opened at a different point) into a single opening.
 
 use crate::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::MultilinearPolynomial,
     },
     subprotocols::{
+        evaluation_reduction::ReducedInstance,
         opening_reduction::{
             EqAddressState, EqCycleState, OpeningProofReductionSumcheckProver,
             OpeningProofReductionSumcheckVerifier, ProverOpening, SharedDensePolynomial,
@@ -34,6 +35,7 @@ use rayon::prelude::*;
 use std::cell::RefCell;
 use std::{
     collections::{BTreeMap, HashMap},
+    ops::Mul,
     sync::{Arc, RwLock},
 };
 
@@ -53,9 +55,18 @@ where
     F: JoltField,
 {
     pub sumchecks: BTreeMap<CommittedPolynomial, OpeningProofReductionSumcheckProver<F>>,
+    /// Openings for polynomials claimed during proving.
+    /// Identified by the kind of polynomial, the node to which it corresponds (both held in Committed/VirtualPolynomial variant),
+    /// and the sumcheck for which the opening is claimed.
+    /// NOTE:
+    /// If a node output is fed twice as index in a same node, it would lead to two different openings.
+    /// However, in practice we always have that both openings are at the same point,
+    /// hence they can be treated as a single opening.  
     pub openings: Openings<F>,
+    /// Mapping from reduced source opening keys to evaluation-reduction line restriction `h`.
+    pub reduced_evaluations: BTreeMap<usize, ReducedInstance<F>>,
     dense_polynomial_map: HashMap<CommittedPolynomial, Arc<RwLock<SharedDensePolynomial<F>>>>,
-    eq_cycle_map: HashMap<Vec<F::Challenge>, Arc<RwLock<EqCycleState<F>>>>,
+    eq_cycle_map: HashMap<Vec<F>, Arc<RwLock<EqCycleState<F>>>>,
     #[cfg(any(test, feature = "test-feature"))]
     pub appended_virtual_openings: RefCell<Vec<OpeningId>>,
     pub cached_opening_claims: BTreeMap<CommittedPolynomial, F>,
@@ -69,6 +80,8 @@ where
 {
     sumchecks: BTreeMap<CommittedPolynomial, OpeningProofReductionSumcheckVerifier<F>>,
     pub openings: Openings<F>,
+    /// Mapping for nodes reduced opening points
+    pub reduced_evaluations: BTreeMap<usize, ReducedInstance<F>>,
     /// In testing, the Jolt verifier may be provided the prover's openings so that we
     /// can detect any places where the openings don't match up.
     #[cfg(any(test, feature = "test-feature"))]
@@ -88,10 +101,9 @@ pub trait OpeningAccumulator<F: JoltField> {
         sumcheck: SumcheckId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F);
 
-    /// TODO(#138): While we no longer overwrite fan-out entries, `.next()` returns
-    /// the entry with the smallest consumer index and we never check the remaining
-    /// entries. All per-consumer openings for the same producer should be reduced
-    /// to a single opening (PAZK 4.5.2).
+    /// Gets the reduced opening claim for the given node index.
+    /// The reduced opening claim is either the unique existing opening claim,
+    /// Or obtained from the evaluation reduction protocol if multiple openings need to be reduced.
     fn get_node_output_opening(&self, node_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F);
 }
 
@@ -132,25 +144,13 @@ impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
     }
 
     fn get_node_output_opening(&self, node_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        // Scan for any NodeExecution(_) entry for this node's NodeOutput.
-        // TODO(#138): `.next()` returns the entry with the smallest consumer index;
-        // the remaining entries are never verified. See trait-level doc comment.
-        let lo = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(node_idx),
-            // Only consider openings for consumer indices greater than node index,
-            // since output is only consumed by later nodes
-            SumcheckId::NodeExecution(node_idx + 1),
-        );
-        let hi = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(node_idx),
-            SumcheckId::NodeExecution(usize::MAX),
-        );
-        let (_, (point, claim)) = self
-            .openings
-            .range(lo..=hi)
-            .next()
-            .unwrap_or_else(|| panic!("No NodeOutput opening found for node {node_idx}"));
-        (point.clone(), *claim)
+        let reduced_instance = self
+            .reduced_evaluations
+            .get(&node_idx)
+            .unwrap_or_else(|| panic!("reduced evaluation for node {node_idx} not found"))
+            .clone();
+
+        (reduced_instance.r.into(), reduced_instance.claim)
     }
 }
 
@@ -162,6 +162,7 @@ where
         Self {
             sumchecks: BTreeMap::new(),
             openings: BTreeMap::new(),
+            reduced_evaluations: BTreeMap::new(),
             eq_cycle_map: HashMap::new(),
             dense_polynomial_map: HashMap::new(),
             #[cfg(any(test, feature = "test-feature"))]
@@ -188,23 +189,45 @@ where
             .1
     }
 
+    pub fn get_node_openings(&self, node_idx: usize) -> Vec<&Opening<F>> {
+        let lo = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(node_idx),
+            // Only consider openings for consumer indices greater than node index,
+            // since output is only consumed by later nodes
+            SumcheckId::NodeExecution(node_idx + 1),
+        );
+        let hi = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(node_idx),
+            SumcheckId::NodeExecution(usize::MAX),
+        );
+
+        self.openings
+            .range(lo..=hi)
+            .map(|(_, opening)| opening)
+            .collect::<Vec<_>>()
+    }
+
     /// Adds an opening of a dense polynomial to the accumulator.
     /// The given `polynomial` is opened at `opening_point`, yielding the claimed
     /// evaluation `claim`.
     #[tracing::instrument(skip_all, name = "ProverOpeningAccumulator::append_dense")]
-    pub fn append_dense<T: Transcript>(
+    pub fn append_dense<T, U>(
         &mut self,
         transcript: &mut T,
         polynomial: CommittedPolynomial,
         sumcheck: SumcheckId,
-        opening_point: Vec<F::Challenge>,
+        opening_point: Vec<U>,
         claim: F,
-    ) {
+    ) where
+        T: Transcript,
+        U: Copy + Send + Sync + Into<F>,
+        F: Mul<U, Output = F>,
+    {
         transcript.append_scalar(&claim);
 
         let shared_eq = self
             .eq_cycle_map
-            .entry(opening_point.clone())
+            .entry(opening_point.iter().map(|&u| u.into()).collect())
             .or_insert_with(|| Arc::new(RwLock::new(EqCycleState::new(&opening_point))));
 
         // Add opening to map
@@ -228,15 +251,19 @@ where
     }
 
     #[tracing::instrument(skip_all, name = "ProverOpeningAccumulator::append_sparse")]
-    pub fn append_sparse<T: Transcript>(
+    pub fn append_sparse<T, U>(
         &mut self,
         transcript: &mut T,
         polynomials: Vec<CommittedPolynomial>,
         sumcheck: SumcheckId,
-        r_address: Vec<F::Challenge>,
-        r_cycle: Vec<F::Challenge>,
+        r_address: Vec<U>,
+        r_cycle: Vec<U>,
         claims: Vec<F>,
-    ) {
+    ) where
+        T: Transcript,
+        U: Copy + Send + Sync + Into<F>,
+        F: Mul<U, Output = F>,
+    {
         claims.iter().for_each(|claim| {
             transcript.append_scalar(claim);
         });
@@ -245,7 +272,7 @@ where
         let shared_eq_address = Arc::new(RwLock::new(EqAddressState::new(&r_address)));
         let shared_eq_cycle = self
             .eq_cycle_map
-            .entry(r_cycle.clone())
+            .entry(r_cycle.clone().into_opening())
             .or_insert(Arc::new(RwLock::new(EqCycleState::new(&r_cycle))));
 
         // Add openings to map
@@ -277,10 +304,18 @@ where
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
         claim: F,
     ) {
+        if let VirtualPolynomial::NodeOutput(node_idx) = polynomial {
+            debug_assert!(
+                // TODO(AntoineF4C5) Temporary exception: RAF plumbing may still append NodeOutput after reduction
+                // until range-check identity polynomial wiring is fully implemented.
+                // See #208
+                sumcheck == SumcheckId::Raf || !self.reduced_evaluations.contains_key(&node_idx),
+                "cannot append opening for node {node_idx} after evaluation reduction"
+            );
+        }
+
         transcript.append_scalar(&claim);
 
-        // TODO: Allow a node to have multiple openings that need to be reduced
-        //       See #138 for details
         let key = OpeningId::Virtual(polynomial, sumcheck);
         self.openings.insert(key, (opening_point, claim));
         #[cfg(test)]
@@ -494,25 +529,13 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
     }
 
     fn get_node_output_opening(&self, node_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        // Scan for any NodeExecution(_) entry for this node's NodeOutput.
-        // TODO(#138): `.next()` returns the entry with the smallest consumer index;
-        // the remaining entries are never verified. See trait-level doc comment.
-        let lo = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(node_idx),
-            // Only consider openings for consumer indices greater than node index,
-            // since output is only consumed by later nodes
-            SumcheckId::NodeExecution(node_idx + 1),
-        );
-        let hi = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(node_idx),
-            SumcheckId::NodeExecution(usize::MAX),
-        );
-        let (_, (point, claim)) = self
-            .openings
-            .range(lo..=hi)
-            .next()
-            .unwrap_or_else(|| panic!("No NodeOutput opening found for node {node_idx}"));
-        (point.clone(), *claim)
+        let reduced_instance = self
+            .reduced_evaluations
+            .get(&node_idx)
+            .unwrap_or_else(|| panic!("reduced evaluation for node {node_idx} not found"))
+            .clone();
+
+        (reduced_instance.r.into(), reduced_instance.claim)
     }
 }
 
@@ -524,6 +547,7 @@ where
         Self {
             sumchecks: BTreeMap::new(),
             openings: BTreeMap::new(),
+            reduced_evaluations: BTreeMap::new(),
             #[cfg(any(test, feature = "test-feature"))]
             prover_opening_accumulator: None,
         }
@@ -539,6 +563,23 @@ where
         .1
     }
 
+    pub fn get_node_openings(&self, node_idx: usize) -> Vec<&Opening<F>> {
+        let lo = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(node_idx),
+            // Only consider openings for consumer indices greater than node index,
+            // since output is only consumed by later nodes
+            SumcheckId::NodeExecution(node_idx + 1),
+        );
+        let hi = OpeningId::Virtual(
+            VirtualPolynomial::NodeOutput(node_idx),
+            SumcheckId::NodeExecution(usize::MAX),
+        );
+        self.openings
+            .range(lo..=hi)
+            .map(|(_, opening)| opening)
+            .collect()
+    }
+
     /// Compare this accumulator to the corresponding `ProverOpeningAccumulator` and panic
     /// if the openings appended differ from the prover's openings.
     #[cfg(any(test, feature = "test-feature"))]
@@ -548,13 +589,16 @@ where
 
     /// Adds an opening of a dense polynomial the accumulator.
     /// The given `polynomial` is opened at `opening_point`.
-    pub fn append_dense<T: Transcript>(
+    pub fn append_dense<T, U>(
         &mut self,
         transcript: &mut T,
         polynomial: CommittedPolynomial,
         sumcheck: SumcheckId,
-        opening_point: Vec<F::Challenge>,
-    ) {
+        opening_point: Vec<U>,
+    ) where
+        T: Transcript,
+        U: Copy + Send + Sync + Into<F>,
+    {
         let key = OpeningId::Committed(polynomial, sumcheck);
         let claim = self.openings.get(&key).unwrap().1;
         transcript.append_scalar(&claim);
@@ -579,13 +623,16 @@ where
     /// `claims`.
     /// Multiple sparse polynomials opened at a single point are NOT batched into
     /// a single polynomial opened at the same point.
-    pub fn append_sparse<T: Transcript>(
+    pub fn append_sparse<T, U>(
         &mut self,
         transcript: &mut T,
         polynomials: Vec<CommittedPolynomial>,
         sumcheck: SumcheckId,
-        opening_point: Vec<F::Challenge>,
-    ) {
+        opening_point: Vec<U>,
+    ) where
+        T: Transcript,
+        U: Copy + Send + Sync + Into<F>,
+    {
         for label in polynomials.into_iter() {
             let key = OpeningId::Committed(label, sumcheck);
             let claim = self.openings.get(&key).unwrap().1;
@@ -615,6 +662,16 @@ where
         sumcheck: SumcheckId,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
     ) {
+        if let VirtualPolynomial::NodeOutput(node_idx) = polynomial {
+            debug_assert!(
+                // TODO(AntoineF4C5) Temporary exception: RAF plumbing may still append NodeOutput after reduction
+                // until range-check identity polynomial wiring is fully implemented.
+                // See #208
+                sumcheck == SumcheckId::Raf || !self.reduced_evaluations.contains_key(&node_idx),
+                "cannot append opening for node {node_idx} after evaluation reduction"
+            );
+        }
+
         let key = OpeningId::Virtual(polynomial, sumcheck);
         if let Some((_, claim)) = self.openings.get(&key) {
             transcript.append_scalar(claim);
@@ -775,13 +832,17 @@ where
     }
 }
 
+// TODO(AntoineF4C5): Using Vec<F> rather than Vec<F::Challenge> denies us from the performance gains of F::Challenge.
+// The goal would be to use an enum that can be either F or F::Challenge.
+// Might also be interesting to make a difference between an opening point, which allows to evaluate a poly at a point,
+// and an array of sumcheck challenges, which might need reordering to correspond to a polynomial evaluation point.
 #[derive(Clone, Debug, PartialEq, Default, Allocative)]
 pub struct OpeningPoint<const E: Endianness, F: JoltField> {
-    pub r: Vec<F::Challenge>,
+    pub r: Vec<F>,
 }
 
 impl<const E: Endianness, F: JoltField> std::ops::Index<usize> for OpeningPoint<E, F> {
-    type Output = F::Challenge;
+    type Output = F;
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.r[index]
@@ -791,7 +852,7 @@ impl<const E: Endianness, F: JoltField> std::ops::Index<usize> for OpeningPoint<
 impl<const E: Endianness, F: JoltField> std::ops::Index<std::ops::RangeFull>
     for OpeningPoint<E, F>
 {
-    type Output = [F::Challenge];
+    type Output = [F];
 
     fn index(&self, _index: std::ops::RangeFull) -> &Self::Output {
         &self.r[..]
@@ -803,7 +864,7 @@ impl<const E: Endianness, F: JoltField> OpeningPoint<E, F> {
         self.r.len()
     }
 
-    pub fn split_at_r(&self, mid: usize) -> (&[F::Challenge], &[F::Challenge]) {
+    pub fn split_at_r(&self, mid: usize) -> (&[F], &[F]) {
         self.r.split_at(mid)
     }
 
@@ -814,8 +875,10 @@ impl<const E: Endianness, F: JoltField> OpeningPoint<E, F> {
 }
 
 impl<const E: Endianness, F: JoltField> OpeningPoint<E, F> {
-    pub fn new(r: Vec<F::Challenge>) -> Self {
-        Self { r }
+    pub fn new<C: Into<F>>(r: Vec<C>) -> Self {
+        Self {
+            r: r.into_iter().map(|x| x.into()).collect(),
+        }
     }
 
     pub fn endianness(&self) -> &'static str {
@@ -838,29 +901,29 @@ impl<const E: Endianness, F: JoltField> OpeningPoint<E, F> {
     }
 }
 
-impl<F: JoltField> From<Vec<F::Challenge>> for OpeningPoint<LITTLE_ENDIAN, F> {
-    fn from(r: Vec<F::Challenge>) -> Self {
-        Self::new(r)
+impl<F: JoltField, U: Into<F>> From<Vec<U>> for OpeningPoint<LITTLE_ENDIAN, F> {
+    fn from(r: Vec<U>) -> Self {
+        Self::new(r.into_iter().map(|x| x.into()).collect())
     }
 }
 
-impl<F: JoltField> From<Vec<F::Challenge>> for OpeningPoint<BIG_ENDIAN, F> {
-    fn from(r: Vec<F::Challenge>) -> Self {
-        Self::new(r)
+impl<F: JoltField, U: Into<F>> From<Vec<U>> for OpeningPoint<BIG_ENDIAN, F> {
+    fn from(r: Vec<U>) -> Self {
+        Self::new(r.into_iter().map(|x| x.into()).collect())
     }
 }
 
-impl<const E: Endianness, F: JoltField> Into<Vec<F::Challenge>> for OpeningPoint<E, F> {
-    fn into(self) -> Vec<F::Challenge> {
+impl<const E: Endianness, F: JoltField> Into<Vec<F>> for OpeningPoint<E, F> {
+    fn into(self) -> Vec<F> {
         self.r
     }
 }
 
-impl<const E: Endianness, F: JoltField> Into<Vec<F::Challenge>> for &OpeningPoint<E, F>
+impl<const E: Endianness, F: JoltField> Into<Vec<F>> for &OpeningPoint<E, F>
 where
     F: Clone,
 {
-    fn into(self) -> Vec<F::Challenge> {
+    fn into(self) -> Vec<F> {
         self.r.clone()
     }
 }
@@ -1015,5 +1078,71 @@ impl CanonicalDeserialize for OpeningId {
             }
             _ => Err(SerializationError::InvalidData),
         }
+    }
+}
+
+#[cfg(test)]
+mod guardrail_tests {
+    use super::{
+        OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+    };
+    use crate::{
+        subprotocols::evaluation_reduction::ReducedInstance,
+        transcripts::{Blake2bTranscript, Transcript},
+    };
+    use ark_bn254::Fr;
+    use common::VirtualPolynomial;
+
+    #[test]
+    #[should_panic(expected = "reduced evaluation for node 7 not found")]
+    fn get_node_output_opening_panics_before_reduction() {
+        let acc = ProverOpeningAccumulator::<Fr>::new();
+        let _ = acc.get_node_output_opening(7);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot append opening for node 3 after evaluation reduction")]
+    fn append_virtual_panics_after_reduction() {
+        let mut acc = ProverOpeningAccumulator::<Fr>::new();
+        acc.reduced_evaluations.insert(
+            3,
+            ReducedInstance {
+                r: vec![Fr::from(1u64)],
+                claim: Fr::from(2u64),
+            },
+        );
+
+        let mut transcript = Blake2bTranscript::new(b"guardrail_test");
+        acc.append_virtual(
+            &mut transcript,
+            VirtualPolynomial::NodeOutput(3),
+            SumcheckId::NodeExecution(9),
+            OpeningPoint::new(vec![Fr::from(1u64)]),
+            Fr::from(2u64),
+        );
+    }
+
+    #[test]
+    fn append_virtual_node_output_raf_allowed_after_reduction() {
+        let mut acc = ProverOpeningAccumulator::<Fr>::new();
+        acc.reduced_evaluations.insert(
+            3,
+            ReducedInstance {
+                r: vec![Fr::from(1u64)],
+                claim: Fr::from(2u64),
+            },
+        );
+
+        let mut transcript = Blake2bTranscript::new(b"guardrail_test");
+        acc.append_virtual(
+            &mut transcript,
+            VirtualPolynomial::NodeOutput(3),
+            SumcheckId::Raf,
+            OpeningPoint::new(vec![Fr::from(1u64)]),
+            Fr::from(5u64),
+        );
+
+        let key = OpeningId::Virtual(VirtualPolynomial::NodeOutput(3), SumcheckId::Raf);
+        assert!(acc.openings.contains_key(&key));
     }
 }

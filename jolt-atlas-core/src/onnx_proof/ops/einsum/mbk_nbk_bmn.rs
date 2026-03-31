@@ -6,7 +6,7 @@ use atlas_onnx_tracer::{
 };
 use common::VirtualPolynomial;
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
@@ -36,7 +36,7 @@ const DEGREE_BOUND: usize = 3;
 /// This implements batch matrix multiplication with specific dimension ordering.
 #[derive(Clone)]
 pub struct MbkNbkBmnParams<F: JoltField> {
-    r_node_output: Vec<F::Challenge>,
+    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
     einsum_dims: EinsumDims,
     log_b: usize,
@@ -57,7 +57,7 @@ impl<F: JoltField> MbkNbkBmnParams<F> {
         let log_b = einsum_dims.left_operand()[1].log_2();
         let log_k = einsum_dims.left_operand()[2].log_2();
         Self {
-            r_node_output,
+            r_node_output: r_node_output.into(),
             computation_node,
             einsum_dims,
             log_b,
@@ -76,7 +76,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MbkNbkBmnParams<F> {
         einsum_claim
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::new(challenges.to_vec())
     }
 
@@ -113,8 +113,8 @@ impl<F: JoltField> MbkNbkBmnProver<F> {
         );
         let (r_b, r_mn) = params.r_node_output.split_at(b.log_2());
         let (r_m, r_n) = r_mn.split_at(m.log_2());
-        let eq_r_m = EqPolynomial::evals(r_m);
-        let eq_r_n = EqPolynomial::evals(r_n);
+        let eq_r_m = EqPolynomial::evals(&r_m.r);
+        let eq_r_n = EqPolynomial::evals(&r_n.r);
         let mut lo_r_m: Vec<F> = unsafe_allocate_zero_vec(k * b);
         let mut ro_r_n: Vec<F> = unsafe_allocate_zero_vec(k * b);
         lo_r_m.par_chunks_mut(k).enumerate().for_each(|(h, row)| {
@@ -131,7 +131,7 @@ impl<F: JoltField> MbkNbkBmnProver<F> {
                     .sum();
             }
         });
-        let eq_r_b = MultilinearPolynomial::from(EqPolynomial::evals(r_b));
+        let eq_r_b = MultilinearPolynomial::from(EqPolynomial::evals(&r_b.r));
         let left_operand = MultilinearPolynomial::from(lo_r_m);
         let right_operand = MultilinearPolynomial::from(ro_r_n);
         Self {
@@ -204,6 +204,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MbkNbkBmnProv
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let sumcheck_challenges = sumcheck_challenges.into_opening();
         let (m, b) = (
             self.params.einsum_dims.left_operand()[0],
             self.params.einsum_dims.left_operand()[1],
@@ -211,7 +212,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MbkNbkBmnProv
         let (_, r_mn) = self.params.r_node_output.split_at(b.log_2());
         let (r_m, r_n) = r_mn.split_at(m.log_2());
 
-        let r_left_node_output = [r_m, sumcheck_challenges].concat();
+        let r_left_node_output = [r_m.r.as_slice(), &sumcheck_challenges].concat();
         let left_opening_point = self.params.normalize_opening_point(&r_left_node_output);
         accumulator.append_virtual(
             transcript,
@@ -221,7 +222,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MbkNbkBmnProv
             self.left_operand.final_sumcheck_claim(),
         );
 
-        let r_right_node_output = [r_n, sumcheck_challenges].concat();
+        let r_right_node_output = [r_n.r.as_slice(), &sumcheck_challenges].concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right_node_output);
         accumulator.append_virtual(
             transcript,
@@ -272,7 +273,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MbkNbkBmnVe
             self.params.computation_node.inputs[1],
             self.params.computation_node.idx,
         );
-        left_operand_claim * right_operand_claim * EqPolynomial::mle(r_b, r_h)
+        left_operand_claim * right_operand_claim * EqPolynomial::mle(&r_b.r, r_h)
     }
 
     fn cache_openings(
@@ -281,6 +282,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MbkNbkBmnVe
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let sumcheck_challenges = sumcheck_challenges.into_opening();
         let (m, b) = (
             self.params.einsum_dims.left_operand()[0],
             self.params.einsum_dims.left_operand()[1],
@@ -288,7 +290,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MbkNbkBmnVe
         let (_, r_other) = self.params.r_node_output.split_at(b.log_2());
         let (r_m, r_n) = r_other.split_at(m.log_2());
 
-        let r_left_node_output = [r_m, sumcheck_challenges].concat();
+        let r_left_node_output = [r_m.r.as_slice(), &sumcheck_challenges].concat();
         let left_opening_point = self.params.normalize_opening_point(&r_left_node_output);
         accumulator.append_virtual(
             transcript,
@@ -297,7 +299,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MbkNbkBmnVe
             left_opening_point.clone(),
         );
 
-        let r_right_node_output = [r_n, sumcheck_challenges].concat();
+        let r_right_node_output = [r_n.r.as_slice(), &sumcheck_challenges].concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right_node_output);
         accumulator.append_virtual(
             transcript,

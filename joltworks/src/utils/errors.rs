@@ -2,7 +2,20 @@ use core::fmt::Debug;
 use thiserror::Error;
 
 #[derive(Error, Debug, Default)]
+pub enum ProvingError {
+    #[error("Empty input")]
+    EmptyInput,
+    #[error("Proving failed")]
+    #[default]
+    InternalError,
+    #[error("Invalid input length, expected length {0} but got {1}")]
+    InvalidInputLength(usize, usize),
+}
+
+#[derive(Error, Debug, Default)]
 pub enum ProofVerifyError {
+    #[error("Empty input")]
+    EmptyInput,
     #[error("Invalid input length, expected length {0} but got {1}")]
     InvalidInputLength(usize, usize),
     #[error("Input too large")]

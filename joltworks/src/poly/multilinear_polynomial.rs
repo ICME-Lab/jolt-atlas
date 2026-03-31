@@ -148,6 +148,23 @@ impl<F: JoltField> MultilinearPolynomial<F> {
         }
     }
 
+    pub fn coeffs(&self) -> Vec<F> {
+        match self {
+            MultilinearPolynomial::LargeScalars(poly) => poly.evals(),
+            MultilinearPolynomial::BoolScalars(poly) => poly.coeffs_as_field_elements(),
+            MultilinearPolynomial::U8Scalars(poly) => poly.coeffs_as_field_elements(),
+            MultilinearPolynomial::U16Scalars(poly) => poly.coeffs_as_field_elements(),
+            MultilinearPolynomial::U32Scalars(poly) => poly.coeffs_as_field_elements(),
+            MultilinearPolynomial::U64Scalars(poly) => poly.coeffs_as_field_elements(),
+            MultilinearPolynomial::I32Scalars(poly) => poly.coeffs_as_field_elements(),
+            MultilinearPolynomial::I64Scalars(poly) => poly.coeffs_as_field_elements(),
+            MultilinearPolynomial::I128Scalars(poly) => poly.coeffs_as_field_elements(),
+            MultilinearPolynomial::U128Scalars(poly) => poly.coeffs_as_field_elements(),
+            MultilinearPolynomial::S128Scalars(poly) => poly.coeffs_as_field_elements(),
+            MultilinearPolynomial::OneHot(poly) => poly.coeffs(),
+        }
+    }
+
     /// Gets the polynomial coefficient at the given `index`
     pub fn get_coeff(&self, index: usize) -> F {
         match self {

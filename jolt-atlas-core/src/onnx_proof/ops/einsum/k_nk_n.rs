@@ -4,7 +4,7 @@ use atlas_onnx_tracer::{
 };
 use common::VirtualPolynomial;
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{
@@ -35,7 +35,7 @@ const DEGREE_BOUND: usize = 2;
 /// This implements matrix-vector multiplication variants.
 #[derive(Clone)]
 pub struct KNkNParams<F: JoltField> {
-    r_node_output: Vec<F::Challenge>,
+    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
     einsum_dims: EinsumDims,
 }
@@ -47,10 +47,7 @@ impl<F: JoltField> KNkNParams<F> {
         einsum_dims: EinsumDims,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
-        let r_node_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+        let r_node_output = accumulator.get_node_output_opening(computation_node.idx).0;
         Self {
             r_node_output,
             computation_node,
@@ -69,7 +66,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for KNkNParams<F> {
         einsum_claim
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::new(challenges.to_vec())
     }
 
@@ -100,7 +97,7 @@ impl<F: JoltField> KNkNProver<F> {
             params.einsum_dims.output()[0],
             params.einsum_dims.left_operand()[0],
         );
-        let eq_r_node_output = EqPolynomial::evals(&params.r_node_output);
+        let eq_r_node_output = EqPolynomial::evals(&params.r_node_output.r);
         let right_operand: Vec<F> = (0..k)
             .into_par_iter()
             .map(|j| {
@@ -159,7 +156,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for KNkNProver<F>
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let left_opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let left_opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
@@ -168,7 +167,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for KNkNProver<F>
             self.left_operand.final_sumcheck_claim(),
         );
 
-        let r_right_node_output = [&self.params.r_node_output, sumcheck_challenges].concat();
+        let r_right_node_output = [
+            self.params.r_node_output.r.as_slice(),
+            &sumcheck_challenges.into_opening(),
+        ]
+        .concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right_node_output);
         accumulator.append_virtual(
             transcript,
@@ -225,7 +228,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for KNkNVerifie
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let left_opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let left_opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
@@ -233,7 +238,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for KNkNVerifie
             left_opening_point.clone(),
         );
 
-        let r_right_node_output = [&self.params.r_node_output, sumcheck_challenges].concat();
+        let r_right_node_output = [
+            self.params.r_node_output.r.as_slice(),
+            &sumcheck_challenges.into_opening(),
+        ]
+        .concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right_node_output);
         accumulator.append_virtual(
             transcript,

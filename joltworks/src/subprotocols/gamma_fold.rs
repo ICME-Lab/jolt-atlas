@@ -3,7 +3,7 @@ use common::VirtualPolynomial;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
@@ -69,7 +69,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for GammaFoldParams<F> {
             .1
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
@@ -103,7 +103,7 @@ impl<F: JoltField> GammaFoldProver<F> {
             transcript,
             claim_poly,
             SumcheckId::RLC(node_exec_idx),
-            vec![].into(),
+            (vec![] as Vec<F>).into(),
             claim,
         );
 
@@ -163,7 +163,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GammaFoldProv
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             self.params.claim_poly,
@@ -196,7 +198,7 @@ impl<F: JoltField> GammaFoldVerifier<F> {
             transcript,
             claim_poly,
             SumcheckId::RLC(node_exec_idx),
-            vec![].into(),
+            (vec![] as Vec<F>).into(),
         );
 
         let params = GammaFoldParams::new(node_exec_idx, claim_poly, num_elements.log_2());
@@ -218,7 +220,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GammaFoldVe
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         let weight_eval = self.weights.evaluate(&opening_point.r);
         let tensor_claim = accumulator
             .get_virtual_polynomial_opening(
@@ -235,7 +239,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GammaFoldVe
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             self.params.claim_poly,

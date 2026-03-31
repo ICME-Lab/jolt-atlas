@@ -28,7 +28,7 @@ use joltworks::{
         opening_proof::{ProverOpeningAccumulator, SumcheckId},
         rlc_polynomial::build_materialized_rlc,
     },
-    subprotocols::sumcheck::SumcheckInstanceProof,
+    subprotocols::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof},
     transcripts::Transcript,
     utils::math::Math,
 };
@@ -88,7 +88,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         (poly_map, commitments)
     }
 
-    pub(super) fn output_claim(prover: &mut Prover<F, T>) {
+    pub(crate) fn output_claim(prover: &mut Prover<F, T>) {
         // Construct output polynomial
         let output_index = prover.preprocessing.model().outputs()[0];
         let output_computation_node = &prover.preprocessing.model()[output_index];
@@ -122,13 +122,16 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     /// Iterate over computation graph in reverse topological order
     /// Prove each operation using sum-check and virtual polynomials
     #[tracing::instrument(skip_all, name = "ONNXProof::iop")]
-    pub(super) fn iop(
+    pub(crate) fn iop(
         computation_nodes: &BTreeMap<usize, ComputationNode>,
         prover: &mut Prover<F, T>,
         proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+        eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
     ) {
-        for (_, computation_node) in computation_nodes.iter().rev() {
-            proofs.extend(OperatorProver::prove(computation_node, prover));
+        for (_, node) in computation_nodes.iter().rev() {
+            let (eval_reduction_proof, execution_proofs) = OperatorProver::prove(node, prover);
+            eval_reduction_proofs.insert(node.idx, eval_reduction_proof);
+            proofs.extend(execution_proofs);
         }
     }
 
@@ -176,6 +179,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         io: ModelExecutionIO,
         commitments: Vec<PCS::Commitment>,
         proofs: BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+        eval_reduction_proofs: BTreeMap<usize, EvalReductionProof<F>>,
         reduced_opening_proof: Option<ReducedOpeningProof<F, T, PCS>>,
     ) -> (Self, ModelExecutionIO, Option<ProverDebugInfo<F, T>>) {
         #[cfg(test)]
@@ -191,6 +195,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                 proofs,
                 opening_claims: Claims(opening_claims),
                 commitments,
+                eval_reduction_proofs,
                 reduced_opening_proof,
             },
             io,

@@ -17,7 +17,7 @@ use atlas_onnx_tracer::{
 };
 use common::VirtualPolynomial;
 use joltworks::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
@@ -64,7 +64,7 @@ pub fn compute_division(input: &Tensor<i32>, tau: i32) -> (Tensor<i32>, Tensor<i
 /// Parameters for division sumcheck
 #[derive(Clone)]
 pub struct TeleportDivisionParams<F: JoltField> {
-    r_node_output: Vec<F::Challenge>,
+    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
     tau: i32,
 }
@@ -85,7 +85,24 @@ impl<F: JoltField> TeleportDivisionParams<F> {
             .r;
 
         Self {
-            r_node_output,
+            r_node_output: r_node_output.into(),
+            computation_node,
+            tau,
+        }
+    }
+
+    /// Creates new division parameters by sampling the opening point from transcript.
+    /// The opening point is sampled from the transcript
+    pub fn new_from_transcript(
+        computation_node: ComputationNode,
+        transcript: &mut impl Transcript,
+        tau: i32,
+    ) -> Self {
+        let num_vars = computation_node.pow2_padded_num_output_elements().log_2();
+        let r_node_output = transcript.challenge_vector_optimized::<F>(num_vars);
+
+        Self {
+            r_node_output: r_node_output.into(),
             computation_node,
             tau,
         }
@@ -101,7 +118,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for TeleportDivisionParams<F> {
         F::zero()
     }
 
-    fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
@@ -128,7 +145,7 @@ impl<F: JoltField> TeleportDivisionProver<F> {
     /// the multilinear polynomials needed for the sumcheck protocol.
     pub fn new(trace: &Trace, params: TeleportDivisionParams<F>) -> Self {
         let eq_r_node_output =
-            GruenSplitEqPolynomial::new(&params.r_node_output, BindingOrder::LowToHigh);
+            GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
         let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
         let input_data = operands[0];
 
@@ -199,7 +216,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TeleportDivis
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
@@ -242,6 +261,16 @@ impl<F: JoltField> TeleportDivisionVerifier<F> {
         let params = TeleportDivisionParams::new(computation_node, accumulator, tau);
         Self { params }
     }
+
+    /// Creates a new verifier for transcript-sampled teleport-division parameters.
+    pub fn new_from_transcript(
+        computation_node: ComputationNode,
+        tau: i32,
+        transcript: &mut impl Transcript,
+    ) -> Self {
+        let params = TeleportDivisionParams::new_from_transcript(computation_node, transcript, tau);
+        Self { params }
+    }
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TeleportDivisionVerifier<F> {
@@ -254,11 +283,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TeleportDiv
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let r_node_output = accumulator
-            .get_node_output_opening(self.params.computation_node.idx)
-            .0
+        let r_node_output = self.params.r_node_output.r.clone();
+        let r_node_output_prime = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
-        let r_node_output_prime = self.params.normalize_opening_point(sumcheck_challenges).r;
         let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
 
         let input_claim = accumulator.get_node_output_claim(
@@ -288,7 +317,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TeleportDiv
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self.params.normalize_opening_point(sumcheck_challenges);
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),

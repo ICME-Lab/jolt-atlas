@@ -16,8 +16,8 @@ use super::{ComputationGraph, Model};
 /// A wire represents a connection to a node's output in the computation graph.
 pub type Wire = usize;
 
-// number of bits dedicated to the fractional part in fixed-point representation
-const SCALE: u32 = 7;
+// Default number of bits dedicated to the fractional part in fixed-point representation
+const DEFAULT_SCALE: u32 = 7;
 
 /// Builder for constructing `Model` instances programmatically.
 ///
@@ -28,6 +28,7 @@ pub struct ModelBuilder {
     inputs: Vec<usize>,
     outputs: Vec<usize>,
     next_id: usize,
+    scale: u32,
 }
 
 impl Default for ModelBuilder {
@@ -37,13 +38,19 @@ impl Default for ModelBuilder {
 }
 
 impl ModelBuilder {
-    /// Create a new empty model builder.
+    /// Create a new empty model builder with the default scale (7).
     pub fn new() -> Self {
+        Self::with_scale(DEFAULT_SCALE)
+    }
+
+    /// Create a new empty model builder with a custom scale (number of fractional bits).
+    pub fn with_scale(scale: u32) -> Self {
         Self {
             nodes: BTreeMap::new(),
             inputs: Vec::new(),
             outputs: Vec::new(),
             next_id: 0,
+            scale,
         }
     }
 
@@ -124,7 +131,7 @@ impl ModelBuilder {
         let node = ComputationNode::new(
             id,
             Operator::Mul(Mul {
-                scale: SCALE as i32, // TODO: Pass in scale from runtime args instead of hardcoding here.
+                scale: self.scale as i32,
             }),
             vec![a, b],
             output_dims,
@@ -160,7 +167,7 @@ impl ModelBuilder {
         let node = ComputationNode::new(
             id,
             Operator::Rsqrt(Rsqrt {
-                scale: F32(SCALE as f32),
+                scale: F32(self.scale as f32),
             }),
             vec![input],
             output_dims,
@@ -222,7 +229,7 @@ impl ModelBuilder {
             id,
             Operator::Einsum(Einsum {
                 equation: equation.to_string(),
-                scale: SCALE as i32, // TODO: Pass in scale from runtime args instead of hardcoding here.
+                scale: self.scale as i32,
             }),
             inputs,
             output_dims,
@@ -338,7 +345,23 @@ impl ModelBuilder {
             id,
             Operator::SoftmaxAxes(SoftmaxAxes {
                 axes,
-                scale: F32((1 << SCALE) as f32),
+                scale: F32((1 << self.scale) as f32),
+            }),
+            vec![input],
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
+    /// Add a softmax-last-axis node.
+    /// Uses the builder's scale (set via `with_scale`) as S = 2^scale.
+    pub fn softmax_last_axis(&mut self, input: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&input].output_dims.clone();
+        let node = ComputationNode::new(
+            id,
+            Operator::SoftmaxLastAxis(SoftmaxLastAxis {
+                scale: 1 << self.scale,
             }),
             vec![input],
             output_dims,
@@ -354,7 +377,7 @@ impl ModelBuilder {
         let node = ComputationNode::new(
             id,
             Operator::Tanh(Tanh {
-                scale: F32((1 << SCALE) as f32),
+                scale: F32((1 << self.scale) as f32),
                 tau,
                 log_table: NEURAL_TELEPORT_LOG_TABLE_SIZE,
             }),
@@ -371,7 +394,7 @@ impl ModelBuilder {
         let node = ComputationNode::new(
             id,
             Operator::Cos(Cos {
-                scale: F32((1 << SCALE) as f32),
+                scale: F32((1 << self.scale) as f32),
             }),
             vec![input],
             output_dims,
@@ -386,7 +409,7 @@ impl ModelBuilder {
         let node = ComputationNode::new(
             id,
             Operator::Sin(Sin {
-                scale: F32((1 << SCALE) as f32),
+                scale: F32((1 << self.scale) as f32),
             }),
             vec![input],
             output_dims,
@@ -402,7 +425,7 @@ impl ModelBuilder {
         let node = ComputationNode::new(
             id,
             Operator::Erf(Erf {
-                scale: F32((1 << SCALE) as f32),
+                scale: F32((1 << self.scale) as f32),
                 tau,
                 log_table: NEURAL_TELEPORT_LOG_TABLE_SIZE,
             }),
@@ -427,6 +450,7 @@ impl ModelBuilder {
                 original_input_dims: HashMap::new(),
                 original_output_dims: HashMap::new(),
             },
+            scale: self.scale as i32,
         }
     }
 }

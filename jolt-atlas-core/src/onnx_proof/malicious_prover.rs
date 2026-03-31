@@ -18,9 +18,6 @@ use joltworks::{
     transcripts::{AppendToTranscript, Transcript},
 };
 
-pub use ark_bn254::{Bn254, Fr};
-pub use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
-
 use crate::onnx_proof::{
     ops::{malicious_sub::malicious_sub_prove, OperatorProver},
     AtlasProverPreprocessing, ONNXProof, ProofId, Prover, ProverDebugInfo,
@@ -28,8 +25,10 @@ use crate::onnx_proof::{
 use std::collections::BTreeMap;
 
 /// Test helper namespace for constructing malicious prover experiments.
+#[allow(dead_code)]
 pub struct MaliciousONNXProof;
 
+#[allow(dead_code)]
 type ProverOutput<F, T, PCS> = (
     ONNXProof<F, T, PCS>,
     ModelExecutionIO,
@@ -38,6 +37,7 @@ type ProverOutput<F, T, PCS> = (
 
 // ── Public API: prove & verify ───────────────────────────────────────────
 
+#[allow(dead_code)]
 impl MaliciousONNXProof {
     /// Generate a proof for an ONNX neural network computation.
     ///

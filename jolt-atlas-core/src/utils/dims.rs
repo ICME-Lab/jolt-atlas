@@ -556,3 +556,41 @@ pub fn transpose_flat_matrix<F: JoltField>(
     }
     transposed
 }
+
+/// Transposes a flattened matrix stored in row-major order.
+///
+/// # Arguments
+/// * `flat_vector` - The input vector representing a flattened matrix in row-major order
+/// * `num_rows` - The number of rows in the original matrix
+/// * `num_cols` - The number of columns in the original matrix
+///
+/// # Returns
+/// A new vector representing the transposed matrix in row-major order
+pub fn transpose_flat_matrix_int(
+    flat_vector: Vec<i32>,
+    num_rows: usize,
+    num_cols: usize,
+) -> Vec<i32> {
+    const MIN_SIZE_FOR_PARALLEL: usize = 1024;
+
+    let mut transposed = unsafe_allocate_zero_vec(num_rows * num_cols);
+    let total_size = num_rows * num_cols;
+
+    if total_size >= MIN_SIZE_FOR_PARALLEL {
+        transposed
+            .par_chunks_mut(num_rows)
+            .enumerate()
+            .for_each(|(j, col)| {
+                for i in 0..num_rows {
+                    col[i] = flat_vector[i * num_cols + j];
+                }
+            });
+    } else {
+        for i in 0..num_rows {
+            for j in 0..num_cols {
+                transposed[j * num_rows + i] = flat_vector[i * num_cols + j];
+            }
+        }
+    }
+    transposed
+}

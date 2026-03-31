@@ -448,6 +448,7 @@ fn shadow_f64(op: &Operator, inputs: Vec<&Tensor<f64>>, scale: Scale) -> Tensor<
 
         // ── Nonlinearities (ideal f64 versions) ─────────────────────────
         Operator::SoftmaxAxes(s) => softmax_f64(inputs[0], s.axes),
+        Operator::SoftmaxLastAxis { .. } => softmax_f64(inputs[0], inputs[0].dims().len() - 1),
         Operator::Clamp(_) => inputs[0].clone(), // quantization artifact — identity in f64
         Operator::Erf(_) => elementwise_f64(inputs[0], erf_f64),
         Operator::Tanh(_) => elementwise_f64(inputs[0], |x| (x).tanh()),

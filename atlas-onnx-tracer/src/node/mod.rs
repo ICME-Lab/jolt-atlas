@@ -1,7 +1,6 @@
 //! Node representation and helpers used by the ONNX tracer.
 //! A `ComputationNode` models a single operation in the graph.
-use crate::ops::Operator;
-use crate::utils::dims::UsizeDimsExt;
+use crate::{ops::Operator, utils::dims::UsizeDimsExt};
 use serde::{Deserialize, Serialize};
 
 /// Node-specific handler functions and utilities.
@@ -83,4 +82,21 @@ impl ComputationNode {
     pub fn is_scalar(&self) -> bool {
         self.num_output_elements() == 1
     }
+
+    /// Returns the [ComputationNodeIndices] for this node, which includes its index and input indices.
+    pub fn indices(&self) -> ComputationNodeIndices {
+        ComputationNodeIndices {
+            idx: self.idx,
+            input_indices: self.inputs.clone(), // Relatively cheap since input lists are typically short
+        }
+    }
+}
+
+/// Lightweight index-only representation of a [`ComputationNode`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComputationNodeIndices {
+    /// Index of this node in the computation graph.
+    pub idx: usize,
+    /// Indices of the input nodes.
+    pub input_indices: Vec<usize>,
 }

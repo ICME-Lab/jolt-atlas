@@ -30,7 +30,7 @@ pub mod proof_serialization;
 pub mod range_checking;
 pub mod witness;
 
-pub mod malicious_prover;
+mod malicious_prover;
 mod preprocessing;
 mod prover;
 mod types;

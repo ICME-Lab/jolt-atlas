@@ -86,6 +86,8 @@ pub mod scalar_const_div;
 pub mod sin;
 /// Softmax operation along specified axes.
 pub mod softmax_axes;
+/// Softmax operation along the last axis.
+pub mod softmax_last_axis;
 /// Element-wise square (x²) operation.
 pub mod square;
 /// Element-wise subtraction operation.
@@ -178,6 +180,7 @@ macro_rules! dispatch_operator {
             Operator::ScalarConstDiv($inner) => $body,
             Operator::Sin($inner) => $body,
             Operator::SoftmaxAxes($inner) => $body,
+            Operator::SoftmaxLastAxis($inner) => $body,
             Operator::Square($inner) => $body,
             Operator::Sub($inner) => $body,
             Operator::Sum($inner) => $body,

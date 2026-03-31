@@ -3237,7 +3237,7 @@ pub mod nonlinearities {
     /// softmax layout
     #[tracing::instrument(name = "tensor::ops::nonlinearities::softmax_axes", skip_all)]
     pub fn softmax_axes(a: &Tensor<i32>, scale: f64, axes: &[usize]) -> Tensor<i32> {
-        let exp_lut = generate_exp_lut(scale as i64);
+        let exp_lut = generate_exp_lut(scale as i32);
         // we want this to be as small as possible so we set the output scale to 1
         let dims = a.dims();
 

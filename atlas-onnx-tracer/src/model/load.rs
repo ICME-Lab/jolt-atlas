@@ -573,6 +573,7 @@ impl<'a> ModelLoader<'a> {
                 original_input_dims: self.original_input_dims,
                 original_output_dims: self.original_output_dims,
             },
+            scale: self.run_args.scale,
         }
     }
 }

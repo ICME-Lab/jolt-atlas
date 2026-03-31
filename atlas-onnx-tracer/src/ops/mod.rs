@@ -143,6 +143,7 @@ define_operators! {
         ScalarConstDiv {divisor: i32},
         Sin { scale: F32 },
         SoftmaxAxes { axes: usize, scale: F32 },
+        SoftmaxLastAxis {scale: i32 },
         Square,
         Sub,
         Sum { axes: Vec<usize> },

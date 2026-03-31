@@ -373,6 +373,18 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     one_hot_params.k_chunk,
                 ))
             }
+            _ => {
+                panic!("Committed polynomial type {self:?} is not supported for witness generation")
+            }
+            // CommittedPolynomial::SoftmaxRecipMultRemainder(_) => {
+            //     todo!()
+            // }
+            // CommittedPolynomial::SoftmaxInvSumDiff(_) => {
+            //     todo!()
+            // }
+            // CommittedPolynomial::SoftmaxExpMultRemainder(_) => {
+            //     todo!()
+            // }
         }
     }
 }

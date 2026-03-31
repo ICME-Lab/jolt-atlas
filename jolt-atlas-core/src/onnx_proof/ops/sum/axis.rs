@@ -1,7 +1,3 @@
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-};
 use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
@@ -23,33 +19,100 @@ use joltworks::{
 };
 use rayon::prelude::*;
 
-use crate::utils::dims::{SumAxis, SumConfig};
+use crate::utils::dims::SumAxis;
 
 const DEGREE_BOUND: usize = 1;
 
-/// Parameters for proving sum operations along an axis.
+// ---------------------------------------------------------------------------
+// SumAxisProvider trait
+// ---------------------------------------------------------------------------
+
+/// Describes the polynomial configuration for a sum-axis sumcheck instance.
+///
+/// Implementors specify which [`VirtualPolynomial`] variants represent the
+/// sum output and operand, enabling reuse of the same sumcheck logic across
+/// standalone sum ops and composite ops like softmax.
+///
+/// This follows the same pattern as [`RaOneHotEncoding`] in `shout.rs`.
+pub trait SumAxisProvider {
+    /// The axis along which the sum is computed (0 or 1 after 2D normalization).
+    fn axis(&self) -> SumAxis;
+
+    /// Operand dimensions `[m, n]` of the 2D-normalized input.
+    fn operand_dims(&self) -> [usize; 2];
+
+    /// The `(VirtualPolynomial, SumcheckId)` whose opening provides the
+    /// sum-output reduction point (`r_node_output`) and the input claim.
+    ///
+    /// For the standalone sum op this is `(NodeOutput(node_idx), NodeExecution(node_idx))`.
+    /// For softmax stage 3 this is `(SoftmaxExpSum(node_idx), Execution)`.
+    fn sum_output_source(&self) -> (VirtualPolynomial, SumcheckId);
+
+    /// The `(VirtualPolynomial, SumcheckId)` for the operand polynomial,
+    /// used in `cache_openings` and `expected_output_claim`.
+    ///
+    /// For the standalone sum op this is `(NodeOutput(input_idx), NodeExecution(node_idx))`.
+    /// For softmax stage 3 this is `(SoftmaxExpQ(node_idx), Execution)`.
+    fn operand_source(&self) -> (VirtualPolynomial, SumcheckId);
+}
+
+// ---------------------------------------------------------------------------
+// Helper
+// ---------------------------------------------------------------------------
+
+/// Resolve a `(VirtualPolynomial, SumcheckId)` opening, routing `NodeOutput`
+/// through `get_node_output_opening` (which scans consumer entries) instead of
+/// requiring an exact key match.
+fn resolve_vp_opening<F: JoltField>(
+    accumulator: &dyn OpeningAccumulator<F>,
+    vp: VirtualPolynomial,
+    sid: SumcheckId,
+) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+    if let VirtualPolynomial::NodeOutput(producer_idx) = vp {
+        accumulator.get_node_output_opening(producer_idx)
+    } else {
+        accumulator.get_virtual_polynomial_opening(vp, sid)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SumAxisParams
+// ---------------------------------------------------------------------------
+
+/// Shared prover/verifier parameters for the sum-axis sumcheck, resolved from
+/// a [`SumAxisProvider`].
 #[derive(Clone)]
 pub struct SumAxisParams<F: JoltField> {
     r_node_output: Vec<F::Challenge>,
-    computation_node: ComputationNode,
-    sum_config: SumConfig,
+    axis: SumAxis,
+    operand_dims: [usize; 2],
+    sum_output: (VirtualPolynomial, SumcheckId),
+    operand: (VirtualPolynomial, SumcheckId),
 }
 
 impl<F: JoltField> SumAxisParams<F> {
-    /// Create new parameters for sum operation along an axis.
-    pub fn new(
-        computation_node: ComputationNode,
-        sum_config: SumConfig,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Self {
-        let r_node_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+    /// Build parameters from a [`SumAxisProvider`] and the current accumulator state.
+    pub fn new(provider: &impl SumAxisProvider, accumulator: &dyn OpeningAccumulator<F>) -> Self {
+        let axis = provider.axis();
+        let operand_dims = provider.operand_dims();
+        let sum_output = provider.sum_output_source();
+        let operand = provider.operand_source();
+
+        // Length of the non-summed dimension = length of r_node_output.
+        let r_len = match axis {
+            SumAxis::Axis0 => operand_dims[1].log_2(),
+            SumAxis::Axis1 => operand_dims[0].log_2(),
+        };
+
+        let (point, _claim) = resolve_vp_opening(accumulator, sum_output.0, sum_output.1);
+        let r_node_output = point.r[..r_len].to_vec();
+
         Self {
             r_node_output,
-            computation_node,
-            sum_config,
+            axis,
+            operand_dims,
+            sum_output,
+            operand,
         }
     }
 }
@@ -60,8 +123,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SumAxisParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, sum_claim) = accumulator.get_node_output_opening(self.computation_node.idx);
-        sum_claim
+        resolve_vp_opening(accumulator, self.sum_output.0, self.sum_output.1).1
     }
 
     fn normalize_opening_point(&self, challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -69,9 +131,13 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SumAxisParams<F> {
     }
 
     fn num_rounds(&self) -> usize {
-        self.sum_config.operand_dims()[self.sum_config.axis().axis_index()].log_2()
+        self.operand_dims[self.axis.axis_index()].log_2()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Prover
+// ---------------------------------------------------------------------------
 
 /// Prover state for sum along axis sumcheck protocol.
 pub struct SumAxisProver<F: JoltField> {
@@ -80,27 +146,20 @@ pub struct SumAxisProver<F: JoltField> {
 }
 
 impl<F: JoltField> SumAxisProver<F> {
-    /// Initialize the prover with trace data and parameters for sum along axis.
-    #[tracing::instrument(skip_all, name = "SumAxisProver::initialize")]
-    pub fn initialize(
-        trace: &Trace,
+    /// Build the prover from raw operand values and resolved parameters.
+    ///
+    /// The operand is a flat `[m * n]` array in row-major order.
+    /// The eq-polynomial reduction (absorbing `r_node_output`) is performed
+    /// here, producing the univariate sumcheck polynomial.
+    #[tracing::instrument(skip_all, name = "SumAxisProver::new")]
+    pub fn new(
+        operand_i32: &[i32],
         params: SumAxisParams<F>,
-        _accumulator: &ProverOpeningAccumulator<F>,
+        #[allow(unused_variables)] accumulator: &ProverOpeningAccumulator<F>,
     ) -> Self {
-        let LayerData {
-            operands,
-            output: _,
-        } = Trace::layer_data(trace, &params.computation_node);
-        let [operand] = operands[..] else {
-            panic!("Expected one operand for SumAxis operation")
-        };
+        let (m, n) = (params.operand_dims[0], params.operand_dims[1]);
 
-        let (m, n) = (
-            params.sum_config.operand_dims()[0],
-            params.sum_config.operand_dims()[1],
-        );
-
-        let operand: Vec<F> = match params.sum_config.axis() {
+        let operand: Vec<F> = match params.axis {
             SumAxis::Axis0 => {
                 debug_assert_eq!(n.log_2(), params.r_node_output.len());
                 let eq_r_node_output = EqPolynomial::evals(&params.r_node_output);
@@ -108,7 +167,7 @@ impl<F: JoltField> SumAxisProver<F> {
                     .into_par_iter()
                     .map(|h| {
                         (0..n)
-                            .map(|j| F::from_i32(operand[h * n + j]) * eq_r_node_output[j])
+                            .map(|j| F::from_i32(operand_i32[h * n + j]) * eq_r_node_output[j])
                             .sum::<F>()
                     })
                     .collect()
@@ -120,7 +179,7 @@ impl<F: JoltField> SumAxisProver<F> {
                     .into_par_iter()
                     .map(|j| {
                         (0..m)
-                            .map(|h| F::from_i32(operand[h * n + j]) * eq_r_node_output[h])
+                            .map(|h| F::from_i32(operand_i32[h * n + j]) * eq_r_node_output[h])
                             .sum::<F>()
                     })
                     .collect()
@@ -134,7 +193,7 @@ impl<F: JoltField> SumAxisProver<F> {
                 .into_par_iter()
                 .map(|i| operand.get_bound_coeff(i))
                 .sum::<F>();
-            assert_eq!(claim, params.input_claim(_accumulator));
+            assert_eq!(claim, params.input_claim(accumulator));
         }
         Self { params, operand }
     }
@@ -164,35 +223,28 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SumAxisProver
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = match self.params.sum_config.axis() {
+        let opening_point = match self.params.axis {
             SumAxis::Axis0 => [sumcheck_challenges, &self.params.r_node_output].concat(),
             SumAxis::Axis1 => [&self.params.r_node_output, sumcheck_challenges].concat(),
         };
+        let (vp, sid) = self.params.operand;
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
+            vp,
+            sid,
             opening_point.into(),
             self.operand.final_sumcheck_claim(),
         );
     }
 }
 
+// ---------------------------------------------------------------------------
+// Verifier
+// ---------------------------------------------------------------------------
+
 /// Verifier for sum along axis sumcheck protocol.
 pub struct SumAxisVerifier<F: JoltField> {
     params: SumAxisParams<F>,
-}
-
-impl<F: JoltField> SumAxisVerifier<F> {
-    /// Create new verifier for sum along axis.
-    pub fn new(
-        computation_node: ComputationNode,
-        sum_config: SumConfig,
-        accumulator: &VerifierOpeningAccumulator<F>,
-    ) -> Self {
-        let params = SumAxisParams::new(computation_node, sum_config, accumulator);
-        Self { params }
-    }
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVerifier<F> {
@@ -205,10 +257,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVeri
         accumulator: &VerifierOpeningAccumulator<F>,
         _sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[0],
-            self.params.computation_node.idx,
-        )
+        let (vp, sid) = self.params.operand;
+        accumulator.get_virtual_polynomial_opening(vp, sid).1
     }
 
     fn cache_openings(
@@ -217,17 +267,37 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVeri
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = match self.params.sum_config.axis() {
+        let opening_point = match self.params.axis {
             SumAxis::Axis0 => [sumcheck_challenges, &self.params.r_node_output].concat(),
             SumAxis::Axis1 => [&self.params.r_node_output, sumcheck_challenges].concat(),
         };
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.into(),
-        );
+        let (vp, sid) = self.params.operand;
+        accumulator.append_virtual(transcript, vp, sid, opening_point.into());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Free functions (like ra_onehot_provers / ra_onehot_verifiers in shout.rs)
+// ---------------------------------------------------------------------------
+
+/// Build a sum-axis sumcheck **prover** from a [`SumAxisProvider`] and raw
+/// operand values (flat `[m * n]` row-major `i32` slice).
+pub fn sum_axis_prover<F: JoltField>(
+    provider: &impl SumAxisProvider,
+    operand: &[i32],
+    accumulator: &ProverOpeningAccumulator<F>,
+) -> SumAxisProver<F> {
+    let params = SumAxisParams::new(provider, accumulator);
+    SumAxisProver::new(operand, params, accumulator)
+}
+
+/// Build a sum-axis sumcheck **verifier** from a [`SumAxisProvider`].
+pub fn sum_axis_verifier<F: JoltField>(
+    provider: &impl SumAxisProvider,
+    accumulator: &VerifierOpeningAccumulator<F>,
+) -> SumAxisVerifier<F> {
+    let params = SumAxisParams::new(provider, accumulator);
+    SumAxisVerifier { params }
 }
 
 #[cfg(test)]

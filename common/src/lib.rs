@@ -1,557 +1,619 @@
 use allocative::Allocative;
-use ark_serialize::{
-    CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
-    Write,
-};
 
 pub mod consts;
 pub mod utils;
 
-#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
-pub enum CommittedPolynomial {
-    /// Fields:
-    ///
-    /// `0` - node index,
-    ///
-    /// `1` - d
-    NodeOutputRaD(usize, usize),
-    CosRaD(usize, usize),  // One-hot read addresses for Cos lookup
-    ErfRaD(usize, usize),  // One-hot read addresses for Erf lookup
-    SinRaD(usize, usize),  // One-hot read addresses for Sin lookup
-    TanhRaD(usize, usize), // One-hot read addresses for Tanh lookup
+/// Generates `CanonicalSerialize`, `CanonicalDeserialize`, and `Valid` impls
+/// for an enum whose variants are unit or carry only `CanonicalSerialize` /
+/// `CanonicalDeserialize` fields (up to 3 fields per variant).
+///
+/// Tags are assigned automatically in **declaration order** (0, 1, 2, …).
+/// Adding a new variant at the end is a one-line change with no additional
+/// boilerplate.
+///
+/// # Example
+/// ```ignore
+/// canonical_serde_enum! {
+///     #[derive(Debug, Clone)]
+///     pub enum MyPoly {
+///         Foo(usize),
+///         Bar(usize, usize),
+///         Baz,
+///     }
+/// }
+/// ```
+macro_rules! canonical_serde_enum {
+    // ── entry point ───────────────────────────────────────────────────
+    (
+        $(#[$enum_meta:meta])*
+        $vis:vis enum $name:ident {
+            $(
+                $(#[$var_meta:meta])*
+                $variant:ident $( ( $($fty:ty),+ $(,)? ) )?
+            ),+ $(,)?
+        }
+    ) => {
+        // 1) Emit the enum itself, forwarding all attributes & doc-comments.
+        $(#[$enum_meta])*
+        $vis enum $name {
+            $(
+                $(#[$var_meta])*
+                $variant $( ( $($fty),+ ) )?,
+            )+
+        }
 
-    /// Fields:
-    ///
-    /// `0` - node index
-    ///
-    /// `1` - feature index
-    SoftmaxRemainder(usize, usize),
+        // 2) CanonicalSerialize
+        impl ::ark_serialize::CanonicalSerialize for $name {
+            fn serialize_with_mode<W: ::ark_serialize::Write>(
+                &self,
+                mut writer: W,
+                compress: ::ark_serialize::Compress,
+            ) -> ::core::result::Result<(), ::ark_serialize::SerializationError> {
+                let mut _tag: u8 = 0;
+                $(
+                    canonical_serde_enum!(
+                        @try_serialize self, _tag, writer, compress,
+                        $name, $variant $( ( $($fty),+ ) )?
+                    );
+                    #[allow(unused_assignments)]
+                    { _tag += 1; }
+                )+
+                unreachable!()
+            }
 
-    /// Fields:
-    ///
-    /// `0` - node index
-    ///
-    /// `1` - feature index
-    ///
-    /// `2` - d
-    SoftmaxExponentiationRaD(usize, usize, usize),
+            fn serialized_size(
+                &self,
+                compress: ::ark_serialize::Compress,
+            ) -> usize {
+                $(
+                    canonical_serde_enum!(
+                        @try_size self, compress,
+                        $name, $variant $( ( $($fty),+ ) )?
+                    );
+                )+
+                unreachable!()
+            }
+        }
 
-    // One-hot polynomials for Advices
-    DivRangeCheckRaD(usize, usize), // Interleaved R and divisor for Div advice
-    SqrtDivRangeCheckRaD(usize, usize), // Interleaved R and divisor for Div advice
-    SqrtRangeCheckRaD(usize, usize), // Interleaved r_s and sqrt for Sqrt advice
-    TeleportRangeCheckRaD(usize, usize), // Remainder and input for neural teleportation division
+        // 3) Valid (trivial – nothing extra to check)
+        impl ::ark_serialize::Valid for $name {
+            fn check(
+                &self,
+            ) -> ::core::result::Result<(), ::ark_serialize::SerializationError> {
+                ::core::result::Result::Ok(())
+            }
+        }
 
-    /// Fields:
-    ///
-    /// `0` - node index
-    DivNodeQuotient(usize), // Advice for `quotient` in Div
-    ScalarConstDivNodeRemainder(usize), // Advice for `remainder` in Div
-    RsqrtNodeInv(usize),                // Advice for `inv` in Rsqrt
-    RsqrtNodeRsqrt(usize),              // Advice for `rsqrt` in Rsqrt
-    GatherRa(usize),
-}
+        // 4) CanonicalDeserialize
+        impl ::ark_serialize::CanonicalDeserialize for $name {
+            fn deserialize_with_mode<R: ::ark_serialize::Read>(
+                mut reader: R,
+                compress: ::ark_serialize::Compress,
+                validate: ::ark_serialize::Validate,
+            ) -> ::core::result::Result<Self, ::ark_serialize::SerializationError> {
+                let tag =
+                    <u8 as ::ark_serialize::CanonicalDeserialize>::deserialize_with_mode(
+                        &mut reader, compress, validate,
+                    )?;
+                let mut _expected: u8 = 0;
+                $(
+                    if tag == _expected {
+                        return canonical_serde_enum!(
+                            @deserialize reader, compress, validate,
+                            $name, $variant $( ( $($fty),+ ) )?
+                        );
+                    }
+                    #[allow(unused_assignments)]
+                    { _expected += 1; }
+                )+
+                ::core::result::Result::Err(
+                    ::ark_serialize::SerializationError::InvalidData,
+                )
+            }
+        }
+    };
 
-#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
-pub enum VirtualPolynomial {
-    /// The MLE of a node's output tensor.
-    ///
-    /// `0` - producer node index
-    NodeOutput(usize),
-    NodeOutputRa(usize),
-    CosRa(usize),  // One-hot read addresses for Cos lookup
-    ErfRa(usize),  // One-hot read addresses for Erf lookup
-    SinRa(usize),  // One-hot read addresses for Sin lookup
-    TanhRa(usize), // One-hot read addresses for Tanh lookup
+    // ── @try_serialize helpers (per field-count) ─────────────────────
 
-    /// Fields:
-    ///
-    /// `0` - node index
-    ///
-    /// `1` - feature index
-    SoftmaxFeatureOutput(usize, usize),
-    SoftmaxSumOutput(usize, usize),
-    SoftmaxMaxOutput(usize, usize),
-    SoftmaxMaxIndex(usize, usize),
-    SoftmaxExponentiationOutput(usize, usize),
-    SoftmaxInputLogitsOutput(usize, usize),
-    SoftmaxAbsCenteredLogitsOutput(usize, usize),
-    SoftmaxExponentiationRa(usize, usize), // One-hot read address for exponentiation lookup
+    // unit
+    (@try_serialize $self:ident, $tag:ident, $writer:ident, $compress:ident,
+     $name:ident, $variant:ident
+    ) => {
+        if let $name::$variant = $self {
+            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
+                &$tag, &mut $writer, $compress,
+            )?;
+            return ::core::result::Result::Ok(());
+        }
+    };
 
-    /// Used in hamming weight sumcheck
-    HammingWeight,
-    // Advices given for operators requiring it
-    // Those are proven by the ReadRafSumcheckProver,
-    // from Committed one-hot polynomials.
-    DivRangeCheckRa(usize),
-    SqrtRangeCheckRa(usize),
-    TeleportRangeCheckRa(usize),
+    // 1 field
+    (@try_serialize $self:ident, $tag:ident, $writer:ident, $compress:ident,
+     $name:ident, $variant:ident ($fty0:ty)
+    ) => {
+        if let $name::$variant(_f0) = $self {
+            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
+                &$tag, &mut $writer, $compress,
+            )?;
+            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
+                _f0, &mut $writer, $compress,
+            )?;
+            return ::core::result::Result::Ok(());
+        }
+    };
 
-    DivRemainder(usize),
-    SqrtRemainder(usize),
-    TeleportQuotient(usize), // Quotient polynomial for neural teleportation lookups
-    TeleportRemainder(usize), // Remainder polynomial for neural teleportation lookups
+    // 2 fields
+    (@try_serialize $self:ident, $tag:ident, $writer:ident, $compress:ident,
+     $name:ident, $variant:ident ($fty0:ty, $fty1:ty)
+    ) => {
+        if let $name::$variant(_f0, _f1) = $self {
+            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
+                &$tag, &mut $writer, $compress,
+            )?;
+            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
+                _f0, &mut $writer, $compress,
+            )?;
+            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
+                _f1, &mut $writer, $compress,
+            )?;
+            return ::core::result::Result::Ok(());
+        }
+    };
+
+    // 3 fields
+    (@try_serialize $self:ident, $tag:ident, $writer:ident, $compress:ident,
+     $name:ident, $variant:ident ($fty0:ty, $fty1:ty, $fty2:ty)
+    ) => {
+        if let $name::$variant(_f0, _f1, _f2) = $self {
+            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
+                &$tag, &mut $writer, $compress,
+            )?;
+            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
+                _f0, &mut $writer, $compress,
+            )?;
+            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
+                _f1, &mut $writer, $compress,
+            )?;
+            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
+                _f2, &mut $writer, $compress,
+            )?;
+            return ::core::result::Result::Ok(());
+        }
+    };
+
+    // ── @try_size helpers (per field-count) ──────────────────────────
+
+    // unit
+    (@try_size $self:ident, $compress:ident,
+     $name:ident, $variant:ident
+    ) => {
+        if let $name::$variant = $self {
+            return ::ark_serialize::CanonicalSerialize::serialized_size(&0u8, $compress);
+        }
+    };
+
+    // 1 field
+    (@try_size $self:ident, $compress:ident,
+     $name:ident, $variant:ident ($fty0:ty)
+    ) => {
+        if let $name::$variant(_f0) = $self {
+            return ::ark_serialize::CanonicalSerialize::serialized_size(&0u8, $compress)
+                 + ::ark_serialize::CanonicalSerialize::serialized_size(_f0, $compress);
+        }
+    };
+
+    // 2 fields
+    (@try_size $self:ident, $compress:ident,
+     $name:ident, $variant:ident ($fty0:ty, $fty1:ty)
+    ) => {
+        if let $name::$variant(_f0, _f1) = $self {
+            return ::ark_serialize::CanonicalSerialize::serialized_size(&0u8, $compress)
+                 + ::ark_serialize::CanonicalSerialize::serialized_size(_f0, $compress)
+                 + ::ark_serialize::CanonicalSerialize::serialized_size(_f1, $compress);
+        }
+    };
+
+    // 3 fields
+    (@try_size $self:ident, $compress:ident,
+     $name:ident, $variant:ident ($fty0:ty, $fty1:ty, $fty2:ty)
+    ) => {
+        if let $name::$variant(_f0, _f1, _f2) = $self {
+            return ::ark_serialize::CanonicalSerialize::serialized_size(&0u8, $compress)
+                 + ::ark_serialize::CanonicalSerialize::serialized_size(_f0, $compress)
+                 + ::ark_serialize::CanonicalSerialize::serialized_size(_f1, $compress)
+                 + ::ark_serialize::CanonicalSerialize::serialized_size(_f2, $compress);
+        }
+    };
+
+    // ── @deserialize helpers (per field-count) ──────────────────────
+
+    // unit
+    (@deserialize $reader:ident, $compress:ident, $validate:ident,
+     $name:ident, $variant:ident
+    ) => {
+        ::core::result::Result::Ok($name::$variant)
+    };
+
+    // 1 field
+    (@deserialize $reader:ident, $compress:ident, $validate:ident,
+     $name:ident, $variant:ident ($fty0:ty)
+    ) => {
+        ::core::result::Result::Ok($name::$variant(
+            <$fty0 as ::ark_serialize::CanonicalDeserialize>::deserialize_with_mode(
+                &mut $reader, $compress, $validate,
+            )?,
+        ))
+    };
+
+    // 2 fields
+    (@deserialize $reader:ident, $compress:ident, $validate:ident,
+     $name:ident, $variant:ident ($fty0:ty, $fty1:ty)
+    ) => {
+        ::core::result::Result::Ok($name::$variant(
+            <$fty0 as ::ark_serialize::CanonicalDeserialize>::deserialize_with_mode(
+                &mut $reader, $compress, $validate,
+            )?,
+            <$fty1 as ::ark_serialize::CanonicalDeserialize>::deserialize_with_mode(
+                &mut $reader, $compress, $validate,
+            )?,
+        ))
+    };
+
+    // 3 fields
+    (@deserialize $reader:ident, $compress:ident, $validate:ident,
+     $name:ident, $variant:ident ($fty0:ty, $fty1:ty, $fty2:ty)
+    ) => {
+        ::core::result::Result::Ok($name::$variant(
+            <$fty0 as ::ark_serialize::CanonicalDeserialize>::deserialize_with_mode(
+                &mut $reader, $compress, $validate,
+            )?,
+            <$fty1 as ::ark_serialize::CanonicalDeserialize>::deserialize_with_mode(
+                &mut $reader, $compress, $validate,
+            )?,
+            <$fty2 as ::ark_serialize::CanonicalDeserialize>::deserialize_with_mode(
+                &mut $reader, $compress, $validate,
+            )?,
+        ))
+    };
 }
 
 // ---------------------------------------------------------------------------
-// CanonicalSerialize / CanonicalDeserialize for CommittedPolynomial
+// CommittedPolynomial
 // ---------------------------------------------------------------------------
 
-impl CanonicalSerialize for CommittedPolynomial {
-    fn serialize_with_mode<W: Write>(
-        &self,
-        mut writer: W,
-        compress: Compress,
-    ) -> Result<(), SerializationError> {
-        match self {
-            Self::NodeOutputRaD(a, b) => {
-                0u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::TanhRaD(a, b) => {
-                1u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SoftmaxRemainder(a, b) => {
-                2u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SoftmaxExponentiationRaD(a, b, c) => {
-                3u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-                c.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::DivRangeCheckRaD(a, b) => {
-                4u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SqrtDivRangeCheckRaD(a, b) => {
-                5u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SqrtRangeCheckRaD(a, b) => {
-                6u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::TeleportRangeCheckRaD(a, b) => {
-                7u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::DivNodeQuotient(a) => {
-                8u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::ScalarConstDivNodeRemainder(a) => {
-                9u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::RsqrtNodeInv(a) => {
-                10u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::RsqrtNodeRsqrt(a) => {
-                11u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::GatherRa(a) => {
-                12u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::ErfRaD(a, b) => {
-                13u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::CosRaD(a, b) => {
-                14u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SinRaD(a, b) => {
-                15u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-        }
-        Ok(())
-    }
+canonical_serde_enum! {
+    /// Identifiers for polynomials that are **committed** (i.e. their evaluations are
+    /// bound via a polynomial commitment scheme).
+    ///
+    /// Each variant carries enough information to uniquely identify a specific
+    /// committed polynomial within a proof.  The naming convention uses the
+    /// following suffixes:
+    ///
+    /// * **`RaD`** – one-hot *read-address decomposition* polynomial (indexed by
+    ///   node and decomposition index `d`).
+    /// * **`Ra`** – read-address polynomial (a single polynomial per node, before
+    ///   decomposition).
+    ///
+    /// # Grouping
+    ///
+    /// | Group | Purpose |
+    /// |-------|---------|
+    /// | `NodeOutputRaD` / `{Cos,Erf,Sin,Tanh}RaD` | One-hot read-address decompositions for activation-function lookup tables |
+    /// | `Softmax*` | Polynomials specific to softmax sub-protocol |
+    /// | `Div* / Sqrt* / Teleport*` | Range-check one-hot polynomials for integer-arithmetic advice values |
+    /// | `*NodeQuotient / *NodeRemainder / *NodeInv / *NodeRsqrt` | Scalar advice polynomials for division / reciprocal-square-root |
+    /// | `GatherRa` | Read-address polynomial for the Gather operator |
+    /// | `SoftmaxRecipMultRemainder` | Remainder used in the reciprocal-multiplication check of softmax |
+    #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
+    pub enum CommittedPolynomial {
+        // ----- One-hot read-address decompositions (node_index, d) -----
+        /// One-hot read-address decomposition for a node's output lookup.
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        NodeOutputRaD(usize, usize),
 
-    fn serialized_size(&self, compress: Compress) -> usize {
-        1 + match self {
-            Self::NodeOutputRaD(a, b)
-            | Self::TanhRaD(a, b)
-            | Self::ErfRaD(a, b)
-            | Self::CosRaD(a, b)
-            | Self::SinRaD(a, b)
-            | Self::SoftmaxRemainder(a, b)
-            | Self::DivRangeCheckRaD(a, b)
-            | Self::SqrtDivRangeCheckRaD(a, b)
-            | Self::SqrtRangeCheckRaD(a, b)
-            | Self::TeleportRangeCheckRaD(a, b) => {
-                a.serialized_size(compress) + b.serialized_size(compress)
-            }
-            Self::SoftmaxExponentiationRaD(a, b, c) => {
-                a.serialized_size(compress)
-                    + b.serialized_size(compress)
-                    + c.serialized_size(compress)
-            }
-            Self::DivNodeQuotient(a)
-            | Self::ScalarConstDivNodeRemainder(a)
-            | Self::RsqrtNodeInv(a)
-            | Self::RsqrtNodeRsqrt(a)
-            | Self::GatherRa(a) => a.serialized_size(compress),
-        }
-    }
-}
+        /// One-hot read-address decomposition for the **Cos** lookup table.
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        CosRaD(usize, usize),
 
-impl Valid for CommittedPolynomial {
-    fn check(&self) -> Result<(), SerializationError> {
-        Ok(())
-    }
-}
+        /// One-hot read-address decomposition for the **Erf** lookup table.
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        ErfRaD(usize, usize),
 
-impl CanonicalDeserialize for CommittedPolynomial {
-    fn deserialize_with_mode<R: Read>(
-        mut reader: R,
-        compress: Compress,
-        validate: Validate,
-    ) -> Result<Self, SerializationError> {
-        let tag = u8::deserialize_with_mode(&mut reader, compress, validate)?;
-        match tag {
-            0 => Ok(Self::NodeOutputRaD(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            1 => Ok(Self::TanhRaD(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            2 => Ok(Self::SoftmaxRemainder(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            3 => Ok(Self::SoftmaxExponentiationRaD(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            4 => Ok(Self::DivRangeCheckRaD(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            5 => Ok(Self::SqrtDivRangeCheckRaD(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            6 => Ok(Self::SqrtRangeCheckRaD(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            7 => Ok(Self::TeleportRangeCheckRaD(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            8 => Ok(Self::DivNodeQuotient(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            9 => Ok(Self::ScalarConstDivNodeRemainder(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            10 => Ok(Self::RsqrtNodeInv(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            11 => Ok(Self::RsqrtNodeRsqrt(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            12 => Ok(Self::GatherRa(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            13 => Ok(Self::ErfRaD(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            14 => Ok(Self::CosRaD(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            15 => Ok(Self::SinRaD(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            _ => Err(SerializationError::InvalidData),
-        }
+        /// One-hot read-address decomposition for the **Sin** lookup table.
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        SinRaD(usize, usize),
+
+        /// One-hot read-address decomposition for the **Tanh** lookup table.
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        TanhRaD(usize, usize),
+
+        // ----- Softmax-specific committed polynomials -----
+        /// Remainder polynomial used in the softmax reciprocal division check.
+        ///
+        /// * `0` – node index
+        /// * `1` – feature index
+        SoftmaxRemainder(usize, usize),
+
+        /// One-hot read-address decomposition for the softmax exponentiation
+        /// lookup table.
+        ///
+        /// * `0` – node index
+        /// * `1` – feature index
+        /// * `2` – decomposition index `d`
+        SoftmaxExponentiationRaD(usize, usize, usize),
+
+        // ----- Range-check one-hot polynomials for advice values (node_index, d) -----
+        /// Interleaved remainder `R` and divisor one-hot polynomial for the
+        /// **Div** range check.
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        DivRangeCheckRaD(usize, usize),
+
+        /// Interleaved remainder `R` and divisor one-hot polynomial for the
+        /// **Sqrt** division range check.
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        SqrtDivRangeCheckRaD(usize, usize),
+
+        /// Interleaved `r_s` and square-root one-hot polynomial for the
+        /// **Sqrt** range check.
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        SqrtRangeCheckRaD(usize, usize),
+
+        /// Remainder and input one-hot polynomial for the **neural teleportation**
+        /// division range check.
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        TeleportRangeCheckRaD(usize, usize),
+
+        // ----- Scalar advice polynomials (node_index) -----
+        /// Advice polynomial for the **quotient** in integer division.
+        ///
+        /// * `0` – node index
+        DivNodeQuotient(usize),
+
+        /// Advice polynomial for the **remainder** in scalar-constant division.
+        ///
+        /// * `0` – node index
+        ScalarConstDivNodeRemainder(usize),
+
+        /// Advice polynomial for `1 / sqrt(x)` intermediate **inverse** in Rsqrt.
+        ///
+        /// * `0` – node index
+        RsqrtNodeInv(usize),
+
+        /// Advice polynomial for the **reciprocal square root** result in Rsqrt.
+        ///
+        /// * `0` – node index
+        RsqrtNodeRsqrt(usize),
+
+        /// Read-address polynomial for the **Gather** operator.
+        ///
+        /// * `0` – node index
+        GatherRa(usize),
+
+        /// Remainder polynomial for the reciprocal-multiplication check in
+        /// **softmax**.
+        ///
+        /// * `0` – node index
+        SoftmaxRecipMultRemainder(usize),
+
+        /// Diff polynomial for the inv-sum remainder range check in **softmax**.
+        /// `diff[k] = exp_sum_q[k] − 1 − r_inv[k]`, proved to lie in `[0, N·S)`.
+        ///
+        /// * `0` – node index
+        SoftmaxInvSumDiff(usize),
+
+        /// Remainder polynomial for the softmax exponentiation check in softmax.
+        ///
+        /// * `0` – node index
+        SoftmaxExpRemainder(usize),
     }
 }
 
 // ---------------------------------------------------------------------------
-// CanonicalSerialize / CanonicalDeserialize for VirtualPolynomial
+// VirtualPolynomial
 // ---------------------------------------------------------------------------
 
-impl CanonicalSerialize for VirtualPolynomial {
-    fn serialize_with_mode<W: Write>(
-        &self,
-        mut writer: W,
-        compress: Compress,
-    ) -> Result<(), SerializationError> {
-        match self {
-            Self::NodeOutput(a) => {
-                0u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::NodeOutputRa(a) => {
-                1u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::TanhRa(a) => {
-                2u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SoftmaxFeatureOutput(a, b) => {
-                3u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SoftmaxSumOutput(a, b) => {
-                4u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SoftmaxMaxOutput(a, b) => {
-                5u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SoftmaxMaxIndex(a, b) => {
-                6u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SoftmaxExponentiationOutput(a, b) => {
-                7u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SoftmaxInputLogitsOutput(a, b) => {
-                8u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SoftmaxAbsCenteredLogitsOutput(a, b) => {
-                9u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SoftmaxExponentiationRa(a, b) => {
-                10u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-                b.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::HammingWeight => {
-                11u8.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::DivRangeCheckRa(a) => {
-                12u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SqrtRangeCheckRa(a) => {
-                13u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::TeleportRangeCheckRa(a) => {
-                14u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::DivRemainder(a) => {
-                15u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SqrtRemainder(a) => {
-                16u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::TeleportQuotient(a) => {
-                17u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::TeleportRemainder(a) => {
-                18u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::ErfRa(a) => {
-                19u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::CosRa(a) => {
-                20u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-            Self::SinRa(a) => {
-                21u8.serialize_with_mode(&mut writer, compress)?;
-                a.serialize_with_mode(&mut writer, compress)?;
-            }
-        }
-        Ok(())
-    }
+canonical_serde_enum! {
+    /// Identifiers for **virtual** (non-committed) polynomials.
+    ///
+    /// Virtual polynomials are derived or constructed during the proof but are
+    /// *not* independently committed.  They are instead verified through sumcheck
+    /// relations that tie them back to committed polynomials and public inputs.
+    ///
+    /// The same naming conventions as [`CommittedPolynomial`] apply (`Ra` = read
+    /// address, `RaD` = read-address decomposition, etc.).
+    ///
+    /// # Grouping
+    ///
+    /// | Group | Purpose |
+    /// |-------|---------|
+    /// | `NodeOutput` / `NodeOutputRa` | MLE of a node's output tensor and its read-address polynomial |
+    /// | `{Cos,Erf,Sin,Tanh}Ra` | Read-address polynomials for activation-function lookups |
+    /// | `Softmax*` | Intermediate polynomials arising in the softmax sub-protocol |
+    /// | `HammingWeight` | Polynomial used in the Hamming-weight sumcheck |
+    /// | `Div* / Sqrt* / Teleport*` | Advice-derived polynomials proven via `ReadRafSumcheckProver` from committed one-hot polynomials |
+    #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
+    pub enum VirtualPolynomial {
+        // ----- Node output -----
+        /// Multilinear extension (MLE) of a node's output tensor.
+        ///
+        /// * `0` – producer node index
+        NodeOutput(usize),
 
-    fn serialized_size(&self, compress: Compress) -> usize {
-        1 + match self {
-            Self::HammingWeight => 0,
-            Self::NodeOutput(a) => a.serialized_size(compress),
-            Self::NodeOutputRa(a)
-            | Self::CosRa(a)
-            | Self::ErfRa(a)
-            | Self::SinRa(a)
-            | Self::TanhRa(a)
-            | Self::DivRangeCheckRa(a)
-            | Self::SqrtRangeCheckRa(a)
-            | Self::TeleportRangeCheckRa(a)
-            | Self::DivRemainder(a)
-            | Self::SqrtRemainder(a)
-            | Self::TeleportQuotient(a)
-            | Self::TeleportRemainder(a) => a.serialized_size(compress),
-            Self::SoftmaxFeatureOutput(a, b)
-            | Self::SoftmaxSumOutput(a, b)
-            | Self::SoftmaxMaxOutput(a, b)
-            | Self::SoftmaxMaxIndex(a, b)
-            | Self::SoftmaxExponentiationOutput(a, b)
-            | Self::SoftmaxInputLogitsOutput(a, b)
-            | Self::SoftmaxAbsCenteredLogitsOutput(a, b)
-            | Self::SoftmaxExponentiationRa(a, b) => {
-                a.serialized_size(compress) + b.serialized_size(compress)
-            }
-        }
-    }
-}
+        /// Read-address polynomial for a node's output lookup table.
+        ///
+        /// * `0` – node index
+        NodeOutputRa(usize),
 
-impl Valid for VirtualPolynomial {
-    fn check(&self) -> Result<(), SerializationError> {
-        Ok(())
-    }
-}
+        // ----- Activation-function read-address polynomials (node_index) -----
+        /// Read-address polynomial for the **Cos** lookup table.
+        ///
+        /// * `0` – node index
+        CosRa(usize),
 
-impl CanonicalDeserialize for VirtualPolynomial {
-    fn deserialize_with_mode<R: Read>(
-        mut reader: R,
-        compress: Compress,
-        validate: Validate,
-    ) -> Result<Self, SerializationError> {
-        let tag = u8::deserialize_with_mode(&mut reader, compress, validate)?;
-        match tag {
-            0 => Ok(Self::NodeOutput(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            1 => Ok(Self::NodeOutputRa(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            2 => Ok(Self::TanhRa(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            3 => Ok(Self::SoftmaxFeatureOutput(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            4 => Ok(Self::SoftmaxSumOutput(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            5 => Ok(Self::SoftmaxMaxOutput(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            6 => Ok(Self::SoftmaxMaxIndex(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            7 => Ok(Self::SoftmaxExponentiationOutput(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            8 => Ok(Self::SoftmaxInputLogitsOutput(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            9 => Ok(Self::SoftmaxAbsCenteredLogitsOutput(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            10 => Ok(Self::SoftmaxExponentiationRa(
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-                usize::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            11 => Ok(Self::HammingWeight),
-            12 => Ok(Self::DivRangeCheckRa(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            13 => Ok(Self::SqrtRangeCheckRa(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            14 => Ok(Self::TeleportRangeCheckRa(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            15 => Ok(Self::DivRemainder(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            16 => Ok(Self::SqrtRemainder(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            17 => Ok(Self::TeleportQuotient(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            18 => Ok(Self::TeleportRemainder(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            19 => Ok(Self::ErfRa(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            20 => Ok(Self::CosRa(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            21 => Ok(Self::SinRa(usize::deserialize_with_mode(
-                &mut reader,
-                compress,
-                validate,
-            )?)),
-            _ => Err(SerializationError::InvalidData),
-        }
+        /// Read-address polynomial for the **Erf** lookup table.
+        ///
+        /// * `0` – node index
+        ErfRa(usize),
+
+        /// Read-address polynomial for the **Sin** lookup table.
+        ///
+        /// * `0` – node index
+        SinRa(usize),
+
+        /// Read-address polynomial for the **Tanh** lookup table.
+        ///
+        /// * `0` – node index
+        TanhRa(usize),
+
+        // ----- Softmax intermediate polynomials (node_index, feature_index) -----
+        /// Per-feature output of softmax.
+        ///
+        /// * `0` – node index
+        /// * `1` – feature index
+        SoftmaxFeatureOutput(usize, usize),
+
+        /// Running sum used inside softmax normalisation.
+        ///
+        /// * `0` – node index
+        /// * `1` – feature index
+        SoftmaxSumOutput(usize, usize),
+
+        /// Running max used inside softmax numerical stabilisation.
+        ///
+        /// * `0` – node index
+        /// * `1` – feature index
+        SoftmaxMaxOutput(usize, usize),
+
+        /// Index of the maximum logit (used for softmax stabilisation).
+        ///
+        /// * `0` – node index
+        /// * `1` – feature index
+        SoftmaxMaxIndex(usize, usize),
+
+        /// Exponentiation intermediate in softmax (`exp(x - max)`).
+        ///
+        /// * `0` – node index
+        /// * `1` – feature index
+        SoftmaxExponentiationOutput(usize, usize),
+
+        /// Raw input logits fed into softmax.
+        ///
+        /// * `0` – node index
+        /// * `1` – feature index
+        SoftmaxInputLogitsOutput(usize, usize),
+
+        /// `|logit - max|` (absolute centred logits) used for exponentiation
+        /// lookup bounds.
+        ///
+        /// * `0` – node index
+        /// * `1` – feature index
+        SoftmaxAbsCenteredLogitsOutput(usize, usize),
+
+        /// Read-address polynomial for the softmax exponentiation lookup table.
+        ///
+        /// * `0` – node index
+        /// * `1` – feature index
+        SoftmaxExponentiationRa(usize, usize),
+
+        // ----- Hamming weight -----
+        /// Polynomial used in the Hamming-weight sumcheck (shared across all
+        /// nodes; no parameters).
+        HammingWeight,
+
+        // ----- Advice-derived polynomials (proven via ReadRafSumcheckProver) -----
+
+        /// Read-address polynomial derived from [`CommittedPolynomial::DivRangeCheckRaD`].
+        ///
+        /// * `0` – node index
+        DivRangeCheckRa(usize),
+
+        /// Read-address polynomial derived from [`CommittedPolynomial::SqrtRangeCheckRaD`].
+        ///
+        /// * `0` – node index
+        SqrtRangeCheckRa(usize),
+
+        /// Read-address polynomial derived from
+        /// [`CommittedPolynomial::TeleportRangeCheckRaD`].
+        ///
+        /// * `0` – node index
+        TeleportRangeCheckRa(usize),
+
+        // ----- Division / square-root remainder & quotient polynomials -----
+        /// Remainder polynomial for integer division advice.
+        ///
+        /// * `0` – node index
+        DivRemainder(usize),
+
+        /// Remainder polynomial for square-root advice.
+        ///
+        /// * `0` – node index
+        SqrtRemainder(usize),
+
+        /// Quotient polynomial for the **neural teleportation** division.
+        ///
+        /// * `0` – node index
+        TeleportQuotient(usize),
+
+        /// Remainder polynomial for the **neural teleportation** division.
+        ///
+        /// * `0` – node index
+        TeleportRemainder(usize),
+
+        /// Per-feature-vector reciprocal of the exp sum: `inv_sum[k] = ⌊S² / exp_sum_q[k]⌋`.
+        /// Used in the reciprocal-multiply optimization to replace variable-divisor
+        /// division with a constant-divisor multiplication.
+        ///
+        /// * `0` – node index
+        SoftmaxInvSum(usize),
+        SoftmaxExpSum(usize),
+        SoftmaxRInv(usize),
+
+        /// The rv polynomial for the softmax exponentiation lookup.
+        ///
+        /// * `0` – node index
+        SoftmaxExpQ(usize),
+
+        /// The one-hot encoding of the softmax R poly
+        ///
+        /// * `0` – node index
+        SoftmaxRemainderRa(usize),
+
+        /// Read-address polynomial for the softmax inv-sum diff range check.
+        ///
+        /// * `0` – node index
+        SoftmaxInvSumDiffRa(usize),
+
+        /// The rv polynomial for the softmax exponentiation lookup.
+        ///
+        /// * `0` – node index
+        SoftmaxExpHi(usize),
+
+        /// The rv polynomial for the softmax exponentiation lookup.
+        ///
+        /// * `0` – node index
+        SoftmaxExpLo(usize),
+
+        /// Read-address polynomial for the softmax exp-remainder range check.
+        ///
+        /// * `0` – node index
+        SoftmaxExpRemainderRa(usize),
     }
 }

@@ -49,6 +49,17 @@ pub enum ProofType {
     SoftmaxExponentiationRaOneHot = 6,
     /// Range-checking for remainders.
     RangeCheck = 7,
+    /// Softmax reciprocal multiplication.
+    SoftmaxRecipMult = 8,
+    /// Softmax remainder range check.
+    SoftmaxRem = 9,
+    /// Softmax sum-axis sumcheck (stage 3: exp_sum_q[k] = Σ_j exp_q[k,j]).
+    SoftmaxSum = 10,
+    /// Softmax inv-sum diff range check (stage 2: diff[k] ∈ [0, N·S)).
+    SoftmaxInvSumDiffRC = 11,
+    SoftmaxExpMult = 12,
+    /// Softmax exp-remainder range check (stage 4b: r_exp[k,j] ∈ [0, S)).
+    SoftmaxExpRemRC = 13,
 }
 
 impl TryFrom<u8> for ProofType {
@@ -64,6 +75,12 @@ impl TryFrom<u8> for ProofType {
             5 => Ok(Self::SoftmaxExponentiationReadRaf),
             6 => Ok(Self::SoftmaxExponentiationRaOneHot),
             7 => Ok(Self::RangeCheck),
+            8 => Ok(Self::SoftmaxRecipMult),
+            9 => Ok(Self::SoftmaxRem),
+            10 => Ok(Self::SoftmaxSum),
+            11 => Ok(Self::SoftmaxInvSumDiffRC),
+            12 => Ok(Self::SoftmaxExpMult),
+            13 => Ok(Self::SoftmaxExpRemRC),
             _ => Err(SerializationError::InvalidData),
         }
     }

@@ -55,6 +55,11 @@ impl AtlasSharedPreprocessing {
     pub fn model(&self) -> &Model {
         &self.model
     }
+
+    /// Get the models scale
+    pub fn scale(&self) -> i32 {
+        self.model().scale
+    }
 }
 
 // ---------------------------------------------------------------------------

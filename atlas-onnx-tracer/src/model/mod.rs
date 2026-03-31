@@ -22,6 +22,8 @@ pub mod trace;
 pub struct Model {
     /// The computation graph of the model
     pub graph: ComputationGraph,
+    /// The fixed-point quantization scale used for the model (denominator in fixed-point representation).
+    pub scale: quantize::Scale,
 }
 
 impl Model {

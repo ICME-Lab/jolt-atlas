@@ -1,3 +1,4 @@
+use crate::utils::dims::{coord_to_linear, linear_to_coord};
 use atlas_onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
@@ -29,6 +30,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, index_to_field_bitvector, math::Math},
 };
+use rayon::prelude::*;
 
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
 
@@ -237,20 +239,23 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ConcatSumchec
             .first()
             .map(|term| term.input_mle.len() / 2)
             .unwrap_or(0);
-        let mut uni_poly_evals = [F::zero(); 2];
-
-        for term in &self.input_terms {
-            for i in 0..half_poly_len {
-                let input_evals =
-                    term.input_mle
-                        .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-                let selector_evals =
-                    term.selector_mle
-                        .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-                uni_poly_evals[0] += input_evals[0] * selector_evals[0];
-                uni_poly_evals[1] += input_evals[1] * selector_evals[1];
-            }
-        }
+        let uni_poly_evals: [F; 2] = (0..half_poly_len)
+            .into_par_iter()
+            .map(|i| {
+                let mut evals = [F::zero(); 2];
+                for term in &self.input_terms {
+                    let input_evals =
+                        term.input_mle
+                            .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+                    let selector_evals =
+                        term.selector_mle
+                            .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+                    evals[0] += input_evals[0] * selector_evals[0];
+                    evals[1] += input_evals[1] * selector_evals[1];
+                }
+                evals
+            })
+            .reduce(|| [F::zero(); 2], |a, b| [a[0] + b[0], a[1] + b[1]]);
 
         UniPoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
     }
@@ -319,8 +324,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ConcatSumch
 
         self.params.input_raw_dims.iter().enumerate().fold(
             F::zero(),
-            |running, (input_idx, input_raw_dims)| {
-                let input_num_vars = padded_domain_len(input_raw_dims).log_2();
+            |running, (input_idx, _input_raw_dims)| {
                 let input_claim = accumulator.get_node_output_claim(
                     self.params.computation_node.inputs[input_idx],
                     self.params.computation_node.idx,
@@ -335,7 +339,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ConcatSumch
                 );
                 let selector_claim =
                     MultilinearPolynomial::from(selector).evaluate(&full_opening_point.r);
-                let _ = input_num_vars;
                 running + input_claim * selector_claim
             },
         )
@@ -430,25 +433,6 @@ fn build_concat_selector<F: JoltField>(
     }
 
     selector
-}
-
-fn linear_to_coord(mut index: usize, dims: &[usize]) -> Vec<usize> {
-    let mut coord = vec![0; dims.len()];
-    for axis in (0..dims.len()).rev() {
-        coord[axis] = index % dims[axis];
-        index /= dims[axis];
-    }
-    coord
-}
-
-fn coord_to_linear(coord: &[usize], dims: &[usize]) -> usize {
-    let mut index = 0usize;
-    let mut stride = 1usize;
-    for axis in (0..dims.len()).rev() {
-        index += coord[axis] * stride;
-        stride *= dims[axis];
-    }
-    index
 }
 
 /// Normalizes an ONNX-style axis (possibly negative) to a canonical `[0, rank)` axis.

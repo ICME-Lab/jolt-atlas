@@ -1,3 +1,4 @@
+use crate::utils::dims::{coord_to_linear, linear_to_coord};
 use atlas_onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
@@ -29,6 +30,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, index_to_field_bitvector, math::Math},
 };
+use rayon::prelude::*;
 
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
 
@@ -168,20 +170,17 @@ pub struct SliceSumcheckProver<F: JoltField> {
 impl<F: JoltField> SliceSumcheckProver<F> {
     /// Initialize the slice sumcheck prover from trace data and prepared parameters.
     pub fn initialize(trace: &Trace, params: SliceSumcheckParams<F>) -> Self {
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
         let [input] = operands[..] else {
             panic!("Slice expects exactly one operand")
         };
 
         let input_mle = MultilinearPolynomial::from(input.padded_next_power_of_two());
-        let _output_mle: MultilinearPolynomial<F> =
-            MultilinearPolynomial::from(output.padded_next_power_of_two());
         let selector = build_slice_selector(
             &params.input_raw_dims,
             &params.output_raw_dims,
             params.axis,
             params.start,
-            params.end,
             &params.r_output.r,
         );
         let selector_mle = MultilinearPolynomial::from(selector);
@@ -203,17 +202,21 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SliceSumcheck
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         const DEGREE_BOUND: usize = 2;
         let half_poly_len = self.input_mle.len() / 2;
-        let mut uni_poly_evals = [F::zero(); 2];
-        for i in 0..half_poly_len {
-            let input_evals =
-                self.input_mle
-                    .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-            let selector_evals =
-                self.selector_mle
-                    .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-            uni_poly_evals[0] += input_evals[0] * selector_evals[0];
-            uni_poly_evals[1] += input_evals[1] * selector_evals[1];
-        }
+        let uni_poly_evals: [F; 2] = (0..half_poly_len)
+            .into_par_iter()
+            .map(|i| {
+                let input_evals =
+                    self.input_mle
+                        .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+                let selector_evals =
+                    self.selector_mle
+                        .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+                [
+                    input_evals[0] * selector_evals[0],
+                    input_evals[1] * selector_evals[1],
+                ]
+            })
+            .reduce(|| [F::zero(); 2], |a, b| [a[0] + b[0], a[1] + b[1]]);
         UniPoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
     }
 
@@ -279,7 +282,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SliceSumche
             &self.params.output_raw_dims,
             self.params.axis,
             self.params.start,
-            self.params.end,
             &self.params.r_output.r,
         );
         let selector_claim = MultilinearPolynomial::from(selector).evaluate(
@@ -314,7 +316,6 @@ fn build_slice_selector<F: JoltField>(
     output_raw_dims: &[usize],
     axis: usize,
     start: usize,
-    end: usize,
     r_output: &[F],
 ) -> Vec<F> {
     let input_raw_len: usize = input_raw_dims.iter().product();
@@ -351,27 +352,7 @@ fn build_slice_selector<F: JoltField>(
         input_raw_len >= output_raw_dims.iter().product(),
         "Slice output raw length exceeds input raw length"
     );
-    let _ = end;
     selector
-}
-
-fn linear_to_coord(mut index: usize, dims: &[usize]) -> Vec<usize> {
-    let mut coord = vec![0; dims.len()];
-    for axis in (0..dims.len()).rev() {
-        coord[axis] = index % dims[axis];
-        index /= dims[axis];
-    }
-    coord
-}
-
-fn coord_to_linear(coord: &[usize], dims: &[usize]) -> usize {
-    let mut index = 0usize;
-    let mut stride = 1usize;
-    for axis in (0..dims.len()).rev() {
-        index += coord[axis] * stride;
-        stride *= dims[axis];
-    }
-    index
 }
 
 fn validate_slice_shapes(

@@ -1,20 +1,14 @@
-//! Reshape proof (selector-based equality over padded layouts).
+//! Reshape proof using an eq-selector over the padded input domain.
 //!
-//! Proof target:
-//! `sum_i (A(i) * Sa(i) - B(i) * Sb(i)) = 0`
-//! which is equivalent to:
-//! `sum_i A(i) * Sa(i) = sum_i B(i) * Sb(i)`.
+//! For each raw input element `t`, we compute the padded output index that the
+//! same element occupies after reshape and place `eq(r_output, mapped_index(t))`
+//! at the corresponding padded input position. The resulting selector MLE
+//! satisfies:
 //!
-//! Where:
-//! - `A(i)`: input padded MLE values
-//! - `B(i)`: output padded MLE values
-//! - `Sa(i), Sb(i)`: selector MLEs that place the same coefficient `rho(t)=gamma^t`
-//!   on the padded position corresponding to raw element `t`, and `0` on padding cells.
-//!
-//! This aligns input/output raw elements under different padded layouts and checks
-//! reshape consistency via one sumcheck instance.
+//! `out(r_output) = sum_i selector(i) * input(i)`.
 
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
+use crate::utils::dims::{coord_to_linear, linear_to_coord};
 use atlas_onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
@@ -46,6 +40,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, index_to_field_bitvector, math::Math},
 };
+use rayon::prelude::*;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
     #[tracing::instrument(skip_all, name = "Reshape::prove")]
@@ -54,8 +49,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        // TODO(soundness): Audit challenge derivation/order to ensure this gamma is
-        // transcript-bound to all required prior messages before selector construction.
         let params = ReshapeSumcheckParams::<F>::new(
             node.clone(),
             &prover.accumulator,
@@ -76,8 +69,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        // TODO(soundness): Keep gamma derivation order exactly aligned with prover
-        // and verify transcript binding assumptions for selector randomization.
         let proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
@@ -111,25 +102,6 @@ pub(crate) fn build_reshape_selectors<F: JoltField + ChallengeFieldOps<F>>(
     output_raw_dims: &[usize],
     r_output: &[F],
 ) -> Vec<F> {
-    fn linear_to_coord(mut index: usize, dims: &[usize]) -> Vec<usize> {
-        let mut coord = vec![0; dims.len()];
-        for axis in (0..dims.len()).rev() {
-            coord[axis] = index % dims[axis];
-            index /= dims[axis];
-        }
-        coord
-    }
-
-    fn coord_to_linear(coord: &[usize], dims: &[usize]) -> usize {
-        let mut index = 0usize;
-        let mut stride = 1usize;
-        for axis in (0..dims.len()).rev() {
-            index += coord[axis] * stride;
-            stride *= dims[axis];
-        }
-        index
-    }
-
     let input_raw_len: usize = input_raw_dims.iter().product();
     let output_raw_len: usize = output_raw_dims.iter().product();
     assert_eq!(
@@ -167,10 +139,7 @@ pub(crate) fn build_reshape_selectors<F: JoltField + ChallengeFieldOps<F>>(
     selector
 }
 
-/// Parameters for the upcoming reshape sumcheck.
-///
-/// Intended claim shape:
-/// sum_i (A(i) * Sa(i) - B(i) * Sb(i)) = 0
+/// Static metadata for the reshape selector sumcheck.
 #[derive(Clone)]
 pub struct ReshapeSumcheckParams<F: JoltField> {
     /// Reshape computation node being proven.
@@ -248,11 +217,8 @@ impl<F: JoltField> ReshapeSumcheckProver<F> {
         };
 
         let input_mle = MultilinearPolynomial::from(input.padded_next_power_of_two());
-        let output_mle: MultilinearPolynomial<F> =
-            MultilinearPolynomial::from(output.padded_next_power_of_two());
         let selector = build_reshape_selectors(input.dims(), output.dims(), &params.r_output.r);
         let selector_mle = MultilinearPolynomial::from(selector);
-        assert_eq!(input_mle.len(), output_mle.len());
         assert_eq!(input_mle.len(), selector_mle.len());
 
         Self {
@@ -276,15 +242,18 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReshapeSumche
             ..
         } = self;
         let half_poly_len = input_mle.len() / 2;
-        let mut uni_poly_evals = [F::zero(); 2];
-        for i in 0..half_poly_len {
-            let a_evals = input_mle.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-            let selector_evals =
-                selector_mle.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-
-            uni_poly_evals[0] += a_evals[0] * selector_evals[0];
-            uni_poly_evals[1] += a_evals[1] * selector_evals[1];
-        }
+        let uni_poly_evals: [F; 2] = (0..half_poly_len)
+            .into_par_iter()
+            .map(|i| {
+                let a_evals = input_mle.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+                let selector_evals =
+                    selector_mle.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+                [
+                    a_evals[0] * selector_evals[0],
+                    a_evals[1] * selector_evals[1],
+                ]
+            })
+            .reduce(|| [F::zero(); 2], |a, b| [a[0] + b[0], a[1] + b[1]]);
         UniPoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
     }
 

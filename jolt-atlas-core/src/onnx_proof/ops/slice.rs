@@ -1,82 +1,56 @@
 use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
+    model::{
+        trace::{LayerData, Trace},
+        ComputationGraph,
+    },
     node::ComputationNode,
     ops::{Operator, Slice},
-    utils::dims::Pad,
 };
 use common::VirtualPolynomial;
 use joltworks::{
-    field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, SumcheckId},
+    field::{IntoOpening, JoltField},
+    poly::{
+        eq_poly::EqPolynomial,
+        multilinear_polynomial::{
+            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+        },
+        opening_proof::{
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+        },
+        unipoly::UniPoly,
+    },
     subprotocols::{
-        gamma_fold::{gamma_powers, GammaFoldProver, GammaFoldVerifier},
-        sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
+        sumcheck::Sumcheck,
+        sumcheck::SumcheckInstanceProof,
         sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::SumcheckInstanceVerifier,
+        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::errors::ProofVerifyError,
+    utils::{errors::ProofVerifyError, index_to_field_bitvector, math::Math},
 };
 
-use crate::onnx_proof::{
-    ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
-    ProofId, ProofType, Prover, Verifier,
-};
+use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
-    fn reduction_flow(&self) -> ReductionFlow {
-        ReductionFlow::Custom
-    }
-
     #[tracing::instrument(skip_all, name = "Slice::prove")]
     fn prove(
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        let Operator::Slice(slice_op) = &node.operator else {
-            panic!("Expected Slice operator")
-        };
-
-        let gamma: F = prover.transcript.challenge_scalar();
-
-        let input_dims = {
-            let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
-            let [input_tensor] = operands[..] else {
-                panic!("Slice expects exactly one operand")
-            };
-            input_tensor.dims().to_vec()
-        };
-
-        let ctx =
-            SliceGammaWeightsContext::new(&input_dims, &node.output_dims, slice_op.clone(), gamma);
-
-        let output_prover = initialize_output_prover(node, &ctx, prover);
-        let input_prover = initialize_input_prover(node, &ctx, prover);
-
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-            vec![Box::new(output_prover), Box::new(input_prover)];
-
-        let (proof, _) = BatchedSumcheck::prove(
-            instances.iter_mut().map(|v| &mut **v as _).collect(),
+        let params = SliceSumcheckParams::new(
+            node.clone(),
+            &prover.accumulator,
+            &prover.preprocessing.model.graph,
+        );
+        let mut prover_sumcheck = SliceSumcheckProver::initialize(&prover.trace, params);
+        let (proof, _) = Sumcheck::prove(
+            &mut prover_sumcheck,
             &mut prover.accumulator,
             &mut prover.transcript,
         );
-
         vec![(ProofId(node.idx, ProofType::Execution), proof)]
-    }
-
-    fn prove_with_reduction(
-        &self,
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> (
-        joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
-        Vec<(ProofId, SumcheckInstanceProof<F, T>)>,
-    ) {
-        let proofs = self.prove(node, prover);
-        let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
-        (eval_reduction_proof, proofs)
     }
 
     #[tracing::instrument(skip_all, name = "Slice::verify")]
@@ -89,150 +63,332 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-
-        let Operator::Slice(slice_op) = &node.operator else {
-            panic!("Expected Slice operator")
-        };
-
-        let gamma: F = verifier.transcript.challenge_scalar();
-
-        let input_dims = {
-            let graph = &verifier.preprocessing.model.graph;
-            let input_nodes = graph.get_input_nodes(node);
-            let [input_node] = input_nodes[..] else {
-                panic!("Slice expects exactly one input node")
-            };
-            input_node.output_dims.clone()
-        };
-
-        let ctx =
-            SliceGammaWeightsContext::new(&input_dims, &node.output_dims, slice_op.clone(), gamma);
-
-        let verifiers: Vec<GammaFoldVerifier<F>> = vec![
-            initialize_output_verifier(node, &ctx, verifier),
-            initialize_input_verifier(node, &ctx, verifier),
-        ];
-        let instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = verifiers
-            .iter()
-            .map(|instance| instance as &dyn SumcheckInstanceVerifier<F, T>)
-            .collect();
-        BatchedSumcheck::verify(
+        let verifier_sumcheck = SliceSumcheckVerifier::new(
+            node.clone(),
+            &verifier.accumulator,
+            &verifier.preprocessing.model.graph,
+        );
+        Sumcheck::verify(
             proof,
-            instances,
+            &verifier_sumcheck,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
-
-        let output_claim = verifier
-            .accumulator
-            .get_virtual_polynomial_opening(claim_poly_output(node), SumcheckId::RLC(node.idx))
-            .1;
-        let input_claim = verifier
-            .accumulator
-            .get_virtual_polynomial_opening(claim_poly_input(node), SumcheckId::RLC(node.idx))
-            .1;
-        if output_claim != input_claim {
-            return Err(ProofVerifyError::InvalidOpeningProof(
-                "Slice folded-claim relation failed".to_string(),
-            ));
-        }
-
         Ok(())
     }
+}
 
-    fn verify_with_reduction(
-        &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-        eval_reduction_proof: &joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
-    ) -> Result<(), ProofVerifyError> {
-        self.verify(node, verifier)?;
-        NodeEvalReduction::verify(verifier, node, eval_reduction_proof)
+/// Parameters for the slice selector sumcheck.
+#[derive(Clone)]
+pub struct SliceSumcheckParams<F: JoltField> {
+    /// Slice node being proven.
+    pub computation_node: ComputationNode,
+    /// Reduced opening point for the slice output.
+    pub r_output: OpeningPoint<BIG_ENDIAN, F>,
+    /// Raw input shape.
+    pub input_raw_dims: Vec<usize>,
+    /// Raw output shape.
+    pub output_raw_dims: Vec<usize>,
+    /// Slice axis.
+    pub axis: usize,
+    /// Slice start index on the axis.
+    pub start: usize,
+    /// Slice end index on the axis.
+    pub end: usize,
+}
+
+impl<F: JoltField> SliceSumcheckParams<F> {
+    /// Build slice sumcheck parameters from the graph metadata and reduced output opening.
+    pub fn new(
+        computation_node: ComputationNode,
+        accumulator: &dyn OpeningAccumulator<F>,
+        graph: &ComputationGraph,
+    ) -> Self {
+        let Operator::Slice(slice_op) = &computation_node.operator else {
+            panic!("Expected Slice operator")
+        };
+        let axis = slice_op.axis;
+        let start = slice_op.start;
+        let end = slice_op.end;
+        let r_output = accumulator.get_node_output_opening(computation_node.idx).0;
+        let input_raw_dims = graph
+            .nodes
+            .get(&computation_node.inputs[0])
+            .expect("Slice node should have one input")
+            .output_dims
+            .clone();
+        let output_raw_dims = computation_node.output_dims.clone();
+        validate_slice_shapes(&input_raw_dims, &output_raw_dims, axis, start, end);
+        Self {
+            computation_node,
+            r_output,
+            input_raw_dims,
+            output_raw_dims,
+            axis,
+            start,
+            end,
+        }
     }
 }
 
-fn initialize_output_prover<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    ctx: &SliceGammaWeightsContext<F>,
-    prover: &mut Prover<F, T>,
-) -> GammaFoldProver<F> {
-    let LayerData { output, .. } = Trace::layer_data(&prover.trace, node);
+impl<F: JoltField> SumcheckInstanceParams<F> for SliceSumcheckParams<F> {
+    fn degree(&self) -> usize {
+        2
+    }
 
-    GammaFoldProver::initialize(
-        node.idx,
-        claim_poly_output(node),
-        output,
-        ctx.output_gamma_weights(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    )
+    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
+        accumulator
+            .get_node_output_opening(self.computation_node.idx)
+            .1
+    }
+
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
+    }
+
+    fn num_rounds(&self) -> usize {
+        self.input_raw_dims
+            .iter()
+            .map(|dim| dim.next_power_of_two())
+            .product::<usize>()
+            .log_2()
+    }
 }
 
-fn initialize_input_prover<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    ctx: &SliceGammaWeightsContext<F>,
-    prover: &mut Prover<F, T>,
-) -> GammaFoldProver<F> {
-    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
-    let [input_tensor] = operands[..] else {
-        panic!("Slice expects exactly one operand")
-    };
-
-    GammaFoldProver::initialize(
-        node.idx,
-        claim_poly_input(node),
-        input_tensor,
-        ctx.input_gamma_weights(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    )
+/// Prover state for the slice selector sumcheck.
+pub struct SliceSumcheckProver<F: JoltField> {
+    /// Static slice parameters shared across all rounds.
+    pub params: SliceSumcheckParams<F>,
+    /// Input polynomial over the padded input domain.
+    pub input_mle: MultilinearPolynomial<F>,
+    /// Selector polynomial mapping input coordinates to the output point.
+    pub selector_mle: MultilinearPolynomial<F>,
 }
 
-fn initialize_output_verifier<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    ctx: &SliceGammaWeightsContext<F>,
-    verifier: &mut Verifier<'_, F, T>,
-) -> GammaFoldVerifier<F> {
-    GammaFoldVerifier::initialize(
-        node.idx,
-        claim_poly_output(node),
-        node.pow2_padded_num_output_elements(),
-        ctx.output_gamma_weights(),
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )
+impl<F: JoltField> SliceSumcheckProver<F> {
+    /// Initialize the slice sumcheck prover from trace data and prepared parameters.
+    pub fn initialize(trace: &Trace, params: SliceSumcheckParams<F>) -> Self {
+        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
+        let [input] = operands[..] else {
+            panic!("Slice expects exactly one operand")
+        };
+
+        let input_mle = MultilinearPolynomial::from(input.padded_next_power_of_two());
+        let _output_mle: MultilinearPolynomial<F> =
+            MultilinearPolynomial::from(output.padded_next_power_of_two());
+        let selector = build_slice_selector(
+            &params.input_raw_dims,
+            &params.output_raw_dims,
+            params.axis,
+            params.start,
+            params.end,
+            &params.r_output.r,
+        );
+        let selector_mle = MultilinearPolynomial::from(selector);
+        assert_eq!(input_mle.len(), selector_mle.len());
+
+        Self {
+            params,
+            input_mle,
+            selector_mle,
+        }
+    }
 }
 
-fn initialize_input_verifier<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    ctx: &SliceGammaWeightsContext<F>,
-    verifier: &mut Verifier<'_, F, T>,
-) -> GammaFoldVerifier<F> {
-    let graph = &verifier.preprocessing.model.graph;
-    let input_nodes = graph.get_input_nodes(node);
-    let [input_node] = input_nodes[..] else {
-        panic!("Slice expects exactly one input node")
-    };
+impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SliceSumcheckProver<F> {
+    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+        &self.params
+    }
 
-    GammaFoldVerifier::initialize(
-        node.idx,
-        claim_poly_input(node),
-        input_node.pow2_padded_num_output_elements(),
-        ctx.input_gamma_weights(),
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )
+    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
+        const DEGREE_BOUND: usize = 2;
+        let half_poly_len = self.input_mle.len() / 2;
+        let mut uni_poly_evals = [F::zero(); 2];
+        for i in 0..half_poly_len {
+            let input_evals =
+                self.input_mle
+                    .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+            let selector_evals =
+                self.selector_mle
+                    .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+            uni_poly_evals[0] += input_evals[0] * selector_evals[0];
+            uni_poly_evals[1] += input_evals[1] * selector_evals[1];
+        }
+        UniPoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
+    }
+
+    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
+        self.input_mle.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.selector_mle
+            .bind_parallel(r_j, BindingOrder::LowToHigh);
+    }
+
+    fn cache_openings(
+        &self,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        accumulator.append_virtual(
+            transcript,
+            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
+            opening_point,
+            self.input_mle.final_sumcheck_claim(),
+        );
+    }
 }
 
-fn validate_slice_shapes(input_dims: &[usize], output_dims: &[usize], op: &Slice) {
+/// Verifier state for the slice selector sumcheck.
+pub struct SliceSumcheckVerifier<F: JoltField> {
+    /// Static slice parameters shared across all rounds.
+    pub params: SliceSumcheckParams<F>,
+}
+
+impl<F: JoltField> SliceSumcheckVerifier<F> {
+    /// Build the slice verifier from the reduced output opening and graph metadata.
+    pub fn new(
+        computation_node: ComputationNode,
+        accumulator: &VerifierOpeningAccumulator<F>,
+        graph: &ComputationGraph,
+    ) -> Self {
+        let params = SliceSumcheckParams::new(computation_node, accumulator, graph);
+        Self { params }
+    }
+}
+
+impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SliceSumcheckVerifier<F> {
+    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+        &self.params
+    }
+
+    fn expected_output_claim(
+        &self,
+        accumulator: &VerifierOpeningAccumulator<F>,
+        sumcheck_challenges: &[F::Challenge],
+    ) -> F {
+        let input_claim = accumulator.get_node_output_claim(
+            self.params.computation_node.inputs[0],
+            self.params.computation_node.idx,
+        );
+        let selector = build_slice_selector(
+            &self.params.input_raw_dims,
+            &self.params.output_raw_dims,
+            self.params.axis,
+            self.params.start,
+            self.params.end,
+            &self.params.r_output.r,
+        );
+        let selector_claim = MultilinearPolynomial::from(selector).evaluate(
+            &self
+                .params
+                .normalize_opening_point(&sumcheck_challenges.into_opening())
+                .r,
+        );
+        input_claim * selector_claim
+    }
+
+    fn cache_openings(
+        &self,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        accumulator.append_virtual(
+            transcript,
+            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
+            opening_point,
+        );
+    }
+}
+
+fn build_slice_selector<F: JoltField>(
+    input_raw_dims: &[usize],
+    output_raw_dims: &[usize],
+    axis: usize,
+    start: usize,
+    end: usize,
+    r_output: &[F],
+) -> Vec<F> {
+    let input_raw_len: usize = input_raw_dims.iter().product();
+    let input_padded_dims: Vec<usize> = input_raw_dims
+        .iter()
+        .map(|dim| dim.next_power_of_two())
+        .collect();
+    let output_padded_dims: Vec<usize> = output_raw_dims
+        .iter()
+        .map(|dim| dim.next_power_of_two())
+        .collect();
+    let input_domain_len: usize = input_padded_dims.iter().product();
+    let output_domain_len: usize = output_padded_dims.iter().product();
+    let output_num_vars = output_domain_len.log_2();
+    assert_eq!(
+        output_num_vars,
+        r_output.len(),
+        "Slice selector expects output challenge length to match output padded domain"
+    );
+
+    let mut selector = vec![F::zero(); input_domain_len];
+    for output_linear_idx in 0..output_raw_dims.iter().product() {
+        let output_coord = linear_to_coord(output_linear_idx, output_raw_dims);
+        let mut input_coord = output_coord.clone();
+        input_coord[axis] += start;
+
+        let input_index = coord_to_linear(&input_coord, &input_padded_dims);
+        let output_index = coord_to_linear(&output_coord, &output_padded_dims);
+        let output_bits = index_to_field_bitvector::<F>(output_index as u64, output_num_vars);
+        selector[input_index] = EqPolynomial::mle(&output_bits, r_output);
+    }
+
+    assert!(
+        input_raw_len >= output_raw_dims.iter().product(),
+        "Slice output raw length exceeds input raw length"
+    );
+    let _ = end;
+    selector
+}
+
+fn linear_to_coord(mut index: usize, dims: &[usize]) -> Vec<usize> {
+    let mut coord = vec![0; dims.len()];
+    for axis in (0..dims.len()).rev() {
+        coord[axis] = index % dims[axis];
+        index /= dims[axis];
+    }
+    coord
+}
+
+fn coord_to_linear(coord: &[usize], dims: &[usize]) -> usize {
+    let mut index = 0usize;
+    let mut stride = 1usize;
+    for axis in (0..dims.len()).rev() {
+        index += coord[axis] * stride;
+        stride *= dims[axis];
+    }
+    index
+}
+
+fn validate_slice_shapes(
+    input_dims: &[usize],
+    output_dims: &[usize],
+    axis: usize,
+    start: usize,
+    end: usize,
+) {
     assert_eq!(input_dims.len(), output_dims.len(), "Slice rank mismatch");
-    assert!(op.axis < input_dims.len(), "Slice axis out of range");
-    assert!(op.start <= op.end, "Slice start must be <= end");
-    assert!(op.end <= input_dims[op.axis], "Slice end out of bounds");
+    assert!(axis < input_dims.len(), "Slice axis out of range");
+    assert!(start <= end, "Slice start must be <= end");
+    assert!(end <= input_dims[axis], "Slice end out of bounds");
 
     for dim in 0..input_dims.len() {
-        let expected = if dim == op.axis {
-            op.end - op.start
+        let expected = if dim == axis {
+            end - start
         } else {
             input_dims[dim]
         };
@@ -243,94 +399,13 @@ fn validate_slice_shapes(input_dims: &[usize], output_dims: &[usize], op: &Slice
     }
 }
 
-struct SliceGammaWeightsContext<F: JoltField> {
-    input_dims: Vec<usize>,
-    output_dims: Vec<usize>,
-    op: Slice,
-    gamma_powers: Vec<F>,
-}
-
-impl<F: JoltField> SliceGammaWeightsContext<F> {
-    fn new(input_dims: &[usize], output_dims: &[usize], op: Slice, gamma: F) -> Self {
-        validate_slice_shapes(input_dims, output_dims, &op);
-
-        let output_len: usize = output_dims.iter().product();
-        Self {
-            input_dims: input_dims.to_vec(),
-            output_dims: output_dims.to_vec(),
-            op,
-            gamma_powers: gamma_powers(output_len, gamma),
-        }
-    }
-
-    fn output_gamma_weights(&self) -> Vec<F> {
-        self.gamma_powers.pad_next_power_of_two(&self.output_dims)
-    }
-
-    fn input_gamma_weights(&self) -> Vec<F> {
-        let rank = self.input_dims.len();
-        assert!(rank > 0, "Slice rank must be non-zero");
-
-        let raw_weights = self.build_input_weights_recursive(rank - 1, vec![F::one()]);
-        debug_assert_eq!(raw_weights.len(), self.input_dims.iter().product::<usize>());
-        raw_weights.pad_next_power_of_two(&self.input_dims)
-    }
-
-    /// Recursively expands gamma factors from inner to outer dimensions.
-    ///
-    /// This mirrors concat-style weight construction and keeps all indexing in
-    /// slice-native terms: at the sliced axis we only emit non-zero factors for
-    /// positions in `[start, start + output_axis_dim)` and zero otherwise.
-    fn build_input_weights_recursive(&self, dim: usize, current_slice: Vec<F>) -> Vec<F> {
-        let output_linear_factor: usize = self.output_dims.iter().skip(dim + 1).product();
-        let mut outer_slice = Vec::with_capacity(self.input_dims[dim] * current_slice.len());
-
-        if dim == self.op.axis {
-            outer_slice.extend((0..current_slice.len() * self.op.start).map(|_| F::zero()));
-        }
-
-        for i in 0..self.output_dims[dim] {
-            let exp = i * output_linear_factor;
-            let dim_factor = self.gamma_powers[exp];
-            outer_slice.extend(current_slice.iter().map(|w| *w * dim_factor));
-        }
-
-        if dim == self.op.axis {
-            outer_slice.resize(self.input_dims[dim] * current_slice.len(), F::zero());
-        }
-
-        if dim == 0 {
-            outer_slice
-        } else {
-            self.build_input_weights_recursive(dim - 1, outer_slice)
-        }
-    }
-}
-
-fn claim_poly_output(node: &ComputationNode) -> VirtualPolynomial {
-    VirtualPolynomial::NodeOutput(node.idx)
-}
-
-fn claim_poly_input(node: &ComputationNode) -> VirtualPolynomial {
-    let input_node_idx = *node
-        .inputs
-        .first()
-        .expect("Slice node should have one input");
-    VirtualPolynomial::NodeOutput(input_node_idx)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::onnx_proof::ops::test::unit_test_op;
-    use ark_bn254::Fr;
     use atlas_onnx_tracer::{
         model::{test::ModelBuilder, Model},
-        ops::Slice,
-        tensor::{ops::concat, Tensor},
-        utils::dims::Pad,
+        tensor::Tensor,
     };
-    use joltworks::field::JoltField;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn slice_model(input_shape: Vec<usize>, axis: usize, start: usize, end: usize) -> Model {
@@ -339,86 +414,6 @@ mod tests {
         let out = b.slice(input, axis, start, end);
         b.mark_output(out);
         b.build()
-    }
-
-    fn gamma_pow<F: JoltField>(gamma: F, power: usize) -> F {
-        (0..power).fold(F::one(), |acc, _| acc * gamma)
-    }
-
-    fn weights_from_exponents<F: JoltField>(gamma: F, exponents: &[usize]) -> Vec<F> {
-        exponents.iter().map(|exp| gamma_pow(gamma, *exp)).collect()
-    }
-
-    fn exponents_tensor_to_weights(gamma: Fr, exponents: &Tensor<i32>) -> Vec<Fr> {
-        exponents
-            .data()
-            .iter()
-            .map(|exp| {
-                if *exp < 0 {
-                    Fr::from(0u64)
-                } else {
-                    gamma_pow(gamma, *exp as usize)
-                }
-            })
-            .collect()
-    }
-
-    fn output_exponents_2d(dims: &[usize; 2]) -> Tensor<i32> {
-        let len = dims[0] * dims[1];
-        let data: Vec<i32> = (0..len as i32).collect();
-        Tensor::construct(data, vec![dims[0], dims[1]])
-    }
-
-    /// Builds expected 2D input-weight exponents using concat of:
-    /// zero block(s) + active output exponents block + zero block(s).
-    ///
-    /// Sentinel `-1` means zero weight.
-    fn expected_input_exponents_with_concat_2d(input_dims: &[usize; 2], op: &Slice) -> Tensor<i32> {
-        let output_dims = [input_dims[0], input_dims[1]];
-        let output_dims = if op.axis == 0 {
-            [op.end - op.start, output_dims[1]]
-        } else {
-            [output_dims[0], op.end - op.start]
-        };
-        let active = output_exponents_2d(&output_dims);
-
-        if op.axis == 1 {
-            let mut blocks: Vec<Tensor<i32>> = Vec::new();
-            if op.start > 0 {
-                blocks.push(Tensor::construct(
-                    vec![-1; input_dims[0] * op.start],
-                    vec![input_dims[0], op.start],
-                ));
-            }
-            blocks.push(active);
-            let right = input_dims[1] - op.end;
-            if right > 0 {
-                blocks.push(Tensor::construct(
-                    vec![-1; input_dims[0] * right],
-                    vec![input_dims[0], right],
-                ));
-            }
-            let block_refs: Vec<&Tensor<i32>> = blocks.iter().collect();
-            concat(&block_refs, 1).expect("concat on axis 1 should build expected exponents")
-        } else {
-            let mut blocks: Vec<Tensor<i32>> = Vec::new();
-            if op.start > 0 {
-                blocks.push(Tensor::construct(
-                    vec![-1; op.start * input_dims[1]],
-                    vec![op.start, input_dims[1]],
-                ));
-            }
-            blocks.push(active);
-            let bottom = input_dims[0] - op.end;
-            if bottom > 0 {
-                blocks.push(Tensor::construct(
-                    vec![-1; bottom * input_dims[1]],
-                    vec![bottom, input_dims[1]],
-                ));
-            }
-            let block_refs: Vec<&Tensor<i32>> = blocks.iter().collect();
-            concat(&block_refs, 0).expect("concat on axis 0 should build expected exponents")
-        }
     }
 
     #[test]
@@ -437,69 +432,6 @@ mod tests {
             let input = Tensor::<i32>::random_small(&mut rng, &shape);
             let model = slice_model(shape, axis, start, end);
             unit_test_op(model, &[input]);
-        }
-    }
-
-    #[test]
-    fn test_slice_gamma_weights_layout_rank2_axis1() {
-        let gamma = Fr::from(7u64);
-        let cases = vec![
-            (
-                [2, 5],
-                Slice {
-                    axis: 1,
-                    start: 1,
-                    end: 4,
-                },
-            ),
-            (
-                [3, 6],
-                Slice {
-                    axis: 1,
-                    start: 2,
-                    end: 5,
-                },
-            ),
-            (
-                [5, 4],
-                Slice {
-                    axis: 0,
-                    start: 1,
-                    end: 4,
-                },
-            ),
-            (
-                [6, 3],
-                Slice {
-                    axis: 0,
-                    start: 0,
-                    end: 2,
-                },
-            ),
-        ];
-
-        for (input_dims, op) in cases {
-            let output_dims = if op.axis == 0 {
-                vec![op.end - op.start, input_dims[1]]
-            } else {
-                vec![input_dims[0], op.end - op.start]
-            };
-
-            let ctx = SliceGammaWeightsContext::new(&input_dims, &output_dims, op.clone(), gamma);
-            let output_weights = ctx.output_gamma_weights();
-            let input_weights = ctx.input_gamma_weights();
-
-            let output_len = output_dims.iter().product::<usize>();
-            let expected_output =
-                weights_from_exponents(gamma, &(0..output_len).collect::<Vec<_>>())
-                    .pad_next_power_of_two(&output_dims);
-            assert_eq!(output_weights, expected_output);
-
-            let expected_input_exponents =
-                expected_input_exponents_with_concat_2d(&input_dims, &op);
-            let expected_input = exponents_tensor_to_weights(gamma, &expected_input_exponents)
-                .pad_next_power_of_two(&input_dims);
-            assert_eq!(input_weights, expected_input);
         }
     }
 }

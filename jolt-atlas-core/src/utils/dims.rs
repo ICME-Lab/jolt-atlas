@@ -14,6 +14,27 @@ use atlas_onnx_tracer::{model::Model, node::ComputationNode, ops::Operator};
 use joltworks::{field::JoltField, utils::thread::unsafe_allocate_zero_vec};
 use rayon::prelude::*;
 
+/// Convert a row-major linear index into coordinates for the given dimensions.
+pub fn linear_to_coord(mut index: usize, dims: &[usize]) -> Vec<usize> {
+    let mut coord = vec![0; dims.len()];
+    for axis in (0..dims.len()).rev() {
+        coord[axis] = index % dims[axis];
+        index /= dims[axis];
+    }
+    coord
+}
+
+/// Convert row-major coordinates into a linear index for the given dimensions.
+pub fn coord_to_linear(coord: &[usize], dims: &[usize]) -> usize {
+    let mut index = 0usize;
+    let mut stride = 1usize;
+    for axis in (0..dims.len()).rev() {
+        index += coord[axis] * stride;
+        stride *= dims[axis];
+    }
+    index
+}
+
 /// Function type for extracting dimension information from a computation node.
 pub type DimExtractor = fn(&ComputationNode, &Model) -> EinsumDims;
 

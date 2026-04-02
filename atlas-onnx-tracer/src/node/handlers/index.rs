@@ -8,7 +8,7 @@ use tract_onnx::tract_hir::internal::DimLike;
 
 use crate::{
     node::ComputationNode,
-    ops::{Gather, Operator, Slice},
+    ops::{GatherLarge, GatherSmall, Operator, Slice},
     utils::{handler_builder::HandlerBuilder, parser::load_op},
 };
 
@@ -30,9 +30,21 @@ fn handle_gather(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         hctx.node.op().name().to_string(),
     );
 
-    HandlerBuilder::new(hctx)
-        .simple_op(Operator::Gather(Gather { axis: op.axis }))
-        .build()
+    let dict_len = hctx.internal_input_nodes[0].output_dims[op.axis];
+
+    let operator = if dict_len.next_power_of_two() <= 65536 {
+        Operator::GatherSmall(GatherSmall {
+            axis: op.axis,
+            dict_len,
+        })
+    } else {
+        Operator::GatherLarge(GatherLarge {
+            axis: op.axis,
+            dict_len,
+        })
+    };
+
+    HandlerBuilder::new(hctx).simple_op(operator).build()
 }
 
 /// Slice: Single-axis slice using axis, start and end parameters.

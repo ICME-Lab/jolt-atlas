@@ -34,6 +34,9 @@ fn resolve_vp_opening<F: JoltField>(
     vp: VirtualPolynomial,
     sid: SumcheckId,
 ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+    if let Some(opening) = accumulator.try_get_virtual_polynomial_opening(vp, sid) {
+        return opening;
+    }
     if let VirtualPolynomial::NodeOutput(producer_idx) = vp {
         accumulator.get_node_output_opening(producer_idx)
     } else {

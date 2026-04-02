@@ -45,6 +45,19 @@ pub mod mbk_nbk_bmn;
 /// Einstein summation for matrix-matrix multiply: mk,kn->mn
 pub mod mk_kn_mn;
 
+// TODO(Qwen): add proof implementations for the remaining einsum patterns that
+// show up in the Qwen graph but are not yet covered by the current prover:
+// - m,an->abnm
+// - abmk,abnk->abmn
+// - acbmk,kcn->cbmn
+// - cbmk,cbkn->amn
+//
+// Notes:
+// - amk,kn->amn
+// - amk,kn->mn
+// - mk,kn->amn
+// are already normalized through EINSUM_REGISTRY into the mk,kn->mn prover.
+
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
     #[tracing::instrument(skip_all, name = "Einsum::prove")]
     fn prove(

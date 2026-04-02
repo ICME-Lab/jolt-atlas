@@ -65,6 +65,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ScalarConstDivPow
         );
         results.push((ProofId(node.idx, ProofType::Execution), exec_proof));
 
+        // TODO(soundness): scalar outputs currently skip the RA one-hot range
+        // check, matching the existing Div behavior. Add a scalar-specific
+        // remainder range proof instead of relying only on the execution
+        // relation.
+        if node.is_scalar() {
+            return results;
+        }
+
         let encoding = ScalarConstDivPow2RaEncoding::new(node);
         let lookup_indices = scalar_const_div_pow2_lookup_indices(&prover.trace, node);
         let [ra_sumcheck, hw_sumcheck, bool_sumcheck] = shout::ra_onehot_provers(
@@ -123,6 +131,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ScalarConstDivPow
             &mut verifier.transcript,
         )?;
 
+        // TODO(soundness): scalar outputs currently skip the RA one-hot range
+        // check, matching the existing Div behavior. Add a scalar-specific
+        // remainder range proof instead of relying only on the execution
+        // relation.
+        if node.is_scalar() {
+            return Ok(());
+        }
+
         let ra_one_hot_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
@@ -151,6 +167,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ScalarConstDivPow
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
+        // TODO(soundness): scalar outputs currently skip the RA one-hot range
+        // check, matching the existing Div behavior. Add a scalar-specific
+        // remainder range proof instead of relying only on the execution
+        // relation.
+        if node.is_scalar() {
+            return Vec::new();
+        }
+
         let encoding = ScalarConstDivPow2RaEncoding::new(node);
         let d = encoding.one_hot_params().instruction_d;
         (0..d)

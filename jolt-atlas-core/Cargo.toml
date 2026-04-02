@@ -22,6 +22,7 @@ num-traits.workspace = true
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
+bincode.workspace = true
 
 # Parallel Processing
 rayon.workspace = true

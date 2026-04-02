@@ -912,10 +912,7 @@ fn fold_dictionary<F: JoltField>(r: &[F], dictionary: &Tensor<i32>, num_words: u
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
     use atlas_onnx_tracer::{
-        model::test::ModelBuilder,
-        model::Model,
-        ops::Operator,
-        tensor::Tensor,
+        model::test::ModelBuilder, model::Model, ops::Operator, tensor::Tensor,
     };
     use rand::{rngs::StdRng, SeedableRng};
 

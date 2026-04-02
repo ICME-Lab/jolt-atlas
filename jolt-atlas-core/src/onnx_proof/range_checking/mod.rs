@@ -251,7 +251,7 @@ impl<H: RangeCheckingOperandsTrait> RaOneHotEncoding for RangeCheckEncoding<H> {
 
     fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
         (
-            VirtualPolynomial::NodeOutput(self.operands.node_idx()),
+            self.operands.get_input_operands()[0],
             SumcheckId::NodeExecution(self.operands.node_idx()),
         )
     }

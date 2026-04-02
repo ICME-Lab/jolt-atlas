@@ -22,7 +22,7 @@ use crate::{
         ops::{rsqrt::Q_SQUARE, softmax_axes::softmax::scalar_div::S},
         range_checking::range_check_operands::{
             DivRangeCheckOperands, RangeCheckingOperandsTrait, RiRangeCheckOperands,
-            RsRangeCheckOperands, TeleportRangeCheckOperands,
+            RsRangeCheckOperands, ScalarConstDivRangeCheckOperands, TeleportRangeCheckOperands,
         },
     },
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
@@ -96,6 +96,23 @@ fn build_one_hot_rad_witness<F: JoltField>(
         .collect();
     MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
         addresses,
+        one_hot_params.k_chunk,
+    ))
+}
+
+fn build_custom_one_hot_rad_witness<F: JoltField>(
+    lookup_indices: &[usize],
+    log_k: usize,
+    d: usize,
+) -> MultilinearPolynomial<F> {
+    let one_hot_params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k);
+    let h_indices =
+        subprotocols::shout::compute_instruction_h_indices(lookup_indices, &one_hot_params);
+    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+        h_indices[d]
+            .par_iter()
+            .map(|&h| h.map(|h| h as u16))
+            .collect(),
         one_hot_params.k_chunk,
     ))
 }
@@ -218,24 +235,10 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 let (quotient, _remainder) = compute_division(input, tau);
                 MultilinearPolynomial::from(quotient)
             }
-            CommittedPolynomial::ScalarConstDivNodeRemainder(node_idx) => {
-                let computation_node = &model.graph.nodes[node_idx];
-                let Operator::ScalarConstDiv(op) = &computation_node.operator else {
-                    panic!("Expected ScalarConstDiv operator at node {node_idx}");
-                };
-                let b = op.divisor;
-                let layer_data = Trace::layer_data(trace, computation_node);
-                let [left_operand] = layer_data.operands[..] else {
-                    panic!("Expected one operand for ScalarConstDiv operation")
-                };
-                let remainder_data: Vec<i32> = left_operand
-                    .iter()
-                    .map(|&a| adjusted_remainder(a, b))
-                    .collect();
-                MultilinearPolynomial::from(Tensor::<i32>::construct(
-                    remainder_data,
-                    left_operand.dims().to_vec(),
-                ))
+            CommittedPolynomial::ScalarConstDivNodeRemainder(_node_idx) => {
+                panic!(
+                    "ScalarConstDivNodeRemainder is no longer committed; use ScalarConstDivRangeCheckRaD / DivRemainder"
+                )
             }
             CommittedPolynomial::RsqrtNodeInv(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
@@ -251,6 +254,34 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 build_range_check_rad_witness::<F, DivRangeCheckOperands>(
                     model, trace, *node_idx, *d,
                 )
+            }
+            CommittedPolynomial::ScalarConstDivRangeCheckRaD(node_idx, d) => {
+                build_range_check_rad_witness::<F, ScalarConstDivRangeCheckOperands>(
+                    model, trace, *node_idx, *d,
+                )
+            }
+            CommittedPolynomial::ScalarConstDivPow2RaD(node_idx, d) => {
+                let computation_node = &model.graph.nodes[node_idx];
+                let Operator::ScalarConstDivPow2(op) = &computation_node.operator else {
+                    panic!(
+                        "Expected ScalarConstDivPow2 operator for ScalarConstDivPow2RaD witness"
+                    );
+                };
+                assert!(
+                    op.divisor > 0 && (op.divisor as u32).is_power_of_two(),
+                    "ScalarConstDivPow2RaD witness requires a positive power-of-two divisor, got {}",
+                    op.divisor
+                );
+                let log_table = (op.divisor as u32).trailing_zeros() as usize;
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let [input] = layer_data.operands[..] else {
+                    panic!("Expected one operand for ScalarConstDivPow2 operation")
+                };
+                let lookup_indices: Vec<usize> = input
+                    .par_iter()
+                    .map(|&x| adjusted_remainder(x, op.divisor) as usize)
+                    .collect();
+                build_custom_one_hot_rad_witness(&lookup_indices, log_table, *d)
             }
             CommittedPolynomial::SqrtRangeCheckRaD(node_idx, d) => {
                 build_range_check_rad_witness::<F, RsRangeCheckOperands>(

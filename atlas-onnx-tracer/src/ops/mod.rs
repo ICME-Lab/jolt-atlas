@@ -51,6 +51,8 @@ pub mod reshape;
 pub mod rsqrt;
 /// Division by a scalar constant operator.
 pub mod scalar_const_div;
+/// Division by a power-of-two scalar constant operator.
+pub mod scalar_const_div_pow2;
 /// Sigmoid activation operator.
 pub mod sigmoid;
 /// Element-wise sine operator.
@@ -145,6 +147,7 @@ define_operators! {
         Reshape { shape:Vec<usize> },
         Rsqrt { scale: F32 },
         ScalarConstDiv {divisor: i32},
+        ScalarConstDivPow2 {divisor: i32},
         Sigmoid { scale: F32, tau: i32, log_table: usize },
         Sin { scale: F32 },
         Slice { axis: usize, start: usize, end: usize},

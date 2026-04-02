@@ -442,6 +442,14 @@ fn shadow_f64(op: &Operator, inputs: Vec<&Tensor<f64>>, scale: Scale) -> Tensor<
                 elementwise_f64(inputs[0], |x| x / d)
             }
         }
+        Operator::ScalarConstDivPow2(scd) => {
+            if is_rebase_divisor(scd.divisor, scale) {
+                inputs[0].clone()
+            } else {
+                let d = scd.divisor as f64;
+                elementwise_f64(inputs[0], |x| x / d)
+            }
+        }
 
         // ── Matrix / tensor contraction ─────────────────────────────────
         Operator::Einsum(e) => tensor::ops::einsum(&e.equation, &inputs).unwrap(),

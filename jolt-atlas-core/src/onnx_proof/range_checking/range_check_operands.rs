@@ -135,6 +135,14 @@ pub struct RsRangeCheckOperands {
     base: RangeCheckOperandsBase,
 }
 
+/// Operands for scalar-constant division range-checking.
+///
+/// For integer division `a / b = q` with constant positive `b`, verifies that
+/// the remainder `r` satisfies `0 ≤ r < b`.
+pub struct ScalarConstDivRangeCheckOperands {
+    base: RangeCheckOperandsBase,
+}
+
 impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
     fn new(node: &ComputationNode) -> Self {
         Self {
@@ -175,6 +183,59 @@ impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
 
     fn rad_poly(&self, d: usize) -> CommittedPolynomial {
         CommittedPolynomial::DivRangeCheckRaD(self.base.node_idx, d)
+    }
+}
+
+impl RangeCheckingOperandsTrait for ScalarConstDivRangeCheckOperands {
+    fn new(node: &ComputationNode) -> Self {
+        Self {
+            base: RangeCheckOperandsBase {
+                node_idx: node.idx,
+                input_operands: vec![
+                    VirtualPolynomial::DivRemainder(node.idx),
+                    VirtualPolynomial::ScalarConstDivDivisor(node.idx),
+                ],
+                virtual_ra: VirtualPolynomial::ScalarConstDivRangeCheckRa(node.idx),
+            },
+        }
+    }
+
+    fn base(&self) -> &RangeCheckOperandsBase {
+        &self.base
+    }
+
+    fn get_operands_tensors(trace: &Trace, node: &ComputationNode) -> (Tensor<i32>, Tensor<i32>) {
+        let LayerData {
+            output: _,
+            operands,
+        } = Trace::layer_data(trace, node);
+
+        let [dividend] = operands[..] else {
+            panic!("Expected exactly one input tensor");
+        };
+        let Operator::ScalarConstDiv(op) = &node.operator else {
+            panic!("Expected ScalarConstDiv node");
+        };
+        assert!(
+            op.divisor > 0,
+            "ScalarConstDiv range-check requires a positive divisor, got {}",
+            op.divisor
+        );
+
+        let remainder_data: Vec<i32> = dividend
+            .iter()
+            .map(|&a| adjusted_remainder(a, op.divisor))
+            .collect();
+        let divisor_data = vec![op.divisor; dividend.len()];
+
+        (
+            Tensor::<i32>::construct(remainder_data, dividend.dims().to_vec()),
+            Tensor::<i32>::construct(divisor_data, dividend.dims().to_vec()),
+        )
+    }
+
+    fn rad_poly(&self, d: usize) -> CommittedPolynomial {
+        CommittedPolynomial::ScalarConstDivRangeCheckRaD(self.base.node_idx, d)
     }
 }
 

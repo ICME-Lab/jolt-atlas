@@ -108,7 +108,7 @@ fn handle_einsum(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     }));
 
     #[cfg(not(feature = "fused-ops"))]
-    let builder = builder.with_auto_rebase();
+    let builder = builder.with_auto_rebase_pow2();
 
     builder.build()
 }

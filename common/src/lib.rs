@@ -15,11 +15,13 @@ pub enum CommittedPolynomial {
     ///
     /// `1` - d
     NodeOutputRaD(usize, usize),
-    CosRaD(usize, usize),     // One-hot read addresses for Cos lookup
-    ErfRaD(usize, usize),     // One-hot read addresses for Erf lookup
-    SigmoidRaD(usize, usize), // One-hot read addresses for Sigmoid lookup
-    SinRaD(usize, usize),     // One-hot read addresses for Sin lookup
-    TanhRaD(usize, usize),    // One-hot read addresses for Tanh lookup
+    CosRaD(usize, usize),                // One-hot read addresses for Cos lookup
+    ErfRaD(usize, usize),                // One-hot read addresses for Erf lookup
+    SigmoidRaD(usize, usize),            // One-hot read addresses for Sigmoid lookup
+    SinRaD(usize, usize),                // One-hot read addresses for Sin lookup
+    ScalarConstDivPow2RaD(usize, usize), // One-hot read addresses for ScalarConstDivPow2 remainder lookup
+    ScalarConstDivRangeCheckRaD(usize, usize), // Interleaved remainder and constant divisor for ScalarConstDiv
+    TanhRaD(usize, usize),                     // One-hot read addresses for Tanh lookup
 
     /// Fields:
     ///
@@ -86,10 +88,14 @@ pub enum VirtualPolynomial {
     // Those are proven by the ReadRafSumcheckProver,
     // from Committed one-hot polynomials.
     DivRangeCheckRa(usize),
+    ScalarConstDivDivisor(usize),
+    ScalarConstDivRangeCheckRa(usize),
     SqrtRangeCheckRa(usize),
     TeleportRangeCheckRa(usize),
 
     DivRemainder(usize),
+    ScalarConstDivPow2Divisor(usize),
+    ScalarConstDivPow2Ra(usize),
     SqrtRemainder(usize),
     TeleportQuotient(usize), // Quotient polynomial for neural teleportation lookups
     TeleportRemainder(usize), // Remainder polynomial for neural teleportation lookups
@@ -187,6 +193,16 @@ impl CanonicalSerialize for CommittedPolynomial {
                 a.serialize_with_mode(&mut writer, compress)?;
                 b.serialize_with_mode(&mut writer, compress)?;
             }
+            Self::ScalarConstDivPow2RaD(a, b) => {
+                17u8.serialize_with_mode(&mut writer, compress)?;
+                a.serialize_with_mode(&mut writer, compress)?;
+                b.serialize_with_mode(&mut writer, compress)?;
+            }
+            Self::ScalarConstDivRangeCheckRaD(a, b) => {
+                18u8.serialize_with_mode(&mut writer, compress)?;
+                a.serialize_with_mode(&mut writer, compress)?;
+                b.serialize_with_mode(&mut writer, compress)?;
+            }
         }
         Ok(())
     }
@@ -199,6 +215,8 @@ impl CanonicalSerialize for CommittedPolynomial {
             | Self::SigmoidRaD(a, b)
             | Self::CosRaD(a, b)
             | Self::SinRaD(a, b)
+            | Self::ScalarConstDivPow2RaD(a, b)
+            | Self::ScalarConstDivRangeCheckRaD(a, b)
             | Self::SoftmaxRemainder(a, b)
             | Self::DivRangeCheckRaD(a, b)
             | Self::SqrtDivRangeCheckRaD(a, b)
@@ -303,6 +321,14 @@ impl CanonicalDeserialize for CommittedPolynomial {
                 usize::deserialize_with_mode(&mut reader, compress, validate)?,
             )),
             16 => Ok(Self::SigmoidRaD(
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+            )),
+            17 => Ok(Self::ScalarConstDivPow2RaD(
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+            )),
+            18 => Ok(Self::ScalarConstDivRangeCheckRaD(
                 usize::deserialize_with_mode(&mut reader, compress, validate)?,
                 usize::deserialize_with_mode(&mut reader, compress, validate)?,
             )),
@@ -421,6 +447,22 @@ impl CanonicalSerialize for VirtualPolynomial {
                 22u8.serialize_with_mode(&mut writer, compress)?;
                 a.serialize_with_mode(&mut writer, compress)?;
             }
+            Self::ScalarConstDivDivisor(a) => {
+                23u8.serialize_with_mode(&mut writer, compress)?;
+                a.serialize_with_mode(&mut writer, compress)?;
+            }
+            Self::ScalarConstDivRangeCheckRa(a) => {
+                24u8.serialize_with_mode(&mut writer, compress)?;
+                a.serialize_with_mode(&mut writer, compress)?;
+            }
+            Self::ScalarConstDivPow2Divisor(a) => {
+                25u8.serialize_with_mode(&mut writer, compress)?;
+                a.serialize_with_mode(&mut writer, compress)?;
+            }
+            Self::ScalarConstDivPow2Ra(a) => {
+                26u8.serialize_with_mode(&mut writer, compress)?;
+                a.serialize_with_mode(&mut writer, compress)?;
+            }
         }
         Ok(())
     }
@@ -436,9 +478,13 @@ impl CanonicalSerialize for VirtualPolynomial {
             | Self::SinRa(a)
             | Self::TanhRa(a)
             | Self::DivRangeCheckRa(a)
+            | Self::ScalarConstDivDivisor(a)
+            | Self::ScalarConstDivRangeCheckRa(a)
             | Self::SqrtRangeCheckRa(a)
             | Self::TeleportRangeCheckRa(a)
             | Self::DivRemainder(a)
+            | Self::ScalarConstDivPow2Divisor(a)
+            | Self::ScalarConstDivPow2Ra(a)
             | Self::SqrtRemainder(a)
             | Self::TeleportQuotient(a)
             | Self::TeleportRemainder(a) => a.serialized_size(compress),
@@ -569,6 +615,22 @@ impl CanonicalDeserialize for VirtualPolynomial {
                 validate,
             )?)),
             22 => Ok(Self::SigmoidRa(usize::deserialize_with_mode(
+                &mut reader,
+                compress,
+                validate,
+            )?)),
+            23 => Ok(Self::ScalarConstDivDivisor(usize::deserialize_with_mode(
+                &mut reader,
+                compress,
+                validate,
+            )?)),
+            24 => Ok(Self::ScalarConstDivRangeCheckRa(
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+            )),
+            25 => Ok(Self::ScalarConstDivPow2Divisor(
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+            )),
+            26 => Ok(Self::ScalarConstDivPow2Ra(usize::deserialize_with_mode(
                 &mut reader,
                 compress,
                 validate,

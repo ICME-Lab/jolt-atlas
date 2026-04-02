@@ -14,10 +14,7 @@
 //! This aligns input/output raw elements under different padded layouts and checks
 //! reshape consistency via one sumcheck instance.
 
-use crate::onnx_proof::{
-    ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
-    ProofId, ProofType, Prover, Verifier,
-};
+use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
 use atlas_onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
@@ -28,8 +25,9 @@ use atlas_onnx_tracer::{
 };
 use common::VirtualPolynomial;
 use joltworks::{
-    field::{IntoOpening, JoltField},
+    field::{ChallengeFieldOps, IntoOpening, JoltField},
     poly::{
+        eq_poly::EqPolynomial,
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
@@ -46,14 +44,10 @@ use joltworks::{
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math},
+    utils::{errors::ProofVerifyError, index_to_field_bitvector, math::Math},
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
-    fn reduction_flow(&self) -> ReductionFlow {
-        ReductionFlow::Custom
-    }
-
     #[tracing::instrument(skip_all, name = "Reshape::prove")]
     fn prove(
         &self,
@@ -62,12 +56,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
         // TODO(soundness): Audit challenge derivation/order to ensure this gamma is
         // transcript-bound to all required prior messages before selector construction.
-        let gamma = prover.transcript.challenge_scalar_optimized::<F>();
         let params = ReshapeSumcheckParams::<F>::new(
             node.clone(),
+            &prover.accumulator,
             &prover.preprocessing.model.graph,
-            gamma.into(),
-            &mut prover.transcript,
         );
         let mut prover_sumcheck = ReshapeSumcheckProver::initialize(&prover.trace, params);
         let (proof, _) = Sumcheck::prove(
@@ -78,19 +70,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
         vec![(ProofId(node.idx, ProofType::Execution), proof)]
     }
 
-    fn prove_with_reduction(
-        &self,
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> (
-        joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
-        Vec<(ProofId, SumcheckInstanceProof<F, T>)>,
-    ) {
-        let execution_proofs = self.prove(node, prover);
-        let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
-        (eval_reduction_proof, execution_proofs)
-    }
-
     #[tracing::instrument(skip_all, name = "Reshape::verify")]
     fn verify(
         &self,
@@ -99,16 +78,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
     ) -> Result<(), ProofVerifyError> {
         // TODO(soundness): Keep gamma derivation order exactly aligned with prover
         // and verify transcript binding assumptions for selector randomization.
-        let gamma = verifier.transcript.challenge_scalar_optimized::<F>();
         let proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         let verifier_sumcheck = ReshapeSumcheckVerifier::new(
             node.clone(),
+            &verifier.accumulator,
             &verifier.preprocessing.model.graph,
-            gamma.into(),
-            &mut verifier.transcript,
         );
         Sumcheck::verify(
             proof,
@@ -118,28 +95,22 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
         )?;
         Ok(())
     }
-
-    fn verify_with_reduction(
-        &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-        eval_reduction_proof: &joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
-    ) -> Result<(), ProofVerifyError> {
-        self.verify(node, verifier)?;
-        NodeEvalReduction::verify(verifier, node, eval_reduction_proof)
-    }
 }
 
-/// Build a reshape selector vector over the padded tensor domain.
+/// Build a reshape selector vector over the padded input domain.
 ///
-/// For each raw (unpadded) linear position `t`, this places `rho(t)` at the
-/// corresponding padded linear index that keeps the same raw coordinate.
-/// All padding cells remain zero.
+/// For each raw input position `t`, this computes the padded input index
+/// corresponding to `t`, the padded output index that the same raw element maps
+/// to after reshape, and stores `eq(r_output, mapped_output_index)` at that
+/// padded input position. Padding cells remain zero.
 ///
-/// This lets us compare two differently padded layouts (e.g. input/output of
-/// reshape) under the same extraction order by using the same `rho(t)=gamma^t`
-/// sequence on both sides.
-pub(crate) fn build_reshape_selectors<F: JoltField>(dims: &[usize], gamma: F) -> Vec<F> {
+/// This gives a selector MLE such that:
+/// `out(r_output) = Σ_i selector(i) * input(i)`.
+pub(crate) fn build_reshape_selectors<F: JoltField + ChallengeFieldOps<F>>(
+    input_raw_dims: &[usize],
+    output_raw_dims: &[usize],
+    r_output: &[F],
+) -> Vec<F> {
     fn linear_to_coord(mut index: usize, dims: &[usize]) -> Vec<usize> {
         let mut coord = vec![0; dims.len()];
         for axis in (0..dims.len()).rev() {
@@ -159,21 +130,38 @@ pub(crate) fn build_reshape_selectors<F: JoltField>(dims: &[usize], gamma: F) ->
         index
     }
 
-    let raw_len: usize = dims.iter().product();
-    let padded_dims: Vec<usize> = dims.iter().map(|d| d.next_power_of_two()).collect();
-    let padded_len: usize = padded_dims.iter().product();
+    let input_raw_len: usize = input_raw_dims.iter().product();
+    let output_raw_len: usize = output_raw_dims.iter().product();
+    assert_eq!(
+        input_raw_len, output_raw_len,
+        "Reshape selector requires equal raw element counts"
+    );
+
+    let input_padded_dims: Vec<usize> = input_raw_dims
+        .iter()
+        .map(|d| d.next_power_of_two())
+        .collect();
+    let output_padded_dims: Vec<usize> = output_raw_dims
+        .iter()
+        .map(|d| d.next_power_of_two())
+        .collect();
+    let input_padded_len: usize = input_padded_dims.iter().product();
+    let output_padded_len: usize = output_padded_dims.iter().product();
+    assert_eq!(
+        input_padded_len, output_padded_len,
+        "Reshape selector requires equal padded domain sizes"
+    );
 
     // Selector values are zero on padding cells by default.
-    let mut selector = vec![F::zero(); padded_len];
+    let mut selector = vec![F::zero(); input_padded_len];
 
-    // For each raw linear position t, compute its padded linear position by:
-    // 1) converting t to a raw coordinate
-    // 2) re-encoding that coordinate under padded strides
-    // Then store rho(t)=gamma^t at that padded position.
-    for t in 0..raw_len {
-        let raw_coord = linear_to_coord(t, dims);
-        let padded_index = coord_to_linear(&raw_coord, &padded_dims);
-        selector[padded_index] = gamma_power(gamma, t);
+    for t in 0..input_raw_len {
+        let input_coord = linear_to_coord(t, input_raw_dims);
+        let output_coord = linear_to_coord(t, output_raw_dims);
+        let input_padded_index = coord_to_linear(&input_coord, &input_padded_dims);
+        let output_padded_index = coord_to_linear(&output_coord, &output_padded_dims);
+        let output_bits = index_to_field_bitvector::<F>(output_padded_index as u64, r_output.len());
+        selector[input_padded_index] = EqPolynomial::mle(&output_bits, r_output);
     }
 
     selector
@@ -193,20 +181,16 @@ pub struct ReshapeSumcheckParams<F: JoltField> {
     pub input_raw_dims: Vec<usize>,
     /// Original (unpadded) output shape used to build selector `Sb`.
     pub output_raw_dims: Vec<usize>,
-    /// Transcript-derived randomizer used in selector coefficients (`gamma^t`).
-    pub gamma: F,
 }
 
 impl<F: JoltField> ReshapeSumcheckParams<F> {
     /// Build reshape sumcheck parameters from node/opening context and graph metadata.
     pub fn new(
         computation_node: ComputationNode,
+        accumulator: &dyn OpeningAccumulator<F>,
         graph: &ComputationGraph,
-        gamma: F,
-        transcript: &mut impl Transcript,
     ) -> Self {
-        let num_vars = computation_node.pow2_padded_num_output_elements().log_2();
-        let r_output = transcript.challenge_vector_optimized::<F>(num_vars);
+        let r_output = accumulator.get_node_output_opening(computation_node.idx).0;
         let input_raw_dims = graph
             .nodes
             .get(&computation_node.inputs[0])
@@ -216,10 +200,9 @@ impl<F: JoltField> ReshapeSumcheckParams<F> {
         let output_raw_dims = computation_node.output_dims.clone();
         Self {
             computation_node,
-            r_output: r_output.into(),
+            r_output,
             input_raw_dims,
             output_raw_dims,
-            gamma,
         }
     }
 }
@@ -229,8 +212,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeSumcheckParams<F> {
         2
     }
 
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
-        F::zero()
+    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
+        accumulator
+            .get_node_output_opening(self.computation_node.idx)
+            .1
     }
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -250,12 +235,8 @@ pub struct ReshapeSumcheckProver<F: JoltField> {
     pub params: ReshapeSumcheckParams<F>,
     /// Input polynomial (padded MLE).
     pub input_mle: MultilinearPolynomial<F>,
-    /// Output polynomial (padded MLE).
-    pub output_mle: MultilinearPolynomial<F>,
-    /// Selector polynomial for input layout.
-    pub selector_a_mle: MultilinearPolynomial<F>,
-    /// Selector polynomial for output layout.
-    pub selector_b_mle: MultilinearPolynomial<F>,
+    /// Selector polynomial mapping padded input coordinates to the output point.
+    pub selector_mle: MultilinearPolynomial<F>,
 }
 
 impl<F: JoltField> ReshapeSumcheckProver<F> {
@@ -267,23 +248,17 @@ impl<F: JoltField> ReshapeSumcheckProver<F> {
         };
 
         let input_mle = MultilinearPolynomial::from(input.padded_next_power_of_two());
-        let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
-
-        let selector_a = build_reshape_selectors(input.dims(), params.gamma);
-        let selector_b = build_reshape_selectors(output.dims(), params.gamma);
-
-        let selector_a_mle = MultilinearPolynomial::from(selector_a);
-        let selector_b_mle = MultilinearPolynomial::from(selector_b);
+        let output_mle: MultilinearPolynomial<F> =
+            MultilinearPolynomial::from(output.padded_next_power_of_two());
+        let selector = build_reshape_selectors(input.dims(), output.dims(), &params.r_output.r);
+        let selector_mle = MultilinearPolynomial::from(selector);
         assert_eq!(input_mle.len(), output_mle.len());
-        assert_eq!(input_mle.len(), selector_a_mle.len());
-        assert_eq!(output_mle.len(), selector_b_mle.len());
+        assert_eq!(input_mle.len(), selector_mle.len());
 
         Self {
             params,
             input_mle,
-            output_mle,
-            selector_a_mle,
-            selector_b_mle,
+            selector_mle,
         }
     }
 }
@@ -297,31 +272,25 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReshapeSumche
         const DEGREE_BOUND: usize = 2;
         let Self {
             input_mle,
-            output_mle,
-            selector_a_mle,
-            selector_b_mle,
+            selector_mle,
             ..
         } = self;
         let half_poly_len = input_mle.len() / 2;
         let mut uni_poly_evals = [F::zero(); 2];
         for i in 0..half_poly_len {
             let a_evals = input_mle.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-            let b_evals = output_mle.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-            let sa_evals = selector_a_mle.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-            let sb_evals = selector_b_mle.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
+            let selector_evals =
+                selector_mle.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
 
-            uni_poly_evals[0] += a_evals[0] * sa_evals[0] - b_evals[0] * sb_evals[0];
-            uni_poly_evals[1] += a_evals[1] * sa_evals[1] - b_evals[1] * sb_evals[1];
+            uni_poly_evals[0] += a_evals[0] * selector_evals[0];
+            uni_poly_evals[1] += a_evals[1] * selector_evals[1];
         }
         UniPoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
     }
 
     fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
         self.input_mle.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.output_mle.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.selector_a_mle
-            .bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.selector_b_mle
+        self.selector_mle
             .bind_parallel(r_j, BindingOrder::LowToHigh);
     }
 
@@ -341,13 +310,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReshapeSumche
             opening_point.clone(),
             self.input_mle.final_sumcheck_claim(),
         );
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point,
-            self.output_mle.final_sumcheck_claim(),
-        );
     }
 }
 
@@ -361,11 +323,10 @@ impl<F: JoltField> ReshapeSumcheckVerifier<F> {
     /// Build the reshape sumcheck verifier from node/opening context and graph metadata.
     pub fn new(
         computation_node: ComputationNode,
+        accumulator: &VerifierOpeningAccumulator<F>,
         graph: &ComputationGraph,
-        gamma: F,
-        transcript: &mut impl Transcript,
     ) -> Self {
-        let params = ReshapeSumcheckParams::new(computation_node, graph, gamma, transcript);
+        let params = ReshapeSumcheckParams::new(computation_node, accumulator, graph);
         Self { params }
     }
 }
@@ -380,28 +341,22 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumc
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let r_node_output_prime = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening())
-            .r;
-
         let input_claim = accumulator.get_node_output_claim(
             self.params.computation_node.inputs[0],
             self.params.computation_node.idx,
         );
-        let output_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.idx,
-            self.params.computation_node.idx,
+        let selector = build_reshape_selectors(
+            &self.params.input_raw_dims,
+            &self.params.output_raw_dims,
+            &self.params.r_output.r,
         );
-
-        let selector_a = build_reshape_selectors(&self.params.input_raw_dims, self.params.gamma);
-        let selector_b = build_reshape_selectors(&self.params.output_raw_dims, self.params.gamma);
-        let selector_a_claim =
-            MultilinearPolynomial::from(selector_a).evaluate(&r_node_output_prime);
-        let selector_b_claim =
-            MultilinearPolynomial::from(selector_b).evaluate(&r_node_output_prime);
-
-        input_claim * selector_a_claim - output_claim * selector_b_claim
+        let selector_claim = MultilinearPolynomial::from(selector).evaluate(
+            &self
+                .params
+                .normalize_opening_point(&sumcheck_challenges.into_opening())
+                .r,
+        );
+        input_claim * selector_claim
     }
 
     fn cache_openings(
@@ -417,25 +372,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumc
             transcript,
             VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.clone(),
-        );
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
             opening_point,
         );
     }
-}
-
-fn gamma_power<F: JoltField>(gamma: F, exponent: usize) -> F {
-    // TODO: This is a naive O(exponent) implementation. Replace with fast exponentiation
-    // (square-and-multiply) or incremental power caching when selector construction is optimized.
-    let mut acc = F::one();
-    for _ in 0..exponent {
-        acc *= gamma;
-    }
-    acc
 }
 
 #[cfg(test)]

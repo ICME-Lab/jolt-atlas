@@ -31,8 +31,54 @@ use joltworks::{
     utils::{errors::ProofVerifyError, index_to_field_bitvector, math::Math},
 };
 use rayon::prelude::*;
+use std::{
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
+};
 
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
+
+#[derive(Clone, Debug, Default)]
+/// Aggregate timing breakdown for concat selector construction.
+pub struct ConcatSelectorBuildMetrics {
+    /// Number of selector builds recorded.
+    pub calls: u64,
+    /// Total wall time spent building concat selectors.
+    pub total: Duration,
+    /// Time spent converting raw input linear indices to coordinates.
+    pub linear_to_coord_input: Duration,
+    /// Time spent converting input coordinates back to padded linear indices.
+    pub coord_to_linear_input: Duration,
+    /// Time spent converting output coordinates back to padded linear indices.
+    pub coord_to_linear_output: Duration,
+    /// Time spent building output-point bitvectors.
+    pub output_bits: Duration,
+    /// Time spent materializing the full `eq(r, ·)` table.
+    pub eq_evals: Duration,
+    /// Time spent indexing into the precomputed `eq(r, ·)` table.
+    pub eq_lookup: Duration,
+}
+
+static CONCAT_SELECTOR_BUILD_METRICS: OnceLock<Mutex<ConcatSelectorBuildMetrics>> = OnceLock::new();
+
+fn concat_selector_build_metrics() -> &'static Mutex<ConcatSelectorBuildMetrics> {
+    CONCAT_SELECTOR_BUILD_METRICS.get_or_init(|| Mutex::new(ConcatSelectorBuildMetrics::default()))
+}
+
+/// Reset the accumulated concat selector build metrics.
+pub fn reset_concat_selector_build_metrics() {
+    *concat_selector_build_metrics()
+        .lock()
+        .expect("concat selector metrics mutex poisoned") = ConcatSelectorBuildMetrics::default();
+}
+
+/// Return a snapshot of the accumulated concat selector build metrics.
+pub fn snapshot_concat_selector_build_metrics() -> ConcatSelectorBuildMetrics {
+    concat_selector_build_metrics()
+        .lock()
+        .expect("concat selector metrics mutex poisoned")
+        .clone()
+}
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
     #[tracing::instrument(skip_all, name = "Concat::prove")]
@@ -176,6 +222,7 @@ pub struct ConcatSumcheckProver<F: JoltField> {
 
 impl<F: JoltField> ConcatSumcheckProver<F> {
     /// Initialize prover state from trace tensors and prepared concat parameters.
+    #[tracing::instrument(skip_all, name = "ConcatSumcheckProver::initialize")]
     pub fn initialize(trace: &Trace, params: ConcatSumcheckParams<F>) -> Self {
         let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
         assert!(!operands.is_empty(), "Concat expects at least one operand");
@@ -232,6 +279,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ConcatSumchec
         &self.params
     }
 
+    #[tracing::instrument(skip_all, name = "ConcatSumcheckProver::compute_message")]
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         const DEGREE_BOUND: usize = 2;
         let half_poly_len = self
@@ -313,6 +361,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ConcatSumch
         &self.params
     }
 
+    #[tracing::instrument(skip_all, name = "ConcatSumcheckVerifier::expected_output_claim")]
     fn expected_output_claim(
         &self,
         accumulator: &VerifierOpeningAccumulator<F>,
@@ -385,6 +434,7 @@ fn extend_input_to_max_domain<T: Copy>(
     extended
 }
 
+#[tracing::instrument(skip_all, name = "concat::build_concat_selector")]
 fn build_concat_selector<F: JoltField>(
     raw_input_dims: &[Vec<usize>],
     output_raw_dims: &[usize],
@@ -393,6 +443,7 @@ fn build_concat_selector<F: JoltField>(
     r_output: &[F],
     max_input_num_vars: usize,
 ) -> Vec<F> {
+    let total_timing = Instant::now();
     let input_raw_dims = raw_input_dims
         .get(input_idx)
         .unwrap_or_else(|| panic!("Concat input_idx {input_idx} out of range"));
@@ -419,18 +470,48 @@ fn build_concat_selector<F: JoltField>(
     let max_domain_len = 1usize << max_input_num_vars;
     let axis_offset = axis_offset(raw_input_dims, input_idx, axis);
     let mut selector = vec![F::zero(); max_domain_len];
+    let mut linear_to_coord_input = Duration::ZERO;
+    let mut coord_to_linear_input = Duration::ZERO;
+    let mut coord_to_linear_output = Duration::ZERO;
+    let mut output_bits_time = Duration::ZERO;
+    let timing = Instant::now();
+    let eq_evals = EqPolynomial::evals(r_output);
+    let eq_evals_time = timing.elapsed();
+    let mut eq_lookup = Duration::ZERO;
 
     for linear_idx in 0..input_raw_len {
+        let timing = Instant::now();
         let input_coord = linear_to_coord(linear_idx, input_raw_dims);
+        linear_to_coord_input += timing.elapsed();
         let mut output_coord = input_coord.clone();
         output_coord[axis] += axis_offset;
 
+        let timing = Instant::now();
         let input_index = coord_to_linear(&input_coord, &input_padded_dims);
+        coord_to_linear_input += timing.elapsed();
+        let timing = Instant::now();
         let output_index = coord_to_linear(&output_coord, &output_padded_dims);
-        let output_bits = index_to_field_bitvector::<F>(output_index as u64, output_num_vars);
+        coord_to_linear_output += timing.elapsed();
+        let timing = Instant::now();
+        let _output_bits = index_to_field_bitvector::<F>(output_index as u64, output_num_vars);
+        output_bits_time += timing.elapsed();
         let full_index = input_index << (max_input_num_vars - input_num_vars);
-        selector[full_index] = EqPolynomial::mle(&output_bits, r_output);
+        let timing = Instant::now();
+        selector[full_index] = eq_evals[output_index];
+        eq_lookup += timing.elapsed();
     }
+
+    let mut metrics = concat_selector_build_metrics()
+        .lock()
+        .expect("concat selector metrics mutex poisoned");
+    metrics.calls += 1;
+    metrics.total += total_timing.elapsed();
+    metrics.linear_to_coord_input += linear_to_coord_input;
+    metrics.coord_to_linear_input += coord_to_linear_input;
+    metrics.coord_to_linear_output += coord_to_linear_output;
+    metrics.output_bits += output_bits_time;
+    metrics.eq_evals += eq_evals_time;
+    metrics.eq_lookup += eq_lookup;
 
     selector
 }

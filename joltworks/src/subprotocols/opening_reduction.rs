@@ -328,13 +328,12 @@ impl<F: JoltField> DensePolynomialProverOpening<F> {
                 .into_par_iter()
                 .map(|x_in| {
                     let unreduced_inner_sum = (0..num_x_out)
-                        .into_par_iter()
                         .map(|x_out| {
                             let j = (x_in << num_x_out_bits) | x_out;
                             let poly_eval = polynomial.get_bound_coeff(j);
                             d_e_out[x_out].mul_unreduced::<9>(poly_eval)
                         })
-                        .reduce(F::Unreduced::<9>::zero, |running, new| running + new);
+                        .fold(F::Unreduced::<9>::zero(), |running, new| running + new);
                     let inner_sum = F::from_montgomery_reduce(unreduced_inner_sum);
                     d_e_in[x_in] * inner_sum
                 })

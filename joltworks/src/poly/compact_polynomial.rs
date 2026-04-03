@@ -73,14 +73,13 @@ impl<T: SmallScalar, F: JoltField> CompactPolynomial<T, F> {
             .into_par_iter()
             .map(|x1| {
                 let partial_sum = (0..eq_two.len())
-                    .into_par_iter()
                     .map(|x2| {
                         let idx = x1 * eq_two.len() + x2;
                         // field_mul now already checks for 0 and 1 optimisation
                         // via Jolfield mul_64 method
                         self.coeffs[idx].field_mul(eq_two[x2])
                     })
-                    .reduce(|| F::zero(), |acc, val| acc + val);
+                    .fold(F::zero(), |acc, val| acc + val);
                 OptimizedMul::mul_01_optimized(partial_sum, eq_one[x1])
             })
             .reduce(|| F::zero(), |acc, val| acc + val);

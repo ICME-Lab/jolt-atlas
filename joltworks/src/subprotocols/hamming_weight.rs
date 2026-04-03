@@ -88,12 +88,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for HammingWeight
             .zip(self.params.gamma_powers.par_iter())
             .map(|(ra, gamma)| {
                 let ra_sum = (0..ra.len() / 2)
-                    .into_par_iter()
                     .map(|i| ra.get_bound_coeff(2 * i))
-                    .fold_with(F::Unreduced::<5>::zero(), |running, new| {
+                    .fold(F::Unreduced::<5>::zero(), |running, new| {
                         running + new.as_unreduced_ref()
-                    })
-                    .reduce(F::Unreduced::zero, |running, new| running + new);
+                    });
                 ra_sum.mul_trunc::<4, 9>(gamma.as_unreduced_ref())
             })
             .reduce(F::Unreduced::zero, |running, new| running + new);

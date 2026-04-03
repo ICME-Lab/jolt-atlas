@@ -274,12 +274,11 @@ impl<F: JoltField> DensePolynomial<F> {
             .into_par_iter()
             .map(|x1| {
                 let partial_sum = (0..eq_two.len())
-                    .into_par_iter()
                     .map(|x2| {
                         let idx = x1 * eq_two.len() + x2;
                         OptimizedMul::mul_01_optimized(eq_two[x2], self.Z[idx])
                     })
-                    .reduce(|| F::zero(), |acc, val| acc + val);
+                    .fold(F::zero(), |acc, val| acc + val);
                 OptimizedMul::mul_01_optimized(eq_one[x1], partial_sum)
             })
             .reduce(|| F::zero(), |acc, val| acc + val);
@@ -536,8 +535,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for DensePolynomial<F> {
             .map(|x1| {
                 let eq1_val = eq_one[x1];
                 let inner_sums = (0..eq_two.len())
-                    .into_par_iter()
-                    .filter_map(|x2| {
+                    .map(|x2| {
                         let eq2_val = eq_two[x2];
                         let idx = x1 * eq_two.len() + x2;
                         let partial: Vec<F> = polys
@@ -547,17 +545,14 @@ impl<F: JoltField> PolynomialEvaluation<F> for DensePolynomial<F> {
                                 OptimizedMul::mul_01_optimized(eq2_val, coeff)
                             })
                             .collect();
-                        Some(partial)
+                        partial
                     })
-                    .reduce(
-                        || vec![F::zero(); num_polys],
-                        |mut acc, item| {
-                            for i in 0..num_polys {
-                                acc[i] += item[i];
-                            }
-                            acc
-                        },
-                    );
+                    .fold(vec![F::zero(); num_polys], |mut acc, item| {
+                        for i in 0..num_polys {
+                            acc[i] += item[i];
+                        }
+                        acc
+                    });
                 inner_sums
                     .into_iter()
                     .map(|s| OptimizedMul::mul_01_optimized(eq1_val, s))

@@ -31,8 +31,54 @@ use joltworks::{
     utils::{errors::ProofVerifyError, index_to_field_bitvector, math::Math},
 };
 use rayon::prelude::*;
+use std::{
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
+};
 
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
+
+#[derive(Clone, Debug, Default)]
+/// Aggregate timing breakdown for slice selector construction.
+pub struct SliceSelectorBuildMetrics {
+    /// Number of selector builds recorded.
+    pub calls: u64,
+    /// Total wall time spent building slice selectors.
+    pub total: Duration,
+    /// Time spent converting raw output linear indices to coordinates.
+    pub linear_to_coord_output: Duration,
+    /// Time spent converting input coordinates back to padded linear indices.
+    pub coord_to_linear_input: Duration,
+    /// Time spent converting output coordinates back to padded linear indices.
+    pub coord_to_linear_output: Duration,
+    /// Time spent building output-point bitvectors.
+    pub output_bits: Duration,
+    /// Time spent materializing the full `eq(r, ·)` table.
+    pub eq_evals: Duration,
+    /// Time spent indexing into the precomputed `eq(r, ·)` table.
+    pub eq_lookup: Duration,
+}
+
+static SLICE_SELECTOR_BUILD_METRICS: OnceLock<Mutex<SliceSelectorBuildMetrics>> = OnceLock::new();
+
+fn slice_selector_build_metrics() -> &'static Mutex<SliceSelectorBuildMetrics> {
+    SLICE_SELECTOR_BUILD_METRICS.get_or_init(|| Mutex::new(SliceSelectorBuildMetrics::default()))
+}
+
+/// Reset the accumulated slice selector build metrics.
+pub fn reset_slice_selector_build_metrics() {
+    *slice_selector_build_metrics()
+        .lock()
+        .expect("slice selector metrics mutex poisoned") = SliceSelectorBuildMetrics::default();
+}
+
+/// Return a snapshot of the accumulated slice selector build metrics.
+pub fn snapshot_slice_selector_build_metrics() -> SliceSelectorBuildMetrics {
+    slice_selector_build_metrics()
+        .lock()
+        .expect("slice selector metrics mutex poisoned")
+        .clone()
+}
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
     #[tracing::instrument(skip_all, name = "Slice::prove")]
@@ -169,6 +215,7 @@ pub struct SliceSumcheckProver<F: JoltField> {
 
 impl<F: JoltField> SliceSumcheckProver<F> {
     /// Initialize the slice sumcheck prover from trace data and prepared parameters.
+    #[tracing::instrument(skip_all, name = "SliceSumcheckProver::initialize")]
     pub fn initialize(trace: &Trace, params: SliceSumcheckParams<F>) -> Self {
         let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
         let [input] = operands[..] else {
@@ -199,6 +246,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SliceSumcheck
         &self.params
     }
 
+    #[tracing::instrument(skip_all, name = "SliceSumcheckProver::compute_message")]
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         const DEGREE_BOUND: usize = 2;
         let half_poly_len = self.input_mle.len() / 2;
@@ -268,6 +316,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SliceSumche
         &self.params
     }
 
+    #[tracing::instrument(skip_all, name = "SliceSumcheckVerifier::expected_output_claim")]
     fn expected_output_claim(
         &self,
         accumulator: &VerifierOpeningAccumulator<F>,
@@ -311,6 +360,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SliceSumche
     }
 }
 
+#[tracing::instrument(skip_all, name = "slice::build_slice_selector")]
 fn build_slice_selector<F: JoltField>(
     input_raw_dims: &[usize],
     output_raw_dims: &[usize],
@@ -318,6 +368,7 @@ fn build_slice_selector<F: JoltField>(
     start: usize,
     r_output: &[F],
 ) -> Vec<F> {
+    let total_timing = Instant::now();
     let input_raw_len: usize = input_raw_dims.iter().product();
     let input_padded_dims: Vec<usize> = input_raw_dims
         .iter()
@@ -337,21 +388,52 @@ fn build_slice_selector<F: JoltField>(
     );
 
     let mut selector = vec![F::zero(); input_domain_len];
+    let mut linear_to_coord_output = Duration::ZERO;
+    let mut coord_to_linear_input = Duration::ZERO;
+    let mut coord_to_linear_output = Duration::ZERO;
+    let mut output_bits_time = Duration::ZERO;
+    let timing = Instant::now();
+    let eq_evals = EqPolynomial::evals(r_output);
+    let eq_evals_time = timing.elapsed();
+    let mut eq_lookup = Duration::ZERO;
     for output_linear_idx in 0..output_raw_dims.iter().product() {
+        let timing = Instant::now();
         let output_coord = linear_to_coord(output_linear_idx, output_raw_dims);
+        linear_to_coord_output += timing.elapsed();
         let mut input_coord = output_coord.clone();
         input_coord[axis] += start;
 
+        let timing = Instant::now();
         let input_index = coord_to_linear(&input_coord, &input_padded_dims);
+        coord_to_linear_input += timing.elapsed();
+        let timing = Instant::now();
         let output_index = coord_to_linear(&output_coord, &output_padded_dims);
-        let output_bits = index_to_field_bitvector::<F>(output_index as u64, output_num_vars);
-        selector[input_index] = EqPolynomial::mle(&output_bits, r_output);
+        coord_to_linear_output += timing.elapsed();
+        let timing = Instant::now();
+        let _output_bits = index_to_field_bitvector::<F>(output_index as u64, output_num_vars);
+        output_bits_time += timing.elapsed();
+        let timing = Instant::now();
+        selector[input_index] = eq_evals[output_index];
+        eq_lookup += timing.elapsed();
     }
 
     assert!(
         input_raw_len >= output_raw_dims.iter().product(),
         "Slice output raw length exceeds input raw length"
     );
+
+    let mut metrics = slice_selector_build_metrics()
+        .lock()
+        .expect("slice selector metrics mutex poisoned");
+    metrics.calls += 1;
+    metrics.total += total_timing.elapsed();
+    metrics.linear_to_coord_output += linear_to_coord_output;
+    metrics.coord_to_linear_input += coord_to_linear_input;
+    metrics.coord_to_linear_output += coord_to_linear_output;
+    metrics.output_bits += output_bits_time;
+    metrics.eq_evals += eq_evals_time;
+    metrics.eq_lookup += eq_lookup;
+
     selector
 }
 

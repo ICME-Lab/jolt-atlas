@@ -134,12 +134,11 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
         // Compute quadratic coefficients via generic split-eq fold (handles both E_in cases).
         let quadratic_coeffs: [F; DEGREE_BOUND - 1] = B
             .par_fold_out_in_unreduced::<9, { DEGREE_BOUND - 1 }>(&|k_prime| {
-                let coeffs = (0..self.params.d)
-                    .into_par_iter()
-                    .map(|i| {
+                let coeffs =
+                    (0..self.params.d).fold([F::zero(); DEGREE_BOUND - 1], |running, i| {
                         let G_i = &self.G[i];
                         let inner_sum = G_i[k_prime << m..(k_prime + 1) << m]
-                            .par_iter()
+                            .iter()
                             .enumerate()
                             .map(|(k, &G_k)| {
                                 let k_m = k >> (m - 1);
@@ -156,7 +155,7 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
                                 };
                                 [eval_0, eval_infty]
                             })
-                            .fold_with(
+                            .fold(
                                 [F::Unreduced::<5>::zero(); DEGREE_BOUND - 1],
                                 |running, new| {
                                     [
@@ -164,21 +163,15 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
                                         running[1] + new[1].as_unreduced_ref(),
                                     ]
                                 },
-                            )
-                            .reduce(
-                                || [F::Unreduced::zero(); DEGREE_BOUND - 1],
-                                |running, new| [running[0] + new[0], running[1] + new[1]],
                             );
 
                         [
-                            self.params.gammas[i] * F::from_barrett_reduce(inner_sum[0]),
-                            self.params.gammas[i] * F::from_barrett_reduce(inner_sum[1]),
+                            running[0]
+                                + self.params.gammas[i] * F::from_barrett_reduce(inner_sum[0]),
+                            running[1]
+                                + self.params.gammas[i] * F::from_barrett_reduce(inner_sum[1]),
                         ]
-                    })
-                    .reduce(
-                        || [F::zero(); DEGREE_BOUND - 1],
-                        |running, new| [running[0] + new[0], running[1] + new[1]],
-                    );
+                    });
                 coeffs
             });
 

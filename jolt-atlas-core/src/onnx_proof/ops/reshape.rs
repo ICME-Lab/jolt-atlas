@@ -41,6 +41,56 @@ use joltworks::{
     utils::{errors::ProofVerifyError, index_to_field_bitvector, math::Math},
 };
 use rayon::prelude::*;
+use std::{
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
+};
+
+#[derive(Clone, Debug, Default)]
+/// Aggregate timing breakdown for reshape selector construction.
+pub struct ReshapeSelectorBuildMetrics {
+    /// Number of selector builds recorded.
+    pub calls: u64,
+    /// Total wall time spent building reshape selectors.
+    pub total: Duration,
+    /// Time spent converting raw input linear indices to coordinates.
+    pub linear_to_coord_input: Duration,
+    /// Time spent converting raw output linear indices to coordinates.
+    pub linear_to_coord_output: Duration,
+    /// Time spent converting input coordinates back to padded linear indices.
+    pub coord_to_linear_input: Duration,
+    /// Time spent converting output coordinates back to padded linear indices.
+    pub coord_to_linear_output: Duration,
+    /// Time spent building output-point bitvectors.
+    pub output_bits: Duration,
+    /// Time spent materializing the full `eq(r, ·)` table.
+    pub eq_evals: Duration,
+    /// Time spent indexing into the precomputed `eq(r, ·)` table.
+    pub eq_lookup: Duration,
+}
+
+static RESHAPE_SELECTOR_BUILD_METRICS: OnceLock<Mutex<ReshapeSelectorBuildMetrics>> =
+    OnceLock::new();
+
+fn reshape_selector_build_metrics() -> &'static Mutex<ReshapeSelectorBuildMetrics> {
+    RESHAPE_SELECTOR_BUILD_METRICS
+        .get_or_init(|| Mutex::new(ReshapeSelectorBuildMetrics::default()))
+}
+
+/// Reset the accumulated reshape selector build metrics.
+pub fn reset_reshape_selector_build_metrics() {
+    *reshape_selector_build_metrics()
+        .lock()
+        .expect("reshape selector metrics mutex poisoned") = ReshapeSelectorBuildMetrics::default();
+}
+
+/// Return a snapshot of the accumulated reshape selector build metrics.
+pub fn snapshot_reshape_selector_build_metrics() -> ReshapeSelectorBuildMetrics {
+    reshape_selector_build_metrics()
+        .lock()
+        .expect("reshape selector metrics mutex poisoned")
+        .clone()
+}
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
     #[tracing::instrument(skip_all, name = "Reshape::prove")]
@@ -97,11 +147,13 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
 ///
 /// This gives a selector MLE such that:
 /// `out(r_output) = Σ_i selector(i) * input(i)`.
+#[tracing::instrument(skip_all, name = "reshape::build_reshape_selectors")]
 pub(crate) fn build_reshape_selectors<F: JoltField + ChallengeFieldOps<F>>(
     input_raw_dims: &[usize],
     output_raw_dims: &[usize],
     r_output: &[F],
 ) -> Vec<F> {
+    let total_timing = Instant::now();
     let input_raw_len: usize = input_raw_dims.iter().product();
     let output_raw_len: usize = output_raw_dims.iter().product();
     assert_eq!(
@@ -126,15 +178,50 @@ pub(crate) fn build_reshape_selectors<F: JoltField + ChallengeFieldOps<F>>(
 
     // Selector values are zero on padding cells by default.
     let mut selector = vec![F::zero(); input_padded_len];
+    let mut linear_to_coord_input = Duration::ZERO;
+    let mut linear_to_coord_output = Duration::ZERO;
+    let mut coord_to_linear_input = Duration::ZERO;
+    let mut coord_to_linear_output = Duration::ZERO;
+    let mut output_bits_time = Duration::ZERO;
+    let timing = Instant::now();
+    let eq_evals = EqPolynomial::evals(r_output);
+    let eq_evals_time = timing.elapsed();
+    let mut eq_lookup = Duration::ZERO;
 
     for t in 0..input_raw_len {
+        let timing = Instant::now();
         let input_coord = linear_to_coord(t, input_raw_dims);
+        linear_to_coord_input += timing.elapsed();
+        let timing = Instant::now();
         let output_coord = linear_to_coord(t, output_raw_dims);
+        linear_to_coord_output += timing.elapsed();
+        let timing = Instant::now();
         let input_padded_index = coord_to_linear(&input_coord, &input_padded_dims);
+        coord_to_linear_input += timing.elapsed();
+        let timing = Instant::now();
         let output_padded_index = coord_to_linear(&output_coord, &output_padded_dims);
-        let output_bits = index_to_field_bitvector::<F>(output_padded_index as u64, r_output.len());
-        selector[input_padded_index] = EqPolynomial::mle(&output_bits, r_output);
+        coord_to_linear_output += timing.elapsed();
+        let timing = Instant::now();
+        let _output_bits =
+            index_to_field_bitvector::<F>(output_padded_index as u64, r_output.len());
+        output_bits_time += timing.elapsed();
+        let timing = Instant::now();
+        selector[input_padded_index] = eq_evals[output_padded_index];
+        eq_lookup += timing.elapsed();
     }
+
+    let mut metrics = reshape_selector_build_metrics()
+        .lock()
+        .expect("reshape selector metrics mutex poisoned");
+    metrics.calls += 1;
+    metrics.total += total_timing.elapsed();
+    metrics.linear_to_coord_input += linear_to_coord_input;
+    metrics.linear_to_coord_output += linear_to_coord_output;
+    metrics.coord_to_linear_input += coord_to_linear_input;
+    metrics.coord_to_linear_output += coord_to_linear_output;
+    metrics.output_bits += output_bits_time;
+    metrics.eq_evals += eq_evals_time;
+    metrics.eq_lookup += eq_lookup;
 
     selector
 }
@@ -210,6 +297,7 @@ pub struct ReshapeSumcheckProver<F: JoltField> {
 
 impl<F: JoltField> ReshapeSumcheckProver<F> {
     /// Initialize reshape prover state from trace tensors and prepared parameters.
+    #[tracing::instrument(skip_all, name = "ReshapeSumcheckProver::initialize")]
     pub fn initialize(trace: &Trace, params: ReshapeSumcheckParams<F>) -> Self {
         let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
         let [input] = operands[..] else {
@@ -234,6 +322,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReshapeSumche
         &self.params
     }
 
+    #[tracing::instrument(skip_all, name = "ReshapeSumcheckProver::compute_message")]
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         const DEGREE_BOUND: usize = 2;
         let Self {

@@ -16,34 +16,322 @@ use atlas_onnx_tracer::{
     tensor::Tensor,
 };
 use bincode::config::standard;
-use common::utils::logging::setup_tracing;
+use jolt_atlas_core::onnx_proof::ops::{
+    concat::{reset_concat_selector_build_metrics, snapshot_concat_selector_build_metrics},
+    reshape::{reset_reshape_selector_build_metrics, snapshot_reshape_selector_build_metrics},
+    slice::{reset_slice_selector_build_metrics, snapshot_slice_selector_build_metrics},
+};
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use std::{env, fs, path::Path};
+use std::{
+    collections::HashMap,
+    env, fs,
+    path::Path,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+use tracing::{info, info_span, span::Attributes, Id, Subscriber};
+use tracing_chrome::ChromeLayerBuilder;
+use tracing_subscriber::{
+    fmt::format::FmtSpan,
+    layer::{Context, SubscriberExt},
+    registry::LookupSpan,
+    util::SubscriberInitExt,
+    EnvFilter, Layer,
+};
 
 const MODEL_PATH: &str = "atlas-onnx-tracer/models/qwen/network.onnx";
 const SHARED_PP_CACHE_PATH: &str = "atlas-onnx-tracer/models/qwen/shared_preprocessing.bin";
 
+#[derive(Clone, Debug)]
+struct SpanState {
+    name: &'static str,
+    started_at: Instant,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SpanAggregate {
+    total: Duration,
+    max: Duration,
+    count: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SpanMetricsCollector {
+    totals: Arc<Mutex<HashMap<String, SpanAggregate>>>,
+}
+
+impl SpanMetricsCollector {
+    fn record(&self, name: &str, elapsed: Duration) {
+        let mut totals = self.totals.lock().expect("span metrics mutex poisoned");
+        let entry = totals.entry(name.to_string()).or_default();
+        entry.total += elapsed;
+        entry.max = entry.max.max(elapsed);
+        entry.count += 1;
+    }
+
+    fn sorted_rows(&self) -> Vec<(String, SpanAggregate)> {
+        let totals = self.totals.lock().expect("span metrics mutex poisoned");
+        let mut rows: Vec<_> = totals.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        rows.sort_by(|a, b| b.1.total.cmp(&a.1.total));
+        rows
+    }
+
+    fn print_top(&self, title: &str, limit: usize, filter: impl Fn(&str) -> bool) {
+        println!("{title}:");
+        for (name, agg) in self
+            .sorted_rows()
+            .into_iter()
+            .filter(|(name, _)| filter(name))
+            .take(limit)
+        {
+            println!(
+                "  {name}: total={:.2?}, count={}, max={:.2?}",
+                agg.total, agg.count, agg.max
+            );
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SpanMetricsLayer {
+    collector: SpanMetricsCollector,
+}
+
+impl SpanMetricsLayer {
+    fn new(collector: SpanMetricsCollector) -> Self {
+        Self { collector }
+    }
+}
+
+impl<S> Layer<S> for SpanMetricsLayer
+where
+    S: Subscriber + for<'span> LookupSpan<'span>,
+{
+    fn on_new_span(&self, _attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+        if let Some(span) = ctx.span(id) {
+            let mut extensions = span.extensions_mut();
+            extensions.insert(SpanState {
+                name: span.metadata().name(),
+                started_at: Instant::now(),
+            });
+        }
+    }
+
+    fn on_close(&self, id: Id, ctx: Context<'_, S>) {
+        if let Some(span) = ctx.span(&id) {
+            let extensions = span.extensions();
+            if let Some(state) = extensions.get::<SpanState>() {
+                self.collector
+                    .record(state.name, state.started_at.elapsed());
+            }
+        }
+    }
+}
+
+struct QwenTracingGuard {
+    chrome_guard: Option<tracing_chrome::FlushGuard>,
+    span_metrics: SpanMetricsCollector,
+}
+
+fn setup_qwen_tracing(title: &str) -> QwenTracingGuard {
+    let args: Vec<String> = std::env::args().collect();
+    let enable_trace_json = args.contains(&"--trace".to_string());
+    let enable_trace_terminal = args.contains(&"--trace-terminal".to_string());
+    let span_metrics = SpanMetricsCollector::default();
+    let metrics_layer = SpanMetricsLayer::new(span_metrics.clone());
+
+    if enable_trace_json {
+        let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
+        tracing_subscriber::registry()
+            .with(metrics_layer)
+            .with(chrome_layer)
+            .init();
+
+        println!("=== {title} (Chrome Tracing enabled) ===");
+        println!("Trace output: trace-<timestamp>.json (viewable in chrome://tracing)\n");
+        QwenTracingGuard {
+            chrome_guard: Some(guard),
+            span_metrics,
+        }
+    } else if enable_trace_terminal {
+        let fmt_layer = tracing_subscriber::fmt::layer().with_span_events(FmtSpan::CLOSE);
+        let env_filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        tracing_subscriber::registry()
+            .with(metrics_layer)
+            .with(env_filter)
+            .with(fmt_layer)
+            .init();
+
+        println!("=== {title} (Terminal Tracing enabled) ===");
+        println!("Log level: Set via RUST_LOG environment variable (default: info)\n");
+        QwenTracingGuard {
+            chrome_guard: None,
+            span_metrics,
+        }
+    } else {
+        tracing_subscriber::registry().with(metrics_layer).init();
+        println!("=== {title} ===");
+        println!("(Run with --trace for JSON output or --trace-terminal for terminal output)\n");
+        QwenTracingGuard {
+            chrome_guard: None,
+            span_metrics,
+        }
+    }
+}
+
+struct SharedPreprocessingLoad {
+    shared: AtlasSharedPreprocessing,
+    cache_hit: bool,
+    cache_read: Duration,
+    trace: Duration,
+    shared_preprocess: Duration,
+}
+
+#[derive(Clone, Debug, Default)]
+struct QwenMetrics {
+    cache_hit: bool,
+    cache_read: Duration,
+    trace: Duration,
+    shared_preprocess: Duration,
+    prover_preprocess: Duration,
+    prove: Duration,
+    verify: Duration,
+    total: Duration,
+}
+
+impl QwenMetrics {
+    fn print_summary(&self, span_metrics: &SpanMetricsCollector) {
+        println!("Qwen metrics:");
+        println!("  cache_hit: {}", self.cache_hit);
+        if self.cache_hit {
+            println!("  cache_read: {:.2?}", self.cache_read);
+        } else {
+            println!("  trace: {:.2?}", self.trace);
+            println!("  shared_preprocess: {:.2?}", self.shared_preprocess);
+        }
+        println!("  prover_preprocess: {:.2?}", self.prover_preprocess);
+        println!("  prove: {:.2?}", self.prove);
+        println!("  verify: {:.2?}", self.verify);
+        println!("  total: {:.2?}", self.total);
+
+        span_metrics.print_top("Top spans", 25, |_| true);
+        span_metrics.print_top("Top op spans", 25, |name| {
+            name.contains("::prove")
+                || name.contains("::verify")
+                || name.contains("Prover::initialize")
+                || name.contains("Verifier::new")
+                || name.contains("SumcheckProver::compute_message")
+        });
+
+        let reshape = snapshot_reshape_selector_build_metrics();
+        println!("Reshape selector build metrics:");
+        println!("  calls: {}", reshape.calls);
+        println!("  total: {:.2?}", reshape.total);
+        println!(
+            "  linear_to_coord(input): {:.2?}",
+            reshape.linear_to_coord_input
+        );
+        println!(
+            "  linear_to_coord(output): {:.2?}",
+            reshape.linear_to_coord_output
+        );
+        println!(
+            "  coord_to_linear(input): {:.2?}",
+            reshape.coord_to_linear_input
+        );
+        println!(
+            "  coord_to_linear(output): {:.2?}",
+            reshape.coord_to_linear_output
+        );
+        println!("  output_bits: {:.2?}", reshape.output_bits);
+        println!("  eq_evals: {:.2?}", reshape.eq_evals);
+        println!("  eq_lookup: {:.2?}", reshape.eq_lookup);
+
+        let concat = snapshot_concat_selector_build_metrics();
+        println!("Concat selector build metrics:");
+        println!("  calls: {}", concat.calls);
+        println!("  total: {:.2?}", concat.total);
+        println!(
+            "  linear_to_coord(input): {:.2?}",
+            concat.linear_to_coord_input
+        );
+        println!(
+            "  coord_to_linear(input): {:.2?}",
+            concat.coord_to_linear_input
+        );
+        println!(
+            "  coord_to_linear(output): {:.2?}",
+            concat.coord_to_linear_output
+        );
+        println!("  output_bits: {:.2?}", concat.output_bits);
+        println!("  eq_evals: {:.2?}", concat.eq_evals);
+        println!("  eq_lookup: {:.2?}", concat.eq_lookup);
+
+        let slice = snapshot_slice_selector_build_metrics();
+        println!("Slice selector build metrics:");
+        println!("  calls: {}", slice.calls);
+        println!("  total: {:.2?}", slice.total);
+        println!(
+            "  linear_to_coord(output): {:.2?}",
+            slice.linear_to_coord_output
+        );
+        println!(
+            "  coord_to_linear(input): {:.2?}",
+            slice.coord_to_linear_input
+        );
+        println!(
+            "  coord_to_linear(output): {:.2?}",
+            slice.coord_to_linear_output
+        );
+        println!("  output_bits: {:.2?}", slice.output_bits);
+        println!("  eq_evals: {:.2?}", slice.eq_evals);
+        println!("  eq_lookup: {:.2?}", slice.eq_lookup);
+    }
+}
+
 fn load_or_build_shared_preprocessing(
     run_args: &RunArgs,
     use_cache: bool,
-) -> AtlasSharedPreprocessing {
+) -> SharedPreprocessingLoad {
     if use_cache && Path::new(SHARED_PP_CACHE_PATH).exists() {
+        let cache_span = info_span!("qwen.cache_read", path = SHARED_PP_CACHE_PATH);
+        let _entered = cache_span.enter();
+        let timing = Instant::now();
         let bytes = fs::read(SHARED_PP_CACHE_PATH).expect("failed to read shared preprocessing");
         let (shared, _): (AtlasSharedPreprocessing, usize) =
             bincode::serde::decode_from_slice(&bytes, standard())
                 .expect("failed to decode shared preprocessing");
-        return shared;
+        let cache_read = timing.elapsed();
+        info!(?cache_read, "Loaded shared preprocessing from cache");
+        return SharedPreprocessingLoad {
+            shared,
+            cache_hit: true,
+            cache_read,
+            trace: Duration::ZERO,
+            shared_preprocess: Duration::ZERO,
+        };
     }
 
+    let trace_span = info_span!("qwen.trace", model_path = MODEL_PATH);
+    let _entered = trace_span.enter();
+    let trace_timing = Instant::now();
     let model = Model::load(MODEL_PATH, run_args);
     println!("{}", model.pretty_print());
     println!("max num vars: {}", model.max_num_vars());
+    let trace = trace_timing.elapsed();
+    drop(_entered);
 
+    let preprocess_span = info_span!("qwen.shared_preprocess");
+    let _entered = preprocess_span.enter();
+    let preprocess_timing = Instant::now();
     let shared = AtlasSharedPreprocessing::preprocess(model);
+    let shared_preprocess = preprocess_timing.elapsed();
+    info!(?trace, ?shared_preprocess, "Built shared preprocessing");
 
     if use_cache {
         let bytes = bincode::serde::encode_to_vec(&shared, standard())
@@ -52,12 +340,22 @@ fn load_or_build_shared_preprocessing(
         println!("saved shared preprocessing cache to {SHARED_PP_CACHE_PATH}");
     }
 
-    shared
+    SharedPreprocessingLoad {
+        shared,
+        cache_hit: false,
+        cache_read: Duration::ZERO,
+        trace,
+        shared_preprocess,
+    }
 }
 
 fn main() {
-    let (_guard, _tracing_enabled) = setup_tracing("Qwen ONNX Proof");
+    let guard = setup_qwen_tracing("Qwen ONNX Proof");
     let use_cache = env::args().any(|arg| arg == "--use-cache");
+    let total_timing = Instant::now();
+    reset_reshape_selector_build_metrics();
+    reset_concat_selector_build_metrics();
+    reset_slice_selector_build_metrics();
 
     let seq_len: usize = 16;
     let run_args = RunArgs::new([
@@ -79,20 +377,51 @@ fn main() {
     let attention_mask_data: Vec<i32> = vec![1; seq_len];
     let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
 
-    tracing::info!("Loaded input data");
-    let pp = load_or_build_shared_preprocessing(&run_args, use_cache);
-    let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    info!("Loaded input data");
+    let shared_load = load_or_build_shared_preprocessing(&run_args, use_cache);
 
-    let timing = std::time::Instant::now();
+    let prover_preprocess_span = info_span!("qwen.prover_preprocess");
+    let _entered = prover_preprocess_span.enter();
+    let prover_preprocess_timing = Instant::now();
+    let prover_preprocessing =
+        AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(shared_load.shared);
+    let prover_preprocess = prover_preprocess_timing.elapsed();
+    info!(?prover_preprocess, "Built prover preprocessing");
+
+    let prove_span = info_span!("qwen.prove");
+    let _entered = prove_span.enter();
+    let timing = Instant::now();
     let (proof, io, _debug_info) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
         &prover_preprocessing,
         &[input_ids, token_type_ids, attention_mask],
     );
-    println!("Proof generation took {:.2?}", timing.elapsed());
+    let prove = timing.elapsed();
+    println!("Proof generation took {prove:.2?}");
+    info!(?prove, "Finished proof generation");
 
+    let verifier_preprocess_span = info_span!("qwen.verifier_preprocess");
+    let _entered = verifier_preprocess_span.enter();
     let verifier_preprocessing =
         AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
 
+    let verify_span = info_span!("qwen.verify");
+    let _entered = verify_span.enter();
+    let verify_timing = Instant::now();
     proof.verify(&verifier_preprocessing, &io, None).unwrap();
+    let verify = verify_timing.elapsed();
     println!("Proof verified successfully!");
+    info!(?verify, "Finished verification");
+
+    let metrics = QwenMetrics {
+        cache_hit: shared_load.cache_hit,
+        cache_read: shared_load.cache_read,
+        trace: shared_load.trace,
+        shared_preprocess: shared_load.shared_preprocess,
+        prover_preprocess,
+        prove,
+        verify,
+        total: total_timing.elapsed(),
+    };
+    metrics.print_summary(&guard.span_metrics);
+    drop(guard.chrome_guard);
 }

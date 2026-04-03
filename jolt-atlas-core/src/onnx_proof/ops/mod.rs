@@ -84,6 +84,8 @@ pub mod reshape;
 pub mod rsqrt;
 /// Division by a scalar constant.
 pub mod scalar_const_div;
+/// Division by a power-of-two scalar constant.
+pub mod scalar_const_div_pow2;
 /// Sigmoid activation function.
 pub mod sigmoid;
 /// Sin trigonometric function.
@@ -241,6 +243,7 @@ macro_rules! dispatch_operator {
             Operator::Reshape($inner) => $body,
             Operator::Rsqrt($inner) => $body,
             Operator::ScalarConstDiv($inner) => $body,
+            Operator::ScalarConstDivPow2($inner) => $body,
             Operator::Sigmoid($inner) => $body,
             Operator::Sin($inner) => $body,
             Operator::Slice($inner) => $body,

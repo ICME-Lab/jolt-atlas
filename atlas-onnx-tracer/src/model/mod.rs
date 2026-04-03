@@ -267,7 +267,12 @@ impl Model {
                 | Operator::Rsqrt(_)
                 | Operator::Sigmoid(_)
                 | Operator::Sin(_) => LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements()),
-                Operator::ScalarConstDiv(_) => log_2(node.pow2_padded_num_output_elements()),
+                Operator::ScalarConstDiv(_) => {
+                    LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements())
+                }
+                Operator::ScalarConstDivPow2(_) => {
+                    LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements())
+                }
                 Operator::SoftmaxAxes(_) => {
                     LOG_K_CHUNK + log_2(*node.output_dims.last().unwrap_or(&1))
                 }

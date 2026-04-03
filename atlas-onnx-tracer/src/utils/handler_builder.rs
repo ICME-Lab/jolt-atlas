@@ -28,7 +28,7 @@
 
 use crate::{
     node::{ComputationNode, handlers::HandlerContext},
-    ops::{Constant, Operator, ScalarConstDiv},
+    ops::{Constant, Operator, ScalarConstDiv, ScalarConstDivPow2},
     tensor::Tensor,
 };
 
@@ -45,6 +45,7 @@ pub struct HandlerBuilder<'a, 'b> {
     broadcast_nodes: Vec<ComputationNode>,
     stages: Vec<Stage>,
     auto_rebase: bool,
+    auto_rebase_pow2: bool,
     custom_rebase_factor: Option<i32>,
 }
 
@@ -79,6 +80,7 @@ impl<'a, 'b> HandlerBuilder<'a, 'b> {
             broadcast_nodes: vec![],
             stages: vec![],
             auto_rebase: false,
+            auto_rebase_pow2: false,
             custom_rebase_factor: None,
         }
     }
@@ -124,6 +126,15 @@ impl<'a, 'b> HandlerBuilder<'a, 'b> {
     /// to rebase the result.
     pub fn with_auto_rebase(mut self) -> Self {
         self.auto_rebase = true;
+        self
+    }
+
+    /// Automatically adds a power-of-two rebase node.
+    ///
+    /// This should only be used when the rebase factor is known to be a positive
+    /// power of two, such as fixed-point scale restoration after Mul/Square/Einsum.
+    pub fn with_auto_rebase_pow2(mut self) -> Self {
+        self.auto_rebase_pow2 = true;
         self
     }
 
@@ -260,10 +271,15 @@ impl<'a, 'b> HandlerBuilder<'a, 'b> {
         if let Some(factor) = self.determine_rebase_factor() {
             let prev_idx = current_output_idx.expect("Rebase requires a previous node");
             let output_dims = self.hctx.output_dims.clone();
+            let operator = if self.auto_rebase_pow2 {
+                Operator::ScalarConstDivPow2(ScalarConstDivPow2 { divisor: factor })
+            } else {
+                Operator::ScalarConstDiv(ScalarConstDiv { divisor: factor })
+            };
 
             builder.add_node(ComputationNode {
                 idx: builder.idx(node_offset),
-                operator: Operator::ScalarConstDiv(ScalarConstDiv { divisor: factor }),
+                operator,
                 inputs: vec![prev_idx],
                 output_dims,
             });
@@ -302,7 +318,7 @@ impl<'a, 'b> HandlerBuilder<'a, 'b> {
             return Some(factor);
         }
 
-        if self.auto_rebase {
+        if self.auto_rebase || self.auto_rebase_pow2 {
             // Find the last operator that might need rebase
             for stage in self.stages.iter().rev() {
                 let operator = match stage {

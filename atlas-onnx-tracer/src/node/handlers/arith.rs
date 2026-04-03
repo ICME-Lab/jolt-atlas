@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::{
     node::ComputationNode,
-    ops::{Constant, Cube, Mul, Operator, ScalarConstDiv},
+    ops::{Constant, Cube, Mul, Operator, ScalarConstDiv, ScalarConstDivPow2},
     simple_handler,
     utils::{handler_builder::HandlerBuilder, parser::DecompositionBuilder},
 };
@@ -47,7 +47,7 @@ fn build_mul(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         .simple_op(Operator::Mul(Mul { scale }));
 
     #[cfg(not(feature = "fused-ops"))]
-    let builder = builder.with_auto_rebase();
+    let builder = builder.with_auto_rebase_pow2();
 
     builder.build()
 }
@@ -85,11 +85,11 @@ fn handle_square(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 /// Builds Square(x) = x²/S to maintain scale S.
 ///
 /// When `pre_rebase_nonlinear` is **false** (default):
-///   Square(x) → ScalarConstDiv(x², S)
+///   Square(x) → ScalarConstDivPow2(x², S)
 ///
 /// HACK: When `pre_rebase_nonlinear` is **true** (for large models like GPT-2):
 ///   Decomposes into existing ops to avoid i32 overflow:
-///     x' = x / S          (ScalarConstDiv)
+///     x' = x / S          (ScalarConstDivPow2)
 ///     result = x' * x     (Mul, no rebase)
 ///   Since x' * x = x²/S, the result is already at scale S.
 ///   TODO: Remove pre_rebase_nonlinear path once fused i64 ops are default.
@@ -106,7 +106,7 @@ fn build_square(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         // Node 0: x' = x / S
         builder.add_node(ComputationNode {
             idx: builder.idx(0),
-            operator: Operator::ScalarConstDiv(ScalarConstDiv { divisor: s }),
+            operator: Operator::ScalarConstDivPow2(ScalarConstDivPow2 { divisor: s }),
             inputs: vec![x_idx],
             output_dims: output_dims.clone(),
         });
@@ -123,7 +123,7 @@ fn build_square(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     HandlerBuilder::new(hctx)
         .with_broadcast()
         .simple_op(Operator::Square(Default::default()))
-        .with_auto_rebase()
+        .with_auto_rebase_pow2()
         .build()
 }
 

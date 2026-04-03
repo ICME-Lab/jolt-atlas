@@ -277,12 +277,13 @@ impl ModelBuilder {
         output_dims: Vec<usize>,
     ) -> Wire {
         let id = self.alloc();
-        let node = ComputationNode::new(
-            id,
-            Operator::Gather(Gather { axis }),
-            vec![data, indices],
-            output_dims,
-        );
+        let dict_len = self.nodes[&data].output_dims[axis];
+        let operator = if dict_len.next_power_of_two() <= 65536 {
+            Operator::GatherSmall(GatherSmall { axis, dict_len })
+        } else {
+            Operator::GatherLarge(GatherLarge { axis, dict_len })
+        };
+        let node = ComputationNode::new(id, operator, vec![data, indices], output_dims);
         self.insert_node(node)
     }
 

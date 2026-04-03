@@ -32,7 +32,12 @@ impl From<&ComputationNode> for NodeRow {
             Operator::Broadcast(op) => format!("shape: {:?}", op.shape),
             Operator::Clamp(op) => format!("axes: {}, spread: {}", op.axes, op.max_spread),
             Operator::Einsum(op) => format!("eq: {}", op.equation),
-            Operator::Gather(op) => format!("axis: {}", op.axis),
+            Operator::GatherSmall(op) => {
+                format!("axis: {}, dict_len: {}", op.axis, op.dict_len)
+            }
+            Operator::GatherLarge(op) => {
+                format!("axis: {}, dict_len: {}", op.axis, op.dict_len)
+            }
             Operator::MoveAxis(op) => format!("src: {} → dst: {}", op.source, op.destination),
             Operator::Reshape(op) => format!("shape: {:?}", op.shape),
             Operator::Rsqrt(op) => format!("scale: {}", op.scale),

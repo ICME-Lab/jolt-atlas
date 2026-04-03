@@ -271,11 +271,17 @@ impl Model {
                 Operator::SoftmaxAxes(_) => {
                     LOG_K_CHUNK + log_2(*node.output_dims.last().unwrap_or(&1))
                 }
-                Operator::Gather(_) => {
+                Operator::GatherSmall(_) => {
                     let input_nodes = self.get_input_nodes(node);
                     let num_words = input_nodes[0].output_dims[0];
                     let num_indices = input_nodes[1].pow2_padded_num_output_elements();
                     log_2(num_words) + log_2(num_indices) // TODO: Gather ra virtualization
+                }
+                Operator::GatherLarge(_) => {
+                    let input_nodes = self.get_input_nodes(node);
+                    let num_words = input_nodes[0].output_dims[0].next_power_of_two();
+                    let num_indices = input_nodes[1].pow2_padded_num_output_elements();
+                    log_2(num_words) + log_2(num_indices)
                 }
                 _ => 1,
             })

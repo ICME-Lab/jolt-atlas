@@ -314,7 +314,10 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
 
             CommittedPolynomial::GatherRa(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
-                assert!(matches!(computation_node.operator, Operator::Gather(_)));
+                assert!(matches!(
+                    computation_node.operator,
+                    Operator::GatherSmall(_)
+                ));
                 let layer_data = Trace::layer_data(trace, computation_node);
                 let indexes = &layer_data.operands[1];
                 let non_zero_addresses: Vec<_> = indexes
@@ -327,6 +330,32 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
                     non_zero_addresses,
                     num_words,
+                ))
+            }
+            CommittedPolynomial::GatherRaD(node_idx, d_idx) => {
+                let computation_node = &model.graph.nodes[node_idx];
+                let Operator::GatherLarge(gather_op) = &computation_node.operator else {
+                    panic!("Expected GatherLarge operator for GatherRaD committed polynomial");
+                };
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let indexes = layer_data.operands[1].padded_next_power_of_two();
+                let lookup_indices: Vec<usize> =
+                    indexes.data().par_iter().map(|&x| x as usize).collect();
+                let num_words = gather_op.dict_len.next_power_of_two();
+                let one_hot_params = OneHotParams::from_config_and_log_K(
+                    &OneHotConfig::default(),
+                    num_words.log_2(),
+                );
+                let h_indices = subprotocols::shout::compute_instruction_h_indices(
+                    &lookup_indices,
+                    &one_hot_params,
+                );
+                MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                    h_indices[*d_idx]
+                        .par_iter()
+                        .map(|&h| h.map(|h| h as u16))
+                        .collect(),
+                    one_hot_params.k_chunk,
                 ))
             }
 

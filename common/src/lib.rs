@@ -51,6 +51,7 @@ pub enum CommittedPolynomial {
     RsqrtNodeInv(usize),                // Advice for `inv` in Rsqrt
     TeleportNodeQuotient(usize),        // Used for neural teleport
     GatherRa(usize),
+    GatherRaD(usize, usize),
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
@@ -187,6 +188,11 @@ impl CanonicalSerialize for CommittedPolynomial {
                 a.serialize_with_mode(&mut writer, compress)?;
                 b.serialize_with_mode(&mut writer, compress)?;
             }
+            Self::GatherRaD(a, b) => {
+                17u8.serialize_with_mode(&mut writer, compress)?;
+                a.serialize_with_mode(&mut writer, compress)?;
+                b.serialize_with_mode(&mut writer, compress)?;
+            }
         }
         Ok(())
     }
@@ -203,9 +209,8 @@ impl CanonicalSerialize for CommittedPolynomial {
             | Self::DivRangeCheckRaD(a, b)
             | Self::SqrtDivRangeCheckRaD(a, b)
             | Self::SqrtRangeCheckRaD(a, b)
-            | Self::TeleportRangeCheckRaD(a, b) => {
-                a.serialized_size(compress) + b.serialized_size(compress)
-            }
+            | Self::TeleportRangeCheckRaD(a, b)
+            | Self::GatherRaD(a, b) => a.serialized_size(compress) + b.serialized_size(compress),
             Self::SoftmaxExponentiationRaD(a, b, c) => {
                 a.serialized_size(compress)
                     + b.serialized_size(compress)
@@ -303,6 +308,10 @@ impl CanonicalDeserialize for CommittedPolynomial {
                 usize::deserialize_with_mode(&mut reader, compress, validate)?,
             )),
             16 => Ok(Self::SigmoidRaD(
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+                usize::deserialize_with_mode(&mut reader, compress, validate)?,
+            )),
+            17 => Ok(Self::GatherRaD(
                 usize::deserialize_with_mode(&mut reader, compress, validate)?,
                 usize::deserialize_with_mode(&mut reader, compress, validate)?,
             )),

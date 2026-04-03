@@ -89,6 +89,12 @@ where
 }
 
 pub trait OpeningAccumulator<F: JoltField> {
+    fn try_get_virtual_polynomial_opening(
+        &self,
+        polynomial: VirtualPolynomial,
+        sumcheck: SumcheckId,
+    ) -> Option<(OpeningPoint<BIG_ENDIAN, F>, F)>;
+
     fn get_virtual_polynomial_opening(
         &self,
         polynomial: VirtualPolynomial,
@@ -108,6 +114,17 @@ pub trait OpeningAccumulator<F: JoltField> {
 }
 
 impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
+    fn try_get_virtual_polynomial_opening(
+        &self,
+        polynomial: VirtualPolynomial,
+        sumcheck: SumcheckId,
+    ) -> Option<(OpeningPoint<BIG_ENDIAN, F>, F)> {
+        let key = OpeningId::Virtual(polynomial, sumcheck);
+        self.openings
+            .get(&key)
+            .map(|(point, claim)| (point.clone(), *claim))
+    }
+
     fn get_virtual_polynomial_opening(
         &self,
         polynomial: VirtualPolynomial,
@@ -502,6 +519,17 @@ pub struct OpeningReductionState<F: JoltField> {
 }
 
 impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
+    fn try_get_virtual_polynomial_opening(
+        &self,
+        polynomial: VirtualPolynomial,
+        sumcheck: SumcheckId,
+    ) -> Option<(OpeningPoint<BIG_ENDIAN, F>, F)> {
+        let key = OpeningId::Virtual(polynomial, sumcheck);
+        self.openings
+            .get(&key)
+            .map(|(point, claim)| (point.clone(), *claim))
+    }
+
     fn get_virtual_polynomial_opening(
         &self,
         polynomial: VirtualPolynomial,

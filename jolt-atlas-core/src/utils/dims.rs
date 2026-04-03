@@ -147,6 +147,14 @@ pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
             dims_extractor: extract_ak_k_mn_dims,
         },
     ),
+    /* **************** m,an->a1nm **************** */
+    (
+        "m,an->abnm",
+        EinsumConfig {
+            equation: "m,an->a1nm",
+            dims_extractor: extract_m_an_a1nm_dims,
+        },
+    ),
     /* **************** mbk,nbk->bmn **************** */
     (
         "mbk,nbk->bmn",
@@ -214,6 +222,28 @@ pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
             dims_extractor: extract_mbk_bnk_bmn_dims,
         },
     ),
+    /* **************** rbmk,rbnk->bmn **************** */
+    (
+        "abmk,abnk->abmn",
+        EinsumConfig {
+            equation: "rbmk,rbnk->bmn",
+            dims_extractor: extract_abmk_abnk_abmn_dims,
+        },
+    ),
+    (
+        "acbmk,kcn->cbmn",
+        EinsumConfig {
+            equation: "rbmk,rbnk->bmn",
+            dims_extractor: extract_acbmk_kcn_cbmn_dims,
+        },
+    ),
+    (
+        "cbmk,cbkn->amn",
+        EinsumConfig {
+            equation: "rbmk,rbnk->bmn",
+            dims_extractor: extract_cbmk_cbkn_amn_dims,
+        },
+    ),
 ];
 
 fn extract_mk_kn_mn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
@@ -251,6 +281,19 @@ fn extract_ak_k_mn_dims(computation_node: &ComputationNode, model: &Model) -> Ei
     let b_node = &model[b_idx];
     let k = b_node.output_dims[0];
     EinsumDims::new(vec![k], vec![k], vec![1, 1])
+}
+
+fn extract_m_an_a1nm_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
+    let [a_idx, b_idx] = computation_node.inputs[..] else {
+        panic!("Expected exactly two inputs for m,an->abnm operation")
+    };
+    let a_node = &model[a_idx];
+    let b_node = &model[b_idx];
+    let m = a_node.output_dims[0];
+    let a = b_node.output_dims[0];
+    let n = b_node.output_dims[1];
+
+    EinsumDims::new(vec![m], vec![a, n], computation_node.output_dims.clone())
 }
 
 fn extract_mbk_nbk_bmn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
@@ -327,6 +370,52 @@ fn extract_mbk_bkn_amn_dims(computation_node: &ComputationNode, model: &Model) -
     let bk = b * k;
 
     EinsumDims::new(vec![m, bk], vec![bk, n], vec![m, n])
+}
+
+fn extract_abmk_abnk_abmn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
+    let [a_idx, b_idx] = computation_node.inputs[..] else {
+        panic!("Expected exactly two inputs for abmk,abnk->abmn operation")
+    };
+    let a_node = &model[a_idx];
+    let b_node = &model[b_idx];
+    let a = a_node.output_dims[0];
+    let b = a_node.output_dims[1];
+    let m = a_node.output_dims[2];
+    let k = a_node.output_dims[3];
+    let n = b_node.output_dims[2];
+
+    EinsumDims::new(vec![a * b, m, k], vec![a * b, n, k], vec![a * b, m, n])
+}
+
+fn extract_acbmk_kcn_cbmn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
+    let [a_idx, b_idx] = computation_node.inputs[..] else {
+        panic!("Expected exactly two inputs for acbmk,kcn->cbmn operation")
+    };
+    let a_node = &model[a_idx];
+    let b_node = &model[b_idx];
+    let a = a_node.output_dims[0];
+    let c = a_node.output_dims[1];
+    let b = a_node.output_dims[2];
+    let m = a_node.output_dims[3];
+    let k = a_node.output_dims[4];
+    let n = b_node.output_dims[2];
+
+    EinsumDims::new(vec![a, c * b, m, k], vec![k, c, n], vec![c * b, m, n])
+}
+
+fn extract_cbmk_cbkn_amn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
+    let [a_idx, b_idx] = computation_node.inputs[..] else {
+        panic!("Expected exactly two inputs for cbmk,cbkn->amn operation")
+    };
+    let a_node = &model[a_idx];
+    let b_node = &model[b_idx];
+    let c = a_node.output_dims[0];
+    let b = a_node.output_dims[1];
+    let m = a_node.output_dims[2];
+    let k = a_node.output_dims[3];
+    let n = b_node.output_dims[2];
+
+    EinsumDims::new(vec![c * b, m, k], vec![c * b, n, k], vec![m, n])
 }
 
 /// Stores preprocessed dims (from the Model) for einsum equations
@@ -576,4 +665,31 @@ pub fn transpose_flat_matrix<F: JoltField>(
         }
     }
     transposed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EINSUM_REGISTRY;
+
+    #[test]
+    fn test_rbmk_rbnk_bmn_patterns_normalize_to_shared_family() {
+        for pattern in ["abmk,abnk->abmn", "acbmk,kcn->cbmn", "cbmk,cbkn->amn"] {
+            let config = EINSUM_REGISTRY
+                .iter()
+                .find(|(registered, _)| *registered == pattern)
+                .map(|(_, config)| config)
+                .expect("expected pattern in einsum registry");
+            assert_eq!(config.equation, "rbmk,rbnk->bmn");
+        }
+    }
+
+    #[test]
+    fn test_m_an_a1nm_pattern_normalizes_to_shared_family() {
+        let config = EINSUM_REGISTRY
+            .iter()
+            .find(|(registered, _)| *registered == "m,an->abnm")
+            .map(|(_, config)| config)
+            .expect("expected pattern in einsum registry");
+        assert_eq!(config.equation, "m,an->a1nm");
+    }
 }

@@ -51,19 +51,18 @@ pub mod mk_kn_mn;
 /// Shared family for remaining rbmk,rbnk->bmn-style patterns.
 pub mod rbmk_rbnk_bmn;
 
-// TODO(Qwen): the remaining Qwen einsum patterns still need new prover support.
+// Qwen einsum pattern coverage:
 //
-// Already normalized through EINSUM_REGISTRY into existing provers:
+// Normalized through EINSUM_REGISTRY into existing provers:
 // - amk,kn->amn
 // - amk,kn->mn
 // - mk,kn->amn
 // - m,an->abnm   (canonicalized as m,an->a1nm)
 //
-// Still requiring new prover work:
+// Routed through the shared rbmk,rbnk->bmn prover family:
 // - abmk,abnk->abmn
 // - acbmk,kcn->cbmn
 // - cbmk,cbkn->amn
-//   These three are now routed through the shared rbmk,rbnk->bmn family.
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
     #[tracing::instrument(skip_all, name = "Einsum::prove")]

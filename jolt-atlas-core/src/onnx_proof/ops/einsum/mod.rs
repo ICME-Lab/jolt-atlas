@@ -5,9 +5,11 @@ use crate::{
                 bmk_bkn_mbn::{BmkBknMbnParams, BmkBknMbnProver, BmkBknMbnVerifier},
                 bmk_kbn_mbn::{BmkKbnMbnParams, BmkKbnMbnProver, BmkKbnMbnVerifier},
                 k_nk_n::{KNkNParams, KNkNProver, KNkNVerifier},
+                m_an_a1nm::{MAnA1nmParams, MAnA1nmProver, MAnA1nmVerifier},
                 mbk_bnk_bmn::{MbkBnkBmnParams, MbkBnkBmnProver, MbkBnkBmnVerifier},
                 mbk_nbk_bmn::{MbkNbkBmnParams, MbkNbkBmnProver, MbkNbkBmnVerifier},
                 mk_kn_mn::{MkKnMnParams, MkKnMnProver, MkKnMnVerifier},
+                rbmk_rbnk_bmn::{RbmkRbnkBmnParams, RbmkRbnkBmnProver, RbmkRbnkBmnVerifier},
             },
             OperatorProofTrait, Prover, Verifier,
         },
@@ -38,25 +40,29 @@ pub mod bmk_bkn_mbn;
 pub mod bmk_kbn_mbn;
 /// Einstein summation for vector-matrix multiply: k,nk->n
 pub mod k_nk_n;
+/// Family for outer-product / broadcast pattern: m,an->a1nm
+pub mod m_an_a1nm;
 /// Einstein summation for batch matrix-matrix multiply: mbk,bnk->bmn
 pub mod mbk_bnk_bmn;
 /// Einstein summation for batch matrix-matrix multiply: mbk,nbk->bmn
 pub mod mbk_nbk_bmn;
 /// Einstein summation for matrix-matrix multiply: mk,kn->mn
 pub mod mk_kn_mn;
+/// Shared family for remaining rbmk,rbnk->bmn-style patterns.
+pub mod rbmk_rbnk_bmn;
 
-// TODO(Qwen): add proof implementations for the remaining einsum patterns that
-// show up in the Qwen graph but are not yet covered by the current prover:
-// - m,an->abnm
-// - abmk,abnk->abmn
-// - acbmk,kcn->cbmn
-// - cbmk,cbkn->amn
+// Qwen einsum pattern coverage:
 //
-// Notes:
+// Normalized through EINSUM_REGISTRY into existing provers:
 // - amk,kn->amn
 // - amk,kn->mn
 // - mk,kn->amn
-// are already normalized through EINSUM_REGISTRY into the mk,kn->mn prover.
+// - m,an->abnm   (canonicalized as m,an->a1nm)
+//
+// Routed through the shared rbmk,rbnk->bmn prover family:
+// - abmk,abnk->abmn
+// - acbmk,kcn->cbmn
+// - cbmk,cbkn->amn
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
     #[tracing::instrument(skip_all, name = "Einsum::prove")]
@@ -140,6 +146,10 @@ impl EinsumProver {
                 let params = KNkNParams::new(computation_node, einsum_dims, accumulator);
                 Box::new(KNkNProver::initialize(trace, params))
             }
+            "m,an->a1nm" => {
+                let params = MAnA1nmParams::new(computation_node, einsum_dims, accumulator);
+                Box::new(MAnA1nmProver::initialize(trace, params))
+            }
             "bmk,kbn->mbn" => {
                 let params = BmkKbnMbnParams::new(computation_node, einsum_dims, accumulator);
                 Box::new(BmkKbnMbnProver::initialize(trace, params))
@@ -155,6 +165,10 @@ impl EinsumProver {
             "mbk,bnk->bmn" => {
                 let params = MbkBnkBmnParams::new(computation_node, einsum_dims, accumulator);
                 Box::new(MbkBnkBmnProver::initialize(trace, params))
+            }
+            "rbmk,rbnk->bmn" => {
+                let params = RbmkRbnkBmnParams::new(computation_node, einsum_dims, accumulator);
+                Box::new(RbmkRbnkBmnProver::initialize(trace, params))
             }
             _ => panic!("unexpected equation: {}", config.equation),
         }
@@ -198,6 +212,11 @@ impl EinsumVerifier {
                 einsum_dims,
                 accumulator,
             )),
+            "m,an->a1nm" => Box::new(MAnA1nmVerifier::new(
+                computation_node,
+                einsum_dims,
+                accumulator,
+            )),
             "mbk,nbk->bmn" => Box::new(MbkNbkBmnVerifier::new(
                 computation_node,
                 einsum_dims,
@@ -214,6 +233,11 @@ impl EinsumVerifier {
                 accumulator,
             )),
             "bmk,bkn->mbn" => Box::new(BmkBknMbnVerifier::new(
+                computation_node,
+                einsum_dims,
+                accumulator,
+            )),
+            "rbmk,rbnk->bmn" => Box::new(RbmkRbnkBmnVerifier::new(
                 computation_node,
                 einsum_dims,
                 accumulator,

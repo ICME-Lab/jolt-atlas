@@ -144,6 +144,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MAnA1nmProver
         &self.params
     }
 
+    #[tracing::instrument(skip_all, name = "MAnA1nmProver::compute_message")]
     fn compute_message(
         &mut self,
         _round: usize,

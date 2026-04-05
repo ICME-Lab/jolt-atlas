@@ -115,6 +115,15 @@ macro_rules! define_operators {
                     )*
                 }
             }
+
+            /// Return the enum variant name without formatting the inner payload.
+            pub fn variant_name(&self) -> &'static str {
+                match self {
+                    $(
+                        Operator::$operator(_) => stringify!($operator),
+                    )*
+                }
+            }
         }
     };
 }

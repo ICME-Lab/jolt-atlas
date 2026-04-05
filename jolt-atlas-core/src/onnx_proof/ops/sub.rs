@@ -72,6 +72,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SubProver<F> 
         &self.params
     }
 
+    #[tracing::instrument(skip_all, name = "SubSumcheckProver::compute_message")]
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         let Self {
             eq_r_node_output,

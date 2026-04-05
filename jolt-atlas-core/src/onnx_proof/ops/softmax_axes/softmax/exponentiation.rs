@@ -165,6 +165,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReadRafProver
         &self.params
     }
 
+    #[tracing::instrument(
+        skip_all,
+        name = "SoftmaxExponentiationSumcheckProver::compute_message"
+    )]
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         let Self { F, val, int, .. } = self;
         let half_poly_len = val.len() / 2;

@@ -98,6 +98,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SumProver<F> 
         &self.params
     }
 
+    #[tracing::instrument(skip_all, name = "SoftmaxSumSumcheckProver::compute_message")]
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         let Self { operand, .. } = self;
         let half_poly_len = operand.len() / 2;

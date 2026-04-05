@@ -10,33 +10,47 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
+use tracing::info_span;
 
 /// Node-scoped evaluation reduction helper used by ONNX proving and verification.
 pub struct NodeEvalReduction;
 
 impl NodeEvalReduction {
     /// Run node-output evaluation reduction on the prover side for the given node.
+    #[tracing::instrument(skip_all, name = "NodeEvalReduction::prove")]
     pub fn prove<F: JoltField, T: Transcript>(
         prover: &mut Prover<F, T>,
         computation_node: &ComputationNode,
     ) -> EvalReductionProof<F> {
         let node_idx = computation_node.idx;
-        let openings = prover.accumulator.get_node_openings(node_idx);
+        let openings = {
+            let _span = info_span!("NodeEvalReduction::prove/get_node_openings").entered();
+            prover.accumulator.get_node_openings(node_idx)
+        };
 
         let LayerData {
             operands: _,
             output,
         } = Trace::layer_data(&prover.trace, computation_node);
-        let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
+        let output_mle = {
+            let _span = info_span!("NodeEvalReduction::prove/output_mle").entered();
+            MultilinearPolynomial::from(output.padded_next_power_of_two())
+        };
 
-        let (proof, reduced) =
+        let (proof, reduced) = {
+            let _span =
+                info_span!("NodeEvalReduction::prove/EvalReductionProtocol::prove").entered();
             EvalReductionProtocol::prove(&openings, output_mle, &mut prover.transcript)
-                .expect("Proving evaluation reduction should not fail");
+                .expect("Proving evaluation reduction should not fail")
+        };
 
-        prover
-            .accumulator
-            .reduced_evaluations
-            .insert(node_idx, reduced);
+        {
+            let _span = info_span!("NodeEvalReduction::prove/store_reduced").entered();
+            prover
+                .accumulator
+                .reduced_evaluations
+                .insert(node_idx, reduced);
+        }
 
         proof
     }

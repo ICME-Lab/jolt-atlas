@@ -48,7 +48,8 @@ mod soundness_tests;
 pub use preprocessing::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
 };
-pub use prover::Prover;
+pub(crate) use prover::record_iop_node_phase;
+pub use prover::{snapshot_prove_exclusive_metrics, ProveExclusiveMetrics, Prover};
 pub use types::{Claims, ProofId, ProofType, ProverDebugInfo};
 pub use verifier::Verifier;
 
@@ -88,46 +89,64 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         pp: &AtlasProverPreprocessing<F, PCS>,
         inputs: &[Tensor<i32>],
     ) -> (Self, ModelExecutionIO, Option<ProverDebugInfo<F, T>>) {
+        prover::reset_prove_exclusive_metrics();
         // Generate trace and io
+        let timing = std::time::Instant::now();
         let trace = pp.model().trace(inputs);
+        prover::record_top_level_phase("trace", timing.elapsed());
+        let timing = std::time::Instant::now();
         let io = Trace::io(&trace, pp.model());
+        prover::record_top_level_phase("trace_io", timing.elapsed());
 
         // Initialize prover state
         // TODO: Deduplicate shared preprocessing, which is present in both AtlasProverPreprocessing and Prover state
+        let timing = std::time::Instant::now();
         let mut prover: Prover<F, T> = Prover::new(pp.shared.clone(), trace);
+        prover::record_top_level_phase("prover_new", timing.elapsed());
         let mut proofs = BTreeMap::new();
 
         // Commit to witness polynomials and append commitments to transcript
+        let timing = std::time::Instant::now();
         let (poly_map, commitments) = Self::commit_witness_polynomials(
             pp.model(),
             &prover.trace,
             &pp.generators,
             &mut prover.transcript,
         );
+        prover::record_top_level_phase("commit_witness_polynomials", timing.elapsed());
 
         // Evaluate output MLE at random point τ
+        let timing = std::time::Instant::now();
         Self::output_claim(&mut prover);
+        prover::record_top_level_phase("output_claim", timing.elapsed());
 
         // IOP portion
         let mut eval_reduction_proofs = BTreeMap::new();
+        let timing = std::time::Instant::now();
         Self::iop(
             pp.model().nodes(),
             &mut prover,
             &mut proofs,
             &mut eval_reduction_proofs,
         );
+        prover::record_top_level_phase("iop", timing.elapsed());
 
         // Reduction sum-check + PCS::prove
+        let timing = std::time::Instant::now();
         let reduced_opening_proof =
             Self::prove_reduced_openings(&mut prover, &poly_map, &pp.generators);
-        Self::finalize_proof(
+        prover::record_top_level_phase("prove_reduced_openings", timing.elapsed());
+        let timing = std::time::Instant::now();
+        let result = Self::finalize_proof(
             prover,
             io,
             commitments,
             proofs,
             eval_reduction_proofs,
             reduced_opening_proof,
-        )
+        );
+        prover::record_top_level_phase("finalize_proof", timing.elapsed());
+        result
     }
 
     /// Verify a proof for an ONNX neural network computation.

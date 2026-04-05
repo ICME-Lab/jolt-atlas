@@ -22,8 +22,11 @@ use jolt_atlas_core::onnx_proof::ops::{
     slice::{reset_slice_selector_build_metrics, snapshot_slice_selector_build_metrics},
 };
 use jolt_atlas_core::onnx_proof::{
-    AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
-    Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
+    snapshot_prove_exclusive_metrics, AtlasProverPreprocessing, AtlasSharedPreprocessing,
+    AtlasVerifierPreprocessing, Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
+};
+use joltworks::subprotocols::sumcheck::{
+    reset_batched_sumcheck_prove_metrics, snapshot_batched_sumcheck_prove_metrics,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{
@@ -219,6 +222,78 @@ impl QwenMetrics {
         println!("  verify: {:.2?}", self.verify);
         println!("  total: {:.2?}", self.total);
 
+        let prove_exclusive = snapshot_prove_exclusive_metrics();
+        println!("Prove top-level phases:");
+        let top_level_total: Duration = prove_exclusive
+            .top_level
+            .iter()
+            .map(|phase| phase.duration)
+            .sum();
+        for phase in &prove_exclusive.top_level {
+            println!("  {}: {:.2?}", phase.name, phase.duration);
+        }
+        println!("  summed_top_level: {top_level_total:.2?}");
+
+        println!("Reduced openings phases:");
+        let reduced_total: Duration = prove_exclusive
+            .reduced_openings
+            .iter()
+            .map(|phase| phase.duration)
+            .sum();
+        for phase in &prove_exclusive.reduced_openings {
+            println!("  {}: {:.2?}", phase.name, phase.duration);
+        }
+        println!("  summed_reduced_openings: {reduced_total:.2?}");
+
+        let mut op_agg: HashMap<String, (u64, Duration)> = HashMap::new();
+        for node in &prove_exclusive.iop_nodes {
+            let entry = op_agg.entry(node.op_name.clone()).or_default();
+            entry.0 += 1;
+            entry.1 += node.duration;
+        }
+        let mut op_phase_agg: HashMap<(String, String), (u64, Duration)> = HashMap::new();
+        for phase in &prove_exclusive.iop_node_phases {
+            let entry = op_phase_agg
+                .entry((phase.op_name.clone(), phase.phase_name.clone()))
+                .or_default();
+            entry.0 += 1;
+            entry.1 += phase.duration;
+        }
+        let mut op_rows: Vec<_> = op_agg.into_iter().collect();
+        op_rows.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+        let mut op_phase_rows: Vec<_> = op_phase_agg.into_iter().collect();
+        op_phase_rows.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+        let iop_total: Duration = prove_exclusive
+            .iop_nodes
+            .iter()
+            .map(|node| node.duration)
+            .sum();
+        let mut node_rows = prove_exclusive.iop_nodes.clone();
+        node_rows.sort_by(|a, b| b.duration.cmp(&a.duration));
+        println!("IOP top nodes:");
+        for node in node_rows.iter().take(25) {
+            println!(
+                "  node {} {}: {:.2?}",
+                node.idx, node.op_name, node.duration
+            );
+        }
+        println!("IOP per-op totals:");
+        for (op_name, (count, duration)) in op_rows.iter().take(25) {
+            println!("  {op_name}: total={duration:.2?}, count={count}");
+        }
+        println!("  summed_iop_nodes: {iop_total:.2?}");
+        println!("IOP per-op phase totals:");
+        for ((op_name, phase_name), (count, duration)) in op_phase_rows.iter().take(40) {
+            println!("  {op_name}/{phase_name}: total={duration:.2?}, count={count}");
+        }
+        println!("Constant node phases:");
+        for ((op_name, phase_name), (count, duration)) in op_phase_rows
+            .iter()
+            .filter(|((op_name, _), _)| op_name == "Constant")
+        {
+            println!("  {op_name}/{phase_name}: total={duration:.2?}, count={count}");
+        }
+
         span_metrics.print_top("Top spans", 25, |_| true);
         span_metrics.print_top("Top op spans", 25, |name| {
             name.contains("::prove")
@@ -226,6 +301,12 @@ impl QwenMetrics {
                 || name.contains("Prover::initialize")
                 || name.contains("Verifier::new")
                 || name.contains("SumcheckProver::compute_message")
+        });
+        span_metrics.print_top("Top compute_message spans", 40, |name| {
+            name.contains("compute_message")
+        });
+        span_metrics.print_top("Top eval reduction spans", 30, |name| {
+            name.contains("EvalReduction") || name.contains("NodeEvalReduction")
         });
 
         let reshape = snapshot_reshape_selector_build_metrics();
@@ -291,6 +372,53 @@ impl QwenMetrics {
         println!("  output_bits: {:.2?}", slice.output_bits);
         println!("  eq_evals: {:.2?}", slice.eq_evals);
         println!("  eq_lookup: {:.2?}", slice.eq_lookup);
+
+        let batched_sumcheck = snapshot_batched_sumcheck_prove_metrics();
+        println!("BatchedSumcheck::prove metrics:");
+        println!("  calls: {}", batched_sumcheck.calls);
+        println!("  instances_total: {}", batched_sumcheck.instances_total);
+        println!("  max_instances: {}", batched_sumcheck.max_instances);
+        println!("  rounds_total: {}", batched_sumcheck.rounds_total);
+        println!("  max_rounds: {}", batched_sumcheck.max_rounds);
+        println!("  total: {:.2?}", batched_sumcheck.total);
+        println!(
+            "  append_input_claims: {:.2?}",
+            batched_sumcheck.append_input_claims
+        );
+        println!(
+            "  batching_coeffs: {:.2?}",
+            batched_sumcheck.batching_coeffs
+        );
+        println!(
+            "  initialize_individual_claims: {:.2?}",
+            batched_sumcheck.initialize_individual_claims
+        );
+        println!(
+            "  compute_messages: {:.2?}",
+            batched_sumcheck.compute_messages
+        );
+        println!(
+            "  combine_univariate_polys: {:.2?}",
+            batched_sumcheck.combine_univariate_polys
+        );
+        println!("  compress: {:.2?}", batched_sumcheck.compress);
+        println!(
+            "  transcript_and_challenge: {:.2?}",
+            batched_sumcheck.transcript_and_challenge
+        );
+        println!(
+            "  update_individual_claims: {:.2?}",
+            batched_sumcheck.update_individual_claims
+        );
+        println!(
+            "  ingest_challenges: {:.2?}",
+            batched_sumcheck.ingest_challenges
+        );
+        println!(
+            "  finalize_instances: {:.2?}",
+            batched_sumcheck.finalize_instances
+        );
+        println!("  cache_openings: {:.2?}", batched_sumcheck.cache_openings);
     }
 }
 
@@ -356,6 +484,7 @@ fn main() {
     reset_reshape_selector_build_metrics();
     reset_concat_selector_build_metrics();
     reset_slice_selector_build_metrics();
+    reset_batched_sumcheck_prove_metrics();
 
     let seq_len: usize = 16;
     let run_args = RunArgs::new([

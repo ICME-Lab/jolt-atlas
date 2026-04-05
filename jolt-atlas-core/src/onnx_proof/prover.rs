@@ -18,6 +18,7 @@ use atlas_onnx_tracer::{
         Model,
     },
     node::ComputationNode,
+    ops::Operator,
 };
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
@@ -32,7 +33,118 @@ use joltworks::{
     transcripts::Transcript,
     utils::math::Math,
 };
-use std::collections::BTreeMap;
+use std::time::Duration;
+use std::{
+    collections::BTreeMap,
+    sync::{Mutex, OnceLock},
+    time::Instant,
+};
+
+#[derive(Clone, Debug, Default)]
+pub struct ProvePhaseMetric {
+    pub name: String,
+    pub duration: Duration,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ProveNodeMetric {
+    pub idx: usize,
+    pub op_name: String,
+    pub duration: Duration,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ProveNodePhaseMetric {
+    pub idx: usize,
+    pub op_name: String,
+    pub phase_name: String,
+    pub duration: Duration,
+}
+
+#[derive(Clone, Debug, Default)]
+/// Exclusive timing breakdown for `ONNXProof::prove`.
+pub struct ProveExclusiveMetrics {
+    /// Top-level sequential phases that sum to the total prove time.
+    pub top_level: Vec<ProvePhaseMetric>,
+    /// Exclusive per-node timings recorded during the IOP loop.
+    pub iop_nodes: Vec<ProveNodeMetric>,
+    /// Exclusive per-node subphase timings recorded during the IOP loop.
+    pub iop_node_phases: Vec<ProveNodePhaseMetric>,
+    /// Sequential subphases inside `prove_reduced_openings`.
+    pub reduced_openings: Vec<ProvePhaseMetric>,
+}
+
+static PROVE_EXCLUSIVE_METRICS: OnceLock<Mutex<ProveExclusiveMetrics>> = OnceLock::new();
+
+fn prove_exclusive_metrics() -> &'static Mutex<ProveExclusiveMetrics> {
+    PROVE_EXCLUSIVE_METRICS.get_or_init(|| Mutex::new(ProveExclusiveMetrics::default()))
+}
+
+pub fn reset_prove_exclusive_metrics() {
+    *prove_exclusive_metrics()
+        .lock()
+        .expect("prove metrics mutex poisoned") = ProveExclusiveMetrics::default();
+}
+
+/// Snapshot the current exclusive timing breakdown for `ONNXProof::prove`.
+pub fn snapshot_prove_exclusive_metrics() -> ProveExclusiveMetrics {
+    prove_exclusive_metrics()
+        .lock()
+        .expect("prove metrics mutex poisoned")
+        .clone()
+}
+
+pub(crate) fn record_top_level_phase(name: &str, duration: Duration) {
+    let mut metrics = prove_exclusive_metrics()
+        .lock()
+        .expect("prove metrics mutex poisoned");
+    metrics.top_level.push(ProvePhaseMetric {
+        name: name.to_string(),
+        duration,
+    });
+}
+
+pub(crate) fn record_iop_node(idx: usize, op_name: &str, duration: Duration) {
+    let mut metrics = prove_exclusive_metrics()
+        .lock()
+        .expect("prove metrics mutex poisoned");
+    metrics.iop_nodes.push(ProveNodeMetric {
+        idx,
+        op_name: op_name.to_string(),
+        duration,
+    });
+}
+
+pub(crate) fn record_iop_node_phase(
+    idx: usize,
+    op_name: &str,
+    phase_name: &str,
+    duration: Duration,
+) {
+    let mut metrics = prove_exclusive_metrics()
+        .lock()
+        .expect("prove metrics mutex poisoned");
+    metrics.iop_node_phases.push(ProveNodePhaseMetric {
+        idx,
+        op_name: op_name.to_string(),
+        phase_name: phase_name.to_string(),
+        duration,
+    });
+}
+
+pub(crate) fn record_reduced_openings_phase(name: &str, duration: Duration) {
+    let mut metrics = prove_exclusive_metrics()
+        .lock()
+        .expect("prove metrics mutex poisoned");
+    metrics.reduced_openings.push(ProvePhaseMetric {
+        name: name.to_string(),
+        duration,
+    });
+}
+
+fn op_variant_name(op: &Operator) -> String {
+    op.variant_name().to_string()
+}
 
 // ---------------------------------------------------------------------------
 // Prover state
@@ -129,7 +241,9 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
     ) {
         for (_, node) in computation_nodes.iter().rev() {
+            let timing = Instant::now();
             let (eval_reduction_proof, execution_proofs) = OperatorProver::prove(node, prover);
+            record_iop_node(node.idx, &op_variant_name(&node.operator), timing.elapsed());
             eval_reduction_proofs.insert(node.idx, eval_reduction_proof);
             proofs.extend(execution_proofs);
         }
@@ -144,21 +258,30 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         if poly_map.is_empty() {
             None
         } else {
+            let timing = Instant::now();
             prover.accumulator.prepare_for_sumcheck(poly_map);
+            record_reduced_openings_phase("prepare_for_sumcheck", timing.elapsed());
 
             // Run sumcheck
+            let timing = Instant::now();
             let (accumulator_sumcheck_proof, r_sumcheck_acc) = prover
                 .accumulator
                 .prove_batch_opening_sumcheck(&mut prover.transcript);
+            record_reduced_openings_phase("prove_batch_opening_sumcheck", timing.elapsed());
 
             // Finalize sumcheck (uses claims cached via cache_openings, derives gamma, cleans up)
+            let timing = Instant::now();
             let state = prover
                 .accumulator
                 .finalize_batch_opening_sumcheck(r_sumcheck_acc.clone(), &mut prover.transcript);
+            record_reduced_openings_phase("finalize_batch_opening_sumcheck", timing.elapsed());
             let sumcheck_claims: Vec<F> = state.sumcheck_claims.clone();
             // Build RLC
+            let timing = Instant::now();
             let rlc = build_materialized_rlc(&state.gamma_powers, poly_map);
+            record_reduced_openings_phase("build_materialized_rlc", timing.elapsed());
             // Create joint opening proof
+            let timing = Instant::now();
             let joint_opening_proof = PCS::prove(
                 generators,
                 &rlc,
@@ -166,6 +289,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                 None,
                 &mut prover.transcript,
             );
+            record_reduced_openings_phase("pcs_prove", timing.elapsed());
             Some(ReducedOpeningProof {
                 sumcheck_proof: accumulator_sumcheck_proof,
                 sumcheck_claims,

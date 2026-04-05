@@ -146,6 +146,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MbkBnkBmnProv
         &self.params
     }
 
+    #[tracing::instrument(skip_all, name = "MbkBnkBmnProver::compute_message")]
     fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
         let Self {
             left_operand,

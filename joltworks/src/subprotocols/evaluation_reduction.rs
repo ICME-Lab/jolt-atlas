@@ -271,6 +271,7 @@ fn group_by_variable<F: JoltField, Ref: AsRef<[F]>>(evaluation_points: &[Ref]) -
 pub struct EvalReductionProtocol;
 
 impl EvalReductionProtocol {
+    #[tracing::instrument(skip_all, name = "EvalReductionProtocol::prove")]
     pub fn prove<F: JoltField, T: Transcript>(
         openings: &[&Opening<F>],
         output_mle: MultilinearPolynomial<F>,

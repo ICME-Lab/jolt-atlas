@@ -557,6 +557,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RbmkRbnkBmnPr
         &self.params
     }
 
+    #[tracing::instrument(skip_all, name = "RbmkRbnkBmnProver::compute_message")]
     fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
         match self.params.variant {
             RbmkRbnkBmnVariant::AbmkAbnkAbmn {

@@ -127,7 +127,7 @@ pub use square::{SquareParams, SquareProver, SquareVerifier};
 use std::collections::BTreeMap;
 pub use sub::{SubParams, SubProver, SubVerifier};
 
-use crate::onnx_proof::{ProofId, Prover, Verifier};
+use crate::onnx_proof::{record_iop_node_phase, ProofId, Prover, Verifier};
 
 /// Standard execution proofs emitted by an operator.
 type ExecutionProofs<F, T> = Vec<(ProofId, SumcheckInstanceProof<F, T>)>;
@@ -331,14 +331,24 @@ impl OperatorProver {
         T: Transcript,
         Op: OperatorProofTrait<F, T>,
     {
+        let op_name = node.operator.variant_name().to_string();
         match operator.reduction_flow() {
             ReductionFlow::Default => {
+                let eval_timing = std::time::Instant::now();
                 let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
+                record_iop_node_phase(node.idx, &op_name, "eval_reduction", eval_timing.elapsed());
+                let execution_timing = std::time::Instant::now();
                 let execution_proofs = operator.prove(node, prover);
+                record_iop_node_phase(node.idx, &op_name, "execution", execution_timing.elapsed());
                 // Store eval reduction proof and execution proofs as needed
                 (eval_reduction_proof, execution_proofs)
             }
-            ReductionFlow::Custom => operator.prove_with_reduction(node, prover),
+            ReductionFlow::Custom => {
+                let custom_timing = std::time::Instant::now();
+                let result = operator.prove_with_reduction(node, prover);
+                record_iop_node_phase(node.idx, &op_name, "custom", custom_timing.elapsed());
+                result
+            }
         }
     }
 }

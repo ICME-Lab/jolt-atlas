@@ -17,7 +17,53 @@ use crate::{
 };
 
 use ark_serialize::*;
-use std::marker::PhantomData;
+use std::{
+    marker::PhantomData,
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
+};
+
+#[derive(Clone, Debug, Default)]
+pub struct BatchedSumcheckProveMetrics {
+    pub calls: u64,
+    pub instances_total: u64,
+    pub max_instances: usize,
+    pub rounds_total: u64,
+    pub max_rounds: usize,
+    pub total: Duration,
+    pub append_input_claims: Duration,
+    pub batching_coeffs: Duration,
+    pub initialize_individual_claims: Duration,
+    pub compute_messages: Duration,
+    pub combine_univariate_polys: Duration,
+    pub compress: Duration,
+    pub transcript_and_challenge: Duration,
+    pub update_individual_claims: Duration,
+    pub ingest_challenges: Duration,
+    pub finalize_instances: Duration,
+    pub cache_openings: Duration,
+}
+
+static BATCHED_SUMCHECK_PROVE_METRICS: OnceLock<Mutex<BatchedSumcheckProveMetrics>> =
+    OnceLock::new();
+
+fn batched_sumcheck_prove_metrics() -> &'static Mutex<BatchedSumcheckProveMetrics> {
+    BATCHED_SUMCHECK_PROVE_METRICS
+        .get_or_init(|| Mutex::new(BatchedSumcheckProveMetrics::default()))
+}
+
+pub fn reset_batched_sumcheck_prove_metrics() {
+    *batched_sumcheck_prove_metrics()
+        .lock()
+        .expect("batched sumcheck metrics mutex poisoned") = BatchedSumcheckProveMetrics::default();
+}
+
+pub fn snapshot_batched_sumcheck_prove_metrics() -> BatchedSumcheckProveMetrics {
+    batched_sumcheck_prove_metrics()
+        .lock()
+        .expect("batched sumcheck metrics mutex poisoned")
+        .clone()
+}
 
 /// Implements the standard technique for batching parallel sumchecks to reduce
 /// verifier cost and proof size.
@@ -32,19 +78,35 @@ impl BatchedSumcheck {
         opening_accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut ProofTranscript,
     ) -> (SumcheckInstanceProof<F, ProofTranscript>, Vec<F::Challenge>) {
+        let total_timing = Instant::now();
         let max_num_rounds = sumcheck_instances
             .iter()
             .map(|sumcheck| sumcheck.num_rounds())
             .max()
             .unwrap();
+        let mut append_input_claims = Duration::ZERO;
+        let mut batching_coeffs_time = Duration::ZERO;
+        let mut initialize_individual_claims = Duration::ZERO;
+        let mut compute_messages = Duration::ZERO;
+        let mut combine_univariate_polys = Duration::ZERO;
+        let mut compress_time = Duration::ZERO;
+        let mut transcript_and_challenge = Duration::ZERO;
+        let mut update_individual_claims = Duration::ZERO;
+        let mut ingest_challenges = Duration::ZERO;
+        let mut finalize_instances = Duration::ZERO;
+        let mut cache_openings = Duration::ZERO;
 
         // Append input claims to transcript
+        let timing = Instant::now();
         sumcheck_instances.iter().for_each(|sumcheck| {
             let input_claim = sumcheck.input_claim(opening_accumulator);
             transcript.append_scalar(&input_claim);
         });
+        append_input_claims += timing.elapsed();
 
+        let timing = Instant::now();
         let batching_coeffs: Vec<F> = transcript.challenge_vector(sumcheck_instances.len());
+        batching_coeffs_time += timing.elapsed();
 
         // To see why we may need to scale by a power of two, consider a batch of
         // two sumchecks:
@@ -55,6 +117,7 @@ impl BatchedSumcheck {
         //   = A * \sum_y \sum_x P(x) + B * \sum_{x, y} Q(x, y)
         //   = A * \sum_y claim_a + B * claim_b
         //   = A * 2^N * claim_a + B * claim_b
+        let timing = Instant::now();
         let mut individual_claims: Vec<F> = sumcheck_instances
             .iter()
             .map(|sumcheck| {
@@ -63,6 +126,7 @@ impl BatchedSumcheck {
                 input_claim.mul_pow_2(max_num_rounds - num_rounds)
             })
             .collect();
+        initialize_individual_claims += timing.elapsed();
 
         #[cfg(test)]
         let mut batched_claim: F = individual_claims
@@ -83,6 +147,7 @@ impl BatchedSumcheck {
 
             let remaining_rounds = max_num_rounds - round;
 
+            let timing = Instant::now();
             let univariate_polys: Vec<UniPoly<F>> = sumcheck_instances
                 .iter_mut()
                 .zip(individual_claims.iter())
@@ -104,8 +169,10 @@ impl BatchedSumcheck {
                     }
                 })
                 .collect();
+            compute_messages += timing.elapsed();
 
             // Linear combination of individual univariate polynomials
+            let timing = Instant::now();
             let batched_univariate_poly: UniPoly<F> =
                 univariate_polys.iter().zip(&batching_coeffs).fold(
                     UniPoly::from_coeff(vec![]),
@@ -114,19 +181,26 @@ impl BatchedSumcheck {
                         batched_poly
                     },
                 );
+            combine_univariate_polys += timing.elapsed();
 
+            let timing = Instant::now();
             let compressed_poly = batched_univariate_poly.compress();
+            compress_time += timing.elapsed();
 
             // append the prover's message to the transcript
+            let timing = Instant::now();
             compressed_poly.append_to_transcript(transcript);
             let r_j = transcript.challenge_scalar_optimized::<F>();
             r_sumcheck.push(r_j);
+            transcript_and_challenge += timing.elapsed();
 
             // Cache individual claims for this round
+            let timing = Instant::now();
             individual_claims
                 .iter_mut()
                 .zip(univariate_polys.into_iter())
                 .for_each(|(claim, poly)| *claim = poly.evaluate(&r_j));
+            update_individual_claims += timing.elapsed();
 
             #[cfg(test)]
             {
@@ -141,6 +215,7 @@ impl BatchedSumcheck {
                 batched_claim = batched_univariate_poly.evaluate(&r_j);
             }
 
+            let timing = Instant::now();
             for sumcheck in sumcheck_instances.iter_mut() {
                 // If a sumcheck instance has fewer than `max_num_rounds`,
                 // we wait until there are <= `sumcheck.num_rounds()` left
@@ -150,6 +225,7 @@ impl BatchedSumcheck {
                     sumcheck.ingest_challenge(r_j, round - offset);
                 }
             }
+            ingest_challenges += timing.elapsed();
 
             compressed_polys.push(compressed_poly);
         }
@@ -157,9 +233,11 @@ impl BatchedSumcheck {
         // Allow each sumcheck instance to perform any end-of-protocol work (e.g. flushing
         // delayed bindings) after the final challenge has been ingested and before we cache
         // openings.
+        let timing = Instant::now();
         for sumcheck in sumcheck_instances.iter_mut() {
             sumcheck.finalize();
         }
+        finalize_instances += timing.elapsed();
 
         let max_num_rounds = sumcheck_instances
             .iter()
@@ -167,6 +245,7 @@ impl BatchedSumcheck {
             .max()
             .unwrap();
 
+        let timing = Instant::now();
         for sumcheck in sumcheck_instances.iter() {
             // If a sumcheck instance has fewer than `max_num_rounds`,
             // we wait until there are <= `sumcheck.num_rounds()` left
@@ -179,6 +258,28 @@ impl BatchedSumcheck {
             // opening proof or sumcheck (in the case of virtual polynomials).
             sumcheck.cache_openings(opening_accumulator, transcript, r_slice);
         }
+        cache_openings += timing.elapsed();
+
+        let mut metrics = batched_sumcheck_prove_metrics()
+            .lock()
+            .expect("batched sumcheck metrics mutex poisoned");
+        metrics.calls += 1;
+        metrics.instances_total += sumcheck_instances.len() as u64;
+        metrics.max_instances = metrics.max_instances.max(sumcheck_instances.len());
+        metrics.rounds_total += max_num_rounds as u64;
+        metrics.max_rounds = metrics.max_rounds.max(max_num_rounds);
+        metrics.total += total_timing.elapsed();
+        metrics.append_input_claims += append_input_claims;
+        metrics.batching_coeffs += batching_coeffs_time;
+        metrics.initialize_individual_claims += initialize_individual_claims;
+        metrics.compute_messages += compute_messages;
+        metrics.combine_univariate_polys += combine_univariate_polys;
+        metrics.compress += compress_time;
+        metrics.transcript_and_challenge += transcript_and_challenge;
+        metrics.update_individual_claims += update_individual_claims;
+        metrics.ingest_challenges += ingest_challenges;
+        metrics.finalize_instances += finalize_instances;
+        metrics.cache_openings += cache_openings;
 
         (SumcheckInstanceProof::new(compressed_polys), r_sumcheck)
     }

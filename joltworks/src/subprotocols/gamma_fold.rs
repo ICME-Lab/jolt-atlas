@@ -129,6 +129,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GammaFoldProv
         &self.params
     }
 
+    #[tracing::instrument(skip_all, name = "GammaFoldProver::compute_message")]
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         let univariate_poly_evals: [F; DEGREE_BOUND] = (0..self.tensor.len() / 2)
             .into_par_iter()

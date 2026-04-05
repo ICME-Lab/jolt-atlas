@@ -72,6 +72,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for CubeProver<F>
         &self.params
     }
 
+    #[tracing::instrument(skip_all, name = "CubeSumcheckProver::compute_message")]
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         compute_mle_product_sum(
             DEGREE_BOUND - 1,

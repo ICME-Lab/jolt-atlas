@@ -499,6 +499,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for CosProver<F> 
         &self.params
     }
 
+    #[tracing::instrument(skip_all, name = "CosSumcheckProver::compute_message")]
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         let Self {
             input_onehot,

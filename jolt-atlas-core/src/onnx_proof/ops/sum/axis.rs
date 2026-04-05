@@ -145,6 +145,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SumAxisProver
         &self.params
     }
 
+    #[tracing::instrument(skip_all, name = "SumAxisSumcheckProver::compute_message")]
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         let half_poly_len = self.operand.len() / 2;
         let eval_0 = (0..half_poly_len)

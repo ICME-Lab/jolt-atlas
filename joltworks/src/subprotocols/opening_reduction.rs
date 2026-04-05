@@ -191,6 +191,10 @@ where
         &self.opening
     }
 
+    #[tracing::instrument(
+        skip_all,
+        name = "OpeningProofReductionSumcheckProver::compute_message"
+    )]
     fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
         match &mut self.prover_state {
             ProverOpening::Dense(opening) => opening.compute_message(round, previous_claim),
@@ -517,37 +521,24 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
         let polynomial = &self.polynomial;
 
         if round < polynomial.K.log_2() {
-            let num_unbound_address_variables = polynomial.K.log_2() - round;
             let B = &shared_eq_address.B;
             let F = &shared_eq_address.F;
             let G = &polynomial.G;
+            let b_half = B.len() / 2;
 
-            let unreduced_univariate_poly_evals = (0..B.len() / 2)
+            let unreduced_univariate_poly_evals = (0..b_half)
                 .into_par_iter()
                 .map(|k_prime| {
                     let B_evals = B.sumcheck_evals_array::<2>(k_prime, BindingOrder::HighToLow);
-                    let inner_sum = G
-                        .par_iter()
-                        .enumerate()
-                        .skip(k_prime)
-                        .step_by(B.len() / 2)
-                        .map(|(k, &G_k)| {
-                            let k_m = (k >> (num_unbound_address_variables - 1)) & 1;
-                            let F_k = F[k >> num_unbound_address_variables];
-                            let G_times_F = G_k * F_k;
-
-                            let eval_c0 = if k_m == 0 { G_times_F } else { F::zero() };
-                            let eval_c2 = if k_m == 0 {
-                                -G_times_F
-                            } else {
-                                G_times_F + G_times_F
-                            };
-                            [eval_c0, eval_c2]
-                        })
-                        .reduce(
-                            || [F::zero(); 2],
-                            |running, new| [running[0] + new[0], running[1] + new[1]],
-                        );
+                    let mut inner_sum = [F::zero(); 2];
+                    let pair_count = F.len();
+                    for q in 0..pair_count {
+                        let f_q = F[q];
+                        let g_even = G[k_prime + (2 * q) * b_half];
+                        let g_odd = G[k_prime + (2 * q + 1) * b_half];
+                        inner_sum[0] += g_even * f_q;
+                        inner_sum[1] += (g_odd + g_odd - g_even) * f_q;
+                    }
 
                     [
                         B_evals[0].mul_unreduced::<9>(inner_sum[0]),
@@ -588,13 +579,13 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
                 (0..num_x_in)
                     .into_par_iter()
                     .map(|x_in| {
-                        let unreduced_inner_sum = (0..num_x_out)
-                            .into_par_iter()
-                            .map(|x_out| {
-                                let j = (x_in << num_x_out_bits) | x_out;
-                                d_e_out[x_out].mul_unreduced::<9>(H.get_bound_coeff(j))
-                            })
-                            .reduce(F::Unreduced::<9>::zero, |running, new| running + new);
+                        let block_start = x_in << num_x_out_bits;
+                        let unreduced_inner_sum =
+                            (0..num_x_out).fold(F::Unreduced::<9>::zero(), |running, x_out| {
+                                running
+                                    + d_e_out[x_out]
+                                        .mul_unreduced::<9>(H.get_bound_coeff(block_start + x_out))
+                            });
                         let inner_sum = F::from_montgomery_reduce(unreduced_inner_sum);
                         d_e_in[x_in] * inner_sum
                     })

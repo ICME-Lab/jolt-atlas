@@ -1,10 +1,93 @@
 use crate::{
     field::JoltField,
     poly::{dense_mlpoly::DensePolynomial, multilinear_polynomial::MultilinearPolynomial},
+    utils::small_scalar::SmallScalar,
 };
 use common::CommittedPolynomial;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
+
+const RLC_CHUNK_SIZE: usize = 1 << 14;
+
+#[inline]
+fn accumulate_dense_chunk<F: JoltField>(
+    out: &mut [F],
+    start: usize,
+    poly: &MultilinearPolynomial<F>,
+    coeff: F,
+) {
+    match poly {
+        MultilinearPolynomial::LargeScalars(p) => {
+            let coeffs = &p.Z[start..start + out.len()];
+            out.iter_mut()
+                .zip(coeffs.iter())
+                .for_each(|(dst, src)| *dst += *src * coeff);
+        }
+        MultilinearPolynomial::BoolScalars(p) => {
+            let coeffs = &p.coeffs[start..start + out.len()];
+            out.iter_mut().zip(coeffs.iter()).for_each(|(dst, src)| {
+                if *src {
+                    *dst += coeff;
+                }
+            });
+        }
+        MultilinearPolynomial::U8Scalars(p) => {
+            let coeffs = &p.coeffs[start..start + out.len()];
+            out.iter_mut()
+                .zip(coeffs.iter())
+                .for_each(|(dst, src)| *dst += src.field_mul(coeff));
+        }
+        MultilinearPolynomial::U16Scalars(p) => {
+            let coeffs = &p.coeffs[start..start + out.len()];
+            out.iter_mut()
+                .zip(coeffs.iter())
+                .for_each(|(dst, src)| *dst += src.field_mul(coeff));
+        }
+        MultilinearPolynomial::U32Scalars(p) => {
+            let coeffs = &p.coeffs[start..start + out.len()];
+            out.iter_mut()
+                .zip(coeffs.iter())
+                .for_each(|(dst, src)| *dst += src.field_mul(coeff));
+        }
+        MultilinearPolynomial::U64Scalars(p) => {
+            let coeffs = &p.coeffs[start..start + out.len()];
+            out.iter_mut()
+                .zip(coeffs.iter())
+                .for_each(|(dst, src)| *dst += src.field_mul(coeff));
+        }
+        MultilinearPolynomial::U128Scalars(p) => {
+            let coeffs = &p.coeffs[start..start + out.len()];
+            out.iter_mut()
+                .zip(coeffs.iter())
+                .for_each(|(dst, src)| *dst += src.field_mul(coeff));
+        }
+        MultilinearPolynomial::I32Scalars(p) => {
+            let coeffs = &p.coeffs[start..start + out.len()];
+            out.iter_mut()
+                .zip(coeffs.iter())
+                .for_each(|(dst, src)| *dst += src.field_mul(coeff));
+        }
+        MultilinearPolynomial::I64Scalars(p) => {
+            let coeffs = &p.coeffs[start..start + out.len()];
+            out.iter_mut()
+                .zip(coeffs.iter())
+                .for_each(|(dst, src)| *dst += src.field_mul(coeff));
+        }
+        MultilinearPolynomial::I128Scalars(p) => {
+            let coeffs = &p.coeffs[start..start + out.len()];
+            out.iter_mut()
+                .zip(coeffs.iter())
+                .for_each(|(dst, src)| *dst += src.field_mul(coeff));
+        }
+        MultilinearPolynomial::S128Scalars(p) => {
+            let coeffs = &p.coeffs[start..start + out.len()];
+            out.iter_mut()
+                .zip(coeffs.iter())
+                .for_each(|(dst, src)| *dst += src.field_mul(coeff));
+        }
+        MultilinearPolynomial::OneHot(_) => unreachable!(),
+    }
+}
 
 /// Build materialized dense polynomial from this state (for HyperKZG).
 /// Regenerates witness polynomials from trace and combines them homomorphically.
@@ -38,22 +121,22 @@ pub fn build_materialized_rlc<F: JoltField>(
 
     let joint_len = dense_len.max(one_hot_len);
 
-    // Homomorphically combine dense polynomials: joint[i] = Σ coeff_j * poly_j[i]
-    let mut joint_coeffs: Vec<F> = (0..joint_len)
-        .into_par_iter()
-        .map(|i| {
-            dense
-                .iter()
-                .map(|((_, poly), coeff)| {
-                    if i < poly.original_len() {
-                        **coeff * poly.get_scaled_coeff(i, F::one())
-                    } else {
-                        F::zero()
-                    }
-                })
-                .sum()
-        })
-        .collect();
+    // Homomorphically combine dense polynomials in cache-friendly chunks.
+    let mut joint_coeffs: Vec<F> = vec![F::zero(); joint_len];
+    joint_coeffs
+        .par_chunks_mut(RLC_CHUNK_SIZE)
+        .enumerate()
+        .for_each(|(chunk_idx, chunk)| {
+            let start = chunk_idx * RLC_CHUNK_SIZE;
+            for ((_, poly), coeff) in dense.iter() {
+                let poly_len = poly.original_len();
+                if start >= poly_len {
+                    continue;
+                }
+                let overlap_len = chunk.len().min(poly_len - start);
+                accumulate_dense_chunk(&mut chunk[..overlap_len], start, poly, **coeff);
+            }
+        });
 
     // Add one-hot polynomials directly (sparse - only set nonzero entries)
     // Index formula matches HyperKZG::commit_one_hot: k * T + t (no bit reversal)

@@ -1,11 +1,11 @@
 use crate::{Config, Fq, Fq12, Fq2, Fq6, Fq6Config};
 use ark_ec::bn::FromPsi6Pow;
+use ark_ff::vec::Vec;
 /// Implement the torus-based compression method in https://eprint.iacr.org/2007/429.pdf.
 /// This module contains relevant data structures such as compressible Fq12 and compressed Fq12
 /// and the relevant compression and conversion functions.
 use ark_ff::{AdditiveGroup, Field, Fp12, Fp12Config, Fp6Config, MontFp};
-use ark_ff::vec::Vec;
-use ark_serialize::{ CanonicalDeserialize, CanonicalSerialize};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 pub type CompressibleFq12 = Fp12<CompressibleFq12Config>;
 

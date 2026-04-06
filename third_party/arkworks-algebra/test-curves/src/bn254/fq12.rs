@@ -1,6 +1,6 @@
 use ark_ec::bn::FromPsi6Pow;
-use ark_ff::{AdditiveGroup, Field, Fp12, Fp12Config, Fp6Config, MontFp};
 use ark_ff::vec::Vec;
+use ark_ff::{AdditiveGroup, Field, Fp12, Fp12Config, Fp6Config, MontFp};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 use crate::bn254::{Config, Fq, Fq2, Fq6, Fq6Config};

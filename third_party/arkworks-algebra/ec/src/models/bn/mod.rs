@@ -222,7 +222,11 @@ pub trait BnConfig: 'static + Sized {
     type Fp2Config: Fp2Config<Fp = Self::Fp>;
     type Fp6Config: Fp6Config<Fp2Config = Self::Fp2Config>;
     type Fp12Config: Fp12Config<Fp6Config = Self::Fp6Config>;
-    type CompressedFp12Config: FromPsi6Pow<Self> + Sized + Sync + CanonicalDeserialize + CanonicalSerialize;
+    type CompressedFp12Config: FromPsi6Pow<Self>
+        + Sized
+        + Sync
+        + CanonicalDeserialize
+        + CanonicalSerialize;
     type G1Config: SWCurveConfig<BaseField = Self::Fp>;
     type G2Config: SWCurveConfig<
         BaseField = Fp2<Self::Fp2Config>,

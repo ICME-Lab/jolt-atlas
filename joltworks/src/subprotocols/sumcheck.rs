@@ -17,6 +17,7 @@ use crate::{
 };
 
 use ark_serialize::*;
+use rayon::prelude::*;
 use std::{
     marker::PhantomData,
     sync::{Mutex, OnceLock},
@@ -98,9 +99,16 @@ impl BatchedSumcheck {
 
         // Append input claims to transcript
         let timing = Instant::now();
-        sumcheck_instances.iter().for_each(|sumcheck| {
-            let input_claim = sumcheck.input_claim(opening_accumulator);
-            transcript.append_scalar(&input_claim);
+        let input_claims: Vec<F> = sumcheck_instances
+            .iter()
+            .map(|sumcheck| sumcheck.input_claim(opening_accumulator))
+            .collect();
+        let num_rounds_per_instance: Vec<usize> = sumcheck_instances
+            .iter()
+            .map(|sumcheck| sumcheck.num_rounds())
+            .collect();
+        input_claims.iter().for_each(|input_claim| {
+            transcript.append_scalar(input_claim);
         });
         append_input_claims += timing.elapsed();
 
@@ -118,12 +126,11 @@ impl BatchedSumcheck {
         //   = A * \sum_y claim_a + B * claim_b
         //   = A * 2^N * claim_a + B * claim_b
         let timing = Instant::now();
-        let mut individual_claims: Vec<F> = sumcheck_instances
+        let mut individual_claims: Vec<F> = input_claims
             .iter()
-            .map(|sumcheck| {
-                let num_rounds = sumcheck.num_rounds();
-                let input_claim = sumcheck.input_claim(opening_accumulator);
-                input_claim.mul_pow_2(max_num_rounds - num_rounds)
+            .zip(num_rounds_per_instance.iter())
+            .map(|(input_claim, num_rounds)| {
+                input_claim.mul_pow_2(max_num_rounds - *num_rounds)
             })
             .collect();
         initialize_individual_claims += timing.elapsed();
@@ -149,22 +156,21 @@ impl BatchedSumcheck {
 
             let timing = Instant::now();
             let univariate_polys: Vec<UniPoly<F>> = sumcheck_instances
-                .iter_mut()
-                .zip(individual_claims.iter())
-                .map(|(sumcheck, previous_claim)| {
-                    let num_rounds = sumcheck.num_rounds();
-                    if remaining_rounds > num_rounds {
+                .par_iter_mut()
+                .zip(individual_claims.par_iter())
+                .zip(num_rounds_per_instance.par_iter())
+                .zip(input_claims.par_iter())
+                .map(|(((sumcheck, previous_claim), num_rounds), input_claim)| {
+                    if remaining_rounds > *num_rounds {
                         // We haven't gotten to this sumcheck's variables yet, so
                         // the univariate polynomial is just a constant equal to
                         // the input claim, scaled by a power of 2.
-                        let num_rounds = sumcheck.num_rounds();
-                        let scaled_input_claim = sumcheck
-                            .input_claim(opening_accumulator)
-                            .mul_pow_2(remaining_rounds - num_rounds - 1);
+                        let scaled_input_claim =
+                            input_claim.mul_pow_2(remaining_rounds - *num_rounds - 1);
                         // Constant polynomial
                         UniPoly::from_coeff(vec![scaled_input_claim])
                     } else {
-                        let offset = max_num_rounds - sumcheck.num_rounds();
+                        let offset = max_num_rounds - *num_rounds;
                         sumcheck.compute_message(round - offset, *previous_claim)
                     }
                 })
@@ -216,7 +222,7 @@ impl BatchedSumcheck {
             }
 
             let timing = Instant::now();
-            for sumcheck in sumcheck_instances.iter_mut() {
+            sumcheck_instances.par_iter_mut().for_each(|sumcheck| {
                 // If a sumcheck instance has fewer than `max_num_rounds`,
                 // we wait until there are <= `sumcheck.num_rounds()` left
                 // before binding its variables.
@@ -224,7 +230,7 @@ impl BatchedSumcheck {
                     let offset = max_num_rounds - sumcheck.num_rounds();
                     sumcheck.ingest_challenge(r_j, round - offset);
                 }
-            }
+            });
             ingest_challenges += timing.elapsed();
 
             compressed_polys.push(compressed_poly);

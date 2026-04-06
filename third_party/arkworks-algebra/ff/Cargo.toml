@@ -48,14 +48,8 @@ serde_derive.workspace = true
 hex.workspace = true
 rand = "0.8"
 
-[build-dependencies]
-cc = "1.2.57"
-
 [features]
 default = ["allocative"]
 std = ["ark-std/std", "ark-serialize/std", "itertools/use_std"]
 parallel = ["std", "rayon", "ark-std/parallel", "ark-serialize/parallel"]
 asm = []
-s2n-bignum-aarch64 = ["s2n-bignum-aarch64-mul"]
-s2n-bignum-aarch64-mul = []
-s2n-bignum-aarch64-square = []

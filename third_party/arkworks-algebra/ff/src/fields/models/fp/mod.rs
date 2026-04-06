@@ -24,8 +24,6 @@ use core::iter;
 mod montgomery_backend;
 pub use montgomery_backend::*;
 
-mod aarch64_s2n_bn254;
-
 /// A trait that specifies the configuration of a prime field.
 /// Also specifies how to perform arithmetic on field elements.
 pub trait FpConfig<const N: usize>: Send + Sync + 'static + Sized {

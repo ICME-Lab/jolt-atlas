@@ -38,6 +38,15 @@ pub trait SumcheckInstanceProver<F: JoltField, T: Transcript>:
     /// Ingest the verifier's challenge for a sumcheck round.
     fn ingest_challenge(&mut self, r_j: F::Challenge, round: usize);
 
+    /// Returns a stable key for the shared state mutated by [`Self::ingest_challenge`].
+    ///
+    /// Instances that mutate the same underlying state should return the same key so
+    /// callers can ensure only one representative performs the bind in a given round.
+    /// `None` means the instance can be treated as independent.
+    fn ingest_challenge_group_key(&self) -> Option<u64> {
+        None
+    }
+
     /// Finalize prover state after the last challenge has been ingested, but before
     /// [`Self::cache_openings`] is called.
     ///

@@ -226,17 +226,6 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
     fn mul_assign(a: &mut Fp<MontBackend<Self, N>, N>, b: &Fp<MontBackend<Self, N>, N>) {
         // No-carry optimisation applied to CIOS
         if Self::CAN_USE_NO_CARRY_MUL_OPT {
-            #[cfg(all(feature = "s2n-bignum-aarch64-mul", target_arch = "aarch64"))]
-            if N == 4
-                && crate::fields::models::fp::aarch64_s2n_bn254::try_mul_assign(
-                    &mut (a.0).0,
-                    &(b.0).0,
-                    &Self::MODULUS.0,
-                )
-            {
-                return;
-            }
-
             if N <= 6
                 && N > 1
                 && cfg!(all(
@@ -336,16 +325,6 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                 _ => unsafe { ark_std::hint::unreachable_unchecked() },
             };
             a.subtract_modulus();
-            return;
-        }
-
-        #[cfg(all(feature = "s2n-bignum-aarch64-square", target_arch = "aarch64"))]
-        if N == 4
-            && crate::fields::models::fp::aarch64_s2n_bn254::try_square_in_place(
-                &mut (a.0).0,
-                &Self::MODULUS.0,
-            )
-        {
             return;
         }
 

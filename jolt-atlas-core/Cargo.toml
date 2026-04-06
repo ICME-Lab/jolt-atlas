@@ -3,11 +3,6 @@ name = "jolt-atlas-core"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-s2n-bignum-aarch64 = ["joltworks/s2n-bignum-aarch64"]
-s2n-bignum-aarch64-mul = ["joltworks/s2n-bignum-aarch64-mul"]
-s2n-bignum-aarch64-square = ["joltworks/s2n-bignum-aarch64-square"]
-
 [dependencies]
 # Internal
 atlas-onnx-tracer.workspace = true

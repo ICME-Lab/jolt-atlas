@@ -19,6 +19,7 @@ use crate::{
 use ark_serialize::*;
 use rayon::prelude::*;
 use std::{
+    collections::HashSet,
     marker::PhantomData,
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
@@ -222,14 +223,29 @@ impl BatchedSumcheck {
             }
 
             let timing = Instant::now();
+            let seen_bind_groups = Mutex::new(HashSet::new());
             sumcheck_instances.par_iter_mut().for_each(|sumcheck| {
                 // If a sumcheck instance has fewer than `max_num_rounds`,
                 // we wait until there are <= `sumcheck.num_rounds()` left
                 // before binding its variables.
-                if remaining_rounds <= sumcheck.num_rounds() {
-                    let offset = max_num_rounds - sumcheck.num_rounds();
-                    sumcheck.ingest_challenge(r_j, round - offset);
+                if remaining_rounds > sumcheck.num_rounds() {
+                    return;
                 }
+
+                if let Some(group_key) = sumcheck.ingest_challenge_group_key() {
+                    let should_bind = {
+                        let mut seen = seen_bind_groups
+                            .lock()
+                            .expect("bind group mutex poisoned");
+                        seen.insert(group_key)
+                    };
+                    if !should_bind {
+                        return;
+                    }
+                }
+
+                let offset = max_num_rounds - sumcheck.num_rounds();
+                sumcheck.ingest_challenge(r_j, round - offset);
             });
             ingest_challenges += timing.elapsed();
 

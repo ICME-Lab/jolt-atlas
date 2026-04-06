@@ -8,9 +8,6 @@ monitor = ["dep:sysinfo"]
 allocative = ["dep:inferno"]
 challenge-254-bit = []
 test-feature = []
-s2n-bignum-aarch64 = ["ark-ff/s2n-bignum-aarch64"]
-s2n-bignum-aarch64-mul = ["ark-ff/s2n-bignum-aarch64-mul"]
-s2n-bignum-aarch64-square = ["ark-ff/s2n-bignum-aarch64-square"]
 
 [dependencies]
 # Internal

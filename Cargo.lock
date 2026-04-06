@@ -173,7 +173,6 @@ dependencies = [
  "ark-serialize",
  "ark-std",
  "arrayvec",
- "cc",
  "digest",
  "educe",
  "itertools 0.13.0",

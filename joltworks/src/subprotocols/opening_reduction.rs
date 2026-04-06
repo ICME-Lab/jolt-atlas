@@ -36,6 +36,7 @@ use common::CommittedPolynomial;
 use rayon::prelude::*;
 use std::{
     collections::{BTreeMap, HashMap},
+    hash::{Hash, Hasher},
     mem,
     ops::Mul,
     sync::{Arc, RwLock},
@@ -207,6 +208,35 @@ where
             ProverOpening::Dense(opening) => opening.bind(r_j, round),
             ProverOpening::OneHot(opening) => opening.bind(r_j, round),
         }
+    }
+
+    fn ingest_challenge_group_key(&self) -> Option<u64> {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.polynomial.hash(&mut hasher);
+        self.sumcheck_id.hash(&mut hasher);
+
+        match &self.prover_state {
+            ProverOpening::Dense(opening) => {
+                let eq_ptr = Arc::as_ptr(&opening.eq_poly) as usize;
+                let poly_ptr = opening
+                    .polynomial
+                    .as_ref()
+                    .map(|poly| Arc::as_ptr(poly) as usize)
+                    .unwrap_or(0);
+                eq_ptr.hash(&mut hasher);
+                poly_ptr.hash(&mut hasher);
+            }
+            ProverOpening::OneHot(opening) => {
+                let eq_address_ptr = Arc::as_ptr(&opening.eq_address_state) as usize;
+                let eq_cycle_ptr = Arc::as_ptr(&opening.eq_cycle_state) as usize;
+                let h_ptr = Arc::as_ptr(&opening.polynomial.H) as usize;
+                eq_address_ptr.hash(&mut hasher);
+                eq_cycle_ptr.hash(&mut hasher);
+                h_ptr.hash(&mut hasher);
+            }
+        }
+
+        Some(hasher.finish())
     }
 
     fn cache_openings(

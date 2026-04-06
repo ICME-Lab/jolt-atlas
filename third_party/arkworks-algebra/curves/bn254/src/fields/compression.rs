@@ -1,0 +1,171 @@
+use crate::{Config, Fq, Fq12, Fq2, Fq6, Fq6Config};
+use ark_ec::bn::FromPsi6Pow;
+/// Implement the torus-based compression method in https://eprint.iacr.org/2007/429.pdf.
+/// This module contains relevant data structures such as compressible Fq12 and compressed Fq12
+/// and the relevant compression and conversion functions.
+use ark_ff::{AdditiveGroup, Field, Fp12, Fp12Config, Fp6Config, MontFp};
+use ark_ff::vec::Vec;
+use ark_serialize::{ CanonicalDeserialize, CanonicalSerialize};
+
+pub type CompressibleFq12 = Fp12<CompressibleFq12Config>;
+
+// https://eprint.iacr.org/2007/429.pdf Proposition 1
+#[derive(Clone, Copy, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct CompressedFq12(pub (Fq2, Fq2));
+
+impl Default for CompressedFq12 {
+    // Return a default compressed Fq12 in the case that the arguments to multi-pairing are empty. Note this default value is not the identity element of the group.
+    fn default() -> Self {
+        CompressedFq12((Fq2::ZERO, Fq2::ONE))
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct CompressibleFq12Config;
+
+// Q is in the notation of the paper. This is q^2 where q is the order of the base prime field.
+static Q: [u64; 8] = [
+    0x3b5458a2275d69b1,
+    0xa602072d09eac101,
+    0x4a50189c6d96cadc,
+    0x04689e957a1242c8,
+    0x26edfa5c34c6b38d,
+    0xb00b855116375606,
+    0x599a6f7c0348d21c,
+    0x925c4b8763cbf9c,
+];
+
+const COMPRESSIBLE_FROBENIUS_COEFFS: [Fq2; 4] = [
+    Fq2::new(Fq::ONE, Fq::ZERO),
+    Fq2::new(
+        MontFp!("2821565182194536844548159561693502659359617185244120367078079554186484126554"),
+        MontFp!("3505843767911556378687030309984248845540243509899259641013678093033130930403"),
+    ),
+    Fq2::new(
+        MontFp!("21888242871839275222246405745257275088696311157297823662689037894645226208582"),
+        MontFp!("0"),
+    ),
+    Fq2::new(
+        MontFp!("19066677689644738377698246183563772429336693972053703295610958340458742082029"),
+        MontFp!("18382399103927718843559375435273026243156067647398564021675359801612095278180"),
+    ),
+];
+
+impl Fp12Config for CompressibleFq12Config {
+    type Fp6Config = Fq6Config;
+
+    // The 12th degree extension is generated as a quadratic extension over the 6th degree
+    // extension. Another way to think about this is that the field as a 12th deg extension over the
+    // base field is really the composite field of a quadratic extension and a cubic extension, with
+    // generators sqrt(\gamma) and cbrt(\gamma), respectively, where \gamma is a sextic non-residue
+    // in the base field (itself a second deg extension over the base field on which the bn254 curve
+    // is defined). Therefore, the quadratic non-residue that generates the 12th degree extension
+    // over the 6th deg base field is \gamma = Fq6::non_residue.
+    const NONRESIDUE: Fq6 = Fq6::new(<Fq6Config as Fp6Config>::NONRESIDUE, Fq2::ZERO, Fq2::ZERO);
+
+    const FROBENIUS_COEFF_FP12_C1: &'static [Fq2] = &[
+        COMPRESSIBLE_FROBENIUS_COEFFS[0],
+        COMPRESSIBLE_FROBENIUS_COEFFS[1],
+        COMPRESSIBLE_FROBENIUS_COEFFS[2],
+        COMPRESSIBLE_FROBENIUS_COEFFS[3],
+        COMPRESSIBLE_FROBENIUS_COEFFS[0],
+        COMPRESSIBLE_FROBENIUS_COEFFS[1],
+        COMPRESSIBLE_FROBENIUS_COEFFS[2],
+        COMPRESSIBLE_FROBENIUS_COEFFS[3],
+        COMPRESSIBLE_FROBENIUS_COEFFS[0],
+        COMPRESSIBLE_FROBENIUS_COEFFS[1],
+        COMPRESSIBLE_FROBENIUS_COEFFS[2],
+        COMPRESSIBLE_FROBENIUS_COEFFS[3],
+    ];
+
+    fn mul_fp6_by_nonresidue_in_place(fe: &mut Fq6) -> &mut Fq6 {
+        Fq6Config::mul_fp2_by_nonresidue_in_place(&mut fe.c0);
+        Fq6Config::mul_fp2_by_nonresidue_in_place(&mut fe.c1);
+        Fq6Config::mul_fp2_by_nonresidue_in_place(&mut fe.c2);
+        fe
+    }
+}
+
+impl FromPsi6Pow<Config> for CompressedFq12 {
+    fn from_psi_six_pow(value: Fq12) -> Option<Self> {
+        // Reference: https://eprint.iacr.org/2007/429.pdf p.10 Proposition 1
+        let compressible_value = fq12_to_compressible_fq12(value);
+        Some(torus_compress_psi_6_pow_to_two_fq2(compressible_value))
+    }
+}
+
+impl CompressedFq12 {
+    #[inline]
+    pub fn decompress_to_fq12(self) -> Fq12 {
+        compressible_fq12_to_fq12(self.decompress())
+    }
+
+    #[inline]
+    pub fn decompress(self) -> CompressibleFq12 {
+        // https://eprint.iacr.org/2007/429.pdf p.10 equation (6)
+        let c2 = (Fq2::from(3) * self.0 .0.square() + Fq6Config::NONRESIDUE)
+            * (Fq2::from(3) * self.0 .1 * Fq6Config::NONRESIDUE)
+                .inverse()
+                .unwrap();
+        CompressibleFq12::torus_decompress(Fq6 {
+            c0: self.0 .0,
+            c1: self.0 .1,
+            c2,
+        })
+    }
+}
+
+#[inline]
+pub fn torus_compress_fq6(element: Fq6) -> CompressedFq12 {
+    CompressedFq12((element.c0, element.c1))
+}
+
+#[inline]
+pub fn torus_decompress_fq6(element: CompressedFq12) -> Fq6 {
+    let c2 = (Fq2::from(3) * element.0 .0.square() + Fq6Config::NONRESIDUE)
+        * (Fq2::from(3) * element.0 .1 * Fq6Config::NONRESIDUE)
+            .inverse()
+            .unwrap_or_else(|| panic!("c1 cannot be zero for an element with norm 1."));
+    Fq6 {
+        c0: element.0 .0,
+        c1: element.0 .1,
+        c2,
+    }
+}
+
+pub fn torus_compress_psi_6_pow_to_two_fq2(element: CompressibleFq12) -> CompressedFq12 {
+    let c1 = element.c0 / element.c1;
+    let c1_pow = -c1.pow(Q);
+    let compressed_prod = CompressibleFq12::mul_torus_compressed_elements(c1_pow, c1);
+    CompressedFq12((compressed_prod.c0, compressed_prod.c1))
+}
+
+#[inline]
+pub fn fq12_to_compressible_fq12(value: Fq12) -> CompressibleFq12 {
+    // Divide by the generator of Fq6
+    let new_c1 = Fq6 {
+        c0: value.c1.c1,
+        c1: value.c1.c2,
+        c2: value.c1.c0 * Fq6Config::NONRESIDUE.inverse().unwrap(),
+    };
+
+    CompressibleFq12 {
+        c0: value.c0,
+        c1: new_c1,
+    }
+}
+
+#[inline]
+pub fn compressible_fq12_to_fq12(value: CompressibleFq12) -> Fq12 {
+    // Multiply by the generator of Fq6
+    let new_c1 = Fq6 {
+        c0: value.c1.c2 * Fq6Config::NONRESIDUE,
+        c1: value.c1.c0,
+        c2: value.c1.c1,
+    };
+
+    Fq12 {
+        c0: value.c0,
+        c1: new_c1,
+    }
+}

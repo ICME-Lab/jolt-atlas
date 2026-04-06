@@ -1,0 +1,101 @@
+[package]
+name = "ark-test-curves"
+description = "A library for testing ark-ec & ark-poly"
+keywords = ["cryptography", "serialization" ]
+documentation = "https://docs.rs/ark-test-curves/"
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+categories.workspace = true
+include.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+metadata.docs.rs.workspace = true
+package.metadata.release.workspace = true
+
+[dependencies]
+ark-std = { workspace = true, default-features = false }
+ark-ff = { workspace = true, default-features = false }
+ark-ec = { workspace = true, default-features = false }
+ark-ff-macros = { workspace = true, default-features = false }
+ark-serialize  = { workspace = true, default-features = false }
+
+[dev-dependencies]
+ark-serialize  = { workspace = true, default-features = false }
+ark-algebra-test-templates = { workspace = true, default-features = false }
+ark-algebra-bench-templates = { workspace = true, default-features = false }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[features]
+default = []
+
+asm = [ "ark-ff/asm" ]
+
+parallel = [ "ark-ff/parallel", "ark-ec/parallel", "ark-std/parallel" ]
+
+bls12_381_scalar_field = []
+bls12_381_curve = [ "bls12_381_scalar_field" ]
+ed_on_bls12_381 = [ "bls12_381_scalar_field" ]
+
+mnt4_753_scalar_field = []
+mnt4_753_base_field = []
+mnt4_753_curve = [ "mnt4_753_scalar_field", "mnt4_753_base_field" ]
+
+mnt6_753 = [ "mnt4_753_scalar_field", "mnt4_753_base_field" ]
+
+bn384_small_two_adicity_scalar_field = []
+bn384_small_two_adicity_base_field = []
+bn384_small_two_adicity_curve = [ "bn384_small_two_adicity_scalar_field", "bn384_small_two_adicity_base_field" ]
+
+bn254_scalar_field = []
+bn254_base_field = []
+bn254 = [ "bn254_scalar_field", "bn254_base_field" ]
+
+secp256k1 = []
+
+[[bench]]
+name = "compressed_pairing"
+path = "benches/compressed_pairing.rs"
+harness = false
+
+[[bench]]
+name = "bls12_381"
+path = "benches/bls12_381.rs"
+harness = false
+
+[[bench]]
+name = "ed_on_bls12_381"
+path = "benches/ed_on_bls12_381.rs"
+harness = false
+
+[[bench]]
+name = "bn384_small_two_adicity"
+path = "benches/bn384_small_two_adicity.rs"
+harness = false
+
+[[bench]]
+name = "mnt4_753"
+path = "benches/mnt4_753.rs"
+harness = false
+
+[[bench]]
+name = "mnt6_753"
+path = "benches/mnt6_753.rs"
+harness = false
+
+[[bench]]
+name = "small_mul"
+path = "benches/small_mul.rs"
+harness = false
+
+[[bench]]
+name = "bn254"
+path = "benches/bn254.rs"
+harness = false
+
+[[bench]]
+name = "bigint"
+path = "benches/bigint.rs"
+harness = false

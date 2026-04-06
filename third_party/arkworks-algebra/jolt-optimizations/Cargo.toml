@@ -1,0 +1,61 @@
+[package]
+name = "jolt-optimizations"
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+categories.workspace = true
+include.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+metadata.docs.rs.workspace = true
+description = "Optimized BN254 G1/G2 scalar multiplication primitives using 2D/4D GLV decomposition"
+
+[dependencies]
+ark-bn254.workspace = true
+ark-ec.workspace = true
+ark-ff.workspace = true
+ark-serialize.workspace = true
+ark-std.workspace = true
+arrayvec.workspace = true
+num-bigint.workspace = true
+num-rational.workspace = true
+num-integer.workspace = true
+num-traits.workspace = true
+rayon.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[features]
+default = []
+std = ["ark-std/std", "ark-ff/std", "ark-ec/std", "ark-serialize/std"]
+parallel = ["std", "ark-std/parallel", "ark-ff/parallel", "ark-ec/parallel", "ark-serialize/parallel"]
+
+[[bench]]
+name = "scalar_multiplication"
+harness = false
+
+[[bench]]
+name = "dory_utils"
+harness = false
+
+[[bench]]
+name = "dory_all"
+harness = false
+
+[[bench]]
+name = "g1_scalar_multiplication"
+harness = false
+
+[[bench]]
+name = "vector_scalar_mul_add_gamma_g2"
+harness = false
+
+[[bench]]
+name = "batch_addition"
+harness = false
+
+[[example]]
+name = "memory_test"

@@ -211,6 +211,10 @@ where
     }
 
     fn ingest_challenge_group_key(&self) -> Option<u64> {
+        // REVIEW NOTE: this key is used for correctness-critical deduplication in
+        // BatchedSumcheck::prove. It should eventually become an exact structural
+        // identity (enum + raw shared-state pointers + ids), not just a hash output,
+        // so that hash collisions can never suppress a required bind.
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.polynomial.hash(&mut hasher);
         self.sumcheck_id.hash(&mut hasher);

@@ -233,6 +233,10 @@ impl BatchedSumcheck {
                 }
 
                 if let Some(group_key) = sumcheck.ingest_challenge_group_key() {
+                    // Soundness note: dedup is only correct if the group key identifies
+                    // the exact shared mutable state being bound in this round. A hashed
+                    // surrogate key is risky here because a collision would incorrectly
+                    // skip a bind for an unrelated instance group.
                     let should_bind = {
                         let mut seen = seen_bind_groups
                             .lock()

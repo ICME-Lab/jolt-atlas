@@ -16,6 +16,7 @@ keywords = ["SNARK", "cryptography", "proofs", "zkML"]
 
 [workspace]
 members = ["jolt-atlas-core", "atlas-onnx-tracer", "common", "joltworks"]
+exclude = ["third_party/arkworks-algebra"]
 
 [workspace.dependencies]
 # Internal
@@ -24,8 +25,8 @@ common = { path = "./common" }
 joltworks = { path = "./joltworks" }
 
 # Cryptography and Math
-ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }
-ark-serialize = { version = "0.5.0", default-features = false, features = [
+ark-bn254 = { path = "./third_party/arkworks-algebra/curves/bn254", default-features = false }
+ark-serialize = { path = "./third_party/arkworks-algebra/serialize", default-features = false, features = [
     "derive",
 ] }
 ark-std = { version = "0.5.0", default-features = false }
@@ -93,8 +94,8 @@ inherits = "release"
 debug = false
 
 [patch.crates-io]
-ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
-ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
-ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
-ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+ark-ff = { path = "./third_party/arkworks-algebra/ff" }
+ark-ec = { path = "./third_party/arkworks-algebra/ec" }
+ark-serialize = { path = "./third_party/arkworks-algebra/serialize" }
+ark-bn254 = { path = "./third_party/arkworks-algebra/curves/bn254" }
 allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }

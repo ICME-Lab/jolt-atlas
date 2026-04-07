@@ -108,7 +108,7 @@ canonical_serde_enum! {
         /// * `0` – node index
         RsqrtNodeInv(usize),
 
-        /// Advice polynomial for the **reciprocal square root** result in Rsqrt.
+        /// Advice polynomial for the teleportation division op.
         ///
         /// * `0` – node index
         TeleportNodeQuotient(usize),

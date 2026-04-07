@@ -103,13 +103,14 @@ impl<F: JoltField> ReadRafParams<F> {
         transcript: &mut impl Transcript,
     ) -> Self {
         let gamma = transcript.challenge_scalar();
+        let (ra_vp, ra_sid) = provider.ra_poly();
         Self {
             r: provider.r(accumulator).r,
             gamma,
             rv_claim: provider.rv_claim(accumulator),
             raf_claim: provider.raf_claim(accumulator),
-            ra_vp: provider.ra_poly().0,
-            ra_sid: provider.ra_poly().1,
+            ra_vp,
+            ra_sid,
             log_K: provider.log_K(),
         }
     }
@@ -137,7 +138,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReadRafParams<F> {
 pub struct ReadRafProver<F: JoltField> {
     params: ReadRafParams<F>,
     val: MultilinearPolynomial<F>,
-    F: MultilinearPolynomial<F>,
+    G: MultilinearPolynomial<F>,
     int: IdentityPolynomial<F>,
 }
 
@@ -147,20 +148,20 @@ impl<F: JoltField> ReadRafProver<F> {
     pub fn initialize(lookup_indices: &[usize], table: &[i32], params: ReadRafParams<F>) -> Self {
         let table_size = 1 << params.log_K;
         let E = EqPolynomial::evals(&params.r);
-        let F = lookup_indices
+        let G = lookup_indices
             .par_iter()
             .enumerate()
             .fold(
                 || unsafe_allocate_zero_vec::<F>(table_size),
-                |mut local_F, (j, &lookup_index)| {
-                    local_F[lookup_index] += E[j];
-                    local_F
+                |mut local_G, (j, &lookup_index)| {
+                    local_G[lookup_index] += E[j];
+                    local_G
                 },
             )
             .reduce(
                 || unsafe_allocate_zero_vec::<F>(table_size),
-                |mut acc, local_F| {
-                    for (i, &val) in local_F.iter().enumerate() {
+                |mut acc, local_G| {
+                    for (i, &val) in local_G.iter().enumerate() {
                         acc[i] += val;
                     }
                     acc
@@ -171,7 +172,7 @@ impl<F: JoltField> ReadRafProver<F> {
             int: IdentityPolynomial::new(params.log_K),
             params,
             val,
-            F: MultilinearPolynomial::from(F),
+            G: MultilinearPolynomial::from(G),
         }
     }
 }
@@ -183,19 +184,19 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReadRafProver
 
     #[tracing::instrument(name = "ReadRafProver::compute_message", skip_all)]
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        let Self { F, val, int, .. } = self;
+        let Self { G, val, int, .. } = self;
         let half_poly_len = val.len() / 2;
         let uni_poly_evals: [F; 2] = (0..half_poly_len)
             .into_par_iter()
             .map(|i| {
                 let val_evals =
                     val.sumcheck_evals(i, READ_RAF_DEGREE_BOUND, BindingOrder::HighToLow);
-                let f_evals = F.sumcheck_evals(i, READ_RAF_DEGREE_BOUND, BindingOrder::HighToLow);
+                let g_evals = G.sumcheck_evals(i, READ_RAF_DEGREE_BOUND, BindingOrder::HighToLow);
                 let int_evals =
                     int.sumcheck_evals(i, READ_RAF_DEGREE_BOUND, BindingOrder::HighToLow);
                 [
-                    f_evals[0] * (val_evals[0] + self.params.gamma * int_evals[0]),
-                    f_evals[1] * (val_evals[1] + self.params.gamma * int_evals[1]),
+                    g_evals[0] * (val_evals[0] + self.params.gamma * int_evals[0]),
+                    g_evals[1] * (val_evals[1] + self.params.gamma * int_evals[1]),
                 ]
             })
             .reduce(
@@ -207,7 +208,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReadRafProver
 
     fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
         self.val.bind_parallel(r_j, BindingOrder::HighToLow);
-        self.F.bind_parallel(r_j, BindingOrder::HighToLow);
+        self.G.bind_parallel(r_j, BindingOrder::HighToLow);
         self.int.bind_parallel(r_j, BindingOrder::HighToLow);
     }
 
@@ -224,7 +225,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReadRafProver
             self.params.ra_vp,
             self.params.ra_sid,
             opening_point.into(),
-            self.F.final_sumcheck_claim(),
+            self.G.final_sumcheck_claim(),
         );
     }
 }
@@ -265,7 +266,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReadRafVeri
         let span = tracing::span!(tracing::Level::INFO, "ReadRafVerifier::val_evaluation");
         let _guard = span.enter();
         let val_claim =
-            MultilinearPolynomial::from(self.table.clone()).evaluate(sumcheck_challenges);
+            MultilinearPolynomial::from(self.table.clone()).evaluate(sumcheck_challenges); // TODO: rm clone
         drop(_guard);
         drop(span);
         let int_claim = IdentityPolynomial::new(self.params.log_K).evaluate(sumcheck_challenges);

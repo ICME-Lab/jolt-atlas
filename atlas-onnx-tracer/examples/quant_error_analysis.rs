@@ -15,7 +15,7 @@ const THIN: &str = "────────────────────
 #[cfg(feature = "fused-ops")]
 const SCALE: i32 = 12;
 #[cfg(not(feature = "fused-ops"))]
-const SCALE: i32 = 7;
+const SCALE: i32 = 8;
 
 /// Quantization error analysis for GPT-2.
 ///

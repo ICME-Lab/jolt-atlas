@@ -27,7 +27,7 @@ mod tests {
 
     #[test]
     fn test_sin_precision_stats() {
-        const SCALE: f64 = 128.0;
+        const SCALE: f64 = 256.0;
         const SAMPLE_SIZE: usize = 1 << 14;
         const MIN_INPUT: i32 = -(1 << 20);
         const MAX_INPUT: i32 = 1 << 20;

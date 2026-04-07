@@ -19,7 +19,7 @@ use crate::{
     onnx_proof::{
         neural_teleport::{division::compute_division, n_bits_to_usize},
         op_lookups::InterleavedBitsMarker,
-        ops::{rsqrt::Q_SQUARE, softmax_axes::softmax::scalar_div::S},
+        ops::{rsqrt::Q_SQUARE, softmax_last_axis::rc::SAT_DIFF_RC_BITS},
         range_checking::range_check_operands::{
             DivRangeCheckOperands, RangeCheckingOperandsTrait, RiRangeCheckOperands,
             RsRangeCheckOperands, TeleportRangeCheckOperands,
@@ -28,17 +28,13 @@ use crate::{
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
 };
 use atlas_onnx_tracer::{
-    model::{
-        consts::EIGHT_PI_APPROX,
-        trace::{LayerData, Trace},
-        Model,
-    },
+    model::{consts::EIGHT_PI_APPROX, trace::Trace, Model},
     node::ComputationNode,
-    ops::Operator,
-    tensor::{
-        ops::nonlinearities::{softmax_fixed_128, SoftmaxTrace, LOG_EXP_LUT_SIZE},
-        Tensor,
+    ops::{
+        softmax::{generate_exp_lut_decomposed, softmax_last_axis_decomposed},
+        Operator, SoftmaxLastAxis,
     },
+    tensor::Tensor,
 };
 use common::CommittedPolynomial;
 use joltworks::{
@@ -49,19 +45,6 @@ use joltworks::{
     utils::{lookup_bits::LookupBits, math::Math},
 };
 use rayon::prelude::*;
-
-/// Computes the softmax intermediate trace for one feature-group chunk of a `SoftmaxAxes` node.
-///
-/// Both `SoftmaxRemainder` and `SoftmaxExponentiationRaD` need identical slicing and
-/// `softmax_fixed_128` logic; this helper eliminates the duplication.
-fn softmax_chunk_trace(node: &ComputationNode, trace: &Trace, feature_idx: usize) -> SoftmaxTrace {
-    let features = node.output_dims[2];
-    let LayerData { operands, .. } = Trace::layer_data(trace, node);
-    let operand = operands[0];
-    let chunk = operand.data()[feature_idx * features..(feature_idx + 1) * features].to_vec();
-    let (_, softmax_trace) = softmax_fixed_128::<true>(&Tensor::construct(chunk, vec![features]));
-    softmax_trace.expect("softmax trace is always Some when TRACE = true")
-}
 
 /// Builds a one-hot RaD witness for any of the range-checking operand types.
 ///
@@ -267,51 +250,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     model, trace, *node_idx, *d,
                 )
             }
-            // TODO: Generate batch witness for Softmax committed polynomials
-            CommittedPolynomial::SoftmaxRemainder(node_idx, feature_idx) => {
-                let computation_node = &model.graph.nodes[node_idx];
-                assert!(matches!(
-                    computation_node.operator,
-                    Operator::SoftmaxAxes(_)
-                ));
-                let st = softmax_chunk_trace(computation_node, trace, *feature_idx);
-                let remainder_data: Vec<i32> = st
-                    .exp_q_values
-                    .iter()
-                    .map(|&a| adjusted_remainder(a * S as i32, st.exp_sum_q))
-                    .collect();
-                MultilinearPolynomial::from(Tensor::<i32>::construct(
-                    remainder_data,
-                    st.exp_q_values.dims().to_vec(),
-                ))
-            }
-            CommittedPolynomial::SoftmaxExponentiationRaD(node_idx, feature_idx, d_idx) => {
-                let computation_node = &model.graph.nodes[node_idx];
-                assert!(matches!(
-                    computation_node.operator,
-                    Operator::SoftmaxAxes(_)
-                ));
-                let st = softmax_chunk_trace(computation_node, trace, *feature_idx);
-                let lookup_indices: Vec<usize> = st
-                    .abs_centered_logits
-                    .par_iter()
-                    .map(|&x| x as usize)
-                    .collect();
-                let one_hot_params =
-                    OneHotParams::from_config_and_log_K(&OneHotConfig::default(), LOG_EXP_LUT_SIZE);
-                let h_indices = subprotocols::shout::compute_instruction_h_indices(
-                    &lookup_indices,
-                    &one_hot_params,
-                );
-                MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
-                    h_indices[*d_idx]
-                        .par_iter()
-                        .map(|&h| h.map(|h| h as u16))
-                        .collect(),
-                    one_hot_params.k_chunk,
-                ))
-            }
-
             CommittedPolynomial::GatherRa(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 assert!(matches!(computation_node.operator, Operator::Gather(_)));
@@ -395,6 +333,96 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     one_hot_params.k_chunk,
                 ))
             }
+            CommittedPolynomial::SoftmaxRemainderRaD(node_idx, d) => {
+                let node = &model.graph.nodes[node_idx];
+                let Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) = &node.operator else {
+                    panic!("Expected SoftmaxLastAxis at node {node_idx}");
+                };
+                let log_scale = scale.trailing_zeros() as usize;
+                let st = softmax_last_axis_full_trace(node, trace);
+                let lookup_indices: Vec<usize> = st.R.iter().map(|&v| v as usize).collect();
+                build_softmax_last_axis_onehot_witness(&lookup_indices, log_scale, *d)
+            }
+            CommittedPolynomial::SoftmaxExpRemainderRaD(node_idx, d) => {
+                let node = &model.graph.nodes[node_idx];
+                let Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) = &node.operator else {
+                    panic!("Expected SoftmaxLastAxis at node {node_idx}");
+                };
+                let log_scale = scale.trailing_zeros() as usize;
+                let st = softmax_last_axis_full_trace(node, trace);
+                let lookup_indices: Vec<usize> = st
+                    .decomposed_exp
+                    .r_exp
+                    .iter()
+                    .map(|&v| v as usize)
+                    .collect();
+                build_softmax_last_axis_onehot_witness(&lookup_indices, log_scale, *d)
+            }
+            CommittedPolynomial::SoftmaxSatDiffRaD(node_idx, d) => {
+                let node = &model.graph.nodes[node_idx];
+                let st = softmax_last_axis_full_trace(node, trace);
+                let lookup_indices: Vec<usize> = st
+                    .decomposed_exp
+                    .sat_diff
+                    .iter()
+                    .map(|&v| v as usize)
+                    .collect();
+                build_softmax_last_axis_onehot_witness(&lookup_indices, SAT_DIFF_RC_BITS, *d)
+            }
+            CommittedPolynomial::SoftmaxExpZHiRaD(node_idx, d) => {
+                let node = &model.graph.nodes[node_idx];
+                let st = softmax_last_axis_full_trace(node, trace);
+                let decomp = generate_exp_lut_decomposed(st.scale as i32);
+                let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
+                let lookup_indices: Vec<usize> =
+                    st.decomposed_exp.z_hi.iter().map(|&v| v as usize).collect();
+                build_softmax_last_axis_onehot_witness(&lookup_indices, log_hi, *d)
+            }
+            CommittedPolynomial::SoftmaxExpZLoRaD(node_idx, d) => {
+                let node = &model.graph.nodes[node_idx];
+                let st = softmax_last_axis_full_trace(node, trace);
+                let decomp = generate_exp_lut_decomposed(st.scale as i32);
+                let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
+                let lookup_indices: Vec<usize> =
+                    st.decomposed_exp.z_lo.iter().map(|&v| v as usize).collect();
+                build_softmax_last_axis_onehot_witness(&lookup_indices, log_lo, *d)
+            }
         }
     }
+}
+
+/// Re-runs the decomposed softmax trace for a `SoftmaxLastAxis` node.
+///
+/// Returns the full [`SoftmaxLastAxisTrace`] from which the individual lookup
+/// indices (R, r_exp, sat_diff, z_hi, z_lo) can be extracted.
+fn softmax_last_axis_full_trace(
+    node: &ComputationNode,
+    trace: &Trace,
+) -> atlas_onnx_tracer::ops::softmax::SoftmaxLastAxisTrace {
+    let Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) = &node.operator else {
+        panic!("Expected SoftmaxLastAxis operator at node {}", node.idx);
+    };
+    let layer_data = Trace::layer_data(trace, node);
+    let input = &layer_data.operands[0];
+    softmax_last_axis_decomposed(input, *scale).1
+}
+
+/// Build a one-hot RaD witness for a SoftmaxLastAxis identity range-check or
+/// Shout ra polynomial, given raw lookup indices and the log2 of the table /
+/// range-check size.
+fn build_softmax_last_axis_onehot_witness<F: JoltField>(
+    lookup_indices: &[usize],
+    log_k: usize,
+    d: usize,
+) -> MultilinearPolynomial<F> {
+    let one_hot_params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k);
+    let h_indices =
+        subprotocols::shout::compute_instruction_h_indices(lookup_indices, &one_hot_params);
+    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+        h_indices[d]
+            .par_iter()
+            .map(|&h| h.map(|h| h as u16))
+            .collect(),
+        one_hot_params.k_chunk,
+    ))
 }

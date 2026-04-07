@@ -340,9 +340,21 @@ pub fn finish_mles_product_sum_from_evals<F: JoltField>(
     let eq_eval_at_0 = F::one() - r_round;
     let eq_eval_at_1 = r_round;
 
-    // Obtain the eval at 0 from the claim.
-    let eval_at_1 = sum_evals[0];
-    let eval_at_0 = (claim - eq_eval_at_1 * eval_at_1) / eq_eval_at_0;
+    // Obtain h(0) from the claim.
+    //
+    // For d > 1 the grid is U_d = [1, 2, …, d-1, ∞] so sum_evals[0] = h(1).
+    // For d = 1  the grid is U_1 = [∞]            so sum_evals[0] = h(∞).
+    //
+    // In both cases  claim = (1−r)·h(0) + r·h(1),  and h is degree-(d−1).
+    let eval_at_0 = if sum_evals.len() == 1 {
+        // d = 1: h is linear, h(X) = a + bX, with b = h(∞) = sum_evals[0].
+        // claim = h(0) + r·b  ⟹  h(0) = claim − r·b
+        claim - eq_eval_at_1 * sum_evals[0]
+    } else {
+        // d > 1: sum_evals[0] = h(1).
+        // claim = (1−r)·h(0) + r·h(1)  ⟹  h(0) = (claim − r·h(1)) / (1−r)
+        (claim - eq_eval_at_1 * sum_evals[0]) / eq_eval_at_0
+    };
 
     // Interpolate the intermediate polynomial.
     let mut toom_evals = Vec::with_capacity(sum_evals.len() + 1);

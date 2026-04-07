@@ -22,6 +22,8 @@ pub mod trace;
 pub struct Model {
     /// The computation graph of the model
     pub graph: ComputationGraph,
+    /// The fixed-point quantization scale used for the model (denominator in fixed-point representation).
+    pub scale: quantize::Scale,
 }
 
 impl Model {
@@ -268,8 +270,8 @@ impl Model {
                 | Operator::Sigmoid(_)
                 | Operator::Sin(_) => LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements()),
                 Operator::ScalarConstDiv(_) => log_2(node.pow2_padded_num_output_elements()),
-                Operator::SoftmaxAxes(_) => {
-                    LOG_K_CHUNK + log_2(*node.output_dims.last().unwrap_or(&1))
+                Operator::SoftmaxLastAxis(_) => {
+                    LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements())
                 }
                 Operator::Gather(_) => {
                     let input_nodes = self.get_input_nodes(node);
@@ -463,12 +465,13 @@ impl RunArgs {
 /// Const values used across the model and ops.
 pub mod consts {
     /// Default quantization scale (denominator in fixed-point representation).
-    pub const DEFAULT_SCALE: i32 = 7;
+    pub const DEFAULT_SCALE: i32 = 8;
 
-    /// Const used as an approximation of 8π in the zkVM with a scale factor of 128.
+    /// Const used as an approximation of 8π in the zkVM with a scale factor of 2^DEFAULT_SCALE.
     /// This allows us to wrap around a multiple of 2π, using the periodicity of the cosine function
     /// while keeping the lookup table size reasonable.
-    pub const EIGHT_PI_APPROX: i32 = 3217;
+    /// Value: round(8 * π * 2^DEFAULT_SCALE) = round(8 * π * 256) = 6434
+    pub const EIGHT_PI_APPROX: i32 = 6434;
 }
 
 #[cfg(test)]

@@ -933,6 +933,8 @@ pub enum SumcheckId {
     /// A node-execution sumcheck for a specific consumer node.
     /// The payload is the consumer's node index.
     NodeExecution(usize),
+    /// Arbitrary sum-check id for sum-checks not associated with a specific node execution, e.g. for the different stages in softmax proof.
+    Execution,
     Raf,
     RaVirtualization,
     RamHammingBooleanity,
@@ -964,6 +966,7 @@ impl CanonicalSerialize for SumcheckId {
                 7u8.serialize_with_mode(&mut writer, compress)?;
                 idx.serialize_with_mode(&mut writer, compress)?;
             }
+            Self::Execution => 8u8.serialize_with_mode(&mut writer, compress)?,
         }
         Ok(())
     }
@@ -1006,6 +1009,7 @@ impl CanonicalDeserialize for SumcheckId {
                 let idx = usize::deserialize_with_mode(&mut reader, compress, validate)?;
                 Ok(Self::RLC(idx))
             }
+            8 => Ok(Self::Execution),
             _ => Err(SerializationError::InvalidData),
         }
     }

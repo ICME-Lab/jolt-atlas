@@ -1,12 +1,13 @@
-use crate::onnx_proof::neural_teleport::{
-    division::{
-        compute_division, TeleportDivisionParams, TeleportDivisionProver, TeleportDivisionVerifier,
-    },
-    n_bits_to_usize,
-    utils::compute_ra_evals_nbits_2comp,
-    SigmoidTable,
-};
 use crate::onnx_proof::{
+    neural_teleport::{
+        division::{
+            compute_division, TeleportDivisionParams, TeleportDivisionProver,
+            TeleportDivisionVerifier,
+        },
+        n_bits_to_usize,
+        utils::compute_ra_evals_nbits_2comp,
+        SigmoidTable,
+    },
     ops::OperatorProofTrait,
     range_checking::{
         range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,

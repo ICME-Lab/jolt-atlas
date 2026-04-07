@@ -385,6 +385,94 @@ fn extend_input_to_max_domain<T: Copy>(
     extended
 }
 
+/// Context for generating concat-aware eq weights for each input polynomial.
+struct ConcatEqWeightsContext<'a, F: JoltField> {
+    /// Raw input dims, the source of truth for concat indexing.
+    inputs_dims: &'a [Vec<usize>],
+    /// Raw output dims are used for stride computation.
+    output_dims: &'a [usize],
+    /// Concat axis index.
+    axis: usize,
+    /// Reduced opening point for the concat output.
+    r_output: &'a [F],
+}
+
+impl<'a, F: JoltField> ConcatEqWeightsContext<'a, F> {
+    fn new(
+        raw_input_dims: &'a [Vec<usize>],
+        output_raw_dims: &'a [usize],
+        axis: usize,
+        r_output: &'a [F],
+    ) -> Self {
+        Self {
+            inputs_dims: raw_input_dims,
+            output_dims: output_raw_dims,
+            axis,
+            r_output,
+        }
+    }
+
+    fn input_dims(&self, input_idx: usize) -> &[usize] {
+        self.inputs_dims
+            .get(input_idx)
+            .unwrap_or_else(|| panic!("Concat input_idx {input_idx} out of range"))
+    }
+
+    /// Returns the axis offset (in output coordinates) for the given input.
+    fn axis_offset(&self, input_idx: usize) -> usize {
+        self.inputs_dims[..input_idx]
+            .iter()
+            .map(|dims| dims[self.axis])
+            .sum()
+    }
+
+    /// Builds concat-aware eq weights for one input tensor.
+    ///
+    /// The produced vector aligns with row-major linearization of the padded input,
+    /// then extends to the max domain used by the single selector-based sumcheck.
+    fn eq_weights(&self, input_idx: usize, max_input_num_vars: usize) -> Vec<F> {
+        let input_raw_dims = self.input_dims(input_idx);
+        let input_raw_len: usize = input_raw_dims.iter().product();
+        let input_padded_dims: Vec<usize> = input_raw_dims
+            .iter()
+            .map(|dim| dim.next_power_of_two())
+            .collect();
+        let input_domain_len: usize = input_padded_dims.iter().product();
+        let input_num_vars = input_domain_len.log_2();
+
+        let output_padded_dims: Vec<usize> = self
+            .output_dims
+            .iter()
+            .map(|dim| dim.next_power_of_two())
+            .collect();
+        let output_domain_len: usize = output_padded_dims.iter().product();
+        let output_num_vars = output_domain_len.log_2();
+        assert_eq!(
+            output_num_vars,
+            self.r_output.len(),
+            "Concat eq weights expect output challenge length to match output padded domain"
+        );
+
+        let max_domain_len = 1usize << max_input_num_vars;
+        let axis_offset = self.axis_offset(input_idx);
+        let mut weights = vec![F::zero(); max_domain_len];
+
+        for linear_idx in 0..input_raw_len {
+            let input_coord = linear_to_coord(linear_idx, input_raw_dims);
+            let mut output_coord = input_coord.clone();
+            output_coord[self.axis] += axis_offset;
+
+            let input_index = coord_to_linear(&input_coord, &input_padded_dims);
+            let output_index = coord_to_linear(&output_coord, &output_padded_dims);
+            let output_bits = index_to_field_bitvector::<F>(output_index as u64, output_num_vars);
+            let full_index = input_index << (max_input_num_vars - input_num_vars);
+            weights[full_index] = EqPolynomial::mle(&output_bits, self.r_output);
+        }
+
+        weights
+    }
+}
+
 fn build_concat_selector<F: JoltField>(
     raw_input_dims: &[Vec<usize>],
     output_raw_dims: &[usize],
@@ -393,46 +481,8 @@ fn build_concat_selector<F: JoltField>(
     r_output: &[F],
     max_input_num_vars: usize,
 ) -> Vec<F> {
-    let input_raw_dims = raw_input_dims
-        .get(input_idx)
-        .unwrap_or_else(|| panic!("Concat input_idx {input_idx} out of range"));
-    let input_raw_len: usize = input_raw_dims.iter().product();
-    let input_padded_dims: Vec<usize> = input_raw_dims
-        .iter()
-        .map(|dim| dim.next_power_of_two())
-        .collect();
-    let input_domain_len: usize = input_padded_dims.iter().product();
-    let input_num_vars = input_domain_len.log_2();
-
-    let output_padded_dims: Vec<usize> = output_raw_dims
-        .iter()
-        .map(|dim| dim.next_power_of_two())
-        .collect();
-    let output_domain_len: usize = output_padded_dims.iter().product();
-    let output_num_vars = output_domain_len.log_2();
-    assert_eq!(
-        output_num_vars,
-        r_output.len(),
-        "Concat selector expects output challenge length to match output padded domain"
-    );
-
-    let max_domain_len = 1usize << max_input_num_vars;
-    let axis_offset = axis_offset(raw_input_dims, input_idx, axis);
-    let mut selector = vec![F::zero(); max_domain_len];
-
-    for linear_idx in 0..input_raw_len {
-        let input_coord = linear_to_coord(linear_idx, input_raw_dims);
-        let mut output_coord = input_coord.clone();
-        output_coord[axis] += axis_offset;
-
-        let input_index = coord_to_linear(&input_coord, &input_padded_dims);
-        let output_index = coord_to_linear(&output_coord, &output_padded_dims);
-        let output_bits = index_to_field_bitvector::<F>(output_index as u64, output_num_vars);
-        let full_index = input_index << (max_input_num_vars - input_num_vars);
-        selector[full_index] = EqPolynomial::mle(&output_bits, r_output);
-    }
-
-    selector
+    ConcatEqWeightsContext::new(raw_input_dims, output_raw_dims, axis, r_output)
+        .eq_weights(input_idx, max_input_num_vars)
 }
 
 /// Normalizes an ONNX-style axis (possibly negative) to a canonical `[0, rank)` axis.
@@ -471,15 +521,6 @@ fn validate_concat_shapes(inputs_dims: &[&[usize]], out_dims: &[usize], axis: us
             }
         }
     }
-}
-
-/// Returns the axis offset (in output coordinates) for the given input.
-fn axis_offset(raw_input_dims: &[Vec<usize>], input_idx: usize, axis: usize) -> usize {
-    raw_input_dims
-        .iter()
-        .take(input_idx)
-        .map(|dims| dims[axis])
-        .sum()
 }
 
 #[cfg(test)]

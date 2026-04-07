@@ -25,7 +25,7 @@ pub enum ExpDigit {
 }
 
 impl ExpDigit {
-    /// Virtual polynomial for the looked-up value (`exp_hi` or `exp_lo`).
+    /// Virtual polynomial for the read-values value (`exp_hi` or `exp_lo`).
     fn rv_vp(self, node_idx: usize) -> VirtualPolynomial {
         match self {
             Self::Hi => VirtualPolynomial::SoftmaxExpHi(node_idx),
@@ -33,7 +33,7 @@ impl ExpDigit {
         }
     }
 
-    /// Virtual polynomial for the read-address-function output (`z_hi` or `z_lo`).
+    /// vp type for raf polynomials (`z_hi` or `z_lo`).
     fn raf_vp(self, node_idx: usize) -> VirtualPolynomial {
         match self {
             Self::Hi => VirtualPolynomial::SoftmaxExpZHi(node_idx),

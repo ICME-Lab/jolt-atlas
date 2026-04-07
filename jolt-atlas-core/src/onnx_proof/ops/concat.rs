@@ -1,58 +1,90 @@
 use crate::utils::dims::{coord_to_linear, linear_to_coord};
 use atlas_onnx_tracer::{
-    model::{
-        trace::{LayerData, Trace},
-        ComputationGraph,
-    },
+    model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::{Concat, Operator},
+    utils::dims::Pad,
 };
 use common::VirtualPolynomial;
 use joltworks::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
-        multilinear_polynomial::{
-            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
-        },
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
-        },
-        unipoly::UniPoly,
+        opening_proof::{OpeningAccumulator, SumcheckId},
     },
     subprotocols::{
-        sumcheck::Sumcheck,
-        sumcheck::SumcheckInstanceProof,
+        gamma_fold::{GammaFoldProver, GammaFoldVerifier},
+        sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        sumcheck_verifier::SumcheckInstanceVerifier,
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, index_to_field_bitvector, math::Math},
+    utils::{errors::ProofVerifyError, index_to_field_bitvector},
 };
-use rayon::prelude::*;
 
-use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
+use crate::onnx_proof::{
+    ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
+    ProofId, ProofType, Prover, Verifier,
+};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
+    fn reduction_flow(&self) -> ReductionFlow {
+        ReductionFlow::Custom
+    }
+
     #[tracing::instrument(skip_all, name = "Concat::prove")]
     fn prove(
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        let params = ConcatSumcheckParams::new(
-            node.clone(),
-            &prover.accumulator,
-            &prover.preprocessing.model.graph,
-        );
-        let mut prover_sumcheck = ConcatSumcheckProver::initialize(&prover.trace, params);
-        let (proof, _) = Sumcheck::prove(
-            &mut prover_sumcheck,
+        let Operator::Concat(concat_op) = &node.operator else {
+            panic!("Expected Concat operator")
+        };
+
+        let r_output = prover.accumulator.get_node_output_opening(node.idx).0;
+
+        let raw_inputs_dims = {
+            let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+            operands
+                .iter()
+                .map(|tensor| tensor.dims())
+                .collect::<Vec<_>>()
+        };
+        let input_count = raw_inputs_dims.len();
+        assert!(input_count > 0, "Concat expects at least one operand");
+
+        let axis = normalize_axis(concat_op.axis, node.output_dims.len());
+        let ctx =
+            ConcatGammaWeightsContext::new(&raw_inputs_dims, &node.output_dims, axis, &r_output.r);
+
+        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
+            Vec::with_capacity(input_count);
+        for input_idx in 0..input_count {
+            instances.push(Box::new(initialize_input_prover(
+                node, input_idx, &ctx, prover,
+            )));
+        }
+        let (proof, _) = BatchedSumcheck::prove(
+            instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
             &mut prover.transcript,
         );
+
         vec![(ProofId(node.idx, ProofType::Execution), proof)]
+    }
+
+    fn prove_with_reduction(
+        &self,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> (
+        joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+        Vec<(ProofId, SumcheckInstanceProof<F, T>)>,
+    ) {
+        let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
+        let execution_proofs = self.prove(node, prover);
+        (eval_reduction_proof, execution_proofs)
     }
 
     #[tracing::instrument(skip_all, name = "Concat::verify")]
@@ -65,424 +97,115 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let verifier_sumcheck = ConcatSumcheckVerifier::new(
-            node.clone(),
-            &verifier.accumulator,
-            &verifier.preprocessing.model.graph,
-        );
-        Sumcheck::verify(
+
+        let Operator::Concat(concat_op) = &node.operator else {
+            panic!("Expected Concat operator")
+        };
+
+        let r_output = verifier.accumulator.get_node_output_opening(node.idx).0;
+
+        let raw_inputs_dims = {
+            let graph = &verifier.preprocessing.model.graph;
+            let input_nodes = graph.get_input_nodes(node);
+            input_nodes
+                .iter()
+                .map(|input_node| input_node.output_dims.as_slice())
+                .collect::<Vec<&[usize]>>()
+        };
+        let input_count = raw_inputs_dims.len();
+        assert!(input_count > 0, "Concat expects at least one input node");
+
+        let axis = normalize_axis(concat_op.axis, node.output_dims.len());
+        let ctx =
+            ConcatGammaWeightsContext::new(&raw_inputs_dims, &node.output_dims, axis, &r_output.r);
+
+        let mut verifiers = Vec::with_capacity(input_count);
+        for input_idx in 0..input_count {
+            verifiers.push(initialize_input_verifier(node, input_idx, &ctx, verifier));
+        }
+
+        let instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = verifiers
+            .iter()
+            .map(|instance| instance as &dyn SumcheckInstanceVerifier<F, T>)
+            .collect();
+        let r_sumcheck = BatchedSumcheck::verify(
             proof,
-            &verifier_sumcheck,
+            instances,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
+        let _ = r_sumcheck;
+
+        let output_claim = verifier.accumulator.get_node_output_opening(node.idx).1;
+        let expected_output_claim = (0..input_count).fold(F::zero(), |running, input_idx| {
+            let input_claim = verifier
+                .accumulator
+                .get_virtual_polynomial_opening(
+                    claim_poly_input(node, input_idx),
+                    SumcheckId::RLC(node.idx),
+                )
+                .1;
+            running + input_claim
+        });
+        if output_claim != expected_output_claim {
+            return Err(ProofVerifyError::InvalidOpeningProof(
+                "Concat output-claim relation failed".to_string(),
+            ));
+        }
+
         Ok(())
     }
-}
 
-/// Parameters for the concat selector sumcheck.
-#[derive(Clone)]
-pub struct ConcatSumcheckParams<F: JoltField> {
-    /// Concat node being proven.
-    pub computation_node: ComputationNode,
-    /// Reduced opening point for the concat output.
-    pub r_output: OpeningPoint<BIG_ENDIAN, F>,
-    /// Raw input shapes for each concat operand.
-    pub input_raw_dims: Vec<Vec<usize>>,
-    /// Raw output shape for the concat result.
-    pub output_raw_dims: Vec<usize>,
-    /// Normalized concat axis.
-    pub axis: usize,
-    /// Maximum padded input domain size, in variables.
-    pub max_input_num_vars: usize,
-}
-
-impl<F: JoltField> ConcatSumcheckParams<F> {
-    /// Build concat sumcheck parameters from the graph metadata and reduced output opening.
-    pub fn new(
-        computation_node: ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-        graph: &ComputationGraph,
-    ) -> Self {
-        let Operator::Concat(concat_op) = &computation_node.operator else {
-            panic!("Expected Concat operator")
-        };
-        let r_output = accumulator.get_node_output_opening(computation_node.idx).0;
-        let input_raw_dims = graph
-            .get_input_nodes(&computation_node)
-            .iter()
-            .map(|input_node| input_node.output_dims.clone())
-            .collect::<Vec<_>>();
-        let output_raw_dims = computation_node.output_dims.clone();
-        let axis = normalize_axis(concat_op.axis, output_raw_dims.len());
-        validate_concat_shapes(
-            &input_raw_dims
-                .iter()
-                .map(|dims| dims.as_slice())
-                .collect::<Vec<_>>(),
-            &output_raw_dims,
-            axis,
-        );
-        let max_input_num_vars = input_raw_dims
-            .iter()
-            .map(|dims| padded_domain_len(dims).log_2())
-            .max()
-            .unwrap_or(0);
-
-        Self {
-            computation_node,
-            r_output,
-            input_raw_dims,
-            output_raw_dims,
-            axis,
-            max_input_num_vars,
-        }
-    }
-}
-
-impl<F: JoltField> SumcheckInstanceParams<F> for ConcatSumcheckParams<F> {
-    fn degree(&self) -> usize {
-        2
-    }
-
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        accumulator
-            .get_node_output_opening(self.computation_node.idx)
-            .1
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.max_input_num_vars
-    }
-}
-
-struct ConcatInputTerm<F: JoltField> {
-    producer_idx: usize,
-    input_num_vars: usize,
-    input_mle: MultilinearPolynomial<F>,
-    selector_mle: MultilinearPolynomial<F>,
-}
-
-/// Prover state for the concat selector sumcheck.
-pub struct ConcatSumcheckProver<F: JoltField> {
-    /// Static concat parameters shared across all rounds.
-    pub params: ConcatSumcheckParams<F>,
-    input_terms: Vec<ConcatInputTerm<F>>,
-}
-
-impl<F: JoltField> ConcatSumcheckProver<F> {
-    /// Initialize prover state from trace tensors and prepared concat parameters.
-    pub fn initialize(trace: &Trace, params: ConcatSumcheckParams<F>) -> Self {
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
-        assert!(!operands.is_empty(), "Concat expects at least one operand");
-        assert_eq!(
-            operands.len(),
-            params.input_raw_dims.len(),
-            "Concat input shape count mismatch"
-        );
-
-        let output_padded_len = output.padded_next_power_of_two().len();
-        let max_input_domain_len = 1usize << params.max_input_num_vars;
-        assert!(
-            max_input_domain_len <= output_padded_len,
-            "Concat max input domain cannot exceed output padded domain"
-        );
-
-        let input_terms = operands
-            .iter()
-            .enumerate()
-            .map(|(input_idx, input_tensor)| {
-                let input_padded = input_tensor.padded_next_power_of_two();
-                let input_num_vars = input_padded.len().log_2();
-                let extended_input = extend_input_to_max_domain(
-                    input_padded.data(),
-                    input_num_vars,
-                    params.max_input_num_vars,
-                );
-                let selector = build_concat_selector(
-                    &params.input_raw_dims,
-                    &params.output_raw_dims,
-                    params.axis,
-                    input_idx,
-                    &params.r_output.r,
-                    params.max_input_num_vars,
-                );
-                ConcatInputTerm {
-                    producer_idx: params.computation_node.inputs[input_idx],
-                    input_num_vars,
-                    input_mle: MultilinearPolynomial::from(extended_input),
-                    selector_mle: MultilinearPolynomial::from(selector),
-                }
-            })
-            .collect();
-
-        Self {
-            params,
-            input_terms,
-        }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ConcatSumcheckProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        const DEGREE_BOUND: usize = 2;
-        let half_poly_len = self
-            .input_terms
-            .first()
-            .map(|term| term.input_mle.len() / 2)
-            .unwrap_or(0);
-        let uni_poly_evals: [F; 2] = (0..half_poly_len)
-            .into_par_iter()
-            .map(|i| {
-                let mut evals = [F::zero(); 2];
-                for term in &self.input_terms {
-                    let input_evals =
-                        term.input_mle
-                            .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-                    let selector_evals =
-                        term.selector_mle
-                            .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-                    evals[0] += input_evals[0] * selector_evals[0];
-                    evals[1] += input_evals[1] * selector_evals[1];
-                }
-                evals
-            })
-            .reduce(|| [F::zero(); 2], |a, b| [a[0] + b[0], a[1] + b[1]]);
-
-        UniPoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        for term in &mut self.input_terms {
-            term.input_mle.bind_parallel(r_j, BindingOrder::LowToHigh);
-            term.selector_mle
-                .bind_parallel(r_j, BindingOrder::LowToHigh);
-        }
-    }
-
-    fn cache_openings(
+    fn verify_with_reduction(
         &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let full_opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        for term in &self.input_terms {
-            let live_opening_point = full_opening_point.r[..term.input_num_vars].to_vec();
-            accumulator.append_virtual(
-                transcript,
-                VirtualPolynomial::NodeOutput(term.producer_idx),
-                SumcheckId::NodeExecution(self.params.computation_node.idx),
-                live_opening_point.into(),
-                term.input_mle.final_sumcheck_claim(),
-            );
-        }
+        node: &ComputationNode,
+        verifier: &mut Verifier<'_, F, T>,
+        eval_reduction_proof: &joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+    ) -> Result<(), ProofVerifyError> {
+        NodeEvalReduction::verify(verifier, node, eval_reduction_proof)?;
+        self.verify(node, verifier)
     }
 }
 
-/// Verifier state for the concat selector sumcheck.
-pub struct ConcatSumcheckVerifier<F: JoltField> {
-    /// Static concat parameters shared across all rounds.
-    pub params: ConcatSumcheckParams<F>,
-}
-
-impl<F: JoltField> ConcatSumcheckVerifier<F> {
-    /// Build the concat verifier from the reduced output opening and graph metadata.
-    pub fn new(
-        computation_node: ComputationNode,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        graph: &ComputationGraph,
-    ) -> Self {
-        let params = ConcatSumcheckParams::new(computation_node, accumulator, graph);
-        Self { params }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ConcatSumcheckVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let full_opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-
-        self.params.input_raw_dims.iter().enumerate().fold(
-            F::zero(),
-            |running, (input_idx, _input_raw_dims)| {
-                let input_claim = accumulator.get_node_output_claim(
-                    self.params.computation_node.inputs[input_idx],
-                    self.params.computation_node.idx,
-                );
-                let selector = build_concat_selector(
-                    &self.params.input_raw_dims,
-                    &self.params.output_raw_dims,
-                    self.params.axis,
-                    input_idx,
-                    &self.params.r_output.r,
-                    self.params.max_input_num_vars,
-                );
-                let selector_claim =
-                    MultilinearPolynomial::from(selector).evaluate(&full_opening_point.r);
-                running + input_claim * selector_claim
-            },
-        )
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let full_opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        for (input_idx, input_raw_dims) in self.params.input_raw_dims.iter().enumerate() {
-            let input_num_vars = padded_domain_len(input_raw_dims).log_2();
-            let live_opening_point = full_opening_point.r[..input_num_vars].to_vec();
-            accumulator.append_virtual(
-                transcript,
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[input_idx]),
-                SumcheckId::NodeExecution(self.params.computation_node.idx),
-                live_opening_point.into(),
-            );
-        }
-    }
-}
-
-fn padded_domain_len(dims: &[usize]) -> usize {
-    dims.iter().map(|dim| dim.next_power_of_two()).product()
-}
-
-fn extend_input_to_max_domain<T: Copy>(
-    input_padded: &[T],
-    input_num_vars: usize,
-    max_num_vars: usize,
-) -> Vec<T> {
-    let pad_repeat = 1usize << (max_num_vars - input_num_vars);
-    let mut extended = Vec::with_capacity(input_padded.len() * pad_repeat);
-    for value in input_padded {
-        for _ in 0..pad_repeat {
-            extended.push(*value);
-        }
-    }
-    extended
-}
-
-/// Context for generating concat-aware eq weights for each input polynomial.
-struct ConcatEqWeightsContext<'a, F: JoltField> {
-    /// Raw input dims, the source of truth for concat indexing.
-    inputs_dims: &'a [Vec<usize>],
-    /// Raw output dims are used for stride computation.
-    output_dims: &'a [usize],
-    /// Concat axis index.
-    axis: usize,
-    /// Reduced opening point for the concat output.
-    r_output: &'a [F],
-}
-
-impl<'a, F: JoltField> ConcatEqWeightsContext<'a, F> {
-    fn new(
-        raw_input_dims: &'a [Vec<usize>],
-        output_raw_dims: &'a [usize],
-        axis: usize,
-        r_output: &'a [F],
-    ) -> Self {
-        Self {
-            inputs_dims: raw_input_dims,
-            output_dims: output_raw_dims,
-            axis,
-            r_output,
-        }
-    }
-
-    fn input_dims(&self, input_idx: usize) -> &[usize] {
-        self.inputs_dims
-            .get(input_idx)
-            .unwrap_or_else(|| panic!("Concat input_idx {input_idx} out of range"))
-    }
-
-    /// Returns the axis offset (in output coordinates) for the given input.
-    fn axis_offset(&self, input_idx: usize) -> usize {
-        self.inputs_dims[..input_idx]
-            .iter()
-            .map(|dims| dims[self.axis])
-            .sum()
-    }
-
-    /// Builds concat-aware eq weights for one input tensor.
-    ///
-    /// The produced vector aligns with row-major linearization of the padded input,
-    /// then extends to the max domain used by the single selector-based sumcheck.
-    fn eq_weights(&self, input_idx: usize, max_input_num_vars: usize) -> Vec<F> {
-        let input_raw_dims = self.input_dims(input_idx);
-        let input_raw_len: usize = input_raw_dims.iter().product();
-        let input_padded_dims: Vec<usize> = input_raw_dims
-            .iter()
-            .map(|dim| dim.next_power_of_two())
-            .collect();
-        let input_domain_len: usize = input_padded_dims.iter().product();
-        let input_num_vars = input_domain_len.log_2();
-
-        let output_padded_dims: Vec<usize> = self
-            .output_dims
-            .iter()
-            .map(|dim| dim.next_power_of_two())
-            .collect();
-        let output_domain_len: usize = output_padded_dims.iter().product();
-        let output_num_vars = output_domain_len.log_2();
-        assert_eq!(
-            output_num_vars,
-            self.r_output.len(),
-            "Concat eq weights expect output challenge length to match output padded domain"
-        );
-
-        let max_domain_len = 1usize << max_input_num_vars;
-        let axis_offset = self.axis_offset(input_idx);
-        let mut weights = vec![F::zero(); max_domain_len];
-
-        for linear_idx in 0..input_raw_len {
-            let input_coord = linear_to_coord(linear_idx, input_raw_dims);
-            let mut output_coord = input_coord.clone();
-            output_coord[self.axis] += axis_offset;
-
-            let input_index = coord_to_linear(&input_coord, &input_padded_dims);
-            let output_index = coord_to_linear(&output_coord, &output_padded_dims);
-            let output_bits = index_to_field_bitvector::<F>(output_index as u64, output_num_vars);
-            let full_index = input_index << (max_input_num_vars - input_num_vars);
-            weights[full_index] = EqPolynomial::mle(&output_bits, self.r_output);
-        }
-
-        weights
-    }
-}
-
-fn build_concat_selector<F: JoltField>(
-    raw_input_dims: &[Vec<usize>],
-    output_raw_dims: &[usize],
-    axis: usize,
+fn initialize_input_prover<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
     input_idx: usize,
-    r_output: &[F],
-    max_input_num_vars: usize,
-) -> Vec<F> {
-    ConcatEqWeightsContext::new(raw_input_dims, output_raw_dims, axis, r_output)
-        .eq_weights(input_idx, max_input_num_vars)
+    ctx: &ConcatGammaWeightsContext<F>,
+    prover: &mut Prover<F, T>,
+) -> GammaFoldProver<F> {
+    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+    let input_tensor = operands
+        .get(input_idx)
+        .unwrap_or_else(|| panic!("Concat input_idx {input_idx} out of range"));
+
+    GammaFoldProver::initialize(
+        node.idx,
+        claim_poly_input(node, input_idx),
+        input_tensor,
+        ctx.gamma_weights(input_idx),
+        &mut prover.accumulator,
+        &mut prover.transcript,
+    )
+}
+
+fn initialize_input_verifier<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    input_idx: usize,
+    ctx: &ConcatGammaWeightsContext<F>,
+    verifier: &mut Verifier<'_, F, T>,
+) -> GammaFoldVerifier<F> {
+    let graph = &verifier.preprocessing.model.graph;
+    let input_nodes = graph.get_input_nodes(node);
+    let input_num_elements = input_nodes[input_idx].pow2_padded_num_output_elements();
+
+    GammaFoldVerifier::initialize(
+        node.idx,
+        claim_poly_input(node, input_idx),
+        input_num_elements,
+        ctx.gamma_weights(input_idx),
+        &mut verifier.accumulator,
+        &mut verifier.transcript,
+    )
 }
 
 /// Normalizes an ONNX-style axis (possibly negative) to a canonical `[0, rank)` axis.
@@ -497,6 +220,12 @@ fn normalize_axis(axis: isize, rank: usize) -> usize {
 }
 
 /// Validates concat shape rules.
+///
+/// All inputs must share rank with output. Non-concat dimensions must match output,
+/// and concat dimension in output must equal the sum of the same dimension across inputs.
+///
+/// Note:
+/// Requires non-padded shapes.
 fn validate_concat_shapes(inputs_dims: &[&[usize]], out_dims: &[usize], axis: usize) {
     assert!(!inputs_dims.is_empty(), "Concat expects at least one input");
     let rank = out_dims.len();
@@ -523,13 +252,128 @@ fn validate_concat_shapes(inputs_dims: &[&[usize]], out_dims: &[usize], axis: us
     }
 }
 
+/// Context for generating concat-aware gamma weights for each input polynomial.
+struct ConcatGammaWeightsContext<F: JoltField> {
+    /// Raw input dims, the source of truth for concat indexing.
+    inputs_dims: Vec<Vec<usize>>,
+    /// Padded output dims are used for stride computation.
+    output_dims: Vec<usize>,
+    /// Concat axis index.
+    axis: usize,
+    /// Eq evaluations over raw output linear indices.
+    output_eq_evals: Vec<F>,
+}
+
+impl<F: JoltField> ConcatGammaWeightsContext<F> {
+    fn new(raw_inputs: &[&[usize]], raw_output_dims: &[usize], axis: usize, r_output: &[F]) -> Self {
+        validate_concat_shapes(raw_inputs, raw_output_dims, axis);
+
+        let raw_inputs = raw_inputs.iter().map(|dims| dims.to_vec()).collect();
+        let output_padded_dims = raw_output_dims
+            .iter()
+            .map(|dim| dim.next_power_of_two())
+            .collect::<Vec<_>>();
+        let output_padded_len: usize = output_padded_dims.iter().product();
+        let output_num_vars = output_padded_len.trailing_zeros() as usize;
+        assert_eq!(
+            output_num_vars,
+            r_output.len(),
+            "Concat output opening length must match padded output domain"
+        );
+        let output_eq_evals = (0..output_padded_len)
+            .map(|i| {
+                let output_bits = index_to_field_bitvector::<F>(i as u64, output_num_vars);
+                EqPolynomial::mle(&output_bits, r_output)
+            })
+            .collect();
+
+        Self {
+            inputs_dims: raw_inputs,
+            output_dims: output_padded_dims,
+            axis,
+            output_eq_evals,
+        }
+    }
+
+    /// Returns the linearized gamma weights for the concat output polynomial.
+    fn output_gamma_weights(&self) -> Vec<F> {
+        self.output_eq_evals.clone()
+    }
+
+    fn input_dims(&self, input_idx: usize) -> &[usize] {
+        self.inputs_dims
+            .get(input_idx)
+            .unwrap_or_else(|| panic!("Concat input_idx {input_idx} out of range"))
+    }
+
+    /// Returns the axis offset (in output coordinates) for the given input.
+    fn axis_offset(&self, input_idx: usize) -> usize {
+        self.inputs_dims[..input_idx]
+            .iter()
+            .map(|dims| dims[self.axis])
+            .sum()
+    }
+
+    /// Builds concat-aware gamma weights for one input tensor.
+    ///
+    /// The produced vector aligns with row-major linearization of the padded input.
+    ///
+    /// This used to recurse dimension-by-dimension for `gamma^i` weights. That worked because
+    /// gamma powers factor cleanly across row-major strides. For `eq(r, i)` weights we instead
+    /// need the final output linear index, so we map each input position directly to its
+    /// corresponding output index and read the precomputed evaluation from `output_eq_evals`.
+    ///
+    /// Example
+    /// ```ignore
+    /// // For concat of [2,2] and [2,1] on axis 1.
+    /// // Position of input 1, index [0,0] in output is [0, 2]
+    /// // i.e. 2 in row-major order, so it's weight is gamma^2.
+    /// // Complete weight vector for input 1 is [gamma^2, gamma^5]
+    /// ```
+    ///
+    fn gamma_weights(&self, input_idx: usize) -> Vec<F> {
+        let input_dims = self.input_dims(input_idx);
+        let poly_len: usize = input_dims.iter().product();
+
+        if poly_len == 0 {
+            return Vec::new();
+        }
+
+        let axis_offset = self.axis_offset(input_idx);
+
+        // This loop is index-independent and could be upgraded to `into_par_iter()` if selector
+        // construction becomes a measurable hotspot for large concat inputs.
+        let raw_weights = (0..poly_len)
+            .map(|linear_idx| {
+                let coord = linear_to_coord(linear_idx, input_dims);
+                let mut output_coord = coord.clone();
+                output_coord[self.axis] += axis_offset;
+                let output_index = coord_to_linear(&output_coord, &self.output_dims);
+                self.output_eq_evals[output_index]
+            })
+            .collect::<Vec<_>>();
+        raw_weights.pad_next_power_of_two(input_dims)
+    }
+}
+
+fn claim_poly_input(node: &ComputationNode, input_idx: usize) -> VirtualPolynomial {
+    let input_node_idx = *node
+        .inputs
+        .get(input_idx)
+        .unwrap_or_else(|| panic!("Concat input_idx {input_idx} out of range"));
+    VirtualPolynomial::NodeOutput(input_node_idx)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
+    use ark_bn254::Fr;
     use atlas_onnx_tracer::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };
+    use joltworks::{field::JoltField, poly::eq_poly::EqPolynomial, utils::index_to_field_bitvector};
+    use num_traits::Zero;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn concat_model(input_shapes: Vec<Vec<usize>>, axis: isize) -> Model {
@@ -543,13 +387,23 @@ mod tests {
         b.build()
     }
 
+    fn eq_eval<F: JoltField>(r: &[F], index: usize) -> F {
+        let bits = index_to_field_bitvector::<F>(index as u64, r.len());
+        EqPolynomial::mle(&bits, r)
+    }
+
     #[test]
     fn test_concat_power_of_two_shapes() {
         let cases: Vec<(Vec<usize>, Vec<usize>, isize)> = vec![
+            // Rank 2, concat on positive axis.
             (vec![4, 2], vec![4, 2], 1),
+            // Rank 2, concat on axis 0.
             (vec![2, 4], vec![2, 4], 0),
+            // Rank 3, concat on last axis.
             (vec![2, 4, 2], vec![2, 4, 2], 2),
+            // Rank 3, concat on negative axis (-2 => axis 1).
             (vec![2, 2, 4], vec![2, 2, 4], -2),
+            // Rank 4, concat on last axis.
             (vec![2, 2, 2, 2], vec![2, 2, 2, 2], 3),
         ];
 
@@ -565,10 +419,15 @@ mod tests {
     #[test]
     fn test_concat_arbitrary_shapes() {
         let cases: Vec<(Vec<usize>, Vec<usize>, isize)> = vec![
+            // Rank 2, concat on positive axis.
             (vec![3, 2], vec![3, 3], 1),
+            // Rank 2, concat on axis 0.
             (vec![2, 3], vec![4, 3], 0),
+            // Rank 3, concat on last axis.
             (vec![2, 3, 3], vec![2, 3, 2], 2),
+            // Rank 3, concat on negative axis (-2 => axis 1).
             (vec![2, 1, 3], vec![2, 2, 3], -2),
+            // Rank 4, concat on last axis.
             (vec![1, 2, 3, 1], vec![1, 2, 3, 2], 3),
         ];
 
@@ -610,5 +469,64 @@ mod tests {
         let input = Tensor::<i32>::random_small(&mut rng, &shape);
         let model = concat_model(vec![shape], 1);
         unit_test_op(model, &[input]);
+    }
+
+    #[test]
+    fn test_concat_gamma_weights_visual_layout_rank3_axis1() {
+        let r_output = vec![
+            Fr::from(2u64),
+            Fr::from(3u64),
+            Fr::from(5u64),
+            Fr::from(7u64),
+        ];
+        // Concat inputs [2,3,2] and [2,1,2] along axis 1.
+        // Raw output [2,4,2] (3+1=4, already pow2).
+        // Padded input A [2,4,2], padded input B [2,1,2], padded output [2,4,2].
+        let ctx = super::ConcatGammaWeightsContext::new(
+            &[&[2, 3, 2], &[2, 1, 2]],
+            &[2, 4, 2],
+            1,
+            &r_output,
+        );
+
+        let output_weights = ctx.output_gamma_weights();
+        let a_weights = ctx.gamma_weights(0);
+        let b_weights = ctx.gamma_weights(1);
+
+        // Output [2,4,2] is already pow2 (len=16), so all 16 entries are eq(r, i).
+        let expected_output = (0..16)
+            .map(|i| eq_eval(&r_output, i))
+            .collect::<Vec<_>>();
+        assert_eq!(output_weights, expected_output.as_slice());
+
+        let mut expected_a = vec![Fr::zero(); 16];
+        for (dst, output_index) in [
+            (0usize, 0usize),
+            (1, 1),
+            (2, 2),
+            (3, 3),
+            (4, 4),
+            (5, 5),
+            (8, 8),
+            (9, 9),
+            (10, 10),
+            (11, 11),
+            (12, 12),
+            (13, 13),
+        ] {
+            expected_a[dst] = eq_eval(&r_output, output_index);
+        }
+        assert_eq!(a_weights, expected_a);
+
+        // Input B raw [2,1,2] padded to [2,1,2], axis-1 offset 3.
+        // d0=0: output indices [6, 7]
+        // d0=1: output indices [14, 15]
+        let expected_b = vec![
+            eq_eval(&r_output, 6),
+            eq_eval(&r_output, 7),
+            eq_eval(&r_output, 14),
+            eq_eval(&r_output, 15),
+        ];
+        assert_eq!(b_weights, expected_b);
     }
 }

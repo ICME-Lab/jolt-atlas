@@ -104,74 +104,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
     }
 }
 
-/// Pre-computed lookup table data shared between stage3 and stage4.
-struct LookupTableData {
-    table_hi: Vec<i32>,
-    table_lo: Vec<i32>,
-    z_hi_indices: Vec<usize>,
-    z_lo_indices: Vec<usize>,
-}
-
 struct SoftmaxLastAxisProver {
     node_idx: usize,
     operand_node_index: usize,
     scale: i32,
     F_N: [usize; 2],
     trace: SoftmaxLastAxisTrace,
-}
-
-// ---------------------------------------------------------------------------
-// Small helpers used across prover stages
-// ---------------------------------------------------------------------------
-
-/// Convert `i32` trace values to usize indices.
-fn to_indices(values: &[i32]) -> Vec<usize> {
-    values.iter().map(|&v| v as usize).collect()
-}
-
-/// Convert `i32` trace values to `LookupBits` with the given bit-width.
-fn to_lookup_bits(values: &[i32], bits: usize) -> Vec<LookupBits> {
-    values
-        .iter()
-        .map(|&v| LookupBits::new(v as u64, bits))
-        .collect()
-}
-
-/// Pad a vector in-place to the next power of two with zeros.
-fn pad_to_power_of_two(v: &mut Vec<i32>) {
-    v.resize(v.len().next_power_of_two(), 0);
-}
-
-/// Run `BatchedSumcheck::prove` with the standard boilerplate.
-fn run_batched_prove<F: JoltField, T: Transcript>(
-    instances: &mut [Box<dyn SumcheckInstanceProver<F, T>>],
-    prover: &mut Prover<F, T>,
-) -> SumcheckInstanceProof<F, T> {
-    BatchedSumcheck::prove(
-        instances.iter_mut().map(|v| &mut **v as _).collect(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    )
-    .0
-}
-
-/// Build an MLE from `data`, evaluate it at `eval_point`, and append the
-/// result as a virtual polynomial opening in the prover's accumulator.
-fn cache_mle_opening<F: JoltField, T: Transcript>(
-    prover: &mut Prover<F, T>,
-    data: &[i32],
-    eval_point: &[F],
-    vp: VirtualPolynomial,
-) {
-    let poly: MultilinearPolynomial<F> = MultilinearPolynomial::from(data.to_vec());
-    let eval = poly.evaluate(eval_point);
-    prover.accumulator.append_virtual(
-        &mut prover.transcript,
-        vp,
-        SumcheckId::Execution,
-        eval_point.to_vec().into(),
-        eval,
-    );
 }
 
 impl SoftmaxLastAxisProver {
@@ -265,28 +203,6 @@ pub struct SoftmaxLastAxisVerifier {
     exp_sum: Vec<i32>,
     max_k: Vec<i32>,
     argmax_k: Vec<usize>,
-}
-
-/// Pre-computed verifier lookup table data (shared across stage3, operand_link, stage4).
-struct VerifierLookupTableData {
-    table_hi: Vec<i32>,
-    table_lo: Vec<i32>,
-    base: u64,
-}
-
-impl VerifierLookupTableData {
-    fn new(scale: i32) -> Self {
-        let decomp = generate_exp_lut_decomposed(scale);
-        let mut table_hi = decomp.lut_hi;
-        table_hi.resize(table_hi.len().next_power_of_two(), 0);
-        let mut table_lo = decomp.lut_lo;
-        table_lo.resize(table_lo.len().next_power_of_two(), 0);
-        Self {
-            table_hi,
-            table_lo,
-            base: decomp.base as u64,
-        }
-    }
 }
 
 impl SoftmaxLastAxisVerifier {
@@ -1209,6 +1125,90 @@ impl SoftmaxLastAxisVerifier {
             &mut verifier.transcript,
         )?;
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Small helpers used across prover stages
+// ---------------------------------------------------------------------------
+
+/// Convert `i32` trace values to usize indices.
+fn to_indices(values: &[i32]) -> Vec<usize> {
+    values.iter().map(|&v| v as usize).collect()
+}
+
+/// Convert `i32` trace values to `LookupBits` with the given bit-width.
+fn to_lookup_bits(values: &[i32], bits: usize) -> Vec<LookupBits> {
+    values
+        .iter()
+        .map(|&v| LookupBits::new(v as u64, bits))
+        .collect()
+}
+
+/// Pad a vector in-place to the next power of two with zeros.
+fn pad_to_power_of_two(v: &mut Vec<i32>) {
+    v.resize(v.len().next_power_of_two(), 0);
+}
+
+/// Run `BatchedSumcheck::prove` with the standard boilerplate.
+fn run_batched_prove<F: JoltField, T: Transcript>(
+    instances: &mut [Box<dyn SumcheckInstanceProver<F, T>>],
+    prover: &mut Prover<F, T>,
+) -> SumcheckInstanceProof<F, T> {
+    BatchedSumcheck::prove(
+        instances.iter_mut().map(|v| &mut **v as _).collect(),
+        &mut prover.accumulator,
+        &mut prover.transcript,
+    )
+    .0
+}
+
+/// Build an MLE from `data`, evaluate it at `eval_point`, and append the
+/// result as a virtual polynomial opening in the prover's accumulator.
+fn cache_mle_opening<F: JoltField, T: Transcript>(
+    prover: &mut Prover<F, T>,
+    data: &[i32],
+    eval_point: &[F],
+    vp: VirtualPolynomial,
+) {
+    let poly: MultilinearPolynomial<F> = MultilinearPolynomial::from(data.to_vec());
+    let eval = poly.evaluate(eval_point);
+    prover.accumulator.append_virtual(
+        &mut prover.transcript,
+        vp,
+        SumcheckId::Execution,
+        eval_point.to_vec().into(),
+        eval,
+    );
+}
+
+/// Pre-computed lookup table data shared between stage3 and stage4.
+struct LookupTableData {
+    table_hi: Vec<i32>,
+    table_lo: Vec<i32>,
+    z_hi_indices: Vec<usize>,
+    z_lo_indices: Vec<usize>,
+}
+
+/// Pre-computed verifier lookup table data (shared across stage3, operand_link, stage4).
+struct VerifierLookupTableData {
+    table_hi: Vec<i32>,
+    table_lo: Vec<i32>,
+    base: u64,
+}
+
+impl VerifierLookupTableData {
+    fn new(scale: i32) -> Self {
+        let decomp = generate_exp_lut_decomposed(scale);
+        let mut table_hi = decomp.lut_hi;
+        table_hi.resize(table_hi.len().next_power_of_two(), 0);
+        let mut table_lo = decomp.lut_lo;
+        table_lo.resize(table_lo.len().next_power_of_two(), 0);
+        Self {
+            table_hi,
+            table_lo,
+            base: decomp.base as u64,
+        }
     }
 }
 

@@ -1,16 +1,16 @@
 //! Cosine activation lookup table for neural teleportation.
 //!
-//! This table stores cos(x) values for x in [0, 8π), scaled by `SCALE`.
+//! This table stores cos(x) values for x in [0, 4π), scaled by `SCALE`.
 
 use super::SCALE;
-use atlas_onnx_tracer::{model::consts::EIGHT_PI_APPROX, tensor::Tensor};
+use atlas_onnx_tracer::{model::consts::FOUR_PI_APPROX, tensor::Tensor};
 
 /// Fixed lookup table bit width for cosine teleportation.
 ///
-/// The table size is the next power of two above the `8π` period approximation,
-/// so all valid remainders in [0, EIGHT_PI_APPROX) map to valid table indices.
+/// The table size is the next power of two above the `4π` period approximation,
+/// so all valid remainders in [0, FOUR_PI_APPROX) map to valid table indices.
 pub const COS_LOG_TABLE_SIZE: usize =
-    (EIGHT_PI_APPROX as usize).next_power_of_two().ilog2() as usize;
+    (FOUR_PI_APPROX as usize).next_power_of_two().ilog2() as usize;
 
 /// Cosine lookup table implementation for neural teleportation.
 #[derive(Debug, Clone, Copy, Default)]

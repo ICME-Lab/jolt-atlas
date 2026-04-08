@@ -28,7 +28,7 @@ use crate::{
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
 };
 use atlas_onnx_tracer::{
-    model::{consts::EIGHT_PI_APPROX, trace::Trace, Model},
+    model::{consts::FOUR_PI_APPROX, trace::Trace, Model},
     node::ComputationNode,
     ops::{
         softmax::{generate_exp_lut_decomposed, softmax_last_axis_decomposed},
@@ -191,7 +191,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     Operator::Cos(_) | Operator::Sin(_)
                 ));
                 let tau = match &computation_node.operator {
-                    Operator::Cos(_) | Operator::Sin(_) => EIGHT_PI_APPROX,
+                    Operator::Cos(_) | Operator::Sin(_) => FOUR_PI_APPROX,
                     _ => unreachable!(
                         "teleport quotient witness requested for non-teleport operator"
                     ),
@@ -301,7 +301,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
             CommittedPolynomial::CosRaD(node_idx, d_idx)
             | CommittedPolynomial::SinRaD(node_idx, d_idx) => {
                 const COS_LOG_TABLE_SIZE: usize =
-                    (EIGHT_PI_APPROX as usize).next_power_of_two().ilog2() as usize;
+                    (FOUR_PI_APPROX as usize).next_power_of_two().ilog2() as usize;
 
                 let computation_node = &model.graph.nodes[node_idx];
                 assert!(
@@ -314,7 +314,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 let layer_data = Trace::layer_data(trace, computation_node);
                 let input = &layer_data.operands[0];
 
-                let (_quotient, remainder) = compute_division(input, EIGHT_PI_APPROX);
+                let (_quotient, remainder) = compute_division(input, FOUR_PI_APPROX);
                 let lookup_indices: Vec<usize> =
                     remainder.par_iter().map(|&x| x as usize).collect();
                 let one_hot_params = OneHotParams::from_config_and_log_K(
@@ -341,7 +341,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 let log_scale = scale.trailing_zeros() as usize;
                 let st = softmax_last_axis_full_trace(node, trace);
                 let lookup_indices: Vec<usize> = st.R.iter().map(|&v| v as usize).collect();
-                build_softmax_last_axis_onehot_witness(&lookup_indices, log_scale, *d)
+                build_onehot_witness(&lookup_indices, log_scale, *d)
             }
             CommittedPolynomial::SoftmaxExpRemainderRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
@@ -356,7 +356,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     .iter()
                     .map(|&v| v as usize)
                     .collect();
-                build_softmax_last_axis_onehot_witness(&lookup_indices, log_scale, *d)
+                build_onehot_witness(&lookup_indices, log_scale, *d)
             }
             CommittedPolynomial::SoftmaxSatDiffRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
@@ -367,7 +367,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     .iter()
                     .map(|&v| v as usize)
                     .collect();
-                build_softmax_last_axis_onehot_witness(&lookup_indices, SAT_DIFF_RC_BITS, *d)
+                build_onehot_witness(&lookup_indices, SAT_DIFF_RC_BITS, *d)
             }
             CommittedPolynomial::SoftmaxExpZHiRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
@@ -376,7 +376,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
                 let lookup_indices: Vec<usize> =
                     st.decomposed_exp.z_hi.iter().map(|&v| v as usize).collect();
-                build_softmax_last_axis_onehot_witness(&lookup_indices, log_hi, *d)
+                build_onehot_witness(&lookup_indices, log_hi, *d)
             }
             CommittedPolynomial::SoftmaxExpZLoRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
@@ -385,7 +385,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
                 let lookup_indices: Vec<usize> =
                     st.decomposed_exp.z_lo.iter().map(|&v| v as usize).collect();
-                build_softmax_last_axis_onehot_witness(&lookup_indices, log_lo, *d)
+                build_onehot_witness(&lookup_indices, log_lo, *d)
             }
         }
     }
@@ -407,10 +407,10 @@ fn softmax_last_axis_full_trace(
     softmax_last_axis_decomposed(input, *scale).1
 }
 
-/// Build a one-hot RaD witness for a SoftmaxLastAxis identity range-check or
-/// Shout ra polynomial, given raw lookup indices and the log2 of the table /
+/// Build a one-hot RaD witness for an identity range-check or Shout ra
+/// polynomial, given raw lookup indices and the log2 of the table /
 /// range-check size.
-fn build_softmax_last_axis_onehot_witness<F: JoltField>(
+fn build_onehot_witness<F: JoltField>(
     lookup_indices: &[usize],
     log_k: usize,
     d: usize,

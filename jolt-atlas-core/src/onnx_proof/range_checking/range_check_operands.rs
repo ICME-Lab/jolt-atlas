@@ -1,6 +1,6 @@
 use atlas_onnx_tracer::{
     model::{
-        consts::EIGHT_PI_APPROX,
+        consts::FOUR_PI_APPROX,
         trace::{LayerData, Trace},
     },
     node::ComputationNode,
@@ -337,7 +337,7 @@ impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
             Operator::Tanh(inner) => inner.tau,
             Operator::Erf(inner) => inner.tau,
             Operator::Sigmoid(inner) => inner.tau,
-            Operator::Cos(_) | Operator::Sin(_) => EIGHT_PI_APPROX,
+            Operator::Cos(_) | Operator::Sin(_) => FOUR_PI_APPROX,
             _ => {
                 panic!(
                     "Expected Tanh, Erf, Sigmoid, Cos, or Sin operator for neural teleportation division"

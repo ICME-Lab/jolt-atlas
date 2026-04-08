@@ -268,11 +268,11 @@ impl Model {
                 | Operator::ReLU(_)
                 | Operator::Rsqrt(_)
                 | Operator::Sigmoid(_)
-                | Operator::Sin(_) => LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements()),
-                Operator::ScalarConstDiv(_) => log_2(node.pow2_padded_num_output_elements()),
-                Operator::SoftmaxLastAxis(_) => {
+                | Operator::Sin(_)
+                | Operator::SoftmaxLastAxis(_) => {
                     LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements())
                 }
+                Operator::ScalarConstDiv(_) => log_2(node.pow2_padded_num_output_elements()),
                 Operator::Gather(_) => {
                     let input_nodes = self.get_input_nodes(node);
                     let num_words = input_nodes[0].output_dims[0];
@@ -467,11 +467,10 @@ pub mod consts {
     /// Default quantization scale (denominator in fixed-point representation).
     pub const DEFAULT_SCALE: i32 = 8;
 
-    /// Const used as an approximation of 8π in the zkVM with a scale factor of 2^DEFAULT_SCALE.
-    /// This allows us to wrap around a multiple of 2π, using the periodicity of the cosine function
-    /// while keeping the lookup table size reasonable.
-    /// Value: round(8 * π * 2^DEFAULT_SCALE) = round(8 * π * 256) = 6434
-    pub const EIGHT_PI_APPROX: i32 = 6434;
+    /// Const used in the zkVM to wrap around a multiple of 2π,
+    /// using the periodicity of the cosine function while keeping the lookup table size reasonable.
+    /// For a scale of 8, the best multiple was found to be 4: value = round(4 * π * 256) = 3217
+    pub const FOUR_PI_APPROX: i32 = 3217;
 }
 
 #[cfg(test)]

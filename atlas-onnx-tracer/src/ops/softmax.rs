@@ -35,7 +35,7 @@ pub struct SoftmaxLastAxisTrace {
     pub argmax_k: Vec<usize>,
     /// e_k[j] — one-hot indicator at argmax_k, flat [F*N] (1 at argmax, 0 elsewhere)
     pub e_k: Vec<i32>,
-    /// z[k,j] — max_k − X[k,j] (≥ 0), flat [F*N]
+    /// z[k,j] = max_k − X[k,j] (≥ 0), flat [F*N]
     pub z: Vec<i32>,
     /// exp_q[k,j] — LUT[z[k,j]], flat [F*N]
     pub exp_q: Vec<i32>,
@@ -92,8 +92,8 @@ pub fn softmax_last_axis_decomposed(
     let num_slices: usize = dims.iter().product::<usize>() / last_dim;
     let data = a.data();
     debug_assert!(
-        scale.trailing_zeros() <= 15,
-        "scale={scale} exceeds 2^15; i32 intermediates would overflow"
+        scale > 0 && scale <= (1 << 15),
+        "scale={scale} must be a positive power-of-two up to 2^15; i32 intermediates would overflow"
     );
     let s = scale;
     let s_sq = s * s;
@@ -155,29 +155,20 @@ pub fn softmax_last_axis_decomposed(
             w_z_lo[idx] = z_lo;
 
             // Sub-table lookups
-            let hi_val = if (z_hi as usize) < decomp.lut_hi.len() {
-                decomp.lut_hi[z_hi as usize]
-            } else {
-                0
-            };
+            let hi_val = decomp.lut_hi[z_hi as usize];
             let lo_val = decomp.lut_lo[z_lo as usize];
             w_exp_hi[idx] = hi_val;
             w_exp_lo[idx] = lo_val;
 
             // Combine: exp_q = ⌊hi·lo / S⌋
-            if hi_val == 0 {
-                exp_q[idx] = 0;
-                w_r_exp[idx] = 0;
-            } else {
-                let product = hi_val as i64 * lo_val as i64;
-                exp_q[idx] = (product / s as i64) as i32;
-                w_r_exp[idx] = (product - exp_q[idx] as i64 * s as i64) as i32;
-                debug_assert!(
-                    w_r_exp[idx] >= 0 && w_r_exp[idx] < s,
-                    "r_exp out of range: {}, S={s}",
-                    w_r_exp[idx]
-                );
-            }
+            let product = hi_val as i64 * lo_val as i64;
+            exp_q[idx] = (product / s as i64) as i32;
+            w_r_exp[idx] = (product - exp_q[idx] as i64 * s as i64) as i32;
+            debug_assert!(
+                w_r_exp[idx] >= 0 && w_r_exp[idx] < s,
+                "r_exp out of range: {}, S={s}",
+                w_r_exp[idx]
+            );
 
             sum_exp += exp_q[idx];
         }

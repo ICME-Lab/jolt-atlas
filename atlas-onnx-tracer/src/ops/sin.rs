@@ -1,12 +1,12 @@
 use crate::{
-    model::consts::EIGHT_PI_APPROX,
+    model::consts::FOUR_PI_APPROX,
     ops::{Op, Sin},
     tensor::{self, Tensor},
 };
 
 impl Op for Sin {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
-        let remainder = tensor::ops::nonlinearities::const_rem(inputs[0], EIGHT_PI_APPROX);
+        let remainder = tensor::ops::nonlinearities::const_rem(inputs[0], FOUR_PI_APPROX);
         tensor::ops::nonlinearities::sin(&remainder, self.scale.into())
     }
 

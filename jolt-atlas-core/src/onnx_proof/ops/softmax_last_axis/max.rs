@@ -11,7 +11,7 @@ use joltworks::{
         },
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
@@ -61,10 +61,10 @@ impl<F: JoltField> MaxIndicatorParams<F> {
 
         // Get r1 (the point from Stage 1 reciprocal multiplication output)
         let r1 = accumulator
-            .get_virtual_polynomial_opening(
+            .get_virtual_polynomial_opening(VirtualOpeningId::new(
                 VirtualPolynomial::SoftmaxExpQ(computation_node_index),
                 SumcheckId::NodeExecution(computation_node_index),
-            )
+            ))
             .0;
         let r1_k = &r1.r[..log_f];
 
@@ -230,8 +230,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaxIndicatorP
 
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(self.params.operand_node_index),
-            SumcheckId::NodeExecution(self.params.computation_node_index),
+            VirtualOpeningId::new(
+                VirtualPolynomial::NodeOutput(self.params.operand_node_index),
+                SumcheckId::NodeExecution(self.params.computation_node_index),
+            ),
             opening_point,
             self.X.final_sumcheck_claim(),
         );
@@ -281,8 +283,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MaxIndicato
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(self.params.operand_node_index),
-            SumcheckId::NodeExecution(self.params.computation_node_index),
+            VirtualOpeningId::new(
+                VirtualPolynomial::NodeOutput(self.params.operand_node_index),
+                SumcheckId::NodeExecution(self.params.computation_node_index),
+            ),
             opening_point,
         );
     }
@@ -298,10 +302,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MaxIndicato
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
         let X_claim = accumulator
-            .get_virtual_polynomial_opening(
+            .get_virtual_polynomial_opening(VirtualOpeningId::new(
                 VirtualPolynomial::NodeOutput(self.params.operand_node_index),
                 SumcheckId::NodeExecution(self.params.computation_node_index),
-            )
+            ))
             .1;
 
         // Evaluate e(r_sc) in O(F · log N) by exploiting sparsity:

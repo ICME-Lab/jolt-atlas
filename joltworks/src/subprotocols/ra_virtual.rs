@@ -8,8 +8,8 @@ use crate::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, PolynomialBinding},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            CommittedOpeningId, OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator,
+            SumcheckId, VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         ra_poly::RaPolynomial,
         split_eq_poly::GruenSplitEqPolynomial,
@@ -169,10 +169,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RaSumcheckV
         let eq_eval = EqPolynomial::mle_endian(&self.params.r_cycle, &r);
         let ra_claim_prod: F = (0..self.params.one_hot_params.instruction_d)
             .map(|i| {
-                let (_, ra_i_claim) = accumulator.get_committed_polynomial_opening(
+                let id = CommittedOpeningId::new(
                     self.params.polynomial_types[i],
                     SumcheckId::RaVirtualization,
                 );
+                let (_, ra_i_claim) = accumulator.get_committed_polynomial_opening(id);
                 ra_i_claim
             })
             .product();
@@ -343,10 +344,11 @@ mod tests {
         .unwrap();
 
         for i in 0..one_hot_params.instruction_d {
-            let (opening_point, claim) = verifier_accumulator.get_committed_polynomial_opening(
+            let id = CommittedOpeningId::new(
                 CommittedPolynomial::NodeOutputRaD(0, i),
                 SumcheckId::RaVirtualization,
             );
+            let (opening_point, claim) = verifier_accumulator.get_committed_polynomial_opening(id);
             let H_index: Vec<Option<u16>> = H_indices[i]
                 .iter()
                 .map(|v| v.map(|new_v| new_v as u16))

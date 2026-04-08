@@ -13,7 +13,7 @@ use crate::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
@@ -132,13 +132,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T>
             .iter()
             .zip(claims)
             .for_each(|(&poly_type, claim)| {
-                accumulator.append_virtual(
-                    transcript,
-                    poly_type,
-                    self.params.sumcheck_id,
-                    opening_point.clone(),
-                    claim,
-                );
+                let id = VirtualOpeningId::new(poly_type, self.params.sumcheck_id);
+                accumulator.append_virtual(transcript, id, opening_point.clone(), claim);
             });
     }
 
@@ -171,12 +166,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
         let hw_claim = (0..self.params.d).map(|i| {
-            accumulator
-                .get_virtual_polynomial_opening(
-                    self.params.polynomial_types[i],
-                    self.params.sumcheck_id,
-                )
-                .1
+            let id =
+                VirtualOpeningId::new(self.params.polynomial_types[i], self.params.sumcheck_id);
+            accumulator.get_virtual_polynomial_opening(id).1
         });
 
         let r = self
@@ -200,7 +192,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
             .normalize_opening_point(&sumcheck_challenges.into_opening());
 
         self.params.polynomial_types.iter().for_each(|&poly_type| {
-            accumulator.append_virtual(transcript, poly_type, self.params.sumcheck_id, r.clone());
+            let id = VirtualOpeningId::new(poly_type, self.params.sumcheck_id);
+            accumulator.append_virtual(transcript, id, r.clone());
         });
     }
 }

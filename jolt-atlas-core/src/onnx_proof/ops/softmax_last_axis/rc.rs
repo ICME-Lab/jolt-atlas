@@ -2,7 +2,9 @@ use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, OpeningPoint, SumcheckId, BIG_ENDIAN},
+    poly::opening_proof::{
+        OpeningAccumulator, OpeningPoint, SumcheckId, VirtualOpeningId, BIG_ENDIAN,
+    },
     subprotocols::{identity_range_check::IdentityRCProvider, shout::RaOneHotEncoding},
 };
 
@@ -66,10 +68,10 @@ impl SoftmaxRCProvider {
 impl<F: JoltField> IdentityRCProvider<F> for SoftmaxRCProvider {
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         accumulator
-            .get_virtual_polynomial_opening(
+            .get_virtual_polynomial_opening(VirtualOpeningId::new(
                 (self.source_vp)(self.node_idx),
                 SumcheckId::NodeExecution(self.node_idx),
-            )
+            ))
             .1
     }
 
@@ -79,10 +81,10 @@ impl<F: JoltField> IdentityRCProvider<F> for SoftmaxRCProvider {
 
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
         accumulator
-            .get_virtual_polynomial_opening(
+            .get_virtual_polynomial_opening(VirtualOpeningId::new(
                 (self.source_vp)(self.node_idx),
                 SumcheckId::NodeExecution(self.node_idx),
-            )
+            ))
             .0
     }
 

@@ -9,13 +9,12 @@ use atlas_onnx_tracer::{
     ops::Broadcast,
     tensor::Tensor,
 };
-use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
     poly::{
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
         opening_proof::{
-            OpeningAccumulator, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
         },
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
@@ -23,9 +22,13 @@ use joltworks::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 
-use crate::onnx_proof::{
-    ops::{OperatorProofTrait, Prover, Verifier},
-    ProofId,
+use crate::utils::opening_id_builder::OpeningTarget;
+use crate::{
+    onnx_proof::{
+        ops::{OperatorProofTrait, Prover, Verifier},
+        ProofId,
+    },
+    utils::opening_id_builder::OpeningIdBuilder,
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
@@ -135,11 +138,14 @@ impl<F: JoltField> BroadcastProver<F> {
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) {
+        let node = &self.params.computation_node;
+        let builder = OpeningIdBuilder::new(node);
+
+        let opening_id = builder.node_io(OpeningTarget::Input(0));
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            self.r_input.clone().into(),
+            opening_id,
+            OpeningPoint::new(self.r_input.clone()),
             self.claim_A,
         );
     }
@@ -189,11 +195,13 @@ impl<F: JoltField> BroadcastVerifier<F> {
         transcript: &mut impl Transcript,
     ) -> Result<(), ProofVerifyError> {
         // Cache the opening point for the input node
+        let node = &self.params.computation_node;
+        let builder = OpeningIdBuilder::new(node);
+        let opening_id = builder.node_io(OpeningTarget::Input(0));
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            self.r_input.clone().into(),
+            opening_id,
+            OpeningPoint::new(self.r_input.clone()),
         );
 
         // Retrieve the claim for the input node

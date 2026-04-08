@@ -93,10 +93,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for RecipMultParams<F> {
             .get_node_output_opening(self.computation_node_index)
             .1;
         let R_claim = accumulator
-            .get_virtual_polynomial_opening(
+            .get_virtual_polynomial_opening(VirtualOpeningId::new(
                 VirtualPolynomial::SoftmaxRecipMultRemainder(self.computation_node_index),
                 SumcheckId::NodeExecution(self.computation_node_index),
-            )
+            ))
             .1;
         softmax_claim * F::from_i32(self.S) + R_claim
     }
@@ -224,8 +224,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RecipMultProv
         // Only cache exp_q — inv_sum is verifier-known (derived from sent exp_sum_q).
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::SoftmaxExpQ(self.params.computation_node_index),
-            SumcheckId::NodeExecution(self.params.computation_node_index),
+            VirtualOpeningId::new(
+                VirtualPolynomial::SoftmaxExpQ(self.params.computation_node_index),
+                SumcheckId::NodeExecution(self.params.computation_node_index),
+            ),
             opening_point.clone(),
             self.exp_q.final_sumcheck_claim(),
         );
@@ -274,8 +276,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RecipMultVe
         // Only cache exp_q — inv_sum is verifier-known.
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::SoftmaxExpQ(self.params.computation_node_index),
-            SumcheckId::NodeExecution(self.params.computation_node_index),
+            VirtualOpeningId::new(
+                VirtualPolynomial::SoftmaxExpQ(self.params.computation_node_index),
+                SumcheckId::NodeExecution(self.params.computation_node_index),
+            ),
             opening_point.clone(),
         );
     }
@@ -290,10 +294,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RecipMultVe
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
         let exp_q_claim = accumulator
-            .get_virtual_polynomial_opening(
+            .get_virtual_polynomial_opening(VirtualOpeningId::new(
                 VirtualPolynomial::SoftmaxExpQ(self.params.computation_node_index),
                 SumcheckId::NodeExecution(self.params.computation_node_index),
-            )
+            ))
             .1;
         // Evaluate inv_sum MLE at the leading part of the sumcheck challenge point.
         let r_sc_leading = &r_sc[..self.params.log_F()];

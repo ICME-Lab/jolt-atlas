@@ -25,7 +25,7 @@ use joltworks::{
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{ProverOpeningAccumulator, SumcheckId},
+        opening_proof::{OpeningPoint, ProverOpeningAccumulator, SumcheckId, VirtualOpeningId},
         rlc_polynomial::build_materialized_rlc,
     },
     subprotocols::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof},
@@ -108,14 +108,17 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
 
         // Evaluate output polynomial at r_node_output
         let output_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
+        let output_opening_id = VirtualOpeningId::new(
+            VirtualPolynomial::NodeOutput(output_computation_node.idx),
+            // NodeOutput claims are generally produced by subsequent nodes during proving; emulate that here.
+            SumcheckId::NodeExecution(output_computation_node.idx + 1),
+        );
 
         // append_virtual handles both transcript append and insertion into openings
         prover.accumulator.append_virtual(
             &mut prover.transcript,
-            VirtualPolynomial::NodeOutput(output_computation_node.idx),
-            // NodeOutput claims are generally produced by subsequent nodes during proving; emulate that here.
-            SumcheckId::NodeExecution(output_computation_node.idx + 1),
-            r_node_output.clone().into(),
+            output_opening_id,
+            OpeningPoint::new(r_node_output.clone()),
             output_claim,
         );
     }

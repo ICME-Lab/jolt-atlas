@@ -1,4 +1,7 @@
-use crate::utils::dims::{coord_to_linear, linear_to_coord};
+use crate::utils::{
+    dims::{coord_to_linear, linear_to_coord},
+    opening_id_builder::{OpeningIdBuilder, OpeningTarget},
+};
 use atlas_onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
@@ -8,7 +11,6 @@ use atlas_onnx_tracer::{
     ops::{Concat, Operator},
 };
 use common::parallel::par_enabled;
-use common::VirtualPolynomial;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -17,8 +19,8 @@ use joltworks::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
+            BIG_ENDIAN, LITTLE_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -162,7 +164,6 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ConcatSumcheckParams<F> {
 }
 
 struct ConcatInputTerm<F: JoltField> {
-    producer_idx: usize,
     input_num_vars: usize,
     input_mle: MultilinearPolynomial<F>,
     selector_mle: MultilinearPolynomial<F>,
@@ -213,7 +214,6 @@ impl<F: JoltField> ConcatSumcheckProver<F> {
                     params.max_input_num_vars,
                 );
                 ConcatInputTerm {
-                    producer_idx: params.computation_node.inputs[input_idx],
                     input_num_vars,
                     input_mle: MultilinearPolynomial::from(extended_input),
                     selector_mle: MultilinearPolynomial::from(selector),
@@ -276,15 +276,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ConcatSumchec
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let builder = OpeningIdBuilder::new(&self.params.computation_node);
         let full_opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        for term in &self.input_terms {
+        for (i, term) in self.input_terms.iter().enumerate() {
             let live_opening_point = full_opening_point.r[..term.input_num_vars].to_vec();
+            let opening_id = builder.node_io(OpeningTarget::Input(i));
             accumulator.append_virtual(
                 transcript,
-                VirtualPolynomial::NodeOutput(term.producer_idx),
-                SumcheckId::NodeExecution(self.params.computation_node.idx),
+                opening_id,
                 live_opening_point.into(),
                 term.input_mle.final_sumcheck_claim(),
             );
@@ -352,18 +353,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ConcatSumch
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let builder = OpeningIdBuilder::new(&self.params.computation_node);
         let full_opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         for (input_idx, input_raw_dims) in self.params.input_raw_dims.iter().enumerate() {
             let input_num_vars = padded_domain_len(input_raw_dims).log_2();
             let live_opening_point = full_opening_point.r[..input_num_vars].to_vec();
-            accumulator.append_virtual(
-                transcript,
-                VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[input_idx]),
-                SumcheckId::NodeExecution(self.params.computation_node.idx),
-                live_opening_point.into(),
-            );
+
+            let opening_id = builder.node_io(OpeningTarget::Input(input_idx));
+            accumulator.append_virtual(transcript, opening_id, live_opening_point.into());
         }
     }
 }

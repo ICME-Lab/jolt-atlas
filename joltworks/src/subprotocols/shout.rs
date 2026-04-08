@@ -3,7 +3,9 @@ use crate::{
     field::{FieldChallengeOps, IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
-        opening_proof::{OpeningAccumulator, OpeningPoint, SumcheckId, BIG_ENDIAN},
+        opening_proof::{
+            OpeningAccumulator, OpeningPoint, SumcheckId, VirtualOpeningId, BIG_ENDIAN,
+        },
     },
     subprotocols::{
         booleanity::{
@@ -297,21 +299,17 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReadRafVeri
 // RaOneHotEncoding trait
 // ---------------------------------------------------------------------------
 
-/// Look up a virtual-polynomial opening, routing `NodeOutput` through
-/// `get_node_output_opening` (which scans all consumer entries for the
-/// given producer) instead of requiring an exact `(VP, SumcheckId)` key.
+/// Retrieves the existing opening for the given `VirtualOpeningId` from the accumulator,
+/// with special handling for `VirtualPolynomial::NodeOutput`,
+/// where we recover the reduced opening point.
 fn resolve_vp_opening<F: JoltField>(
     accumulator: &dyn OpeningAccumulator<F>,
-    vp: VirtualPolynomial,
-    sid: SumcheckId,
+    opening_id: VirtualOpeningId,
 ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-    if let Some(opening) = accumulator.try_get_virtual_polynomial_opening(vp, sid) {
-        return opening;
-    }
-    if let VirtualPolynomial::NodeOutput(producer_idx) = vp {
+    if let VirtualPolynomial::NodeOutput(producer_idx) = opening_id.polynomial {
         accumulator.get_node_output_opening(producer_idx)
     } else {
-        accumulator.get_virtual_polynomial_opening(vp, sid)
+        accumulator.get_virtual_polynomial_opening(opening_id)
     }
 }
 
@@ -323,13 +321,13 @@ pub trait RaOneHotEncoding {
     /// The committed polynomial for the `d`-th one-hot decomposition chunk.
     fn committed_poly(&self, d: usize) -> CommittedPolynomial;
 
-    /// The `(VirtualPolynomial, SumcheckId)` whose opening point supplies
+    /// The opening id whose opening point supplies
     /// `r_cycle` for HammingWeight and Booleanity.
-    fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId);
+    fn r_cycle_source(&self) -> VirtualOpeningId;
 
-    /// The `(VirtualPolynomial, SumcheckId)` whose opening gives `(r, ra_claim)`
+    /// The opening id whose opening gives `(r, ra_claim)`
     /// for RaVirtual. The point is split at `self.log_k()`.
-    fn ra_source(&self) -> (VirtualPolynomial, SumcheckId);
+    fn ra_source(&self) -> VirtualOpeningId;
 
     /// Split point: the first `log_k()` coordinates of the RA opening point
     /// become `r_address`, the rest become `r_cycle` for RaVirtual.
@@ -365,8 +363,8 @@ pub fn ra_onehot_provers<F: JoltField, T: Transcript>(
         (0..d).map(|i| encoding.committed_poly(i)).collect();
 
     // --- HammingWeight params (draws gamma_powers) ---
-    let (r_cycle_vp, r_cycle_sid) = encoding.r_cycle_source();
-    let r_cycle_hw = resolve_vp_opening(accumulator, r_cycle_vp, r_cycle_sid).0.r;
+    let r_cycle_source = encoding.r_cycle_source();
+    let r_cycle_hw = resolve_vp_opening(accumulator, r_cycle_source).0.r;
     let gamma_powers = transcript.challenge_scalar_powers(d);
     let hamming_weight_params = HammingWeightSumcheckParams {
         d,
@@ -378,8 +376,8 @@ pub fn ra_onehot_provers<F: JoltField, T: Transcript>(
     };
 
     // --- Booleanity params (draws gammas, r_address) ---
-    let (r_cycle_vp, r_cycle_sid) = encoding.r_cycle_source();
-    let r_cycle_bool = resolve_vp_opening(accumulator, r_cycle_vp, r_cycle_sid).0;
+    let r_cycle_source = encoding.r_cycle_source();
+    let r_cycle_bool = resolve_vp_opening(accumulator, r_cycle_source).0;
     let gammas = transcript.challenge_vector_optimized::<F>(d);
     let r_address = transcript.challenge_vector_optimized::<F>(one_hot_params.log_k_chunk);
     let booleanity_params = BooleanitySumcheckParams {
@@ -394,8 +392,7 @@ pub fn ra_onehot_provers<F: JoltField, T: Transcript>(
     };
 
     // --- RaVirtual params (no transcript challenges) ---
-    let (ra_vp, ra_sid) = encoding.ra_source();
-    let (r, ra_claim) = accumulator.get_virtual_polynomial_opening(ra_vp, ra_sid);
+    let (r, ra_claim) = accumulator.get_virtual_polynomial_opening(encoding.ra_source());
     let (r_address_ra, r_cycle_ra) = r.split_at(encoding.log_k());
     let ra_params = RaSumcheckParams {
         r_address: r_address_ra,
@@ -441,8 +438,8 @@ pub fn ra_onehot_verifiers<F: JoltField, T: Transcript>(
         (0..d).map(|i| encoding.committed_poly(i)).collect();
 
     // --- HammingWeight params ---
-    let (r_cycle_vp, r_cycle_sid) = encoding.r_cycle_source();
-    let r_cycle_hw = resolve_vp_opening(accumulator, r_cycle_vp, r_cycle_sid).0.r;
+    let r_cycle_source = encoding.r_cycle_source();
+    let r_cycle_hw = resolve_vp_opening(accumulator, r_cycle_source).0.r;
     let gamma_powers = transcript.challenge_scalar_powers(d);
     let hamming_weight_params = HammingWeightSumcheckParams {
         d,
@@ -454,8 +451,8 @@ pub fn ra_onehot_verifiers<F: JoltField, T: Transcript>(
     };
 
     // --- Booleanity params ---
-    let (r_cycle_vp, r_cycle_sid) = encoding.r_cycle_source();
-    let r_cycle_bool = resolve_vp_opening(accumulator, r_cycle_vp, r_cycle_sid).0;
+    let r_cycle_source = encoding.r_cycle_source();
+    let r_cycle_bool = resolve_vp_opening(accumulator, r_cycle_source).0;
     let gammas = transcript.challenge_vector_optimized::<F>(d);
     let r_address = transcript.challenge_vector_optimized::<F>(one_hot_params.log_k_chunk);
     let booleanity_params = BooleanitySumcheckParams {
@@ -470,8 +467,7 @@ pub fn ra_onehot_verifiers<F: JoltField, T: Transcript>(
     };
 
     // --- RaVirtual params ---
-    let (ra_vp, ra_sid) = encoding.ra_source();
-    let (r, ra_claim) = accumulator.get_virtual_polynomial_opening(ra_vp, ra_sid);
+    let (r, ra_claim) = accumulator.get_virtual_polynomial_opening(encoding.ra_source());
     let (r_address_ra, r_cycle_ra) = r.split_at(encoding.log_k());
     let ra_params = RaSumcheckParams {
         r_address: r_address_ra,

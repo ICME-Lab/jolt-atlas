@@ -16,7 +16,7 @@ use joltworks::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
@@ -58,10 +58,10 @@ impl<F: JoltField> SatDiffSlacknessParams<F> {
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
         let r1 = accumulator
-            .get_virtual_polynomial_opening(
+            .get_virtual_polynomial_opening(VirtualOpeningId::new(
                 VirtualPolynomial::SoftmaxExpQ(computation_node_index),
                 SumcheckId::NodeExecution(computation_node_index),
-            )
+            ))
             .0
             .r;
         let num_vars = r1.len();
@@ -179,22 +179,19 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SatDiffSlackn
 
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::SoftmaxSatDiff(idx),
-            sid,
+            VirtualOpeningId::new(VirtualPolynomial::SoftmaxSatDiff(idx), sid),
             opening_point.clone(),
             self.sat_diff.final_sumcheck_claim(),
         );
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::SoftmaxZHi(idx),
-            sid,
+            VirtualOpeningId::new(VirtualPolynomial::SoftmaxZHi(idx), sid),
             opening_point.clone(),
             self.z_hi.final_sumcheck_claim(),
         );
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::SoftmaxZLo(idx),
-            sid,
+            VirtualOpeningId::new(VirtualPolynomial::SoftmaxZLo(idx), sid),
             opening_point,
             self.z_lo.final_sumcheck_claim(),
         );
@@ -243,20 +240,17 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SatDiffSlac
 
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::SoftmaxSatDiff(idx),
-            sid,
+            VirtualOpeningId::new(VirtualPolynomial::SoftmaxSatDiff(idx), sid),
             opening_point.clone(),
         );
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::SoftmaxZHi(idx),
-            sid,
+            VirtualOpeningId::new(VirtualPolynomial::SoftmaxZHi(idx), sid),
             opening_point.clone(),
         );
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::SoftmaxZLo(idx),
-            sid,
+            VirtualOpeningId::new(VirtualPolynomial::SoftmaxZLo(idx), sid),
             opening_point,
         );
     }
@@ -276,13 +270,22 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SatDiffSlac
 
         // Read the prover's claimed evaluations at r₂.
         let sat_diff_claim = accumulator
-            .get_virtual_polynomial_opening(VirtualPolynomial::SoftmaxSatDiff(idx), sid)
+            .get_virtual_polynomial_opening(VirtualOpeningId::new(
+                VirtualPolynomial::SoftmaxSatDiff(idx),
+                sid,
+            ))
             .1;
         let z_hi_claim = accumulator
-            .get_virtual_polynomial_opening(VirtualPolynomial::SoftmaxZHi(idx), sid)
+            .get_virtual_polynomial_opening(VirtualOpeningId::new(
+                VirtualPolynomial::SoftmaxZHi(idx),
+                sid,
+            ))
             .1;
         let z_lo_claim = accumulator
-            .get_virtual_polynomial_opening(VirtualPolynomial::SoftmaxZLo(idx), sid)
+            .get_virtual_polynomial_opening(VirtualOpeningId::new(
+                VirtualPolynomial::SoftmaxZLo(idx),
+                sid,
+            ))
             .1;
 
         // complement(r_2) = z_bound − 1 − z_hi(r_2) * B − z_lo(r_2)

@@ -13,8 +13,8 @@ use crate::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, PolynomialBinding},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN,
+            CommittedOpeningId, OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator,
+            SumcheckId, VerifierOpeningAccumulator, BIG_ENDIAN,
         },
         ra_poly::RaPolynomial,
         split_eq_poly::GruenSplitEqPolynomial,
@@ -336,9 +336,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BooleanityS
             .polynomial_types
             .iter()
             .map(|poly_type| {
-                accumulator
-                    .get_committed_polynomial_opening(*poly_type, self.params.sumcheck_id)
-                    .1
+                let id = CommittedOpeningId::new(*poly_type, self.params.sumcheck_id);
+                accumulator.get_committed_polynomial_opening(id).1
             })
             .collect::<Vec<F>>();
 

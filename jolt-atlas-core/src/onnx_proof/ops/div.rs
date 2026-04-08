@@ -1,9 +1,12 @@
-use crate::onnx_proof::{
-    ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
-    range_checking::{
-        range_check_operands::DivRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+use crate::{
+    onnx_proof::{
+        ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
+        range_checking::{
+            range_check_operands::DivRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+        },
+        ProofId, ProofType, Prover, Verifier,
     },
-    ProofId, ProofType, Prover, Verifier,
+    utils::opening_id_builder::{OpeningIdBuilder, OpeningTarget},
 };
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
@@ -19,8 +22,8 @@ use joltworks::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            CommittedOpeningId, OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator,
+            SumcheckId, VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
@@ -76,10 +79,13 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
         let reduced = prover.accumulator.get_node_output_opening(node.idx);
 
-        prover.accumulator.append_dense(
-            &mut prover.transcript,
+        let quotient_opening_id = CommittedOpeningId::new(
             CommittedPolynomial::DivNodeQuotient(node.idx),
             SumcheckId::NodeExecution(node.idx),
+        );
+        prover.accumulator.append_dense(
+            &mut prover.transcript,
+            quotient_opening_id,
             reduced.0.r.clone(),
             reduced.1,
         );
@@ -125,19 +131,19 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         NodeEvalReduction::verify(verifier, node, eval_reduction_proof)?;
         let reduced = verifier.accumulator.get_node_output_opening(node.idx);
 
-        verifier.accumulator.append_dense(
-            &mut verifier.transcript,
+        let quotient_opening_id = CommittedOpeningId::new(
             CommittedPolynomial::DivNodeQuotient(node.idx),
             SumcheckId::NodeExecution(node.idx),
+        );
+        verifier.accumulator.append_dense(
+            &mut verifier.transcript,
+            quotient_opening_id,
             reduced.0.r.clone(),
         );
 
         let quotient_claim = verifier
             .accumulator
-            .get_committed_polynomial_opening(
-                CommittedPolynomial::DivNodeQuotient(node.idx),
-                SumcheckId::NodeExecution(node.idx),
-            )
+            .get_committed_polynomial_opening(quotient_opening_id)
             .1;
 
         if quotient_claim != reduced.1 {
@@ -323,34 +329,45 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let node = &self.params.computation_node;
+        let builder = OpeningIdBuilder::new(node);
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
+
+        let left_opening_id = builder.node_io(OpeningTarget::Input(0));
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
+            left_opening_id,
             opening_point.clone(),
             self.left_operand.final_sumcheck_claim(),
         );
+
+        let right_opening_id = builder.node_io(OpeningTarget::Input(1));
         accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
+            right_opening_id,
             opening_point.clone(),
             self.right_operand.final_sumcheck_claim(),
         );
-        accumulator.append_virtual(
-            transcript,
+        let quotient_opening_id = VirtualOpeningId::new(
             VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.clone(),
-            self.q.final_sumcheck_claim(),
         );
         accumulator.append_virtual(
             transcript,
+            quotient_opening_id,
+            opening_point.clone(),
+            self.q.final_sumcheck_claim(),
+        );
+
+        let remainder_opening_id = VirtualOpeningId::new(
             VirtualPolynomial::DivRemainder(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
+        );
+        accumulator.append_virtual(
+            transcript,
+            remainder_opening_id,
             opening_point.clone(),
             self.R.final_sumcheck_claim(),
         );
@@ -389,17 +406,19 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
         let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
+        let quotient_opening_id = VirtualOpeningId::new(
+            VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
+        );
+        let remainder_opening_id = VirtualOpeningId::new(
+            VirtualPolynomial::DivRemainder(self.params.computation_node.idx),
+            SumcheckId::NodeExecution(self.params.computation_node.idx),
+        );
         let q_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
-                SumcheckId::NodeExecution(self.params.computation_node.idx),
-            )
+            .get_virtual_polynomial_opening(quotient_opening_id)
             .1;
         let R_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::DivRemainder(self.params.computation_node.idx),
-                SumcheckId::NodeExecution(self.params.computation_node.idx),
-            )
+            .get_virtual_polynomial_opening(remainder_opening_id)
             .1;
         let left_operand_claim = accumulator.get_node_output_claim(
             self.params.computation_node.inputs[0],
@@ -418,33 +437,29 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
+        let node = &self.params.computation_node;
+        let builder = OpeningIdBuilder::new(node);
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.clone(),
-        );
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.clone(),
-        );
-        accumulator.append_virtual(
-            transcript,
+
+        let left_opening_id = builder.node_io(OpeningTarget::Input(0));
+        accumulator.append_virtual(transcript, left_opening_id, opening_point.clone());
+
+        let right_opening_id = builder.node_io(OpeningTarget::Input(1));
+        accumulator.append_virtual(transcript, right_opening_id, opening_point.clone());
+
+        let quotient_opening_id = VirtualOpeningId::new(
             VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.clone(),
         );
-        accumulator.append_virtual(
-            transcript,
+        accumulator.append_virtual(transcript, quotient_opening_id, opening_point.clone());
+
+        let remainder_opening_id = VirtualOpeningId::new(
             VirtualPolynomial::DivRemainder(self.params.computation_node.idx),
             SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.clone(),
         );
+        accumulator.append_virtual(transcript, remainder_opening_id, opening_point.clone());
     }
 }
 

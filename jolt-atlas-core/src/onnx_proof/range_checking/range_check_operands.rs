@@ -10,7 +10,7 @@ use atlas_onnx_tracer::{
 use common::{CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, SumcheckId},
+    poly::opening_proof::{OpeningAccumulator, SumcheckId, VirtualOpeningId},
     utils::lookup_bits::LookupBits,
 };
 
@@ -82,8 +82,8 @@ pub trait RangeCheckingOperandsTrait {
             .get_input_operands()
             .iter()
             .map(|operand| {
-                let (_, claim) =
-                    accumulator.get_virtual_polynomial_opening(*operand, SumcheckId::Raf);
+                let operand_id = VirtualOpeningId::new(*operand, SumcheckId::Raf);
+                let (_, claim) = accumulator.get_virtual_polynomial_opening(operand_id);
                 claim
             })
             .collect::<Vec<_>>();

@@ -13,7 +13,7 @@ use common::VirtualPolynomial;
 use joltworks::{
     poly::{
         commitment::hyperkzg::HyperKZG,
-        opening_proof::{OpeningId, SumcheckId},
+        opening_proof::{OpeningId, SumcheckId, VirtualOpeningId},
     },
     transcripts::Blake2bTranscript,
 };
@@ -98,10 +98,10 @@ fn soundness_sub_virtual_operand_attack_is_rejected() {
 
     // Confirm the malicious prover stored forged NodeOutput claims in opening_claims.
     for &input_idx in sub_node.inputs.iter() {
-        let key = OpeningId::Virtual(
+        let key = OpeningId::Virtual(VirtualOpeningId::new(
             VirtualPolynomial::NodeOutput(input_idx),
             SumcheckId::NodeExecution(sub_node.idx),
-        );
+        ));
         assert!(
             proof.opening_claims.0.contains_key(&key),
             "sub node forged NodeOutput({input_idx}) claim should exist in opening_claims"
@@ -186,14 +186,14 @@ fn soundness_same_consumer_duplicate_operand_should_track_both() {
     );
 
     // Count entries for NodeOutput(x) in opening_claims.
-    let lo = OpeningId::Virtual(
+    let lo = OpeningId::Virtual(VirtualOpeningId::new(
         VirtualPolynomial::NodeOutput(x_idx),
         SumcheckId::NodeExecution(0),
-    );
-    let hi = OpeningId::Virtual(
+    ));
+    let hi = OpeningId::Virtual(VirtualOpeningId::new(
         VirtualPolynomial::NodeOutput(x_idx),
         SumcheckId::NodeExecution(usize::MAX),
-    );
+    ));
     let entries: Vec<_> = proof.opening_claims.0.range(lo..=hi).collect();
 
     // Duplicate-operand openings are expected to collapse into one entry.

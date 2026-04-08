@@ -683,8 +683,8 @@ mod tests {
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
             one_hot_polynomial::OneHotPolynomial,
             opening_proof::{
-                OpeningPoint, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
-                BIG_ENDIAN,
+                CommittedOpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+                VerifierOpeningAccumulator, BIG_ENDIAN,
             },
             rlc_polynomial::build_materialized_rlc,
         },
@@ -740,13 +740,11 @@ mod tests {
                 let poly = MultilinearPolynomial::from(raw);
                 let eval = poly.evaluate(&point);
                 let commitment = HyperKZG::commit(&poly, &pk).0;
-                prover_opening_accumulator.append_dense(
-                    &mut prover_tr,
+                let id = CommittedOpeningId::new(
                     CommittedPolynomial::DivNodeQuotient(i),
                     SumcheckId::NodeExecution(0),
-                    point.clone(),
-                    eval,
                 );
+                prover_opening_accumulator.append_dense(&mut prover_tr, id, point.clone(), eval);
                 PolyData {
                     poly,
                     commitment,
@@ -797,12 +795,11 @@ mod tests {
         }
 
         dense_polys.iter().enumerate().for_each(|(i, data)| {
-            verifier_opening_accumulator.append_dense(
-                &mut verifier_tr,
-                CommittedPolynomial::DivNodeQuotient(i), // ID doesn't matter for verification
+            let id = CommittedOpeningId::new(
+                CommittedPolynomial::DivNodeQuotient(i),
                 SumcheckId::NodeExecution(0),
-                data.point.clone(),
             );
+            verifier_opening_accumulator.append_dense(&mut verifier_tr, id, data.point.clone());
         });
 
         // Prepare - populate sumcheck claims
@@ -899,13 +896,11 @@ mod tests {
                 let poly = MultilinearPolynomial::from(raw);
                 let eval = poly.evaluate(&point);
                 let commitment = HyperKZG::commit(&poly, &pk).0;
-                prover_opening_accumulator.append_dense(
-                    &mut prover_tr,
+                let id = CommittedOpeningId::new(
                     CommittedPolynomial::DivNodeQuotient(i),
                     SumcheckId::NodeExecution(0),
-                    point.clone(),
-                    eval,
                 );
+                prover_opening_accumulator.append_dense(&mut prover_tr, id, point.clone(), eval);
                 PolyData {
                     poly,
                     commitment,
@@ -998,12 +993,11 @@ mod tests {
         }
 
         dense_polys.iter().enumerate().for_each(|(i, data)| {
-            verifier_opening_accumulator.append_dense(
-                &mut verifier_tr,
-                CommittedPolynomial::DivNodeQuotient(i), // ID doesn't matter for verification
+            let id = CommittedOpeningId::new(
+                CommittedPolynomial::DivNodeQuotient(i),
                 SumcheckId::NodeExecution(0),
-                data.point.clone(),
             );
+            verifier_opening_accumulator.append_dense(&mut verifier_tr, id, data.point.clone());
         });
 
         oh_polys.iter().enumerate().for_each(|(i, data)| {
@@ -1113,13 +1107,11 @@ mod tests {
                 let poly = MultilinearPolynomial::from(raw);
                 let eval = poly.evaluate(&point);
                 let commitment = HyperKZG::commit(&poly, &pk).0;
-                prover_opening_accumulator.append_dense(
-                    &mut prover_tr,
+                let id = CommittedOpeningId::new(
                     CommittedPolynomial::DivNodeQuotient(i),
                     SumcheckId::NodeExecution(0),
-                    point.clone(),
-                    eval,
                 );
+                prover_opening_accumulator.append_dense(&mut prover_tr, id, point.clone(), eval);
                 PolyData {
                     poly,
                     commitment,
@@ -1212,12 +1204,11 @@ mod tests {
         }
 
         dense_polys.iter().enumerate().for_each(|(i, data)| {
-            verifier_opening_accumulator.append_dense(
-                &mut verifier_tr,
-                CommittedPolynomial::DivNodeQuotient(i), // ID doesn't matter for verification
+            let id = CommittedOpeningId::new(
+                CommittedPolynomial::DivNodeQuotient(i),
                 SumcheckId::NodeExecution(0),
-                data.point.clone(),
             );
+            verifier_opening_accumulator.append_dense(&mut verifier_tr, id, data.point.clone());
         });
 
         oh_polys.iter().enumerate().for_each(|(i, data)| {

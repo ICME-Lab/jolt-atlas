@@ -1,5 +1,11 @@
 //! Proofs for softmax with the last axis as the reduction dimension (ONNX Softmax operator).
 //! For more on the claim flow and design of the protocol, see: https://hackmd.io/@R5TO3fi7TlWQKnY6Ejr2eg/Byjucoqjbx
+//!
+//! The prover sends three auxiliary vectors (`max_k`, `exp_sum_q`, `argmax_k`) to the
+//! verifier via the transcript. These let the verifier derive `inv_sum[k]` without a
+//! committed polynomial, but they add O(F) field elements to the proof size.
+//!
+//! TODO(#218): Remove auxiliary vectors and derive them inside the protocol.
 
 use crate::onnx_proof::{
     ops::{

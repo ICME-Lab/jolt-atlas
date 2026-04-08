@@ -92,8 +92,8 @@ pub fn softmax_last_axis_decomposed(
     let num_slices: usize = dims.iter().product::<usize>() / last_dim;
     let data = a.data();
     debug_assert!(
-        scale > 0 && scale <= (1 << 15),
-        "scale={scale} must be a positive power-of-two up to 2^15; i32 intermediates would overflow"
+        scale <= (1 << 15),
+        "scale={scale} must be at most 2^15; i32 intermediates would overflow"
     );
     let s = scale;
     let s_sq = s * s;

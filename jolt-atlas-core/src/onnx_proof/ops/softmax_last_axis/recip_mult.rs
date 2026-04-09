@@ -249,13 +249,7 @@ impl<F: JoltField> RecipMultVerifier<F> {
         accumulator: &VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let params = RecipMultParams::new(
-            computation_node_index,
-            S,
-            F_N,
-            accumulator,
-            transcript,
-        );
+        let params = RecipMultParams::new(computation_node_index, S, F_N, accumulator, transcript);
         Self {
             params,
             inv_sum_evals,

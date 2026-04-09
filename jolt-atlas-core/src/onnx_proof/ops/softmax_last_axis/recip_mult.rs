@@ -34,8 +34,6 @@ pub struct RecipMultParams<F: JoltField> {
     pub computation_node_index: usize,
     /// `[F, N]` — leading-dim product and last-axis size.
     pub F_N: [usize; 2],
-    /// Full inv_sum vector (F elements) — used to evaluate at r_sc_leading.
-    pub inv_sum_evals: Vec<F>,
 }
 
 impl<F: JoltField> RecipMultParams<F> {
@@ -44,7 +42,6 @@ impl<F: JoltField> RecipMultParams<F> {
         computation_node_index: usize,
         S: i32,
         F_N: [usize; 2],
-        inv_sum_evals: Vec<F>,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut impl Transcript,
     ) -> Self {
@@ -57,7 +54,6 @@ impl<F: JoltField> RecipMultParams<F> {
             S,
             computation_node_index,
             F_N,
-            inv_sum_evals,
         }
     }
 
@@ -99,7 +95,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for RecipMultParams<F> {
         let R_claim = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxRecipMultRemainder(self.computation_node_index),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.computation_node_index),
             )
             .1;
         softmax_claim * F::from_i32(self.S) + R_claim
@@ -229,7 +225,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RecipMultProv
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SoftmaxExpQ(self.params.computation_node_index),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node_index),
             opening_point.clone(),
             self.exp_q.final_sumcheck_claim(),
         );
@@ -239,6 +235,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RecipMultProv
 /// Verifier for reciprocal multiplication in softmax.
 pub struct RecipMultVerifier<F: JoltField> {
     params: RecipMultParams<F>,
+    /// Full inv_sum vector (F elements) — used to evaluate at r_sc_leading.
+    inv_sum_evals: Vec<F>,
 }
 
 impl<F: JoltField> RecipMultVerifier<F> {
@@ -255,11 +253,13 @@ impl<F: JoltField> RecipMultVerifier<F> {
             computation_node_index,
             S,
             F_N,
-            inv_sum_evals,
             accumulator,
             transcript,
         );
-        Self { params }
+        Self {
+            params,
+            inv_sum_evals,
+        }
     }
 }
 
@@ -281,7 +281,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RecipMultVe
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SoftmaxExpQ(self.params.computation_node_index),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node_index),
             opening_point.clone(),
         );
     }
@@ -298,12 +298,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RecipMultVe
         let exp_q_claim = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpQ(self.params.computation_node_index),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.computation_node_index),
             )
             .1;
         // Evaluate inv_sum MLE at the leading part of the sumcheck challenge point.
         let r_sc_leading = &r_sc[..self.params.log_F()];
-        let inv_sum_poly = MultilinearPolynomial::from(self.params.inv_sum_evals.clone());
+        let inv_sum_poly = MultilinearPolynomial::from(self.inv_sum_evals.clone());
         let inv_sum_claim = inv_sum_poly.evaluate(r_sc_leading);
         EqPolynomial::mle(&self.params.r, &r_sc) * (exp_q_claim * inv_sum_claim)
     }

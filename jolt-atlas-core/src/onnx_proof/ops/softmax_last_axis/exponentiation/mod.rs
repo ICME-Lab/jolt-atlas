@@ -36,16 +36,16 @@ impl ExpDigit {
     /// vp type for raf polynomials (`z_hi` or `z_lo`).
     fn raf_vp(self, node_idx: usize) -> VirtualPolynomial {
         match self {
-            Self::Hi => VirtualPolynomial::SoftmaxExpZHi(node_idx),
-            Self::Lo => VirtualPolynomial::SoftmaxExpZLo(node_idx),
+            Self::Hi => VirtualPolynomial::SoftmaxZHi(node_idx),
+            Self::Lo => VirtualPolynomial::SoftmaxZLo(node_idx),
         }
     }
 
     /// Virtual polynomial for the one-hot encoded read address.
     fn ra_vp(self, node_idx: usize) -> VirtualPolynomial {
         match self {
-            Self::Hi => VirtualPolynomial::SoftmaxExpZHiRa(node_idx),
-            Self::Lo => VirtualPolynomial::SoftmaxExpZLoRa(node_idx),
+            Self::Hi => VirtualPolynomial::SoftmaxZHiRa(node_idx),
+            Self::Lo => VirtualPolynomial::SoftmaxZLoRa(node_idx),
         }
     }
 }
@@ -68,23 +68,35 @@ impl<F: JoltField> ReadRafProvider<F> for ExpReadRafProvider {
 
     fn r(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
         accumulator
-            .get_virtual_polynomial_opening(self.digit.rv_vp(self.node_idx), SumcheckId::Execution)
+            .get_virtual_polynomial_opening(
+                self.digit.rv_vp(self.node_idx),
+                SumcheckId::NodeExecution(self.node_idx),
+            )
             .0
     }
 
     fn ra_poly(&self) -> (VirtualPolynomial, SumcheckId) {
-        (self.digit.ra_vp(self.node_idx), SumcheckId::Execution)
+        (
+            self.digit.ra_vp(self.node_idx),
+            SumcheckId::NodeExecution(self.node_idx),
+        )
     }
 
     fn raf_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         accumulator
-            .get_virtual_polynomial_opening(self.digit.raf_vp(self.node_idx), SumcheckId::Execution)
+            .get_virtual_polynomial_opening(
+                self.digit.raf_vp(self.node_idx),
+                SumcheckId::NodeExecution(self.node_idx),
+            )
             .1
     }
 
     fn rv_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         accumulator
-            .get_virtual_polynomial_opening(self.digit.rv_vp(self.node_idx), SumcheckId::Execution)
+            .get_virtual_polynomial_opening(
+                self.digit.rv_vp(self.node_idx),
+                SumcheckId::NodeExecution(self.node_idx),
+            )
             .1
     }
 }

@@ -66,7 +66,10 @@ impl SoftmaxRCProvider {
 impl<F: JoltField> IdentityRCProvider<F> for SoftmaxRCProvider {
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         accumulator
-            .get_virtual_polynomial_opening((self.source_vp)(self.node_idx), SumcheckId::Execution)
+            .get_virtual_polynomial_opening(
+                (self.source_vp)(self.node_idx),
+                SumcheckId::NodeExecution(self.node_idx),
+            )
             .1
     }
 
@@ -76,12 +79,18 @@ impl<F: JoltField> IdentityRCProvider<F> for SoftmaxRCProvider {
 
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
         accumulator
-            .get_virtual_polynomial_opening((self.source_vp)(self.node_idx), SumcheckId::Execution)
+            .get_virtual_polynomial_opening(
+                (self.source_vp)(self.node_idx),
+                SumcheckId::NodeExecution(self.node_idx),
+            )
             .0
     }
 
     fn ra_poly(&self) -> (VirtualPolynomial, SumcheckId) {
-        ((self.ra_vp)(self.node_idx), SumcheckId::Execution)
+        (
+            (self.ra_vp)(self.node_idx),
+            SumcheckId::NodeExecution(self.node_idx),
+        )
     }
 }
 
@@ -126,7 +135,7 @@ impl SoftmaxRaEncoding {
             log_k: scale as usize,
             committed_poly_fn: CommittedPolynomial::SoftmaxExpRemainderRaD,
             r_cycle_vp: VirtualPolynomial::SoftmaxExpQ,
-            r_cycle_sc_id: SumcheckId::Execution,
+            r_cycle_sc_id: SumcheckId::NodeExecution(node_idx),
             ra_vp: VirtualPolynomial::SoftmaxExpRemainderRa,
         }
     }
@@ -138,7 +147,7 @@ impl SoftmaxRaEncoding {
             log_k: SAT_DIFF_RC_BITS,
             committed_poly_fn: CommittedPolynomial::SoftmaxSatDiffRaD,
             r_cycle_vp: VirtualPolynomial::SoftmaxSatDiff,
-            r_cycle_sc_id: SumcheckId::Execution,
+            r_cycle_sc_id: SumcheckId::NodeExecution(node_idx),
             ra_vp: VirtualPolynomial::SoftmaxSatDiffRa,
         }
     }
@@ -148,10 +157,10 @@ impl SoftmaxRaEncoding {
         Self {
             node_idx,
             log_k: log_table_size,
-            committed_poly_fn: CommittedPolynomial::SoftmaxExpZHiRaD,
+            committed_poly_fn: CommittedPolynomial::SoftmaxZHiRaD,
             r_cycle_vp: VirtualPolynomial::SoftmaxExpHi,
-            r_cycle_sc_id: SumcheckId::Execution,
-            ra_vp: VirtualPolynomial::SoftmaxExpZHiRa,
+            r_cycle_sc_id: SumcheckId::NodeExecution(node_idx),
+            ra_vp: VirtualPolynomial::SoftmaxZHiRa,
         }
     }
 
@@ -160,10 +169,10 @@ impl SoftmaxRaEncoding {
         Self {
             node_idx,
             log_k: log_table_size,
-            committed_poly_fn: CommittedPolynomial::SoftmaxExpZLoRaD,
+            committed_poly_fn: CommittedPolynomial::SoftmaxZLoRaD,
             r_cycle_vp: VirtualPolynomial::SoftmaxExpLo,
-            r_cycle_sc_id: SumcheckId::Execution,
-            ra_vp: VirtualPolynomial::SoftmaxExpZLoRa,
+            r_cycle_sc_id: SumcheckId::NodeExecution(node_idx),
+            ra_vp: VirtualPolynomial::SoftmaxZLoRa,
         }
     }
 }
@@ -178,7 +187,10 @@ impl RaOneHotEncoding for SoftmaxRaEncoding {
     }
 
     fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        ((self.ra_vp)(self.node_idx), SumcheckId::Execution)
+        (
+            (self.ra_vp)(self.node_idx),
+            SumcheckId::NodeExecution(self.node_idx),
+        )
     }
 
     fn log_k(&self) -> usize {

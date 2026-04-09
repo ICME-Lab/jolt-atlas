@@ -338,7 +338,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 let Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) = &node.operator else {
                     panic!("Expected SoftmaxLastAxis at node {node_idx}");
                 };
-                let log_scale = scale.trailing_zeros() as usize;
+                let log_scale = scale.ilog2() as usize;
                 let st = softmax_last_axis_full_trace(node, trace);
                 let lookup_indices: Vec<usize> = st.R.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_scale, *d)
@@ -348,7 +348,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 let Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) = &node.operator else {
                     panic!("Expected SoftmaxLastAxis at node {node_idx}");
                 };
-                let log_scale = scale.trailing_zeros() as usize;
+                let log_scale = scale.ilog2() as usize;
                 let st = softmax_last_axis_full_trace(node, trace);
                 let lookup_indices: Vec<usize> = st
                     .decomposed_exp
@@ -369,7 +369,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     .collect();
                 build_onehot_witness(&lookup_indices, SAT_DIFF_RC_BITS, *d)
             }
-            CommittedPolynomial::SoftmaxExpZHiRaD(node_idx, d) => {
+            CommittedPolynomial::SoftmaxZHiRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
                 let st = softmax_last_axis_full_trace(node, trace);
                 let decomp = generate_exp_lut_decomposed(st.scale as i32);
@@ -378,7 +378,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     st.decomposed_exp.z_hi.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_hi, *d)
             }
-            CommittedPolynomial::SoftmaxExpZLoRaD(node_idx, d) => {
+            CommittedPolynomial::SoftmaxZLoRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
                 let st = softmax_last_axis_full_trace(node, trace);
                 let decomp = generate_exp_lut_decomposed(st.scale as i32);

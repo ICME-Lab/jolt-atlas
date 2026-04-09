@@ -140,13 +140,13 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         /// * `1` – decomposition index `d`
-        SoftmaxExpZHiRaD(usize, usize),
+        SoftmaxZHiRaD(usize, usize),
 
         /// One-hot read-address decomposition for the softmax **exp-lo** Shout lookup.
         ///
         /// * `0` – node index
         /// * `1` – decomposition index `d`
-        SoftmaxExpZLoRaD(usize, usize),
+        SoftmaxZLoRaD(usize, usize),
 
         /// One-hot read-address decomposition for the softmax **sat-diff** RC.
         ///
@@ -317,22 +317,22 @@ canonical_serde_enum! {
         /// The raf polynomial for the softmax `exp_hi` sub-table lookup.
         ///
         /// * `0` – node index
-        SoftmaxExpZHi(usize),
+        SoftmaxZHi(usize),
 
         /// The raf polynomial for the softmax `exp_lo` sub-table lookup.
         ///
         /// * `0` – node index
-        SoftmaxExpZLo(usize),
+        SoftmaxZLo(usize),
 
         /// One-hot-encoded read-address polynomial for the softmax `exp_hi` sub-table lookup.
         ///
         /// * `0` – node index
-        SoftmaxExpZHiRa(usize),
+        SoftmaxZHiRa(usize),
 
         /// One-hot-encoded read-address polynomial for the softmax `exp_lo` sub-table lookup.
         ///
         /// * `0` – node index
-        SoftmaxExpZLoRa(usize),
+        SoftmaxZLoRa(usize),
 
         /// Saturation-diff polynomial for the softmax operand link.
         /// `sat_diff[k,j] = z[k,j] − z_c[k,j]` (≥ 0).

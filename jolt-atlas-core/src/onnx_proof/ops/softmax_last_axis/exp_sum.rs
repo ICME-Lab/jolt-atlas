@@ -73,7 +73,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ExpSumParams<F> {
         accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpSum(self.computation_node_index),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.computation_node_index),
             )
             .1
     }
@@ -173,7 +173,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ExpSumProver<
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SoftmaxExpQ(self.params.computation_node_index),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node_index),
             opening_point.clone(),
             self.exp_q.final_sumcheck_claim(),
         );
@@ -215,7 +215,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ExpSumVerif
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SoftmaxExpQ(self.params.computation_node_index),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node_index),
             opening_point.clone(),
         );
     }
@@ -232,7 +232,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ExpSumVerif
         let exp_q_claim = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpQ(self.params.computation_node_index),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.computation_node_index),
             )
             .1;
         // Evaluate inv_sum MLE at the leading part of the sumcheck challenge point.

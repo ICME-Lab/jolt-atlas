@@ -85,7 +85,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
         // self.scale is the actual scale S (e.g. 4096); log_scale is log₂(S) (e.g. 12)
-        let log_scale = self.scale.trailing_zeros() as usize;
+        let log_scale = self.scale.ilog2() as usize;
         let decomp = generate_exp_lut_decomposed(self.scale);
         let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
         let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
@@ -99,8 +99,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
             ),
             (log_scale, CommittedPolynomial::SoftmaxExpRemainderRaD),
             (SAT_DIFF_RC_BITS, CommittedPolynomial::SoftmaxSatDiffRaD),
-            (log_hi, CommittedPolynomial::SoftmaxExpZHiRaD),
-            (log_lo, CommittedPolynomial::SoftmaxExpZLoRaD),
+            (log_hi, CommittedPolynomial::SoftmaxZHiRaD),
+            (log_lo, CommittedPolynomial::SoftmaxZLoRaD),
         ] {
             let d =
                 OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
@@ -314,6 +314,7 @@ impl SoftmaxLastAxisProver {
             &self.trace.exp_sum_q,
             &r0.r[..log_f],
             VirtualPolynomial::SoftmaxExpSum(self.node_idx),
+            self.node_idx,
         );
     }
 
@@ -325,6 +326,7 @@ impl SoftmaxLastAxisProver {
             &self.trace.R,
             &r0.r,
             VirtualPolynomial::SoftmaxRecipMultRemainder(self.node_idx),
+            self.node_idx,
         );
     }
 
@@ -335,12 +337,10 @@ impl SoftmaxLastAxisProver {
         r_lookup_bits: Vec<LookupBits>,
     ) -> SumcheckInstanceProof<F, T> {
         // recip mult instance
-        let inv_sum_evals: Vec<F> = self.trace.inv_sum.iter().map(|&v| F::from_i32(v)).collect();
         let recip_mult_params = RecipMultParams::new(
             self.node_idx,
             self.scale,
             self.F_N,
-            inv_sum_evals,
             &prover.accumulator,
             &mut prover.transcript,
         );
@@ -381,7 +381,7 @@ impl SoftmaxLastAxisProver {
             .accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpQ(self.node_idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.node_idx),
             )
             .0;
         cache_mle_opening(
@@ -389,6 +389,7 @@ impl SoftmaxLastAxisProver {
             &self.trace.decomposed_exp.r_exp,
             &r1.r,
             VirtualPolynomial::SoftmaxExpRemainder(self.node_idx),
+            self.node_idx,
         );
     }
 
@@ -408,7 +409,7 @@ impl SoftmaxLastAxisProver {
             .accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpQ(self.node_idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.node_idx),
             )
             .0;
         let r1_k = &r1.r[..log_f];
@@ -471,20 +472,22 @@ impl SoftmaxLastAxisProver {
             .accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpHi(self.node_idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.node_idx),
             )
             .0;
         cache_mle_opening(
             prover,
             &self.trace.decomposed_exp.z_hi,
             &r2.r,
-            VirtualPolynomial::SoftmaxExpZHi(self.node_idx),
+            VirtualPolynomial::SoftmaxZHi(self.node_idx),
+            self.node_idx,
         );
         cache_mle_opening(
             prover,
             &self.trace.decomposed_exp.z_lo,
             &r2.r,
-            VirtualPolynomial::SoftmaxExpZLo(self.node_idx),
+            VirtualPolynomial::SoftmaxZLo(self.node_idx),
+            self.node_idx,
         );
     }
 
@@ -498,7 +501,7 @@ impl SoftmaxLastAxisProver {
             .accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpHi(self.node_idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.node_idx),
             )
             .0;
         cache_mle_opening(
@@ -506,6 +509,7 @@ impl SoftmaxLastAxisProver {
             &self.trace.decomposed_exp.sat_diff,
             &r2.r,
             VirtualPolynomial::SoftmaxSatDiff(self.node_idx),
+            self.node_idx,
         );
     }
 
@@ -763,7 +767,7 @@ impl SoftmaxLastAxisVerifier {
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,
             VirtualPolynomial::SoftmaxExpSum(self.node_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.node_idx),
             r_lead.to_vec().into(),
         );
         let exp_sum_poly: MultilinearPolynomial<F> =
@@ -773,7 +777,7 @@ impl SoftmaxLastAxisVerifier {
             .accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpSum(self.node_idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.node_idx),
             )
             .1;
         if exp_sum_eval != claimed_exp_sum_eval {
@@ -795,7 +799,7 @@ impl SoftmaxLastAxisVerifier {
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,
             VirtualPolynomial::SoftmaxRecipMultRemainder(self.node_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.node_idx),
             r.to_vec().into(),
         );
     }
@@ -840,14 +844,14 @@ impl SoftmaxLastAxisVerifier {
             .accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpQ(self.node_idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.node_idx),
             )
             .0
             .r;
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,
             VirtualPolynomial::SoftmaxExpRemainder(self.node_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.node_idx),
             r.to_vec().into(),
         );
     }
@@ -866,7 +870,7 @@ impl SoftmaxLastAxisVerifier {
             .accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpQ(self.node_idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.node_idx),
             )
             .0;
         let r1_k = &r1.r[..log_f];
@@ -924,19 +928,19 @@ impl SoftmaxLastAxisVerifier {
             .accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpHi(self.node_idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.node_idx),
             )
             .0;
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,
-            VirtualPolynomial::SoftmaxExpZHi(self.node_idx),
-            SumcheckId::Execution,
+            VirtualPolynomial::SoftmaxZHi(self.node_idx),
+            SumcheckId::NodeExecution(self.node_idx),
             r2.clone(),
         );
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,
-            VirtualPolynomial::SoftmaxExpZLo(self.node_idx),
-            SumcheckId::Execution,
+            VirtualPolynomial::SoftmaxZLo(self.node_idx),
+            SumcheckId::NodeExecution(self.node_idx),
             r2,
         );
     }
@@ -949,13 +953,13 @@ impl SoftmaxLastAxisVerifier {
             .accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpHi(self.node_idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.node_idx),
             )
             .0;
         verifier.accumulator.append_virtual(
             &mut verifier.transcript,
             VirtualPolynomial::SoftmaxSatDiff(self.node_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.node_idx),
             r2,
         );
     }
@@ -1044,7 +1048,7 @@ impl SoftmaxLastAxisVerifier {
             .accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpHi(self.node_idx),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.node_idx),
             )
             .0;
         let r2_lead = &r2.r[..log_f];
@@ -1055,19 +1059,19 @@ impl SoftmaxLastAxisVerifier {
 
         // z_c(r2) = z_hi(r2)·B + z_lo(r2)
         let (_, z_hi_eval) = verifier.accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::SoftmaxExpZHi(self.node_idx),
-            SumcheckId::Execution,
+            VirtualPolynomial::SoftmaxZHi(self.node_idx),
+            SumcheckId::NodeExecution(self.node_idx),
         );
         let (_, z_lo_eval) = verifier.accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::SoftmaxExpZLo(self.node_idx),
-            SumcheckId::Execution,
+            VirtualPolynomial::SoftmaxZLo(self.node_idx),
+            SumcheckId::NodeExecution(self.node_idx),
         );
         let z_c_eval = z_hi_eval * F::from_u64(lut.base) + z_lo_eval;
 
         // sat_diff(r2)
         let (_, sat_diff_eval) = verifier.accumulator.get_virtual_polynomial_opening(
             VirtualPolynomial::SoftmaxSatDiff(self.node_idx),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.node_idx),
         );
 
         // X(r2) = max_k(r2_lead) − z_c(r2) − sat_diff(r2)
@@ -1176,13 +1180,14 @@ fn cache_mle_opening<F: JoltField, T: Transcript>(
     data: &[i32],
     eval_point: &[F],
     vp: VirtualPolynomial,
+    node_idx: usize,
 ) {
     let poly: MultilinearPolynomial<F> = MultilinearPolynomial::from(data.to_vec());
     let eval = poly.evaluate(eval_point);
     prover.accumulator.append_virtual(
         &mut prover.transcript,
         vp,
-        SumcheckId::Execution,
+        SumcheckId::NodeExecution(node_idx),
         eval_point.to_vec().into(),
         eval,
     );

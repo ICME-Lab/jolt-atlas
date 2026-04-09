@@ -43,7 +43,7 @@ impl<F: JoltField> MultParams<F> {
         let r = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpQ(computation_node_index),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(computation_node_index),
             )
             .0
             .r;
@@ -64,13 +64,13 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MultParams<F> {
         let exp_q_claim = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpQ(self.computation_node_index),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.computation_node_index),
             )
             .1;
         let R_claim = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpRemainder(self.computation_node_index),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.computation_node_index),
             )
             .1;
         exp_q_claim * F::from_i32(self.S) + R_claim
@@ -150,14 +150,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MultProver<F>
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SoftmaxExpHi(self.params.computation_node_index),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node_index),
             opening_point.clone(),
             self.exp_hi.final_sumcheck_claim(),
         );
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SoftmaxExpLo(self.params.computation_node_index),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node_index),
             opening_point.clone(),
             self.exp_lo.final_sumcheck_claim(),
         );
@@ -198,13 +198,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MultVerifie
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SoftmaxExpHi(self.params.computation_node_index),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node_index),
             opening_point.clone(),
         );
         accumulator.append_virtual(
             transcript,
             VirtualPolynomial::SoftmaxExpLo(self.params.computation_node_index),
-            SumcheckId::Execution,
+            SumcheckId::NodeExecution(self.params.computation_node_index),
             opening_point.clone(),
         );
     }
@@ -221,13 +221,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MultVerifie
         let exp_hi_claim = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpHi(self.params.computation_node_index),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.computation_node_index),
             )
             .1;
         let exp_lo_claim = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpLo(self.params.computation_node_index),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(self.params.computation_node_index),
             )
             .1;
         EqPolynomial::mle(&self.params.r, &r_sc) * exp_lo_claim * exp_hi_claim

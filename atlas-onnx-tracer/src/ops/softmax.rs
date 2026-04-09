@@ -23,31 +23,19 @@ impl Op for SoftmaxLastAxis {
 pub struct SoftmaxLastAxisTrace {
     /// Scale S (= 2^scale)
     pub scale: i64,
-    /// Number of feature vectors (product of all dims except last)
-    pub num_slices: usize,
-    /// Size of each feature vector (last dim)
-    pub last_dim: usize,
-    /// X[k,j] — input logits, flat [F*N]
+    /// X[k,j] = input logits, flat [F*N]
     pub x: Vec<i32>,
-    /// max_k — max of feature vector k, [F]
+    /// max_k = max of feature vector k, [F]
     pub max_k: Vec<i32>,
-    /// argmax_k[k] — position of the max in each feature vector, [F]
+    /// argmax_k[k] = position of the max in each feature vector, [F]
     pub argmax_k: Vec<usize>,
-    /// e_k[j] — one-hot indicator at argmax_k, flat [F*N] (1 at argmax, 0 elsewhere)
-    pub e_k: Vec<i32>,
-    /// z[k,j] = max_k − X[k,j] (≥ 0), flat [F*N]
-    pub z: Vec<i32>,
-    /// exp_q[k,j] — LUT[z[k,j]], flat [F*N]
+    /// exp_q[k,j] = LUT[z[k,j]], flat [F*N]
     pub exp_q: Vec<i32>,
-    /// exp_sum_q[k] — Σ_j exp_q[k,j], [F]
+    /// exp_sum_q[k] = Σ_j exp_q[k,j], [F]
     pub exp_sum_q: Vec<i32>,
-    /// inv_sum[k] — ⌊S² / exp_sum_q[k]⌋, [F]
+    /// inv_sum[k] = ⌊S² / exp_sum_q[k]⌋, [F]
     pub inv_sum: Vec<i32>,
-    /// r_inv[k] — S² − inv_sum[k]·exp_sum_q[k], [F]  ∈ [0, exp_sum_q[k])
-    pub r_inv: Vec<i32>,
-    /// softmax_q[k,j] — ⌊exp_q[k,j] · inv_sum[k] / S⌋, flat [F*N]
-    pub softmax_q: Vec<i32>,
-    /// R[k,j] — exp_q[k,j]·inv_sum[k] − softmax_q[k,j]·S, flat [F*N]  ∈ [0, S)
+    /// R[k,j] = exp_q[k,j]·inv_sum[k] − softmax_q[k,j]·S, flat [F*N]  ∈ [0, S)
     pub R: Vec<i32>,
     /// Decomposed exp witness (sub-table lookups, digit splits, saturation)
     pub decomposed_exp: DecomposedExpWitness,
@@ -58,14 +46,14 @@ pub struct SoftmaxLastAxisTrace {
 /// For the proof pipeline: two Shout lookups (tiny tables) +
 /// multiplication relation (exp_hi · exp_lo = exp_q · S + r_exp) +
 /// range checks (z_lo ∈ [0,B), r_exp ∈ [0,S)) +
-/// digit reconstruction (z = z_hi · B + z_lo).
+/// digit reconstruction (z_c = z_hi · B + z_lo).
 #[derive(Debug, Clone)]
 pub struct DecomposedExpWitness {
     /// The sub-tables used
     pub lut: ExpLutDecomposed,
-    /// z_hi[k,j] = z[k,j] >> log2(B) — high digit of centered logit
+    /// z_hi[k,j] = z_c[k,j] >> log2(B), high digit of centered logit
     pub z_hi: Vec<i32>,
-    /// z_lo[k,j] = z[k,j] & (B-1) — low digit of centered logit
+    /// z_lo[k,j] = z_c[k,j] & (B-1), low digit of centered logit
     pub z_lo: Vec<i32>,
     /// exp_hi[k,j] = LUT_hi[z_hi[k,j]]
     pub exp_hi: Vec<i32>,
@@ -73,7 +61,8 @@ pub struct DecomposedExpWitness {
     pub exp_lo: Vec<i32>,
     /// r_exp[k,j] = exp_hi·exp_lo − exp_q·S  ∈ [0, S)
     pub r_exp: Vec<i32>,
-    /// sat_diff[k,j] = z[k,j] − z_c[k,j]  (≥ 0, saturation overflow)
+    /// sat_diff[k,j] = z[k,j] − z_c[k,j]  (≥ 0, saturation overflow),
+    /// where z_c[k,j] = min(z[k,j], z_bound − 1) is z clamped to the sub-table range.
     pub sat_diff: Vec<i32>,
 }
 
@@ -105,12 +94,10 @@ pub fn softmax_last_axis_decomposed(
     // Pre-allocate all witness vectors.
     let mut max_k = Vec::with_capacity(num_slices);
     let mut argmax_k = Vec::with_capacity(num_slices);
-    let mut e_k = vec![0i32; total];
     let mut z = vec![0i32; total];
     let mut exp_q = vec![0i32; total];
     let mut exp_sum_q = Vec::with_capacity(num_slices);
     let mut inv_sum = Vec::with_capacity(num_slices);
-    let mut r_inv = Vec::with_capacity(num_slices);
     let mut softmax_q = vec![0i32; total];
     let mut R = vec![0i32; total];
 
@@ -130,10 +117,9 @@ pub fn softmax_last_axis_decomposed(
         let mv = *slice.iter().max().unwrap();
         max_k.push(mv);
 
-        // 2. e_k: one-hot at first occurrence of max
+        // 2. argmax
         let argmax = slice.iter().position(|&x| x == mv).unwrap();
         argmax_k.push(argmax);
-        e_k[offset + argmax] = 1;
 
         // 3. z and exp_q via DECOMPOSED lookup
         let mut sum_exp: i32 = 0;
@@ -176,14 +162,15 @@ pub fn softmax_last_axis_decomposed(
         // 4. exp_sum_q
         exp_sum_q.push(sum_exp);
 
-        // 5. inv_sum and r_inv
+        // 5. inv_sum
         let is = s_sq / sum_exp;
-        let ri = s_sq - is * sum_exp;
         inv_sum.push(is);
-        r_inv.push(ri);
         debug_assert!(
-            ri >= 0 && ri < sum_exp,
-            "r_inv out of range: {ri}, sum={sum_exp}"
+            {
+                let ri = s_sq - is * sum_exp;
+                ri >= 0 && ri < sum_exp
+            },
+            "r_inv out of range, sum={sum_exp}"
         );
 
         // 6-7. softmax_q and R
@@ -203,18 +190,12 @@ pub fn softmax_last_axis_decomposed(
 
     let trace = SoftmaxLastAxisTrace {
         scale: s as i64,
-        num_slices,
-        last_dim,
         x: data.to_vec(),
         max_k,
         argmax_k,
-        e_k,
-        z,
         exp_q,
         exp_sum_q,
         inv_sum,
-        r_inv,
-        softmax_q: softmax_q.clone(),
         R,
         decomposed_exp: DecomposedExpWitness {
             lut: decomp,

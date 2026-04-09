@@ -62,7 +62,7 @@ impl<F: JoltField> MaxIndicatorParams<F> {
         let r1 = accumulator
             .get_virtual_polynomial_opening(
                 VirtualPolynomial::SoftmaxExpQ(computation_node_index),
-                SumcheckId::Execution,
+                SumcheckId::NodeExecution(computation_node_index),
             )
             .0;
         let r1_k = &r1.r[..log_f];

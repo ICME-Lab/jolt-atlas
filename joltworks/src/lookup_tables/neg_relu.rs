@@ -62,6 +62,11 @@ impl<const X_LEN: usize> PrefixSuffixDecompositionTrait<X_LEN> for NegReluTable<
         suffixes: &[SuffixEval<F>],
     ) -> F {
         let [one, suffix_neg_relu] = suffixes.try_into().unwrap();
+        // Safe to multiply prefix[MSB] * prefix[NotLowerWord]:
+        //   - prefix[NotLowerWord] is degree-0 in the MSB variable
+        //   - prefix[MSB] is degree-1 in the MSB variable and degree-0 in the lower bits
+        // so their product remains degree ≤ 1 in every variable,
+        // preserving the multilinear property.
         prefixes[Prefixes::Msb] * prefixes[Prefixes::NotLowerWord] * one
             + prefixes[Prefixes::Msb] * suffix_neg_relu
     }

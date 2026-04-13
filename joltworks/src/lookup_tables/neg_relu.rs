@@ -61,9 +61,9 @@ impl<const X_LEN: usize> PrefixSuffixDecompositionTrait<X_LEN> for NegReluTable<
         prefixes: &[PrefixEval<F>],
         suffixes: &[SuffixEval<F>],
     ) -> F {
-        let [one, nlw] = suffixes.try_into().unwrap();
+        let [one, suffix_neg_relu] = suffixes.try_into().unwrap();
         prefixes[Prefixes::Msb] * prefixes[Prefixes::NotLowerWord] * one
-            + prefixes[Prefixes::Msb] * nlw
+            + prefixes[Prefixes::Msb] * suffix_neg_relu
     }
 
     fn combine<F: JoltField>(&self, prefixes: &[PrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F {

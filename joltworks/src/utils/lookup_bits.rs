@@ -112,7 +112,7 @@ impl std::ops::Not for LookupBits {
     type Output = Self;
 
     fn not(self) -> Self::Output {
-        Self::new(!(self.bits % (1 << self.len)), self.len)
+        Self::new(!self.bits, self.len)
     }
 }
 

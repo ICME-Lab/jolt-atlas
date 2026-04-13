@@ -11,6 +11,7 @@ use self::{
 };
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
+    lookup_tables::prefixes::{msb::MsbPrefix, nlw::NotLowerWordPrefix},
     utils::lookup_bits::LookupBits,
 };
 use num::FromPrimitive;
@@ -28,6 +29,10 @@ pub mod eq;
 pub mod less_than;
 /// Lower word (without MSB) prefix implementation.
 pub mod lower_word_no_msb;
+/// MSB (most significant bit) prefix implementation.
+pub mod msb;
+/// Two's complement negation prefix: `(!lower_word) + 1`, used in `neg_relu` decomposition.
+pub mod nlw;
 /// Not-MSB (most significant bit) prefix implementation.
 pub mod not_msb;
 /// Bitwise OR prefix implementation.
@@ -101,6 +106,10 @@ pub enum Prefixes {
     Or,
     /// Bitwise XOR prefix
     Xor,
+    /// MSB (sign bit) prefix
+    Msb,
+    /// Two's complement negation prefix: `(!lower_word) + 1`
+    NotLowerWord,
 }
 
 #[derive(Clone, Copy)]
@@ -189,6 +198,10 @@ impl Prefixes {
             Prefixes::NotMsb => NotMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::Or => OrPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::Xor => XorPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::Msb => MsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::NotLowerWord => {
+                NotLowerWordPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
+            }
         };
         PrefixEval(eval)
     }
@@ -269,6 +282,16 @@ impl Prefixes {
             Prefixes::Xor => {
                 XorPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
             }
+            Prefixes::Msb => {
+                MsbPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
+            }
+            Prefixes::NotLowerWord => NotLowerWordPrefix::<XLEN>::update_prefix_checkpoint(
+                checkpoints,
+                r_x,
+                r_y,
+                j,
+                suffix_len,
+            ),
         }
     }
 }

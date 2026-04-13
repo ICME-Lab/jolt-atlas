@@ -34,6 +34,7 @@ pub trait ChallengeFieldOps<F>:
     + for<'a> Sub<&'a Self, Output = F>
     + Mul<Self, Output = F>
     + for<'a> Mul<&'a Self, Output = F>
+    + Debug
 {
 }
 
@@ -86,6 +87,7 @@ impl<F, C> ChallengeFieldOps<F> for C where
         + for<'a> Sub<&'a C, Output = F>
         + Mul<C, Output = F>
         + for<'a> Mul<&'a C, Output = F>
+        + Debug
 {
 }
 

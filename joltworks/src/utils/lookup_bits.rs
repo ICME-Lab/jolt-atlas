@@ -108,6 +108,14 @@ impl std::ops::Rem<usize> for &LookupBits {
     }
 }
 
+impl std::ops::Not for LookupBits {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        Self::new(!self.bits, self.len)
+    }
+}
+
 impl std::ops::Rem<usize> for LookupBits {
     type Output = usize;
 

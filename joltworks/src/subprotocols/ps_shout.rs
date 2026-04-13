@@ -817,3 +817,264 @@ pub fn ps_read_raf_verifier<
     let params = ReadRafSumcheckParams::new(provider, accumulator, transcript);
     ReadRafSumcheckVerifier::new(params)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        lookup_tables::{
+            and::AndTable, or::OrTable, relu::ReluTable, unsigned_abs::UnsignedAbsTable,
+            unsigned_less_than::UnsignedLessThanTable, xor::XorTable, JoltLookupTable,
+            PrefixSuffixDecompositionTrait,
+        },
+        poly::{
+            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+            opening_proof::{
+                OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+                VerifierOpeningAccumulator, BIG_ENDIAN,
+            },
+        },
+        subprotocols::{
+            ps_shout::{
+                ps_read_raf_prover, ps_read_raf_verifier, PrefixSuffixShoutProvider, ReadRafClaims,
+            },
+            sumcheck::Sumcheck,
+        },
+        transcripts::{Blake2bTranscript, Transcript},
+        utils::{lookup_bits::LookupBits, uninterleave_bits},
+    };
+    use ark_bn254::Fr;
+    use ark_std::Zero;
+    use common::{
+        consts::{LOG_K, XLEN},
+        VirtualPolynomial,
+    };
+    use itertools::Itertools;
+    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use std::marker::PhantomData;
+
+    const LOG_NUM_LOOKUPS: usize = 10;
+    const NUM_LOOKUPS: usize = 1 << LOG_NUM_LOOKUPS;
+
+    #[test]
+    fn test_unsigned_abs() {
+        test_read_raf_sumcheck::<UnsignedAbsTable<XLEN>, false>();
+    }
+
+    #[test]
+    fn test_and() {
+        test_read_raf_sumcheck::<AndTable<XLEN>, true>();
+    }
+
+    #[test]
+    fn test_or() {
+        test_read_raf_sumcheck::<OrTable<XLEN>, true>();
+    }
+
+    #[test]
+    fn test_relu() {
+        test_read_raf_sumcheck::<ReluTable<XLEN>, false>();
+    }
+
+    #[test]
+    fn test_ltu() {
+        test_read_raf_sumcheck::<UnsignedLessThanTable<XLEN>, true>();
+    }
+
+    #[test]
+    fn test_xor() {
+        test_read_raf_sumcheck::<XorTable<XLEN>, true>();
+    }
+
+    fn test_read_raf_sumcheck<LUT, const INTERLEAVED: bool>()
+    where
+        LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
+    {
+        let trace = generate_trace::<LUT>();
+
+        // --- Prover ---
+        let (mut prover_transcript, r_cycle) = new_test_transcript();
+        let mut prover_accumulator = ProverOpeningAccumulator::new();
+
+        let rv_claim = trace.rv.evaluate(&r_cycle);
+        let (left_operand_claim, right_operand_claim) =
+            compute_operand_claims::<INTERLEAVED>(&trace.lookup_indices, &r_cycle);
+
+        let provider = TestProvider::<LUT>::new(
+            rv_claim,
+            left_operand_claim,
+            right_operand_claim,
+            r_cycle,
+            INTERLEAVED,
+        );
+
+        let mut prover = ps_read_raf_prover(
+            &provider,
+            trace.lookup_bits,
+            &mut prover_accumulator,
+            &mut prover_transcript,
+        );
+        let (proof, prover_challenges) =
+            Sumcheck::prove(&mut prover, &mut prover_accumulator, &mut prover_transcript);
+
+        // --- Verifier ---
+        // Re-derive the same transcript state the prover started from
+        let (mut verifier_transcript, _) = new_test_transcript();
+        let mut verifier_accumulator = VerifierOpeningAccumulator::new();
+        transfer_openings(&prover_accumulator, &mut verifier_accumulator);
+
+        let verifier = ps_read_raf_verifier(
+            &provider,
+            &mut verifier_accumulator,
+            &mut verifier_transcript,
+        );
+        let verifier_challenges = Sumcheck::verify(
+            &proof,
+            &verifier,
+            &mut verifier_accumulator,
+            &mut verifier_transcript,
+        )
+        .unwrap();
+
+        assert_eq!(prover_challenges, verifier_challenges);
+    }
+
+    /// Computes operand polynomial claims at `r_cycle`, branching on interleaving mode.
+    ///
+    /// - Interleaved: uninterleaves bits into left/right operand indices and evaluates both.
+    /// - Non-interleaved: left claim is zero, right claim evaluates raw lookup indices.
+    fn compute_operand_claims<const INTERLEAVED: bool>(
+        lookup_indices: &[u64],
+        r_cycle: &[Fr],
+    ) -> (Fr, Fr) {
+        if INTERLEAVED {
+            let (left_indices, right_indices): (Vec<_>, Vec<_>) =
+                lookup_indices.iter().map(|&i| uninterleave_bits(i)).unzip();
+            (
+                MultilinearPolynomial::from(left_indices).evaluate(r_cycle),
+                MultilinearPolynomial::from(right_indices).evaluate(r_cycle),
+            )
+        } else {
+            (
+                Fr::zero(),
+                MultilinearPolynomial::from(lookup_indices.to_vec()).evaluate(r_cycle),
+            )
+        }
+    }
+
+    /// Copies opening claims from prover accumulator to verifier accumulator,
+    /// simulating the verifier receiving committed opening claims.
+    fn transfer_openings(
+        prover_acc: &ProverOpeningAccumulator<Fr>,
+        verifier_acc: &mut VerifierOpeningAccumulator<Fr>,
+    ) {
+        for (key, (_, claim)) in &prover_acc.openings {
+            verifier_acc
+                .openings
+                .insert(*key, (OpeningPoint::default(), *claim));
+        }
+    }
+
+    struct TestTrace {
+        lookup_indices: Vec<u64>,
+        lookup_bits: Vec<LookupBits>,
+        rv: MultilinearPolynomial<Fr>,
+    }
+
+    /// Generates a deterministic random lookup trace for testing.
+    fn generate_trace<LUT: JoltLookupTable + Default>() -> TestTrace {
+        let mut rng = StdRng::seed_from_u64(0x1109);
+        let table = LUT::default();
+        let lookup_indices: Vec<u64> = (0..NUM_LOOKUPS).map(|_| rng.gen()).collect();
+        let lookup_bits = lookup_indices
+            .iter()
+            .map(|&i| LookupBits::new(i, LOG_K))
+            .collect();
+        let rv = MultilinearPolynomial::from(
+            lookup_indices
+                .iter()
+                .map(|&i| table.materialize_entry(i))
+                .collect_vec(),
+        );
+        TestTrace {
+            lookup_indices,
+            lookup_bits,
+            rv,
+        }
+    }
+
+    /// Creates a fresh test transcript and draws the challenge vector for cycle variables.
+    fn new_test_transcript() -> (Blake2bTranscript, Vec<Fr>) {
+        let mut transcript = Blake2bTranscript::new(b"test");
+        let r_cycle: Vec<Fr> = transcript.challenge_vector(LOG_NUM_LOOKUPS);
+        (transcript, r_cycle)
+    }
+
+    struct TestProvider<LUT>
+    where
+        LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
+    {
+        rv_claim: Fr,
+        left_operand_claim: Fr,
+        right_operand_claim: Fr,
+        r_cycle: Vec<Fr>,
+        is_interleaved_operands: bool,
+        _phantom: PhantomData<LUT>,
+    }
+
+    impl<LUT> TestProvider<LUT>
+    where
+        LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
+    {
+        fn new(
+            rv_claim: Fr,
+            left_operand_claim: Fr,
+            right_operand_claim: Fr,
+            r_cycle: Vec<Fr>,
+            is_interleaved_operands: bool,
+        ) -> Self {
+            Self {
+                rv_claim,
+                left_operand_claim,
+                right_operand_claim,
+                r_cycle,
+                is_interleaved_operands,
+                _phantom: PhantomData,
+            }
+        }
+    }
+
+    impl<LUT> PrefixSuffixShoutProvider<Fr, LUT> for TestProvider<LUT>
+    where
+        LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
+    {
+        fn read_raf_claims(&self, _accumulator: &dyn OpeningAccumulator<Fr>) -> ReadRafClaims<Fr> {
+            ReadRafClaims {
+                rv_claim: self.rv_claim,
+                left_operand_claim: self.left_operand_claim,
+                right_operand_claim: self.right_operand_claim,
+            }
+        }
+
+        fn is_interleaved_operands(&self) -> bool {
+            self.is_interleaved_operands
+        }
+
+        fn ra_poly(&self) -> (VirtualPolynomial, SumcheckId) {
+            (
+                VirtualPolynomial::NodeOutputRa(0),
+                SumcheckId::NodeExecution(0),
+            )
+        }
+
+        fn r_cycle(
+            &self,
+            _accumulator: &dyn OpeningAccumulator<Fr>,
+        ) -> OpeningPoint<BIG_ENDIAN, Fr> {
+            OpeningPoint::new(self.r_cycle.clone())
+        }
+
+        fn raf_claim_specs(&self) -> Vec<(VirtualPolynomial, SumcheckId)> {
+            unimplemented!()
+        }
+    }
+}

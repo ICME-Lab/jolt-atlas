@@ -5,7 +5,10 @@
 //! protocol, suffix MLEs are evaluated and combined with prefix contributions to
 //! reconstruct the full lookup table evaluation without materializing the entire table.
 
-use crate::{field::JoltField, utils::lookup_bits::LookupBits};
+use crate::{
+    field::JoltField, lookup_tables::suffixes::neg_relu::NegReluSuffix,
+    utils::lookup_bits::LookupBits,
+};
 use num_derive::FromPrimitive;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
@@ -20,6 +23,8 @@ pub mod and;
 pub mod less_than;
 /// Lower word without MSB suffix implementation.
 pub mod lower_word_no_msb;
+/// Negated ReLU suffix (Relu(-x)): `neg_relu(x) = max(-x, 0)`.
+pub mod neg_relu;
 /// Constant one suffix implementation.
 pub mod one;
 /// Bitwise OR suffix implementation.
@@ -57,6 +62,8 @@ pub enum Suffixes {
     Relu,
     /// Bitwise XOR suffix
     Xor,
+    /// Suffix for Relu(-x) table
+    NegRelu,
 }
 
 /// Type alias for suffix evaluation results in the field.
@@ -74,6 +81,7 @@ impl Suffixes {
             Suffixes::LowerWordNoMSB => LowerWordNoMsbSuffix::<XLEN>::suffix_mle(b),
             Suffixes::Relu => ReluSuffix::<XLEN>::suffix_mle(b),
             Suffixes::Xor => XorSuffix::suffix_mle(b),
+            Suffixes::NegRelu => NegReluSuffix::<XLEN>::suffix_mle(b),
         }
     }
 }

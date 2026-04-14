@@ -68,6 +68,7 @@ pub mod iff;
 pub mod input;
 /// Check for NaN values.
 pub mod is_nan;
+#[cfg(test)]
 /// Experimental malicious variant of Sub proof logic.
 pub mod malicious_sub;
 /// Reorder tensor axes.

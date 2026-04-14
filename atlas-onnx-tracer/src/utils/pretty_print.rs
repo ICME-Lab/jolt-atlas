@@ -38,7 +38,6 @@ impl From<&ComputationNode> for NodeRow {
             Operator::Rsqrt(op) => format!("scale: {}", op.scale),
             Operator::Sigmoid(op) => format!("scale: {}", op.scale),
             Operator::Slice(op) => format!("axis: {}, {}..{}", op.axis, op.start, op.end),
-            Operator::SoftmaxAxes(op) => format!("axes: {}", op.axes),
             Operator::Sum(op) => format!("axes: {:?}", op.axes),
             Operator::Tanh(op) => format!("scale: {}", op.scale),
             _ => "-".to_string(),

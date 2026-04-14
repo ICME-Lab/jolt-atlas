@@ -55,6 +55,11 @@ impl AtlasSharedPreprocessing {
     pub fn model(&self) -> &Model {
         &self.model
     }
+
+    /// Get the model's scale.
+    pub fn scale(&self) -> i32 {
+        self.model().scale
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +99,11 @@ where
     pub fn model(&self) -> &Model {
         &self.shared.model
     }
+
+    /// Get the models scale
+    pub fn scale(&self) -> i32 {
+        self.model().scale
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -131,5 +141,10 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> AtlasVerifierPreprocessing<
     /// Get a reference to the ONNX model.
     pub fn model(&self) -> &Model {
         &self.shared.model
+    }
+
+    /// Get the model's scale.
+    pub fn scale(&self) -> i32 {
+        self.model().scale
     }
 }

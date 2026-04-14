@@ -541,12 +541,12 @@ mod tests {
     };
     use rand::{rngs::StdRng, SeedableRng};
 
-    const SCALE: i32 = 7;
+    const SCALE: i32 = 8;
 
     fn div_model(T: usize) -> Model {
         let mut b = ModelBuilder::new();
         let i = b.input(vec![T]);
-        let c = b.constant(Tensor::construct(vec![128; T], vec![T]));
+        let c = b.constant(Tensor::construct(vec![1 << SCALE; T], vec![T]));
         let res = b.div(i, c);
         b.mark_output(res);
         b.build()

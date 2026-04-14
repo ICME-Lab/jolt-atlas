@@ -12,8 +12,8 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde_json::Value;
 use std::{collections::HashMap, fs::File, io::Read, time::Instant};
 
-// Fixed-point scale factor: 2^7 = 128
-const SCALE: i32 = 128;
+// Fixed-point scale factor: 2^8 = 256
+const SCALE: i32 = 256;
 
 /// Configuration for test prove-and-verify workflows.
 ///
@@ -167,14 +167,11 @@ fn test_bge_small_en_v1_5() {
     let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
 
     // Configure RunArgs for BGE
-    // HACK: pre_rebase_nonlinear prevents i32 overflow in Square/Cube for large models.
-    // TODO: Remove once fused i64-precision ops are the default path.
     let run_args = RunArgs::new([
         ("batch_size", 1),
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
-    ])
-    .with_pre_rebase_nonlinear(true);
+    ]);
 
     prove_and_verify(
         working_dir,
@@ -208,7 +205,7 @@ fn test_transformer() {
     let working_dir = "../atlas-onnx-tracer/models/transformer/";
     let mut rng = StdRng::seed_from_u64(0x1096);
     let input_data: Vec<i32> = (0..64 * 64)
-        .map(|_| (1 << 7) + rng.gen_range(-50..=50))
+        .map(|_| SCALE + rng.gen_range(-50..=50))
         .collect();
     let input = Tensor::new(Some(&input_data), &[1, 64, 64]).unwrap();
     prove_and_verify(
@@ -270,7 +267,7 @@ fn test_layernorm_head() {
     let working_dir = "../atlas-onnx-tracer/models/layernorm_head/";
     let mut rng = StdRng::seed_from_u64(0x8096);
     let input_data: Vec<i32> = (0..16 * 16)
-        .map(|_| (1 << 7) + rng.gen_range(-50..=50))
+        .map(|_| SCALE + rng.gen_range(-50..=50))
         .collect();
     let input = Tensor::construct(input_data, vec![16, 16]);
     prove_and_verify(
@@ -653,7 +650,7 @@ fn test_erf() {
 fn test_sigmoid() {
     let working_dir = "../atlas-onnx-tracer/models/sigmoid_encoder/";
     let mut rng = StdRng::seed_from_u64(0x100);
-    let input = Tensor::random_range(&mut rng, &[1, 4, 16], -(SCALE * 100)..(SCALE * 100));
+    let input = Tensor::random_range(&mut rng, &[1, 4, 16], -(SCALE * 50)..(SCALE * 50));
 
     prove_and_verify(
         working_dir,
@@ -668,10 +665,10 @@ fn test_positional_encoding_trig() {
     let working_dir = "../atlas-onnx-tracer/models/positional_encoding/";
 
     // Positional-encoding-style angle tensor: [batch=1, sequence_length=8, half_dim=4].
-    // Values are fixed-point quantized with SCALE=128.
+    // Values are fixed-point quantized with SCALE=256.
     let input_vector = vec![
-        0, 0, 0, 0, 128, 13, 1, 0, 256, 26, 3, 0, 384, 38, 4, 0, 512, 51, 5, 1, 640, 64, 6, 1, 768,
-        77, 8, 1, 896, 90, 9, 1,
+        0, 0, 0, 0, 256, 26, 2, 0, 512, 52, 6, 0, 768, 76, 8, 0, 1024, 102, 10, 2, 1280, 128, 12,
+        2, 1536, 154, 16, 2, 1792, 180, 18, 2,
     ];
     let input = Tensor::new(Some(&input_vector), &[1, 8, 4]).unwrap();
 

@@ -41,14 +41,16 @@ pub enum ProofType {
     RaOneHotChecks = 2,
     /// Hamming weight check for read-addresses.
     RaHammingWeight = 3,
-    /// Softmax division by sum of max.
-    SoftmaxDivSumMax = 4,
-    /// Softmax exponentiation read-raf checking.
-    SoftmaxExponentiationReadRaf = 5,
-    /// Softmax exponentiation read-address one-hot encoding checks.
-    SoftmaxExponentiationRaOneHot = 6,
     /// Range-checking for remainders.
-    RangeCheck = 7,
+    RangeCheck = 4,
+    /// Softmax stage 1
+    SoftmaxStage1 = 5,
+    /// Softmax stage 2
+    SoftmaxStage2 = 6,
+    /// Softmax stage 3
+    SoftmaxStage3 = 7,
+    /// Softmax stage 4
+    SoftmaxStage4 = 8,
 }
 
 impl TryFrom<u8> for ProofType {
@@ -60,10 +62,11 @@ impl TryFrom<u8> for ProofType {
             1 => Ok(Self::NeuralTeleport),
             2 => Ok(Self::RaOneHotChecks),
             3 => Ok(Self::RaHammingWeight),
-            4 => Ok(Self::SoftmaxDivSumMax),
-            5 => Ok(Self::SoftmaxExponentiationReadRaf),
-            6 => Ok(Self::SoftmaxExponentiationRaOneHot),
-            7 => Ok(Self::RangeCheck),
+            4 => Ok(Self::RangeCheck),
+            5 => Ok(Self::SoftmaxStage1),
+            6 => Ok(Self::SoftmaxStage2),
+            7 => Ok(Self::SoftmaxStage3),
+            8 => Ok(Self::SoftmaxStage4),
             _ => Err(SerializationError::InvalidData),
         }
     }

@@ -3,6 +3,7 @@ pub mod evaluation_reduction;
 pub mod gamma_fold;
 pub mod hamming_booleanity;
 pub mod hamming_weight;
+pub mod identity_range_check;
 pub mod mles_product_sum;
 pub mod opening_reduction;
 pub mod ps_shout;

@@ -18,8 +18,8 @@ define_signed_activation_table!(TanhTable, nonlinearities::tanh);
 define_signed_activation_table!(ErfTable, nonlinearities::erffunc);
 define_signed_activation_table!(SigmoidTable, nonlinearities::sigmoid);
 
-/// Fixed-point scale factor: maps [-1, 1] to [-128, 128]
-pub const SCALE: f64 = 128.0;
+/// Fixed-point scale factor: maps [-1, 1] to [-256, 256]
+pub const SCALE: f64 = 256.0;
 
 /// Converts an n-bit index to a signed integer using two's complement.
 ///

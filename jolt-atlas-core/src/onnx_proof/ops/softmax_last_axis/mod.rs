@@ -18,6 +18,7 @@ use crate::onnx_proof::{
             max::{MaxIndicatorParams, MaxIndicatorProver, MaxIndicatorVerifier},
             rc::{SoftmaxRCProvider, SoftmaxRaEncoding, SAT_DIFF_RC_BITS},
             recip_mult::{RecipMultParams, RecipMultProver, RecipMultVerifier},
+            sat_diff::{SatDiffSlacknessParams, SatDiffSlacknessProver, SatDiffSlacknessVerifier},
         },
         OperatorProofTrait,
     },
@@ -61,6 +62,8 @@ pub mod max;
 pub mod rc;
 /// softmax(r0) * S + R(r0) = sum_{k,j} eq(r0, (k,j)) * exp_q[k,j] * inv_sum[k]
 pub mod recip_mult;
+/// Complementary slackness: sat_diff * (z_bound - 1 - z_c) = 0
+pub mod sat_diff;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
     #[tracing::instrument(skip_all, name = "SoftmaxLastAxis::prove")]
@@ -148,7 +151,9 @@ impl SoftmaxLastAxisProver {
         let sat_diff_indices = to_indices(&self.trace.decomposed_exp.sat_diff);
 
         // Padded lookup tables (consumed by stage3 Shout + stage4 one-hot)
+        let base = self.trace.decomposed_exp.lut.base as u64;
         let mut table_hi = std::mem::take(&mut self.trace.decomposed_exp.lut.lut_hi);
+        let z_bound_minus_1 = (table_hi.len() as u64) * base - 1;
         pad_to_power_of_two(&mut table_hi);
         let mut table_lo = std::mem::take(&mut self.trace.decomposed_exp.lut.lut_lo);
         pad_to_power_of_two(&mut table_lo);
@@ -158,6 +163,8 @@ impl SoftmaxLastAxisProver {
             table_lo,
             z_hi_indices,
             z_lo_indices,
+            base,
+            z_bound_minus_1,
         };
 
         // ── Pipeline ────────────────────────────────────────────────────
@@ -168,10 +175,8 @@ impl SoftmaxLastAxisProver {
         let stage_1_proof = self.stage1(prover, r_lookup_bits);
 
         self.cache_r_exp(prover);
-        let stage_2_proof = self.stage2(prover, r_exp_lookup_bits, &r_indices);
+        let stage_2_proof = self.stage2(prover, r_exp_lookup_bits, &r_indices, &lut_data);
 
-        self.cache_z(prover);
-        self.cache_sat_diff(prover);
         let stage_3_proof = self.stage3(prover, &lut_data, sat_diff_lookup_bits, &r_exp_indices);
 
         let stage_4_proof = self.stage4(prover, &lut_data, &sat_diff_indices);
@@ -223,13 +228,11 @@ impl SoftmaxLastAxisVerifier {
         self.cache_R(verifier);
         self.stage1(verifier)?;
 
-        self.cache_r_exp(verifier);
-        self.stage2(verifier)?;
-
         let lut = VerifierLookupTableData::new(self.scale);
 
-        self.cache_z(verifier);
-        self.cache_sat_diff(verifier);
+        self.cache_r_exp(verifier);
+        self.stage2(verifier, &lut)?;
+
         self.stage3(verifier, &lut)?;
 
         self.operand_link(node, verifier, &lut)?;
@@ -399,6 +402,7 @@ impl SoftmaxLastAxisProver {
         prover: &mut Prover<F, T>,
         r_exp_lookup_bits: Vec<LookupBits>,
         r_indices: &[usize],
+        lut_data: &LookupTableData,
     ) -> SumcheckInstanceProof<F, T> {
         // max indicator instance
         let [f, _n] = self.F_N;
@@ -452,6 +456,20 @@ impl SoftmaxLastAxisProver {
             &mut prover.transcript,
         );
 
+        // complementary slackness: sat_diff * (z_bound − 1 − z_hi * B − z_lo) = 0
+        let sd_params = SatDiffSlacknessParams::new(
+            self.node_idx,
+            lut_data.z_bound_minus_1,
+            lut_data.base,
+            &prover.accumulator,
+        );
+        let sd_prover = SatDiffSlacknessProver::initialize(
+            &self.trace.decomposed_exp.sat_diff,
+            &self.trace.decomposed_exp.z_hi,
+            &self.trace.decomposed_exp.z_lo,
+            sd_params,
+        );
+
         let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
             Box::new(exp_mult_prover),
             Box::new(max_indicator_prover),
@@ -459,58 +477,9 @@ impl SoftmaxLastAxisProver {
             R_ra_prover,
             R_hw_prover,
             R_bool_prover,
+            Box::new(sd_prover),
         ];
         run_batched_prove(&mut instances, prover)
-    }
-
-    #[tracing::instrument(name = "SoftmaxLastAxisProver::cache_z", skip_all)]
-    /// Cache `z_hi(r2)` and `z_lo(r2)` as virtual polynomial openings.
-    ///
-    /// These become the RAF claims consumed by Stage 3 Shout.
-    fn cache_z<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
-        let r2 = prover
-            .accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::SoftmaxExpHi(self.node_idx),
-                SumcheckId::NodeExecution(self.node_idx),
-            )
-            .0;
-        cache_mle_opening(
-            prover,
-            &self.trace.decomposed_exp.z_hi,
-            &r2.r,
-            VirtualPolynomial::SoftmaxZHi(self.node_idx),
-            self.node_idx,
-        );
-        cache_mle_opening(
-            prover,
-            &self.trace.decomposed_exp.z_lo,
-            &r2.r,
-            VirtualPolynomial::SoftmaxZLo(self.node_idx),
-            self.node_idx,
-        );
-    }
-
-    #[tracing::instrument(name = "SoftmaxLastAxisProver::cache_sat_diff", skip_all)]
-    /// Cache `sat_diff(r2)` as a virtual polynomial opening.
-    ///
-    /// sat_diff is not independently committed — the identity RC commits
-    /// to its one-hot encoding.  We only need the evaluation at r2.
-    fn cache_sat_diff<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
-        let r2 = prover
-            .accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::SoftmaxExpHi(self.node_idx),
-                SumcheckId::NodeExecution(self.node_idx),
-            )
-            .0;
-        cache_mle_opening(
-            prover,
-            &self.trace.decomposed_exp.sat_diff,
-            &r2.r,
-            VirtualPolynomial::SoftmaxSatDiff(self.node_idx),
-            self.node_idx,
-        );
     }
 
     #[tracing::instrument(name = "SoftmaxLastAxisProver::stage3", skip_all)]
@@ -860,6 +829,7 @@ impl SoftmaxLastAxisVerifier {
     fn stage2<F: JoltField, T: Transcript>(
         &self,
         verifier: &mut Verifier<'_, F, T>,
+        lut: &VerifierLookupTableData,
     ) -> Result<(), ProofVerifyError> {
         // max indicator instance
         let [f, _n] = self.F_N;
@@ -901,6 +871,14 @@ impl SoftmaxLastAxisVerifier {
         let [R_ra_verifier, R_hw_verifier, R_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
 
+        // complementary slackness verifier
+        let sd_verifier = SatDiffSlacknessVerifier::new(
+            self.node_idx,
+            lut.z_bound_minus_1,
+            lut.base,
+            &verifier.accumulator,
+        );
+
         BatchedSumcheck::verify(
             verifier
                 .proofs
@@ -913,55 +891,14 @@ impl SoftmaxLastAxisVerifier {
                 &*R_ra_verifier,
                 &*R_hw_verifier,
                 &*R_bool_verifier,
+                &sd_verifier,
             ],
             &mut verifier.accumulator,
             &mut verifier.transcript,
-        )?;
+        )
+        .unwrap();
 
         Ok(())
-    }
-
-    #[tracing::instrument(name = "SoftmaxLastAxisVerifier::cache_z", skip_all)]
-    /// Cache `z_hi(r2)` and `z_lo(r2)` — mirror of prover [`cache_z`].
-    fn cache_z<F: JoltField, T: Transcript>(&self, verifier: &mut Verifier<'_, F, T>) {
-        let r2 = verifier
-            .accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::SoftmaxExpHi(self.node_idx),
-                SumcheckId::NodeExecution(self.node_idx),
-            )
-            .0;
-        verifier.accumulator.append_virtual(
-            &mut verifier.transcript,
-            VirtualPolynomial::SoftmaxZHi(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-            r2.clone(),
-        );
-        verifier.accumulator.append_virtual(
-            &mut verifier.transcript,
-            VirtualPolynomial::SoftmaxZLo(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-            r2,
-        );
-    }
-
-    /// Cache `sat_diff(r2)` — mirror of prover [`cache_sat_diff`].
-    ///
-    /// sat_diff is virtual (identity RC commits to the one-hot encoding).
-    fn cache_sat_diff<F: JoltField, T: Transcript>(&self, verifier: &mut Verifier<'_, F, T>) {
-        let r2 = verifier
-            .accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::SoftmaxExpHi(self.node_idx),
-                SumcheckId::NodeExecution(self.node_idx),
-            )
-            .0;
-        verifier.accumulator.append_virtual(
-            &mut verifier.transcript,
-            VirtualPolynomial::SoftmaxSatDiff(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-            r2,
-        );
     }
 
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::stage3", skip_all)]
@@ -1199,6 +1136,10 @@ struct LookupTableData {
     table_lo: Vec<i32>,
     z_hi_indices: Vec<usize>,
     z_lo_indices: Vec<usize>,
+    /// `z_bound - 1 = K_hi * B - 1` (unpadded).
+    z_bound_minus_1: u64,
+    /// Digit base B.
+    base: u64,
 }
 
 /// Pre-computed verifier lookup table data (shared across stage3, operand_link, stage4).
@@ -1206,11 +1147,15 @@ struct VerifierLookupTableData {
     table_hi: Vec<i32>,
     table_lo: Vec<i32>,
     base: u64,
+    /// `z_bound − 1 = K_hi * B − 1`, the maximum clamped logit value.
+    /// Used in the complementary-slackness check.
+    z_bound_minus_1: u64,
 }
 
 impl VerifierLookupTableData {
     fn new(scale: i32) -> Self {
         let decomp = generate_exp_lut_decomposed(scale);
+        let z_bound_minus_1 = (decomp.lut_hi.len() * decomp.base - 1) as u64;
         let mut table_hi = decomp.lut_hi;
         table_hi.resize(table_hi.len().next_power_of_two(), 0);
         let mut table_lo = decomp.lut_lo;
@@ -1219,6 +1164,7 @@ impl VerifierLookupTableData {
             table_hi,
             table_lo,
             base: decomp.base as u64,
+            z_bound_minus_1,
         }
     }
 }

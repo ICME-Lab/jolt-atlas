@@ -3,7 +3,7 @@ use crate::{
     poly::{dense_mlpoly::DensePolynomial, multilinear_polynomial::MultilinearPolynomial},
 };
 use common::parallel::par_enabled;
-use common::CommittedPolynomial;
+use common::CommittedPoly;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 
@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 #[tracing::instrument(skip_all)]
 pub fn build_materialized_rlc<F: JoltField>(
     coeffs: &[F],
-    polynomials: &BTreeMap<CommittedPolynomial, MultilinearPolynomial<F>>,
+    polynomials: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
 ) -> MultilinearPolynomial<F> {
     // Partition into dense and one-hot polynomials (like RLCPolynomial::linear_combination)
     let (dense, one_hot): (Vec<_>, Vec<_>) = polynomials

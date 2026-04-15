@@ -1,6 +1,6 @@
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
-    utils::opening_id_builder::{OpeningIdBuilder, OpeningTarget},
+    utils::opening_id_builder::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
@@ -8,15 +8,15 @@ use atlas_onnx_tracer::{
     ops::{Operator, ScalarConstDiv},
     tensor::Tensor,
 };
-use common::CommittedPolynomial;
+use common::CommittedPoly;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
-            CommittedOpeningId, OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator,
-            SumcheckId, VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
+            BIG_ENDIAN, LITTLE_ENDIAN,
         },
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
@@ -73,8 +73,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ScalarConstDiv {
         Ok(())
     }
 
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
-        let polys = vec![CommittedPolynomial::ScalarConstDivNodeRemainder(node.idx)];
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        let polys = vec![CommittedPoly::ScalarConstDivNodeRemainder(node.idx)];
         polys
     }
 }
@@ -95,15 +95,13 @@ pub struct ScalarConstDivParams<F: JoltField> {
 impl<F: JoltField> ScalarConstDivParams<F> {
     /// Create new scalar constant division parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let r_node_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
+        let r_node_output = accessor.get_reduced_opening().0;
         let Operator::ScalarConstDiv(scalar_const_div) = &computation_node.operator else {
             panic!("Expected ScalarConstDiv operator")
         };
         Self {
-            r_node_output: r_node_output.into(),
+            r_node_output,
             scalar_const_divisor: scalar_const_div.divisor,
             computation_node,
         }
@@ -116,9 +114,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ScalarConstDivParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let q_claim = accumulator
-            .get_node_output_opening(self.computation_node.idx)
-            .1;
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
+        let q_claim = accessor.get_reduced_opening().1;
         q_claim * F::from_i32(self.scalar_const_divisor)
     }
 
@@ -213,27 +210,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ScalarConstDi
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let node = &self.params.computation_node;
-        let builder = OpeningIdBuilder::new(node);
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let input_opening_id = builder.node_io(OpeningTarget::Input(0));
-        let remainder_opening_id = CommittedOpeningId::new(
-            CommittedPolynomial::ScalarConstDivNodeRemainder(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(
-            transcript,
-            input_opening_id,
-            opening_point.clone(),
-            self.left_operand.final_sumcheck_claim(),
-        );
-        accumulator.append_dense(
-            transcript,
-            remainder_opening_id,
-            opening_point.r.clone(),
-            self.R.final_sumcheck_claim(),
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, opening_point);
+
+        provider.append_node_io(Target::Input(0), self.left_operand.final_claim());
+        provider.append_advice(
+            CommittedPoly::ScalarConstDivNodeRemainder,
+            self.R.final_claim(),
         );
     }
 }
@@ -267,26 +253,20 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ScalarConst
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let r_node_output = accumulator
-            .get_node_output_opening(self.params.computation_node.idx)
-            .0
-            .r;
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
+
+        let r_node_output = &self.params.r_node_output.r;
         let r_node_output_prime = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
-        let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
-        let remainder_opening_id = CommittedOpeningId::new(
-            CommittedPolynomial::ScalarConstDivNodeRemainder(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        let R_claim = accumulator
-            .get_committed_polynomial_opening(remainder_opening_id)
+        let eq_eval = EqPolynomial::mle(r_node_output, &r_node_output_prime);
+
+        let R_claim = accessor
+            .get_advice(CommittedPoly::ScalarConstDivNodeRemainder)
             .1;
-        let left_operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[0],
-            self.params.computation_node.idx,
-        );
+        let left_operand_claim = accessor.get_node_io(Target::Input(0)).1;
+
         eq_eval * (left_operand_claim - R_claim)
     }
 
@@ -296,18 +276,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ScalarConst
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let node = &self.params.computation_node;
-        let builder = OpeningIdBuilder::new(node);
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let input_opening_id = builder.node_io(OpeningTarget::Input(0));
-        let remainder_opening_id = CommittedOpeningId::new(
-            CommittedPolynomial::ScalarConstDivNodeRemainder(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(transcript, input_opening_id, opening_point.clone());
-        accumulator.append_dense(transcript, remainder_opening_id, opening_point.r.clone());
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, opening_point);
+        provider.append_node_io(Target::Input(0));
+        provider.append_advice(CommittedPoly::ScalarConstDivNodeRemainder);
     }
 }
 

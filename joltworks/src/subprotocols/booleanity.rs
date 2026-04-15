@@ -3,7 +3,7 @@ use allocative::Allocative;
 use allocative::FlameGraphBuilder;
 use ark_std::Zero;
 use common::parallel::par_enabled;
-use common::CommittedPolynomial;
+use common::CommittedPoly;
 use rayon::prelude::*;
 use std::{fmt::Debug, iter::zip, sync::Arc};
 
@@ -13,8 +13,8 @@ use crate::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, PolynomialBinding},
         opening_proof::{
-            CommittedOpeningId, OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator,
-            SumcheckId, VerifierOpeningAccumulator, BIG_ENDIAN,
+            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            VerifierOpeningAccumulator, BIG_ENDIAN,
         },
         ra_poly::RaPolynomial,
         split_eq_poly::GruenSplitEqPolynomial,
@@ -45,7 +45,7 @@ pub struct BooleanitySumcheckParams<F: JoltField> {
     /// Cycle binding point
     pub r_cycle: Vec<F>,
     /// Polynomial types for opening accumulator
-    pub polynomial_types: Vec<CommittedPolynomial>,
+    pub polynomial_types: Vec<CommittedPoly>,
     /// Sumcheck ID for opening accumulator
     pub sumcheck_id: SumcheckId,
 }
@@ -294,7 +294,7 @@ impl<
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let claims: Vec<F> = self.H.iter().map(|H| H.final_sumcheck_claim()).collect();
+        let claims: Vec<F> = self.H.iter().map(|H| H.final_claim()).collect();
         accumulator.append_sparse(
             transcript,
             self.params.polynomial_types.clone(),
@@ -336,7 +336,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BooleanityS
             .polynomial_types
             .iter()
             .map(|poly_type| {
-                let id = CommittedOpeningId::new(*poly_type, self.params.sumcheck_id);
+                let id = OpeningId::new(*poly_type, self.params.sumcheck_id);
                 accumulator.get_committed_polynomial_opening(id).1
             })
             .collect::<Vec<F>>();
@@ -377,7 +377,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BooleanityS
 #[cfg(test)]
 mod tests {
     use ark_bn254::Fr;
-    use common::CommittedPolynomial;
+    use common::CommittedPoly;
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 
     use crate::{
@@ -413,7 +413,7 @@ mod tests {
             r_cycle: r_lookups,
             r_address: r_words,
             gammas: vec![<Fr as JoltField>::Challenge::from(1)],
-            polynomial_types: vec![CommittedPolynomial::NodeOutputRaD(0, 0)],
+            polynomial_types: vec![CommittedPoly::NodeOutputRaD(0, 0)],
             sumcheck_id: SumcheckId::Booleanity,
         };
 

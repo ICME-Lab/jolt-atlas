@@ -124,7 +124,7 @@ impl<F: JoltField> EvalReductionInstance<F> {
 
         // i'th vector of this Vec<Vec<F>> is the vector of i'th variables across all evaluation points.
         let ri_vec = group_by_variable(&opening_points);
-        // h = mle ∘ l, where l is the line defined by the opening points.
+        // h = mle ∘ l, where l is the unique n-1 degree polynomial defined by the n opening points.
         let h = compute_h(&witness.mle, &ri_vec);
 
         #[cfg(test)]

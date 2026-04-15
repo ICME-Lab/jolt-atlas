@@ -1,17 +1,20 @@
+use crate::utils::{
+    dims::{SumAxis, SumConfig},
+    opening_id_builder::{AccOpeningAccessor, Target},
+};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
 };
 use common::parallel::par_enabled;
-use common::VirtualPolynomial;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
+            BIG_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -23,8 +26,6 @@ use joltworks::{
     utils::math::Math,
 };
 use rayon::prelude::*;
-
-use crate::utils::dims::{SumAxis, SumConfig};
 
 const DEGREE_BOUND: usize = 1;
 
@@ -43,12 +44,10 @@ impl<F: JoltField> SumAxisParams<F> {
         sum_config: SumConfig,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
-        let r_node_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
+        let r_node_output = accessor.get_reduced_opening().0;
         Self {
-            r_node_output: r_node_output.into(),
+            r_node_output,
             computation_node,
             sum_config,
         }
@@ -61,8 +60,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SumAxisParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, sum_claim) = accumulator.get_node_output_opening(self.computation_node.idx);
-        sum_claim
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
+        accessor.get_reduced_opening().1
     }
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -182,16 +181,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SumAxisProver
             ]
             .concat(),
         };
-        let operand_id = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(
-            transcript,
-            operand_id,
-            OpeningPoint::new(opening_point),
-            self.operand.final_sumcheck_claim(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, OpeningPoint::new(opening_point));
+        provider.append_node_io(Target::Input(0), self.operand.final_claim());
     }
 }
 
@@ -222,10 +214,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVeri
         accumulator: &VerifierOpeningAccumulator<F>,
         _sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[0],
-            self.params.computation_node.idx,
-        )
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
+        accessor.get_node_io(Target::Input(0)).1
     }
 
     fn cache_openings(
@@ -247,15 +237,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVeri
             ]
             .concat(),
         };
-        let operand_id = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(
-            transcript,
-            operand_id,
-            OpeningPoint::new(opening_point),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, OpeningPoint::new(opening_point));
+        provider.append_node_io(Target::Input(0));
     }
 }
 

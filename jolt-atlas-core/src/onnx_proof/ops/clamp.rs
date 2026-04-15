@@ -1,14 +1,11 @@
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
-    utils::opening_id_builder::{OpeningIdBuilder, OpeningTarget},
+    utils::opening_id_builder::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{node::ComputationNode, ops::Clamp};
 use joltworks::{
     field::JoltField,
-    poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::OpeningAccumulator,
-    },
+    poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
@@ -23,17 +20,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
         // TODO: Clamp
         // Currently this is just a dummy implementation that passes down an operand claim for the rest of the proof system
-        let (opening_point, _claim) = prover.accumulator.get_node_output_opening(node.idx);
+        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
+        let (opening_point, _claim) = accessor.get_reduced_opening();
         let operand = prover.trace.operand_tensors(node)[0];
         let operand_claim = MultilinearPolynomial::from(operand.clone()).evaluate(&opening_point.r);
-        let builder = OpeningIdBuilder::new(node);
-        let opening_id = builder.node_io(OpeningTarget::Input(0));
-        prover.accumulator.append_virtual(
-            &mut prover.transcript,
-            opening_id,
-            opening_point,
-            operand_claim,
-        );
+        let mut provider = accessor.to_provider(&mut prover.transcript, opening_point);
+        provider.append_node_io(Target::Input(0), operand_claim);
         vec![]
     }
 
@@ -43,12 +35,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        let (opening_point, _claim) = verifier.accumulator.get_node_output_opening(node.idx);
-        let builder = OpeningIdBuilder::new(node);
-        let opening_id = builder.node_io(OpeningTarget::Input(0));
-        verifier
-            .accumulator
-            .append_virtual(&mut verifier.transcript, opening_id, opening_point);
+        let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, node);
+        let (opening_point, _claim) = accessor.get_reduced_opening();
+        let mut provider = accessor.to_provider(&mut verifier.transcript, opening_point);
+        provider.append_node_io(Target::Input(0));
         Ok(())
     }
 }

@@ -1,7 +1,10 @@
 use common::parallel::par_enabled;
 use std::array;
 
-use crate::utils::opening_id_builder::{OpeningIdBuilder, OpeningTarget};
+use crate::utils::{
+    dims::EinsumDims,
+    opening_id_builder::{AccOpeningAccessor, Target},
+};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
@@ -26,8 +29,6 @@ use joltworks::{
 };
 use rayon::prelude::*;
 
-use crate::utils::dims::EinsumDims;
-
 // TODO: Add [DT24] opts
 
 const DEGREE_BOUND: usize = 3;
@@ -51,14 +52,12 @@ impl<F: JoltField> MbkNbkBmnParams<F> {
         einsum_dims: EinsumDims,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
-        let r_node_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
+        let r_node_output = accessor.get_reduced_opening().0;
         let log_b = einsum_dims.left_operand()[1].log_2();
         let log_k = einsum_dims.left_operand()[2].log_2();
         Self {
-            r_node_output: r_node_output.into(),
+            r_node_output,
             computation_node,
             einsum_dims,
             log_b,
@@ -73,8 +72,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MbkNbkBmnParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, einsum_claim) = accumulator.get_node_output_opening(self.computation_node.idx);
-        einsum_claim
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
+        accessor.get_reduced_opening().1
     }
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -196,7 +195,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MbkNbkBmnProv
         };
         // cache eq eval
         if round == self.params.log_b - 1 {
-            self.eq_rb_rh = Some(self.eq_r_b.final_sumcheck_claim());
+            self.eq_rb_rh = Some(self.eq_r_b.final_claim());
         }
     }
 
@@ -206,8 +205,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MbkNbkBmnProv
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let node = &self.params.computation_node;
-        let builder = OpeningIdBuilder::new(node);
         let sumcheck_challenges = sumcheck_challenges.into_opening();
         let (m, b) = (
             self.params.einsum_dims.left_operand()[0],
@@ -218,23 +215,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MbkNbkBmnProv
 
         let r_left_node_output = [r_m.r.as_slice(), &sumcheck_challenges].concat();
         let left_opening_point = self.params.normalize_opening_point(&r_left_node_output);
-        let left_opening_id = builder.node_io(OpeningTarget::Input(0));
-        accumulator.append_virtual(
-            transcript,
-            left_opening_id,
-            left_opening_point.clone(),
-            self.left_operand.final_sumcheck_claim(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, left_opening_point.clone());
+        provider.append_node_io(Target::Input(0), self.left_operand.final_claim());
 
         let r_right_node_output = [r_n.r.as_slice(), &sumcheck_challenges].concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right_node_output);
-        let right_opening_id = builder.node_io(OpeningTarget::Input(1));
-        accumulator.append_virtual(
-            transcript,
-            right_opening_id,
-            right_opening_point,
-            self.right_operand.final_sumcheck_claim(),
-        );
+        provider.update_point(right_opening_point);
+        provider.append_node_io(Target::Input(1), self.right_operand.final_claim());
     }
 }
 
@@ -266,17 +254,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MbkNbkBmnVe
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
         let b = self.params.einsum_dims.left_operand()[1];
         let (r_b, _) = self.params.r_node_output.split_at(b.log_2());
         let (r_h, _r_j) = sumcheck_challenges.split_at(self.params.log_b);
-        let left_operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[0],
-            self.params.computation_node.idx,
-        );
-        let right_operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[1],
-            self.params.computation_node.idx,
-        );
+        let left_operand_claim = accessor.get_node_io(Target::Input(0)).1;
+        let right_operand_claim = accessor.get_node_io(Target::Input(1)).1;
         left_operand_claim * right_operand_claim * EqPolynomial::mle(&r_b.r, r_h)
     }
 
@@ -286,8 +269,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MbkNbkBmnVe
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let node = &self.params.computation_node;
-        let builder = OpeningIdBuilder::new(node);
         let sumcheck_challenges = sumcheck_challenges.into_opening();
         let (m, b) = (
             self.params.einsum_dims.left_operand()[0],
@@ -298,13 +279,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MbkNbkBmnVe
 
         let r_left_node_output = [r_m.r.as_slice(), &sumcheck_challenges].concat();
         let left_opening_point = self.params.normalize_opening_point(&r_left_node_output);
-        let left_opening_id = builder.node_io(OpeningTarget::Input(0));
-        accumulator.append_virtual(transcript, left_opening_id, left_opening_point.clone());
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, left_opening_point.clone());
+        provider.append_node_io(Target::Input(0));
 
         let r_right_node_output = [r_n.r.as_slice(), &sumcheck_challenges].concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right_node_output);
-        let right_opening_id = builder.node_io(OpeningTarget::Input(1));
-        accumulator.append_virtual(transcript, right_opening_id, right_opening_point);
+        provider.update_point(right_opening_point);
+        provider.append_node_io(Target::Input(1));
     }
 }
 

@@ -1,17 +1,20 @@
-use crate::onnx_proof::{
-    ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
-    range_checking::{
-        range_check_operands::{RiRangeCheckOperands, RsRangeCheckOperands},
-        RangeCheckEncoding, RangeCheckProvider,
+use crate::{
+    onnx_proof::{
+        ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
+        range_checking::{
+            range_check_operands::{RiRangeCheckOperands, RsRangeCheckOperands},
+            RangeCheckEncoding, RangeCheckProvider,
+        },
+        ProofId, ProofType, Prover, Verifier,
     },
-    ProofId, ProofType, Prover, Verifier,
+    utils::opening_id_builder::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::Rsqrt,
 };
-use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
+use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 use joltworks::{
     field::{IntoOpening, JoltField},
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
@@ -19,13 +22,14 @@ use joltworks::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
-            CommittedOpeningId, OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator,
-            SumcheckId, VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
+            BIG_ENDIAN, LITTLE_ENDIAN,
         },
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
     },
     subprotocols::{
+        evaluation_reduction::EvalReductionProof,
         shout::{self, RaOneHotEncoding},
         sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
@@ -71,7 +75,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> (
-        joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+        EvalReductionProof<F>,
         Vec<(ProofId, SumcheckInstanceProof<F, T>)>,
     ) {
         let mut proofs = self.prove(node, prover);
@@ -106,20 +110,20 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
         &self,
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
-        eval_reduction_proof: &joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+        eval_reduction_proof: &EvalReductionProof<F>,
     ) -> Result<(), ProofVerifyError> {
         self.verify(node, verifier)?;
         NodeEvalReduction::verify(verifier, node, eval_reduction_proof)?;
         verify_range_and_onehot(node, verifier)
     }
 
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
-        let mut polys = vec![CommittedPolynomial::RsqrtNodeInv(node.idx)];
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        let mut polys = vec![CommittedPoly::RsqrtNodeInv(node.idx)];
         let encoding = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
         let d = encoding.one_hot_params().instruction_d;
         for i in 0..d {
-            polys.push(CommittedPolynomial::SqrtDivRangeCheckRaD(node.idx, i));
-            polys.push(CommittedPolynomial::SqrtRangeCheckRaD(node.idx, i));
+            polys.push(CommittedPoly::SqrtDivRangeCheckRaD(node.idx, i));
+            polys.push(CommittedPoly::SqrtRangeCheckRaD(node.idx, i));
         }
         polys
     }
@@ -333,56 +337,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RsqrtProver<F
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let left_operand_id = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(
-            transcript,
-            left_operand_id,
-            opening_point.clone(),
-            self.left_operand.final_sumcheck_claim(),
-        );
-        let inv_id = CommittedOpeningId::new(
-            CommittedPolynomial::RsqrtNodeInv(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_dense(
-            transcript,
-            inv_id,
-            opening_point.r.clone(),
-            self.inv.final_sumcheck_claim(),
-        );
-        let rsqrt_id = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(
-            transcript,
-            rsqrt_id,
-            opening_point.clone(),
-            self.rsqrt.final_sumcheck_claim(),
-        );
-        let r_i_id = VirtualOpeningId::new(
-            VirtualPolynomial::DivRemainder(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(
-            transcript,
-            r_i_id,
-            opening_point.clone(),
-            self.r_i.final_sumcheck_claim(),
-        );
-        let r_s_id = VirtualOpeningId::new(
-            VirtualPolynomial::SqrtRemainder(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(
-            transcript,
-            r_s_id,
-            opening_point.clone(),
-            self.r_s.final_sumcheck_claim(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, opening_point);
+
+        provider.append_node_io(Target::Input(0), self.left_operand.final_claim());
+        provider.append_advice(CommittedPoly::RsqrtNodeInv, self.inv.final_claim());
+        provider.append_node_io(Target::Current, self.rsqrt.final_claim());
+        provider.append_advice(VirtualPoly::DivRemainder, self.r_i.final_claim());
+        provider.append_advice(VirtualPoly::SqrtRemainder, self.r_s.final_claim());
     }
 }
 
@@ -414,36 +376,21 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RsqrtVerifi
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let r_node_output = self.params.r_node_output.r.clone();
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
+
+        let r_node_output = &self.params.r_node_output.r;
         let r_node_output_prime = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
-        let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
-        let inv_id = CommittedOpeningId::new(
-            CommittedPolynomial::RsqrtNodeInv(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        let inv_claim = accumulator.get_committed_polynomial_opening(inv_id).1;
-        let r_i_id = VirtualOpeningId::new(
-            VirtualPolynomial::DivRemainder(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        let r_i_claim = accumulator.get_virtual_polynomial_opening(r_i_id).1;
-        let rsqrt_id = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        let rsqrt_claim = accumulator.get_virtual_polynomial_opening(rsqrt_id).1;
-        let r_s_id = VirtualOpeningId::new(
-            VirtualPolynomial::SqrtRemainder(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        let r_s_claim = accumulator.get_virtual_polynomial_opening(r_s_id).1;
-        let left_operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[0],
-            self.params.computation_node.idx,
-        );
+        let eq_eval = EqPolynomial::mle(r_node_output, &r_node_output_prime);
+
+        let inv_claim = accessor.get_advice(CommittedPoly::RsqrtNodeInv).1;
+        let r_i_claim = accessor.get_advice(VirtualPoly::DivRemainder).1;
+        let rsqrt_claim = accessor.get_node_io(Target::Current).1;
+        let r_s_claim = accessor.get_advice(VirtualPoly::SqrtRemainder).1;
+        let left_operand_claim = accessor.get_node_io(Target::Input(0)).1;
+
         eq_eval
             * (left_operand_claim * inv_claim + r_i_claim - F::from_i32(Q_SQUARE)
                 + self.gamma * (rsqrt_claim * rsqrt_claim + r_s_claim - F::from_i32(Q) * inv_claim))
@@ -458,31 +405,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RsqrtVerifi
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let left_operand_id = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(transcript, left_operand_id, opening_point.clone());
-        let inv_id = CommittedOpeningId::new(
-            CommittedPolynomial::RsqrtNodeInv(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_dense(transcript, inv_id, opening_point.r.clone());
-        let rsqrt_id = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(transcript, rsqrt_id, opening_point.clone());
-        let r_i_id = VirtualOpeningId::new(
-            VirtualPolynomial::DivRemainder(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(transcript, r_i_id, opening_point.clone());
-        let r_s_id = VirtualOpeningId::new(
-            VirtualPolynomial::SqrtRemainder(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(transcript, r_s_id, opening_point.clone());
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, opening_point);
+
+        provider.append_node_io(Target::Input(0));
+        provider.append_advice(CommittedPoly::RsqrtNodeInv);
+        provider.append_node_io(Target::Current);
+        provider.append_advice(VirtualPoly::DivRemainder);
+        provider.append_advice(VirtualPoly::SqrtRemainder);
     }
 }
 

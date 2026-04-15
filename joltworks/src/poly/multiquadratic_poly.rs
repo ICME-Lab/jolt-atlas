@@ -376,7 +376,7 @@ impl<F: JoltField> PolynomialBinding<F> for MultiquadraticPolynomial<F> {
         self.bind(r, order);
     }
 
-    fn final_sumcheck_claim(&self) -> F {
+    fn final_claim(&self) -> F {
         debug_assert!(self.is_bound());
         debug_assert_eq!(self.evals.len(), 1);
         self.evals[0]

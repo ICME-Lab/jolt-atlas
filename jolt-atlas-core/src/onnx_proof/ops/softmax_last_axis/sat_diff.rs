@@ -8,15 +8,17 @@
 //! `z_c = min(z, z_bound − 1)`: either sat_diff = 0 (unsaturated) or
 //! z_c = z_bound − 1 (saturated).
 
-use common::VirtualPolynomial;
+use crate::utils::opening_id_builder::AccOpeningAccessor;
+use atlas_onnx_tracer::node::ComputationNode;
+use common::VirtualPoly;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
+            BIG_ENDIAN, LITTLE_ENDIAN,
         },
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
@@ -37,10 +39,10 @@ const DEGREE_BOUND: usize = 3;
 /// Shared prover / verifier parameters for the complementary-slackness sumcheck.
 #[derive(Clone)]
 pub struct SatDiffSlacknessParams<F: JoltField> {
+    /// Computation node reference.
+    node: ComputationNode,
     /// The eq-binding point r₁ (from the Stage 1 exp-sum challenge).
     r1: Vec<F>,
-    /// Computation node index.
-    computation_node_index: usize,
     /// `z_bound − 1` as a field element (= K_hi * B − 1).
     z_bound_minus_1: F,
     /// Base `B` as a field element.
@@ -52,22 +54,19 @@ pub struct SatDiffSlacknessParams<F: JoltField> {
 impl<F: JoltField> SatDiffSlacknessParams<F> {
     /// Create new CS params, reading r₁ from the accumulator.
     pub fn new(
-        computation_node_index: usize,
+        node: ComputationNode,
         z_bound_minus_1: u64,
         base: u64,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
-        let r1 = accumulator
-            .get_virtual_polynomial_opening(VirtualOpeningId::new(
-                VirtualPolynomial::SoftmaxExpQ(computation_node_index),
-                SumcheckId::NodeExecution(computation_node_index),
-            ))
+        let r1 = AccOpeningAccessor::new(accumulator, &node)
+            .get_advice(VirtualPoly::SoftmaxExpQ)
             .0
             .r;
         let num_vars = r1.len();
         Self {
             r1,
-            computation_node_index,
+            node,
             z_bound_minus_1: F::from_u64(z_bound_minus_1),
             base: F::from_u64(base),
             num_vars,
@@ -174,27 +173,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SatDiffSlackn
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let idx = self.params.computation_node_index;
-        let sid = SumcheckId::NodeExecution(idx);
-
-        accumulator.append_virtual(
-            transcript,
-            VirtualOpeningId::new(VirtualPolynomial::SoftmaxSatDiff(idx), sid),
-            opening_point.clone(),
-            self.sat_diff.final_sumcheck_claim(),
-        );
-        accumulator.append_virtual(
-            transcript,
-            VirtualOpeningId::new(VirtualPolynomial::SoftmaxZHi(idx), sid),
-            opening_point.clone(),
-            self.z_hi.final_sumcheck_claim(),
-        );
-        accumulator.append_virtual(
-            transcript,
-            VirtualOpeningId::new(VirtualPolynomial::SoftmaxZLo(idx), sid),
-            opening_point,
-            self.z_lo.final_sumcheck_claim(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
+            .to_provider(transcript, opening_point);
+        provider.append_advice(VirtualPoly::SoftmaxSatDiff, self.sat_diff.final_claim());
+        provider.append_advice(VirtualPoly::SoftmaxZHi, self.z_hi.final_claim());
+        provider.append_advice(VirtualPoly::SoftmaxZLo, self.z_lo.final_claim());
     }
 }
 
@@ -210,13 +193,12 @@ pub struct SatDiffSlacknessVerifier<F: JoltField> {
 impl<F: JoltField> SatDiffSlacknessVerifier<F> {
     /// Create a new SatDiff verifier.
     pub fn new(
-        computation_node_index: usize,
+        node: ComputationNode,
         z_bound_minus_1: u64,
         base: u64,
         accumulator: &VerifierOpeningAccumulator<F>,
     ) -> Self {
-        let params =
-            SatDiffSlacknessParams::new(computation_node_index, z_bound_minus_1, base, accumulator);
+        let params = SatDiffSlacknessParams::new(node, z_bound_minus_1, base, accumulator);
         Self { params }
     }
 }
@@ -235,24 +217,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SatDiffSlac
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let idx = self.params.computation_node_index;
-        let sid = SumcheckId::NodeExecution(idx);
-
-        accumulator.append_virtual(
-            transcript,
-            VirtualOpeningId::new(VirtualPolynomial::SoftmaxSatDiff(idx), sid),
-            opening_point.clone(),
-        );
-        accumulator.append_virtual(
-            transcript,
-            VirtualOpeningId::new(VirtualPolynomial::SoftmaxZHi(idx), sid),
-            opening_point.clone(),
-        );
-        accumulator.append_virtual(
-            transcript,
-            VirtualOpeningId::new(VirtualPolynomial::SoftmaxZLo(idx), sid),
-            opening_point,
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
+            .to_provider(transcript, opening_point);
+        provider.append_advice(VirtualPoly::SoftmaxSatDiff);
+        provider.append_advice(VirtualPoly::SoftmaxZHi);
+        provider.append_advice(VirtualPoly::SoftmaxZLo);
     }
 
     fn expected_output_claim(
@@ -260,33 +229,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SatDiffSlac
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let idx = self.params.computation_node_index;
-        let sid = SumcheckId::NodeExecution(idx);
-
         let r2: Vec<F> = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
 
         // Read the prover's claimed evaluations at r₂.
-        let sat_diff_claim = accumulator
-            .get_virtual_polynomial_opening(VirtualOpeningId::new(
-                VirtualPolynomial::SoftmaxSatDiff(idx),
-                sid,
-            ))
-            .1;
-        let z_hi_claim = accumulator
-            .get_virtual_polynomial_opening(VirtualOpeningId::new(
-                VirtualPolynomial::SoftmaxZHi(idx),
-                sid,
-            ))
-            .1;
-        let z_lo_claim = accumulator
-            .get_virtual_polynomial_opening(VirtualOpeningId::new(
-                VirtualPolynomial::SoftmaxZLo(idx),
-                sid,
-            ))
-            .1;
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.node);
+        let sat_diff_claim = accessor.get_advice(VirtualPoly::SoftmaxSatDiff).1;
+        let z_hi_claim = accessor.get_advice(VirtualPoly::SoftmaxZHi).1;
+        let z_lo_claim = accessor.get_advice(VirtualPoly::SoftmaxZLo).1;
 
         // complement(r_2) = z_bound − 1 − z_hi(r_2) * B − z_lo(r_2)
         let complement = self.params.z_bound_minus_1 - z_hi_claim * self.params.base - z_lo_claim;

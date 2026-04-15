@@ -7,7 +7,7 @@
 
 use crate::{
     onnx_proof::{malicious_prover::malicious_sumcheck_prove, ProofId, ProofType, Prover},
-    utils::opening_id_builder::{OpeningIdBuilder, OpeningTarget},
+    utils::opening_id_builder::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
@@ -121,16 +121,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaliciousSubP
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let node = &self.params.computation_node;
-        let builder = OpeningIdBuilder::new(node);
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
 
         // Malicious behavior: forge virtual operand claims while preserving the
         // same subtraction difference, so expected_output_claim remains unchanged.
-        let left_claim = self.left_operand.final_sumcheck_claim();
-        let right_claim = self.right_operand.final_sumcheck_claim();
+        let left_claim = self.left_operand.final_claim();
+        let right_claim = self.right_operand.final_claim();
         let final_claim = self
             .final_claim
             .expect("final_claim must be set before cache_openings");
@@ -154,17 +152,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaliciousSubP
             forged_left - final_claim * inv
         };
         debug_assert_eq!(final_claim, eq_eval * (forged_left - forged_right));
-        let left_opening_id = builder.node_io(OpeningTarget::Input(0));
-        let right_opening_id = builder.node_io(OpeningTarget::Input(1));
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, opening_point);
 
-        // Use append_virtual with forged claims. This inserts into openings
-        // and appends to transcript, keeping prover/verifier in sync.
-        accumulator.append_virtual(
-            transcript,
-            left_opening_id,
-            opening_point.clone(),
-            forged_left,
-        );
-        accumulator.append_virtual(transcript, right_opening_id, opening_point, forged_right);
+        // Insert forged claims while keeping transcript/opener state consistent.
+        provider.append_node_io(Target::Input(0), forged_left);
+        provider.append_node_io(Target::Input(1), forged_right);
     }
 }

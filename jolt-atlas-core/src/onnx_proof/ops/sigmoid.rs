@@ -1,19 +1,20 @@
+use crate::onnx_proof::neural_teleport::{
+    division::{
+        compute_division, TeleportDivisionParams, TeleportDivisionProver, TeleportDivisionVerifier,
+    },
+    n_bits_to_usize,
+    range_and_onehot::{
+        prove_range_and_onehot, verify_range_and_onehot, NeuralTeleportRangeOneHot,
+    },
+    utils::compute_ra_evals_nbits_2comp,
+    SigmoidTable,
+};
 use crate::onnx_proof::{
-    neural_teleport::{
-        division::{
-            compute_division, TeleportDivisionParams, TeleportDivisionProver,
-            TeleportDivisionVerifier,
-        },
-        n_bits_to_usize,
-        utils::compute_ra_evals_nbits_2comp,
-        SigmoidTable,
-    },
     ops::OperatorProofTrait,
-    range_checking::{
-        range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
-    },
+    range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding},
     ProofId, ProofType, Prover, Verifier,
 };
+use crate::utils::opening_id_builder::AccOpeningAccessor;
 use atlas_onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
@@ -23,25 +24,24 @@ use atlas_onnx_tracer::{
     ops::Sigmoid,
 };
 use common::parallel::par_enabled;
-use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
+use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::{IntoOpening, JoltField},
-    lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
+            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         teleport_id_poly::TeleportIdPolynomial,
         unipoly::UniPoly,
     },
     subprotocols::{
-        shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
+        shout::RaOneHotEncoding,
+        sumcheck::{Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -91,68 +91,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sigmoid {
         );
         results.push((ProofId(node.idx, ProofType::Execution), exec_proof));
 
-        let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
-        let input = operands[0];
-
-        // Compute quotient for neural teleportation
-        let (quotient, _remainder) = compute_division(input, self.tau);
-        let lookup_indices = quotient
-            .par_iter()
-            .with_min_len(par_enabled())
-            .map(|&x| n_bits_to_usize(x, self.log_table))
-            .collect::<Vec<usize>>();
-
-        // Stage 2: Range check proof for division and first One-Hot checks for SigmoidRa
-        let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-        let (rangecheck_sumcheck, rc_lookup_indices) = rangecheck_provider
-            .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
-                &prover.trace,
-                &mut prover.accumulator,
-                &mut prover.transcript,
-            );
-        let sigmoid_encoding = SigmoidRaEncoding {
-            node_idx: node.idx,
-            log_table: self.log_table,
-        };
-        let ra_onehot_provers = shout::ra_onehot_provers(
-            &sigmoid_encoding,
-            &lookup_indices,
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-            vec![Box::new(rangecheck_sumcheck)];
-        instances.extend(ra_onehot_provers);
-
-        let (sigmoid_ra_one_hot_proof, _) = BatchedSumcheck::prove(
-            instances.iter_mut().map(|v| &mut **v as _).collect(),
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        results.push((
-            ProofId(node.idx, ProofType::RaOneHotChecks),
-            sigmoid_ra_one_hot_proof,
-        ));
-
-        // Stage 3: one-hot checks for division
-        let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-        let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_provers(
-            &rc_encoding,
-            &rc_lookup_indices,
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![rc_ra, rc_hw, rc_bool];
-        let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
-            instances.iter_mut().map(|v| &mut **v as _).collect(),
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        results.push((
-            ProofId(node.idx, ProofType::RaHammingWeight),
-            ra_one_hot_proof,
-        ));
+        results.extend(prove_range_and_onehot(node, prover, self));
 
         results
     }
@@ -197,61 +136,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sigmoid {
             &mut verifier.transcript,
         )?;
 
-        // Stage 2: Range check verification for division and first One-Hot checks for SigmoidRa
-        let sigmoid_ra_one_hot_proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-
-        let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-        let rangecheck_verifier = rangecheck_provider
-            .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
-                &mut verifier.accumulator,
-                &mut verifier.transcript,
-            );
-        let sigmoid_encoding = SigmoidRaEncoding {
-            node_idx: node.idx,
-            log_table: self.log_table,
-        };
-        let ra_onehot_verifier = shout::ra_onehot_verifiers(
-            &sigmoid_encoding,
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        );
-        let ra_onehot_verifier: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
-            ra_onehot_verifier.iter().map(|v| &**v as _).collect();
-        let mut instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = vec![&rangecheck_verifier];
-        instances.extend(ra_onehot_verifier);
-        BatchedSumcheck::verify(
-            sigmoid_ra_one_hot_proof,
-            instances,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        // Stage 3: one-hot check verification for division
-        let ra_one_hot_proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::RaHammingWeight))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-
-        let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-        let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_verifiers(
-            &rc_encoding,
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        );
-        BatchedSumcheck::verify(
-            ra_one_hot_proof,
-            vec![&*rc_ra, &*rc_hw, &*rc_bool],
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
+        verify_range_and_onehot(node, verifier, self)?;
 
         Ok(())
     }
 
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
         let sigmoid_encoding = SigmoidRaEncoding {
             node_idx: node.idx,
             log_table: NEURAL_TELEPORT_LOG_TABLE_SIZE,
@@ -260,8 +150,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sigmoid {
         let sigmoid_d = sigmoid_encoding.one_hot_params().instruction_d;
         let rc_d = rc_encoding.one_hot_params().instruction_d;
         let mut polys = vec![];
-        polys.extend((0..sigmoid_d).map(|i| CommittedPolynomial::SigmoidRaD(node.idx, i)));
-        polys.extend((0..rc_d).map(|i| CommittedPolynomial::TeleportRangeCheckRaD(node.idx, i)));
+        polys.extend((0..sigmoid_d).map(|i| CommittedPoly::SigmoidRaD(node.idx, i)));
+        polys.extend((0..rc_d).map(|i| CommittedPoly::TeleportRangeCheckRaD(node.idx, i)));
         polys
     }
 }
@@ -298,15 +188,13 @@ impl<F: JoltField> SigmoidParams<F> {
         transcript: &mut impl Transcript,
         op: Sigmoid,
     ) -> Self {
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let gamma = transcript.challenge_scalar();
-        let r_node_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+        let r_node_output = accessor.get_reduced_opening().0;
 
         Self {
             gamma,
-            r_node_output: r_node_output.into(),
+            r_node_output,
             computation_node,
             op,
             _marker: core::marker::PhantomData,
@@ -320,15 +208,14 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SigmoidParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let rv_claim = accumulator
-            .get_node_output_opening(self.computation_node.idx)
-            .1;
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
+        let rv_claim = accessor.get_reduced_opening().1;
 
-        let quotient_id = VirtualOpeningId::new(
-            VirtualPolynomial::TeleportQuotient(self.computation_node.idx),
+        let quotient_id = OpeningId::new(
+            VirtualPoly::TeleportQuotient(self.computation_node.idx),
             SumcheckId::Raf,
         );
-        let quotient_claim = accumulator.get_virtual_polynomial_opening(quotient_id).1;
+        let quotient_claim = accessor.get_custom(quotient_id).1;
 
         rv_claim + self.gamma * quotient_claim
     }
@@ -393,11 +280,14 @@ impl<F: JoltField> SigmoidProver<F> {
         // TODO(ClankPan): Follow up on the TODOs in tanh.rs.
         let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data())
             .evaluate(&params.r_node_output.r);
-        let quotient_id = VirtualOpeningId::new(
-            VirtualPolynomial::TeleportQuotient(params.computation_node.idx),
+        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
+            .to_provider(transcript, params.r_node_output.clone());
+        // TODO(AntoineF4C5): Clean once #208 is dealt with
+        let quotient_opening_id = OpeningId::new(
+            VirtualPoly::TeleportQuotient(params.computation_node.idx),
             SumcheckId::Raf,
         );
-        accumulator.append_virtual(transcript, quotient_id, params.r_node_output.clone(), quotient_claim);
+        provider.append_custom(quotient_opening_id, quotient_claim);
 
         let input_onehot = MultilinearPolynomial::from(input_onehot);
         assert_eq!(input_onehot.len(), sigmoid_table.len());
@@ -466,16 +356,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SigmoidProver
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let r = [opening_point.r.as_slice(), &self.params.r_node_output.r].concat();
-        let sigmoid_ra_id = VirtualOpeningId::new(
-            VirtualPolynomial::SigmoidRa(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(
-            transcript,
-            sigmoid_ra_id,
-            OpeningPoint::new(r),
-            self.input_onehot.final_sumcheck_claim(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, OpeningPoint::new(r));
+        provider.append_advice(VirtualPoly::SigmoidRa, self.input_onehot.final_claim());
     }
 }
 
@@ -502,12 +385,14 @@ impl<F: JoltField> SigmoidVerifier<F> {
         op: Sigmoid,
     ) -> Self {
         let params = SigmoidParams::new(computation_node, graph, accumulator, transcript, op);
-
-        let quotient_id = VirtualOpeningId::new(
-            VirtualPolynomial::TeleportQuotient(params.computation_node.idx),
+        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
+            .to_provider(transcript, params.r_node_output.clone());
+        // TODO(AntoineF4C5): Clean once #208 is dealt with
+        let quotient_opening_id = OpeningId::new(
+            VirtualPoly::TeleportQuotient(params.computation_node.idx),
             SumcheckId::Raf,
         );
-        accumulator.append_virtual(transcript, quotient_id, params.r_node_output.clone());
+        provider.append_custom(quotient_opening_id);
 
         let sigmoid_table = SigmoidTable::new(params.op.log_table, params.op.tau);
         let sigmoid_table = MultilinearPolynomial::from(sigmoid_table.materialize());
@@ -529,15 +414,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SigmoidVeri
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
 
-        let sigmoid_ra_id = VirtualOpeningId::new(
-            VirtualPolynomial::SigmoidRa(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        let ra_claim = accumulator.get_virtual_polynomial_opening(sigmoid_ra_id).1;
+        let ra_claim = accessor.get_advice(VirtualPoly::SigmoidRa).1;
 
         // Evaluate sigmoid table at the opening point
         let table_claim = self.sigmoid_table.evaluate(&opening_point.r);
@@ -558,11 +440,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SigmoidVeri
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let r = [opening_point.r.as_slice(), &self.params.r_node_output.r].concat();
-        let sigmoid_ra_id = VirtualOpeningId::new(
-            VirtualPolynomial::SigmoidRa(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(transcript, sigmoid_ra_id, OpeningPoint::new(r));
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, OpeningPoint::new(r));
+        provider.append_advice(VirtualPoly::SigmoidRa);
     }
 }
 
@@ -581,20 +461,20 @@ pub struct SigmoidRaEncoding {
 }
 
 impl RaOneHotEncoding for SigmoidRaEncoding {
-    fn committed_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::SigmoidRaD(self.node_idx, d)
+    fn committed_poly(&self, d: usize) -> CommittedPoly {
+        CommittedPoly::SigmoidRaD(self.node_idx, d)
     }
 
-    fn r_cycle_source(&self) -> VirtualOpeningId {
-        VirtualOpeningId::new(
-            VirtualPolynomial::TeleportQuotient(self.node_idx),
+    fn r_cycle_source(&self) -> OpeningId {
+        OpeningId::new(
+            VirtualPoly::TeleportQuotient(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
 
-    fn ra_source(&self) -> VirtualOpeningId {
-        VirtualOpeningId::new(
-            VirtualPolynomial::SigmoidRa(self.node_idx),
+    fn ra_source(&self) -> OpeningId {
+        OpeningId::new(
+            VirtualPoly::SigmoidRa(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
@@ -605,6 +485,27 @@ impl RaOneHotEncoding for SigmoidRaEncoding {
 
     fn one_hot_params(&self) -> OneHotParams {
         OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.log_table)
+    }
+}
+
+impl<F: JoltField, T: Transcript> NeuralTeleportRangeOneHot<F, T> for Sigmoid {
+    type RaEncoding = SigmoidRaEncoding;
+
+    fn lookup_indices(&self, node: &ComputationNode, trace: &Trace) -> Vec<usize> {
+        let LayerData { operands, .. } = Trace::layer_data(trace, node);
+        let input = operands[0];
+        let (quotient, _remainder) = compute_division(input, self.tau);
+        quotient
+            .par_iter()
+            .map(|&x| n_bits_to_usize(x, self.log_table))
+            .collect()
+    }
+
+    fn ra_encoding(&self, node: &ComputationNode) -> Self::RaEncoding {
+        SigmoidRaEncoding {
+            node_idx: node.idx,
+            log_table: self.log_table,
+        }
     }
 }
 

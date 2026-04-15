@@ -8,7 +8,7 @@ use crate::{
 };
 use ark_bn254::Bn254;
 use ark_std::UniformRand;
-use common::CommittedPolynomial;
+use common::CommittedPoly;
 use rand::Rng;
 use rand_core::SeedableRng;
 use std::collections::BTreeMap;
@@ -304,9 +304,9 @@ fn test_hyperkzg_batch_dense_oh() {
 
     // Build RLCPolynomial manually
     let polynomial_map = BTreeMap::from([
-        (CommittedPolynomial::DivNodeQuotient(0), dense_poly.clone()),
+        (CommittedPoly::DivNodeQuotient(0), dense_poly.clone()),
         (
-            CommittedPolynomial::DivNodeQuotient(1),
+            CommittedPoly::DivNodeQuotient(1),
             MultilinearPolynomial::OneHot(one_hot_poly.clone()),
         ),
     ]);
@@ -432,14 +432,14 @@ fn test_hyperkzg_batch_3dense_3oh() {
             .iter()
             .map(|data| MultilinearPolynomial::OneHot(data.poly.clone())),
     );
-    let mut all_polys: Vec<(CommittedPolynomial, MultilinearPolynomial<Fr>)> = dense_polys
+    let mut all_polys: Vec<(CommittedPoly, MultilinearPolynomial<Fr>)> = dense_polys
         .iter()
         .enumerate()
-        .map(|(i, data)| (CommittedPolynomial::DivNodeQuotient(i), data.poly.clone()))
+        .map(|(i, data)| (CommittedPoly::DivNodeQuotient(i), data.poly.clone()))
         .collect();
     all_polys.extend(oh_polys.iter().enumerate().map(|(i, data)| {
         (
-            CommittedPolynomial::RsqrtNodeInv(i), // make sure RsqrtNodeInv comes after DivNodeQuotient in Ordering
+            CommittedPoly::RsqrtNodeInv(i), // make sure RsqrtNodeInv comes after DivNodeQuotient in Ordering
             MultilinearPolynomial::OneHot(data.poly.clone()),
         )
     }));

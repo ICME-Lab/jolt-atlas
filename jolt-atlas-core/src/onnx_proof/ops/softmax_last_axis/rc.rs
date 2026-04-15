@@ -1,10 +1,10 @@
-use common::{CommittedPolynomial, VirtualPolynomial};
+use crate::utils::opening_id_builder::AccOpeningAccessor;
+use atlas_onnx_tracer::node::ComputationNode;
+use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::JoltField,
-    poly::opening_proof::{
-        OpeningAccumulator, OpeningPoint, SumcheckId, VirtualOpeningId, BIG_ENDIAN,
-    },
+    poly::opening_proof::{OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, BIG_ENDIAN},
     subprotocols::{identity_range_check::IdentityRCProvider, shout::RaOneHotEncoding},
 };
 
@@ -24,55 +24,51 @@ pub const SAT_DIFF_RC_BITS: usize = 32;
 /// parameterises that pattern via function pointers to the relevant
 /// `VirtualPolynomial` constructors.
 pub struct SoftmaxRCProvider {
-    /// Index of the computation node.
-    pub node_idx: usize,
+    /// Computation node reference.
+    pub node: ComputationNode,
     log_k: usize,
     /// Virtual polynomial for the claim value and cycle point.
-    source_vp: fn(usize) -> VirtualPolynomial,
+    source_vp: fn(usize) -> VirtualPoly,
     /// Virtual polynomial for the ra decomposition.
-    ra_vp: fn(usize) -> VirtualPolynomial,
+    ra_vp: fn(usize) -> VirtualPoly,
 }
 
 impl SoftmaxRCProvider {
     /// Range-check for reciprocal-multiplication remainders (`R[k,j] ∈ [0, S)`).
-    pub fn remainder(node_idx: usize, scale: i32) -> Self {
+    pub fn remainder(node: ComputationNode, scale: i32) -> Self {
         Self {
-            node_idx,
+            node,
             log_k: scale as usize,
-            source_vp: VirtualPolynomial::SoftmaxRecipMultRemainder,
-            ra_vp: VirtualPolynomial::SoftmaxRemainderRa,
+            source_vp: VirtualPoly::SoftmaxRecipMultRemainder,
+            ra_vp: VirtualPoly::SoftmaxRemainderRa,
         }
     }
 
     /// Range-check for exponentiation remainders (`r_exp[k,j] ∈ [0, S)`).
-    pub fn exp_remainder(node_idx: usize, scale: i32) -> Self {
+    pub fn exp_remainder(node: ComputationNode, scale: i32) -> Self {
         Self {
-            node_idx,
+            node,
             log_k: scale as usize,
-            source_vp: VirtualPolynomial::SoftmaxExpRemainder,
-            ra_vp: VirtualPolynomial::SoftmaxExpRemainderRa,
+            source_vp: VirtualPoly::SoftmaxExpRemainder,
+            ra_vp: VirtualPoly::SoftmaxExpRemainderRa,
         }
     }
 
     /// Range-check for saturation-diff values (`sat_diff[k,j] ∈ [0, 2^D)`).
-    pub fn sat_diff(node_idx: usize) -> Self {
+    pub fn sat_diff(node: ComputationNode) -> Self {
         Self {
-            node_idx,
+            node,
             log_k: SAT_DIFF_RC_BITS,
-            source_vp: VirtualPolynomial::SoftmaxSatDiff,
-            ra_vp: VirtualPolynomial::SoftmaxSatDiffRa,
+            source_vp: VirtualPoly::SoftmaxSatDiff,
+            ra_vp: VirtualPoly::SoftmaxSatDiffRa,
         }
     }
 }
 
 impl<F: JoltField> IdentityRCProvider<F> for SoftmaxRCProvider {
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        accumulator
-            .get_virtual_polynomial_opening(VirtualOpeningId::new(
-                (self.source_vp)(self.node_idx),
-                SumcheckId::NodeExecution(self.node_idx),
-            ))
-            .1
+        let accessor = AccOpeningAccessor::new(accumulator, &self.node);
+        accessor.get_advice(self.source_vp).1
     }
 
     fn log_K(&self) -> usize {
@@ -80,18 +76,14 @@ impl<F: JoltField> IdentityRCProvider<F> for SoftmaxRCProvider {
     }
 
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
-        accumulator
-            .get_virtual_polynomial_opening(VirtualOpeningId::new(
-                (self.source_vp)(self.node_idx),
-                SumcheckId::NodeExecution(self.node_idx),
-            ))
-            .0
+        let accessor = AccOpeningAccessor::new(accumulator, &self.node);
+        accessor.get_advice(self.source_vp).0
     }
 
-    fn ra_poly(&self) -> (VirtualPolynomial, SumcheckId) {
+    fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
         (
-            (self.ra_vp)(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
+            (self.ra_vp)(self.node.idx),
+            SumcheckId::NodeExecution(self.node.idx),
         )
     }
 }
@@ -110,10 +102,10 @@ pub struct SoftmaxRaEncoding {
     /// Index of the computation node.
     pub node_idx: usize,
     log_k: usize,
-    committed_poly_fn: fn(usize, usize) -> CommittedPolynomial,
-    r_cycle_vp: fn(usize) -> VirtualPolynomial,
+    committed_poly_fn: fn(usize, usize) -> CommittedPoly,
+    r_cycle_vp: fn(usize) -> VirtualPoly,
     r_cycle_sc_id: SumcheckId,
-    ra_vp: fn(usize) -> VirtualPolynomial,
+    ra_vp: fn(usize) -> VirtualPoly,
 }
 
 impl SoftmaxRaEncoding {
@@ -123,10 +115,10 @@ impl SoftmaxRaEncoding {
         Self {
             node_idx,
             log_k: scale as usize,
-            committed_poly_fn: CommittedPolynomial::SoftmaxRemainderRaD,
-            r_cycle_vp: VirtualPolynomial::NodeOutput,
+            committed_poly_fn: CommittedPoly::SoftmaxRemainderRaD,
+            r_cycle_vp: VirtualPoly::NodeOutput,
             r_cycle_sc_id: SumcheckId::NodeExecution(node_idx),
-            ra_vp: VirtualPolynomial::SoftmaxRemainderRa,
+            ra_vp: VirtualPoly::SoftmaxRemainderRa,
         }
     }
 
@@ -135,10 +127,10 @@ impl SoftmaxRaEncoding {
         Self {
             node_idx,
             log_k: scale as usize,
-            committed_poly_fn: CommittedPolynomial::SoftmaxExpRemainderRaD,
-            r_cycle_vp: VirtualPolynomial::SoftmaxExpQ,
+            committed_poly_fn: CommittedPoly::SoftmaxExpRemainderRaD,
+            r_cycle_vp: VirtualPoly::SoftmaxExpQ,
             r_cycle_sc_id: SumcheckId::NodeExecution(node_idx),
-            ra_vp: VirtualPolynomial::SoftmaxExpRemainderRa,
+            ra_vp: VirtualPoly::SoftmaxExpRemainderRa,
         }
     }
 
@@ -147,10 +139,10 @@ impl SoftmaxRaEncoding {
         Self {
             node_idx,
             log_k: SAT_DIFF_RC_BITS,
-            committed_poly_fn: CommittedPolynomial::SoftmaxSatDiffRaD,
-            r_cycle_vp: VirtualPolynomial::SoftmaxSatDiff,
+            committed_poly_fn: CommittedPoly::SoftmaxSatDiffRaD,
+            r_cycle_vp: VirtualPoly::SoftmaxSatDiff,
             r_cycle_sc_id: SumcheckId::NodeExecution(node_idx),
-            ra_vp: VirtualPolynomial::SoftmaxSatDiffRa,
+            ra_vp: VirtualPoly::SoftmaxSatDiffRa,
         }
     }
 
@@ -159,10 +151,10 @@ impl SoftmaxRaEncoding {
         Self {
             node_idx,
             log_k: log_table_size,
-            committed_poly_fn: CommittedPolynomial::SoftmaxZHiRaD,
-            r_cycle_vp: VirtualPolynomial::SoftmaxExpHi,
+            committed_poly_fn: CommittedPoly::SoftmaxZHiRaD,
+            r_cycle_vp: VirtualPoly::SoftmaxExpHi,
             r_cycle_sc_id: SumcheckId::NodeExecution(node_idx),
-            ra_vp: VirtualPolynomial::SoftmaxZHiRa,
+            ra_vp: VirtualPoly::SoftmaxZHiRa,
         }
     }
 
@@ -171,25 +163,25 @@ impl SoftmaxRaEncoding {
         Self {
             node_idx,
             log_k: log_table_size,
-            committed_poly_fn: CommittedPolynomial::SoftmaxZLoRaD,
-            r_cycle_vp: VirtualPolynomial::SoftmaxExpLo,
+            committed_poly_fn: CommittedPoly::SoftmaxZLoRaD,
+            r_cycle_vp: VirtualPoly::SoftmaxExpLo,
             r_cycle_sc_id: SumcheckId::NodeExecution(node_idx),
-            ra_vp: VirtualPolynomial::SoftmaxZLoRa,
+            ra_vp: VirtualPoly::SoftmaxZLoRa,
         }
     }
 }
 
 impl RaOneHotEncoding for SoftmaxRaEncoding {
-    fn committed_poly(&self, d: usize) -> CommittedPolynomial {
+    fn committed_poly(&self, d: usize) -> CommittedPoly {
         (self.committed_poly_fn)(self.node_idx, d)
     }
 
-    fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        ((self.r_cycle_vp)(self.node_idx), self.r_cycle_sc_id)
+    fn r_cycle_source(&self) -> OpeningId {
+        OpeningId::new((self.r_cycle_vp)(self.node_idx), self.r_cycle_sc_id)
     }
 
-    fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (
+    fn ra_source(&self) -> OpeningId {
+        OpeningId::new(
             (self.ra_vp)(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )

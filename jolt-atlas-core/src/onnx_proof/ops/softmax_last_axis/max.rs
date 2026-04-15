@@ -1,7 +1,9 @@
 use common::parallel::par_enabled;
 use std::array;
 
-use common::VirtualPolynomial;
+use crate::utils::opening_id_builder::{AccOpeningAccessor, Target};
+use atlas_onnx_tracer::node::ComputationNode;
+use common::VirtualPoly;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -10,8 +12,8 @@ use joltworks::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
+            BIG_ENDIAN, LITTLE_ENDIAN,
         },
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
@@ -30,12 +32,10 @@ const DEGREE_BOUND: usize = 3;
 /// Shared parameters for the max indicator sumcheck instance.
 #[derive(Clone)]
 pub struct MaxIndicatorParams<F: JoltField> {
+    /// Computation node reference.
+    pub node: ComputationNode,
     /// Random evaluation point.
     pub r1_k: Vec<F>,
-    /// Index of the computation node.
-    pub computation_node_index: usize,
-    /// Used to cache the operand claim
-    pub operand_node_index: usize,
     /// max_k(r1_k)
     pub input_claim: F,
     /// Softmax dims
@@ -49,8 +49,7 @@ pub struct MaxIndicatorParams<F: JoltField> {
 impl<F: JoltField> MaxIndicatorParams<F> {
     /// Create a new instance of max indicator sumcheck parameters.
     pub fn new(
-        computation_node_index: usize,
-        operand_node_index: usize,
+        node: ComputationNode,
         F_N: [usize; 2],
         argmax_k: Vec<usize>,
         input_claim: F,
@@ -60,13 +59,9 @@ impl<F: JoltField> MaxIndicatorParams<F> {
         let log_f = F.log_2();
 
         // Get r1 (the point from Stage 1 reciprocal multiplication output)
-        let r1 = accumulator
-            .get_virtual_polynomial_opening(VirtualOpeningId::new(
-                VirtualPolynomial::SoftmaxExpQ(computation_node_index),
-                SumcheckId::NodeExecution(computation_node_index),
-            ))
-            .0;
-        let r1_k = &r1.r[..log_f];
+        let accessor = AccOpeningAccessor::new(accumulator, &node);
+        let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
+        let r1_k = r1.split_at(log_f).0.r;
 
         let mut e: Vec<u32> = vec![0; F * N];
         // Only set the argmax positions — everything else is already 0
@@ -79,8 +74,7 @@ impl<F: JoltField> MaxIndicatorParams<F> {
             F_N,
             e,
             argmax_k,
-            computation_node_index,
-            operand_node_index,
+            node,
         }
     }
 
@@ -227,16 +221,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaxIndicatorP
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-
-        accumulator.append_virtual(
-            transcript,
-            VirtualOpeningId::new(
-                VirtualPolynomial::NodeOutput(self.params.operand_node_index),
-                SumcheckId::NodeExecution(self.params.computation_node_index),
-            ),
-            opening_point,
-            self.X.final_sumcheck_claim(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
+            .to_provider(transcript, opening_point);
+        provider.append_node_io(Target::Input(0), self.X.final_claim());
     }
 }
 
@@ -248,21 +235,13 @@ pub struct MaxIndicatorVerifier<F: JoltField> {
 impl<F: JoltField> MaxIndicatorVerifier<F> {
     /// Create new verifier for max indicator sumcheck.
     pub fn new(
-        computation_node_index: usize,
-        operand_node_index: usize,
+        node: ComputationNode,
         F_N: [usize; 2],
         argmax_k: Vec<usize>,
         input_claim: F,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
-        let params = MaxIndicatorParams::new(
-            computation_node_index,
-            operand_node_index,
-            F_N,
-            argmax_k,
-            input_claim,
-            accumulator,
-        );
+        let params = MaxIndicatorParams::new(node, F_N, argmax_k, input_claim, accumulator);
         Self { params }
     }
 }
@@ -281,14 +260,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MaxIndicato
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            VirtualOpeningId::new(
-                VirtualPolynomial::NodeOutput(self.params.operand_node_index),
-                SumcheckId::NodeExecution(self.params.computation_node_index),
-            ),
-            opening_point,
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
+            .to_provider(transcript, opening_point);
+        provider.append_node_io(Target::Input(0));
     }
 
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::expected_output_claim", skip_all)]
@@ -301,18 +275,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MaxIndicato
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
-        let X_claim = accumulator
-            .get_virtual_polynomial_opening(VirtualOpeningId::new(
-                VirtualPolynomial::NodeOutput(self.params.operand_node_index),
-                SumcheckId::NodeExecution(self.params.computation_node_index),
-            ))
-            .1;
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.node);
+        let X_claim = accessor.get_node_io(Target::Input(0)).1;
 
         // Evaluate e(r_sc) in O(F · log N) by exploiting sparsity:
         // e has exactly F nonzero entries at positions k·N + argmax_k[k],
         // so ẽ(r_k, r_j) = Σ_k eq(r_k, bits(k)) · eq(r_j, bits(argmax_k[k]))
-        let r_k = &r_sc[..self.params.log_F()];
-        let r_j = &r_sc[self.params.log_F()..];
+        let (r_k, r_j) = r_sc.split_at(self.params.log_F());
         let eq_k_evals = EqPolynomial::evals(r_k);
         let log_n = r_j.len();
         let e_claim: F = eq_k_evals
@@ -323,7 +292,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MaxIndicato
                 eq_k * EqPolynomial::mle(r_j, &y)
             })
             .sum();
-        let r2_k = &r_sc[..self.params.log_F()];
-        EqPolynomial::mle(&self.params.r1_k, r2_k) * e_claim * X_claim
+        EqPolynomial::mle(&self.params.r1_k, r_k) * e_claim * X_claim
     }
 }

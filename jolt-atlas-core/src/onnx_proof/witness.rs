@@ -37,7 +37,7 @@ use atlas_onnx_tracer::{
     tensor::Tensor,
 };
 use common::parallel::par_enabled;
-use common::CommittedPolynomial;
+use common::CommittedPoly;
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::JoltField,
@@ -161,11 +161,11 @@ pub trait WitnessGenerator<F: JoltField> {
 /// - Softmax intermediate values
 /// - Gather operation addresses
 /// - Tanh lookup table addresses
-impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
+impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
     #[tracing::instrument(skip_all)]
     fn generate_witness(&self, model: &Model, trace: &Trace) -> MultilinearPolynomial<F> {
         match self {
-            CommittedPolynomial::NodeOutputRaD(node_idx, d) => {
+            CommittedPoly::NodeOutputRaD(node_idx, d) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 let layer_data = Trace::layer_data(trace, computation_node);
                 let is_interleaved_operands = computation_node.is_interleaved_operands();
@@ -179,14 +179,14 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     compute_lookup_indices_from_operands(&operand_refs, is_interleaved_operands);
                 build_one_hot_rad_witness(&lookup_indices, *d)
             }
-            CommittedPolynomial::DivNodeQuotient(node_idx) => {
+            CommittedPoly::DivNodeQuotient(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 assert!(matches!(computation_node.operator, Operator::Div(_)));
                 let layer_data = Trace::layer_data(trace, computation_node);
                 let q = layer_data.output;
                 MultilinearPolynomial::from(q.clone())
             }
-            CommittedPolynomial::TeleportNodeQuotient(node_idx) => {
+            CommittedPoly::TeleportNodeQuotient(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 // For nodes that use the quotient for a lookup (erf/sigmoid ...),
                 // the quotient is virtualized from a one-hot encoding.
@@ -205,7 +205,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 let (quotient, _remainder) = compute_division(input, tau);
                 MultilinearPolynomial::from(quotient)
             }
-            CommittedPolynomial::ScalarConstDivNodeRemainder(node_idx) => {
+            CommittedPoly::ScalarConstDivNodeRemainder(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 let Operator::ScalarConstDiv(op) = &computation_node.operator else {
                     panic!("Expected ScalarConstDiv operator at node {node_idx}");
@@ -224,7 +224,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     left_operand.dims().to_vec(),
                 ))
             }
-            CommittedPolynomial::RsqrtNodeInv(node_idx) => {
+            CommittedPoly::RsqrtNodeInv(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 assert!(matches!(computation_node.operator, Operator::Rsqrt(_)));
                 let layer_data = Trace::layer_data(trace, computation_node);
@@ -234,27 +234,27 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 let inv_data: Vec<i32> = left_operand.iter().map(|&x| Q_SQUARE / x).collect();
                 MultilinearPolynomial::from(inv_data)
             }
-            CommittedPolynomial::DivRangeCheckRaD(node_idx, d) => {
+            CommittedPoly::DivRangeCheckRaD(node_idx, d) => {
                 build_range_check_rad_witness::<F, DivRangeCheckOperands>(
                     model, trace, *node_idx, *d,
                 )
             }
-            CommittedPolynomial::SqrtRangeCheckRaD(node_idx, d) => {
+            CommittedPoly::SqrtRangeCheckRaD(node_idx, d) => {
                 build_range_check_rad_witness::<F, RsRangeCheckOperands>(
                     model, trace, *node_idx, *d,
                 )
             }
-            CommittedPolynomial::SqrtDivRangeCheckRaD(node_idx, d) => {
+            CommittedPoly::SqrtDivRangeCheckRaD(node_idx, d) => {
                 build_range_check_rad_witness::<F, RiRangeCheckOperands>(
                     model, trace, *node_idx, *d,
                 )
             }
-            CommittedPolynomial::TeleportRangeCheckRaD(node_idx, d) => {
+            CommittedPoly::TeleportRangeCheckRaD(node_idx, d) => {
                 build_range_check_rad_witness::<F, TeleportRangeCheckOperands>(
                     model, trace, *node_idx, *d,
                 )
             }
-            CommittedPolynomial::GatherRa(node_idx) => {
+            CommittedPoly::GatherRa(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 assert!(matches!(
                     computation_node.operator,
@@ -275,7 +275,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     num_words,
                 ))
             }
-            CommittedPolynomial::GatherRaD(node_idx, d_idx) => {
+            CommittedPoly::GatherRaD(node_idx, d_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 let Operator::GatherLarge(gather_op) = &computation_node.operator else {
                     panic!("Expected GatherLarge operator for GatherRaD committed polynomial");
@@ -307,7 +307,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 ))
             }
 
-            CommittedPolynomial::TanhRaD(node_idx, d_idx) => {
+            CommittedPoly::TanhRaD(node_idx, d_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 let Operator::Tanh(inner) = &computation_node.operator else {
                     panic!("Expected Tanh operator for TanhRa committed polynomial");
@@ -317,7 +317,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 build_teleport_activation_rad_witness(input, inner.tau, inner.log_table, *d_idx)
             }
 
-            CommittedPolynomial::ErfRaD(node_idx, d_idx) => {
+            CommittedPoly::ErfRaD(node_idx, d_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 let Operator::Erf(inner) = &computation_node.operator else {
                     panic!("Expected Erf operator for ErfRa committed polynomial");
@@ -327,7 +327,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 build_teleport_activation_rad_witness(input, inner.tau, inner.log_table, *d_idx)
             }
 
-            CommittedPolynomial::SigmoidRaD(node_idx, d_idx) => {
+            CommittedPoly::SigmoidRaD(node_idx, d_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 let Operator::Sigmoid(inner) = &computation_node.operator else {
                     panic!("Expected Sigmoid operator for SigmoidRa committed polynomial");
@@ -337,8 +337,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 build_teleport_activation_rad_witness(input, inner.tau, inner.log_table, *d_idx)
             }
 
-            CommittedPolynomial::CosRaD(node_idx, d_idx)
-            | CommittedPolynomial::SinRaD(node_idx, d_idx) => {
+            CommittedPoly::CosRaD(node_idx, d_idx) | CommittedPoly::SinRaD(node_idx, d_idx) => {
                 const COS_LOG_TABLE_SIZE: usize =
                     (FOUR_PI_APPROX as usize).next_power_of_two().ilog2() as usize;
 
@@ -376,7 +375,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     one_hot_params.k_chunk,
                 ))
             }
-            CommittedPolynomial::SoftmaxRemainderRaD(node_idx, d) => {
+            CommittedPoly::SoftmaxRemainderRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
                 let Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) = &node.operator else {
                     panic!("Expected SoftmaxLastAxis at node {node_idx}");
@@ -386,7 +385,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 let lookup_indices: Vec<usize> = st.R.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_scale, *d)
             }
-            CommittedPolynomial::SoftmaxExpRemainderRaD(node_idx, d) => {
+            CommittedPoly::SoftmaxExpRemainderRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
                 let Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) = &node.operator else {
                     panic!("Expected SoftmaxLastAxis at node {node_idx}");
@@ -401,7 +400,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     .collect();
                 build_onehot_witness(&lookup_indices, log_scale, *d)
             }
-            CommittedPolynomial::SoftmaxSatDiffRaD(node_idx, d) => {
+            CommittedPoly::SoftmaxSatDiffRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
                 let st = softmax_last_axis_full_trace(node, trace);
                 let lookup_indices: Vec<usize> = st
@@ -412,7 +411,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     .collect();
                 build_onehot_witness(&lookup_indices, SAT_DIFF_RC_BITS, *d)
             }
-            CommittedPolynomial::SoftmaxZHiRaD(node_idx, d) => {
+            CommittedPoly::SoftmaxZHiRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
                 let st = softmax_last_axis_full_trace(node, trace);
                 let decomp = generate_exp_lut_decomposed(st.scale as i32);
@@ -421,7 +420,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                     st.decomposed_exp.z_hi.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_hi, *d)
             }
-            CommittedPolynomial::SoftmaxZLoRaD(node_idx, d) => {
+            CommittedPoly::SoftmaxZLoRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
                 let st = softmax_last_axis_full_trace(node, trace);
                 let decomp = generate_exp_lut_decomposed(st.scale as i32);

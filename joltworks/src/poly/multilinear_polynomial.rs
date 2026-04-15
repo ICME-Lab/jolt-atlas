@@ -663,7 +663,7 @@ pub trait PolynomialBinding<F: JoltField> {
     /// by coefficient.
     fn bind_parallel(&mut self, r: F::Challenge, order: BindingOrder);
     /// Returns the final sumcheck claim about the polynomial.
-    fn final_sumcheck_claim(&self) -> F;
+    fn final_claim(&self) -> F;
 }
 
 pub trait PolynomialEvaluation<F: JoltField> {
@@ -740,21 +740,21 @@ impl<F: JoltField> PolynomialBinding<F> for MultilinearPolynomial<F> {
         }
     }
 
-    fn final_sumcheck_claim(&self) -> F {
+    fn final_claim(&self) -> F {
         match self {
             MultilinearPolynomial::LargeScalars(poly) => {
                 assert_eq!(poly.len(), 1);
                 poly.Z[0]
             }
-            MultilinearPolynomial::BoolScalars(poly) => poly.final_sumcheck_claim(),
-            MultilinearPolynomial::U8Scalars(poly) => poly.final_sumcheck_claim(),
-            MultilinearPolynomial::U16Scalars(poly) => poly.final_sumcheck_claim(),
-            MultilinearPolynomial::U32Scalars(poly) => poly.final_sumcheck_claim(),
-            MultilinearPolynomial::U64Scalars(poly) => poly.final_sumcheck_claim(),
-            MultilinearPolynomial::I32Scalars(poly) => poly.final_sumcheck_claim(),
-            MultilinearPolynomial::I64Scalars(poly) => poly.final_sumcheck_claim(),
-            MultilinearPolynomial::I128Scalars(poly) => poly.final_sumcheck_claim(),
-            MultilinearPolynomial::U128Scalars(poly) => poly.final_sumcheck_claim(),
+            MultilinearPolynomial::BoolScalars(poly) => poly.final_claim(),
+            MultilinearPolynomial::U8Scalars(poly) => poly.final_claim(),
+            MultilinearPolynomial::U16Scalars(poly) => poly.final_claim(),
+            MultilinearPolynomial::U32Scalars(poly) => poly.final_claim(),
+            MultilinearPolynomial::U64Scalars(poly) => poly.final_claim(),
+            MultilinearPolynomial::I32Scalars(poly) => poly.final_claim(),
+            MultilinearPolynomial::I64Scalars(poly) => poly.final_claim(),
+            MultilinearPolynomial::I128Scalars(poly) => poly.final_claim(),
+            MultilinearPolynomial::U128Scalars(poly) => poly.final_claim(),
             _ => unimplemented!("Unexpected MultilinearPolynomial variant"),
         }
     }

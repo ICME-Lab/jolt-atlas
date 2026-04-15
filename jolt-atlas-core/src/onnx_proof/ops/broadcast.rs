@@ -22,13 +22,12 @@ use joltworks::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 
-use crate::utils::opening_id_builder::OpeningTarget;
 use crate::{
     onnx_proof::{
         ops::{OperatorProofTrait, Prover, Verifier},
         ProofId,
     },
-    utils::opening_id_builder::OpeningIdBuilder,
+    utils::opening_id_builder::{AccOpeningAccessor, Target},
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
@@ -71,10 +70,8 @@ pub struct BroadcastParams<F: JoltField> {
 impl<F: JoltField> BroadcastParams<F> {
     /// Create new broadcast parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let r_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
+        let r_output = accessor.get_reduced_opening().0.r;
         Self {
             r_output,
             computation_node,
@@ -138,16 +135,10 @@ impl<F: JoltField> BroadcastProver<F> {
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) {
-        let node = &self.params.computation_node;
-        let builder = OpeningIdBuilder::new(node);
-
-        let opening_id = builder.node_io(OpeningTarget::Input(0));
-        accumulator.append_virtual(
-            transcript,
-            opening_id,
-            OpeningPoint::new(self.r_input.clone()),
-            self.claim_A,
-        );
+        let opening_point = OpeningPoint::new(self.r_input.clone());
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, opening_point);
+        provider.append_node_io(Target::Input(0), self.claim_A);
     }
 }
 
@@ -194,28 +185,15 @@ impl<F: JoltField> BroadcastVerifier<F> {
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Result<(), ProofVerifyError> {
-        // Cache the opening point for the input node
-        let node = &self.params.computation_node;
-        let builder = OpeningIdBuilder::new(node);
-        let opening_id = builder.node_io(OpeningTarget::Input(0));
-        accumulator.append_virtual(
-            transcript,
-            opening_id,
-            OpeningPoint::new(self.r_input.clone()),
-        );
+        let opening_point = OpeningPoint::new(self.r_input.clone());
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, opening_point);
 
-        // Retrieve the claim for the input node
-        let operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[0],
-            self.params.computation_node.idx,
-        );
-
+        provider.append_node_io(Target::Input(0));
+        let operand_claim = provider.get_node_io(Target::Input(0)).1;
         let expected_claim_O = operand_claim * self.eval_I;
 
-        let claim_O = accumulator
-            .get_node_output_opening(self.params.computation_node.idx)
-            .1;
-
+        let claim_O = provider.get_reduced_opening().1;
         if expected_claim_O != claim_O {
             return Err(ProofVerifyError::InvalidOpeningProof(
                 "Broadcast claim does not match expected claim".to_string(),

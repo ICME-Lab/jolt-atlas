@@ -1,6 +1,6 @@
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
-    utils::opening_id_builder::{OpeningIdBuilder, OpeningTarget},
+    utils::opening_id_builder::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
@@ -47,12 +47,10 @@ pub struct IffParams<F: JoltField> {
 impl<F: JoltField> IffParams<F> {
     /// Create new conditional selection parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let r_node_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
+        let r_node_output = accessor.get_reduced_opening().0;
         Self {
-            r_node_output: r_node_output.into(),
+            r_node_output,
             computation_node,
         }
     }
@@ -64,8 +62,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for IffParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, iff_claim) = accumulator.get_node_output_opening(self.computation_node.idx);
-        iff_claim
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
+        accessor.get_reduced_opening().1
     }
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -183,35 +181,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for IffProver<F> 
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let node = &self.params.computation_node;
-        let builder = OpeningIdBuilder::new(node);
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, opening_point);
 
-        let mask_opening_id = builder.node_io(OpeningTarget::Input(0));
-        accumulator.append_virtual(
-            transcript,
-            mask_opening_id,
-            opening_point.clone(),
-            self.mask_operand.final_sumcheck_claim(),
-        );
-
-        let a_opening_id = builder.node_io(OpeningTarget::Input(1));
-        accumulator.append_virtual(
-            transcript,
-            a_opening_id,
-            opening_point.clone(),
-            self.a_operand.final_sumcheck_claim(),
-        );
-
-        let b_opening_id = builder.node_io(OpeningTarget::Input(2));
-        accumulator.append_virtual(
-            transcript,
-            b_opening_id,
-            opening_point,
-            self.b_operand.final_sumcheck_claim(),
-        );
+        provider.append_node_io(Target::Input(0), self.mask_operand.final_claim());
+        provider.append_node_io(Target::Input(1), self.a_operand.final_claim());
+        provider.append_node_io(Target::Input(2), self.b_operand.final_claim());
     }
 }
 
@@ -245,27 +223,18 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for IffVerifier
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let r_node_output = accumulator
-            .get_node_output_opening(self.params.computation_node.idx)
-            .0
-            .r;
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
+        let r_node_output = &self.params.r_node_output.r;
         let r_node_output_prime = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
-        let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
-        let mask_operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[0],
-            self.params.computation_node.idx,
-        );
-        let a_operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[1],
-            self.params.computation_node.idx,
-        );
-        let b_operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[2],
-            self.params.computation_node.idx,
-        );
+        let eq_eval = EqPolynomial::mle(r_node_output, &r_node_output_prime);
+
+        let mask_operand_claim = accessor.get_node_io(Target::Input(0)).1;
+        let a_operand_claim = accessor.get_node_io(Target::Input(1)).1;
+        let b_operand_claim = accessor.get_node_io(Target::Input(2)).1;
+
         eq_eval
             * (mask_operand_claim * a_operand_claim
                 + (F::one() - mask_operand_claim) * b_operand_claim)
@@ -277,20 +246,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for IffVerifier
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let node = &self.params.computation_node;
-        let builder = OpeningIdBuilder::new(node);
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, opening_point);
 
-        let mask_opening_id = builder.node_io(OpeningTarget::Input(0));
-        accumulator.append_virtual(transcript, mask_opening_id, opening_point.clone());
-
-        let a_opening_id = builder.node_io(OpeningTarget::Input(1));
-        accumulator.append_virtual(transcript, a_opening_id, opening_point.clone());
-
-        let b_opening_id = builder.node_io(OpeningTarget::Input(2));
-        accumulator.append_virtual(transcript, b_opening_id, opening_point);
+        provider.append_node_io(Target::Input(0));
+        provider.append_node_io(Target::Input(1));
+        provider.append_node_io(Target::Input(2));
     }
 }
 

@@ -75,11 +75,11 @@ mod tests {
         ops::{Add, Operator},
         tensor::Tensor,
     };
-    use common::VirtualPolynomial;
+    use common::VirtualPoly;
     use joltworks::{
         poly::{
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-            opening_proof::{OpeningId, OpeningPoint, SumcheckId, VirtualOpeningId},
+            opening_proof::{OpeningId, OpeningPoint, SumcheckId},
         },
         subprotocols::{
             evaluation_reduction::EvalReductionProtocol, sumcheck::SumcheckInstanceProof,
@@ -124,12 +124,12 @@ mod tests {
         let claim1 = output_mle.evaluate(&point1);
         let claim2 = output_mle.evaluate(&point2);
 
-        let key1 = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(producer_idx),
+        let key1 = OpeningId::new(
+            VirtualPoly::NodeOutput(producer_idx),
             SumcheckId::NodeExecution(consumer1),
         );
-        let key2 = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(producer_idx),
+        let key2 = OpeningId::new(
+            VirtualPoly::NodeOutput(producer_idx),
             SumcheckId::NodeExecution(consumer2),
         );
         prover.accumulator.append_virtual(
@@ -178,8 +178,8 @@ mod tests {
         let point = prover.transcript.challenge_vector_optimized::<Fr>(num_vars);
         let claim = output_mle.evaluate(&point);
 
-        let key = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(producer_idx),
+        let key = OpeningId::new(
+            VirtualPoly::NodeOutput(producer_idx),
             SumcheckId::NodeExecution(consumer),
         );
         prover.accumulator.append_virtual(
@@ -228,10 +228,10 @@ mod tests {
             .transcript
             .challenge_vector_optimized::<Fr>(num_vars);
         let claim = output_mle.evaluate(&point);
-        let key = OpeningId::Virtual(VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(producer_idx),
+        let key = OpeningId::new(
+            VirtualPoly::NodeOutput(producer_idx),
             SumcheckId::NodeExecution(consumer),
-        ));
+        );
         let opening = (OpeningPoint::new(point.clone()), claim);
         verifier.accumulator.openings.insert(key, opening);
 

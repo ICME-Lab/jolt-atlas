@@ -1,12 +1,11 @@
 use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode};
-use common::VirtualPolynomial;
 use joltworks::{
     field::JoltField,
     poly::{
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
+            BIG_ENDIAN,
         },
     },
     subprotocols::{
@@ -17,7 +16,10 @@ use joltworks::{
     utils::math::Math,
 };
 
-use crate::utils::dims::EinsumDims;
+use crate::utils::{
+    dims::EinsumDims,
+    opening_id_builder::{AccOpeningAccessor, Target},
+};
 
 /// Parameters for the shared `m,an->a1nm` canonical einsum family.
 #[derive(Clone)]
@@ -34,6 +36,7 @@ impl<F: JoltField> MAnA1nmParams<F> {
         einsum_dims: EinsumDims,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let atlas_onnx_tracer::ops::Operator::Einsum(einsum) = &computation_node.operator else {
             panic!("Expected Einsum operator")
         };
@@ -62,7 +65,7 @@ impl<F: JoltField> MAnA1nmParams<F> {
             ],
             "m,an->a1nm requires the right operand to align with the output a and n axes"
         );
-        let r_node_output = accumulator.get_node_output_opening(computation_node.idx).0;
+        let r_node_output = accessor.get_reduced_opening().0;
         Self {
             r_node_output,
             computation_node,
@@ -77,8 +80,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MAnA1nmParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, einsum_claim) = accumulator.get_node_output_opening(self.computation_node.idx);
-        einsum_claim
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
+        accessor.get_reduced_opening().1
     }
 
     fn normalize_opening_point(
@@ -164,25 +167,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MAnA1nmProver
         let split_at_m = self.params.r_node_output.r.len().saturating_sub(log_m);
         let (r_prefix, r_m) = self.params.r_node_output.split_at(split_at_m);
         let left_opening_point = self.params.normalize_opening_point(&r_m.r);
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            left_opening_point,
-            self.left_claim,
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, left_opening_point);
+        provider.append_node_io(Target::Input(0), self.left_claim);
 
         let (r_a, r_bn) = r_prefix.split_at(log_a);
         let (_, r_n) = r_bn.split_at(r_bn.r.len().saturating_sub(log_n));
         let r_right = [r_a.r.as_slice(), r_n.r.as_slice()].concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right);
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            right_opening_point,
-            self.right_claim,
-        );
+        provider.update_point(right_opening_point);
+        provider.append_node_io(Target::Input(1), self.right_claim);
     }
 }
 
@@ -213,14 +207,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MAnA1nmVeri
         accumulator: &VerifierOpeningAccumulator<F>,
         _sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let left_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[0],
-            self.params.computation_node.idx,
-        );
-        let right_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[1],
-            self.params.computation_node.idx,
-        );
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
+        let left_claim = accessor.get_node_io(Target::Input(0)).1;
+        let right_claim = accessor.get_node_io(Target::Input(1)).1;
         left_claim * right_claim
     }
 
@@ -237,23 +226,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MAnA1nmVeri
         let split_at_m = self.params.r_node_output.r.len().saturating_sub(log_m);
         let (r_prefix, r_m) = self.params.r_node_output.split_at(split_at_m);
         let left_opening_point = self.params.normalize_opening_point(&r_m.r);
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            left_opening_point,
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, left_opening_point);
+        provider.append_node_io(Target::Input(0));
 
         let (r_a, r_bn) = r_prefix.split_at(log_a);
         let (_, r_n) = r_bn.split_at(r_bn.r.len().saturating_sub(log_n));
         let r_right = [r_a.r.as_slice(), r_n.r.as_slice()].concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right);
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            right_opening_point,
-        );
+        provider.update_point(right_opening_point);
+        provider.append_node_io(Target::Input(1));
     }
 }
 

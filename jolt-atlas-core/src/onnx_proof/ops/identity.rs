@@ -1,11 +1,10 @@
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
-    utils::opening_id_builder::{OpeningIdBuilder, OpeningTarget},
+    utils::opening_id_builder::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{node::ComputationNode, ops::Identity};
 use joltworks::{
-    field::JoltField, poly::opening_proof::OpeningAccumulator,
-    subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
+    field::JoltField, subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
 
@@ -16,13 +15,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Identity {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        let builder = OpeningIdBuilder::new(node);
-        let node_poly_opening = prover.accumulator.get_node_output_opening(node.idx);
+        let node_poly_opening =
+            AccOpeningAccessor::new(&prover.accumulator, node).get_reduced_opening();
         let (opening_point, claim) = node_poly_opening;
-        let opening_id = builder.node_io(OpeningTarget::Input(0));
-        prover
-            .accumulator
-            .append_virtual(&mut prover.transcript, opening_id, opening_point, claim);
+        let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, node)
+            .to_provider(&mut prover.transcript, opening_point);
+        provider.append_node_io(Target::Input(0), claim);
         vec![]
     }
 
@@ -32,15 +30,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Identity {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        let builder = OpeningIdBuilder::new(node);
-        let (opening_point, claim) = verifier.accumulator.get_node_output_opening(node.idx);
-        let opening_id = builder.node_io(OpeningTarget::Input(0));
-        verifier
-            .accumulator
-            .append_virtual(&mut verifier.transcript, opening_id, opening_point);
-        let (_, operand_claim) = verifier
-            .accumulator
-            .get_virtual_polynomial_opening(opening_id);
+        let (opening_point, claim) =
+            AccOpeningAccessor::new(&verifier.accumulator, node).get_reduced_opening();
+        let mut provider = AccOpeningAccessor::new(&mut verifier.accumulator, node)
+            .to_provider(&mut verifier.transcript, opening_point);
+        provider.append_node_io(Target::Input(0));
+        let (_, operand_claim) = provider.get_node_io(Target::Input(0));
 
         if operand_claim != claim {
             return Err(ProofVerifyError::InvalidOpeningProof(

@@ -110,7 +110,7 @@ use atlas_onnx_tracer::{node::ComputationNode, ops::Operator};
 
 // Re-export operator param/prover/verifier types for the handler macro
 pub use add::{AddParams, AddProver, AddVerifier};
-use common::CommittedPolynomial;
+use common::CommittedPoly;
 pub use cube::{CubeParams, CubeProver, CubeVerifier};
 pub use div::{DivParams, DivProver, DivVerifier};
 use eval_reduction::NodeEvalReduction;
@@ -209,7 +209,7 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
     }
 
     /// Get the committed polynomials involved in this operator's proof.
-    fn get_committed_polynomials(&self, _node: &ComputationNode) -> Vec<CommittedPolynomial> {
+    fn get_committed_polynomials(&self, _node: &ComputationNode) -> Vec<CommittedPoly> {
         vec![]
     }
 }
@@ -277,7 +277,7 @@ impl NodeCommittedPolynomials {
     /// A vector of [`CommittedPolynomial`] instances that the prover must commit to
     pub fn get_committed_polynomials<F: JoltField, T: Transcript>(
         node: &ComputationNode,
-    ) -> Vec<CommittedPolynomial> {
+    ) -> Vec<CommittedPoly> {
         dispatch_operator!(
             node,
             |inner| OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node),
@@ -447,12 +447,14 @@ macro_rules! impl_standard_params {
                 computation_node: ComputationNode,
                 accumulator: &dyn OpeningAccumulator<F>,
             ) -> Self {
-                let r_node_output = accumulator
-                    .get_node_output_opening(computation_node.idx)
-                    .0
-                    .r;
+                let r_node_output = $crate::utils::opening_id_builder::AccOpeningAccessor::new(
+                    accumulator,
+                    &computation_node,
+                )
+                .get_reduced_opening()
+                .0;
                 Self {
-                    r_node_output: r_node_output.into(),
+                    r_node_output,
                     computation_node,
                 }
             }
@@ -464,9 +466,12 @@ macro_rules! impl_standard_params {
             }
 
             fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-                accumulator
-                    .get_node_output_opening(self.computation_node.idx)
-                    .1
+                $crate::utils::opening_id_builder::AccOpeningAccessor::new(
+                    accumulator,
+                    &self.computation_node,
+                )
+                .get_reduced_opening()
+                .1
             }
 
             fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {

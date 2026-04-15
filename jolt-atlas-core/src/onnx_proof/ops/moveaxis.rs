@@ -1,4 +1,7 @@
-use atlas_onnx_tracer::{node::ComputationNode, ops::MoveAxis};
+use atlas_onnx_tracer::{
+    node::ComputationNode,
+    ops::{MoveAxis, Operator},
+};
 use joltworks::{
     field::JoltField,
     poly::opening_proof::{
@@ -14,7 +17,7 @@ use crate::{
         ops::{OperatorProofTrait, Prover, Verifier},
         ProofId,
     },
-    utils::opening_id_builder::{OpeningIdBuilder, OpeningTarget},
+    utils::opening_id_builder::{AccOpeningAccessor, Target},
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MoveAxis {
@@ -53,10 +56,8 @@ pub struct MoveAxisParams<F: JoltField> {
 impl<F: JoltField> MoveAxisParams<F> {
     /// Create new moveaxis parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let r_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
+        let r_output = accessor.get_reduced_opening().0.r;
         Self {
             r_output,
             computation_node,
@@ -90,20 +91,12 @@ impl<F: JoltField> MoveAxisProver<F> {
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) {
-        let node = &self.params.computation_node;
-        let builder = OpeningIdBuilder::new(node);
-        // For MoveAxis, claim_A == claim_O since the data doesn't change
-        let claim_O = accumulator
-            .get_node_output_opening(self.params.computation_node.idx)
-            .1;
-
-        let opening_id = builder.node_io(OpeningTarget::Input(0));
-        accumulator.append_virtual(
-            transcript,
-            opening_id,
-            OpeningPoint::new(self.r_input.clone()),
-            claim_O,
-        );
+        let opening_point = OpeningPoint::new(self.r_input.clone());
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, opening_point);
+        // For MoveAxis, claim_A == claim_O since the data doesn't change.
+        let claim_O = provider.get_reduced_opening().1;
+        provider.append_node_io(Target::Input(0), claim_O);
     }
 }
 
@@ -138,26 +131,16 @@ impl<F: JoltField> MoveAxisVerifier<F> {
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Result<(), ProofVerifyError> {
-        // Cache the opening point for the input node
-        let node = &self.params.computation_node;
-        let builder = OpeningIdBuilder::new(node);
-        let opening_id = builder.node_io(OpeningTarget::Input(0));
-        accumulator.append_virtual(
-            transcript,
-            opening_id,
-            OpeningPoint::new(self.r_input.clone()),
-        );
+        let opening_point = OpeningPoint::new(self.r_input.clone());
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, opening_point);
 
-        // Retrieve the claim for the input node
-        let operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[0],
-            self.params.computation_node.idx,
-        );
+        // Cache and retrieve the claim for the input node.
+        provider.append_node_io(Target::Input(0));
+        let operand_claim = provider.get_node_io(Target::Input(0)).1;
 
-        // For MoveAxis, the input claim should equal the output claim
-        let claim_O = accumulator
-            .get_node_output_opening(self.params.computation_node.idx)
-            .1;
+        // For MoveAxis, the input claim should equal the output claim.
+        let claim_O = provider.get_reduced_opening().1;
 
         if operand_claim != claim_O {
             return Err(ProofVerifyError::InvalidOpeningProof(
@@ -173,10 +156,8 @@ impl<F: JoltField> MoveAxisVerifier<F> {
 fn permute_challenge_groups<F: JoltField>(
     output_dims: &[usize],
     r_output: &[F],
-    operator: &atlas_onnx_tracer::ops::Operator,
+    operator: &Operator,
 ) -> Vec<F> {
-    use atlas_onnx_tracer::ops::Operator;
-
     let (source, destination) = match operator {
         Operator::MoveAxis(op) => (op.source, op.destination),
         _ => panic!("Expected MoveAxis operator"),

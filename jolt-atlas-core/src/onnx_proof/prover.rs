@@ -8,9 +8,12 @@ use super::{
     types::{Claims, ProofId, ProverDebugInfo},
     AtlasSharedPreprocessing, ONNXProof, ReducedOpeningProof,
 };
-use crate::onnx_proof::{
-    ops::{NodeCommittedPolynomials, OperatorProver},
-    witness::WitnessGenerator,
+use crate::{
+    onnx_proof::{
+        ops::{NodeCommittedPolynomials, OperatorProver},
+        witness::WitnessGenerator,
+    },
+    utils::opening_id_builder::AccOpeningAccessor,
 };
 use atlas_onnx_tracer::{
     model::{
@@ -19,13 +22,13 @@ use atlas_onnx_tracer::{
     },
     node::ComputationNode,
 };
-use common::{parallel::ParallelFlagGuard, CommittedPolynomial, VirtualPolynomial};
+use common::{parallel::ParallelFlagGuard, CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{OpeningPoint, ProverOpeningAccumulator, SumcheckId, VirtualOpeningId},
+        opening_proof::{OpeningId, ProverOpeningAccumulator, SumcheckId},
         rlc_polynomial::build_materialized_rlc,
     },
     subprotocols::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof},
@@ -78,7 +81,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         generators: &PCS::ProverSetup,
         transcript: &mut T,
     ) -> (
-        BTreeMap<CommittedPolynomial, MultilinearPolynomial<F>>,
+        BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
         Vec<PCS::Commitment>,
     ) {
         let poly_map = Self::polynomial_map(model, trace);
@@ -108,19 +111,20 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
 
         // Evaluate output polynomial at r_node_output
         let output_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
-        let output_opening_id = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(output_computation_node.idx),
-            // NodeOutput claims are generally produced by subsequent nodes during proving; emulate that here.
+
+        let output_opening_id = OpeningId::new(
+            VirtualPoly::NodeOutput(output_computation_node.idx),
+            // We add a NodeOutput claim for the model output. We use idx+1 as the execution,
+            // since some nodes add a claim during their own execution that would otherwise collide with the output
             SumcheckId::NodeExecution(output_computation_node.idx + 1),
         );
 
+        let mut provider =
+            AccOpeningAccessor::new(&mut prover.accumulator, output_computation_node)
+                .to_provider(&mut prover.transcript, r_node_output.into());
+
         // append_virtual handles both transcript append and insertion into openings
-        prover.accumulator.append_virtual(
-            &mut prover.transcript,
-            output_opening_id,
-            OpeningPoint::new(r_node_output.clone()),
-            output_claim,
-        );
+        provider.append_custom(output_opening_id, output_claim);
     }
 
     /// Iterate over computation graph in reverse topological order
@@ -142,7 +146,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     #[tracing::instrument(skip_all, name = "ONNXProof::prove_reduced_openings")]
     pub(super) fn prove_reduced_openings(
         prover: &mut Prover<F, T>,
-        poly_map: &BTreeMap<CommittedPolynomial, MultilinearPolynomial<F>>,
+        poly_map: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
         generators: &PCS::ProverSetup,
     ) -> Option<ReducedOpeningProof<F, T, PCS>> {
         if poly_map.is_empty() {
@@ -211,7 +215,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     pub(super) fn polynomial_map(
         model: &Model,
         trace: &Trace,
-    ) -> BTreeMap<CommittedPolynomial, MultilinearPolynomial<F>> {
+    ) -> BTreeMap<CommittedPoly, MultilinearPolynomial<F>> {
         // Rayon jobs were overly fragmented, and the resulting context switching degraded performance,
         // so the parallelism granularity is now limited to the polynomial level.
         let _guard = ParallelFlagGuard::disabled();
@@ -231,7 +235,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
 
     #[tracing::instrument(skip_all)]
     fn commit_to_polynomials(
-        poly_map: &BTreeMap<CommittedPolynomial, MultilinearPolynomial<F>>,
+        poly_map: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
         pcs: &PCS::ProverSetup,
     ) -> Vec<PCS::Commitment> {
         // Rayon jobs were overly fragmented, and the resulting context switching degraded performance,

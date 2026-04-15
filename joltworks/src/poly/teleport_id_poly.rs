@@ -80,7 +80,7 @@ impl<F: JoltField> PolynomialBinding<F> for TeleportIdPolynomial<F> {
         self.bind(r, order);
     }
 
-    fn final_sumcheck_claim(&self) -> F {
+    fn final_claim(&self) -> F {
         debug_assert_eq!(self.num_vars, self.num_bound_vars);
         self.bound_value
     }
@@ -223,9 +223,6 @@ mod tests {
             }
         }
 
-        assert_eq!(
-            identity_poly.final_sumcheck_claim(),
-            reference_poly.final_sumcheck_claim()
-        );
+        assert_eq!(identity_poly.final_claim(), reference_poly.final_claim());
     }
 }

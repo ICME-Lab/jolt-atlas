@@ -7,7 +7,7 @@ use crate::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN,
         },
         prefix_suffix::{Prefix, PrefixRegistry, PrefixSuffixDecomposition},
@@ -26,7 +26,7 @@ use crate::{
 };
 use ark_std::Zero;
 use common::parallel::par_enabled;
-use common::VirtualPolynomial;
+use common::VirtualPoly;
 use itertools::Itertools;
 use rayon::prelude::*;
 use std::array;
@@ -55,7 +55,7 @@ where
     /// Opening point for the node output polynomial (r_reduction).
     pub r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     /// Polynomial types for opening accumulator (to cache ra claim)
-    pub polynomial_type: VirtualPolynomial,
+    pub polynomial_type: VirtualPoly,
     /// Sumcheck ID for opening accumulator (to cache ra claim)
     pub sumcheck_id: SumcheckId,
     /// Input claim for the read-checking sum-check
@@ -377,10 +377,9 @@ impl<F: JoltField, FS: Transcript> SumcheckInstanceProver<F, FS> for IdentityRCP
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
-            self.params.polynomial_type,
-            self.params.sumcheck_id,
+            OpeningId::new(self.params.polynomial_type, self.params.sumcheck_id),
             opening_point,
-            self.ra.as_ref().unwrap().final_sumcheck_claim(),
+            self.ra.as_ref().unwrap().final_claim(),
         );
     }
 }
@@ -419,8 +418,7 @@ impl<F: JoltField, FS: Transcript> SumcheckInstanceVerifier<F, FS> for IdentityR
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_virtual(
             transcript,
-            self.params.polynomial_type,
-            self.params.sumcheck_id,
+            OpeningId::new(self.params.polynomial_type, self.params.sumcheck_id),
             opening_point,
         );
     }
@@ -434,8 +432,10 @@ impl<F: JoltField, FS: Transcript> SumcheckInstanceVerifier<F, FS> for IdentityR
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let (r_address_prime, r_node_output_prime) = opening_point.split_at(self.params.log_K);
-        let (_, ra_claim) = accumulator
-            .get_virtual_polynomial_opening(self.params.polynomial_type, self.params.sumcheck_id);
+        let (_, ra_claim) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
+            self.params.polynomial_type,
+            self.params.sumcheck_id,
+        ));
         let eq_eval = EqPolynomial::mle(&self.params.r_node_output.r, &r_node_output_prime.r);
         let identity_poly_eval =
             IdentityPolynomial::<F>::new(self.params.log_K).evaluate(&r_address_prime.r);
@@ -462,7 +462,7 @@ where
     /// Returns the opening claim for the polynomial being range-checked.
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F;
     /// Returns the virtual polynomial and sumcheck id for the one-hot encoded read-address polynomial.
-    fn ra_poly(&self) -> (VirtualPolynomial, SumcheckId);
+    fn ra_poly(&self) -> (VirtualPoly, SumcheckId);
     /// Returns challenge used in the prefix-suffix sum-check protocol
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F>;
     /// Returns log₂ of the range upper bound K.

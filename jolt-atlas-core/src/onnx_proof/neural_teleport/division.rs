@@ -10,20 +10,21 @@
 //! The quotient is a virtual polynomial (proven via the lookup operation)
 //! The remainder is range-checked to be in [0, DIVISOR)
 
+use crate::utils::opening_id_builder::{AccOpeningAccessor, Target};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     tensor::Tensor,
 };
-use common::VirtualPolynomial;
+use common::VirtualPoly;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
+            BIG_ENDIAN, LITTLE_ENDIAN,
         },
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
@@ -79,13 +80,11 @@ impl<F: JoltField> TeleportDivisionParams<F> {
         accumulator: &dyn OpeningAccumulator<F>,
         tau: i32,
     ) -> Self {
-        let r_node_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
+        let r_node_output = accessor.get_reduced_opening().0;
 
         Self {
-            r_node_output: r_node_output.into(),
+            r_node_output,
             computation_node,
             tau,
         }
@@ -219,36 +218,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TeleportDivis
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let input_id = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(
-            transcript,
-            input_id,
-            opening_point.clone(),
-            self.input.final_sumcheck_claim(),
-        );
-        let quotient_id = VirtualOpeningId::new(
-            VirtualPolynomial::TeleportQuotient(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(
-            transcript,
-            quotient_id,
-            opening_point.clone(),
-            self.quotient.final_sumcheck_claim(),
-        );
-        let remainder_id = VirtualOpeningId::new(
-            VirtualPolynomial::TeleportRemainder(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(
-            transcript,
-            remainder_id,
-            opening_point.clone(),
-            self.remainder.final_sumcheck_claim(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, opening_point);
+
+        provider.append_node_io(Target::Input(0), self.input.final_claim());
+        provider.append_advice(VirtualPoly::TeleportQuotient, self.quotient.final_claim());
+        provider.append_advice(VirtualPoly::TeleportRemainder, self.remainder.final_claim());
     }
 }
 
@@ -292,6 +267,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TeleportDiv
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
+
         let r_node_output = self.params.r_node_output.r.clone();
         let r_node_output_prime = self
             .params
@@ -299,22 +276,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TeleportDiv
             .r;
         let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
 
-        let input_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[0],
-            self.params.computation_node.idx,
-        );
-        let quotient_claim = accumulator
-            .get_virtual_polynomial_opening(VirtualOpeningId::new(
-                VirtualPolynomial::TeleportQuotient(self.params.computation_node.idx),
-                SumcheckId::NodeExecution(self.params.computation_node.idx),
-            ))
-            .1;
-        let remainder_claim = accumulator
-            .get_virtual_polynomial_opening(VirtualOpeningId::new(
-                VirtualPolynomial::TeleportRemainder(self.params.computation_node.idx),
-                SumcheckId::NodeExecution(self.params.computation_node.idx),
-            ))
-            .1;
+        let input_claim = accessor.get_node_io(Target::Input(0)).1;
+        let quotient_claim = accessor.get_advice(VirtualPoly::TeleportQuotient).1;
+        let remainder_claim = accessor.get_advice(VirtualPoly::TeleportRemainder).1;
 
         let divisor = F::from_i32(self.params.tau);
         eq_eval * ((divisor * quotient_claim) + remainder_claim - input_claim)
@@ -329,20 +293,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TeleportDiv
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let input_id = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        let quotient_id = VirtualOpeningId::new(
-            VirtualPolynomial::TeleportQuotient(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        let remainder_id = VirtualOpeningId::new(
-            VirtualPolynomial::TeleportRemainder(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(transcript, input_id, opening_point.clone());
-        accumulator.append_virtual(transcript, quotient_id, opening_point.clone());
-        accumulator.append_virtual(transcript, remainder_id, opening_point.clone());
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, opening_point);
+
+        provider.append_node_io(Target::Input(0));
+        provider.append_advice(VirtualPoly::TeleportQuotient);
+        provider.append_advice(VirtualPoly::TeleportRemainder);
     }
 }

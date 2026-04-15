@@ -33,7 +33,7 @@ use allocative::Allocative;
 use allocative::FlameGraphBuilder;
 use ark_std::Zero;
 use common::parallel::par_enabled;
-use common::CommittedPolynomial;
+use common::CommittedPoly;
 use rayon::prelude::*;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -53,7 +53,7 @@ where
 {
     pub prover_state: ProverOpening<F>,
     /// Represents the polynomial opened.
-    pub polynomial: CommittedPolynomial,
+    pub polynomial: CommittedPoly,
     /// The ID of the sumcheck these openings originated from
     pub sumcheck_id: SumcheckId,
     pub opening: Opening<F>,
@@ -65,7 +65,7 @@ where
     F: JoltField,
 {
     pub fn new_dense<U>(
-        polynomial: CommittedPolynomial,
+        polynomial: CommittedPoly,
         sumcheck_id: SumcheckId,
         eq_poly: Arc<RwLock<EqCycleState<F>>>,
         opening_point: Vec<U>,
@@ -88,7 +88,7 @@ where
     }
 
     pub fn new_one_hot<U>(
-        polynomial: CommittedPolynomial,
+        polynomial: CommittedPoly,
         sumcheck_id: SumcheckId,
         eq_address: Arc<RwLock<EqAddressState<F>>>,
         eq_cycle: Arc<RwLock<EqCycleState<F>>>,
@@ -111,11 +111,8 @@ where
     #[tracing::instrument(skip_all, name = "OpeningProofReductionSumcheck::prepare_sumcheck")]
     pub fn prepare_sumcheck(
         &mut self,
-        polynomials_map: &BTreeMap<CommittedPolynomial, MultilinearPolynomial<F>>,
-        shared_dense_polynomials: &HashMap<
-            CommittedPolynomial,
-            Arc<RwLock<SharedDensePolynomial<F>>>,
-        >,
+        polynomials_map: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
+        shared_dense_polynomials: &HashMap<CommittedPoly, Arc<RwLock<SharedDensePolynomial<F>>>>,
     ) {
         #[cfg(test)]
         // #[cfg(any(test, feature = "test-feature"))]
@@ -227,13 +224,13 @@ where
     F: JoltField,
 {
     /// Represents the polynomial opened.
-    pub polynomial: CommittedPolynomial,
+    pub polynomial: CommittedPoly,
     opening: Opening<F>,
     pub sumcheck_claim: Option<F>,
 }
 
 impl<F: JoltField> OpeningProofReductionSumcheckVerifier<F> {
-    pub fn new<U>(polynomial: CommittedPolynomial, opening_point: Vec<U>, input_claim: F) -> Self
+    pub fn new<U>(polynomial: CommittedPoly, opening_point: Vec<U>, input_claim: F) -> Self
     where
         U: Copy + Send + Sync + Into<F>,
     {
@@ -366,7 +363,7 @@ impl<F: JoltField> DensePolynomialProverOpening<F> {
 
     pub fn final_sumcheck_claim(&self) -> F {
         let poly_ref = self.polynomial.as_ref().unwrap();
-        poly_ref.read().unwrap().poly.final_sumcheck_claim()
+        poly_ref.read().unwrap().poly.final_claim()
     }
 }
 
@@ -577,7 +574,7 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
             // T-variable rounds
             let B = &shared_eq_address.B;
             let d_gruen = &shared_eq_cycle.D;
-            let eq_r_address_claim = B.final_sumcheck_claim();
+            let eq_r_address_claim = B.final_claim();
             let H = &polynomial.H.read().unwrap();
 
             let gruen_eval_0 = if d_gruen.E_in_current_len() == 1 {
@@ -664,7 +661,7 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
     }
 
     pub fn final_sumcheck_claim(&self) -> F {
-        self.polynomial.H.read().unwrap().final_sumcheck_claim()
+        self.polynomial.H.read().unwrap().final_claim()
     }
 }
 
@@ -683,7 +680,7 @@ mod tests {
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
             one_hot_polynomial::OneHotPolynomial,
             opening_proof::{
-                CommittedOpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+                OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
                 VerifierOpeningAccumulator, BIG_ENDIAN,
             },
             rlc_polynomial::build_materialized_rlc,
@@ -693,7 +690,7 @@ mod tests {
     use ark_bn254::Bn254;
     use ark_ec::pairing::Pairing;
     use ark_std::UniformRand;
-    use common::CommittedPolynomial;
+    use common::CommittedPoly;
     use itertools::Itertools;
     use rand::{Rng, SeedableRng};
     use std::collections::BTreeMap;
@@ -740,8 +737,8 @@ mod tests {
                 let poly = MultilinearPolynomial::from(raw);
                 let eval = poly.evaluate(&point);
                 let commitment = HyperKZG::commit(&poly, &pk).0;
-                let id = CommittedOpeningId::new(
-                    CommittedPolynomial::DivNodeQuotient(i),
+                let id = OpeningId::new(
+                    CommittedPoly::DivNodeQuotient(i),
                     SumcheckId::NodeExecution(0),
                 );
                 prover_opening_accumulator.append_dense(&mut prover_tr, id, point.clone(), eval);
@@ -754,10 +751,10 @@ mod tests {
             .collect();
 
         // Combine all polynomials for RLC
-        let all_polys: Vec<(CommittedPolynomial, MultilinearPolynomial<Fr>)> = dense_polys
+        let all_polys: Vec<(CommittedPoly, MultilinearPolynomial<Fr>)> = dense_polys
             .iter()
             .enumerate()
-            .map(|(i, data)| (CommittedPolynomial::DivNodeQuotient(i), data.poly.clone()))
+            .map(|(i, data)| (CommittedPoly::DivNodeQuotient(i), data.poly.clone()))
             .collect();
 
         // Prepare sumcheck
@@ -795,8 +792,8 @@ mod tests {
         }
 
         dense_polys.iter().enumerate().for_each(|(i, data)| {
-            let id = CommittedOpeningId::new(
-                CommittedPolynomial::DivNodeQuotient(i),
+            let id = OpeningId::new(
+                CommittedPoly::DivNodeQuotient(i),
                 SumcheckId::NodeExecution(0),
             );
             verifier_opening_accumulator.append_dense(&mut verifier_tr, id, data.point.clone());
@@ -817,13 +814,10 @@ mod tests {
             &mut verifier_tr,
         );
 
-        let mut commitments_map: BTreeMap<CommittedPolynomial, HyperKZGCommitment<Bn254>> =
+        let mut commitments_map: BTreeMap<CommittedPoly, HyperKZGCommitment<Bn254>> =
             BTreeMap::new();
         dense_polys.iter().enumerate().for_each(|(i, data)| {
-            commitments_map.insert(
-                CommittedPolynomial::DivNodeQuotient(i),
-                data.commitment.clone(),
-            );
+            commitments_map.insert(CommittedPoly::DivNodeQuotient(i), data.commitment.clone());
         });
 
         // Compute joint commitment
@@ -896,8 +890,8 @@ mod tests {
                 let poly = MultilinearPolynomial::from(raw);
                 let eval = poly.evaluate(&point);
                 let commitment = HyperKZG::commit(&poly, &pk).0;
-                let id = CommittedOpeningId::new(
-                    CommittedPolynomial::DivNodeQuotient(i),
+                let id = OpeningId::new(
+                    CommittedPoly::DivNodeQuotient(i),
                     SumcheckId::NodeExecution(0),
                 );
                 prover_opening_accumulator.append_dense(&mut prover_tr, id, point.clone(), eval);
@@ -931,7 +925,7 @@ mod tests {
                 let (r_address, r_cycle) = point.split_at(log_k);
                 prover_opening_accumulator.append_sparse(
                     &mut prover_tr,
-                    vec![CommittedPolynomial::NodeOutputRaD(i, 0)],
+                    vec![CommittedPoly::NodeOutputRaD(i, 0)],
                     SumcheckId::NodeExecution(0),
                     r_address.to_vec(),
                     r_cycle.to_vec(),
@@ -946,14 +940,14 @@ mod tests {
             .collect();
 
         // Combine all polynomials for RLC
-        let mut all_polys: Vec<(CommittedPolynomial, MultilinearPolynomial<Fr>)> = dense_polys
+        let mut all_polys: Vec<(CommittedPoly, MultilinearPolynomial<Fr>)> = dense_polys
             .iter()
             .enumerate()
-            .map(|(i, data)| (CommittedPolynomial::DivNodeQuotient(i), data.poly.clone()))
+            .map(|(i, data)| (CommittedPoly::DivNodeQuotient(i), data.poly.clone()))
             .collect();
         all_polys.extend(oh_polys.iter().enumerate().map(|(i, data)| {
             (
-                CommittedPolynomial::NodeOutputRaD(i, 0),
+                CommittedPoly::NodeOutputRaD(i, 0),
                 MultilinearPolynomial::OneHot(data.poly.clone()),
             )
         }));
@@ -993,8 +987,8 @@ mod tests {
         }
 
         dense_polys.iter().enumerate().for_each(|(i, data)| {
-            let id = CommittedOpeningId::new(
-                CommittedPolynomial::DivNodeQuotient(i),
+            let id = OpeningId::new(
+                CommittedPoly::DivNodeQuotient(i),
                 SumcheckId::NodeExecution(0),
             );
             verifier_opening_accumulator.append_dense(&mut verifier_tr, id, data.point.clone());
@@ -1003,7 +997,7 @@ mod tests {
         oh_polys.iter().enumerate().for_each(|(i, data)| {
             verifier_opening_accumulator.append_sparse(
                 &mut verifier_tr,
-                vec![CommittedPolynomial::NodeOutputRaD(i, 0)],
+                vec![CommittedPoly::NodeOutputRaD(i, 0)],
                 SumcheckId::NodeExecution(0),
                 data.point.clone(),
             );
@@ -1024,19 +1018,13 @@ mod tests {
             &mut verifier_tr,
         );
 
-        let mut commitments_map: BTreeMap<CommittedPolynomial, HyperKZGCommitment<Bn254>> =
+        let mut commitments_map: BTreeMap<CommittedPoly, HyperKZGCommitment<Bn254>> =
             BTreeMap::new();
         dense_polys.iter().enumerate().for_each(|(i, data)| {
-            commitments_map.insert(
-                CommittedPolynomial::DivNodeQuotient(i),
-                data.commitment.clone(),
-            );
+            commitments_map.insert(CommittedPoly::DivNodeQuotient(i), data.commitment.clone());
         });
         oh_polys.iter().enumerate().for_each(|(i, data)| {
-            commitments_map.insert(
-                CommittedPolynomial::NodeOutputRaD(i, 0),
-                data.commitment.clone(),
-            );
+            commitments_map.insert(CommittedPoly::NodeOutputRaD(i, 0), data.commitment.clone());
         });
         // Compute joint commitment
         let joint_commitment = VerifierOpeningAccumulator::compute_joint_commitment::<
@@ -1107,8 +1095,8 @@ mod tests {
                 let poly = MultilinearPolynomial::from(raw);
                 let eval = poly.evaluate(&point);
                 let commitment = HyperKZG::commit(&poly, &pk).0;
-                let id = CommittedOpeningId::new(
-                    CommittedPolynomial::DivNodeQuotient(i),
+                let id = OpeningId::new(
+                    CommittedPoly::DivNodeQuotient(i),
                     SumcheckId::NodeExecution(0),
                 );
                 prover_opening_accumulator.append_dense(&mut prover_tr, id, point.clone(), eval);
@@ -1142,7 +1130,7 @@ mod tests {
                 let (r_address, r_cycle) = point.split_at(log_k);
                 prover_opening_accumulator.append_sparse(
                     &mut prover_tr,
-                    vec![CommittedPolynomial::NodeOutputRaD(i, 0)],
+                    vec![CommittedPoly::NodeOutputRaD(i, 0)],
                     SumcheckId::NodeExecution(0),
                     r_address.to_vec(),
                     r_cycle.to_vec(),
@@ -1157,14 +1145,14 @@ mod tests {
             .collect();
 
         // Combine all polynomials for RLC
-        let mut all_polys: Vec<(CommittedPolynomial, MultilinearPolynomial<Fr>)> = dense_polys
+        let mut all_polys: Vec<(CommittedPoly, MultilinearPolynomial<Fr>)> = dense_polys
             .iter()
             .enumerate()
-            .map(|(i, data)| (CommittedPolynomial::DivNodeQuotient(i), data.poly.clone()))
+            .map(|(i, data)| (CommittedPoly::DivNodeQuotient(i), data.poly.clone()))
             .collect();
         all_polys.extend(oh_polys.iter().enumerate().map(|(i, data)| {
             (
-                CommittedPolynomial::NodeOutputRaD(i, 0),
+                CommittedPoly::NodeOutputRaD(i, 0),
                 MultilinearPolynomial::OneHot(data.poly.clone()),
             )
         }));
@@ -1204,8 +1192,8 @@ mod tests {
         }
 
         dense_polys.iter().enumerate().for_each(|(i, data)| {
-            let id = CommittedOpeningId::new(
-                CommittedPolynomial::DivNodeQuotient(i),
+            let id = OpeningId::new(
+                CommittedPoly::DivNodeQuotient(i),
                 SumcheckId::NodeExecution(0),
             );
             verifier_opening_accumulator.append_dense(&mut verifier_tr, id, data.point.clone());
@@ -1214,7 +1202,7 @@ mod tests {
         oh_polys.iter().enumerate().for_each(|(i, data)| {
             verifier_opening_accumulator.append_sparse(
                 &mut verifier_tr,
-                vec![CommittedPolynomial::NodeOutputRaD(i, 0)],
+                vec![CommittedPoly::NodeOutputRaD(i, 0)],
                 SumcheckId::NodeExecution(0),
                 data.point.clone(),
             );
@@ -1235,19 +1223,13 @@ mod tests {
             &mut verifier_tr,
         );
 
-        let mut commitments_map: BTreeMap<CommittedPolynomial, HyperKZGCommitment<Bn254>> =
+        let mut commitments_map: BTreeMap<CommittedPoly, HyperKZGCommitment<Bn254>> =
             BTreeMap::new();
         dense_polys.iter().enumerate().for_each(|(i, data)| {
-            commitments_map.insert(
-                CommittedPolynomial::DivNodeQuotient(i),
-                data.commitment.clone(),
-            );
+            commitments_map.insert(CommittedPoly::DivNodeQuotient(i), data.commitment.clone());
         });
         oh_polys.iter().enumerate().for_each(|(i, data)| {
-            commitments_map.insert(
-                CommittedPolynomial::NodeOutputRaD(i, 0),
-                data.commitment.clone(),
-            );
+            commitments_map.insert(CommittedPoly::NodeOutputRaD(i, 0), data.commitment.clone());
         });
         // Compute joint commitment
         let joint_commitment = VerifierOpeningAccumulator::compute_joint_commitment::<

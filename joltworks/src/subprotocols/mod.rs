@@ -2,7 +2,6 @@
 pub mod blindfold;
 pub mod booleanity;
 pub mod evaluation_reduction;
-pub mod gamma_fold;
 pub mod hamming_booleanity;
 pub mod hamming_weight;
 pub mod identity_range_check;

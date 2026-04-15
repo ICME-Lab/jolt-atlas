@@ -11,7 +11,7 @@
 //! 3. [`AtlasVerifierPreprocessing`] — adds the PCS verifier setup (VK).
 
 use atlas_onnx_tracer::model::Model;
-use common::CommittedPolynomial;
+use common::CommittedPoly;
 use joltworks::{
     field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme,
     transcripts::Transcript,
@@ -41,7 +41,7 @@ impl AtlasSharedPreprocessing {
     /// Get all committed polynomials required by the model's operations.
     pub fn get_models_committed_polynomials<F: JoltField, T: Transcript>(
         &self,
-    ) -> Vec<CommittedPolynomial> {
+    ) -> Vec<CommittedPoly> {
         use crate::onnx_proof::ops::NodeCommittedPolynomials;
         self.model
             .graph

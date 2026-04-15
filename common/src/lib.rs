@@ -32,7 +32,7 @@ canonical_serde_enum! {
     /// | `GatherRa` | Read-address polynomial for the Gather operator |
     /// | `SoftmaxRecipMultRemainder` | Remainder used in the reciprocal-multiplication check of softmax |
     #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
-    pub enum CommittedPolynomial {
+    pub enum CommittedPoly {
         // ----- One-hot read-address decompositions (node_index, d) -----
         /// One-hot read-address decomposition for a node's output lookup.
         ///
@@ -187,7 +187,7 @@ canonical_serde_enum! {
     /// | `HammingWeight` | Polynomial used in the Hamming-weight sumcheck |
     /// | `Div* / Sqrt* / Teleport*` | Advice-derived polynomials proven via `ReadRafSumcheckProver` from committed one-hot polynomials |
     #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
-    pub enum VirtualPolynomial {
+    pub enum VirtualPoly {
         // ----- Node output -----
         /// Multilinear extension (MLE) of a node's output tensor.
         ///

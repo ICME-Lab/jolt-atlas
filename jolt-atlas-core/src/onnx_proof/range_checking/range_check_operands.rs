@@ -7,10 +7,10 @@ use atlas_onnx_tracer::{
     ops::Operator,
     tensor::Tensor,
 };
-use common::{CommittedPolynomial, VirtualPolynomial};
+use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, SumcheckId, VirtualOpeningId},
+    poly::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     utils::lookup_bits::LookupBits,
 };
 
@@ -30,10 +30,12 @@ use crate::{
 pub struct RangeCheckOperandsBase {
     /// Index of the computation node in the graph.
     pub node_idx: usize,
-    /// Input operand virtual polynomials: [left_operand, right_operand].
-    pub input_operands: Vec<VirtualPolynomial>,
+    /// Polynomial to be range-checked
+    pub remainder: VirtualPoly,
+    /// Bound polynomial
+    pub bound: VirtualPoly,
     /// Virtual polynomial representing the range-check read-address (Ra).
-    pub virtual_ra: VirtualPolynomial,
+    pub virtual_ra: VirtualPoly,
 }
 
 /// Trait defining the interface for operations that require range-checking.
@@ -59,12 +61,12 @@ pub trait RangeCheckingOperandsTrait {
     }
 
     /// Get the virtual polynomials representing the input operands for range-checking.
-    fn get_input_operands(&self) -> Vec<VirtualPolynomial> {
-        self.base().input_operands.to_vec()
+    fn get_input_operands(&self) -> Vec<VirtualPoly> {
+        vec![self.base().remainder, self.base().bound]
     }
 
     /// Get the virtual polynomial representing the range-check read-address (Ra) output.
-    fn get_output_operand(&self) -> VirtualPolynomial {
+    fn get_output_operand(&self) -> VirtualPoly {
         self.base().virtual_ra
     }
 
@@ -82,7 +84,7 @@ pub trait RangeCheckingOperandsTrait {
             .get_input_operands()
             .iter()
             .map(|operand| {
-                let operand_id = VirtualOpeningId::new(*operand, SumcheckId::Raf);
+                let operand_id = OpeningId::new(*operand, SumcheckId::Raf);
                 let (_, claim) = accumulator.get_virtual_polynomial_opening(operand_id);
                 claim
             })
@@ -110,7 +112,7 @@ pub trait RangeCheckingOperandsTrait {
     }
 
     /// Get the committed polynomial for the d-th dimension of the range-check read-address.
-    fn rad_poly(&self, d: usize) -> CommittedPolynomial;
+    fn rad_poly(&self, d: usize) -> CommittedPoly;
 }
 
 /// Operands for division range-checking.
@@ -140,11 +142,9 @@ impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
         Self {
             base: RangeCheckOperandsBase {
                 node_idx: node.idx,
-                input_operands: vec![
-                    VirtualPolynomial::DivRemainder(node.idx),
-                    VirtualPolynomial::NodeOutput(node.inputs[1]),
-                ],
-                virtual_ra: VirtualPolynomial::DivRangeCheckRa(node.idx),
+                remainder: VirtualPoly::DivRemainder(node.idx),
+                bound: VirtualPoly::NodeOutput(node.inputs[1]),
+                virtual_ra: VirtualPoly::DivRangeCheckRa(node.idx),
             },
         }
     }
@@ -173,8 +173,8 @@ impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
         (remainder, divisor.clone())
     }
 
-    fn rad_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::DivRangeCheckRaD(self.base.node_idx, d)
+    fn rad_poly(&self, d: usize) -> CommittedPoly {
+        CommittedPoly::DivRangeCheckRaD(self.base.node_idx, d)
     }
 }
 
@@ -183,11 +183,9 @@ impl RangeCheckingOperandsTrait for RiRangeCheckOperands {
         Self {
             base: RangeCheckOperandsBase {
                 node_idx: node.idx,
-                input_operands: vec![
-                    VirtualPolynomial::DivRemainder(node.idx),
-                    VirtualPolynomial::NodeOutput(node.inputs[0]),
-                ],
-                virtual_ra: VirtualPolynomial::DivRangeCheckRa(node.idx),
+                remainder: VirtualPoly::DivRemainder(node.idx),
+                bound: VirtualPoly::NodeOutput(node.inputs[0]),
+                virtual_ra: VirtualPoly::DivRangeCheckRa(node.idx),
             },
         }
     }
@@ -214,8 +212,8 @@ impl RangeCheckingOperandsTrait for RiRangeCheckOperands {
         (remainder, input_tensor.clone())
     }
 
-    fn rad_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::SqrtDivRangeCheckRaD(self.base.node_idx, d)
+    fn rad_poly(&self, d: usize) -> CommittedPoly {
+        CommittedPoly::SqrtDivRangeCheckRaD(self.base.node_idx, d)
     }
 }
 
@@ -224,11 +222,9 @@ impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
         Self {
             base: RangeCheckOperandsBase {
                 node_idx: node.idx,
-                input_operands: vec![
-                    VirtualPolynomial::SqrtRemainder(node.idx),
-                    VirtualPolynomial::NodeOutput(node.idx),
-                ],
-                virtual_ra: VirtualPolynomial::SqrtRangeCheckRa(node.idx),
+                remainder: VirtualPoly::SqrtRemainder(node.idx),
+                bound: VirtualPoly::NodeOutput(node.idx),
+                virtual_ra: VirtualPoly::SqrtRangeCheckRa(node.idx),
             },
         }
     }
@@ -293,8 +289,8 @@ impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
         compute_lookup_indices_from_operands(&[left_operand, &upper_bound], true)
     }
 
-    fn rad_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::SqrtRangeCheckRaD(self.base.node_idx, d)
+    fn rad_poly(&self, d: usize) -> CommittedPoly {
+        CommittedPoly::SqrtRangeCheckRaD(self.base.node_idx, d)
     }
 }
 
@@ -310,11 +306,9 @@ impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
         Self {
             base: RangeCheckOperandsBase {
                 node_idx: node.idx,
-                input_operands: vec![
-                    VirtualPolynomial::TeleportRemainder(node.idx),
-                    VirtualPolynomial::NodeOutput(node.inputs[0]),
-                ],
-                virtual_ra: VirtualPolynomial::TeleportRangeCheckRa(node.idx),
+                remainder: VirtualPoly::TeleportRemainder(node.idx),
+                bound: VirtualPoly::NodeOutput(node.inputs[0]),
+                virtual_ra: VirtualPoly::TeleportRangeCheckRa(node.idx),
             },
         }
     }
@@ -353,7 +347,7 @@ impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
         (remainder, divisor_tensor)
     }
 
-    fn rad_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::TeleportRangeCheckRaD(self.base.node_idx, d)
+    fn rad_poly(&self, d: usize) -> CommittedPoly {
+        CommittedPoly::TeleportRangeCheckRaD(self.base.node_idx, d)
     }
 }

@@ -1,18 +1,19 @@
+use crate::onnx_proof::neural_teleport::{
+    division::{
+        compute_division, TeleportDivisionParams, TeleportDivisionProver, TeleportDivisionVerifier,
+    },
+    range_and_onehot::{
+        prove_range_and_onehot, verify_range_and_onehot, NeuralTeleportRangeOneHot,
+    },
+    sin::{SinTable, SIN_LOG_TABLE_SIZE},
+    utils::compute_ra_evals_direct,
+};
 use crate::onnx_proof::{
-    neural_teleport::{
-        division::{
-            compute_division, TeleportDivisionParams, TeleportDivisionProver,
-            TeleportDivisionVerifier,
-        },
-        sin::{SinTable, SIN_LOG_TABLE_SIZE},
-        utils::compute_ra_evals_direct,
-    },
     ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
-    range_checking::{
-        range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
-    },
+    range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding},
     ProofId, ProofType, Prover, Verifier,
 };
+use crate::utils::opening_id_builder::{AccOpeningAccessor, Target};
 use atlas_onnx_tracer::{
     model::{
         consts::FOUR_PI_APPROX,
@@ -23,25 +24,24 @@ use atlas_onnx_tracer::{
     ops::Sin,
 };
 use common::parallel::par_enabled;
-use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
+use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::{IntoOpening, JoltField},
-    lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
         opening_proof::{
-            CommittedOpeningId, OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator,
-            SumcheckId, VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
+            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         unipoly::UniPoly,
     },
     subprotocols::{
-        shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
+        shout::RaOneHotEncoding,
+        sumcheck::{Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -114,26 +114,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
         let mut execution_proofs = self.prove(node, prover);
 
         // teleportation quotient is never virtualized, so we need to commit to it.
-        let quotient_vid = VirtualOpeningId::new(
-            VirtualPolynomial::TeleportQuotient(node.idx),
-            SumcheckId::NodeExecution(node.idx),
-        );
-        let teleport_q = prover
-            .accumulator
-            .get_virtual_polynomial_opening(quotient_vid);
-        let quotient_cid = CommittedOpeningId::new(
-            CommittedPolynomial::TeleportNodeQuotient(node.idx),
-            SumcheckId::NodeExecution(node.idx),
-        );
-        prover.accumulator.append_dense(
-            &mut prover.transcript,
-            quotient_cid,
-            teleport_q.0.r.clone(),
-            teleport_q.1,
-        );
+        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
+        let teleport_q = accessor.get_advice(VirtualPoly::TeleportQuotient);
+        let mut provider = accessor.to_provider(&mut prover.transcript, teleport_q.0.clone());
+
+        provider.append_advice(CommittedPoly::TeleportNodeQuotient, teleport_q.1);
 
         let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
-        execution_proofs.extend(prove_post_reduction_checks(node, prover));
+        execution_proofs.extend(prove_range_and_onehot(node, prover, self));
         (eval_reduction_proof, execution_proofs)
     }
 
@@ -190,27 +178,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
     ) -> Result<(), ProofVerifyError> {
         self.verify(node, verifier)?;
 
-        let quotient_vid = VirtualOpeningId::new(
-            VirtualPolynomial::TeleportQuotient(node.idx),
-            SumcheckId::NodeExecution(node.idx),
-        );
-        let teleport_q = verifier
-            .accumulator
-            .get_virtual_polynomial_opening(quotient_vid);
+        let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, node);
+        let teleport_q = accessor.get_advice(VirtualPoly::TeleportQuotient);
+        let mut provider = accessor.to_provider(&mut verifier.transcript, teleport_q.0.clone());
 
-        let quotient_cid = CommittedOpeningId::new(
-            CommittedPolynomial::TeleportNodeQuotient(node.idx),
-            SumcheckId::NodeExecution(node.idx),
-        );
-        verifier.accumulator.append_dense(
-            &mut verifier.transcript,
-            quotient_cid,
-            teleport_q.0.r.clone(),
-        );
-        let committed_q = verifier
-            .accumulator
-            .get_committed_polynomial_opening(quotient_cid)
-            .1;
+        provider.append_advice(CommittedPoly::TeleportNodeQuotient);
+        let committed_q = provider.get_advice(CommittedPoly::TeleportNodeQuotient).1;
         if committed_q != teleport_q.1 {
             return Err(ProofVerifyError::InvalidOpeningProof(
                 "Teleport quotient claim does not match committed quotient claim".to_string(),
@@ -218,140 +191,19 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
         }
 
         NodeEvalReduction::verify(verifier, node, eval_reduction_proof)?;
-        verify_post_reduction_checks(node, verifier)
+        verify_range_and_onehot(node, verifier, self)
     }
 
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
         let sin_encoding = SinRaEncoding { node_idx: node.idx };
         let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
         let sin_d = sin_encoding.one_hot_params().instruction_d;
         let rc_d = rc_encoding.one_hot_params().instruction_d;
-        let mut polys = vec![CommittedPolynomial::TeleportNodeQuotient(node.idx)];
-        polys.extend((0..sin_d).map(|i| CommittedPolynomial::SinRaD(node.idx, i)));
-        polys.extend((0..rc_d).map(|i| CommittedPolynomial::TeleportRangeCheckRaD(node.idx, i)));
+        let mut polys = vec![CommittedPoly::TeleportNodeQuotient(node.idx)];
+        polys.extend((0..sin_d).map(|i| CommittedPoly::SinRaD(node.idx, i)));
+        polys.extend((0..rc_d).map(|i| CommittedPoly::TeleportRangeCheckRaD(node.idx, i)));
         polys
     }
-}
-
-fn prove_post_reduction_checks<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    prover: &mut Prover<F, T>,
-) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-    let mut proofs = Vec::new();
-
-    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
-    let input = operands[0];
-    let (_, remainder) = compute_division(input, FOUR_PI_APPROX);
-    let sin_lookup_indices = remainder
-        .par_iter()
-        .with_min_len(par_enabled())
-        .map(|&x| x as usize)
-        .collect::<Vec<usize>>();
-
-    let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-    let (rangecheck_sumcheck, rc_lookup_indices) = rangecheck_provider
-        .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
-            &prover.trace,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-
-    let sin_encoding = SinRaEncoding { node_idx: node.idx };
-    let sin_ra_onehot_provers = shout::ra_onehot_provers(
-        &sin_encoding,
-        &sin_lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let mut range_and_sin_instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-        vec![Box::new(rangecheck_sumcheck)];
-    range_and_sin_instances.extend(sin_ra_onehot_provers);
-    let (sin_ra_one_hot_proof, _) = BatchedSumcheck::prove(
-        range_and_sin_instances
-            .iter_mut()
-            .map(|v| &mut **v as _)
-            .collect(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-    proofs.push((
-        ProofId(node.idx, ProofType::RaOneHotChecks),
-        sin_ra_one_hot_proof,
-    ));
-
-    let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-    let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_provers(
-        &rc_encoding,
-        &rc_lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![rc_ra, rc_hw, rc_bool];
-    let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
-        instances.iter_mut().map(|v| &mut **v as _).collect(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-    proofs.push((
-        ProofId(node.idx, ProofType::RaHammingWeight),
-        ra_one_hot_proof,
-    ));
-
-    proofs
-}
-
-fn verify_post_reduction_checks<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, T>,
-) -> Result<(), ProofVerifyError> {
-    let sin_ra_one_hot_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-
-    let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-    let rangecheck_verifier = rangecheck_provider
-        .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        );
-    let sin_encoding = SinRaEncoding { node_idx: node.idx };
-    let sin_ra_onehot_verifier = shout::ra_onehot_verifiers(
-        &sin_encoding,
-        &verifier.accumulator,
-        &mut verifier.transcript,
-    );
-    let sin_ra_onehot_verifier: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
-        sin_ra_onehot_verifier.iter().map(|v| &**v as _).collect();
-    let mut range_and_sin_instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
-        vec![&rangecheck_verifier];
-    range_and_sin_instances.extend(sin_ra_onehot_verifier);
-    BatchedSumcheck::verify(
-        sin_ra_one_hot_proof,
-        range_and_sin_instances,
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
-
-    let ra_one_hot_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::RaHammingWeight))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-
-    let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-    let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_verifiers(
-        &rc_encoding,
-        &verifier.accumulator,
-        &mut verifier.transcript,
-    );
-    BatchedSumcheck::verify(
-        ra_one_hot_proof,
-        vec![&*rc_ra, &*rc_hw, &*rc_bool],
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
-
-    Ok(())
 }
 
 const DEGREE_BOUND: usize = 2;
@@ -375,16 +227,13 @@ impl<F: JoltField> SinParams<F> {
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let gamma = transcript.challenge_scalar();
-        let remainder_id = VirtualOpeningId::new(
-            VirtualPolynomial::TeleportRemainder(computation_node.idx),
-            SumcheckId::NodeExecution(computation_node.idx),
-        );
-        let r_node_output = accumulator.get_virtual_polynomial_opening(remainder_id).0.r;
+        let r_node_output = accessor.get_advice(VirtualPoly::TeleportRemainder).0;
 
         Self {
             gamma,
-            r_node_output: r_node_output.into(),
+            r_node_output,
             computation_node,
         }
     }
@@ -396,17 +245,9 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SinParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let output_id = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(self.computation_node.idx),
-            SumcheckId::NodeExecution(self.computation_node.idx),
-        );
-        let rv_claim = accumulator.get_virtual_polynomial_opening(output_id).1;
-
-        let remainder_id = VirtualOpeningId::new(
-            VirtualPolynomial::TeleportRemainder(self.computation_node.idx),
-            SumcheckId::NodeExecution(self.computation_node.idx),
-        );
-        let remainder_claim = accumulator.get_virtual_polynomial_opening(remainder_id).1;
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
+        let rv_claim = accessor.get_node_io(Target::Current).1;
+        let remainder_claim = accessor.get_advice(VirtualPoly::TeleportRemainder).1;
 
         rv_claim + self.gamma * remainder_claim
     }
@@ -461,16 +302,9 @@ impl<F: JoltField> SinProver<F> {
         // Both claims are derived from a different opening point, so we need to derive a new claim for one of (`output`, `remainder`).
         // We chose `output` to prevent us from having to use n-to-1 reductions on the `remainder` and rather only implement it on NodeOutput.
         // Making further work for Issue#138 easier.
-        let output_id = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(params.computation_node.idx),
-            SumcheckId::NodeExecution(params.computation_node.idx),
-        );
-        accumulator.append_virtual(
-            transcript,
-            output_id,
-            params.r_node_output.clone(),
-            output_claim,
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
+            .to_provider(transcript, params.r_node_output.clone());
+        provider.append_node_io(Target::Current, output_claim);
 
         let input_onehot = MultilinearPolynomial::from(input_onehot);
         assert_eq!(input_onehot.len(), sin_table.len());
@@ -478,16 +312,8 @@ impl<F: JoltField> SinProver<F> {
 
         #[cfg(test)]
         {
-            let remainder_id = VirtualOpeningId::new(
-                VirtualPolynomial::TeleportRemainder(params.computation_node.idx),
-                SumcheckId::NodeExecution(params.computation_node.idx),
-            );
-            let output_id = VirtualOpeningId::new(
-                VirtualPolynomial::NodeOutput(params.computation_node.idx),
-                SumcheckId::NodeExecution(params.computation_node.idx),
-            );
-            let remainder_claim = accumulator.get_virtual_polynomial_opening(remainder_id).1;
-            let rv_claim = accumulator.get_virtual_polynomial_opening(output_id).1;
+            let remainder_claim = provider.get_advice(VirtualPoly::TeleportRemainder).1;
+            let rv_claim = provider.get_node_io(Target::Current).1;
             let claim = (0..input_onehot.len())
                 .map(|i| {
                     let a = input_onehot.get_bound_coeff(i);
@@ -565,16 +391,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SinProver<F> 
             self.params.r_node_output.r.as_slice(),
         ]
         .concat();
-        let sin_ra_id = VirtualOpeningId::new(
-            VirtualPolynomial::SinRa(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(
-            transcript,
-            sin_ra_id,
-            OpeningPoint::new(r),
-            self.input_onehot.final_sumcheck_claim(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, OpeningPoint::new(r));
+        provider.append_advice(VirtualPoly::SinRa, self.input_onehot.final_claim());
     }
 }
 
@@ -596,12 +415,9 @@ impl<F: JoltField> SinVerifier<F> {
         transcript: &mut impl Transcript,
     ) -> Self {
         let params = SinParams::new(computation_node, graph, accumulator, transcript);
-
-        let output_id = VirtualOpeningId::new(
-            VirtualPolynomial::NodeOutput(params.computation_node.idx),
-            SumcheckId::NodeExecution(params.computation_node.idx),
-        );
-        accumulator.append_virtual(transcript, output_id, params.r_node_output.clone());
+        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
+            .to_provider(transcript, params.r_node_output.clone());
+        provider.append_node_io(Target::Current);
 
         let sin_table = MultilinearPolynomial::from(SinTable::materialize());
         Self { params, sin_table }
@@ -618,15 +434,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SinVerifier
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
 
-        let sin_ra_id = VirtualOpeningId::new(
-            VirtualPolynomial::SinRa(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        let ra_claim = accumulator.get_virtual_polynomial_opening(sin_ra_id).1;
+        let ra_claim = accessor.get_advice(VirtualPoly::SinRa).1;
         let table_claim = self.sin_table.evaluate(&opening_point.r);
         let int_eval = IdentityPolynomial::new(SIN_LOG_TABLE_SIZE).evaluate(&opening_point.r);
 
@@ -647,11 +460,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SinVerifier
             self.params.r_node_output.r.as_slice(),
         ]
         .concat();
-        let sin_ra_id = VirtualOpeningId::new(
-            VirtualPolynomial::SinRa(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-        );
-        accumulator.append_virtual(transcript, sin_ra_id, OpeningPoint::new(r));
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, OpeningPoint::new(r));
+        provider.append_advice(VirtualPoly::SinRa);
     }
 }
 
@@ -664,20 +475,20 @@ pub struct SinRaEncoding {
 }
 
 impl RaOneHotEncoding for SinRaEncoding {
-    fn committed_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::SinRaD(self.node_idx, d)
+    fn committed_poly(&self, d: usize) -> CommittedPoly {
+        CommittedPoly::SinRaD(self.node_idx, d)
     }
 
-    fn r_cycle_source(&self) -> VirtualOpeningId {
-        VirtualOpeningId::new(
-            VirtualPolynomial::TeleportRemainder(self.node_idx),
+    fn r_cycle_source(&self) -> OpeningId {
+        OpeningId::new(
+            VirtualPoly::TeleportRemainder(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
 
-    fn ra_source(&self) -> VirtualOpeningId {
-        VirtualOpeningId::new(
-            VirtualPolynomial::SinRa(self.node_idx),
+    fn ra_source(&self) -> OpeningId {
+        OpeningId::new(
+            VirtualPoly::SinRa(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
@@ -688,6 +499,21 @@ impl RaOneHotEncoding for SinRaEncoding {
 
     fn one_hot_params(&self) -> OneHotParams {
         OneHotParams::from_config_and_log_K(&OneHotConfig::default(), SIN_LOG_TABLE_SIZE)
+    }
+}
+
+impl<F: JoltField, T: Transcript> NeuralTeleportRangeOneHot<F, T> for Sin {
+    type RaEncoding = SinRaEncoding;
+
+    fn lookup_indices(&self, node: &ComputationNode, trace: &Trace) -> Vec<usize> {
+        let LayerData { operands, .. } = Trace::layer_data(trace, node);
+        let input = operands[0];
+        let (_, remainder) = compute_division(input, FOUR_PI_APPROX);
+        remainder.par_iter().map(|&x| x as usize).collect()
+    }
+
+    fn ra_encoding(&self, node: &ComputationNode) -> Self::RaEncoding {
+        SinRaEncoding { node_idx: node.idx }
     }
 }
 

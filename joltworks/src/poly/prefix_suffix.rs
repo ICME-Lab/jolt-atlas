@@ -46,9 +46,7 @@ impl<F: JoltField> PrefixRegistry<F> {
 
     pub fn update_checkpoints(&mut self) {
         Prefix::iter().for_each(|p| {
-            self.checkpoints[p] = self[p]
-                .as_ref()
-                .map(|p| p.read().unwrap().final_sumcheck_claim());
+            self.checkpoints[p] = self[p].as_ref().map(|p| p.read().unwrap().final_claim());
             self[p] = None;
         });
     }
@@ -127,8 +125,8 @@ impl<F: JoltField> PolynomialBinding<F> for CachedPolynomial<F> {
         }
     }
 
-    fn final_sumcheck_claim(&self) -> F {
-        self.inner.final_sumcheck_claim()
+    fn final_claim(&self) -> F {
+        self.inner.final_claim()
     }
 
     fn is_bound(&self) -> bool {
@@ -508,7 +506,7 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
                 }
                 if let Some(p) = p {
                     let p = p.read().unwrap();
-                    p.final_sumcheck_claim().mul_u64(suff)
+                    p.final_claim().mul_u64(suff)
                 } else {
                     F::from_u64(suff)
                 }

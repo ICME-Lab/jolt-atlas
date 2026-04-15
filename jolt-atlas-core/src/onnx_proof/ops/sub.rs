@@ -1,7 +1,7 @@
 use crate::{
     impl_standard_params, impl_standard_sumcheck_proof_api,
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
-    utils::opening_id_builder::{OpeningIdBuilder, OpeningTarget},
+    utils::opening_id_builder::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
@@ -101,25 +101,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SubProver<F> 
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let node = &self.params.computation_node;
-        let builder = OpeningIdBuilder::new(node);
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let left_opening_id = builder.node_io(OpeningTarget::Input(0));
-        let right_opening_id = builder.node_io(OpeningTarget::Input(1));
-        accumulator.append_virtual(
-            transcript,
-            left_opening_id,
-            opening_point.clone(),
-            self.left_operand.final_sumcheck_claim(),
-        );
-        accumulator.append_virtual(
-            transcript,
-            right_opening_id,
-            opening_point,
-            self.right_operand.final_sumcheck_claim(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, opening_point);
+        provider.append_node_io(Target::Input(0), self.left_operand.final_claim());
+        provider.append_node_io(Target::Input(1), self.right_operand.final_claim());
     }
 }
 
@@ -153,23 +141,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SubVerifier
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let r_node_output = accumulator
-            .get_node_output_opening(self.params.computation_node.idx)
-            .0
-            .r;
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
+        let r_node_output = &self.params.r_node_output.r;
         let r_node_output_prime = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
-        let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
-        let left_operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[0],
-            self.params.computation_node.idx,
-        );
-        let right_operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[1],
-            self.params.computation_node.idx,
-        );
+        let eq_eval = EqPolynomial::mle(r_node_output, &r_node_output_prime);
+
+        let left_operand_claim = accessor.get_node_io(Target::Input(0)).1;
+        let right_operand_claim = accessor.get_node_io(Target::Input(1)).1;
         eq_eval * (left_operand_claim - right_operand_claim)
     }
 
@@ -179,15 +160,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SubVerifier
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let node = &self.params.computation_node;
-        let builder = OpeningIdBuilder::new(node);
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let left_opening_id = builder.node_io(OpeningTarget::Input(0));
-        let right_opening_id = builder.node_io(OpeningTarget::Input(1));
-        accumulator.append_virtual(transcript, left_opening_id, opening_point.clone());
-        accumulator.append_virtual(transcript, right_opening_id, opening_point);
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, opening_point);
+        provider.append_node_io(Target::Input(0));
+        provider.append_node_io(Target::Input(1));
     }
 }
 

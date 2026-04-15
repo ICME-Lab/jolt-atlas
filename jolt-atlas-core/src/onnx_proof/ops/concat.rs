@@ -1,6 +1,6 @@
 use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
-    opening_id_builder::{OpeningIdBuilder, OpeningTarget},
+    opening_id_builder::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
     model::{
@@ -107,10 +107,11 @@ impl<F: JoltField> ConcatSumcheckParams<F> {
         accumulator: &dyn OpeningAccumulator<F>,
         graph: &ComputationGraph,
     ) -> Self {
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let Operator::Concat(concat_op) = &computation_node.operator else {
             panic!("Expected Concat operator")
         };
-        let r_output = accumulator.get_node_output_opening(computation_node.idx).0;
+        let r_output = accessor.get_reduced_opening().0;
         let input_raw_dims = graph
             .get_input_nodes(&computation_node)
             .iter()
@@ -149,9 +150,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ConcatSumcheckParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        accumulator
-            .get_node_output_opening(self.computation_node.idx)
-            .1
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
+        accessor.get_reduced_opening().1
     }
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -276,19 +276,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ConcatSumchec
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let builder = OpeningIdBuilder::new(&self.params.computation_node);
         let full_opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, Default::default()); // We will update the opening point for each input term
         for (i, term) in self.input_terms.iter().enumerate() {
             let live_opening_point = full_opening_point.r[..term.input_num_vars].to_vec();
-            let opening_id = builder.node_io(OpeningTarget::Input(i));
-            accumulator.append_virtual(
-                transcript,
-                opening_id,
-                live_opening_point.into(),
-                term.input_mle.final_sumcheck_claim(),
-            );
+            provider.update_point(live_opening_point.into());
+            provider.append_node_io(Target::Input(i), term.input_mle.final_claim());
         }
     }
 }
@@ -321,6 +317,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ConcatSumch
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
         let full_opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
@@ -328,10 +325,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ConcatSumch
         self.params.input_raw_dims.iter().enumerate().fold(
             F::zero(),
             |running, (input_idx, _input_raw_dims)| {
-                let input_claim = accumulator.get_node_output_claim(
-                    self.params.computation_node.inputs[input_idx],
-                    self.params.computation_node.idx,
-                );
+                let input_claim = accessor.get_node_io(Target::Input(input_idx)).1;
+
                 let selector = build_concat_selector(
                     &self.params.input_raw_dims,
                     &self.params.output_raw_dims,
@@ -353,16 +348,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ConcatSumch
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let builder = OpeningIdBuilder::new(&self.params.computation_node);
         let full_opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .to_provider(transcript, Default::default()); // We will update the opening point for each input term
         for (input_idx, input_raw_dims) in self.params.input_raw_dims.iter().enumerate() {
             let input_num_vars = padded_domain_len(input_raw_dims).log_2();
             let live_opening_point = full_opening_point.r[..input_num_vars].to_vec();
-
-            let opening_id = builder.node_io(OpeningTarget::Input(input_idx));
-            accumulator.append_virtual(transcript, opening_id, live_opening_point.into());
+            provider.update_point(live_opening_point.into());
+            provider.append_node_io(Target::Input(input_idx));
         }
     }
 }

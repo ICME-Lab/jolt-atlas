@@ -279,13 +279,9 @@ impl BatchedSumcheck {
         transcript: &mut ProofTranscript,
         pedersen_gens: &crate::poly::commitment::pedersen::PedersenGenerators<C>,
         rng: &mut R,
-    ) -> (
-        ZkSumcheckProof<F, C, ProofTranscript>,
-        Vec<F::Challenge>,
-        F,
-    ) {
-        use crate::subprotocols::blindfold::ZkStageData;
+    ) -> (ZkSumcheckProof<F, C, ProofTranscript>, Vec<F::Challenge>, F) {
         use crate::poly::unipoly::UniPoly;
+        use crate::subprotocols::blindfold::ZkStageData;
 
         let max_num_rounds = sumcheck_instances
             .iter()
@@ -534,7 +530,11 @@ impl BatchedSumcheck {
 /// ZK sumcheck proof containing Pedersen commitments instead of cleartext polynomials.
 #[cfg(feature = "zk")]
 #[derive(Clone, Debug)]
-pub struct ZkSumcheckProof<F: JoltField, C: crate::curve::JoltCurve<F = F>, ProofTranscript: Transcript> {
+pub struct ZkSumcheckProof<
+    F: JoltField,
+    C: crate::curve::JoltCurve<F = F>,
+    ProofTranscript: Transcript,
+> {
     pub round_commitments: Vec<C::G1>,
     pub poly_degrees: Vec<usize>,
     pub output_claims_commitments: Vec<C::G1>,

@@ -511,11 +511,7 @@ pub struct Constraint<F> {
 }
 
 impl<F: JoltField> Constraint<F> {
-    pub fn new(
-        a: LinearCombination<F>,
-        b: LinearCombination<F>,
-        c: LinearCombination<F>,
-    ) -> Self {
+    pub fn new(a: LinearCombination<F>, b: LinearCombination<F>, c: LinearCombination<F>) -> Self {
         Self { a, b, c }
     }
 

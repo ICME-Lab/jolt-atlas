@@ -488,7 +488,6 @@ pub fn compute_L_w_at_ry<F: JoltField>(
     ra * a_val + rb * b_val + rc * c_val
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

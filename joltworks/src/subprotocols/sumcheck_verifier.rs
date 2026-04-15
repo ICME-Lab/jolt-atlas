@@ -66,12 +66,17 @@ pub trait SumcheckInstanceParams<F: JoltField> {
     }
 
     #[cfg(feature = "zk")]
-    fn input_constraint_challenge_values(&self, _accumulator: &dyn OpeningAccumulator<F>) -> Vec<F> {
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
         todo!("implement per-operator BlindFold constraints")
     }
 
     #[cfg(feature = "zk")]
-    fn output_claim_constraint(&self) -> Option<crate::subprotocols::blindfold::OutputClaimConstraint> {
+    fn output_claim_constraint(
+        &self,
+    ) -> Option<crate::subprotocols::blindfold::OutputClaimConstraint> {
         todo!("implement per-operator BlindFold constraints")
     }
 

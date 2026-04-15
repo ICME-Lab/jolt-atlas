@@ -236,7 +236,11 @@ mod tests {
         let c2 = gens.commit(&coeffs2, &r2);
         let c_sum = c1 + c2;
 
-        let coeffs_sum: Vec<Fr> = coeffs1.iter().zip(coeffs2.iter()).map(|(a, b)| *a + *b).collect();
+        let coeffs_sum: Vec<Fr> = coeffs1
+            .iter()
+            .zip(coeffs2.iter())
+            .map(|(a, b)| *a + *b)
+            .collect();
         let r_sum = r1 + r2;
         let c_expected = gens.commit(&coeffs_sum, &r_sum);
 

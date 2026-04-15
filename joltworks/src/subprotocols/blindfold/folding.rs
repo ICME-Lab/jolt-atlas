@@ -307,7 +307,6 @@ pub fn commit_cross_term_rows<F: JoltField, C: JoltCurve<F = F>>(
     (t_row_commitments, t_row_blindings)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

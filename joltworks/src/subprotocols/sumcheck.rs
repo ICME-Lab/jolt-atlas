@@ -257,6 +257,288 @@ impl BatchedSumcheck {
 
         Ok(r_sumcheck)
     }
+
+    /// Prove a batched sumcheck in zero-knowledge mode.
+    ///
+    /// Instead of sending cleartext round polynomials, the prover commits to each
+    /// round's batched polynomial using Pedersen commitments. The committed coefficients
+    /// are later verified by BlindFold's split-committed R1CS.
+    ///
+    /// Returns (proof, challenges, initial_batched_claim).
+    #[cfg(feature = "zk")]
+    #[tracing::instrument(skip_all, name = "BatchedSumcheck::prove_zk")]
+    pub fn prove_zk<
+        F: JoltField,
+        C: crate::curve::JoltCurve<F = F>,
+        ProofTranscript: Transcript,
+        R: rand_core::CryptoRngCore,
+    >(
+        mut sumcheck_instances: Vec<&mut dyn SumcheckInstanceProver<F, ProofTranscript>>,
+        opening_accumulator: &mut ProverOpeningAccumulator<F>,
+        blindfold_accumulator: &mut crate::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+        transcript: &mut ProofTranscript,
+        pedersen_gens: &crate::poly::commitment::pedersen::PedersenGenerators<C>,
+        rng: &mut R,
+    ) -> (
+        ZkSumcheckProof<F, C, ProofTranscript>,
+        Vec<F::Challenge>,
+        F,
+    ) {
+        use crate::subprotocols::blindfold::ZkStageData;
+        use crate::poly::unipoly::UniPoly;
+
+        let max_num_rounds = sumcheck_instances
+            .iter()
+            .map(|sumcheck| sumcheck.num_rounds())
+            .max()
+            .unwrap();
+
+        // In ZK mode, don't absorb cleartext claims -- polynomial commitments provide binding.
+        let batching_coeffs: Vec<F> = transcript.challenge_vector(sumcheck_instances.len());
+
+        let mut individual_claims: Vec<F> = sumcheck_instances
+            .iter()
+            .map(|sumcheck| {
+                let num_rounds = sumcheck.num_rounds();
+                let input_claim = sumcheck.input_claim(opening_accumulator);
+                input_claim.mul_pow_2(max_num_rounds - num_rounds)
+            })
+            .collect();
+
+        let initial_batched_claim: F = individual_claims
+            .iter()
+            .zip(batching_coeffs.iter())
+            .map(|(claim, coeff)| *claim * coeff)
+            .sum();
+
+        let mut r_sumcheck: Vec<F::Challenge> = Vec::with_capacity(max_num_rounds);
+        let mut round_commitments_g1: Vec<C::G1> = Vec::with_capacity(max_num_rounds);
+        let mut poly_coeffs: Vec<Vec<F>> = Vec::with_capacity(max_num_rounds);
+        let mut blinding_factors: Vec<F> = Vec::with_capacity(max_num_rounds);
+        let mut poly_degrees: Vec<usize> = Vec::with_capacity(max_num_rounds);
+
+        for round in 0..max_num_rounds {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let label = format!("Sumcheck round {round}");
+                print_current_memory_usage(label.as_str());
+            }
+
+            let univariate_polys: Vec<UniPoly<F>> = sumcheck_instances
+                .iter_mut()
+                .zip(individual_claims.iter())
+                .map(|(sumcheck, previous_claim)| {
+                    let num_rounds = sumcheck.num_rounds();
+                    let offset = sumcheck.round_offset(max_num_rounds);
+                    let active = round >= offset && round < offset + num_rounds;
+                    if active {
+                        sumcheck.compute_message(round - offset, *previous_claim)
+                    } else {
+                        // Dummy round: polynomial is constant with H(0)=H(1)=previous_claim/2.
+                        let two_inv = F::from_u64(2).inverse().unwrap();
+                        UniPoly::from_coeff(vec![*previous_claim * two_inv])
+                    }
+                })
+                .collect();
+
+            let batched_univariate_poly: UniPoly<F> =
+                univariate_polys.iter().zip(&batching_coeffs).fold(
+                    UniPoly::from_coeff(vec![]),
+                    |mut batched_poly, (poly, &coeff)| {
+                        batched_poly += &(poly * coeff);
+                        batched_poly
+                    },
+                );
+
+            let blinding = F::random(rng);
+            let commitment = pedersen_gens.commit(&batched_univariate_poly.coeffs, &blinding);
+
+            transcript.append_serializable(&commitment);
+
+            let r_j = transcript.challenge_scalar_optimized::<F>();
+            r_sumcheck.push(r_j);
+
+            individual_claims
+                .iter_mut()
+                .zip(univariate_polys.into_iter())
+                .for_each(|(claim, poly)| *claim = poly.evaluate(&r_j));
+
+            for sumcheck in sumcheck_instances.iter_mut() {
+                let num_rounds = sumcheck.num_rounds();
+                let offset = sumcheck.round_offset(max_num_rounds);
+                let active = round >= offset && round < offset + num_rounds;
+                if active {
+                    sumcheck.ingest_challenge(r_j, round - offset);
+                }
+            }
+
+            round_commitments_g1.push(commitment);
+            poly_degrees.push(batched_univariate_poly.coeffs.len() - 1);
+            poly_coeffs.push(batched_univariate_poly.coeffs.clone());
+            blinding_factors.push(blinding);
+        }
+
+        for sumcheck in sumcheck_instances.iter_mut() {
+            sumcheck.finalize();
+        }
+
+        let max_num_rounds = sumcheck_instances
+            .iter()
+            .map(|sumcheck| sumcheck.num_rounds())
+            .max()
+            .unwrap();
+
+        for sumcheck in sumcheck_instances.iter() {
+            let num_rounds = sumcheck.num_rounds();
+            let offset = sumcheck.round_offset(max_num_rounds);
+            let r_slice = &r_sumcheck[offset..offset + num_rounds];
+            sumcheck.cache_openings(opening_accumulator, transcript, r_slice);
+        }
+
+        let output_claim_values = opening_accumulator.take_pending_claims();
+        let output_claim_ids = opening_accumulator.take_pending_claim_ids();
+        let oc_committed: Vec<_> = pedersen_gens.commit_chunked(&output_claim_values, rng);
+        let output_claims: Vec<(crate::poly::opening_proof::OpeningId, F)> = output_claim_ids
+            .into_iter()
+            .zip(output_claim_values)
+            .collect();
+        let (output_claims_commitments, output_claims_blindings): (Vec<_>, Vec<_>) =
+            oc_committed.into_iter().unzip();
+        for com in &output_claims_commitments {
+            transcript.append_serializable(com);
+        }
+
+        let output_constraints: Vec<_> = sumcheck_instances
+            .iter()
+            .map(|sumcheck| sumcheck.get_params().output_claim_constraint())
+            .collect();
+
+        let constraint_challenge_values: Vec<Vec<F>> = sumcheck_instances
+            .iter()
+            .map(|sumcheck| {
+                let num_rounds = sumcheck.num_rounds();
+                let offset = sumcheck.round_offset(max_num_rounds);
+                let r_slice = &r_sumcheck[offset..offset + num_rounds];
+                sumcheck
+                    .get_params()
+                    .output_constraint_challenge_values(r_slice)
+            })
+            .collect();
+
+        let input_constraints: Vec<_> = sumcheck_instances
+            .iter()
+            .map(|sumcheck| sumcheck.get_params().input_claim_constraint())
+            .collect();
+
+        let input_constraint_challenge_values: Vec<Vec<F>> = sumcheck_instances
+            .iter()
+            .map(|sumcheck| {
+                sumcheck
+                    .get_params()
+                    .input_constraint_challenge_values(opening_accumulator)
+            })
+            .collect();
+
+        let input_claim_scaling_exponents: Vec<usize> = sumcheck_instances
+            .iter()
+            .map(|sumcheck| max_num_rounds - sumcheck.num_rounds())
+            .collect();
+
+        blindfold_accumulator.push_stage_data(ZkStageData {
+            initial_claim: initial_batched_claim,
+            round_commitments: round_commitments_g1.clone(),
+            poly_coeffs,
+            blinding_factors,
+            challenges: r_sumcheck.clone(),
+            batching_coefficients: batching_coeffs.to_vec(),
+            output_constraints,
+            constraint_challenge_values,
+            input_constraints,
+            input_constraint_challenge_values,
+            input_claim_scaling_exponents,
+            output_claims,
+            output_claims_blindings,
+            output_claims_commitments: output_claims_commitments.clone(),
+        });
+
+        (
+            ZkSumcheckProof {
+                round_commitments: round_commitments_g1,
+                poly_degrees,
+                output_claims_commitments,
+                _marker: PhantomData,
+            },
+            r_sumcheck,
+            initial_batched_claim,
+        )
+    }
+
+    /// Verify a ZK batched sumcheck proof.
+    ///
+    /// Absorbs commitments from the proof, derives challenges, but skips the
+    /// output claim equality check (that is handled by BlindFold).
+    #[cfg(feature = "zk")]
+    #[tracing::instrument(skip_all, name = "BatchedSumcheck::verify_zk")]
+    pub fn verify_zk<
+        F: JoltField,
+        C: crate::curve::JoltCurve<F = F>,
+        ProofTranscript: Transcript,
+    >(
+        proof: &ZkSumcheckProof<F, C, ProofTranscript>,
+        sumcheck_instances: Vec<&dyn SumcheckInstanceVerifier<F, ProofTranscript>>,
+        opening_accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut ProofTranscript,
+    ) -> Result<Vec<F::Challenge>, ProofVerifyError> {
+        let max_num_rounds = sumcheck_instances
+            .iter()
+            .map(|sumcheck| sumcheck.num_rounds())
+            .max()
+            .unwrap();
+
+        if proof.round_commitments.len() != max_num_rounds {
+            return Err(ProofVerifyError::SumcheckVerificationError);
+        }
+
+        // In ZK mode, don't absorb cleartext claims.
+        // Derive batching coefficients to keep transcript in sync with prover.
+        let _batching_coeffs: Vec<F> = transcript.challenge_vector(sumcheck_instances.len());
+
+        // Absorb commitments and derive challenges
+        let mut r_sumcheck: Vec<F::Challenge> = Vec::with_capacity(max_num_rounds);
+
+        for commitment in &proof.round_commitments {
+            transcript.append_serializable(commitment);
+            let r_j = transcript.challenge_scalar_optimized::<F>();
+            r_sumcheck.push(r_j);
+        }
+
+        // Cache openings for each instance
+        for sumcheck in sumcheck_instances.iter() {
+            let num_rounds = sumcheck.num_rounds();
+            let offset = max_num_rounds - num_rounds;
+            let r_slice = &r_sumcheck[offset..offset + num_rounds];
+            sumcheck.cache_openings(opening_accumulator, transcript, r_slice);
+        }
+
+        // Absorb output claims commitments
+        opening_accumulator.take_pending_claims();
+        for com in &proof.output_claims_commitments {
+            transcript.append_serializable(com);
+        }
+
+        // Skip output claim equality check -- BlindFold proves this
+        Ok(r_sumcheck)
+    }
+}
+
+/// ZK sumcheck proof containing Pedersen commitments instead of cleartext polynomials.
+#[cfg(feature = "zk")]
+#[derive(Clone, Debug)]
+pub struct ZkSumcheckProof<F: JoltField, C: crate::curve::JoltCurve<F = F>, ProofTranscript: Transcript> {
+    pub round_commitments: Vec<C::G1>,
+    pub poly_degrees: Vec<usize>,
+    pub output_claims_commitments: Vec<C::G1>,
+    _marker: PhantomData<(F, ProofTranscript)>,
 }
 
 pub struct Sumcheck;

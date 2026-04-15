@@ -26,6 +26,11 @@ pub trait SumcheckInstanceVerifier<F: JoltField, T: Transcript> {
         self.get_params().input_claim(accumulator)
     }
 
+    /// Computes the round offset for this instance within a batched sumcheck.
+    fn round_offset(&self, max_num_rounds: usize) -> usize {
+        max_num_rounds - self.num_rounds()
+    }
+
     /// Expected final claim after binding to the provided instance-local r slice.
     fn expected_output_claim(
         &self,
@@ -54,4 +59,24 @@ pub trait SumcheckInstanceParams<F: JoltField> {
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F;
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F>;
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> crate::subprotocols::blindfold::InputClaimConstraint {
+        todo!("implement per-operator BlindFold constraints")
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(&self, _accumulator: &dyn OpeningAccumulator<F>) -> Vec<F> {
+        todo!("implement per-operator BlindFold constraints")
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(&self) -> Option<crate::subprotocols::blindfold::OutputClaimConstraint> {
+        todo!("implement per-operator BlindFold constraints")
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, _sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        todo!("implement per-operator BlindFold constraints")
+    }
 }

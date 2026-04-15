@@ -11,6 +11,7 @@
 )]
 
 pub mod config;
+pub mod curve;
 pub mod field;
 pub mod lookup_tables;
 pub mod msm;

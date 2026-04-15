@@ -70,6 +70,10 @@ where
     #[cfg(any(test, feature = "test-feature"))]
     pub appended_virtual_openings: RefCell<Vec<OpeningId>>,
     pub cached_opening_claims: BTreeMap<CommittedPolynomial, F>,
+    #[cfg(feature = "zk")]
+    pending_claims: Vec<F>,
+    #[cfg(feature = "zk")]
+    pending_claim_ids: Vec<OpeningId>,
 }
 
 /// Accumulates openings encountered by the verifier over the course of Jolt,
@@ -86,6 +90,8 @@ where
     /// can detect any places where the openings don't match up.
     #[cfg(any(test, feature = "test-feature"))]
     prover_opening_accumulator: Option<ProverOpeningAccumulator<F>>,
+    #[cfg(feature = "zk")]
+    pending_claims: Vec<F>,
 }
 
 pub trait OpeningAccumulator<F: JoltField> {
@@ -168,7 +174,23 @@ where
             #[cfg(any(test, feature = "test-feature"))]
             appended_virtual_openings: std::cell::RefCell::new(vec![]),
             cached_opening_claims: BTreeMap::new(),
+            #[cfg(feature = "zk")]
+            pending_claims: Vec::new(),
+            #[cfg(feature = "zk")]
+            pending_claim_ids: Vec::new(),
         }
+    }
+
+    /// Takes and returns the pending ZK claims, leaving the internal vector empty.
+    #[cfg(feature = "zk")]
+    pub fn take_pending_claims(&mut self) -> Vec<F> {
+        std::mem::take(&mut self.pending_claims)
+    }
+
+    /// Takes and returns the pending ZK claim IDs, leaving the internal vector empty.
+    #[cfg(feature = "zk")]
+    pub fn take_pending_claim_ids(&mut self) -> Vec<OpeningId> {
+        std::mem::take(&mut self.pending_claim_ids)
     }
 
     /// Caches an opening claim from the opening reduction sumcheck.
@@ -550,7 +572,15 @@ where
             reduced_evaluations: BTreeMap::new(),
             #[cfg(any(test, feature = "test-feature"))]
             prover_opening_accumulator: None,
+            #[cfg(feature = "zk")]
+            pending_claims: Vec::new(),
         }
+    }
+
+    /// Takes and returns the pending ZK claims, leaving the internal vector empty.
+    #[cfg(feature = "zk")]
+    pub fn take_pending_claims(&mut self) -> Vec<F> {
+        std::mem::take(&mut self.pending_claims)
     }
 
     /// Returns the scalar claim for a NodeOutput opening, identified by

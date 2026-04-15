@@ -52,8 +52,42 @@ impl<F: JoltField> UniPoly<F> {
 
     /// Interpolate a polynomial from its evaluations at the points 0, 1, 2, ..., n-1.
     pub fn from_evals(evals: &[F]) -> Self {
-        let coeffs = Self::vandermonde_interpolation(evals);
-        Self::from_coeff(coeffs)
+        match evals.len() {
+            3 => Self::from_evals_degree2(evals[0], evals[1], evals[2]),
+            4 => Self::from_evals_degree3(evals[0], evals[1], evals[2], evals[3]),
+            _ => {
+                let coeffs = Self::vandermonde_interpolation(evals);
+                Self::from_coeff(coeffs)
+            }
+        }
+    }
+
+    /// Direct interpolation for a degree-2 polynomial from evals at 0, 1, 2.
+    /// Preserves a fixed length-3 coefficient vector even when the leading
+    /// coefficient is zero; downstream `compress()` depends on this.
+    fn from_evals_degree2(e0: F, e1: F, e2: F) -> Self {
+        let two_inv = F::from_u64(2).inverse().unwrap();
+        let c0 = e0;
+        let c2 = (e0 - e1 - e1 + e2) * two_inv;
+        let c1 = e1 - e0 - c2;
+        UniPoly {
+            coeffs: vec![c0, c1, c2],
+        }
+    }
+
+    /// Direct interpolation for a degree-3 polynomial from evals at 0, 1, 2, 3.
+    /// Preserves a fixed length-4 coefficient vector even when the leading
+    /// coefficient is zero; downstream `compress()` depends on this.
+    fn from_evals_degree3(e0: F, e1: F, e2: F, e3: F) -> Self {
+        let two_inv = F::from_u64(2).inverse().unwrap();
+        let six_inv = F::from_u64(6).inverse().unwrap();
+        let c0 = e0;
+        let c3 = (e3 - e0 + (e1 - e2) * F::from_u64(3)) * six_inv;
+        let c2 = (e0 - e1 - e1 + e2) * two_inv - c3 - c3 - c3;
+        let c1 = e1 - e0 - c2 - c3;
+        UniPoly {
+            coeffs: vec![c0, c1, c2, c3],
+        }
     }
 
     /// Interpolate a polynomial `p(x)` from its evaluations at even points `0, 2, 3, ..., n-1`
@@ -589,10 +623,13 @@ mod tests {
         let poly = UniPoly::from_evals(&evals);
         assert_eq!(constant_poly, poly);
 
-        // Test where evals.len() > DEGREE + 1, i.e. more evals than needed to determine the polynomial.
+        // `from_evals` with 4 points preserves a length-4 coefficient vector,
+        // even when the leading coefficient is zero (required by `compress()`
+        // in the BlindFold Spartan round-polynomial path).
         let evals = vec![0.into(), 1.into(), 4.into(), 9.into()]; // evals of x^2 at 0, 1, 2, 3
         let poly = UniPoly::from_evals(&evals);
-        let expected_poly = UniPoly::<Fr>::from_coeff(vec![0.into(), 0.into(), 1.into()]); // x^2
+        let expected_poly =
+            UniPoly::<Fr> { coeffs: vec![0.into(), 0.into(), 1.into(), 0.into()] };
         assert_eq!(expected_poly, poly);
     }
 

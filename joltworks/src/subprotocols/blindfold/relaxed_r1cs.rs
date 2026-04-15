@@ -20,8 +20,8 @@ use crate::field::JoltField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use rayon::prelude::*;
 
-use super::BlindFoldVerifyError;
 use super::r1cs::VerifierR1CS;
+use super::BlindFoldVerifyError;
 
 /// Relaxed R1CS Instance (public data)
 ///
@@ -518,4 +518,3 @@ mod tests {
         assert_eq!(folded.round_commitments[0], rc1[0] + rc2[0].scalar_mul(&r));
     }
 }
-

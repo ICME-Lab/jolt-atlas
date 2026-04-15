@@ -628,8 +628,9 @@ mod tests {
         // in the BlindFold Spartan round-polynomial path).
         let evals = vec![0.into(), 1.into(), 4.into(), 9.into()]; // evals of x^2 at 0, 1, 2, 3
         let poly = UniPoly::from_evals(&evals);
-        let expected_poly =
-            UniPoly::<Fr> { coeffs: vec![0.into(), 0.into(), 1.into(), 0.into()] };
+        let expected_poly = UniPoly::<Fr> {
+            coeffs: vec![0.into(), 0.into(), 1.into(), 0.into()],
+        };
         assert_eq!(expected_poly, poly);
     }
 

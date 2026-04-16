@@ -22,7 +22,7 @@ pub const SAT_DIFF_RC_BITS: usize = 32;
 /// the same pattern: read a claim and cycle point from one virtual polynomial,
 /// and emit an `ra` polynomial for the one-hot encoding.  This struct
 /// parameterises that pattern via function pointers to the relevant
-/// `VirtualPolynomial` constructors.
+/// `VirtualPoly` constructors.
 pub struct SoftmaxRCProvider {
     /// Computation node reference.
     pub node: ComputationNode,

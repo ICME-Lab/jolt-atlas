@@ -18,7 +18,7 @@ use joltworks::{
 
 use crate::utils::{
     dims::EinsumDims,
-    opening_id_builder::{AccOpeningAccessor, Target},
+    opening_access::{AccOpeningAccessor, Target},
 };
 
 /// Parameters for the shared `m,an->a1nm` canonical einsum family.

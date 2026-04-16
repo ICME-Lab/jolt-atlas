@@ -274,7 +274,7 @@ impl NodeCommittedPolynomials {
     ///
     /// # Returns
     ///
-    /// A vector of [`CommittedPolynomial`] instances that the prover must commit to
+    /// A vector of [`CommittedPoly`] instances that the prover must commit to
     pub fn get_committed_polynomials<F: JoltField, T: Transcript>(
         node: &ComputationNode,
     ) -> Vec<CommittedPoly> {
@@ -420,7 +420,7 @@ impl OperatorVerifier {
 ///
 /// The call site must have the following names in scope (they are already present in all
 /// standard operator modules):
-/// `JoltField`, `ComputationNode`, `OpeningAccumulator`, `VirtualPolynomial`, `SumcheckId`,
+/// `JoltField`, `ComputationNode`, `OpeningAccumulator`, `VirtualPoly`, `SumcheckId`,
 /// `SumcheckInstanceParams`, `OpeningPoint`, `BIG_ENDIAN`, `LITTLE_ENDIAN`.
 ///
 /// # Example

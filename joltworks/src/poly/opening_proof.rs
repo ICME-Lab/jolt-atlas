@@ -56,7 +56,7 @@ where
 {
     pub sumchecks: BTreeMap<CommittedPoly, OpeningProofReductionSumcheckProver<F>>,
     /// Openings for polynomials claimed during proving.
-    /// Identified by the kind of polynomial, the node to which it corresponds (both held in Committed/VirtualPolynomial variant),
+    /// Identified by the kind of polynomial, the node to which it corresponds (both held in Committed/VirtualPoly variant),
     /// and the sumcheck for which the opening is claimed.
     /// NOTE:
     /// If a node output is fed twice as index in a same node, it would lead to two different openings.
@@ -130,7 +130,9 @@ impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
         &self,
         opening_id: OpeningId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        opening_id.expect_virtual_poly();
+        opening_id
+            .virtual_poly()
+            .expect("expected virtual polynomial");
         match self.openings.get(&opening_id) {
             Some((point, claim)) => {
                 #[cfg(any(test, feature = "test-feature"))]
@@ -152,7 +154,9 @@ impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
         &self,
         opening_id: OpeningId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        opening_id.expect_committed_poly();
+        opening_id
+            .committed_poly()
+            .expect("expected committed polynomial");
         let (point, claim) = self
             .openings
             .get(&opening_id)
@@ -271,7 +275,9 @@ where
             ),
         );
 
-        let polynomial = opening_id.expect_committed_poly();
+        let polynomial = opening_id
+            .committed_poly()
+            .expect("expected committed polynomial");
 
         let sumcheck = OpeningProofReductionSumcheckProver::new_dense(
             polynomial,
@@ -336,7 +342,10 @@ where
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
         claim: F,
     ) {
-        if let VirtualPoly::NodeOutput(node_idx) = opening_id.expect_virtual_poly() {
+        let virtual_poly = opening_id
+            .virtual_poly()
+            .expect("expected virtual polynomial");
+        if let VirtualPoly::NodeOutput(node_idx) = virtual_poly {
             debug_assert!(
                 // TODO(AntoineF4C5) Temporary exception: RAF plumbing may still append NodeOutput after reduction
                 // until range-check identity polynomial wiring is fully implemented.
@@ -370,7 +379,9 @@ where
         &self,
         opening_id: OpeningId,
     ) -> Option<&(OpeningPoint<false, F>, F)> {
-        opening_id.expect_virtual_poly();
+        opening_id
+            .virtual_poly()
+            .expect("expected virtual polynomial");
         self.openings.get(&opening_id)
     }
 }
@@ -546,7 +557,9 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         &self,
         opening_id: OpeningId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        opening_id.expect_virtual_poly();
+        opening_id
+            .virtual_poly()
+            .expect("expected virtual polynomial");
         let key = opening_id;
         match self.openings.get(&key) {
             Some((point, claim)) => (point.clone(), *claim),
@@ -560,7 +573,9 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         &self,
         opening_id: OpeningId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        opening_id.expect_committed_poly();
+        opening_id
+            .committed_poly()
+            .expect("expected committed polynomial");
         let (point, claim) = self
             .openings
             .get(&opening_id)
@@ -640,7 +655,9 @@ where
             ),
         );
 
-        let polynomial = opening_id.expect_committed_poly();
+        let polynomial = opening_id
+            .committed_poly()
+            .expect("expected committed polynomial");
         self.sumchecks.insert(
             polynomial,
             OpeningProofReductionSumcheckVerifier::new(polynomial, opening_point, claim),
@@ -690,7 +707,10 @@ where
         opening_id: OpeningId,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
     ) {
-        if let VirtualPoly::NodeOutput(node_idx) = opening_id.expect_virtual_poly() {
+        let virtual_poly = opening_id
+            .virtual_poly()
+            .expect("expected virtual polynomial");
+        if let VirtualPoly::NodeOutput(node_idx) = virtual_poly {
             debug_assert!(
                 // TODO(AntoineF4C5) Temporary exception: RAF plumbing may still append NodeOutput after reduction
                 // until range-check identity polynomial wiring is fully implemented.
@@ -1059,17 +1079,17 @@ impl From<CommittedPoly> for PolynomialId {
 }
 
 impl PolynomialId {
-    pub fn into_virtual(self) -> Result<VirtualPoly, Self> {
+    fn into_virtual(self) -> Option<VirtualPoly> {
         match self {
-            Self::Virtual(poly) => Ok(poly),
-            _ => Err(self),
+            Self::Virtual(poly) => Some(poly),
+            _ => None,
         }
     }
 
-    pub fn into_committed(self) -> Result<CommittedPoly, Self> {
+    fn into_committed(self) -> Option<CommittedPoly> {
         match self {
-            Self::Committed(poly) => Ok(poly),
-            _ => Err(self),
+            Self::Committed(poly) => Some(poly),
+            _ => None,
         }
     }
 }
@@ -1088,16 +1108,12 @@ impl OpeningId {
         }
     }
 
-    pub fn expect_virtual_poly(&self) -> VirtualPoly {
-        self.polynomial
-            .into_virtual()
-            .unwrap_or_else(|_| panic!("expected a virtual opening id, got committed: {self:?}"))
+    pub fn virtual_poly(&self) -> Option<VirtualPoly> {
+        self.polynomial.into_virtual()
     }
 
-    pub fn expect_committed_poly(&self) -> CommittedPoly {
-        self.polynomial
-            .into_committed()
-            .unwrap_or_else(|_| panic!("expected a committed opening id, got virtual: {self:?}"))
+    pub fn committed_poly(&self) -> Option<CommittedPoly> {
+        self.polynomial.into_committed()
     }
 }
 

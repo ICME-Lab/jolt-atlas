@@ -296,16 +296,19 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReadRafVeri
 // ---------------------------------------------------------------------------
 
 /// Retrieves the existing opening for the given virtual opening id from the accumulator,
-/// with special handling for `VirtualPolynomial::NodeOutput`,
+/// with special handling for `VirtualPoly::NodeOutput`,
 /// where we recover the reduced opening point.
 fn resolve_vp_opening<F: JoltField>(
     accumulator: &dyn OpeningAccumulator<F>,
     opening_id: OpeningId,
 ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+    let virtual_poly = opening_id
+        .virtual_poly()
+        .expect("expected virtual polynomial");
     if let Some(opening) = accumulator.try_get_virtual_polynomial_opening(opening_id) {
         return opening;
     }
-    if let VirtualPoly::NodeOutput(producer_idx) = opening_id.expect_virtual_poly() {
+    if let VirtualPoly::NodeOutput(producer_idx) = virtual_poly {
         accumulator.get_node_output_opening(producer_idx)
     } else {
         accumulator.get_virtual_polynomial_opening(opening_id)
@@ -314,7 +317,7 @@ fn resolve_vp_opening<F: JoltField>(
 
 /// Describes the polynomial configuration for the three RA one-hot sumchecks
 /// (RaVirtual, HammingWeight, Booleanity). Implementors specify which
-/// `CommittedPolynomial` / `VirtualPolynomial` variants to use, the split
+/// `CommittedPoly` / `VirtualPoly` variants to use, the split
 /// point for R_a, and the `OneHotParams`.
 pub trait RaOneHotEncoding {
     /// The committed polynomial for the `d`-th one-hot decomposition chunk.

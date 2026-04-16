@@ -29,7 +29,7 @@ use rayon::prelude::*;
 
 use crate::utils::{
     dims::EinsumDims,
-    opening_id_builder::{AccOpeningAccessor, Target},
+    opening_access::{AccOpeningAccessor, Target},
 };
 
 const DEGREE_BOUND_DOT: usize = 2;

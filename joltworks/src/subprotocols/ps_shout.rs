@@ -786,7 +786,7 @@ where
     /// Recovers the opening point sampled for the node output
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F>;
 
-    /// Returns the `(VirtualPolynomial, SumcheckId)` pairs that should be appended
+    /// Returns the `OpeningId` that should be appended
     /// as RAF claims to the opening accumulator. Used by both prover and verifier to
     /// determine which virtual polynomial openings to register.
     fn raf_claim_specs(&self) -> Vec<OpeningId>;

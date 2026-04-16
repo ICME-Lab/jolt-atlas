@@ -27,7 +27,7 @@ use crate::{
         },
         ProofId, ProofType, Prover, Verifier,
     },
-    utils::opening_id_builder::{AccOpeningAccessor, Target},
+    utils::opening_access::{AccOpeningAccessor, Target},
 };
 use joltworks::{
     config::{OneHotConfig, OneHotParams},

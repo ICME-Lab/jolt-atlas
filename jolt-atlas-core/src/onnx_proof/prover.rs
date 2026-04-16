@@ -13,7 +13,7 @@ use crate::{
         ops::{NodeCommittedPolynomials, OperatorProver},
         witness::WitnessGenerator,
     },
-    utils::opening_id_builder::AccOpeningAccessor,
+    utils::opening_access::AccOpeningAccessor,
 };
 use atlas_onnx_tracer::{
     model::{

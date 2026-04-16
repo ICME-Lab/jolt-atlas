@@ -1,6 +1,6 @@
 use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
-    opening_id_builder::{AccOpeningAccessor, Target},
+    opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
     model::{

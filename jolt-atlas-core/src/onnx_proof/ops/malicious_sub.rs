@@ -7,7 +7,7 @@
 
 use crate::{
     onnx_proof::{malicious_prover::malicious_sumcheck_prove, ProofId, ProofType, Prover},
-    utils::opening_id_builder::{AccOpeningAccessor, Target},
+    utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},

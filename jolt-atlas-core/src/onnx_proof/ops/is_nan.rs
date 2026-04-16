@@ -1,6 +1,6 @@
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
-    utils::opening_id_builder::{AccOpeningAccessor, Target},
+    utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{node::ComputationNode, ops::IsNan};
 use joltworks::{

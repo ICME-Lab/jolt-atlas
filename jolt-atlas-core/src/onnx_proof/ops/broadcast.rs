@@ -27,7 +27,7 @@ use crate::{
         ops::{OperatorProofTrait, Prover, Verifier},
         ProofId,
     },
-    utils::opening_id_builder::{AccOpeningAccessor, Target},
+    utils::opening_access::{AccOpeningAccessor, Target},
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {

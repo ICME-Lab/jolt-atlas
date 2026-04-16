@@ -1,7 +1,7 @@
-//! Opening ID builder utilities for computation nodes.
+//! Opening accessor and provider utilities for computation nodes.
 //!
-//! Uses a struct-based factory with closure-based constructors so callers can
-//! create any virtual/committed opening ID without maintaining large template enums.
+//! Provides a node-scoped accessor/provider layer over opening accumulators,
+//! with a small internal builder used to derive opening IDs consistently.
 
 use atlas_onnx_tracer::node::ComputationNode;
 use common::VirtualPoly;
@@ -25,14 +25,14 @@ pub enum Target {
 
 /// Struct-based opening ID factory scoped to one computation node.
 #[derive(Debug, Clone, Copy)]
-pub struct OpeningIdBuilder<'a> {
+struct OpeningIdBuilder<'a> {
     node: &'a ComputationNode,
     sumcheck_id: SumcheckId,
 }
 
 impl<'a> OpeningIdBuilder<'a> {
     /// Create a builder scoped to one computation node.
-    pub fn new(node: &'a ComputationNode) -> Self {
+    fn new(node: &'a ComputationNode) -> Self {
         Self {
             node,
             sumcheck_id: SumcheckId::NodeExecution(node.idx),
@@ -41,7 +41,7 @@ impl<'a> OpeningIdBuilder<'a> {
 
     /// Convenience method for the common case of opening an input/current node output
     /// in this builder's default sumcheck context.
-    pub fn node_io(&self, target: Target) -> OpeningId {
+    fn node_io(&self, target: Target) -> OpeningId {
         let node_idx = match target {
             Target::Current => self.node.idx,
             Target::Input(position) => self.node.inputs[position],
@@ -51,7 +51,7 @@ impl<'a> OpeningIdBuilder<'a> {
 
     /// Build an advice opening for the current node in this builder's default
     /// sumcheck context.
-    pub fn advice<Poly>(&self, poly_ctor: impl FnOnce(usize) -> Poly) -> OpeningId
+    fn advice<Poly>(&self, poly_ctor: impl FnOnce(usize) -> Poly) -> OpeningId
     where
         Poly: Into<PolynomialId>,
     {

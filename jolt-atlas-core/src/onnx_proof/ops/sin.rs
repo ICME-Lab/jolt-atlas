@@ -13,7 +13,7 @@ use crate::onnx_proof::{
     range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding},
     ProofId, ProofType, Prover, Verifier,
 };
-use crate::utils::opening_id_builder::{AccOpeningAccessor, Target};
+use crate::utils::opening_access::{AccOpeningAccessor, Target};
 use atlas_onnx_tracer::{
     model::{
         consts::FOUR_PI_APPROX,

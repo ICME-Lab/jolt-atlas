@@ -10,7 +10,7 @@
 //! The quotient is a virtual polynomial (proven via the lookup operation)
 //! The remainder is range-checked to be in [0, DIVISOR)
 
-use crate::utils::opening_id_builder::{AccOpeningAccessor, Target};
+use crate::utils::opening_access::{AccOpeningAccessor, Target};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,

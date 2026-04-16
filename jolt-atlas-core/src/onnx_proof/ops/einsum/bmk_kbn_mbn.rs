@@ -3,7 +3,7 @@ use std::array;
 
 use crate::utils::{
     dims::{transpose_flat_matrix, EinsumDims},
-    opening_id_builder::{AccOpeningAccessor, Target},
+    opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},

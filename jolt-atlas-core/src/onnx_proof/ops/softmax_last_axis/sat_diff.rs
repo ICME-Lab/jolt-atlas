@@ -8,7 +8,7 @@
 //! `z_c = min(z, z_bound − 1)`: either sat_diff = 0 (unsaturated) or
 //! z_c = z_bound − 1 (saturated).
 
-use crate::utils::opening_id_builder::AccOpeningAccessor;
+use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_onnx_tracer::node::ComputationNode;
 use common::VirtualPoly;
 use joltworks::{

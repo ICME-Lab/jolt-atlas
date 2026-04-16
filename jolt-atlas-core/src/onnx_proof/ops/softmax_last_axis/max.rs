@@ -1,7 +1,7 @@
 use common::parallel::par_enabled;
 use std::array;
 
-use crate::utils::opening_id_builder::{AccOpeningAccessor, Target};
+use crate::utils::opening_access::{AccOpeningAccessor, Target};
 use atlas_onnx_tracer::node::ComputationNode;
 use common::VirtualPoly;
 use joltworks::{

@@ -447,7 +447,7 @@ macro_rules! impl_standard_params {
                 computation_node: ComputationNode,
                 accumulator: &dyn OpeningAccumulator<F>,
             ) -> Self {
-                let r_node_output = $crate::utils::opening_id_builder::AccOpeningAccessor::new(
+                let r_node_output = $crate::utils::opening_access::AccOpeningAccessor::new(
                     accumulator,
                     &computation_node,
                 )
@@ -466,7 +466,7 @@ macro_rules! impl_standard_params {
             }
 
             fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-                $crate::utils::opening_id_builder::AccOpeningAccessor::new(
+                $crate::utils::opening_access::AccOpeningAccessor::new(
                     accumulator,
                     &self.computation_node,
                 )

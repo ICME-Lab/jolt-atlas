@@ -5,7 +5,7 @@
 //! `verify` delegates to.
 
 use super::{types::ProofId, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof};
-use crate::{onnx_proof::ops::OperatorVerifier, utils::opening_id_builder::AccOpeningAccessor};
+use crate::{onnx_proof::ops::OperatorVerifier, utils::opening_access::AccOpeningAccessor};
 use atlas_onnx_tracer::model::{trace::ModelExecutionIO, Model};
 use common::VirtualPoly;
 use joltworks::{

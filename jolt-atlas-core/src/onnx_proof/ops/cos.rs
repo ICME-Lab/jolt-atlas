@@ -15,7 +15,7 @@ use crate::{
         range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding},
         ProofId, ProofType, Prover, Verifier,
     },
-    utils::opening_id_builder::{AccOpeningAccessor, Target},
+    utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
     model::{

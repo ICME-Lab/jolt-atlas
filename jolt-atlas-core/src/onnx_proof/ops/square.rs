@@ -1,7 +1,7 @@
 use crate::{
     impl_standard_params, impl_standard_sumcheck_proof_api,
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
-    utils::opening_id_builder::{AccOpeningAccessor, Target},
+    utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},

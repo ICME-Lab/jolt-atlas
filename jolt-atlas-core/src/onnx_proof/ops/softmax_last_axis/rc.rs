@@ -1,4 +1,4 @@
-use crate::utils::opening_id_builder::AccOpeningAccessor;
+use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_onnx_tracer::node::ComputationNode;
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{

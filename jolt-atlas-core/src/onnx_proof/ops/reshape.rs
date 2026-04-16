@@ -10,7 +10,7 @@
 use crate::utils::dims::{coord_to_linear, linear_to_coord};
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
-    utils::opening_id_builder::{AccOpeningAccessor, Target},
+    utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
     model::{

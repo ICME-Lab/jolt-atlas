@@ -1,6 +1,6 @@
 use crate::utils::{
     dims::EinsumDims,
-    opening_id_builder::{AccOpeningAccessor, Target},
+    opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},

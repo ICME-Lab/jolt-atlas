@@ -277,7 +277,7 @@ impl Model {
                     let input_nodes = self.get_input_nodes(node);
                     let num_words = input_nodes[0].output_dims[0];
                     let num_indices = input_nodes[1].pow2_padded_num_output_elements();
-                    log_2(num_words) + log_2(num_indices) // TODO: Gather ra virtualization
+                    log_2(num_words) + log_2(num_indices)
                 }
                 Operator::GatherLarge(_) => {
                     let input_nodes = self.get_input_nodes(node);

@@ -12,7 +12,7 @@
 //!
 //! **Arithmetic Operations**: [`add`], [`sub`], [`mul`], [`div`], [`square`], [`cube`], [`scalar_const_div`]
 //!
-//! **Activation Functions**: [`relu`], [`tanh`], [`softmax_axes`]
+//! **Activation Functions**: [`relu`], [`tanh`], [`softmax_last_axis`]
 //!
 //! **Tensor Operations**: [`einsum`], [`sum`], [`reshape`], [`broadcast`], [`moveaxis`], [`gather`]
 //!
@@ -68,6 +68,7 @@ pub mod iff;
 pub mod input;
 /// Check for NaN values.
 pub mod is_nan;
+#[cfg(test)]
 /// Experimental malicious variant of Sub proof logic.
 pub mod malicious_sub;
 /// Reorder tensor axes.
@@ -90,8 +91,8 @@ pub mod sigmoid;
 pub mod sin;
 /// Slice tensor along one axis.
 pub mod slice;
-/// Softmax operation along specified axes.
-pub mod softmax_axes;
+/// Softmax operation along the last axis (axis = -1).
+pub mod softmax_last_axis;
 /// Element-wise square (x²) operation.
 pub mod square;
 /// Element-wise subtraction operation.
@@ -245,7 +246,7 @@ macro_rules! dispatch_operator {
             Operator::Sigmoid($inner) => $body,
             Operator::Sin($inner) => $body,
             Operator::Slice($inner) => $body,
-            Operator::SoftmaxAxes($inner) => $body,
+            Operator::SoftmaxLastAxis($inner) => $body,
             Operator::Square($inner) => $body,
             Operator::Sub($inner) => $body,
             Operator::Sum($inner) => $body,

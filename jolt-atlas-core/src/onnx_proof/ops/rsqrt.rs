@@ -36,8 +36,8 @@ use joltworks::{
 };
 
 /// Fixed-point scaling factor for reciprocal square root calculations.
-pub const Q: i32 = 128;
-/// Square of the fixed-point scaling factor (Q * Q = 16384).
+pub const Q: i32 = 256;
+/// Square of the fixed-point scaling factor (Q * Q = 65536).
 pub const Q_SQUARE: i32 = Q * Q;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {

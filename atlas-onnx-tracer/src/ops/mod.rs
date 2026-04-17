@@ -149,7 +149,7 @@ define_operators! {
         Sigmoid { scale: F32, tau: i32, log_table: usize },
         Sin { scale: F32 },
         Slice { axis: usize, start: usize, end: usize},
-        SoftmaxAxes { axes: usize, scale: F32 },
+        SoftmaxLastAxis { scale: i32 },
         Square,
         Sub,
         Sum { axes: Vec<usize> },

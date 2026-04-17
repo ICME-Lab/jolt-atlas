@@ -105,10 +105,22 @@ pub mod suffixes;
 
 /// Bitwise AND lookup table.
 pub mod and;
+/// Negated ReLU lookup table: `f(x) = max(−x, 0)`.
+///
+/// Returns the magnitude of `x` when negative, and `0` otherwise.
+pub mod neg_relu;
 /// Bitwise OR lookup table.
 pub mod or;
 /// ReLU (Rectified Linear Unit) activation lookup table.
 pub mod relu;
+/// Unsigned absolute value lookup table.
+///
+/// Computes `abs(x)` by interpreting the input as a signed integer and returning
+/// its unsigned magnitude. For the edge case where `x = i8::MIN` (−128), the
+/// two's complement absolute value would overflow in hardware, but since we
+/// operate over a prime field, we simply return `128` (i.e., −(−128) = 128
+/// in the canonical field representation).
+pub mod unsigned_abs;
 /// Unsigned less-than comparison lookup table.
 pub mod unsigned_less_than;
 /// Bitwise XOR lookup table.

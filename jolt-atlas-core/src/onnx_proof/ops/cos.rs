@@ -1,11 +1,12 @@
-use crate::onnx_proof::neural_teleport::{
-    cos::{CosTable, COS_LOG_TABLE_SIZE},
-    division::{
-        compute_division, TeleportDivisionParams, TeleportDivisionProver, TeleportDivisionVerifier,
-    },
-    utils::compute_ra_evals_direct,
-};
 use crate::onnx_proof::{
+    neural_teleport::{
+        cos::{CosTable, COS_LOG_TABLE_SIZE},
+        division::{
+            compute_division, TeleportDivisionParams, TeleportDivisionProver,
+            TeleportDivisionVerifier,
+        },
+        utils::compute_ra_evals_direct,
+    },
     ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
     range_checking::{
         range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
@@ -14,7 +15,7 @@ use crate::onnx_proof::{
 };
 use atlas_onnx_tracer::{
     model::{
-        consts::EIGHT_PI_APPROX,
+        consts::FOUR_PI_APPROX,
         trace::{LayerData, Trace},
         ComputationGraph,
     },
@@ -64,7 +65,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         let div_params = TeleportDivisionParams::new_from_transcript(
             node.clone(),
             &mut prover.transcript,
-            EIGHT_PI_APPROX,
+            FOUR_PI_APPROX,
         );
         let mut div_sumcheck = TeleportDivisionProver::new(&prover.trace, div_params);
 
@@ -139,7 +140,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
 
         let div_verifier = TeleportDivisionVerifier::new_from_transcript(
             node.clone(),
-            EIGHT_PI_APPROX,
+            FOUR_PI_APPROX,
             &mut verifier.transcript,
         );
         Sumcheck::verify(
@@ -226,7 +227,7 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
 
     let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
     let input = operands[0];
-    let (_, remainder) = compute_division(input, EIGHT_PI_APPROX);
+    let (_, remainder) = compute_division(input, FOUR_PI_APPROX);
     let cos_lookup_indices = remainder
         .par_iter()
         .map(|&x| x as usize)
@@ -429,11 +430,11 @@ impl<F: JoltField> CosProver<F> {
     ) -> Self {
         let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
         let input = operands[0];
-        let (_quotient_tensor, remainder_tensor) = compute_division(input, EIGHT_PI_APPROX);
+        let (_quotient_tensor, remainder_tensor) = compute_division(input, FOUR_PI_APPROX);
 
         assert!(remainder_tensor
             .iter()
-            .all(|&x| (0..EIGHT_PI_APPROX).contains(&x)));
+            .all(|&x| (0..FOUR_PI_APPROX).contains(&x)));
 
         let cos_table = MultilinearPolynomial::from(CosTable::materialize());
         let input_onehot: Vec<F> = compute_ra_evals_direct(
@@ -685,7 +686,7 @@ mod tests {
     };
     use rand::{rngs::StdRng, SeedableRng};
 
-    use super::EIGHT_PI_APPROX;
+    use super::FOUR_PI_APPROX;
 
     fn cos_model(input_shape: &[usize]) -> Model {
         let mut b = ModelBuilder::new();
@@ -708,14 +709,14 @@ mod tests {
     fn test_cos_periodic_boundary_inputs() {
         let input = Tensor::new(
             Some(&[
-                -EIGHT_PI_APPROX - 1,
-                -EIGHT_PI_APPROX,
+                -FOUR_PI_APPROX - 1,
+                -FOUR_PI_APPROX,
                 -1,
                 0,
                 1,
-                EIGHT_PI_APPROX - 1,
-                EIGHT_PI_APPROX,
-                EIGHT_PI_APPROX + 1,
+                FOUR_PI_APPROX - 1,
+                FOUR_PI_APPROX,
+                FOUR_PI_APPROX + 1,
             ]),
             &[8],
         )

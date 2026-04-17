@@ -28,7 +28,7 @@ use joltworks::{
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, index_to_field_bitvector, math::Math},
+    utils::{errors::ProofVerifyError, math::Math},
 };
 use rayon::prelude::*;
 
@@ -419,6 +419,7 @@ fn build_concat_selector<F: JoltField>(
     let max_domain_len = 1usize << max_input_num_vars;
     let axis_offset = axis_offset(raw_input_dims, input_idx, axis);
     let mut selector = vec![F::zero(); max_domain_len];
+    let eq_evals = EqPolynomial::evals(r_output);
 
     for linear_idx in 0..input_raw_len {
         let input_coord = linear_to_coord(linear_idx, input_raw_dims);
@@ -427,9 +428,8 @@ fn build_concat_selector<F: JoltField>(
 
         let input_index = coord_to_linear(&input_coord, &input_padded_dims);
         let output_index = coord_to_linear(&output_coord, &output_padded_dims);
-        let output_bits = index_to_field_bitvector::<F>(output_index as u64, output_num_vars);
         let full_index = input_index << (max_input_num_vars - input_num_vars);
-        selector[full_index] = EqPolynomial::mle(&output_bits, r_output);
+        selector[full_index] = eq_evals[output_index];
     }
 
     selector

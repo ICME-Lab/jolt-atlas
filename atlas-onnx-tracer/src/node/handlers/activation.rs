@@ -7,11 +7,9 @@ use std::collections::HashMap;
 
 use crate::{
     node::ComputationNode,
-    ops::{Constant, Cos, Erf, Operator, Rsqrt, Sigmoid, Sin, SoftmaxAxes, Tanh},
+    ops::{Constant, Cos, Erf, Operator, Rsqrt, Sigmoid, Sin, SoftmaxLastAxis, Tanh},
     utils::{handler_builder::HandlerBuilder, parser::load_op, quantize::scale_to_multiplier},
 };
-#[cfg(not(feature = "fused-ops"))]
-use crate::{ops::Clamp, tensor::ops::nonlinearities::EXP_LUT_SIZE};
 
 use super::{HandlerContext, OpHandlerFn};
 
@@ -23,7 +21,10 @@ const NEURAL_TELEPORT_TAU: i32 = 1;
 const NEURAL_TELEPORT_TAU: i32 = 2;
 
 /// Log2 of the lookup table size used for activation functions.
-pub const NEURAL_TELEPORT_LOG_TABLE_SIZE: usize = 12;
+/// With tau=2 and scale=256 (log_scale=8), this must cover quotients produced
+/// by GELU's cubic polynomial.  16 gives a quotient range of ±32 768, i.e.
+/// raw fixed-point inputs up to ±65 534 (≈ ±256 in real value).
+pub const NEURAL_TELEPORT_LOG_TABLE_SIZE: usize = 16;
 
 /// Returns a map of activation operator names to their handler functions.
 pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
@@ -136,47 +137,36 @@ fn handle_sigmoid(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         .build()
 }
 
-/// Softmax: Apply softmax along specified axis.
-/// With `fused-ops`, softmax handles centering internally.
-/// Without, a Clamp node is prepended to fit the exp LUT range.
+/// Softmax: Apply softmax along the last axis.
+///
+/// Uses the decomposed `SoftmaxLastAxis` prover which supports dynamic scales.
+/// Panics if the ONNX softmax axis is not the last dimension.
 fn handle_softmax(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let op = load_op::<tract_onnx::tract_core::ops::nn::Softmax>(
         hctx.node.op(),
         hctx.node.op().name().to_string(),
     );
     let axes = op.axes.to_vec();
-    assert!(axes.len() == 1);
+    assert!(axes.len() == 1, "Softmax must have exactly one axis");
 
-    let scale = scale_to_multiplier(hctx.run_args.scale).into();
+    // Determine the rank of the input tensor so we can verify last-axis.
+    let input_rank = hctx.internal_input_nodes[0].output_dims.len();
+    let axis = axes[0];
+    assert_eq!(
+        axis,
+        input_rank - 1,
+        "SoftmaxLastAxis only supports the last axis (got axis={axis}, rank={input_rank}). \
+         Transpose the input so the softmax dimension is last."
+    );
 
-    #[cfg(feature = "fused-ops")]
-    {
-        HandlerBuilder::new(hctx)
-            .with_broadcast()
-            .simple_op(Operator::SoftmaxAxes(SoftmaxAxes {
-                axes: axes[0],
-                scale,
-            }))
-            .build()
-    }
+    let scale = scale_to_multiplier(hctx.run_args.scale);
 
-    #[cfg(not(feature = "fused-ops"))]
-    {
-        HandlerBuilder::new(hctx)
-            .with_broadcast()
-            // HACK: Clamp to fit exp LUT range.
-            // TODO: Remove once prover supports full range.
-            .simple_op(Operator::Clamp(Clamp {
-
-                axes: axes[0],
-                max_spread: (EXP_LUT_SIZE as i32 - 1),
-            }))
-            .pipe(Operator::SoftmaxAxes(SoftmaxAxes {
-                axes: axes[0],
-                scale,
-            }))
-            .build()
-    }
+    HandlerBuilder::new(hctx)
+        .with_broadcast()
+        .simple_op(Operator::SoftmaxLastAxis(SoftmaxLastAxis {
+            scale: scale as i32,
+        }))
+        .build()
 }
 
 /// Rsqrt: Reciprocal square root.

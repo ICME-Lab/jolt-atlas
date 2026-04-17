@@ -1,12 +1,12 @@
 use crate::{
-    model::consts::EIGHT_PI_APPROX,
+    model::consts::FOUR_PI_APPROX,
     ops::{Cos, Op},
     tensor::{self, Tensor},
 };
 
 impl Op for Cos {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
-        let remainder = tensor::ops::nonlinearities::const_rem(inputs[0], EIGHT_PI_APPROX);
+        let remainder = tensor::ops::nonlinearities::const_rem(inputs[0], FOUR_PI_APPROX);
         tensor::ops::nonlinearities::cos(&remainder, self.scale.into())
     }
 
@@ -27,7 +27,7 @@ mod tests {
 
     #[test]
     fn test_cos_precision_stats() {
-        const SCALE: f64 = 128.0;
+        const SCALE: f64 = 256.0;
         const SAMPLE_SIZE: usize = 1 << 14;
         const MIN_INPUT: i32 = -(1 << 20);
         const MAX_INPUT: i32 = 1 << 20;

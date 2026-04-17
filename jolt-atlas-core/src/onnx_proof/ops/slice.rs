@@ -28,7 +28,7 @@ use joltworks::{
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, index_to_field_bitvector, math::Math},
+    utils::{errors::ProofVerifyError, math::Math},
 };
 use rayon::prelude::*;
 
@@ -337,6 +337,7 @@ fn build_slice_selector<F: JoltField>(
     );
 
     let mut selector = vec![F::zero(); input_domain_len];
+    let eq_evals = EqPolynomial::evals(r_output);
     for output_linear_idx in 0..output_raw_dims.iter().product() {
         let output_coord = linear_to_coord(output_linear_idx, output_raw_dims);
         let mut input_coord = output_coord.clone();
@@ -344,14 +345,14 @@ fn build_slice_selector<F: JoltField>(
 
         let input_index = coord_to_linear(&input_coord, &input_padded_dims);
         let output_index = coord_to_linear(&output_coord, &output_padded_dims);
-        let output_bits = index_to_field_bitvector::<F>(output_index as u64, output_num_vars);
-        selector[input_index] = EqPolynomial::mle(&output_bits, r_output);
+        selector[input_index] = eq_evals[output_index];
     }
 
     assert!(
         input_raw_len >= output_raw_dims.iter().product(),
         "Slice output raw length exceeds input raw length"
     );
+
     selector
 }
 

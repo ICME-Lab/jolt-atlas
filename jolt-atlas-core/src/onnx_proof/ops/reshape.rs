@@ -38,7 +38,7 @@ use joltworks::{
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, index_to_field_bitvector, math::Math},
+    utils::{errors::ProofVerifyError, math::Math},
 };
 use rayon::prelude::*;
 
@@ -126,14 +126,14 @@ pub(crate) fn build_reshape_selectors<F: JoltField + ChallengeFieldOps<F>>(
 
     // Selector values are zero on padding cells by default.
     let mut selector = vec![F::zero(); input_padded_len];
+    let eq_evals = EqPolynomial::evals(r_output);
 
     for t in 0..input_raw_len {
         let input_coord = linear_to_coord(t, input_raw_dims);
         let output_coord = linear_to_coord(t, output_raw_dims);
         let input_padded_index = coord_to_linear(&input_coord, &input_padded_dims);
         let output_padded_index = coord_to_linear(&output_coord, &output_padded_dims);
-        let output_bits = index_to_field_bitvector::<F>(output_padded_index as u64, r_output.len());
-        selector[input_padded_index] = EqPolynomial::mle(&output_bits, r_output);
+        selector[input_padded_index] = eq_evals[output_padded_index];
     }
 
     selector

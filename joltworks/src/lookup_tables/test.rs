@@ -112,7 +112,7 @@ pub fn prefix_suffix_test<
                 let combined = T::default().combine_test(&prefix_evals, &suffix_evals);
                 if combined != mle_eval {
                     println!("Lookup index: {lookup_index}");
-                    println!("{j} {prefix_bits} {suffix_bits}");
+                    println!("j: {j} {prefix_bits} {suffix_bits}");
                     for (i, x) in prefix_evals.iter().enumerate() {
                         println!("prefix_evals[{i}] = {x}");
                     }

@@ -413,7 +413,7 @@ fn extract_cbmk_cbkn_amn_dims(computation_node: &ComputationNode, model: &Model)
     let b = a_node.output_dims[1];
     let m = a_node.output_dims[2];
     let k = a_node.output_dims[3];
-    let n = b_node.output_dims[2];
+    let n = b_node.output_dims[3];
 
     EinsumDims::new(vec![c * b, m, k], vec![c * b, n, k], vec![m, n])
 }

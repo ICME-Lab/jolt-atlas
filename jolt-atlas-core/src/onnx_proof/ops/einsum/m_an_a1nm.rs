@@ -23,12 +23,8 @@ use crate::utils::dims::EinsumDims;
 #[derive(Clone)]
 pub struct MAnA1nmParams<F: JoltField> {
     r_node_output: OpeningPoint<BIG_ENDIAN, F>,
-    #[allow(dead_code)]
     computation_node: ComputationNode,
-    #[allow(dead_code)]
     einsum_dims: EinsumDims,
-    #[allow(dead_code)]
-    _marker: core::marker::PhantomData<F>,
 }
 
 impl<F: JoltField> MAnA1nmParams<F> {
@@ -71,7 +67,6 @@ impl<F: JoltField> MAnA1nmParams<F> {
             r_node_output,
             computation_node,
             einsum_dims,
-            _marker: core::marker::PhantomData,
         }
     }
 }
@@ -265,7 +260,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MAnA1nmVeri
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use atlas_onnx_tracer::{
+        model::{test::ModelBuilder, Model},
+        tensor::Tensor,
+    };
     use rand::{rngs::StdRng, SeedableRng};
 
     fn m_an_a1nm_model(rng: &mut StdRng, m: usize, a: usize, n: usize) -> Model {

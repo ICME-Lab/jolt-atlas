@@ -479,7 +479,11 @@ fn shadow_f64(op: &Operator, inputs: Vec<&Tensor<f64>>, scale: Scale) -> Tensor<
         Operator::Cube(_) => inputs[0].pow(3).unwrap(),
 
         // ── Index / Lookup ──────────────────────────────────────────────
-        Operator::Gather(g) => {
+        Operator::GatherSmall(g) => {
+            let indices: Tensor<usize> = inputs[1].map(|v| v as usize);
+            tensor::ops::gather(inputs[0], &indices, g.axis).unwrap()
+        }
+        Operator::GatherLarge(g) => {
             let indices: Tensor<usize> = inputs[1].map(|v| v as usize);
             tensor::ops::gather(inputs[0], &indices, g.axis).unwrap()
         }

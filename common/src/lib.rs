@@ -124,6 +124,12 @@ canonical_serde_enum! {
         /// * `0` – node index
         GatherRa(usize),
 
+        /// One-hot read-address decomposition for the **Gather** operator.
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        GatherRaD(usize, usize),
+
         /// One-hot read-address decomposition for the softmax **remainder** RC.
         ///
         /// * `0` – node index

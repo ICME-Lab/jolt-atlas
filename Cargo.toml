@@ -37,6 +37,7 @@ num-derive = "0.4.2"
 num-traits = "0.2.19"
 
 # Serialization
+bincode = { version = "2.0.1", features = ["serde"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", default-features = false }
 
@@ -67,6 +68,10 @@ serial_test = "3.2.0"
 
 [lib]
 path = "./src/lib.rs"
+
+
+[dev-dependencies]
+bincode = { version = "2.0.1", features = ["serde"] }
 
 
 [dependencies]

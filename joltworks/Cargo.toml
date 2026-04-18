@@ -8,6 +8,7 @@ monitor = ["dep:sysinfo"]
 allocative = ["dep:inferno"]
 challenge-254-bit = []
 test-feature = []
+zk = []
 
 [dependencies]
 # Internal

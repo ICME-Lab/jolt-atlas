@@ -32,6 +32,12 @@ pub trait SumcheckInstanceProver<F: JoltField, T: Transcript>:
         self.get_params().input_claim(accumulator)
     }
 
+    /// Computes the round offset for this instance within a batched sumcheck.
+    /// Instances with fewer rounds start later in the batched protocol.
+    fn round_offset(&self, max_num_rounds: usize) -> usize {
+        max_num_rounds - self.num_rounds()
+    }
+
     /// Computes the prover's message for a specific round of the sumcheck protocol.
     fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F>;
 

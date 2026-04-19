@@ -117,9 +117,9 @@ impl<C: JoltCurve> PedersenGenerators<C> {
     }
 }
 
-#[cfg(any(test, feature = "test-feature"))]
+#[cfg(any(test, feature = "test-feature", feature = "zk"))]
 impl PedersenGenerators<crate::curve::Bn254Curve> {
-    /// Test-only: derives generators deterministically from hash.
+    /// Derives generators deterministically from hash (test/ZK pilot only).
     pub fn deterministic(count: usize) -> Self {
         use ark_bn254::G1Projective;
         use ark_std::UniformRand;

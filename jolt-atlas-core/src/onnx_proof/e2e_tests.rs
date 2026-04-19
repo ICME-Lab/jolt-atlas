@@ -717,3 +717,31 @@ fn test_mlp_square_4layer() {
         TestConfig::default(),
     );
 }
+
+/// End-to-end ZK test: proves a Square-only model through the ZK pipeline
+/// (Pedersen-committed sumcheck rounds + BlindFold), then verifies both the
+/// standard proof and the BlindFold proof.
+#[cfg(feature = "zk")]
+#[test]
+fn test_square_zk() {
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+
+    let size = 1 << 4;
+    let mut rng = StdRng::seed_from_u64(0xBF02);
+    let input = Tensor::<i32>::random_small(&mut rng, &[size]);
+
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![size]);
+    let res = b.square(i);
+    b.mark_output(res);
+    let model = b.build();
+
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+
+    let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input]);
+
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, None)
+        .expect("ZK verification should succeed");
+}

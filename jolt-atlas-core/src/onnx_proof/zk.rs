@@ -154,6 +154,51 @@ pub fn prove_zk(
         }
     }
 
+    // 3b. y_com transcript binding for the batch opening evaluation claim.
+    // When there are committed polynomials, the batch opening reduction produces
+    // a joint evaluation claim that must be hidden. We commit it via Pedersen
+    // and append y_com to the transcript instead of the raw scalar.
+    // For Square (no committed polys), poly_map is empty and this is a no-op.
+    if !poly_map.is_empty() {
+        // Replay the batch opening reduction sumcheck on the ZK transcript
+        prover.accumulator.prepare_for_sumcheck(&poly_map);
+        let (_acc_proof, r_sumcheck_acc) = prover
+            .accumulator
+            .prove_batch_opening_sumcheck(&mut prover.transcript);
+        let state = prover
+            .accumulator
+            .finalize_batch_opening_sumcheck(r_sumcheck_acc, &mut prover.transcript);
+
+        // Commit the joint claim via Pedersen (y_com)
+        let joint_claim: F = state.sumcheck_claims.iter().sum();
+        let y_blinding = F::random(&mut rand::thread_rng());
+        let y_com_gens = PedersenGenerators::<C>::deterministic(2);
+        let y_com = y_com_gens.commit(&[joint_claim], &y_blinding);
+
+        // Append y_com to transcript instead of raw claim
+        prover.transcript.append_serializable(&y_com);
+
+        // Store in BlindFold accumulator for R1CS constraint encoding
+        blindfold_accumulator.set_opening_proof_data(
+            joltworks::subprotocols::blindfold::OpeningProofData {
+                opening_ids: state
+                    .sumcheck_claims
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| {
+                        joltworks::poly::opening_proof::OpeningId::Virtual(
+                            common::VirtualPolynomial::NodeOutput(i),
+                            joltworks::poly::opening_proof::SumcheckId::Raf,
+                        )
+                    })
+                    .collect(),
+                constraint_coeffs: state.gamma_powers.clone(),
+                joint_claim,
+                y_blinding,
+            },
+        );
+    }
+
     // 4. Build BlindFold proof from accumulated stage data
     let stage_data_vec = blindfold_accumulator.take_stage_data();
     let mut all_stages = Vec::new();

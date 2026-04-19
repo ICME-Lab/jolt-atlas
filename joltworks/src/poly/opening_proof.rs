@@ -359,8 +359,13 @@ where
         transcript.append_scalar(&claim);
 
         self.openings.insert(opening_id, (opening_point, claim));
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-feature"))]
         self.appended_virtual_openings.borrow_mut().push(opening_id);
+        #[cfg(feature = "zk")]
+        {
+            self.pending_claims.push(claim);
+            self.pending_claim_ids.push(opening_id);
+        }
     }
 
     /// Take the openings, removing the points to reduce proof size

@@ -351,7 +351,7 @@ struct RoundVariables {
 }
 
 impl<F: JoltField> VerifierR1CSBuilder<F> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-feature"))]
     pub fn new(stage_configs: &[StageConfig], baked: &BakedPublicInputs<F>) -> Self {
         Self::new_with_extra(stage_configs, &[], baked, Vec::new(), BTreeMap::new())
     }

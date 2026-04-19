@@ -117,7 +117,7 @@ impl<C: JoltCurve> PedersenGenerators<C> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-feature"))]
 impl PedersenGenerators<crate::curve::Bn254Curve> {
     /// Test-only: derives generators deterministically from hash.
     pub fn deterministic(count: usize) -> Self {

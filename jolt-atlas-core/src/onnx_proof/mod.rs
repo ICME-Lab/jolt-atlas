@@ -38,6 +38,8 @@ mod preprocessing;
 mod prover;
 mod types;
 mod verifier;
+#[cfg(feature = "zk")]
+pub mod zk;
 
 #[cfg(test)]
 mod e2e_tests;

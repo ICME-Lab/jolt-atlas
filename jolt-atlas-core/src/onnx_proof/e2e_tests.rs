@@ -742,6 +742,62 @@ fn test_square_zk() {
 
     let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input]);
 
-    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, None)
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io)
         .expect("ZK verification should succeed");
+}
+
+/// Benchmark: measures ZK overhead vs standard prove/verify for Square.
+/// Run with: cargo test -p jolt-atlas-core --features zk --release bench_square_zk_overhead -- --nocapture --ignored
+#[cfg(feature = "zk")]
+#[ignore = "benchmark, run manually with --release --nocapture"]
+#[test]
+fn bench_square_zk_overhead() {
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use std::time::Instant;
+
+    let size = 1 << 16;
+    let mut rng = StdRng::seed_from_u64(0xBE01);
+    let input = Tensor::<i32>::random_small(&mut rng, &[size]);
+
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![size]);
+    let res = b.square(i);
+    b.mark_output(res);
+    let model = b.build();
+
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+
+    // Warmup
+    let _ =
+        ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_pp, &[input.clone()]);
+
+    // Standard prove
+    let t0 = Instant::now();
+    let (proof, io, _) =
+        ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_pp, &[input.clone()]);
+    let standard_prove = t0.elapsed();
+
+    // ZK prove (single pass: setup + ZK sumcheck + BlindFold)
+    let t0 = Instant::now();
+    let (bundle, io_zk) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input.clone()]);
+    let zk_prove = t0.elapsed();
+
+    // Standard verify
+    let t0 = Instant::now();
+    proof.verify(&verifier_pp, &io, None).unwrap();
+    let standard_verify = t0.elapsed();
+
+    // ZK verify (BlindFold only)
+    let t0 = Instant::now();
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io_zk).unwrap();
+    let zk_verify = t0.elapsed();
+
+    let prove_overhead = zk_prove.as_secs_f64() / standard_prove.as_secs_f64();
+    let verify_overhead = zk_verify.as_secs_f64() / standard_verify.as_secs_f64();
+
+    println!("\n=== Square ZK Overhead (n={size}) ===");
+    println!("Prove:  standard={standard_prove:?}  zk={zk_prove:?}  overhead={prove_overhead:.2}x  delta={:?}", zk_prove.saturating_sub(standard_prove));
+    println!("Verify: standard={standard_verify:?}  zk={zk_verify:?}  overhead={verify_overhead:.2}x  delta={:?}", zk_verify.saturating_sub(standard_verify));
 }

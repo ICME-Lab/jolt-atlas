@@ -340,8 +340,13 @@ where
 
         let key = OpeningId::Virtual(polynomial, sumcheck);
         self.openings.insert(key, (opening_point, claim));
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-feature"))]
         self.appended_virtual_openings.borrow_mut().push(key);
+        #[cfg(feature = "zk")]
+        {
+            self.pending_claims.push(claim);
+            self.pending_claim_ids.push(key);
+        }
     }
 
     /// Take the openings, removing the points to reduce proof size

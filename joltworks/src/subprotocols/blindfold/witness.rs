@@ -169,7 +169,7 @@ pub struct BlindFoldWitness<F> {
 }
 
 impl<F: JoltField> BlindFoldWitness<F> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-feature"))]
     pub fn new(initial_claim: F, stages: Vec<StageWitness<F>>) -> Self {
         Self {
             initial_claims: vec![initial_claim],

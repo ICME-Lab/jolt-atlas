@@ -220,6 +220,25 @@ impl OutputClaimConstraint {
         Self::sum_of_products(terms)
     }
 
+    /// Wraps every term with an additional challenge factor at index `num_challenges`.
+    /// Used to incorporate the batching coefficient from `prove_zk`: the sumcheck
+    /// output is `batching_coeff * expected_output`, so the constraint must produce
+    /// `batching_coeff * raw_constraint`. The caller appends the batching coefficient
+    /// as the last element of `challenge_values`.
+    pub fn scale_by_new_challenge(&self) -> Self {
+        let scale_idx = self.num_challenges;
+        let new_terms: Vec<ProductTerm> = self
+            .terms
+            .iter()
+            .map(|term| {
+                let mut new_factors = vec![ValueSource::Challenge(scale_idx)];
+                new_factors.extend(term.factors.iter().cloned());
+                ProductTerm::new(term.coeff.clone(), new_factors)
+            })
+            .collect();
+        Self::new(new_terms, self.required_openings.clone())
+    }
+
     pub fn batch(constraints: &[Option<OutputClaimConstraint>]) -> Option<Self> {
         if constraints.iter().any(|c| c.is_none()) {
             return None;

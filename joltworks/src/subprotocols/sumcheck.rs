@@ -404,20 +404,37 @@ impl BatchedSumcheck {
             transcript.append_serializable(com);
         }
 
+        // Build output constraints, scaling each by its batching coefficient.
+        // The sumcheck polynomials are batched (scaled by batching_coeff), so the
+        // final claim = batching_coeff * expected_output. The raw constraint produces
+        // expected_output (unbatched). We wrap each constraint with an extra challenge
+        // that carries the batching coefficient so the R1CS checks:
+        //   final_claim == batching_coeff * constraint_output
         let output_constraints: Vec<_> = sumcheck_instances
             .iter()
-            .map(|sumcheck| sumcheck.get_params().output_claim_constraint())
+            .zip(&batching_coeffs)
+            .map(|(sumcheck, _batch_coeff)| {
+                sumcheck
+                    .get_params()
+                    .output_claim_constraint()
+                    .map(|c| c.scale_by_new_challenge())
+            })
             .collect();
 
         let constraint_challenge_values: Vec<Vec<F>> = sumcheck_instances
             .iter()
-            .map(|sumcheck| {
+            .zip(&batching_coeffs)
+            .map(|(sumcheck, &batch_coeff)| {
                 let num_rounds = sumcheck.num_rounds();
                 let offset = sumcheck.round_offset(max_num_rounds);
                 let r_slice = &r_sumcheck[offset..offset + num_rounds];
-                sumcheck
+                let mut vals = sumcheck
                     .get_params()
-                    .output_constraint_challenge_values(r_slice)
+                    .output_constraint_challenge_values(r_slice);
+                // Append the batching coefficient as the final challenge value,
+                // matching the scale_by_new_challenge() wrapping above.
+                vals.push(batch_coeff);
+                vals
             })
             .collect();
 

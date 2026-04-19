@@ -500,18 +500,13 @@ mod tests {
             .collect();
 
         // Build output constraint witness.
-        // The constraint evaluates to the unbatched output, but prove_zk scales
-        // polynomials by batching_coeff, so the final claim includes it.
-        // Scale the challenge values by the batching coefficient to compensate.
+        // prove_zk now wraps each output constraint with scale_by_new_challenge()
+        // and appends the batching coefficient to the challenge values, so we can
+        // use them directly.
         let output_constraint = sd.output_constraints[0]
             .as_ref()
             .expect("Square should have output constraint");
-        let batching_coeff = sd.batching_coefficients[0];
-        let output_challenge_values: Vec<F> = sd.constraint_challenge_values[0]
-            .iter()
-            .enumerate()
-            .map(|(i, v)| if i == 0 { *v * batching_coeff } else { *v })
-            .collect();
+        let output_challenge_values = sd.constraint_challenge_values[0].clone();
         let output_opening_values: Vec<F> =
             sd.output_claims.iter().map(|(_id, val)| *val).collect();
 

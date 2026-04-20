@@ -672,10 +672,17 @@ pub trait PolynomialEvaluation<F: JoltField> {
     where
         Self: Sized,
         C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
-        F: FieldChallengeOps<C>;
+        F: FieldChallengeOps<C>,
+    {
+        let _ = (polys, r); // to silence unused variable warnings
+        unimplemented!("Implemented batch evaluation for MultilinearPolynomial");
+    }
     /// Computes this polynomial's contribution to the computation of a prover
     /// sumcheck message (i.e. a univariate polynomial of the given `degree`).
-    fn sumcheck_evals(&self, index: usize, degree: usize, order: BindingOrder) -> Vec<F>;
+    fn sumcheck_evals(&self, index: usize, degree: usize, order: BindingOrder) -> Vec<F> {
+        let _ = (index, degree, order); // to silence unused variable warnings
+        unimplemented!("Implemented sumcheck evals for MultilinearPolynomial");
+    }
 }
 
 impl<F: JoltField> PolynomialBinding<F> for MultilinearPolynomial<F> {

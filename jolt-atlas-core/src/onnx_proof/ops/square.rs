@@ -41,23 +41,12 @@ pub struct SquareParams<F: JoltField> {
 impl<F: JoltField> SquareParams<F> {
     /// Creates new params by reading the current output opening from the accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let r_node_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
+        let r_node_output = accessor.get_reduced_opening().0;
         Self {
-            r_node_output: r_node_output.into(),
+            r_node_output,
             computation_node,
         }
-    }
-
-    /// OpeningId for the operand (input[0]) at this node's execution sumcheck.
-    #[cfg(feature = "zk")]
-    fn operand_opening_id(&self) -> joltworks::poly::opening_proof::OpeningId {
-        joltworks::poly::opening_proof::OpeningId::new(
-            common::VirtualPoly::NodeOutput(self.computation_node.inputs[0]),
-            joltworks::poly::opening_proof::SumcheckId::NodeExecution(self.computation_node.idx),
-        )
     }
 }
 
@@ -67,8 +56,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SquareParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        accumulator
-            .get_node_output_opening(self.computation_node.idx)
+        AccOpeningAccessor::new(accumulator, &self.computation_node)
+            .get_reduced_opening()
             .1
     }
 
@@ -108,7 +97,9 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SquareParams<F> {
     ) -> Option<joltworks::subprotocols::blindfold::OutputClaimConstraint> {
         use joltworks::subprotocols::blindfold::{OutputClaimConstraint, ProductTerm, ValueSource};
 
-        let operand_id = self.operand_opening_id();
+        let operand_id =
+            crate::utils::opening_access::OpeningIdBuilder::new(&self.computation_node)
+                .nodeio(Target::Input(0));
         let term = ProductTerm::scaled(
             ValueSource::Challenge(0),
             vec![

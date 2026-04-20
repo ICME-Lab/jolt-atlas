@@ -180,16 +180,6 @@ impl<F: JoltField> ReshapeSumcheckParams<F> {
     }
 }
 
-impl<F: JoltField> ReshapeSumcheckParams<F> {
-    #[cfg(feature = "zk")]
-    fn input_opening_id(&self) -> joltworks::poly::opening_proof::OpeningId {
-        joltworks::poly::opening_proof::OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(self.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.computation_node.idx),
-        )
-    }
-}
-
 impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeSumcheckParams<F> {
     fn degree(&self) -> usize {
         2
@@ -232,7 +222,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeSumcheckParams<F> {
     ) -> Option<joltworks::subprotocols::blindfold::OutputClaimConstraint> {
         use joltworks::subprotocols::blindfold::{OutputClaimConstraint, ProductTerm, ValueSource};
 
-        let input_id = self.input_opening_id();
+        let input_id = crate::utils::opening_access::OpeningIdBuilder::new(&self.computation_node)
+            .nodeio(Target::Input(0));
         let term = ProductTerm::scaled(
             ValueSource::Challenge(0),
             vec![ValueSource::Opening(input_id)],

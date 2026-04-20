@@ -190,11 +190,56 @@ pub fn prove_zk(
                     &mut stage_configs,
                 );
             }
+            Operator::Neg(_) => {
+                use crate::onnx_proof::ops::neg::{NegParams, NegProver};
+                let params = NegParams::<F>::new(node.clone(), &prover.accumulator);
+                let mut sc = NegProver::initialize(&prover.trace, params);
+                run_zk_sumcheck(
+                    &mut sc,
+                    &mut prover,
+                    &mut blindfold_accumulator,
+                    &mut stage_configs,
+                );
+            }
+            Operator::Sub(_) => {
+                use crate::onnx_proof::ops::sub::{SubParams, SubProver};
+                let params = SubParams::<F>::new(node.clone(), &prover.accumulator);
+                let mut sc = SubProver::initialize(&prover.trace, params);
+                run_zk_sumcheck(
+                    &mut sc,
+                    &mut prover,
+                    &mut blindfold_accumulator,
+                    &mut stage_configs,
+                );
+            }
+            Operator::Mul(_) | Operator::And(_) => {
+                use crate::onnx_proof::ops::mul::{MulParams, MulProver};
+                let params = MulParams::<F>::new(node.clone(), &prover.accumulator);
+                let mut sc = MulProver::initialize(&prover.trace, params);
+                run_zk_sumcheck(
+                    &mut sc,
+                    &mut prover,
+                    &mut blindfold_accumulator,
+                    &mut stage_configs,
+                );
+            }
+            Operator::Cube(_) => {
+                use crate::onnx_proof::ops::cube::{CubeParams, CubeProver};
+                let params = CubeParams::<F>::new(node.clone(), &prover.accumulator);
+                let mut sc = CubeProver::initialize(&prover.trace, params);
+                run_zk_sumcheck(
+                    &mut sc,
+                    &mut prover,
+                    &mut blindfold_accumulator,
+                    &mut stage_configs,
+                );
+            }
             Operator::Input(_)
             | Operator::Identity(_)
             | Operator::Broadcast(_)
             | Operator::MoveAxis(_)
-            | Operator::Constant(_) => {}
+            | Operator::Constant(_)
+            | Operator::IsNan(_) => {}
             other => {
                 panic!("ZK proving not yet implemented for operator: {other:?}");
             }
@@ -224,8 +269,8 @@ pub fn prove_zk(
                     .iter()
                     .enumerate()
                     .map(|(i, _)| {
-                        joltworks::poly::opening_proof::OpeningId::Virtual(
-                            common::VirtualPolynomial::NodeOutput(i),
+                        joltworks::poly::opening_proof::OpeningId::new(
+                            common::VirtualPoly::NodeOutput(i),
                             joltworks::poly::opening_proof::SumcheckId::Raf,
                         )
                     })

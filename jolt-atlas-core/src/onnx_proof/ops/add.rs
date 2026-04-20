@@ -41,30 +41,12 @@ pub struct AddParams<F: JoltField> {
 impl<F: JoltField> AddParams<F> {
     /// Creates new params by reading the current output opening from the accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let r_node_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
+        let r_node_output = accessor.get_reduced_opening().0;
         Self {
-            r_node_output: r_node_output.into(),
+            r_node_output,
             computation_node,
         }
-    }
-
-    #[cfg(feature = "zk")]
-    fn left_opening_id(&self) -> joltworks::poly::opening_proof::OpeningId {
-        joltworks::poly::opening_proof::OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(self.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.computation_node.idx),
-        )
-    }
-
-    #[cfg(feature = "zk")]
-    fn right_opening_id(&self) -> joltworks::poly::opening_proof::OpeningId {
-        joltworks::poly::opening_proof::OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(self.computation_node.inputs[1]),
-            SumcheckId::NodeExecution(self.computation_node.idx),
-        )
     }
 }
 
@@ -111,8 +93,11 @@ impl<F: JoltField> SumcheckInstanceParams<F> for AddParams<F> {
     ) -> Option<joltworks::subprotocols::blindfold::OutputClaimConstraint> {
         use joltworks::subprotocols::blindfold::{OutputClaimConstraint, ProductTerm, ValueSource};
 
-        let left_id = self.left_opening_id();
-        let right_id = self.right_opening_id();
+        let op_builder =
+            crate::utils::opening_access::OpeningIdBuilder::new(&self.computation_node);
+        let left_id = op_builder.nodeio(Target::Input(0));
+        let right_id = op_builder.nodeio(Target::Input(1));
+
         let terms = vec![
             ProductTerm::scaled(
                 ValueSource::Challenge(0),

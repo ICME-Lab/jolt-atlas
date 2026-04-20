@@ -746,6 +746,77 @@ fn test_square_zk() {
         .expect("ZK verification should succeed");
 }
 
+#[cfg(feature = "zk")]
+#[test]
+fn test_add_zk() {
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+
+    let size = 1 << 4;
+    let mut rng = StdRng::seed_from_u64(0xBF03);
+    let input = Tensor::<i32>::random_small(&mut rng, &[size]);
+
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![size]);
+    let c = b.constant(Tensor::<i32>::random_small(&mut rng, &[size]));
+    let res = b.add(i, c);
+    b.mark_output(res);
+    let model = b.build();
+
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+
+    let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input]);
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io)
+        .expect("ZK verification should succeed");
+}
+
+#[cfg(feature = "zk")]
+#[test]
+fn test_reshape_zk() {
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+
+    let mut rng = StdRng::seed_from_u64(0xBF04);
+    let input = Tensor::<i32>::random_small(&mut rng, &[4, 4]);
+
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![4, 4]);
+    let res = b.reshape(i, vec![16]);
+    b.mark_output(res);
+    let model = b.build();
+
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+
+    let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input]);
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io)
+        .expect("ZK verification should succeed");
+}
+
+#[cfg(feature = "zk")]
+#[test]
+fn test_slice_zk() {
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+
+    let mut rng = StdRng::seed_from_u64(0xBF05);
+    let input = Tensor::<i32>::random_small(&mut rng, &[2, 8]);
+
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![2, 8]);
+    let res = b.slice(i, 1, 2, 6); // slice axis 1, range [2..6]
+    b.mark_output(res);
+    let model = b.build();
+
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+
+    let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input]);
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io)
+        .expect("ZK verification should succeed");
+}
+
 /// Benchmark: measures ZK overhead vs standard prove/verify for Square.
 /// Run with: cargo test -p jolt-atlas-core --features zk --release bench_square_zk_overhead -- --nocapture --ignored
 #[cfg(feature = "zk")]

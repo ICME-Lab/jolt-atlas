@@ -68,6 +68,35 @@ pub struct ZkProofBundle {
     pub commitments: Vec<<PCS as CommitmentScheme>::Commitment>,
 }
 
+/// Run a single-instance ZK sumcheck and collect stage data.
+fn run_zk_sumcheck(
+    sc: &mut dyn SumcheckInstanceProver<F, T>,
+    prover: &mut Prover<F, T>,
+    blindfold_accumulator: &mut BlindFoldAccumulator<F, C>,
+    stage_configs: &mut Vec<StageConfig>,
+) {
+    let poly_degree = sc.get_params().degree();
+    let num_rounds = sc.get_params().num_rounds();
+
+    let _ = prover.accumulator.take_pending_claims();
+    let _ = prover.accumulator.take_pending_claim_ids();
+
+    let pedersen_gens = PedersenGenerators::<C>::deterministic(poly_degree + 2);
+    let mut rng = rand::thread_rng();
+
+    let instances: Vec<&mut dyn SumcheckInstanceProver<F, T>> = vec![sc];
+    let _ = BatchedSumcheck::prove_zk::<F, C, T, _>(
+        instances,
+        &mut prover.accumulator,
+        blindfold_accumulator,
+        &mut prover.transcript,
+        &pedersen_gens,
+        &mut rng,
+    );
+
+    stage_configs.push(StageConfig::new_chain(num_rounds, poly_degree));
+}
+
 /// Prove an ONNX model execution with zero-knowledge (single pass).
 ///
 /// Runs the model once, performs setup (commit, output claim), then for each
@@ -109,32 +138,57 @@ pub fn prove_zk(
         match &node.operator {
             Operator::Square(_) => {
                 use crate::onnx_proof::ops::square::{SquareParams, SquareProver};
-
                 let params = SquareParams::<F>::new(node.clone(), &prover.accumulator);
-                let poly_degree = params.degree();
-                let num_rounds = params.num_rounds();
-
-                let mut square_prover = SquareProver::initialize(&prover.trace, params);
-
-                // Drain pre-sumcheck pending claims
-                let _ = prover.accumulator.take_pending_claims();
-                let _ = prover.accumulator.take_pending_claim_ids();
-
-                let pedersen_gens = PedersenGenerators::<C>::deterministic(poly_degree + 2);
-                let mut rng = rand::thread_rng();
-
-                let instances: Vec<&mut dyn SumcheckInstanceProver<F, T>> =
-                    vec![&mut square_prover];
-                let _ = BatchedSumcheck::prove_zk::<F, C, T, _>(
-                    instances,
-                    &mut prover.accumulator,
+                let mut sc = SquareProver::initialize(&prover.trace, params);
+                run_zk_sumcheck(
+                    &mut sc,
+                    &mut prover,
                     &mut blindfold_accumulator,
-                    &mut prover.transcript,
-                    &pedersen_gens,
-                    &mut rng,
+                    &mut stage_configs,
                 );
-
-                stage_configs.push(StageConfig::new_chain(num_rounds, poly_degree));
+            }
+            Operator::Add(_) => {
+                use crate::onnx_proof::ops::add::{AddParams, AddProver};
+                let params = AddParams::<F>::new(node.clone(), &prover.accumulator);
+                let mut sc = AddProver::initialize(&prover.trace, params);
+                run_zk_sumcheck(
+                    &mut sc,
+                    &mut prover,
+                    &mut blindfold_accumulator,
+                    &mut stage_configs,
+                );
+            }
+            Operator::Reshape(_) => {
+                use crate::onnx_proof::ops::reshape::{
+                    ReshapeSumcheckParams, ReshapeSumcheckProver,
+                };
+                let params = ReshapeSumcheckParams::<F>::new(
+                    node.clone(),
+                    &prover.accumulator,
+                    &pp.shared.model().graph,
+                );
+                let mut sc = ReshapeSumcheckProver::initialize(&prover.trace, params);
+                run_zk_sumcheck(
+                    &mut sc,
+                    &mut prover,
+                    &mut blindfold_accumulator,
+                    &mut stage_configs,
+                );
+            }
+            Operator::Slice(_) => {
+                use crate::onnx_proof::ops::slice::{SliceSumcheckParams, SliceSumcheckProver};
+                let params = SliceSumcheckParams::<F>::new(
+                    node.clone(),
+                    &prover.accumulator,
+                    &pp.shared.model().graph,
+                );
+                let mut sc = SliceSumcheckProver::initialize(&prover.trace, params);
+                run_zk_sumcheck(
+                    &mut sc,
+                    &mut prover,
+                    &mut blindfold_accumulator,
+                    &mut stage_configs,
+                );
             }
             Operator::Input(_)
             | Operator::Identity(_)

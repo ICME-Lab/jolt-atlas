@@ -34,6 +34,8 @@
 //! Internal Computation Graph
 //! ```
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+use crate::utils::parallel_utils::IndexedParallelIterator;
 use crate::{
     model::RunArgs,
     node::{
@@ -43,6 +45,7 @@ use crate::{
     ops::Operator,
     tensor::Tensor,
 };
+use common::parallel::par_enabled;
 
 use std::{collections::BTreeMap, sync::Arc};
 use tract_onnx::{
@@ -695,7 +698,11 @@ pub fn extract_tensor_value(
     match dt {
         DatumType::F16 => {
             let vec = input.as_slice::<tract_onnx::prelude::f16>()?.to_vec();
-            let cast: Vec<f32> = vec.par_iter().map(|x| (*x).into()).collect();
+            let cast: Vec<f32> = vec
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|x| (*x).into())
+                .collect();
             const_value = Tensor::<f32>::new(Some(&cast), &dims)?;
         }
         DatumType::F32 => {
@@ -704,61 +711,101 @@ pub fn extract_tensor_value(
         }
         DatumType::F64 => {
             let vec = input.as_slice::<f64>()?.to_vec();
-            let cast: Vec<f32> = vec.par_iter().map(|x| *x as f32).collect();
+            let cast: Vec<f32> = vec
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|x| *x as f32)
+                .collect();
             const_value = Tensor::<f32>::new(Some(&cast), &dims)?;
         }
         DatumType::I64 => {
             // Generally a shape or hyperparam
             let vec = input.as_slice::<i64>()?.to_vec();
-            let cast: Vec<f32> = vec.par_iter().map(|x| *x as f32).collect();
+            let cast: Vec<f32> = vec
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|x| *x as f32)
+                .collect();
             const_value = Tensor::<f32>::new(Some(&cast), &dims)?;
         }
         DatumType::I32 => {
             // Generally a shape or hyperparam
             let vec = input.as_slice::<i32>()?.to_vec();
-            let cast: Vec<f32> = vec.par_iter().map(|x| *x as f32).collect();
+            let cast: Vec<f32> = vec
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|x| *x as f32)
+                .collect();
             const_value = Tensor::<f32>::new(Some(&cast), &dims)?;
         }
         DatumType::I16 => {
             // Generally a shape or hyperparam
             let vec = input.as_slice::<i16>()?.to_vec();
-            let cast: Vec<f32> = vec.par_iter().map(|x| *x as f32).collect();
+            let cast: Vec<f32> = vec
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|x| *x as f32)
+                .collect();
             const_value = Tensor::<f32>::new(Some(&cast), &dims)?;
         }
         DatumType::I8 => {
             // Generally a shape or hyperparam
             let vec = input.as_slice::<i8>()?.to_vec();
-            let cast: Vec<f32> = vec.par_iter().map(|x| *x as f32).collect();
+            let cast: Vec<f32> = vec
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|x| *x as f32)
+                .collect();
             const_value = Tensor::<f32>::new(Some(&cast), &dims)?;
         }
         DatumType::U8 => {
             // Generally a shape or hyperparam
             let vec = input.as_slice::<u8>()?.to_vec();
-            let cast: Vec<f32> = vec.par_iter().map(|x| *x as f32).collect();
+            let cast: Vec<f32> = vec
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|x| *x as f32)
+                .collect();
             const_value = Tensor::<f32>::new(Some(&cast), &dims)?;
         }
         DatumType::U16 => {
             // Generally a shape or hyperparam
             let vec = input.as_slice::<u16>()?.to_vec();
-            let cast: Vec<f32> = vec.par_iter().map(|x| *x as f32).collect();
+            let cast: Vec<f32> = vec
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|x| *x as f32)
+                .collect();
             const_value = Tensor::<f32>::new(Some(&cast), &dims)?;
         }
         DatumType::U32 => {
             // Generally a shape or hyperparam
             let vec = input.as_slice::<u32>()?.to_vec();
-            let cast: Vec<f32> = vec.par_iter().map(|x| *x as f32).collect();
+            let cast: Vec<f32> = vec
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|x| *x as f32)
+                .collect();
             const_value = Tensor::<f32>::new(Some(&cast), &dims)?;
         }
         DatumType::U64 => {
             // Generally a shape or hyperparam
             let vec = input.as_slice::<u64>()?.to_vec();
-            let cast: Vec<f32> = vec.par_iter().map(|x| *x as f32).collect();
+            let cast: Vec<f32> = vec
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|x| *x as f32)
+                .collect();
             const_value = Tensor::<f32>::new(Some(&cast), &dims)?;
         }
         DatumType::Bool => {
             // Generally a shape or hyperparam
             let vec = input.as_slice::<bool>()?.to_vec();
-            let cast: Vec<f32> = vec.par_iter().map(|x| *x as usize as f32).collect();
+            let cast: Vec<f32> = vec
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|x| *x as usize as f32)
+                .collect();
             const_value = Tensor::<f32>::new(Some(&cast), &dims)?;
         }
         DatumType::TDim => {
@@ -767,6 +814,7 @@ pub fn extract_tensor_value(
 
             let cast: Result<Vec<f32>, &str> = vec
                 .par_iter()
+                .with_min_len(par_enabled())
                 .map(|x| match x.to_i64() {
                     Ok(v) => Ok(v as f32),
                     Err(_) => match x.to_i64() {

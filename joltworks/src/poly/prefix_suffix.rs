@@ -9,6 +9,7 @@ use crate::{
     utils::{lookup_bits::LookupBits, math::Math, thread::unsafe_allocate_zero_vec},
 };
 use allocative::Allocative;
+use common::parallel::par_enabled;
 use num_traits::Zero;
 use rayon::prelude::*;
 use std::{
@@ -441,6 +442,7 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
             .P
             .par_iter()
             .zip(self.Q.par_iter())
+            .with_min_len(par_enabled())
             .map(|(p, q)| {
                 let p_evals = if let Some(p) = p {
                     // one for registry and one for self
@@ -479,15 +481,18 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
     }
 
     pub fn bind(&mut self, r: F::Challenge) {
-        self.P.par_iter().for_each(|p| {
+        self.P.par_iter().with_min_len(par_enabled()).for_each(|p| {
             if let Some(p) = p {
                 let mut p = p.write().unwrap();
                 p.bind_parallel(r, BindingOrder::HighToLow);
             }
         });
-        self.Q.par_iter_mut().for_each(|poly| {
-            poly.bind_parallel(r, BindingOrder::HighToLow);
-        });
+        self.Q
+            .par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|poly| {
+                poly.bind_parallel(r, BindingOrder::HighToLow);
+            });
         self.next_round();
     }
 
@@ -495,6 +500,7 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
         self.P
             .par_iter()
             .zip(self.poly.suffixes().par_iter())
+            .with_min_len(par_enabled())
             .map(|(p, suffix)| {
                 let suff = suffix.suffix_mle(LookupBits::new(0, 0));
                 if suff == 0 {
@@ -511,7 +517,7 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
     }
 
     fn next_round(&mut self) {
-        self.P.par_iter().for_each(|p| {
+        self.P.par_iter().with_min_len(par_enabled()).for_each(|p| {
             if let Some(p) = p {
                 // one for registry and one for self
                 let use_cache = Arc::strong_count(p) > 2;

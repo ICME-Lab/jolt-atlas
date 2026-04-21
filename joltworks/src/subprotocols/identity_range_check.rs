@@ -25,6 +25,7 @@ use crate::{
     },
 };
 use ark_std::Zero;
+use common::parallel::par_enabled;
 use common::VirtualPolynomial;
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -233,6 +234,7 @@ where
         let len = self.identity_ps.Q_len();
         (0..len / 2)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|b| {
                 let (i0, i2) = self.identity_ps.sumcheck_evals(b);
                 [i0, i2]
@@ -264,6 +266,7 @@ where
             let _guard = span.enter();
             self.lookup_indices
                 .par_iter()
+                .with_min_len(par_enabled())
                 .map(|k| {
                     (0..self.phases)
                         .map(|phase| {

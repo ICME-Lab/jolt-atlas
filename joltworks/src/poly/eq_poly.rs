@@ -1,6 +1,7 @@
 use crate::field::JoltField;
 use crate::poly::opening_proof::{Endianness, OpeningPoint};
 use crate::utils::{math::Math, thread::unsafe_allocate_zero_vec};
+use common::parallel::par_enabled;
 use rayon::prelude::*;
 use std::{
     marker::PhantomData,
@@ -29,6 +30,7 @@ impl<F: JoltField> EqPolynomial<F> {
         assert_eq!(x.len(), y.len());
         x.par_iter()
             .zip(y.par_iter())
+            .with_min_len(par_enabled())
             .map(|(x_i, y_i)| *x_i * *y_i + (F::one() - *x_i) * (F::one() - *y_i))
             .product()
     }
@@ -45,11 +47,13 @@ impl<F: JoltField> EqPolynomial<F> {
         if E1 == E2 {
             x.r.par_iter()
                 .zip(y.r.par_iter())
+                .with_min_len(par_enabled())
                 .map(|(x_i, y_i)| *x_i * y_i + (F::one() - x_i) * (F::one() - y_i))
                 .product()
         } else {
             x.r.par_iter()
                 .zip(y.r.par_iter().rev())
+                .with_min_len(par_enabled())
                 .map(|(x_i, y_i)| *x_i * y_i + (F::one() - x_i) * (F::one() - y_i))
                 .product()
         }
@@ -235,6 +239,7 @@ impl<F: JoltField> EqPolynomial<F> {
             evals_left
                 .par_iter_mut()
                 .zip(evals_right.par_iter_mut())
+                .with_min_len(par_enabled())
                 .for_each(|(x, y)| {
                     *y = *x * *r;
                     *x -= *y;

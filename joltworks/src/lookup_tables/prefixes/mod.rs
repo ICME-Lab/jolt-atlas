@@ -14,6 +14,7 @@ use crate::{
     lookup_tables::prefixes::{msb::MsbPrefix, nlw::NotLowerWordPrefix},
     utils::lookup_bits::LookupBits,
 };
+use common::parallel::par_enabled;
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
 use rayon::prelude::*;
@@ -225,6 +226,7 @@ impl Prefixes {
         let previous_checkpoints = checkpoints.to_vec();
         checkpoints
             .par_iter_mut()
+            .with_min_len(par_enabled())
             .enumerate()
             .for_each(|(index, new_checkpoint)| {
                 let prefix: Self = FromPrimitive::from_u8(index as u8).unwrap();

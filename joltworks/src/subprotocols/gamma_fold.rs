@@ -1,6 +1,7 @@
 use atlas_onnx_tracer::tensor::Tensor;
+use common::parallel::par_enabled;
 use common::VirtualPolynomial;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
 use crate::{
     field::{IntoOpening, JoltField},
@@ -132,6 +133,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GammaFoldProv
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         let univariate_poly_evals: [F; DEGREE_BOUND] = (0..self.tensor.len() / 2)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|i| {
                 let tensor_evals =
                     self.tensor

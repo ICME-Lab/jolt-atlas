@@ -2,6 +2,7 @@ use crate::{
     field::JoltField,
     poly::{dense_mlpoly::DensePolynomial, multilinear_polynomial::MultilinearPolynomial},
 };
+use common::parallel::par_enabled;
 use common::CommittedPolynomial;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
@@ -41,6 +42,7 @@ pub fn build_materialized_rlc<F: JoltField>(
     // Homomorphically combine dense polynomials: joint[i] = Σ coeff_j * poly_j[i]
     let mut joint_coeffs: Vec<F> = (0..joint_len)
         .into_par_iter()
+        .with_min_len(par_enabled())
         .map(|i| {
             dense
                 .iter()

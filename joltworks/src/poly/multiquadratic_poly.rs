@@ -1,4 +1,5 @@
 use allocative::Allocative;
+use common::parallel::par_enabled;
 use rayon::prelude::*;
 
 use crate::field::JoltField;
@@ -331,6 +332,7 @@ impl<F: JoltField> MultiquadraticPolynomial<F> {
 
         E_active
             .par_iter()
+            .with_min_len(par_enabled())
             .enumerate()
             .map(|(eq_active_idx, eq_active_val)| {
                 let mut index = offset;

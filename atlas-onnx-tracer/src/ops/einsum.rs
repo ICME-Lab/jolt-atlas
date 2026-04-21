@@ -2,6 +2,7 @@ use crate::{
     ops::{Einsum, Op},
     tensor::{Tensor, TensorError},
 };
+use common::parallel::par_enabled;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use tract_onnx::prelude::tract_itertools::Itertools;
@@ -169,6 +170,7 @@ pub fn einsum_i32_with_i64_rebase(
 
     let output: Vec<i32> = cartesian_coord
         .par_iter()
+        .with_min_len(par_enabled())
         .map(|out_coord| {
             let out_partials: Vec<usize> = (0..inputs.len())
                 .map(|inp_idx| {

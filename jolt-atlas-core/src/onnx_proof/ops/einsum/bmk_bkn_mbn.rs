@@ -1,3 +1,4 @@
+use common::parallel::par_enabled;
 use std::array;
 
 use atlas_onnx_tracer::{
@@ -155,6 +156,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for BmkBknMbnProv
         let half_poly_len = right_operand.len() / 2;
         let uni_poly_evals: [F; DEGREE_BOUND] = (0..half_poly_len)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|jh| {
                 let left_evals =
                     left_operand.sumcheck_evals_array::<DEGREE_BOUND>(jh, BindingOrder::HighToLow);

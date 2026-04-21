@@ -1,3 +1,4 @@
+use common::parallel::par_enabled;
 use rayon::prelude::*;
 use std::{fmt::Debug, iter::zip, mem, sync::Arc};
 
@@ -218,10 +219,18 @@ impl<I: Into<usize> + Copy + Default + Send + Sync + 'static, F: JoltField>
         let mut F_10: Vec<F> = self.F_1.clone();
         let mut F_11: Vec<F> = self.F_1;
 
-        F_00.par_iter_mut().for_each(|f| *f *= eq_0_r1);
-        F_01.par_iter_mut().for_each(|f| *f *= eq_1_r1);
-        F_10.par_iter_mut().for_each(|f| *f *= eq_0_r1);
-        F_11.par_iter_mut().for_each(|f| *f *= eq_1_r1);
+        F_00.par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|f| *f *= eq_0_r1);
+        F_01.par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|f| *f *= eq_1_r1);
+        F_10.par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|f| *f *= eq_0_r1);
+        F_11.par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|f| *f *= eq_1_r1);
 
         RaPolynomialRound3 {
             F_00,
@@ -296,14 +305,38 @@ impl<I: Into<usize> + Copy + Default + Send + Sync + 'static, F: JoltField>
         let mut F_110: Vec<F> = self.F_11.clone();
         let mut F_111: Vec<F> = self.F_11;
 
-        F_000.par_iter_mut().for_each(|f| *f *= eq_0_r2);
-        F_010.par_iter_mut().for_each(|f| *f *= eq_0_r2);
-        F_100.par_iter_mut().for_each(|f| *f *= eq_0_r2);
-        F_110.par_iter_mut().for_each(|f| *f *= eq_0_r2);
-        F_001.par_iter_mut().for_each(|f| *f *= eq_1_r2);
-        F_011.par_iter_mut().for_each(|f| *f *= eq_1_r2);
-        F_101.par_iter_mut().for_each(|f| *f *= eq_1_r2);
-        F_111.par_iter_mut().for_each(|f| *f *= eq_1_r2);
+        F_000
+            .par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|f| *f *= eq_0_r2);
+        F_010
+            .par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|f| *f *= eq_0_r2);
+        F_100
+            .par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|f| *f *= eq_0_r2);
+        F_110
+            .par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|f| *f *= eq_0_r2);
+        F_001
+            .par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|f| *f *= eq_1_r2);
+        F_011
+            .par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|f| *f *= eq_1_r2);
+        F_101
+            .par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|f| *f *= eq_1_r2);
+        F_111
+            .par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|f| *f *= eq_1_r2);
 
         let lookup_indices = &self.lookup_indices;
         let n = lookup_indices.len() / 8;

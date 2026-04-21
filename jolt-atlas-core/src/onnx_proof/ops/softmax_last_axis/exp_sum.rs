@@ -1,3 +1,4 @@
+use common::parallel::par_enabled;
 use common::VirtualPolynomial;
 use joltworks::{
     field::{IntoOpening, JoltField},
@@ -115,6 +116,7 @@ impl<F: JoltField> ExpSumProver<F> {
         let half_poly_len = exp_q.len() / 2;
         let eval_0 = (0..half_poly_len)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|kj| {
                 let k = kj >> (self.params.log_N() - m);
                 exp_q.get_bound_coeff(2 * kj) * eq_r0_k[k]

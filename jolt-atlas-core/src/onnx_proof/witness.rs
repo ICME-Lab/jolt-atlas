@@ -36,6 +36,7 @@ use atlas_onnx_tracer::{
     },
     tensor::Tensor,
 };
+use common::parallel::par_enabled;
 use common::CommittedPolynomial;
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -75,6 +76,7 @@ fn build_one_hot_rad_witness<F: JoltField>(
     let one_hot_params = OneHotParams::new(lookup_indices.len().log_2());
     let addresses: Vec<_> = lookup_indices
         .par_iter()
+        .with_min_len(par_enabled())
         .map(|lookup_index| Some(one_hot_params.lookup_index_chunk(lookup_index.into(), d) as u16))
         .collect();
     MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
@@ -97,6 +99,7 @@ fn build_teleport_activation_rad_witness<F: JoltField>(
     let (quotient, _remainder) = compute_division(input, tau);
     let lookup_indices: Vec<usize> = quotient
         .par_iter()
+        .with_min_len(par_enabled())
         .map(|&x| n_bits_to_usize(x, log_table))
         .collect();
     let one_hot_params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_table);
@@ -105,6 +108,7 @@ fn build_teleport_activation_rad_witness<F: JoltField>(
     MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
         h_indices[d]
             .par_iter()
+            .with_min_len(par_enabled())
             .map(|&h| h.map(|h| h as u16))
             .collect(),
         one_hot_params.k_chunk,
@@ -261,6 +265,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 let non_zero_addresses: Vec<_> = indexes
                     .data()
                     .par_iter()
+                    .with_min_len(par_enabled())
                     .map(|&index| Some(index as u16))
                     .collect();
                 let input_dict = &model.graph.nodes.get(&computation_node.inputs[0]).unwrap();
@@ -277,8 +282,12 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 };
                 let layer_data = Trace::layer_data(trace, computation_node);
                 let indexes = layer_data.operands[1].padded_next_power_of_two();
-                let lookup_indices: Vec<usize> =
-                    indexes.data().par_iter().map(|&x| x as usize).collect();
+                let lookup_indices: Vec<usize> = indexes
+                    .data()
+                    .par_iter()
+                    .with_min_len(par_enabled())
+                    .map(|&x| x as usize)
+                    .collect();
                 let num_words = gather_op.dict_len.next_power_of_two();
                 let one_hot_params = OneHotParams::from_config_and_log_K(
                     &OneHotConfig::default(),
@@ -291,6 +300,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
                     h_indices[*d_idx]
                         .par_iter()
+                        .with_min_len(par_enabled())
                         .map(|&h| h.map(|h| h as u16))
                         .collect(),
                     one_hot_params.k_chunk,
@@ -344,8 +354,11 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 let input = &layer_data.operands[0];
 
                 let (_quotient, remainder) = compute_division(input, FOUR_PI_APPROX);
-                let lookup_indices: Vec<usize> =
-                    remainder.par_iter().map(|&x| x as usize).collect();
+                let lookup_indices: Vec<usize> = remainder
+                    .par_iter()
+                    .with_min_len(par_enabled())
+                    .map(|&x| x as usize)
+                    .collect();
                 let one_hot_params = OneHotParams::from_config_and_log_K(
                     &OneHotConfig::default(),
                     COS_LOG_TABLE_SIZE,
@@ -357,6 +370,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPolynomial {
                 MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
                     h_indices[*d_idx]
                         .par_iter()
+                        .with_min_len(par_enabled())
                         .map(|&h| h.map(|h| h as u16))
                         .collect(),
                     one_hot_params.k_chunk,
@@ -450,6 +464,7 @@ fn build_onehot_witness<F: JoltField>(
     MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
         h_indices[d]
             .par_iter()
+            .with_min_len(par_enabled())
             .map(|&h| h.map(|h| h as u16))
             .collect(),
         one_hot_params.k_chunk,

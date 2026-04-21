@@ -1,6 +1,7 @@
 use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
+use common::parallel::par_enabled;
 use common::VirtualPolynomial;
 use rayon::prelude::*;
 use std::iter::zip;
@@ -85,6 +86,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T>
         let [q_constant, q_quadratic] = hw
             .par_iter()
             .zip(self.params.gamma_powers.par_iter())
+            .with_min_len(par_enabled())
             .map(|(hw_d, &gamma)| {
                 let [qd_c, qd_q] = eq_r.par_fold_out_in_unreduced::<9, 2>(&|g| {
                     let hw0 = hw_d.get_bound_coeff(2 * g);
@@ -109,6 +111,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T>
     fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
         self.hw
             .par_iter_mut()
+            .with_min_len(par_enabled())
             .for_each(|ra| ra.bind_parallel(r_j, BindingOrder::LowToHigh));
         self.eq_r.bind(r_j);
     }

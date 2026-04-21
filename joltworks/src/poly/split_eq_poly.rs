@@ -1,6 +1,7 @@
 //! Implements the Dao-Thaler + Gruen optimization for EQ polynomial evaluations
 //! https://eprint.iacr.org/2024/1210.pdf
 
+use common::parallel::par_enabled;
 use std::ops::Mul;
 
 use allocative::Allocative;
@@ -543,6 +544,7 @@ impl<F: JoltField> GruenSplitEqPolynomial<F> {
 
         (0..out_len)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|x_out| {
                 let mut inner_acc = make_inner();
 

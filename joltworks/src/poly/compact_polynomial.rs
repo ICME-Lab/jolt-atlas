@@ -5,6 +5,7 @@ use crate::{
 };
 use allocative::Allocative;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use common::parallel::par_enabled;
 use rayon::prelude::*;
 use std::{cmp::Ordering, ops::Index};
 
@@ -56,7 +57,11 @@ impl<T: SmallScalar, F: JoltField> CompactPolynomial<T, F> {
     }
 
     pub fn coeffs_as_field_elements(&self) -> Vec<F> {
-        self.coeffs.par_iter().map(|x| x.to_field()).collect()
+        self.coeffs
+            .par_iter()
+            .with_min_len(par_enabled())
+            .map(|x| x.to_field())
+            .collect()
     }
 
     pub fn split_eq_evaluate(&self, r_len: usize, eq_one: &[F], eq_two: &[F]) -> F {
@@ -71,9 +76,11 @@ impl<T: SmallScalar, F: JoltField> CompactPolynomial<T, F> {
     fn evaluate_split_eq_parallel(&self, eq_one: &[F], eq_two: &[F]) -> F {
         let eval: F = (0..eq_one.len())
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|x1| {
                 let partial_sum = (0..eq_two.len())
                     .into_par_iter()
+                    .with_min_len(par_enabled())
                     .map(|x2| {
                         let idx = x1 * eq_two.len() + x2;
                         // field_mul now already checks for 0 and 1 optimisation
@@ -145,7 +152,12 @@ impl<T: SmallScalar, F: JoltField> CompactPolynomial<T, F> {
     }
 
     fn inside_out_parallel(&self, r: &[F]) -> F {
-        let mut current: Vec<F> = self.coeffs.par_iter().map(|&c| c.to_field()).collect();
+        let mut current: Vec<F> = self
+            .coeffs
+            .par_iter()
+            .with_min_len(par_enabled())
+            .map(|&c| c.to_field())
+            .collect();
         let m = r.len();
         for i in (0..m).rev() {
             let stride = 1 << i;
@@ -156,6 +168,7 @@ impl<T: SmallScalar, F: JoltField> CompactPolynomial<T, F> {
             evals_left
                 .par_iter_mut()
                 .zip(evals_right.par_iter())
+                .with_min_len(par_enabled())
                 .for_each(|(x, y)| {
                     //*x = *x + r_val * (*y - *x);
                     let slope = *y - *x;
@@ -267,6 +280,7 @@ impl<T: SmallScalar, F: JoltField> PolynomialBinding<F> for CompactPolynomial<T,
                         self.bound_coeffs.par_chunks_exact(2),
                     )
                         .into_par_iter()
+                        .with_min_len(par_enabled())
                         .with_min_len(512)
                         .for_each(|(bound_coeff, coeffs)| {
                             bound_coeff.write(if coeffs[1] == coeffs[0] {
@@ -282,6 +296,7 @@ impl<T: SmallScalar, F: JoltField> PolynomialBinding<F> for CompactPolynomial<T,
                     let (left, right) = self.bound_coeffs.split_at_mut(n);
                     left.par_iter_mut()
                         .zip(right.par_iter())
+                        .with_min_len(par_enabled())
                         .with_min_len(4096)
                         .filter(|(a, b)| a != b)
                         .for_each(|(a, b)| {
@@ -294,6 +309,7 @@ impl<T: SmallScalar, F: JoltField> PolynomialBinding<F> for CompactPolynomial<T,
                 BindingOrder::LowToHigh => {
                     self.bound_coeffs = (0..n)
                         .into_par_iter()
+                        .with_min_len(par_enabled())
                         .map(|i| {
                             let a = self.coeffs[2 * i];
                             let b = self.coeffs[2 * i + 1];
@@ -316,6 +332,7 @@ impl<T: SmallScalar, F: JoltField> PolynomialBinding<F> for CompactPolynomial<T,
                     self.bound_coeffs = left
                         .par_iter()
                         .zip(right.par_iter())
+                        .with_min_len(par_enabled())
                         .map(|(&a, &b)| {
                             match a.cmp(&b) {
                                 Ordering::Equal => a.to_field(),

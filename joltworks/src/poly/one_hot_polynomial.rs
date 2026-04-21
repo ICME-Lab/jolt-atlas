@@ -1,5 +1,3 @@
-#[cfg(test)]
-use crate::poly::dense_mlpoly::DensePolynomial;
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     poly::{
@@ -10,6 +8,7 @@ use crate::{
     utils::math::Math,
 };
 use allocative::Allocative;
+use common::parallel::par_enabled;
 use rayon::prelude::*;
 use std::sync::{Arc, RwLock};
 
@@ -87,6 +86,7 @@ impl<F: JoltField> OneHotPolynomial<F> {
         let poly = MultilinearPolynomial::from(
             self.nonzero_indices
                 .par_iter()
+                .with_min_len(par_enabled())
                 .map(|instruction| match instruction {
                     Some(index) => eq_r_address[*index as usize],
                     None => F::zero(),
@@ -118,6 +118,7 @@ impl<F: JoltField> OneHotPolynomial<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::poly::dense_mlpoly::DensePolynomial;
     use crate::{
         poly::{multilinear_polynomial::BindingOrder, unipoly::UniPoly},
         subprotocols::opening_reduction::{

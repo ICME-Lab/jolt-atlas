@@ -2,6 +2,7 @@ use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use ark_std::Zero;
+use common::parallel::par_enabled;
 use common::{CommittedPolynomial, VirtualPolynomial};
 use rayon::prelude::*;
 use std::iter::zip;
@@ -85,10 +86,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for HammingWeight
         let prover_msg = self
             .ra
             .par_iter()
-            .zip(self.params.gamma_powers.par_iter())
+            .zip(
+                self.params
+                    .gamma_powers
+                    .par_iter()
+                    .with_min_len(par_enabled()),
+            )
             .map(|(ra, gamma)| {
                 let ra_sum = (0..ra.len() / 2)
                     .into_par_iter()
+                    .with_min_len(par_enabled())
                     .map(|i| ra.get_bound_coeff(2 * i))
                     .fold_with(F::Unreduced::<5>::zero(), |running, new| {
                         running + new.as_unreduced_ref()
@@ -106,6 +113,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for HammingWeight
     fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
         self.ra
             .par_iter_mut()
+            .with_min_len(par_enabled())
             .for_each(|ra| ra.bind_parallel(r_j, BindingOrder::LowToHigh));
     }
 

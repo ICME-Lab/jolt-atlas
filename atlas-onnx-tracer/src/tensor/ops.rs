@@ -5,6 +5,7 @@ use crate::{
     tensor::{Tensor, TensorType},
     utils::parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator},
 };
+use common::parallel::par_enabled;
 use maybe_rayon::iter::ParallelIterator;
 use std::collections::{HashMap, HashSet};
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -53,6 +54,7 @@ pub fn iff<
     // assert is boolean
     if !mask
         .par_iter()
+        .with_min_len(par_enabled())
         .all(|x| *x == T::one().unwrap() || *x == T::zero().unwrap())
     {
         return Err(TensorError::WrongMethod);
@@ -134,6 +136,7 @@ pub fn or<
 ) -> Result<Tensor<T>, TensorError> {
     if !b
         .par_iter()
+        .with_min_len(par_enabled())
         .all(|x| *x == T::one().unwrap() || *x == T::zero().unwrap())
     {
         return Err(TensorError::WrongMethod);
@@ -214,6 +217,7 @@ pub fn and<
     // assert is boolean
     if !b
         .par_iter()
+        .with_min_len(par_enabled())
         .all(|x| *x == T::one().unwrap() || *x == T::zero().unwrap())
     {
         return Err(TensorError::WrongMethod);
@@ -222,6 +226,7 @@ pub fn and<
     // assert is boolean
     if !a
         .par_iter()
+        .with_min_len(par_enabled())
         .all(|x| *x == T::one().unwrap() || *x == T::zero().unwrap())
     {
         return Err(TensorError::WrongMethod);
@@ -267,6 +272,7 @@ pub fn and2<
     let result: Vec<T> = tensor1
         .par_iter()
         .zip(tensor2.par_iter())
+        .with_min_len(par_enabled())
         .map(|(a, b)| *a & *b)
         .collect();
 
@@ -877,6 +883,7 @@ pub fn einsum<
 
     let output: Vec<T> = cartesian_coord
         .par_iter()
+        .with_min_len(par_enabled())
         .map(|out_coord| {
             // Precompute partial flat index for each input from output coordinates
             let out_partials: Vec<usize> = (0..inputs.len())
@@ -1101,11 +1108,15 @@ pub fn rescale<T: TensorType + Add<Output = T> + std::marker::Send + std::marker
 ) -> Result<Tensor<T>, TensorError> {
     // calculate value of output
     let mut output: Tensor<T> = a.clone();
-    output.par_iter_mut().enumerate().for_each(|(i, a_i)| {
-        for _ in 1..mult {
-            *a_i = a_i.clone() + a[i].clone();
-        }
-    });
+    output
+        .par_iter_mut()
+        .with_min_len(par_enabled())
+        .enumerate()
+        .for_each(|(i, a_i)| {
+            for _ in 1..mult {
+                *a_i = a_i.clone() + a[i].clone();
+            }
+        });
     Ok(output)
 }
 
@@ -1683,7 +1694,15 @@ pub fn min_axes<T: TensorType + Add<Output = T> + std::cmp::Ord + Send + Sync>(
     // calculate value of output
 
     let min_fn = |a: &Tensor<T>| -> Result<Tensor<T>, TensorError> {
-        Ok(vec![a.par_iter().min().unwrap().clone()].into_iter().into())
+        Ok(vec![
+            a.par_iter()
+                .with_min_len(par_enabled())
+                .min()
+                .unwrap()
+                .clone(),
+        ]
+        .into_iter()
+        .into())
     };
 
     axes_op(a, axes, min_fn)
@@ -1744,7 +1763,15 @@ pub fn max_axes<T: TensorType + Add<Output = T> + std::cmp::Ord + Send + Sync>(
     // calculate value of output
 
     let max_fn = |a: &Tensor<T>| -> Result<Tensor<T>, TensorError> {
-        Ok(vec![a.par_iter().max().unwrap().clone()].into_iter().into())
+        Ok(vec![
+            a.par_iter()
+                .with_min_len(par_enabled())
+                .max()
+                .unwrap()
+                .clone(),
+        ]
+        .into_iter()
+        .into())
     };
 
     axes_op(a, axes, max_fn)
@@ -2001,44 +2028,48 @@ pub fn conv<
     .multi_cartesian_product()
     .collect::<Vec<_>>();
 
-    output.par_iter_mut().enumerate().for_each(|(i, o)| {
-        let cartesian_coord_per_group = &cartesian_coord[i];
-        let (batch, group, i, j, k) = (
-            cartesian_coord_per_group[0],
-            cartesian_coord_per_group[1],
-            cartesian_coord_per_group[2],
-            cartesian_coord_per_group[3],
-            cartesian_coord_per_group[4],
-        );
-        let rs = j * stride.0;
-        let cs = k * stride.1;
+    output
+        .par_iter_mut()
+        .with_min_len(par_enabled())
+        .enumerate()
+        .for_each(|(i, o)| {
+            let cartesian_coord_per_group = &cartesian_coord[i];
+            let (batch, group, i, j, k) = (
+                cartesian_coord_per_group[0],
+                cartesian_coord_per_group[1],
+                cartesian_coord_per_group[2],
+                cartesian_coord_per_group[3],
+                cartesian_coord_per_group[4],
+            );
+            let rs = j * stride.0;
+            let cs = k * stride.1;
 
-        let start_channel = group * input_channels_per_group;
-        let end_channel = start_channel + input_channels_per_group;
+            let start_channel = group * input_channels_per_group;
+            let end_channel = start_channel + input_channels_per_group;
 
-        let local_image = padded_image
-            .get_slice(&[
-                batch..batch + 1,
-                start_channel..end_channel,
-                rs..(rs + kernel_height),
-                cs..(cs + kernel_width),
-            ])
-            .unwrap();
+            let local_image = padded_image
+                .get_slice(&[
+                    batch..batch + 1,
+                    start_channel..end_channel,
+                    rs..(rs + kernel_height),
+                    cs..(cs + kernel_width),
+                ])
+                .unwrap();
 
-        let start_kernel_index = group * output_channels_per_group + i;
-        let end_kernel_index = start_kernel_index + 1;
-        #[allow(clippy::single_range_in_vec_init)]
-        let local_kernel = kernel
-            .get_slice(&[start_kernel_index..end_kernel_index])
-            .unwrap();
+            let start_kernel_index = group * output_channels_per_group + i;
+            let end_kernel_index = start_kernel_index + 1;
+            #[allow(clippy::single_range_in_vec_init)]
+            let local_kernel = kernel
+                .get_slice(&[start_kernel_index..end_kernel_index])
+                .unwrap();
 
-        let res = dot(&[local_image, local_kernel]).unwrap()[0].clone();
-        if has_bias {
-            *o = res + inputs[2][start_kernel_index].clone();
-        } else {
-            *o = res;
-        }
-    });
+            let res = dot(&[local_image, local_kernel]).unwrap()[0].clone();
+            if has_bias {
+                *o = res + inputs[2][start_kernel_index].clone();
+            } else {
+                *o = res;
+            }
+        });
 
     // remove dummy batch dimension if we added one
     if og_image_dims.len() == 3 && vert_slides == 1 {
@@ -2517,6 +2548,7 @@ pub fn max_pool2d<T: TensorType + std::marker::Sync + std::marker::Send + std::c
 
     output
         .par_iter_mut()
+        .with_min_len(par_enabled())
         .enumerate()
         .for_each(|(flat_index, o)| {
             let coord = &cartesian_coord[flat_index];
@@ -2572,6 +2604,7 @@ pub fn dot<T: TensorType + Mul<Output = T> + Add<Output = T> + Send + Sync + std
     let res: Vec<T> = a
         .par_iter()
         .zip(b.par_iter())
+        .with_min_len(par_enabled())
         .fold(
             || T::zero().unwrap(),
             |acc, (k, i)| acc + k.clone() * i.clone(),

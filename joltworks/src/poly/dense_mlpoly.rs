@@ -7,6 +7,7 @@ use crate::{
         compute_dotproduct, compute_dotproduct_low_optimized, thread::unsafe_allocate_zero_vec,
     },
 };
+use common::parallel::par_enabled;
 
 use crate::{
     field::{FieldChallengeOps, JoltField, OptimizedMul},
@@ -129,6 +130,7 @@ impl<F: JoltField> DensePolynomial<F> {
 
         left.par_iter_mut()
             .zip(right.par_iter())
+            .with_min_len(par_enabled())
             .with_min_len(4096)
             .filter(|(&mut a, &b)| a != b)
             .for_each(|(a, b)| {
@@ -220,6 +222,7 @@ impl<F: JoltField> DensePolynomial<F> {
         let mut bound_Z = Vec::with_capacity(n);
         (bound_Z.spare_capacity_mut(), self.Z.par_chunks_exact(2))
             .into_par_iter()
+            .with_min_len(par_enabled())
             .with_min_len(512)
             .for_each(|(bound_coeff, coeffs)| {
                 let m = coeffs[1] - coeffs[0];
@@ -272,9 +275,11 @@ impl<F: JoltField> DensePolynomial<F> {
     fn evaluate_split_eq_parallel(&self, eq_one: &[F], eq_two: &[F]) -> F {
         let eval: F = (0..eq_one.len())
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|x1| {
                 let partial_sum = (0..eq_two.len())
                     .into_par_iter()
+                    .with_min_len(par_enabled())
                     .map(|x2| {
                         let idx = x1 * eq_two.len() + x2;
                         OptimizedMul::mul_01_optimized(eq_two[x2], self.Z[idx])
@@ -364,7 +369,12 @@ impl<F: JoltField> DensePolynomial<F> {
         C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
-        let mut current: Vec<_> = self.Z.par_iter().cloned().collect();
+        let mut current: Vec<_> = self
+            .Z
+            .par_iter()
+            .with_min_len(par_enabled())
+            .cloned()
+            .collect();
         let m = r.len();
         // Invoking the same parallelisation structure
         // currently in evaluating in Lagrange bases.
@@ -378,6 +388,7 @@ impl<F: JoltField> DensePolynomial<F> {
             evals_left
                 .par_iter_mut()
                 .zip(evals_right.par_iter())
+                .with_min_len(par_enabled())
                 .for_each(|(x, y)| {
                     let slope = *y - *x;
                     if slope.is_zero() {
@@ -446,6 +457,7 @@ impl<F: JoltField> DensePolynomial<F> {
 
         let result: Vec<F> = (0..max_length)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|i| {
                 let mut acc = F::zero();
                 for (coeff, poly) in coefficients.iter().zip(polynomials.iter()) {
@@ -533,10 +545,12 @@ impl<F: JoltField> PolynomialEvaluation<F> for DensePolynomial<F> {
 
         let evals = (0..eq_one.len())
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|x1| {
                 let eq1_val = eq_one[x1];
                 let inner_sums = (0..eq_two.len())
                     .into_par_iter()
+                    .with_min_len(par_enabled())
                     .filter_map(|x2| {
                         let eq2_val = eq_two[x2];
                         let idx = x1 * eq_two.len() + x2;

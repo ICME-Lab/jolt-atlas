@@ -1,3 +1,4 @@
+use common::parallel::par_enabled;
 use rayon::prelude::*;
 
 use crate::{
@@ -44,6 +45,7 @@ pub fn mult_i32_with_i64_rebase(
         output
             .par_iter_mut()
             .zip(rhs_expanded.data().par_iter())
+            .with_min_len(par_enabled())
             .for_each(|(o, r)| {
                 let prod: i64 = (*o as i64) * (*r as i64);
 

@@ -32,6 +32,7 @@ use crate::{
     },
 };
 use ark_std::Zero;
+use common::parallel::par_enabled;
 use common::{
     consts::{LOG_K, XLEN},
     VirtualPolynomial,
@@ -221,6 +222,7 @@ where
             .iter()
             .collect::<Vec<_>>()
             .par_iter()
+            .with_min_len(par_enabled())
             .map(|_| DensePolynomial::default())
             .collect();
         let is_interleaved_operands = params.is_interleaved_operands;
@@ -336,6 +338,7 @@ where
             .table
             .suffixes()
             .par_iter()
+            .with_min_len(par_enabled())
             .map(|s| {
                 let mut Q = unsafe_allocate_zero_vec(m);
                 self.lookup_indices.iter().enumerate().for_each(|(j, &k)| {
@@ -391,6 +394,7 @@ where
         let half_poly_len = self.suffix_polys[0].len() / 2;
         let [eval_0, eval_2_low, eval_2_high] = (0..half_poly_len)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|i| {
                 let b = LookupBits::new(i as u64, half_poly_len.log_2());
                 let prefix_evals_0 = self
@@ -456,6 +460,7 @@ where
         let len = self.identity_ps.Q_len();
         let [left_0, left_2, right_0, right_2] = (0..len / 2)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|b| {
                 let (i0, i2) = self.identity_ps.sumcheck_evals(b);
                 let (r0, r2) = self.right_operand_ps.sumcheck_evals(b);
@@ -519,6 +524,7 @@ where
             let _guard = span.enter();
             self.lookup_indices
                 .par_iter()
+                .with_min_len(par_enabled())
                 .map(|k| {
                     (0..self.phases)
                         .map(|phase| {
@@ -598,6 +604,7 @@ where
                 s.spawn(|_| {
                     self.suffix_polys
                         .par_iter_mut()
+                        .with_min_len(par_enabled())
                         .for_each(|s| s.bind(r_j, BindingOrder::HighToLow));
                 });
                 s.spawn(|_| self.identity_ps.bind(r_j));

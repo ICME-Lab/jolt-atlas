@@ -19,7 +19,7 @@ use atlas_onnx_tracer::{
     },
     node::ComputationNode,
 };
-use common::{CommittedPolynomial, VirtualPolynomial, parallel::ParallelFlagGuard};
+use common::{parallel::ParallelFlagGuard, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     field::JoltField,
     poly::{

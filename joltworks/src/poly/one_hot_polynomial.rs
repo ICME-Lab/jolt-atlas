@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::poly::dense_mlpoly::DensePolynomial;
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     poly::{
@@ -118,7 +120,6 @@ impl<F: JoltField> OneHotPolynomial<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::poly::dense_mlpoly::DensePolynomial;
     use crate::{
         poly::{multilinear_polynomial::BindingOrder, unipoly::UniPoly},
         subprotocols::opening_reduction::{

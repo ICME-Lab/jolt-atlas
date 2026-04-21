@@ -5,10 +5,11 @@ use crate::utils::parallel_utils::IndexedParallelIterator;
 use crate::utils::{
     self,
     dims::copy_strided,
-    parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelSliceMut},
+    parallel_utils::{
+        IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator, ParallelSliceMut,
+    },
     quantize,
 };
-use maybe_rayon::iter::ParallelIterator;
 use rand::{Rng, RngCore, distributions::Uniform, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 use std::{

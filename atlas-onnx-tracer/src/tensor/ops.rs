@@ -3,10 +3,9 @@ use super::TensorError;
 use crate::utils::parallel_utils::IndexedParallelIterator;
 use crate::{
     tensor::{Tensor, TensorType},
-    utils::parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator},
+    utils::parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator},
 };
 use common::parallel::par_enabled;
-use maybe_rayon::iter::ParallelIterator;
 use std::collections::{HashMap, HashSet};
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use std::iter::Iterator;

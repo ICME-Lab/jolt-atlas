@@ -19,7 +19,7 @@ use atlas_onnx_tracer::{
     },
     node::ComputationNode,
 };
-use common::{CommittedPolynomial, VirtualPolynomial};
+use common::{CommittedPolynomial, VirtualPolynomial, parallel::ParallelFlagGuard};
 use joltworks::{
     field::JoltField,
     poly::{
@@ -32,6 +32,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::math::Math,
 };
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
@@ -208,10 +209,15 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         model: &Model,
         trace: &Trace,
     ) -> BTreeMap<CommittedPolynomial, MultilinearPolynomial<F>> {
+        // Rayon jobs were overly fragmented, and the resulting context switching degraded performance,
+        // so the parallelism granularity is now limited to the polynomial level.
+        let _guard = ParallelFlagGuard::disabled();
         model
             .graph
             .nodes
             .values()
+            .collect::<Vec<_>>()
+            .par_iter()
             .flat_map(|node| NodeCommittedPolynomials::get_committed_polynomials::<F, T>(node))
             .map(|committed_poly| {
                 let witness = committed_poly.generate_witness(model, trace);
@@ -225,8 +231,13 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         poly_map: &BTreeMap<CommittedPolynomial, MultilinearPolynomial<F>>,
         pcs: &PCS::ProverSetup,
     ) -> Vec<PCS::Commitment> {
+        // Rayon jobs were overly fragmented, and the resulting context switching degraded performance,
+        // so the parallelism granularity is now limited to the polynomial level.
+        let _guard = ParallelFlagGuard::disabled();
         poly_map
             .values()
+            .collect::<Vec<_>>()
+            .par_iter()
             .map(|poly| PCS::commit(poly, pcs).0)
             .collect()
     }

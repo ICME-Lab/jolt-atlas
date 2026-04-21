@@ -265,13 +265,12 @@ pub fn prove_zk(
         blindfold_accumulator.set_opening_proof_data(
             joltworks::subprotocols::blindfold::OpeningProofData {
                 opening_ids: state
-                    .sumcheck_claims
+                    .polynomials
                     .iter()
-                    .enumerate()
-                    .map(|(i, _)| {
-                        joltworks::poly::opening_proof::OpeningId::Virtual(
-                            common::VirtualPolynomial::NodeOutput(i),
-                            joltworks::poly::opening_proof::SumcheckId::Raf,
+                    .map(|poly| {
+                        joltworks::poly::opening_proof::OpeningId::Committed(
+                            *poly,
+                            joltworks::poly::opening_proof::SumcheckId::BlindFoldBatchOpening,
                         )
                     })
                     .collect(),

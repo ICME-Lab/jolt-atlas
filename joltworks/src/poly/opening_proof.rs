@@ -976,6 +976,8 @@ pub enum SumcheckId {
     HammingWeight,
     /// RLC sumcheck for the execution of a specific node.
     RLC(usize),
+    /// Batch opening reduction (used by BlindFold y_com constraint).
+    BlindFoldBatchOpening,
 }
 
 impl CanonicalSerialize for SumcheckId {
@@ -999,6 +1001,7 @@ impl CanonicalSerialize for SumcheckId {
                 7u8.serialize_with_mode(&mut writer, compress)?;
                 idx.serialize_with_mode(&mut writer, compress)?;
             }
+            Self::BlindFoldBatchOpening => 8u8.serialize_with_mode(&mut writer, compress)?,
         }
         Ok(())
     }
@@ -1041,6 +1044,7 @@ impl CanonicalDeserialize for SumcheckId {
                 let idx = usize::deserialize_with_mode(&mut reader, compress, validate)?;
                 Ok(Self::RLC(idx))
             }
+            8 => Ok(Self::BlindFoldBatchOpening),
             _ => Err(SerializationError::InvalidData),
         }
     }

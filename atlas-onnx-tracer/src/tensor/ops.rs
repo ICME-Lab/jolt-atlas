@@ -3,7 +3,9 @@ use super::TensorError;
 use crate::utils::parallel_utils::IndexedParallelIterator;
 use crate::{
     tensor::{Tensor, TensorType},
-    utils::parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator},
+    utils::parallel_utils::{
+        IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+    },
 };
 use common::parallel::par_enabled;
 use std::collections::{HashMap, HashSet};

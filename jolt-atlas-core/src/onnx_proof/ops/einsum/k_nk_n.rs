@@ -2,6 +2,7 @@ use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
 };
+use common::parallel::par_enabled;
 use common::VirtualPolynomial;
 use joltworks::{
     field::{IntoOpening, JoltField},
@@ -100,6 +101,7 @@ impl<F: JoltField> KNkNProver<F> {
         let eq_r_node_output = EqPolynomial::evals(&params.r_node_output.r);
         let right_operand: Vec<F> = (0..k)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|j| {
                 (0..n)
                     .map(|h| F::from_i32(right_operand[h * k + j]) * eq_r_node_output[h])
@@ -130,6 +132,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for KNkNProver<F>
         let half_poly_len = left_operand.len() / 2;
         let uni_poly_evals: [F; 2] = (0..half_poly_len)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|i| {
                 let l_evals = left_operand.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::HighToLow);
                 let r_evals =

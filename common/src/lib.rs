@@ -1,6 +1,7 @@
 use allocative::Allocative;
 
 pub mod consts;
+pub mod parallel;
 pub mod utils;
 
 // ---------------------------------------------------------------------------

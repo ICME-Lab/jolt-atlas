@@ -32,6 +32,7 @@ use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use ark_std::Zero;
+use common::parallel::par_enabled;
 use common::CommittedPolynomial;
 use rayon::prelude::*;
 use std::{
@@ -309,6 +310,7 @@ impl<F: JoltField> DensePolynomialProverOpening<F> {
             // E_in is fully bound
             let unreduced_q_0 = (0..mle_half)
                 .into_par_iter()
+                .with_min_len(par_enabled())
                 .map(|j| {
                     let eq_eval = gruen_eq.E_out_current()[j];
                     // TODO(quang): special case depending on the polynomial type?
@@ -326,9 +328,11 @@ impl<F: JoltField> DensePolynomialProverOpening<F> {
 
             (0..num_x_in)
                 .into_par_iter()
+                .with_min_len(par_enabled())
                 .map(|x_in| {
                     let unreduced_inner_sum = (0..num_x_out)
                         .into_par_iter()
+                        .with_min_len(par_enabled())
                         .map(|x_out| {
                             let j = (x_in << num_x_out_bits) | x_out;
                             let poly_eval = polynomial.get_bound_coeff(j);
@@ -501,6 +505,7 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
                     running
                         .par_iter_mut()
                         .zip(new.into_par_iter())
+                        .with_min_len(par_enabled())
                         .for_each(|(x, y)| *x += y);
                     running
                 },
@@ -525,10 +530,12 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
 
             let unreduced_univariate_poly_evals = (0..B.len() / 2)
                 .into_par_iter()
+                .with_min_len(par_enabled())
                 .map(|k_prime| {
                     let B_evals = B.sumcheck_evals_array::<2>(k_prime, BindingOrder::HighToLow);
                     let inner_sum = G
                         .par_iter()
+                        .with_min_len(par_enabled())
                         .enumerate()
                         .skip(k_prime)
                         .step_by(B.len() / 2)
@@ -576,6 +583,7 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
             let gruen_eval_0 = if d_gruen.E_in_current_len() == 1 {
                 let unreduced_gruen_eval_0 = (0..d_gruen.len() / 2)
                     .into_par_iter()
+                    .with_min_len(par_enabled())
                     .map(|j| d_gruen.E_out_current()[j].mul_unreduced::<9>(H.get_bound_coeff(j)))
                     .reduce(F::Unreduced::<9>::zero, |running, new| running + new);
                 F::from_montgomery_reduce(unreduced_gruen_eval_0)
@@ -588,9 +596,11 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
 
                 (0..num_x_in)
                     .into_par_iter()
+                    .with_min_len(par_enabled())
                     .map(|x_in| {
                         let unreduced_inner_sum = (0..num_x_out)
                             .into_par_iter()
+                            .with_min_len(par_enabled())
                             .map(|x_out| {
                                 let j = (x_in << num_x_out_bits) | x_out;
                                 d_e_out[x_out].mul_unreduced::<9>(H.get_bound_coeff(j))

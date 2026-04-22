@@ -6,8 +6,14 @@
 /// # Terminal output with timing
 /// cargo run --release --package jolt-atlas-core --example qwen -- --trace-terminal
 ///
+/// # Override sequence length (default: 16)
+/// cargo run --release --package jolt-atlas-core --example qwen -- --seq-len 32
+///
 /// # Reuse cached shared preprocessing (builds and saves it on first use)
 /// cargo run --release --package jolt-atlas-core --example qwen -- --use-cache
+///
+/// # Disable pre-rebase nonlinear decomposition
+/// cargo run --release --package jolt-atlas-core --example qwen -- --no-pre-rebase-nonlinear
 /// ```
 ///
 /// Requires the Qwen ONNX model to be present first.
@@ -26,6 +32,19 @@ use std::{env, fs, path::Path};
 
 const MODEL_PATH: &str = "atlas-onnx-tracer/models/qwen/network.onnx";
 const SHARED_PP_CACHE_PATH: &str = "atlas-onnx-tracer/models/qwen/shared_preprocessing.bin";
+
+fn parse_seq_len_arg(args: &[String]) -> usize {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--seq-len" {
+            let value = args.next().expect("--seq-len requires a value");
+            return value
+                .parse::<usize>()
+                .expect("--seq-len must be a positive integer");
+        }
+    }
+    16
+}
 
 fn load_or_build_shared_preprocessing(
     run_args: &RunArgs,
@@ -57,15 +76,17 @@ fn load_or_build_shared_preprocessing(
 
 fn main() {
     let (_guard, _tracing_enabled) = setup_tracing("Qwen ONNX Proof");
-    let use_cache = env::args().any(|arg| arg == "--use-cache");
+    let args: Vec<String> = env::args().collect();
+    let use_cache = args.iter().any(|arg| arg == "--use-cache");
+    let pre_rebase_nonlinear = !args.iter().any(|arg| arg == "--no-pre-rebase-nonlinear");
+    let seq_len = parse_seq_len_arg(&args);
 
-    let seq_len: usize = 16;
     let run_args = RunArgs::new([
         ("batch_size", 1),
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
     ])
-    .with_pre_rebase_nonlinear(true);
+    .with_pre_rebase_nonlinear(pre_rebase_nonlinear);
 
     let mut rng = StdRng::seed_from_u64(44);
     let vocab_size: i32 = 151936;

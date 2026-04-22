@@ -7,6 +7,7 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
     ops::{Operator, Slice},
 };
+use common::parallel::par_enabled;
 use common::VirtualPolynomial;
 use joltworks::{
     field::{IntoOpening, JoltField},
@@ -204,6 +205,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SliceSumcheck
         let half_poly_len = self.input_mle.len() / 2;
         let uni_poly_evals: [F; 2] = (0..half_poly_len)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|i| {
                 let input_evals =
                     self.input_mle

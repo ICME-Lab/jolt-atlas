@@ -1,3 +1,4 @@
+use common::parallel::par_enabled;
 use std::sync::Arc;
 
 use crate::{
@@ -76,6 +77,7 @@ impl<F: JoltField> RaSumcheckProver<F> {
 
         let ra_i_polys = H_indices
             .into_par_iter()
+            .with_min_len(par_enabled())
             .enumerate()
             .map(|(i, lookup_indices)| {
                 let eq_evals = EqPolynomial::evals(&r_address_chunks[i]);
@@ -236,6 +238,7 @@ mod tests {
         let poly = MultilinearPolynomial::from(
             indices
                 .par_iter()
+                .with_min_len(par_enabled())
                 .map(|index| {
                     let bit_vec: Vec<F> = index_to_field_bitvector(*index as u64, r_address.len());
                     EqPolynomial::mle(r_address, &bit_vec)
@@ -283,6 +286,7 @@ mod tests {
             .map(|i| {
                 lookup_indices
                     .par_iter()
+                    .with_min_len(par_enabled())
                     .map(|lookup_index| {
                         Some(one_hot_params.lookup_index_chunk(*lookup_index as u64, i))
                     })

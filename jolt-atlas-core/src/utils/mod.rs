@@ -2,6 +2,7 @@
 
 use atlas_onnx_tracer::tensor::Tensor;
 use common::consts::XLEN;
+use common::parallel::par_enabled;
 use joltworks::utils::{interleave_bits, lookup_bits::LookupBits};
 use rayon::prelude::*;
 
@@ -80,6 +81,7 @@ pub fn compute_lookup_indices_from_operands(
             .data()
             .par_iter()
             .zip(right_operand.data().par_iter())
+            .with_min_len(par_enabled())
             .map(|(&left_val, &right_val)| {
                 // Cast to u64 for interleaving
                 let left_bits = left_val as u32;
@@ -109,6 +111,7 @@ pub fn compute_lookup_indices_from_operands(
         operand
             .data()
             .par_iter()
+            .with_min_len(par_enabled())
             .map(|&value| {
                 // Cast to u64 for consistent bit representation
                 let index = value as u32 as u64;

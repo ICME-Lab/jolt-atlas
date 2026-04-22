@@ -1,3 +1,4 @@
+use common::parallel::par_enabled;
 use std::array;
 
 use common::VirtualPolynomial;
@@ -145,6 +146,7 @@ impl<F: JoltField> MaxIndicatorProver<F> {
         let half_poly_len = X.len() / 2;
         let evals: [F; DEGREE_BOUND] = (0..half_poly_len)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|kj| {
                 let k = kj >> (self.params.log_N() - m);
                 let eq_val = eq[k];

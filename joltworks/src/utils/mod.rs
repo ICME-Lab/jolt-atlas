@@ -1,4 +1,5 @@
 use crate::field::{ChallengeFieldOps, JoltField};
+use common::parallel::par_enabled;
 
 use rayon::prelude::*;
 
@@ -52,6 +53,7 @@ pub fn index_to_field_bitvector<F: JoltField + ChallengeFieldOps<F>>(
 pub fn compute_dotproduct<F: JoltField>(a: &[F], b: &[F]) -> F {
     a.par_iter()
         .zip_eq(b.par_iter())
+        .with_min_len(par_enabled())
         .map(|(a_i, b_i)| *a_i * *b_i)
         .sum()
 }
@@ -61,6 +63,7 @@ pub fn compute_dotproduct<F: JoltField>(a: &[F], b: &[F]) -> F {
 pub fn compute_dotproduct_low_optimized<F: JoltField>(a: &[F], b: &[F]) -> F {
     a.par_iter()
         .zip_eq(b.par_iter())
+        .with_min_len(par_enabled())
         .map(|(a_i, b_i)| mul_0_1_optimized(a_i, b_i))
         .sum()
 }

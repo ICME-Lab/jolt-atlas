@@ -1,3 +1,4 @@
+use common::parallel::par_enabled;
 use std::array;
 
 use atlas_onnx_tracer::{
@@ -106,6 +107,7 @@ impl<F: JoltField> MkKnMnProver<F> {
         let (eq_r_m, eq_r_n) = (EqPolynomial::evals(&r_m.r), EqPolynomial::evals(&r_n.r));
         let left_operand: Vec<F> = (0..k)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|j| {
                 (0..m)
                     .map(|i| F::from_i32(left_operand[i * k + j]) * eq_r_m[i])
@@ -114,6 +116,7 @@ impl<F: JoltField> MkKnMnProver<F> {
             .collect();
         let right_operand: Vec<F> = (0..k)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|j| {
                 (0..n)
                     .map(|h| F::from_i32(right_operand[j * n + h]) * eq_r_n[h])
@@ -144,6 +147,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MkKnMnProver<
         let half_poly_len = left_operand.len() / 2;
         let uni_poly_evals: [F; 2] = (0..half_poly_len)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|i| {
                 let l_evals = left_operand.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::HighToLow);
                 let r_evals =

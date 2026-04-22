@@ -4,6 +4,7 @@
 
 use super::{n_bits_to_usize, usize_to_n_bits, SCALE};
 use atlas_onnx_tracer::tensor::Tensor;
+use common::parallel::par_enabled;
 use joltworks::{
     field::{FieldChallengeOps, JoltField},
     poly::eq_poly::EqPolynomial,
@@ -28,6 +29,7 @@ where
 {
     let indexes_usize = indexes
         .par_iter()
+        .with_min_len(par_enabled())
         .map(|&x| x as usize)
         .collect::<Vec<usize>>();
     compute_ra_evals_from_usize_indices(r, &indexes_usize, table_size)
@@ -49,6 +51,7 @@ where
     let table_size = 1 << log_table_size;
     let input_usize = input
         .par_iter()
+        .with_min_len(par_enabled())
         .map(|&x| n_bits_to_usize(x, log_table_size))
         .collect::<Vec<usize>>();
 
@@ -152,6 +155,7 @@ where
     for partial in partial_results {
         ra.par_iter_mut()
             .zip(partial.par_iter())
+            .with_min_len(par_enabled())
             .for_each(|(dest, &src)| *dest += src);
     }
     ra

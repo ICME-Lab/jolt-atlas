@@ -22,6 +22,7 @@ use atlas_onnx_tracer::{
     node::{handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE, ComputationNode},
     ops::{Operator, Tanh},
 };
+use common::parallel::par_enabled;
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -47,7 +48,9 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
+};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
     #[tracing::instrument(skip_all, name = "Tanh::prove")]
@@ -105,6 +108,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
         let (quotient, _remainder) = compute_division(input, tanh_op.tau);
         let lookup_indices = quotient
             .par_iter()
+            .with_min_len(par_enabled())
             .map(|&x| n_bits_to_usize(x, tanh_op.log_table))
             .collect::<Vec<usize>>();
 
@@ -456,6 +460,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TanhProver<F>
 
         let univariate_poly_evals: [F; 2] = (0..input_onehot.len() / 2)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|i| {
                 let ra_evals =
                     input_onehot.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);

@@ -1,4 +1,5 @@
 use crate::field::{ChallengeFieldOps, FieldChallengeOps, JoltField};
+use common::parallel::par_enabled;
 use std::cmp::Ordering;
 use std::iter::zip;
 use std::ops::{Add, AddAssign, Index, IndexMut, Mul, MulAssign, Sub};
@@ -325,7 +326,10 @@ impl<F: JoltField> UniPoly<F> {
     }
 
     pub fn shift_coefficients(&mut self, rhs: &F) {
-        self.coeffs.par_iter_mut().for_each(|c| *c += *rhs);
+        self.coeffs
+            .par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|c| *c += *rhs);
     }
 
     /// This function computes a cubic polynomial s(X), given the following conditions:
@@ -434,7 +438,7 @@ impl<F: JoltField> Mul<F> for UniPoly<F> {
     type Output = Self;
 
     fn mul(self, rhs: F) -> Self {
-        let iter = self.coeffs.into_par_iter();
+        let iter = self.coeffs.into_par_iter().with_min_len(par_enabled());
         Self::from_coeff(iter.map(|c| c * rhs).collect::<Vec<_>>())
     }
 }
@@ -443,7 +447,7 @@ impl<F: JoltField> Mul<&F> for UniPoly<F> {
     type Output = Self;
 
     fn mul(self, rhs: &F) -> Self {
-        let iter = self.coeffs.into_par_iter();
+        let iter = self.coeffs.into_par_iter().with_min_len(par_enabled());
         Self::from_coeff(iter.map(|c| c * *rhs).collect::<Vec<_>>())
     }
 }
@@ -487,7 +491,10 @@ impl<F: JoltField> IndexMut<usize> for UniPoly<F> {
 
 impl<F: JoltField> MulAssign<&F> for UniPoly<F> {
     fn mul_assign(&mut self, rhs: &F) {
-        self.coeffs.par_iter_mut().for_each(|c| *c *= *rhs);
+        self.coeffs
+            .par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|c| *c *= *rhs);
     }
 }
 

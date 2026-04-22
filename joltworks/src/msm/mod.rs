@@ -1,3 +1,4 @@
+use common::parallel::par_enabled;
 use std::borrow::Borrow;
 
 use crate::{
@@ -38,10 +39,22 @@ where
             MultilinearPolynomial::U8Scalars(poly) => (bases.len() == poly.coeffs.len())
                 .then(|| {
                     let scalars = &poly.coeffs;
-                    if scalars.par_iter().all(|&s| s == 0) {
+                    if scalars
+                        .par_iter()
+                        .with_min_len(par_enabled())
+                        .all(|&s| s == 0)
+                    {
                         Self::zero()
-                    } else if scalars.par_iter().all(|&s| s <= 1) {
-                        let bool_scalars: Vec<bool> = scalars.par_iter().map(|&s| s == 1).collect();
+                    } else if scalars
+                        .par_iter()
+                        .with_min_len(par_enabled())
+                        .all(|&s| s <= 1)
+                    {
+                        let bool_scalars: Vec<bool> = scalars
+                            .par_iter()
+                            .with_min_len(par_enabled())
+                            .map(|&s| s == 1)
+                            .collect();
                         msm_binary::<Self>(bases, &bool_scalars, false)
                     } else {
                         msm_u8::<Self>(bases, scalars, false)
@@ -89,6 +102,7 @@ where
                 ) = bases
                     .par_iter()
                     .zip(scalars.par_iter())
+                    .with_min_len(par_enabled())
                     .fold(
                         || (vec![], vec![], vec![], vec![]),
                         |(mut pos_s, mut pos_b, mut neg_s, mut neg_b), (base, &scalar)| {
@@ -134,6 +148,7 @@ where
                 ) = bases
                     .par_iter()
                     .zip(scalars.par_iter())
+                    .with_min_len(par_enabled())
                     .fold(
                         || (vec![], vec![], vec![], vec![]),
                         |(mut pos_s, mut pos_b, mut neg_s, mut neg_b), (base, &scalar)| {
@@ -178,8 +193,16 @@ where
     fn msm_u8(bases: &[Self::MulBase], scalars: &[u8]) -> Result<Self, ProofVerifyError> {
         (bases.len() == scalars.len())
             .then(|| {
-                if scalars.par_iter().all(|&s| s <= 1) {
-                    let bool_scalars: Vec<bool> = scalars.par_iter().map(|&s| s == 1).collect();
+                if scalars
+                    .par_iter()
+                    .with_min_len(par_enabled())
+                    .all(|&s| s <= 1)
+                {
+                    let bool_scalars: Vec<bool> = scalars
+                        .par_iter()
+                        .with_min_len(par_enabled())
+                        .map(|&s| s == 1)
+                        .collect();
                     msm_binary::<Self>(bases, &bool_scalars, true)
                 } else {
                     msm_u8::<Self>(bases, scalars, true)
@@ -226,6 +249,7 @@ where
             bases
                 .par_iter()
                 .zip(scalars.par_iter())
+                .with_min_len(par_enabled())
                 .fold(
                     || (vec![], vec![], vec![], vec![]),
                     |(mut pos_s, mut pos_b, mut neg_s, mut neg_b), (base, &scalar)| {
@@ -288,6 +312,7 @@ where
     {
         polys
             .par_iter()
+            .with_min_len(par_enabled())
             .map(|poly| VariableBaseMSM::msm(&bases[..poly.borrow().len()], poly).unwrap())
             .collect()
     }
@@ -298,6 +323,7 @@ where
     ) -> Vec<Self> {
         polys
             .par_iter()
+            .with_min_len(par_enabled())
             .map(|poly| {
                 VariableBaseMSM::msm_field_elements(&bases[..poly.coeffs.len()], &poly.coeffs)
                     .unwrap()

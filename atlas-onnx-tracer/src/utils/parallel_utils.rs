@@ -104,8 +104,10 @@ impl<T> ParallelSliceMut<T> for [T] {
 }
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-pub trait ParallelIterator: Iterator {
-    // Removed custom collect implementation to avoid conflicts
+pub trait ParallelIterator: Iterator + Sized {
+    fn with_min_len(self, _min: usize) -> Self {
+        self
+    }
 }
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]

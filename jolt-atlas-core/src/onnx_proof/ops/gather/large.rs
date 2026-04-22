@@ -1,5 +1,6 @@
 use super::*;
 use atlas_onnx_tracer::ops::GatherLarge;
+use common::parallel::par_enabled;
 use common::CommittedPolynomial;
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -170,6 +171,7 @@ pub(crate) fn gather_lookup_indices(
         .padded_next_power_of_two()
         .data()
         .par_iter()
+        .with_min_len(par_enabled())
         .map(|&x| x as usize)
         .collect()
 }

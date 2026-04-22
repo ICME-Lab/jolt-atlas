@@ -1,4 +1,5 @@
 use allocative::Allocative;
+use common::parallel::par_enabled;
 use rayon::prelude::*;
 use std::ops::Index;
 
@@ -65,6 +66,7 @@ impl<F: JoltField> ExpandingTable<F> {
                 values_left
                     .par_iter_mut()
                     .zip(values_right.par_iter_mut())
+                    .with_min_len(par_enabled())
                     .for_each(|(x, y)| {
                         *y = *x * r_j;
                         *x -= *y;

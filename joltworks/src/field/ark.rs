@@ -6,6 +6,7 @@ use crate::{
     utils::thread::unsafe_allocate_zero_vec,
 };
 use ark_ff::{prelude::*, BigInt, PrimeField, UniformRand};
+use common::parallel::par_enabled;
 use rayon::prelude::*;
 
 impl FieldOps for ark_bn254::Fr {}
@@ -51,9 +52,10 @@ impl JoltField for ark_bn254::Fr {
         for i in 0..2 {
             let bitshift = 16 * i;
             let unit = <Self as JoltField>::from_u64(1 << bitshift);
-            lookup_tables[i] = (0..(1 << 16))
+            lookup_tables[i] = (0usize..(1 << 16))
                 .into_par_iter()
-                .map(|j| unit * <Self as JoltField>::from_u64(j))
+                .with_min_len(par_enabled())
+                .map(|j| unit * <Self as JoltField>::from_u64(j as u64))
                 .collect();
         }
 

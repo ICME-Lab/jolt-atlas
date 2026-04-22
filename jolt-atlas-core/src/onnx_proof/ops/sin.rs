@@ -22,6 +22,7 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
     ops::Sin,
 };
+use common::parallel::par_enabled;
 use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -47,7 +48,9 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
+};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
     fn reduction_flow(&self) -> ReductionFlow {
@@ -231,6 +234,7 @@ fn prove_post_reduction_checks<F: JoltField, T: Transcript>(
     let (_, remainder) = compute_division(input, FOUR_PI_APPROX);
     let sin_lookup_indices = remainder
         .par_iter()
+        .with_min_len(par_enabled())
         .map(|&x| x as usize)
         .collect::<Vec<usize>>();
 
@@ -511,6 +515,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SinProver<F> 
 
         let univariate_poly_evals: [F; 2] = (0..input_onehot.len() / 2)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|i| {
                 let ra_evals =
                     input_onehot.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);

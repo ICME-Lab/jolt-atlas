@@ -8,6 +8,7 @@ use atlas_onnx_tracer::{
     ops::Operator,
     tensor::Tensor,
 };
+use common::parallel::par_enabled;
 use common::VirtualPolynomial;
 use joltworks::{
     field::{IntoOpening, JoltField},
@@ -207,6 +208,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GatherProver<
 
         let univariate_poly_evals: [F; 2] = (0..index_onehot.len() / 2)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|i| {
                 let ra_evals =
                     index_onehot.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
@@ -370,6 +372,7 @@ where
 
     let indexes_usize = indexes
         .par_iter()
+        .with_min_len(par_enabled())
         .map(|&x| x as usize)
         .collect::<Vec<usize>>();
 
@@ -390,6 +393,7 @@ where
     for partial in partial_results {
         ra.par_iter_mut()
             .zip(partial.par_iter())
+            .with_min_len(par_enabled())
             .for_each(|(dest, &src)| *dest += src);
     }
     ra

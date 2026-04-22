@@ -2,6 +2,7 @@ use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use ark_std::Zero;
+use common::parallel::par_enabled;
 use common::CommittedPolynomial;
 use rayon::prelude::*;
 use std::{fmt::Debug, iter::zip, sync::Arc};
@@ -136,10 +137,12 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
             .par_fold_out_in_unreduced::<9, { DEGREE_BOUND - 1 }>(&|k_prime| {
                 let coeffs = (0..self.params.d)
                     .into_par_iter()
+                    .with_min_len(par_enabled())
                     .map(|i| {
                         let G_i = &self.G[i];
                         let inner_sum = G_i[k_prime << m..(k_prime + 1) << m]
                             .par_iter()
+                            .with_min_len(par_enabled())
                             .enumerate()
                             .map(|(k, &G_k)| {
                                 let k_m = k >> (m - 1);
@@ -277,6 +280,7 @@ impl<
             self.D.bind(r_j);
             self.H
                 .par_iter_mut()
+                .with_min_len(par_enabled())
                 .for_each(|poly| poly.bind_parallel(r_j, BindingOrder::LowToHigh));
         }
     }

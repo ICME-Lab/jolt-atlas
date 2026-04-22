@@ -7,6 +7,7 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
     ops::{Concat, Operator},
 };
+use common::parallel::par_enabled;
 use common::VirtualPolynomial;
 use joltworks::{
     field::{IntoOpening, JoltField},
@@ -241,6 +242,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ConcatSumchec
             .unwrap_or(0);
         let uni_poly_evals: [F; 2] = (0..half_poly_len)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|i| {
                 let mut evals = [F::zero(); 2];
                 for term in &self.input_terms {

@@ -14,6 +14,7 @@ use crate::{
     utils::errors::ProofVerifyError,
 };
 use ark_ec::CurveGroup;
+use common::parallel::par_enabled;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use rayon::prelude::*;
@@ -82,6 +83,7 @@ impl CommitmentScheme for HyperKZG<ark_bn254::Bn254> {
         UnivariateKZG::commit_batch(&gens.kzg_pk, polys)
             .unwrap()
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|c| (HyperKZGCommitment(c), ()))
             .collect()
     }

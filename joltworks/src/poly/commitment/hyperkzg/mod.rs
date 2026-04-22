@@ -22,6 +22,7 @@ use crate::{
 use ark_ec::{pairing::Pairing, AffineRepr};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{One, Zero};
+use common::parallel::par_enabled;
 use kzg::{KZGProverKey, KZGVerifierKey, UnivariateKZG, SRS};
 use rand_core::{CryptoRng, RngCore};
 use rayon::iter::{
@@ -155,6 +156,7 @@ where
     let f: &DensePolynomial<P::ScalarField> = f.try_into().unwrap();
     let h = u
         .par_iter()
+        .with_min_len(par_enabled())
         .map(|ui| {
             let h = compute_witness_polynomial::<P>(&f.evals(), *ui);
             MultilinearPolynomial::from(h)
@@ -197,13 +199,16 @@ where
     // The verifier needs f_i(u_j), so we compute them here
     // (V will compute B(u_j) itself)
     let mut v = vec![vec!(P::ScalarField::zero(); k); t];
-    v.par_iter_mut().enumerate().for_each(|(i, v_i)| {
-        // for each point u
-        v_i.par_iter_mut().zip_eq(f).for_each(|(v_ij, f)| {
-            // for each poly f
-            *v_ij = UniPoly::eval_as_univariate(f, &u[i]);
+    v.par_iter_mut()
+        .with_min_len(par_enabled())
+        .enumerate()
+        .for_each(|(i, v_i)| {
+            // for each point u
+            v_i.par_iter_mut().zip_eq(f).for_each(|(v_ij, f)| {
+                // for each poly f
+                *v_ij = UniPoly::eval_as_univariate(f, &u[i]);
+            });
         });
-    });
 
     // TODO(moodlezoup): Avoid cloned()
     let scalars = v.iter().flatten().collect::<Vec<&P::ScalarField>>();
@@ -277,6 +282,7 @@ where
 
     let q_powers_multiplied: Vec<P::ScalarField> = q_powers
         .par_iter()
+        .with_min_len(par_enabled())
         .map(|q_power| *q_power * q_power_multiplier)
         .collect();
 
@@ -284,9 +290,11 @@ where
     // compute B(u_i) = v[i][0] + q*v[i][1] + ... + q^(t-1) * v[i][t-1]
     let B_u = v
         .into_par_iter()
+        .with_min_len(par_enabled())
         .map(|v_i| {
             v_i.into_par_iter()
                 .zip(q_powers.par_iter())
+                .with_min_len(par_enabled())
                 .map(|(a, b)| *a * *b)
                 .sum()
         })
@@ -364,10 +372,13 @@ where
             let previous_poly: &DensePolynomial<P::ScalarField> = (&polys[i]).try_into().unwrap();
             let Pi_len = previous_poly.len() / 2;
             let mut Pi = vec![P::ScalarField::zero(); Pi_len];
-            Pi.par_iter_mut().enumerate().for_each(|(j, Pi_j)| {
-                *Pi_j = point[ell - i - 1] * (previous_poly[2 * j + 1] - previous_poly[2 * j])
-                    + previous_poly[2 * j];
-            });
+            Pi.par_iter_mut()
+                .with_min_len(par_enabled())
+                .enumerate()
+                .for_each(|(j, Pi_j)| {
+                    *Pi_j = point[ell - i - 1] * (previous_poly[2 * j + 1] - previous_poly[2 * j])
+                        + previous_poly[2 * j];
+                });
 
             polys.push(MultilinearPolynomial::from(Pi));
         }

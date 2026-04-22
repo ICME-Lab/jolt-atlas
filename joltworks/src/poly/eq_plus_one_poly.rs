@@ -1,4 +1,5 @@
 use allocative::Allocative;
+use common::parallel::par_enabled;
 use rayon::prelude::*;
 
 use crate::field::{FieldChallengeOps, JoltField};
@@ -43,6 +44,7 @@ impl<F: JoltField> EqPlusOnePolynomial<F> {
         */
         (0..l)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|k| {
                 let lower_bits_product = (0..k)
                     .map(|i| x[l - 1 - i] * (F::one() - y[l - 1 - i]))
@@ -74,7 +76,11 @@ impl<F: JoltField> EqPlusOnePolynomial<F> {
             debug_assert!(i != 0);
             let step = 1 << (ell - i); // step = (full / size)/2
 
-            let mut selected: Vec<_> = eq_evals.par_iter_mut().step_by(step).collect();
+            let mut selected: Vec<_> = eq_evals
+                .par_iter_mut()
+                .with_min_len(par_enabled())
+                .step_by(step)
+                .collect();
 
             selected.par_chunks_mut(2).for_each(|chunk| {
                 *chunk[1] = *chunk[0] * r[i - 1];
@@ -94,6 +100,7 @@ impl<F: JoltField> EqPlusOnePolynomial<F> {
 
             eq_plus_one_evals
                 .par_iter_mut()
+                .with_min_len(par_enabled())
                 .enumerate()
                 .skip(half_step)
                 .step_by(step)

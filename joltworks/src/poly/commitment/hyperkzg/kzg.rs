@@ -8,6 +8,7 @@ use ark_ec::{pairing::Pairing, AffineRepr, CurveGroup};
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{One, UniformRand, Zero};
+use common::parallel::par_enabled;
 use rand_core::{CryptoRng, RngCore};
 use rayon::prelude::*;
 use std::borrow::Borrow;
@@ -72,7 +73,10 @@ impl<P: Pairing> SRS<P> {
         // Precompute a commitment to each power-of-two length vector of ones, which is just the sum of each power-of-two length prefix of the SRS
         let num_powers = (g1_powers.len() as f64).log2().floor() as usize + 1;
         let all_ones_coeffs: Vec<u8> = vec![1; num_g1_powers + 1];
-        let powers_of_2 = (0..num_powers).into_par_iter().map(|i| 1usize << i);
+        let powers_of_2 = (0..num_powers)
+            .into_par_iter()
+            .with_min_len(par_enabled())
+            .map(|i| 1usize << i);
         let g_products = powers_of_2
             .map(|power| {
                 <P::G1 as VariableBaseMSM>::msm_u8(&g1_powers[..power], &all_ones_coeffs[..power])
@@ -200,6 +204,7 @@ where
         // batch commit requires all batches to have the same length
         assert!(polys
             .par_iter()
+            .with_min_len(par_enabled())
             .all(|s| s.borrow().len() == polys[0].borrow().len()));
 
         if let Some(invalid) = polys

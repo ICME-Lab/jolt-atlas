@@ -19,6 +19,7 @@ use crate::{
     transcripts::Transcript,
     utils::thread::unsafe_allocate_zero_vec,
 };
+use common::parallel::par_enabled;
 use common::{CommittedPolynomial, VirtualPolynomial};
 use rayon::prelude::*;
 use std::array;
@@ -150,6 +151,7 @@ impl<F: JoltField> ReadRafProver<F> {
         let E = EqPolynomial::evals(&params.r);
         let G = lookup_indices
             .par_iter()
+            .with_min_len(par_enabled())
             .enumerate()
             .fold(
                 || unsafe_allocate_zero_vec::<F>(table_size),
@@ -188,6 +190,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReadRafProver
         let half_poly_len = val.len() / 2;
         let uni_poly_evals: [F; 2] = (0..half_poly_len)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|i| {
                 let val_evals =
                     val.sumcheck_evals(i, READ_RAF_DEGREE_BOUND, BindingOrder::HighToLow);
@@ -494,6 +497,7 @@ pub fn compute_instruction_h_indices(
         .map(|i| {
             trace
                 .par_iter()
+                .with_min_len(par_enabled())
                 .map(|lookup_index| {
                     Some(one_hot_params.lookup_index_chunk(*lookup_index as u64, i))
                 })
@@ -545,6 +549,7 @@ where
                 running.iter_mut().zip(new.into_iter()).for_each(|(x, y)| {
                     x.par_iter_mut()
                         .zip(y.into_par_iter())
+                        .with_min_len(par_enabled())
                         .for_each(|(x, y)| *x += y)
                 });
                 running

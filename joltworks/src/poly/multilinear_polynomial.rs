@@ -7,6 +7,7 @@ use allocative::Allocative;
 use ark_ff::biginteger::S128;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Valid};
 use atlas_onnx_tracer::tensor::Tensor;
+use common::parallel::par_enabled;
 use rayon::prelude::*;
 use strum_macros::EnumIter;
 
@@ -343,60 +344,70 @@ impl<F: JoltField> MultilinearPolynomial<F> {
                 .coeffs
                 .par_iter()
                 .zip_eq(other.par_iter())
+                .with_min_len(par_enabled())
                 .map(|(a, b)| a.field_mul(*b))
                 .sum(),
             MultilinearPolynomial::U8Scalars(poly) => poly
                 .coeffs
                 .par_iter()
                 .zip_eq(other.par_iter())
+                .with_min_len(par_enabled())
                 .map(|(a, b)| a.field_mul(*b))
                 .sum(),
             MultilinearPolynomial::U16Scalars(poly) => poly
                 .coeffs
                 .par_iter()
                 .zip_eq(other.par_iter())
+                .with_min_len(par_enabled())
                 .map(|(a, b)| a.field_mul(*b))
                 .sum(),
             MultilinearPolynomial::U32Scalars(poly) => poly
                 .coeffs
                 .par_iter()
                 .zip_eq(other.par_iter())
+                .with_min_len(par_enabled())
                 .map(|(a, b)| a.field_mul(*b))
                 .sum(),
             MultilinearPolynomial::U64Scalars(poly) => poly
                 .coeffs
                 .par_iter()
                 .zip_eq(other.par_iter())
+                .with_min_len(par_enabled())
                 .map(|(a, b)| a.field_mul(*b))
                 .sum(),
             MultilinearPolynomial::I32Scalars(poly) => poly
                 .coeffs
                 .par_iter()
                 .zip_eq(other.par_iter())
+                .with_min_len(par_enabled())
                 .map(|(a, b)| a.field_mul(*b))
                 .sum(),
             MultilinearPolynomial::I64Scalars(poly) => poly
                 .coeffs
                 .par_iter()
                 .zip_eq(other.par_iter())
+                .with_min_len(par_enabled())
                 .map(|(a, b)| a.field_mul(*b))
                 .sum(),
             MultilinearPolynomial::I128Scalars(poly) => poly
                 .coeffs
                 .par_iter()
                 .zip_eq(other.par_iter())
+                .with_min_len(par_enabled())
                 .map(|(a, b)| a.field_mul(*b))
                 .sum(),
             MultilinearPolynomial::U128Scalars(poly) => poly
                 .coeffs
                 .par_iter()
                 .zip_eq(other.par_iter())
+                .with_min_len(par_enabled())
                 .map(|(a, b)| a.field_mul(*b))
                 .sum(),
             MultilinearPolynomial::S128Scalars(poly) => poly
                 .coeffs
                 .par_iter()
                 .zip_eq(other.par_iter())
+                .with_min_len(par_enabled())
                 .map(|(a, b)| a.field_mul(*b))
                 .sum(),
             _ => unimplemented!("Unexpected MultilinearPolynomial variant"),

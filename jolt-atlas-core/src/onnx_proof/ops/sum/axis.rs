@@ -2,6 +2,7 @@ use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
 };
+use common::parallel::par_enabled;
 use common::VirtualPolynomial;
 use joltworks::{
     field::{IntoOpening, JoltField},
@@ -106,6 +107,7 @@ impl<F: JoltField> SumAxisProver<F> {
                 let eq_r_node_output = EqPolynomial::evals(&params.r_node_output.r);
                 (0..m)
                     .into_par_iter()
+                    .with_min_len(par_enabled())
                     .map(|h| {
                         (0..n)
                             .map(|j| F::from_i32(operand[h * n + j]) * eq_r_node_output[j])
@@ -118,6 +120,7 @@ impl<F: JoltField> SumAxisProver<F> {
                 let eq_r_node_output = EqPolynomial::evals(&params.r_node_output.r);
                 (0..n)
                     .into_par_iter()
+                    .with_min_len(par_enabled())
                     .map(|j| {
                         (0..m)
                             .map(|h| F::from_i32(operand[h * n + j]) * eq_r_node_output[h])
@@ -132,6 +135,7 @@ impl<F: JoltField> SumAxisProver<F> {
         {
             let claim = (0..operand.len())
                 .into_par_iter()
+                .with_min_len(par_enabled())
                 .map(|i| operand.get_bound_coeff(i))
                 .sum::<F>();
             assert_eq!(claim, params.input_claim(_accumulator));
@@ -149,6 +153,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SumAxisProver
         let half_poly_len = self.operand.len() / 2;
         let eval_0 = (0..half_poly_len)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|i| self.operand.get_bound_coeff(i))
             .sum();
         UniPoly::from_evals_and_hint(previous_claim, &[eval_0])

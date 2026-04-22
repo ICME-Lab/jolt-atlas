@@ -1,3 +1,4 @@
+use common::parallel::par_enabled;
 use std::array;
 
 use atlas_onnx_tracer::{
@@ -247,6 +248,7 @@ impl<F: JoltField> RbmkRbnkBmnProver<F> {
         let batch = a * b;
         let left: Vec<F> = (0..batch * k)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|hj| {
                 let h = hj / k;
                 let j = hj % k;
@@ -260,6 +262,7 @@ impl<F: JoltField> RbmkRbnkBmnProver<F> {
             .collect();
         let right: Vec<F> = (0..batch * k)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|hj| {
                 let h = hj / k;
                 let j = hj % k;
@@ -303,6 +306,7 @@ impl<F: JoltField> RbmkRbnkBmnProver<F> {
         let cb = c * b;
         let left: Vec<F> = (0..cb * a * k)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|hak| {
                 let h = hak / (a * k);
                 let rem = hak % (a * k);
@@ -320,6 +324,7 @@ impl<F: JoltField> RbmkRbnkBmnProver<F> {
             .collect();
         let right_base: Vec<F> = (0..c * k)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|ck| {
                 let c_idx = ck / k;
                 let k_idx = ck % k;
@@ -333,6 +338,7 @@ impl<F: JoltField> RbmkRbnkBmnProver<F> {
             .collect();
         let right: Vec<F> = (0..cb * a * k)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|hak| {
                 let h = hak / (a * k);
                 let rem = hak % (a * k);
@@ -367,6 +373,7 @@ impl<F: JoltField> RbmkRbnkBmnProver<F> {
 
         let left: Vec<F> = (0..cb * k)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|hk| {
                 let h = hk / k;
                 let k_idx = hk % k;
@@ -380,6 +387,7 @@ impl<F: JoltField> RbmkRbnkBmnProver<F> {
             .collect();
         let right: Vec<F> = (0..cb * k)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|hk| {
                 let h = hk / k;
                 let k_idx = hk % k;
@@ -524,6 +532,7 @@ impl<F: JoltField> RbmkRbnkBmnProver<F> {
         let half_poly_len = self.left_operand.len() / 2;
         let uni_poly_evals: [F; DEGREE_BOUND_EQ] = (0..half_poly_len)
             .into_par_iter()
+            .with_min_len(par_enabled())
             .map(|idx| {
                 let l_evals = self
                     .left_operand
@@ -576,6 +585,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RbmkRbnkBmnPr
                 let half_poly_len = self.left_operand.len() / 2;
                 let uni_poly_evals: [F; DEGREE_BOUND_DOT] = (0..half_poly_len)
                     .into_par_iter()
+                    .with_min_len(par_enabled())
                     .map(|idx| {
                         let l_evals = self.left_operand.sumcheck_evals(
                             idx,

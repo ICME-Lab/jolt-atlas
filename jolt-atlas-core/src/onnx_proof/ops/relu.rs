@@ -4,7 +4,7 @@ use crate::onnx_proof::{
     ProofId, ProofType, Prover, Verifier,
 };
 use atlas_onnx_tracer::{node::ComputationNode, ops::ReLU};
-use common::CommittedPolynomial;
+use common::CommittedPoly;
 use joltworks::{
     self,
     field::JoltField,
@@ -110,11 +110,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
         Ok(())
     }
 
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
         let encoding = OpLookupEncoding::new(node);
         let d = encoding.one_hot_params().instruction_d;
         (0..d)
-            .map(|i| CommittedPolynomial::NodeOutputRaD(node.idx, i))
+            .map(|i| CommittedPoly::NodeOutputRaD(node.idx, i))
             .collect()
     }
 }

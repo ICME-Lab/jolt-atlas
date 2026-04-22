@@ -1,6 +1,6 @@
 use super::*;
 use atlas_onnx_tracer::ops::GatherSmall;
-use common::CommittedPolynomial;
+use common::CommittedPoly;
 use joltworks::subprotocols::{
     booleanity::{
         BooleanitySumcheckParams, BooleanitySumcheckVerifier, SmallBooleanitySumcheckProver,
@@ -116,8 +116,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherSmall {
         Ok(())
     }
 
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
-        vec![CommittedPolynomial::GatherRa(node.idx)]
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        vec![CommittedPoly::GatherRa(node.idx)]
     }
 }
 
@@ -210,13 +210,10 @@ fn ra_hamming_bool_params<F: JoltField>(
     opening_accumulator: &dyn OpeningAccumulator<F>,
     _transcript: &mut impl Transcript,
 ) -> HammingBooleanitySumcheckParams<F> {
-    let polynomial_types = vec![VirtualPolynomial::HammingWeight];
+    let polynomial_types = vec![VirtualPoly::HammingWeight];
 
-    let r_lookup = opening_accumulator
-        .get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(computation_node.inputs[1]),
-            SumcheckId::NodeExecution(computation_node.idx),
-        )
+    let r_lookup = AccOpeningAccessor::new(opening_accumulator, computation_node)
+        .get_nodeio(Target::Input(1))
         .0
         .r;
 
@@ -237,13 +234,10 @@ fn ra_booleanity_params<F: JoltField>(
     opening_accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut impl Transcript,
 ) -> BooleanitySumcheckParams<F> {
-    let polynomial_type = CommittedPolynomial::GatherRa(computation_node.idx);
+    let polynomial_type = CommittedPoly::GatherRa(computation_node.idx);
 
-    let r_lookup = opening_accumulator
-        .get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(computation_node.inputs[1]),
-            SumcheckId::NodeExecution(computation_node.idx),
-        )
+    let r_lookup = AccOpeningAccessor::new(opening_accumulator, computation_node)
+        .get_nodeio(Target::Input(1))
         .0
         .r;
     let r_address = transcript
@@ -315,13 +309,10 @@ fn ra_hamming_weight_params<F: JoltField>(
     opening_accumulator: &dyn OpeningAccumulator<F>,
     _transcript: &mut impl Transcript,
 ) -> HammingWeightSumcheckParams<F> {
-    let polynomial_types = vec![CommittedPolynomial::GatherRa(computation_node.idx)];
+    let polynomial_types = vec![CommittedPoly::GatherRa(computation_node.idx)];
 
-    let r_lookup = opening_accumulator
-        .get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(computation_node.inputs[1]),
-            SumcheckId::NodeExecution(computation_node.idx),
-        )
+    let r_lookup = AccOpeningAccessor::new(opening_accumulator, computation_node)
+        .get_nodeio(Target::Input(1))
         .0
         .r;
 

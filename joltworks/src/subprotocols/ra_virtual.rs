@@ -8,7 +8,7 @@ use crate::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, PolynomialBinding},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         ra_poly::RaPolynomial,
@@ -22,7 +22,7 @@ use crate::{
     },
     transcripts::Transcript,
 };
-use common::CommittedPolynomial;
+use common::CommittedPoly;
 use rayon::prelude::*;
 
 // Instruction read-access (RA) virtualization sumcheck
@@ -40,7 +40,7 @@ pub struct RaSumcheckParams<F: JoltField> {
     pub one_hot_params: OneHotParams,
     pub ra_claim: F,
     /// Polynomial types for opening accumulator
-    pub polynomial_types: Vec<CommittedPolynomial>,
+    pub polynomial_types: Vec<CommittedPoly>,
 }
 
 impl<F: JoltField> SumcheckInstanceParams<F> for RaSumcheckParams<F> {
@@ -130,7 +130,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RaSumcheckPro
             .compute_r_address_chunks(&self.params.r_address.r);
 
         for (i, r_address) in r_address_chunks.into_iter().enumerate() {
-            let claim = self.ra_i_polys[i].final_sumcheck_claim();
+            let claim = self.ra_i_polys[i].final_claim();
             accumulator.append_sparse(
                 transcript,
                 vec![self.params.polynomial_types[i]],
@@ -169,10 +169,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RaSumcheckV
         let eq_eval = EqPolynomial::mle_endian(&self.params.r_cycle, &r);
         let ra_claim_prod: F = (0..self.params.one_hot_params.instruction_d)
             .map(|i| {
-                let (_, ra_i_claim) = accumulator.get_committed_polynomial_opening(
+                let id = OpeningId::new(
                     self.params.polynomial_types[i],
                     SumcheckId::RaVirtualization,
                 );
+                let (_, ra_i_claim) = accumulator.get_committed_polynomial_opening(id);
                 ra_i_claim
             })
             .product();
@@ -212,7 +213,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RaSumcheckV
 #[cfg(test)]
 mod tests {
     use ark_bn254::Fr;
-    use common::CommittedPolynomial;
+    use common::CommittedPoly;
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 
     use crate::{
@@ -302,14 +303,14 @@ mod tests {
             one_hot_params: one_hot_params.clone(),
             ra_claim,
             polynomial_types: vec![
-                CommittedPolynomial::NodeOutputRaD(0, 0),
-                CommittedPolynomial::NodeOutputRaD(0, 1),
-                CommittedPolynomial::NodeOutputRaD(0, 2),
-                CommittedPolynomial::NodeOutputRaD(0, 3),
-                CommittedPolynomial::NodeOutputRaD(0, 4),
-                CommittedPolynomial::NodeOutputRaD(0, 5),
-                CommittedPolynomial::NodeOutputRaD(0, 6),
-                CommittedPolynomial::NodeOutputRaD(0, 7),
+                CommittedPoly::NodeOutputRaD(0, 0),
+                CommittedPoly::NodeOutputRaD(0, 1),
+                CommittedPoly::NodeOutputRaD(0, 2),
+                CommittedPoly::NodeOutputRaD(0, 3),
+                CommittedPoly::NodeOutputRaD(0, 4),
+                CommittedPoly::NodeOutputRaD(0, 5),
+                CommittedPoly::NodeOutputRaD(0, 6),
+                CommittedPoly::NodeOutputRaD(0, 7),
             ],
         };
 
@@ -343,10 +344,11 @@ mod tests {
         .unwrap();
 
         for i in 0..one_hot_params.instruction_d {
-            let (opening_point, claim) = verifier_accumulator.get_committed_polynomial_opening(
-                CommittedPolynomial::NodeOutputRaD(0, i),
+            let id = OpeningId::new(
+                CommittedPoly::NodeOutputRaD(0, i),
                 SumcheckId::RaVirtualization,
             );
+            let (opening_point, claim) = verifier_accumulator.get_committed_polynomial_opening(id);
             let H_index: Vec<Option<u16>> = H_indices[i]
                 .iter()
                 .map(|v| v.map(|new_v| new_v as u16))

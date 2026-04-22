@@ -1,17 +1,21 @@
-use crate::onnx_proof::{
-    neural_teleport::{
-        cos::{CosTable, COS_LOG_TABLE_SIZE},
-        division::{
-            compute_division, TeleportDivisionParams, TeleportDivisionProver,
-            TeleportDivisionVerifier,
+use crate::{
+    onnx_proof::{
+        neural_teleport::{
+            cos::{CosTable, COS_LOG_TABLE_SIZE},
+            division::{
+                compute_division, TeleportDivisionParams, TeleportDivisionProver,
+                TeleportDivisionVerifier,
+            },
+            range_and_onehot::{
+                prove_range_and_onehot, verify_range_and_onehot, NeuralTeleportRangeOneHot,
+            },
+            utils::compute_ra_evals_direct,
         },
-        utils::compute_ra_evals_direct,
+        ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
+        range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding},
+        ProofId, ProofType, Prover, Verifier,
     },
-    ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
-    range_checking::{
-        range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
-    },
-    ProofId, ProofType, Prover, Verifier,
+    utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
     model::{
@@ -23,25 +27,25 @@ use atlas_onnx_tracer::{
     ops::Cos,
 };
 use common::parallel::par_enabled;
-use common::{consts::XLEN, CommittedPolynomial, VirtualPolynomial};
+use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::{IntoOpening, JoltField},
-    lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         unipoly::UniPoly,
     },
     subprotocols::{
-        shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
+        evaluation_reduction::EvalReductionProof,
+        shout::RaOneHotEncoding,
+        sumcheck::{Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -108,25 +112,19 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> (
-        joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+        EvalReductionProof<F>,
         Vec<(ProofId, SumcheckInstanceProof<F, T>)>,
     ) {
         let mut execution_proofs = self.prove(node, prover);
 
-        let teleport_q = prover.accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::TeleportQuotient(node.idx),
-            SumcheckId::NodeExecution(node.idx),
-        );
-        prover.accumulator.append_dense(
-            &mut prover.transcript,
-            CommittedPolynomial::TeleportNodeQuotient(node.idx),
-            SumcheckId::NodeExecution(node.idx),
-            teleport_q.0.r.clone(),
-            teleport_q.1,
-        );
+        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
+        let teleport_q = accessor.get_advice(VirtualPoly::TeleportQuotient);
+        let mut provider = accessor.into_provider(&mut prover.transcript, teleport_q.0.clone());
+
+        provider.append_advice(CommittedPoly::TeleportNodeQuotient, teleport_q.1);
 
         let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
-        execution_proofs.extend(prove_range_and_onehot(node, prover));
+        execution_proofs.extend(prove_range_and_onehot(node, prover, self));
         (eval_reduction_proof, execution_proofs)
     }
 
@@ -179,27 +177,16 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         &self,
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
-        eval_reduction_proof: &joltworks::subprotocols::evaluation_reduction::EvalReductionProof<F>,
+        eval_reduction_proof: &EvalReductionProof<F>,
     ) -> Result<(), ProofVerifyError> {
         self.verify(node, verifier)?;
 
-        let teleport_q = verifier.accumulator.get_virtual_polynomial_opening(
-            VirtualPolynomial::TeleportQuotient(node.idx),
-            SumcheckId::NodeExecution(node.idx),
-        );
-        verifier.accumulator.append_dense(
-            &mut verifier.transcript,
-            CommittedPolynomial::TeleportNodeQuotient(node.idx),
-            SumcheckId::NodeExecution(node.idx),
-            teleport_q.0.r.clone(),
-        );
-        let committed_q = verifier
-            .accumulator
-            .get_committed_polynomial_opening(
-                CommittedPolynomial::TeleportNodeQuotient(node.idx),
-                SumcheckId::NodeExecution(node.idx),
-            )
-            .1;
+        let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, node);
+        let teleport_q = accessor.get_advice(VirtualPoly::TeleportQuotient);
+        let mut provider = accessor.into_provider(&mut verifier.transcript, teleport_q.0.clone());
+
+        provider.append_advice(CommittedPoly::TeleportNodeQuotient);
+        let committed_q = provider.get_advice(CommittedPoly::TeleportNodeQuotient).1;
         if committed_q != teleport_q.1 {
             return Err(ProofVerifyError::InvalidOpeningProof(
                 "Teleport quotient claim does not match committed quotient claim".to_string(),
@@ -207,140 +194,19 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         }
 
         NodeEvalReduction::verify(verifier, node, eval_reduction_proof)?;
-        verify_range_and_onehot(node, verifier)
+        verify_range_and_onehot(node, verifier, self)
     }
 
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPolynomial> {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
         let cos_encoding = CosRaEncoding { node_idx: node.idx };
         let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
         let cos_d = cos_encoding.one_hot_params().instruction_d;
         let rc_d = rc_encoding.one_hot_params().instruction_d;
-        let mut polys = vec![CommittedPolynomial::TeleportNodeQuotient(node.idx)];
-        polys.extend((0..cos_d).map(|i| CommittedPolynomial::CosRaD(node.idx, i)));
-        polys.extend((0..rc_d).map(|i| CommittedPolynomial::TeleportRangeCheckRaD(node.idx, i)));
+        let mut polys = vec![CommittedPoly::TeleportNodeQuotient(node.idx)];
+        polys.extend((0..cos_d).map(|i| CommittedPoly::CosRaD(node.idx, i)));
+        polys.extend((0..rc_d).map(|i| CommittedPoly::TeleportRangeCheckRaD(node.idx, i)));
         polys
     }
-}
-
-fn prove_range_and_onehot<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    prover: &mut Prover<F, T>,
-) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-    let mut proofs = Vec::new();
-
-    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
-    let input = operands[0];
-    let (_, remainder) = compute_division(input, FOUR_PI_APPROX);
-    let cos_lookup_indices = remainder
-        .par_iter()
-        .with_min_len(par_enabled())
-        .map(|&x| x as usize)
-        .collect::<Vec<usize>>();
-
-    let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-    let (rangecheck_sumcheck, rc_lookup_indices) = rangecheck_provider
-        .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
-            &prover.trace,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-
-    let cos_encoding = CosRaEncoding { node_idx: node.idx };
-    let cos_ra_onehot_provers = shout::ra_onehot_provers(
-        &cos_encoding,
-        &cos_lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let mut range_and_cos_instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-        vec![Box::new(rangecheck_sumcheck)];
-    range_and_cos_instances.extend(cos_ra_onehot_provers);
-    let (cos_ra_one_hot_proof, _) = BatchedSumcheck::prove(
-        range_and_cos_instances
-            .iter_mut()
-            .map(|v| &mut **v as _)
-            .collect(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-    proofs.push((
-        ProofId(node.idx, ProofType::RaOneHotChecks),
-        cos_ra_one_hot_proof,
-    ));
-
-    let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-    let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_provers(
-        &rc_encoding,
-        &rc_lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![rc_ra, rc_hw, rc_bool];
-    let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
-        instances.iter_mut().map(|v| &mut **v as _).collect(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-    proofs.push((
-        ProofId(node.idx, ProofType::RaHammingWeight),
-        ra_one_hot_proof,
-    ));
-
-    proofs
-}
-
-fn verify_range_and_onehot<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, T>,
-) -> Result<(), ProofVerifyError> {
-    let cos_ra_one_hot_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-
-    let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-    let rangecheck_verifier = rangecheck_provider
-        .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        );
-    let cos_encoding = CosRaEncoding { node_idx: node.idx };
-    let cos_ra_onehot_verifier = shout::ra_onehot_verifiers(
-        &cos_encoding,
-        &verifier.accumulator,
-        &mut verifier.transcript,
-    );
-    let cos_ra_onehot_verifier: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
-        cos_ra_onehot_verifier.iter().map(|v| &**v as _).collect();
-    let mut range_and_cos_instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
-        vec![&rangecheck_verifier];
-    range_and_cos_instances.extend(cos_ra_onehot_verifier);
-    BatchedSumcheck::verify(
-        cos_ra_one_hot_proof,
-        range_and_cos_instances,
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
-
-    let ra_one_hot_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::RaHammingWeight))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-
-    let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-    let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_verifiers(
-        &rc_encoding,
-        &verifier.accumulator,
-        &mut verifier.transcript,
-    );
-    BatchedSumcheck::verify(
-        ra_one_hot_proof,
-        vec![&*rc_ra, &*rc_hw, &*rc_bool],
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
-
-    Ok(())
 }
 
 const DEGREE_BOUND: usize = 2;
@@ -361,21 +227,17 @@ impl<F: JoltField> CosParams<F> {
     pub fn new(
         computation_node: ComputationNode,
         _graph: &ComputationGraph,
-        accumulator: &dyn OpeningAccumulator<F>,
+        accumulator: &impl OpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
+
         let gamma = transcript.challenge_scalar();
-        let r_node_output = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::TeleportRemainder(computation_node.idx),
-                SumcheckId::NodeExecution(computation_node.idx),
-            )
-            .0
-            .r;
+        let r_node_output = accessor.get_advice(VirtualPoly::TeleportRemainder).0;
 
         Self {
             gamma,
-            r_node_output: r_node_output.into(),
+            r_node_output,
             computation_node,
         }
     }
@@ -387,19 +249,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for CosParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let rv_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::NodeOutput(self.computation_node.idx),
-                SumcheckId::NodeExecution(self.computation_node.idx),
-            )
-            .1;
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
+        let rv_claim = accessor.get_nodeio(Target::Current).1;
 
-        let remainder_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::TeleportRemainder(self.computation_node.idx),
-                SumcheckId::NodeExecution(self.computation_node.idx),
-            )
-            .1;
+        let remainder_claim = accessor.get_advice(VirtualPoly::TeleportRemainder).1;
 
         rv_claim + self.gamma * remainder_claim
     }
@@ -453,13 +306,9 @@ impl<F: JoltField> CosProver<F> {
         // This is due to the fact that `remainder` poly claim is used as input claim for cos lookup sumcheck, together with a node output claim.
         // Both claims are derived from a different opening point, so we need to derive a new claim for one of (`output`, `remainder`).
         // We chose `output` to prevent us from having to use n-to-1 reductions on the `remainder` and rather only implement it on NodeOutput.
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(params.computation_node.idx),
-            SumcheckId::NodeExecution(params.computation_node.idx),
-            params.r_node_output.clone(),
-            output_claim,
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
+            .into_provider(transcript, params.r_node_output.clone());
+        provider.append_nodeio(Target::Current, output_claim);
 
         let input_onehot = MultilinearPolynomial::from(input_onehot);
         assert_eq!(input_onehot.len(), cos_table.len());
@@ -467,18 +316,8 @@ impl<F: JoltField> CosProver<F> {
 
         #[cfg(test)]
         {
-            let remainder_claim = accumulator
-                .get_virtual_polynomial_opening(
-                    VirtualPolynomial::TeleportRemainder(params.computation_node.idx),
-                    SumcheckId::NodeExecution(params.computation_node.idx),
-                )
-                .1;
-            let rv_claim = accumulator
-                .get_virtual_polynomial_opening(
-                    VirtualPolynomial::NodeOutput(params.computation_node.idx),
-                    SumcheckId::NodeExecution(params.computation_node.idx),
-                )
-                .1;
+            let remainder_claim = provider.get_advice(VirtualPoly::TeleportRemainder).1;
+            let rv_claim = provider.get_nodeio(Target::Current).1;
             let claim = (0..input_onehot.len())
                 .map(|i| {
                     let a = input_onehot.get_bound_coeff(i);
@@ -556,13 +395,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for CosProver<F> 
             self.params.r_node_output.r.as_slice(),
         ]
         .concat();
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::CosRa(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            r.into(),
-            self.input_onehot.final_sumcheck_claim(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .into_provider(transcript, OpeningPoint::new(r));
+        provider.append_advice(VirtualPoly::CosRa, self.input_onehot.final_claim());
     }
 }
 
@@ -584,13 +419,9 @@ impl<F: JoltField> CosVerifier<F> {
         transcript: &mut impl Transcript,
     ) -> Self {
         let params = CosParams::new(computation_node, graph, accumulator, transcript);
-
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(params.computation_node.idx),
-            SumcheckId::NodeExecution(params.computation_node.idx),
-            params.r_node_output.clone(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
+            .into_provider(transcript, params.r_node_output.clone());
+        provider.append_nodeio(Target::Current);
 
         let cos_table = MultilinearPolynomial::from(CosTable::materialize());
         Self { params, cos_table }
@@ -607,16 +438,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for CosVerifier
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
 
-        let ra_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::CosRa(self.params.computation_node.idx),
-                SumcheckId::NodeExecution(self.params.computation_node.idx),
-            )
-            .1;
+        let ra_claim = accessor.get_advice(VirtualPoly::CosRa).1;
         let table_claim = self.cos_table.evaluate(&opening_point.r);
         let int_eval = IdentityPolynomial::new(COS_LOG_TABLE_SIZE).evaluate(&opening_point.r);
 
@@ -637,12 +464,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for CosVerifier
             self.params.r_node_output.r.as_slice(),
         ]
         .concat();
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::CosRa(self.params.computation_node.idx),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            r.into(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .into_provider(transcript, OpeningPoint::new(r));
+        provider.append_advice(VirtualPoly::CosRa);
     }
 }
 
@@ -655,20 +479,20 @@ pub struct CosRaEncoding {
 }
 
 impl RaOneHotEncoding for CosRaEncoding {
-    fn committed_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::CosRaD(self.node_idx, d)
+    fn committed_poly(&self, d: usize) -> CommittedPoly {
+        CommittedPoly::CosRaD(self.node_idx, d)
     }
 
-    fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (
-            VirtualPolynomial::TeleportRemainder(self.node_idx),
+    fn r_cycle_source(&self) -> OpeningId {
+        OpeningId::new(
+            VirtualPoly::TeleportRemainder(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
 
-    fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (
-            VirtualPolynomial::CosRa(self.node_idx),
+    fn ra_source(&self) -> OpeningId {
+        OpeningId::new(
+            VirtualPoly::CosRa(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
@@ -679,6 +503,21 @@ impl RaOneHotEncoding for CosRaEncoding {
 
     fn one_hot_params(&self) -> OneHotParams {
         OneHotParams::from_config_and_log_K(&OneHotConfig::default(), COS_LOG_TABLE_SIZE)
+    }
+}
+
+impl<F: JoltField, T: Transcript> NeuralTeleportRangeOneHot<F, T> for Cos {
+    type RaEncoding = CosRaEncoding;
+
+    fn lookup_indices(&self, node: &ComputationNode, trace: &Trace) -> Vec<usize> {
+        let LayerData { operands, .. } = Trace::layer_data(trace, node);
+        let input = operands[0];
+        let (_, remainder) = compute_division(input, FOUR_PI_APPROX);
+        remainder.par_iter().map(|&x| x as usize).collect()
+    }
+
+    fn ra_encoding(&self, node: &ComputationNode) -> Self::RaEncoding {
+        CosRaEncoding { node_idx: node.idx }
     }
 }
 

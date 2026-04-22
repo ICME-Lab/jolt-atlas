@@ -8,7 +8,7 @@ use crate::onnx_proof::range_checking::range_check_operands::RangeCheckingOperan
 use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode};
 use common::{
     consts::{LOG_K, XLEN},
-    CommittedPolynomial, VirtualPolynomial,
+    CommittedPoly, VirtualPoly,
 };
 use joltworks::{
     config::OneHotParams,
@@ -17,7 +17,7 @@ use joltworks::{
     poly::{
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN,
         },
     },
@@ -197,22 +197,23 @@ where
     }
 
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
-        let (r_node_output, _) = accumulator.get_virtual_polynomial_opening(
+        let id = OpeningId::new(
             self.operands.get_input_operands()[0],
             SumcheckId::NodeExecution(self.operands.node_idx()),
         );
+        let (r_node_output, _) = accumulator.get_virtual_polynomial_opening(id);
         r_node_output
     }
 
-    fn ra_poly(&self) -> (VirtualPolynomial, SumcheckId) {
+    fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
         (self.operands.get_output_operand(), SumcheckId::Raf)
     }
 
-    fn raf_claim_specs(&self) -> Vec<(VirtualPolynomial, SumcheckId)> {
+    fn raf_claim_specs(&self) -> Vec<OpeningId> {
         self.operands
             .get_input_operands()
             .into_iter()
-            .map(|p| (p, SumcheckId::Raf))
+            .map(|p| OpeningId::new(p, SumcheckId::Raf))
             .collect()
     }
 }
@@ -245,19 +246,19 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckEncoding<H> {
 }
 
 impl<H: RangeCheckingOperandsTrait> RaOneHotEncoding for RangeCheckEncoding<H> {
-    fn committed_poly(&self, d: usize) -> CommittedPolynomial {
+    fn committed_poly(&self, d: usize) -> CommittedPoly {
         self.operands.rad_poly(d)
     }
 
-    fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (
-            VirtualPolynomial::NodeOutput(self.operands.node_idx()),
+    fn r_cycle_source(&self) -> OpeningId {
+        OpeningId::new(
+            VirtualPoly::NodeOutput(self.operands.node_idx()),
             SumcheckId::NodeExecution(self.operands.node_idx()),
         )
     }
 
-    fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (self.operands.get_output_operand(), SumcheckId::Raf)
+    fn ra_source(&self) -> OpeningId {
+        OpeningId::new(self.operands.get_output_operand(), SumcheckId::Raf)
     }
 
     fn log_k(&self) -> usize {
@@ -293,10 +294,10 @@ fn append_raf_claims_prover<F: JoltField, LUT, H>(
     let operand_tensors = [left_operand, right_operand];
     let raf_specs =
         <RangeCheckProvider<H> as PrefixSuffixShoutProvider<F, LUT>>::raf_claim_specs(provider);
-    for (tensor, (poly, sumcheck_id)) in operand_tensors.into_iter().zip(raf_specs) {
+    for (tensor, opening_id) in operand_tensors.into_iter().zip(raf_specs) {
         let claim = MultilinearPolynomial::from(tensor.into_container_data()) // TODO: make this work with from_i32
             .evaluate(&r_cycle.r);
-        opening_accumulator.append_virtual(transcript, poly, sumcheck_id, r_cycle.clone(), claim);
+        opening_accumulator.append_virtual(transcript, opening_id, r_cycle.clone(), claim);
     }
 }
 
@@ -312,9 +313,9 @@ fn append_raf_claims_verifier<F: JoltField, LUT, H>(
         provider,
         opening_accumulator,
     );
-    for (poly, sumcheck_id) in
+    for opening_id in
         <RangeCheckProvider<H> as PrefixSuffixShoutProvider<F, LUT>>::raf_claim_specs(provider)
     {
-        opening_accumulator.append_virtual(transcript, poly, sumcheck_id, r_cycle.clone());
+        opening_accumulator.append_virtual(transcript, opening_id, r_cycle.clone());
     }
 }

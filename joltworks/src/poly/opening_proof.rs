@@ -28,7 +28,7 @@ use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
     Write,
 };
-use common::{CommittedPolynomial, VirtualPolynomial};
+use common::{CommittedPoly, VirtualPoly};
 use rayon::prelude::*;
 
 #[cfg(any(test, feature = "test-feature"))]
@@ -54,9 +54,9 @@ pub struct ProverOpeningAccumulator<F>
 where
     F: JoltField,
 {
-    pub sumchecks: BTreeMap<CommittedPolynomial, OpeningProofReductionSumcheckProver<F>>,
+    pub sumchecks: BTreeMap<CommittedPoly, OpeningProofReductionSumcheckProver<F>>,
     /// Openings for polynomials claimed during proving.
-    /// Identified by the kind of polynomial, the node to which it corresponds (both held in Committed/VirtualPolynomial variant),
+    /// Identified by the kind of polynomial, the node to which it corresponds (both held in Committed/VirtualPoly variant),
     /// and the sumcheck for which the opening is claimed.
     /// NOTE:
     /// If a node output is fed twice as index in a same node, it would lead to two different openings.
@@ -65,11 +65,11 @@ where
     pub openings: Openings<F>,
     /// Mapping from reduced source opening keys to evaluation-reduction line restriction `h`.
     pub reduced_evaluations: BTreeMap<usize, ReducedInstance<F>>,
-    dense_polynomial_map: HashMap<CommittedPolynomial, Arc<RwLock<SharedDensePolynomial<F>>>>,
+    dense_polynomial_map: HashMap<CommittedPoly, Arc<RwLock<SharedDensePolynomial<F>>>>,
     eq_cycle_map: HashMap<Vec<F>, Arc<RwLock<EqCycleState<F>>>>,
     #[cfg(any(test, feature = "test-feature"))]
     pub appended_virtual_openings: RefCell<Vec<OpeningId>>,
-    pub cached_opening_claims: BTreeMap<CommittedPolynomial, F>,
+    pub cached_opening_claims: BTreeMap<CommittedPoly, F>,
     #[cfg(feature = "zk")]
     pending_claims: Vec<F>,
     #[cfg(feature = "zk")]
@@ -82,7 +82,7 @@ pub struct VerifierOpeningAccumulator<F>
 where
     F: JoltField,
 {
-    sumchecks: BTreeMap<CommittedPolynomial, OpeningProofReductionSumcheckVerifier<F>>,
+    sumchecks: BTreeMap<CommittedPoly, OpeningProofReductionSumcheckVerifier<F>>,
     pub openings: Openings<F>,
     /// Mapping for nodes reduced opening points
     pub reduced_evaluations: BTreeMap<usize, ReducedInstance<F>>,
@@ -97,20 +97,17 @@ where
 pub trait OpeningAccumulator<F: JoltField> {
     fn try_get_virtual_polynomial_opening(
         &self,
-        polynomial: VirtualPolynomial,
-        sumcheck: SumcheckId,
+        opening_id: OpeningId,
     ) -> Option<(OpeningPoint<BIG_ENDIAN, F>, F)>;
 
     fn get_virtual_polynomial_opening(
         &self,
-        polynomial: VirtualPolynomial,
-        sumcheck: SumcheckId,
+        opening_id: OpeningId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F);
 
     fn get_committed_polynomial_opening(
         &self,
-        polynomial: CommittedPolynomial,
-        sumcheck: SumcheckId,
+        opening_id: OpeningId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F);
 
     /// Gets the reduced opening claim for the given node index.
@@ -122,47 +119,48 @@ pub trait OpeningAccumulator<F: JoltField> {
 impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
     fn try_get_virtual_polynomial_opening(
         &self,
-        polynomial: VirtualPolynomial,
-        sumcheck: SumcheckId,
+        opening_id: OpeningId,
     ) -> Option<(OpeningPoint<BIG_ENDIAN, F>, F)> {
-        let key = OpeningId::Virtual(polynomial, sumcheck);
         self.openings
-            .get(&key)
+            .get(&opening_id)
             .map(|(point, claim)| (point.clone(), *claim))
     }
 
     fn get_virtual_polynomial_opening(
         &self,
-        polynomial: VirtualPolynomial,
-        sumcheck: SumcheckId,
+        opening_id: OpeningId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        let key = OpeningId::Virtual(polynomial, sumcheck);
-        match self.openings.get(&key) {
+        opening_id
+            .virtual_poly()
+            .expect("expected virtual polynomial");
+        match self.openings.get(&opening_id) {
             Some((point, claim)) => {
                 #[cfg(any(test, feature = "test-feature"))]
                 {
                     let mut virtual_openings = self.appended_virtual_openings.borrow_mut();
-                    if let Some(index) = virtual_openings.iter().position(|id| id == &key) {
+                    if let Some(index) = virtual_openings.iter().position(|id| id == &opening_id) {
                         virtual_openings.remove(index);
                     }
                 }
                 (point.clone(), *claim)
             }
             None => {
-                panic!("opening for {sumcheck:?} {polynomial:?} not found")
+                panic!("opening for {opening_id:?} not found")
             }
         }
     }
 
     fn get_committed_polynomial_opening(
         &self,
-        polynomial: CommittedPolynomial,
-        sumcheck: SumcheckId,
+        opening_id: OpeningId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+        opening_id
+            .committed_poly()
+            .expect("expected committed polynomial");
         let (point, claim) = self
             .openings
-            .get(&OpeningId::Committed(polynomial, sumcheck))
-            .unwrap_or_else(|| panic!("opening for {sumcheck:?} {polynomial:?} not found"));
+            .get(&opening_id)
+            .unwrap_or_else(|| panic!("opening for {opening_id:?} not found"));
         (point.clone(), *claim)
     }
 
@@ -212,7 +210,7 @@ where
 
     /// Caches an opening claim from the opening reduction sumcheck.
     /// Called from `OpeningProofReductionSumcheckProver::cache_openings`.
-    pub fn cache_opening_reduction_claim(&mut self, polynomial: CommittedPolynomial, claim: F) {
+    pub fn cache_opening_reduction_claim(&mut self, polynomial: CommittedPoly, claim: F) {
         self.cached_opening_claims.insert(polynomial, claim);
     }
 
@@ -229,14 +227,14 @@ where
     }
 
     pub fn get_node_openings(&self, node_idx: usize) -> Vec<&Opening<F>> {
-        let lo = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(node_idx),
-            // Only consider openings for consumer indices greater than node index,
-            // since output is only consumed by later nodes
-            SumcheckId::NodeExecution(node_idx + 1),
+        let lo = OpeningId::new(
+            VirtualPoly::NodeOutput(node_idx),
+            // Only consider openings for consumer indices greater or equal to node index,
+            // since claims are only produced for current or later nodes
+            SumcheckId::NodeExecution(node_idx),
         );
-        let hi = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(node_idx),
+        let hi = OpeningId::new(
+            VirtualPoly::NodeOutput(node_idx),
             SumcheckId::NodeExecution(usize::MAX),
         );
 
@@ -253,8 +251,7 @@ where
     pub fn append_dense<T, U>(
         &mut self,
         transcript: &mut T,
-        polynomial: CommittedPolynomial,
-        sumcheck: SumcheckId,
+        opening_id: OpeningId,
         opening_point: Vec<U>,
         claim: F,
     ) where
@@ -270,18 +267,21 @@ where
             .or_insert_with(|| Arc::new(RwLock::new(EqCycleState::new(&opening_point))));
 
         // Add opening to map
-        let key = OpeningId::Committed(polynomial, sumcheck);
         self.openings.insert(
-            key,
+            opening_id,
             (
                 OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone()),
                 claim,
             ),
         );
 
+        let polynomial = opening_id
+            .committed_poly()
+            .expect("expected committed polynomial");
+
         let sumcheck = OpeningProofReductionSumcheckProver::new_dense(
             polynomial,
-            sumcheck,
+            opening_id.sumcheck,
             shared_eq.clone(),
             opening_point,
             claim,
@@ -293,7 +293,7 @@ where
     pub fn append_sparse<T, U>(
         &mut self,
         transcript: &mut T,
-        polynomials: Vec<CommittedPolynomial>,
+        polynomials: Vec<CommittedPoly>,
         sumcheck: SumcheckId,
         r_address: Vec<U>,
         r_cycle: Vec<U>,
@@ -315,14 +315,14 @@ where
             .or_insert(Arc::new(RwLock::new(EqCycleState::new(&r_cycle))));
 
         // Add openings to map
-        for (label, claim) in polynomials.iter().zip(claims.iter()) {
+        for (&label, claim) in polynomials.iter().zip(claims.iter()) {
             let opening_point_struct = OpeningPoint::<BIG_ENDIAN, F>::new(r_concat.clone());
-            let key = OpeningId::Committed(*label, sumcheck);
+            let key = OpeningId::new(label, sumcheck);
             self.openings
                 .insert(key, (opening_point_struct.clone(), *claim));
         }
 
-        for (label, claim) in polynomials.into_iter().zip(claims.into_iter()) {
+        for (label, claim) in polynomials.iter().copied().zip(claims.into_iter()) {
             let sumcheck = OpeningProofReductionSumcheckProver::new_one_hot(
                 label,
                 sumcheck,
@@ -338,27 +338,29 @@ where
     pub fn append_virtual<T: Transcript>(
         &mut self,
         transcript: &mut T,
-        polynomial: VirtualPolynomial,
-        sumcheck: SumcheckId,
+        opening_id: OpeningId,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
         claim: F,
     ) {
-        if let VirtualPolynomial::NodeOutput(node_idx) = polynomial {
+        let virtual_poly = opening_id
+            .virtual_poly()
+            .expect("expected virtual polynomial");
+        if let VirtualPoly::NodeOutput(node_idx) = virtual_poly {
             debug_assert!(
                 // TODO(AntoineF4C5) Temporary exception: RAF plumbing may still append NodeOutput after reduction
                 // until range-check identity polynomial wiring is fully implemented.
                 // See #208
-                sumcheck == SumcheckId::Raf || !self.reduced_evaluations.contains_key(&node_idx),
+                opening_id.sumcheck == SumcheckId::Raf
+                    || !self.reduced_evaluations.contains_key(&node_idx),
                 "cannot append opening for node {node_idx} after evaluation reduction"
             );
         }
 
         transcript.append_scalar(&claim);
 
-        let key = OpeningId::Virtual(polynomial, sumcheck);
-        self.openings.insert(key, (opening_point, claim));
+        self.openings.insert(opening_id, (opening_point, claim));
         #[cfg(test)]
-        self.appended_virtual_openings.borrow_mut().push(key);
+        self.appended_virtual_openings.borrow_mut().push(opening_id);
     }
 
     /// Take the openings, removing the points to reduce proof size
@@ -375,11 +377,12 @@ where
 
     pub fn assert_virtual_polynomial_opening_exists(
         &self,
-        polynomial: VirtualPolynomial,
-        sumcheck: SumcheckId,
+        opening_id: OpeningId,
     ) -> Option<&(OpeningPoint<false, F>, F)> {
-        let key = OpeningId::Virtual(polynomial, sumcheck);
-        self.openings.get(&key)
+        opening_id
+            .virtual_poly()
+            .expect("expected virtual polynomial");
+        self.openings.get(&opening_id)
     }
 }
 
@@ -398,10 +401,10 @@ where
     #[tracing::instrument(skip_all, name = "ProverOpeningAccumulator::prepare_for_sumcheck")]
     pub fn prepare_for_sumcheck(
         &mut self,
-        polynomials: &BTreeMap<CommittedPolynomial, MultilinearPolynomial<F>>,
+        polynomials: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
     ) {
         if self.sumchecks.len() != polynomials.len() {
-            let missing_sumchecks: Vec<CommittedPolynomial> = polynomials
+            let missing_sumchecks: Vec<CommittedPoly> = polynomials
                 .keys()
                 .filter(|poly| !self.sumchecks.contains_key(poly))
                 .cloned()
@@ -497,7 +500,7 @@ where
         transcript: &mut T,
     ) -> OpeningReductionState<F> {
         // Extract claims and polynomials from cached opening claims (populated by cache_openings)
-        let (polynomials, sumcheck_claims): (Vec<CommittedPolynomial>, Vec<F>) =
+        let (polynomials, sumcheck_claims): (Vec<CommittedPoly>, Vec<F>) =
             std::mem::take(&mut self.cached_opening_claims)
                 .into_iter()
                 .unzip();
@@ -537,44 +540,46 @@ pub struct OpeningReductionState<F: JoltField> {
     pub r_sumcheck: Vec<F::Challenge>,
     pub gamma_powers: Vec<F>,
     pub sumcheck_claims: Vec<F>,
-    pub polynomials: Vec<CommittedPolynomial>,
+    pub polynomials: Vec<CommittedPoly>,
 }
 
 impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
     fn try_get_virtual_polynomial_opening(
         &self,
-        polynomial: VirtualPolynomial,
-        sumcheck: SumcheckId,
+        opening_id: OpeningId,
     ) -> Option<(OpeningPoint<BIG_ENDIAN, F>, F)> {
-        let key = OpeningId::Virtual(polynomial, sumcheck);
         self.openings
-            .get(&key)
+            .get(&opening_id)
             .map(|(point, claim)| (point.clone(), *claim))
     }
 
     fn get_virtual_polynomial_opening(
         &self,
-        polynomial: VirtualPolynomial,
-        sumcheck: SumcheckId,
+        opening_id: OpeningId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        let key = OpeningId::Virtual(polynomial, sumcheck);
+        opening_id
+            .virtual_poly()
+            .expect("expected virtual polynomial");
+        let key = opening_id;
         match self.openings.get(&key) {
             Some((point, claim)) => (point.clone(), *claim),
             None => {
-                panic!("No opening found for {sumcheck:?} {polynomial:?}")
+                panic!("No opening found for {opening_id:?}")
             }
         }
     }
 
     fn get_committed_polynomial_opening(
         &self,
-        polynomial: CommittedPolynomial,
-        sumcheck: SumcheckId,
+        opening_id: OpeningId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+        opening_id
+            .committed_poly()
+            .expect("expected committed polynomial");
         let (point, claim) = self
             .openings
-            .get(&OpeningId::Committed(polynomial, sumcheck))
-            .unwrap_or_else(|| panic!("No opening found for {sumcheck:?} {polynomial:?}"));
+            .get(&opening_id)
+            .unwrap_or_else(|| panic!("No opening found for {opening_id:?}"));
         (point.clone(), *claim)
     }
 
@@ -611,25 +616,15 @@ where
         std::mem::take(&mut self.pending_claims)
     }
 
-    /// Returns the scalar claim for a NodeOutput opening, identified by
-    /// both producer and consumer.
-    pub fn get_node_output_claim(&self, producer_idx: usize, consumer_idx: usize) -> F {
-        self.get_virtual_polynomial_opening(
-            VirtualPolynomial::NodeOutput(producer_idx),
-            SumcheckId::NodeExecution(consumer_idx),
-        )
-        .1
-    }
-
     pub fn get_node_openings(&self, node_idx: usize) -> Vec<&Opening<F>> {
-        let lo = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(node_idx),
-            // Only consider openings for consumer indices greater than node index,
-            // since output is only consumed by later nodes
-            SumcheckId::NodeExecution(node_idx + 1),
+        let lo = OpeningId::new(
+            VirtualPoly::NodeOutput(node_idx),
+            // Only consider openings for consumer indices greater or equal to node index,
+            // since claims are only produced for current or later nodes
+            SumcheckId::NodeExecution(node_idx),
         );
-        let hi = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(node_idx),
+        let hi = OpeningId::new(
+            VirtualPoly::NodeOutput(node_idx),
             SumcheckId::NodeExecution(usize::MAX),
         );
         self.openings
@@ -650,26 +645,27 @@ where
     pub fn append_dense<T, U>(
         &mut self,
         transcript: &mut T,
-        polynomial: CommittedPolynomial,
-        sumcheck: SumcheckId,
+        opening_id: OpeningId,
         opening_point: Vec<U>,
     ) where
         T: Transcript,
         U: Copy + Send + Sync + Into<F>,
     {
-        let key = OpeningId::Committed(polynomial, sumcheck);
-        let claim = self.openings.get(&key).unwrap().1;
+        let claim = self.openings.get(&opening_id).unwrap().1;
         transcript.append_scalar(&claim);
 
         // Update the opening point in self.openings (it was initialized with default empty point)
         self.openings.insert(
-            key,
+            opening_id,
             (
                 OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone()),
                 claim,
             ),
         );
 
+        let polynomial = opening_id
+            .committed_poly()
+            .expect("expected committed polynomial");
         self.sumchecks.insert(
             polynomial,
             OpeningProofReductionSumcheckVerifier::new(polynomial, opening_point, claim),
@@ -684,7 +680,7 @@ where
     pub fn append_sparse<T, U>(
         &mut self,
         transcript: &mut T,
-        polynomials: Vec<CommittedPolynomial>,
+        polynomials: Vec<CommittedPoly>,
         sumcheck: SumcheckId,
         opening_point: Vec<U>,
     ) where
@@ -692,7 +688,7 @@ where
         U: Copy + Send + Sync + Into<F>,
     {
         for label in polynomials.into_iter() {
-            let key = OpeningId::Committed(label, sumcheck);
+            let key = OpeningId::new(label, sumcheck);
             let claim = self.openings.get(&key).unwrap().1;
             transcript.append_scalar(&claim);
 
@@ -716,27 +712,30 @@ where
     pub fn append_virtual<T: Transcript>(
         &mut self,
         transcript: &mut T,
-        polynomial: VirtualPolynomial,
-        sumcheck: SumcheckId,
+        opening_id: OpeningId,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
     ) {
-        if let VirtualPolynomial::NodeOutput(node_idx) = polynomial {
+        let virtual_poly = opening_id
+            .virtual_poly()
+            .expect("expected virtual polynomial");
+        if let VirtualPoly::NodeOutput(node_idx) = virtual_poly {
             debug_assert!(
                 // TODO(AntoineF4C5) Temporary exception: RAF plumbing may still append NodeOutput after reduction
                 // until range-check identity polynomial wiring is fully implemented.
                 // See #208
-                sumcheck == SumcheckId::Raf || !self.reduced_evaluations.contains_key(&node_idx),
+                opening_id.sumcheck == SumcheckId::Raf
+                    || !self.reduced_evaluations.contains_key(&node_idx),
                 "cannot append opening for node {node_idx} after evaluation reduction"
             );
         }
 
-        let key = OpeningId::Virtual(polynomial, sumcheck);
-        if let Some((_, claim)) = self.openings.get(&key) {
+        if let Some((_, claim)) = self.openings.get(&opening_id) {
             transcript.append_scalar(claim);
             let claim = *claim; // Copy the claim value
-            self.openings.insert(key, (opening_point.clone(), claim));
+            self.openings
+                .insert(opening_id, (opening_point.clone(), claim));
         } else {
-            panic!("Tried to populate opening point for non-existent key: {key:?}");
+            panic!("Tried to populate opening point for non-existent key: {opening_id:?}");
         }
     }
 }
@@ -805,7 +804,7 @@ where
         transcript: &mut T,
     ) -> OpeningReductionState<F> {
         // Extract polynomial labels
-        let polynomials: Vec<CommittedPolynomial> =
+        let polynomials: Vec<CommittedPoly> =
             self.sumchecks.values().map(|s| s.polynomial).collect();
 
         // Append claims and derive gamma powers
@@ -824,7 +823,7 @@ where
 
     /// Computes the joint commitment by homomorphically combining individual commitments.
     pub fn compute_joint_commitment<PCS: CommitmentScheme<Field = F>>(
-        commitment_map: &mut BTreeMap<CommittedPolynomial, PCS::Commitment>,
+        commitment_map: &mut BTreeMap<CommittedPoly, PCS::Commitment>,
         state: &OpeningReductionState<F>,
     ) -> PCS::Commitment {
         let commitments: Vec<PCS::Commitment> = state
@@ -1070,9 +1069,60 @@ impl CanonicalDeserialize for SumcheckId {
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
-pub enum OpeningId {
-    Committed(CommittedPolynomial, SumcheckId),
-    Virtual(VirtualPolynomial, SumcheckId),
+pub enum PolynomialId {
+    Virtual(VirtualPoly),
+    Committed(CommittedPoly),
+}
+
+impl From<VirtualPoly> for PolynomialId {
+    fn from(poly: VirtualPoly) -> Self {
+        Self::Virtual(poly)
+    }
+}
+
+impl From<CommittedPoly> for PolynomialId {
+    fn from(poly: CommittedPoly) -> Self {
+        Self::Committed(poly)
+    }
+}
+
+impl PolynomialId {
+    fn into_virtual(self) -> Option<VirtualPoly> {
+        match self {
+            Self::Virtual(poly) => Some(poly),
+            _ => None,
+        }
+    }
+
+    fn into_committed(self) -> Option<CommittedPoly> {
+        match self {
+            Self::Committed(poly) => Some(poly),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
+pub struct OpeningId {
+    pub polynomial: PolynomialId,
+    pub sumcheck: SumcheckId,
+}
+
+impl OpeningId {
+    pub fn new(polynomial: impl Into<PolynomialId>, sumcheck: SumcheckId) -> Self {
+        Self {
+            polynomial: polynomial.into(),
+            sumcheck,
+        }
+    }
+
+    pub fn virtual_poly(&self) -> Option<VirtualPoly> {
+        self.polynomial.into_virtual()
+    }
+
+    pub fn committed_poly(&self) -> Option<CommittedPoly> {
+        self.polynomial.into_committed()
+    }
 }
 
 impl CanonicalSerialize for OpeningId {
@@ -1081,30 +1131,27 @@ impl CanonicalSerialize for OpeningId {
         mut writer: W,
         compress: Compress,
     ) -> Result<(), SerializationError> {
-        match self {
-            Self::Committed(poly, sc) => {
+        match self.polynomial {
+            PolynomialId::Committed(polynomial) => {
                 0u8.serialize_with_mode(&mut writer, compress)?;
-                poly.serialize_with_mode(&mut writer, compress)?;
-                sc.serialize_with_mode(&mut writer, compress)?;
+                polynomial.serialize_with_mode(&mut writer, compress)?;
+                self.sumcheck.serialize_with_mode(&mut writer, compress)?;
             }
-            Self::Virtual(poly, sc) => {
+            PolynomialId::Virtual(polynomial) => {
                 1u8.serialize_with_mode(&mut writer, compress)?;
-                poly.serialize_with_mode(&mut writer, compress)?;
-                sc.serialize_with_mode(&mut writer, compress)?;
+                polynomial.serialize_with_mode(&mut writer, compress)?;
+                self.sumcheck.serialize_with_mode(&mut writer, compress)?;
             }
         }
         Ok(())
     }
 
     fn serialized_size(&self, compress: Compress) -> usize {
-        1 + match self {
-            Self::Committed(poly, sc) => {
-                poly.serialized_size(compress) + sc.serialized_size(compress)
+        1 + self.sumcheck.serialized_size(compress)
+            + match self.polynomial {
+                PolynomialId::Virtual(polynomial) => polynomial.serialized_size(compress),
+                PolynomialId::Committed(polynomial) => polynomial.serialized_size(compress),
             }
-            Self::Virtual(poly, sc) => {
-                poly.serialized_size(compress) + sc.serialized_size(compress)
-            }
-        }
     }
 }
 
@@ -1123,16 +1170,14 @@ impl CanonicalDeserialize for OpeningId {
         let tag = u8::deserialize_with_mode(&mut reader, compress, validate)?;
         match tag {
             0 => {
-                let poly =
-                    CommittedPolynomial::deserialize_with_mode(&mut reader, compress, validate)?;
+                let poly = CommittedPoly::deserialize_with_mode(&mut reader, compress, validate)?;
                 let sc = SumcheckId::deserialize_with_mode(&mut reader, compress, validate)?;
-                Ok(Self::Committed(poly, sc))
+                Ok(Self::new(poly, sc))
             }
             1 => {
-                let poly =
-                    VirtualPolynomial::deserialize_with_mode(&mut reader, compress, validate)?;
+                let poly = VirtualPoly::deserialize_with_mode(&mut reader, compress, validate)?;
                 let sc = SumcheckId::deserialize_with_mode(&mut reader, compress, validate)?;
-                Ok(Self::Virtual(poly, sc))
+                Ok(Self::new(poly, sc))
             }
             _ => Err(SerializationError::InvalidData),
         }
@@ -1149,7 +1194,7 @@ mod guardrail_tests {
         transcripts::{Blake2bTranscript, Transcript},
     };
     use ark_bn254::Fr;
-    use common::VirtualPolynomial;
+    use common::VirtualPoly;
 
     #[test]
     #[should_panic(expected = "reduced evaluation for node 7 not found")]
@@ -1171,10 +1216,10 @@ mod guardrail_tests {
         );
 
         let mut transcript = Blake2bTranscript::new(b"guardrail_test");
+        let id = OpeningId::new(VirtualPoly::NodeOutput(3), SumcheckId::NodeExecution(9));
         acc.append_virtual(
             &mut transcript,
-            VirtualPolynomial::NodeOutput(3),
-            SumcheckId::NodeExecution(9),
+            id,
             OpeningPoint::new(vec![Fr::from(1u64)]),
             Fr::from(2u64),
         );
@@ -1192,15 +1237,15 @@ mod guardrail_tests {
         );
 
         let mut transcript = Blake2bTranscript::new(b"guardrail_test");
+        let id = OpeningId::new(VirtualPoly::NodeOutput(3), SumcheckId::Raf);
         acc.append_virtual(
             &mut transcript,
-            VirtualPolynomial::NodeOutput(3),
-            SumcheckId::Raf,
+            id,
             OpeningPoint::new(vec![Fr::from(1u64)]),
             Fr::from(5u64),
         );
 
-        let key = OpeningId::Virtual(VirtualPolynomial::NodeOutput(3), SumcheckId::Raf);
+        let key = OpeningId::new(VirtualPoly::NodeOutput(3), SumcheckId::Raf);
         assert!(acc.openings.contains_key(&key));
     }
 }

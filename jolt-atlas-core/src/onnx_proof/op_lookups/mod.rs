@@ -13,7 +13,7 @@ use atlas_onnx_tracer::{
 };
 use common::{
     consts::{LOG_K, XLEN},
-    CommittedPolynomial, VirtualPolynomial,
+    CommittedPoly, VirtualPoly,
 };
 use joltworks::{
     config::OneHotParams,
@@ -22,7 +22,7 @@ use joltworks::{
     poly::{
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN,
         },
     },
@@ -158,20 +158,26 @@ where
         let (_, rv_claim) = accumulator.get_node_output_opening(self.computation_node.idx);
         let (left_operand_claim, right_operand_claim) =
             if self.computation_node.is_interleaved_operands() {
-                let (_, left_operand_claim) = accumulator.get_virtual_polynomial_opening(
-                    VirtualPolynomial::NodeOutput(self.computation_node.inputs[0]),
+                let left_operand_id = OpeningId::new(
+                    VirtualPoly::NodeOutput(self.computation_node.inputs[0]),
                     SumcheckId::Raf,
                 );
-                let (_, right_operand_claim) = accumulator.get_virtual_polynomial_opening(
-                    VirtualPolynomial::NodeOutput(self.computation_node.inputs[1]),
+                let right_operand_id = OpeningId::new(
+                    VirtualPoly::NodeOutput(self.computation_node.inputs[1]),
                     SumcheckId::Raf,
                 );
+                let (_, left_operand_claim) =
+                    accumulator.get_virtual_polynomial_opening(left_operand_id);
+                let (_, right_operand_claim) =
+                    accumulator.get_virtual_polynomial_opening(right_operand_id);
                 (left_operand_claim, right_operand_claim)
             } else {
-                let (_, right_operand_claim) = accumulator.get_virtual_polynomial_opening(
-                    VirtualPolynomial::NodeOutput(self.computation_node.inputs[0]),
+                let right_operand_id = OpeningId::new(
+                    VirtualPoly::NodeOutput(self.computation_node.inputs[0]),
                     SumcheckId::Raf,
                 );
+                let (_, right_operand_claim) =
+                    accumulator.get_virtual_polynomial_opening(right_operand_id);
                 (F::zero(), right_operand_claim)
             };
 
@@ -191,33 +197,33 @@ where
         r_node_output
     }
 
-    fn ra_poly(&self) -> (VirtualPolynomial, SumcheckId) {
+    fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
         (
-            VirtualPolynomial::NodeOutputRa(self.computation_node.idx),
+            VirtualPoly::NodeOutputRa(self.computation_node.idx),
             SumcheckId::NodeExecution(self.computation_node.idx),
         )
     }
 
-    fn raf_claim_specs(&self) -> Vec<(VirtualPolynomial, SumcheckId)> {
+    fn raf_claim_specs(&self) -> Vec<OpeningId> {
         if self.computation_node.is_interleaved_operands() {
             vec![
-                (
-                    VirtualPolynomial::NodeOutput(self.computation_node.inputs[0]),
+                OpeningId::new(
+                    VirtualPoly::NodeOutput(self.computation_node.inputs[0]),
                     SumcheckId::Raf,
                 ),
-                (
-                    VirtualPolynomial::NodeOutput(self.computation_node.inputs[1]),
+                OpeningId::new(
+                    VirtualPoly::NodeOutput(self.computation_node.inputs[1]),
                     SumcheckId::Raf,
                 ),
             ]
         } else {
             vec![
-                (
-                    VirtualPolynomial::NodeOutput(self.computation_node.inputs[0]),
+                OpeningId::new(
+                    VirtualPoly::NodeOutput(self.computation_node.inputs[0]),
                     SumcheckId::Raf,
                 ),
-                (
-                    VirtualPolynomial::NodeOutput(self.computation_node.inputs[0]),
+                OpeningId::new(
+                    VirtualPoly::NodeOutput(self.computation_node.inputs[0]),
                     SumcheckId::NodeExecution(self.computation_node.idx),
                 ),
             ]
@@ -252,20 +258,20 @@ impl OpLookupEncoding {
 }
 
 impl RaOneHotEncoding for OpLookupEncoding {
-    fn committed_poly(&self, d: usize) -> CommittedPolynomial {
-        CommittedPolynomial::NodeOutputRaD(self.node_idx, d)
+    fn committed_poly(&self, d: usize) -> CommittedPoly {
+        CommittedPoly::NodeOutputRaD(self.node_idx, d)
     }
 
-    fn r_cycle_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (
-            VirtualPolynomial::NodeOutput(self.node_idx),
+    fn r_cycle_source(&self) -> OpeningId {
+        OpeningId::new(
+            VirtualPoly::NodeOutput(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
 
-    fn ra_source(&self) -> (VirtualPolynomial, SumcheckId) {
-        (
-            VirtualPolynomial::NodeOutputRa(self.node_idx),
+    fn ra_source(&self) -> OpeningId {
+        OpeningId::new(
+            VirtualPoly::NodeOutputRa(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
@@ -326,20 +332,26 @@ fn append_raf_claims_prover<F: JoltField, LUT>(
         let left_operand_claim =
             MultilinearPolynomial::from(left_operand_tensor.into_container_data()) // TODO: make this work with from_i32
                 .evaluate(&r_cycle.r);
+        let left_raf_id = OpeningId::new(
+            VirtualPoly::NodeOutput(provider.computation_node.inputs[0]),
+            SumcheckId::Raf,
+        );
         opening_accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(provider.computation_node.inputs[0]),
-            SumcheckId::Raf,
+            left_raf_id,
             r_cycle.clone(),
             left_operand_claim,
         );
         let right_operand_claim =
             MultilinearPolynomial::from(right_operand_tensor.into_container_data())
                 .evaluate(&r_cycle.r);
+        let right_raf_id = OpeningId::new(
+            VirtualPoly::NodeOutput(provider.computation_node.inputs[1]),
+            SumcheckId::Raf,
+        );
         opening_accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(provider.computation_node.inputs[1]),
-            SumcheckId::Raf,
+            right_raf_id,
             r_cycle.clone(),
             right_operand_claim,
         );
@@ -347,19 +359,25 @@ fn append_raf_claims_prover<F: JoltField, LUT>(
         // HACK: we should modify RAF operand polynomials for proving these claims
         let left_operand_claim = MultilinearPolynomial::from(left_operand_tensor.clone()) // TODO: make this work with from_i32
             .evaluate(&r_cycle.r);
+        let left_exec_id = OpeningId::new(
+            VirtualPoly::NodeOutput(provider.computation_node.inputs[0]),
+            SumcheckId::NodeExecution(provider.computation_node.idx),
+        );
         opening_accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(provider.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(provider.computation_node.idx),
+            left_exec_id,
             r_cycle.clone(),
             left_operand_claim,
         );
         let right_operand_claim =
             MultilinearPolynomial::from(right_operand_tensor.clone()).evaluate(&r_cycle.r);
+        let right_exec_id = OpeningId::new(
+            VirtualPoly::NodeOutput(provider.computation_node.inputs[1]),
+            SumcheckId::NodeExecution(provider.computation_node.idx),
+        );
         opening_accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(provider.computation_node.inputs[1]),
-            SumcheckId::NodeExecution(provider.computation_node.idx),
+            right_exec_id,
             r_cycle.clone(),
             right_operand_claim,
         );
@@ -368,19 +386,25 @@ fn append_raf_claims_prover<F: JoltField, LUT>(
         let right_operand_claim =
             MultilinearPolynomial::from(right_operand_tensor.into_container_data())
                 .evaluate(&r_cycle.r);
+        let right_raf_id = OpeningId::new(
+            VirtualPoly::NodeOutput(provider.computation_node.inputs[0]),
+            SumcheckId::Raf,
+        );
         opening_accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(provider.computation_node.inputs[0]),
-            SumcheckId::Raf,
+            right_raf_id,
             r_cycle.clone(),
             right_operand_claim,
         );
         let right_operand_claim =
             MultilinearPolynomial::from(right_operand_tensor.clone()).evaluate(&r_cycle.r);
+        let right_exec_id = OpeningId::new(
+            VirtualPoly::NodeOutput(provider.computation_node.inputs[0]),
+            SumcheckId::NodeExecution(provider.computation_node.idx),
+        );
         opening_accumulator.append_virtual(
             transcript,
-            VirtualPolynomial::NodeOutput(provider.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(provider.computation_node.idx), // TODO: Add specialized sumcheck that relates raf and execution claims (signed vs unsigned claims)
+            right_exec_id, // TODO: Add specialized sumcheck that relates raf and execution claims (signed vs unsigned claims)
             r_cycle.clone(),
             right_operand_claim,
         );
@@ -399,9 +423,9 @@ fn append_raf_claims_verifier<F: JoltField, LUT>(
         opening_accumulator,
     );
     opening_accumulator.get_node_output_opening(provider.computation_node.idx);
-    for (poly, sumcheck_id) in
+    for opening_id in
         <OpLookupProvider as PrefixSuffixShoutProvider<F, LUT>>::raf_claim_specs(provider)
     {
-        opening_accumulator.append_virtual(transcript, poly, sumcheck_id, r_cycle.clone());
+        opening_accumulator.append_virtual(transcript, opening_id, r_cycle.clone());
     }
 }

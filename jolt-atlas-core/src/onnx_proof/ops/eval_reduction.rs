@@ -75,7 +75,7 @@ mod tests {
         ops::{Add, Operator},
         tensor::Tensor,
     };
-    use common::VirtualPolynomial;
+    use common::VirtualPoly;
     use joltworks::{
         poly::{
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
@@ -124,17 +124,23 @@ mod tests {
         let claim1 = output_mle.evaluate(&point1);
         let claim2 = output_mle.evaluate(&point2);
 
+        let key1 = OpeningId::new(
+            VirtualPoly::NodeOutput(producer_idx),
+            SumcheckId::NodeExecution(consumer1),
+        );
+        let key2 = OpeningId::new(
+            VirtualPoly::NodeOutput(producer_idx),
+            SumcheckId::NodeExecution(consumer2),
+        );
         prover.accumulator.append_virtual(
             &mut prover.transcript,
-            VirtualPolynomial::NodeOutput(producer_idx),
-            SumcheckId::NodeExecution(consumer1),
+            key1,
             OpeningPoint::new(point1),
             claim1,
         );
         prover.accumulator.append_virtual(
             &mut prover.transcript,
-            VirtualPolynomial::NodeOutput(producer_idx),
-            SumcheckId::NodeExecution(consumer2),
+            key2,
             OpeningPoint::new(point2),
             claim2,
         );
@@ -172,10 +178,13 @@ mod tests {
         let point = prover.transcript.challenge_vector_optimized::<Fr>(num_vars);
         let claim = output_mle.evaluate(&point);
 
+        let key = OpeningId::new(
+            VirtualPoly::NodeOutput(producer_idx),
+            SumcheckId::NodeExecution(consumer),
+        );
         prover.accumulator.append_virtual(
             &mut prover.transcript,
-            VirtualPolynomial::NodeOutput(producer_idx),
-            SumcheckId::NodeExecution(consumer),
+            key,
             OpeningPoint::new(point.clone()),
             claim,
         );
@@ -219,8 +228,8 @@ mod tests {
             .transcript
             .challenge_vector_optimized::<Fr>(num_vars);
         let claim = output_mle.evaluate(&point);
-        let key = OpeningId::Virtual(
-            VirtualPolynomial::NodeOutput(producer_idx),
+        let key = OpeningId::new(
+            VirtualPoly::NodeOutput(producer_idx),
             SumcheckId::NodeExecution(consumer),
         );
         let opening = (OpeningPoint::new(point.clone()), claim);

@@ -1,11 +1,11 @@
-use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier};
+use crate::{
+    onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
+    utils::opening_access::AccOpeningAccessor,
+};
 use atlas_onnx_tracer::{node::ComputationNode, ops::Input};
 use joltworks::{
     field::JoltField,
-    poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::OpeningAccumulator,
-    },
+    poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
@@ -19,7 +19,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Input {
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
         // Assert claim is already cached
-        let _opening = prover.accumulator.get_node_output_opening(node.idx);
+        let _opening = AccOpeningAccessor::new(&prover.accumulator, node).get_reduced_opening();
         vec![]
     }
 
@@ -30,7 +30,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Input {
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         // Check input_claim == IO.evaluate_input(r_input)
-        let (r_node_input, input_claim) = verifier.accumulator.get_node_output_opening(node.idx);
+        let (r_node_input, input_claim) =
+            AccOpeningAccessor::new(&verifier.accumulator, node).get_reduced_opening();
         let input = verifier.io.inputs[verifier
             .io
             .input_indices

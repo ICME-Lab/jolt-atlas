@@ -1,9 +1,12 @@
+use crate::utils::{
+    dims::EinsumDims,
+    opening_access::{AccOpeningAccessor, Target},
+};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
 };
 use common::parallel::par_enabled;
-use common::VirtualPolynomial;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -12,8 +15,8 @@ use joltworks::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
+            BIG_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -26,8 +29,6 @@ use joltworks::{
 };
 use rayon::prelude::*;
 use std::array;
-
-use crate::utils::dims::EinsumDims;
 
 const DEGREE_BOUND: usize = 2;
 
@@ -48,7 +49,8 @@ impl<F: JoltField> KNkNParams<F> {
         einsum_dims: EinsumDims,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
-        let r_node_output = accumulator.get_node_output_opening(computation_node.idx).0;
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
+        let r_node_output = accessor.get_reduced_opening().0;
         Self {
             r_node_output,
             computation_node,
@@ -63,8 +65,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for KNkNParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, einsum_claim) = accumulator.get_node_output_opening(self.computation_node.idx);
-        einsum_claim
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
+        accessor.get_reduced_opening().1
     }
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -162,12 +164,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for KNkNProver<F>
         let left_opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            left_opening_point.clone(),
-            self.left_operand.final_sumcheck_claim(),
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .into_provider(transcript, Default::default());
+        provider.append_nodeio_at(
+            Target::Input(0),
+            left_opening_point,
+            self.left_operand.final_claim(),
         );
 
         let r_right_node_output = [
@@ -176,12 +178,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for KNkNProver<F>
         ]
         .concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right_node_output);
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
+        provider.append_nodeio_at(
+            Target::Input(1),
             right_opening_point,
-            self.right_operand.final_sumcheck_claim(),
+            self.right_operand.final_claim(),
         );
     }
 }
@@ -214,14 +214,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for KNkNVerifie
         accumulator: &VerifierOpeningAccumulator<F>,
         _sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let left_operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[0],
-            self.params.computation_node.idx,
-        );
-        let right_operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[1],
-            self.params.computation_node.idx,
-        );
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
+        let left_operand_claim = accessor.get_nodeio(Target::Input(0)).1;
+        let right_operand_claim = accessor.get_nodeio(Target::Input(1)).1;
         left_operand_claim * right_operand_claim
     }
 
@@ -234,12 +229,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for KNkNVerifie
         let left_opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            left_opening_point.clone(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .into_provider(transcript, Default::default());
+        provider.append_nodeio_at(Target::Input(0), left_opening_point);
 
         let r_right_node_output = [
             self.params.r_node_output.r.as_slice(),
@@ -247,12 +239,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for KNkNVerifie
         ]
         .concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right_node_output);
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            right_opening_point,
-        );
+        provider.append_nodeio_at(Target::Input(1), right_opening_point);
     }
 }
 

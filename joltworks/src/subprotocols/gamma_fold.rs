@@ -11,7 +11,7 @@ use crate::{
         },
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            VerifierOpeningAccumulator, VirtualOpeningId, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -65,9 +65,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for GammaFoldParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        accumulator
-            .get_virtual_polynomial_opening(self.claim_poly, SumcheckId::RLC(self.node_exec_idx))
-            .1
+        let id = VirtualOpeningId::new(self.claim_poly, SumcheckId::RLC(self.node_exec_idx));
+        accumulator.get_virtual_polynomial_opening(id).1
     }
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -102,8 +101,7 @@ impl<F: JoltField> GammaFoldProver<F> {
         let weights = MultilinearPolynomial::from(weight_values);
         accumulator.append_virtual(
             transcript,
-            claim_poly,
-            SumcheckId::RLC(node_exec_idx),
+            VirtualOpeningId::new(claim_poly, SumcheckId::RLC(node_exec_idx)),
             (vec![] as Vec<F>).into(),
             claim,
         );
@@ -168,10 +166,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GammaFoldProv
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
+        let id = VirtualOpeningId::new(
             self.params.claim_poly,
             SumcheckId::NodeExecution(self.params.node_exec_idx),
+        );
+        accumulator.append_virtual(
+            transcript,
+            id,
             opening_point,
             self.tensor.final_sumcheck_claim(),
         );
@@ -198,8 +199,7 @@ impl<F: JoltField> GammaFoldVerifier<F> {
         let weights = MultilinearPolynomial::from(weight_values);
         accumulator.append_virtual(
             transcript,
-            claim_poly,
-            SumcheckId::RLC(node_exec_idx),
+            VirtualOpeningId::new(claim_poly, SumcheckId::RLC(node_exec_idx)),
             (vec![] as Vec<F>).into(),
         );
 
@@ -226,12 +226,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GammaFoldVe
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let weight_eval = self.weights.evaluate(&opening_point.r);
-        let tensor_claim = accumulator
-            .get_virtual_polynomial_opening(
-                self.params.claim_poly,
-                SumcheckId::NodeExecution(self.params.node_exec_idx),
-            )
-            .1;
+        let id = VirtualOpeningId::new(
+            self.params.claim_poly,
+            SumcheckId::NodeExecution(self.params.node_exec_idx),
+        );
+        let tensor_claim = accumulator.get_virtual_polynomial_opening(id).1;
         weight_eval * tensor_claim
     }
 
@@ -244,11 +243,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GammaFoldVe
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
+        let id = VirtualOpeningId::new(
             self.params.claim_poly,
             SumcheckId::NodeExecution(self.params.node_exec_idx),
-            opening_point,
         );
+        accumulator.append_virtual(transcript, id, opening_point);
     }
 }

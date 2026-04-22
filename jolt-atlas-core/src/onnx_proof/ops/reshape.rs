@@ -7,8 +7,11 @@
 //!
 //! `out(r_output) = sum_i selector(i) * input(i)`.
 
-use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
 use crate::utils::dims::{coord_to_linear, linear_to_coord};
+use crate::{
+    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
+    utils::opening_access::{AccOpeningAccessor, Target},
+};
 use atlas_onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
@@ -18,7 +21,6 @@ use atlas_onnx_tracer::{
     ops::Reshape,
 };
 use common::parallel::par_enabled;
-use common::VirtualPolynomial;
 use joltworks::{
     field::{ChallengeFieldOps, IntoOpening, JoltField},
     poly::{
@@ -27,8 +29,8 @@ use joltworks::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
+            BIG_ENDIAN, LITTLE_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -160,7 +162,8 @@ impl<F: JoltField> ReshapeSumcheckParams<F> {
         accumulator: &dyn OpeningAccumulator<F>,
         graph: &ComputationGraph,
     ) -> Self {
-        let r_output = accumulator.get_node_output_opening(computation_node.idx).0;
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
+        let r_output = accessor.get_reduced_opening().0;
         let input_raw_dims = graph
             .nodes
             .get(&computation_node.inputs[0])
@@ -183,9 +186,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeSumcheckParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        accumulator
-            .get_node_output_opening(self.computation_node.idx)
-            .1
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
+        accessor.get_reduced_opening().1
     }
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -274,13 +276,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReshapeSumche
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.clone(),
-            self.input_mle.final_sumcheck_claim(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .into_provider(transcript, opening_point);
+        provider.append_nodeio(Target::Input(0), self.input_mle.final_claim());
     }
 }
 
@@ -312,10 +310,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumc
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let input_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[0],
-            self.params.computation_node.idx,
-        );
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
+
+        let input_claim = accessor.get_nodeio(Target::Input(0)).1;
         let selector = build_reshape_selectors(
             &self.params.input_raw_dims,
             &self.params.output_raw_dims,
@@ -339,12 +336,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumc
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point,
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .into_provider(transcript, opening_point);
+        provider.append_nodeio(Target::Input(0));
     }
 }
 

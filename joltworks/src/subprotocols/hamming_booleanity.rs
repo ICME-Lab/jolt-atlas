@@ -2,7 +2,7 @@ use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use common::parallel::par_enabled;
-use common::VirtualPolynomial;
+use common::VirtualPoly;
 use rayon::prelude::*;
 use std::iter::zip;
 
@@ -12,7 +12,7 @@ use crate::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         split_eq_poly::GruenSplitEqPolynomial,
@@ -32,7 +32,7 @@ pub struct HammingBooleanitySumcheckParams<F: JoltField> {
     pub d: usize,
     pub num_rounds: usize,
     pub gamma_powers: Vec<F>,
-    pub polynomial_types: Vec<VirtualPolynomial>,
+    pub polynomial_types: Vec<VirtualPoly>,
     pub sumcheck_id: SumcheckId,
     pub r_cycle: Vec<F>,
 }
@@ -125,20 +125,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T>
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let claims: Vec<F> = self.hw.iter().map(|hw| hw.final_sumcheck_claim()).collect();
+        let claims: Vec<F> = self.hw.iter().map(|hw| hw.final_claim()).collect();
 
         self.params
             .polynomial_types
             .iter()
             .zip(claims)
             .for_each(|(&poly_type, claim)| {
-                accumulator.append_virtual(
-                    transcript,
-                    poly_type,
-                    self.params.sumcheck_id,
-                    opening_point.clone(),
-                    claim,
-                );
+                let id = OpeningId::new(poly_type, self.params.sumcheck_id);
+                accumulator.append_virtual(transcript, id, opening_point.clone(), claim);
             });
     }
 
@@ -171,12 +166,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
         let hw_claim = (0..self.params.d).map(|i| {
-            accumulator
-                .get_virtual_polynomial_opening(
-                    self.params.polynomial_types[i],
-                    self.params.sumcheck_id,
-                )
-                .1
+            let id = OpeningId::new(self.params.polynomial_types[i], self.params.sumcheck_id);
+            accumulator.get_virtual_polynomial_opening(id).1
         });
 
         let r = self
@@ -200,7 +191,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
             .normalize_opening_point(&sumcheck_challenges.into_opening());
 
         self.params.polynomial_types.iter().for_each(|&poly_type| {
-            accumulator.append_virtual(transcript, poly_type, self.params.sumcheck_id, r.clone());
+            let id = OpeningId::new(poly_type, self.params.sumcheck_id);
+            accumulator.append_virtual(transcript, id, r.clone());
         });
     }
 }
@@ -233,7 +225,7 @@ mod tests {
             d: 1,
             num_rounds: log_T,
             gamma_powers: vec![Fr::from_u8(1)],
-            polynomial_types: vec![VirtualPolynomial::HammingWeight],
+            polynomial_types: vec![VirtualPoly::HammingWeight],
             sumcheck_id: SumcheckId::RamHammingBooleanity,
             r_cycle,
         };

@@ -5,18 +5,20 @@
 //! by [`MaliciousONNXProof`] to test that the verifier correctly handles
 //! (and rejects) such attacks.
 
-use crate::onnx_proof::{malicious_prover::malicious_sumcheck_prove, ProofId, ProofType, Prover};
+use crate::{
+    onnx_proof::{malicious_prover::malicious_sumcheck_prove, ProofId, ProofType, Prover},
+    utils::opening_access::{AccOpeningAccessor, Target},
+};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
 };
-use common::VirtualPolynomial;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        opening_proof::{ProverOpeningAccumulator, SumcheckId},
+        opening_proof::ProverOpeningAccumulator,
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
     },
@@ -125,8 +127,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaliciousSubP
 
         // Malicious behavior: forge virtual operand claims while preserving the
         // same subtraction difference, so expected_output_claim remains unchanged.
-        let left_claim = self.left_operand.final_sumcheck_claim();
-        let right_claim = self.right_operand.final_sumcheck_claim();
+        let left_claim = self.left_operand.final_claim();
+        let right_claim = self.right_operand.final_claim();
         let final_claim = self
             .final_claim
             .expect("final_claim must be set before cache_openings");
@@ -150,22 +152,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaliciousSubP
             forged_left - final_claim * inv
         };
         debug_assert_eq!(final_claim, eq_eval * (forged_left - forged_right));
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .into_provider(transcript, opening_point);
 
-        // Use append_virtual with forged claims. This inserts into openings
-        // and appends to transcript, keeping prover/verifier in sync.
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.clone(),
-            forged_left,
-        );
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point,
-            forged_right,
-        );
+        // Insert forged claims while keeping transcript/opener state consistent.
+        provider.append_nodeio(Target::Input(0), forged_left);
+        provider.append_nodeio(Target::Input(1), forged_right);
     }
 }

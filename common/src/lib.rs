@@ -5,7 +5,7 @@ pub mod parallel;
 pub mod utils;
 
 // ---------------------------------------------------------------------------
-// CommittedPolynomial
+// CommittedPoly
 // ---------------------------------------------------------------------------
 
 canonical_serde_enum! {
@@ -32,7 +32,7 @@ canonical_serde_enum! {
     /// | `GatherRa` | Read-address polynomial for the Gather operator |
     /// | `SoftmaxRecipMultRemainder` | Remainder used in the reciprocal-multiplication check of softmax |
     #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
-    pub enum CommittedPolynomial {
+    pub enum CommittedPoly {
         // ----- One-hot read-address decompositions (node_index, d) -----
         /// One-hot read-address decomposition for a node's output lookup.
         ///
@@ -164,7 +164,7 @@ canonical_serde_enum! {
 }
 
 // ---------------------------------------------------------------------------
-// VirtualPolynomial
+// VirtualPoly
 // ---------------------------------------------------------------------------
 
 canonical_serde_enum! {
@@ -174,7 +174,7 @@ canonical_serde_enum! {
     /// *not* independently committed.  They are instead verified through sumcheck
     /// relations that tie them back to committed polynomials and public inputs.
     ///
-    /// The same naming conventions as [`CommittedPolynomial`] apply (`Ra` = read
+    /// The same naming conventions as [`CommittedPoly`] apply (`Ra` = read
     /// address, `RaD` = read-address decomposition, etc.).
     ///
     /// # Grouping
@@ -187,7 +187,7 @@ canonical_serde_enum! {
     /// | `HammingWeight` | Polynomial used in the Hamming-weight sumcheck |
     /// | `Div* / Sqrt* / Teleport*` | Advice-derived polynomials proven via `ReadRafSumcheckProver` from committed one-hot polynomials |
     #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
-    pub enum VirtualPolynomial {
+    pub enum VirtualPoly {
         // ----- Node output -----
         /// Multilinear extension (MLE) of a node's output tensor.
         ///
@@ -249,18 +249,18 @@ canonical_serde_enum! {
 
         // ----- Advice-derived polynomials (proven via ReadRafSumcheckProver) -----
 
-        /// Read-address polynomial derived from [`CommittedPolynomial::DivRangeCheckRaD`].
+        /// Read-address polynomial derived from [`CommittedPoly::DivRangeCheckRaD`].
         ///
         /// * `0` – node index
         DivRangeCheckRa(usize),
 
-        /// Read-address polynomial derived from [`CommittedPolynomial::SqrtRangeCheckRaD`].
+        /// Read-address polynomial derived from [`CommittedPoly::SqrtRangeCheckRaD`].
         ///
         /// * `0` – node index
         SqrtRangeCheckRa(usize),
 
         /// Read-address polynomial derived from
-        /// [`CommittedPolynomial::TeleportRangeCheckRaD`].
+        /// [`CommittedPoly::TeleportRangeCheckRaD`].
         ///
         /// * `0` – node index
         TeleportRangeCheckRa(usize),

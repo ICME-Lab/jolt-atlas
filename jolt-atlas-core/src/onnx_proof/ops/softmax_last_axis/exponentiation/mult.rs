@@ -1,12 +1,14 @@
-use common::VirtualPolynomial;
+use crate::utils::opening_access::AccOpeningAccessor;
+use atlas_onnx_tracer::node::ComputationNode;
+use common::VirtualPoly;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
+            BIG_ENDIAN, LITTLE_ENDIAN,
         },
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
@@ -29,29 +31,18 @@ pub struct MultParams<F: JoltField> {
     pub r: Vec<F>,
     /// Quantisation scale exponent.
     pub S: i32,
-    /// Index of the computation node.
-    pub computation_node_index: usize,
+    /// Computation node reference.
+    pub node: ComputationNode,
 }
 
 impl<F: JoltField> MultParams<F> {
     /// Create new parameters for softmax exp multiplication operation.
-    pub fn new(
-        computation_node_index: usize,
-        S: i32,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Self {
-        let r = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::SoftmaxExpQ(computation_node_index),
-                SumcheckId::NodeExecution(computation_node_index),
-            )
+    pub fn new(node: ComputationNode, S: i32, accumulator: &dyn OpeningAccumulator<F>) -> Self {
+        let r = AccOpeningAccessor::new(accumulator, &node)
+            .get_advice(VirtualPoly::SoftmaxExpQ)
             .0
             .r;
-        Self {
-            r,
-            S,
-            computation_node_index,
-        }
+        Self { r, S, node }
     }
 }
 
@@ -61,18 +52,9 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MultParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let exp_q_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::SoftmaxExpQ(self.computation_node_index),
-                SumcheckId::NodeExecution(self.computation_node_index),
-            )
-            .1;
-        let R_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::SoftmaxExpRemainder(self.computation_node_index),
-                SumcheckId::NodeExecution(self.computation_node_index),
-            )
-            .1;
+        let accessor = AccOpeningAccessor::new(accumulator, &self.node);
+        let exp_q_claim = accessor.get_advice(VirtualPoly::SoftmaxExpQ).1;
+        let R_claim = accessor.get_advice(VirtualPoly::SoftmaxExpRemainder).1;
         exp_q_claim * F::from_i32(self.S) + R_claim
     }
 
@@ -147,20 +129,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MultProver<F>
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::SoftmaxExpHi(self.params.computation_node_index),
-            SumcheckId::NodeExecution(self.params.computation_node_index),
-            opening_point.clone(),
-            self.exp_hi.final_sumcheck_claim(),
-        );
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::SoftmaxExpLo(self.params.computation_node_index),
-            SumcheckId::NodeExecution(self.params.computation_node_index),
-            opening_point.clone(),
-            self.exp_lo.final_sumcheck_claim(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
+            .into_provider(transcript, opening_point);
+        provider.append_advice(VirtualPoly::SoftmaxExpHi, self.exp_hi.final_claim());
+        provider.append_advice(VirtualPoly::SoftmaxExpLo, self.exp_lo.final_claim());
     }
 }
 
@@ -171,12 +143,8 @@ pub struct MultVerifier<F: JoltField> {
 
 impl<F: JoltField> MultVerifier<F> {
     /// Create new verifier for softmax exp multiplication operation.
-    pub fn new(
-        computation_node_index: usize,
-        S: i32,
-        accumulator: &VerifierOpeningAccumulator<F>,
-    ) -> Self {
-        let params = MultParams::new(computation_node_index, S, accumulator);
+    pub fn new(node: ComputationNode, S: i32, accumulator: &VerifierOpeningAccumulator<F>) -> Self {
+        let params = MultParams::new(node, S, accumulator);
         Self { params }
     }
 }
@@ -195,18 +163,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MultVerifie
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::SoftmaxExpHi(self.params.computation_node_index),
-            SumcheckId::NodeExecution(self.params.computation_node_index),
-            opening_point.clone(),
-        );
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::SoftmaxExpLo(self.params.computation_node_index),
-            SumcheckId::NodeExecution(self.params.computation_node_index),
-            opening_point.clone(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
+            .into_provider(transcript, opening_point);
+        provider.append_advice(VirtualPoly::SoftmaxExpHi);
+        provider.append_advice(VirtualPoly::SoftmaxExpLo);
     }
 
     fn expected_output_claim(
@@ -218,18 +178,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MultVerifie
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
-        let exp_hi_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::SoftmaxExpHi(self.params.computation_node_index),
-                SumcheckId::NodeExecution(self.params.computation_node_index),
-            )
-            .1;
-        let exp_lo_claim = accumulator
-            .get_virtual_polynomial_opening(
-                VirtualPolynomial::SoftmaxExpLo(self.params.computation_node_index),
-                SumcheckId::NodeExecution(self.params.computation_node_index),
-            )
-            .1;
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.node);
+        let exp_hi_claim = accessor.get_advice(VirtualPoly::SoftmaxExpHi).1;
+        let exp_lo_claim = accessor.get_advice(VirtualPoly::SoftmaxExpLo).1;
         EqPolynomial::mle(&self.params.r, &r_sc) * exp_lo_claim * exp_hi_claim
     }
 }

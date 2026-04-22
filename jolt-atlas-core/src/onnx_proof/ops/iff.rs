@@ -1,18 +1,20 @@
-use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
+use crate::{
+    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
+    utils::opening_access::{AccOpeningAccessor, Target},
+};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::Iff,
 };
-use common::VirtualPolynomial;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
+            BIG_ENDIAN, LITTLE_ENDIAN,
         },
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
@@ -45,12 +47,10 @@ pub struct IffParams<F: JoltField> {
 impl<F: JoltField> IffParams<F> {
     /// Create new conditional selection parameters from a computation node and opening accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let r_node_output = accumulator
-            .get_node_output_opening(computation_node.idx)
-            .0
-            .r;
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
+        let r_node_output = accessor.get_reduced_opening().0;
         Self {
-            r_node_output: r_node_output.into(),
+            r_node_output,
             computation_node,
         }
     }
@@ -62,8 +62,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for IffParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, iff_claim) = accumulator.get_node_output_opening(self.computation_node.idx);
-        iff_claim
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
+        accessor.get_reduced_opening().1
     }
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -184,27 +184,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for IffProver<F> 
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.clone(),
-            self.mask_operand.final_sumcheck_claim(),
-        );
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.clone(),
-            self.a_operand.final_sumcheck_claim(),
-        );
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[2]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point,
-            self.b_operand.final_sumcheck_claim(),
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .into_provider(transcript, opening_point);
+
+        provider.append_nodeio(Target::Input(0), self.mask_operand.final_claim());
+        provider.append_nodeio(Target::Input(1), self.a_operand.final_claim());
+        provider.append_nodeio(Target::Input(2), self.b_operand.final_claim());
     }
 }
 
@@ -238,27 +223,18 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for IffVerifier
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let r_node_output = accumulator
-            .get_node_output_opening(self.params.computation_node.idx)
-            .0
-            .r;
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
+        let r_node_output = &self.params.r_node_output.r;
         let r_node_output_prime = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
-        let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
-        let mask_operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[0],
-            self.params.computation_node.idx,
-        );
-        let a_operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[1],
-            self.params.computation_node.idx,
-        );
-        let b_operand_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[2],
-            self.params.computation_node.idx,
-        );
+        let eq_eval = EqPolynomial::mle(r_node_output, &r_node_output_prime);
+
+        let mask_operand_claim = accessor.get_nodeio(Target::Input(0)).1;
+        let a_operand_claim = accessor.get_nodeio(Target::Input(1)).1;
+        let b_operand_claim = accessor.get_nodeio(Target::Input(2)).1;
+
         eq_eval
             * (mask_operand_claim * a_operand_claim
                 + (F::one() - mask_operand_claim) * b_operand_claim)
@@ -273,24 +249,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for IffVerifier
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.clone(),
-        );
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point.clone(),
-        );
-        accumulator.append_virtual(
-            transcript,
-            VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[2]),
-            SumcheckId::NodeExecution(self.params.computation_node.idx),
-            opening_point,
-        );
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .into_provider(transcript, opening_point);
+
+        provider.append_nodeio(Target::Input(0));
+        provider.append_nodeio(Target::Input(1));
+        provider.append_nodeio(Target::Input(2));
     }
 }
 

@@ -216,7 +216,7 @@ mod tests {
             eq.bind_parallel(r, BindingOrder::HighToLow);
         }
         assert_eq!(
-            one_hot_opening.final_sumcheck_claim(),
+            one_hot_opening.final_claim(),
             dense_poly[0],
             "final sumcheck claim"
         );

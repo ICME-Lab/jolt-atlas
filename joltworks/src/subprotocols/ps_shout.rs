@@ -12,7 +12,7 @@ use crate::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN,
         },
         prefix_suffix::{Prefix, PrefixRegistry, PrefixSuffixDecomposition},
@@ -35,7 +35,7 @@ use ark_std::Zero;
 use common::parallel::par_enabled;
 use common::{
     consts::{LOG_K, XLEN},
-    VirtualPolynomial,
+    VirtualPoly,
 };
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -70,7 +70,7 @@ where
     /// Table for this node
     pub table: LUT,
     /// Polynomial types for opening accumulator
-    pub polynomial_type: VirtualPolynomial,
+    pub polynomial_type: VirtualPoly,
     /// Sumcheck ID for opening accumulator
     pub sumcheck_id: SumcheckId,
     /// Input claim for the read-checking sum-check
@@ -683,12 +683,12 @@ where
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let id = OpeningId::new(self.params.polynomial_type, self.params.sumcheck_id);
         accumulator.append_virtual(
             transcript,
-            self.params.polynomial_type,
-            self.params.sumcheck_id,
+            id,
             opening_point,
-            self.ra.as_ref().unwrap().final_sumcheck_claim(),
+            self.ra.as_ref().unwrap().final_claim(),
         );
     }
 }
@@ -731,8 +731,8 @@ where
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let (r_address_prime, r_node_output_prime) = opening_point.split_at(LOG_K);
-        let (_, ra_claim) = accumulator
-            .get_virtual_polynomial_opening(self.params.polynomial_type, self.params.sumcheck_id);
+        let id = OpeningId::new(self.params.polynomial_type, self.params.sumcheck_id);
+        let (_, ra_claim) = accumulator.get_virtual_polynomial_opening(id);
         let val_claim = self.params.table.evaluate_mle(&r_address_prime.r);
         let eq_eval = EqPolynomial::mle(&self.params.r_node_output.r, &r_node_output_prime.r);
 
@@ -759,12 +759,8 @@ where
         let opening_point = self
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            self.params.polynomial_type,
-            self.params.sumcheck_id,
-            opening_point,
-        );
+        let id = OpeningId::new(self.params.polynomial_type, self.params.sumcheck_id);
+        accumulator.append_virtual(transcript, id, opening_point);
     }
 }
 
@@ -785,13 +781,15 @@ where
 {
     fn read_raf_claims(&self, accumulator: &dyn OpeningAccumulator<F>) -> ReadRafClaims<F>;
     fn is_interleaved_operands(&self) -> bool;
-    fn ra_poly(&self) -> (VirtualPolynomial, SumcheckId);
+    fn ra_poly(&self) -> (VirtualPoly, SumcheckId);
+
+    /// Recovers the opening point sampled for the node output
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F>;
 
-    /// Returns the `(VirtualPolynomial, SumcheckId)` pairs that should be appended
+    /// Returns the `OpeningId` that should be appended
     /// as RAF claims to the opening accumulator. Used by both prover and verifier to
     /// determine which virtual polynomial openings to register.
-    fn raf_claim_specs(&self) -> Vec<(VirtualPolynomial, SumcheckId)>;
+    fn raf_claim_specs(&self) -> Vec<OpeningId>;
 
     fn table(&self) -> LUT {
         LUT::default()
@@ -836,7 +834,7 @@ mod tests {
         poly::{
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
             opening_proof::{
-                OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+                OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
                 VerifierOpeningAccumulator, BIG_ENDIAN,
             },
         },
@@ -853,7 +851,7 @@ mod tests {
     use ark_std::Zero;
     use common::{
         consts::{LOG_K, XLEN},
-        VirtualPolynomial,
+        VirtualPoly,
     };
     use itertools::Itertools;
     use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -1066,11 +1064,8 @@ mod tests {
             self.is_interleaved_operands
         }
 
-        fn ra_poly(&self) -> (VirtualPolynomial, SumcheckId) {
-            (
-                VirtualPolynomial::NodeOutputRa(0),
-                SumcheckId::NodeExecution(0),
-            )
+        fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
+            (VirtualPoly::NodeOutputRa(0), SumcheckId::NodeExecution(0))
         }
 
         fn r_cycle(
@@ -1080,7 +1075,7 @@ mod tests {
             OpeningPoint::new(self.r_cycle.clone())
         }
 
-        fn raf_claim_specs(&self) -> Vec<(VirtualPolynomial, SumcheckId)> {
+        fn raf_claim_specs(&self) -> Vec<OpeningId> {
             unimplemented!()
         }
     }

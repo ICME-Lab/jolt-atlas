@@ -352,7 +352,7 @@ impl<T: SmallScalar, F: JoltField> PolynomialBinding<F> for CompactPolynomial<T,
         self.len = n;
     }
 
-    fn final_sumcheck_claim(&self) -> F {
+    fn final_claim(&self) -> F {
         assert_eq!(self.len, 1);
         if self.is_bound() {
             self.bound_coeffs[0]

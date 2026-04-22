@@ -1,4 +1,6 @@
-use common::VirtualPolynomial;
+use crate::utils::opening_access::AccOpeningAccessor;
+use atlas_onnx_tracer::node::ComputationNode;
+use common::VirtualPoly;
 use joltworks::{
     field::JoltField,
     poly::opening_proof::{OpeningAccumulator, OpeningPoint, SumcheckId, BIG_ENDIAN},
@@ -26,26 +28,26 @@ pub enum ExpDigit {
 
 impl ExpDigit {
     /// Virtual polynomial for the read-values value (`exp_hi` or `exp_lo`).
-    fn rv_vp(self, node_idx: usize) -> VirtualPolynomial {
+    fn rv_vp(self, node_idx: usize) -> VirtualPoly {
         match self {
-            Self::Hi => VirtualPolynomial::SoftmaxExpHi(node_idx),
-            Self::Lo => VirtualPolynomial::SoftmaxExpLo(node_idx),
+            Self::Hi => VirtualPoly::SoftmaxExpHi(node_idx),
+            Self::Lo => VirtualPoly::SoftmaxExpLo(node_idx),
         }
     }
 
     /// vp type for raf polynomials (`z_hi` or `z_lo`).
-    fn raf_vp(self, node_idx: usize) -> VirtualPolynomial {
+    fn raf_vp(self, node_idx: usize) -> VirtualPoly {
         match self {
-            Self::Hi => VirtualPolynomial::SoftmaxZHi(node_idx),
-            Self::Lo => VirtualPolynomial::SoftmaxZLo(node_idx),
+            Self::Hi => VirtualPoly::SoftmaxZHi(node_idx),
+            Self::Lo => VirtualPoly::SoftmaxZLo(node_idx),
         }
     }
 
     /// Virtual polynomial for the one-hot encoded read address.
-    fn ra_vp(self, node_idx: usize) -> VirtualPolynomial {
+    fn ra_vp(self, node_idx: usize) -> VirtualPoly {
         match self {
-            Self::Hi => VirtualPolynomial::SoftmaxZHiRa(node_idx),
-            Self::Lo => VirtualPolynomial::SoftmaxZLoRa(node_idx),
+            Self::Hi => VirtualPoly::SoftmaxZHiRa(node_idx),
+            Self::Lo => VirtualPoly::SoftmaxZLoRa(node_idx),
         }
     }
 }
@@ -53,8 +55,8 @@ impl ExpDigit {
 /// Unified Shout ReadRaf provider for exp sub-table lookups.
 #[derive(Clone)]
 pub struct ExpReadRafProvider {
-    /// Node index in the computation graph.
-    pub node_idx: usize,
+    /// Computation node reference.
+    pub node: ComputationNode,
     /// Number of entries in the sub-table (must be a power of two).
     pub table_size: usize,
     /// Which digit (hi or lo) this provider serves.
@@ -67,36 +69,27 @@ impl<F: JoltField> ReadRafProvider<F> for ExpReadRafProvider {
     }
 
     fn r(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
-        accumulator
-            .get_virtual_polynomial_opening(
-                self.digit.rv_vp(self.node_idx),
-                SumcheckId::NodeExecution(self.node_idx),
-            )
+        AccOpeningAccessor::new(accumulator, &self.node)
+            .get_advice(|idx| self.digit.rv_vp(idx))
             .0
     }
 
-    fn ra_poly(&self) -> (VirtualPolynomial, SumcheckId) {
+    fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
         (
-            self.digit.ra_vp(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
+            self.digit.ra_vp(self.node.idx),
+            SumcheckId::NodeExecution(self.node.idx),
         )
     }
 
     fn raf_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        accumulator
-            .get_virtual_polynomial_opening(
-                self.digit.raf_vp(self.node_idx),
-                SumcheckId::NodeExecution(self.node_idx),
-            )
+        AccOpeningAccessor::new(accumulator, &self.node)
+            .get_advice(|idx| self.digit.raf_vp(idx))
             .1
     }
 
     fn rv_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        accumulator
-            .get_virtual_polynomial_opening(
-                self.digit.rv_vp(self.node_idx),
-                SumcheckId::NodeExecution(self.node_idx),
-            )
+        AccOpeningAccessor::new(accumulator, &self.node)
+            .get_advice(|idx| self.digit.rv_vp(idx))
             .1
     }
 }

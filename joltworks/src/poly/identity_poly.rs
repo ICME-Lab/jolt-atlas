@@ -59,7 +59,7 @@ impl<F: JoltField> PolynomialBinding<F> for IdentityPolynomial<F> {
         self.bind(r, order);
     }
 
-    fn final_sumcheck_claim(&self) -> F {
+    fn final_claim(&self) -> F {
         debug_assert_eq!(self.num_vars, self.num_bound_vars);
         self.bound_value
     }
@@ -229,7 +229,7 @@ impl<F: JoltField> PolynomialBinding<F> for OperandPolynomial<F> {
         self.bind(r, order);
     }
 
-    fn final_sumcheck_claim(&self) -> F {
+    fn final_claim(&self) -> F {
         debug_assert_eq!(self.num_vars, self.num_bound_vars);
         self.bound_value
     }
@@ -429,8 +429,8 @@ impl<F: JoltField> PolynomialBinding<F> for UnmapRamAddressPolynomial<F> {
         self.bind(r, order);
     }
 
-    fn final_sumcheck_claim(&self) -> F {
-        self.int_poly.final_sumcheck_claim().mul_u64(8) + F::from_u64(self.start_address)
+    fn final_claim(&self) -> F {
+        self.int_poly.final_claim().mul_u64(8) + F::from_u64(self.start_address)
     }
 }
 
@@ -504,10 +504,7 @@ mod tests {
             }
         }
 
-        assert_eq!(
-            identity_poly.final_sumcheck_claim(),
-            reference_poly.final_sumcheck_claim()
-        );
+        assert_eq!(identity_poly.final_claim(), reference_poly.final_claim());
     }
 
     #[test]
@@ -655,13 +652,13 @@ mod tests {
         }
 
         assert_eq!(
-            ro_poly.final_sumcheck_claim(),
-            reference_poly_r.final_sumcheck_claim(),
+            ro_poly.final_claim(),
+            reference_poly_r.final_claim(),
             "Final sumcheck claims don't match"
         );
         assert_eq!(
-            lo_poly.final_sumcheck_claim(),
-            reference_poly_l.final_sumcheck_claim(),
+            lo_poly.final_claim(),
+            reference_poly_l.final_claim(),
             "Final sumcheck claims don't match"
         );
     }
@@ -698,8 +695,8 @@ mod tests {
         }
 
         assert_eq!(
-            unmap_poly.final_sumcheck_claim(),
-            reference_poly.final_sumcheck_claim(),
+            unmap_poly.final_claim(),
+            reference_poly.final_claim(),
             "Final sumcheck claims don't match"
         );
     }

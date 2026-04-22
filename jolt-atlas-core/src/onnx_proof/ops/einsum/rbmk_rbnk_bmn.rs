@@ -5,7 +5,6 @@ use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
 };
-use common::VirtualPolynomial;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -14,8 +13,8 @@ use joltworks::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN,
+            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
+            BIG_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -28,7 +27,10 @@ use joltworks::{
 };
 use rayon::prelude::*;
 
-use crate::utils::dims::EinsumDims;
+use crate::utils::{
+    dims::EinsumDims,
+    opening_access::{AccOpeningAccessor, Target},
+};
 
 const DEGREE_BOUND_DOT: usize = 2;
 const DEGREE_BOUND_EQ: usize = 3;
@@ -178,7 +180,8 @@ impl<F: JoltField> RbmkRbnkBmnParams<F> {
         einsum_dims: EinsumDims,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
-        let r_node_output = accumulator.get_node_output_opening(computation_node.idx).0;
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
+        let r_node_output = accessor.get_reduced_opening().0;
         let variant = RbmkRbnkBmnVariant::from_node(&computation_node, &einsum_dims);
         Self {
             r_node_output,
@@ -194,8 +197,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for RbmkRbnkBmnParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, einsum_claim) = accumulator.get_node_output_opening(self.computation_node.idx);
-        einsum_claim
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
+        accessor.get_reduced_opening().1
     }
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -622,7 +625,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RbmkRbnkBmnPr
             if round < log_eq {
                 eq_poly.bind_parallel(r_j, BindingOrder::HighToLow);
                 if round == log_eq - 1 {
-                    self.eq_bound_claim = Some(eq_poly.final_sumcheck_claim());
+                    self.eq_bound_claim = Some(eq_poly.final_claim());
                 }
             }
         }
@@ -648,31 +651,32 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RbmkRbnkBmnPr
                 let (r_ab, r_k) = sumcheck_challenges.split_at(log_a + log_b);
                 let (r_a, r_b) = r_ab.split_at(log_a);
                 let left_point = [r_a, r_b, &r_m.r, r_k].concat();
-                accumulator.append_virtual(
-                    transcript,
-                    VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                    SumcheckId::NodeExecution(self.params.computation_node.idx),
-                    self.params.normalize_opening_point(&left_point),
-                    self.left_operand.final_sumcheck_claim(),
+                let mut provider =
+                    AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+                        .into_provider(transcript, Default::default());
+                let left_opening = self.params.normalize_opening_point(&left_point);
+                provider.append_nodeio_at(
+                    Target::Input(0),
+                    left_opening,
+                    self.left_operand.final_claim(),
                 );
                 #[cfg(debug_assertions)]
                 debug_assert_eq!(
                     MultilinearPolynomial::from(self.original_left.clone()).evaluate(&left_point),
-                    self.left_operand.final_sumcheck_claim()
+                    self.left_operand.final_claim()
                 );
 
                 let right_point = [r_a, r_b, &r_n.r, r_k].concat();
-                accumulator.append_virtual(
-                    transcript,
-                    VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-                    SumcheckId::NodeExecution(self.params.computation_node.idx),
-                    self.params.normalize_opening_point(&right_point),
-                    self.right_operand.final_sumcheck_claim(),
+                let right_opening = self.params.normalize_opening_point(&right_point);
+                provider.append_nodeio_at(
+                    Target::Input(1),
+                    right_opening,
+                    self.right_operand.final_claim(),
                 );
                 #[cfg(debug_assertions)]
                 debug_assert_eq!(
                     MultilinearPolynomial::from(self.original_right.clone()).evaluate(&right_point),
-                    self.right_operand.final_sumcheck_claim()
+                    self.right_operand.final_claim()
                 );
             }
             RbmkRbnkBmnVariant::AcbmkKcnCbmn {
@@ -689,31 +693,32 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RbmkRbnkBmnPr
                 let (r_c, r_b) = r_cb.split_at(log_c);
                 let (r_a, r_k) = r_ak.split_at(log_a);
                 let left_point = [r_a, r_c, r_b, &r_m.r, r_k].concat();
-                accumulator.append_virtual(
-                    transcript,
-                    VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                    SumcheckId::NodeExecution(self.params.computation_node.idx),
-                    self.params.normalize_opening_point(&left_point),
-                    self.left_operand.final_sumcheck_claim(),
+                let mut provider =
+                    AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+                        .into_provider(transcript, Default::default());
+                let left_opening = self.params.normalize_opening_point(&left_point);
+                provider.append_nodeio_at(
+                    Target::Input(0),
+                    left_opening,
+                    self.left_operand.final_claim(),
                 );
                 #[cfg(debug_assertions)]
                 debug_assert_eq!(
                     MultilinearPolynomial::from(self.original_left.clone()).evaluate(&left_point),
-                    self.left_operand.final_sumcheck_claim()
+                    self.left_operand.final_claim()
                 );
 
                 let right_point = [r_k, r_c, &r_n.r].concat();
-                accumulator.append_virtual(
-                    transcript,
-                    VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-                    SumcheckId::NodeExecution(self.params.computation_node.idx),
-                    self.params.normalize_opening_point(&right_point),
-                    self.right_operand.final_sumcheck_claim(),
+                let right_opening = self.params.normalize_opening_point(&right_point);
+                provider.append_nodeio_at(
+                    Target::Input(1),
+                    right_opening,
+                    self.right_operand.final_claim(),
                 );
                 #[cfg(debug_assertions)]
                 debug_assert_eq!(
                     MultilinearPolynomial::from(self.original_right.clone()).evaluate(&right_point),
-                    self.right_operand.final_sumcheck_claim()
+                    self.right_operand.final_claim()
                 );
             }
             RbmkRbnkBmnVariant::CbmkCbknAmn {
@@ -732,31 +737,32 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RbmkRbnkBmnPr
                 let (r_m, r_n) = r_mn.split_at(log_m);
                 let (r_cb, r_k) = sumcheck_challenges.split_at(log_cb);
                 let left_point = [r_cb, &r_m.r, r_k].concat();
-                accumulator.append_virtual(
-                    transcript,
-                    VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                    SumcheckId::NodeExecution(self.params.computation_node.idx),
-                    self.params.normalize_opening_point(&left_point),
-                    self.left_operand.final_sumcheck_claim(),
+                let mut provider =
+                    AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+                        .into_provider(transcript, Default::default());
+                let left_opening = self.params.normalize_opening_point(&left_point);
+                provider.append_nodeio_at(
+                    Target::Input(0),
+                    left_opening,
+                    self.left_operand.final_claim(),
                 );
                 #[cfg(debug_assertions)]
                 debug_assert_eq!(
                     MultilinearPolynomial::from(self.original_left.clone()).evaluate(&left_point),
-                    self.left_operand.final_sumcheck_claim()
+                    self.left_operand.final_claim()
                 );
 
                 let right_point = [r_cb, r_k, &r_n.r].concat();
-                accumulator.append_virtual(
-                    transcript,
-                    VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-                    SumcheckId::NodeExecution(self.params.computation_node.idx),
-                    self.params.normalize_opening_point(&right_point),
-                    self.right_operand.final_sumcheck_claim(),
+                let right_opening = self.params.normalize_opening_point(&right_point);
+                provider.append_nodeio_at(
+                    Target::Input(1),
+                    right_opening,
+                    self.right_operand.final_claim(),
                 );
                 #[cfg(debug_assertions)]
                 debug_assert_eq!(
                     MultilinearPolynomial::from(self.original_right.clone()).evaluate(&right_point),
-                    self.right_operand.final_sumcheck_claim()
+                    self.right_operand.final_claim()
                 );
             }
         }
@@ -790,14 +796,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RbmkRbnkBmn
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let left_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[0],
-            self.params.computation_node.idx,
-        );
-        let right_claim = accumulator.get_node_output_claim(
-            self.params.computation_node.inputs[1],
-            self.params.computation_node.idx,
-        );
+        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
+        let left_claim = accessor.get_nodeio(Target::Input(0)).1;
+        let right_claim = accessor.get_nodeio(Target::Input(1)).1;
         let eq_claim = match self.params.variant {
             RbmkRbnkBmnVariant::AbmkAbnkAbmn { log_a, log_b, .. } => {
                 let (r_a, r_bmn) = self.params.r_node_output.split_at(log_a);
@@ -838,19 +839,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RbmkRbnkBmn
                 let (r_ab, r_k) = sumcheck_challenges.split_at(log_a + log_b);
                 let (r_a, r_b) = r_ab.split_at(log_a);
                 let left_point = [r_a, r_b, &r_m.r, r_k].concat();
-                accumulator.append_virtual(
-                    transcript,
-                    VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                    SumcheckId::NodeExecution(self.params.computation_node.idx),
-                    self.params.normalize_opening_point(&left_point),
-                );
+                let mut provider =
+                    AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+                        .into_provider(transcript, Default::default());
+                let left_opening = self.params.normalize_opening_point(&left_point);
+                provider.append_nodeio_at(Target::Input(0), left_opening);
+
                 let right_point = [r_a, r_b, &r_n.r, r_k].concat();
-                accumulator.append_virtual(
-                    transcript,
-                    VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-                    SumcheckId::NodeExecution(self.params.computation_node.idx),
-                    self.params.normalize_opening_point(&right_point),
-                );
+                let right_opening = self.params.normalize_opening_point(&right_point);
+                provider.append_nodeio_at(Target::Input(1), right_opening);
             }
             RbmkRbnkBmnVariant::AcbmkKcnCbmn {
                 log_c,
@@ -866,19 +863,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RbmkRbnkBmn
                 let (r_c, r_b) = r_cb.split_at(log_c);
                 let (r_a, r_k) = r_ak.split_at(log_a);
                 let left_point = [r_a, r_c, r_b, &r_m.r, r_k].concat();
-                accumulator.append_virtual(
-                    transcript,
-                    VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                    SumcheckId::NodeExecution(self.params.computation_node.idx),
-                    self.params.normalize_opening_point(&left_point),
-                );
+                let mut provider =
+                    AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+                        .into_provider(transcript, Default::default());
+                let left_opening = self.params.normalize_opening_point(&left_point);
+                provider.append_nodeio_at(Target::Input(0), left_opening);
+
                 let right_point = [r_k, r_c, &r_n.r].concat();
-                accumulator.append_virtual(
-                    transcript,
-                    VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-                    SumcheckId::NodeExecution(self.params.computation_node.idx),
-                    self.params.normalize_opening_point(&right_point),
-                );
+                let right_opening = self.params.normalize_opening_point(&right_point);
+                provider.append_nodeio_at(Target::Input(1), right_opening);
             }
             RbmkRbnkBmnVariant::CbmkCbknAmn {
                 log_cb,
@@ -896,19 +889,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RbmkRbnkBmn
                 let (r_m, r_n) = r_mn.split_at(log_m);
                 let (r_cb, r_k) = sumcheck_challenges.split_at(log_cb);
                 let left_point = [r_cb, &r_m.r, r_k].concat();
-                accumulator.append_virtual(
-                    transcript,
-                    VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[0]),
-                    SumcheckId::NodeExecution(self.params.computation_node.idx),
-                    self.params.normalize_opening_point(&left_point),
-                );
+                let mut provider =
+                    AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+                        .into_provider(transcript, Default::default());
+                let left_opening = self.params.normalize_opening_point(&left_point);
+                provider.append_nodeio_at(Target::Input(0), left_opening);
+
                 let right_point = [r_cb, r_k, &r_n.r].concat();
-                accumulator.append_virtual(
-                    transcript,
-                    VirtualPolynomial::NodeOutput(self.params.computation_node.inputs[1]),
-                    SumcheckId::NodeExecution(self.params.computation_node.idx),
-                    self.params.normalize_opening_point(&right_point),
-                );
+                let right_opening = self.params.normalize_opening_point(&right_point);
+                provider.append_nodeio_at(Target::Input(1), right_opening);
             }
         }
     }

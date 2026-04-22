@@ -7,7 +7,7 @@ use crate::{
         compute_dotproduct, compute_dotproduct_low_optimized, thread::unsafe_allocate_zero_vec,
     },
 };
-use common::parallel::par_enabled;
+use common::parallel::{par_enabled, par_enabled_with};
 
 use crate::{
     field::{FieldChallengeOps, JoltField, OptimizedMul},
@@ -130,8 +130,7 @@ impl<F: JoltField> DensePolynomial<F> {
 
         left.par_iter_mut()
             .zip(right.par_iter())
-            .with_min_len(par_enabled())
-            .with_min_len(4096)
+            .with_min_len(par_enabled_with(4096))
             .filter(|(&mut a, &b)| a != b)
             .for_each(|(a, b)| {
                 *a += *r * (*b - *a);
@@ -222,8 +221,7 @@ impl<F: JoltField> DensePolynomial<F> {
         let mut bound_Z = Vec::with_capacity(n);
         (bound_Z.spare_capacity_mut(), self.Z.par_chunks_exact(2))
             .into_par_iter()
-            .with_min_len(par_enabled())
-            .with_min_len(512)
+            .with_min_len(par_enabled_with(512))
             .for_each(|(bound_coeff, coeffs)| {
                 let m = coeffs[1] - coeffs[0];
                 bound_coeff.write(if m.is_zero() {

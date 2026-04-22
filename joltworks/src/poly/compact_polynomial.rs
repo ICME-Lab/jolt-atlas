@@ -5,7 +5,7 @@ use crate::{
 };
 use allocative::Allocative;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use common::parallel::par_enabled;
+use common::parallel::{par_enabled, par_enabled_with};
 use rayon::prelude::*;
 use std::{cmp::Ordering, ops::Index};
 
@@ -280,8 +280,7 @@ impl<T: SmallScalar, F: JoltField> PolynomialBinding<F> for CompactPolynomial<T,
                         self.bound_coeffs.par_chunks_exact(2),
                     )
                         .into_par_iter()
-                        .with_min_len(par_enabled())
-                        .with_min_len(512)
+                        .with_min_len(par_enabled_with(512))
                         .for_each(|(bound_coeff, coeffs)| {
                             bound_coeff.write(if coeffs[1] == coeffs[0] {
                                 coeffs[0]
@@ -296,8 +295,7 @@ impl<T: SmallScalar, F: JoltField> PolynomialBinding<F> for CompactPolynomial<T,
                     let (left, right) = self.bound_coeffs.split_at_mut(n);
                     left.par_iter_mut()
                         .zip(right.par_iter())
-                        .with_min_len(par_enabled())
-                        .with_min_len(4096)
+                        .with_min_len(par_enabled_with(4096))
                         .filter(|(a, b)| a != b)
                         .for_each(|(a, b)| {
                             *a += r * (*b - *a);

@@ -40,6 +40,18 @@ pub fn par_enabled() -> usize {
     }
 }
 
+/// Returns the effective minimum parallel chunk length for the given enabled case.
+///
+/// When parallel execution is enabled, this returns `enabled_min_len`. When disabled,
+/// this returns `usize::MAX`, which prevents further splitting for indexed iterators.
+pub fn par_enabled_with(enabled_min_len: usize) -> usize {
+    if PAR_ENABLED.load(Ordering::Relaxed) {
+        enabled_min_len
+    } else {
+        usize::MAX
+    }
+}
+
 /// Sets whether shared parallel execution is enabled.
 pub fn set_par_enabled(enabled: bool) {
     PAR_ENABLED.store(enabled, Ordering::Relaxed);
@@ -52,7 +64,9 @@ pub fn swap_par_enabled(enabled: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ParallelFlagGuard, par_enabled, set_par_enabled, swap_par_enabled};
+    use super::{
+        ParallelFlagGuard, par_enabled, par_enabled_with, set_par_enabled, swap_par_enabled,
+    };
 
     #[test]
     fn parallel_flag_round_trips() {
@@ -60,9 +74,11 @@ mod tests {
 
         set_par_enabled(false);
         assert_eq!(par_enabled(), usize::MAX);
+        assert_eq!(par_enabled_with(4096), usize::MAX);
 
         assert!(!swap_par_enabled(true));
         assert_eq!(par_enabled(), 1);
+        assert_eq!(par_enabled_with(4096), 4096);
 
         set_par_enabled(original);
     }

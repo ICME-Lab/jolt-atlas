@@ -86,12 +86,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for HammingWeight
         let prover_msg = self
             .ra
             .par_iter()
-            .zip(
-                self.params
-                    .gamma_powers
-                    .par_iter()
-                    .with_min_len(par_enabled()),
-            )
+            .zip(self.params.gamma_powers.par_iter())
+            .with_min_len(par_enabled())
             .map(|(ra, gamma)| {
                 let ra_sum = (0..ra.len() / 2)
                     .into_par_iter()

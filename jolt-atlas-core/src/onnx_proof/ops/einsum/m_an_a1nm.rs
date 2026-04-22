@@ -168,15 +168,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MAnA1nmProver
         let (r_prefix, r_m) = self.params.r_node_output.split_at(split_at_m);
         let left_opening_point = self.params.normalize_opening_point(&r_m.r);
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, left_opening_point);
-        provider.append_node_io(Target::Input(0), self.left_claim);
+            .into_provider(transcript, Default::default());
+        provider.append_nodeio_at(Target::Input(0), left_opening_point, self.left_claim);
 
         let (r_a, r_bn) = r_prefix.split_at(log_a);
         let (_, r_n) = r_bn.split_at(r_bn.r.len().saturating_sub(log_n));
         let r_right = [r_a.r.as_slice(), r_n.r.as_slice()].concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right);
-        provider.update_point(right_opening_point);
-        provider.append_node_io(Target::Input(1), self.right_claim);
+        provider.append_nodeio_at(Target::Input(1), right_opening_point, self.right_claim);
     }
 }
 
@@ -208,8 +207,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MAnA1nmVeri
         _sumcheck_challenges: &[F::Challenge],
     ) -> F {
         let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-        let left_claim = accessor.get_node_io(Target::Input(0)).1;
-        let right_claim = accessor.get_node_io(Target::Input(1)).1;
+        let left_claim = accessor.get_nodeio(Target::Input(0)).1;
+        let right_claim = accessor.get_nodeio(Target::Input(1)).1;
         left_claim * right_claim
     }
 
@@ -227,15 +226,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MAnA1nmVeri
         let (r_prefix, r_m) = self.params.r_node_output.split_at(split_at_m);
         let left_opening_point = self.params.normalize_opening_point(&r_m.r);
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, left_opening_point);
-        provider.append_node_io(Target::Input(0));
+            .into_provider(transcript, Default::default());
+        provider.append_nodeio_at(Target::Input(0), left_opening_point);
 
         let (r_a, r_bn) = r_prefix.split_at(log_a);
         let (_, r_n) = r_bn.split_at(r_bn.r.len().saturating_sub(log_n));
         let r_right = [r_a.r.as_slice(), r_n.r.as_slice()].concat();
         let right_opening_point = self.params.normalize_opening_point(&r_right);
-        provider.update_point(right_opening_point);
-        provider.append_node_io(Target::Input(1));
+        provider.append_nodeio_at(Target::Input(1), right_opening_point);
     }
 }
 

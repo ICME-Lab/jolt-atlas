@@ -116,7 +116,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
         // teleportation quotient is never virtualized, so we need to commit to it.
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
         let teleport_q = accessor.get_advice(VirtualPoly::TeleportQuotient);
-        let mut provider = accessor.to_provider(&mut prover.transcript, teleport_q.0.clone());
+        let mut provider = accessor.into_provider(&mut prover.transcript, teleport_q.0.clone());
 
         provider.append_advice(CommittedPoly::TeleportNodeQuotient, teleport_q.1);
 
@@ -180,7 +180,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
 
         let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, node);
         let teleport_q = accessor.get_advice(VirtualPoly::TeleportQuotient);
-        let mut provider = accessor.to_provider(&mut verifier.transcript, teleport_q.0.clone());
+        let mut provider = accessor.into_provider(&mut verifier.transcript, teleport_q.0.clone());
 
         provider.append_advice(CommittedPoly::TeleportNodeQuotient);
         let committed_q = provider.get_advice(CommittedPoly::TeleportNodeQuotient).1;
@@ -246,7 +246,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SinParams<F> {
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
-        let rv_claim = accessor.get_node_io(Target::Current).1;
+        let rv_claim = accessor.get_nodeio(Target::Current).1;
         let remainder_claim = accessor.get_advice(VirtualPoly::TeleportRemainder).1;
 
         rv_claim + self.gamma * remainder_claim
@@ -303,8 +303,8 @@ impl<F: JoltField> SinProver<F> {
         // We chose `output` to prevent us from having to use n-to-1 reductions on the `remainder` and rather only implement it on NodeOutput.
         // Making further work for Issue#138 easier.
         let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .to_provider(transcript, params.r_node_output.clone());
-        provider.append_node_io(Target::Current, output_claim);
+            .into_provider(transcript, params.r_node_output.clone());
+        provider.append_nodeio(Target::Current, output_claim);
 
         let input_onehot = MultilinearPolynomial::from(input_onehot);
         assert_eq!(input_onehot.len(), sin_table.len());
@@ -313,7 +313,7 @@ impl<F: JoltField> SinProver<F> {
         #[cfg(test)]
         {
             let remainder_claim = provider.get_advice(VirtualPoly::TeleportRemainder).1;
-            let rv_claim = provider.get_node_io(Target::Current).1;
+            let rv_claim = provider.get_nodeio(Target::Current).1;
             let claim = (0..input_onehot.len())
                 .map(|i| {
                     let a = input_onehot.get_bound_coeff(i);
@@ -392,7 +392,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SinProver<F> 
         ]
         .concat();
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, OpeningPoint::new(r));
+            .into_provider(transcript, OpeningPoint::new(r));
         provider.append_advice(VirtualPoly::SinRa, self.input_onehot.final_claim());
     }
 }
@@ -416,8 +416,8 @@ impl<F: JoltField> SinVerifier<F> {
     ) -> Self {
         let params = SinParams::new(computation_node, graph, accumulator, transcript);
         let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .to_provider(transcript, params.r_node_output.clone());
-        provider.append_node_io(Target::Current);
+            .into_provider(transcript, params.r_node_output.clone());
+        provider.append_nodeio(Target::Current);
 
         let sin_table = MultilinearPolynomial::from(SinTable::materialize());
         Self { params, sin_table }
@@ -461,7 +461,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SinVerifier
         ]
         .concat();
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, OpeningPoint::new(r));
+            .into_provider(transcript, OpeningPoint::new(r));
         provider.append_advice(VirtualPoly::SinRa);
     }
 }

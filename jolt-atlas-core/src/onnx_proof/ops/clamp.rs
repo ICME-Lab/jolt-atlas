@@ -24,8 +24,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
         let (opening_point, _claim) = accessor.get_reduced_opening();
         let operand = prover.trace.operand_tensors(node)[0];
         let operand_claim = MultilinearPolynomial::from(operand.clone()).evaluate(&opening_point.r);
-        let mut provider = accessor.to_provider(&mut prover.transcript, opening_point);
-        provider.append_node_io(Target::Input(0), operand_claim);
+        let mut provider = accessor.into_provider(&mut prover.transcript, opening_point);
+        provider.append_nodeio(Target::Input(0), operand_claim);
         vec![]
     }
 
@@ -37,8 +37,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
     ) -> Result<(), ProofVerifyError> {
         let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, node);
         let (opening_point, _claim) = accessor.get_reduced_opening();
-        let mut provider = accessor.to_provider(&mut verifier.transcript, opening_point);
-        provider.append_node_io(Target::Input(0));
+        let mut provider = accessor.into_provider(&mut verifier.transcript, opening_point);
+        provider.append_nodeio(Target::Input(0));
         Ok(())
     }
 }

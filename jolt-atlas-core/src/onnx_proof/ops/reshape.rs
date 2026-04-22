@@ -277,8 +277,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReshapeSumche
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, opening_point);
-        provider.append_node_io(Target::Input(0), self.input_mle.final_claim());
+            .into_provider(transcript, opening_point);
+        provider.append_nodeio(Target::Input(0), self.input_mle.final_claim());
     }
 }
 
@@ -312,7 +312,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumc
     ) -> F {
         let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
 
-        let input_claim = accessor.get_node_io(Target::Input(0)).1;
+        let input_claim = accessor.get_nodeio(Target::Input(0)).1;
         let selector = build_reshape_selectors(
             &self.params.input_raw_dims,
             &self.params.output_raw_dims,
@@ -337,8 +337,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumc
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, opening_point);
-        provider.append_node_io(Target::Input(0));
+            .into_provider(transcript, opening_point);
+        provider.append_nodeio(Target::Input(0));
     }
 }
 

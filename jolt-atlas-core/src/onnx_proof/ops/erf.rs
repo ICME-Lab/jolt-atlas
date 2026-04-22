@@ -281,7 +281,7 @@ impl<F: JoltField> ErfProver<F> {
         let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data())
             .evaluate(&params.r_node_output.r);
         let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .to_provider(transcript, params.r_node_output.clone());
+            .into_provider(transcript, params.r_node_output.clone());
         // TODO(AntoineF4C5): Clean once #208 is dealt with
         let quotient_opening_id = OpeningId::new(
             VirtualPoly::TeleportQuotient(params.computation_node.idx),
@@ -360,7 +360,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ErfProver<F> 
         ]
         .concat();
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, OpeningPoint::new(r));
+            .into_provider(transcript, OpeningPoint::new(r));
         provider.append_advice(VirtualPoly::ErfRa, self.input_onehot.final_claim());
     }
 }
@@ -389,7 +389,7 @@ impl<F: JoltField> ErfVerifier<F> {
     ) -> Self {
         let params = ErfParams::new(computation_node, graph, accumulator, transcript, op);
         let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .to_provider(transcript, params.r_node_output.clone());
+            .into_provider(transcript, params.r_node_output.clone());
         // TODO(AntoineF4C5): Clean once #208 is dealt with
         let quotient_opening_id = OpeningId::new(
             VirtualPoly::TeleportQuotient(params.computation_node.idx),
@@ -445,7 +445,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ErfVerifier
         ]
         .concat();
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, OpeningPoint::new(r));
+            .into_provider(transcript, OpeningPoint::new(r));
         provider.append_advice(VirtualPoly::ErfRa);
     }
 }

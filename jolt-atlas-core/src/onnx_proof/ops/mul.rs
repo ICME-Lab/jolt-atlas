@@ -109,10 +109,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MulProver<F> 
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, opening_point);
+            .into_provider(transcript, opening_point);
 
-        provider.append_node_io(Target::Input(0), self.left_operand.final_claim());
-        provider.append_node_io(Target::Input(1), self.right_operand.final_claim());
+        provider.append_nodeio(Target::Input(0), self.left_operand.final_claim());
+        provider.append_nodeio(Target::Input(1), self.right_operand.final_claim());
     }
 }
 
@@ -154,8 +154,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MulVerifier
             .r;
         let eq_eval = EqPolynomial::mle(r_node_output, &r_node_output_prime);
 
-        let left_operand_claim = accessor.get_node_io(Target::Input(0)).1;
-        let right_operand_claim = accessor.get_node_io(Target::Input(1)).1;
+        let left_operand_claim = accessor.get_nodeio(Target::Input(0)).1;
+        let right_operand_claim = accessor.get_nodeio(Target::Input(1)).1;
 
         eq_eval * left_operand_claim * right_operand_claim
     }
@@ -170,9 +170,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MulVerifier
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, opening_point);
-        provider.append_node_io(Target::Input(0));
-        provider.append_node_io(Target::Input(1));
+            .into_provider(transcript, opening_point);
+        provider.append_nodeio(Target::Input(0));
+        provider.append_nodeio(Target::Input(1));
     }
 }
 

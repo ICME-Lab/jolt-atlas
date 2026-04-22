@@ -153,10 +153,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaliciousSubP
         };
         debug_assert_eq!(final_claim, eq_eval * (forged_left - forged_right));
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, opening_point);
+            .into_provider(transcript, opening_point);
 
         // Insert forged claims while keeping transcript/opener state consistent.
-        provider.append_node_io(Target::Input(0), forged_left);
-        provider.append_node_io(Target::Input(1), forged_right);
+        provider.append_nodeio(Target::Input(0), forged_left);
+        provider.append_nodeio(Target::Input(1), forged_right);
     }
 }

@@ -182,8 +182,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SumAxisProver
             .concat(),
         };
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, OpeningPoint::new(opening_point));
-        provider.append_node_io(Target::Input(0), self.operand.final_claim());
+            .into_provider(transcript, OpeningPoint::new(opening_point));
+        provider.append_nodeio(Target::Input(0), self.operand.final_claim());
     }
 }
 
@@ -215,7 +215,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVeri
         _sumcheck_challenges: &[F::Challenge],
     ) -> F {
         let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-        accessor.get_node_io(Target::Input(0)).1
+        accessor.get_nodeio(Target::Input(0)).1
     }
 
     fn cache_openings(
@@ -238,8 +238,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVeri
             .concat(),
         };
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, OpeningPoint::new(opening_point));
-        provider.append_node_io(Target::Input(0));
+            .into_provider(transcript, OpeningPoint::new(opening_point));
+        provider.append_nodeio(Target::Input(0));
     }
 }
 

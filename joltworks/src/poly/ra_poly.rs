@@ -82,7 +82,7 @@ impl<I: Into<usize> + Copy + Default + Send + Sync + Debug + 'static, F: JoltFie
         match self {
             Self::RoundN(mle) => mle.final_claim(),
             Self::Round3(mle) => mle.get_bound_coeff(0),
-            _ => panic!("RaPolynomial::final_sumcheck_claim called on non-RoundN variant {self:?}"),
+            _ => panic!("RaPolynomial::final_claim called on non-RoundN variant {self:?}"),
         }
     }
 }

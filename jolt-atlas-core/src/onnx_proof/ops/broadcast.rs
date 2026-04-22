@@ -137,8 +137,8 @@ impl<F: JoltField> BroadcastProver<F> {
     ) {
         let opening_point = OpeningPoint::new(self.r_input.clone());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, opening_point);
-        provider.append_node_io(Target::Input(0), self.claim_A);
+            .into_provider(transcript, opening_point);
+        provider.append_nodeio(Target::Input(0), self.claim_A);
     }
 }
 
@@ -187,10 +187,10 @@ impl<F: JoltField> BroadcastVerifier<F> {
     ) -> Result<(), ProofVerifyError> {
         let opening_point = OpeningPoint::new(self.r_input.clone());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, opening_point);
+            .into_provider(transcript, opening_point);
 
-        provider.append_node_io(Target::Input(0));
-        let operand_claim = provider.get_node_io(Target::Input(0)).1;
+        provider.append_nodeio(Target::Input(0));
+        let operand_claim = provider.get_nodeio(Target::Input(0)).1;
         let expected_claim_O = operand_claim * self.eval_I;
 
         let claim_O = provider.get_reduced_opening().1;

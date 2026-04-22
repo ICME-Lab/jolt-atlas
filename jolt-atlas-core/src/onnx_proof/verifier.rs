@@ -104,7 +104,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
 
         let mut provider =
             AccOpeningAccessor::new(&mut verifier.accumulator, output_computation_node)
-                .to_provider(&mut verifier.transcript, r_node_output.into());
+                .into_provider(&mut verifier.transcript, r_node_output.into());
 
         // append_virtual now handles both transcript append and opening point update.
         // The claim was loaded from opening_claims in populate_accumulator.

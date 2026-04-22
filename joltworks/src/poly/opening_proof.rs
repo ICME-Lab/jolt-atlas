@@ -605,7 +605,15 @@ where
             reduced_evaluations: BTreeMap::new(),
             #[cfg(any(test, feature = "test-feature"))]
             prover_opening_accumulator: None,
+            #[cfg(feature = "zk")]
+            pending_claims: Vec::new(),
         }
+    }
+
+    /// Takes and returns the pending ZK claims, leaving the internal vector empty.
+    #[cfg(feature = "zk")]
+    pub fn take_pending_claims(&mut self) -> Vec<F> {
+        std::mem::take(&mut self.pending_claims)
     }
 
     pub fn get_node_openings(&self, node_idx: usize) -> Vec<&Opening<F>> {

@@ -93,10 +93,10 @@ impl<F: JoltField> MoveAxisProver<F> {
     ) {
         let opening_point = OpeningPoint::new(self.r_input.clone());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, opening_point);
+            .into_provider(transcript, opening_point);
         // For MoveAxis, claim_A == claim_O since the data doesn't change.
         let claim_O = provider.get_reduced_opening().1;
-        provider.append_node_io(Target::Input(0), claim_O);
+        provider.append_nodeio(Target::Input(0), claim_O);
     }
 }
 
@@ -133,11 +133,11 @@ impl<F: JoltField> MoveAxisVerifier<F> {
     ) -> Result<(), ProofVerifyError> {
         let opening_point = OpeningPoint::new(self.r_input.clone());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, opening_point);
+            .into_provider(transcript, opening_point);
 
         // Cache and retrieve the claim for the input node.
-        provider.append_node_io(Target::Input(0));
-        let operand_claim = provider.get_node_io(Target::Input(0)).1;
+        provider.append_nodeio(Target::Input(0));
+        let operand_claim = provider.get_nodeio(Target::Input(0)).1;
 
         // For MoveAxis, the input claim should equal the output claim.
         let claim_O = provider.get_reduced_opening().1;

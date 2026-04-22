@@ -19,8 +19,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Identity {
             AccOpeningAccessor::new(&prover.accumulator, node).get_reduced_opening();
         let (opening_point, claim) = node_poly_opening;
         let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, node)
-            .to_provider(&mut prover.transcript, opening_point);
-        provider.append_node_io(Target::Input(0), claim);
+            .into_provider(&mut prover.transcript, opening_point);
+        provider.append_nodeio(Target::Input(0), claim);
         vec![]
     }
 
@@ -33,9 +33,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Identity {
         let (opening_point, claim) =
             AccOpeningAccessor::new(&verifier.accumulator, node).get_reduced_opening();
         let mut provider = AccOpeningAccessor::new(&mut verifier.accumulator, node)
-            .to_provider(&mut verifier.transcript, opening_point);
-        provider.append_node_io(Target::Input(0));
-        let (_, operand_claim) = provider.get_node_io(Target::Input(0));
+            .into_provider(&mut verifier.transcript, opening_point);
+        provider.append_nodeio(Target::Input(0));
+        let (_, operand_claim) = provider.get_nodeio(Target::Input(0));
 
         if operand_claim != claim {
             return Err(ProofVerifyError::InvalidOpeningProof(

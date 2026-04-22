@@ -156,8 +156,8 @@ where
     pub fn cache_sumcheck_claim(&mut self) {
         debug_assert!(self.sumcheck_claim.is_none());
         let claim = match &mut self.prover_state {
-            ProverOpening::Dense(opening) => opening.final_sumcheck_claim(),
-            ProverOpening::OneHot(opening) => opening.final_sumcheck_claim(),
+            ProverOpening::Dense(opening) => opening.final_claim(),
+            ProverOpening::OneHot(opening) => opening.final_claim(),
         };
         self.sumcheck_claim = Some(claim);
     }
@@ -211,8 +211,8 @@ where
     ) {
         // Cache the final sumcheck claim in the accumulator
         let claim = match &self.prover_state {
-            ProverOpening::Dense(opening) => opening.final_sumcheck_claim(),
-            ProverOpening::OneHot(opening) => opening.final_sumcheck_claim(),
+            ProverOpening::Dense(opening) => opening.final_claim(),
+            ProverOpening::OneHot(opening) => opening.final_claim(),
         };
         accumulator.cache_opening_reduction_claim(self.polynomial, claim);
     }
@@ -361,7 +361,7 @@ impl<F: JoltField> DensePolynomialProverOpening<F> {
         }
     }
 
-    pub fn final_sumcheck_claim(&self) -> F {
+    pub fn final_claim(&self) -> F {
         let poly_ref = self.polynomial.as_ref().unwrap();
         poly_ref.read().unwrap().poly.final_claim()
     }
@@ -660,7 +660,7 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
         }
     }
 
-    pub fn final_sumcheck_claim(&self) -> F {
+    pub fn final_claim(&self) -> F {
         self.polynomial.H.read().unwrap().final_claim()
     }
 }

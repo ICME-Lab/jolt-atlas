@@ -653,8 +653,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RbmkRbnkBmnPr
                 let left_point = [r_a, r_b, &r_m.r, r_k].concat();
                 let mut provider =
                     AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-                        .to_provider(transcript, self.params.normalize_opening_point(&left_point));
-                provider.append_node_io(Target::Input(0), self.left_operand.final_claim());
+                        .into_provider(transcript, Default::default());
+                let left_opening = self.params.normalize_opening_point(&left_point);
+                provider.append_nodeio_at(
+                    Target::Input(0),
+                    left_opening,
+                    self.left_operand.final_claim(),
+                );
                 #[cfg(debug_assertions)]
                 debug_assert_eq!(
                     MultilinearPolynomial::from(self.original_left.clone()).evaluate(&left_point),
@@ -662,8 +667,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RbmkRbnkBmnPr
                 );
 
                 let right_point = [r_a, r_b, &r_n.r, r_k].concat();
-                provider.update_point(self.params.normalize_opening_point(&right_point));
-                provider.append_node_io(Target::Input(1), self.right_operand.final_claim());
+                let right_opening = self.params.normalize_opening_point(&right_point);
+                provider.append_nodeio_at(
+                    Target::Input(1),
+                    right_opening,
+                    self.right_operand.final_claim(),
+                );
                 #[cfg(debug_assertions)]
                 debug_assert_eq!(
                     MultilinearPolynomial::from(self.original_right.clone()).evaluate(&right_point),
@@ -686,8 +695,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RbmkRbnkBmnPr
                 let left_point = [r_a, r_c, r_b, &r_m.r, r_k].concat();
                 let mut provider =
                     AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-                        .to_provider(transcript, self.params.normalize_opening_point(&left_point));
-                provider.append_node_io(Target::Input(0), self.left_operand.final_claim());
+                        .into_provider(transcript, Default::default());
+                let left_opening = self.params.normalize_opening_point(&left_point);
+                provider.append_nodeio_at(
+                    Target::Input(0),
+                    left_opening,
+                    self.left_operand.final_claim(),
+                );
                 #[cfg(debug_assertions)]
                 debug_assert_eq!(
                     MultilinearPolynomial::from(self.original_left.clone()).evaluate(&left_point),
@@ -695,8 +709,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RbmkRbnkBmnPr
                 );
 
                 let right_point = [r_k, r_c, &r_n.r].concat();
-                provider.update_point(self.params.normalize_opening_point(&right_point));
-                provider.append_node_io(Target::Input(1), self.right_operand.final_claim());
+                let right_opening = self.params.normalize_opening_point(&right_point);
+                provider.append_nodeio_at(
+                    Target::Input(1),
+                    right_opening,
+                    self.right_operand.final_claim(),
+                );
                 #[cfg(debug_assertions)]
                 debug_assert_eq!(
                     MultilinearPolynomial::from(self.original_right.clone()).evaluate(&right_point),
@@ -721,8 +739,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RbmkRbnkBmnPr
                 let left_point = [r_cb, &r_m.r, r_k].concat();
                 let mut provider =
                     AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-                        .to_provider(transcript, self.params.normalize_opening_point(&left_point));
-                provider.append_node_io(Target::Input(0), self.left_operand.final_claim());
+                        .into_provider(transcript, Default::default());
+                let left_opening = self.params.normalize_opening_point(&left_point);
+                provider.append_nodeio_at(
+                    Target::Input(0),
+                    left_opening,
+                    self.left_operand.final_claim(),
+                );
                 #[cfg(debug_assertions)]
                 debug_assert_eq!(
                     MultilinearPolynomial::from(self.original_left.clone()).evaluate(&left_point),
@@ -730,8 +753,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RbmkRbnkBmnPr
                 );
 
                 let right_point = [r_cb, r_k, &r_n.r].concat();
-                provider.update_point(self.params.normalize_opening_point(&right_point));
-                provider.append_node_io(Target::Input(1), self.right_operand.final_claim());
+                let right_opening = self.params.normalize_opening_point(&right_point);
+                provider.append_nodeio_at(
+                    Target::Input(1),
+                    right_opening,
+                    self.right_operand.final_claim(),
+                );
                 #[cfg(debug_assertions)]
                 debug_assert_eq!(
                     MultilinearPolynomial::from(self.original_right.clone()).evaluate(&right_point),
@@ -770,8 +797,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RbmkRbnkBmn
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
         let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-        let left_claim = accessor.get_node_io(Target::Input(0)).1;
-        let right_claim = accessor.get_node_io(Target::Input(1)).1;
+        let left_claim = accessor.get_nodeio(Target::Input(0)).1;
+        let right_claim = accessor.get_nodeio(Target::Input(1)).1;
         let eq_claim = match self.params.variant {
             RbmkRbnkBmnVariant::AbmkAbnkAbmn { log_a, log_b, .. } => {
                 let (r_a, r_bmn) = self.params.r_node_output.split_at(log_a);
@@ -814,11 +841,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RbmkRbnkBmn
                 let left_point = [r_a, r_b, &r_m.r, r_k].concat();
                 let mut provider =
                     AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-                        .to_provider(transcript, self.params.normalize_opening_point(&left_point));
-                provider.append_node_io(Target::Input(0));
+                        .into_provider(transcript, Default::default());
+                let left_opening = self.params.normalize_opening_point(&left_point);
+                provider.append_nodeio_at(Target::Input(0), left_opening);
+
                 let right_point = [r_a, r_b, &r_n.r, r_k].concat();
-                provider.update_point(self.params.normalize_opening_point(&right_point));
-                provider.append_node_io(Target::Input(1));
+                let right_opening = self.params.normalize_opening_point(&right_point);
+                provider.append_nodeio_at(Target::Input(1), right_opening);
             }
             RbmkRbnkBmnVariant::AcbmkKcnCbmn {
                 log_c,
@@ -836,11 +865,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RbmkRbnkBmn
                 let left_point = [r_a, r_c, r_b, &r_m.r, r_k].concat();
                 let mut provider =
                     AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-                        .to_provider(transcript, self.params.normalize_opening_point(&left_point));
-                provider.append_node_io(Target::Input(0));
+                        .into_provider(transcript, Default::default());
+                let left_opening = self.params.normalize_opening_point(&left_point);
+                provider.append_nodeio_at(Target::Input(0), left_opening);
+
                 let right_point = [r_k, r_c, &r_n.r].concat();
-                provider.update_point(self.params.normalize_opening_point(&right_point));
-                provider.append_node_io(Target::Input(1));
+                let right_opening = self.params.normalize_opening_point(&right_point);
+                provider.append_nodeio_at(Target::Input(1), right_opening);
             }
             RbmkRbnkBmnVariant::CbmkCbknAmn {
                 log_cb,
@@ -860,11 +891,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RbmkRbnkBmn
                 let left_point = [r_cb, &r_m.r, r_k].concat();
                 let mut provider =
                     AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-                        .to_provider(transcript, self.params.normalize_opening_point(&left_point));
-                provider.append_node_io(Target::Input(0));
+                        .into_provider(transcript, Default::default());
+                let left_opening = self.params.normalize_opening_point(&left_point);
+                provider.append_nodeio_at(Target::Input(0), left_opening);
+
                 let right_point = [r_cb, r_k, &r_n.r].concat();
-                provider.update_point(self.params.normalize_opening_point(&right_point));
-                provider.append_node_io(Target::Input(1));
+                let right_opening = self.params.normalize_opening_point(&right_point);
+                provider.append_nodeio_at(Target::Input(1), right_opening);
             }
         }
     }

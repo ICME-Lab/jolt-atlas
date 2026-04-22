@@ -216,7 +216,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RecipMultProv
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         // Only cache exp_q — inv_sum is verifier-known (derived from sent exp_sum_q).
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .to_provider(transcript, opening_point);
+            .into_provider(transcript, opening_point);
         provider.append_advice(VirtualPoly::SoftmaxExpQ, self.exp_q.final_claim());
     }
 }
@@ -262,7 +262,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RecipMultVe
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         // Only cache exp_q — inv_sum is verifier-known.
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .to_provider(transcript, opening_point);
+            .into_provider(transcript, opening_point);
         provider.append_advice(VirtualPoly::SoftmaxExpQ);
     }
 

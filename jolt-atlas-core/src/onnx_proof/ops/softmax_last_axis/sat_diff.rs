@@ -174,7 +174,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SatDiffSlackn
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .to_provider(transcript, opening_point);
+            .into_provider(transcript, opening_point);
         provider.append_advice(VirtualPoly::SoftmaxSatDiff, self.sat_diff.final_claim());
         provider.append_advice(VirtualPoly::SoftmaxZHi, self.z_hi.final_claim());
         provider.append_advice(VirtualPoly::SoftmaxZLo, self.z_lo.final_claim());
@@ -218,7 +218,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SatDiffSlac
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .to_provider(transcript, opening_point);
+            .into_provider(transcript, opening_point);
         provider.append_advice(VirtualPoly::SoftmaxSatDiff);
         provider.append_advice(VirtualPoly::SoftmaxZHi);
         provider.append_advice(VirtualPoly::SoftmaxZLo);

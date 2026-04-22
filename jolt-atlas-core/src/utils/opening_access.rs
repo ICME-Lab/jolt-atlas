@@ -41,7 +41,7 @@ impl<'a> OpeningIdBuilder<'a> {
 
     /// Convenience method for the common case of opening an input/current node output
     /// in this builder's default sumcheck context.
-    fn node_io(&self, target: Target) -> OpeningId {
+    fn nodeio(&self, target: Target) -> OpeningId {
         let node_idx = match target {
             Target::Current => self.node.idx,
             Target::Input(position) => self.node.inputs[position],
@@ -134,8 +134,8 @@ impl<'a, F: JoltField, Acc: OpeningAccumulator<F> + ?Sized> AccOpeningAccessor<'
     }
 
     /// Read a node I/O opening for the selected target.
-    pub fn get_node_io(&self, target: Target) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        let opening_id = self.builder.node_io(target);
+    pub fn get_nodeio(&self, target: Target) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+        let opening_id = self.builder.nodeio(target);
         self.acc().get_virtual_polynomial_opening(opening_id)
     }
 
@@ -167,7 +167,7 @@ impl<'a, F: JoltField, Acc: OpeningAccumulator<F> + ?Sized> AccOpeningAccessor<'
 impl<'a, F: JoltField> AccOpeningAccessor<'a, F, ProverOpeningAccumulator<F>> {
     /// Convert this accessor into a prover provider that can append openings
     /// to the accumulator using `transcript` and `opening_point`.
-    pub fn to_provider(
+    pub fn into_provider(
         self,
         transcript: &'a mut impl Transcript,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
@@ -179,7 +179,7 @@ impl<'a, F: JoltField> AccOpeningAccessor<'a, F, ProverOpeningAccumulator<F>> {
 impl<'a, F: JoltField> AccOpeningAccessor<'a, F, VerifierOpeningAccumulator<F>> {
     /// Convert this accessor into a verifier provider that can request openings
     /// from the accumulator using `transcript` and `opening_point`.
-    pub fn to_provider(
+    pub fn into_provider(
         self,
         transcript: &'a mut impl Transcript,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
@@ -202,8 +202,8 @@ macro_rules! impl_accessor_methods {
             }
 
             /// Read a node I/O opening from the wrapped accumulator.
-            pub fn get_node_io(&self, target: Target) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-                self.accessor.get_node_io(target)
+            pub fn get_nodeio(&self, target: Target) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+                self.accessor.get_nodeio(target)
             }
 
             /// Read an advice opening from the wrapped accumulator.
@@ -251,25 +251,39 @@ impl<'a, F: JoltField, T: Transcript> ProverAccOpeningProvider<'a, F, T> {
         }
     }
 
-    /// Update the opening point used when appending openings.
-    pub fn update_point(&mut self, opening_point: OpeningPoint<BIG_ENDIAN, F>) {
-        self.opening_point = opening_point;
+    /// Append a node I/O opening with its claimed value to the prover accumulator at the provider's current opening point.
+    pub fn append_nodeio(&mut self, target: Target, claim: F) {
+        self.append_nodeio_at(target, self.opening_point.clone(), claim);
     }
 
-    /// Append a node I/O opening with its claimed value to the prover accumulator.
-    pub fn append_node_io(&mut self, target: Target, claim: F) {
-        let opening_id = self.accessor.builder.node_io(target);
-        self.accessor.acc_mut().append_virtual(
-            self.transcript,
-            opening_id,
-            self.opening_point.clone(),
-            claim,
-        );
+    /// Append a node I/O opening with its claimed value to the prover accumulator at an explicit opening point.
+    pub fn append_nodeio_at(
+        &mut self,
+        target: Target,
+        opening_point: OpeningPoint<BIG_ENDIAN, F>,
+        claim: F,
+    ) {
+        let opening_id = self.accessor.builder.nodeio(target);
+        self.accessor
+            .acc_mut()
+            .append_virtual(self.transcript, opening_id, opening_point, claim);
     }
 
-    /// Append an advice opening with its claimed value to the prover accumulator.
+    /// Append an advice opening with its claimed value to the prover accumulator at the provider's current opening point.
     pub fn append_advice<Poly>(&mut self, poly_ctor: impl FnOnce(usize) -> Poly, claim: F)
     where
+        Poly: Into<PolynomialId>,
+    {
+        self.append_advice_at(poly_ctor, self.opening_point.clone(), claim);
+    }
+
+    /// Append an advice opening with its claimed value to the prover accumulator at an explicit opening point.
+    pub fn append_advice_at<Poly>(
+        &mut self,
+        poly_ctor: impl FnOnce(usize) -> Poly,
+        opening_point: OpeningPoint<BIG_ENDIAN, F>,
+        claim: F,
+    ) where
         Poly: Into<PolynomialId>,
     {
         let opening_id = self.accessor.builder.advice(poly_ctor);
@@ -277,7 +291,7 @@ impl<'a, F: JoltField, T: Transcript> ProverAccOpeningProvider<'a, F, T> {
             PolynomialId::Virtual(_) => self.accessor.acc_mut().append_virtual(
                 self.transcript,
                 opening_id,
-                self.opening_point.clone(),
+                opening_point,
                 claim,
             ),
             // TODO(AntoineF4C5): split committed advice handling between dense and one-hot
@@ -285,7 +299,7 @@ impl<'a, F: JoltField, T: Transcript> ProverAccOpeningProvider<'a, F, T> {
             PolynomialId::Committed(_) => self.accessor.acc_mut().append_dense(
                 self.transcript,
                 opening_id,
-                self.opening_point.r.clone(),
+                opening_point.r.clone(),
                 claim,
             ),
         }
@@ -340,43 +354,56 @@ impl<'a, F: JoltField, T: Transcript> VerifierAccOpeningProvider<'a, F, T> {
         }
     }
 
-    /// Update the opening point used when appending openings.
-    pub fn update_point(&mut self, opening_point: OpeningPoint<BIG_ENDIAN, F>) {
-        self.opening_point = opening_point;
-    }
-
-    /// Append a node I/O opening request to the verifier accumulator.
+    /// Append a node I/O opening request to the verifier accumulator at the provider's current opening point.
     ///
     /// Panics if this provider was created from an immutable reference.
-    pub fn append_node_io(&mut self, target: Target) {
-        let opening_id = self.accessor.builder.node_io(target);
-        self.accessor.acc_mut().append_virtual(
-            self.transcript,
-            opening_id,
-            self.opening_point.clone(),
-        );
+    pub fn append_nodeio(&mut self, target: Target) {
+        self.append_nodeio_at(target, self.opening_point.clone());
     }
 
-    /// Append an advice opening request to the verifier accumulator.
+    /// Append a node I/O opening request to the verifier accumulator at provided point.
+    ///
+    /// Panics if this provider was created from an immutable reference.
+    pub fn append_nodeio_at(&mut self, target: Target, opening_point: OpeningPoint<BIG_ENDIAN, F>) {
+        let opening_id = self.accessor.builder.nodeio(target);
+        self.accessor
+            .acc_mut()
+            .append_virtual(self.transcript, opening_id, opening_point);
+    }
+
+    /// Append an advice opening request to the verifier accumulator at the provider's current opening point.
     ///
     /// Panics if this provider was created from an immutable reference.
     pub fn append_advice<Poly>(&mut self, poly_ctor: impl FnOnce(usize) -> Poly)
     where
         Poly: Into<PolynomialId>,
     {
+        self.append_advice_at(poly_ctor, self.opening_point.clone());
+    }
+
+    /// Append an advice opening request to the verifier accumulator at provided point.
+    ///
+    /// Panics if this provider was created from an immutable reference.
+    pub fn append_advice_at<Poly>(
+        &mut self,
+        poly_ctor: impl FnOnce(usize) -> Poly,
+        opening_point: OpeningPoint<BIG_ENDIAN, F>,
+    ) where
+        Poly: Into<PolynomialId>,
+    {
         let opening_id = self.accessor.builder.advice(poly_ctor);
         match opening_id.polynomial {
-            PolynomialId::Virtual(_) => self.accessor.acc_mut().append_virtual(
-                self.transcript,
-                opening_id,
-                self.opening_point.clone(),
-            ),
+            PolynomialId::Virtual(_) => {
+                self.accessor
+                    .acc_mut()
+                    .append_virtual(self.transcript, opening_id, opening_point)
+            }
             // TODO(AntoineF4C5): split committed advice handling between dense and one-hot
             // encodings. append_dense is correct for the current dense-only callsites.
             PolynomialId::Committed(_) => self.accessor.acc_mut().append_dense(
                 self.transcript,
                 opening_id,
-                self.opening_point.r.clone(),
+                opening_point.r.clone(),
             ),
         }
     }

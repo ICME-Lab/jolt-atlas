@@ -130,7 +130,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MultProver<F>
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .to_provider(transcript, opening_point);
+            .into_provider(transcript, opening_point);
         provider.append_advice(VirtualPoly::SoftmaxExpHi, self.exp_hi.final_claim());
         provider.append_advice(VirtualPoly::SoftmaxExpLo, self.exp_lo.final_claim());
     }
@@ -164,7 +164,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MultVerifie
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .to_provider(transcript, opening_point);
+            .into_provider(transcript, opening_point);
         provider.append_advice(VirtualPoly::SoftmaxExpHi);
         provider.append_advice(VirtualPoly::SoftmaxExpLo);
     }

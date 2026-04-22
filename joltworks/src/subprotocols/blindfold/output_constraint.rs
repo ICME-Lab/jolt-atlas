@@ -394,11 +394,11 @@ impl InputClaimConstraint {
 mod tests {
     use super::*;
     use crate::poly::opening_proof::SumcheckId;
-    use common::CommittedPolynomial;
+    use common::CommittedPoly;
 
     fn test_opening(idx: usize) -> OpeningId {
-        OpeningId::Committed(
-            CommittedPolynomial::DivNodeQuotient(idx),
+        OpeningId::new(
+            CommittedPoly::DivNodeQuotient(idx),
             SumcheckId::NodeExecution(0),
         )
     }

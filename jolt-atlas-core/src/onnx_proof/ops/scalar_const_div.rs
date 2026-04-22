@@ -214,9 +214,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ScalarConstDi
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, opening_point);
+            .into_provider(transcript, opening_point);
 
-        provider.append_node_io(Target::Input(0), self.left_operand.final_claim());
+        provider.append_nodeio(Target::Input(0), self.left_operand.final_claim());
         provider.append_advice(
             CommittedPoly::ScalarConstDivNodeRemainder,
             self.R.final_claim(),
@@ -265,7 +265,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ScalarConst
         let R_claim = accessor
             .get_advice(CommittedPoly::ScalarConstDivNodeRemainder)
             .1;
-        let left_operand_claim = accessor.get_node_io(Target::Input(0)).1;
+        let left_operand_claim = accessor.get_nodeio(Target::Input(0)).1;
 
         eq_eval * (left_operand_claim - R_claim)
     }
@@ -280,8 +280,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ScalarConst
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, opening_point);
-        provider.append_node_io(Target::Input(0));
+            .into_provider(transcript, opening_point);
+        provider.append_nodeio(Target::Input(0));
         provider.append_advice(CommittedPoly::ScalarConstDivNodeRemainder);
     }
 }

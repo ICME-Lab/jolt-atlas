@@ -494,7 +494,7 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
         self.next_round();
     }
 
-    pub fn final_sumcheck_claim(&self) -> F {
+    pub fn final_claim(&self) -> F {
         self.P
             .par_iter()
             .zip(self.poly.suffixes().par_iter())

@@ -285,7 +285,7 @@ impl SoftmaxLastAxisProver {
     fn send_auxiliary_vectors<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let [f, _] = self.F_N;
         let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node)
-            .to_provider(&mut prover.transcript, OpeningPoint::default());
+            .into_provider(&mut prover.transcript, OpeningPoint::default());
         for k in 0..f {
             provider.append_advice(
                 |idx| VirtualPoly::SoftmaxSumOutput(idx, k),
@@ -313,7 +313,7 @@ impl SoftmaxLastAxisProver {
         let log_f = self.F_N[0].log_2();
         let r_lead = r0.split_at(log_f).0;
         let eval = MultilinearPolynomial::from(self.trace.exp_sum_q.clone()).evaluate(&r_lead.r);
-        let mut provider = accessor.to_provider(&mut prover.transcript, r_lead);
+        let mut provider = accessor.into_provider(&mut prover.transcript, r_lead);
         provider.append_advice(VirtualPoly::SoftmaxExpSum, eval);
     }
 
@@ -322,7 +322,7 @@ impl SoftmaxLastAxisProver {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
         let r0 = accessor.get_reduced_opening().0;
         let eval = MultilinearPolynomial::from(self.trace.R.clone()).evaluate(&r0.r);
-        let mut provider = accessor.to_provider(&mut prover.transcript, r0);
+        let mut provider = accessor.into_provider(&mut prover.transcript, r0);
         provider.append_advice(VirtualPoly::SoftmaxRecipMultRemainder, eval);
     }
 
@@ -380,7 +380,7 @@ impl SoftmaxLastAxisProver {
         let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
         let eval =
             MultilinearPolynomial::from(self.trace.decomposed_exp.r_exp.clone()).evaluate(&r1.r);
-        let mut provider = accessor.to_provider(&mut prover.transcript, r1);
+        let mut provider = accessor.into_provider(&mut prover.transcript, r1);
         provider.append_advice(VirtualPoly::SoftmaxExpRemainder, eval);
     }
 
@@ -604,7 +604,8 @@ impl SoftmaxLastAxisVerifier {
         let f = leading_dims.iter().product::<usize>();
 
         let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, node);
-        let mut provider = accessor.to_provider(&mut verifier.transcript, OpeningPoint::default());
+        let mut provider =
+            accessor.into_provider(&mut verifier.transcript, OpeningPoint::default());
         for k in 0..f {
             provider.append_advice(|idx| VirtualPoly::SoftmaxSumOutput(idx, k));
             provider.append_advice(|idx| VirtualPoly::SoftmaxMaxOutput(idx, k));
@@ -693,7 +694,7 @@ impl SoftmaxLastAxisVerifier {
         let r0 = accessor.get_reduced_opening().0;
         let log_f = self.F_N[0].log_2();
         let r_lead = r0.split_at(log_f).0;
-        let mut provider = accessor.to_provider(&mut verifier.transcript, r_lead.clone());
+        let mut provider = accessor.into_provider(&mut verifier.transcript, r_lead.clone());
         provider.append_advice(VirtualPoly::SoftmaxExpSum);
         let exp_sum_eval =
             MultilinearPolynomial::from(std::mem::take(&mut self.exp_sum)).evaluate(&r_lead.r);
@@ -711,7 +712,7 @@ impl SoftmaxLastAxisVerifier {
     fn cache_R<F: JoltField, T: Transcript>(&self, verifier: &mut Verifier<'_, F, T>) {
         let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, &self.computation_node);
         let r = accessor.get_reduced_opening().0;
-        let mut provider = accessor.to_provider(&mut verifier.transcript, r);
+        let mut provider = accessor.into_provider(&mut verifier.transcript, r);
         provider.append_advice(VirtualPoly::SoftmaxRecipMultRemainder);
     }
 
@@ -755,7 +756,7 @@ impl SoftmaxLastAxisVerifier {
     fn cache_r_exp<F: JoltField, T: Transcript>(&self, verifier: &mut Verifier<'_, F, T>) {
         let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, &self.computation_node);
         let r = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
-        let mut provider = accessor.to_provider(&mut verifier.transcript, r);
+        let mut provider = accessor.into_provider(&mut verifier.transcript, r);
         provider.append_advice(VirtualPoly::SoftmaxExpRemainder);
     }
 
@@ -931,7 +932,7 @@ impl SoftmaxLastAxisVerifier {
 
         // Verify the operand link: prover's claimed X(r2) must match the
         // algebraic derivation from max_k, z_c, and sat_diff.
-        let prover_x_r2 = accessor.get_node_io(Target::Input(0)).1;
+        let prover_x_r2 = accessor.get_nodeio(Target::Input(0)).1;
         if prover_x_r2 != x_r2 {
             return Err(ProofVerifyError::InvalidOpeningProof(
                 "Operand link failed: prover's X(r2) does not match max_k - z_c - sat_diff"

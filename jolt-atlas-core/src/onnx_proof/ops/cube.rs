@@ -96,8 +96,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for CubeProver<F>
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, opening_point);
-        provider.append_node_io(Target::Input(0), self.operand.final_claim());
+            .into_provider(transcript, opening_point);
+        provider.append_nodeio(Target::Input(0), self.operand.final_claim());
     }
 }
 
@@ -140,7 +140,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for CubeVerifie
             .r;
         let eq_eval = EqPolynomial::mle(r_node_output, &r_node_output_prime);
 
-        let operand_claim = accessor.get_node_io(Target::Input(0)).1;
+        let operand_claim = accessor.get_nodeio(Target::Input(0)).1;
 
         eq_eval * operand_claim * operand_claim * operand_claim
     }
@@ -155,8 +155,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for CubeVerifie
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, opening_point);
-        provider.append_node_io(Target::Input(0));
+            .into_provider(transcript, opening_point);
+        provider.append_nodeio(Target::Input(0));
     }
 }
 

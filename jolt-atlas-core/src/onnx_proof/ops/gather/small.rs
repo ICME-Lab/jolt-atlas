@@ -213,7 +213,7 @@ fn ra_hamming_bool_params<F: JoltField>(
     let polynomial_types = vec![VirtualPoly::HammingWeight];
 
     let r_lookup = AccOpeningAccessor::new(opening_accumulator, computation_node)
-        .get_node_io(Target::Input(1))
+        .get_nodeio(Target::Input(1))
         .0
         .r;
 
@@ -237,7 +237,7 @@ fn ra_booleanity_params<F: JoltField>(
     let polynomial_type = CommittedPoly::GatherRa(computation_node.idx);
 
     let r_lookup = AccOpeningAccessor::new(opening_accumulator, computation_node)
-        .get_node_io(Target::Input(1))
+        .get_nodeio(Target::Input(1))
         .0
         .r;
     let r_address = transcript
@@ -312,7 +312,7 @@ fn ra_hamming_weight_params<F: JoltField>(
     let polynomial_types = vec![CommittedPoly::GatherRa(computation_node.idx)];
 
     let r_lookup = AccOpeningAccessor::new(opening_accumulator, computation_node)
-        .get_node_io(Target::Input(1))
+        .get_nodeio(Target::Input(1))
         .0
         .r;
 

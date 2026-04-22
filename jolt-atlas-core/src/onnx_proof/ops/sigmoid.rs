@@ -281,7 +281,7 @@ impl<F: JoltField> SigmoidProver<F> {
         let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data())
             .evaluate(&params.r_node_output.r);
         let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .to_provider(transcript, params.r_node_output.clone());
+            .into_provider(transcript, params.r_node_output.clone());
         // TODO(AntoineF4C5): Clean once #208 is dealt with
         let quotient_opening_id = OpeningId::new(
             VirtualPoly::TeleportQuotient(params.computation_node.idx),
@@ -357,7 +357,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SigmoidProver
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let r = [opening_point.r.as_slice(), &self.params.r_node_output.r].concat();
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, OpeningPoint::new(r));
+            .into_provider(transcript, OpeningPoint::new(r));
         provider.append_advice(VirtualPoly::SigmoidRa, self.input_onehot.final_claim());
     }
 }
@@ -386,7 +386,7 @@ impl<F: JoltField> SigmoidVerifier<F> {
     ) -> Self {
         let params = SigmoidParams::new(computation_node, graph, accumulator, transcript, op);
         let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .to_provider(transcript, params.r_node_output.clone());
+            .into_provider(transcript, params.r_node_output.clone());
         // TODO(AntoineF4C5): Clean once #208 is dealt with
         let quotient_opening_id = OpeningId::new(
             VirtualPoly::TeleportQuotient(params.computation_node.idx),
@@ -441,7 +441,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SigmoidVeri
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let r = [opening_point.r.as_slice(), &self.params.r_node_output.r].concat();
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, OpeningPoint::new(r));
+            .into_provider(transcript, OpeningPoint::new(r));
         provider.append_advice(VirtualPoly::SigmoidRa);
     }
 }

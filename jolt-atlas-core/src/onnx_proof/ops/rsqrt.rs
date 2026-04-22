@@ -338,11 +338,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RsqrtProver<F
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, opening_point);
+            .into_provider(transcript, opening_point);
 
-        provider.append_node_io(Target::Input(0), self.left_operand.final_claim());
+        provider.append_nodeio(Target::Input(0), self.left_operand.final_claim());
         provider.append_advice(CommittedPoly::RsqrtNodeInv, self.inv.final_claim());
-        provider.append_node_io(Target::Current, self.rsqrt.final_claim());
+        provider.append_nodeio(Target::Current, self.rsqrt.final_claim());
         provider.append_advice(VirtualPoly::DivRemainder, self.r_i.final_claim());
         provider.append_advice(VirtualPoly::SqrtRemainder, self.r_s.final_claim());
     }
@@ -387,9 +387,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RsqrtVerifi
 
         let inv_claim = accessor.get_advice(CommittedPoly::RsqrtNodeInv).1;
         let r_i_claim = accessor.get_advice(VirtualPoly::DivRemainder).1;
-        let rsqrt_claim = accessor.get_node_io(Target::Current).1;
+        let rsqrt_claim = accessor.get_nodeio(Target::Current).1;
         let r_s_claim = accessor.get_advice(VirtualPoly::SqrtRemainder).1;
-        let left_operand_claim = accessor.get_node_io(Target::Input(0)).1;
+        let left_operand_claim = accessor.get_nodeio(Target::Input(0)).1;
 
         eq_eval
             * (left_operand_claim * inv_claim + r_i_claim - F::from_i32(Q_SQUARE)
@@ -406,11 +406,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RsqrtVerifi
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, opening_point);
+            .into_provider(transcript, opening_point);
 
-        provider.append_node_io(Target::Input(0));
+        provider.append_nodeio(Target::Input(0));
         provider.append_advice(CommittedPoly::RsqrtNodeInv);
-        provider.append_node_io(Target::Current);
+        provider.append_nodeio(Target::Current);
         provider.append_advice(VirtualPoly::DivRemainder);
         provider.append_advice(VirtualPoly::SqrtRemainder);
     }

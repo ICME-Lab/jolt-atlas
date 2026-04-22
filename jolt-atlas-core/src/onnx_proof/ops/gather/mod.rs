@@ -101,7 +101,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for GatherParams<F> {
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
         let rv_claim = accessor.get_reduced_opening().1;
-        let index_claim = accessor.get_node_io(Target::Input(1)).1;
+        let index_claim = accessor.get_nodeio(Target::Input(1)).1;
 
         rv_claim + self.gamma * index_claim
     }
@@ -149,8 +149,8 @@ impl<F: JoltField> GatherProver<F> {
         let index_claim = MultilinearPolynomial::from(padded_indexes.clone()).evaluate(r_index);
 
         let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .to_provider(transcript, OpeningPoint::new(r_index.to_vec()));
-        provider.append_node_io(Target::Input(1), index_claim);
+            .into_provider(transcript, OpeningPoint::new(r_index.to_vec()));
+        provider.append_nodeio(Target::Input(1), index_claim);
 
         let index_onehot: Vec<F> = compute_ra_evals(r_index, &padded_indexes, params.num_words);
         let dict: Vec<F> = fold_dictionary(r_word, dictionary, params.num_words);
@@ -241,13 +241,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GatherProver<
             .r
             .split_at(self.params.lookup_vars);
 
-        let r_idx_onehot = [&opening_point.r, r_index].concat();
+        let r_idx_onehot = [&opening_point.r, r_index].concat().into();
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, OpeningPoint::new(r_idx_onehot));
-        provider.append_advice(VirtualPoly::NodeOutputRa, self.index_onehot.final_claim());
-        let r_dict = [&opening_point.r, r_word].concat();
-        provider.update_point(OpeningPoint::new(r_dict));
-        provider.append_node_io(Target::Input(0), self.dictionary.final_claim());
+            .into_provider(transcript, Default::default());
+        provider.append_advice_at(
+            VirtualPoly::NodeOutputRa,
+            r_idx_onehot,
+            self.index_onehot.final_claim(),
+        );
+        let r_dict = [&opening_point.r, r_word].concat().into();
+        provider.append_nodeio_at(Target::Input(0), r_dict, self.dictionary.final_claim());
     }
 }
 
@@ -270,8 +273,8 @@ impl<F: JoltField> GatherVerifier<F> {
 
         let (r_index, _) = params.r_node_output.r.split_at(params.lookup_vars);
         let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .to_provider(transcript, OpeningPoint::new(r_index.to_vec()));
-        provider.append_node_io(Target::Input(1));
+            .into_provider(transcript, OpeningPoint::new(r_index.to_vec()));
+        provider.append_nodeio(Target::Input(1));
 
         Self { params }
     }
@@ -296,7 +299,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GatherVerif
         let ra_claim = accessor.get_advice(VirtualPoly::NodeOutputRa).1;
         let int_eval =
             IdentityPolynomial::new(self.params.num_words.log_2()).evaluate(&opening_point.r);
-        let dict_claim = accessor.get_node_io(Target::Input(0)).1;
+        let dict_claim = accessor.get_nodeio(Target::Input(0)).1;
 
         ra_claim * (dict_claim + self.params.gamma * int_eval)
     }
@@ -316,13 +319,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GatherVerif
             .r_node_output
             .r
             .split_at(self.params.lookup_vars);
-        let r_idx_onehot = [&opening_point.r, r_index].concat();
+        let r_idx_onehot = [&opening_point.r, r_index].concat().into();
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, OpeningPoint::new(r_idx_onehot));
-        provider.append_advice(VirtualPoly::NodeOutputRa);
-        let r_dict = [&opening_point.r, r_word].concat();
-        provider.update_point(OpeningPoint::new(r_dict));
-        provider.append_node_io(Target::Input(0));
+            .into_provider(transcript, Default::default());
+        provider.append_advice_at(VirtualPoly::NodeOutputRa, r_idx_onehot);
+
+        let r_dict = [&opening_point.r, r_word].concat().into();
+        provider.append_nodeio_at(Target::Input(0), r_dict);
     }
 }
 

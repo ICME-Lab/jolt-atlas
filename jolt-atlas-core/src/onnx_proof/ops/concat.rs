@@ -280,11 +280,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ConcatSumchec
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, Default::default()); // We will update the opening point for each input term
+            .into_provider(transcript, Default::default()); // We will update the opening point for each input term
         for (i, term) in self.input_terms.iter().enumerate() {
-            let live_opening_point = full_opening_point.r[..term.input_num_vars].to_vec();
-            provider.update_point(live_opening_point.into());
-            provider.append_node_io(Target::Input(i), term.input_mle.final_claim());
+            let live_opening_point = full_opening_point.r[..term.input_num_vars].to_vec().into();
+            provider.append_nodeio_at(
+                Target::Input(i),
+                live_opening_point,
+                term.input_mle.final_claim(),
+            );
         }
     }
 }
@@ -325,7 +328,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ConcatSumch
         self.params.input_raw_dims.iter().enumerate().fold(
             F::zero(),
             |running, (input_idx, _input_raw_dims)| {
-                let input_claim = accessor.get_node_io(Target::Input(input_idx)).1;
+                let input_claim = accessor.get_nodeio(Target::Input(input_idx)).1;
 
                 let selector = build_concat_selector(
                     &self.params.input_raw_dims,
@@ -352,12 +355,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ConcatSumch
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, Default::default()); // We will update the opening point for each input term
+            .into_provider(transcript, Default::default()); // We will update the opening point for each input term
         for (input_idx, input_raw_dims) in self.params.input_raw_dims.iter().enumerate() {
             let input_num_vars = padded_domain_len(input_raw_dims).log_2();
-            let live_opening_point = full_opening_point.r[..input_num_vars].to_vec();
-            provider.update_point(live_opening_point.into());
-            provider.append_node_io(Target::Input(input_idx));
+            let live_opening_point = full_opening_point.r[..input_num_vars].to_vec().into();
+            provider.append_nodeio_at(Target::Input(input_idx), live_opening_point);
         }
     }
 }

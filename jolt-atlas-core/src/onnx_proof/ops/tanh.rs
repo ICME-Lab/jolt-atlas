@@ -287,7 +287,7 @@ impl<F: JoltField> TanhProver<F> {
         let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data()) // TODO: unify tensor representations (always i32 or always u32)
             .evaluate(&params.r_node_output.r);
         let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .to_provider(transcript, params.r_node_output.clone());
+            .into_provider(transcript, params.r_node_output.clone());
         // Edge case where we need to insert for SumcheckId::Raf sumcheck
         // TODO(AntoineF4C5): Clean once #208 is dealt with
         let raf_opening_id = OpeningId::new(
@@ -385,7 +385,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TanhProver<F>
         ]
         .concat();
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, OpeningPoint::new(r));
+            .into_provider(transcript, OpeningPoint::new(r));
         provider.append_advice(VirtualPoly::TanhRa, self.input_onehot.final_claim());
     }
 }
@@ -412,7 +412,7 @@ impl<F: JoltField> TanhVerifier<F> {
 
         // Cache quotient polynomial opening
         let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .to_provider(transcript, params.r_node_output.clone());
+            .into_provider(transcript, params.r_node_output.clone());
         // Edge case where we need to insert for SumcheckId::Raf sumcheck
         // TODO(AntoineF4C5): Clean once #208 is dealt with
         let raf_opening_id = OpeningId::new(
@@ -470,7 +470,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifie
         ]
         .concat();
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .to_provider(transcript, OpeningPoint::new(r));
+            .into_provider(transcript, OpeningPoint::new(r));
         provider.append_advice(VirtualPoly::TanhRa);
     }
 }

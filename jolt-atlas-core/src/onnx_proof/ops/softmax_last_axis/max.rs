@@ -222,8 +222,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaxIndicatorP
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .to_provider(transcript, opening_point);
-        provider.append_node_io(Target::Input(0), self.X.final_claim());
+            .into_provider(transcript, opening_point);
+        provider.append_nodeio(Target::Input(0), self.X.final_claim());
     }
 }
 
@@ -261,8 +261,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MaxIndicato
             .params
             .normalize_opening_point(&sumcheck_challenges.into_opening());
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .to_provider(transcript, opening_point);
-        provider.append_node_io(Target::Input(0));
+            .into_provider(transcript, opening_point);
+        provider.append_nodeio(Target::Input(0));
     }
 
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::expected_output_claim", skip_all)]
@@ -276,7 +276,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MaxIndicato
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
         let accessor = AccOpeningAccessor::new(accumulator, &self.params.node);
-        let X_claim = accessor.get_node_io(Target::Input(0)).1;
+        let X_claim = accessor.get_nodeio(Target::Input(0)).1;
 
         // Evaluate e(r_sc) in O(F · log N) by exploiting sparsity:
         // e has exactly F nonzero entries at positions k·N + argmax_k[k],

@@ -387,7 +387,7 @@ mod tests {
         let builder = VerifierR1CSBuilder::<F>::new(&configs, &baked);
         let r1cs = builder.build();
 
-        let gens = PedersenGenerators::<Bn254Curve>::deterministic(r1cs.hyrax.C + 1);
+        let gens = PedersenGenerators::<Bn254Curve>::deterministic(r1cs.hyrax.C);
 
         let (instance, witness, z) = sample_random_satisfying_pair(&gens, &r1cs, None, &mut rng);
 
@@ -438,7 +438,7 @@ mod tests {
         let builder = VerifierR1CSBuilder::<F>::new(&configs, &baked);
         let r1cs = builder.build();
 
-        let gens = PedersenGenerators::<Bn254Curve>::deterministic(r1cs.hyrax.C + 1);
+        let gens = PedersenGenerators::<Bn254Curve>::deterministic(r1cs.hyrax.C);
 
         let round1 = RoundWitness::new(
             vec![

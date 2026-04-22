@@ -439,8 +439,8 @@ mod tests {
 
         // 6. Call BatchedSumcheck::prove_zk
         let mut blindfold_accumulator = BlindFoldAccumulator::<F, C>::new();
-        // Size the Pedersen generators for the max polynomial degree + 1
-        let pedersen_gens = PedersenGenerators::<C>::deterministic(poly_degree + 2);
+        // poly_degree + 1 coefficients need poly_degree + 1 message generators
+        let pedersen_gens = PedersenGenerators::<C>::deterministic(poly_degree + 1);
         let mut rng = rand::thread_rng();
 
         // Drain pending claims accumulated before the sumcheck (from output_claim,
@@ -514,7 +514,7 @@ mod tests {
             .expect("BlindFold R1CS should be satisfied");
 
         // 10. Build RelaxedR1CSInstance + witness
-        let gens = PedersenGenerators::<C>::deterministic(r1cs.hyrax.C + 1);
+        let gens = PedersenGenerators::<C>::deterministic(r1cs.hyrax.C);
         let witness: Vec<F> = z[1..].to_vec();
         let hyrax = &r1cs.hyrax;
         let hyrax_C = hyrax.C;

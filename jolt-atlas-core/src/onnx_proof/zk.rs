@@ -21,7 +21,7 @@ use atlas_onnx_tracer::{
 };
 use joltworks::{
     curve::Bn254Curve,
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::commitment::{
         commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG, pedersen::PedersenGenerators,
     },
@@ -38,7 +38,6 @@ use joltworks::{
         evaluation_reduction::EvalReductionProof,
         sumcheck::BatchedSumcheck,
         sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::SumcheckInstanceParams as _,
     },
     transcripts::{Blake2bTranscript, Transcript},
     utils::errors::ProofVerifyError,
@@ -48,6 +47,7 @@ use std::collections::BTreeMap;
 type F = Fr;
 type C = Bn254Curve;
 type T = Blake2bTranscript;
+#[expect(clippy::upper_case_acronyms)]
 type PCS = HyperKZG<Bn254>;
 
 /// Result of a single-pass ZK prove.
@@ -74,6 +74,7 @@ fn run_zk_sumcheck(
     prover: &mut Prover<F, T>,
     blindfold_accumulator: &mut BlindFoldAccumulator<F, C>,
     stage_configs: &mut Vec<StageConfig>,
+    pedersen_gens: &PedersenGenerators<C>,
 ) {
     let poly_degree = sc.get_params().degree();
     let num_rounds = sc.get_params().num_rounds();
@@ -81,7 +82,6 @@ fn run_zk_sumcheck(
     let _ = prover.accumulator.take_pending_claims();
     let _ = prover.accumulator.take_pending_claim_ids();
 
-    let pedersen_gens = PedersenGenerators::<C>::deterministic(poly_degree + 2);
     let mut rng = rand::thread_rng();
 
     let instances: Vec<&mut dyn SumcheckInstanceProver<F, T>> = vec![sc];
@@ -90,7 +90,7 @@ fn run_zk_sumcheck(
         &mut prover.accumulator,
         blindfold_accumulator,
         &mut prover.transcript,
-        &pedersen_gens,
+        pedersen_gens,
         &mut rng,
     );
 
@@ -129,6 +129,14 @@ pub fn prove_zk(
     let mut stage_configs = Vec::new();
     let mut eval_reduction_proofs = BTreeMap::new();
 
+    // TODO: In production, Pedersen generators should come from preprocessing
+    // (like the HyperKZG SRS), not generated on the fly.
+    // The max sumcheck polynomial degree across all supported operators is 4 (Cube).
+    // poly_degree + 1 coefficients need poly_degree + 1 message generators.
+    let max_sumcheck_degree = 4;
+    let sumcheck_pedersen_gens =
+        PedersenGenerators::<C>::deterministic(max_sumcheck_degree + 1);
+
     for (_, node) in nodes.iter().rev() {
         // Eval reduction (same as standard flow)
         let eval_reduction_proof = NodeEvalReduction::prove(&mut prover, node);
@@ -145,6 +153,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
+                    &sumcheck_pedersen_gens,
                 );
             }
             Operator::Add(_) => {
@@ -156,6 +165,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
+                    &sumcheck_pedersen_gens,
                 );
             }
             Operator::Reshape(_) => {
@@ -173,6 +183,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
+                    &sumcheck_pedersen_gens,
                 );
             }
             Operator::Slice(_) => {
@@ -188,6 +199,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
+                    &sumcheck_pedersen_gens,
                 );
             }
             Operator::Neg(_) => {
@@ -199,6 +211,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
+                    &sumcheck_pedersen_gens,
                 );
             }
             Operator::Sub(_) => {
@@ -210,6 +223,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
+                    &sumcheck_pedersen_gens,
                 );
             }
             Operator::Mul(_) | Operator::And(_) => {
@@ -221,6 +235,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
+                    &sumcheck_pedersen_gens,
                 );
             }
             Operator::Cube(_) => {
@@ -232,6 +247,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
+                    &sumcheck_pedersen_gens,
                 );
             }
             Operator::Input(_)
@@ -392,8 +408,8 @@ pub fn prove_zk(
 /// independently checks eval reduction proofs and the output claim.
 pub fn verify_zk(
     bundle: &ZkProofBundle,
-    pp: &AtlasVerifierPreprocessing<F, PCS>,
-    io: &ModelExecutionIO,
+    _pp: &AtlasVerifierPreprocessing<F, PCS>,
+    _io: &ModelExecutionIO,
 ) -> Result<(), ProofVerifyError> {
     // 1. Verify BlindFold proof
     let builder = VerifierR1CSBuilder::<F>::new(&bundle.stage_configs, &bundle.baked);

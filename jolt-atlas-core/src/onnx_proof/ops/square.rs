@@ -391,7 +391,6 @@ mod tests {
         use ark_std::Zero;
         use joltworks::{
             curve::Bn254Curve,
-            field::IntoOpening,
             poly::commitment::pedersen::PedersenGenerators,
             subprotocols::{
                 blindfold::{
@@ -402,7 +401,6 @@ mod tests {
                     BakedPublicInputs, BlindFoldAccumulator, StageConfig,
                 },
                 sumcheck::BatchedSumcheck,
-                sumcheck_prover::SumcheckInstanceProver as _,
             },
             transcripts::KeccakTranscript,
         };
@@ -410,8 +408,6 @@ mod tests {
         use crate::onnx_proof::{
             ops::eval_reduction::NodeEvalReduction, AtlasSharedPreprocessing, ONNXProof, Prover,
         };
-        use atlas_onnx_tracer::model::trace::Trace;
-
         type F = Fr;
         type C = Bn254Curve;
         type T = KeccakTranscript;
@@ -432,7 +428,7 @@ mod tests {
 
         // 4. Eval reduction for the Square node
         let nodes = pp.model().nodes();
-        let (_, square_node) = nodes.iter().rev().next().unwrap();
+        let (_, square_node) = nodes.iter().next_back().unwrap();
         NodeEvalReduction::prove(&mut prover, square_node);
 
         // 5. Create SquareProver

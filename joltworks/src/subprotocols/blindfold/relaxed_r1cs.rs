@@ -331,7 +331,7 @@ mod tests {
         // witness_start = 1 (no public inputs)
         let witness: Vec<F> = z[1..].to_vec();
 
-        let gens = PedersenGenerators::<Bn254Curve>::deterministic(r1cs.hyrax.C + 1);
+        let gens = PedersenGenerators::<Bn254Curve>::deterministic(r1cs.hyrax.C);
 
         let hyrax_C = r1cs.hyrax.C;
         let coeffs_row = &witness[0..hyrax_C];

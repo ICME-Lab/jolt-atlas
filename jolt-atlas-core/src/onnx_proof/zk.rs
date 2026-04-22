@@ -56,8 +56,6 @@ pub struct ZkProofBundle {
     pub blindfold_proof: BlindFoldProof<F, C>,
     /// BlindFold verifier input (round commitments from the real instance).
     pub blindfold_verifier_input: BlindFoldVerifierInput<C>,
-    /// Pedersen generators used for commitments (needed by verifier).
-    pub pedersen_gens: PedersenGenerators<C>,
     /// Stage configs describing the BlindFold R1CS layout.
     pub stage_configs: Vec<StageConfig>,
     /// Baked public inputs for the BlindFold R1CS.
@@ -103,11 +101,19 @@ fn run_zk_sumcheck(
 /// operator runs eval reduction + ZK sumcheck. Finally builds the BlindFold
 /// proof from accumulated stage data.
 ///
-/// Currently only supports models whose operators are Square, Input, Identity,
-/// Broadcast, MoveAxis, or Constant.
+/// `pedersen_gens` must have at least `max(poly_degree + 1, hyrax_C)` message
+/// generators, where `hyrax_C` depends on the BlindFold R1CS grid layout.
+/// For current operators, 8 generators suffice. In tests, use
+/// `PedersenGenerators::deterministic(n)`; in production, use generators from
+/// a trusted setup.
+///
+/// Currently only supports models whose operators are Square, Add, Sub, Neg,
+/// Mul, And, Cube, Reshape, Slice, Input, Identity, Broadcast, MoveAxis,
+/// Constant, or IsNan.
 pub fn prove_zk(
     pp: &AtlasProverPreprocessing<F, PCS>,
     inputs: &[Tensor<i32>],
+    pedersen_gens: &PedersenGenerators<C>,
 ) -> (ZkProofBundle, ModelExecutionIO) {
     // 1. Single pass: trace the model once
     let trace = pp.model().trace(inputs);
@@ -129,14 +135,6 @@ pub fn prove_zk(
     let mut stage_configs = Vec::new();
     let mut eval_reduction_proofs = BTreeMap::new();
 
-    // TODO: In production, Pedersen generators should come from preprocessing
-    // (like the HyperKZG SRS), not generated on the fly.
-    // The max sumcheck polynomial degree across all supported operators is 4 (Cube).
-    // poly_degree + 1 coefficients need poly_degree + 1 message generators.
-    let max_sumcheck_degree = 4;
-    let sumcheck_pedersen_gens =
-        PedersenGenerators::<C>::deterministic(max_sumcheck_degree + 1);
-
     for (_, node) in nodes.iter().rev() {
         // Eval reduction (same as standard flow)
         let eval_reduction_proof = NodeEvalReduction::prove(&mut prover, node);
@@ -153,7 +151,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
-                    &sumcheck_pedersen_gens,
+                    pedersen_gens,
                 );
             }
             Operator::Add(_) => {
@@ -165,7 +163,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
-                    &sumcheck_pedersen_gens,
+                    pedersen_gens,
                 );
             }
             Operator::Reshape(_) => {
@@ -183,7 +181,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
-                    &sumcheck_pedersen_gens,
+                    pedersen_gens,
                 );
             }
             Operator::Slice(_) => {
@@ -199,7 +197,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
-                    &sumcheck_pedersen_gens,
+                    pedersen_gens,
                 );
             }
             Operator::Neg(_) => {
@@ -211,7 +209,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
-                    &sumcheck_pedersen_gens,
+                    pedersen_gens,
                 );
             }
             Operator::Sub(_) => {
@@ -223,7 +221,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
-                    &sumcheck_pedersen_gens,
+                    pedersen_gens,
                 );
             }
             Operator::Mul(_) | Operator::And(_) => {
@@ -235,7 +233,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
-                    &sumcheck_pedersen_gens,
+                    pedersen_gens,
                 );
             }
             Operator::Cube(_) => {
@@ -247,7 +245,7 @@ pub fn prove_zk(
                     &mut prover,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
-                    &sumcheck_pedersen_gens,
+                    pedersen_gens,
                 );
             }
             Operator::Input(_)
@@ -274,8 +272,7 @@ pub fn prove_zk(
 
         let joint_claim: F = state.sumcheck_claims.iter().sum();
         let y_blinding = F::random(&mut rand::thread_rng());
-        let y_com_gens = PedersenGenerators::<C>::deterministic(2);
-        let y_com = y_com_gens.commit(&[joint_claim], &y_blinding);
+        let y_com = pedersen_gens.commit(&[joint_claim], &y_blinding);
         prover.transcript.append_serializable(&y_com);
 
         blindfold_accumulator.set_opening_proof_data(
@@ -339,7 +336,12 @@ pub fn prove_zk(
     r1cs.check_satisfaction(&z)
         .expect("BlindFold R1CS should be satisfied");
 
-    let gens = PedersenGenerators::<C>::deterministic(r1cs.hyrax.C + 1);
+    assert!(
+        pedersen_gens.message_generators.len() >= r1cs.hyrax.C,
+        "Pedersen generators too small: need {} for Hyrax columns, have {}",
+        r1cs.hyrax.C,
+        pedersen_gens.message_generators.len()
+    );
     let witness: Vec<F> = z[1..].to_vec();
     let hyrax = &r1cs.hyrax;
     let hyrax_C = hyrax.C;
@@ -353,7 +355,7 @@ pub fn prove_zk(
     for round_idx in 0..hyrax.total_rounds {
         let row_start = round_idx * hyrax_C;
         let blinding = F::random(&mut rng);
-        let commitment = gens.commit(&witness[row_start..row_start + hyrax_C], &blinding);
+        let commitment = pedersen_gens.commit(&witness[row_start..row_start + hyrax_C], &blinding);
         w_row_blindings[round_idx] = blinding;
         round_commitments.push(commitment);
     }
@@ -364,7 +366,7 @@ pub fn prove_zk(
         let start = R_coeff * hyrax_C + row * hyrax_C;
         let end = (start + hyrax_C).min(witness.len());
         let blinding = F::random(&mut rng);
-        noncoeff_row_commitments.push(gens.commit(&witness[start..end], &blinding));
+        noncoeff_row_commitments.push(pedersen_gens.commit(&witness[start..end], &blinding));
         w_row_blindings[R_coeff + row] = blinding;
     }
 
@@ -379,7 +381,7 @@ pub fn prove_zk(
         w_row_blindings,
     );
 
-    let bf_prover = BlindFoldProver::new(&gens, &r1cs, None);
+    let bf_prover = BlindFoldProver::new(pedersen_gens, &r1cs, None);
     let mut bf_transcript = T::new(b"BlindFold_onnx");
     let blindfold_proof = bf_prover.prove(&real_instance, &real_witness, &z, &mut bf_transcript);
 
@@ -392,7 +394,6 @@ pub fn prove_zk(
     let bundle = ZkProofBundle {
         blindfold_proof,
         blindfold_verifier_input,
-        pedersen_gens: gens,
         stage_configs,
         baked,
         eval_reduction_proofs,
@@ -410,11 +411,12 @@ pub fn verify_zk(
     bundle: &ZkProofBundle,
     _pp: &AtlasVerifierPreprocessing<F, PCS>,
     _io: &ModelExecutionIO,
+    pedersen_gens: &PedersenGenerators<C>,
 ) -> Result<(), ProofVerifyError> {
     // 1. Verify BlindFold proof
     let builder = VerifierR1CSBuilder::<F>::new(&bundle.stage_configs, &bundle.baked);
     let r1cs = builder.build();
-    let bf_verifier = BlindFoldVerifier::new(&bundle.pedersen_gens, &r1cs, None);
+    let bf_verifier = BlindFoldVerifier::new(pedersen_gens, &r1cs, None);
 
     let mut bf_transcript = T::new(b"BlindFold_onnx");
     bf_verifier

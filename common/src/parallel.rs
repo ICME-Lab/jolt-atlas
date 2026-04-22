@@ -1,29 +1,22 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-static PAR_ENABLED: AtomicBool = AtomicBool::new(true);
+static PAR_DISABLE_DEPTH: AtomicUsize = AtomicUsize::new(0);
 
-/// RAII guard that restores the shared parallel execution flag on drop.
-pub struct ParallelFlagGuard {
-    previous: bool,
-}
+/// RAII guard that disables shared parallel execution for the current scope.
+pub struct ParallelFlagGuard;
 
 impl ParallelFlagGuard {
-    /// Sets the shared parallel execution flag for the current scope.
-    pub fn set(enabled: bool) -> Self {
-        Self {
-            previous: swap_par_enabled(enabled),
-        }
-    }
-
     /// Disables shared parallel execution for the current scope.
     pub fn disabled() -> Self {
-        Self::set(false)
+        PAR_DISABLE_DEPTH.fetch_add(1, Ordering::SeqCst);
+        Self
     }
 }
 
 impl Drop for ParallelFlagGuard {
     fn drop(&mut self) {
-        swap_par_enabled(self.previous);
+        let previous = PAR_DISABLE_DEPTH.fetch_sub(1, Ordering::SeqCst);
+        debug_assert!(previous > 0, "parallel disable depth underflow");
     }
 }
 
@@ -33,7 +26,7 @@ impl Drop for ParallelFlagGuard {
 /// Rayon default behavior. When disabled, this returns `usize::MAX`, which
 /// prevents further splitting for indexed iterators.
 pub fn par_enabled() -> usize {
-    if PAR_ENABLED.load(Ordering::Relaxed) {
+    if PAR_DISABLE_DEPTH.load(Ordering::SeqCst) == 0 {
         1
     } else {
         usize::MAX
@@ -45,48 +38,46 @@ pub fn par_enabled() -> usize {
 /// When parallel execution is enabled, this returns `enabled_min_len`. When disabled,
 /// this returns `usize::MAX`, which prevents further splitting for indexed iterators.
 pub fn par_enabled_with(enabled_min_len: usize) -> usize {
-    if PAR_ENABLED.load(Ordering::Relaxed) {
+    if PAR_DISABLE_DEPTH.load(Ordering::SeqCst) == 0 {
         enabled_min_len
     } else {
         usize::MAX
     }
 }
 
-/// Sets whether shared parallel execution is enabled.
-pub fn set_par_enabled(enabled: bool) {
-    PAR_ENABLED.store(enabled, Ordering::Relaxed);
-}
-
-/// Swaps the shared parallel execution flag and returns the previous value.
-pub fn swap_par_enabled(enabled: bool) -> bool {
-    PAR_ENABLED.swap(enabled, Ordering::Relaxed)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        ParallelFlagGuard, par_enabled, par_enabled_with, set_par_enabled, swap_par_enabled,
-    };
+    use super::{PAR_DISABLE_DEPTH, ParallelFlagGuard, par_enabled, par_enabled_with};
+    use std::sync::atomic::Ordering;
+    use std::sync::{Mutex, MutexGuard};
+
+    static PARALLEL_TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+    fn test_lock() -> MutexGuard<'static, ()> {
+        PARALLEL_TEST_MUTEX.lock().unwrap()
+    }
+
+    fn reset_depth() {
+        PAR_DISABLE_DEPTH.store(0, Ordering::SeqCst);
+    }
 
     #[test]
-    fn parallel_flag_round_trips() {
-        let original = swap_par_enabled(true);
+    fn parallel_flag_guard_disables_and_restores() {
+        let _lock = test_lock();
+        reset_depth();
 
-        set_par_enabled(false);
-        assert_eq!(par_enabled(), usize::MAX);
-        assert_eq!(par_enabled_with(4096), usize::MAX);
-
-        assert!(!swap_par_enabled(true));
         assert_eq!(par_enabled(), 1);
         assert_eq!(par_enabled_with(4096), 4096);
 
-        set_par_enabled(original);
+        let _guard = ParallelFlagGuard::disabled();
+        assert_eq!(par_enabled(), usize::MAX);
+        assert_eq!(par_enabled_with(4096), usize::MAX);
     }
 
     #[test]
     fn parallel_flag_guard_restores_previous_value() {
-        let original = swap_par_enabled(true);
-        set_par_enabled(true);
+        let _lock = test_lock();
+        reset_depth();
 
         {
             let _guard = ParallelFlagGuard::disabled();
@@ -94,6 +85,24 @@ mod tests {
         }
 
         assert_eq!(par_enabled(), 1);
-        set_par_enabled(original);
+        assert_eq!(par_enabled_with(4096), 4096);
+    }
+
+    #[test]
+    fn parallel_flag_guard_is_reference_counted() {
+        let _lock = test_lock();
+        reset_depth();
+
+        let outer = ParallelFlagGuard::disabled();
+        assert_eq!(par_enabled(), usize::MAX);
+
+        {
+            let _inner = ParallelFlagGuard::disabled();
+            assert_eq!(par_enabled(), usize::MAX);
+        }
+
+        assert_eq!(par_enabled(), usize::MAX);
+        drop(outer);
+        assert_eq!(par_enabled(), 1);
     }
 }

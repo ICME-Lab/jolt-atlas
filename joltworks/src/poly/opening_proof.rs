@@ -359,8 +359,13 @@ where
         transcript.append_scalar(&claim);
 
         self.openings.insert(opening_id, (opening_point, claim));
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-feature"))]
         self.appended_virtual_openings.borrow_mut().push(opening_id);
+        #[cfg(feature = "zk")]
+        {
+            self.pending_claims.push(claim);
+            self.pending_claim_ids.push(opening_id);
+        }
     }
 
     /// Take the openings, removing the points to reduce proof size
@@ -998,6 +1003,8 @@ pub enum SumcheckId {
     HammingWeight,
     /// RLC sumcheck for the execution of a specific node.
     RLC(usize),
+    /// Batch opening reduction (used by BlindFold y_com constraint).
+    BlindFoldBatchOpening,
 }
 
 impl CanonicalSerialize for SumcheckId {
@@ -1021,6 +1028,7 @@ impl CanonicalSerialize for SumcheckId {
                 7u8.serialize_with_mode(&mut writer, compress)?;
                 idx.serialize_with_mode(&mut writer, compress)?;
             }
+            Self::BlindFoldBatchOpening => 8u8.serialize_with_mode(&mut writer, compress)?,
         }
         Ok(())
     }
@@ -1063,6 +1071,7 @@ impl CanonicalDeserialize for SumcheckId {
                 let idx = usize::deserialize_with_mode(&mut reader, compress, validate)?;
                 Ok(Self::RLC(idx))
             }
+            8 => Ok(Self::BlindFoldBatchOpening),
             _ => Err(SerializationError::InvalidData),
         }
     }

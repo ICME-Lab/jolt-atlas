@@ -25,14 +25,14 @@ pub enum Target {
 
 /// Struct-based opening ID factory scoped to one computation node.
 #[derive(Debug, Clone, Copy)]
-struct OpeningIdBuilder<'a> {
+pub(crate) struct OpeningIdBuilder<'a> {
     node: &'a ComputationNode,
     sumcheck_id: SumcheckId,
 }
 
 impl<'a> OpeningIdBuilder<'a> {
     /// Create a builder scoped to one computation node.
-    fn new(node: &'a ComputationNode) -> Self {
+    pub fn new(node: &'a ComputationNode) -> Self {
         Self {
             node,
             sumcheck_id: SumcheckId::NodeExecution(node.idx),
@@ -41,7 +41,7 @@ impl<'a> OpeningIdBuilder<'a> {
 
     /// Convenience method for the common case of opening an input/current node output
     /// in this builder's default sumcheck context.
-    fn nodeio(&self, target: Target) -> OpeningId {
+    pub fn nodeio(&self, target: Target) -> OpeningId {
         let node_idx = match target {
             Target::Current => self.node.idx,
             Target::Input(position) => self.node.inputs[position],
@@ -51,7 +51,7 @@ impl<'a> OpeningIdBuilder<'a> {
 
     /// Build an advice opening for the current node in this builder's default
     /// sumcheck context.
-    fn advice<Poly>(&self, poly_ctor: impl FnOnce(usize) -> Poly) -> OpeningId
+    pub fn advice<Poly>(&self, poly_ctor: impl FnOnce(usize) -> Poly) -> OpeningId
     where
         Poly: Into<PolynomialId>,
     {

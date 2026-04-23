@@ -1,5 +1,5 @@
 use crate::{
-    impl_standard_params, impl_standard_sumcheck_proof_api,
+    impl_standard_sumcheck_proof_api,
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
@@ -30,7 +30,96 @@ use joltworks::{
 };
 
 impl_standard_sumcheck_proof_api!(Add, AddParams, AddProver, AddVerifier);
-impl_standard_params!(AddParams, 2);
+
+/// Shared parameter block for the element-wise addition sumcheck proof.
+#[derive(Clone)]
+pub struct AddParams<F: JoltField> {
+    pub(crate) r_node_output: OpeningPoint<BIG_ENDIAN, F>,
+    pub(crate) computation_node: ComputationNode,
+}
+
+impl<F: JoltField> AddParams<F> {
+    /// Creates new params by reading the current output opening from the accumulator.
+    pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
+        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
+        let r_node_output = accessor.get_reduced_opening().0;
+        Self {
+            r_node_output,
+            computation_node,
+        }
+    }
+}
+
+impl<F: JoltField> SumcheckInstanceParams<F> for AddParams<F> {
+    fn degree(&self) -> usize {
+        2
+    }
+
+    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
+        accumulator
+            .get_node_output_opening(self.computation_node.idx)
+            .1
+    }
+
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
+    }
+
+    fn num_rounds(&self) -> usize {
+        use joltworks::utils::math::Math;
+        self.computation_node
+            .pow2_padded_num_output_elements()
+            .log_2()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> joltworks::subprotocols::blindfold::InputClaimConstraint {
+        joltworks::subprotocols::blindfold::InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    // output = eq_eval * (left + right) = eq_eval * left + eq_eval * right
+    // Two terms, each with Challenge(0) = eq_eval scaling one opening.
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(
+        &self,
+    ) -> Option<joltworks::subprotocols::blindfold::OutputClaimConstraint> {
+        use joltworks::subprotocols::blindfold::{OutputClaimConstraint, ProductTerm, ValueSource};
+
+        let op_builder =
+            crate::utils::opening_access::OpeningIdBuilder::new(&self.computation_node);
+        let left_id = op_builder.nodeio(Target::Input(0));
+        let right_id = op_builder.nodeio(Target::Input(1));
+
+        let terms = vec![
+            ProductTerm::scaled(
+                ValueSource::Challenge(0),
+                vec![ValueSource::Opening(left_id)],
+            ),
+            ProductTerm::scaled(
+                ValueSource::Challenge(0),
+                vec![ValueSource::Opening(right_id)],
+            ),
+        ];
+        Some(OutputClaimConstraint::sum_of_products(terms))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        let r_node_output_prime: Vec<F> = self
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
+        let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_node_output_prime);
+        vec![eq_eval]
+    }
+}
 
 /// Prover state for element-wise addition sumcheck protocol.
 ///

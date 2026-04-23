@@ -158,9 +158,9 @@ pub struct BakedPublicInputs<F> {
     pub extra_constraint_challenges: Vec<F>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-feature", feature = "zk"))]
 impl<F: JoltField> BakedPublicInputs<F> {
-    pub(crate) fn from_witness(
+    pub fn from_witness(
         witness: &witness::BlindFoldWitness<F>,
         stage_configs: &[StageConfig],
     ) -> Self {

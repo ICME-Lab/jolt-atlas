@@ -547,7 +547,7 @@ mod tests {
         let baked = BakedPublicInputs::from_witness(blindfold_witness, configs);
         let builder = VerifierR1CSBuilder::<F>::new(configs, &baked);
         let r1cs = builder.build();
-        let gens = PedersenGenerators::<Bn254Curve>::deterministic(r1cs.hyrax.C + 1);
+        let gens = PedersenGenerators::<Bn254Curve>::deterministic(r1cs.hyrax.C);
 
         let z = blindfold_witness.assign(&r1cs);
         r1cs.check_satisfaction(&z).unwrap();

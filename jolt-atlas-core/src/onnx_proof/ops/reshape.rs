@@ -199,6 +199,52 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeSumcheckParams<F> {
             .pow2_padded_num_output_elements()
             .log_2()
     }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> joltworks::subprotocols::blindfold::InputClaimConstraint {
+        joltworks::subprotocols::blindfold::InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    // output = input_claim * selector_claim
+    // selector_claim is deterministic from public data (shapes + r_output), so Challenge(0).
+    // input_claim is an opening.
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(
+        &self,
+    ) -> Option<joltworks::subprotocols::blindfold::OutputClaimConstraint> {
+        use joltworks::subprotocols::blindfold::{OutputClaimConstraint, ProductTerm, ValueSource};
+
+        let input_id = crate::utils::opening_access::OpeningIdBuilder::new(&self.computation_node)
+            .nodeio(Target::Input(0));
+        let term = ProductTerm::scaled(
+            ValueSource::Challenge(0),
+            vec![ValueSource::Opening(input_id)],
+        );
+        Some(OutputClaimConstraint::sum_of_products(vec![term]))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        let selector = build_reshape_selectors(
+            &self.input_raw_dims,
+            &self.output_raw_dims,
+            &self.r_output.r,
+        );
+        let selector_claim = MultilinearPolynomial::from(selector).evaluate(
+            &self
+                .normalize_opening_point(&sumcheck_challenges.into_opening())
+                .r,
+        );
+        vec![selector_claim]
+    }
 }
 
 /// Prover skeleton for reshape sumcheck.

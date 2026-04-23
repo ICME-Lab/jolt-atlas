@@ -4,6 +4,7 @@
     clippy::len_without_is_empty,
     clippy::needless_range_loop,
     clippy::new_without_default,
+    clippy::enum_variant_names,
     clippy::too_long_first_doc_paragraph,
     long_running_const_eval,
     non_snake_case,

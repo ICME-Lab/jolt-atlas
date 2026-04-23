@@ -29,6 +29,8 @@ pub static FROM_U16_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static FROM_U32_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Count of `from_u64` conversions.
 pub static FROM_U64_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Count of `from_i8` conversions.
+pub static FROM_I8_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Count of `from_i32` conversions.
 pub static FROM_I32_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Count of `from_i64` conversions.

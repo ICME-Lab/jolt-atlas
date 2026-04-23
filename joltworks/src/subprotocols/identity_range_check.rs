@@ -1,3 +1,4 @@
+//! sum_{k,j} eq(r, j) * ra(k, j) * Identity(k) = rv(r)
 use crate::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -34,7 +35,7 @@ use std::array;
 const DEGREE_BOUND: usize = 2;
 
 #[derive(Debug, Clone)]
-/// Parameters for the Prefix suffix Read-raf checking sum-check protocol.
+/// Parameters for the Prefix suffix Raf checking sum-check protocol.
 ///
 /// This protocol proves correct lookups from instruction tables by verifying that
 /// read values match the table entries at computed addresses. The protocol uses
@@ -325,7 +326,7 @@ impl<F: JoltField, FS: Transcript> SumcheckInstanceProver<F, FS> for IdentityRCP
         }
     }
 
-    #[tracing::instrument(skip_all, name = "InstructionIdentityRCProver::ingest_challenge")]
+    #[tracing::instrument(skip_all, name = "IdentityRCProver::ingest_challenge")]
     /// Binds the next variable (address or cycle) and advances state.
     ///
     /// Address rounds: bind all active prefix–suffix polynomials and the

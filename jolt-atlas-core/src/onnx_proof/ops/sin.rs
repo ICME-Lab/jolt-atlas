@@ -509,7 +509,11 @@ impl<F: JoltField, T: Transcript> NeuralTeleportRangeOneHot<F, T> for Sin {
         let LayerData { operands, .. } = Trace::layer_data(trace, node);
         let input = operands[0];
         let (_, remainder) = compute_division(input, FOUR_PI_APPROX);
-        remainder.par_iter().map(|&x| x as usize).collect()
+        remainder
+            .par_iter()
+            .with_min_len(par_enabled())
+            .map(|&x| x as usize)
+            .collect()
     }
 
     fn ra_encoding(&self, node: &ComputationNode) -> Self::RaEncoding {

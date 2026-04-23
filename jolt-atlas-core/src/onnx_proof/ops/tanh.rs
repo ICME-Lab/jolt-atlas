@@ -526,6 +526,7 @@ impl<F: JoltField, T: Transcript> NeuralTeleportRangeOneHot<F, T> for Tanh {
         let (quotient, _remainder) = compute_division(input, self.tau);
         quotient
             .par_iter()
+            .with_min_len(par_enabled())
             .map(|&x| n_bits_to_usize(x, self.log_table))
             .collect()
     }

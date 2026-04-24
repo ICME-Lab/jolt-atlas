@@ -68,8 +68,12 @@ pub struct ZkProofBundle {
     pub stage_configs: Vec<StageConfig>,
     /// Baked public inputs for the BlindFold R1CS.
     pub baked: BakedPublicInputs<F>,
-    /// Evaluation reduction proofs for each node.
+    /// Evaluation reduction proofs for each node (standard mode data; h polynomial
+    /// is NOT used by the ZK verifier, which relies on h_commitments instead).
     pub eval_reduction_proofs: BTreeMap<usize, EvalReductionProof<F>>,
+    /// Pedersen commitments to eval reduction h polynomials (keyed by node index).
+    /// None for single-opening nodes (short path, no h produced).
+    pub eval_reduction_h_commitments: BTreeMap<usize, joltworks::curve::Bn254G1>,
     /// Polynomial commitments for witness polynomials.
     pub commitments: Vec<<PCS as CommitmentScheme>::Commitment>,
     /// The output claim value (public, computed from IO).
@@ -150,11 +154,40 @@ pub fn prove_zk(
     let mut blindfold_accumulator = BlindFoldAccumulator::<F, C>::new();
     let mut stage_configs = Vec::new();
     let mut eval_reduction_proofs = BTreeMap::new();
+    let mut eval_reduction_h_commitments = BTreeMap::new();
     let mut zk_sumcheck_proofs: Vec<NodeZkProof> = Vec::new();
 
     for (_, node) in nodes.iter().rev() {
-        let eval_reduction_proof = NodeEvalReduction::prove(&mut prover, node);
-        eval_reduction_proofs.insert(node.idx, eval_reduction_proof);
+        // ZK eval reduction: commit h via Pedersen instead of cleartext
+        {
+            use atlas_onnx_tracer::model::trace::{LayerData, Trace};
+            use joltworks::subprotocols::evaluation_reduction::EvalReductionProtocol;
+
+            let node_idx = node.idx;
+            let openings = prover.accumulator.get_node_openings(node_idx);
+            let LayerData {
+                operands: _,
+                output,
+            } = Trace::layer_data(&prover.trace, node);
+            let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
+
+            let (proof, reduced, h_com) = EvalReductionProtocol::prove_zk::<F, C, _>(
+                &openings,
+                output_mle,
+                &mut prover.transcript,
+                pedersen_gens,
+            )
+            .expect("ZK eval reduction should not fail");
+
+            prover
+                .accumulator
+                .reduced_evaluations
+                .insert(node_idx, reduced);
+            eval_reduction_proofs.insert(node_idx, proof);
+            if let Some(com) = h_com {
+                eval_reduction_h_commitments.insert(node_idx, com);
+            }
+        }
 
         let zk_proof = match &node.operator {
             Operator::Square(_) => {
@@ -443,6 +476,7 @@ pub fn prove_zk(
         stage_configs,
         baked,
         eval_reduction_proofs,
+        eval_reduction_h_commitments,
         commitments,
         output_claim,
         zk_sumcheck_proofs,
@@ -510,17 +544,11 @@ pub fn verify_zk(
     // 3. Full IOP replay: for each node, verify eval reduction + absorb ZK sumcheck
     let mut zk_proof_idx = 0;
     for (_, node) in model.graph.nodes.iter().rev() {
-        // Verify eval reduction
-        let eval_reduction_proof =
-            bundle.eval_reduction_proofs.get(&node.idx).ok_or_else(|| {
-                ProofVerifyError::InvalidOpeningProof(format!(
-                    "Missing eval reduction proof for node {}",
-                    node.idx
-                ))
-            })?;
+        // Verify eval reduction (ZK mode: absorb h commitment, skip claim checks)
         let openings = accumulator.get_node_openings(node.idx);
+        let h_commitment = bundle.eval_reduction_h_commitments.get(&node.idx);
         let reduced_instance =
-            EvalReductionProtocol::verify(&openings, eval_reduction_proof, &mut transcript)?;
+            EvalReductionProtocol::verify_zk::<F, T>(&openings, h_commitment, &mut transcript)?;
         accumulator
             .reduced_evaluations
             .insert(node.idx, reduced_instance);

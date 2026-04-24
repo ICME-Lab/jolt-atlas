@@ -291,6 +291,97 @@ impl EvalReductionProtocol {
 
         instance.verify(proof, transcript)
     }
+
+    /// ZK-mode prove: commits h via Pedersen instead of appending cleartext coefficients.
+    /// Returns the proof, reduced instance, and the h commitment (to be stored in
+    /// ZkProofBundle for the verifier).
+    #[cfg(feature = "zk")]
+    pub fn prove_zk<F: JoltField, C: crate::curve::JoltCurve<F = F>, T: Transcript>(
+        openings: &[&Opening<F>],
+        output_mle: MultilinearPolynomial<F>,
+        transcript: &mut T,
+        pedersen_gens: &crate::poly::commitment::pedersen::PedersenGenerators<C>,
+    ) -> Result<(EvalReductionProof<F>, ReducedInstance<F>, Option<C::G1>), ProvingError> {
+        let witness = EvalReductionWitness::new(output_mle);
+        let instance = EvalReductionInstance::new(openings);
+
+        if instance.openings.is_empty() {
+            return Err(ProvingError::EmptyInput);
+        }
+
+        if instance.openings.len() == 1 {
+            // Short path: single opening, no h polynomial to commit.
+            let (proof, reduced) = instance.prove(&witness, transcript)?;
+            return Ok((proof, reduced, None));
+        }
+
+        let opening_points = instance.openings.iter().map(|(r, _)| r).collect::<Vec<_>>();
+        let ri_vec = group_by_variable(&opening_points);
+        let h = compute_h(&witness.mle, &ri_vec);
+
+        // Commit h via Pedersen instead of appending cleartext coefficients
+        let blinding = F::random(&mut rand::thread_rng());
+        let h_commitment = pedersen_gens.commit(&h.coeffs, &blinding);
+        transcript.append_serializable(&h_commitment);
+
+        let x_prime: F::Challenge = transcript.challenge_scalar_optimized::<F>();
+
+        let proof = EvalReductionProof { h };
+        let reduced_instance = ReducedInstance {
+            r: eval_on_l(&ri_vec, x_prime.into()),
+            claim: proof.h.evaluate(&x_prime),
+        };
+
+        Ok((proof, reduced_instance, Some(h_commitment)))
+    }
+
+    /// ZK-mode verify: absorbs h commitment from the proof bundle (not cleartext h),
+    /// skips h(i) == claim checks (BlindFold constrains claim consistency),
+    /// derives the same challenge and reduced opening point.
+    /// The reduced claim is set to F::zero() (placeholder; BlindFold handles correctness).
+    #[cfg(feature = "zk")]
+    pub fn verify_zk<F: JoltField, T: Transcript>(
+        openings: &[&Opening<F>],
+        h_commitment: Option<&impl ark_serialize::CanonicalSerialize>,
+        transcript: &mut T,
+    ) -> Result<ReducedInstance<F>, ProofVerifyError> {
+        let instance = EvalReductionInstance::new(openings);
+
+        if instance.openings.is_empty() {
+            return Err(ProofVerifyError::EmptyInput);
+        }
+
+        if instance.openings.len() == 1 {
+            // Short path: single opening, no commitment.
+            let (r, claim) = &instance.openings[0];
+            return Ok(ReducedInstance {
+                r: r.clone(),
+                claim: *claim,
+            });
+        }
+
+        let opening_points = instance.openings.iter().map(|(r, _)| r).collect::<Vec<_>>();
+        let ri_vec = group_by_variable(&opening_points);
+
+        // Absorb the same commitment the prover appended
+        if let Some(com) = h_commitment {
+            transcript.append_serializable(com);
+        } else {
+            return Err(ProofVerifyError::InvalidOpeningProof(
+                "Missing h commitment for multi-opening eval reduction in ZK mode".to_string(),
+            ));
+        }
+
+        let x_prime = transcript.challenge_scalar_optimized::<F>();
+        let reduced_r = eval_on_l(&ri_vec, x_prime.into());
+
+        // Reduced claim is unknown to verifier (h is committed, not revealed).
+        // BlindFold constrains its correctness via the sumcheck input claim.
+        Ok(ReducedInstance {
+            r: reduced_r,
+            claim: F::zero(),
+        })
+    }
 }
 
 #[cfg(test)]

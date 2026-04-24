@@ -923,6 +923,55 @@ fn test_cube_zk() {
         .expect("ZK verification should succeed");
 }
 
+#[cfg(feature = "zk")]
+#[test]
+fn test_iff_zk() {
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+    let size = 1 << 4;
+    let mut rng = StdRng::seed_from_u64(0xBF10);
+    let input = Tensor::<i32>::random_small(&mut rng, &[size]);
+    let mut builder = ModelBuilder::new();
+    let i = builder.input(vec![size]);
+    let mask = builder.constant(Tensor::random_boolean(&mut rng, &[size]));
+    let c0 = builder.constant(Tensor::<i32>::random_small(&mut rng, &[size]));
+    let res = builder.iff(mask, i, c0);
+    builder.mark_output(res);
+    let model = builder.build();
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+    let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
+        joltworks::curve::Bn254Curve,
+    >::deterministic(16);
+    let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
+        .expect("ZK verification should succeed");
+}
+
+#[cfg(feature = "zk")]
+#[test]
+fn test_concat_zk() {
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+    let mut rng = StdRng::seed_from_u64(0xBF11);
+    let a = Tensor::<i32>::random_small(&mut rng, &[4, 2]);
+    let b = Tensor::<i32>::random_small(&mut rng, &[4, 2]);
+    let mut builder = ModelBuilder::new();
+    let ia = builder.input(vec![4, 2]);
+    let ib = builder.input(vec![4, 2]);
+    let res = builder.concat(&[ia, ib], 1);
+    builder.mark_output(res);
+    let model = builder.build();
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+    let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
+        joltworks::curve::Bn254Curve,
+    >::deterministic(16);
+    let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[a, b], &gens);
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
+        .expect("ZK verification should succeed");
+}
+
 /// Benchmark: measures ZK overhead vs standard prove/verify for Square.
 /// Run with: cargo test -p jolt-atlas-core --features zk --release bench_square_zk_overhead -- --nocapture --ignored
 #[cfg(feature = "zk")]

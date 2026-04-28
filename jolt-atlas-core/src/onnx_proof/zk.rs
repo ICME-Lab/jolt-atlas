@@ -550,6 +550,16 @@ fn create_prover_instance(
                 params,
             )))
         }
+        Operator::ScalarConstDiv(_) => {
+            use crate::onnx_proof::ops::scalar_const_div::{
+                ScalarConstDivParams, ScalarConstDivProver,
+            };
+            let params = ScalarConstDivParams::<F>::new(node.clone(), &prover.accumulator);
+            Some(Box::new(ScalarConstDivProver::initialize(
+                &prover.trace,
+                params,
+            )))
+        }
         Operator::Input(_)
         | Operator::Identity(_)
         | Operator::Broadcast(_)
@@ -619,6 +629,13 @@ fn create_verifier_instances(
                 node.clone(),
                 accumulator,
                 &model.graph,
+            ))]
+        }
+        Operator::ScalarConstDiv(_) => {
+            use crate::onnx_proof::ops::scalar_const_div::ScalarConstDivVerifier;
+            vec![Box::new(ScalarConstDivVerifier::new(
+                node.clone(),
+                accumulator,
             ))]
         }
         _ => vec![],

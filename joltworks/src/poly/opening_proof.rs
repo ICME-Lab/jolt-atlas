@@ -92,6 +92,9 @@ where
     prover_opening_accumulator: Option<ProverOpeningAccumulator<F>>,
     #[cfg(feature = "zk")]
     pending_claims: Vec<F>,
+    /// When true, `append_virtual` inserts new keys with placeholder claims
+    /// instead of panicking. Claims are verified by BlindFold, not individually.
+    pub zk_mode: bool,
 }
 
 pub trait OpeningAccumulator<F: JoltField> {
@@ -612,6 +615,16 @@ where
             prover_opening_accumulator: None,
             #[cfg(feature = "zk")]
             pending_claims: Vec::new(),
+            zk_mode: false,
+        }
+    }
+
+    /// Create a verifier accumulator in ZK mode. In ZK mode, `append_virtual`
+    /// inserts new keys with placeholder claims instead of panicking.
+    pub fn new_zk() -> Self {
+        Self {
+            zk_mode: true,
+            ..Self::new()
         }
     }
 
@@ -735,10 +748,17 @@ where
         }
 
         if let Some((_, claim)) = self.openings.get(&opening_id) {
+            // Standard mode: claim was pre-loaded from the proof. Append to transcript.
             transcript.append_scalar(claim);
-            let claim = *claim; // Copy the claim value
+            let claim = *claim;
             self.openings
                 .insert(opening_id, (opening_point.clone(), claim));
+        } else if self.zk_mode {
+            // ZK mode: key doesn't exist yet. Insert with placeholder claim (F::zero()).
+            // The actual claim is verified by BlindFold, not individually.
+            // Don't append to transcript; commitments are absorbed by verify_zk instead.
+            self.openings
+                .insert(opening_id, (opening_point.clone(), F::zero()));
         } else {
             panic!("Tried to populate opening point for non-existent key: {opening_id:?}");
         }

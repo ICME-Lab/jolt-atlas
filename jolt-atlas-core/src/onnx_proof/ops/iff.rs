@@ -75,6 +75,53 @@ impl<F: JoltField> SumcheckInstanceParams<F> for IffParams<F> {
             .pow2_padded_num_output_elements()
             .log_2()
     }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> joltworks::subprotocols::blindfold::InputClaimConstraint {
+        joltworks::subprotocols::blindfold::InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    // output = eq_eval * (mask * a + (1 - mask) * b)
+    //        = eq_eval * mask * a + eq_eval * b - eq_eval * mask * b
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(
+        &self,
+    ) -> Option<joltworks::subprotocols::blindfold::OutputClaimConstraint> {
+        use crate::utils::opening_access::OpeningIdBuilder;
+        use joltworks::subprotocols::blindfold::{OutputClaimConstraint, ProductTerm, ValueSource};
+        let builder = OpeningIdBuilder::new(&self.computation_node);
+        let mask_id = builder.nodeio(Target::Input(0));
+        let a_id = builder.nodeio(Target::Input(1));
+        let b_id = builder.nodeio(Target::Input(2));
+        Some(OutputClaimConstraint::sum_of_products(vec![
+            ProductTerm::scaled(
+                ValueSource::Challenge(0),
+                vec![ValueSource::Opening(mask_id), ValueSource::Opening(a_id)],
+            ),
+            ProductTerm::scaled(ValueSource::Challenge(0), vec![ValueSource::Opening(b_id)]),
+            ProductTerm::scaled(
+                ValueSource::Challenge(1),
+                vec![ValueSource::Opening(mask_id), ValueSource::Opening(b_id)],
+            ),
+        ]))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        let r_node_output_prime: Vec<F> = self
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
+        let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_node_output_prime);
+        vec![eq_eval, -eq_eval]
+    }
 }
 
 /// Prover state for conditional selection (if-then-else) sumcheck protocol.

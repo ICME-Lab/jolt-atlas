@@ -296,6 +296,7 @@ impl EvalReductionProtocol {
     /// Returns the proof, reduced instance, and the h commitment (to be stored in
     /// ZkProofBundle for the verifier).
     #[cfg(feature = "zk")]
+    #[expect(clippy::type_complexity)]
     pub fn prove_zk<F: JoltField, C: crate::curve::JoltCurve<F = F>, T: Transcript>(
         openings: &[&Opening<F>],
         output_mle: MultilinearPolynomial<F>,

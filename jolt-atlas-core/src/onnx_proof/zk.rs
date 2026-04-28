@@ -5,10 +5,7 @@
 //! Sumcheck round polynomials are Pedersen-committed instead of sent in the clear,
 //! and a BlindFold proof (Nova folding + Spartan) verifies constraint consistency.
 
-use crate::onnx_proof::{
-    ops::eval_reduction::NodeEvalReduction, AtlasProverPreprocessing, AtlasVerifierPreprocessing,
-    ONNXProof, Prover,
-};
+use crate::onnx_proof::{AtlasProverPreprocessing, AtlasVerifierPreprocessing, ONNXProof, Prover};
 use ark_bn254::{Bn254, Fr};
 use ark_std::Zero;
 use atlas_onnx_tracer::{
@@ -189,151 +186,15 @@ pub fn prove_zk(
             }
         }
 
-        let zk_proof = match &node.operator {
-            Operator::Square(_) => {
-                use crate::onnx_proof::ops::square::{SquareParams, SquareProver};
-                let params = SquareParams::<F>::new(node.clone(), &prover.accumulator);
-                let mut sc = SquareProver::initialize(&prover.trace, params);
-                Some(run_zk_sumcheck(
-                    &mut sc,
-                    &mut prover,
-                    &mut blindfold_accumulator,
-                    &mut stage_configs,
-                    pedersen_gens,
-                ))
-            }
-            Operator::Add(_) => {
-                use crate::onnx_proof::ops::add::{AddParams, AddProver};
-                let params = AddParams::<F>::new(node.clone(), &prover.accumulator);
-                let mut sc = AddProver::initialize(&prover.trace, params);
-                Some(run_zk_sumcheck(
-                    &mut sc,
-                    &mut prover,
-                    &mut blindfold_accumulator,
-                    &mut stage_configs,
-                    pedersen_gens,
-                ))
-            }
-            Operator::Reshape(_) => {
-                use crate::onnx_proof::ops::reshape::{
-                    ReshapeSumcheckParams, ReshapeSumcheckProver,
-                };
-                let params = ReshapeSumcheckParams::<F>::new(
-                    node.clone(),
-                    &prover.accumulator,
-                    &pp.shared.model().graph,
-                );
-                let mut sc = ReshapeSumcheckProver::initialize(&prover.trace, params);
-                Some(run_zk_sumcheck(
-                    &mut sc,
-                    &mut prover,
-                    &mut blindfold_accumulator,
-                    &mut stage_configs,
-                    pedersen_gens,
-                ))
-            }
-            Operator::Slice(_) => {
-                use crate::onnx_proof::ops::slice::{SliceSumcheckParams, SliceSumcheckProver};
-                let params = SliceSumcheckParams::<F>::new(
-                    node.clone(),
-                    &prover.accumulator,
-                    &pp.shared.model().graph,
-                );
-                let mut sc = SliceSumcheckProver::initialize(&prover.trace, params);
-                Some(run_zk_sumcheck(
-                    &mut sc,
-                    &mut prover,
-                    &mut blindfold_accumulator,
-                    &mut stage_configs,
-                    pedersen_gens,
-                ))
-            }
-            Operator::Neg(_) => {
-                use crate::onnx_proof::ops::neg::{NegParams, NegProver};
-                let params = NegParams::<F>::new(node.clone(), &prover.accumulator);
-                let mut sc = NegProver::initialize(&prover.trace, params);
-                Some(run_zk_sumcheck(
-                    &mut sc,
-                    &mut prover,
-                    &mut blindfold_accumulator,
-                    &mut stage_configs,
-                    pedersen_gens,
-                ))
-            }
-            Operator::Sub(_) => {
-                use crate::onnx_proof::ops::sub::{SubParams, SubProver};
-                let params = SubParams::<F>::new(node.clone(), &prover.accumulator);
-                let mut sc = SubProver::initialize(&prover.trace, params);
-                Some(run_zk_sumcheck(
-                    &mut sc,
-                    &mut prover,
-                    &mut blindfold_accumulator,
-                    &mut stage_configs,
-                    pedersen_gens,
-                ))
-            }
-            Operator::Mul(_) | Operator::And(_) => {
-                use crate::onnx_proof::ops::mul::{MulParams, MulProver};
-                let params = MulParams::<F>::new(node.clone(), &prover.accumulator);
-                let mut sc = MulProver::initialize(&prover.trace, params);
-                Some(run_zk_sumcheck(
-                    &mut sc,
-                    &mut prover,
-                    &mut blindfold_accumulator,
-                    &mut stage_configs,
-                    pedersen_gens,
-                ))
-            }
-            Operator::Cube(_) => {
-                use crate::onnx_proof::ops::cube::{CubeParams, CubeProver};
-                let params = CubeParams::<F>::new(node.clone(), &prover.accumulator);
-                let mut sc = CubeProver::initialize(&prover.trace, params);
-                Some(run_zk_sumcheck(
-                    &mut sc,
-                    &mut prover,
-                    &mut blindfold_accumulator,
-                    &mut stage_configs,
-                    pedersen_gens,
-                ))
-            }
-            Operator::Iff(_) => {
-                use crate::onnx_proof::ops::iff::{IffParams, IffProver};
-                let params = IffParams::<F>::new(node.clone(), &prover.accumulator);
-                let mut sc = IffProver::initialize(&prover.trace, params);
-                Some(run_zk_sumcheck(
-                    &mut sc,
-                    &mut prover,
-                    &mut blindfold_accumulator,
-                    &mut stage_configs,
-                    pedersen_gens,
-                ))
-            }
-            Operator::Concat(_) => {
-                use crate::onnx_proof::ops::concat::{ConcatSumcheckParams, ConcatSumcheckProver};
-                let params = ConcatSumcheckParams::<F>::new(
-                    node.clone(),
-                    &prover.accumulator,
-                    &pp.shared.model().graph,
-                );
-                let mut sc = ConcatSumcheckProver::initialize(&prover.trace, params);
-                Some(run_zk_sumcheck(
-                    &mut sc,
-                    &mut prover,
-                    &mut blindfold_accumulator,
-                    &mut stage_configs,
-                    pedersen_gens,
-                ))
-            }
-            Operator::Input(_)
-            | Operator::Identity(_)
-            | Operator::Broadcast(_)
-            | Operator::MoveAxis(_)
-            | Operator::Constant(_)
-            | Operator::IsNan(_) => None,
-            other => {
-                panic!("ZK proving not yet implemented for operator: {other:?}");
-            }
-        };
+        let zk_proof = create_prover_instance(node, &prover, pp.shared.model()).map(|mut sc| {
+            run_zk_sumcheck(
+                &mut *sc,
+                &mut prover,
+                &mut blindfold_accumulator,
+                &mut stage_configs,
+                pedersen_gens,
+            )
+        });
         if let Some(proof) = zk_proof {
             zk_sumcheck_proofs.push((node.idx, proof));
         }
@@ -499,7 +360,6 @@ pub fn verify_zk(
     io: &ModelExecutionIO,
     pedersen_gens: &PedersenGenerators<C>,
 ) -> Result<(), ProofVerifyError> {
-    use crate::onnx_proof::ops::eval_reduction::NodeEvalReduction;
     use joltworks::poly::opening_proof::VerifierOpeningAccumulator;
     use joltworks::subprotocols::evaluation_reduction::EvalReductionProtocol;
 
@@ -518,7 +378,7 @@ pub fn verify_zk(
     let r_node_output = transcript
         .challenge_vector_optimized::<F>(output_node.pow2_padded_num_output_elements().log_2());
     use joltworks::field::IntoOpening;
-    let r_node_output_field: Vec<F> = r_node_output.into_opening();
+    let r_node_output_field: Vec<F> = r_node_output.clone().into_opening();
     let expected_output_claim =
         MultilinearPolynomial::from(io.outputs[0].padded_next_power_of_two())
             .evaluate(&r_node_output_field);
@@ -618,6 +478,88 @@ pub fn verify_zk(
         .map_err(|e| {
             ProofVerifyError::InvalidOpeningProof(format!("BlindFold verification failed: {e:?}"))
         })
+}
+
+/// Create the ZK sumcheck prover instance for a node.
+/// Returns `None` for operators with no sumcheck (Input, Identity, etc.).
+fn create_prover_instance(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    prover: &Prover<F, T>,
+    model: &atlas_onnx_tracer::model::Model,
+) -> Option<Box<dyn SumcheckInstanceProver<F, T>>> {
+    match &node.operator {
+        Operator::Square(_) => {
+            use crate::onnx_proof::ops::square::{SquareParams, SquareProver};
+            let params = SquareParams::<F>::new(node.clone(), &prover.accumulator);
+            Some(Box::new(SquareProver::initialize(&prover.trace, params)))
+        }
+        Operator::Add(_) => {
+            use crate::onnx_proof::ops::add::{AddParams, AddProver};
+            let params = AddParams::<F>::new(node.clone(), &prover.accumulator);
+            Some(Box::new(AddProver::initialize(&prover.trace, params)))
+        }
+        Operator::Reshape(_) => {
+            use crate::onnx_proof::ops::reshape::{ReshapeSumcheckParams, ReshapeSumcheckProver};
+            let params =
+                ReshapeSumcheckParams::<F>::new(node.clone(), &prover.accumulator, &model.graph);
+            Some(Box::new(ReshapeSumcheckProver::initialize(
+                &prover.trace,
+                params,
+            )))
+        }
+        Operator::Slice(_) => {
+            use crate::onnx_proof::ops::slice::{SliceSumcheckParams, SliceSumcheckProver};
+            let params =
+                SliceSumcheckParams::<F>::new(node.clone(), &prover.accumulator, &model.graph);
+            Some(Box::new(SliceSumcheckProver::initialize(
+                &prover.trace,
+                params,
+            )))
+        }
+        Operator::Neg(_) => {
+            use crate::onnx_proof::ops::neg::{NegParams, NegProver};
+            let params = NegParams::<F>::new(node.clone(), &prover.accumulator);
+            Some(Box::new(NegProver::initialize(&prover.trace, params)))
+        }
+        Operator::Sub(_) => {
+            use crate::onnx_proof::ops::sub::{SubParams, SubProver};
+            let params = SubParams::<F>::new(node.clone(), &prover.accumulator);
+            Some(Box::new(SubProver::initialize(&prover.trace, params)))
+        }
+        Operator::Mul(_) | Operator::And(_) => {
+            use crate::onnx_proof::ops::mul::{MulParams, MulProver};
+            let params = MulParams::<F>::new(node.clone(), &prover.accumulator);
+            Some(Box::new(MulProver::initialize(&prover.trace, params)))
+        }
+        Operator::Cube(_) => {
+            use crate::onnx_proof::ops::cube::{CubeParams, CubeProver};
+            let params = CubeParams::<F>::new(node.clone(), &prover.accumulator);
+            Some(Box::new(CubeProver::initialize(&prover.trace, params)))
+        }
+        Operator::Iff(_) => {
+            use crate::onnx_proof::ops::iff::{IffParams, IffProver};
+            let params = IffParams::<F>::new(node.clone(), &prover.accumulator);
+            Some(Box::new(IffProver::initialize(&prover.trace, params)))
+        }
+        Operator::Concat(_) => {
+            use crate::onnx_proof::ops::concat::{ConcatSumcheckParams, ConcatSumcheckProver};
+            let params =
+                ConcatSumcheckParams::<F>::new(node.clone(), &prover.accumulator, &model.graph);
+            Some(Box::new(ConcatSumcheckProver::initialize(
+                &prover.trace,
+                params,
+            )))
+        }
+        Operator::Input(_)
+        | Operator::Identity(_)
+        | Operator::Broadcast(_)
+        | Operator::MoveAxis(_)
+        | Operator::Constant(_)
+        | Operator::IsNan(_) => None,
+        other => {
+            panic!("ZK proving not yet implemented for operator: {other:?}");
+        }
+    }
 }
 
 /// Create verifier sumcheck instances for a node (for IOP transcript replay).

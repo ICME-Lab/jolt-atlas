@@ -517,7 +517,8 @@ pub fn verify_zk(
     let output_node = &model[output_index];
     let r_node_output = transcript
         .challenge_vector_optimized::<F>(output_node.pow2_padded_num_output_elements().log_2());
-    let r_node_output_field: Vec<F> = r_node_output.iter().map(|c| (*c).into()).collect();
+    use joltworks::field::IntoOpening;
+    let r_node_output_field: Vec<F> = r_node_output.into_opening();
     let expected_output_claim =
         MultilinearPolynomial::from(io.outputs[0].padded_next_power_of_two())
             .evaluate(&r_node_output_field);

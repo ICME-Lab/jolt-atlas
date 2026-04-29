@@ -332,7 +332,7 @@ where
         }
 
         for (label, claim) in polynomials.iter().copied().zip(claims.into_iter()) {
-            let sumcheck = OpeningProofReductionSumcheckProver::new_one_hot(
+            let sumcheck_instance = OpeningProofReductionSumcheckProver::new_one_hot(
                 label,
                 sumcheck,
                 shared_eq_address.clone(),
@@ -340,7 +340,13 @@ where
                 r_concat.clone(),
                 claim,
             );
-            self.sumchecks.insert(label, sumcheck);
+            self.sumchecks.insert(label, sumcheck_instance);
+            #[cfg(feature = "zk")]
+            {
+                let key = OpeningId::new(label, sumcheck);
+                self.pending_claims.push(claim);
+                self.pending_claim_ids.push(key);
+            }
         }
     }
 
@@ -727,10 +733,17 @@ where
     {
         for label in polynomials.into_iter() {
             let key = OpeningId::new(label, sumcheck);
-            let claim = self.openings.get(&key).unwrap().1;
-            transcript.append_scalar(&claim);
+            let claim = if let Some((_, c)) = self.openings.get(&key) {
+                let c = *c;
+                transcript.append_scalar(&c);
+                c
+            } else if self.zk_mode {
+                // ZK mode: insert placeholder. BlindFold handles correctness.
+                F::zero()
+            } else {
+                panic!("Tried to populate sparse opening for non-existent key: {key:?}");
+            };
 
-            // Update the opening point in self.openings (it was initialized with default empty point)
             self.openings.insert(
                 key,
                 (

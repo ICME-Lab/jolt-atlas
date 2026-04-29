@@ -7,7 +7,7 @@
 
 use crate::onnx_proof::{AtlasProverPreprocessing, AtlasVerifierPreprocessing, ONNXProof, Prover};
 use ark_bn254::{Bn254, Fr};
-use ark_std::Zero;
+use ark_std::{One, Zero};
 use atlas_onnx_tracer::{
     model::trace::{ModelExecutionIO, Trace},
     ops::Operator,
@@ -110,6 +110,43 @@ fn run_zk_sumcheck(
     zk_proof
 }
 
+/// Run a batched ZK sumcheck (multiple instances) and collect stage data.
+fn run_zk_batched_sumcheck(
+    instances: Vec<&mut dyn SumcheckInstanceProver<F, T>>,
+    prover: &mut Prover<F, T>,
+    blindfold_accumulator: &mut BlindFoldAccumulator<F, C>,
+    stage_configs: &mut Vec<StageConfig>,
+    pedersen_gens: &PedersenGenerators<C>,
+) -> joltworks::subprotocols::sumcheck::ZkSumcheckProof<F, C, T> {
+    let max_degree = instances
+        .iter()
+        .map(|sc| sc.get_params().degree())
+        .max()
+        .unwrap_or(1);
+    let max_rounds = instances
+        .iter()
+        .map(|sc| sc.get_params().num_rounds())
+        .max()
+        .unwrap_or(1);
+
+    let _ = prover.accumulator.take_pending_claims();
+    let _ = prover.accumulator.take_pending_claim_ids();
+
+    let mut rng = rand::thread_rng();
+
+    let (zk_proof, _, _) = BatchedSumcheck::prove_zk::<F, C, T, _>(
+        instances,
+        &mut prover.accumulator,
+        blindfold_accumulator,
+        &mut prover.transcript,
+        pedersen_gens,
+        &mut rng,
+    );
+
+    stage_configs.push(StageConfig::new_chain(max_rounds, max_degree));
+    zk_proof
+}
+
 /// Run ZK eval reduction for a node: commit h polynomial via Pedersen.
 fn prove_zk_eval_reduction(
     node: &atlas_onnx_tracer::node::ComputationNode,
@@ -166,6 +203,204 @@ fn verify_zk_eval_reduction(
     Ok(())
 }
 
+/// Helper to verify a ZK sumcheck given verifier instances.
+fn verify_zk_sumcheck_instances(
+    zk_proof: &joltworks::subprotocols::sumcheck::ZkSumcheckProof<F, C, T>,
+    verifier_instances: Vec<
+        Box<dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>,
+    >,
+    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> Result<(), ProofVerifyError> {
+    let verifier_refs: Vec<
+        &dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>,
+    > = verifier_instances
+        .iter()
+        .map(|v| {
+            v.as_ref()
+                as &dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>
+        })
+        .collect();
+
+    BatchedSumcheck::verify_zk::<F, C, T>(zk_proof, verifier_refs, accumulator, transcript)?;
+    Ok(())
+}
+
+/// Verify Div operator ZK proof: custom flow mirroring prove_div_zk.
+fn verify_div_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    bundle: &ZkProofBundle,
+    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+    zk_proof_idx: &mut usize,
+) -> Result<(), ProofVerifyError> {
+    use crate::onnx_proof::ops::div::DivVerifier;
+    use crate::onnx_proof::range_checking::{
+        range_check_operands::DivRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+    };
+    use crate::utils::opening_access::AccOpeningAccessor;
+    use common::CommittedPoly;
+    use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+
+    // 1. Execution sumcheck (DivVerifier squeezes r_node_output from transcript)
+    {
+        let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(
+            *proof_node_idx, node.idx,
+            "ZK sumcheck proof order mismatch"
+        );
+        let verifier = DivVerifier::new(node.clone(), transcript);
+        let verifier_instances: Vec<
+            Box<dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>,
+        > = vec![Box::new(verifier)];
+        verify_zk_sumcheck_instances(zk_proof, verifier_instances, accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+
+    // 2. ZK eval reduction
+    verify_zk_eval_reduction(node, bundle, accumulator, transcript)?;
+
+    // 3. Verify quotient binding
+    {
+        let reduced = AccOpeningAccessor::new(&mut *accumulator, node).get_reduced_opening();
+        let mut provider = AccOpeningAccessor::new(&mut *accumulator, node)
+            .into_provider(transcript, reduced.0.clone());
+        provider.append_advice(CommittedPoly::DivNodeQuotient);
+    }
+
+    // 4. Range check + one-hot (skip for scalar outputs)
+    if !node.is_scalar() {
+        // Range check sumcheck
+        {
+            let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+            assert_eq!(
+                *proof_node_idx, node.idx,
+                "ZK sumcheck proof order mismatch"
+            );
+            let rangecheck_provider = RangeCheckProvider::<DivRangeCheckOperands>::new(node);
+            let rangecheck_verifier = rangecheck_provider
+                .read_raf_verify::<F, T, UnsignedLessThanTable<{ common::consts::XLEN }>>(
+                    accumulator,
+                    transcript,
+                );
+            let verifier_instances: Vec<
+                Box<dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>,
+            > = vec![Box::new(rangecheck_verifier)];
+            verify_zk_sumcheck_instances(zk_proof, verifier_instances, accumulator, transcript)?;
+            *zk_proof_idx += 1;
+        }
+
+        // One-hot batch sumcheck (Ra, HammingWeight, Booleanity)
+        {
+            let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+            assert_eq!(
+                *proof_node_idx, node.idx,
+                "ZK sumcheck proof order mismatch"
+            );
+            let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+            let [ra_v, hw_v, bool_v] = joltworks::subprotocols::shout::ra_onehot_verifiers(
+                &encoding,
+                accumulator,
+                transcript,
+            );
+            let verifier_instances: Vec<
+                Box<dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>,
+            > = vec![ra_v, hw_v, bool_v];
+            verify_zk_sumcheck_instances(zk_proof, verifier_instances, accumulator, transcript)?;
+            *zk_proof_idx += 1;
+        }
+    }
+
+    Ok(())
+}
+
+/// Prove Div operator with ZK: custom flow with execution sumcheck before eval reduction.
+#[expect(clippy::too_many_arguments)]
+fn prove_div_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    prover: &mut Prover<F, T>,
+    pedersen_gens: &PedersenGenerators<C>,
+    blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+    stage_configs: &mut Vec<StageConfig>,
+    eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
+    eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
+    zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
+) {
+    use crate::onnx_proof::ops::div::{DivParams, DivProver};
+    use crate::onnx_proof::range_checking::{
+        range_check_operands::DivRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+    };
+    use crate::utils::opening_access::AccOpeningAccessor;
+    use common::CommittedPoly;
+    use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+
+    // 1. Execution sumcheck (r_node_output from transcript challenges)
+    let params = DivParams::<F>::new(node.clone(), &mut prover.transcript);
+    let mut sc = DivProver::initialize(&prover.trace, params);
+    let zk_proof = run_zk_sumcheck(
+        &mut sc,
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, zk_proof));
+
+    // 2. ZK eval reduction
+    prove_zk_eval_reduction(
+        node,
+        prover,
+        pedersen_gens,
+        eval_reduction_proofs,
+        eval_reduction_h_commitments,
+    );
+
+    // 3. Bind quotient as committed poly at reduced opening point
+    {
+        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
+        let reduced = accessor.get_reduced_opening();
+        let mut provider = accessor.into_provider(&mut prover.transcript, reduced.0.clone());
+        provider.append_advice(CommittedPoly::DivNodeQuotient, reduced.1);
+    }
+
+    // 4. Range check + one-hot (skip for scalar outputs)
+    // TODO: Re-enable when range check constraints are debugged
+    if !node.is_scalar() {
+        // Run range check and one-hot in non-ZK mode to keep accumulator consistent
+        let rangecheck_provider = RangeCheckProvider::<DivRangeCheckOperands>::new(node);
+        let (mut rangecheck_sumcheck, lookup_indices) = rangecheck_provider
+            .read_raf_prove::<F, T, UnsignedLessThanTable<{ common::consts::XLEN }>>(
+                &prover.trace,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            );
+        let rc_proof = run_zk_sumcheck(
+            &mut rangecheck_sumcheck,
+            prover,
+            blindfold_accumulator,
+            stage_configs,
+            pedersen_gens,
+        );
+        zk_sumcheck_proofs.push((node.idx, rc_proof));
+
+        let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+        let [mut ra_sc, mut hw_sc, mut bool_sc] = joltworks::subprotocols::shout::ra_onehot_provers(
+            &encoding,
+            &lookup_indices,
+            &prover.accumulator,
+            &mut prover.transcript,
+        );
+        let onehot_proof = run_zk_batched_sumcheck(
+            vec![&mut *ra_sc, &mut *hw_sc, &mut *bool_sc],
+            prover,
+            blindfold_accumulator,
+            stage_configs,
+            pedersen_gens,
+        );
+        zk_sumcheck_proofs.push((node.idx, onehot_proof));
+    }
+}
+
 /// Prove an ONNX model execution with zero-knowledge (single pass).
 ///
 /// `pedersen_gens` must have at least `max(poly_degree + 1, hyrax_C)` message
@@ -211,33 +446,42 @@ pub fn prove_zk(
     let mut zk_sumcheck_proofs: Vec<NodeZkProof> = Vec::new();
 
     for (_, node) in nodes.iter().rev() {
-        // Standard flow: eval reduction first, then execution sumcheck.
-        // Custom-flow operators (Div, Rsqrt, neural teleportation ops) require
-        // pipeline restructuring and range check BlindFold constraints; see TODO below.
-        prove_zk_eval_reduction(
-            node,
-            &mut prover,
-            pedersen_gens,
-            &mut eval_reduction_proofs,
-            &mut eval_reduction_h_commitments,
-        );
-
-        let zk_proof = create_prover_instance(node, &prover, pp.shared.model()).map(|mut sc| {
-            run_zk_sumcheck(
-                &mut *sc,
+        if matches!(&node.operator, Operator::Div(_)) {
+            prove_div_zk(
+                node,
                 &mut prover,
+                pedersen_gens,
                 &mut blindfold_accumulator,
                 &mut stage_configs,
+                &mut eval_reduction_proofs,
+                &mut eval_reduction_h_commitments,
+                &mut zk_sumcheck_proofs,
+            );
+        } else {
+            // Standard flow: eval reduction first, then execution sumcheck.
+            prove_zk_eval_reduction(
+                node,
+                &mut prover,
                 pedersen_gens,
-            )
-        });
-        if let Some(proof) = zk_proof {
-            zk_sumcheck_proofs.push((node.idx, proof));
+                &mut eval_reduction_proofs,
+                &mut eval_reduction_h_commitments,
+            );
+
+            let zk_proof =
+                create_prover_instance(node, &prover, pp.shared.model()).map(|mut sc| {
+                    run_zk_sumcheck(
+                        &mut *sc,
+                        &mut prover,
+                        &mut blindfold_accumulator,
+                        &mut stage_configs,
+                        pedersen_gens,
+                    )
+                });
+            if let Some(proof) = zk_proof {
+                zk_sumcheck_proofs.push((node.idx, proof));
+            }
         }
     }
-    // TODO: Support custom-flow operators (Div, Rsqrt, neural teleportation) which
-    // need: (1) execution sumcheck before eval reduction, (2) quotient binding,
-    // (3) BlindFold constraints for range check + one-hot sumchecks.
 
     // y_com for batch opening (no-op when poly_map is empty)
     if !poly_map.is_empty() {
@@ -278,35 +522,101 @@ pub fn prove_zk(
     let mut all_stages = Vec::new();
 
     for (i, sd) in stage_data_vec.iter().enumerate() {
+        let expected_coeffs = stage_configs[i].poly_degree + 1;
         let rounds: Vec<RoundWitness<F>> = sd
             .poly_coeffs
             .iter()
             .zip(sd.challenges.iter())
             .map(|(coeffs, challenge)| {
                 let challenge_f: F = (*challenge).into();
-                RoundWitness::new(coeffs.clone(), challenge_f)
+                // Pad coefficients to expected degree if UniPoly stripped trailing zeros
+                let mut padded = coeffs.clone();
+                padded.resize(expected_coeffs, F::zero());
+                RoundWitness::new(padded, challenge_f)
             })
             .collect();
 
-        let output_constraint = sd.output_constraints[0].as_ref();
-        if let Some(constraint) = output_constraint {
-            let output_challenge_values = sd.constraint_challenge_values[0].clone();
-            let output_opening_values: Vec<F> =
-                sd.output_claims.iter().map(|(_id, val)| *val).collect();
+        // Combine output constraints: single-instance stages have 1, batched have N.
+        // Each constraint is pre-scaled by scale_by_new_challenge(). For multi-instance
+        // stages, concatenate terms with offset challenge indices (no extra alpha layer).
+        use joltworks::subprotocols::blindfold::output_constraint::{
+            OutputClaimConstraint, ProductTerm, ValueSource,
+        };
+        let combined_constraint: Option<OutputClaimConstraint> =
+            if sd.output_constraints.iter().any(|c| c.is_none()) {
+                None
+            } else if sd.output_constraints.len() == 1 {
+                sd.output_constraints[0].clone()
+            } else {
+                let mut combined_terms = Vec::new();
+                let mut combined_openings = Vec::new();
+                let mut challenge_offset = 0usize;
+                for oc in &sd.output_constraints {
+                    let c = oc.as_ref().unwrap();
+                    let offset = |vs: &ValueSource| match vs {
+                        ValueSource::Challenge(idx) => {
+                            ValueSource::Challenge(idx + challenge_offset)
+                        }
+                        other => other.clone(),
+                    };
+                    for term in &c.terms {
+                        combined_terms.push(ProductTerm::new(
+                            offset(&term.coeff),
+                            term.factors.iter().map(&offset).collect(),
+                        ));
+                    }
+                    for id in &c.required_openings {
+                        if !combined_openings.contains(id) {
+                            combined_openings.push(*id);
+                        }
+                    }
+                    challenge_offset += c.num_challenges;
+                }
+                Some(OutputClaimConstraint::new(
+                    combined_terms,
+                    combined_openings,
+                ))
+            };
+        if let Some(constraint) = combined_constraint {
+            // Challenge values: concatenate per-instance values (already include batch_coeff).
+            let output_challenge_values: Vec<F> = sd
+                .constraint_challenge_values
+                .iter()
+                .flat_map(|cv| cv.iter().cloned())
+                .collect();
+            // Map opening values to match the constraint's required_openings order.
+            let claims_map: std::collections::HashMap<_, _> =
+                sd.output_claims.iter().cloned().collect();
+            let output_opening_values: Vec<F> = constraint
+                .required_openings
+                .iter()
+                .map(|id| {
+                    *claims_map
+                        .get(id)
+                        .unwrap_or_else(|| panic!("Missing opening claim for {id:?}"))
+                })
+                .collect();
             let final_output_witness =
                 FinalOutputWitness::general(output_challenge_values, output_opening_values);
             all_stages.push(StageWitness::with_final_output(
                 rounds,
                 final_output_witness,
             ));
-            stage_configs[i] = stage_configs[i].clone().with_constraint(constraint.clone());
+            stage_configs[i] = stage_configs[i].clone().with_constraint(constraint);
         } else {
             all_stages.push(StageWitness::new(rounds));
         }
     }
 
-    let initial_claim = stage_data_vec[0].initial_claim;
-    let blindfold_witness = BlindFoldWitness::new(initial_claim, all_stages);
+    // Collect initial claims for each chain start
+    let initial_claims: Vec<F> = stage_data_vec
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| stage_configs[*i].starts_new_chain || *i == 0)
+        .map(|(_, sd)| sd.initial_claim)
+        .collect();
+    let blindfold_witness =
+        BlindFoldWitness::with_extra_constraints(initial_claims, all_stages, vec![]);
     let baked = BakedPublicInputs::from_witness(&blindfold_witness, &stage_configs);
     let builder = VerifierR1CSBuilder::<F>::new(&stage_configs, &baked);
     let r1cs = builder.build();
@@ -443,49 +753,45 @@ pub fn verify_zk(
     // 3. Full IOP replay: for each node, verify eval reduction + absorb ZK sumcheck
     let mut zk_proof_idx = 0;
     for (_, node) in model.graph.nodes.iter().rev() {
-        // Standard flow: eval reduction first, then execution sumcheck
-        verify_zk_eval_reduction(node, &bundle, &mut accumulator, &mut transcript)?;
-
-        // For operators with sumcheck: absorb ZK sumcheck commitments into transcript
-        let has_sumcheck = !matches!(
-            &node.operator,
-            Operator::Input(_)
-                | Operator::Identity(_)
-                | Operator::Broadcast(_)
-                | Operator::MoveAxis(_)
-                | Operator::Constant(_)
-                | Operator::IsNan(_)
-        );
-
-        if has_sumcheck {
-            let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[zk_proof_idx];
-            assert_eq!(
-                *proof_node_idx, node.idx,
-                "ZK sumcheck proof order mismatch"
-            );
-
-            let verifier_instances = create_verifier_instances(node, &accumulator, model);
-            let verifier_refs: Vec<
-                &dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>,
-            > = verifier_instances
-                .iter()
-                .map(|v| {
-                    v.as_ref()
-                        as &dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<
-                            F,
-                            T,
-                        >
-                })
-                .collect();
-
-            BatchedSumcheck::verify_zk::<F, C, T>(
-                zk_proof,
-                verifier_refs,
+        if matches!(&node.operator, Operator::Div(_)) {
+            verify_div_zk(
+                node,
+                bundle,
                 &mut accumulator,
                 &mut transcript,
+                &mut zk_proof_idx,
             )?;
+        } else {
+            // Standard flow: eval reduction first, then execution sumcheck
+            verify_zk_eval_reduction(node, bundle, &mut accumulator, &mut transcript)?;
 
-            zk_proof_idx += 1;
+            let has_sumcheck = !matches!(
+                &node.operator,
+                Operator::Input(_)
+                    | Operator::Identity(_)
+                    | Operator::Broadcast(_)
+                    | Operator::MoveAxis(_)
+                    | Operator::Constant(_)
+                    | Operator::IsNan(_)
+            );
+
+            if has_sumcheck {
+                let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[zk_proof_idx];
+                assert_eq!(
+                    *proof_node_idx, node.idx,
+                    "ZK sumcheck proof order mismatch"
+                );
+
+                let verifier_instances = create_verifier_instances(node, &accumulator, model);
+                verify_zk_sumcheck_instances(
+                    zk_proof,
+                    verifier_instances,
+                    &mut accumulator,
+                    &mut transcript,
+                )?;
+
+                zk_proof_idx += 1;
+            }
         }
     }
 

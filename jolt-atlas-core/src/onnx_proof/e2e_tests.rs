@@ -1027,7 +1027,6 @@ fn test_and_zk() {
 
 #[cfg(feature = "zk")]
 #[test]
-#[ignore = "requires custom-flow pipeline + range check BlindFold constraints"]
 fn test_div_zk() {
     use atlas_onnx_tracer::model::test::ModelBuilder;
     let size = 1 << 4;
@@ -1042,9 +1041,10 @@ fn test_div_zk() {
     let pp = AtlasSharedPreprocessing::preprocess(model);
     let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+    // Div's one-hot Ra sumcheck has degree d+1 (d=16 for XLEN), needing more generators
     let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
         joltworks::curve::Bn254Curve,
-    >::deterministic(16);
+    >::deterministic(32);
     let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
     crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
         .expect("ZK verification should succeed");

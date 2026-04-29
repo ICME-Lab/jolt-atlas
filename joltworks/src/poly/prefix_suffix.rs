@@ -25,6 +25,14 @@ pub enum Prefix {
     RightOperand,
     LeftOperand,
     Identity,
+    Msb,
+    LowerWordNoMsb,
+    Relu,
+    NotMsb,
+    NegRelu,
+    NegMsb,
+    NegNegRelu,
+    AntiRelu, // TODO: rm unused prefixes
 }
 
 /// Array storing prefix polynomial evaluations, indexed by Prefix enum variants.
@@ -42,6 +50,19 @@ pub struct PrefixRegistry<F: JoltField> {
 impl<F: JoltField> PrefixRegistry<F> {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns the cached prefix polynomial for `key`, computing and inserting it via `f` if absent.
+    pub fn get_or_insert(
+        &mut self,
+        key: Prefix,
+        f: impl FnOnce(&PrefixCheckpoints<F>) -> CachedPolynomial<F>,
+    ) -> Arc<RwLock<CachedPolynomial<F>>> {
+        if self.polys[key as usize].is_none() {
+            let poly = f(&self.checkpoints);
+            self.polys[key as usize] = Some(Arc::new(RwLock::new(poly)));
+        }
+        self.polys[key as usize].clone().unwrap()
     }
 
     pub fn update_checkpoints(&mut self) {
@@ -553,7 +574,7 @@ pub mod tests {
             + 'static,
     >(
         poly: P,
-        prefix_registry_index: Prefix,
+        prefix_registry_index: Vec<Prefix>,
     ) {
         let SUFFIX_LEN: usize = NUM_VARS - PREFIX_LEN;
 
@@ -578,6 +599,7 @@ pub mod tests {
             );
 
             for round in (0..PREFIX_LEN).rev() {
+                let j = round + PREFIX_LEN * phase;
                 for b in 0..round.pow2() {
                     let eval = ps.sumcheck_evals(b);
 
@@ -607,7 +629,10 @@ pub mod tests {
                         })
                         .sum();
 
-                    assert_eq!(direct_eval, eval.0);
+                    assert_eq!(
+                        direct_eval, eval.0,
+                        "Failed at phase {phase}, round {j}, b {b}"
+                    );
 
                     let eval_point = rr
                         .iter()
@@ -634,7 +659,10 @@ pub mod tests {
                         })
                         .sum();
 
-                    assert_eq!(direct_eval, eval.1);
+                    assert_eq!(
+                        direct_eval, eval.1,
+                        "Failed at phase {phase}, round {j}, b {b}"
+                    );
                 }
                 let r = <Fr as JoltField>::Challenge::random(&mut rng);
                 rr.push(r.into());
@@ -644,8 +672,11 @@ pub mod tests {
             prefix_registry.update_checkpoints();
         }
         assert_eq!(
-            prefix_registry.checkpoints[prefix_registry_index],
-            Some(poly.evaluate(&rr))
-        )
+            prefix_registry_index.iter().fold(Fr::zero(), |acc, &p| {
+                acc + prefix_registry.checkpoints[p].unwrap()
+            }),
+            poly.evaluate(&rr),
+            "Final sumcheck claim does not match direct evaluation"
+        );
     }
 }

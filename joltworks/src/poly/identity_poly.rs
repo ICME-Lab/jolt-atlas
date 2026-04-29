@@ -1,8 +1,4 @@
-use std::sync::{Arc, RwLock};
-
-use allocative::Allocative;
-use num::Integer;
-
+use super::multilinear_polynomial::{BindingOrder, PolynomialBinding, PolynomialEvaluation};
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     poly::{
@@ -14,8 +10,9 @@ use crate::{
     },
     utils::{lookup_bits::LookupBits, math::Math, uninterleave_bits},
 };
-
-use super::multilinear_polynomial::{BindingOrder, PolynomialBinding, PolynomialEvaluation};
+use allocative::Allocative;
+use num::Integer;
+use std::sync::{Arc, RwLock};
 
 #[derive(Clone, Debug, Allocative)]
 pub struct IdentityPolynomial<F: JoltField> {
@@ -511,7 +508,7 @@ mod tests {
     fn identity_poly_prefix_suffix_decomposition() {
         prefix_suffix_decomposition_test::<8, 2, 2, _>(
             IdentityPolynomial::new(8),
-            Prefix::Identity,
+            vec![Prefix::Identity],
         );
     }
 
@@ -519,11 +516,11 @@ mod tests {
     fn operand_poly_prefix_suffix_decomposition() {
         prefix_suffix_decomposition_test::<8, 2, 2, _>(
             OperandPolynomial::new(8, OperandSide::Left),
-            Prefix::LeftOperand,
+            vec![Prefix::LeftOperand],
         );
         prefix_suffix_decomposition_test::<8, 2, 2, _>(
             OperandPolynomial::new(8, OperandSide::Right),
-            Prefix::RightOperand,
+            vec![Prefix::RightOperand],
         );
     }
 

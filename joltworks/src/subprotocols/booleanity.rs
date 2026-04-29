@@ -28,6 +28,11 @@ use crate::{
     utils::{expanding_table::ExpandingTable, thread::drop_in_background_thread},
 };
 
+#[cfg(feature = "zk")]
+use crate::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
+
 /// Degree bound of the sumcheck round polynomials in [`BooleanitySumcheckVerifier`].
 const DEGREE_BOUND: usize = 3;
 
@@ -71,8 +76,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for BooleanitySumcheckParams<F> {
     }
 
     #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> crate::subprotocols::blindfold::InputClaimConstraint {
-        crate::subprotocols::blindfold::InputClaimConstraint::default()
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
     }
 
     #[cfg(feature = "zk")]
@@ -88,10 +93,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for BooleanitySumcheckParams<F> {
     //              + Challenge(2i+1) * Opening(ra_i) ]
     // where Challenge(2i) = eq_eval * γ_i, Challenge(2i+1) = -eq_eval * γ_i
     #[cfg(feature = "zk")]
-    fn output_claim_constraint(
-        &self,
-    ) -> Option<crate::subprotocols::blindfold::OutputClaimConstraint> {
-        use crate::subprotocols::blindfold::{OutputClaimConstraint, ProductTerm, ValueSource};
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
         let mut terms = Vec::with_capacity(2 * self.d);
         for i in 0..self.d {
             let id = OpeningId::new(self.polynomial_types[i], self.sumcheck_id);

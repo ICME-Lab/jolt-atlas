@@ -42,6 +42,11 @@ use rayon::prelude::*;
 use std::array;
 use strum::EnumCount;
 
+#[cfg(feature = "zk")]
+use crate::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
+
 const DEGREE_BOUND: usize = 2;
 
 /// Parameters for the Prefix suffix Read-raf checking sum-check protocol.
@@ -145,8 +150,8 @@ where
     }
 
     #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> crate::subprotocols::blindfold::InputClaimConstraint {
-        crate::subprotocols::blindfold::InputClaimConstraint::default()
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
     }
 
     #[cfg(feature = "zk")]
@@ -160,10 +165,7 @@ where
     // output = eq_eval * ra_claim * (val_claim + γ * raf_claim)
     //        = Challenge(0) * Opening(ra)
     #[cfg(feature = "zk")]
-    fn output_claim_constraint(
-        &self,
-    ) -> Option<crate::subprotocols::blindfold::OutputClaimConstraint> {
-        use crate::subprotocols::blindfold::{OutputClaimConstraint, ProductTerm, ValueSource};
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
         let ra_id = OpeningId::new(self.polynomial_type, self.sumcheck_id);
         Some(OutputClaimConstraint::sum_of_products(vec![
             ProductTerm::scaled(ValueSource::Challenge(0), vec![ValueSource::Opening(ra_id)]),
@@ -172,8 +174,6 @@ where
 
     #[cfg(feature = "zk")]
     fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        use crate::poly::identity_poly::{OperandPolynomial, OperandSide};
-
         let opening_point = self.normalize_opening_point(&sumcheck_challenges.into_opening());
         let (r_address_prime, r_node_output_prime) = opening_point.split_at(LOG_K);
         let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_node_output_prime.r);

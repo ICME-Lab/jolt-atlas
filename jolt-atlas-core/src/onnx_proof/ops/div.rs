@@ -15,6 +15,10 @@ use atlas_onnx_tracer::{
     tensor::Tensor,
 };
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
+#[cfg(feature = "zk")]
+use joltworks::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
 use joltworks::{
     field::{IntoOpening, JoltField},
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
@@ -205,8 +209,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for DivParams<F> {
     }
 
     #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> joltworks::subprotocols::blindfold::InputClaimConstraint {
-        joltworks::subprotocols::blindfold::InputClaimConstraint::default()
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
     }
 
     #[cfg(feature = "zk")]
@@ -220,11 +224,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for DivParams<F> {
     // output = eq_eval * (right * q + R - left)
     //        = eq_eval * right * q + eq_eval * R + (-eq_eval) * left
     #[cfg(feature = "zk")]
-    fn output_claim_constraint(
-        &self,
-    ) -> Option<joltworks::subprotocols::blindfold::OutputClaimConstraint> {
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
         use crate::utils::opening_access::OpeningIdBuilder;
-        use joltworks::subprotocols::blindfold::{OutputClaimConstraint, ProductTerm, ValueSource};
         let builder = OpeningIdBuilder::new(&self.computation_node);
         let left_id = builder.nodeio(Target::Input(0));
         let right_id = builder.nodeio(Target::Input(1));

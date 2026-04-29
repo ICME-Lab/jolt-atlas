@@ -110,6 +110,62 @@ fn run_zk_sumcheck(
     zk_proof
 }
 
+/// Run ZK eval reduction for a node: commit h polynomial via Pedersen.
+fn prove_zk_eval_reduction(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    prover: &mut Prover<F, T>,
+    pedersen_gens: &PedersenGenerators<C>,
+    eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
+    eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
+) {
+    use atlas_onnx_tracer::model::trace::{LayerData, Trace};
+    use joltworks::subprotocols::evaluation_reduction::EvalReductionProtocol;
+
+    let node_idx = node.idx;
+    let openings = prover.accumulator.get_node_openings(node_idx);
+    let LayerData {
+        operands: _,
+        output,
+    } = Trace::layer_data(&prover.trace, node);
+    let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
+
+    let (proof, reduced, h_com) = EvalReductionProtocol::prove_zk::<F, C, _>(
+        &openings,
+        output_mle,
+        &mut prover.transcript,
+        pedersen_gens,
+    )
+    .expect("ZK eval reduction should not fail");
+
+    prover
+        .accumulator
+        .reduced_evaluations
+        .insert(node_idx, reduced);
+    eval_reduction_proofs.insert(node_idx, proof);
+    if let Some(com) = h_com {
+        eval_reduction_h_commitments.insert(node_idx, com);
+    }
+}
+
+/// Verify ZK eval reduction for a node: absorb h commitment, skip claim checks.
+fn verify_zk_eval_reduction(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    bundle: &ZkProofBundle,
+    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> Result<(), ProofVerifyError> {
+    use joltworks::subprotocols::evaluation_reduction::EvalReductionProtocol;
+
+    let openings = accumulator.get_node_openings(node.idx);
+    let h_commitment = bundle.eval_reduction_h_commitments.get(&node.idx);
+    let reduced_instance =
+        EvalReductionProtocol::verify_zk::<F, T>(&openings, h_commitment, transcript)?;
+    accumulator
+        .reduced_evaluations
+        .insert(node.idx, reduced_instance);
+    Ok(())
+}
+
 /// Prove an ONNX model execution with zero-knowledge (single pass).
 ///
 /// `pedersen_gens` must have at least `max(poly_degree + 1, hyrax_C)` message
@@ -155,36 +211,16 @@ pub fn prove_zk(
     let mut zk_sumcheck_proofs: Vec<NodeZkProof> = Vec::new();
 
     for (_, node) in nodes.iter().rev() {
-        // ZK eval reduction: commit h via Pedersen instead of cleartext
-        {
-            use atlas_onnx_tracer::model::trace::{LayerData, Trace};
-            use joltworks::subprotocols::evaluation_reduction::EvalReductionProtocol;
-
-            let node_idx = node.idx;
-            let openings = prover.accumulator.get_node_openings(node_idx);
-            let LayerData {
-                operands: _,
-                output,
-            } = Trace::layer_data(&prover.trace, node);
-            let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
-
-            let (proof, reduced, h_com) = EvalReductionProtocol::prove_zk::<F, C, _>(
-                &openings,
-                output_mle,
-                &mut prover.transcript,
-                pedersen_gens,
-            )
-            .expect("ZK eval reduction should not fail");
-
-            prover
-                .accumulator
-                .reduced_evaluations
-                .insert(node_idx, reduced);
-            eval_reduction_proofs.insert(node_idx, proof);
-            if let Some(com) = h_com {
-                eval_reduction_h_commitments.insert(node_idx, com);
-            }
-        }
+        // Standard flow: eval reduction first, then execution sumcheck.
+        // Custom-flow operators (Div, Rsqrt, neural teleportation ops) require
+        // pipeline restructuring and range check BlindFold constraints; see TODO below.
+        prove_zk_eval_reduction(
+            node,
+            &mut prover,
+            pedersen_gens,
+            &mut eval_reduction_proofs,
+            &mut eval_reduction_h_commitments,
+        );
 
         let zk_proof = create_prover_instance(node, &prover, pp.shared.model()).map(|mut sc| {
             run_zk_sumcheck(
@@ -199,6 +235,9 @@ pub fn prove_zk(
             zk_sumcheck_proofs.push((node.idx, proof));
         }
     }
+    // TODO: Support custom-flow operators (Div, Rsqrt, neural teleportation) which
+    // need: (1) execution sumcheck before eval reduction, (2) quotient binding,
+    // (3) BlindFold constraints for range check + one-hot sumchecks.
 
     // y_com for batch opening (no-op when poly_map is empty)
     if !poly_map.is_empty() {
@@ -361,7 +400,6 @@ pub fn verify_zk(
     pedersen_gens: &PedersenGenerators<C>,
 ) -> Result<(), ProofVerifyError> {
     use joltworks::poly::opening_proof::VerifierOpeningAccumulator;
-    use joltworks::subprotocols::evaluation_reduction::EvalReductionProtocol;
 
     let model = pp.shared.model();
     let mut accumulator = VerifierOpeningAccumulator::<F>::new_zk();
@@ -405,14 +443,8 @@ pub fn verify_zk(
     // 3. Full IOP replay: for each node, verify eval reduction + absorb ZK sumcheck
     let mut zk_proof_idx = 0;
     for (_, node) in model.graph.nodes.iter().rev() {
-        // Verify eval reduction (ZK mode: absorb h commitment, skip claim checks)
-        let openings = accumulator.get_node_openings(node.idx);
-        let h_commitment = bundle.eval_reduction_h_commitments.get(&node.idx);
-        let reduced_instance =
-            EvalReductionProtocol::verify_zk::<F, T>(&openings, h_commitment, &mut transcript)?;
-        accumulator
-            .reduced_evaluations
-            .insert(node.idx, reduced_instance);
+        // Standard flow: eval reduction first, then execution sumcheck
+        verify_zk_eval_reduction(node, &bundle, &mut accumulator, &mut transcript)?;
 
         // For operators with sumcheck: absorb ZK sumcheck commitments into transcript
         let has_sumcheck = !matches!(
@@ -432,7 +464,6 @@ pub fn verify_zk(
                 "ZK sumcheck proof order mismatch"
             );
 
-            // Create verifier sumcheck instances and run verify_zk to replay transcript
             let verifier_instances = create_verifier_instances(node, &accumulator, model);
             let verifier_refs: Vec<
                 &dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>,
@@ -455,11 +486,6 @@ pub fn verify_zk(
             )?;
 
             zk_proof_idx += 1;
-        } else {
-            // No-sumcheck operators: run their standard verify to keep transcript in sync.
-            // Input verifies the claim against IO; others are no-ops.
-            // Input: check that the input claim matches the IO.
-            // Other no-sumcheck ops (Identity, Broadcast, etc.) don't modify the transcript.
         }
     }
 

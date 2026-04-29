@@ -203,6 +203,54 @@ impl<F: JoltField> SumcheckInstanceParams<F> for DivParams<F> {
             .pow2_padded_num_output_elements()
             .log_2()
     }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> joltworks::subprotocols::blindfold::InputClaimConstraint {
+        joltworks::subprotocols::blindfold::InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    // output = eq_eval * (right * q + R - left)
+    //        = eq_eval * right * q + eq_eval * R + (-eq_eval) * left
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(
+        &self,
+    ) -> Option<joltworks::subprotocols::blindfold::OutputClaimConstraint> {
+        use crate::utils::opening_access::OpeningIdBuilder;
+        use joltworks::subprotocols::blindfold::{OutputClaimConstraint, ProductTerm, ValueSource};
+        let builder = OpeningIdBuilder::new(&self.computation_node);
+        let left_id = builder.nodeio(Target::Input(0));
+        let right_id = builder.nodeio(Target::Input(1));
+        let q_id = builder.nodeio(Target::Current);
+        let r_id = builder.advice(VirtualPoly::DivRemainder);
+        Some(OutputClaimConstraint::sum_of_products(vec![
+            ProductTerm::scaled(
+                ValueSource::Challenge(0),
+                vec![ValueSource::Opening(right_id), ValueSource::Opening(q_id)],
+            ),
+            ProductTerm::scaled(ValueSource::Challenge(1), vec![ValueSource::Opening(r_id)]),
+            ProductTerm::scaled(
+                ValueSource::Challenge(2),
+                vec![ValueSource::Opening(left_id)],
+            ),
+        ]))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        let r_node_output_prime: Vec<F> = self
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
+        let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_node_output_prime);
+        vec![eq_eval, eq_eval, -eq_eval]
+    }
 }
 
 /// Prover state for element-wise division sumcheck protocol.

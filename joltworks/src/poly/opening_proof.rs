@@ -290,6 +290,12 @@ where
             claim,
         );
         self.sumchecks.insert(polynomial, sumcheck);
+
+        #[cfg(feature = "zk")]
+        {
+            self.pending_claims.push(claim);
+            self.pending_claim_ids.push(opening_id);
+        }
     }
 
     #[tracing::instrument(skip_all, name = "ProverOpeningAccumulator::append_sparse")]
@@ -669,17 +675,31 @@ where
         T: Transcript,
         U: Copy + Send + Sync + Into<F>,
     {
-        let claim = self.openings.get(&opening_id).unwrap().1;
-        transcript.append_scalar(&claim);
-
-        // Update the opening point in self.openings (it was initialized with default empty point)
-        self.openings.insert(
-            opening_id,
-            (
-                OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone()),
-                claim,
-            ),
-        );
+        let claim = if let Some((_, claim)) = self.openings.get(&opening_id) {
+            // Standard mode: claim was pre-loaded.
+            let claim = *claim;
+            transcript.append_scalar(&claim);
+            self.openings.insert(
+                opening_id,
+                (
+                    OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone()),
+                    claim,
+                ),
+            );
+            claim
+        } else if self.zk_mode {
+            // ZK mode: insert with placeholder claim. BlindFold handles correctness.
+            self.openings.insert(
+                opening_id,
+                (
+                    OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone()),
+                    F::zero(),
+                ),
+            );
+            F::zero()
+        } else {
+            panic!("Tried to populate dense opening for non-existent key: {opening_id:?}");
+        };
 
         let polynomial = opening_id
             .committed_poly()

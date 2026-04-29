@@ -42,6 +42,11 @@ use rayon::prelude::*;
 use std::array;
 use strum::EnumCount;
 
+#[cfg(feature = "zk")]
+use crate::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
+
 const DEGREE_BOUND: usize = 2;
 
 /// Parameters for the Prefix suffix Read-raf checking sum-check protocol.
@@ -142,6 +147,48 @@ where
             .rev()
             .collect::<Vec<_>>();
         OpeningPoint::new([r_address_prime.to_vec(), r_node_output_prime].concat())
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    // output = eq_eval * ra_claim * (val_claim + γ * raf_claim)
+    //        = Challenge(0) * Opening(ra)
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
+        let ra_id = OpeningId::new(self.polynomial_type, self.sumcheck_id);
+        Some(OutputClaimConstraint::sum_of_products(vec![
+            ProductTerm::scaled(ValueSource::Challenge(0), vec![ValueSource::Opening(ra_id)]),
+        ]))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        let opening_point = self.normalize_opening_point(&sumcheck_challenges.into_opening());
+        let (r_address_prime, r_node_output_prime) = opening_point.split_at(LOG_K);
+        let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_node_output_prime.r);
+        let val_claim = self.table.evaluate_mle(&r_address_prime.r);
+
+        let left_operand_eval =
+            OperandPolynomial::<F>::new(LOG_K, OperandSide::Left).evaluate(&r_address_prime.r);
+        let right_operand_eval =
+            OperandPolynomial::<F>::new(LOG_K, OperandSide::Right).evaluate(&r_address_prime.r);
+        let identity_poly_eval = IdentityPolynomial::<F>::new(LOG_K).evaluate(&r_address_prime.r);
+        let raf_flag_claim = F::from_bool(self.is_interleaved_operands);
+        let raf_claim = raf_flag_claim * (left_operand_eval + self.gamma * right_operand_eval)
+            + (F::one() - raf_flag_claim) * self.gamma * identity_poly_eval;
+
+        vec![eq_eval * (val_claim + self.gamma * raf_claim)]
     }
 }
 

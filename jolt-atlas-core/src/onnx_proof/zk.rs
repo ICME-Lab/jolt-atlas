@@ -7,7 +7,7 @@
 
 use crate::onnx_proof::{AtlasProverPreprocessing, AtlasVerifierPreprocessing, ONNXProof, Prover};
 use ark_bn254::{Bn254, Fr};
-use ark_std::{One, Zero};
+use ark_std::Zero;
 use atlas_onnx_tracer::{
     model::trace::{ModelExecutionIO, Trace},
     ops::Operator,
@@ -314,6 +314,261 @@ fn verify_div_zk(
     Ok(())
 }
 
+/// Verify a neural teleportation operator ZK proof.
+fn verify_neural_teleport_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    model: &atlas_onnx_tracer::model::Model,
+    bundle: &ZkProofBundle,
+    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+    zk_proof_idx: &mut usize,
+) -> Result<(), ProofVerifyError> {
+    use crate::onnx_proof::neural_teleport::{
+        division::TeleportDivisionVerifier, range_and_onehot::NeuralTeleportRangeOneHot,
+    };
+    use crate::onnx_proof::range_checking::{
+        range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+    };
+    use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+
+    // 1. Eval reduction
+    verify_zk_eval_reduction(node, bundle, accumulator, transcript)?;
+
+    let tau = match &node.operator {
+        Operator::Sigmoid(op) => op.tau,
+        Operator::Tanh(op) => op.tau,
+        Operator::Erf(op) => op.tau,
+        _ => unreachable!(),
+    };
+
+    // 2. Division sumcheck
+    {
+        let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*proof_node_idx, node.idx);
+        let div_verifier = TeleportDivisionVerifier::new(node.clone(), accumulator, tau);
+        verify_zk_sumcheck_instances(
+            zk_proof,
+            vec![Box::new(div_verifier)],
+            accumulator,
+            transcript,
+        )?;
+        *zk_proof_idx += 1;
+    }
+
+    // 3. Lookup sumcheck
+    {
+        let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*proof_node_idx, node.idx);
+        let verifier_instances = create_verifier_instances(node, accumulator, model, transcript);
+        verify_zk_sumcheck_instances(zk_proof, verifier_instances, accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+
+    // 4. Range-check + operator-specific one-hot
+    {
+        let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*proof_node_idx, node.idx);
+        let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
+        let rangecheck_verifier = rangecheck_provider
+            .read_raf_verify::<F, T, UnsignedLessThanTable<{ common::consts::XLEN }>>(
+                accumulator,
+                transcript,
+            );
+        macro_rules! verify_ra_onehot {
+            ($op:expr) => {{
+                let ra_encoding = NeuralTeleportRangeOneHot::<F, T>::ra_encoding($op, node);
+                let ra_v = joltworks::subprotocols::shout::ra_onehot_verifiers(
+                    &ra_encoding,
+                    &*accumulator,
+                    transcript,
+                );
+                let mut instances: Vec<
+                    Box<
+                        dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<
+                            F,
+                            T,
+                        >,
+                    >,
+                > = vec![Box::new(rangecheck_verifier)];
+                instances.extend(ra_v);
+                verify_zk_sumcheck_instances(zk_proof, instances, accumulator, transcript)
+            }};
+        }
+        match &node.operator {
+            Operator::Sigmoid(op) => verify_ra_onehot!(op)?,
+            Operator::Tanh(op) => verify_ra_onehot!(op)?,
+            Operator::Erf(op) => verify_ra_onehot!(op)?,
+            _ => unreachable!(),
+        };
+        *zk_proof_idx += 1;
+    }
+
+    // 5. Range-check one-hot/hamming-weight consistency
+    {
+        let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*proof_node_idx, node.idx);
+        let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+        let [rc_ra, rc_hw, rc_bool] = joltworks::subprotocols::shout::ra_onehot_verifiers(
+            &rc_encoding,
+            accumulator,
+            transcript,
+        );
+        verify_zk_sumcheck_instances(
+            zk_proof,
+            vec![rc_ra, rc_hw, rc_bool],
+            accumulator,
+            transcript,
+        )?;
+        *zk_proof_idx += 1;
+    }
+
+    Ok(())
+}
+
+/// Prove a neural teleportation operator (Sigmoid, Tanh, Erf) with ZK.
+/// Default flow: eval reduction first, then division + lookup + range/onehot stages.
+#[expect(clippy::too_many_arguments)]
+fn prove_neural_teleport_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    prover: &mut Prover<F, T>,
+    model: &atlas_onnx_tracer::model::Model,
+    pedersen_gens: &PedersenGenerators<C>,
+    blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+    stage_configs: &mut Vec<StageConfig>,
+    eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
+    eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
+    zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
+) {
+    use crate::onnx_proof::neural_teleport::{
+        division::{TeleportDivisionParams, TeleportDivisionProver},
+        range_and_onehot::NeuralTeleportRangeOneHot,
+    };
+    use crate::onnx_proof::range_checking::{
+        range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+    };
+    use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+
+    // 1. Eval reduction (standard, before sumchecks)
+    prove_zk_eval_reduction(
+        node,
+        prover,
+        pedersen_gens,
+        eval_reduction_proofs,
+        eval_reduction_h_commitments,
+    );
+
+    // Dispatch to get operator-specific tau and create the lookup prover instance
+    let tau = match &node.operator {
+        Operator::Sigmoid(op) => op.tau,
+        Operator::Tanh(op) => op.tau,
+        Operator::Erf(op) => op.tau,
+        _ => unreachable!(),
+    };
+
+    // 2. Division sumcheck
+    let div_params = TeleportDivisionParams::<F>::new(node.clone(), &prover.accumulator, tau);
+    let mut div_sc = TeleportDivisionProver::new(&prover.trace, div_params);
+    let div_proof = run_zk_sumcheck(
+        &mut div_sc,
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, div_proof));
+
+    // 3. Lookup sumcheck (operator-specific: needs mutable accumulator/transcript)
+    {
+        use crate::onnx_proof::ops::sigmoid::{SigmoidParams, SigmoidProver};
+        let lookup_op = match &node.operator {
+            Operator::Sigmoid(op) => op.clone(),
+            // TODO: Add Tanh, Erf lookup prover creation here
+            _ => unreachable!(),
+        };
+        let params = SigmoidParams::new(
+            node.clone(),
+            &model.graph,
+            &prover.accumulator,
+            &mut prover.transcript,
+            lookup_op,
+        );
+        let mut sc = SigmoidProver::initialize(
+            &prover.trace,
+            params,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+        let lookup_proof = run_zk_sumcheck(
+            &mut sc,
+            prover,
+            blindfold_accumulator,
+            stage_configs,
+            pedersen_gens,
+        );
+        zk_sumcheck_proofs.push((node.idx, lookup_proof));
+    }
+
+    // 4. Range-check + operator-specific one-hot (batched: rangecheck + 3 ra_onehot)
+    // Helper macro to avoid dynamic dispatch on RaOneHotEncoding (uses &impl).
+    macro_rules! prove_range_and_onehot_zk {
+        ($op:expr) => {{
+            let lookup_indices =
+                NeuralTeleportRangeOneHot::<F, T>::lookup_indices($op, node, &prover.trace);
+            let ra_encoding = NeuralTeleportRangeOneHot::<F, T>::ra_encoding($op, node);
+            let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
+            let (rangecheck_sumcheck, rc_lookup_indices) = rangecheck_provider
+                .read_raf_prove::<F, T, UnsignedLessThanTable<{ common::consts::XLEN }>>(
+                    &prover.trace,
+                    &mut prover.accumulator,
+                    &mut prover.transcript,
+                );
+            let ra_onehot = joltworks::subprotocols::shout::ra_onehot_provers(
+                &ra_encoding,
+                &lookup_indices,
+                &prover.accumulator,
+                &mut prover.transcript,
+            );
+            let mut instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> =
+                vec![Box::new(rangecheck_sumcheck)];
+            instances.extend(ra_onehot);
+            let refs: Vec<&mut dyn SumcheckInstanceProver<F, T>> =
+                instances.iter_mut().map(|v| &mut **v as _).collect();
+            let proof = run_zk_batched_sumcheck(
+                refs,
+                prover,
+                blindfold_accumulator,
+                stage_configs,
+                pedersen_gens,
+            );
+            zk_sumcheck_proofs.push((node.idx, proof));
+            rc_lookup_indices
+        }};
+    }
+    let rc_lookup_indices = match &node.operator {
+        Operator::Sigmoid(op) => prove_range_and_onehot_zk!(op),
+        Operator::Tanh(op) => prove_range_and_onehot_zk!(op),
+        Operator::Erf(op) => prove_range_and_onehot_zk!(op),
+        _ => unreachable!(),
+    };
+
+    // 5. Range-check one-hot/hamming-weight consistency (batched: rc_ra + rc_hw + rc_bool)
+    let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+    let [mut rc_ra, mut rc_hw, mut rc_bool] = joltworks::subprotocols::shout::ra_onehot_provers(
+        &rc_encoding,
+        &rc_lookup_indices,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let hw_proof = run_zk_batched_sumcheck(
+        vec![&mut *rc_ra, &mut *rc_hw, &mut *rc_bool],
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, hw_proof));
+}
+
 /// Prove Div operator with ZK: custom flow with execution sumcheck before eval reduction.
 #[expect(clippy::too_many_arguments)]
 fn prove_div_zk(
@@ -446,7 +701,22 @@ pub fn prove_zk(
     let mut zk_sumcheck_proofs: Vec<NodeZkProof> = Vec::new();
 
     for (_, node) in nodes.iter().rev() {
-        if matches!(&node.operator, Operator::Div(_)) {
+        if matches!(
+            &node.operator,
+            Operator::Sigmoid(_) | Operator::Tanh(_) | Operator::Erf(_)
+        ) {
+            prove_neural_teleport_zk(
+                node,
+                &mut prover,
+                pp.shared.model(),
+                pedersen_gens,
+                &mut blindfold_accumulator,
+                &mut stage_configs,
+                &mut eval_reduction_proofs,
+                &mut eval_reduction_h_commitments,
+                &mut zk_sumcheck_proofs,
+            );
+        } else if matches!(&node.operator, Operator::Div(_)) {
             prove_div_zk(
                 node,
                 &mut prover,
@@ -753,7 +1023,19 @@ pub fn verify_zk(
     // 3. Full IOP replay: for each node, verify eval reduction + absorb ZK sumcheck
     let mut zk_proof_idx = 0;
     for (_, node) in model.graph.nodes.iter().rev() {
-        if matches!(&node.operator, Operator::Div(_)) {
+        if matches!(
+            &node.operator,
+            Operator::Sigmoid(_) | Operator::Tanh(_) | Operator::Erf(_)
+        ) {
+            verify_neural_teleport_zk(
+                node,
+                model,
+                bundle,
+                &mut accumulator,
+                &mut transcript,
+                &mut zk_proof_idx,
+            )?;
+        } else if matches!(&node.operator, Operator::Div(_)) {
             verify_div_zk(
                 node,
                 bundle,
@@ -782,7 +1064,8 @@ pub fn verify_zk(
                     "ZK sumcheck proof order mismatch"
                 );
 
-                let verifier_instances = create_verifier_instances(node, &accumulator, model);
+                let verifier_instances =
+                    create_verifier_instances(node, &mut accumulator, model, &mut transcript);
                 verify_zk_sumcheck_instances(
                     zk_proof,
                     verifier_instances,
@@ -907,8 +1190,9 @@ fn create_prover_instance(
 /// Create verifier sumcheck instances for a node (for IOP transcript replay).
 fn create_verifier_instances(
     node: &atlas_onnx_tracer::node::ComputationNode,
-    accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
     model: &atlas_onnx_tracer::model::Model,
+    transcript: &mut T,
 ) -> Vec<Box<dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>> {
     match &node.operator {
         Operator::Square(_) => {
@@ -968,6 +1252,16 @@ fn create_verifier_instances(
             vec![Box::new(ScalarConstDivVerifier::new(
                 node.clone(),
                 accumulator,
+            ))]
+        }
+        Operator::Sigmoid(op) => {
+            use crate::onnx_proof::ops::sigmoid::SigmoidVerifier;
+            vec![Box::new(SigmoidVerifier::new(
+                node.clone(),
+                &model.graph,
+                accumulator,
+                transcript,
+                op.clone(),
             ))]
         }
         _ => vec![],

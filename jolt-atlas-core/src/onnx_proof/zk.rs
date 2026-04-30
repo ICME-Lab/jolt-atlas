@@ -425,6 +425,108 @@ fn verify_neural_teleport_zk(
     Ok(())
 }
 
+/// Verify Cos/Sin ZK proof: custom flow mirroring prove_cos_sin_zk.
+fn verify_cos_sin_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    model: &atlas_onnx_tracer::model::Model,
+    bundle: &ZkProofBundle,
+    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+    zk_proof_idx: &mut usize,
+) -> Result<(), ProofVerifyError> {
+    use crate::onnx_proof::neural_teleport::{
+        division::TeleportDivisionVerifier, range_and_onehot::NeuralTeleportRangeOneHot,
+    };
+    use crate::onnx_proof::range_checking::{
+        range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+    };
+    use crate::utils::opening_access::AccOpeningAccessor;
+    use common::CommittedPoly;
+    use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+
+    let tau = atlas_onnx_tracer::model::consts::FOUR_PI_APPROX;
+
+    // 1. Division sumcheck (from transcript)
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let v = TeleportDivisionVerifier::new_from_transcript(node.clone(), tau, transcript);
+        verify_zk_sumcheck_instances(zk_proof, vec![Box::new(v)], accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+
+    // 2. Lookup sumcheck
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let vi = create_verifier_instances(node, accumulator, model, transcript);
+        verify_zk_sumcheck_instances(zk_proof, vi, accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+
+    // 3. Verify quotient binding
+    {
+        let accessor = AccOpeningAccessor::new(&mut *accumulator, node);
+        let teleport_q = accessor.get_advice(VirtualPoly::TeleportQuotient);
+        let mut provider = accessor.into_provider(transcript, teleport_q.0.clone());
+        provider.append_advice(CommittedPoly::TeleportNodeQuotient);
+    }
+
+    // 4. Eval reduction
+    verify_zk_eval_reduction(node, bundle, accumulator, transcript)?;
+
+    // 5. Range+onehot
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let rc_prov = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
+        let rc_v = rc_prov
+            .read_raf_verify::<F, T, UnsignedLessThanTable<{ common::consts::XLEN }>>(
+                accumulator,
+                transcript,
+            );
+        macro_rules! verify_ra {
+            ($op:expr) => {{
+                let enc = NeuralTeleportRangeOneHot::<F, T>::ra_encoding($op, node);
+                let ra = joltworks::subprotocols::shout::ra_onehot_verifiers(
+                    &enc,
+                    &*accumulator,
+                    transcript,
+                );
+                let mut inst: Vec<
+                    Box<
+                        dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<
+                            F,
+                            T,
+                        >,
+                    >,
+                > = vec![Box::new(rc_v)];
+                inst.extend(ra);
+                verify_zk_sumcheck_instances(zk_proof, inst, accumulator, transcript)
+            }};
+        }
+        match &node.operator {
+            Operator::Cos(op) => verify_ra!(op)?,
+            Operator::Sin(op) => verify_ra!(op)?,
+            _ => unreachable!(),
+        };
+        *zk_proof_idx += 1;
+    }
+
+    // 6. Hamming-weight
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+        let [a, b, c] =
+            joltworks::subprotocols::shout::ra_onehot_verifiers(&rc_enc, accumulator, transcript);
+        verify_zk_sumcheck_instances(zk_proof, vec![a, b, c], accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+
+    Ok(())
+}
+
 /// Prove a neural teleportation operator (Sigmoid, Tanh, Erf) with ZK.
 /// Default flow: eval reduction first, then division + lookup + range/onehot stages.
 #[expect(clippy::too_many_arguments)]
@@ -580,6 +682,157 @@ fn prove_neural_teleport_zk(
     zk_sumcheck_proofs.push((node.idx, hw_proof));
 }
 
+/// Prove Cos/Sin with ZK: custom flow (division from transcript, then lookup,
+/// then quotient binding, then eval reduction, then range+onehot).
+#[expect(clippy::too_many_arguments)]
+fn prove_cos_sin_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    prover: &mut Prover<F, T>,
+    model: &atlas_onnx_tracer::model::Model,
+    pedersen_gens: &PedersenGenerators<C>,
+    blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+    stage_configs: &mut Vec<StageConfig>,
+    eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
+    eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
+    zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
+) {
+    use crate::onnx_proof::neural_teleport::{
+        division::{TeleportDivisionParams, TeleportDivisionProver},
+        range_and_onehot::NeuralTeleportRangeOneHot,
+    };
+    use crate::onnx_proof::range_checking::{
+        range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+    };
+    use crate::utils::opening_access::AccOpeningAccessor;
+    use common::CommittedPoly;
+    use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+
+    let tau = atlas_onnx_tracer::model::consts::FOUR_PI_APPROX;
+
+    // 1. Division sumcheck (r_node_output from transcript)
+    let div_params =
+        TeleportDivisionParams::<F>::new_from_transcript(node.clone(), &mut prover.transcript, tau);
+    let mut div_sc = TeleportDivisionProver::new(&prover.trace, div_params);
+    let div_proof = run_zk_sumcheck(
+        &mut div_sc,
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, div_proof));
+
+    // 2. Lookup sumcheck
+    macro_rules! prove_lookup {
+        ($Params:ty, $Prover:ty) => {{
+            let params = <$Params>::new(
+                node.clone(),
+                &model.graph,
+                &prover.accumulator,
+                &mut prover.transcript,
+            );
+            let mut sc = <$Prover>::initialize(
+                &prover.trace,
+                params,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            );
+            let proof = run_zk_sumcheck(
+                &mut sc,
+                prover,
+                blindfold_accumulator,
+                stage_configs,
+                pedersen_gens,
+            );
+            zk_sumcheck_proofs.push((node.idx, proof));
+        }};
+    }
+    match &node.operator {
+        Operator::Cos(_) => {
+            use crate::onnx_proof::ops::cos::{CosParams, CosProver};
+            prove_lookup!(CosParams::<F>, CosProver::<F>);
+        }
+        Operator::Sin(_) => {
+            use crate::onnx_proof::ops::sin::{SinParams, SinProver};
+            prove_lookup!(SinParams::<F>, SinProver::<F>);
+        }
+        _ => unreachable!(),
+    }
+
+    // 3. Bind TeleportNodeQuotient as committed poly
+    {
+        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
+        let teleport_q = accessor.get_advice(VirtualPoly::TeleportQuotient);
+        let mut provider = accessor.into_provider(&mut prover.transcript, teleport_q.0.clone());
+        provider.append_advice(CommittedPoly::TeleportNodeQuotient, teleport_q.1);
+    }
+
+    // 4. Eval reduction
+    prove_zk_eval_reduction(
+        node,
+        prover,
+        pedersen_gens,
+        eval_reduction_proofs,
+        eval_reduction_h_commitments,
+    );
+
+    // 5-6. Range+onehot and hamming-weight
+    macro_rules! prove_range_onehot {
+        ($op:expr) => {{
+            let indices =
+                NeuralTeleportRangeOneHot::<F, T>::lookup_indices($op, node, &prover.trace);
+            let enc = NeuralTeleportRangeOneHot::<F, T>::ra_encoding($op, node);
+            let rc_prov = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
+            let (rc_sc, rc_idx) = rc_prov
+                .read_raf_prove::<F, T, UnsignedLessThanTable<{ common::consts::XLEN }>>(
+                    &prover.trace,
+                    &mut prover.accumulator,
+                    &mut prover.transcript,
+                );
+            let ra = joltworks::subprotocols::shout::ra_onehot_provers(
+                &enc,
+                &indices,
+                &prover.accumulator,
+                &mut prover.transcript,
+            );
+            let mut inst: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = vec![Box::new(rc_sc)];
+            inst.extend(ra);
+            let refs: Vec<&mut dyn SumcheckInstanceProver<F, T>> =
+                inst.iter_mut().map(|v| &mut **v as _).collect();
+            let p = run_zk_batched_sumcheck(
+                refs,
+                prover,
+                blindfold_accumulator,
+                stage_configs,
+                pedersen_gens,
+            );
+            zk_sumcheck_proofs.push((node.idx, p));
+            rc_idx
+        }};
+    }
+    let rc_indices = match &node.operator {
+        Operator::Cos(op) => prove_range_onehot!(op),
+        Operator::Sin(op) => prove_range_onehot!(op),
+        _ => unreachable!(),
+    };
+
+    let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+    let [mut a, mut b, mut c] = joltworks::subprotocols::shout::ra_onehot_provers(
+        &rc_enc,
+        &rc_indices,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let hw = run_zk_batched_sumcheck(
+        vec![&mut *a, &mut *b, &mut *c],
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, hw));
+}
+
 /// Prove Div operator with ZK: custom flow with execution sumcheck before eval reduction.
 #[expect(clippy::too_many_arguments)]
 fn prove_div_zk(
@@ -717,6 +970,18 @@ pub fn prove_zk(
             Operator::Sigmoid(_) | Operator::Tanh(_) | Operator::Erf(_)
         ) {
             prove_neural_teleport_zk(
+                node,
+                &mut prover,
+                pp.shared.model(),
+                pedersen_gens,
+                &mut blindfold_accumulator,
+                &mut stage_configs,
+                &mut eval_reduction_proofs,
+                &mut eval_reduction_h_commitments,
+                &mut zk_sumcheck_proofs,
+            );
+        } else if matches!(&node.operator, Operator::Cos(_) | Operator::Sin(_)) {
+            prove_cos_sin_zk(
                 node,
                 &mut prover,
                 pp.shared.model(),
@@ -1046,6 +1311,15 @@ pub fn verify_zk(
                 &mut transcript,
                 &mut zk_proof_idx,
             )?;
+        } else if matches!(&node.operator, Operator::Cos(_) | Operator::Sin(_)) {
+            verify_cos_sin_zk(
+                node,
+                model,
+                bundle,
+                &mut accumulator,
+                &mut transcript,
+                &mut zk_proof_idx,
+            )?;
         } else if matches!(&node.operator, Operator::Div(_)) {
             verify_div_zk(
                 node,
@@ -1293,6 +1567,24 @@ fn create_verifier_instances(
                 accumulator,
                 transcript,
                 op.clone(),
+            ))]
+        }
+        Operator::Cos(_) => {
+            use crate::onnx_proof::ops::cos::CosVerifier;
+            vec![Box::new(CosVerifier::new(
+                node.clone(),
+                &model.graph,
+                accumulator,
+                transcript,
+            ))]
+        }
+        Operator::Sin(_) => {
+            use crate::onnx_proof::ops::sin::SinVerifier;
+            vec![Box::new(SinVerifier::new(
+                node.clone(),
+                &model.graph,
+                accumulator,
+                transcript,
             ))]
         }
         _ => vec![],

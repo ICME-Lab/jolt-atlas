@@ -27,6 +27,11 @@ use joltworks::{
 };
 use rayon::prelude::*;
 
+#[cfg(feature = "zk")]
+use joltworks::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
+
 use crate::utils::{
     dims::EinsumDims,
     opening_access::{AccOpeningAccessor, Target},
@@ -207,6 +212,58 @@ impl<F: JoltField> SumcheckInstanceParams<F> for RbmkRbnkBmnParams<F> {
 
     fn num_rounds(&self) -> usize {
         self.variant.num_rounds()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
+        use crate::utils::opening_access::OpeningIdBuilder;
+        let builder = OpeningIdBuilder::new(&self.computation_node);
+        let left_id = builder.nodeio(Target::Input(0));
+        let right_id = builder.nodeio(Target::Input(1));
+        Some(OutputClaimConstraint::sum_of_products(vec![
+            ProductTerm::scaled(
+                ValueSource::Challenge(0),
+                vec![
+                    ValueSource::Opening(left_id),
+                    ValueSource::Opening(right_id),
+                ],
+            ),
+        ]))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        let eq_eval = match self.variant {
+            RbmkRbnkBmnVariant::AbmkAbnkAbmn { log_a, log_b, .. } => {
+                let (r_a, r_bmn) = self.r_node_output.split_at(log_a);
+                let (r_b, _) = r_bmn.split_at(log_b);
+                let sumcheck_opening = sumcheck_challenges.into_opening();
+                let (r_ab, _) = sumcheck_opening.split_at(log_a + log_b);
+                EqPolynomial::mle(&[r_a.r.as_slice(), r_b.r.as_slice()].concat(), r_ab)
+            }
+            RbmkRbnkBmnVariant::AcbmkKcnCbmn { log_c, log_b, .. } => {
+                let (r_c, r_bmn) = self.r_node_output.split_at(log_c);
+                let (r_b, _) = r_bmn.split_at(log_b);
+                let sumcheck_opening = sumcheck_challenges.into_opening();
+                let (r_cb, _) = sumcheck_opening.split_at(log_c + log_b);
+                EqPolynomial::mle(&[r_c.r.as_slice(), r_b.r.as_slice()].concat(), r_cb)
+            }
+            RbmkRbnkBmnVariant::CbmkCbknAmn { .. } => F::one(),
+        };
+        vec![eq_eval]
     }
 }
 

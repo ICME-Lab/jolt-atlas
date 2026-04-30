@@ -16,6 +16,11 @@ use joltworks::{
     utils::math::Math,
 };
 
+#[cfg(feature = "zk")]
+use joltworks::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
+
 use crate::utils::{
     dims::EinsumDims,
     opening_access::{AccOpeningAccessor, Target},
@@ -96,6 +101,38 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MAnA1nmParams<F> {
 
     fn num_rounds(&self) -> usize {
         0
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
+        use crate::utils::opening_access::OpeningIdBuilder;
+        let builder = OpeningIdBuilder::new(&self.computation_node);
+        let left_id = builder.nodeio(Target::Input(0));
+        let right_id = builder.nodeio(Target::Input(1));
+        Some(OutputClaimConstraint::sum_of_products(vec![
+            ProductTerm::product(vec![
+                ValueSource::Opening(left_id),
+                ValueSource::Opening(right_id),
+            ]),
+        ]))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, _sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        vec![]
     }
 }
 

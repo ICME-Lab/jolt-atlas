@@ -1769,12 +1769,31 @@ fn create_prover_instance(
                 params,
             )))
         }
+        Operator::Einsum(_) => {
+            use crate::onnx_proof::ops::einsum::EinsumProver;
+            Some(EinsumProver::sumcheck(
+                model,
+                &prover.trace,
+                node.clone(),
+                &prover.accumulator,
+            ))
+        }
+        Operator::Sum(_) => {
+            use crate::onnx_proof::ops::sum::create_sum_prover;
+            Some(create_sum_prover(
+                node,
+                model,
+                &prover.trace,
+                &prover.accumulator,
+            ))
+        }
         Operator::Input(_)
         | Operator::Identity(_)
         | Operator::Broadcast(_)
         | Operator::MoveAxis(_)
         | Operator::Constant(_)
-        | Operator::IsNan(_) => None,
+        | Operator::IsNan(_)
+        | Operator::Clamp(_) => None,
         other => {
             panic!("ZK proving not yet implemented for operator: {other:?}");
         }
@@ -1895,6 +1914,14 @@ fn create_verifier_instances(
                 accumulator,
                 transcript,
             ))]
+        }
+        Operator::Einsum(_) => {
+            use crate::onnx_proof::ops::einsum::EinsumVerifier;
+            vec![EinsumVerifier::sumcheck(model, node.clone(), accumulator)]
+        }
+        Operator::Sum(_) => {
+            use crate::onnx_proof::ops::sum::create_sum_verifier;
+            vec![create_sum_verifier(node, model, accumulator)]
         }
         _ => vec![],
     }

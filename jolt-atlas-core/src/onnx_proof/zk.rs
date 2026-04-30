@@ -226,6 +226,80 @@ fn verify_zk_sumcheck_instances(
     Ok(())
 }
 
+/// Verify Rsqrt ZK proof: custom flow mirroring prove_rsqrt_zk.
+fn verify_rsqrt_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    bundle: &ZkProofBundle,
+    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+    zk_proof_idx: &mut usize,
+) -> Result<(), ProofVerifyError> {
+    use crate::onnx_proof::ops::rsqrt::RsqrtVerifier;
+    use crate::onnx_proof::range_checking::{
+        range_check_operands::{RiRangeCheckOperands, RsRangeCheckOperands},
+        RangeCheckEncoding, RangeCheckProvider,
+    };
+    use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+
+    // 1. Execution sumcheck
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let v = RsqrtVerifier::new(node.clone(), transcript);
+        verify_zk_sumcheck_instances(zk_proof, vec![Box::new(v)], accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+
+    // 2. Eval reduction
+    verify_zk_eval_reduction(node, bundle, accumulator, transcript)?;
+
+    // 3. Two range checks batched
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let div_rc = RangeCheckProvider::<RiRangeCheckOperands>::new(node);
+        let div_v = div_rc
+            .read_raf_verify::<F, T, UnsignedLessThanTable<{ common::consts::XLEN }>>(
+                accumulator,
+                transcript,
+            );
+        let sqrt_rc = RangeCheckProvider::<RsRangeCheckOperands>::new(node);
+        let sqrt_v = sqrt_rc
+            .read_raf_verify::<F, T, UnsignedLessThanTable<{ common::consts::XLEN }>>(
+                accumulator,
+                transcript,
+            );
+        verify_zk_sumcheck_instances(
+            zk_proof,
+            vec![Box::new(div_v), Box::new(sqrt_v)],
+            accumulator,
+            transcript,
+        )?;
+        *zk_proof_idx += 1;
+    }
+
+    // 4. Six one-hot instances batched
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+        let [d_ra, d_hw, d_bool] =
+            joltworks::subprotocols::shout::ra_onehot_verifiers(&div_enc, accumulator, transcript);
+        let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+        let [s_ra, s_hw, s_bool] =
+            joltworks::subprotocols::shout::ra_onehot_verifiers(&sqrt_enc, accumulator, transcript);
+        verify_zk_sumcheck_instances(
+            zk_proof,
+            vec![d_ra, d_hw, d_bool, s_ra, s_hw, s_bool],
+            accumulator,
+            transcript,
+        )?;
+        *zk_proof_idx += 1;
+    }
+
+    Ok(())
+}
+
 /// Verify Div operator ZK proof: custom flow mirroring prove_div_zk.
 fn verify_div_zk(
     node: &atlas_onnx_tracer::node::ComputationNode,
@@ -833,6 +907,103 @@ fn prove_cos_sin_zk(
     zk_sumcheck_proofs.push((node.idx, hw));
 }
 
+/// Prove Rsqrt with ZK: custom flow (execution from transcript, eval reduction, range checks).
+#[expect(clippy::too_many_arguments)]
+fn prove_rsqrt_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    prover: &mut Prover<F, T>,
+    pedersen_gens: &PedersenGenerators<C>,
+    blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+    stage_configs: &mut Vec<StageConfig>,
+    eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
+    eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
+    zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
+) {
+    use crate::onnx_proof::ops::rsqrt::{RsqrtParams, RsqrtProver};
+    use crate::onnx_proof::range_checking::{
+        range_check_operands::{RiRangeCheckOperands, RsRangeCheckOperands},
+        RangeCheckEncoding, RangeCheckProvider,
+    };
+    use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+
+    // 1. Execution sumcheck (r_node_output + gamma from transcript)
+    let params = RsqrtParams::<F>::new(node.clone(), &mut prover.transcript);
+    let mut sc = RsqrtProver::initialize(&prover.trace, params);
+    let exec_proof = run_zk_sumcheck(
+        &mut sc,
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, exec_proof));
+
+    // 2. Eval reduction
+    prove_zk_eval_reduction(
+        node,
+        prover,
+        pedersen_gens,
+        eval_reduction_proofs,
+        eval_reduction_h_commitments,
+    );
+
+    // 3. Two range checks (Ri and Rs) batched together
+    let div_rc = RangeCheckProvider::<RiRangeCheckOperands>::new(node);
+    let (div_rc_sc, div_rc_idx) = div_rc
+        .read_raf_prove::<F, T, UnsignedLessThanTable<{ common::consts::XLEN }>>(
+            &prover.trace,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+    let sqrt_rc = RangeCheckProvider::<RsRangeCheckOperands>::new(node);
+    let (sqrt_rc_sc, sqrt_rc_idx) = sqrt_rc
+        .read_raf_prove::<F, T, UnsignedLessThanTable<{ common::consts::XLEN }>>(
+            &prover.trace,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+    let mut rc_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> =
+        vec![Box::new(div_rc_sc), Box::new(sqrt_rc_sc)];
+    let rc_refs: Vec<&mut dyn SumcheckInstanceProver<F, T>> =
+        rc_instances.iter_mut().map(|v| &mut **v as _).collect();
+    let rc_proof = run_zk_batched_sumcheck(
+        rc_refs,
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, rc_proof));
+
+    // 4. Six one-hot instances (3 per range check) batched together
+    let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+    let [div_ra, div_hw, div_bool] = joltworks::subprotocols::shout::ra_onehot_provers(
+        &div_enc,
+        &div_rc_idx,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+    let [sqrt_ra, sqrt_hw, sqrt_bool] = joltworks::subprotocols::shout::ra_onehot_provers(
+        &sqrt_enc,
+        &sqrt_rc_idx,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let mut oh_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> =
+        vec![div_ra, div_hw, div_bool, sqrt_ra, sqrt_hw, sqrt_bool];
+    let oh_refs: Vec<&mut dyn SumcheckInstanceProver<F, T>> =
+        oh_instances.iter_mut().map(|v| &mut **v as _).collect();
+    let oh_proof = run_zk_batched_sumcheck(
+        oh_refs,
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, oh_proof));
+}
+
 /// Prove Div operator with ZK: custom flow with execution sumcheck before eval reduction.
 #[expect(clippy::too_many_arguments)]
 fn prove_div_zk(
@@ -992,17 +1163,30 @@ pub fn prove_zk(
                 &mut eval_reduction_h_commitments,
                 &mut zk_sumcheck_proofs,
             );
-        } else if matches!(&node.operator, Operator::Div(_)) {
-            prove_div_zk(
-                node,
-                &mut prover,
-                pedersen_gens,
-                &mut blindfold_accumulator,
-                &mut stage_configs,
-                &mut eval_reduction_proofs,
-                &mut eval_reduction_h_commitments,
-                &mut zk_sumcheck_proofs,
-            );
+        } else if matches!(&node.operator, Operator::Div(_) | Operator::Rsqrt(_)) {
+            if matches!(&node.operator, Operator::Rsqrt(_)) {
+                prove_rsqrt_zk(
+                    node,
+                    &mut prover,
+                    pedersen_gens,
+                    &mut blindfold_accumulator,
+                    &mut stage_configs,
+                    &mut eval_reduction_proofs,
+                    &mut eval_reduction_h_commitments,
+                    &mut zk_sumcheck_proofs,
+                );
+            } else {
+                prove_div_zk(
+                    node,
+                    &mut prover,
+                    pedersen_gens,
+                    &mut blindfold_accumulator,
+                    &mut stage_configs,
+                    &mut eval_reduction_proofs,
+                    &mut eval_reduction_h_commitments,
+                    &mut zk_sumcheck_proofs,
+                );
+            }
         } else {
             // Standard flow: eval reduction first, then execution sumcheck.
             prove_zk_eval_reduction(
@@ -1315,6 +1499,14 @@ pub fn verify_zk(
             verify_cos_sin_zk(
                 node,
                 model,
+                bundle,
+                &mut accumulator,
+                &mut transcript,
+                &mut zk_proof_idx,
+            )?;
+        } else if matches!(&node.operator, Operator::Rsqrt(_)) {
+            verify_rsqrt_zk(
+                node,
                 bundle,
                 &mut accumulator,
                 &mut transcript,

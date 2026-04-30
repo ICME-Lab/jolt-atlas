@@ -1,0 +1,14 @@
+[package]
+name = "qwen2-prover"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+half = "2.7"
+rayon = { workspace = true }
+safetensors = "0.7"
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+
+[dev-dependencies]
+pollster = "0.4"
+wgpu = "29"

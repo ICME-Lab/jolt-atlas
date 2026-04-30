@@ -478,34 +478,45 @@ fn prove_neural_teleport_zk(
     zk_sumcheck_proofs.push((node.idx, div_proof));
 
     // 3. Lookup sumcheck (operator-specific: needs mutable accumulator/transcript)
-    {
-        use crate::onnx_proof::ops::sigmoid::{SigmoidParams, SigmoidProver};
-        let lookup_op = match &node.operator {
-            Operator::Sigmoid(op) => op.clone(),
-            // TODO: Add Tanh, Erf lookup prover creation here
-            _ => unreachable!(),
-        };
-        let params = SigmoidParams::new(
-            node.clone(),
-            &model.graph,
-            &prover.accumulator,
-            &mut prover.transcript,
-            lookup_op,
-        );
-        let mut sc = SigmoidProver::initialize(
-            &prover.trace,
-            params,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        let lookup_proof = run_zk_sumcheck(
-            &mut sc,
-            prover,
-            blindfold_accumulator,
-            stage_configs,
-            pedersen_gens,
-        );
-        zk_sumcheck_proofs.push((node.idx, lookup_proof));
+    macro_rules! prove_lookup_zk {
+        ($Params:ty, $Prover:ty, $op:expr) => {{
+            let params = <$Params>::new(
+                node.clone(),
+                &model.graph,
+                &prover.accumulator,
+                &mut prover.transcript,
+                $op.clone(),
+            );
+            let mut sc = <$Prover>::initialize(
+                &prover.trace,
+                params,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            );
+            let proof = run_zk_sumcheck(
+                &mut sc,
+                prover,
+                blindfold_accumulator,
+                stage_configs,
+                pedersen_gens,
+            );
+            zk_sumcheck_proofs.push((node.idx, proof));
+        }};
+    }
+    match &node.operator {
+        Operator::Sigmoid(op) => {
+            use crate::onnx_proof::ops::sigmoid::{SigmoidParams, SigmoidProver};
+            prove_lookup_zk!(SigmoidParams::<F>, SigmoidProver::<F>, op);
+        }
+        Operator::Tanh(op) => {
+            use crate::onnx_proof::ops::tanh::{TanhParams, TanhProver};
+            prove_lookup_zk!(TanhParams::<F>, TanhProver::<F>, op);
+        }
+        Operator::Erf(op) => {
+            use crate::onnx_proof::ops::erf::{ErfParams, ErfProver};
+            prove_lookup_zk!(ErfParams::<F>, ErfProver::<F>, op);
+        }
+        _ => unreachable!(),
     }
 
     // 4. Range-check + operator-specific one-hot (batched: rangecheck + 3 ra_onehot)
@@ -1257,6 +1268,26 @@ fn create_verifier_instances(
         Operator::Sigmoid(op) => {
             use crate::onnx_proof::ops::sigmoid::SigmoidVerifier;
             vec![Box::new(SigmoidVerifier::new(
+                node.clone(),
+                &model.graph,
+                accumulator,
+                transcript,
+                op.clone(),
+            ))]
+        }
+        Operator::Tanh(op) => {
+            use crate::onnx_proof::ops::tanh::TanhVerifier;
+            vec![Box::new(TanhVerifier::new(
+                node.clone(),
+                &model.graph,
+                accumulator,
+                transcript,
+                op.clone(),
+            ))]
+        }
+        Operator::Erf(op) => {
+            use crate::onnx_proof::ops::erf::ErfVerifier;
+            vec![Box::new(ErfVerifier::new(
                 node.clone(),
                 &model.graph,
                 accumulator,

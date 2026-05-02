@@ -226,6 +226,45 @@ fn verify_zk_sumcheck_instances(
     Ok(())
 }
 
+/// Verify Relu ZK proof: default flow mirroring prove_relu_zk.
+fn verify_relu_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    bundle: &ZkProofBundle,
+    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+    zk_proof_idx: &mut usize,
+) -> Result<(), ProofVerifyError> {
+    use crate::onnx_proof::op_lookups::{OpLookupEncoding, OpLookupProvider};
+    use joltworks::lookup_tables::relu::ReluTable;
+
+    // 1. Eval reduction
+    verify_zk_eval_reduction(node, bundle, accumulator, transcript)?;
+
+    // 2. Execution sumcheck
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let provider = OpLookupProvider::new(node.clone());
+        let v = provider
+            .read_raf_verify::<F, T, ReluTable<{ common::consts::XLEN }>>(accumulator, transcript);
+        verify_zk_sumcheck_instances(zk_proof, vec![Box::new(v)], accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+
+    // 3. One-hot batch
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let encoding = OpLookupEncoding::new(node);
+        let [ra, hw, b] =
+            joltworks::subprotocols::shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
+        verify_zk_sumcheck_instances(zk_proof, vec![ra, hw, b], accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+
+    Ok(())
+}
+
 /// Verify Rsqrt ZK proof: custom flow mirroring prove_rsqrt_zk.
 fn verify_rsqrt_zk(
     node: &atlas_onnx_tracer::node::ComputationNode,
@@ -907,6 +946,65 @@ fn prove_cos_sin_zk(
     zk_sumcheck_proofs.push((node.idx, hw));
 }
 
+/// Prove Relu with ZK: default flow (eval reduction, then execution + one-hot).
+#[expect(clippy::too_many_arguments)]
+fn prove_relu_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    prover: &mut Prover<F, T>,
+    pedersen_gens: &PedersenGenerators<C>,
+    blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+    stage_configs: &mut Vec<StageConfig>,
+    eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
+    eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
+    zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
+) {
+    use crate::onnx_proof::op_lookups::{OpLookupEncoding, OpLookupProvider};
+    use joltworks::lookup_tables::relu::ReluTable;
+
+    // 1. Eval reduction (standard, before sumchecks)
+    prove_zk_eval_reduction(
+        node,
+        prover,
+        pedersen_gens,
+        eval_reduction_proofs,
+        eval_reduction_h_commitments,
+    );
+
+    // 2. Execution sumcheck (ps_shout read-raf)
+    let provider = OpLookupProvider::new(node.clone());
+    let (mut exec_sc, lookup_indices) = provider
+        .read_raf_prove::<F, T, ReluTable<{ common::consts::XLEN }>>(
+            &prover.trace,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+    let exec_proof = run_zk_sumcheck(
+        &mut exec_sc,
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, exec_proof));
+
+    // 3. One-hot batch (Ra, HammingWeight, Booleanity)
+    let encoding = OpLookupEncoding::new(node);
+    let [mut ra, mut hw, mut b] = joltworks::subprotocols::shout::ra_onehot_provers(
+        &encoding,
+        &lookup_indices,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let oh_proof = run_zk_batched_sumcheck(
+        vec![&mut *ra, &mut *hw, &mut *b],
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, oh_proof));
+}
+
 /// Prove Rsqrt with ZK: custom flow (execution from transcript, eval reduction, range checks).
 #[expect(clippy::too_many_arguments)]
 fn prove_rsqrt_zk(
@@ -1136,7 +1234,18 @@ pub fn prove_zk(
     let mut zk_sumcheck_proofs: Vec<NodeZkProof> = Vec::new();
 
     for (_, node) in nodes.iter().rev() {
-        if matches!(
+        if matches!(&node.operator, Operator::ReLU(_)) {
+            prove_relu_zk(
+                node,
+                &mut prover,
+                pedersen_gens,
+                &mut blindfold_accumulator,
+                &mut stage_configs,
+                &mut eval_reduction_proofs,
+                &mut eval_reduction_h_commitments,
+                &mut zk_sumcheck_proofs,
+            );
+        } else if matches!(
             &node.operator,
             Operator::Sigmoid(_) | Operator::Tanh(_) | Operator::Erf(_)
         ) {
@@ -1483,7 +1592,15 @@ pub fn verify_zk(
     // 3. Full IOP replay: for each node, verify eval reduction + absorb ZK sumcheck
     let mut zk_proof_idx = 0;
     for (_, node) in model.graph.nodes.iter().rev() {
-        if matches!(
+        if matches!(&node.operator, Operator::ReLU(_)) {
+            verify_relu_zk(
+                node,
+                bundle,
+                &mut accumulator,
+                &mut transcript,
+                &mut zk_proof_idx,
+            )?;
+        } else if matches!(
             &node.operator,
             Operator::Sigmoid(_) | Operator::Tanh(_) | Operator::Erf(_)
         ) {

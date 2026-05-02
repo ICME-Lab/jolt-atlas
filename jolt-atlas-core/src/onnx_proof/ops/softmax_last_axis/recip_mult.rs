@@ -1,6 +1,10 @@
 use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_onnx_tracer::node::ComputationNode;
 use common::VirtualPoly;
+#[cfg(feature = "zk")]
+use joltworks::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -100,6 +104,42 @@ impl<F: JoltField> SumcheckInstanceParams<F> for RecipMultParams<F> {
 
     fn num_rounds(&self) -> usize {
         self.r.len()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    // output = eq_eval * exp_q * inv_sum = Challenge(0) * Opening(exp_q)
+    // Challenge(0) = eq_eval * inv_sum_claim (inv_sum is verifier-known)
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
+        let builder = crate::utils::opening_access::OpeningIdBuilder::new(&self.node);
+        let exp_q_id = builder.advice(VirtualPoly::SoftmaxExpQ);
+        Some(OutputClaimConstraint::sum_of_products(vec![
+            ProductTerm::scaled(
+                ValueSource::Challenge(0),
+                vec![ValueSource::Opening(exp_q_id)],
+            ),
+        ]))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        let r_sc: Vec<F> = self
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
+        let eq_eval = EqPolynomial::mle(&self.r, &r_sc);
+        vec![eq_eval]
     }
 }
 

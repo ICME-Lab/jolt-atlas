@@ -1329,6 +1329,31 @@ fn test_gather_small_zk() {
         .expect("ZK verification should succeed");
 }
 
+#[cfg(feature = "zk")]
+#[test]
+#[ignore = "R1CS constraint mismatch, softmax constraints need debugging"]
+fn test_softmax_zk() {
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+    let f = 1 << 2; // leading dim (batch)
+    let n = 1 << 2; // last axis (softmax dim)
+    let mut rng = StdRng::seed_from_u64(0xBF26);
+    let input = Tensor::random_small(&mut rng, &[f, n]);
+    let mut builder = ModelBuilder::new();
+    let i = builder.input(vec![f, n]);
+    let res = builder.softmax_last_axis(i);
+    builder.mark_output(res);
+    let model = builder.build();
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+    let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
+        joltworks::curve::Bn254Curve,
+    >::deterministic(32);
+    let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
+        .expect("ZK verification should succeed");
+}
+
 /// Benchmark: measures ZK overhead vs standard prove/verify for Square.
 /// Run with: cargo test -p jolt-atlas-core --features zk --release bench_square_zk_overhead -- --nocapture --ignored
 #[cfg(feature = "zk")]

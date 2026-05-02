@@ -290,6 +290,12 @@ where
             claim,
         );
         self.sumchecks.insert(polynomial, sumcheck);
+
+        #[cfg(feature = "zk")]
+        {
+            self.pending_claims.push(claim);
+            self.pending_claim_ids.push(opening_id);
+        }
     }
 
     #[tracing::instrument(skip_all, name = "ProverOpeningAccumulator::append_sparse")]
@@ -326,7 +332,7 @@ where
         }
 
         for (label, claim) in polynomials.iter().copied().zip(claims.into_iter()) {
-            let sumcheck = OpeningProofReductionSumcheckProver::new_one_hot(
+            let sumcheck_instance = OpeningProofReductionSumcheckProver::new_one_hot(
                 label,
                 sumcheck,
                 shared_eq_address.clone(),
@@ -334,7 +340,13 @@ where
                 r_concat.clone(),
                 claim,
             );
-            self.sumchecks.insert(label, sumcheck);
+            self.sumchecks.insert(label, sumcheck_instance);
+            #[cfg(feature = "zk")]
+            {
+                let key = OpeningId::new(label, sumcheck);
+                self.pending_claims.push(claim);
+                self.pending_claim_ids.push(key);
+            }
         }
     }
 
@@ -571,6 +583,7 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         let key = opening_id;
         match self.openings.get(&key) {
             Some((point, claim)) => (point.clone(), *claim),
+            None if self.zk_mode => (OpeningPoint::default(), F::zero()),
             None => {
                 panic!("No opening found for {opening_id:?}")
             }
@@ -669,17 +682,31 @@ where
         T: Transcript,
         U: Copy + Send + Sync + Into<F>,
     {
-        let claim = self.openings.get(&opening_id).unwrap().1;
-        transcript.append_scalar(&claim);
-
-        // Update the opening point in self.openings (it was initialized with default empty point)
-        self.openings.insert(
-            opening_id,
-            (
-                OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone()),
-                claim,
-            ),
-        );
+        let claim = if let Some((_, claim)) = self.openings.get(&opening_id) {
+            // Standard mode: claim was pre-loaded.
+            let claim = *claim;
+            transcript.append_scalar(&claim);
+            self.openings.insert(
+                opening_id,
+                (
+                    OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone()),
+                    claim,
+                ),
+            );
+            claim
+        } else if self.zk_mode {
+            // ZK mode: insert with placeholder claim. BlindFold handles correctness.
+            self.openings.insert(
+                opening_id,
+                (
+                    OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone()),
+                    F::zero(),
+                ),
+            );
+            F::zero()
+        } else {
+            panic!("Tried to populate dense opening for non-existent key: {opening_id:?}");
+        };
 
         let polynomial = opening_id
             .committed_poly()
@@ -707,10 +734,17 @@ where
     {
         for label in polynomials.into_iter() {
             let key = OpeningId::new(label, sumcheck);
-            let claim = self.openings.get(&key).unwrap().1;
-            transcript.append_scalar(&claim);
+            let claim = if let Some((_, c)) = self.openings.get(&key) {
+                let c = *c;
+                transcript.append_scalar(&c);
+                c
+            } else if self.zk_mode {
+                // ZK mode: insert placeholder. BlindFold handles correctness.
+                F::zero()
+            } else {
+                panic!("Tried to populate sparse opening for non-existent key: {key:?}");
+            };
 
-            // Update the opening point in self.openings (it was initialized with default empty point)
             self.openings.insert(
                 key,
                 (
@@ -748,7 +782,7 @@ where
         }
 
         if let Some((_, claim)) = self.openings.get(&opening_id) {
-            // Standard mode: claim was pre-loaded from the proof. Append to transcript.
+            // Standard mode: claim was pre-loaded. Append to transcript.
             transcript.append_scalar(claim);
             let claim = *claim;
             self.openings

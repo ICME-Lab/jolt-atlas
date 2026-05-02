@@ -202,6 +202,11 @@ fn verify_zk_eval_reduction(
     use joltworks::subprotocols::evaluation_reduction::EvalReductionProtocol;
 
     let openings = accumulator.get_node_openings(node.idx);
+    if openings.is_empty() {
+        // No openings for this node (e.g. Input node whose consumer's cache_openings
+        // wasn't called in the ZK verifier). Skip eval reduction.
+        return Ok(());
+    }
     let h_commitment = bundle.eval_reduction_h_commitments.get(&node.idx);
     let reduced_instance =
         EvalReductionProtocol::verify_zk::<F, T>(&openings, h_commitment, transcript)?;
@@ -1213,13 +1218,34 @@ fn prove_softmax_zk(
         base,
     };
 
-    // Snapshot prover accumulator keys before Softmax stages.
-    // After all stages, capture any new keys as auxiliary claims for the verifier.
-    let keys_before: std::collections::HashSet<_> =
-        prover.accumulator.openings.keys().cloned().collect();
-
     sm.send_auxiliary_vectors(prover);
-    sm.cache_exp_sum(prover); // public claim (from auxiliary vectors)
+    sm.cache_exp_sum(prover);
+
+    // Capture only PUBLIC auxiliary claims for the verifier.
+    // These are verifier-computable from the auxiliary vectors sent via transcript.
+    // Private claims (sumcheck outputs, cache_R, cache_r_exp) are NOT included.
+    {
+        use joltworks::poly::opening_proof::{OpeningId, SumcheckId};
+        let sid = SumcheckId::NodeExecution(node.idx);
+        let [f, _] = sm.F_N;
+        for k in 0..f {
+            for vp_fn in [
+                VirtualPoly::SoftmaxSumOutput as fn(usize, usize) -> VirtualPoly,
+                VirtualPoly::SoftmaxMaxOutput,
+                VirtualPoly::SoftmaxMaxIndex,
+            ] {
+                let id = OpeningId::new(vp_fn(node.idx, k), sid);
+                if let Some((_, claim)) = prover.accumulator.openings.get(&id) {
+                    auxiliary_claims.insert(id, *claim);
+                }
+            }
+        }
+        // SoftmaxExpSum: derived from public exp_sum_q auxiliary vector
+        let exp_sum_id = OpeningId::new(VirtualPoly::SoftmaxExpSum(node.idx), sid);
+        if let Some((_, claim)) = prover.accumulator.openings.get(&exp_sum_id) {
+            auxiliary_claims.insert(exp_sum_id, *claim);
+        }
+    }
 
     // ZK cache_R: evaluate R polynomial, Pedersen-commit the claim, store in accumulator
     let cache_r_com = {
@@ -1310,15 +1336,6 @@ fn prove_softmax_zk(
     zk_sumcheck_proofs.push((node.idx, s4_proof));
 
     inter_stage_commitments.insert(node.idx, vec![cache_r_com, cache_r_exp_com]);
-
-    // Capture all new openings as auxiliary claims for the verifier.
-    // These include auxiliary vector claims, cache_exp_sum result, and
-    // any claims produced during sumcheck stages.
-    for (id, (_, claim)) in &prover.accumulator.openings {
-        if !keys_before.contains(id) {
-            auxiliary_claims.insert(*id, *claim);
-        }
-    }
 }
 
 /// Prove GatherLarge with ZK: default flow (eval reduction, execution + shout one-hot).

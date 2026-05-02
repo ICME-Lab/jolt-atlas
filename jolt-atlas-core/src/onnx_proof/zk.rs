@@ -226,6 +226,42 @@ fn verify_zk_sumcheck_instances(
     Ok(())
 }
 
+/// Verify GatherLarge ZK proof.
+fn verify_gather_large_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    model: &atlas_onnx_tracer::model::Model,
+    bundle: &ZkProofBundle,
+    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+    zk_proof_idx: &mut usize,
+) -> Result<(), ProofVerifyError> {
+    use crate::onnx_proof::ops::gather::large::GatherRaEncoding;
+
+    verify_zk_eval_reduction(node, bundle, accumulator, transcript)?;
+
+    // Execution sumcheck
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let verifier_instances = create_verifier_instances(node, accumulator, model, transcript);
+        verify_zk_sumcheck_instances(zk_proof, verifier_instances, accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+
+    // One-hot batch
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let encoding = GatherRaEncoding::new(node);
+        let [ra, hw, b] =
+            joltworks::subprotocols::shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
+        verify_zk_sumcheck_instances(zk_proof, vec![ra, hw, b], accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+
+    Ok(())
+}
+
 /// Verify Relu ZK proof: default flow mirroring prove_relu_zk.
 fn verify_relu_zk(
     node: &atlas_onnx_tracer::node::ComputationNode,
@@ -946,6 +982,72 @@ fn prove_cos_sin_zk(
     zk_sumcheck_proofs.push((node.idx, hw));
 }
 
+/// Prove GatherLarge with ZK: default flow (eval reduction, execution + shout one-hot).
+#[expect(clippy::too_many_arguments)]
+fn prove_gather_large_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    prover: &mut Prover<F, T>,
+    model: &atlas_onnx_tracer::model::Model,
+    pedersen_gens: &PedersenGenerators<C>,
+    blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+    stage_configs: &mut Vec<StageConfig>,
+    eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
+    eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
+    zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
+) {
+    use crate::onnx_proof::ops::gather::large::GatherRaEncoding;
+    use crate::onnx_proof::ops::gather::{GatherParams, GatherProver};
+
+    prove_zk_eval_reduction(
+        node,
+        prover,
+        pedersen_gens,
+        eval_reduction_proofs,
+        eval_reduction_h_commitments,
+    );
+
+    // Execution sumcheck
+    let params = GatherParams::new(
+        node.clone(),
+        &model.graph,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let mut sc = GatherProver::initialize(
+        &prover.trace,
+        params,
+        &mut prover.accumulator,
+        &mut prover.transcript,
+    );
+    let exec_proof = run_zk_sumcheck(
+        &mut sc,
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, exec_proof));
+
+    // One-hot batch
+    let encoding = GatherRaEncoding::new(node);
+    let lookup_indices =
+        crate::onnx_proof::ops::gather::large::gather_lookup_indices(node, &prover.trace);
+    let [mut ra, mut hw, mut b] = joltworks::subprotocols::shout::ra_onehot_provers(
+        &encoding,
+        &lookup_indices,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let oh_proof = run_zk_batched_sumcheck(
+        vec![&mut *ra, &mut *hw, &mut *b],
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, oh_proof));
+}
+
 /// Prove Relu with ZK: default flow (eval reduction, then execution + one-hot).
 #[expect(clippy::too_many_arguments)]
 fn prove_relu_zk(
@@ -1234,7 +1336,19 @@ pub fn prove_zk(
     let mut zk_sumcheck_proofs: Vec<NodeZkProof> = Vec::new();
 
     for (_, node) in nodes.iter().rev() {
-        if matches!(&node.operator, Operator::ReLU(_)) {
+        if matches!(&node.operator, Operator::GatherLarge(_)) {
+            prove_gather_large_zk(
+                node,
+                &mut prover,
+                pp.shared.model(),
+                pedersen_gens,
+                &mut blindfold_accumulator,
+                &mut stage_configs,
+                &mut eval_reduction_proofs,
+                &mut eval_reduction_h_commitments,
+                &mut zk_sumcheck_proofs,
+            );
+        } else if matches!(&node.operator, Operator::ReLU(_)) {
             prove_relu_zk(
                 node,
                 &mut prover,
@@ -1592,7 +1706,16 @@ pub fn verify_zk(
     // 3. Full IOP replay: for each node, verify eval reduction + absorb ZK sumcheck
     let mut zk_proof_idx = 0;
     for (_, node) in model.graph.nodes.iter().rev() {
-        if matches!(&node.operator, Operator::ReLU(_)) {
+        if matches!(&node.operator, Operator::GatherLarge(_)) {
+            verify_gather_large_zk(
+                node,
+                model,
+                bundle,
+                &mut accumulator,
+                &mut transcript,
+                &mut zk_proof_idx,
+            )?;
+        } else if matches!(&node.operator, Operator::ReLU(_)) {
             verify_relu_zk(
                 node,
                 bundle,
@@ -1922,6 +2045,15 @@ fn create_verifier_instances(
         Operator::Sum(_) => {
             use crate::onnx_proof::ops::sum::create_sum_verifier;
             vec![create_sum_verifier(node, model, accumulator)]
+        }
+        Operator::GatherLarge(_) | Operator::GatherSmall(_) => {
+            use crate::onnx_proof::ops::gather::GatherVerifier;
+            vec![Box::new(GatherVerifier::new(
+                node.clone(),
+                &model.graph,
+                accumulator,
+                transcript,
+            ))]
         }
         _ => vec![],
     }

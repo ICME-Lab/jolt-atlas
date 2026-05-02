@@ -82,6 +82,9 @@ pub struct ZkProofBundle {
     /// Pedersen commitments for inter-stage private claims (keyed by node index).
     /// Used by multi-stage operators (e.g. Softmax) that cache evaluations between stages.
     pub inter_stage_commitments: BTreeMap<usize, Vec<joltworks::curve::Bn254G1>>,
+    /// Auxiliary opening claims that must be pre-populated in the verifier accumulator.
+    /// In the non-ZK flow, these come from ONNXProof::opening_claims::populate_accumulator.
+    pub auxiliary_claims: BTreeMap<joltworks::poly::opening_proof::OpeningId, F>,
 }
 
 /// Run a single-instance ZK sumcheck and collect stage data.
@@ -256,7 +259,19 @@ fn verify_softmax_zk(
         unreachable!()
     };
 
-    // Construct a temporary Verifier with ZK-mode accumulator.
+    // Pre-populate the auxiliary claims (public data from send_auxiliary_vectors)
+    // so SmVerifier::new can find them in the accumulator.
+    for (id, claim) in &bundle.auxiliary_claims {
+        accumulator.openings.insert(
+            *id,
+            (
+                joltworks::poly::opening_proof::OpeningPoint::default(),
+                *claim,
+            ),
+        );
+    }
+
+    // Construct a temporary Verifier (non-ZK for SmVerifier::new and cache operations).
     let empty_proofs = std::collections::BTreeMap::new();
     let mut temp_verifier = crate::onnx_proof::Verifier {
         preprocessing: &pp.shared,
@@ -1148,6 +1163,7 @@ fn prove_softmax_zk(
     eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
     zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
     inter_stage_commitments: &mut BTreeMap<usize, Vec<joltworks::curve::Bn254G1>>,
+    auxiliary_claims: &mut BTreeMap<joltworks::poly::opening_proof::OpeningId, F>,
 ) {
     use crate::onnx_proof::ops::softmax_last_axis::rc::SAT_DIFF_RC_BITS;
     use crate::onnx_proof::ops::softmax_last_axis::{
@@ -1197,8 +1213,13 @@ fn prove_softmax_zk(
         base,
     };
 
+    // Snapshot prover accumulator keys before Softmax stages.
+    // After all stages, capture any new keys as auxiliary claims for the verifier.
+    let keys_before: std::collections::HashSet<_> =
+        prover.accumulator.openings.keys().cloned().collect();
+
     sm.send_auxiliary_vectors(prover);
-    sm.cache_exp_sum(prover); // public claim (from auxiliary vectors), OK for ZK
+    sm.cache_exp_sum(prover); // public claim (from auxiliary vectors)
 
     // ZK cache_R: evaluate R polynomial, Pedersen-commit the claim, store in accumulator
     let cache_r_com = {
@@ -1289,6 +1310,15 @@ fn prove_softmax_zk(
     zk_sumcheck_proofs.push((node.idx, s4_proof));
 
     inter_stage_commitments.insert(node.idx, vec![cache_r_com, cache_r_exp_com]);
+
+    // Capture all new openings as auxiliary claims for the verifier.
+    // These include auxiliary vector claims, cache_exp_sum result, and
+    // any claims produced during sumcheck stages.
+    for (id, (_, claim)) in &prover.accumulator.openings {
+        if !keys_before.contains(id) {
+            auxiliary_claims.insert(*id, *claim);
+        }
+    }
 }
 
 /// Prove GatherLarge with ZK: default flow (eval reduction, execution + shout one-hot).
@@ -1717,6 +1747,8 @@ pub fn prove_zk(
     let mut zk_sumcheck_proofs: Vec<NodeZkProof> = Vec::new();
     let mut inter_stage_commitments: BTreeMap<usize, Vec<joltworks::curve::Bn254G1>> =
         BTreeMap::new();
+    let mut auxiliary_claims: BTreeMap<joltworks::poly::opening_proof::OpeningId, F> =
+        BTreeMap::new();
 
     for (_, node) in nodes.iter().rev() {
         if matches!(&node.operator, Operator::SoftmaxLastAxis(_)) {
@@ -1730,6 +1762,7 @@ pub fn prove_zk(
                 &mut eval_reduction_h_commitments,
                 &mut zk_sumcheck_proofs,
                 &mut inter_stage_commitments,
+                &mut auxiliary_claims,
             );
         } else if matches!(&node.operator, Operator::GatherLarge(_)) {
             prove_gather_large_zk(
@@ -2056,6 +2089,7 @@ pub fn prove_zk(
         zk_sumcheck_proofs,
         zk_sumcheck_num_instances,
         inter_stage_commitments,
+        auxiliary_claims,
     };
 
     (bundle, io)

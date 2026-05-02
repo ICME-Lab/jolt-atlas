@@ -782,7 +782,7 @@ where
         }
 
         if let Some((_, claim)) = self.openings.get(&opening_id) {
-            // Standard mode: claim was pre-loaded from the proof. Append to transcript.
+            // Standard mode: claim was pre-loaded. Append to transcript.
             transcript.append_scalar(claim);
             let claim = *claim;
             self.openings

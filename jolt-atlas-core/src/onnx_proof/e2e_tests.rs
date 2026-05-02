@@ -1331,7 +1331,6 @@ fn test_gather_small_zk() {
 
 #[cfg(feature = "zk")]
 #[test]
-#[ignore = "R1CS constraint mismatch, softmax constraints need debugging"]
 fn test_softmax_zk() {
     use atlas_onnx_tracer::model::test::ModelBuilder;
     let f = 1 << 2; // leading dim (batch)

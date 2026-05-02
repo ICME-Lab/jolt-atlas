@@ -1302,6 +1302,33 @@ fn test_gather_large_zk() {
         .expect("ZK verification should succeed");
 }
 
+#[cfg(feature = "zk")]
+#[test]
+fn test_gather_small_zk() {
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+    let dict_len = 32; // <= 65536 to trigger GatherSmall
+    let word_dim = 4;
+    let num_indices = 1 << 3;
+    let mut rng = StdRng::seed_from_u64(0xBF25);
+    let indices = Tensor::random_range(&mut rng, &[num_indices], 0..dict_len as i32);
+    let mut builder = ModelBuilder::new();
+    let dict_data: Vec<i32> = (0..dict_len * word_dim).map(|i| i as i32).collect();
+    let dict = builder.constant(Tensor::construct(dict_data, vec![dict_len, word_dim]));
+    let idx = builder.input(vec![num_indices]);
+    let res = builder.gather(dict, idx, 0, vec![num_indices, word_dim]);
+    builder.mark_output(res);
+    let model = builder.build();
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+    let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
+        joltworks::curve::Bn254Curve,
+    >::deterministic(32);
+    let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[indices], &gens);
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
+        .expect("ZK verification should succeed");
+}
+
 /// Benchmark: measures ZK overhead vs standard prove/verify for Square.
 /// Run with: cargo test -p jolt-atlas-core --features zk --release bench_square_zk_overhead -- --nocapture --ignored
 #[cfg(feature = "zk")]

@@ -262,6 +262,57 @@ fn verify_gather_large_zk(
     Ok(())
 }
 
+/// Verify GatherSmall ZK proof.
+fn verify_gather_small_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    model: &atlas_onnx_tracer::model::Model,
+    bundle: &ZkProofBundle,
+    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+    zk_proof_idx: &mut usize,
+) -> Result<(), ProofVerifyError> {
+    use crate::onnx_proof::ops::gather::small::{
+        build_stage2_verifiers_zk, build_stage3_verifier_zk,
+    };
+
+    verify_zk_eval_reduction(node, bundle, accumulator, transcript)?;
+
+    // Stage 1: Execution
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let vi = create_verifier_instances(node, accumulator, model, transcript);
+        verify_zk_sumcheck_instances(zk_proof, vi, accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+
+    // Stage 2: HammingBooleanity + Booleanity
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let (hb_v, bool_v) =
+            build_stage2_verifiers_zk::<F>(node, &model.graph, accumulator, transcript);
+        verify_zk_sumcheck_instances(
+            zk_proof,
+            vec![Box::new(hb_v), Box::new(bool_v)],
+            accumulator,
+            transcript,
+        )?;
+        *zk_proof_idx += 1;
+    }
+
+    // Stage 3: HammingWeight
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let hw_v = build_stage3_verifier_zk::<F>(node, &model.graph, accumulator, transcript);
+        verify_zk_sumcheck_instances(zk_proof, vec![Box::new(hw_v)], accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+
+    Ok(())
+}
+
 /// Verify Relu ZK proof: default flow mirroring prove_relu_zk.
 fn verify_relu_zk(
     node: &atlas_onnx_tracer::node::ComputationNode,
@@ -1048,6 +1099,78 @@ fn prove_gather_large_zk(
     zk_sumcheck_proofs.push((node.idx, oh_proof));
 }
 
+/// Prove GatherSmall with ZK: default flow (eval reduction, execution, HB+bool batch, HW).
+#[expect(clippy::too_many_arguments)]
+fn prove_gather_small_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    prover: &mut Prover<F, T>,
+    model: &atlas_onnx_tracer::model::Model,
+    pedersen_gens: &PedersenGenerators<C>,
+    blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+    stage_configs: &mut Vec<StageConfig>,
+    eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
+    eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
+    zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
+) {
+    use crate::onnx_proof::ops::gather::small::{build_stage2_provers, build_stage3_prover};
+    use crate::onnx_proof::ops::gather::{GatherParams, GatherProver};
+
+    prove_zk_eval_reduction(
+        node,
+        prover,
+        pedersen_gens,
+        eval_reduction_proofs,
+        eval_reduction_h_commitments,
+    );
+
+    // Stage 1: Execution
+    let params = GatherParams::new(
+        node.clone(),
+        &model.graph,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let mut sc = GatherProver::initialize(
+        &prover.trace,
+        params,
+        &mut prover.accumulator,
+        &mut prover.transcript,
+    );
+    let exec_proof = run_zk_sumcheck(
+        &mut sc,
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, exec_proof));
+
+    // Stage 2: HammingBooleanity + Booleanity (batched)
+    let (mut hb_sc, mut bool_sc) = build_stage2_provers::<F>(node, prover);
+    let s2_proof = run_zk_batched_sumcheck(
+        vec![
+            &mut hb_sc as &mut dyn SumcheckInstanceProver<F, T>,
+            &mut bool_sc,
+        ],
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, s2_proof));
+
+    // Stage 3: HammingWeight (single)
+    let mut hw_sc = build_stage3_prover::<F>(node, prover);
+    let s3_proof = run_zk_sumcheck(
+        &mut hw_sc,
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, s3_proof));
+}
+
 /// Prove Relu with ZK: default flow (eval reduction, then execution + one-hot).
 #[expect(clippy::too_many_arguments)]
 fn prove_relu_zk(
@@ -1338,6 +1461,18 @@ pub fn prove_zk(
     for (_, node) in nodes.iter().rev() {
         if matches!(&node.operator, Operator::GatherLarge(_)) {
             prove_gather_large_zk(
+                node,
+                &mut prover,
+                pp.shared.model(),
+                pedersen_gens,
+                &mut blindfold_accumulator,
+                &mut stage_configs,
+                &mut eval_reduction_proofs,
+                &mut eval_reduction_h_commitments,
+                &mut zk_sumcheck_proofs,
+            );
+        } else if matches!(&node.operator, Operator::GatherSmall(_)) {
+            prove_gather_small_zk(
                 node,
                 &mut prover,
                 pp.shared.model(),
@@ -1708,6 +1843,15 @@ pub fn verify_zk(
     for (_, node) in model.graph.nodes.iter().rev() {
         if matches!(&node.operator, Operator::GatherLarge(_)) {
             verify_gather_large_zk(
+                node,
+                model,
+                bundle,
+                &mut accumulator,
+                &mut transcript,
+                &mut zk_proof_idx,
+            )?;
+        } else if matches!(&node.operator, Operator::GatherSmall(_)) {
+            verify_gather_small_zk(
                 node,
                 model,
                 bundle,

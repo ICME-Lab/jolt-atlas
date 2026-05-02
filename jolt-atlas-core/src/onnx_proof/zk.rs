@@ -79,6 +79,9 @@ pub struct ZkProofBundle {
     pub zk_sumcheck_proofs: Vec<NodeZkProof>,
     /// Number of sumcheck instances per ZK proof (for transcript batching coeff replay).
     pub zk_sumcheck_num_instances: Vec<usize>,
+    /// Pedersen commitments for inter-stage private claims (keyed by node index).
+    /// Used by multi-stage operators (e.g. Softmax) that cache evaluations between stages.
+    pub inter_stage_commitments: BTreeMap<usize, Vec<joltworks::curve::Bn254G1>>,
 }
 
 /// Run a single-instance ZK sumcheck and collect stage data.
@@ -253,37 +256,36 @@ fn verify_softmax_zk(
         unreachable!()
     };
 
-    // Construct a temporary Verifier to run the SmVerifier IOP replay.
+    // Construct a temporary Verifier with ZK-mode accumulator.
     let empty_proofs = std::collections::BTreeMap::new();
-    // Use non-ZK accumulator for inter-stage cache operations so transcript
-    // appends match the prover's flow. The ZK-mode accumulator skips appends,
-    // which would cause transcript divergence.
-    let mut non_zk_acc = joltworks::poly::opening_proof::VerifierOpeningAccumulator::<F>::new();
-    // Copy over existing openings from the ZK accumulator
-    non_zk_acc.openings = std::mem::take(&mut accumulator.openings);
-    non_zk_acc.reduced_evaluations = std::mem::take(&mut accumulator.reduced_evaluations);
     let mut temp_verifier = crate::onnx_proof::Verifier {
         preprocessing: &pp.shared,
-        accumulator: non_zk_acc,
+        accumulator: std::mem::take(accumulator),
         transcript: std::mem::take(transcript),
         proofs: &empty_proofs,
         io,
     };
 
-    // Construct SmVerifier which reads auxiliary vectors from transcript.
+    // SmVerifier::new and cache_exp_sum need the accumulator in non-ZK mode
+    // so that: (1) auxiliary claims are stored with real values (not placeholders),
+    // (2) transcript appends match the prover's flow.
+    // The ZK verifier can do this because the auxiliary vectors are PUBLIC
+    // (sent via transcript in send_auxiliary_vectors).
     use crate::onnx_proof::ops::softmax_last_axis::SoftmaxLastAxisVerifier as SmVerifier;
+    temp_verifier.accumulator.zk_mode = false;
     let mut sm_v = SmVerifier::new(node, op.scale, &mut temp_verifier);
-
-    // Run cache methods that advance transcript/accumulator (matching prover flow).
     sm_v.cache_exp_sum(&mut temp_verifier)
         .map_err(|e| ProofVerifyError::InvalidOpeningProof(format!("{e:?}")))?;
-    sm_v.cache_R(&mut temp_verifier);
+    temp_verifier.accumulator.zk_mode = true;
+
+    // cache_R: PRIVATE claim. Absorb the Pedersen commitment from the bundle.
+    let inter_coms = bundle
+        .inter_stage_commitments
+        .get(&node.idx)
+        .expect("Missing inter-stage commitments for Softmax node");
+    temp_verifier.transcript.append_serializable(&inter_coms[0]);
 
     // Helper: absorb a ZK sumcheck proof's commitments into transcript.
-    // Replays the exact transcript operations that verify_zk would do:
-    // 1. Squeeze batching coefficients (challenge_vector(n_instances))
-    // 2. Absorb round commitments + squeeze challenges
-    // 3. Absorb output claims commitments
     let absorb_zk_proof =
         |zk_proof: &joltworks::subprotocols::sumcheck::ZkSumcheckProof<F, C, T>,
          n_instances: usize,
@@ -307,7 +309,8 @@ fn verify_softmax_zk(
         *zk_proof_idx += 1;
     }
 
-    sm_v.cache_r_exp(&mut temp_verifier);
+    // cache_r_exp: PRIVATE claim. Absorb the Pedersen commitment.
+    temp_verifier.transcript.append_serializable(&inter_coms[1]);
 
     // Stages 2-4
     for _ in 1..4 {
@@ -318,9 +321,8 @@ fn verify_softmax_zk(
         *zk_proof_idx += 1;
     }
 
-    // Recover: put openings back into ZK accumulator
-    accumulator.openings = temp_verifier.accumulator.openings;
-    accumulator.reduced_evaluations = temp_verifier.accumulator.reduced_evaluations;
+    // Recover accumulator and transcript
+    *accumulator = temp_verifier.accumulator;
     *transcript = temp_verifier.transcript;
 
     Ok(())
@@ -1145,6 +1147,7 @@ fn prove_softmax_zk(
     eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
     eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
     zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
+    inter_stage_commitments: &mut BTreeMap<usize, Vec<joltworks::curve::Bn254G1>>,
 ) {
     use crate::onnx_proof::ops::softmax_last_axis::rc::SAT_DIFF_RC_BITS;
     use crate::onnx_proof::ops::softmax_last_axis::{
@@ -1195,8 +1198,25 @@ fn prove_softmax_zk(
     };
 
     sm.send_auxiliary_vectors(prover);
-    sm.cache_exp_sum(prover);
-    sm.cache_R(prover);
+    sm.cache_exp_sum(prover); // public claim (from auxiliary vectors), OK for ZK
+
+    // ZK cache_R: evaluate R polynomial, Pedersen-commit the claim, store in accumulator
+    let cache_r_com = {
+        use crate::utils::opening_access::AccOpeningAccessor;
+        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
+        let r0 = accessor.get_reduced_opening().0;
+        let eval = MultilinearPolynomial::from(sm.trace.R.clone()).evaluate(&r0.r);
+        let blinding = F::random(&mut rand::thread_rng());
+        let com = pedersen_gens.commit(&[eval], &blinding);
+        prover.transcript.append_serializable(&com);
+        // Store in accumulator (same as cache_R but without cleartext transcript append)
+        let opening_id = joltworks::poly::opening_proof::OpeningId::new(
+            VirtualPoly::SoftmaxRecipMultRemainder(node.idx),
+            joltworks::poly::opening_proof::SumcheckId::NodeExecution(node.idx),
+        );
+        prover.accumulator.openings.insert(opening_id, (r0, eval));
+        com
+    };
 
     // Stage 1
     let mut s1 = sm.build_stage1_instances(prover, r_lookup_bits);
@@ -1211,7 +1231,23 @@ fn prove_softmax_zk(
     );
     zk_sumcheck_proofs.push((node.idx, s1_proof));
 
-    sm.cache_r_exp(prover);
+    // ZK cache_r_exp: same pattern
+    let cache_r_exp_com = {
+        use crate::utils::opening_access::AccOpeningAccessor;
+        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
+        let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
+        let eval =
+            MultilinearPolynomial::from(sm.trace.decomposed_exp.r_exp.clone()).evaluate(&r1.r);
+        let blinding = F::random(&mut rand::thread_rng());
+        let com = pedersen_gens.commit(&[eval], &blinding);
+        prover.transcript.append_serializable(&com);
+        let opening_id = joltworks::poly::opening_proof::OpeningId::new(
+            VirtualPoly::SoftmaxExpRemainder(node.idx),
+            joltworks::poly::opening_proof::SumcheckId::NodeExecution(node.idx),
+        );
+        prover.accumulator.openings.insert(opening_id, (r1, eval));
+        com
+    };
 
     // Stage 2
     let mut s2 = sm.build_stage2_instances(prover, r_exp_lookup_bits, &r_indices, &lut_data);
@@ -1251,6 +1287,8 @@ fn prove_softmax_zk(
         pedersen_gens,
     );
     zk_sumcheck_proofs.push((node.idx, s4_proof));
+
+    inter_stage_commitments.insert(node.idx, vec![cache_r_com, cache_r_exp_com]);
 }
 
 /// Prove GatherLarge with ZK: default flow (eval reduction, execution + shout one-hot).
@@ -1677,6 +1715,8 @@ pub fn prove_zk(
     let mut eval_reduction_proofs = BTreeMap::new();
     let mut eval_reduction_h_commitments = BTreeMap::new();
     let mut zk_sumcheck_proofs: Vec<NodeZkProof> = Vec::new();
+    let mut inter_stage_commitments: BTreeMap<usize, Vec<joltworks::curve::Bn254G1>> =
+        BTreeMap::new();
 
     for (_, node) in nodes.iter().rev() {
         if matches!(&node.operator, Operator::SoftmaxLastAxis(_)) {
@@ -1689,6 +1729,7 @@ pub fn prove_zk(
                 &mut eval_reduction_proofs,
                 &mut eval_reduction_h_commitments,
                 &mut zk_sumcheck_proofs,
+                &mut inter_stage_commitments,
             );
         } else if matches!(&node.operator, Operator::GatherLarge(_)) {
             prove_gather_large_zk(
@@ -2014,6 +2055,7 @@ pub fn prove_zk(
         output_claim,
         zk_sumcheck_proofs,
         zk_sumcheck_num_instances,
+        inter_stage_commitments,
     };
 
     (bundle, io)

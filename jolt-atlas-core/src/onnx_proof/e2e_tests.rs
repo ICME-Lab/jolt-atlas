@@ -1374,6 +1374,121 @@ fn test_srs_derived_pedersen_generators() {
         .expect("ZK verification with SRS-derived generators should succeed");
 }
 
+/// Multi-operator ZK test: input -> square -> add(constant) -> neg -> output
+/// Tests that multiple single-stage operators chain correctly under BlindFold.
+#[cfg(feature = "zk")]
+#[test]
+fn test_multi_op_arithmetic_chain_zk() {
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+    let size = 1 << 4;
+    let mut rng = StdRng::seed_from_u64(0xBF40);
+    let input = Tensor::<i32>::random_small(&mut rng, &[size]);
+    let bias = Tensor::<i32>::random_small(&mut rng, &[size]);
+    let mut builder = ModelBuilder::new();
+    let i = builder.input(vec![size]);
+    let sq = builder.square(i);
+    let c = builder.constant(bias);
+    let added = builder.add(sq, c);
+    let out = builder.neg(added);
+    builder.mark_output(out);
+    let model = builder.build();
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+    let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
+        joltworks::curve::Bn254Curve,
+    >::deterministic(16);
+    let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
+        .expect("Multi-op arithmetic chain ZK verification should succeed");
+}
+
+/// Multi-operator ZK test: input -> mul(constant) -> scalar_const_div -> sub(constant) -> output
+/// Tests mul, scalar_const_div, sub chained together.
+#[cfg(feature = "zk")]
+#[test]
+fn test_multi_op_mul_div_sub_zk() {
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+    let size = 1 << 4;
+    let mut rng = StdRng::seed_from_u64(0xBF41);
+    let input = Tensor::<i32>::random_small(&mut rng, &[size]);
+    let weights = Tensor::<i32>::random_small(&mut rng, &[size]);
+    let offset = Tensor::<i32>::random_small(&mut rng, &[size]);
+    let mut builder = ModelBuilder::new();
+    let i = builder.input(vec![size]);
+    let w = builder.constant(weights);
+    let m = builder.mul(i, w);
+    let d = builder.scalar_const_div(m, 128);
+    let o = builder.constant(offset);
+    let out = builder.sub(d, o);
+    builder.mark_output(out);
+    let model = builder.build();
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+    let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
+        joltworks::curve::Bn254Curve,
+    >::deterministic(16);
+    let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
+        .expect("Multi-op mul/div/sub ZK verification should succeed");
+}
+
+/// Multi-operator ZK test with Relu: input -> cube -> relu -> output
+/// Tests chaining a degree-3 operator with a lookup-based operator.
+#[cfg(feature = "zk")]
+#[test]
+fn test_multi_op_cube_relu_zk() {
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+    let size = 1 << 4;
+    let mut rng = StdRng::seed_from_u64(0xBF42);
+    let input = Tensor::<i32>::random_small(&mut rng, &[size]);
+    let mut builder = ModelBuilder::new();
+    let i = builder.input(vec![size]);
+    let c = builder.cube(i, 1 << 8);
+    let out = builder.relu(c);
+    builder.mark_output(out);
+    let model = builder.build();
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+    let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
+        joltworks::curve::Bn254Curve,
+    >::deterministic(32);
+    let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
+        .expect("Multi-op cube+relu ZK verification should succeed");
+}
+
+/// Multi-operator ZK test with Div: input -> div(constant) -> add(constant) -> output
+/// Tests a custom-flow operator (Div with range checks) chained with a simple operator.
+#[cfg(feature = "zk")]
+#[test]
+fn test_multi_op_div_add_zk() {
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+    let size = 1 << 4;
+    let mut rng = StdRng::seed_from_u64(0xBF43);
+    let input = Tensor::<i32>::random_small(&mut rng, &[size]);
+    let bias = Tensor::<i32>::random_small(&mut rng, &[size]);
+    let mut builder = ModelBuilder::new();
+    let i = builder.input(vec![size]);
+    let divisor = builder.constant(Tensor::construct(vec![1 << 8; size], vec![size]));
+    let d = builder.div(i, divisor);
+    let b = builder.constant(bias);
+    let out = builder.add(d, b);
+    builder.mark_output(out);
+    let model = builder.build();
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+    let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
+        joltworks::curve::Bn254Curve,
+    >::deterministic(32);
+    let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
+        .expect("Multi-op div+add ZK verification should succeed");
+}
+
 /// Benchmark: measures ZK overhead vs standard prove/verify for Square.
 /// Run with: cargo test -p jolt-atlas-core --features zk --release bench_square_zk_overhead -- --nocapture --ignored
 #[cfg(feature = "zk")]

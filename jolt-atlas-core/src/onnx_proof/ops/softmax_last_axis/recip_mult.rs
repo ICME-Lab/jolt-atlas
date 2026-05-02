@@ -40,6 +40,10 @@ pub struct RecipMultParams<F: JoltField> {
     pub S: i32,
     /// `[F, N]` — leading-dim product and last-axis size.
     pub F_N: [usize; 2],
+    /// Inverse sum evaluations (verifier-known, derived from auxiliary exp_sum_q).
+    /// Used by BlindFold constraint to compute inv_sum_claim at the challenge point.
+    #[cfg(feature = "zk")]
+    pub inv_sum_evals: Vec<F>,
 }
 
 impl<F: JoltField> RecipMultParams<F> {
@@ -55,7 +59,21 @@ impl<F: JoltField> RecipMultParams<F> {
             .get_reduced_opening()
             .0
             .r;
-        Self { r, S, node, F_N }
+        Self {
+            r,
+            S,
+            node,
+            F_N,
+            #[cfg(feature = "zk")]
+            inv_sum_evals: Vec::new(),
+        }
+    }
+
+    /// Set the inv_sum evaluations for BlindFold constraint computation.
+    #[cfg(feature = "zk")]
+    pub fn with_inv_sum_evals(mut self, evals: Vec<F>) -> Self {
+        self.inv_sum_evals = evals;
+        self
     }
 
     /// Returns `[F, N]`.
@@ -139,7 +157,11 @@ impl<F: JoltField> SumcheckInstanceParams<F> for RecipMultParams<F> {
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
         let eq_eval = EqPolynomial::mle(&self.r, &r_sc);
-        vec![eq_eval]
+        // inv_sum is verifier-known (derived from auxiliary exp_sum_q vector)
+        let r_sc_leading = &r_sc[..self.log_F()];
+        let inv_sum_poly = MultilinearPolynomial::from(self.inv_sum_evals.clone());
+        let inv_sum_claim = inv_sum_poly.evaluate(r_sc_leading);
+        vec![eq_eval * inv_sum_claim]
     }
 }
 

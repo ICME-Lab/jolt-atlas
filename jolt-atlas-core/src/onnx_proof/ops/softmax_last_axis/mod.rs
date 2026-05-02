@@ -206,7 +206,7 @@ impl SoftmaxLastAxisProver {
 ///
 /// Mirror of [`SoftmaxLastAxisProver`] — each stage method corresponds to a
 /// prover stage and verifies the associated sumcheck proof.
-pub struct SoftmaxLastAxisVerifier {
+pub(crate) struct SoftmaxLastAxisVerifier {
     computation_node: ComputationNode,
     scale: i32,
     F_N: [usize; 2],
@@ -345,13 +345,18 @@ impl SoftmaxLastAxisProver {
         prover: &mut Prover<F, T>,
         r_lookup_bits: Vec<LookupBits>,
     ) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
-        let recip_mult_params = RecipMultParams::new(
+        let mut recip_mult_params = RecipMultParams::new(
             self.computation_node.clone(),
             self.scale,
             self.F_N,
             &prover.accumulator,
             &mut prover.transcript,
         );
+        #[cfg(feature = "zk")]
+        {
+            recip_mult_params.inv_sum_evals =
+                self.trace.inv_sum.iter().map(|&x| F::from_i32(x)).collect();
+        }
         let exp_q_for_sum = self.trace.exp_q.clone();
         let recip_mult_prover = RecipMultProver::initialize(
             std::mem::take(&mut self.trace.exp_q),
@@ -615,7 +620,7 @@ impl SoftmaxLastAxisVerifier {
     ///
     /// Mirror of [`SoftmaxLastAxisProver::send_auxiliary_vectors`].
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::new", skip_all)]
-    fn new<F: JoltField, T: Transcript>(
+    pub(crate) fn new<F: JoltField, T: Transcript>(
         node: &ComputationNode,
         scale: i32,
         verifier: &mut Verifier<'_, F, T>,
@@ -678,7 +683,7 @@ impl SoftmaxLastAxisVerifier {
     }
 
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::inv_sum_evals", skip_all)]
-    fn inv_sum_evals<F: JoltField, T: Transcript>(
+    pub(crate) fn inv_sum_evals<F: JoltField, T: Transcript>(
         &self,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<Vec<F>, ProofVerifyError> {
@@ -709,7 +714,7 @@ impl SoftmaxLastAxisVerifier {
     /// Cache `exp_sum_q(r0_lead)` — mirror of prover [`cache_exp_sum`].
     /// And verify that the claimed `exp_sum_q` values are consistent with the opening.
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::cache_exp_sum", skip_all)]
-    fn cache_exp_sum<F: JoltField, T: Transcript>(
+    pub(crate) fn cache_exp_sum<F: JoltField, T: Transcript>(
         &mut self,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
@@ -732,7 +737,7 @@ impl SoftmaxLastAxisVerifier {
 
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::cache_R", skip_all)]
     /// Append the remainder polynomial commitment to the accumulator.
-    fn cache_R<F: JoltField, T: Transcript>(&self, verifier: &mut Verifier<'_, F, T>) {
+    pub(crate) fn cache_R<F: JoltField, T: Transcript>(&self, verifier: &mut Verifier<'_, F, T>) {
         let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, &self.computation_node);
         let r = accessor.get_reduced_opening().0;
         let mut provider = accessor.into_provider(&mut verifier.transcript, r);
@@ -776,7 +781,10 @@ impl SoftmaxLastAxisVerifier {
     }
 
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::cache_r_exp", skip_all)]
-    fn cache_r_exp<F: JoltField, T: Transcript>(&self, verifier: &mut Verifier<'_, F, T>) {
+    pub(crate) fn cache_r_exp<F: JoltField, T: Transcript>(
+        &self,
+        verifier: &mut Verifier<'_, F, T>,
+    ) {
         let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, &self.computation_node);
         let r = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
         let mut provider = accessor.into_provider(&mut verifier.transcript, r);

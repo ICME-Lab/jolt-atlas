@@ -77,6 +77,8 @@ pub struct ZkProofBundle {
     pub output_claim: F,
     /// ZK sumcheck proofs for each operator stage (needed by verifier for IOP replay).
     pub zk_sumcheck_proofs: Vec<NodeZkProof>,
+    /// Number of sumcheck instances per ZK proof (for transcript batching coeff replay).
+    pub zk_sumcheck_num_instances: Vec<usize>,
 }
 
 /// Run a single-instance ZK sumcheck and collect stage data.
@@ -253,35 +255,73 @@ fn verify_softmax_zk(
 
     // Construct a temporary Verifier to run the SmVerifier IOP replay.
     let empty_proofs = std::collections::BTreeMap::new();
+    // Use non-ZK accumulator for inter-stage cache operations so transcript
+    // appends match the prover's flow. The ZK-mode accumulator skips appends,
+    // which would cause transcript divergence.
+    let mut non_zk_acc = joltworks::poly::opening_proof::VerifierOpeningAccumulator::<F>::new();
+    // Copy over existing openings from the ZK accumulator
+    non_zk_acc.openings = std::mem::take(&mut accumulator.openings);
+    non_zk_acc.reduced_evaluations = std::mem::take(&mut accumulator.reduced_evaluations);
     let mut temp_verifier = crate::onnx_proof::Verifier {
         preprocessing: &pp.shared,
-        accumulator: std::mem::take(accumulator),
+        accumulator: non_zk_acc,
         transcript: std::mem::take(transcript),
         proofs: &empty_proofs,
         io,
     };
 
-    // Run the full non-ZK verify flow which replays transcript and populates accumulator.
-    // This calls SmVerifier::new, cache_*, and stage1-4 verify methods.
-    // The stage verify methods will call BatchedSumcheck::verify with empty_proofs,
-    // but in ZK mode the accumulator is in zk_mode so missing keys produce placeholders.
-    // The actual proof checking is done by BlindFold, not by the sumcheck verify.
-    use crate::onnx_proof::ops::OperatorProofTrait;
-    let sm_result = op.verify(node, &mut temp_verifier);
-    // The verify will fail because empty_proofs has no entries. That's expected.
-    // We just needed the transcript/accumulator state updates from new/cache methods.
-    let _ = sm_result;
+    // Construct SmVerifier which reads auxiliary vectors from transcript.
+    use crate::onnx_proof::ops::softmax_last_axis::SoftmaxLastAxisVerifier as SmVerifier;
+    let mut sm_v = SmVerifier::new(node, op.scale, &mut temp_verifier);
 
-    // Recover accumulator and transcript
-    *accumulator = temp_verifier.accumulator;
-    *transcript = temp_verifier.transcript;
+    // Run cache methods that advance transcript/accumulator (matching prover flow).
+    sm_v.cache_exp_sum(&mut temp_verifier)
+        .map_err(|e| ProofVerifyError::InvalidOpeningProof(format!("{e:?}")))?;
+    sm_v.cache_R(&mut temp_verifier);
 
-    // Advance the ZK proof index past all 4 stages
-    for _ in 0..4 {
-        let (pid, _) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+    // Helper: absorb a ZK sumcheck proof's commitments into transcript.
+    // Replays the exact transcript operations that verify_zk would do:
+    // 1. Squeeze batching coefficients (challenge_vector(n_instances))
+    // 2. Absorb round commitments + squeeze challenges
+    // 3. Absorb output claims commitments
+    let absorb_zk_proof =
+        |zk_proof: &joltworks::subprotocols::sumcheck::ZkSumcheckProof<F, C, T>,
+         n_instances: usize,
+         t: &mut T| {
+            let _: Vec<F> = t.challenge_vector(n_instances);
+            for com in &zk_proof.round_commitments {
+                t.append_serializable(com);
+                let _: <F as JoltField>::Challenge = t.challenge_scalar_optimized::<F>();
+            }
+            for com in &zk_proof.output_claims_commitments {
+                t.append_serializable(com);
+            }
+        };
+
+    // Stage 1
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        let ni = bundle.zk_sumcheck_num_instances[*zk_proof_idx];
         assert_eq!(*pid, node.idx);
+        absorb_zk_proof(zk_proof, ni, &mut temp_verifier.transcript);
         *zk_proof_idx += 1;
     }
+
+    sm_v.cache_r_exp(&mut temp_verifier);
+
+    // Stages 2-4
+    for _ in 1..4 {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        let ni = bundle.zk_sumcheck_num_instances[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        absorb_zk_proof(zk_proof, ni, &mut temp_verifier.transcript);
+        *zk_proof_idx += 1;
+    }
+
+    // Recover: put openings back into ZK accumulator
+    accumulator.openings = temp_verifier.accumulator.openings;
+    accumulator.reduced_evaluations = temp_verifier.accumulator.reduced_evaluations;
+    *transcript = temp_verifier.transcript;
 
     Ok(())
 }
@@ -1959,6 +1999,10 @@ pub fn prove_zk(
         eval_commitments: real_instance.eval_commitments.clone(),
     };
 
+    let zk_sumcheck_num_instances: Vec<usize> = stage_data_vec
+        .iter()
+        .map(|sd| sd.batching_coefficients.len())
+        .collect();
     let bundle = ZkProofBundle {
         blindfold_proof,
         blindfold_verifier_input,
@@ -1969,6 +2013,7 @@ pub fn prove_zk(
         commitments,
         output_claim,
         zk_sumcheck_proofs,
+        zk_sumcheck_num_instances,
     };
 
     (bundle, io)

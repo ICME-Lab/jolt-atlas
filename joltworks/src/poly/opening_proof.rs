@@ -583,6 +583,7 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         let key = opening_id;
         match self.openings.get(&key) {
             Some((point, claim)) => (point.clone(), *claim),
+            None if self.zk_mode => (OpeningPoint::default(), F::zero()),
             None => {
                 panic!("No opening found for {opening_id:?}")
             }

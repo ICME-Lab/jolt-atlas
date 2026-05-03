@@ -100,6 +100,7 @@ pub struct ReadRafParams<F: JoltField> {
     ra_sid: SumcheckId,
     log_K: usize,
     /// Lookup table (stored for BlindFold constraint evaluation).
+    #[cfg_attr(not(feature = "zk"), allow(dead_code))]
     table: Vec<i32>,
 }
 

@@ -345,6 +345,7 @@ impl SoftmaxLastAxisProver {
         prover: &mut Prover<F, T>,
         r_lookup_bits: Vec<LookupBits>,
     ) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
+        #[cfg_attr(not(feature = "zk"), allow(unused_mut))]
         let mut recip_mult_params = RecipMultParams::new(
             self.computation_node.clone(),
             self.scale,

@@ -860,8 +860,7 @@ impl SoftmaxLastAxisVerifier {
             &*accumulator,
             transcript,
         );
-        let rc_provider =
-            SoftmaxRCProvider::remainder(self.computation_node.clone(), scale_bits);
+        let rc_provider = SoftmaxRCProvider::remainder(self.computation_node.clone(), scale_bits);
         let rc_R_verifier = identity_rangecheck_verifier(&rc_provider, accumulator);
         Ok(vec![
             Box::new(recip_mult_verifier),

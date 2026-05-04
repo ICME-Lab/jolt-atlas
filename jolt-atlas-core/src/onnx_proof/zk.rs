@@ -1935,8 +1935,8 @@ pub fn prove_zk(
                     &mut eval_reduction_h_commitments,
                 );
 
-                let zk_proof = create_prover_instance(node, &prover, pp.shared.model()).map(
-                    |mut sc| {
+                let zk_proof =
+                    create_prover_instance(node, &prover, pp.shared.model()).map(|mut sc| {
                         run_zk_sumcheck(
                             &mut *sc,
                             &mut prover,
@@ -1944,8 +1944,7 @@ pub fn prove_zk(
                             &mut stage_configs,
                             pedersen_gens,
                         )
-                    },
-                );
+                    });
                 if let Some(proof) = zk_proof {
                     zk_sumcheck_proofs.push((node.idx, proof));
                 }

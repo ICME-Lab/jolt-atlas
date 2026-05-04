@@ -24,6 +24,11 @@ use crate::{
     transcripts::Transcript,
 };
 
+#[cfg(feature = "zk")]
+use crate::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
+
 /// Degree bound of the sumcheck round polynomials in [`HammingWeightSumcheckVerifier`].
 const DEGREE_BOUND: usize = 1;
 
@@ -57,6 +62,36 @@ impl<F: JoltField> SumcheckInstanceParams<F> for HammingWeightSumcheckParams<F> 
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    // output = Σ_{i=0}^{d-1} γ^i * ra_i
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
+        let terms: Vec<ProductTerm> = (0..self.d)
+            .map(|i| {
+                let id = OpeningId::new(self.polynomial_types[i], self.sumcheck_id);
+                ProductTerm::scaled(ValueSource::Challenge(i), vec![ValueSource::Opening(id)])
+            })
+            .collect();
+        Some(OutputClaimConstraint::sum_of_products(terms))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, _sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        self.gamma_powers.clone()
     }
 }
 

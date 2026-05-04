@@ -8,6 +8,10 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
     ops::Square,
 };
+#[cfg(feature = "zk")]
+use joltworks::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -76,8 +80,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SquareParams<F> {
     // This value is baked as a constant in BlindFold's R1CS (not a variable),
     // so no constraint is needed.
     #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> joltworks::subprotocols::blindfold::InputClaimConstraint {
-        joltworks::subprotocols::blindfold::InputClaimConstraint::default()
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
     }
 
     #[cfg(feature = "zk")]
@@ -92,11 +96,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SquareParams<F> {
     // eq_eval is a deterministic function of the sumcheck challenges and r_node_output,
     // so it is passed as Challenge(0). The operand opening appears twice (squared).
     #[cfg(feature = "zk")]
-    fn output_claim_constraint(
-        &self,
-    ) -> Option<joltworks::subprotocols::blindfold::OutputClaimConstraint> {
-        use joltworks::subprotocols::blindfold::{OutputClaimConstraint, ProductTerm, ValueSource};
-
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
         let operand_id =
             crate::utils::opening_access::OpeningIdBuilder::new(&self.computation_node)
                 .nodeio(Target::Input(0));

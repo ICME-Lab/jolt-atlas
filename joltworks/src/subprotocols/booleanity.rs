@@ -28,6 +28,11 @@ use crate::{
     utils::{expanding_table::ExpandingTable, thread::drop_in_background_thread},
 };
 
+#[cfg(feature = "zk")]
+use crate::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
+
 /// Degree bound of the sumcheck round polynomials in [`BooleanitySumcheckVerifier`].
 const DEGREE_BOUND: usize = 3;
 
@@ -68,6 +73,63 @@ impl<F: JoltField> SumcheckInstanceParams<F> for BooleanitySumcheckParams<F> {
         opening_point[..self.log_k_chunk].reverse();
         opening_point[self.log_k_chunk..].reverse();
         opening_point.into()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    // output = eq_eval * Σ_i γ_i * (ra_i² - ra_i)
+    //        = Σ_i [ Challenge(2i) * Opening(ra_i) * Opening(ra_i)
+    //              + Challenge(2i+1) * Opening(ra_i) ]
+    // where Challenge(2i) = eq_eval * γ_i, Challenge(2i+1) = -eq_eval * γ_i
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
+        let mut terms = Vec::with_capacity(2 * self.d);
+        for i in 0..self.d {
+            let id = OpeningId::new(self.polynomial_types[i], self.sumcheck_id);
+            // eq_eval * γ_i * ra_i²
+            terms.push(ProductTerm::scaled(
+                ValueSource::Challenge(2 * i),
+                vec![ValueSource::Opening(id), ValueSource::Opening(id)],
+            ));
+            // -eq_eval * γ_i * ra_i
+            terms.push(ProductTerm::scaled(
+                ValueSource::Challenge(2 * i + 1),
+                vec![ValueSource::Opening(id)],
+            ));
+        }
+        Some(OutputClaimConstraint::sum_of_products(terms))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        let combined_r: Vec<F> = self
+            .r_address
+            .iter()
+            .cloned()
+            .rev()
+            .chain(self.r_cycle.iter().cloned().rev())
+            .collect();
+        let sc: Vec<F> = sumcheck_challenges.to_vec().into_opening();
+        let eq_eval = EqPolynomial::<F>::mle(&sc, &combined_r);
+
+        let mut values = Vec::with_capacity(2 * self.d);
+        for gamma in &self.gammas {
+            let g: F = (*gamma).into();
+            values.push(eq_eval * g);
+            values.push(-eq_eval * g);
+        }
+        values
     }
 }
 

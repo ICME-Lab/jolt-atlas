@@ -17,6 +17,10 @@ use atlas_onnx_tracer::{
     tensor::Tensor,
 };
 use common::VirtualPoly;
+#[cfg(feature = "zk")]
+use joltworks::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -125,6 +129,48 @@ impl<F: JoltField> SumcheckInstanceParams<F> for TeleportDivisionParams<F> {
         self.computation_node
             .pow2_padded_num_output_elements()
             .log_2()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    // output = eq_eval * (tau * quotient + remainder - input)
+    //        = Challenge(0) * Opening(q) + Challenge(1) * Opening(r) + Challenge(2) * Opening(input)
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
+        use crate::utils::opening_access::OpeningIdBuilder;
+        let builder = OpeningIdBuilder::new(&self.computation_node);
+        let input_id = builder.nodeio(Target::Input(0));
+        let q_id = builder.advice(VirtualPoly::TeleportQuotient);
+        let r_id = builder.advice(VirtualPoly::TeleportRemainder);
+        Some(OutputClaimConstraint::sum_of_products(vec![
+            ProductTerm::scaled(ValueSource::Challenge(0), vec![ValueSource::Opening(q_id)]),
+            ProductTerm::scaled(ValueSource::Challenge(1), vec![ValueSource::Opening(r_id)]),
+            ProductTerm::scaled(
+                ValueSource::Challenge(2),
+                vec![ValueSource::Opening(input_id)],
+            ),
+        ]))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        let r_node_output_prime: Vec<F> = self
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
+        let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_node_output_prime);
+        let tau = F::from_i32(self.tau);
+        vec![eq_eval * tau, eq_eval, -eq_eval]
     }
 }
 

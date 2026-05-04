@@ -105,6 +105,50 @@ pub struct HyperKZGProverKey<P: Pairing> {
     pub kzg_pk: KZGProverKey<P>,
 }
 
+impl HyperKZGProverKey<ark_bn254::Bn254> {
+    /// Derive Pedersen generators from the HyperKZG SRS for BlindFold.
+    ///
+    /// Uses SRS G1 points as message generators. If the SRS has fewer than
+    /// `count` points, additional generators are derived via hash-to-curve.
+    /// The blinding generator is always hash-derived (independent of SRS).
+    #[cfg(feature = "zk")]
+    pub fn pedersen_generators(
+        &self,
+        count: usize,
+    ) -> crate::poly::commitment::pedersen::PedersenGenerators<crate::curve::Bn254Curve> {
+        use ark_bn254::G1Projective;
+        use ark_std::UniformRand;
+        use rand_chacha::ChaCha20Rng;
+        use rand_core::SeedableRng;
+        use sha3::Digest;
+
+        let srs = &self.kzg_pk.srs;
+        let available = srs.g1_powers.len();
+
+        let mut message_generators: Vec<crate::curve::Bn254G1> = srs.g1_powers
+            [..std::cmp::min(count, available)]
+            .iter()
+            .map(|g| crate::curve::Bn254G1(g.into_group()))
+            .collect();
+
+        for i in available..count {
+            let domain = format!("jolt-atlas-blindfold-extra-generator-{i}");
+            let h = sha3::Sha3_256::digest(domain.as_bytes());
+            let mut gen_rng = ChaCha20Rng::from_seed(h.into());
+            message_generators.push(crate::curve::Bn254G1(G1Projective::rand(&mut gen_rng)));
+        }
+
+        let hash = sha3::Sha3_256::digest(b"jolt-atlas-blindfold-blinding-generator");
+        let mut rng = ChaCha20Rng::from_seed(hash.into());
+        let blinding_generator = crate::curve::Bn254G1(G1Projective::rand(&mut rng));
+
+        crate::poly::commitment::pedersen::PedersenGenerators::new(
+            message_generators,
+            blinding_generator,
+        )
+    }
+}
+
 #[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct HyperKZGVerifierKey<P: Pairing> {
     pub kzg_vk: KZGVerifierKey<P>,

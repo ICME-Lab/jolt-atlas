@@ -106,6 +106,23 @@ where
     }
 }
 
+#[cfg(feature = "zk")]
+impl
+    AtlasProverPreprocessing<
+        ark_bn254::Fr,
+        joltworks::poly::commitment::hyperkzg::HyperKZG<ark_bn254::Bn254>,
+    >
+{
+    /// Derive Pedersen generators from the HyperKZG SRS for BlindFold ZK proofs.
+    pub fn pedersen_generators(
+        &self,
+        count: usize,
+    ) -> joltworks::poly::commitment::pedersen::PedersenGenerators<joltworks::curve::Bn254Curve>
+    {
+        self.generators.pedersen_generators(count)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Verifier
 // ---------------------------------------------------------------------------

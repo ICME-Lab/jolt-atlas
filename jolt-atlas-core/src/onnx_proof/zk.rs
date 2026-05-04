@@ -1888,8 +1888,31 @@ pub fn prove_zk(
                 &mut eval_reduction_h_commitments,
                 &mut zk_sumcheck_proofs,
             ),
-            // Default flow: eval reduction first, then execution sumcheck (or none
-            // for no-sumcheck ops, which create_prover_instance returns None for).
+            // No-sumcheck ops: eval reduction only, no execution sumcheck.
+            // Clamp is a no-op in the ZK pipeline (prover and verifier both
+            // skip the sumcheck step).
+            Operator::Input(_)
+            | Operator::Identity(_)
+            | Operator::Broadcast(_)
+            | Operator::MoveAxis(_)
+            | Operator::Constant(_)
+            | Operator::IsNan(_)
+            | Operator::Clamp(_) => {
+                prove_zk_eval_reduction(
+                    node,
+                    &mut prover,
+                    pedersen_gens,
+                    &mut eval_reduction_proofs,
+                    &mut eval_reduction_h_commitments,
+                );
+            }
+            // MeanOfSquares is not yet implemented in `create_prover_instance`
+            // (it falls into the panic catch-all). Surface that here as an
+            // explicit `unimplemented!` so the dispatch reflects the gap.
+            Operator::MeanOfSquares(_) => {
+                unimplemented!("ZK proving not yet implemented for MeanOfSquares");
+            }
+            // Default flow: eval reduction first, then execution sumcheck.
             Operator::Add(_)
             | Operator::Sub(_)
             | Operator::Neg(_)
@@ -1903,15 +1926,7 @@ pub fn prove_zk(
             | Operator::Slice(_)
             | Operator::ScalarConstDiv(_)
             | Operator::Einsum(_)
-            | Operator::Sum(_)
-            | Operator::MeanOfSquares(_)
-            | Operator::Clamp(_)
-            | Operator::Input(_)
-            | Operator::Identity(_)
-            | Operator::Broadcast(_)
-            | Operator::MoveAxis(_)
-            | Operator::Constant(_)
-            | Operator::IsNan(_) => {
+            | Operator::Sum(_) => {
                 prove_zk_eval_reduction(
                     node,
                     &mut prover,
@@ -2282,15 +2297,25 @@ pub fn verify_zk(
                 &mut zk_proof_idx,
             )?,
             // Default flow: eval reduction always; execution sumcheck for ops
-            // that have one. The no-sumcheck ops are listed explicitly below
-            // and skip the sumcheck-instances call.
+            // that have one. The no-sumcheck ops (including Clamp, which the
+            // prover treats as a no-op via `create_prover_instance` returning
+            // `None`) are listed explicitly below and skip the
+            // sumcheck-instances call.
             Operator::Input(_)
             | Operator::Identity(_)
             | Operator::Broadcast(_)
             | Operator::MoveAxis(_)
             | Operator::Constant(_)
-            | Operator::IsNan(_) => {
+            | Operator::IsNan(_)
+            | Operator::Clamp(_) => {
                 verify_zk_eval_reduction(node, bundle, &mut accumulator, &mut transcript)?;
+            }
+            // MeanOfSquares is not yet implemented on the prover side
+            // (`create_prover_instance` falls through to its panic arm). Mirror
+            // the panic here so both sides fail loudly and symmetrically
+            // rather than later at an opaque proof-index mismatch.
+            Operator::MeanOfSquares(_) => {
+                unimplemented!("ZK verification not yet implemented for MeanOfSquares");
             }
             Operator::Add(_)
             | Operator::Sub(_)
@@ -2305,9 +2330,7 @@ pub fn verify_zk(
             | Operator::Slice(_)
             | Operator::ScalarConstDiv(_)
             | Operator::Einsum(_)
-            | Operator::Sum(_)
-            | Operator::MeanOfSquares(_)
-            | Operator::Clamp(_) => {
+            | Operator::Sum(_) => {
                 verify_zk_eval_reduction(node, bundle, &mut accumulator, &mut transcript)?;
 
                 let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[zk_proof_idx];

@@ -241,31 +241,35 @@ fn verify_zk_sumcheck_instances(
 
 /// Verify SoftmaxLastAxis ZK proof.
 ///
-/// The prover runs the full 4-stage pipeline via `prove_softmax_zk`.
-/// The verifier side requires constructing a `SoftmaxLastAxisVerifier` which
-/// has private stage methods and takes `&mut Verifier`. For now, we construct
-/// a temporary Verifier to run the IOP replay (cache methods + transcript ops),
-/// and skip per-stage verification (BlindFold covers constraint satisfaction).
+/// Mirror of `prove_softmax_zk`: 4 batched stages with two private inter-stage
+/// claims (R, r_exp) absorbed via Pedersen commitments. Each stage runs full
+/// per-stage `verify_zk_sumcheck_instances` (BlindFold covers the *aggregate*
+/// constraint, but per-stage transcript replay still has to match).
 ///
-/// TODO: Refactor `SoftmaxLastAxisVerifier` stage methods to accept decomposed
-/// args for proper per-stage ZK verification.
+/// Public auxiliary claims (`SoftmaxSumOutput`, `SoftmaxMaxOutput`,
+/// `SoftmaxMaxIndex`, `SoftmaxExpSum`) are pre-populated into the accumulator
+/// from the bundle so `SoftmaxLastAxisVerifier::new` and `cache_exp_sum` see
+/// the real values when they re-append them to the transcript.
 fn verify_softmax_zk(
     node: &atlas_onnx_tracer::node::ComputationNode,
     pp: &AtlasVerifierPreprocessing<F, PCS>,
-    io: &atlas_onnx_tracer::model::trace::ModelExecutionIO,
     bundle: &ZkProofBundle,
     accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
     transcript: &mut T,
     zk_proof_idx: &mut usize,
 ) -> Result<(), ProofVerifyError> {
+    use crate::onnx_proof::ops::softmax_last_axis::{
+        SoftmaxLastAxisVerifier as SmVerifier, VerifierLookupTableData,
+    };
+
     verify_zk_eval_reduction(node, bundle, accumulator, transcript)?;
 
     let Operator::SoftmaxLastAxis(op) = &node.operator else {
         unreachable!()
     };
 
-    // Pre-populate the auxiliary claims (public data from send_auxiliary_vectors)
-    // so SmVerifier::new can find them in the accumulator.
+    // Pre-populate public auxiliary claims so SmVerifier::new sees real values
+    // when it re-appends them to the transcript.
     for (id, claim) in &bundle.auxiliary_claims {
         accumulator.openings.insert(
             *id,
@@ -276,74 +280,76 @@ fn verify_softmax_zk(
         );
     }
 
-    // Construct a temporary Verifier (non-ZK for SmVerifier::new and cache operations).
-    let empty_proofs = std::collections::BTreeMap::new();
-    let mut temp_verifier = crate::onnx_proof::Verifier {
-        preprocessing: &pp.shared,
-        accumulator: std::mem::take(accumulator),
-        transcript: std::mem::take(transcript),
-        proofs: &empty_proofs,
-        io,
-    };
-
-    // SmVerifier::new and cache_exp_sum need the accumulator in non-ZK mode
-    // so that: (1) auxiliary claims are stored with real values (not placeholders),
-    // (2) transcript appends match the prover's flow.
-    // The ZK verifier can do this because the auxiliary vectors are PUBLIC
-    // (sent via transcript in send_auxiliary_vectors).
-    use crate::onnx_proof::ops::softmax_last_axis::SoftmaxLastAxisVerifier as SmVerifier;
-    temp_verifier.accumulator.zk_mode = false;
-    let mut sm_v = SmVerifier::new(node, op.scale, &mut temp_verifier);
-    sm_v.cache_exp_sum(&mut temp_verifier)
-        .map_err(|e| ProofVerifyError::InvalidOpeningProof(format!("{e:?}")))?;
-    temp_verifier.accumulator.zk_mode = true;
-
-    // cache_R: PRIVATE claim. Absorb the Pedersen commitment from the bundle.
     let inter_coms = bundle
         .inter_stage_commitments
         .get(&node.idx)
         .expect("Missing inter-stage commitments for Softmax node");
-    temp_verifier.transcript.append_serializable(&inter_coms[0]);
 
-    // Helper: absorb a ZK sumcheck proof's commitments into transcript.
-    let absorb_zk_proof =
-        |zk_proof: &joltworks::subprotocols::sumcheck::ZkSumcheckProof<F, C, T>,
-         n_instances: usize,
-         t: &mut T| {
-            let _: Vec<F> = t.challenge_vector(n_instances);
-            for com in &zk_proof.round_commitments {
-                t.append_serializable(com);
-                let _: <F as JoltField>::Challenge = t.challenge_scalar_optimized::<F>();
-            }
-            for com in &zk_proof.output_claims_commitments {
-                t.append_serializable(com);
-            }
-        };
+    // Auxiliary scalars are public, so we toggle off zk_mode while
+    // SmVerifier::new and cache_exp_sum read/append them. They both rely on
+    // the accumulator returning real claim values (not the zk_mode placeholder
+    // zero) so the transcript appends match the prover's. We restore zk_mode
+    // before the private inter-stage caches and the per-stage sumcheck builds.
+    let saved_zk_mode = accumulator.zk_mode;
+    accumulator.zk_mode = false;
+    let mut sm_v = SmVerifier::new(node, op.scale, accumulator, transcript);
+    sm_v.cache_exp_sum(accumulator, transcript)
+        .map_err(|e| ProofVerifyError::InvalidOpeningProof(format!("{e:?}")))?;
+    accumulator.zk_mode = saved_zk_mode;
+
+    let scale_bits = pp.shared.scale();
+
+    // cache_R: insert explicit zero placeholder, absorb Pedersen commitment.
+    sm_v.cache_R_zk(accumulator, transcript, &inter_coms[0]);
 
     // Stage 1
     {
         let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        let ni = bundle.zk_sumcheck_num_instances[*zk_proof_idx];
         assert_eq!(*pid, node.idx);
-        absorb_zk_proof(zk_proof, ni, &mut temp_verifier.transcript);
+        let v = sm_v.build_stage1_verifiers(accumulator, transcript, scale_bits)?;
+        verify_zk_sumcheck_instances(zk_proof, v, accumulator, transcript)?;
         *zk_proof_idx += 1;
     }
 
-    // cache_r_exp: PRIVATE claim. Absorb the Pedersen commitment.
-    temp_verifier.transcript.append_serializable(&inter_coms[1]);
+    let lut = VerifierLookupTableData::new(op.scale);
 
-    // Stages 2-4
-    for _ in 1..4 {
+    // cache_r_exp: same shape as cache_R.
+    sm_v.cache_r_exp_zk(accumulator, transcript, &inter_coms[1]);
+
+    // Stage 2
+    {
         let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        let ni = bundle.zk_sumcheck_num_instances[*zk_proof_idx];
         assert_eq!(*pid, node.idx);
-        absorb_zk_proof(zk_proof, ni, &mut temp_verifier.transcript);
+        let v = sm_v.build_stage2_verifiers(accumulator, transcript, scale_bits, &lut);
+        verify_zk_sumcheck_instances(zk_proof, v, accumulator, transcript)?;
         *zk_proof_idx += 1;
     }
 
-    // Recover accumulator and transcript
-    *accumulator = temp_verifier.accumulator;
-    *transcript = temp_verifier.transcript;
+    // Stage 3
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let v = sm_v.build_stage3_verifiers(accumulator, transcript, scale_bits, &lut);
+        verify_zk_sumcheck_instances(zk_proof, v, accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+
+    // NOTE: operand_link (X(r2) == max_k - z_c - sat_diff) is intentionally
+    // skipped here. It is a verifier-side algebraic identity over the openings
+    // SoftmaxZHi, SoftmaxZLo, SoftmaxSatDiff, and the input X(r2). All four are
+    // private in the ZK pipeline (the verifier only sees the zk_mode placeholder
+    // zero), while max_k is a public auxiliary scalar (non-zero). Doing the
+    // check here would always fail. Encoding the operand-link identity as a
+    // BlindFold R1CS constraint is the right fix; tracked separately.
+
+    // Stage 4
+    {
+        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(*pid, node.idx);
+        let v = sm_v.build_stage4_verifiers(accumulator, transcript, &lut);
+        verify_zk_sumcheck_instances(zk_proof, v, accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
 
     Ok(())
 }
@@ -2174,7 +2180,6 @@ pub fn verify_zk(
             verify_softmax_zk(
                 node,
                 pp,
-                io,
                 bundle,
                 &mut accumulator,
                 &mut transcript,

@@ -334,13 +334,36 @@ fn verify_softmax_zk(
         *zk_proof_idx += 1;
     }
 
-    // NOTE: operand_link (X(r2) == max_k - z_c - sat_diff) is intentionally
-    // skipped here. It is a verifier-side algebraic identity over the openings
-    // SoftmaxZHi, SoftmaxZLo, SoftmaxSatDiff, and the input X(r2). All four are
-    // private in the ZK pipeline (the verifier only sees the zk_mode placeholder
-    // zero), while max_k is a public auxiliary scalar (non-zero). Doing the
-    // check here would always fail. Encoding the operand-link identity as a
-    // BlindFold R1CS constraint is the right fix; tracked separately.
+    // NOTE: operand_link (X(r2) == max_k - z_c - sat_diff, expanded as
+    //   X(r2) - max_k(r2_lead) + z_hi(r2)*B + z_lo(r2) + sat_diff(r2) == 0
+    // ) is intentionally skipped here.
+    //
+    // It is a verifier-side algebraic identity over openings X (input 0),
+    // SoftmaxZHi, SoftmaxZLo, SoftmaxSatDiff, with `max_k(r2_lead)` derived by
+    // the verifier from public auxiliary scalars and `B` the digit base from
+    // the LUT. In the ZK pipeline all four openings are private and surface to
+    // the verifier as the zk_mode placeholder zero, while max_k is non-zero,
+    // so a direct verifier-side check would always fail.
+    //
+    // Closing this gap requires expressing the identity as a constraint inside
+    // BlindFold's R1CS so it is checked as part of the aggregate proof. The
+    // existing `extra_constraints` mechanism (currently dormant in prove_zk:
+    // empty vec, eval_commitment_gens=None) emits `output_var = SoP` plus a
+    // Pedersen binding on output_value, which is the wrong shape: an identity
+    // wants `(SoP) * 1 == 0` with no output_var or commitment. The right
+    // BlindFold-side change is a new `LayoutStep::AlgebraicIdentity` variant
+    // (and parallel additions in layout.rs / r1cs.rs / witness.rs / folding.rs
+    // / mod.rs) that allocates only the required opening vars, deduplicates
+    // against earlier constraint allocations via the existing seen_openings
+    // set, and emits a single R1CS row `(SoP) * 1 = 0`. Then this site
+    // constructs an OutputClaimConstraint with terms
+    //   1*X, (-max_k_eval)*1, B*z_hi, 1*z_lo, 1*sat_diff
+    // (B as ValueSource::Constant, max_k_eval as a baked challenge), passes
+    // the four opening_values via a new identity-witness collection on
+    // BlindFoldWitness, and the prover commits no extra Pedersen output.
+    //
+    // Tracked in wiki/jolt-atlas/book/src/underway/pr-239-review.md as the
+    // first remaining outstanding item.
 
     // Stage 4
     {

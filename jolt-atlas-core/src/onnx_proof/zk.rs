@@ -1797,8 +1797,10 @@ pub fn prove_zk(
         BTreeMap::new();
 
     for (_, node) in nodes.iter().rev() {
-        if matches!(&node.operator, Operator::SoftmaxLastAxis(_)) {
-            prove_softmax_zk(
+        // Match is exhaustive: adding a new Operator variant fails to compile
+        // until it is routed to a specific prove flow or the default branch.
+        match &node.operator {
+            Operator::SoftmaxLastAxis(_) => prove_softmax_zk(
                 node,
                 &mut prover,
                 pedersen_gens,
@@ -1809,9 +1811,8 @@ pub fn prove_zk(
                 &mut zk_sumcheck_proofs,
                 &mut inter_stage_commitments,
                 &mut auxiliary_claims,
-            );
-        } else if matches!(&node.operator, Operator::GatherLarge(_)) {
-            prove_gather_large_zk(
+            ),
+            Operator::GatherLarge(_) => prove_gather_large_zk(
                 node,
                 &mut prover,
                 pp.shared.model(),
@@ -1821,9 +1822,8 @@ pub fn prove_zk(
                 &mut eval_reduction_proofs,
                 &mut eval_reduction_h_commitments,
                 &mut zk_sumcheck_proofs,
-            );
-        } else if matches!(&node.operator, Operator::GatherSmall(_)) {
-            prove_gather_small_zk(
+            ),
+            Operator::GatherSmall(_) => prove_gather_small_zk(
                 node,
                 &mut prover,
                 pp.shared.model(),
@@ -1833,9 +1833,8 @@ pub fn prove_zk(
                 &mut eval_reduction_proofs,
                 &mut eval_reduction_h_commitments,
                 &mut zk_sumcheck_proofs,
-            );
-        } else if matches!(&node.operator, Operator::ReLU(_)) {
-            prove_relu_zk(
+            ),
+            Operator::ReLU(_) => prove_relu_zk(
                 node,
                 &mut prover,
                 pedersen_gens,
@@ -1844,80 +1843,97 @@ pub fn prove_zk(
                 &mut eval_reduction_proofs,
                 &mut eval_reduction_h_commitments,
                 &mut zk_sumcheck_proofs,
-            );
-        } else if matches!(
-            &node.operator,
-            Operator::Sigmoid(_) | Operator::Tanh(_) | Operator::Erf(_)
-        ) {
-            prove_neural_teleport_zk(
-                node,
-                &mut prover,
-                pp.shared.model(),
-                pedersen_gens,
-                &mut blindfold_accumulator,
-                &mut stage_configs,
-                &mut eval_reduction_proofs,
-                &mut eval_reduction_h_commitments,
-                &mut zk_sumcheck_proofs,
-            );
-        } else if matches!(&node.operator, Operator::Cos(_) | Operator::Sin(_)) {
-            prove_cos_sin_zk(
-                node,
-                &mut prover,
-                pp.shared.model(),
-                pedersen_gens,
-                &mut blindfold_accumulator,
-                &mut stage_configs,
-                &mut eval_reduction_proofs,
-                &mut eval_reduction_h_commitments,
-                &mut zk_sumcheck_proofs,
-            );
-        } else if matches!(&node.operator, Operator::Div(_) | Operator::Rsqrt(_)) {
-            if matches!(&node.operator, Operator::Rsqrt(_)) {
-                prove_rsqrt_zk(
+            ),
+            Operator::Sigmoid(_) | Operator::Tanh(_) | Operator::Erf(_) => {
+                prove_neural_teleport_zk(
                     node,
                     &mut prover,
+                    pp.shared.model(),
                     pedersen_gens,
                     &mut blindfold_accumulator,
                     &mut stage_configs,
                     &mut eval_reduction_proofs,
                     &mut eval_reduction_h_commitments,
                     &mut zk_sumcheck_proofs,
-                );
-            } else {
-                prove_div_zk(
-                    node,
-                    &mut prover,
-                    pedersen_gens,
-                    &mut blindfold_accumulator,
-                    &mut stage_configs,
-                    &mut eval_reduction_proofs,
-                    &mut eval_reduction_h_commitments,
-                    &mut zk_sumcheck_proofs,
-                );
+                )
             }
-        } else {
-            // Standard flow: eval reduction first, then execution sumcheck.
-            prove_zk_eval_reduction(
+            Operator::Cos(_) | Operator::Sin(_) => prove_cos_sin_zk(
+                node,
+                &mut prover,
+                pp.shared.model(),
+                pedersen_gens,
+                &mut blindfold_accumulator,
+                &mut stage_configs,
+                &mut eval_reduction_proofs,
+                &mut eval_reduction_h_commitments,
+                &mut zk_sumcheck_proofs,
+            ),
+            Operator::Rsqrt(_) => prove_rsqrt_zk(
                 node,
                 &mut prover,
                 pedersen_gens,
+                &mut blindfold_accumulator,
+                &mut stage_configs,
                 &mut eval_reduction_proofs,
                 &mut eval_reduction_h_commitments,
-            );
+                &mut zk_sumcheck_proofs,
+            ),
+            Operator::Div(_) => prove_div_zk(
+                node,
+                &mut prover,
+                pedersen_gens,
+                &mut blindfold_accumulator,
+                &mut stage_configs,
+                &mut eval_reduction_proofs,
+                &mut eval_reduction_h_commitments,
+                &mut zk_sumcheck_proofs,
+            ),
+            // Default flow: eval reduction first, then execution sumcheck (or none
+            // for no-sumcheck ops, which create_prover_instance returns None for).
+            Operator::Add(_)
+            | Operator::Sub(_)
+            | Operator::Neg(_)
+            | Operator::Mul(_)
+            | Operator::Square(_)
+            | Operator::Cube(_)
+            | Operator::And(_)
+            | Operator::Iff(_)
+            | Operator::Concat(_)
+            | Operator::Reshape(_)
+            | Operator::Slice(_)
+            | Operator::ScalarConstDiv(_)
+            | Operator::Einsum(_)
+            | Operator::Sum(_)
+            | Operator::MeanOfSquares(_)
+            | Operator::Clamp(_)
+            | Operator::Input(_)
+            | Operator::Identity(_)
+            | Operator::Broadcast(_)
+            | Operator::MoveAxis(_)
+            | Operator::Constant(_)
+            | Operator::IsNan(_) => {
+                prove_zk_eval_reduction(
+                    node,
+                    &mut prover,
+                    pedersen_gens,
+                    &mut eval_reduction_proofs,
+                    &mut eval_reduction_h_commitments,
+                );
 
-            let zk_proof =
-                create_prover_instance(node, &prover, pp.shared.model()).map(|mut sc| {
-                    run_zk_sumcheck(
-                        &mut *sc,
-                        &mut prover,
-                        &mut blindfold_accumulator,
-                        &mut stage_configs,
-                        pedersen_gens,
-                    )
-                });
-            if let Some(proof) = zk_proof {
-                zk_sumcheck_proofs.push((node.idx, proof));
+                let zk_proof = create_prover_instance(node, &prover, pp.shared.model()).map(
+                    |mut sc| {
+                        run_zk_sumcheck(
+                            &mut *sc,
+                            &mut prover,
+                            &mut blindfold_accumulator,
+                            &mut stage_configs,
+                            pedersen_gens,
+                        )
+                    },
+                );
+                if let Some(proof) = zk_proof {
+                    zk_sumcheck_proofs.push((node.idx, proof));
+                }
             }
         }
     }
@@ -2199,93 +2215,101 @@ pub fn verify_zk(
     // 3. Full IOP replay: for each node, verify eval reduction + absorb ZK sumcheck
     let mut zk_proof_idx = 0;
     for (_, node) in model.graph.nodes.iter().rev() {
-        if matches!(&node.operator, Operator::SoftmaxLastAxis(_)) {
-            verify_softmax_zk(
+        // Match is exhaustive: adding a new Operator variant fails to compile
+        // until it is routed to a specific verify flow or the default branch.
+        match &node.operator {
+            Operator::SoftmaxLastAxis(_) => verify_softmax_zk(
                 node,
                 pp,
                 bundle,
                 &mut accumulator,
                 &mut transcript,
                 &mut zk_proof_idx,
-            )?;
-        } else if matches!(&node.operator, Operator::GatherLarge(_)) {
-            verify_gather_large_zk(
+            )?,
+            Operator::GatherLarge(_) => verify_gather_large_zk(
                 node,
                 model,
                 bundle,
                 &mut accumulator,
                 &mut transcript,
                 &mut zk_proof_idx,
-            )?;
-        } else if matches!(&node.operator, Operator::GatherSmall(_)) {
-            verify_gather_small_zk(
+            )?,
+            Operator::GatherSmall(_) => verify_gather_small_zk(
                 node,
                 model,
                 bundle,
                 &mut accumulator,
                 &mut transcript,
                 &mut zk_proof_idx,
-            )?;
-        } else if matches!(&node.operator, Operator::ReLU(_)) {
-            verify_relu_zk(
+            )?,
+            Operator::ReLU(_) => verify_relu_zk(
                 node,
                 bundle,
                 &mut accumulator,
                 &mut transcript,
                 &mut zk_proof_idx,
-            )?;
-        } else if matches!(
-            &node.operator,
-            Operator::Sigmoid(_) | Operator::Tanh(_) | Operator::Erf(_)
-        ) {
-            verify_neural_teleport_zk(
-                node,
-                model,
-                bundle,
-                &mut accumulator,
-                &mut transcript,
-                &mut zk_proof_idx,
-            )?;
-        } else if matches!(&node.operator, Operator::Cos(_) | Operator::Sin(_)) {
-            verify_cos_sin_zk(
+            )?,
+            Operator::Sigmoid(_) | Operator::Tanh(_) | Operator::Erf(_) => {
+                verify_neural_teleport_zk(
+                    node,
+                    model,
+                    bundle,
+                    &mut accumulator,
+                    &mut transcript,
+                    &mut zk_proof_idx,
+                )?
+            }
+            Operator::Cos(_) | Operator::Sin(_) => verify_cos_sin_zk(
                 node,
                 model,
                 bundle,
                 &mut accumulator,
                 &mut transcript,
                 &mut zk_proof_idx,
-            )?;
-        } else if matches!(&node.operator, Operator::Rsqrt(_)) {
-            verify_rsqrt_zk(
+            )?,
+            Operator::Rsqrt(_) => verify_rsqrt_zk(
                 node,
                 bundle,
                 &mut accumulator,
                 &mut transcript,
                 &mut zk_proof_idx,
-            )?;
-        } else if matches!(&node.operator, Operator::Div(_)) {
-            verify_div_zk(
+            )?,
+            Operator::Div(_) => verify_div_zk(
                 node,
                 bundle,
                 &mut accumulator,
                 &mut transcript,
                 &mut zk_proof_idx,
-            )?;
-        } else {
-            // Standard flow: eval reduction first, then execution sumcheck
-            verify_zk_eval_reduction(node, bundle, &mut accumulator, &mut transcript)?;
+            )?,
+            // Default flow: eval reduction always; execution sumcheck for ops
+            // that have one. The no-sumcheck ops are listed explicitly below
+            // and skip the sumcheck-instances call.
+            Operator::Input(_)
+            | Operator::Identity(_)
+            | Operator::Broadcast(_)
+            | Operator::MoveAxis(_)
+            | Operator::Constant(_)
+            | Operator::IsNan(_) => {
+                verify_zk_eval_reduction(node, bundle, &mut accumulator, &mut transcript)?;
+            }
+            Operator::Add(_)
+            | Operator::Sub(_)
+            | Operator::Neg(_)
+            | Operator::Mul(_)
+            | Operator::Square(_)
+            | Operator::Cube(_)
+            | Operator::And(_)
+            | Operator::Iff(_)
+            | Operator::Concat(_)
+            | Operator::Reshape(_)
+            | Operator::Slice(_)
+            | Operator::ScalarConstDiv(_)
+            | Operator::Einsum(_)
+            | Operator::Sum(_)
+            | Operator::MeanOfSquares(_)
+            | Operator::Clamp(_) => {
+                verify_zk_eval_reduction(node, bundle, &mut accumulator, &mut transcript)?;
 
-            let has_sumcheck = !matches!(
-                &node.operator,
-                Operator::Input(_)
-                    | Operator::Identity(_)
-                    | Operator::Broadcast(_)
-                    | Operator::MoveAxis(_)
-                    | Operator::Constant(_)
-                    | Operator::IsNan(_)
-            );
-
-            if has_sumcheck {
                 let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[zk_proof_idx];
                 assert_eq!(
                     *proof_node_idx, node.idx,

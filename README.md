@@ -59,7 +59,7 @@ cargo run --release --package jolt-atlas-core --example microgpt
 
 GPT-2 is a 125-million-parameter transformer model from OpenAI.
 
-**JOLT Atlas** latest run (from `trace-par.json`):
+**JOLT Atlas**
 
 | Stage | Wall clock |
 | ----- | ---------- |
@@ -76,14 +76,15 @@ GPT-2 is a 125-million-parameter transformer model from OpenAI.
 
 nanoGPT is the standard workload we use for cross-project comparison. It is a ~250k-parameter GPT model with 4 transformer layers.
 
-**JOLT Atlas** end-to-end proving breakdown:
+**JOLT Atlas**:
 
 | Stage | Wall clock |
 | ----- | ---------- |
-| Verifying key generation | 0.246 s |
-| Proving key generation | 0.246 s |
-| Proof time | 14 s |
-| Verify time | 0.517 s |
+| Verifying key generation (`setup_verifier`) | <0.001 s |
+| Proving key generation (`setup_prover`) | 0.263 s |
+| Proof time (`ONNXProof::prove`) | 2.288 s |
+| Verify time (`ONNXProof::verify`) | 0.127 s |
+| **End-to-end total (`setup_prover` + prove + verify)** | **2.678 s** |
 
 **ezkl** on the same model ([source](https://blog.ezkl.xyz/post/nanogpt/)):
 
@@ -94,7 +95,7 @@ nanoGPT is the standard workload we use for cross-project comparison. It is a ~2
 | Proof time | 237 s |
 | Verify time | 0.34 s |
 
-JOLT Atlas produces a proof for nanoGPT in **~14 s** versus ezkl's **~237 s proof time** (not counting their 400+ s of key generation). That is roughly a **17× speed-up** on proof generation alone.
+JOLT Atlas produces a proof for nanoGPT in **~2.29 s** versus ezkl's **~237 s proof time** (not counting their 400+ s of key generation). That is roughly a **104× speed-up** on proof generation alone.
 
 ### How to reproduce locally
 

@@ -25,6 +25,9 @@ pub enum Prefix {
     RightOperand,
     LeftOperand,
     Identity,
+    RightOperandMSB,
+    LeftOperandMSB,
+    SignedIdentity,
 }
 
 /// Array storing prefix polynomial evaluations, indexed by Prefix enum variants.
@@ -42,6 +45,19 @@ pub struct PrefixRegistry<F: JoltField> {
 impl<F: JoltField> PrefixRegistry<F> {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns the cached prefix polynomial for `key`, computing and inserting it via `f` if absent.
+    pub fn get_or_insert(
+        &mut self,
+        key: Prefix,
+        f: impl FnOnce(&PrefixCheckpoints<F>) -> CachedPolynomial<F>,
+    ) -> Arc<RwLock<CachedPolynomial<F>>> {
+        if self.polys[key as usize].is_none() {
+            let poly = f(&self.checkpoints);
+            self.polys[key as usize] = Some(Arc::new(RwLock::new(poly)));
+        }
+        self.polys[key as usize].clone().unwrap()
     }
 
     pub fn update_checkpoints(&mut self) {
@@ -200,7 +216,7 @@ pub trait PrefixSuffixPolynomial<F: JoltField, const ORDER: usize> {
 
 #[derive(Allocative)]
 /// Decomposes a polynomial f(x) = Σ_i P_i(x_prefix)·Q_i(x_suffix) for efficient sumcheck evaluation.
-pub struct PrefixSuffixDecomposition<F: JoltField, const ORDER: usize> {
+pub struct PrefixSuffixDecomposition<F: JoltField, const ORDER: usize, const SIGNED: bool> {
     #[allocative(skip)]
     /// Original polynomial to decompose (e.g., OperandPolynomial, IdentityPolynomial).
     poly: Box<dyn PrefixSuffixPolynomial<F, ORDER> + Send + Sync>,
@@ -219,7 +235,9 @@ pub struct PrefixSuffixDecomposition<F: JoltField, const ORDER: usize> {
     round: usize,
 }
 
-impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
+impl<F: JoltField, const ORDER: usize, const SIGNED: bool>
+    PrefixSuffixDecomposition<F, ORDER, SIGNED>
+{
     pub fn new(
         poly: Box<dyn PrefixSuffixPolynomial<F, ORDER> + Send + Sync>,
         chunk_len: usize,
@@ -282,10 +300,10 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
         let chunk_size = (indices.len() / num_chunks).max(1);
 
         // Accumulate in row-major for write locality: rows are r_index in [0, poly_len)
-        let new_Q_rows: Vec<[F::Unreduced<7>; ORDER]> = indices
+        let new_Q_rows: Vec<[F; ORDER]> = indices
             .par_chunks(chunk_size)
             .fold(
-                || vec![[F::Unreduced::<7>::zero(); ORDER]; poly_len],
+                || vec![[F::zero(); ORDER]; poly_len],
                 |mut acc, chunk| {
                     for j in chunk {
                         let k = lookup_bits[*j];
@@ -295,7 +313,11 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
                             for (s_idx, suffix) in suffixes.iter().enumerate() {
                                 let t = suffix.suffix_mle(suffix_bits);
                                 if t != 0 {
-                                    acc[r_index][s_idx] += u.mul_u64_unreduced(t);
+                                    if SIGNED {
+                                        acc[r_index][s_idx] += u.mul_i64(t as i64);
+                                    } else {
+                                        acc[r_index][s_idx] += u.mul_u64(t);
+                                    }
                                 }
                             }
                         }
@@ -304,7 +326,7 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
                 },
             )
             .reduce(
-                || vec![[F::Unreduced::<7>::zero(); ORDER]; poly_len],
+                || vec![[F::zero(); ORDER]; poly_len],
                 |mut acc, new| {
                     for (acc_row, new_row) in acc.iter_mut().zip(new.iter()) {
                         for s in 0..ORDER {
@@ -315,12 +337,12 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
                 },
             );
 
-        // Transpose rows back to suffix-major and reduce to field
+        // Transpose rows back to suffix-major
         let mut reduced_Q: [Vec<F>; ORDER] =
             std::array::from_fn(|_| unsafe_allocate_zero_vec(poly_len));
         for r_idx in 0..poly_len {
             for s in 0..ORDER {
-                reduced_Q[s][r_idx] = F::from_barrett_reduce(new_Q_rows[r_idx][s]);
+                reduced_Q[s][r_idx] = new_Q_rows[r_idx][s];
             }
         }
 
@@ -333,8 +355,8 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
     /// https://eprint.iacr.org/2025/611.pdf
     #[tracing::instrument(skip_all)]
     pub fn init_Q_dual(
-        left: &mut PrefixSuffixDecomposition<F, ORDER>,
-        right: &mut PrefixSuffixDecomposition<F, ORDER>,
+        left: &mut PrefixSuffixDecomposition<F, ORDER, SIGNED>,
+        right: &mut PrefixSuffixDecomposition<F, ORDER, SIGNED>,
         u_evals: &[F],
         indices: &[usize],
         lookup_bits: &[LookupBits],
@@ -352,16 +374,13 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
         let chunk_size = (indices.len() / num_chunks).max(1);
 
         #[allow(clippy::type_complexity)]
-        let (new_left_rows, new_right_rows): (
-            Vec<[F::Unreduced<7>; ORDER]>,
-            Vec<[F::Unreduced<7>; ORDER]>,
-        ) = indices
+        let (new_left_rows, new_right_rows): (Vec<[F; ORDER]>, Vec<[F; ORDER]>) = indices
             .par_chunks(chunk_size)
             .fold(
                 || {
                     (
-                        vec![[F::Unreduced::<7>::zero(); ORDER]; poly_len],
-                        vec![[F::Unreduced::<7>::zero(); ORDER]; poly_len],
+                        vec![[F::zero(); ORDER]; poly_len],
+                        vec![[F::zero(); ORDER]; poly_len],
                     )
                 },
                 |(mut acc_l, mut acc_r), chunk| {
@@ -374,14 +393,22 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
                             for (s_idx, suffix) in suffixes_left.iter().enumerate() {
                                 let t = suffix.suffix_mle(suffix_bits);
                                 if t != 0 {
-                                    acc_l[r_index][s_idx] += u.mul_u64_unreduced(t);
+                                    if SIGNED {
+                                        acc_l[r_index][s_idx] += u.mul_i64(t as i64);
+                                    } else {
+                                        acc_l[r_index][s_idx] += u.mul_u64(t);
+                                    }
                                 }
                             }
                             // Right
                             for (s_idx, suffix) in suffixes_right.iter().enumerate() {
                                 let t = suffix.suffix_mle(suffix_bits);
                                 if t != 0 {
-                                    acc_r[r_index][s_idx] += u.mul_u64_unreduced(t);
+                                    if SIGNED {
+                                        acc_r[r_index][s_idx] += u.mul_i64(t as i64);
+                                    } else {
+                                        acc_r[r_index][s_idx] += u.mul_u64(t);
+                                    }
                                 }
                             }
                         }
@@ -392,8 +419,8 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
             .reduce(
                 || {
                     (
-                        vec![[F::Unreduced::<7>::zero(); ORDER]; poly_len],
-                        vec![[F::Unreduced::<7>::zero(); ORDER]; poly_len],
+                        vec![[F::zero(); ORDER]; poly_len],
+                        vec![[F::zero(); ORDER]; poly_len],
                     )
                 },
                 |(mut acc_l, mut acc_r), (new_l, new_r)| {
@@ -411,19 +438,19 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
                 },
             );
 
-        // Reduce to field for left and right (transpose rows to suffix-major)
+        // Transpose rows to suffix-major for left and right
         let mut reduced_left: [Vec<F>; ORDER] =
             std::array::from_fn(|_| unsafe_allocate_zero_vec(poly_len));
         for r_idx in 0..poly_len {
             for s in 0..ORDER {
-                reduced_left[s][r_idx] = F::from_barrett_reduce(new_left_rows[r_idx][s]);
+                reduced_left[s][r_idx] = new_left_rows[r_idx][s];
             }
         }
         let mut reduced_right: [Vec<F>; ORDER] =
             std::array::from_fn(|_| unsafe_allocate_zero_vec(poly_len));
         for r_idx in 0..poly_len {
             for s in 0..ORDER {
-                reduced_right[s][r_idx] = F::from_barrett_reduce(new_right_rows[r_idx][s]);
+                reduced_right[s][r_idx] = new_right_rows[r_idx][s];
             }
         }
 
@@ -506,7 +533,13 @@ impl<F: JoltField, const ORDER: usize> PrefixSuffixDecomposition<F, ORDER> {
                 }
                 if let Some(p) = p {
                     let p = p.read().unwrap();
-                    p.final_claim().mul_u64(suff)
+                    if SIGNED {
+                        p.final_claim().mul_i64(suff as i64)
+                    } else {
+                        p.final_claim().mul_u64(suff)
+                    }
+                } else if SIGNED {
+                    F::from_i64(suff as i64)
                 } else {
                     F::from_u64(suff)
                 }
@@ -545,6 +578,7 @@ pub mod tests {
         const NUM_VARS: usize,
         const PREFIX_LEN: usize,
         const ORDER: usize,
+        const SIGNED: bool,
         P: PolynomialEvaluation<Fr>
             + PrefixSuffixPolynomial<Fr, ORDER>
             + Clone
@@ -553,13 +587,14 @@ pub mod tests {
             + 'static,
     >(
         poly: P,
-        prefix_registry_index: Prefix,
+        prefix_registry_index: Vec<Prefix>,
     ) {
         let SUFFIX_LEN: usize = NUM_VARS - PREFIX_LEN;
 
         let mut rng = test_rng();
         let mut prefix_registry = PrefixRegistry::new();
-        let mut ps = PrefixSuffixDecomposition::new(Box::new(poly.clone()), PREFIX_LEN, NUM_VARS);
+        let mut ps: PrefixSuffixDecomposition<Fr, ORDER, SIGNED> =
+            PrefixSuffixDecomposition::new(Box::new(poly.clone()), PREFIX_LEN, NUM_VARS);
 
         let indices: Vec<_> = (0..(1 << NUM_VARS)).collect();
         let lookup_bits = (0..(1 << NUM_VARS))
@@ -644,8 +679,11 @@ pub mod tests {
             prefix_registry.update_checkpoints();
         }
         assert_eq!(
-            prefix_registry.checkpoints[prefix_registry_index],
-            Some(poly.evaluate(&rr))
-        )
+            prefix_registry_index.iter().fold(Fr::zero(), |acc, &p| {
+                acc + prefix_registry.checkpoints[p].unwrap()
+            }),
+            poly.evaluate(&rr),
+            "Final sumcheck claim does not match direct evaluation"
+        );
     }
 }

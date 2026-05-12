@@ -74,6 +74,15 @@ where
     pending_claims: Vec<F>,
     #[cfg(feature = "zk")]
     pending_claim_ids: Vec<OpeningId>,
+    /// In ZK mode the prover suppresses cleartext transcript appends in
+    /// `append_virtual` / `append_dense`; transcript synchronisation comes
+    /// from the Pedersen commitments emitted by `BatchedSumcheck::prove_zk`
+    /// (or via auxiliary_claims for public scalars that are intentionally
+    /// re-appended with `zk_mode` toggled off on both sides — see the
+    /// Softmax aux-scalar path). `pending_claims` is still collected so the
+    /// downstream commit_chunked step can hide the claim values.
+    #[cfg(feature = "zk")]
+    pub zk_mode: bool,
 }
 
 /// Accumulates openings encountered by the verifier over the course of Jolt,
@@ -196,6 +205,8 @@ where
             pending_claims: Vec::new(),
             #[cfg(feature = "zk")]
             pending_claim_ids: Vec::new(),
+            #[cfg(feature = "zk")]
+            zk_mode: false,
         }
     }
 
@@ -262,7 +273,13 @@ where
         U: Copy + Send + Sync + Into<F>,
         F: Mul<U, Output = F>,
     {
-        transcript.append_scalar(&claim);
+        #[cfg(feature = "zk")]
+        let suppress = self.zk_mode;
+        #[cfg(not(feature = "zk"))]
+        let suppress = false;
+        if !suppress {
+            transcript.append_scalar(&claim);
+        }
 
         let shared_eq = self
             .eq_cycle_map
@@ -312,9 +329,15 @@ where
         U: Copy + Send + Sync + Into<F>,
         F: Mul<U, Output = F>,
     {
-        claims.iter().for_each(|claim| {
-            transcript.append_scalar(claim);
-        });
+        #[cfg(feature = "zk")]
+        let suppress = self.zk_mode;
+        #[cfg(not(feature = "zk"))]
+        let suppress = false;
+        if !suppress {
+            claims.iter().for_each(|claim| {
+                transcript.append_scalar(claim);
+            });
+        }
         let r_concat = [r_address.as_slice(), r_cycle.as_slice()].concat();
 
         let shared_eq_address = Arc::new(RwLock::new(EqAddressState::new(&r_address)));
@@ -371,7 +394,13 @@ where
             );
         }
 
-        transcript.append_scalar(&claim);
+        #[cfg(feature = "zk")]
+        let suppress = self.zk_mode;
+        #[cfg(not(feature = "zk"))]
+        let suppress = false;
+        if !suppress {
+            transcript.append_scalar(&claim);
+        }
 
         self.openings.insert(opening_id, (opening_point, claim));
         #[cfg(any(test, feature = "test-feature"))]
@@ -682,7 +711,19 @@ where
         T: Transcript,
         U: Copy + Send + Sync + Into<F>,
     {
-        let claim = if let Some((_, claim)) = self.openings.get(&opening_id) {
+        let claim = if self.zk_mode {
+            // ZK mode: stay transcript-quiet to mirror the prover, even if the
+            // key already exists from a prior append (see the matching comment
+            // in `append_virtual` above).
+            self.openings.insert(
+                opening_id,
+                (
+                    OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone()),
+                    F::zero(),
+                ),
+            );
+            F::zero()
+        } else if let Some((_, claim)) = self.openings.get(&opening_id) {
             // Standard mode: claim was pre-loaded.
             let claim = *claim;
             transcript.append_scalar(&claim);
@@ -694,16 +735,6 @@ where
                 ),
             );
             claim
-        } else if self.zk_mode {
-            // ZK mode: insert with placeholder claim. BlindFold handles correctness.
-            self.openings.insert(
-                opening_id,
-                (
-                    OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone()),
-                    F::zero(),
-                ),
-            );
-            F::zero()
         } else {
             panic!("Tried to populate dense opening for non-existent key: {opening_id:?}");
         };
@@ -734,13 +765,15 @@ where
     {
         for label in polynomials.into_iter() {
             let key = OpeningId::new(label, sumcheck);
-            let claim = if let Some((_, c)) = self.openings.get(&key) {
+            let claim = if self.zk_mode {
+                // ZK mode: stay transcript-quiet to mirror the prover, even
+                // if the key already exists from a prior append (see the
+                // matching comment in `append_virtual` above).
+                F::zero()
+            } else if let Some((_, c)) = self.openings.get(&key) {
                 let c = *c;
                 transcript.append_scalar(&c);
                 c
-            } else if self.zk_mode {
-                // ZK mode: insert placeholder. BlindFold handles correctness.
-                F::zero()
             } else {
                 panic!("Tried to populate sparse opening for non-existent key: {key:?}");
             };
@@ -781,18 +814,30 @@ where
             );
         }
 
-        if let Some((_, claim)) = self.openings.get(&opening_id) {
+        if self.zk_mode {
+            // ZK mode: stay transcript-quiet to mirror the prover (whose
+            // zk_mode also suppresses cleartext appends). We always (re)write
+            // a placeholder claim, even when the key already exists from a
+            // prior `append_virtual` call. This matters when the same
+            // `opening_id` is registered twice in a sumcheck batch (e.g.
+            // `SoftmaxExpQ` from both RecipMult and ExpSum cache_openings):
+            // without this, the second call would fall into the standard
+            // branch and emit a stray `transcript.append_scalar(F::zero())`
+            // that the prover does not produce. The actual claim is verified
+            // by BlindFold, not individually.
+            //
+            // Callers that publish a real cleartext claim (the Softmax
+            // auxiliary-scalar path) pre-populate `openings` AND toggle
+            // `zk_mode = false`, so they fall through to the standard branch
+            // below.
+            self.openings
+                .insert(opening_id, (opening_point.clone(), F::zero()));
+        } else if let Some((_, claim)) = self.openings.get(&opening_id) {
             // Standard mode: claim was pre-loaded. Append to transcript.
             transcript.append_scalar(claim);
             let claim = *claim;
             self.openings
                 .insert(opening_id, (opening_point.clone(), claim));
-        } else if self.zk_mode {
-            // ZK mode: key doesn't exist yet. Insert with placeholder claim (F::zero()).
-            // The actual claim is verified by BlindFold, not individually.
-            // Don't append to transcript; commitments are absorbed by verify_zk instead.
-            self.openings
-                .insert(opening_id, (opening_point.clone(), F::zero()));
         } else {
             panic!("Tried to populate opening point for non-existent key: {opening_id:?}");
         }

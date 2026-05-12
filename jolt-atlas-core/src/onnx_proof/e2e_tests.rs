@@ -146,6 +146,59 @@ fn test_gpt2() {
     );
 }
 
+/// ZK end-to-end test for GPT-2: exercises `prove_zk` + `verify_zk`.
+///
+/// Mirrors `test_gpt2` (same inputs, seed, and run args) so any divergence between
+/// the non-zk and ZK paths is visible against an identical workload. Ignored by
+/// default because it requires the GPT-2 ONNX model download. Run with:
+///
+/// ```bash
+/// cargo test --release --features zk --package jolt-atlas-core \
+///     -- --ignored test_gpt2_zk
+/// ```
+#[cfg(feature = "zk")]
+#[ignore = "requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)"]
+#[test]
+fn test_gpt2_zk() {
+    let working_dir = "../atlas-onnx-tracer/models/gpt2/";
+    let mut rng = StdRng::seed_from_u64(42);
+    let seq_len: usize = 16;
+    let vocab_size: i32 = 50257;
+
+    let input_ids_data: Vec<i32> = (0..seq_len).map(|_| rng.gen_range(0..vocab_size)).collect();
+    let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
+
+    let position_ids_data: Vec<i32> = (0..seq_len as i32).collect();
+    let position_ids = Tensor::new(Some(&position_ids_data), &[1, seq_len]).unwrap();
+
+    let attention_mask_data: Vec<i32> = vec![SCALE; seq_len];
+    let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
+
+    let run_args = RunArgs::new([
+        ("batch_size", 1),
+        ("sequence_length", seq_len),
+        ("past_sequence_length", 0),
+    ])
+    .with_pre_rebase_nonlinear(true);
+
+    let model = Model::load(&format!("{working_dir}network.onnx"), &run_args);
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+
+    let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
+        joltworks::curve::Bn254Curve,
+    >::deterministic(4096);
+
+    let (bundle, io) = crate::onnx_proof::zk::prove_zk(
+        &prover_pp,
+        &[input_ids, position_ids, attention_mask],
+        &gens,
+    );
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
+        .expect("ZK verification should succeed");
+}
+
 #[ignore = "requires BGE ONNX model download (run scripts/download_bge_small_en_v1_5.py first)"]
 #[test]
 fn test_bge_small_en_v1_5() {

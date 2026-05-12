@@ -168,6 +168,17 @@ fn prove_zk_eval_reduction(
 
     let node_idx = node.idx;
     let openings = prover.accumulator.get_node_openings(node_idx);
+    if openings.is_empty() {
+        // Mirror verify_zk_eval_reduction (zk.rs:204-209): nodes whose
+        // consumers did not call cache_openings in the ZK path have no
+        // openings to reduce. Skip; the verifier handles this symmetrically.
+        // Safe for no-sumcheck operators (Input/Identity/Broadcast/MoveAxis/
+        // Constant/IsNan/Clamp). For default-branch operators, the subsequent
+        // sumcheck setup will panic looking up `reduced_evaluations[node]`;
+        // that indicates a missing `cache_openings` call in the consumer's
+        // ZK prove flow and is a real bug, not something to paper over here.
+        return;
+    }
     let LayerData {
         operands: _,
         output,
@@ -1247,8 +1258,14 @@ fn prove_softmax_zk(
         base,
     };
 
+    // Public auxiliary scalars: toggle off prover zk_mode so the cleartext
+    // claims are appended to the transcript. The verifier toggles its own
+    // zk_mode off symmetrically (see verify_softmax_zk).
+    let saved_zk_mode = prover.accumulator.zk_mode;
+    prover.accumulator.zk_mode = false;
     sm.send_auxiliary_vectors(prover);
     sm.cache_exp_sum(prover);
+    prover.accumulator.zk_mode = saved_zk_mode;
 
     // Capture only PUBLIC auxiliary claims for the verifier.
     // These are verifier-computable from the auxiliary vectors sent via transcript.
@@ -1760,6 +1777,13 @@ pub fn prove_zk(
     let trace = pp.model().trace(inputs);
     let io = Trace::io(&trace, pp.model());
     let mut prover = Prover::<F, T>::new(pp.shared.clone(), trace);
+    // Mirror the verifier's `VerifierOpeningAccumulator::new_zk` default: the
+    // ZK pipeline hides cleartext opening claims behind Pedersen commitments
+    // (emitted by BatchedSumcheck::prove_zk), so the prover must NOT append
+    // raw claims to the transcript in `append_virtual` / `append_dense`. Code
+    // paths that intentionally publish a claim in the clear (e.g. Softmax's
+    // public auxiliary vectors) toggle this flag off and back on.
+    prover.accumulator.zk_mode = true;
 
     let (poly_map, commitments) = ONNXProof::<F, T, PCS>::commit_witness_polynomials(
         pp.model(),
@@ -1767,7 +1791,15 @@ pub fn prove_zk(
         &pp.generators,
         &mut prover.transcript,
     );
-    ONNXProof::<F, T, PCS>::output_claim(&mut prover);
+    // The output claim is a public scalar derived from IO; both prover and
+    // verifier (`verify_zk` does `transcript.append_scalar(&expected_output_claim)`)
+    // append it in the clear. Toggle prover zk_mode off so its append fires.
+    {
+        let saved = prover.accumulator.zk_mode;
+        prover.accumulator.zk_mode = false;
+        ONNXProof::<F, T, PCS>::output_claim(&mut prover);
+        prover.accumulator.zk_mode = saved;
+    }
 
     // Capture the output claim for the verifier. This is public (derived from IO).
     // Computed the same way as ONNXProof::output_claim: evaluate output MLE at
@@ -1888,16 +1920,10 @@ pub fn prove_zk(
                 &mut eval_reduction_h_commitments,
                 &mut zk_sumcheck_proofs,
             ),
-            // No-sumcheck ops: eval reduction only, no execution sumcheck.
-            // Clamp is a no-op in the ZK pipeline (prover and verifier both
-            // skip the sumcheck step).
-            Operator::Input(_)
-            | Operator::Identity(_)
-            | Operator::Broadcast(_)
-            | Operator::MoveAxis(_)
-            | Operator::Constant(_)
-            | Operator::IsNan(_)
-            | Operator::Clamp(_) => {
+            // No-sumcheck ops that don't register openings on inputs.
+            // Constants and Inputs have no inputs to cache; their non-zk
+            // `prove` is a no-op apart from a sanity read of `get_reduced_opening`.
+            Operator::Input(_) | Operator::Constant(_) => {
                 prove_zk_eval_reduction(
                     node,
                     &mut prover,
@@ -1905,6 +1931,87 @@ pub fn prove_zk(
                     &mut eval_reduction_proofs,
                     &mut eval_reduction_h_commitments,
                 );
+            }
+            // No-sumcheck ops that DO register openings on their input(s).
+            // The non-zk path runs eval reduction then the operator's `prove`,
+            // which appends a `Target::Input(0)` opening so the producer's
+            // openings list is non-empty when it's processed. Mirror that
+            // here, otherwise default-branch producers (e.g. ScalarConstDiv
+            // feeding a Broadcast) hit empty openings and the subsequent
+            // sumcheck setup panics.
+            // No-sumcheck ops that register an opening on their input. Each
+            // op's prove flow appends `Target::Input(0)` via `append_nodeio`.
+            // With `prover.accumulator.zk_mode = true`, those calls are
+            // transcript-quiet on the prover; the verifier (also zk_mode on)
+            // is symmetric, so no auxiliary_claims dance is needed here.
+            Operator::Broadcast(_) => {
+                prove_zk_eval_reduction(
+                    node,
+                    &mut prover,
+                    pedersen_gens,
+                    &mut eval_reduction_proofs,
+                    &mut eval_reduction_h_commitments,
+                );
+                if prover.accumulator.reduced_evaluations.contains_key(&node.idx) {
+                    use crate::onnx_proof::ops::broadcast::{BroadcastParams, BroadcastProver};
+                    let params = BroadcastParams::new(node.clone(), &prover.accumulator);
+                    let bp = BroadcastProver::initialize(&prover.trace, params);
+                    bp.prove(&mut prover.accumulator, &mut prover.transcript);
+                }
+            }
+            Operator::MoveAxis(_) => {
+                prove_zk_eval_reduction(
+                    node,
+                    &mut prover,
+                    pedersen_gens,
+                    &mut eval_reduction_proofs,
+                    &mut eval_reduction_h_commitments,
+                );
+                if prover.accumulator.reduced_evaluations.contains_key(&node.idx) {
+                    use crate::onnx_proof::ops::moveaxis::{MoveAxisParams, MoveAxisProver};
+                    let params = MoveAxisParams::new(node.clone(), &prover.accumulator);
+                    let mp = MoveAxisProver::initialize(params);
+                    mp.prove(&mut prover.accumulator, &mut prover.transcript);
+                }
+            }
+            Operator::Identity(op) => {
+                prove_zk_eval_reduction(
+                    node,
+                    &mut prover,
+                    pedersen_gens,
+                    &mut eval_reduction_proofs,
+                    &mut eval_reduction_h_commitments,
+                );
+                if prover.accumulator.reduced_evaluations.contains_key(&node.idx) {
+                    use crate::onnx_proof::ops::OperatorProofTrait;
+                    let _ = OperatorProofTrait::<F, T>::prove(op, node, &mut prover);
+                }
+            }
+            Operator::IsNan(op) => {
+                prove_zk_eval_reduction(
+                    node,
+                    &mut prover,
+                    pedersen_gens,
+                    &mut eval_reduction_proofs,
+                    &mut eval_reduction_h_commitments,
+                );
+                if prover.accumulator.reduced_evaluations.contains_key(&node.idx) {
+                    use crate::onnx_proof::ops::OperatorProofTrait;
+                    let _ = OperatorProofTrait::<F, T>::prove(op, node, &mut prover);
+                }
+            }
+            Operator::Clamp(op) => {
+                prove_zk_eval_reduction(
+                    node,
+                    &mut prover,
+                    pedersen_gens,
+                    &mut eval_reduction_proofs,
+                    &mut eval_reduction_h_commitments,
+                );
+                if prover.accumulator.reduced_evaluations.contains_key(&node.idx) {
+                    use crate::onnx_proof::ops::OperatorProofTrait;
+                    let _ = OperatorProofTrait::<F, T>::prove(op, node, &mut prover);
+                }
             }
             // MeanOfSquares is not yet implemented in `create_prover_instance`
             // (it falls into the panic catch-all). Surface that here as an
@@ -2300,14 +2407,46 @@ pub fn verify_zk(
             // prover treats as a no-op via `create_prover_instance` returning
             // `None`) are listed explicitly below and skip the
             // sumcheck-instances call.
-            Operator::Input(_)
-            | Operator::Identity(_)
-            | Operator::Broadcast(_)
-            | Operator::MoveAxis(_)
-            | Operator::Constant(_)
-            | Operator::IsNan(_)
-            | Operator::Clamp(_) => {
+            // No-sumcheck ops that don't register openings on inputs.
+            Operator::Input(_) | Operator::Constant(_) => {
                 verify_zk_eval_reduction(node, bundle, &mut accumulator, &mut transcript)?;
+            }
+            // No-sumcheck ops that DO register openings on their input(s).
+            // Mirror the prover-side input caching (see the matching arms in
+            // `prove_zk`) so the producer's openings list is populated.
+            // No-sumcheck ops that register an opening on their input. With
+            // `accumulator.zk_mode = true`, the verifier's `append_nodeio`
+            // hits the placeholder branch and stays transcript-quiet,
+            // mirroring the prover. Each op's verify() also internally
+            // compares the input opening claim against the node's reduced
+            // claim; in ZK both are the placeholder F::zero(), so the check
+            // passes trivially (BlindFold enforces the real algebraic
+            // identity via its R1CS).
+            Operator::Broadcast(_) => {
+                verify_zk_eval_reduction(node, bundle, &mut accumulator, &mut transcript)?;
+                if accumulator.reduced_evaluations.contains_key(&node.idx) {
+                    use crate::onnx_proof::ops::broadcast::BroadcastVerifier;
+                    let bv = BroadcastVerifier::new(node.clone(), &accumulator, &model.graph);
+                    bv.verify(&mut accumulator, &mut transcript)?;
+                }
+            }
+            Operator::MoveAxis(_) => {
+                verify_zk_eval_reduction(node, bundle, &mut accumulator, &mut transcript)?;
+                if accumulator.reduced_evaluations.contains_key(&node.idx) {
+                    use crate::onnx_proof::ops::moveaxis::MoveAxisVerifier;
+                    let mv = MoveAxisVerifier::new(node.clone(), &accumulator);
+                    mv.verify(&mut accumulator, &mut transcript)?;
+                }
+            }
+            Operator::Identity(_) | Operator::IsNan(_) | Operator::Clamp(_) => {
+                verify_zk_eval_reduction(node, bundle, &mut accumulator, &mut transcript)?;
+                if accumulator.reduced_evaluations.contains_key(&node.idx) {
+                    use crate::utils::opening_access::{AccOpeningAccessor, Target};
+                    let accessor = AccOpeningAccessor::new(&mut accumulator, node);
+                    let (opening_point, _claim) = accessor.get_reduced_opening();
+                    let mut provider = accessor.into_provider(&mut transcript, opening_point);
+                    provider.append_nodeio(Target::Input(0));
+                }
             }
             // MeanOfSquares is not yet implemented on the prover side
             // (`create_prover_instance` falls through to its panic arm). Mirror

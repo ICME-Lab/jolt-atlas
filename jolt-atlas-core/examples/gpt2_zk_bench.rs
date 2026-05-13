@@ -19,6 +19,26 @@ fn main() {
 
 #[cfg(feature = "zk")]
 fn main() {
+    // Configure the global rayon pool BEFORE any other rayon use. Two things to
+    // cap:
+    // - stack size: the ZK pipeline does deep MLE work that overflows rayon's
+    //   default 2 MB worker stack on GPT-2-sized polynomials.
+    // - thread count: the patched arkworks MSM
+    //   (`ec/src/scalar_mul/variable_base/mod.rs:813-857`) builds a fresh
+    //   nested 2-thread `rayon::ThreadPoolBuilder` per MSM chunk per call,
+    //   spawning `current_num_threads / 2` chunks each time. With default
+    //   rayon (≈ num CPUs) and many MSMs in rapid succession we hit macOS's
+    //   per-process pthread limit (`pthread_create` → EAGAIN).
+    //
+    // Setting this programmatically here removes the need for `RUST_MIN_STACK`
+    // and `RAYON_NUM_THREADS` env vars on the command line. `build_global`
+    // errors if rayon was already initialised; that's fine, we just leave the
+    // existing pool in place (user-set env vars win).
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .stack_size(32 * 1024 * 1024)
+        .build_global();
+
     use atlas_onnx_tracer::{
         model::{Model, RunArgs},
         tensor::Tensor,

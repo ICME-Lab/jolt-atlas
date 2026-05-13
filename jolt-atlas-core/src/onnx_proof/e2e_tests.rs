@@ -160,6 +160,16 @@ fn test_gpt2() {
 #[ignore = "requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)"]
 #[test]
 fn test_gpt2_zk() {
+    // Cap rayon to keep arkworks' nested per-MSM-chunk `ThreadPoolBuilder`
+    // under macOS's per-process pthread limit, and bump the worker stack
+    // for the ZK pipeline's deep MLE recursion. See the matching comment in
+    // `examples/gpt2_zk_bench.rs`. `build_global` is a no-op if rayon is
+    // already initialised, so this respects user-set env vars.
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .stack_size(32 * 1024 * 1024)
+        .build_global();
+
     let working_dir = "../atlas-onnx-tracer/models/gpt2/";
     let mut rng = StdRng::seed_from_u64(42);
     let seq_len: usize = 16;

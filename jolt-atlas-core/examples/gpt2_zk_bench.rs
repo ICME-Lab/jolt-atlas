@@ -19,25 +19,26 @@ fn main() {
 
 #[cfg(feature = "zk")]
 fn main() {
-    // Configure the global rayon pool BEFORE any other rayon use. Two things to
-    // cap:
-    // - stack size: the ZK pipeline does deep MLE work that overflows rayon's
-    //   default 2 MB worker stack on GPT-2-sized polynomials.
-    // - thread count: the patched arkworks MSM
-    //   (`ec/src/scalar_mul/variable_base/mod.rs:813-857`) builds a fresh
-    //   nested 2-thread `rayon::ThreadPoolBuilder` per MSM chunk per call,
-    //   spawning `current_num_threads / 2` chunks each time. With default
-    //   rayon (≈ num CPUs) and many MSMs in rapid succession we hit macOS's
-    //   per-process pthread limit (`pthread_create` → EAGAIN).
+    // Build a bounded local rayon pool used ONLY for the ZK prove/verify
+    // calls below. Two reasons to scope this locally rather than globally:
+    //  - stack size: the ZK pipeline does deep MLE work that overflows
+    //    rayon's default 2 MB worker stack on GPT-2-sized polynomials.
+    //  - thread count: the patched arkworks MSM
+    //    (`ec/src/scalar_mul/variable_base/mod.rs:813-857`) builds a fresh
+    //    nested 2-thread `rayon::ThreadPoolBuilder` per MSM chunk per call,
+    //    spawning `current_num_threads / 2` chunks each time. With default
+    //    rayon (≈ num CPUs) and many MSMs in rapid succession we hit macOS's
+    //    per-process pthread limit (`pthread_create` → EAGAIN).
     //
-    // Setting this programmatically here removes the need for `RUST_MIN_STACK`
-    // and `RAYON_NUM_THREADS` env vars on the command line. `build_global`
-    // errors if rayon was already initialised; that's fine, we just leave the
-    // existing pool in place (user-set env vars win).
-    let _ = rayon::ThreadPoolBuilder::new()
+    // A *global* pool change would also throttle the non-zk path; we want
+    // the non-zk numbers to reflect full-parallelism performance, so we
+    // only `install` this pool around the ZK calls. Real fix would be
+    // upstream arkworks reusing a single pool across MSM chunks.
+    let zk_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(2)
         .stack_size(32 * 1024 * 1024)
-        .build_global();
+        .build()
+        .expect("failed to build ZK rayon pool");
 
     use atlas_onnx_tracer::{
         model::{Model, RunArgs},
@@ -113,7 +114,8 @@ fn main() {
     >::deterministic(4096);
 
     let t = std::time::Instant::now();
-    let (bundle, zk_io) = jolt_atlas_core::onnx_proof::zk::prove_zk(&prover_pp, &inputs, &gens);
+    let (bundle, zk_io) = zk_pool
+        .install(|| jolt_atlas_core::onnx_proof::zk::prove_zk(&prover_pp, &inputs, &gens));
     let zk_prove = t.elapsed();
     println!("prove:  {:.2?}", zk_prove);
 
@@ -125,7 +127,8 @@ fn main() {
     );
 
     let t = std::time::Instant::now();
-    jolt_atlas_core::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &zk_io, &gens)
+    zk_pool
+        .install(|| jolt_atlas_core::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &zk_io, &gens))
         .expect("ZK verification should succeed");
     let zk_verify = t.elapsed();
     println!("verify: {:.2?}", zk_verify);

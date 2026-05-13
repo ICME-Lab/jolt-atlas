@@ -7,7 +7,7 @@
 
 use crate::onnx_proof::{AtlasProverPreprocessing, AtlasVerifierPreprocessing, ONNXProof, Prover};
 use ark_bn254::{Bn254, Fr};
-use ark_std::Zero;
+use ark_std::{One, Zero};
 use atlas_onnx_tracer::{
     model::trace::{ModelExecutionIO, Trace},
     ops::Operator,
@@ -85,6 +85,28 @@ pub struct ZkProofBundle {
     /// Auxiliary opening claims that must be pre-populated in the verifier accumulator.
     /// In the non-ZK flow, these come from ONNXProof::opening_claims::populate_accumulator.
     pub auxiliary_claims: BTreeMap<joltworks::poly::opening_proof::OpeningId, F>,
+    /// PCS opening proof on the joint (gamma-weighted RLC) polynomial at the
+    /// batched-opening-reduction point `r_sumcheck`. Together with the
+    /// homomorphically-combined commitment, this is what binds `bundle.commitments`
+    /// to a specific evaluation. Reveals `joint_claim` in cleartext (one
+    /// gamma-weighted aggregate scalar; per-poly y_P_i values remain hidden).
+    /// `None` when `poly_map` is empty (no committed polynomials).
+    ///
+    /// NOTE: this is Step 8 of the wiki design. Full ZK for `joint_claim`
+    /// would require a hiding/ZK extension to HyperKZG (none today).
+    pub joint_opening_proof: Option<<PCS as CommitmentScheme>::Proof>,
+    /// Cleartext joint claim revealed by the PCS opening.
+    pub joint_claim: Option<F>,
+    /// The opening point `r_sumcheck` used for `joint_opening_proof`,
+    /// in `F::Challenge` form so it can feed `PCS::verify` directly.
+    pub joint_opening_point: Option<Vec<<F as joltworks::field::JoltField>::Challenge>>,
+    /// ZK proof for the batched-opening reduction sumcheck. The verifier
+    /// re-absorbs its `round_commitments` into the main transcript so the
+    /// transcript state at the y_com / PCS::verify points matches the prover.
+    /// (BlindFold also re-verifies this stage internally via its R1CS; the
+    /// bundle copy is purely for main-transcript replay.)
+    pub batch_opening_zk_sumcheck:
+        Option<joltworks::subprotocols::sumcheck::ZkSumcheckProof<F, C, T>>,
 }
 
 /// Run a single-instance ZK sumcheck and collect stage data.
@@ -2059,38 +2081,159 @@ pub fn prove_zk(
         }
     }
 
-    // y_com for batch opening (no-op when poly_map is empty)
+    // y_com for batch opening (no-op when poly_map is empty).
+    //
+    // ZK path: route the batched-opening sumcheck through `BatchedSumcheck::prove_zk`
+    // (via `prove_batch_opening_sumcheck_zk`) so its round polynomials are Pedersen-
+    // committed and the stage data flows into `BlindFoldAccumulator::stage_data`,
+    // letting the BlindFold R1CS prove sumcheck-validity instead of leaking
+    // per-poly claims through the transcript. Output-claim binding to `y_com`
+    // (eval_commitment_gens machinery) is wired in subsequent steps; the
+    // current `Opening<F>::output_claim_constraint` returns `None`, so the
+    // BlindFold R1CS does not yet enforce the sumcheck output. See
+    // wiki/jolt-atlas/book/src/underway/batched-opening-sound-verifier.md.
+    // Captured for the BlindFold `extra_constraint` that ties the y_com
+    // commitment to `sum gamma_i * y_P_i` (where y_P_i = P_i(r_sumcheck)).
+    // Empty when there are no committed polynomials (poly_map is empty).
+    let mut joint_eval_commitment: Option<joltworks::curve::Bn254G1> = None;
+    let mut batch_opening_extra_constraint:
+        Option<joltworks::subprotocols::blindfold::output_constraint::OutputClaimConstraint> = None;
+    let mut batch_opening_extra_witness:
+        Option<joltworks::subprotocols::blindfold::witness::ExtraConstraintWitness<F>> = None;
+    // Step 8 (PCS-binding): PCS opening proof for the joint polynomial at
+    // r_sumcheck. Binds `bundle.commitments` to the joint evaluation.
+    let mut joint_opening_proof: Option<<PCS as CommitmentScheme>::Proof> = None;
+    let mut joint_claim_value: Option<F> = None;
+    let mut joint_opening_point: Option<Vec<<F as joltworks::field::JoltField>::Challenge>> = None;
+    let mut batch_opening_zk_sumcheck = None;
     if !poly_map.is_empty() {
         prover.accumulator.prepare_for_sumcheck(&poly_map);
-        let (_acc_proof, r_sumcheck_acc) = prover
+        let mut rng = rand::thread_rng();
+        let (zk_acc_proof, r_sumcheck_acc) = prover
             .accumulator
-            .prove_batch_opening_sumcheck(&mut prover.transcript);
+            .prove_batch_opening_sumcheck_zk::<T, C, _>(
+                &mut blindfold_accumulator,
+                &mut stage_configs,
+                pedersen_gens,
+                &mut rng,
+                &mut prover.transcript,
+            );
+        batch_opening_zk_sumcheck = Some(zk_acc_proof);
         let state = prover
             .accumulator
             .finalize_batch_opening_sumcheck(r_sumcheck_acc, &mut prover.transcript);
 
-        let joint_claim: F = state.sumcheck_claims.iter().sum();
+        // Compute effective coefficients = gamma_i * lagrange_i, where
+        // lagrange_i is the product over the high-order r_sumcheck variables
+        // that polynomial i does not depend on. This matches the existing
+        // non-zk `compute_joint_claim` so that
+        //   joint_poly(r_sumcheck) = sum_i (gamma_i * lagrange_i) * y_P_i
+        // i.e. the materialized RLC of `poly_map` (which pads short polys
+        // with zeros) evaluated at `r_sumcheck` equals the algebraic
+        // combination of per-poly evaluations weighted by the lagrange term.
+        // Polynomials with `num_rounds == max_num_rounds` have empty
+        // r_high, so lagrange_i = 1 (no effect).
+        let max_num_rounds = state.r_sumcheck.len();
+        use joltworks::field::OptimizedMul;
+        let num_rounds_per_poly: Vec<usize> = state
+            .polynomials
+            .iter()
+            .map(|poly| {
+                let p = poly_map
+                    .get(poly)
+                    .expect("polynomial in state.polynomials must be in poly_map");
+                match p {
+                    joltworks::poly::multilinear_polynomial::MultilinearPolynomial::OneHot(oh) => {
+                        (oh.K * oh.nonzero_indices.len()).log_2()
+                    }
+                    _ => p.original_len().log_2(),
+                }
+            })
+            .collect();
+        let effective_coeffs: Vec<F> = state
+            .gamma_powers
+            .iter()
+            .zip(num_rounds_per_poly.iter())
+            .map(|(g, num_rounds)| {
+                let r_slice = &state.r_sumcheck[..max_num_rounds - num_rounds];
+                let lagrange_eval: F = r_slice
+                    .iter()
+                    .map(|r| F::one() - *r)
+                    .product();
+                g.mul_01_optimized(lagrange_eval)
+            })
+            .collect();
+
+        let joint_claim: F = effective_coeffs
+            .iter()
+            .zip(state.sumcheck_claims.iter())
+            .map(|(c, claim)| *c * claim)
+            .sum();
         let y_blinding = F::random(&mut rand::thread_rng());
         let y_com = pedersen_gens.commit(&[joint_claim], &y_blinding);
         prover.transcript.append_serializable(&y_com);
 
+        // Build the BlindFold `extra_constraint`:
+        //   joint_claim = sum_i (gamma_i * lagrange_i) * y_P_i
+        // where each y_P_i is the opening registered by
+        // `OpeningProofReductionSumcheckProver::cache_openings` at
+        // (CommittedPoly_i, SumcheckId::BlindFoldBatchOpening).
+        use joltworks::poly::opening_proof::{OpeningId, SumcheckId as SId};
+        use joltworks::subprotocols::blindfold::output_constraint::{
+            OutputClaimConstraint, ValueSource,
+        };
+        use joltworks::subprotocols::blindfold::witness::ExtraConstraintWitness;
+        let opening_ids: Vec<OpeningId> = state
+            .polynomials
+            .iter()
+            .map(|poly| OpeningId::new(*poly, SId::BlindFoldBatchOpening))
+            .collect();
+        let terms: Vec<(ValueSource, ValueSource)> = opening_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (ValueSource::Challenge(i), ValueSource::Opening(*id)))
+            .collect();
+        batch_opening_extra_constraint =
+            Some(OutputClaimConstraint::linear(terms));
+        batch_opening_extra_witness = Some(ExtraConstraintWitness {
+            output_value: joint_claim,
+            blinding: y_blinding,
+            challenge_values: effective_coeffs.clone(),
+            opening_values: state.sumcheck_claims.clone(),
+        });
+        joint_eval_commitment = Some(y_com);
+
+        // Keep the legacy OpeningProofData hook populated for any consumer
+        // that still reads it (none currently, but cheap).
         blindfold_accumulator.set_opening_proof_data(
             joltworks::subprotocols::blindfold::OpeningProofData {
-                opening_ids: state
-                    .polynomials
-                    .iter()
-                    .map(|poly| {
-                        joltworks::poly::opening_proof::OpeningId::new(
-                            *poly,
-                            joltworks::poly::opening_proof::SumcheckId::BlindFoldBatchOpening,
-                        )
-                    })
-                    .collect(),
-                constraint_coeffs: state.gamma_powers.clone(),
+                opening_ids,
+                constraint_coeffs: effective_coeffs.clone(),
                 joint_claim,
                 y_blinding,
             },
         );
+
+        // Step 8: produce the PCS opening proof on the joint polynomial.
+        // Materialise the gamma-weighted RLC of poly_map and prove its opening
+        // at r_sumcheck. The verifier homomorphically combines `bundle.commitments`
+        // with `gamma_powers` to reconstruct the same joint commitment.
+        let r_sumcheck_acc: Vec<<F as joltworks::field::JoltField>::Challenge> =
+            state.r_sumcheck.clone();
+        let joint_poly = joltworks::poly::rlc_polynomial::build_materialized_rlc(
+            &state.gamma_powers,
+            &poly_map,
+        );
+        let opening_proof = PCS::prove(
+            &pp.generators,
+            &joint_poly,
+            &r_sumcheck_acc,
+            None,
+            &mut prover.transcript,
+        );
+        joint_opening_proof = Some(opening_proof);
+        joint_claim_value = Some(joint_claim);
+        joint_opening_point = Some(r_sumcheck_acc);
     }
 
     // Build BlindFold proof from accumulated stage data
@@ -2191,10 +2334,32 @@ pub fn prove_zk(
         .filter(|(i, _)| stage_configs[*i].starts_new_chain || *i == 0)
         .map(|(_, sd)| sd.initial_claim)
         .collect();
-    let blindfold_witness =
-        BlindFoldWitness::with_extra_constraints(initial_claims, all_stages, vec![]);
+    // Plumb the batched-opening extra constraint (if any) into both witness
+    // and R1CS so the BlindFold R1CS enforces
+    //   joint_claim = sum_i gamma_i * y_P_i   AND   y_com = g * joint_claim + h * y_blinding.
+    // The latter is enforced via BlindFold's `eval_commitment_gens` check; the
+    // y_com is placed in `RelaxedR1CSInstance::eval_commitments` below.
+    let extra_constraints_for_r1cs: Vec<_> = batch_opening_extra_constraint
+        .clone()
+        .into_iter()
+        .collect();
+    let extra_constraint_witnesses: Vec<_> = batch_opening_extra_witness
+        .clone()
+        .into_iter()
+        .collect();
+    let blindfold_witness = BlindFoldWitness::with_extra_constraints(
+        initial_claims,
+        all_stages,
+        extra_constraint_witnesses,
+    );
     let baked = BakedPublicInputs::from_witness(&blindfold_witness, &stage_configs);
-    let builder = VerifierR1CSBuilder::<F>::new(&stage_configs, &baked);
+    let builder = VerifierR1CSBuilder::<F>::new_with_extra(
+        &stage_configs,
+        &extra_constraints_for_r1cs,
+        &baked,
+        Vec::new(),
+        std::collections::BTreeMap::new(),
+    );
     let r1cs = builder.build();
 
     let z = blindfold_witness.assign(&r1cs);
@@ -2235,6 +2400,8 @@ pub fn prove_zk(
         w_row_blindings[R_coeff + row] = blinding;
     }
 
+    let eval_commitments: Vec<joltworks::curve::Bn254G1> =
+        joint_eval_commitment.into_iter().collect();
     let (real_instance, real_witness) = RelaxedR1CSInstance::<F, C>::new_non_relaxed(
         &witness,
         r1cs.num_constraints,
@@ -2242,11 +2409,24 @@ pub fn prove_zk(
         round_commitments,
         Vec::new(),
         noncoeff_row_commitments,
-        Vec::new(),
+        eval_commitments,
         w_row_blindings,
     );
 
-    let bf_prover = BlindFoldProver::new(pedersen_gens, &r1cs, None);
+    // `eval_commitment_gens = Some((g, h))` activates BlindFold's
+    // eval-commitment check (protocol.rs:349-362): for every extra constraint
+    // it verifies the folded `eval_commitment_i == g * folded_output_i + h *
+    // folded_blinding_i`. With the batched-opening extra constraint in place,
+    // this is what binds `y_com` to the BlindFold R1CS witness.
+    let eval_commitment_gens = if batch_opening_extra_constraint.is_some() {
+        Some((
+            pedersen_gens.message_generators[0],
+            pedersen_gens.blinding_generator,
+        ))
+    } else {
+        None
+    };
+    let bf_prover = BlindFoldProver::new(pedersen_gens, &r1cs, eval_commitment_gens);
     let mut bf_transcript = T::new(b"BlindFold_onnx");
     let blindfold_proof = bf_prover.prove(&real_instance, &real_witness, &z, &mut bf_transcript);
 
@@ -2273,6 +2453,10 @@ pub fn prove_zk(
         zk_sumcheck_num_instances,
         inter_stage_commitments,
         auxiliary_claims,
+        joint_opening_proof,
+        joint_claim: joint_claim_value,
+        joint_opening_point,
+        batch_opening_zk_sumcheck,
     };
 
     (bundle, io)
@@ -2286,11 +2470,41 @@ pub fn prove_zk(
 ///    sumcheck commitments into transcript (mirroring the prover's flow).
 /// 3. BlindFold proof verifies (covers sumcheck round consistency and
 ///    constraint satisfaction).
+/// Snapshot of the inputs to the final HyperKZG verification step inside
+/// [`verify_zk`], captured by [`verify_zk_with_pcs_capture`] right before
+/// the call to `PCS::verify`. External tools (e.g., zkARc's pi-prime
+/// extractor) use this to derive the verifier-side MSM trace at the exact
+/// transcript state that the verifier reaches.
+#[derive(Clone)]
+pub struct PcsVerifyCapture {
+    pub joint_commitment: <PCS as joltworks::poly::commitment::commitment_scheme::CommitmentScheme>::Commitment,
+    pub opening_proof: <PCS as joltworks::poly::commitment::commitment_scheme::CommitmentScheme>::Proof,
+    pub opening_point: Vec<<F as JoltField>::Challenge>,
+    pub joint_claim: F,
+    pub transcript: T,
+}
+
 pub fn verify_zk(
     bundle: &ZkProofBundle,
     pp: &AtlasVerifierPreprocessing<F, PCS>,
     io: &ModelExecutionIO,
     pedersen_gens: &PedersenGenerators<C>,
+) -> Result<(), ProofVerifyError> {
+    verify_zk_with_pcs_capture(bundle, pp, io, pedersen_gens, None)
+}
+
+/// Same as [`verify_zk`] but exposes an optional slot for capturing the
+/// inputs to the final HyperKZG verification. When `capture` is `Some`,
+/// the slot is filled in right before `PCS::verify` runs; the verifier
+/// then continues normally. Used by external auto-builders to extract
+/// the verifier's MSM trace without having to mirror the entire
+/// transcript walk.
+pub fn verify_zk_with_pcs_capture(
+    bundle: &ZkProofBundle,
+    pp: &AtlasVerifierPreprocessing<F, PCS>,
+    io: &ModelExecutionIO,
+    pedersen_gens: &PedersenGenerators<C>,
+    mut capture: Option<&mut Option<PcsVerifyCapture>>,
 ) -> Result<(), ProofVerifyError> {
     use joltworks::poly::opening_proof::VerifierOpeningAccumulator;
 
@@ -2491,10 +2705,86 @@ pub fn verify_zk(
         }
     }
 
+    // Batched-opening reduction (Steps 6-8 of the wiki plan): mirror the
+    // prover-side flow. Order matches the prover:
+    //   1. derive gamma_powers from transcript (the cleartext per-poly claim
+    //      append is suppressed on both sides in ZK mode),
+    //   2. absorb y_com into the transcript,
+    //   3. build the extra constraint linking joint_claim to per-poly y_P_i's,
+    //   4. run BlindFold (R1CS proves sumcheck + extra constraint),
+    //   5. run PCS::verify on the joint commitment so `bundle.commitments`
+    //      bind to `joint_claim` at the reduced point (Step 8).
+    let extra_constraints_for_r1cs: Vec<_>;
+    let eval_commitment_gens_v;
+    let gamma_powers_v: Vec<F>;
+    if let Some(y_com) = bundle.blindfold_verifier_input.eval_commitments.first() {
+        // Replay the prover-side absorbs from `prove_batch_opening_sumcheck_zk`
+        // and `finalize_batch_opening_sumcheck` into the main transcript:
+        // (a) each round commitment from the batched-opening sumcheck (so
+        //     batching coefficients and round challenges line up with the
+        //     prover's BlindFold stage), then (b) the gamma_powers derivation,
+        //     then (c) y_com. Order matters; deviating here desyncs the
+        //     transcript at the PCS::verify point downstream.
+        let batch_zk = bundle.batch_opening_zk_sumcheck.as_ref().ok_or_else(|| {
+            ProofVerifyError::InvalidOpeningProof(
+                "Missing batch_opening_zk_sumcheck in bundle".to_string(),
+            )
+        })?;
+        let opening_ids: Vec<joltworks::poly::opening_proof::OpeningId> = accumulator
+            .sumchecks_keys()
+            .map(|poly| {
+                joltworks::poly::opening_proof::OpeningId::new(
+                    poly,
+                    joltworks::poly::opening_proof::SumcheckId::BlindFoldBatchOpening,
+                )
+            })
+            .collect();
+        // (a) batching coefficients (consumes `opening_ids.len()` scalars).
+        let _batching_coeffs: Vec<F> = transcript.challenge_vector(opening_ids.len());
+        // round commitments + per-round challenge derivation
+        for round_com in &batch_zk.round_commitments {
+            transcript.append_serializable(round_com);
+            let _r_j: <F as joltworks::field::JoltField>::Challenge =
+                transcript.challenge_scalar_optimized::<F>();
+        }
+        // (output_claims_commitments are absorbed at the tail of BatchedSumcheck::prove_zk)
+        for com in &batch_zk.output_claims_commitments {
+            transcript.append_serializable(com);
+        }
+        // (b) gamma derivation -- cleartext claim append is suppressed on both
+        //     sides in ZK mode, so we just sample.
+        gamma_powers_v = transcript.challenge_scalar_powers(opening_ids.len());
+        // (c) y_com.
+        transcript.append_serializable(y_com);
+        use joltworks::subprotocols::blindfold::output_constraint::{
+            OutputClaimConstraint, ValueSource,
+        };
+        let terms: Vec<(ValueSource, ValueSource)> = opening_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (ValueSource::Challenge(i), ValueSource::Opening(*id)))
+            .collect();
+        extra_constraints_for_r1cs = vec![OutputClaimConstraint::linear(terms)];
+        eval_commitment_gens_v = Some((
+            pedersen_gens.message_generators[0],
+            pedersen_gens.blinding_generator,
+        ));
+    } else {
+        gamma_powers_v = Vec::new();
+        extra_constraints_for_r1cs = Vec::new();
+        eval_commitment_gens_v = None;
+    }
+
     // 4. Verify BlindFold proof
-    let builder = VerifierR1CSBuilder::<F>::new(&bundle.stage_configs, &bundle.baked);
+    let builder = VerifierR1CSBuilder::<F>::new_with_extra(
+        &bundle.stage_configs,
+        &extra_constraints_for_r1cs,
+        &bundle.baked,
+        Vec::new(),
+        std::collections::BTreeMap::new(),
+    );
     let r1cs = builder.build();
-    let bf_verifier = BlindFoldVerifier::new(pedersen_gens, &r1cs, None);
+    let bf_verifier = BlindFoldVerifier::new(pedersen_gens, &r1cs, eval_commitment_gens_v);
 
     let mut bf_transcript = T::new(b"BlindFold_onnx");
     bf_verifier
@@ -2505,7 +2795,43 @@ pub fn verify_zk(
         )
         .map_err(|e| {
             ProofVerifyError::InvalidOpeningProof(format!("BlindFold verification failed: {e:?}"))
-        })
+        })?;
+
+    // Step 8: PCS-binding. Verify that `bundle.commitments` actually evaluate
+    // to `joint_claim` at the batched-opening reduction point. The verifier
+    // homomorphically combines the polynomial commitments under `gamma_powers`
+    // (matching the prover's RLC), then verifies the joint opening proof.
+    //
+    // This is what cryptographically ties the BlindFold R1CS witness (which
+    // proves `joint_claim = sum gamma_i * y_P_i` and consistency with the
+    // per-node sumchecks via the `y_P_i` openings) back to the actual
+    // polynomial commitments. `joint_claim` is revealed in cleartext; a
+    // future ZK extension to HyperKZG could hide it as well.
+    if let (Some(opening_proof), Some(joint_claim), Some(opening_point)) = (
+        bundle.joint_opening_proof.as_ref(),
+        bundle.joint_claim.as_ref(),
+        bundle.joint_opening_point.as_ref(),
+    ) {
+        let joint_commitment = PCS::combine_commitments(&bundle.commitments, &gamma_powers_v);
+        if let Some(slot) = capture.as_deref_mut() {
+            *slot = Some(PcsVerifyCapture {
+                joint_commitment: joint_commitment.clone(),
+                opening_proof: opening_proof.clone(),
+                opening_point: opening_point.clone(),
+                joint_claim: *joint_claim,
+                transcript: transcript.clone(),
+            });
+        }
+        PCS::verify(
+            opening_proof,
+            &pp.generators,
+            &mut transcript,
+            opening_point,
+            joint_claim,
+            &joint_commitment,
+        )?;
+    }
+    Ok(())
 }
 
 /// Create the ZK sumcheck prover instance for a node.

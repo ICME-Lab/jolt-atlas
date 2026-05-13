@@ -535,10 +535,84 @@ where
         (sumcheck_proof, r_sumcheck)
     }
 
+    /// ZK variant of `prove_batch_opening_sumcheck`. Runs `BatchedSumcheck::prove_zk`
+    /// so that round polynomials are Pedersen-committed rather than sent in the clear,
+    /// and the resulting stage data is pushed into `blindfold_accumulator` for later
+    /// inclusion in the BlindFold R1CS witness. The reduced opening claim is no longer
+    /// leaked through the transcript; binding to `y_com` happens via BlindFold.
+    #[cfg(feature = "zk")]
+    #[tracing::instrument(
+        skip_all,
+        name = "ProverOpeningAccumulator::prove_batch_opening_sumcheck_zk"
+    )]
+    pub fn prove_batch_opening_sumcheck_zk<T, C, R>(
+        &mut self,
+        blindfold_accumulator: &mut crate::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+        stage_configs: &mut Vec<crate::subprotocols::blindfold::StageConfig>,
+        pedersen_gens: &crate::poly::commitment::pedersen::PedersenGenerators<C>,
+        rng: &mut R,
+        transcript: &mut T,
+    ) -> (
+        crate::subprotocols::sumcheck::ZkSumcheckProof<F, C, T>,
+        Vec<F::Challenge>,
+    )
+    where
+        T: Transcript,
+        C: crate::curve::JoltCurve<F = F>,
+        R: rand_core::CryptoRngCore,
+    {
+        use crate::subprotocols::sumcheck_verifier::SumcheckInstanceParams;
+
+        let mut sumchecks = std::mem::take(&mut self.sumchecks);
+        // Capture stage shape before borrowing the instances mutably.
+        let max_rounds = sumchecks
+            .values()
+            .map(|opening| {
+                <Opening<F> as SumcheckInstanceParams<F>>::num_rounds(&opening.opening)
+            })
+            .max()
+            .unwrap_or(1);
+        let max_degree = sumchecks
+            .values()
+            .map(|opening| {
+                <Opening<F> as SumcheckInstanceParams<F>>::degree(&opening.opening)
+            })
+            .max()
+            .unwrap_or(1);
+
+        let instances = sumchecks
+            .iter_mut()
+            .map(|(_, opening)| opening as &mut _)
+            .collect();
+
+        let (zk_proof, r_sumcheck, _final_claim) = BatchedSumcheck::prove_zk::<F, C, T, _>(
+            instances,
+            self,
+            blindfold_accumulator,
+            transcript,
+            pedersen_gens,
+            rng,
+        );
+
+        self.sumchecks = sumchecks;
+        stage_configs.push(crate::subprotocols::blindfold::StageConfig::new_chain(
+            max_rounds,
+            max_degree,
+        ));
+        (zk_proof, r_sumcheck)
+    }
+
     /// Finalizes the batch opening reduction sumcheck.
     /// Uses cached claims from `cache_openings`, appends them to transcript, derives gamma powers,
     /// and cleans up sumcheck instances.
     /// Returns the state needed for Stage 8.
+    ///
+    /// In ZK mode the cleartext claim append is suppressed when the prover
+    /// accumulator's `zk_mode` flag is on; the gamma_powers are still derived
+    /// from the transcript (which by then carries the batched-opening stage's
+    /// round commitments via `BatchedSumcheck::prove_zk`). The verifier
+    /// reproduces the same gamma derivation, since both sides skip the
+    /// cleartext append symmetrically.
     #[tracing::instrument(
         skip_all,
         name = "ProverOpeningAccumulator::finalize_batch_opening_sumcheck"
@@ -554,8 +628,13 @@ where
                 .into_iter()
                 .unzip();
 
-        // Append claims and derive gamma powers
-        transcript.append_scalars(&sumcheck_claims);
+        #[cfg(feature = "zk")]
+        let suppress = self.zk_mode;
+        #[cfg(not(feature = "zk"))]
+        let suppress = false;
+        if !suppress {
+            transcript.append_scalars(&sumcheck_claims);
+        }
         let gamma_powers: Vec<F> = transcript.challenge_scalar_powers(sumcheck_claims.len());
 
         // Drop sumchecks in background - they're no longer needed
@@ -850,6 +929,14 @@ where
 {
     pub fn num_sumchecks(&self) -> usize {
         self.sumchecks.len()
+    }
+
+    /// Iterates the `CommittedPoly` keys for which a sumcheck instance has been
+    /// registered (one per committed polynomial that some operator opened).
+    /// `BTreeMap` iteration is sorted, so the order matches the prover's
+    /// `state.polynomials` produced by `finalize_batch_opening_sumcheck`.
+    pub fn sumchecks_keys(&self) -> impl Iterator<Item = CommittedPoly> + '_ {
+        self.sumchecks.keys().copied()
     }
 
     // ========== Batch Opening Reduction Sumcheck ==========

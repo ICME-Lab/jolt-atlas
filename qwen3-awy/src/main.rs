@@ -4,7 +4,7 @@ use std::{
     fs::File,
     io::{BufRead, BufReader, Write},
     path::PathBuf,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use half::{bf16, f16};
@@ -25,24 +25,31 @@ const KV_DIM: usize = KV_HEADS * HEAD_DIM;
 const KV_GROUP: usize = HEADS / KV_HEADS;
 const VOCAB: usize = 151_936;
 const ROPE_THETA: f64 = 1_000_000.0;
-const FIXED_FRAC: u8 = 8;
-const SOFTMAX_FRAC: u8 = 8;
-const EXP_FRAC: u8 = 8;
-const RMSNORM_FRAC: u8 = 8;
+const DEFAULT_FIXED_FRAC: u8 = 8;
 const EOS_IM_END: u32 = 151_645;
 const EOS_END_OF_TEXT: u32 = 151_643;
 const PAD: u32 = EOS_END_OF_TEXT;
+const NO_THINK_SUFFIX: &str = "<think>\n\n</think>\n\n";
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse()?;
     let started = Instant::now();
     let ids = tokenize(&args.tokenizer, &args.text, args.seq_len)?;
+    let read_started = Instant::now();
     let bytes = std::fs::read(&args.model)?;
+    let read_elapsed = read_started.elapsed();
+    let deserialize_started = Instant::now();
     let st = SafeTensors::deserialize(&bytes)?;
-    let smoothquant = match &args.smoothquant_scales {
-        Some(path) => Some(SmoothQuantScales::load(path)?),
-        None => None,
-    };
+    let deserialize_elapsed = deserialize_started.elapsed();
+    // SmoothQuant/QuaRot hooks were intentionally removed from this runtime path.
+    // Keep transforms offline or in separate experiment crates so the fixed path stays simple.
+    if args.timing {
+        println!("timing.read_safetensors: {:.3?}", read_elapsed);
+        println!(
+            "timing.deserialize_safetensors: {:.3?}",
+            deserialize_elapsed
+        );
+    }
     if let Some(path) = &args.calibration_jsonl {
         let out = args
             .activation_stats_out
@@ -58,7 +65,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     if let Some(out) = &args.logit_compare_out {
-        compare_logits(&st, &ids, &args, smoothquant.as_ref(), out)?;
+        compare_logits(&st, &ids, &args, out)?;
         println!("logit_compare_out: {}", out.display());
         println!("elapsed: {:.2?}", started.elapsed());
         return Ok(());
@@ -85,17 +92,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     if let Some(max_new_tokens) = args.generate_tokens {
-        let generated = generate_greedy(&st, &args, smoothquant.as_ref(), max_new_tokens)?;
+        let generated = generate_greedy(&st, &args, max_new_tokens)?;
         println!("prompt: {:?}", args.text);
         println!("model: {}", args.model.display());
         println!("tokenizer: {}", args.tokenizer.display());
-        println!("matmuls: {}", args.cfg.enabled.describe());
-        println!("a_bits: {}", args.cfg.a_bits.describe());
-        println!("w_bits: {}", args.cfg.w_bits.describe());
-        println!("y_bits: {}", args.cfg.y_bits.describe());
-        println!("quant_mode: {}", args.cfg.quant_mode.describe());
-        println!("fixed_first: {}", args.cfg.fixed_first);
-        println!("sigmoid_lut: {}", args.cfg.sigmoid_lut_description());
+        println!("prompt_template: qwen3-no-think");
+        println!("fixed: true");
+        println!("fixed_frac: {}", args.cfg.fixed_frac);
         println!("seq_len: {}", args.seq_len);
         println!("kv_cache: {}", args.use_kv_cache);
         println!("sample: {}", args.sampling.enabled);
@@ -120,19 +123,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("elapsed: {:.2?}", started.elapsed());
         return Ok(());
     }
-    let mut report = Report::default();
-    let hidden = forward(&st, &ids, &args.cfg, smoothquant.as_ref(), &mut report)?;
+    let mut report = if args.report {
+        Report::default()
+    } else {
+        Report::disabled()
+    };
+    let hidden = forward(&st, &ids, &args.cfg, &mut report)?;
     let ppl = perplexity(&st, &hidden, &ids, args.max_targets, &args.cfg, &mut report)?;
 
     println!("text: {:?}", args.text);
     println!("model: {}", args.model.display());
     println!("tokenizer: {}", args.tokenizer.display());
-    println!("matmuls: {}", args.cfg.enabled.describe());
-    println!("a_bits: {}", args.cfg.a_bits.describe());
-    println!("w_bits: {}", args.cfg.w_bits.describe());
-    println!("y_bits: {}", args.cfg.y_bits.describe());
-    println!("quant_mode: {}", args.cfg.quant_mode.describe());
-    println!("fixed_first: {}", args.cfg.fixed_first);
+    println!("prompt_template: qwen3-no-think");
+    println!("fixed: true");
+    println!("fixed_frac: {}", args.cfg.fixed_frac);
     println!("seq_len: {}", args.seq_len);
     println!("input_tokens: {}", args.input_tokens);
     println!("context_tokens: {}", ids.len());
@@ -165,7 +169,6 @@ struct Args {
     calibration_jsonl: Option<PathBuf>,
     activation_stats_out: Option<PathBuf>,
     calibration_limit: Option<usize>,
-    smoothquant_scales: Option<PathBuf>,
     logit_compare_out: Option<PathBuf>,
     logit_compare_top_k: usize,
     outlier_tokens: Option<usize>,
@@ -173,6 +176,7 @@ struct Args {
     outlier_vector: Option<(usize, usize, usize)>,
     max_targets: usize,
     report: bool,
+    timing: bool,
     cfg: ForwardConfig,
 }
 
@@ -190,17 +194,18 @@ impl Args {
         let mut use_kv_cache = true;
         let mut stream = false;
         let mut sampling = Sampling::default();
+        let mut greedy = false;
         let mut calibration_jsonl = None;
         let mut activation_stats_out = None;
         let mut calibration_limit = None;
-        let mut smoothquant_scales = None;
         let mut logit_compare_out = None;
         let mut logit_compare_top_k = 20usize;
         let mut outlier_tokens = None;
         let mut outlier_content_tokens = None;
         let mut outlier_vector = None;
         let mut max_targets = usize::MAX;
-        let mut report = true;
+        let mut report = false;
+        let mut timing = false;
         let mut cfg = ForwardConfig::default();
 
         let mut args = std::env::args().skip(1);
@@ -210,75 +215,15 @@ impl Args {
                 "--tokenizer" => {
                     tokenizer = PathBuf::from(args.next().ok_or("--tokenizer requires a path")?)
                 }
-                "--a-bits" => {
-                    cfg.a_bits = QuantBits::parse(&args.next().ok_or("--a-bits requires a value")?)?
-                }
-                "--w-bits" => {
-                    cfg.w_bits = QuantBits::parse(&args.next().ok_or("--w-bits requires a value")?)?
-                }
-                "--y-bits" => {
-                    cfg.y_bits = QuantBits::parse(&args.next().ok_or("--y-bits requires a value")?)?
-                }
-                "--quant-mode" => {
-                    cfg.quant_mode =
-                        QuantMode::parse(&args.next().ok_or("--quant-mode requires a value")?)?
-                }
-                "--fixed-first" => {
-                    cfg.fixed_first = true;
-                    cfg.quant_mode = QuantMode::Fixed;
-                    cfg.a_bits = QuantBits(Some(FIXED_FRAC));
-                    cfg.w_bits = QuantBits(Some(FIXED_FRAC));
-                    cfg.y_bits = QuantBits(Some(FIXED_FRAC));
-                    cfg.sigmoid_lut_frac = Some(0);
-                    cfg.sigmoid_lut_out_frac = Some(FIXED_FRAC);
-                    cfg.silu_g_frac = Some(FIXED_FRAC);
-                }
-                "--matmuls" => {
-                    cfg.enabled =
-                        MatmulSet::parse(&args.next().ok_or("--matmuls requires a value")?)?
-                }
-                "--sigmoid-lut-frac" => {
+                "--fixed-frac" => {
                     let frac = args
                         .next()
-                        .ok_or("--sigmoid-lut-frac requires a value")?
+                        .ok_or("--fixed-frac requires a value")?
                         .parse()?;
-                    if frac > 20 {
-                        return Err(err("--sigmoid-lut-frac must be in 0..=20"));
+                    if frac > 12 {
+                        return Err(err("--fixed-frac must be in 0..=12"));
                     }
-                    cfg.sigmoid_lut_frac = Some(frac);
-                }
-                "--sigmoid-lut-out-frac" => {
-                    let frac = args
-                        .next()
-                        .ok_or("--sigmoid-lut-out-frac requires a value")?
-                        .parse()?;
-                    if frac > 20 {
-                        return Err(err("--sigmoid-lut-out-frac must be in 0..=20"));
-                    }
-                    cfg.sigmoid_lut_out_frac = Some(frac);
-                }
-                "--sigmoid-lut-clip" => {
-                    cfg.sigmoid_lut_min = args
-                        .next()
-                        .ok_or("--sigmoid-lut-clip requires min max")?
-                        .parse()?;
-                    cfg.sigmoid_lut_max = args
-                        .next()
-                        .ok_or("--sigmoid-lut-clip requires min max")?
-                        .parse()?;
-                    if cfg.sigmoid_lut_min >= cfg.sigmoid_lut_max {
-                        return Err(err("--sigmoid-lut-clip requires min < max"));
-                    }
-                }
-                "--silu-g-frac" => {
-                    let frac = args
-                        .next()
-                        .ok_or("--silu-g-frac requires a value")?
-                        .parse()?;
-                    if frac > 20 {
-                        return Err(err("--silu-g-frac must be in 0..=20"));
-                    }
-                    cfg.silu_g_frac = Some(frac);
+                    cfg.set_fixed_frac(frac);
                 }
                 "--seq-len" => {
                     seq_len = args.next().ok_or("--seq-len requires a value")?.parse()?;
@@ -302,6 +247,7 @@ impl Args {
                 "--no-kv-cache" => use_kv_cache = false,
                 "--stream" => stream = true,
                 "--sample" => sampling.enabled = true,
+                "--greedy" => greedy = true,
                 "--seed" => {
                     sampling.enabled = true;
                     sampling.seed = args.next().ok_or("--seed requires a value")?.parse()?;
@@ -357,11 +303,6 @@ impl Args {
                             .parse()?,
                     );
                 }
-                "--smoothquant-scales" => {
-                    smoothquant_scales = Some(PathBuf::from(
-                        args.next().ok_or("--smoothquant-scales requires a path")?,
-                    ));
-                }
                 "--logit-compare-out" => {
                     logit_compare_out = Some(PathBuf::from(
                         args.next().ok_or("--logit-compare-out requires a path")?,
@@ -406,10 +347,14 @@ impl Args {
                     outlier_vector = Some((layer, pos, top_n));
                 }
                 "--full" => max_targets = usize::MAX,
-                "--no-report" => report = false,
+                "--report" => report = true,
+                "--timing" => timing = true,
                 "--help" | "-h" => {
                     print_help();
                     std::process::exit(0);
+                }
+                other if other.starts_with("--") => {
+                    return Err(err(format!("unknown option {other:?}")));
                 }
                 other => text.push(other.to_string()),
             }
@@ -420,6 +365,9 @@ impl Args {
         } else {
             text.join(" ")
         };
+        if greedy {
+            sampling.enabled = false;
+        }
         let input_tokens = count_tokens(&tokenizer, &text)?;
 
         Ok(Self {
@@ -435,7 +383,6 @@ impl Args {
             calibration_jsonl,
             activation_stats_out,
             calibration_limit,
-            smoothquant_scales,
             logit_compare_out,
             logit_compare_top_k,
             outlier_tokens,
@@ -443,6 +390,7 @@ impl Args {
             outlier_vector,
             max_targets,
             report,
+            timing,
             cfg,
         })
     }
@@ -452,35 +400,26 @@ fn print_help() {
     println!(
         "qwen3-awy\n\
          \n\
-         Run full f32 Qwen3 with optional MatMul A/W/Y quantize-dequantize steps.\n\
+         Run Qwen3 with fixed-point block internals.\n\
          \n\
          Options:\n\
            --model PATH          safetensors path\n\
            --tokenizer PATH      tokenizer.json path\n\
-           --matmuls LIST        all, attention, mlp, or q,k,v,o,gate,up,down,lm_head\n\
-           --a-bits N|none       quantize/dequantize MatMul A row-wise\n\
-           --w-bits N|none       quantize/dequantize MatMul W per output channel\n\
-           --y-bits N|none       quantize/dequantize MatMul Y row-wise\n\
-           --quant-mode MODE     affine|minmax or fixed|qx; fixed interprets N as QX.N\n\
-           --fixed-first         keep tensors in QX.8 by default; float fallback for softmax/rsqrt\n\
-           --sigmoid-lut-frac N  approximate sigmoid in SwiGLU with a QX.N input LUT\n\
-           --sigmoid-lut-out-frac N quantize sigmoid LUT output to QX.N\n\
-           --sigmoid-lut-clip MIN MAX input range for sigmoid LUT; default [-8, 8)\n\
-           --silu-g-frac N       quantize the g multiplier in g*sigmoid(g) to QX.N\n\
+           --fixed-frac N        fractional bits for QX.N fixed-point block runtime; default 8; range 0..=12\n\
            --seq-len N           context length; default 128\n\
-           --generate N          greedy-generate up to N new tokens\n\
+           --generate N          generate up to N new tokens\n\
            --no-kv-cache         use slow full-forward generation\n\
            --stream              print decoded text after each generated token\n\
-           --sample              sample next token instead of greedy argmax\n\
-           --seed N              deterministic sampling seed; enables --sample\n\
-           --temperature T       sampling temperature; default 0.6; enables --sample\n\
-           --top-p P             nucleus sampling cutoff; default 0.95; enables --sample\n\
-           --top-k K             keep only top K candidates before top-p; default 20; enables --sample\n\
+           --sample              sample next token; default on for Qwen3\n\
+           --greedy              disable sampling and use argmax\n\
+           --seed N              deterministic sampling seed\n\
+           --temperature T       sampling temperature; default 0.6\n\
+           --top-p P             nucleus sampling cutoff; default 0.95\n\
+           --top-k K             keep only top K candidates before top-p; default 20\n\
            --repetition-penalty R penalize previously generated tokens; default 1.0\n\
            --calibration-jsonl PATH   read generated texts from JSONL and collect stats\n\
            --activation-stats-out PATH write activation stats JSON\n\
            --calibration-limit N      limit calibration samples for quick tests\n\
-           --smoothquant-scales PATH  apply SmoothQuant scales to PPL forward\n\
            --logit-compare-out PATH   write per-position float vs quant top-k JSONL\n\
            --logit-compare-top-k N    top-k to save for logit compare; default 20\n\
            --outlier-tokens N    print top N down_proj output outliers by layer/token\n\
@@ -488,7 +427,8 @@ fn print_help() {
            --outlier-vector L P N print top N channels for down_proj output at layer L, position P\n\
            --max-targets N       limit PPL targets\n\
            --full                use all non-EOS prefix targets\n\
-           --no-report           hide per-MatMul error report\n"
+           --report              print per-MatMul error and integer-width reports\n\
+           --timing              print coarse timing breakdowns\n"
     );
 }
 
@@ -505,7 +445,7 @@ struct Sampling {
 impl Default for Sampling {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             seed: 1,
             temperature: 0.6,
             top_p: 0.95,
@@ -515,70 +455,6 @@ impl Default for Sampling {
     }
 }
 
-struct SmoothQuantScales {
-    layers: Vec<SmoothQuantLayer>,
-}
-
-struct SmoothQuantLayer {
-    attn_in: Vec<f32>,
-    mlp_in: Vec<f32>,
-    down_in: Vec<f32>,
-}
-
-impl SmoothQuantScales {
-    fn load(path: &PathBuf) -> Result<Self, Box<dyn Error>> {
-        let value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path)?)?;
-        let layers = value
-            .get("layers")
-            .and_then(|v| v.as_array())
-            .ok_or("SmoothQuant scales missing layers array")?;
-        if layers.len() != LAYERS {
-            return Err(err(format!(
-                "SmoothQuant scales expected {LAYERS} layers, got {}",
-                layers.len()
-            )));
-        }
-        let mut out = Vec::with_capacity(LAYERS);
-        for (layer, item) in layers.iter().enumerate() {
-            out.push(SmoothQuantLayer {
-                attn_in: read_scale(item, "attn_in", HIDDEN, layer)?,
-                mlp_in: read_scale(item, "mlp_in", HIDDEN, layer)?,
-                down_in: read_scale(item, "down_in", INTERMEDIATE, layer)?,
-            });
-        }
-        Ok(Self { layers: out })
-    }
-}
-
-fn read_scale(
-    layer: &serde_json::Value,
-    name: &str,
-    len: usize,
-    layer_id: usize,
-) -> Result<Vec<f32>, Box<dyn Error>> {
-    let values = layer
-        .get(name)
-        .and_then(|v| v.get("scale"))
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| err(format!("SmoothQuant layer {layer_id} missing {name}.scale")))?;
-    if values.len() != len {
-        return Err(err(format!(
-            "SmoothQuant layer {layer_id} {name}.scale expected {len}, got {}",
-            values.len()
-        )));
-    }
-    values
-        .iter()
-        .map(|v| {
-            v.as_f64().map(|x| x as f32).ok_or_else(|| {
-                err(format!(
-                    "SmoothQuant layer {layer_id} {name} has non-number"
-                ))
-            })
-        })
-        .collect()
-}
-
 #[derive(Clone, Copy, Debug)]
 struct ForwardConfig {
     a_bits: QuantBits,
@@ -586,73 +462,35 @@ struct ForwardConfig {
     y_bits: QuantBits,
     quant_mode: QuantMode,
     enabled: MatmulSet,
-    fixed_first: bool,
-    sigmoid_lut_frac: Option<u8>,
-    sigmoid_lut_out_frac: Option<u8>,
-    sigmoid_lut_min: f32,
-    sigmoid_lut_max: f32,
-    silu_g_frac: Option<u8>,
+    fixed_frac: u8,
 }
 
 impl ForwardConfig {
-    fn sigmoid_lut_description(&self) -> String {
-        let sigmoid = self.sigmoid_lut_frac.map_or_else(
-            || "off".to_string(),
-            |frac| {
-                let out = self
-                    .sigmoid_lut_out_frac
-                    .map_or_else(|| "f32".to_string(), |out_frac| format!("QX.{out_frac}"));
-                format!(
-                    "frac={frac}, out={out}, clip=[{}, {})",
-                    self.sigmoid_lut_min, self.sigmoid_lut_max
-                )
-            },
-        );
-        let g = self
-            .silu_g_frac
-            .map_or_else(|| "float".to_string(), |frac| format!("QX.{frac}"));
-        format!("{sigmoid}; silu_g={g}")
+    fn set_fixed_frac(&mut self, frac: u8) {
+        self.fixed_frac = frac;
+        self.a_bits = QuantBits(Some(frac));
+        self.w_bits = QuantBits(Some(frac));
+        self.y_bits = QuantBits(Some(frac));
     }
 }
 
 impl Default for ForwardConfig {
     fn default() -> Self {
-        Self {
+        let mut cfg = Self {
             a_bits: QuantBits::default(),
             w_bits: QuantBits::default(),
             y_bits: QuantBits::default(),
-            quant_mode: QuantMode::default(),
+            quant_mode: QuantMode::Fixed,
             enabled: MatmulSet::default(),
-            fixed_first: false,
-            sigmoid_lut_frac: None,
-            sigmoid_lut_out_frac: None,
-            sigmoid_lut_min: -8.0,
-            sigmoid_lut_max: 8.0,
-            silu_g_frac: None,
-        }
+            fixed_frac: DEFAULT_FIXED_FRAC,
+        };
+        cfg.set_fixed_frac(DEFAULT_FIXED_FRAC);
+        cfg
     }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 struct QuantBits(Option<u8>);
-
-impl QuantBits {
-    fn parse(value: &str) -> Result<Self, Box<dyn Error>> {
-        if value == "none" || value == "off" {
-            return Ok(Self(None));
-        }
-        let bits = value.parse::<u8>()?;
-        if !(2..=24).contains(&bits) {
-            return Err(err(format!("bits must be in 2..=24 or none, got {bits}")));
-        }
-        Ok(Self(Some(bits)))
-    }
-
-    fn describe(self) -> String {
-        self.0
-            .map_or_else(|| "none".to_string(), |bits| bits.to_string())
-    }
-}
 
 #[derive(Clone, Copy, Debug, Default)]
 enum QuantMode {
@@ -661,28 +499,13 @@ enum QuantMode {
     Fixed,
 }
 
-impl QuantMode {
-    fn parse(value: &str) -> Result<Self, Box<dyn Error>> {
-        match value {
-            "affine" | "minmax" => Ok(Self::Affine),
-            "fixed" | "qx" | "q" => Ok(Self::Fixed),
-            other => Err(err(format!(
-                "--quant-mode must be affine|minmax or fixed|qx, got {other}"
-            ))),
-        }
-    }
-
-    fn describe(self) -> &'static str {
-        match self {
-            Self::Affine => "affine",
-            Self::Fixed => "fixed",
-        }
-    }
-}
-
 impl ForwardConfig {
     fn has_quant(self) -> bool {
         self.a_bits.0.is_some() || self.w_bits.0.is_some() || self.y_bits.0.is_some()
+    }
+
+    fn fixed_runtime(self) -> bool {
+        self.has_quant() && matches!(self.quant_mode, QuantMode::Fixed)
     }
 }
 
@@ -714,52 +537,6 @@ impl Default for MatmulSet {
 }
 
 impl MatmulSet {
-    fn parse(value: &str) -> Result<Self, Box<dyn Error>> {
-        let mut set = Self {
-            q: false,
-            k: false,
-            v: false,
-            o: false,
-            gate: false,
-            up: false,
-            down: false,
-            lm_head: false,
-        };
-        for item in value.split(',') {
-            match item {
-                "all" => {
-                    set = Self {
-                        lm_head: true,
-                        ..Self::default()
-                    }
-                }
-                "model" => set = Self::default(),
-                "attention" | "attn" => {
-                    set.q = true;
-                    set.k = true;
-                    set.v = true;
-                    set.o = true;
-                }
-                "mlp" => {
-                    set.gate = true;
-                    set.up = true;
-                    set.down = true;
-                }
-                "q" | "q_proj" => set.q = true,
-                "k" | "k_proj" => set.k = true,
-                "v" | "v_proj" => set.v = true,
-                "o" | "o_proj" => set.o = true,
-                "gate" | "gate_proj" => set.gate = true,
-                "up" | "up_proj" => set.up = true,
-                "down" | "down_proj" => set.down = true,
-                "lm_head" => set.lm_head = true,
-                "" => {}
-                _ => return Err(err(format!("unknown --matmuls item {item:?}"))),
-            }
-        }
-        Ok(set)
-    }
-
     fn enabled(self, site: MatmulSite) -> bool {
         match site {
             MatmulSite::Q => self.q,
@@ -773,37 +550,8 @@ impl MatmulSet {
         }
     }
 
-    fn describe(self) -> String {
-        let mut xs = Vec::new();
-        if self.q {
-            xs.push("q");
-        }
-        if self.k {
-            xs.push("k");
-        }
-        if self.v {
-            xs.push("v");
-        }
-        if self.o {
-            xs.push("o");
-        }
-        if self.gate {
-            xs.push("gate");
-        }
-        if self.up {
-            xs.push("up");
-        }
-        if self.down {
-            xs.push("down");
-        }
-        if self.lm_head {
-            xs.push("lm_head");
-        }
-        if xs.is_empty() {
-            "none".to_string()
-        } else {
-            xs.join(",")
-        }
+    fn is_model_default(self) -> bool {
+        self.q && self.k && self.v && self.o && self.gate && self.up && self.down && !self.lm_head
     }
 }
 
@@ -836,13 +584,19 @@ impl MatmulSite {
 
 fn count_tokens(path: &PathBuf, text: &str) -> Result<usize, Box<dyn Error>> {
     let tok = Tokenizer::from_file(path).map_err(|e| err(e.to_string()))?;
-    let enc = tok.encode(text, true).map_err(|e| err(e.to_string()))?;
+    let prompt = no_think_chat_prompt(text);
+    let enc = tok
+        .encode(prompt.as_str(), true)
+        .map_err(|e| err(e.to_string()))?;
     Ok(enc.get_ids().len())
 }
 
 fn tokenize(path: &PathBuf, text: &str, seq_len: usize) -> Result<Vec<u32>, Box<dyn Error>> {
     let tok = Tokenizer::from_file(path).map_err(|e| err(e.to_string()))?;
-    let enc = tok.encode(text, true).map_err(|e| err(e.to_string()))?;
+    let prompt = no_think_chat_prompt(text);
+    let enc = tok
+        .encode(prompt.as_str(), true)
+        .map_err(|e| err(e.to_string()))?;
     let mut ids = enc.get_ids().to_vec();
     ids.truncate(seq_len);
     ids.resize(seq_len, PAD);
@@ -851,13 +605,32 @@ fn tokenize(path: &PathBuf, text: &str, seq_len: usize) -> Result<Vec<u32>, Box<
 
 fn encode_unpadded(path: &PathBuf, text: &str) -> Result<Vec<u32>, Box<dyn Error>> {
     let tok = Tokenizer::from_file(path).map_err(|e| err(e.to_string()))?;
-    let enc = tok.encode(text, true).map_err(|e| err(e.to_string()))?;
+    let prompt = no_think_chat_prompt(text);
+    let enc = tok
+        .encode(prompt.as_str(), true)
+        .map_err(|e| err(e.to_string()))?;
     Ok(enc.get_ids().to_vec())
+}
+
+fn no_think_chat_prompt(text: &str) -> String {
+    format!(
+        "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n{}",
+        text, NO_THINK_SUFFIX
+    )
 }
 
 fn decode_tokens(path: &PathBuf, ids: &[u32]) -> Result<String, Box<dyn Error>> {
     let tok = Tokenizer::from_file(path).map_err(|e| err(e.to_string()))?;
     tok.decode(ids, true).map_err(|e| err(e.to_string()))
+}
+
+fn decode_generation_text(
+    path: &PathBuf,
+    ids: &[u32],
+    prompt_tokens: usize,
+) -> Result<String, Box<dyn Error>> {
+    let start = prompt_tokens.min(ids.len());
+    decode_tokens(path, &ids[start..])
 }
 
 fn pad_to_seq(mut ids: Vec<u32>, seq_len: usize) -> Vec<u32> {
@@ -989,6 +762,73 @@ fn embed_one_from_safetensors(st: &SafeTensors<'_>, id: u32) -> Result<Vec<f32>,
     Ok(out)
 }
 
+fn embed_fixed_from_safetensors(
+    st: &SafeTensors<'_>,
+    ids: &[u32],
+    frac_bits: u8,
+) -> Result<Vec<i32>, Box<dyn Error>> {
+    let t = st.tensor("model.embed_tokens.weight")?;
+    need_shape(&t, &[VOCAB, HIDDEN], "model.embed_tokens.weight")?;
+    let mut out = Vec::with_capacity(ids.len() * HIDDEN);
+    for &id in ids {
+        row_fixed_i32(&t, id as usize, HIDDEN, frac_bits, &mut out)?;
+    }
+    Ok(out)
+}
+
+fn embed_one_fixed_from_safetensors(
+    st: &SafeTensors<'_>,
+    id: u32,
+    frac_bits: u8,
+) -> Result<Vec<i32>, Box<dyn Error>> {
+    let t = st.tensor("model.embed_tokens.weight")?;
+    need_shape(&t, &[VOCAB, HIDDEN], "model.embed_tokens.weight")?;
+    let mut out = Vec::with_capacity(HIDDEN);
+    row_fixed_i32(&t, id as usize, HIDDEN, frac_bits, &mut out)?;
+    Ok(out)
+}
+
+fn row_fixed_i32(
+    t: &TensorView<'_>,
+    row: usize,
+    cols: usize,
+    frac_bits: u8,
+    out: &mut Vec<i32>,
+) -> Result<(), Box<dyn Error>> {
+    if row >= VOCAB {
+        return Err(err(format!("token id {row} exceeds vocab")));
+    }
+    let scale = (1u64 << frac_bits) as f32;
+    match t.dtype() {
+        Dtype::BF16 => {
+            let start = row * cols * 2;
+            for b in t.data()[start..start + cols * 2].chunks_exact(2) {
+                out.push(
+                    (bf16::from_bits(u16::from_le_bytes([b[0], b[1]])).to_f32() * scale).round()
+                        as i32,
+                );
+            }
+        }
+        Dtype::F16 => {
+            let start = row * cols * 2;
+            for b in t.data()[start..start + cols * 2].chunks_exact(2) {
+                out.push(
+                    (f16::from_bits(u16::from_le_bytes([b[0], b[1]])).to_f32() * scale).round()
+                        as i32,
+                );
+            }
+        }
+        Dtype::F32 => {
+            let start = row * cols * 4;
+            for b in t.data()[start..start + cols * 4].chunks_exact(4) {
+                out.push((f32::from_le_bytes([b[0], b[1], b[2], b[3]]) * scale).round() as i32);
+            }
+        }
+        dt => return Err(err(format!("unsupported row dtype {dt:?}"))),
+    }
+    Ok(())
+}
+
 struct LayerWeights {
     ln1: Vec<f32>,
     ln2: Vec<f32>,
@@ -1016,6 +856,14 @@ struct QuantizedLayerWeights {
     wd: Vec<i32>,
 }
 
+struct FixedLayerWeights {
+    ln1: Vec<i32>,
+    ln2: Vec<i32>,
+    q_norm: Vec<i32>,
+    k_norm: Vec<i32>,
+    q: QuantizedLayerWeights,
+}
+
 fn quantize_layers_fixed(layers: &[LayerWeights], frac_bits: u8) -> Vec<QuantizedLayerWeights> {
     layers
         .par_iter()
@@ -1028,6 +876,180 @@ fn quantize_layers_fixed(layers: &[LayerWeights], frac_bits: u8) -> Vec<Quantize
             wu: quantize_fixed_i32(&w.wu, frac_bits),
             wd: quantize_fixed_i32(&w.wd, frac_bits),
         })
+        .collect()
+}
+
+fn quantized_linear_i32_transposed(
+    st: &SafeTensors<'_>,
+    name: &str,
+    out: usize,
+    input: usize,
+    frac_bits: u8,
+) -> Result<Vec<i32>, Box<dyn Error>> {
+    let t = st.tensor(name)?;
+    need_shape(&t, &[out, input], name)?;
+    let scale = (1u64 << frac_bits) as f32;
+    let mut ys = vec![0i32; out * input];
+    match t.dtype() {
+        Dtype::BF16 => {
+            let data = t.data();
+            ys.par_chunks_mut(out).enumerate().for_each(|(i, row)| {
+                for o in 0..out {
+                    let p = (o * input + i) * 2;
+                    let x = bf16::from_bits(u16::from_le_bytes([data[p], data[p + 1]])).to_f32();
+                    row[o] = (x * scale).round() as i32;
+                }
+            });
+        }
+        Dtype::F16 => {
+            let data = t.data();
+            ys.par_chunks_mut(out).enumerate().for_each(|(i, row)| {
+                for o in 0..out {
+                    let p = (o * input + i) * 2;
+                    let x = f16::from_bits(u16::from_le_bytes([data[p], data[p + 1]])).to_f32();
+                    row[o] = (x * scale).round() as i32;
+                }
+            });
+        }
+        Dtype::F32 => {
+            let data = t.data();
+            ys.par_chunks_mut(out).enumerate().for_each(|(i, row)| {
+                for o in 0..out {
+                    let p = (o * input + i) * 4;
+                    let x = f32::from_le_bytes([data[p], data[p + 1], data[p + 2], data[p + 3]]);
+                    row[o] = (x * scale).round() as i32;
+                }
+            });
+        }
+        dt => return Err(err(format!("unsupported tensor dtype {dt:?}"))),
+    }
+    Ok(ys)
+}
+
+fn vec_fixed_i32(
+    st: &SafeTensors<'_>,
+    name: &str,
+    shape: &[usize],
+    frac_bits: u8,
+) -> Result<Vec<i32>, Box<dyn Error>> {
+    let t = st.tensor(name)?;
+    need_shape(&t, shape, name)?;
+    let scale = (1u64 << frac_bits) as f32;
+    match t.dtype() {
+        Dtype::BF16 => Ok(t
+            .data()
+            .par_chunks_exact(2)
+            .map(|b| {
+                (bf16::from_bits(u16::from_le_bytes([b[0], b[1]])).to_f32() * scale).round() as i32
+            })
+            .collect()),
+        Dtype::F16 => Ok(t
+            .data()
+            .par_chunks_exact(2)
+            .map(|b| {
+                (f16::from_bits(u16::from_le_bytes([b[0], b[1]])).to_f32() * scale).round() as i32
+            })
+            .collect()),
+        Dtype::F32 => Ok(t
+            .data()
+            .par_chunks_exact(4)
+            .map(|b| (f32::from_le_bytes([b[0], b[1], b[2], b[3]]) * scale).round() as i32)
+            .collect()),
+        dt => Err(err(format!("unsupported tensor dtype {dt:?}"))),
+    }
+}
+
+fn load_fixed_layer(
+    st: &SafeTensors<'_>,
+    layer: usize,
+    frac_bits: u8,
+) -> Result<FixedLayerWeights, Box<dyn Error>> {
+    let p = format!("model.layers.{layer}");
+    Ok(FixedLayerWeights {
+        ln1: vec_fixed_i32(
+            st,
+            &format!("{p}.input_layernorm.weight"),
+            &[HIDDEN],
+            frac_bits,
+        )?,
+        ln2: vec_fixed_i32(
+            st,
+            &format!("{p}.post_attention_layernorm.weight"),
+            &[HIDDEN],
+            frac_bits,
+        )?,
+        q_norm: vec_fixed_i32(
+            st,
+            &format!("{p}.self_attn.q_norm.weight"),
+            &[HEAD_DIM],
+            frac_bits,
+        )?,
+        k_norm: vec_fixed_i32(
+            st,
+            &format!("{p}.self_attn.k_norm.weight"),
+            &[HEAD_DIM],
+            frac_bits,
+        )?,
+        q: QuantizedLayerWeights {
+            wq: quantized_linear_i32_transposed(
+                st,
+                &format!("{p}.self_attn.q_proj.weight"),
+                Q_DIM,
+                HIDDEN,
+                frac_bits,
+            )?,
+            wk: quantized_linear_i32_transposed(
+                st,
+                &format!("{p}.self_attn.k_proj.weight"),
+                KV_DIM,
+                HIDDEN,
+                frac_bits,
+            )?,
+            wv: quantized_linear_i32_transposed(
+                st,
+                &format!("{p}.self_attn.v_proj.weight"),
+                KV_DIM,
+                HIDDEN,
+                frac_bits,
+            )?,
+            wo: quantized_linear_i32_transposed(
+                st,
+                &format!("{p}.self_attn.o_proj.weight"),
+                HIDDEN,
+                Q_DIM,
+                frac_bits,
+            )?,
+            wg: quantized_linear_i32_transposed(
+                st,
+                &format!("{p}.mlp.gate_proj.weight"),
+                INTERMEDIATE,
+                HIDDEN,
+                frac_bits,
+            )?,
+            wu: quantized_linear_i32_transposed(
+                st,
+                &format!("{p}.mlp.up_proj.weight"),
+                INTERMEDIATE,
+                HIDDEN,
+                frac_bits,
+            )?,
+            wd: quantized_linear_i32_transposed(
+                st,
+                &format!("{p}.mlp.down_proj.weight"),
+                HIDDEN,
+                INTERMEDIATE,
+                frac_bits,
+            )?,
+        },
+    })
+}
+
+fn load_fixed_layers(
+    st: &SafeTensors<'_>,
+    frac_bits: u8,
+) -> Result<Vec<FixedLayerWeights>, Box<dyn Error>> {
+    (0..LAYERS)
+        .map(|layer| load_fixed_layer(st, layer, frac_bits))
         .collect()
 }
 
@@ -1104,7 +1126,6 @@ fn forward(
     st: &SafeTensors<'_>,
     ids: &[u32],
     cfg: &ForwardConfig,
-    smoothquant: Option<&SmoothQuantScales>,
     report: &mut Report,
 ) -> Result<Vec<f32>, Box<dyn Error>> {
     let seq = ids.len();
@@ -1113,15 +1134,7 @@ fn forward(
     x = maybe_fixed_q8(x, cfg);
     for layer in 0..LAYERS {
         let w = load_layer(st, layer)?;
-        x = layer_forward(
-            &x,
-            &w,
-            &r,
-            seq,
-            cfg,
-            smoothquant.map(|sq| &sq.layers[layer]),
-            report,
-        );
+        x = layer_forward(&x, &w, &r, seq, cfg, report);
     }
     let w = vec_f32(st, "model.norm.weight", &[HIDDEN])?;
     Ok(rms_norm_cfg(&x, &w, seq, HIDDEN, cfg))
@@ -1162,8 +1175,9 @@ fn collect_activation_stats(
             .get("text")
             .and_then(|v| v.as_str())
             .ok_or_else(|| err(format!("line {} missing string field 'text'", line_no + 1)))?;
+        let prompt = no_think_chat_prompt(text);
         let enc = tokenizer
-            .encode(text, true)
+            .encode(prompt.as_str(), true)
             .map_err(|e| err(e.to_string()))?;
         let mut ids = enc.get_ids().to_vec();
         ids.truncate(args.seq_len);
@@ -1187,7 +1201,6 @@ fn compare_logits(
     st: &SafeTensors<'_>,
     ids: &[u32],
     args: &Args,
-    smoothquant: Option<&SmoothQuantScales>,
     out: &PathBuf,
 ) -> Result<(), Box<dyn Error>> {
     if let Some(parent) = out.parent() {
@@ -1204,8 +1217,8 @@ fn compare_logits(
         enabled: args.cfg.enabled,
         ..ForwardConfig::default()
     };
-    let float_hidden = forward(st, ids, &float_cfg, None, &mut float_report)?;
-    let quant_hidden = forward(st, ids, &args.cfg, smoothquant, &mut quant_report)?;
+    let float_hidden = forward(st, ids, &float_cfg, &mut float_report)?;
+    let quant_hidden = forward(st, ids, &args.cfg, &mut quant_report)?;
     let mut file = File::create(out)?;
     let mut count = 0usize;
 
@@ -1485,19 +1498,17 @@ fn down_output_row(
 fn generate_greedy(
     st: &SafeTensors<'_>,
     args: &Args,
-    smoothquant: Option<&SmoothQuantScales>,
     max_new_tokens: usize,
 ) -> Result<GenerationResult, Box<dyn Error>> {
     if args.use_kv_cache {
-        return generate_greedy_cached(st, args, smoothquant, max_new_tokens);
+        return generate_greedy_cached(st, args, max_new_tokens);
     }
-    generate_greedy_uncached(st, args, smoothquant, max_new_tokens)
+    generate_greedy_uncached(st, args, max_new_tokens)
 }
 
 fn generate_greedy_uncached(
     st: &SafeTensors<'_>,
     args: &Args,
-    smoothquant: Option<&SmoothQuantScales>,
     max_new_tokens: usize,
 ) -> Result<GenerationResult, Box<dyn Error>> {
     let mut real_ids = encode_unpadded(&args.tokenizer, &args.text)?;
@@ -1514,16 +1525,16 @@ fn generate_greedy_uncached(
     let prompt_tokens = real_ids.len();
     let mut ended_with_eos = false;
     let mut rng = SmallRng::new(args.sampling.seed);
-    let mut streamed_text = if args.stream {
-        decode_tokens(&args.tokenizer, &real_ids)?
-    } else {
-        String::new()
-    };
+    let mut streamed_text = decode_tokens(&args.tokenizer, &real_ids)?;
     for _ in 0..max_new_tokens {
         let last_pos = real_ids.len() - 1;
         let ids = pad_to_seq(real_ids.clone(), args.seq_len);
-        let mut report = Report::default();
-        let hidden = forward(st, &ids, &args.cfg, smoothquant, &mut report)?;
+        let mut report = if args.report {
+            Report::default()
+        } else {
+            Report::disabled()
+        };
+        let hidden = forward(st, &ids, &args.cfg, &mut report)?;
         let x = &hidden[last_pos * HIDDEN..(last_pos + 1) * HIDDEN];
         let mut scores = lm_head_scores(st, x, &args.cfg, &mut report)?;
         apply_repetition_penalty(&mut scores, &real_ids, args.sampling.repetition_penalty);
@@ -1538,7 +1549,7 @@ fn generate_greedy_uncached(
             break;
         }
     }
-    let text = decode_tokens(&args.tokenizer, &real_ids)?;
+    let text = decode_generation_text(&args.tokenizer, &real_ids, prompt_tokens)?;
     Ok(GenerationResult {
         prompt_tokens,
         generated_tokens: real_ids.len() - prompt_tokens,
@@ -1551,7 +1562,6 @@ fn generate_greedy_uncached(
 fn generate_greedy_cached(
     st: &SafeTensors<'_>,
     args: &Args,
-    smoothquant: Option<&SmoothQuantScales>,
     max_new_tokens: usize,
 ) -> Result<GenerationResult, Box<dyn Error>> {
     let mut real_ids = encode_unpadded(&args.tokenizer, &args.text)?;
@@ -1572,9 +1582,112 @@ fn generate_greedy_cached(
     } else {
         Report::disabled()
     };
+    let use_direct_fixed_weights = args.cfg.fixed_runtime()
+        && !args.report
+        && args.cfg.enabled.is_model_default()
+        && args.cfg.a_bits.0.is_some()
+        && args.cfg.w_bits.0.is_some()
+        && args.cfg.y_bits.0.is_some();
+    if use_direct_fixed_weights {
+        let load_layers_started = Instant::now();
+        let fixed_layers = load_fixed_layers(st, args.cfg.w_bits.0.unwrap())?;
+        let load_layers_elapsed = load_layers_started.elapsed();
+        let quantize_weights_elapsed = Duration::ZERO;
+        let load_lm_head_started = Instant::now();
+        let lm_head = load_lm_head(st)?;
+        let load_lm_head_elapsed = load_lm_head_started.elapsed();
+        let rotary_started = Instant::now();
+        let rotary = Rotary::new(args.seq_len);
+        let rotary_elapsed = rotary_started.elapsed();
+        let prefill_started = Instant::now();
+        let (last_hidden, mut caches) =
+            prefill_fixed_cached(st, &fixed_layers, &rotary, &real_ids, &args.cfg)?;
+        let prefill_elapsed = prefill_started.elapsed();
+        let norm_started = Instant::now();
+        let norm = vec_fixed_i32(st, "model.norm.weight", &[HIDDEN], args.cfg.fixed_frac)?;
+        let load_norm_elapsed = norm_started.elapsed();
+        let first_lm_head_started = Instant::now();
+        let mut logits = {
+            let h_int = rms_norm_fixed_i32(&last_hidden, &norm, 1, HIDDEN, args.cfg.fixed_frac);
+            let h = fixed_i32_to_f32(&h_int, args.cfg.fixed_frac);
+            lm_head_scores_loaded(&lm_head, &h, &args.cfg, &mut report)?
+        };
+        let first_lm_head_elapsed = first_lm_head_started.elapsed();
+
+        let mut ended_with_eos = false;
+        let mut rng = SmallRng::new(args.sampling.seed);
+        let mut streamed_text = decode_tokens(&args.tokenizer, &real_ids)?;
+        let mut decode_model_elapsed = Duration::ZERO;
+        let mut decode_lm_head_elapsed = Duration::ZERO;
+        let mut choose_elapsed = Duration::ZERO;
+        for _ in 0..max_new_tokens {
+            let choose_started = Instant::now();
+            apply_repetition_penalty(&mut logits, &real_ids, args.sampling.repetition_penalty);
+            let next = choose_next_token(&logits, args.sampling, &mut rng) as u32;
+            choose_elapsed += choose_started.elapsed();
+            real_ids.push(next);
+            maybe_stream_generation(args, &real_ids, &mut streamed_text)?;
+            if is_eos(next) {
+                ended_with_eos = true;
+                break;
+            }
+            if real_ids.len() >= args.seq_len {
+                break;
+            }
+            let pos = real_ids.len() - 1;
+            let decode_model_started = Instant::now();
+            let hidden = decode_one_fixed_cached(
+                st,
+                &fixed_layers,
+                &rotary,
+                next,
+                pos,
+                &mut caches,
+                &args.cfg,
+            )?;
+            decode_model_elapsed += decode_model_started.elapsed();
+            let decode_lm_head_started = Instant::now();
+            let h_int = rms_norm_fixed_i32(&hidden, &norm, 1, HIDDEN, args.cfg.fixed_frac);
+            let h = fixed_i32_to_f32(&h_int, args.cfg.fixed_frac);
+            logits = lm_head_scores_loaded(&lm_head, &h, &args.cfg, &mut report)?;
+            decode_lm_head_elapsed += decode_lm_head_started.elapsed();
+        }
+
+        if args.timing {
+            println!(
+                "timing.load_layers_bf16_to_i32_transpose: {:.3?}",
+                load_layers_elapsed
+            );
+            println!(
+                "timing.quantize_layer_weights_i32: {:.3?}",
+                quantize_weights_elapsed
+            );
+            println!("timing.load_lm_head_f32: {:.3?}", load_lm_head_elapsed);
+            println!("timing.rotary_build: {:.3?}", rotary_elapsed);
+            println!("timing.prefill_cached: {:.3?}", prefill_elapsed);
+            println!("timing.load_final_norm: {:.3?}", load_norm_elapsed);
+            println!("timing.first_lm_head: {:.3?}", first_lm_head_elapsed);
+            println!("timing.decode_model_total: {:.3?}", decode_model_elapsed);
+            println!(
+                "timing.decode_lm_head_total: {:.3?}",
+                decode_lm_head_elapsed
+            );
+            println!("timing.choose_token_total: {:.3?}", choose_elapsed);
+        }
+        let text = decode_generation_text(&args.tokenizer, &real_ids, prompt_tokens)?;
+        return Ok(GenerationResult {
+            prompt_tokens,
+            generated_tokens: real_ids.len() - prompt_tokens,
+            total_tokens: real_ids.len(),
+            ended_with_eos,
+            text,
+        });
+    }
+    let load_layers_started = Instant::now();
     let layers = load_layers(st)?;
+    let load_layers_elapsed = load_layers_started.elapsed();
+    let quantize_weights_started = Instant::now();
     let quantized_layers = if matches!(args.cfg.quant_mode, QuantMode::Fixed)
-        && smoothquant.is_none()
         && args.cfg.a_bits.0.is_some()
         && args.cfg.w_bits.0.is_some()
     {
@@ -1582,8 +1695,14 @@ fn generate_greedy_cached(
     } else {
         None
     };
+    let quantize_weights_elapsed = quantize_weights_started.elapsed();
+    let load_lm_head_started = Instant::now();
     let lm_head = load_lm_head(st)?;
+    let load_lm_head_elapsed = load_lm_head_started.elapsed();
+    let rotary_started = Instant::now();
     let rotary = Rotary::new(args.seq_len);
+    let rotary_elapsed = rotary_started.elapsed();
+    let prefill_started = Instant::now();
     let (last_hidden, mut caches) = prefill_cached(
         st,
         &layers,
@@ -1591,25 +1710,30 @@ fn generate_greedy_cached(
         &rotary,
         &real_ids,
         &args.cfg,
-        smoothquant,
         &mut report,
     )?;
+    let prefill_elapsed = prefill_started.elapsed();
+    let norm_started = Instant::now();
     let norm = vec_f32(st, "model.norm.weight", &[HIDDEN])?;
+    let load_norm_elapsed = norm_started.elapsed();
+    let first_lm_head_started = Instant::now();
     let mut logits = {
         let h = rms_norm_cfg(&last_hidden, &norm, 1, HIDDEN, &args.cfg);
         lm_head_scores_loaded(&lm_head, &h, &args.cfg, &mut report)?
     };
+    let first_lm_head_elapsed = first_lm_head_started.elapsed();
 
     let mut ended_with_eos = false;
     let mut rng = SmallRng::new(args.sampling.seed);
-    let mut streamed_text = if args.stream {
-        decode_tokens(&args.tokenizer, &real_ids)?
-    } else {
-        String::new()
-    };
+    let mut streamed_text = decode_tokens(&args.tokenizer, &real_ids)?;
+    let mut decode_model_elapsed = Duration::ZERO;
+    let mut decode_lm_head_elapsed = Duration::ZERO;
+    let mut choose_elapsed = Duration::ZERO;
     for _ in 0..max_new_tokens {
+        let choose_started = Instant::now();
         apply_repetition_penalty(&mut logits, &real_ids, args.sampling.repetition_penalty);
         let next = choose_next_token(&logits, args.sampling, &mut rng) as u32;
+        choose_elapsed += choose_started.elapsed();
         real_ids.push(next);
         maybe_stream_generation(args, &real_ids, &mut streamed_text)?;
         if is_eos(next) {
@@ -1620,6 +1744,7 @@ fn generate_greedy_cached(
             break;
         }
         let pos = real_ids.len() - 1;
+        let decode_model_started = Instant::now();
         let hidden = decode_one_cached(
             st,
             &layers,
@@ -1629,11 +1754,13 @@ fn generate_greedy_cached(
             pos,
             &mut caches,
             &args.cfg,
-            smoothquant,
             &mut report,
         )?;
+        decode_model_elapsed += decode_model_started.elapsed();
+        let decode_lm_head_started = Instant::now();
         let h = rms_norm_cfg(&hidden, &norm, 1, HIDDEN, &args.cfg);
         logits = lm_head_scores_loaded(&lm_head, &h, &args.cfg, &mut report)?;
+        decode_lm_head_elapsed += decode_lm_head_started.elapsed();
     }
 
     if args.report {
@@ -1641,7 +1768,28 @@ fn generate_greedy_cached(
         report.print();
         println!();
     }
-    let text = decode_tokens(&args.tokenizer, &real_ids)?;
+    if args.timing {
+        println!(
+            "timing.load_layers_f32_transpose: {:.3?}",
+            load_layers_elapsed
+        );
+        println!(
+            "timing.quantize_layer_weights_i32: {:.3?}",
+            quantize_weights_elapsed
+        );
+        println!("timing.load_lm_head_f32: {:.3?}", load_lm_head_elapsed);
+        println!("timing.rotary_build: {:.3?}", rotary_elapsed);
+        println!("timing.prefill_cached: {:.3?}", prefill_elapsed);
+        println!("timing.load_final_norm: {:.3?}", load_norm_elapsed);
+        println!("timing.first_lm_head: {:.3?}", first_lm_head_elapsed);
+        println!("timing.decode_model_total: {:.3?}", decode_model_elapsed);
+        println!(
+            "timing.decode_lm_head_total: {:.3?}",
+            decode_lm_head_elapsed
+        );
+        println!("timing.choose_token_total: {:.3?}", choose_elapsed);
+    }
+    let text = decode_generation_text(&args.tokenizer, &real_ids, prompt_tokens)?;
     Ok(GenerationResult {
         prompt_tokens,
         generated_tokens: real_ids.len() - prompt_tokens,
@@ -1723,6 +1871,10 @@ fn sample_token(scores: &[f32], sampling: Sampling, rng: &mut SmallRng) -> usize
     if let Some(top_k) = sampling.top_k {
         probs.truncate(top_k.min(probs.len()).max(1));
     }
+    let total = probs.iter().map(|(_, p)| *p).sum::<f64>();
+    if !total.is_finite() || total <= 0.0 {
+        return argmax(scores);
+    }
     let cutoff = sampling.top_p.clamp(0.0, 1.0) as f64;
     let mut kept_total = 0.0f64;
     let mut keep = 0usize;
@@ -1779,6 +1931,11 @@ struct LayerCache {
     v: Vec<f32>,
 }
 
+struct FixedLayerCache {
+    k: Vec<i32>,
+    v: Vec<i32>,
+}
+
 fn prefill_cached(
     st: &SafeTensors<'_>,
     layers: &[LayerWeights],
@@ -1786,7 +1943,6 @@ fn prefill_cached(
     r: &Rotary,
     ids: &[u32],
     cfg: &ForwardConfig,
-    smoothquant: Option<&SmoothQuantScales>,
     report: &mut Report,
 ) -> Result<(Vec<f32>, Vec<LayerCache>), Box<dyn Error>> {
     assert_eq!(layers.len(), LAYERS);
@@ -1801,9 +1957,27 @@ fn prefill_cached(
             &r,
             seq,
             cfg,
-            smoothquant.map(|sq| &sq.layers[layer]),
             report,
         );
+        x = next;
+        caches.push(cache);
+    }
+    Ok((x[(seq - 1) * HIDDEN..seq * HIDDEN].to_vec(), caches))
+}
+
+fn prefill_fixed_cached(
+    st: &SafeTensors<'_>,
+    layers: &[FixedLayerWeights],
+    r: &Rotary,
+    ids: &[u32],
+    cfg: &ForwardConfig,
+) -> Result<(Vec<i32>, Vec<FixedLayerCache>), Box<dyn Error>> {
+    assert_eq!(layers.len(), LAYERS);
+    let seq = ids.len();
+    let mut x = embed_fixed_from_safetensors(st, ids, cfg.fixed_frac)?;
+    let mut caches = Vec::with_capacity(LAYERS);
+    for w in layers {
+        let (next, cache) = layer_prefill_fixed_cached(&x, w, r, seq, cfg);
         x = next;
         caches.push(cache);
     }
@@ -1819,7 +1993,6 @@ fn decode_one_cached(
     pos: usize,
     caches: &mut [LayerCache],
     cfg: &ForwardConfig,
-    smoothquant: Option<&SmoothQuantScales>,
     report: &mut Report,
 ) -> Result<Vec<f32>, Box<dyn Error>> {
     assert_eq!(layers.len(), caches.len());
@@ -1833,9 +2006,25 @@ fn decode_one_cached(
             pos,
             cache,
             cfg,
-            smoothquant.map(|sq| &sq.layers[layer]),
             report,
         );
+    }
+    Ok(x)
+}
+
+fn decode_one_fixed_cached(
+    st: &SafeTensors<'_>,
+    layers: &[FixedLayerWeights],
+    r: &Rotary,
+    id: u32,
+    pos: usize,
+    caches: &mut [FixedLayerCache],
+    cfg: &ForwardConfig,
+) -> Result<Vec<i32>, Box<dyn Error>> {
+    assert_eq!(layers.len(), caches.len());
+    let mut x = embed_one_fixed_from_safetensors(st, id, cfg.fixed_frac)?;
+    for (w, cache) in layers.iter().zip(caches.iter_mut()) {
+        x = layer_decode_fixed_cached(&x, w, r, pos, cache, cfg);
     }
     Ok(x)
 }
@@ -1854,49 +2043,18 @@ fn layer_forward(
     r: &Rotary,
     seq: usize,
     cfg: &ForwardConfig,
-    smoothquant: Option<&SmoothQuantLayer>,
     report: &mut Report,
 ) -> Vec<f32> {
     let n1 = rms_norm_cfg(x, &w.ln1, seq, HIDDEN, cfg);
-    let mut q = matmul_awq_scaled(
-        &n1,
-        &w.wq,
-        seq,
-        HIDDEN,
-        Q_DIM,
-        MatmulSite::Q,
-        cfg,
-        smoothquant.map(|sq| sq.attn_in.as_slice()),
-        report,
-    );
+    let mut q = matmul_awq(&n1, &w.wq, seq, HIDDEN, Q_DIM, MatmulSite::Q, cfg, report);
     add_rows(&mut q, &w.bq);
     fixed_q8_in_place_if(&mut q, cfg);
     let q = rms_norm_heads_cfg(&q, &w.q_norm, seq, HEADS, cfg);
-    let mut k = matmul_awq_scaled(
-        &n1,
-        &w.wk,
-        seq,
-        HIDDEN,
-        KV_DIM,
-        MatmulSite::K,
-        cfg,
-        smoothquant.map(|sq| sq.attn_in.as_slice()),
-        report,
-    );
+    let mut k = matmul_awq(&n1, &w.wk, seq, HIDDEN, KV_DIM, MatmulSite::K, cfg, report);
     add_rows(&mut k, &w.bk);
     fixed_q8_in_place_if(&mut k, cfg);
     let k = rms_norm_heads_cfg(&k, &w.k_norm, seq, KV_HEADS, cfg);
-    let mut v = matmul_awq_scaled(
-        &n1,
-        &w.wv,
-        seq,
-        HIDDEN,
-        KV_DIM,
-        MatmulSite::V,
-        cfg,
-        smoothquant.map(|sq| sq.attn_in.as_slice()),
-        report,
-    );
+    let mut v = matmul_awq(&n1, &w.wv, seq, HIDDEN, KV_DIM, MatmulSite::V, cfg, report);
     add_rows(&mut v, &w.bv);
     fixed_q8_in_place_if(&mut v, cfg);
     let q = rope_cfg(&q, &r.rq[..q.len()], cfg);
@@ -1907,7 +2065,7 @@ fn layer_forward(
     let a = matmul_awq(&c, &w.wo, seq, Q_DIM, HIDDEN, MatmulSite::O, cfg, report);
     let h = add_cfg(x, &a, cfg);
     let n2 = rms_norm_cfg(&h, &w.ln2, seq, HIDDEN, cfg);
-    let g = matmul_awq_scaled(
+    let g = matmul_awq(
         &n2,
         &w.wg,
         seq,
@@ -1915,10 +2073,9 @@ fn layer_forward(
         INTERMEDIATE,
         MatmulSite::Gate,
         cfg,
-        smoothquant.map(|sq| sq.mlp_in.as_slice()),
         report,
     );
-    let u = matmul_awq_scaled(
+    let u = matmul_awq(
         &n2,
         &w.wu,
         seq,
@@ -1926,11 +2083,10 @@ fn layer_forward(
         INTERMEDIATE,
         MatmulSite::Up,
         cfg,
-        smoothquant.map(|sq| sq.mlp_in.as_slice()),
         report,
     );
     let m = silu_mul_cfg(&g, &u, cfg);
-    let d = matmul_awq_scaled(
+    let d = matmul_awq(
         &m,
         &w.wd,
         seq,
@@ -1938,7 +2094,6 @@ fn layer_forward(
         HIDDEN,
         MatmulSite::Down,
         cfg,
-        smoothquant.map(|sq| sq.down_in.as_slice()),
         report,
     );
     add_cfg(&h, &d, cfg)
@@ -2015,11 +2170,10 @@ fn layer_prefill_cached(
     r: &Rotary,
     seq: usize,
     cfg: &ForwardConfig,
-    smoothquant: Option<&SmoothQuantLayer>,
     report: &mut Report,
 ) -> (Vec<f32>, LayerCache) {
     let n1 = rms_norm_cfg(x, &w.ln1, seq, HIDDEN, cfg);
-    let mut q = matmul_cached_awq_scaled(
+    let mut q = matmul_cached_awq(
         &n1,
         &w.wq,
         qw.map(|q| q.wq.as_slice()),
@@ -2028,13 +2182,12 @@ fn layer_prefill_cached(
         Q_DIM,
         MatmulSite::Q,
         cfg,
-        smoothquant.map(|sq| sq.attn_in.as_slice()),
         report,
     );
     add_rows(&mut q, &w.bq);
     fixed_q8_in_place_if(&mut q, cfg);
     let q = rms_norm_heads_cfg(&q, &w.q_norm, seq, HEADS, cfg);
-    let mut k = matmul_cached_awq_scaled(
+    let mut k = matmul_cached_awq(
         &n1,
         &w.wk,
         qw.map(|q| q.wk.as_slice()),
@@ -2043,13 +2196,12 @@ fn layer_prefill_cached(
         KV_DIM,
         MatmulSite::K,
         cfg,
-        smoothquant.map(|sq| sq.attn_in.as_slice()),
         report,
     );
     add_rows(&mut k, &w.bk);
     fixed_q8_in_place_if(&mut k, cfg);
     let k = rms_norm_heads_cfg(&k, &w.k_norm, seq, KV_HEADS, cfg);
-    let mut v = matmul_cached_awq_scaled(
+    let mut v = matmul_cached_awq(
         &n1,
         &w.wv,
         qw.map(|q| q.wv.as_slice()),
@@ -2058,7 +2210,6 @@ fn layer_prefill_cached(
         KV_DIM,
         MatmulSite::V,
         cfg,
-        smoothquant.map(|sq| sq.attn_in.as_slice()),
         report,
     );
     add_rows(&mut v, &w.bv);
@@ -2081,7 +2232,7 @@ fn layer_prefill_cached(
     );
     let h = add_cfg(x, &a, cfg);
     let n2 = rms_norm_cfg(&h, &w.ln2, seq, HIDDEN, cfg);
-    let g = matmul_cached_awq_scaled(
+    let g = matmul_cached_awq(
         &n2,
         &w.wg,
         qw.map(|q| q.wg.as_slice()),
@@ -2090,10 +2241,9 @@ fn layer_prefill_cached(
         INTERMEDIATE,
         MatmulSite::Gate,
         cfg,
-        smoothquant.map(|sq| sq.mlp_in.as_slice()),
         report,
     );
-    let u = matmul_cached_awq_scaled(
+    let u = matmul_cached_awq(
         &n2,
         &w.wu,
         qw.map(|q| q.wu.as_slice()),
@@ -2102,11 +2252,10 @@ fn layer_prefill_cached(
         INTERMEDIATE,
         MatmulSite::Up,
         cfg,
-        smoothquant.map(|sq| sq.mlp_in.as_slice()),
         report,
     );
     let m = silu_mul_cfg(&g, &u, cfg);
-    let d = matmul_cached_awq_scaled(
+    let d = matmul_cached_awq(
         &m,
         &w.wd,
         qw.map(|q| q.wd.as_slice()),
@@ -2115,10 +2264,38 @@ fn layer_prefill_cached(
         HIDDEN,
         MatmulSite::Down,
         cfg,
-        smoothquant.map(|sq| sq.down_in.as_slice()),
         report,
     );
     (add_cfg(&h, &d, cfg), LayerCache { k, v })
+}
+
+fn layer_prefill_fixed_cached(
+    x: &[i32],
+    w: &FixedLayerWeights,
+    r: &Rotary,
+    seq: usize,
+    cfg: &ForwardConfig,
+) -> (Vec<i32>, FixedLayerCache) {
+    let frac = cfg.fixed_frac;
+    let n1 = rms_norm_fixed_i32(x, &w.ln1, seq, HIDDEN, frac);
+    let q = matmul_fixed_i32(&n1, &w.q.wq, seq, HIDDEN, Q_DIM, frac, frac, frac);
+    let q = rms_norm_fixed_i32(&q, &w.q_norm, seq * HEADS, HEAD_DIM, frac);
+    let k = matmul_fixed_i32(&n1, &w.q.wk, seq, HIDDEN, KV_DIM, frac, frac, frac);
+    let k = rms_norm_fixed_i32(&k, &w.k_norm, seq * KV_HEADS, HEAD_DIM, frac);
+    let v = matmul_fixed_i32(&n1, &w.q.wv, seq, HIDDEN, KV_DIM, frac, frac, frac);
+    let q = rope_fixed_i32(&q, &r.rq[..q.len()], frac);
+    let k = rope_fixed_i32(&k, &r.rk[..k.len()], frac);
+    let s = score_qk_fixed_i32(&q, &k, seq, frac);
+    let p = softmax_fixed_i32(&s, HEADS * seq, seq, frac);
+    let c = attn_v_fixed_i32(&p, &v, seq, frac);
+    let a = matmul_fixed_i32(&c, &w.q.wo, seq, Q_DIM, HIDDEN, frac, frac, frac);
+    let h = add_fixed_i32(x, &a);
+    let n2 = rms_norm_fixed_i32(&h, &w.ln2, seq, HIDDEN, frac);
+    let g = matmul_fixed_i32(&n2, &w.q.wg, seq, HIDDEN, INTERMEDIATE, frac, frac, frac);
+    let u = matmul_fixed_i32(&n2, &w.q.wu, seq, HIDDEN, INTERMEDIATE, frac, frac, frac);
+    let m = silu_mul_fixed_i32(&g, &u, frac);
+    let d = matmul_fixed_i32(&m, &w.q.wd, seq, INTERMEDIATE, HIDDEN, frac, frac, frac);
+    (add_fixed_i32(&h, &d), FixedLayerCache { k, v })
 }
 
 fn layer_decode_cached(
@@ -2129,11 +2306,10 @@ fn layer_decode_cached(
     pos: usize,
     cache: &mut LayerCache,
     cfg: &ForwardConfig,
-    smoothquant: Option<&SmoothQuantLayer>,
     report: &mut Report,
 ) -> Vec<f32> {
     let n1 = rms_norm_cfg(x, &w.ln1, 1, HIDDEN, cfg);
-    let mut q = matmul_cached_awq_scaled(
+    let mut q = matmul_cached_awq(
         &n1,
         &w.wq,
         qw.map(|q| q.wq.as_slice()),
@@ -2142,13 +2318,12 @@ fn layer_decode_cached(
         Q_DIM,
         MatmulSite::Q,
         cfg,
-        smoothquant.map(|sq| sq.attn_in.as_slice()),
         report,
     );
     add_rows(&mut q, &w.bq);
     fixed_q8_in_place_if(&mut q, cfg);
     let q = rms_norm_heads_cfg(&q, &w.q_norm, 1, HEADS, cfg);
-    let mut k = matmul_cached_awq_scaled(
+    let mut k = matmul_cached_awq(
         &n1,
         &w.wk,
         qw.map(|q| q.wk.as_slice()),
@@ -2157,13 +2332,12 @@ fn layer_decode_cached(
         KV_DIM,
         MatmulSite::K,
         cfg,
-        smoothquant.map(|sq| sq.attn_in.as_slice()),
         report,
     );
     add_rows(&mut k, &w.bk);
     fixed_q8_in_place_if(&mut k, cfg);
     let k = rms_norm_heads_cfg(&k, &w.k_norm, 1, KV_HEADS, cfg);
-    let mut v = matmul_cached_awq_scaled(
+    let mut v = matmul_cached_awq(
         &n1,
         &w.wv,
         qw.map(|q| q.wv.as_slice()),
@@ -2172,7 +2346,6 @@ fn layer_decode_cached(
         KV_DIM,
         MatmulSite::V,
         cfg,
-        smoothquant.map(|sq| sq.attn_in.as_slice()),
         report,
     );
     add_rows(&mut v, &w.bv);
@@ -2196,7 +2369,7 @@ fn layer_decode_cached(
     );
     let h = add_cfg(x, &a, cfg);
     let n2 = rms_norm_cfg(&h, &w.ln2, 1, HIDDEN, cfg);
-    let g = matmul_cached_awq_scaled(
+    let g = matmul_cached_awq(
         &n2,
         &w.wg,
         qw.map(|q| q.wg.as_slice()),
@@ -2205,10 +2378,9 @@ fn layer_decode_cached(
         INTERMEDIATE,
         MatmulSite::Gate,
         cfg,
-        smoothquant.map(|sq| sq.mlp_in.as_slice()),
         report,
     );
-    let u = matmul_cached_awq_scaled(
+    let u = matmul_cached_awq(
         &n2,
         &w.wu,
         qw.map(|q| q.wu.as_slice()),
@@ -2217,11 +2389,10 @@ fn layer_decode_cached(
         INTERMEDIATE,
         MatmulSite::Up,
         cfg,
-        smoothquant.map(|sq| sq.mlp_in.as_slice()),
         report,
     );
     let m = silu_mul_cfg(&g, &u, cfg);
-    let d = matmul_cached_awq_scaled(
+    let d = matmul_cached_awq(
         &m,
         &w.wd,
         qw.map(|q| q.wd.as_slice()),
@@ -2230,10 +2401,40 @@ fn layer_decode_cached(
         HIDDEN,
         MatmulSite::Down,
         cfg,
-        smoothquant.map(|sq| sq.down_in.as_slice()),
         report,
     );
     add_cfg(&h, &d, cfg)
+}
+
+fn layer_decode_fixed_cached(
+    x: &[i32],
+    w: &FixedLayerWeights,
+    r: &Rotary,
+    pos: usize,
+    cache: &mut FixedLayerCache,
+    cfg: &ForwardConfig,
+) -> Vec<i32> {
+    let frac = cfg.fixed_frac;
+    let n1 = rms_norm_fixed_i32(x, &w.ln1, 1, HIDDEN, frac);
+    let q = matmul_fixed_i32(&n1, &w.q.wq, 1, HIDDEN, Q_DIM, frac, frac, frac);
+    let q = rms_norm_fixed_i32(&q, &w.q_norm, HEADS, HEAD_DIM, frac);
+    let k = matmul_fixed_i32(&n1, &w.q.wk, 1, HIDDEN, KV_DIM, frac, frac, frac);
+    let k = rms_norm_fixed_i32(&k, &w.k_norm, KV_HEADS, HEAD_DIM, frac);
+    let v = matmul_fixed_i32(&n1, &w.q.wv, 1, HIDDEN, KV_DIM, frac, frac, frac);
+    let q = rope_one_fixed_i32(&q, &r.rq, pos, HEADS, frac);
+    let k = rope_one_fixed_i32(&k, &r.rk, pos, KV_HEADS, frac);
+    cache.k.extend_from_slice(&k);
+    cache.v.extend_from_slice(&v);
+    let context_len = cache.v.len() / KV_DIM;
+    let c = attn_v_decode_fixed_i32(&q, &cache.k, &cache.v, context_len, frac);
+    let a = matmul_fixed_i32(&c, &w.q.wo, 1, Q_DIM, HIDDEN, frac, frac, frac);
+    let h = add_fixed_i32(x, &a);
+    let n2 = rms_norm_fixed_i32(&h, &w.ln2, 1, HIDDEN, frac);
+    let g = matmul_fixed_i32(&n2, &w.q.wg, 1, HIDDEN, INTERMEDIATE, frac, frac, frac);
+    let u = matmul_fixed_i32(&n2, &w.q.wu, 1, HIDDEN, INTERMEDIATE, frac, frac, frac);
+    let m = silu_mul_fixed_i32(&g, &u, frac);
+    let d = matmul_fixed_i32(&m, &w.q.wd, 1, INTERMEDIATE, HIDDEN, frac, frac, frac);
+    add_fixed_i32(&h, &d)
 }
 
 fn matmul_awq(
@@ -2292,13 +2493,13 @@ fn matmul_awq_fixed_int(
 }
 
 fn fixed_a_frac_for_site(site: MatmulSite, cfg: &ForwardConfig) -> Option<u8> {
-    if cfg.fixed_first
+    if cfg.fixed_runtime()
         && matches!(
             site,
             MatmulSite::Q | MatmulSite::K | MatmulSite::V | MatmulSite::Gate | MatmulSite::Up
         )
     {
-        Some(RMSNORM_FRAC)
+        Some(cfg.fixed_frac)
     } else {
         cfg.a_bits.0
     }
@@ -2361,44 +2562,6 @@ fn round_shift_signed_i64(x: i64, shift: u8) -> i64 {
     } else {
         -(((-x) + half) >> shift)
     }
-}
-
-fn matmul_awq_scaled(
-    a: &[f32],
-    w: &[f32],
-    m: usize,
-    k: usize,
-    n: usize,
-    site: MatmulSite,
-    cfg: &ForwardConfig,
-    scale: Option<&[f32]>,
-    report: &mut Report,
-) -> Vec<f32> {
-    let Some(scale) = scale else {
-        return matmul_awq(a, w, m, k, n, site, cfg, report);
-    };
-    assert_eq!(scale.len(), k);
-    let a_scaled = scale_activation(a, m, k, scale);
-    let w_scaled = scale_weight_input_axis(w, k, n, scale);
-    matmul_awq(&a_scaled, &w_scaled, m, k, n, site, cfg, report)
-}
-
-fn matmul_cached_awq_scaled(
-    a: &[f32],
-    w: &[f32],
-    w_int: Option<&[i32]>,
-    m: usize,
-    k: usize,
-    n: usize,
-    site: MatmulSite,
-    cfg: &ForwardConfig,
-    scale: Option<&[f32]>,
-    report: &mut Report,
-) -> Vec<f32> {
-    if scale.is_some() {
-        return matmul_awq_scaled(a, w, m, k, n, site, cfg, scale, report);
-    }
-    matmul_cached_awq(a, w, w_int, m, k, n, site, cfg, report)
 }
 
 fn matmul_cached_awq(
@@ -2473,30 +2636,40 @@ fn matmul_fixed_prequant(
     y
 }
 
-fn scale_activation(a: &[f32], m: usize, k: usize, scale: &[f32]) -> Vec<f32> {
+fn matmul_fixed_i32(
+    a: &[i32],
+    w: &[i32],
+    m: usize,
+    k: usize,
+    n: usize,
+    a_frac: u8,
+    w_frac: u8,
+    y_frac: u8,
+) -> Vec<i32> {
     assert_eq!(a.len(), m * k);
-    assert_eq!(scale.len(), k);
-    let mut out = vec![0.0; a.len()];
-    out.par_chunks_mut(k).enumerate().for_each(|(r, row)| {
-        let src = &a[r * k..(r + 1) * k];
-        for c in 0..k {
-            row[c] = src[c] / scale[c];
+    assert_eq!(w.len(), k * n);
+    let acc_frac = a_frac + w_frac;
+    let mut y = vec![0i32; m * n];
+    y.par_chunks_mut(n).enumerate().for_each(|(r, row)| {
+        for c in 0..n {
+            let mut acc = 0i64;
+            for i in 0..k {
+                acc += a[r * k + i] as i64 * w[i * n + c] as i64;
+            }
+            row[c] = rebase_fixed_acc(acc, acc_frac, y_frac) as i32;
         }
     });
-    out
+    y
 }
 
-fn scale_weight_input_axis(w: &[f32], k: usize, n: usize, scale: &[f32]) -> Vec<f32> {
-    assert_eq!(w.len(), k * n);
-    assert_eq!(scale.len(), k);
-    let mut out = vec![0.0; w.len()];
-    out.par_chunks_mut(n).enumerate().for_each(|(r, row)| {
-        let src = &w[r * n..(r + 1) * n];
-        for c in 0..n {
-            row[c] = src[c] * scale[r];
-        }
-    });
-    out
+fn fixed_i32_to_f32(xs: &[i32], frac: u8) -> Vec<f32> {
+    let scale = (1u64 << frac) as f32;
+    xs.par_iter().map(|&x| x as f32 / scale).collect()
+}
+
+fn add_fixed_i32(a: &[i32], b: &[i32]) -> Vec<i32> {
+    assert_eq!(a.len(), b.len());
+    a.par_iter().zip(b).map(|(&x, &y)| x + y).collect()
 }
 
 fn matmul(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
@@ -2534,28 +2707,28 @@ fn add_rows(x: &mut [f32], b: &[f32]) {
 }
 
 fn maybe_fixed_q8(xs: Vec<f32>, cfg: &ForwardConfig) -> Vec<f32> {
-    if cfg.fixed_first {
-        fixed_q8_vec(&xs)
+    if cfg.fixed_runtime() {
+        fixed_q8_vec(&xs, cfg.fixed_frac)
     } else {
         xs
     }
 }
 
 fn fixed_q8_in_place_if(xs: &mut [f32], cfg: &ForwardConfig) {
-    if cfg.fixed_first {
-        fixed_q8_in_place(xs);
+    if cfg.fixed_runtime() {
+        fixed_q8_in_place(xs, cfg.fixed_frac);
     }
 }
 
-fn fixed_q8_vec(xs: &[f32]) -> Vec<f32> {
+fn fixed_q8_vec(xs: &[f32], frac: u8) -> Vec<f32> {
     xs.par_iter()
-        .map(|&x| quantize_fixed_scalar(x, FIXED_FRAC))
+        .map(|&x| quantize_fixed_scalar(x, frac))
         .collect()
 }
 
-fn fixed_q8_in_place(xs: &mut [f32]) {
+fn fixed_q8_in_place(xs: &mut [f32], frac: u8) {
     xs.par_iter_mut()
-        .for_each(|x| *x = quantize_fixed_scalar(*x, FIXED_FRAC));
+        .for_each(|x| *x = quantize_fixed_scalar(*x, frac));
 }
 
 fn rms_norm(x: &[f32], w: &[f32], rows: usize, cols: usize) -> Vec<f32> {
@@ -2574,8 +2747,8 @@ fn rms_norm(x: &[f32], w: &[f32], rows: usize, cols: usize) -> Vec<f32> {
 }
 
 fn rms_norm_cfg(x: &[f32], w: &[f32], rows: usize, cols: usize, cfg: &ForwardConfig) -> Vec<f32> {
-    if cfg.fixed_first {
-        rms_norm_fixed_q8_with_float_rsqrt(x, w, rows, cols)
+    if cfg.fixed_runtime() {
+        rms_norm_fixed_with_float_rsqrt(x, w, rows, cols, cfg.fixed_frac)
     } else {
         rms_norm(x, w, rows, cols)
     }
@@ -2603,14 +2776,20 @@ fn rms_norm_heads_cfg(
     heads: usize,
     cfg: &ForwardConfig,
 ) -> Vec<f32> {
-    if cfg.fixed_first {
-        rms_norm_fixed_q8_with_float_rsqrt(x, w, rows * heads, HEAD_DIM)
+    if cfg.fixed_runtime() {
+        rms_norm_fixed_with_float_rsqrt(x, w, rows * heads, HEAD_DIM, cfg.fixed_frac)
     } else {
         rms_norm_heads(x, w, rows, heads)
     }
 }
 
-fn rms_norm_fixed_q8_with_float_rsqrt(x: &[f32], w: &[f32], rows: usize, cols: usize) -> Vec<f32> {
+fn rms_norm_fixed_with_float_rsqrt(
+    x: &[f32],
+    w: &[f32],
+    rows: usize,
+    cols: usize,
+    frac: u8,
+) -> Vec<f32> {
     assert_eq!(x.len(), rows * cols);
     assert_eq!(w.len(), cols);
     let mut y = vec![0.0; x.len()];
@@ -2619,29 +2798,53 @@ fn rms_norm_fixed_q8_with_float_rsqrt(x: &[f32], w: &[f32], rows: usize, cols: u
         let mut sq_acc = 0i128;
         let mut x_ints = Vec::with_capacity(cols);
         for &value in xs {
-            let xi = quantize_fixed_i64_scalar(value, FIXED_FRAC);
+            let xi = quantize_fixed_i64_scalar(value, frac);
             sq_acc += xi as i128 * xi as i128;
             x_ints.push(xi);
         }
-        let inv_int = rms_inv_from_square_sum_q8(sq_acc, cols);
+        let inv_int = rms_inv_from_square_sum(sq_acc, cols, frac, frac);
         for c in 0..cols {
-            let w_int = quantize_fixed_i64_scalar(w[c], RMSNORM_FRAC);
-            let norm_int = round_shift_signed_i64(x_ints[c] * inv_int, FIXED_FRAC);
-            let out_int = round_shift_signed_i64(norm_int * w_int, RMSNORM_FRAC);
-            row[c] = out_int as f32 / (1u64 << RMSNORM_FRAC) as f32;
+            let w_int = quantize_fixed_i64_scalar(w[c], frac);
+            let norm_int = round_shift_signed_i64(x_ints[c] * inv_int, frac);
+            let out_int = round_shift_signed_i64(norm_int * w_int, frac);
+            row[c] = out_int as f32 / (1u64 << frac) as f32;
         }
     });
     y
 }
 
-fn rms_inv_from_square_sum_q8(square_sum: i128, hidden_size: usize) -> i64 {
+fn rms_inv_from_square_sum(
+    square_sum: i128,
+    hidden_size: usize,
+    input_frac: u8,
+    output_frac: u8,
+) -> i64 {
     debug_assert!(square_sum >= 0);
     debug_assert!(hidden_size > 0);
-    let input_scale = (1u64 << FIXED_FRAC) as f64;
-    let output_scale = (1u64 << RMSNORM_FRAC) as f64;
+    let input_scale = (1u64 << input_frac) as f64;
+    let output_scale = (1u64 << output_frac) as f64;
     let mean = square_sum as f64 / hidden_size as f64 / (input_scale * input_scale);
     let inv = 1.0 / (mean + 1e-6).sqrt();
     (inv * output_scale).round() as i64
+}
+
+fn rms_norm_fixed_i32(x: &[i32], w: &[i32], rows: usize, cols: usize, frac: u8) -> Vec<i32> {
+    assert_eq!(x.len(), rows * cols);
+    assert_eq!(w.len(), cols);
+    let mut y = vec![0i32; x.len()];
+    y.par_chunks_mut(cols).enumerate().for_each(|(r, row)| {
+        let xs = &x[r * cols..(r + 1) * cols];
+        let mut sq_acc = 0i128;
+        for &xi in xs {
+            sq_acc += xi as i128 * xi as i128;
+        }
+        let inv_int = rms_inv_from_square_sum(sq_acc, cols, frac, frac);
+        for c in 0..cols {
+            let norm_int = round_shift_signed_i64(xs[c] as i64 * inv_int, frac);
+            row[c] = round_shift_signed_i64(norm_int * w[c] as i64, frac) as i32;
+        }
+    });
+    y
 }
 
 fn rope(x: &[f32], r: &[f32]) -> Vec<f32> {
@@ -2668,7 +2871,7 @@ fn rope(x: &[f32], r: &[f32]) -> Vec<f32> {
 }
 
 fn rope_cfg(x: &[f32], r: &[f32], cfg: &ForwardConfig) -> Vec<f32> {
-    if !cfg.fixed_first {
+    if !cfg.fixed_runtime() {
         return rope(x, r);
     }
     assert_eq!(x.len(), r.len());
@@ -2680,7 +2883,12 @@ fn rope_cfg(x: &[f32], r: &[f32], cfg: &ForwardConfig) -> Vec<f32> {
     };
     y.par_chunks_mut(hd).enumerate().for_each(|(i, out)| {
         let base = i * hd;
-        rope_fixed_q8_chunk(&x[base..base + hd], &r[base..base + hd], out);
+        rope_fixed_chunk(
+            &x[base..base + hd],
+            &r[base..base + hd],
+            out,
+            cfg.fixed_frac,
+        );
     });
     y
 }
@@ -2705,7 +2913,7 @@ fn rope_one(x: &[f32], r: &[f32], pos: usize, heads: usize) -> Vec<f32> {
 }
 
 fn rope_one_cfg(x: &[f32], r: &[f32], pos: usize, heads: usize, cfg: &ForwardConfig) -> Vec<f32> {
-    if !cfg.fixed_first {
+    if !cfg.fixed_runtime() {
         return rope_one(x, r, pos, heads);
     }
     assert_eq!(x.len(), heads * HEAD_DIM);
@@ -2713,26 +2921,70 @@ fn rope_one_cfg(x: &[f32], r: &[f32], pos: usize, heads: usize, cfg: &ForwardCon
     for h in 0..heads {
         let base = h * HEAD_DIM;
         let rbase = (pos * heads + h) * HEAD_DIM;
-        rope_fixed_q8_chunk(
+        rope_fixed_chunk(
             &x[base..base + HEAD_DIM],
             &r[rbase..rbase + HEAD_DIM],
             &mut y[base..base + HEAD_DIM],
+            cfg.fixed_frac,
         );
     }
     y
 }
 
-fn rope_fixed_q8_chunk(x: &[f32], r: &[f32], out: &mut [f32]) {
+fn rope_fixed_chunk(x: &[f32], r: &[f32], out: &mut [f32], frac: u8) {
     let half = x.len() / 2;
     for d in 0..half {
-        let a = quantize_fixed_i64_scalar(x[d], FIXED_FRAC);
-        let b = quantize_fixed_i64_scalar(x[half + d], FIXED_FRAC);
-        let c = quantize_fixed_i64_scalar(r[d], FIXED_FRAC);
-        let s = quantize_fixed_i64_scalar(r[half + d], FIXED_FRAC);
-        let y0 = round_shift_signed_i64(a * c - b * s, FIXED_FRAC);
-        let y1 = round_shift_signed_i64(b * c + a * s, FIXED_FRAC);
-        out[d] = y0 as f32 / (1u64 << FIXED_FRAC) as f32;
-        out[half + d] = y1 as f32 / (1u64 << FIXED_FRAC) as f32;
+        let a = quantize_fixed_i64_scalar(x[d], frac);
+        let b = quantize_fixed_i64_scalar(x[half + d], frac);
+        let c = quantize_fixed_i64_scalar(r[d], frac);
+        let s = quantize_fixed_i64_scalar(r[half + d], frac);
+        let y0 = round_shift_signed_i64(a * c - b * s, frac);
+        let y1 = round_shift_signed_i64(b * c + a * s, frac);
+        out[d] = y0 as f32 / (1u64 << frac) as f32;
+        out[half + d] = y1 as f32 / (1u64 << frac) as f32;
+    }
+}
+
+fn rope_fixed_i32(x: &[i32], r: &[f32], frac: u8) -> Vec<i32> {
+    assert_eq!(x.len(), r.len());
+    let mut y = vec![0i32; x.len()];
+    let hd = if x.len() % HEAD_DIM == 0 {
+        HEAD_DIM
+    } else {
+        x.len()
+    };
+    y.par_chunks_mut(hd).enumerate().for_each(|(i, out)| {
+        let base = i * hd;
+        rope_fixed_i32_chunk(&x[base..base + hd], &r[base..base + hd], out, frac);
+    });
+    y
+}
+
+fn rope_one_fixed_i32(x: &[i32], r: &[f32], pos: usize, heads: usize, frac: u8) -> Vec<i32> {
+    assert_eq!(x.len(), heads * HEAD_DIM);
+    let mut y = vec![0i32; x.len()];
+    for h in 0..heads {
+        let base = h * HEAD_DIM;
+        let rbase = (pos * heads + h) * HEAD_DIM;
+        rope_fixed_i32_chunk(
+            &x[base..base + HEAD_DIM],
+            &r[rbase..rbase + HEAD_DIM],
+            &mut y[base..base + HEAD_DIM],
+            frac,
+        );
+    }
+    y
+}
+
+fn rope_fixed_i32_chunk(x: &[i32], r: &[f32], out: &mut [i32], frac: u8) {
+    let half = x.len() / 2;
+    for d in 0..half {
+        let a = x[d] as i64;
+        let b = x[half + d] as i64;
+        let c = quantize_fixed_i64_scalar(r[d], frac);
+        let s = quantize_fixed_i64_scalar(r[half + d], frac);
+        out[d] = round_shift_signed_i64(a * c - b * s, frac) as i32;
+        out[half + d] = round_shift_signed_i64(b * c + a * s, frac) as i32;
     }
 }
 
@@ -2763,13 +3015,13 @@ fn score_qk(q: &[f32], k: &[f32], seq: usize) -> Vec<f32> {
 }
 
 fn score_qk_cfg(q: &[f32], k: &[f32], seq: usize, cfg: &ForwardConfig) -> Vec<f32> {
-    if !cfg.fixed_first {
+    if !cfg.fixed_runtime() {
         return score_qk(q, k, seq);
     }
     assert_eq!(q.len(), seq * HEADS * HEAD_DIM);
     assert_eq!(k.len(), seq * KV_DIM);
     let inv_sqrt_int =
-        ((1.0 / (HEAD_DIM as f32).sqrt()) * (1u64 << FIXED_FRAC) as f32).round() as i64;
+        ((1.0 / (HEAD_DIM as f32).sqrt()) * (1u64 << cfg.fixed_frac) as f32).round() as i64;
     let mut y = vec![0.0; HEADS * seq * seq];
     y.par_chunks_mut(seq * seq).enumerate().for_each(|(h, ys)| {
         let kh = h / KV_GROUP;
@@ -2784,13 +3036,41 @@ fn score_qk_cfg(q: &[f32], k: &[f32], seq: usize, cfg: &ForwardConfig) -> Vec<f3
                 for d in 0..HEAD_DIM {
                     let qi = (i * HEADS + h) * HEAD_DIM + d;
                     let ki = (j * KV_HEADS + kh) * HEAD_DIM + d;
-                    let q_int = quantize_fixed_i64_scalar(q[qi], FIXED_FRAC);
-                    let k_int = quantize_fixed_i64_scalar(k[ki], FIXED_FRAC);
+                    let q_int = quantize_fixed_i64_scalar(q[qi], cfg.fixed_frac);
+                    let k_int = quantize_fixed_i64_scalar(k[ki], cfg.fixed_frac);
                     acc += q_int * k_int;
                 }
-                let dot_q8 = round_shift_signed_i64(acc, FIXED_FRAC);
-                let score_q8 = round_shift_signed_i64(dot_q8 * inv_sqrt_int, FIXED_FRAC);
-                ys[o] = score_q8 as f32 / (1u64 << FIXED_FRAC) as f32;
+                let dot_int = round_shift_signed_i64(acc, cfg.fixed_frac);
+                let score_int = round_shift_signed_i64(dot_int * inv_sqrt_int, cfg.fixed_frac);
+                ys[o] = score_int as f32 / (1u64 << cfg.fixed_frac) as f32;
+            }
+        }
+    });
+    y
+}
+
+fn score_qk_fixed_i32(q: &[i32], k: &[i32], seq: usize, frac: u8) -> Vec<i32> {
+    assert_eq!(q.len(), seq * HEADS * HEAD_DIM);
+    assert_eq!(k.len(), seq * KV_DIM);
+    let inv_sqrt_int = ((1.0 / (HEAD_DIM as f32).sqrt()) * (1u64 << frac) as f32).round() as i64;
+    let mut y = vec![0i32; HEADS * seq * seq];
+    y.par_chunks_mut(seq * seq).enumerate().for_each(|(h, ys)| {
+        let kh = h / KV_GROUP;
+        for i in 0..seq {
+            for j in 0..seq {
+                let o = i * seq + j;
+                if j > i {
+                    ys[o] = i32::MIN / 4;
+                    continue;
+                }
+                let mut acc = 0i64;
+                for d in 0..HEAD_DIM {
+                    let qi = (i * HEADS + h) * HEAD_DIM + d;
+                    let ki = (j * KV_HEADS + kh) * HEAD_DIM + d;
+                    acc += q[qi] as i64 * k[ki] as i64;
+                }
+                let dot_int = round_shift_signed_i64(acc, frac);
+                ys[o] = round_shift_signed_i64(dot_int * inv_sqrt_int, frac) as i32;
             }
         }
     });
@@ -2816,7 +3096,7 @@ fn softmax(x: &[f32], rows: usize, cols: usize) -> Vec<f32> {
 }
 
 fn softmax_cfg(x: &[f32], rows: usize, cols: usize, cfg: &ForwardConfig) -> Vec<f32> {
-    if !cfg.fixed_first {
+    if !cfg.fixed_runtime() {
         return softmax(x, rows, cols);
     }
     assert_eq!(x.len(), rows * cols);
@@ -2827,7 +3107,7 @@ fn softmax_cfg(x: &[f32], rows: usize, cols: usize, cfg: &ForwardConfig) -> Vec<
             .iter()
             .map(|&value| {
                 if value.is_finite() {
-                    quantize_fixed_i64_scalar(value, FIXED_FRAC)
+                    quantize_fixed_i64_scalar(value, cfg.fixed_frac)
                 } else {
                     i64::MIN / 4
                 }
@@ -2841,7 +3121,7 @@ fn softmax_cfg(x: &[f32], rows: usize, cols: usize, cfg: &ForwardConfig) -> Vec<
                 exps[c] = 0;
             } else {
                 let diff = xs_int[c] - mx;
-                exps[c] = softmax_exp_q8_coarse(diff);
+                exps[c] = softmax_exp_coarse(diff, cfg.fixed_frac);
             }
             sum += exps[c];
         }
@@ -2849,9 +3129,36 @@ fn softmax_cfg(x: &[f32], rows: usize, cols: usize, cfg: &ForwardConfig) -> Vec<
             return;
         }
         for c in 0..cols {
-            let p_int = div_round_i128((exps[c] as i128) << SOFTMAX_FRAC, sum as i128)
-                .clamp(0, 1i128 << SOFTMAX_FRAC) as i64;
-            row[c] = p_int as f32 / (1u64 << SOFTMAX_FRAC) as f32;
+            let p_int = div_round_i128((exps[c] as i128) << cfg.fixed_frac, sum as i128)
+                .clamp(0, 1i128 << cfg.fixed_frac) as i64;
+            row[c] = p_int as f32 / (1u64 << cfg.fixed_frac) as f32;
+        }
+    });
+    y
+}
+
+fn softmax_fixed_i32(x: &[i32], rows: usize, cols: usize, frac: u8) -> Vec<i32> {
+    assert_eq!(x.len(), rows * cols);
+    let mut y = vec![0i32; x.len()];
+    y.par_chunks_mut(cols).enumerate().for_each(|(r, row)| {
+        let xs = &x[r * cols..(r + 1) * cols];
+        let mx = xs.iter().copied().max().unwrap_or(0);
+        let mut exps = vec![0i64; cols];
+        let mut sum = 0i64;
+        for c in 0..cols {
+            if xs[c] <= i32::MIN / 8 {
+                exps[c] = 0;
+            } else {
+                exps[c] = softmax_exp_coarse((xs[c] - mx) as i64, frac);
+            }
+            sum += exps[c];
+        }
+        if sum == 0 {
+            return;
+        }
+        for c in 0..cols {
+            row[c] = div_round_i128((exps[c] as i128) << frac, sum as i128).clamp(0, 1i128 << frac)
+                as i32;
         }
     });
     y
@@ -2867,13 +3174,13 @@ fn div_round_i128(num: i128, den: i128) -> i128 {
     if sign { -rounded_abs } else { rounded_abs }
 }
 
-fn softmax_exp_q8_coarse(diff_q8: i64) -> i64 {
-    let clipped = diff_q8.clamp(-(8i64 << FIXED_FRAC), 0);
-    let n = floor_shift_signed_i64(clipped, FIXED_FRAC).clamp(-8, 0);
-    let f_q8 = clipped - (n << FIXED_FRAC);
-    let exp_n = ((n as f32).exp() * (1u64 << EXP_FRAC) as f32).round() as i64;
-    let corr = ((1i64 << FIXED_FRAC) + f_q8).max(0);
-    round_shift_signed_i64(exp_n * corr, FIXED_FRAC)
+fn softmax_exp_coarse(diff_int: i64, frac: u8) -> i64 {
+    let clipped = diff_int.clamp(-(8i64 << frac), 0);
+    let n = floor_shift_signed_i64(clipped, frac).clamp(-8, 0);
+    let f_int = clipped - (n << frac);
+    let exp_n = ((n as f32).exp() * (1u64 << frac) as f32).round() as i64;
+    let corr = ((1i64 << frac) + f_int).max(0);
+    round_shift_signed_i64(exp_n * corr, frac)
 }
 
 fn floor_shift_signed_i64(x: i64, shift: u8) -> i64 {
@@ -2904,7 +3211,7 @@ fn attn_v(p: &[f32], v: &[f32], seq: usize) -> Vec<f32> {
 }
 
 fn attn_v_cfg(p: &[f32], v: &[f32], seq: usize, cfg: &ForwardConfig) -> Vec<f32> {
-    if !cfg.fixed_first {
+    if !cfg.fixed_runtime() {
         return attn_v(p, v, seq);
     }
     assert_eq!(p.len(), HEADS * seq * seq);
@@ -2921,12 +3228,35 @@ fn attn_v_cfg(p: &[f32], v: &[f32], seq: usize, cfg: &ForwardConfig) -> Vec<f32>
                 for j in 0..seq {
                     let pi = (h * seq + pos) * seq + j;
                     let vi = (j * KV_HEADS + kh) * HEAD_DIM + d;
-                    let p_int = quantize_fixed_i64_scalar(p[pi], SOFTMAX_FRAC);
-                    let v_int = quantize_fixed_i64_scalar(v[vi], FIXED_FRAC);
+                    let p_int = quantize_fixed_i64_scalar(p[pi], cfg.fixed_frac);
+                    let v_int = quantize_fixed_i64_scalar(v[vi], cfg.fixed_frac);
                     acc += p_int * v_int;
                 }
-                let y_int = round_shift_signed_i64(acc, SOFTMAX_FRAC);
-                *slot = y_int as f32 / (1u64 << FIXED_FRAC) as f32;
+                let y_int = round_shift_signed_i64(acc, cfg.fixed_frac);
+                *slot = y_int as f32 / (1u64 << cfg.fixed_frac) as f32;
+            }
+        });
+    y
+}
+
+fn attn_v_fixed_i32(p: &[i32], v: &[i32], seq: usize, frac: u8) -> Vec<i32> {
+    assert_eq!(p.len(), HEADS * seq * seq);
+    assert_eq!(v.len(), seq * KV_DIM);
+    let mut y = vec![0i32; seq * Q_DIM];
+    y.par_chunks_mut(HEAD_DIM)
+        .enumerate()
+        .for_each(|(oh, out)| {
+            let pos = oh / HEADS;
+            let h = oh % HEADS;
+            let kh = h / KV_GROUP;
+            for (d, slot) in out.iter_mut().enumerate() {
+                let mut acc = 0i64;
+                for j in 0..seq {
+                    let pi = (h * seq + pos) * seq + j;
+                    let vi = (j * KV_HEADS + kh) * HEAD_DIM + d;
+                    acc += p[pi] as i64 * v[vi] as i64;
+                }
+                *slot = round_shift_signed_i64(acc, frac) as i32;
             }
         });
     y
@@ -2974,7 +3304,7 @@ fn attn_v_decode_cfg(
     context_len: usize,
     cfg: &ForwardConfig,
 ) -> Vec<f32> {
-    if !cfg.fixed_first {
+    if !cfg.fixed_runtime() {
         return attn_v_decode(q, k, v, context_len);
     }
     assert_eq!(q.len(), Q_DIM);
@@ -2982,7 +3312,7 @@ fn attn_v_decode_cfg(
     assert_eq!(v.len(), context_len * KV_DIM);
     let mut y = vec![0.0; Q_DIM];
     let inv_sqrt_int =
-        ((1.0 / (HEAD_DIM as f32).sqrt()) * (1u64 << FIXED_FRAC) as f32).round() as i64;
+        ((1.0 / (HEAD_DIM as f32).sqrt()) * (1u64 << cfg.fixed_frac) as f32).round() as i64;
     y.par_chunks_mut(HEAD_DIM).enumerate().for_each(|(h, out)| {
         let kh = h / KV_GROUP;
         let mut scores = vec![0.0f32; context_len];
@@ -2991,37 +3321,83 @@ fn attn_v_decode_cfg(
             for d in 0..HEAD_DIM {
                 let qi = h * HEAD_DIM + d;
                 let ki = (j * KV_HEADS + kh) * HEAD_DIM + d;
-                let q_int = quantize_fixed_i64_scalar(q[qi], FIXED_FRAC);
-                let k_int = quantize_fixed_i64_scalar(k[ki], FIXED_FRAC);
+                let q_int = quantize_fixed_i64_scalar(q[qi], cfg.fixed_frac);
+                let k_int = quantize_fixed_i64_scalar(k[ki], cfg.fixed_frac);
                 acc += q_int * k_int;
             }
-            let dot_q8 = round_shift_signed_i64(acc, FIXED_FRAC);
-            let score_q8 = round_shift_signed_i64(dot_q8 * inv_sqrt_int, FIXED_FRAC);
-            scores[j] = score_q8 as f32 / (1u64 << FIXED_FRAC) as f32;
+            let dot_int = round_shift_signed_i64(acc, cfg.fixed_frac);
+            let score_int = round_shift_signed_i64(dot_int * inv_sqrt_int, cfg.fixed_frac);
+            scores[j] = score_int as f32 / (1u64 << cfg.fixed_frac) as f32;
         }
         let scores_int: Vec<i64> = scores
             .iter()
-            .map(|&score| quantize_fixed_i64_scalar(score, FIXED_FRAC))
+            .map(|&score| quantize_fixed_i64_scalar(score, cfg.fixed_frac))
             .collect();
         let mx = scores_int.iter().copied().max().unwrap_or(0);
         let mut exps = vec![0i64; context_len];
         let mut denom = 0i64;
         for j in 0..context_len {
             let diff = scores_int[j] - mx;
-            exps[j] = softmax_exp_q8_coarse(diff);
+            exps[j] = softmax_exp_coarse(diff, cfg.fixed_frac);
             denom += exps[j];
         }
         for (d, slot) in out.iter_mut().enumerate() {
             let mut acc = 0i64;
             for (j, &exp_int) in exps.iter().enumerate() {
-                let p_int = div_round_i128((exp_int as i128) << SOFTMAX_FRAC, denom as i128)
-                    .clamp(0, 1i128 << SOFTMAX_FRAC) as i64;
+                let p_int = div_round_i128((exp_int as i128) << cfg.fixed_frac, denom as i128)
+                    .clamp(0, 1i128 << cfg.fixed_frac) as i64;
                 let vi = (j * KV_HEADS + kh) * HEAD_DIM + d;
-                let v_int = quantize_fixed_i64_scalar(v[vi], FIXED_FRAC);
+                let v_int = quantize_fixed_i64_scalar(v[vi], cfg.fixed_frac);
                 acc += p_int * v_int;
             }
-            let y_int = round_shift_signed_i64(acc, SOFTMAX_FRAC);
-            *slot = y_int as f32 / (1u64 << FIXED_FRAC) as f32;
+            let y_int = round_shift_signed_i64(acc, cfg.fixed_frac);
+            *slot = y_int as f32 / (1u64 << cfg.fixed_frac) as f32;
+        }
+    });
+    y
+}
+
+fn attn_v_decode_fixed_i32(
+    q: &[i32],
+    k: &[i32],
+    v: &[i32],
+    context_len: usize,
+    frac: u8,
+) -> Vec<i32> {
+    assert_eq!(q.len(), Q_DIM);
+    assert_eq!(k.len(), context_len * KV_DIM);
+    assert_eq!(v.len(), context_len * KV_DIM);
+    let mut y = vec![0i32; Q_DIM];
+    let inv_sqrt_int = ((1.0 / (HEAD_DIM as f32).sqrt()) * (1u64 << frac) as f32).round() as i64;
+    y.par_chunks_mut(HEAD_DIM).enumerate().for_each(|(h, out)| {
+        let kh = h / KV_GROUP;
+        let mut scores = vec![0i32; context_len];
+        for (j, score) in scores.iter_mut().enumerate() {
+            let mut acc = 0i64;
+            for d in 0..HEAD_DIM {
+                let qi = h * HEAD_DIM + d;
+                let ki = (j * KV_HEADS + kh) * HEAD_DIM + d;
+                acc += q[qi] as i64 * k[ki] as i64;
+            }
+            let dot_int = round_shift_signed_i64(acc, frac);
+            *score = round_shift_signed_i64(dot_int * inv_sqrt_int, frac) as i32;
+        }
+        let mx = scores.iter().copied().max().unwrap_or(0);
+        let mut exps = vec![0i64; context_len];
+        let mut denom = 0i64;
+        for j in 0..context_len {
+            exps[j] = softmax_exp_coarse((scores[j] - mx) as i64, frac);
+            denom += exps[j];
+        }
+        for (d, slot) in out.iter_mut().enumerate() {
+            let mut acc = 0i64;
+            for (j, &exp_int) in exps.iter().enumerate() {
+                let p_int = div_round_i128((exp_int as i128) << frac, denom as i128)
+                    .clamp(0, 1i128 << frac) as i64;
+                let vi = (j * KV_HEADS + kh) * HEAD_DIM + d;
+                acc += p_int * v[vi] as i64;
+            }
+            *slot = round_shift_signed_i64(acc, frac) as i32;
         }
     });
     y
@@ -3036,47 +3412,37 @@ fn silu_mul(g: &[f32], u: &[f32]) -> Vec<f32> {
 }
 
 fn silu_mul_cfg(g: &[f32], u: &[f32], cfg: &ForwardConfig) -> Vec<f32> {
-    if cfg.fixed_first {
-        return silu_mul_fixed_q8(g, u);
+    if cfg.fixed_runtime() {
+        return silu_mul_fixed(g, u, cfg.fixed_frac);
     }
-    if cfg.sigmoid_lut_frac.is_none() && cfg.silu_g_frac.is_none() {
-        return silu_mul(g, u);
-    };
-    assert_eq!(g.len(), u.len());
-    let lut = cfg.sigmoid_lut_frac.map(|frac| {
-        SigmoidLut::new(
-            frac,
-            cfg.sigmoid_lut_out_frac,
-            cfg.sigmoid_lut_min,
-            cfg.sigmoid_lut_max,
-        )
-    });
-    g.par_iter()
-        .zip(u)
-        .map(|(&a, &b)| {
-            let g_mul = cfg
-                .silu_g_frac
-                .map_or(a, |frac| quantize_fixed_scalar(a, frac));
-            let sig = lut
-                .as_ref()
-                .map_or_else(|| 1.0 / (1.0 + (-a).exp()), |lut| lut.lookup(a));
-            (g_mul * sig) * b
-        })
-        .collect()
+    silu_mul(g, u)
 }
 
-fn silu_mul_fixed_q8(g: &[f32], u: &[f32]) -> Vec<f32> {
+fn silu_mul_fixed(g: &[f32], u: &[f32], frac: u8) -> Vec<f32> {
     assert_eq!(g.len(), u.len());
     g.par_iter()
         .zip(u)
         .map(|(&g, &u)| {
-            let g_int = quantize_fixed_i64_scalar(g, FIXED_FRAC);
-            let u_int = quantize_fixed_i64_scalar(u, FIXED_FRAC);
-            let g_index = round_shift_signed_i64(g_int, FIXED_FRAC);
-            let sig_int = sigmoid_q8_from_integer_index(g_index);
-            let silu_int = round_shift_signed_i64(g_int * sig_int, FIXED_FRAC);
-            let out_int = round_shift_signed_i64(silu_int * u_int, FIXED_FRAC);
-            out_int as f32 / (1u64 << FIXED_FRAC) as f32
+            let g_int = quantize_fixed_i64_scalar(g, frac);
+            let u_int = quantize_fixed_i64_scalar(u, frac);
+            let g_index = round_shift_signed_i64(g_int, frac);
+            let sig_int = sigmoid_from_integer_index(g_index, frac);
+            let silu_int = round_shift_signed_i64(g_int * sig_int, frac);
+            let out_int = round_shift_signed_i64(silu_int * u_int, frac);
+            out_int as f32 / (1u64 << frac) as f32
+        })
+        .collect()
+}
+
+fn silu_mul_fixed_i32(g: &[i32], u: &[i32], frac: u8) -> Vec<i32> {
+    assert_eq!(g.len(), u.len());
+    g.par_iter()
+        .zip(u)
+        .map(|(&g, &u)| {
+            let g_index = round_shift_signed_i64(g as i64, frac);
+            let sig_int = sigmoid_from_integer_index(g_index, frac);
+            let silu_int = round_shift_signed_i64(g as i64 * sig_int, frac);
+            round_shift_signed_i64(silu_int * u as i64, frac) as i32
         })
         .collect()
 }
@@ -3086,50 +3452,14 @@ fn quantize_fixed_i64_scalar(x: f32, frac: u8) -> i64 {
     (x * scale).round() as i64
 }
 
-fn sigmoid_q8_from_integer_index(x: i64) -> i64 {
+fn sigmoid_from_integer_index(x: i64, frac: u8) -> i64 {
     let x = x.clamp(-8, 7) as f32;
-    (1.0 / (1.0 + (-x).exp()) * (1u64 << FIXED_FRAC) as f32).round() as i64
+    (1.0 / (1.0 + (-x).exp()) * (1u64 << frac) as f32).round() as i64
 }
 
 fn quantize_fixed_scalar(x: f32, frac: u8) -> f32 {
     let scale = (1u64 << frac) as f32;
     (x * scale).round() / scale
-}
-
-struct SigmoidLut {
-    min_q: i32,
-    max_q: i32,
-    scale: f32,
-    values: Vec<f32>,
-}
-
-impl SigmoidLut {
-    fn new(frac: u8, out_frac: Option<u8>, min: f32, max: f32) -> Self {
-        assert!(frac <= 20);
-        let scale = (1u64 << frac) as f32;
-        let min_q = (min * scale).ceil() as i32;
-        let max_q = (max * scale).ceil() as i32 - 1;
-        assert!(min_q <= max_q);
-        let values = (min_q..=max_q)
-            .map(|q| {
-                let x = q as f32 / scale;
-                let y = 1.0 / (1.0 + (-x).exp());
-                out_frac.map_or(y, |frac| quantize_fixed_scalar(y, frac))
-            })
-            .collect();
-        Self {
-            min_q,
-            max_q,
-            scale,
-            values,
-        }
-    }
-
-    fn lookup(&self, x: f32) -> f32 {
-        let q = (x * self.scale).round() as i32;
-        let q = q.clamp(self.min_q, self.max_q);
-        self.values[(q - self.min_q) as usize]
-    }
 }
 
 fn quantize_rows_optional(

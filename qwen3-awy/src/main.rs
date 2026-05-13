@@ -26,15 +26,30 @@ const KV_GROUP: usize = HEADS / KV_HEADS;
 const VOCAB: usize = 151_936;
 const ROPE_THETA: f64 = 1_000_000.0;
 const DEFAULT_FIXED_FRAC: u8 = 8;
+const LUT_FRAC: u8 = 8;
 const EOS_IM_END: u32 = 151_645;
 const EOS_END_OF_TEXT: u32 = 151_643;
 const PAD: u32 = EOS_END_OF_TEXT;
 const NO_THINK_SUFFIX: &str = "<think>\n\n</think>\n\n";
+const ROUND_LUT_Q8: [i64; 256] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+];
+const EXP_LUT_Q8: [i64; 9] = [0, 0, 1, 2, 5, 13, 35, 94, 256];
+const SIGMOID_LUT_Q8: [i64; 16] = [
+    0, 0, 1, 2, 5, 12, 31, 69, 128, 187, 225, 244, 251, 254, 255, 256,
+];
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse()?;
     let started = Instant::now();
-    let ids = tokenize(&args.tokenizer, &args.text, args.seq_len)?;
+    let ids = tokenize(&args.tokenizer, &args.text, args.seq_len, args.thinking)?;
     let read_started = Instant::now();
     let bytes = std::fs::read(&args.model)?;
     let read_elapsed = read_started.elapsed();
@@ -71,21 +86,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     if let Some(top_n) = args.outlier_tokens {
-        let mut real_ids = encode_unpadded(&args.tokenizer, &args.text)?;
+        let mut real_ids = encode_unpadded(&args.tokenizer, &args.text, args.thinking)?;
         real_ids.truncate(args.seq_len);
         report_down_outlier_tokens(&st, &args.tokenizer, &real_ids, top_n, false)?;
         println!("elapsed: {:.2?}", started.elapsed());
         return Ok(());
     }
     if let Some(top_n) = args.outlier_content_tokens {
-        let mut real_ids = encode_unpadded(&args.tokenizer, &args.text)?;
+        let mut real_ids = encode_unpadded(&args.tokenizer, &args.text, args.thinking)?;
         real_ids.truncate(args.seq_len);
         report_down_outlier_tokens(&st, &args.tokenizer, &real_ids, top_n, true)?;
         println!("elapsed: {:.2?}", started.elapsed());
         return Ok(());
     }
     if let Some((layer, pos, top_n)) = args.outlier_vector {
-        let mut real_ids = encode_unpadded(&args.tokenizer, &args.text)?;
+        let mut real_ids = encode_unpadded(&args.tokenizer, &args.text, args.thinking)?;
         real_ids.truncate(args.seq_len);
         report_down_outlier_vector(&st, &args.tokenizer, &real_ids, layer, pos, top_n)?;
         println!("elapsed: {:.2?}", started.elapsed());
@@ -96,9 +111,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("prompt: {:?}", args.text);
         println!("model: {}", args.model.display());
         println!("tokenizer: {}", args.tokenizer.display());
-        println!("prompt_template: qwen3-no-think");
+        println!("prompt_template: {}", prompt_template_name(args.thinking));
         println!("fixed: true");
         println!("fixed_frac: {}", args.cfg.fixed_frac);
+        println!(
+            "matmul_rebase_rounding: {}",
+            args.cfg.matmul_rebase_rounding.name()
+        );
+        println!(
+            "sigmoid_input_rounding: {}",
+            args.cfg.sigmoid_input_rounding.name()
+        );
         println!("seq_len: {}", args.seq_len);
         println!("kv_cache: {}", args.use_kv_cache);
         println!("sample: {}", args.sampling.enabled);
@@ -134,9 +157,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("text: {:?}", args.text);
     println!("model: {}", args.model.display());
     println!("tokenizer: {}", args.tokenizer.display());
-    println!("prompt_template: qwen3-no-think");
+    println!("prompt_template: {}", prompt_template_name(args.thinking));
     println!("fixed: true");
     println!("fixed_frac: {}", args.cfg.fixed_frac);
+    println!(
+        "matmul_rebase_rounding: {}",
+        args.cfg.matmul_rebase_rounding.name()
+    );
+    println!(
+        "sigmoid_input_rounding: {}",
+        args.cfg.sigmoid_input_rounding.name()
+    );
     println!("seq_len: {}", args.seq_len);
     println!("input_tokens: {}", args.input_tokens);
     println!("context_tokens: {}", ids.len());
@@ -165,6 +196,7 @@ struct Args {
     generate_tokens: Option<usize>,
     use_kv_cache: bool,
     stream: bool,
+    thinking: bool,
     sampling: Sampling,
     calibration_jsonl: Option<PathBuf>,
     activation_stats_out: Option<PathBuf>,
@@ -193,6 +225,7 @@ impl Args {
         let mut generate_tokens = None;
         let mut use_kv_cache = true;
         let mut stream = false;
+        let mut thinking = false;
         let mut sampling = Sampling::default();
         let mut greedy = false;
         let mut calibration_jsonl = None;
@@ -225,6 +258,20 @@ impl Args {
                     }
                     cfg.set_fixed_frac(frac);
                 }
+                "--matmul-rebase-rounding" => {
+                    cfg.matmul_rebase_rounding = RoundingMode::parse(
+                        &args
+                            .next()
+                            .ok_or("--matmul-rebase-rounding requires round|floor|ceil")?,
+                    )?;
+                }
+                "--sigmoid-input-rounding" => {
+                    cfg.sigmoid_input_rounding = RoundingMode::parse(
+                        &args
+                            .next()
+                            .ok_or("--sigmoid-input-rounding requires round|floor|ceil")?,
+                    )?;
+                }
                 "--seq-len" => {
                     seq_len = args.next().ok_or("--seq-len requires a value")?.parse()?;
                     if seq_len < 2 {
@@ -246,6 +293,8 @@ impl Args {
                 }
                 "--no-kv-cache" => use_kv_cache = false,
                 "--stream" => stream = true,
+                "--thinking" => thinking = true,
+                "--no-think" => thinking = false,
                 "--sample" => sampling.enabled = true,
                 "--greedy" => greedy = true,
                 "--seed" => {
@@ -368,7 +417,7 @@ impl Args {
         if greedy {
             sampling.enabled = false;
         }
-        let input_tokens = count_tokens(&tokenizer, &text)?;
+        let input_tokens = count_tokens(&tokenizer, &text, thinking)?;
 
         Ok(Self {
             model,
@@ -379,6 +428,7 @@ impl Args {
             generate_tokens,
             use_kv_cache,
             stream,
+            thinking,
             sampling,
             calibration_jsonl,
             activation_stats_out,
@@ -406,8 +456,12 @@ fn print_help() {
            --model PATH          safetensors path\n\
            --tokenizer PATH      tokenizer.json path\n\
            --fixed-frac N        fractional bits for QX.N fixed-point block runtime; default 8; range 0..=12\n\
+           --matmul-rebase-rounding round|floor|ceil MatMul accumulator rebase rounding; default round\n\
+           --sigmoid-input-rounding round|floor|ceil sigmoid input integer rounding; default round\n\
            --seq-len N           context length; default 128\n\
            --generate N          generate up to N new tokens\n\
+           --thinking            use Qwen3 thinking chat prompt instead of no-think\n\
+           --no-think            use Qwen3 no-think prompt; default\n\
            --no-kv-cache         use slow full-forward generation\n\
            --stream              print decoded text after each generated token\n\
            --sample              sample next token; default on for Qwen3\n\
@@ -463,6 +517,8 @@ struct ForwardConfig {
     quant_mode: QuantMode,
     enabled: MatmulSet,
     fixed_frac: u8,
+    matmul_rebase_rounding: RoundingMode,
+    sigmoid_input_rounding: RoundingMode,
 }
 
 impl ForwardConfig {
@@ -483,9 +539,38 @@ impl Default for ForwardConfig {
             quant_mode: QuantMode::Fixed,
             enabled: MatmulSet::default(),
             fixed_frac: DEFAULT_FIXED_FRAC,
+            matmul_rebase_rounding: RoundingMode::Round,
+            sigmoid_input_rounding: RoundingMode::Round,
         };
         cfg.set_fixed_frac(DEFAULT_FIXED_FRAC);
         cfg
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum RoundingMode {
+    #[default]
+    Round,
+    Floor,
+    Ceil,
+}
+
+impl RoundingMode {
+    fn parse(value: &str) -> Result<Self, Box<dyn Error>> {
+        match value {
+            "round" | "nearest" => Ok(Self::Round),
+            "floor" => Ok(Self::Floor),
+            "ceil" | "ceiling" => Ok(Self::Ceil),
+            _ => Err(err(format!("unknown rounding mode {value:?}"))),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Round => "round",
+            Self::Floor => "floor",
+            Self::Ceil => "ceil",
+        }
     }
 }
 
@@ -582,18 +667,23 @@ impl MatmulSite {
     }
 }
 
-fn count_tokens(path: &PathBuf, text: &str) -> Result<usize, Box<dyn Error>> {
+fn count_tokens(path: &PathBuf, text: &str, thinking: bool) -> Result<usize, Box<dyn Error>> {
     let tok = Tokenizer::from_file(path).map_err(|e| err(e.to_string()))?;
-    let prompt = no_think_chat_prompt(text);
+    let prompt = chat_prompt(text, thinking);
     let enc = tok
         .encode(prompt.as_str(), true)
         .map_err(|e| err(e.to_string()))?;
     Ok(enc.get_ids().len())
 }
 
-fn tokenize(path: &PathBuf, text: &str, seq_len: usize) -> Result<Vec<u32>, Box<dyn Error>> {
+fn tokenize(
+    path: &PathBuf,
+    text: &str,
+    seq_len: usize,
+    thinking: bool,
+) -> Result<Vec<u32>, Box<dyn Error>> {
     let tok = Tokenizer::from_file(path).map_err(|e| err(e.to_string()))?;
-    let prompt = no_think_chat_prompt(text);
+    let prompt = chat_prompt(text, thinking);
     let enc = tok
         .encode(prompt.as_str(), true)
         .map_err(|e| err(e.to_string()))?;
@@ -603,20 +693,30 @@ fn tokenize(path: &PathBuf, text: &str, seq_len: usize) -> Result<Vec<u32>, Box<
     Ok(ids)
 }
 
-fn encode_unpadded(path: &PathBuf, text: &str) -> Result<Vec<u32>, Box<dyn Error>> {
+fn encode_unpadded(path: &PathBuf, text: &str, thinking: bool) -> Result<Vec<u32>, Box<dyn Error>> {
     let tok = Tokenizer::from_file(path).map_err(|e| err(e.to_string()))?;
-    let prompt = no_think_chat_prompt(text);
+    let prompt = chat_prompt(text, thinking);
     let enc = tok
         .encode(prompt.as_str(), true)
         .map_err(|e| err(e.to_string()))?;
     Ok(enc.get_ids().to_vec())
 }
 
+fn chat_prompt(text: &str, thinking: bool) -> String {
+    let suffix = if thinking { "" } else { NO_THINK_SUFFIX };
+    format!("<|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n{suffix}")
+}
+
 fn no_think_chat_prompt(text: &str) -> String {
-    format!(
-        "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n{}",
-        text, NO_THINK_SUFFIX
-    )
+    chat_prompt(text, false)
+}
+
+fn prompt_template_name(thinking: bool) -> &'static str {
+    if thinking {
+        "qwen3-thinking"
+    } else {
+        "qwen3-no-think"
+    }
 }
 
 fn decode_tokens(path: &PathBuf, ids: &[u32]) -> Result<String, Box<dyn Error>> {
@@ -1511,7 +1611,7 @@ fn generate_greedy_uncached(
     args: &Args,
     max_new_tokens: usize,
 ) -> Result<GenerationResult, Box<dyn Error>> {
-    let mut real_ids = encode_unpadded(&args.tokenizer, &args.text)?;
+    let mut real_ids = encode_unpadded(&args.tokenizer, &args.text, args.thinking)?;
     if real_ids.is_empty() {
         return Err(err("prompt produced no tokens"));
     }
@@ -1564,7 +1664,7 @@ fn generate_greedy_cached(
     args: &Args,
     max_new_tokens: usize,
 ) -> Result<GenerationResult, Box<dyn Error>> {
-    let mut real_ids = encode_unpadded(&args.tokenizer, &args.text)?;
+    let mut real_ids = encode_unpadded(&args.tokenizer, &args.text, args.thinking)?;
     if real_ids.is_empty() {
         return Err(err("prompt produced no tokens"));
     }
@@ -2278,23 +2378,93 @@ fn layer_prefill_fixed_cached(
 ) -> (Vec<i32>, FixedLayerCache) {
     let frac = cfg.fixed_frac;
     let n1 = rms_norm_fixed_i32(x, &w.ln1, seq, HIDDEN, frac);
-    let q = matmul_fixed_i32(&n1, &w.q.wq, seq, HIDDEN, Q_DIM, frac, frac, frac);
+    let q = matmul_fixed_i32(
+        &n1,
+        &w.q.wq,
+        seq,
+        HIDDEN,
+        Q_DIM,
+        frac,
+        frac,
+        frac,
+        cfg.matmul_rebase_rounding,
+    );
     let q = rms_norm_fixed_i32(&q, &w.q_norm, seq * HEADS, HEAD_DIM, frac);
-    let k = matmul_fixed_i32(&n1, &w.q.wk, seq, HIDDEN, KV_DIM, frac, frac, frac);
+    let k = matmul_fixed_i32(
+        &n1,
+        &w.q.wk,
+        seq,
+        HIDDEN,
+        KV_DIM,
+        frac,
+        frac,
+        frac,
+        cfg.matmul_rebase_rounding,
+    );
     let k = rms_norm_fixed_i32(&k, &w.k_norm, seq * KV_HEADS, HEAD_DIM, frac);
-    let v = matmul_fixed_i32(&n1, &w.q.wv, seq, HIDDEN, KV_DIM, frac, frac, frac);
+    let v = matmul_fixed_i32(
+        &n1,
+        &w.q.wv,
+        seq,
+        HIDDEN,
+        KV_DIM,
+        frac,
+        frac,
+        frac,
+        cfg.matmul_rebase_rounding,
+    );
     let q = rope_fixed_i32(&q, &r.rq[..q.len()], frac);
     let k = rope_fixed_i32(&k, &r.rk[..k.len()], frac);
     let s = score_qk_fixed_i32(&q, &k, seq, frac);
     let p = softmax_fixed_i32(&s, HEADS * seq, seq, frac);
     let c = attn_v_fixed_i32(&p, &v, seq, frac);
-    let a = matmul_fixed_i32(&c, &w.q.wo, seq, Q_DIM, HIDDEN, frac, frac, frac);
+    let a = matmul_fixed_i32(
+        &c,
+        &w.q.wo,
+        seq,
+        Q_DIM,
+        HIDDEN,
+        frac,
+        frac,
+        frac,
+        cfg.matmul_rebase_rounding,
+    );
     let h = add_fixed_i32(x, &a);
     let n2 = rms_norm_fixed_i32(&h, &w.ln2, seq, HIDDEN, frac);
-    let g = matmul_fixed_i32(&n2, &w.q.wg, seq, HIDDEN, INTERMEDIATE, frac, frac, frac);
-    let u = matmul_fixed_i32(&n2, &w.q.wu, seq, HIDDEN, INTERMEDIATE, frac, frac, frac);
-    let m = silu_mul_fixed_i32(&g, &u, frac);
-    let d = matmul_fixed_i32(&m, &w.q.wd, seq, INTERMEDIATE, HIDDEN, frac, frac, frac);
+    let g = matmul_fixed_i32(
+        &n2,
+        &w.q.wg,
+        seq,
+        HIDDEN,
+        INTERMEDIATE,
+        frac,
+        frac,
+        frac,
+        cfg.matmul_rebase_rounding,
+    );
+    let u = matmul_fixed_i32(
+        &n2,
+        &w.q.wu,
+        seq,
+        HIDDEN,
+        INTERMEDIATE,
+        frac,
+        frac,
+        frac,
+        cfg.matmul_rebase_rounding,
+    );
+    let m = silu_mul_fixed_i32(&g, &u, frac, cfg.sigmoid_input_rounding);
+    let d = matmul_fixed_i32(
+        &m,
+        &w.q.wd,
+        seq,
+        INTERMEDIATE,
+        HIDDEN,
+        frac,
+        frac,
+        frac,
+        cfg.matmul_rebase_rounding,
+    );
     (add_fixed_i32(&h, &d), FixedLayerCache { k, v })
 }
 
@@ -2416,24 +2586,94 @@ fn layer_decode_fixed_cached(
 ) -> Vec<i32> {
     let frac = cfg.fixed_frac;
     let n1 = rms_norm_fixed_i32(x, &w.ln1, 1, HIDDEN, frac);
-    let q = matmul_fixed_i32(&n1, &w.q.wq, 1, HIDDEN, Q_DIM, frac, frac, frac);
+    let q = matmul_fixed_i32(
+        &n1,
+        &w.q.wq,
+        1,
+        HIDDEN,
+        Q_DIM,
+        frac,
+        frac,
+        frac,
+        cfg.matmul_rebase_rounding,
+    );
     let q = rms_norm_fixed_i32(&q, &w.q_norm, HEADS, HEAD_DIM, frac);
-    let k = matmul_fixed_i32(&n1, &w.q.wk, 1, HIDDEN, KV_DIM, frac, frac, frac);
+    let k = matmul_fixed_i32(
+        &n1,
+        &w.q.wk,
+        1,
+        HIDDEN,
+        KV_DIM,
+        frac,
+        frac,
+        frac,
+        cfg.matmul_rebase_rounding,
+    );
     let k = rms_norm_fixed_i32(&k, &w.k_norm, KV_HEADS, HEAD_DIM, frac);
-    let v = matmul_fixed_i32(&n1, &w.q.wv, 1, HIDDEN, KV_DIM, frac, frac, frac);
+    let v = matmul_fixed_i32(
+        &n1,
+        &w.q.wv,
+        1,
+        HIDDEN,
+        KV_DIM,
+        frac,
+        frac,
+        frac,
+        cfg.matmul_rebase_rounding,
+    );
     let q = rope_one_fixed_i32(&q, &r.rq, pos, HEADS, frac);
     let k = rope_one_fixed_i32(&k, &r.rk, pos, KV_HEADS, frac);
     cache.k.extend_from_slice(&k);
     cache.v.extend_from_slice(&v);
     let context_len = cache.v.len() / KV_DIM;
     let c = attn_v_decode_fixed_i32(&q, &cache.k, &cache.v, context_len, frac);
-    let a = matmul_fixed_i32(&c, &w.q.wo, 1, Q_DIM, HIDDEN, frac, frac, frac);
+    let a = matmul_fixed_i32(
+        &c,
+        &w.q.wo,
+        1,
+        Q_DIM,
+        HIDDEN,
+        frac,
+        frac,
+        frac,
+        cfg.matmul_rebase_rounding,
+    );
     let h = add_fixed_i32(x, &a);
     let n2 = rms_norm_fixed_i32(&h, &w.ln2, 1, HIDDEN, frac);
-    let g = matmul_fixed_i32(&n2, &w.q.wg, 1, HIDDEN, INTERMEDIATE, frac, frac, frac);
-    let u = matmul_fixed_i32(&n2, &w.q.wu, 1, HIDDEN, INTERMEDIATE, frac, frac, frac);
-    let m = silu_mul_fixed_i32(&g, &u, frac);
-    let d = matmul_fixed_i32(&m, &w.q.wd, 1, INTERMEDIATE, HIDDEN, frac, frac, frac);
+    let g = matmul_fixed_i32(
+        &n2,
+        &w.q.wg,
+        1,
+        HIDDEN,
+        INTERMEDIATE,
+        frac,
+        frac,
+        frac,
+        cfg.matmul_rebase_rounding,
+    );
+    let u = matmul_fixed_i32(
+        &n2,
+        &w.q.wu,
+        1,
+        HIDDEN,
+        INTERMEDIATE,
+        frac,
+        frac,
+        frac,
+        cfg.matmul_rebase_rounding,
+    );
+    let m = silu_mul_fixed_i32(&g, &u, frac, cfg.sigmoid_input_rounding);
+    let d = matmul_fixed_i32(
+        &m,
+        &w.q.wd,
+        1,
+        INTERMEDIATE,
+        HIDDEN,
+        frac,
+        frac,
+        frac,
+        cfg.matmul_rebase_rounding,
+    );
     add_fixed_i32(&h, &d)
 }
 
@@ -2480,9 +2720,17 @@ fn matmul_awq_fixed_int(
     cfg: &ForwardConfig,
 ) -> Vec<f32> {
     match (fixed_a_frac_for_site(site, cfg), cfg.w_bits.0) {
-        (Some(a_frac), Some(w_frac)) => {
-            matmul_fixed_int(a, w, m, k, n, a_frac, w_frac, cfg.y_bits.0)
-        }
+        (Some(a_frac), Some(w_frac)) => matmul_fixed_int(
+            a,
+            w,
+            m,
+            k,
+            n,
+            a_frac,
+            w_frac,
+            cfg.y_bits.0,
+            cfg.matmul_rebase_rounding,
+        ),
         _ => {
             let aq = quantize_rows_optional(a, m, k, cfg.a_bits, cfg.quant_mode);
             let wq = quantize_cols_optional(w, k, n, cfg.w_bits, cfg.quant_mode);
@@ -2514,6 +2762,7 @@ fn matmul_fixed_int(
     a_frac: u8,
     w_frac: u8,
     y_frac: Option<u8>,
+    rounding: RoundingMode,
 ) -> Vec<f32> {
     assert_eq!(a.len(), m * k);
     assert_eq!(w.len(), k * n);
@@ -2531,7 +2780,7 @@ fn matmul_fixed_int(
             }
             row[c] = match y_frac {
                 Some(y_frac) => {
-                    let y_int = rebase_fixed_acc(acc, acc_frac, y_frac);
+                    let y_int = rebase_fixed_acc(acc, acc_frac, y_frac, rounding);
                     (y_int as f64 / (1u64 << y_frac) as f64) as f32
                 }
                 None => (acc as f64 / (1u64 << acc_frac) as f64) as f32,
@@ -2541,14 +2790,22 @@ fn matmul_fixed_int(
     y
 }
 
-fn rebase_fixed_acc(acc: i64, from_frac: u8, to_frac: u8) -> i64 {
+fn rebase_fixed_acc(acc: i64, from_frac: u8, to_frac: u8, rounding: RoundingMode) -> i64 {
     if from_frac == to_frac {
         return acc;
     }
     if from_frac > to_frac {
-        round_shift_signed_i64(acc, from_frac - to_frac)
+        shift_signed_i64(acc, from_frac - to_frac, rounding)
     } else {
         acc << (to_frac - from_frac)
+    }
+}
+
+fn shift_signed_i64(x: i64, shift: u8, rounding: RoundingMode) -> i64 {
+    match rounding {
+        RoundingMode::Round => round_shift_signed_i64(x, shift),
+        RoundingMode::Floor => floor_shift_signed_i64(x, shift),
+        RoundingMode::Ceil => ceil_shift_signed_i64(x, shift),
     }
 }
 
@@ -2556,12 +2813,31 @@ fn round_shift_signed_i64(x: i64, shift: u8) -> i64 {
     if shift == 0 {
         return x;
     }
-    let half = 1i64 << (shift - 1);
-    if x >= 0 {
-        (x + half) >> shift
+    let q = floor_shift_signed_i64(x, shift);
+    let denom = 1i64 << shift;
+    let r = x - (q << shift);
+    debug_assert!((0..denom).contains(&r));
+    if shift == LUT_FRAC {
+        q + ROUND_LUT_Q8[r as usize]
+    } else if r * 2 >= denom {
+        q + 1
     } else {
-        -(((-x) + half) >> shift)
+        q
     }
+}
+
+fn ceil_shift_signed_i64(x: i64, shift: u8) -> i64 {
+    if shift == 0 {
+        return x;
+    }
+    let denom = 1i128 << shift;
+    let x = x as i128;
+    let y = if x >= 0 {
+        (x + denom - 1) / denom
+    } else {
+        -((-x) / denom)
+    };
+    y as i64
 }
 
 fn matmul_cached_awq(
@@ -2590,7 +2866,16 @@ fn matmul_cached_awq(
     };
     assert_eq!(w_int.len(), k * n);
     let a_int = quantize_fixed_i32(a, a_frac);
-    let y = matmul_fixed_prequant(&a_int, w_int, m, k, n, a_frac + w_frac, cfg.y_bits.0);
+    let y = matmul_fixed_prequant(
+        &a_int,
+        w_int,
+        m,
+        k,
+        n,
+        a_frac + w_frac,
+        cfg.y_bits.0,
+        cfg.matmul_rebase_rounding,
+    );
     if report.enabled {
         let reference = matmul(a, w, m, k, n);
         report.push(site.name(), &reference, &y);
@@ -2614,6 +2899,7 @@ fn matmul_fixed_prequant(
     n: usize,
     acc_frac: u8,
     y_frac: Option<u8>,
+    rounding: RoundingMode,
 ) -> Vec<f32> {
     assert_eq!(a.len(), m * k);
     assert_eq!(w.len(), k * n);
@@ -2626,7 +2912,7 @@ fn matmul_fixed_prequant(
             }
             row[c] = match y_frac {
                 Some(y_frac) => {
-                    let y_int = rebase_fixed_acc(acc, acc_frac, y_frac);
+                    let y_int = rebase_fixed_acc(acc, acc_frac, y_frac, rounding);
                     (y_int as f64 / (1u64 << y_frac) as f64) as f32
                 }
                 None => (acc as f64 / (1u64 << acc_frac) as f64) as f32,
@@ -2645,21 +2931,239 @@ fn matmul_fixed_i32(
     a_frac: u8,
     w_frac: u8,
     y_frac: u8,
+    rounding: RoundingMode,
 ) -> Vec<i32> {
     assert_eq!(a.len(), m * k);
     assert_eq!(w.len(), k * n);
     let acc_frac = a_frac + w_frac;
     let mut y = vec![0i32; m * n];
-    y.par_chunks_mut(n).enumerate().for_each(|(r, row)| {
-        for c in 0..n {
+    if m == 1 {
+        y.par_chunks_mut(256)
+            .enumerate()
+            .for_each(|(chunk_idx, chunk)| {
+                let start_col = chunk_idx * 256;
+                #[cfg(target_arch = "aarch64")]
+                unsafe {
+                    matmul_fixed_i32_cols_neon(
+                        a, w, chunk, start_col, k, n, acc_frac, y_frac, rounding,
+                    );
+                }
+                #[cfg(not(target_arch = "aarch64"))]
+                {
+                    matmul_fixed_i32_cols_scalar(
+                        a, w, chunk, start_col, k, n, acc_frac, y_frac, rounding,
+                    );
+                }
+            });
+        return y;
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        y.par_chunks_mut(n).enumerate().for_each(|(r, row)| {
+            // SAFETY: aarch64 always has NEON. The helper uses unaligned loads
+            // and falls back to scalar code for tail columns.
+            unsafe {
+                matmul_fixed_i32_row_neon(
+                    &a[r * k..(r + 1) * k],
+                    w,
+                    row,
+                    k,
+                    n,
+                    acc_frac,
+                    y_frac,
+                    rounding,
+                );
+            }
+        });
+    }
+
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        y.par_chunks_mut(n).enumerate().for_each(|(r, row)| {
+            matmul_fixed_i32_row_scalar(
+                &a[r * k..(r + 1) * k],
+                w,
+                row,
+                k,
+                n,
+                acc_frac,
+                y_frac,
+                rounding,
+            );
+        });
+    }
+    y
+}
+
+#[cfg(target_arch = "aarch64")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn matmul_fixed_i32_cols_neon(
+    a: &[i32],
+    w: &[i32],
+    out: &mut [i32],
+    start_col: usize,
+    k: usize,
+    n: usize,
+    acc_frac: u8,
+    y_frac: u8,
+    rounding: RoundingMode,
+) {
+    use std::arch::aarch64::{
+        int64x2_t, vaddq_s64, vdup_n_s32, vdupq_n_s64, vget_high_s32, vget_low_s32, vld1q_s32,
+        vmull_s32, vshlq_s64, vst1q_s64,
+    };
+
+    let mut offset = 0usize;
+    while offset + 4 <= out.len() {
+        let col = start_col + offset;
+        let mut tmp = [0i64; 4];
+        unsafe {
+            let mut acc_lo: int64x2_t = vdupq_n_s64(0);
+            let mut acc_hi: int64x2_t = vdupq_n_s64(0);
+            for i in 0..k {
+                let ai = vdup_n_s32(a[i]);
+                let wv = vld1q_s32(w.as_ptr().add(i * n + col));
+                acc_lo = vaddq_s64(acc_lo, vmull_s32(ai, vget_low_s32(wv)));
+                acc_hi = vaddq_s64(acc_hi, vmull_s32(ai, vget_high_s32(wv)));
+            }
+            // The floor case can rebase by SIMD arithmetic shift. Other modes
+            // keep SIMD accumulation but use scalar post-processing for ties/signs.
+            if rounding == RoundingMode::Floor && acc_frac >= y_frac {
+                let shift = vdupq_n_s64(-((acc_frac - y_frac) as i64));
+                acc_lo = vshlq_s64(acc_lo, shift);
+                acc_hi = vshlq_s64(acc_hi, shift);
+            }
+            vst1q_s64(tmp.as_mut_ptr(), acc_lo);
+            vst1q_s64(tmp.as_mut_ptr().add(2), acc_hi);
+        }
+        for j in 0..4 {
+            out[offset + j] = if rounding == RoundingMode::Floor && acc_frac >= y_frac {
+                tmp[j] as i32
+            } else {
+                rebase_fixed_acc(tmp[j], acc_frac, y_frac, rounding) as i32
+            };
+        }
+        offset += 4;
+    }
+
+    if offset < out.len() {
+        matmul_fixed_i32_cols_scalar(
+            a,
+            w,
+            &mut out[offset..],
+            start_col + offset,
+            k,
+            n,
+            acc_frac,
+            y_frac,
+            rounding,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn matmul_fixed_i32_cols_scalar(
+    a: &[i32],
+    w: &[i32],
+    out: &mut [i32],
+    start_col: usize,
+    k: usize,
+    n: usize,
+    acc_frac: u8,
+    y_frac: u8,
+    rounding: RoundingMode,
+) {
+    for (offset, slot) in out.iter_mut().enumerate() {
+        let col = start_col + offset;
+        let mut acc = 0i64;
+        for i in 0..k {
+            acc += a[i] as i64 * w[i * n + col] as i64;
+        }
+        *slot = rebase_fixed_acc(acc, acc_frac, y_frac, rounding) as i32;
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+fn matmul_fixed_i32_row_scalar(
+    a: &[i32],
+    w: &[i32],
+    row: &mut [i32],
+    k: usize,
+    n: usize,
+    acc_frac: u8,
+    y_frac: u8,
+    rounding: RoundingMode,
+) {
+    for c in 0..n {
+        let mut acc = 0i64;
+        for i in 0..k {
+            acc += a[i] as i64 * w[i * n + c] as i64;
+        }
+        row[c] = rebase_fixed_acc(acc, acc_frac, y_frac, rounding) as i32;
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn matmul_fixed_i32_row_neon(
+    a: &[i32],
+    w: &[i32],
+    row: &mut [i32],
+    k: usize,
+    n: usize,
+    acc_frac: u8,
+    y_frac: u8,
+    rounding: RoundingMode,
+) {
+    use std::arch::aarch64::{
+        int64x2_t, vaddq_s64, vdup_n_s32, vdupq_n_s64, vget_high_s32, vget_low_s32, vld1q_s32,
+        vmull_s32, vshlq_s64, vst1q_s64,
+    };
+
+    let mut c = 0usize;
+    while c + 4 <= n {
+        let mut tmp = [0i64; 4];
+        unsafe {
+            let mut acc_lo: int64x2_t = vdupq_n_s64(0);
+            let mut acc_hi: int64x2_t = vdupq_n_s64(0);
+            for i in 0..k {
+                let ai = vdup_n_s32(a[i]);
+                let wv = vld1q_s32(w.as_ptr().add(i * n + c));
+                acc_lo = vaddq_s64(acc_lo, vmull_s32(ai, vget_low_s32(wv)));
+                acc_hi = vaddq_s64(acc_hi, vmull_s32(ai, vget_high_s32(wv)));
+            }
+            // The floor MatMul rebase is just an arithmetic right shift from
+            // QX.(a_frac + w_frac) to QX.y_frac. Round/ceil need extra
+            // sign/tie handling and stay on the scalar post-processing path.
+            // We also store i64 lanes and cast to i32 below to preserve scalar
+            // `as i32` semantics; saturating NEON narrowing would change behavior.
+            if rounding == RoundingMode::Floor && acc_frac >= y_frac {
+                let shift = vdupq_n_s64(-((acc_frac - y_frac) as i64));
+                acc_lo = vshlq_s64(acc_lo, shift);
+                acc_hi = vshlq_s64(acc_hi, shift);
+            }
+            vst1q_s64(tmp.as_mut_ptr(), acc_lo);
+            vst1q_s64(tmp.as_mut_ptr().add(2), acc_hi);
+        }
+        for j in 0..4 {
+            row[c + j] = if rounding == RoundingMode::Floor && acc_frac >= y_frac {
+                tmp[j] as i32
+            } else {
+                rebase_fixed_acc(tmp[j], acc_frac, y_frac, rounding) as i32
+            };
+        }
+        c += 4;
+    }
+
+    if c < n {
+        for col in c..n {
             let mut acc = 0i64;
             for i in 0..k {
-                acc += a[r * k + i] as i64 * w[i * n + c] as i64;
+                acc += a[i] as i64 * w[i * n + col] as i64;
             }
-            row[c] = rebase_fixed_acc(acc, acc_frac, y_frac) as i32;
+            row[col] = rebase_fixed_acc(acc, acc_frac, y_frac, rounding) as i32;
         }
-    });
-    y
+    }
 }
 
 fn fixed_i32_to_f32(xs: &[i32], frac: u8) -> Vec<f32> {
@@ -3178,7 +3682,11 @@ fn softmax_exp_coarse(diff_int: i64, frac: u8) -> i64 {
     let clipped = diff_int.clamp(-(8i64 << frac), 0);
     let n = floor_shift_signed_i64(clipped, frac).clamp(-8, 0);
     let f_int = clipped - (n << frac);
-    let exp_n = ((n as f32).exp() * (1u64 << frac) as f32).round() as i64;
+    let exp_n = if frac == LUT_FRAC {
+        EXP_LUT_Q8[(n + 8) as usize]
+    } else {
+        ((n as f32).exp() * (1u64 << frac) as f32).round() as i64
+    };
     let corr = ((1i64 << frac) + f_int).max(0);
     round_shift_signed_i64(exp_n * corr, frac)
 }
@@ -3413,19 +3921,19 @@ fn silu_mul(g: &[f32], u: &[f32]) -> Vec<f32> {
 
 fn silu_mul_cfg(g: &[f32], u: &[f32], cfg: &ForwardConfig) -> Vec<f32> {
     if cfg.fixed_runtime() {
-        return silu_mul_fixed(g, u, cfg.fixed_frac);
+        return silu_mul_fixed(g, u, cfg.fixed_frac, cfg.sigmoid_input_rounding);
     }
     silu_mul(g, u)
 }
 
-fn silu_mul_fixed(g: &[f32], u: &[f32], frac: u8) -> Vec<f32> {
+fn silu_mul_fixed(g: &[f32], u: &[f32], frac: u8, sigmoid_rounding: RoundingMode) -> Vec<f32> {
     assert_eq!(g.len(), u.len());
     g.par_iter()
         .zip(u)
         .map(|(&g, &u)| {
             let g_int = quantize_fixed_i64_scalar(g, frac);
             let u_int = quantize_fixed_i64_scalar(u, frac);
-            let g_index = round_shift_signed_i64(g_int, frac);
+            let g_index = shift_signed_i64(g_int, frac, sigmoid_rounding);
             let sig_int = sigmoid_from_integer_index(g_index, frac);
             let silu_int = round_shift_signed_i64(g_int * sig_int, frac);
             let out_int = round_shift_signed_i64(silu_int * u_int, frac);
@@ -3434,12 +3942,12 @@ fn silu_mul_fixed(g: &[f32], u: &[f32], frac: u8) -> Vec<f32> {
         .collect()
 }
 
-fn silu_mul_fixed_i32(g: &[i32], u: &[i32], frac: u8) -> Vec<i32> {
+fn silu_mul_fixed_i32(g: &[i32], u: &[i32], frac: u8, sigmoid_rounding: RoundingMode) -> Vec<i32> {
     assert_eq!(g.len(), u.len());
     g.par_iter()
         .zip(u)
         .map(|(&g, &u)| {
-            let g_index = round_shift_signed_i64(g as i64, frac);
+            let g_index = shift_signed_i64(g as i64, frac, sigmoid_rounding);
             let sig_int = sigmoid_from_integer_index(g_index, frac);
             let silu_int = round_shift_signed_i64(g as i64 * sig_int, frac);
             round_shift_signed_i64(silu_int * u as i64, frac) as i32
@@ -3453,8 +3961,13 @@ fn quantize_fixed_i64_scalar(x: f32, frac: u8) -> i64 {
 }
 
 fn sigmoid_from_integer_index(x: i64, frac: u8) -> i64 {
-    let x = x.clamp(-8, 7) as f32;
-    (1.0 / (1.0 + (-x).exp()) * (1u64 << frac) as f32).round() as i64
+    let x = x.clamp(-8, 7);
+    if frac == LUT_FRAC {
+        SIGMOID_LUT_Q8[(x + 8) as usize]
+    } else {
+        let x = x as f32;
+        (1.0 / (1.0 + (-x).exp()) * (1u64 << frac) as f32).round() as i64
+    }
 }
 
 fn quantize_fixed_scalar(x: f32, frac: u8) -> f32 {

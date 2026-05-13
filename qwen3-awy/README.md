@@ -75,11 +75,30 @@ Generation:
 cargo run --release -p qwen3-awy -- --seq-len 128 --generate 64 "Tell a fairy tale about a quiet fox helping a lost rabbit home. Once upon a time, in a forest, a quiet fox"
 ```
 
+Longer fixed-point story sample:
+
+```bash
+cargo run --release -p qwen3-awy -- --seq-len 384 --generate 320 --seed 1 "Tell a fairy tale about a quiet fox helping a lost rabbit home."
+```
+
+With the default QX.8 runtime, nearest MatMul rebase, nearest sigmoid input
+rounding, and the QX.8 lookup tables for rounding, sigmoid, and coarse exp, this
+currently produces:
+
+```text
+Once upon a time, in a small village nestled between a forest and a river, there lived a quiet fox named Lila. She was known for her gentle heart and her ability to see things from another's perspective. One day, a lost rabbit named Timmy wandered into the village, his fur brown and his eyes wide with worry. He had never heard of the village, and he felt lost and alone.
+
+Lila noticed him and decided to help him. She knelt beside him and said, "Timmy, I know you're lost, and I'm here for you. Please don't worry. I'm here to help." Timmy looked up and saw her, and he felt safe. After a while, Lila led him home, and together they made a new home for Timmy. The village was grateful for the kindness of Lila and Timmy.
+
+In the end, Lila and Timmy became friends, and Lila helped others when they were lost. Timmy, who had once been alone, now lived happily in the village with Lila. The story taught the value of kindness and the importance of helping others, even when they feel lost.
+```
+
 The block runtime is fixed point by default. It keeps block-internal tensors in
-QX.8 by default, uses integer MatMul accumulation, fixed-point RoPE,
-fixed-point attention score/value products, fixed-point SiLU, and leaves only
-the rsqrt advice, the coarse exp advice, `lm_head`, and decode-time
-sampling/logit softmax in float.
+QX.8 by default, uses integer MatMul accumulation, uses nearest MatMul
+accumulator rebases and sigmoid input indices for fixed-point SiLU, fixed-point
+RoPE, fixed-point attention score/value products, and leaves only the rsqrt
+advice, the coarse exp advice, `lm_head`, and decode-time sampling/logit softmax
+in float.
 
 ```bash
 cargo run --release -p qwen3-awy -- --fixed-frac 9 --seq-len 128 --generate 64 "Tell a fairy tale about a quiet fox helping a lost rabbit home. Once upon a time, in a forest, a quiet fox"
@@ -93,6 +112,21 @@ short and long runs can be compared honestly.
 Use `--fixed-frac N` to run the fixed path as QX.N instead. The current range is
 `0..=12`; higher values would risk overflowing the current `i32` quantized
 storage and `i64` MatMul accumulators.
+
+Rounding ablations:
+
+```bash
+cargo run --release -p qwen3-awy -- --matmul-rebase-rounding round --seq-len 384 --generate 320 --seed 1 "Tell a fairy tale about a quiet fox helping a lost rabbit home."
+cargo run --release -p qwen3-awy -- --sigmoid-input-rounding floor --seq-len 384 --generate 320 --seed 1 "Tell a fairy tale about a quiet fox helping a lost rabbit home."
+cargo run --release -p qwen3-awy -- --sigmoid-input-rounding ceil --seq-len 384 --generate 320 --seed 1 "Tell a fairy tale about a quiet fox helping a lost rabbit home."
+```
+
+`--matmul-rebase-rounding` controls the MatMul accumulator rebase from
+`QX.(a_frac + w_frac)` back to `QX.fixed_frac`. `--sigmoid-input-rounding`
+controls how the fixed-point SwiGLU gate value is reduced to the integer index
+used by the sigmoid approximation. Both accept `round`, `floor`, or `ceil`,
+where `round` is nearest rounding based on `f = x - floor(x)`. The default is
+`matmul-rebase-rounding=round` and `sigmoid-input-rounding=round`.
 
 Per-MatMul float comparison reports are disabled by default because they run an
 extra reference MatMul for every quantized MatMul and make generation much

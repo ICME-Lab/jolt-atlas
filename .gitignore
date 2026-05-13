@@ -2,6 +2,10 @@
 /atlas-onnx-tracer/models/gpt2/
 # Ignore only the Qwen setup
 /atlas-onnx-tracer/models/qwen/
+/qwen2-awy/calibration/
+/qwen3-awy/models/
+/qwen3-awy/calibration/
+/qwen3-awy/calibration.old/
 # Ignore only the BGE small setup
 /atlas-onnx-tracer/models/bge-small-en-v1.5/
 # Ignore ONNX model files
@@ -38,3 +42,4 @@ temp_file
 
 # python virtual environment
 .venv/
+__pycache__/

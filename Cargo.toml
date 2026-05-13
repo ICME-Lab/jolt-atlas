@@ -21,6 +21,8 @@ members = [
     "common",
     "joltworks",
     "qwen2-prover",
+    "qwen2-awy",
+    "qwen3-awy",
 ]
 
 [workspace.dependencies]
@@ -29,6 +31,8 @@ atlas-onnx-tracer = { path = "./atlas-onnx-tracer" }
 common = { path = "./common" }
 joltworks = { path = "./joltworks" }
 qwen2-prover = { path = "./qwen2-prover" }
+qwen2-awy = { path = "./qwen2-awy" }
+qwen3-awy = { path = "./qwen3-awy" }
 
 # Cryptography and Math
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }

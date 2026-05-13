@@ -2303,6 +2303,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "qwen2-awy"
+version = "0.1.0"
+dependencies = [
+ "half",
+ "rayon",
+ "safetensors 0.7.0",
+ "serde_json",
+ "tokenizers",
+]
+
+[[package]]
 name = "qwen2-prover"
 version = "0.1.0"
 dependencies = [
@@ -2312,6 +2323,17 @@ dependencies = [
  "safetensors 0.7.0",
  "tokenizers",
  "wgpu",
+]
+
+[[package]]
+name = "qwen3-awy"
+version = "0.1.0"
+dependencies = [
+ "half",
+ "rayon",
+ "safetensors 0.7.0",
+ "serde_json",
+ "tokenizers",
 ]
 
 [[package]]

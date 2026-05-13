@@ -1,6 +1,6 @@
 # qwen3-awy
 
-Standalone Qwen3-0.6B fixed-point implementation for AWY experiments.
+Standalone Qwen3-0.6B fixed-point implementation.
 
 The crate intentionally does not depend on `qwen3-prover`. It implements the
 full Qwen3 forward pass with block-internal tensors kept in fixed point:
@@ -9,8 +9,8 @@ full Qwen3 forward pass with block-internal tensors kept in fixed point:
 - `W`: MatMul right input, quantized per output channel.
 - `Y`: MatMul output, quantized row-wise.
 
-This is meant for PPL and fixed-point behavior experiments, not for proving or
-production inference.
+This is a small execution path for the current QX.8 fixed-point runtime, not a
+proving implementation or a general experiment harness.
 
 ## Model
 
@@ -63,13 +63,7 @@ places:
 
 ## Run
 
-Default QX.8 fixed-point run with a 128-token context:
-
-```bash
-cargo run --release -p qwen3-awy -- --seq-len 128 --full "hello world this is a test"
-```
-
-Generation:
+Default QX.8 fixed-point generation:
 
 ```bash
 cargo run --release -p qwen3-awy -- --seq-len 128 --generate 64 "Tell a fairy tale about a quiet fox helping a lost rabbit home. Once upon a time, in a forest, a quiet fox"
@@ -93,25 +87,21 @@ Lila noticed him and decided to help him. She knelt beside him and said, "Timmy,
 In the end, Lila and Timmy became friends, and Lila helped others when they were lost. Timmy, who had once been alone, now lived happily in the village with Lila. The story taught the value of kindness and the importance of helping others, even when they feel lost.
 ```
 
-The block runtime is fixed point by default. It keeps block-internal tensors in
-QX.8 by default, uses integer MatMul accumulation, uses nearest MatMul
-accumulator rebases and sigmoid input indices for fixed-point SiLU, fixed-point
-RoPE, fixed-point attention score/value products, and leaves only the rsqrt
-advice, the coarse exp advice, `lm_head`, and decode-time sampling/logit softmax
-in float.
+The block runtime is fixed QX.8. It uses integer MatMul accumulation, nearest
+MatMul accumulator rebases, fixed-point SiLU, fixed-point RoPE, fixed-point
+attention score/value products, and leaves `rsqrt` advice, `lm_head`, and
+decode-time sampling/logit softmax in float.
 
-```bash
-cargo run --release -p qwen3-awy -- --fixed-frac 9 --seq-len 128 --generate 64 "Tell a fairy tale about a quiet fox helping a lost rabbit home. Once upon a time, in a forest, a quiet fox"
-```
+LUT clipping note:
 
-`--seq-len` controls the causal context length. Input tokens are truncated to
-that length and padded with EOS if shorter. PPL is computed over non-EOS
-next-token targets within that context, and the output reports `ppl_targets` so
-short and long runs can be compared honestly.
-
-Use `--fixed-frac N` to run the fixed path as QX.N instead. The current range is
-`0..=12`; higher values would risk overflowing the current `i32` quantized
-storage and `i64` MatMul accumulators.
+`sigmoid` and softmax `exp` use small LUTs over clipped integer inputs. For a
+ZK circuit, the clipped integer part can be handled by separating the same
+number of low bits as the fractional extraction uses. The circuit checks that
+the high part plus those low bits reconstructs the original value. A boolean
+flag selects whether the LUT index is the clipped boundary or the reconstructed
+unclipped integer. When the flag is `1`, the clipped boundary is used; when it
+is `0`, the original integer input is used. The flag must be constrained so the
+prover cannot choose an arbitrary LUT entry.
 
 Rounding ablations:
 
@@ -121,13 +111,9 @@ cargo run --release -p qwen3-awy -- --sigmoid-input-rounding floor --seq-len 384
 cargo run --release -p qwen3-awy -- --sigmoid-input-rounding ceil --seq-len 384 --generate 320 --seed 1 "Tell a fairy tale about a quiet fox helping a lost rabbit home."
 ```
 
-`--matmul-rebase-rounding` controls the MatMul accumulator rebase from
-`QX.(a_frac + w_frac)` back to `QX.fixed_frac`. `--sigmoid-input-rounding`
-controls how the fixed-point SwiGLU gate value is reduced to the integer index
-used by the sigmoid approximation. Both accept `round`, `floor`, or `ceil`,
-where `round` is nearest rounding based on `f = x - floor(x)`. The default is
-`matmul-rebase-rounding=round` and `sigmoid-input-rounding=round`.
-
-Per-MatMul float comparison reports are disabled by default because they run an
-extra reference MatMul for every quantized MatMul and make generation much
-slower. Add `--report` only when collecting error metrics.
+`--matmul-rebase-rounding` controls the MatMul accumulator rebase from QX.16
+back to QX.8. `--sigmoid-input-rounding` controls how the fixed-point SwiGLU
+gate value is reduced to the integer index used by the sigmoid approximation.
+Both accept `round`, `floor`, or `ceil`, where `round` is nearest rounding based
+on `f = x - floor(x)`. The default is `matmul-rebase-rounding=round` and
+`sigmoid-input-rounding=round`.

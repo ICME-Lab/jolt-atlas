@@ -125,8 +125,8 @@ fn main() {
     >::deterministic(4096);
 
     let t = std::time::Instant::now();
-    let (bundle, zk_io) = zk_pool
-        .install(|| jolt_atlas_core::onnx_proof::zk::prove_zk(&prover_pp, &inputs, &gens));
+    let (bundle, zk_io) =
+        zk_pool.install(|| jolt_atlas_core::onnx_proof::zk::prove_zk(&prover_pp, &inputs, &gens));
     let zk_prove = t.elapsed();
     println!("prove:  {:.2?}", zk_prove);
 
@@ -139,7 +139,9 @@ fn main() {
 
     let t = std::time::Instant::now();
     zk_pool
-        .install(|| jolt_atlas_core::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &zk_io, &gens))
+        .install(|| {
+            jolt_atlas_core::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &zk_io, &gens)
+        })
         .expect("ZK verification should succeed");
     let zk_verify = t.elapsed();
     println!("verify: {:.2?}", zk_verify);

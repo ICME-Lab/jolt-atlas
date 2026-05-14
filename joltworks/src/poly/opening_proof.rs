@@ -567,16 +567,12 @@ where
         // Capture stage shape before borrowing the instances mutably.
         let max_rounds = sumchecks
             .values()
-            .map(|opening| {
-                <Opening<F> as SumcheckInstanceParams<F>>::num_rounds(&opening.opening)
-            })
+            .map(|opening| <Opening<F> as SumcheckInstanceParams<F>>::num_rounds(&opening.opening))
             .max()
             .unwrap_or(1);
         let max_degree = sumchecks
             .values()
-            .map(|opening| {
-                <Opening<F> as SumcheckInstanceParams<F>>::degree(&opening.opening)
-            })
+            .map(|opening| <Opening<F> as SumcheckInstanceParams<F>>::degree(&opening.opening))
             .max()
             .unwrap_or(1);
 
@@ -596,8 +592,7 @@ where
 
         self.sumchecks = sumchecks;
         stage_configs.push(crate::subprotocols::blindfold::StageConfig::new_chain(
-            max_rounds,
-            max_degree,
+            max_rounds, max_degree,
         ));
         (zk_proof, r_sumcheck)
     }

@@ -1983,7 +1983,11 @@ pub fn prove_zk(
                     &mut eval_reduction_proofs,
                     &mut eval_reduction_h_commitments,
                 );
-                if prover.accumulator.reduced_evaluations.contains_key(&node.idx) {
+                if prover
+                    .accumulator
+                    .reduced_evaluations
+                    .contains_key(&node.idx)
+                {
                     use crate::onnx_proof::ops::broadcast::{BroadcastParams, BroadcastProver};
                     let params = BroadcastParams::new(node.clone(), &prover.accumulator);
                     let bp = BroadcastProver::initialize(&prover.trace, params);
@@ -1998,7 +2002,11 @@ pub fn prove_zk(
                     &mut eval_reduction_proofs,
                     &mut eval_reduction_h_commitments,
                 );
-                if prover.accumulator.reduced_evaluations.contains_key(&node.idx) {
+                if prover
+                    .accumulator
+                    .reduced_evaluations
+                    .contains_key(&node.idx)
+                {
                     use crate::onnx_proof::ops::moveaxis::{MoveAxisParams, MoveAxisProver};
                     let params = MoveAxisParams::new(node.clone(), &prover.accumulator);
                     let mp = MoveAxisProver::initialize(params);
@@ -2013,7 +2021,11 @@ pub fn prove_zk(
                     &mut eval_reduction_proofs,
                     &mut eval_reduction_h_commitments,
                 );
-                if prover.accumulator.reduced_evaluations.contains_key(&node.idx) {
+                if prover
+                    .accumulator
+                    .reduced_evaluations
+                    .contains_key(&node.idx)
+                {
                     use crate::onnx_proof::ops::OperatorProofTrait;
                     let _ = OperatorProofTrait::<F, T>::prove(op, node, &mut prover);
                 }
@@ -2026,7 +2038,11 @@ pub fn prove_zk(
                     &mut eval_reduction_proofs,
                     &mut eval_reduction_h_commitments,
                 );
-                if prover.accumulator.reduced_evaluations.contains_key(&node.idx) {
+                if prover
+                    .accumulator
+                    .reduced_evaluations
+                    .contains_key(&node.idx)
+                {
                     use crate::onnx_proof::ops::OperatorProofTrait;
                     let _ = OperatorProofTrait::<F, T>::prove(op, node, &mut prover);
                 }
@@ -2039,7 +2055,11 @@ pub fn prove_zk(
                     &mut eval_reduction_proofs,
                     &mut eval_reduction_h_commitments,
                 );
-                if prover.accumulator.reduced_evaluations.contains_key(&node.idx) {
+                if prover
+                    .accumulator
+                    .reduced_evaluations
+                    .contains_key(&node.idx)
+                {
                     use crate::onnx_proof::ops::OperatorProofTrait;
                     let _ = OperatorProofTrait::<F, T>::prove(op, node, &mut prover);
                 }
@@ -2105,10 +2125,12 @@ pub fn prove_zk(
     // commitment to `sum gamma_i * y_P_i` (where y_P_i = P_i(r_sumcheck)).
     // Empty when there are no committed polynomials (poly_map is empty).
     let mut joint_eval_commitment: Option<joltworks::curve::Bn254G1> = None;
-    let mut batch_opening_extra_constraint:
-        Option<joltworks::subprotocols::blindfold::output_constraint::OutputClaimConstraint> = None;
-    let mut batch_opening_extra_witness:
-        Option<joltworks::subprotocols::blindfold::witness::ExtraConstraintWitness<F>> = None;
+    let mut batch_opening_extra_constraint: Option<
+        joltworks::subprotocols::blindfold::output_constraint::OutputClaimConstraint,
+    > = None;
+    let mut batch_opening_extra_witness: Option<
+        joltworks::subprotocols::blindfold::witness::ExtraConstraintWitness<F>,
+    > = None;
     // Step 8 (PCS-binding): PCS opening proof for the joint polynomial at
     // r_sumcheck. Binds `bundle.commitments` to the joint evaluation.
     let mut joint_opening_proof: Option<<PCS as CommitmentScheme>::Proof> = None;
@@ -2165,10 +2187,7 @@ pub fn prove_zk(
             .zip(num_rounds_per_poly.iter())
             .map(|(g, num_rounds)| {
                 let r_slice = &state.r_sumcheck[..max_num_rounds - num_rounds];
-                let lagrange_eval: F = r_slice
-                    .iter()
-                    .map(|r| F::one() - *r)
-                    .product();
+                let lagrange_eval: F = r_slice.iter().map(|r| F::one() - *r).product();
                 g.mul_01_optimized(lagrange_eval)
             })
             .collect();
@@ -2202,8 +2221,7 @@ pub fn prove_zk(
             .enumerate()
             .map(|(i, id)| (ValueSource::Challenge(i), ValueSource::Opening(*id)))
             .collect();
-        batch_opening_extra_constraint =
-            Some(OutputClaimConstraint::linear(terms));
+        batch_opening_extra_constraint = Some(OutputClaimConstraint::linear(terms));
         batch_opening_extra_witness = Some(ExtraConstraintWitness {
             output_value: joint_claim,
             blinding: y_blinding,
@@ -2229,10 +2247,8 @@ pub fn prove_zk(
         // with `gamma_powers` to reconstruct the same joint commitment.
         let r_sumcheck_acc: Vec<<F as joltworks::field::JoltField>::Challenge> =
             state.r_sumcheck.clone();
-        let joint_poly = joltworks::poly::rlc_polynomial::build_materialized_rlc(
-            &state.gamma_powers,
-            &poly_map,
-        );
+        let joint_poly =
+            joltworks::poly::rlc_polynomial::build_materialized_rlc(&state.gamma_powers, &poly_map);
         let opening_proof = PCS::prove(
             &pp.generators,
             &joint_poly,
@@ -2348,14 +2364,10 @@ pub fn prove_zk(
     //   joint_claim = sum_i gamma_i * y_P_i   AND   y_com = g * joint_claim + h * y_blinding.
     // The latter is enforced via BlindFold's `eval_commitment_gens` check; the
     // y_com is placed in `RelaxedR1CSInstance::eval_commitments` below.
-    let extra_constraints_for_r1cs: Vec<_> = batch_opening_extra_constraint
-        .clone()
-        .into_iter()
-        .collect();
-    let extra_constraint_witnesses: Vec<_> = batch_opening_extra_witness
-        .clone()
-        .into_iter()
-        .collect();
+    let extra_constraints_for_r1cs: Vec<_> =
+        batch_opening_extra_constraint.clone().into_iter().collect();
+    let extra_constraint_witnesses: Vec<_> =
+        batch_opening_extra_witness.clone().into_iter().collect();
     let blindfold_witness = BlindFoldWitness::with_extra_constraints(
         initial_claims,
         all_stages,
@@ -2505,8 +2517,10 @@ pub fn prove_zk(
 /// transcript state that the verifier reaches.
 #[derive(Clone)]
 pub struct PcsVerifyCapture {
-    pub joint_commitment: <PCS as joltworks::poly::commitment::commitment_scheme::CommitmentScheme>::Commitment,
-    pub opening_proof: <PCS as joltworks::poly::commitment::commitment_scheme::CommitmentScheme>::Proof,
+    pub joint_commitment:
+        <PCS as joltworks::poly::commitment::commitment_scheme::CommitmentScheme>::Commitment,
+    pub opening_proof:
+        <PCS as joltworks::poly::commitment::commitment_scheme::CommitmentScheme>::Proof,
     pub opening_point: Vec<<F as JoltField>::Challenge>,
     pub joint_claim: F,
     pub transcript: T,
@@ -2677,10 +2691,10 @@ pub fn verify_zk_with_pcs_capture(
                         })?;
                     let r_field: Vec<F> = reduced.r.clone();
                     let expected_claim = match &node.operator {
-                        Operator::Constant(c) => MultilinearPolynomial::from(
-                            c.0.clone().padded_next_power_of_two(),
-                        )
-                        .evaluate(&r_field),
+                        Operator::Constant(c) => {
+                            MultilinearPolynomial::from(c.0.clone().padded_next_power_of_two())
+                                .evaluate(&r_field)
+                        }
                         Operator::Input(_) => {
                             let input_pos = io
                                 .input_indices

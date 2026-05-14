@@ -76,21 +76,52 @@ cargo run --release -p qwen3-awy -- --seq-len 384 --generate 320 --seed 1 "Tell 
 ```
 
 With the default QX.8 runtime, nearest MatMul rebase, nearest sigmoid input
-rounding, and the QX.8 lookup tables for rounding, sigmoid, and coarse exp, this
-currently produces:
+rounding, fixed `lm_head`, fixed decode-time softmax weights, and the QX.8
+lookup tables for rounding, sigmoid, and coarse exp, this currently produces:
 
 ```text
-Once upon a time, in a small village nestled between a forest and a river, there lived a quiet fox named Lila. She was known for her gentle heart and her ability to see things from another's perspective. One day, a lost rabbit named Timmy wandered into the village, his fur brown and his eyes wide with worry. He had never heard of the village, and he felt lost and alone.
+**Title: The Whispering Fox and the Lost Rabbit**  
 
-Lila noticed him and decided to help him. She knelt beside him and said, "Timmy, I know you're lost, and I'm here for you. Please don't worry. I'm here to help." Timmy looked up and saw her, and he felt safe. After a while, Lila led him home, and together they made a new home for Timmy. The village was grateful for the kindness of Lila and Timmy.
+In a quiet village nestled between rolling hills and ancient trees, there lived a fox named Lira. She was known for her gentle heart and quiet kindness. One day, a rabbit named Luna was lost and wandering alone, lost in the forest.  
 
-In the end, Lila and Timmy became friends, and Lila helped others when they were lost. Timmy, who had once been alone, now lived happily in the village with Lila. The story taught the value of kindness and the importance of helping others, even when they feel lost.
+Luna had been following her mother, who had vanished one day, and had been lost for days. She had no place to go, and no one to trust.  
+
+Lira noticed Luna's sadness and decided to help. She stepped forward and said, "Luna, I heard you were lost. I will help
 ```
 
 The block runtime is fixed QX.8. It uses integer MatMul accumulation, nearest
 MatMul accumulator rebases, fixed-point SiLU, fixed-point RoPE, fixed-point
-attention score/value products, and leaves `rsqrt` advice, `lm_head`, and
-decode-time sampling/logit softmax in float.
+attention score/value products, fixed-point `lm_head`, and fixed-point
+decode-time softmax weights. The remaining float use is `rsqrt` advice plus
+one-time conversion of sampling controls such as temperature/top-p.
+
+On first run, the executable writes a fixed-weight cache next to the safetensors
+model, using the same path with a `.q8.bin` extension. The cache stores QX.8
+i32 weights after quantization and transposition, including layer weights,
+`lm_head`, and final norm. Later runs reuse that file and skip the BF16/F16/F32
+to i32 conversion path. The cache is a generated model artifact and should not
+be committed.
+
+`--timing` prints decode timing broken down by embedding, layer norms,
+attention, QKV projection, RoPE, attention value product, output projection,
+MLP gate/up/down, SiLU, residual adds, `lm_head`, and token choice.
+
+`--dump-final-awy PATH` records the final generated token only. Generation runs
+normally first, then the executable rebuilds the KV cache for the prefix and
+replays the last token with tracing enabled. The output directory contains a
+`manifest.jsonl` plus raw little-endian `i32` tensor files. MatMul, RMSNorm,
+RoPE, residual adds, attention score/value products, softmax probabilities,
+SwiGLU/SiLU, final norm, and `lm_head` are recorded. `A` and `Y` tensors are
+stored as files; `W` tensors are referenced by model weight name or LUT name so
+the fixed-weight cache is not duplicated into the trace.
+
+```bash
+cargo run --release -p qwen3-awy -- \
+  --seq-len 128 \
+  --generate 64 \
+  --dump-final-awy /private/tmp/qwen3-awy-final-awy \
+  "Tell a fairy tale about a quiet fox helping a lost rabbit home."
+```
 
 LUT clipping note:
 

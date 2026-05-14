@@ -6,6 +6,7 @@
 /qwen3-awy/models/
 /qwen3-awy/calibration/
 /qwen3-awy/calibration.old/
+/qwen3-awy/traces/
 # Ignore only the BGE small setup
 /atlas-onnx-tracer/models/bge-small-en-v1.5/
 # Ignore ONNX model files

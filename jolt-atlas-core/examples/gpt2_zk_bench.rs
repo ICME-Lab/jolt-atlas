@@ -34,11 +34,22 @@ fn main() {
     // the non-zk numbers to reflect full-parallelism performance, so we
     // only `install` this pool around the ZK calls. Real fix would be
     // upstream arkworks reusing a single pool across MSM chunks.
+    // Thread count is overridable via `ZK_BENCH_THREADS` so the bench can flip
+    // between the throttled (default = 2, safe with the upstream arkworks MSM
+    // bug) and unthrottled (full parallelism, only sound with the patched
+    // arkworks MSM that drops the nested ThreadPoolBuilder) configurations
+    // without code edits. See
+    // wiki/jolt-atlas/book/src/underway/zk-prove-overhead.md.
+    let zk_num_threads: usize = std::env::var("ZK_BENCH_THREADS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2);
     let zk_pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(2)
+        .num_threads(zk_num_threads)
         .stack_size(32 * 1024 * 1024)
         .build()
         .expect("failed to build ZK rayon pool");
+    eprintln!("[bench] zk_pool threads = {zk_num_threads}");
 
     use atlas_onnx_tracer::{
         model::{Model, RunArgs},

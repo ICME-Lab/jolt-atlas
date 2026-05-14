@@ -107,6 +107,15 @@ pub struct ZkProofBundle {
     /// bundle copy is purely for main-transcript replay.)
     pub batch_opening_zk_sumcheck:
         Option<joltworks::subprotocols::sumcheck::ZkSumcheckProof<F, C, T>>,
+    /// Cleartext reduced-eval claim for each public-data node (Constant/Input).
+    /// Mirror of the per-op `Constant::verify` / `Input::verify` check in non-zk:
+    /// the verifier locally evaluates the public tensor's MLE at `r_reduced`
+    /// and compares against this value. Catches honest-prover errors; full
+    /// soundness against an active malicious prover additionally requires an
+    /// R1CS constraint binding the BlindFold witness opening value to this
+    /// cleartext (Jolt's `ValueSource::Constant`-style binding) — tracked as
+    /// future work in `wiki/jolt-atlas/.../zk-prove-overhead.md`.
+    pub public_node_reduced_claims: BTreeMap<usize, F>,
 }
 
 /// Run a single-instance ZK sumcheck and collect stage data.
@@ -2440,6 +2449,24 @@ pub fn prove_zk(
         .iter()
         .map(|sd| sd.batching_coefficients.len())
         .collect();
+
+    // Collect cleartext reduced-eval claims for Constants and Inputs. The
+    // verifier mirrors `Constant::verify` / `Input::verify` (non-zk) by locally
+    // evaluating the public tensor's MLE at `r_reduced` and checking equality
+    // against this value. See `verify_zk` for the matching check.
+    let mut public_node_reduced_claims: BTreeMap<usize, F> = BTreeMap::new();
+    for (_, node) in pp.model().nodes().iter() {
+        if matches!(
+            node.operator,
+            atlas_onnx_tracer::ops::Operator::Constant(_)
+                | atlas_onnx_tracer::ops::Operator::Input(_)
+        ) {
+            if let Some(reduced) = prover.accumulator.reduced_evaluations.get(&node.idx) {
+                public_node_reduced_claims.insert(node.idx, reduced.claim);
+            }
+        }
+    }
+
     let bundle = ZkProofBundle {
         blindfold_proof,
         blindfold_verifier_input,
@@ -2457,6 +2484,7 @@ pub fn prove_zk(
         joint_claim: joint_claim_value,
         joint_opening_point,
         batch_opening_zk_sumcheck,
+        public_node_reduced_claims,
     };
 
     (bundle, io)
@@ -2624,6 +2652,75 @@ pub fn verify_zk_with_pcs_capture(
             // No-sumcheck ops that don't register openings on inputs.
             Operator::Input(_) | Operator::Constant(_) => {
                 verify_zk_eval_reduction(node, bundle, &mut accumulator, &mut transcript)?;
+                // Mirror non-zk `Constant::verify` / `Input::verify` (ops/constant.rs:28-43,
+                // ops/input.rs:27-49): locally evaluate the public MLE at the
+                // reduced opening point and compare against the prover's
+                // cleartext reduced claim from the bundle. Catches honest-prover
+                // errors. Active-malice soundness needs an R1CS constraint
+                // binding the BlindFold witness to this cleartext (future work;
+                // see wiki/jolt-atlas/.../zk-prove-overhead.md).
+                if let Some(reduced) = accumulator.reduced_evaluations.get(&node.idx).cloned() {
+                    let prover_claim = bundle
+                        .public_node_reduced_claims
+                        .get(&node.idx)
+                        .copied()
+                        .ok_or_else(|| {
+                            ProofVerifyError::InvalidOpeningProof(format!(
+                                "Missing public_node_reduced_claims for node {} ({})",
+                                node.idx,
+                                match node.operator {
+                                    Operator::Input(_) => "Input",
+                                    Operator::Constant(_) => "Constant",
+                                    _ => unreachable!(),
+                                }
+                            ))
+                        })?;
+                    let r_field: Vec<F> = reduced.r.clone();
+                    let expected_claim = match &node.operator {
+                        Operator::Constant(c) => MultilinearPolynomial::from(
+                            c.0.clone().padded_next_power_of_two(),
+                        )
+                        .evaluate(&r_field),
+                        Operator::Input(_) => {
+                            let input_pos = io
+                                .input_indices
+                                .iter()
+                                .position(|&idx| idx == node.idx)
+                                .ok_or_else(|| {
+                                    ProofVerifyError::InvalidOpeningProof(format!(
+                                        "Input node {} not in io.input_indices",
+                                        node.idx
+                                    ))
+                                })?;
+                            MultilinearPolynomial::from(
+                                io.inputs[input_pos].padded_next_power_of_two(),
+                            )
+                            .evaluate(&r_field)
+                        }
+                        _ => unreachable!(),
+                    };
+                    if expected_claim != prover_claim {
+                        return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                            "Public node {} ({}) reduced-eval mismatch: prover claim {} != public MLE eval {}",
+                            node.idx,
+                            match node.operator {
+                                Operator::Input(_) => "Input",
+                                Operator::Constant(_) => "Constant",
+                                _ => unreachable!(),
+                            },
+                            prover_claim,
+                            expected_claim
+                        )));
+                    }
+                    // Insert the (now-verified) cleartext claim into the
+                    // verifier's accumulator so downstream code that reads
+                    // `reduced_evaluations` sees the correct value rather than
+                    // the F::zero() placeholder. Has no effect on R1CS verify
+                    // (which only uses bundle.baked) — see future-work note.
+                    if let Some(slot) = accumulator.reduced_evaluations.get_mut(&node.idx) {
+                        slot.claim = expected_claim;
+                    }
+                }
             }
             // No-sumcheck ops that DO register openings on their input(s).
             // Mirror the prover-side input caching (see the matching arms in

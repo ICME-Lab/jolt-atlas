@@ -27,6 +27,25 @@ The default runtime paths are:
 
 The model directory is ignored by git.
 
+Smoke test after download:
+
+```bash
+cargo run --release -p qwen3-awy -- \
+  --seq-len 128 \
+  --generate 32 \
+  --seed 1 \
+  "Tell a fairy tale about a quiet fox helping a lost rabbit home."
+```
+
+The first run also creates:
+
+```text
+qwen3-awy/models/qwen3-0.6b/model.q8.bin
+```
+
+That file is the generated QX.8 fixed-weight cache. It is ignored by git and
+can be deleted safely; the runtime will rebuild it from `model.safetensors`.
+
 `generation_config.json` for Qwen3-0.6B uses:
 
 - `do_sample: true`
@@ -52,6 +71,18 @@ Input text is wrapped in Qwen3's no-think chat prompt by default:
 
 ```
 
+Use `--thinking` to let the model emit its own thinking section. In that mode,
+the runtime does not inject the empty `<think>...</think>` block above.
+
+Use `--plain` only for raw continuation experiments. It disables the Qwen3 chat
+template entirely and tokenizes the prompt as-is:
+
+```text
+{prompt}
+```
+
+The story samples below use the default no-think chat template, not `--plain`.
+
 Qwen3-0.6B differs from the Qwen2-0.5B implementation in a few important
 places:
 
@@ -74,6 +105,64 @@ Longer fixed-point story sample:
 ```bash
 cargo run --release -p qwen3-awy -- --seq-len 384 --generate 320 --seed 1 "Tell a fairy tale about a quiet fox helping a lost rabbit home."
 ```
+
+Current fox-story sample command used for EOS runs:
+
+```bash
+cargo run --release -p qwen3-awy -- \
+  --seq-len 1024 \
+  --generate 998 \
+  --seed 1 \
+  --temperature 0.6 \
+  --top-p 0.95 \
+  --top-k 20 \
+  --repetition-penalty 1.0 \
+  --matmul-rebase-rounding round \
+  --sigmoid-input-rounding round \
+  --timing \
+  "Tell a fairy tale about a quiet fox helping a lost rabbit home."
+```
+
+The same run with final-token AWY tracing enabled:
+
+```bash
+cargo run --release -p qwen3-awy -- \
+  --seq-len 1024 \
+  --generate 998 \
+  --seed 1 \
+  --temperature 0.6 \
+  --top-p 0.95 \
+  --top-k 20 \
+  --repetition-penalty 1.0 \
+  --matmul-rebase-rounding round \
+  --sigmoid-input-rounding round \
+  --dump-final-awy qwen3-awy/traces/fox_eos_final_awy \
+  --timing \
+  "Tell a fairy tale about a quiet fox helping a lost rabbit home."
+```
+
+Thinking-mode fox run:
+
+```bash
+cargo run --release -p qwen3-awy -- \
+  --seq-len 1024 \
+  --generate 998 \
+  --seed 1 \
+  --thinking \
+  --temperature 0.6 \
+  --top-p 0.95 \
+  --top-k 20 \
+  --repetition-penalty 1.0 \
+  --matmul-rebase-rounding round \
+  --sigmoid-input-rounding round \
+  --dump-final-awy qwen3-awy/traces/fox_eos_thinking_final_awy \
+  --timing \
+  "Tell a fairy tale about a quiet fox helping a lost rabbit home."
+```
+
+`qwen3-awy/traces/` is ignored by git. Use a separate trace directory for each
+prompt or decoding mode so no-think and thinking dumps do not overwrite each
+other.
 
 With the default QX.8 runtime, nearest MatMul rebase, nearest sigmoid input
 rounding, fixed `lm_head`, fixed decode-time softmax weights, and the QX.8

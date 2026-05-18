@@ -363,6 +363,11 @@ impl JoltField for TrackedFr {
         TrackedFr(<ark_bn254::Fr as JoltField>::from_u64(n))
     }
 
+    #[cfg(test)]
+    fn from_i8(_: i8) -> Self {
+        unimplemented!("currently not used in tests, but can be implemented if needed")
+    }
+
     fn from_i32(n: i32) -> Self {
         FROM_I32_COUNT.fetch_add(1, Ordering::Relaxed);
         TrackedFr(<ark_bn254::Fr as JoltField>::from_i32(n))

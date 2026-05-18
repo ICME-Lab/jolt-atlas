@@ -32,9 +32,9 @@ use crate::{
     },
 };
 use ark_std::Zero;
-use common::parallel::par_enabled;
 use common::{
     consts::{LOG_K, XLEN},
+    parallel::par_enabled,
     VirtualPoly,
 };
 use itertools::Itertools;
@@ -240,11 +240,11 @@ where
     /// Registry holding prefix checkpoint values for `PrefixSuffixDecomposition` instances.
     prefix_registry: PrefixRegistry<F>,
     /// Prefix-suffix decomposition for right operand identity polynomial family.
-    right_operand_ps: PrefixSuffixDecomposition<F, 2>,
+    right_operand_ps: PrefixSuffixDecomposition<F, 2, false>,
     /// Prefix-suffix decomposition for left operand identity polynomial family.
-    left_operand_ps: PrefixSuffixDecomposition<F, 2>,
+    left_operand_ps: PrefixSuffixDecomposition<F, 2, false>,
     /// Prefix-suffix decomposition for the instruction-identity path (RAF flag path).
-    identity_ps: PrefixSuffixDecomposition<F, 2>,
+    identity_ps: PrefixSuffixDecomposition<F, 2, false>, // TODO: make SIGNED generic
 }
 
 impl<F, LUT> ReadRafSumcheckProver<F, LUT>

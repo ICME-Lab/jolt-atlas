@@ -509,21 +509,21 @@ mod tests {
 
     #[test]
     fn identity_poly_prefix_suffix_decomposition() {
-        prefix_suffix_decomposition_test::<8, 2, 2, _>(
+        prefix_suffix_decomposition_test::<8, 2, 2, false, _>(
             IdentityPolynomial::new(8),
-            Prefix::Identity,
+            vec![Prefix::Identity],
         );
     }
 
     #[test]
     fn operand_poly_prefix_suffix_decomposition() {
-        prefix_suffix_decomposition_test::<8, 2, 2, _>(
+        prefix_suffix_decomposition_test::<8, 2, 2, false, _>(
             OperandPolynomial::new(8, OperandSide::Left),
-            Prefix::LeftOperand,
+            vec![Prefix::LeftOperand],
         );
-        prefix_suffix_decomposition_test::<8, 2, 2, _>(
+        prefix_suffix_decomposition_test::<8, 2, 2, false, _>(
             OperandPolynomial::new(8, OperandSide::Right),
-            Prefix::RightOperand,
+            vec![Prefix::RightOperand],
         );
     }
 

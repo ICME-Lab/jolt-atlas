@@ -15,6 +15,10 @@ use atlas_onnx_tracer::{
     ops::Rsqrt,
 };
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
+#[cfg(feature = "zk")]
+use joltworks::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
 use joltworks::{
     field::{IntoOpening, JoltField},
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
@@ -58,8 +62,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
         let mut results = Vec::new();
         // Execution proof
         let params = RsqrtParams::new(node.clone(), &mut prover.transcript);
-        let mut prover_sumcheck =
-            RsqrtProver::initialize(&prover.trace, &mut prover.transcript, params);
+        let mut prover_sumcheck = RsqrtProver::initialize(&prover.trace, params);
         let (proof, _) = Sumcheck::prove(
             &mut prover_sumcheck,
             &mut prover.accumulator,
@@ -162,16 +165,21 @@ const DEGREE_BOUND: usize = 3;
 pub struct RsqrtParams<F: JoltField> {
     r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
+    /// Folding challenge for batching the inverse and sqrt relations.
+    gamma: F,
 }
 
 impl<F: JoltField> RsqrtParams<F> {
     /// Create new rsqrt parameters from a computation node and transcript.
+    /// Squeezes both the opening point and the folding challenge gamma.
     pub fn new<T: Transcript>(computation_node: ComputationNode, transcript: &mut T) -> Self {
         let num_vars = computation_node.pow2_padded_num_output_elements().log_2();
         let r_node_output = transcript.challenge_vector_optimized::<F>(num_vars);
+        let gamma = transcript.challenge_scalar();
         Self {
             r_node_output: r_node_output.into(),
             computation_node,
+            gamma,
         }
     }
 }
@@ -194,6 +202,80 @@ impl<F: JoltField> SumcheckInstanceParams<F> for RsqrtParams<F> {
             .pow2_padded_num_output_elements()
             .log_2()
     }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    // output = eq * (left*inv + r_i - Q^2 + gamma*(rsqrt^2 + r_s - Q*inv))
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
+        use crate::utils::opening_access::OpeningIdBuilder;
+        let builder = OpeningIdBuilder::new(&self.computation_node);
+        let left_id = builder.nodeio(Target::Input(0));
+        let inv_id = builder.advice(CommittedPoly::RsqrtNodeInv);
+        let rsqrt_id = builder.nodeio(Target::Current);
+        let r_i_id = builder.advice(VirtualPoly::DivRemainder);
+        let r_s_id = builder.advice(VirtualPoly::SqrtRemainder);
+        Some(OutputClaimConstraint::sum_of_products(vec![
+            // eq * left * inv
+            ProductTerm::scaled(
+                ValueSource::Challenge(0),
+                vec![ValueSource::Opening(left_id), ValueSource::Opening(inv_id)],
+            ),
+            // eq * r_i
+            ProductTerm::scaled(
+                ValueSource::Challenge(1),
+                vec![ValueSource::Opening(r_i_id)],
+            ),
+            // -eq * Q^2  (constant term, no openings)
+            ProductTerm::scaled(ValueSource::Challenge(2), vec![]),
+            // eq * gamma * rsqrt^2
+            ProductTerm::scaled(
+                ValueSource::Challenge(3),
+                vec![
+                    ValueSource::Opening(rsqrt_id),
+                    ValueSource::Opening(rsqrt_id),
+                ],
+            ),
+            // eq * gamma * r_s
+            ProductTerm::scaled(
+                ValueSource::Challenge(4),
+                vec![ValueSource::Opening(r_s_id)],
+            ),
+            // -eq * gamma * Q * inv
+            ProductTerm::scaled(
+                ValueSource::Challenge(5),
+                vec![ValueSource::Opening(inv_id)],
+            ),
+        ]))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        let r_prime: Vec<F> = self
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
+        let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_prime);
+        let eq_gamma = eq_eval * self.gamma;
+        vec![
+            eq_eval,                          // Ch(0): eq * left * inv
+            eq_eval,                          // Ch(1): eq * r_i
+            -eq_eval * F::from_i32(Q_SQUARE), // Ch(2): -eq * Q^2 (constant)
+            eq_gamma,                         // Ch(3): eq * gamma * rsqrt^2
+            eq_gamma,                         // Ch(4): eq * gamma * r_s
+            -eq_gamma * F::from_i32(Q),       // Ch(5): -eq * gamma * Q * inv
+        ]
+    }
 }
 
 /// Prover state for reciprocal square root sumcheck protocol.
@@ -214,11 +296,7 @@ pub struct RsqrtProver<F: JoltField> {
 
 impl<F: JoltField> RsqrtProver<F> {
     /// Initialize the prover with trace data, transcript, and parameters.
-    pub fn initialize<T: Transcript>(
-        trace: &Trace,
-        transcript: &mut T,
-        params: RsqrtParams<F>,
-    ) -> Self {
+    pub fn initialize(trace: &Trace, params: RsqrtParams<F>) -> Self {
         let eq_r_node_output =
             GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
         let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
@@ -267,7 +345,7 @@ impl<F: JoltField> RsqrtProver<F> {
             assert_eq!(F::zero(), claim_sqrt)
         }
 
-        let gamma = transcript.challenge_scalar();
+        let gamma = params.gamma;
         Self {
             params,
             eq_r_node_output,
@@ -361,7 +439,7 @@ impl<F: JoltField> RsqrtVerifier<F> {
     /// Create a new verifier for the rsqrt operation with folding challenge from transcript.
     pub fn new<T: Transcript>(computation_node: ComputationNode, transcript: &mut T) -> Self {
         let params = RsqrtParams::new(computation_node, transcript);
-        let gamma = transcript.challenge_scalar();
+        let gamma = params.gamma;
         Self { params, gamma }
     }
 }

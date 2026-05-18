@@ -1,3 +1,7 @@
+#[cfg(feature = "zk")]
+use crate::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
 use crate::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -93,6 +97,38 @@ where
 {
     fn num_rounds(&self) -> usize {
         self.log_K + self.log_T
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    // output = eq_eval * ra_claim * identity_eval = Challenge(0) * Opening(ra)
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
+        let ra_id = OpeningId::new(self.polynomial_type, self.sumcheck_id);
+        Some(OutputClaimConstraint::sum_of_products(vec![
+            ProductTerm::scaled(ValueSource::Challenge(0), vec![ValueSource::Opening(ra_id)]),
+        ]))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        let opening_point = self.normalize_opening_point(&sumcheck_challenges.into_opening());
+        let (r_address_prime, r_node_output_prime) = opening_point.split_at(self.log_K);
+        let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_node_output_prime.r);
+        let identity_poly_eval =
+            IdentityPolynomial::<F>::new(self.log_K).evaluate(&r_address_prime.r);
+        vec![eq_eval * identity_poly_eval]
     }
 
     fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {

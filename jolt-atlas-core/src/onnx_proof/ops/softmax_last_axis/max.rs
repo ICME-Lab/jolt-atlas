@@ -4,6 +4,10 @@ use std::array;
 use crate::utils::opening_access::{AccOpeningAccessor, Target};
 use atlas_onnx_tracer::node::ComputationNode;
 use common::VirtualPoly;
+#[cfg(feature = "zk")]
+use joltworks::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -104,6 +108,50 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MaxIndicatorParams<F> {
 
     fn num_rounds(&self) -> usize {
         self.F_N.iter().product::<usize>().log_2()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    // output = eq(r1_k, r_k) * e_claim * X_claim = Challenge(0) * Opening(X)
+    // e_claim is verifier-computable from argmax_k, folded into Challenge(0)
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
+        let builder = crate::utils::opening_access::OpeningIdBuilder::new(&self.node);
+        let x_id = builder.nodeio(Target::Input(0));
+        Some(OutputClaimConstraint::sum_of_products(vec![
+            ProductTerm::scaled(ValueSource::Challenge(0), vec![ValueSource::Opening(x_id)]),
+        ]))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        let r_sc: Vec<F> = self
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
+        let (r_k, r_j) = r_sc.split_at(self.log_F());
+        let eq_k_evals = EqPolynomial::evals(r_k);
+        let log_n = r_j.len();
+        let e_claim: F = eq_k_evals
+            .iter()
+            .zip(self.argmax_k.iter())
+            .map(|(&eq_k, &argmax_j)| {
+                let y = index_to_field_bitvector::<F>(argmax_j as u64, log_n);
+                eq_k * EqPolynomial::mle(r_j, &y)
+            })
+            .sum();
+        let eq_eval = EqPolynomial::mle(&self.r1_k, r_k);
+        vec![eq_eval * e_claim]
     }
 }
 

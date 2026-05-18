@@ -7,6 +7,10 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
     ops::Iff,
 };
+#[cfg(feature = "zk")]
+use joltworks::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -77,8 +81,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for IffParams<F> {
     }
 
     #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> joltworks::subprotocols::blindfold::InputClaimConstraint {
-        joltworks::subprotocols::blindfold::InputClaimConstraint::default()
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
     }
 
     #[cfg(feature = "zk")]
@@ -92,11 +96,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for IffParams<F> {
     // output = eq_eval * (mask * a + (1 - mask) * b)
     //        = eq_eval * mask * a + eq_eval * b - eq_eval * mask * b
     #[cfg(feature = "zk")]
-    fn output_claim_constraint(
-        &self,
-    ) -> Option<joltworks::subprotocols::blindfold::OutputClaimConstraint> {
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
         use crate::utils::opening_access::OpeningIdBuilder;
-        use joltworks::subprotocols::blindfold::{OutputClaimConstraint, ProductTerm, ValueSource};
         let builder = OpeningIdBuilder::new(&self.computation_node);
         let mask_id = builder.nodeio(Target::Input(0));
         let a_id = builder.nodeio(Target::Input(1));

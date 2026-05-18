@@ -21,6 +21,10 @@ use atlas_onnx_tracer::{
     ops::Reshape,
 };
 use common::parallel::par_enabled;
+#[cfg(feature = "zk")]
+use joltworks::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
 use joltworks::{
     field::{ChallengeFieldOps, IntoOpening, JoltField},
     poly::{
@@ -201,8 +205,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeSumcheckParams<F> {
     }
 
     #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> joltworks::subprotocols::blindfold::InputClaimConstraint {
-        joltworks::subprotocols::blindfold::InputClaimConstraint::default()
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
     }
 
     #[cfg(feature = "zk")]
@@ -217,11 +221,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeSumcheckParams<F> {
     // selector_claim is deterministic from public data (shapes + r_output), so Challenge(0).
     // input_claim is an opening.
     #[cfg(feature = "zk")]
-    fn output_claim_constraint(
-        &self,
-    ) -> Option<joltworks::subprotocols::blindfold::OutputClaimConstraint> {
-        use joltworks::subprotocols::blindfold::{OutputClaimConstraint, ProductTerm, ValueSource};
-
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
         let input_id = crate::utils::opening_access::OpeningIdBuilder::new(&self.computation_node)
             .nodeio(Target::Input(0));
         let term = ProductTerm::scaled(

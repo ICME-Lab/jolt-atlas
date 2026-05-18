@@ -179,6 +179,34 @@ impl<F: JoltField> SumcheckInstanceParams<F> for Opening<F> {
     fn normalize_opening_point(&self, _: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         unimplemented!("Unused")
     }
+
+    // ZK methods: minimal starting impls so `BatchedSumcheck::prove_zk` doesn't
+    // hit the trait's `todo!()` defaults. These are placeholders -- input claim
+    // is left as a free witness variable and the output claim is not yet bound
+    // to `eq * y_P`. Closing the loop requires the params to know the
+    // polynomial and prior sumcheck id (see
+    // wiki/jolt-atlas/book/src/underway/batched-opening-sound-verifier.md).
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> crate::subprotocols::blindfold::InputClaimConstraint {
+        crate::subprotocols::blindfold::InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(&self, _: &dyn OpeningAccumulator<F>) -> Vec<F> {
+        Vec::new()
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(
+        &self,
+    ) -> Option<crate::subprotocols::blindfold::OutputClaimConstraint> {
+        None
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, _: &[F::Challenge]) -> Vec<F> {
+        Vec::new()
+    }
 }
 
 impl<F, T: Transcript> SumcheckInstanceProver<F, T> for OpeningProofReductionSumcheckProver<F>
@@ -207,7 +235,7 @@ where
         &self,
         accumulator: &mut ProverOpeningAccumulator<F>,
         _transcript: &mut T,
-        _sumcheck_challenges: &[F::Challenge],
+        sumcheck_challenges: &[F::Challenge],
     ) {
         // Cache the final sumcheck claim in the accumulator
         let claim = match &self.prover_state {
@@ -215,6 +243,23 @@ where
             ProverOpening::OneHot(opening) => opening.final_claim(),
         };
         accumulator.cache_opening_reduction_claim(self.polynomial, claim);
+
+        // Also register the reduced evaluation as a standard opening so the
+        // BlindFold R1CS can reference it via `OpeningId`. The opening point
+        // is the batched-opening sumcheck's challenge vector r_sumcheck; the
+        // claim is the per-poly value P(r_sumcheck). Stored unconditionally
+        // (cheap insert); only the `--features zk` path actually consumes it
+        // via the extra constraint linking `joint_claim = sum gamma_i * y_P_i`
+        // to `y_com`.
+        use crate::field::IntoOpening;
+        let opening_point = OpeningPoint::new(sumcheck_challenges.into_opening());
+        let opening_id = crate::poly::opening_proof::OpeningId::new(
+            self.polynomial,
+            SumcheckId::BlindFoldBatchOpening,
+        );
+        accumulator
+            .openings
+            .insert(opening_id, (opening_point, claim));
     }
 }
 
@@ -260,11 +305,23 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
 
     fn cache_openings(
         &self,
-        _accumulator: &mut VerifierOpeningAccumulator<F>,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
         _transcript: &mut T,
-        _sumcheck_challenges: &[F::Challenge],
+        sumcheck_challenges: &[F::Challenge],
     ) {
-        // Nothing to cache.
+        // Mirror the prover-side insert: register an opening at
+        // `(self.polynomial, SumcheckId::BlindFoldBatchOpening)` so the
+        // BlindFold R1CS can reference it. In ZK mode the actual claim is a
+        // placeholder; the value the prover assigned is verified by BlindFold.
+        use crate::field::IntoOpening;
+        let opening_point = OpeningPoint::new(sumcheck_challenges.into_opening());
+        let opening_id = crate::poly::opening_proof::OpeningId::new(
+            self.polynomial,
+            SumcheckId::BlindFoldBatchOpening,
+        );
+        accumulator
+            .openings
+            .insert(opening_id, (opening_point, F::zero()));
     }
 }
 

@@ -25,6 +25,11 @@ use crate::{
     transcripts::Transcript,
 };
 
+#[cfg(feature = "zk")]
+use crate::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
+
 /// Degree bound of the sumcheck round polynomials in [`HammingBooleanitySumcheckVerifier`].
 const DEGREE_BOUND: usize = 3;
 
@@ -52,6 +57,50 @@ impl<F: JoltField> SumcheckInstanceParams<F> for HammingBooleanitySumcheckParams
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    // output = eq_eval * Σ_i gamma^i * hw_i * (hw_i - 1)
+    //        = Σ_i [Challenge(2i) * Opening(hw_i)^2 + Challenge(2i+1) * Opening(hw_i)]
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
+        let mut terms = Vec::with_capacity(2 * self.d);
+        for i in 0..self.d {
+            let id = OpeningId::new(self.polynomial_types[i], self.sumcheck_id);
+            terms.push(ProductTerm::scaled(
+                ValueSource::Challenge(2 * i),
+                vec![ValueSource::Opening(id), ValueSource::Opening(id)],
+            ));
+            terms.push(ProductTerm::scaled(
+                ValueSource::Challenge(2 * i + 1),
+                vec![ValueSource::Opening(id)],
+            ));
+        }
+        Some(OutputClaimConstraint::sum_of_products(terms))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        let r = self.normalize_opening_point(&sumcheck_challenges.into_opening());
+        let eq_eval = EqPolynomial::mle(&self.r_cycle, &r.r);
+        let mut values = Vec::with_capacity(2 * self.d);
+        for gamma in &self.gamma_powers {
+            values.push(eq_eval * *gamma);
+            values.push(-eq_eval * *gamma);
+        }
+        values
     }
 }
 

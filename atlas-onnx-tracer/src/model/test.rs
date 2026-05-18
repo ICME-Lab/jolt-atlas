@@ -125,6 +125,14 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    /// Add a bitwise AND node.
+    pub fn and(&mut self, a: Wire, b: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&a].output_dims.clone();
+        let node = ComputationNode::new(id, Operator::And(And), vec![a, b], output_dims);
+        self.insert_node(node)
+    }
+
     /// Add a multiplication node.
     pub fn mul(&mut self, a: Wire, b: Wire) -> Wire {
         let id = self.alloc();

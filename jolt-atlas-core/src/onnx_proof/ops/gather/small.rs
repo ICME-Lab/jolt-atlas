@@ -303,6 +303,59 @@ pub(crate) fn build_stage3_verifier<F: JoltField>(
     HammingWeightSumcheckVerifier::new(hw_params)
 }
 
+/// Build stage 2 verifiers from decomposed args (for ZK pipeline).
+#[cfg(feature = "zk")]
+pub(crate) fn build_stage2_verifiers_zk<F: JoltField>(
+    computation_node: &ComputationNode,
+    graph: &atlas_onnx_tracer::model::ComputationGraph,
+    accumulator: &dyn OpeningAccumulator<F>,
+    transcript: &mut impl Transcript,
+) -> (
+    HammingBooleanitySumcheckVerifier<F>,
+    BooleanitySumcheckVerifier<F>,
+) {
+    let Operator::GatherSmall(gather_op) = &computation_node.operator else {
+        panic!("Expected GatherSmall operator")
+    };
+    let dict = graph.nodes.get(&computation_node.inputs[0]).unwrap();
+    let indices = graph.nodes.get(&computation_node.inputs[1]).unwrap();
+    let num_words = dict.output_dims[gather_op.axis];
+    let num_lookups = indices.pow2_padded_num_output_elements();
+
+    let hb_params =
+        ra_hamming_bool_params::<F>(computation_node, num_lookups, accumulator, transcript);
+    let bool_params = ra_booleanity_params::<F>(
+        computation_node,
+        num_words,
+        num_lookups,
+        accumulator,
+        transcript,
+    );
+
+    (
+        HammingBooleanitySumcheckVerifier::new(hb_params),
+        BooleanitySumcheckVerifier::new(bool_params),
+    )
+}
+
+/// Build stage 3 verifier from decomposed args (for ZK pipeline).
+#[cfg(feature = "zk")]
+pub(crate) fn build_stage3_verifier_zk<F: JoltField>(
+    computation_node: &ComputationNode,
+    graph: &atlas_onnx_tracer::model::ComputationGraph,
+    accumulator: &dyn OpeningAccumulator<F>,
+    transcript: &mut impl Transcript,
+) -> HammingWeightSumcheckVerifier<F> {
+    let Operator::GatherSmall(gather_op) = &computation_node.operator else {
+        panic!("Expected GatherSmall operator")
+    };
+    let dict = graph.nodes.get(&computation_node.inputs[0]).unwrap();
+    let num_words = dict.output_dims[gather_op.axis];
+    let hw_params =
+        ra_hamming_weight_params::<F>(computation_node, num_words, accumulator, transcript);
+    HammingWeightSumcheckVerifier::new(hw_params)
+}
+
 fn ra_hamming_weight_params<F: JoltField>(
     computation_node: &ComputationNode,
     num_words: usize,

@@ -11,6 +11,10 @@
 use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_onnx_tracer::node::ComputationNode;
 use common::VirtualPoly;
+#[cfg(feature = "zk")]
+use joltworks::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -89,6 +93,67 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SatDiffSlacknessParams<F> {
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
+    }
+
+    #[cfg(feature = "zk")]
+    fn input_constraint_challenge_values(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+
+    // output = eq_eval * sat_diff * (z_bound_minus_1 - z_hi * base - z_lo)
+    //        = Challenge(0) * Opening(sat_diff)
+    //          + Challenge(1) * Opening(sat_diff) * Opening(z_hi)
+    //          + Challenge(2) * Opening(sat_diff) * Opening(z_lo)
+    #[cfg(feature = "zk")]
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
+        let builder = crate::utils::opening_access::OpeningIdBuilder::new(&self.node);
+        let sat_diff_id = builder.advice(VirtualPoly::SoftmaxSatDiff);
+        let z_hi_id = builder.advice(VirtualPoly::SoftmaxZHi);
+        let z_lo_id = builder.advice(VirtualPoly::SoftmaxZLo);
+        Some(OutputClaimConstraint::sum_of_products(vec![
+            // eq_eval * z_bound_minus_1 * sat_diff
+            ProductTerm::scaled(
+                ValueSource::Challenge(0),
+                vec![ValueSource::Opening(sat_diff_id)],
+            ),
+            // -eq_eval * base * sat_diff * z_hi
+            ProductTerm::scaled(
+                ValueSource::Challenge(1),
+                vec![
+                    ValueSource::Opening(sat_diff_id),
+                    ValueSource::Opening(z_hi_id),
+                ],
+            ),
+            // -eq_eval * sat_diff * z_lo
+            ProductTerm::scaled(
+                ValueSource::Challenge(2),
+                vec![
+                    ValueSource::Opening(sat_diff_id),
+                    ValueSource::Opening(z_lo_id),
+                ],
+            ),
+        ]))
+    }
+
+    #[cfg(feature = "zk")]
+    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
+        let r2: Vec<F> = self
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
+        let eq_eval = EqPolynomial::mle(&self.r1, &r2);
+        vec![
+            eq_eval * self.z_bound_minus_1,
+            -eq_eval * self.base,
+            -eq_eval,
+        ]
     }
 }
 

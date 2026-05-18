@@ -33,6 +33,7 @@ use joltworks::{
     config::{OneHotConfig, OneHotParams},
     poly::opening_proof::VerifierOpeningAccumulator,
 };
+use std::collections::BTreeMap;
 
 use atlas_onnx_tracer::{
     node::ComputationNode,
@@ -55,6 +56,7 @@ use joltworks::{
         shout,
         sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
+        sumcheck_verifier::SumcheckInstanceVerifier,
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits, math::Math},
@@ -91,7 +93,19 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        SoftmaxLastAxisVerifier::new(node, self.scale, verifier).verify(verifier)
+        let scale_bits = verifier.preprocessing.scale();
+        let mut sm = SoftmaxLastAxisVerifier::new(
+            node,
+            self.scale,
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        );
+        sm.verify(
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+            verifier.proofs,
+            scale_bits,
+        )
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
@@ -121,11 +135,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
     }
 }
 
-struct SoftmaxLastAxisProver {
-    computation_node: ComputationNode,
-    scale: i32,
-    F_N: [usize; 2],
-    trace: SoftmaxLastAxisTrace,
+pub(crate) struct SoftmaxLastAxisProver {
+    pub(crate) computation_node: ComputationNode,
+    pub(crate) scale: i32,
+    pub(crate) F_N: [usize; 2],
+    pub(crate) trace: SoftmaxLastAxisTrace,
 }
 
 impl SoftmaxLastAxisProver {
@@ -206,7 +220,7 @@ impl SoftmaxLastAxisProver {
 ///
 /// Mirror of [`SoftmaxLastAxisProver`] — each stage method corresponds to a
 /// prover stage and verifies the associated sumcheck proof.
-pub struct SoftmaxLastAxisVerifier {
+pub(crate) struct SoftmaxLastAxisVerifier {
     computation_node: ComputationNode,
     scale: i32,
     F_N: [usize; 2],
@@ -217,30 +231,75 @@ pub struct SoftmaxLastAxisVerifier {
 
 impl SoftmaxLastAxisVerifier {
     #[inline]
-    fn idx(&self) -> usize {
+    pub(crate) fn idx(&self) -> usize {
         self.computation_node.idx
     }
 
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::verify", skip_all)]
-    /// Run the full verification pipeline.
-    fn verify<F: JoltField, T: Transcript>(
+    /// Run the full verification pipeline (non-ZK).
+    pub(crate) fn verify<F: JoltField, T: Transcript>(
         &mut self,
-        verifier: &mut Verifier<'_, F, T>,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+        proofs: &BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+        scale_bits: i32,
     ) -> Result<(), ProofVerifyError> {
-        self.cache_exp_sum(verifier)?;
-        self.cache_R(verifier);
-        self.stage1(verifier)?;
+        self.cache_exp_sum(accumulator, transcript)?;
+        self.cache_R(accumulator, transcript);
+        self.run_stage(
+            ProofType::SoftmaxStage1,
+            self.build_stage1_verifiers(accumulator, transcript, scale_bits)?,
+            proofs,
+            accumulator,
+            transcript,
+        )?;
 
         let lut = VerifierLookupTableData::new(self.scale);
 
-        self.cache_r_exp(verifier);
-        self.stage2(verifier, &lut)?;
+        self.cache_r_exp(accumulator, transcript);
+        self.run_stage(
+            ProofType::SoftmaxStage2,
+            self.build_stage2_verifiers(accumulator, transcript, scale_bits, &lut),
+            proofs,
+            accumulator,
+            transcript,
+        )?;
 
-        self.stage3(verifier, &lut)?;
+        self.run_stage(
+            ProofType::SoftmaxStage3,
+            self.build_stage3_verifiers(accumulator, transcript, scale_bits, &lut),
+            proofs,
+            accumulator,
+            transcript,
+        )?;
 
-        self.operand_link(verifier, &lut)?;
+        self.operand_link(accumulator, &lut)?;
 
-        self.stage4(verifier, &lut)?;
+        self.run_stage(
+            ProofType::SoftmaxStage4,
+            self.build_stage4_verifiers(accumulator, transcript, &lut),
+            proofs,
+            accumulator,
+            transcript,
+        )?;
+        Ok(())
+    }
+
+    /// Drive a single batched-sumcheck stage given pre-built verifier instances.
+    fn run_stage<F: JoltField, T: Transcript>(
+        &self,
+        proof_type: ProofType,
+        instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>>,
+        proofs: &BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+    ) -> Result<(), ProofVerifyError> {
+        let proof = proofs
+            .get(&ProofId(self.idx(), proof_type))
+            .ok_or(ProofVerifyError::MissingProof(self.idx()))?;
+        let refs: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
+            instances.iter().map(|b| b.as_ref()).collect();
+        BatchedSumcheck::verify(proof, refs, accumulator, transcript)?;
         Ok(())
     }
 }
@@ -250,7 +309,7 @@ impl SoftmaxLastAxisVerifier {
 // ---------------------------------------------------------------------------
 
 impl SoftmaxLastAxisProver {
-    fn new(node: &ComputationNode, trace: SoftmaxLastAxisTrace, scale: i32) -> Self {
+    pub(crate) fn new(node: &ComputationNode, trace: SoftmaxLastAxisTrace, scale: i32) -> Self {
         let (&n, leading_dims) = node
             .output_dims
             .split_last()
@@ -282,7 +341,10 @@ impl SoftmaxLastAxisProver {
     /// the same field element).  The recovered `i32` values are then fed into
     /// `MultilinearPolynomial::from(Vec<i32>)`, which correctly uses `from_i32`
     /// for the actual MLE computations.
-    fn send_auxiliary_vectors<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
+    pub(crate) fn send_auxiliary_vectors<F: JoltField, T: Transcript>(
+        &self,
+        prover: &mut Prover<F, T>,
+    ) {
         let [f, _] = self.F_N;
         let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node)
             .into_provider(&mut prover.transcript, OpeningPoint::default());
@@ -307,7 +369,7 @@ impl SoftmaxLastAxisProver {
     /// Evaluates the prover-sent `exp_sum_q` vector at the leading part of
     /// `r0` (the initial output opening point).
     #[tracing::instrument(name = "SoftmaxLastAxisProver::cache_exp_sum", skip_all)]
-    fn cache_exp_sum<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
+    pub(crate) fn cache_exp_sum<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
         let r0 = accessor.get_reduced_opening().0;
         let log_f = self.F_N[0].log_2();
@@ -318,7 +380,7 @@ impl SoftmaxLastAxisProver {
     }
 
     /// Cache the R (remainder) polynomial to the accumulator.
-    fn cache_R<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
+    pub(crate) fn cache_R<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
         let r0 = accessor.get_reduced_opening().0;
         let eval = MultilinearPolynomial::from(self.trace.R.clone()).evaluate(&r0.r);
@@ -332,15 +394,29 @@ impl SoftmaxLastAxisProver {
         prover: &mut Prover<F, T>,
         r_lookup_bits: Vec<LookupBits>,
     ) -> SumcheckInstanceProof<F, T> {
-        // recip mult instance
-        let recip_mult_params = RecipMultParams::new(
+        let mut instances = self.build_stage1_instances(prover, r_lookup_bits);
+        run_batched_prove(&mut instances, prover)
+    }
+
+    /// Build stage 1 sumcheck instances without running the sumcheck.
+    pub(crate) fn build_stage1_instances<F: JoltField, T: Transcript>(
+        &mut self,
+        prover: &mut Prover<F, T>,
+        r_lookup_bits: Vec<LookupBits>,
+    ) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
+        #[cfg_attr(not(feature = "zk"), allow(unused_mut))]
+        let mut recip_mult_params = RecipMultParams::new(
             self.computation_node.clone(),
             self.scale,
             self.F_N,
             &prover.accumulator,
             &mut prover.transcript,
         );
-        // Clone exp_q for exp_sum, take for recip_mult (two consumers need owned copies)
+        #[cfg(feature = "zk")]
+        {
+            recip_mult_params.inv_sum_evals =
+                self.trace.inv_sum.iter().map(|&x| F::from_i32(x)).collect();
+        }
         let exp_q_for_sum = self.trace.exp_q.clone();
         let recip_mult_prover = RecipMultProver::initialize(
             std::mem::take(&mut self.trace.exp_q),
@@ -348,7 +424,6 @@ impl SoftmaxLastAxisProver {
             recip_mult_params,
         );
 
-        // exp sum instance
         let exp_sum_params = ExpSumParams::new(
             self.computation_node.clone(),
             self.F_N,
@@ -357,7 +432,6 @@ impl SoftmaxLastAxisProver {
         );
         let exp_sum_prover = ExpSumProver::initialize(exp_q_for_sum, exp_sum_params);
 
-        // range-check R instance (uses pre-computed lookup bits)
         let provider = SoftmaxRCProvider::remainder(
             self.computation_node.clone(),
             prover.preprocessing.scale(),
@@ -365,17 +439,16 @@ impl SoftmaxLastAxisProver {
         let rc_R_prover =
             identity_rangecheck_prover(&provider, r_lookup_bits, &mut prover.accumulator);
 
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
+        vec![
             Box::new(recip_mult_prover),
             Box::new(exp_sum_prover),
             Box::new(rc_R_prover),
-        ];
-        run_batched_prove(&mut instances, prover)
+        ]
     }
 
     /// Cache the r_exp polynomial to the accumulator.
     #[tracing::instrument(name = "SoftmaxLastAxisProver::cache_r_exp", skip_all)]
-    fn cache_r_exp<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
+    pub(crate) fn cache_r_exp<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
         let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
         let eval =
@@ -392,16 +465,26 @@ impl SoftmaxLastAxisProver {
         r_indices: &[usize],
         lut_data: &LookupTableData,
     ) -> SumcheckInstanceProof<F, T> {
-        // max indicator instance
+        let mut instances =
+            self.build_stage2_instances(prover, r_exp_lookup_bits, r_indices, lut_data);
+        run_batched_prove(&mut instances, prover)
+    }
+
+    /// Build stage 2 sumcheck instances without running the sumcheck.
+    pub(crate) fn build_stage2_instances<F: JoltField, T: Transcript>(
+        &mut self,
+        prover: &mut Prover<F, T>,
+        r_exp_lookup_bits: Vec<LookupBits>,
+        r_indices: &[usize],
+        lut_data: &LookupTableData,
+    ) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
         let [f, _n] = self.F_N;
         let log_f = f.log_2();
 
-        // Get r1 (the exp_q opening point from Stage 1)
         let accessor = AccOpeningAccessor::new(&prover.accumulator, &self.computation_node);
         let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
         let r1_k = r1.split_at(log_f).0;
 
-        // max_k(r1_k) — evaluate the auxiliary max_k vector at the leading point
         let max_k_eval = MultilinearPolynomial::from(self.trace.max_k.clone()).evaluate(&r1_k.r);
         let max_indicator_params = MaxIndicatorParams::new(
             self.computation_node.clone(),
@@ -413,7 +496,6 @@ impl SoftmaxLastAxisProver {
         let max_indicator_prover =
             MaxIndicatorProver::initialize(std::mem::take(&mut self.trace.x), max_indicator_params);
 
-        // exp mult instance
         let exp_mult_params = MultParams::new(
             self.computation_node.clone(),
             self.scale,
@@ -425,7 +507,6 @@ impl SoftmaxLastAxisProver {
             exp_mult_params,
         );
 
-        // range-check r_exp instance (uses pre-computed lookup bits)
         let provider = SoftmaxRCProvider::exp_remainder(
             self.computation_node.clone(),
             prover.preprocessing.scale(),
@@ -433,7 +514,6 @@ impl SoftmaxLastAxisProver {
         let exp_r_rc_prover =
             identity_rangecheck_prover(&provider, r_exp_lookup_bits, &mut prover.accumulator);
 
-        // one-hot check for R ra (uses pre-computed indices)
         let encoding = SoftmaxRaEncoding::remainder(self.idx(), prover.preprocessing.scale());
         let [R_ra_prover, R_hw_prover, R_bool_prover] = shout::ra_onehot_provers(
             &encoding,
@@ -442,7 +522,6 @@ impl SoftmaxLastAxisProver {
             &mut prover.transcript,
         );
 
-        // complementary slackness: sat_diff * (z_bound − 1 − z_hi * B − z_lo) = 0
         let sd_params = SatDiffSlacknessParams::new(
             self.computation_node.clone(),
             lut_data.z_bound_minus_1,
@@ -456,7 +535,7 @@ impl SoftmaxLastAxisProver {
             sd_params,
         );
 
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
+        vec![
             Box::new(exp_mult_prover),
             Box::new(max_indicator_prover),
             Box::new(exp_r_rc_prover),
@@ -464,8 +543,7 @@ impl SoftmaxLastAxisProver {
             R_hw_prover,
             R_bool_prover,
             Box::new(sd_prover),
-        ];
-        run_batched_prove(&mut instances, prover)
+        ]
     }
 
     #[tracing::instrument(name = "SoftmaxLastAxisProver::stage3", skip_all)]
@@ -476,9 +554,19 @@ impl SoftmaxLastAxisProver {
         sat_diff_lookup_bits: Vec<LookupBits>,
         r_exp_indices: &[usize],
     ) -> SumcheckInstanceProof<F, T> {
-        // read-raf for exponentiation
+        let mut instances =
+            self.build_stage3_instances(prover, lut_data, sat_diff_lookup_bits, r_exp_indices);
+        run_batched_prove(&mut instances, prover)
+    }
 
-        // hi
+    /// Build stage 3 sumcheck instances without running the sumcheck.
+    pub(crate) fn build_stage3_instances<F: JoltField, T: Transcript>(
+        &self,
+        prover: &mut Prover<F, T>,
+        lut_data: &LookupTableData,
+        sat_diff_lookup_bits: Vec<LookupBits>,
+        r_exp_indices: &[usize],
+    ) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
         let hi_provider = ExpReadRafProvider {
             node: self.computation_node.clone(),
             table_size: lut_data.table_hi.len(),
@@ -492,7 +580,6 @@ impl SoftmaxLastAxisProver {
             &mut prover.transcript,
         );
 
-        // lo
         let lo_provider = ExpReadRafProvider {
             node: self.computation_node.clone(),
             table_size: lut_data.table_lo.len(),
@@ -506,12 +593,10 @@ impl SoftmaxLastAxisProver {
             &mut prover.transcript,
         );
 
-        // rc sat diff (uses pre-computed lookup bits)
         let provider = SoftmaxRCProvider::sat_diff(self.computation_node.clone());
         let sat_diff_rc_prover =
             identity_rangecheck_prover(&provider, sat_diff_lookup_bits, &mut prover.accumulator);
 
-        // one-hot checks for r_exp ra (uses pre-computed indices)
         let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), prover.preprocessing.scale());
         let [exp_r_ra_prover, exp_r_hw_prover, exp_r_bool_prover] = shout::ra_onehot_provers(
             &encoding,
@@ -520,27 +605,33 @@ impl SoftmaxLastAxisProver {
             &mut prover.transcript,
         );
 
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
+        vec![
             hi_prover,
             lo_prover,
             Box::new(sat_diff_rc_prover),
             exp_r_ra_prover,
             exp_r_hw_prover,
             exp_r_bool_prover,
-        ];
-        run_batched_prove(&mut instances, prover)
+        ]
     }
 
-    #[tracing::instrument(name = "SoftmaxLastAxisProver::stage4", skip_all)]
     fn stage4<F: JoltField, T: Transcript>(
         &self,
         prover: &mut Prover<F, T>,
         lut_data: &LookupTableData,
         sat_diff_indices: &[usize],
     ) -> SumcheckInstanceProof<F, T> {
-        // one-hot checks for z_hi_ra and z_lo_ra
+        let mut instances = self.build_stage4_instances(prover, lut_data, sat_diff_indices);
+        run_batched_prove(&mut instances, prover)
+    }
 
-        // hi
+    /// Build stage 4 sumcheck instances without running the sumcheck.
+    pub(crate) fn build_stage4_instances<F: JoltField, T: Transcript>(
+        &self,
+        prover: &mut Prover<F, T>,
+        lut_data: &LookupTableData,
+        sat_diff_indices: &[usize],
+    ) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
         let encoding = SoftmaxRaEncoding::exp_hi(self.idx(), lut_data.table_hi.len().log_2());
         let [hi_ra_prover, hi_hw_prover, hi_bool_prover] = shout::ra_onehot_provers(
             &encoding,
@@ -549,7 +640,6 @@ impl SoftmaxLastAxisProver {
             &mut prover.transcript,
         );
 
-        // lo
         let encoding = SoftmaxRaEncoding::exp_lo(self.idx(), lut_data.table_lo.len().log_2());
         let [lo_ra_prover, lo_hw_prover, lo_bool_prover] = shout::ra_onehot_provers(
             &encoding,
@@ -558,7 +648,6 @@ impl SoftmaxLastAxisProver {
             &mut prover.transcript,
         );
 
-        // one-hot checks for sat_diff ra
         let encoding = SoftmaxRaEncoding::sat_diff(self.idx());
         let [sat_diff_ra_prover, sat_diff_hw_prover, sat_diff_bool_prover] =
             shout::ra_onehot_provers(
@@ -568,7 +657,7 @@ impl SoftmaxLastAxisProver {
                 &mut prover.transcript,
             );
 
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
+        vec![
             hi_ra_prover,
             hi_hw_prover,
             hi_bool_prover,
@@ -578,8 +667,7 @@ impl SoftmaxLastAxisProver {
             sat_diff_ra_prover,
             sat_diff_hw_prover,
             sat_diff_bool_prover,
-        ];
-        run_batched_prove(&mut instances, prover)
+        ]
     }
 }
 
@@ -592,10 +680,11 @@ impl SoftmaxLastAxisVerifier {
     ///
     /// Mirror of [`SoftmaxLastAxisProver::send_auxiliary_vectors`].
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::new", skip_all)]
-    fn new<F: JoltField, T: Transcript>(
+    pub(crate) fn new<F: JoltField, T: Transcript>(
         node: &ComputationNode,
         scale: i32,
-        verifier: &mut Verifier<'_, F, T>,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
     ) -> Self {
         let (&n, leading_dims) = node
             .output_dims
@@ -603,9 +692,8 @@ impl SoftmaxLastAxisVerifier {
             .expect("softmax node must have at least one output dimension");
         let f = leading_dims.iter().product::<usize>();
 
-        let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, node);
-        let mut provider =
-            accessor.into_provider(&mut verifier.transcript, OpeningPoint::default());
+        let accessor = AccOpeningAccessor::new(&mut *accumulator, node);
+        let mut provider = accessor.into_provider(&mut *transcript, OpeningPoint::default());
         for k in 0..f {
             provider.append_advice(|idx| VirtualPoly::SoftmaxSumOutput(idx, k));
             provider.append_advice(|idx| VirtualPoly::SoftmaxMaxOutput(idx, k));
@@ -629,7 +717,7 @@ impl SoftmaxLastAxisVerifier {
                 .collect()
         }
 
-        let accessor = AccOpeningAccessor::new(&verifier.accumulator, node);
+        let accessor = AccOpeningAccessor::new(&*accumulator, node);
 
         let exp_sum = read_aux_scalars(&accessor, f, VirtualPoly::SoftmaxSumOutput)
             .into_iter()
@@ -655,13 +743,13 @@ impl SoftmaxLastAxisVerifier {
     }
 
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::inv_sum_evals", skip_all)]
-    fn inv_sum_evals<F: JoltField, T: Transcript>(
+    pub(crate) fn inv_sum_evals<F: JoltField>(
         &self,
-        verifier: &mut Verifier<'_, F, T>,
+        accumulator: &VerifierOpeningAccumulator<F>,
     ) -> Result<Vec<F>, ProofVerifyError> {
         let [f, _] = self.F_N;
         let s_squared = (self.scale as i64) * (self.scale as i64);
-        let accessor = AccOpeningAccessor::new(&verifier.accumulator, &self.computation_node);
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
         (0..f)
             .map(|k| {
                 let exp_sum_q_k = accessor
@@ -686,15 +774,16 @@ impl SoftmaxLastAxisVerifier {
     /// Cache `exp_sum_q(r0_lead)` — mirror of prover [`cache_exp_sum`].
     /// And verify that the claimed `exp_sum_q` values are consistent with the opening.
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::cache_exp_sum", skip_all)]
-    fn cache_exp_sum<F: JoltField, T: Transcript>(
+    pub(crate) fn cache_exp_sum<F: JoltField, T: Transcript>(
         &mut self,
-        verifier: &mut Verifier<'_, F, T>,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
     ) -> Result<(), ProofVerifyError> {
-        let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, &self.computation_node);
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
         let r0 = accessor.get_reduced_opening().0;
         let log_f = self.F_N[0].log_2();
         let r_lead = r0.split_at(log_f).0;
-        let mut provider = accessor.into_provider(&mut verifier.transcript, r_lead.clone());
+        let mut provider = accessor.into_provider(transcript, r_lead.clone());
         provider.append_advice(VirtualPoly::SoftmaxExpSum);
         let exp_sum_eval =
             MultilinearPolynomial::from(std::mem::take(&mut self.exp_sum)).evaluate(&r_lead.r);
@@ -708,194 +797,207 @@ impl SoftmaxLastAxisVerifier {
     }
 
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::cache_R", skip_all)]
-    /// Append the remainder polynomial commitment to the accumulator.
-    fn cache_R<F: JoltField, T: Transcript>(&self, verifier: &mut Verifier<'_, F, T>) {
-        let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, &self.computation_node);
+    /// Append the remainder polynomial commitment to the accumulator (non-ZK).
+    pub(crate) fn cache_R<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+    ) {
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
         let r = accessor.get_reduced_opening().0;
-        let mut provider = accessor.into_provider(&mut verifier.transcript, r);
+        let mut provider = accessor.into_provider(transcript, r);
         provider.append_advice(VirtualPoly::SoftmaxRecipMultRemainder);
     }
 
-    #[tracing::instrument(name = "SoftmaxLastAxisVerifier::stage1", skip_all)]
-    fn stage1<F: JoltField, T: Transcript>(
+    /// Cache the remainder polynomial in the ZK pipeline.
+    ///
+    /// In ZK mode the verifier does not see the claim value (it is private and
+    /// Pedersen-committed by the prover). This method mirrors [`cache_R`] but:
+    /// - inserts an explicit `(r0, F::zero())` placeholder at the same `OpeningId`
+    ///   so subsequent stage-1 verifiers that read this opening get an explicit
+    ///   placeholder (rather than relying on the accumulator's permissive
+    ///   `zk_mode` fallback), and
+    /// - absorbs the Pedersen commitment into the transcript (the prover side
+    ///   appends the same commitment in `prove_softmax_zk`).
+    #[cfg(feature = "zk")]
+    pub(crate) fn cache_R_zk<F: JoltField, T: Transcript>(
         &self,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+        commitment: &impl ark_serialize::CanonicalSerialize,
+    ) {
+        use joltworks::poly::opening_proof::{OpeningId, SumcheckId};
+        let accessor = AccOpeningAccessor::new(&*accumulator, &self.computation_node);
+        let r0 = accessor.get_reduced_opening().0;
+        let opening_id = OpeningId::new(
+            VirtualPoly::SoftmaxRecipMultRemainder(self.idx()),
+            SumcheckId::NodeExecution(self.idx()),
+        );
+        accumulator.openings.insert(opening_id, (r0, F::zero()));
+        transcript.append_serializable(commitment);
+    }
+
+    /// Build stage 1 verifier instances. The caller drives the actual sumcheck.
+    #[tracing::instrument(name = "SoftmaxLastAxisVerifier::build_stage1_verifiers", skip_all)]
+    pub(crate) fn build_stage1_verifiers<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+        scale_bits: i32,
+    ) -> Result<Vec<Box<dyn SumcheckInstanceVerifier<F, T>>>, ProofVerifyError> {
+        let inv_sum = self.inv_sum_evals(&*accumulator)?;
         let recip_mult_verifier = RecipMultVerifier::new(
             self.computation_node.clone(),
             self.scale,
             self.F_N,
-            self.inv_sum_evals(verifier)?,
-            &verifier.accumulator,
-            &mut verifier.transcript,
+            inv_sum,
+            &*accumulator,
+            transcript,
         );
         let exp_sum_verifier = ExpSumVerifier::new(
             self.computation_node.clone(),
             self.F_N,
-            &verifier.accumulator,
-            &mut verifier.transcript,
+            &*accumulator,
+            transcript,
         );
-        let rc_provider = SoftmaxRCProvider::remainder(
-            self.computation_node.clone(),
-            verifier.preprocessing.scale(),
-        );
-        let rc_R_verifier = identity_rangecheck_verifier(&rc_provider, &mut verifier.accumulator);
-        BatchedSumcheck::verify(
-            verifier
-                .proofs
-                .get(&ProofId(self.idx(), ProofType::SoftmaxStage1))
-                .ok_or(ProofVerifyError::MissingProof(self.idx()))?,
-            vec![&recip_mult_verifier, &exp_sum_verifier, &rc_R_verifier],
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-        Ok(())
+        let rc_provider = SoftmaxRCProvider::remainder(self.computation_node.clone(), scale_bits);
+        let rc_R_verifier = identity_rangecheck_verifier(&rc_provider, accumulator);
+        Ok(vec![
+            Box::new(recip_mult_verifier),
+            Box::new(exp_sum_verifier),
+            Box::new(rc_R_verifier),
+        ])
     }
 
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::cache_r_exp", skip_all)]
-    fn cache_r_exp<F: JoltField, T: Transcript>(&self, verifier: &mut Verifier<'_, F, T>) {
-        let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, &self.computation_node);
+    pub(crate) fn cache_r_exp<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+    ) {
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
         let r = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
-        let mut provider = accessor.into_provider(&mut verifier.transcript, r);
+        let mut provider = accessor.into_provider(transcript, r);
         provider.append_advice(VirtualPoly::SoftmaxExpRemainder);
     }
 
-    #[tracing::instrument(name = "SoftmaxLastAxisVerifier::stage2", skip_all)]
-    fn stage2<F: JoltField, T: Transcript>(
+    /// Cache the exp-remainder polynomial in the ZK pipeline.
+    ///
+    /// Same shape as [`cache_R_zk`]: insert an explicit `(r1, F::zero())`
+    /// placeholder for the private `SoftmaxExpRemainder` opening and absorb
+    /// the Pedersen commitment from the bundle into the transcript.
+    #[cfg(feature = "zk")]
+    pub(crate) fn cache_r_exp_zk<F: JoltField, T: Transcript>(
         &self,
-        verifier: &mut Verifier<'_, F, T>,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+        commitment: &impl ark_serialize::CanonicalSerialize,
+    ) {
+        use joltworks::poly::opening_proof::{OpeningId, SumcheckId};
+        let accessor = AccOpeningAccessor::new(&*accumulator, &self.computation_node);
+        let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
+        let opening_id = OpeningId::new(
+            VirtualPoly::SoftmaxExpRemainder(self.idx()),
+            SumcheckId::NodeExecution(self.idx()),
+        );
+        accumulator.openings.insert(opening_id, (r1, F::zero()));
+        transcript.append_serializable(commitment);
+    }
+
+    /// Build stage 2 verifier instances.
+    #[tracing::instrument(name = "SoftmaxLastAxisVerifier::build_stage2_verifiers", skip_all)]
+    pub(crate) fn build_stage2_verifiers<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+        scale_bits: i32,
         lut: &VerifierLookupTableData,
-    ) -> Result<(), ProofVerifyError> {
-        // max indicator instance
+    ) -> Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> {
         let [f, _n] = self.F_N;
         let log_f = f.log_2();
 
-        // Get r1 (the exp_q opening point from Stage 1)
-        let accessor = AccOpeningAccessor::new(&verifier.accumulator, &self.computation_node);
+        let accessor = AccOpeningAccessor::new(&*accumulator, &self.computation_node);
         let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
         let r1_k = r1.split_at(log_f).0;
 
-        // max_k(r1_k) — evaluate the auxiliary max_k vector at the leading point
         let max_k_eval = MultilinearPolynomial::from(self.max_k.clone()).evaluate(&r1_k.r);
         let max_indicator_verifier = MaxIndicatorVerifier::new(
             self.computation_node.clone(),
             self.F_N,
             self.argmax_k.clone(),
             max_k_eval,
-            &verifier.accumulator,
+            &*accumulator,
         );
 
-        // exp mult instance
-        let exp_mult_verifier = MultVerifier::new(
-            self.computation_node.clone(),
-            self.scale,
-            &verifier.accumulator,
-        );
+        let exp_mult_verifier =
+            MultVerifier::new(self.computation_node.clone(), self.scale, &*accumulator);
 
-        // range-check r_exp instance
-        let rc_provider = SoftmaxRCProvider::exp_remainder(
-            self.computation_node.clone(),
-            verifier.preprocessing.scale(),
-        );
-        let exp_r_rc_verifier =
-            identity_rangecheck_verifier(&rc_provider, &mut verifier.accumulator);
+        let rc_provider =
+            SoftmaxRCProvider::exp_remainder(self.computation_node.clone(), scale_bits);
+        let exp_r_rc_verifier = identity_rangecheck_verifier(&rc_provider, accumulator);
 
-        // one-hot check for R
-        let encoding = SoftmaxRaEncoding::remainder(self.idx(), verifier.preprocessing.scale());
+        let encoding = SoftmaxRaEncoding::remainder(self.idx(), scale_bits);
         let [R_ra_verifier, R_hw_verifier, R_bool_verifier] =
-            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
+            shout::ra_onehot_verifiers(&encoding, &*accumulator, transcript);
 
-        // complementary slackness verifier
         let sd_verifier = SatDiffSlacknessVerifier::new(
             self.computation_node.clone(),
             lut.z_bound_minus_1,
             lut.base,
-            &verifier.accumulator,
+            &*accumulator,
         );
 
-        BatchedSumcheck::verify(
-            verifier
-                .proofs
-                .get(&ProofId(self.idx(), ProofType::SoftmaxStage2))
-                .ok_or(ProofVerifyError::MissingProof(self.idx()))?,
-            vec![
-                &exp_mult_verifier,
-                &max_indicator_verifier,
-                &exp_r_rc_verifier,
-                &*R_ra_verifier,
-                &*R_hw_verifier,
-                &*R_bool_verifier,
-                &sd_verifier,
-            ],
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        Ok(())
+        vec![
+            Box::new(exp_mult_verifier),
+            Box::new(max_indicator_verifier),
+            Box::new(exp_r_rc_verifier),
+            R_ra_verifier,
+            R_hw_verifier,
+            R_bool_verifier,
+            Box::new(sd_verifier),
+        ]
     }
 
-    #[tracing::instrument(name = "SoftmaxLastAxisVerifier::stage3", skip_all)]
-    fn stage3<F: JoltField, T: Transcript>(
+    /// Build stage 3 verifier instances.
+    #[tracing::instrument(name = "SoftmaxLastAxisVerifier::build_stage3_verifiers", skip_all)]
+    pub(crate) fn build_stage3_verifiers<F: JoltField, T: Transcript>(
         &self,
-        verifier: &mut Verifier<'_, F, T>,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+        scale_bits: i32,
         lut: &VerifierLookupTableData,
-    ) -> Result<(), ProofVerifyError> {
-        // read-raf for exponentiation
-
-        // hi
+    ) -> Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> {
         let provider = ExpReadRafProvider {
             node: self.computation_node.clone(),
             table_size: lut.table_hi.len(),
             digit: ExpDigit::Hi,
         };
-        let hi_verifier = shout::read_raf_verifier(
-            &provider,
-            lut.table_hi.clone(),
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        );
+        let hi_verifier =
+            shout::read_raf_verifier(&provider, lut.table_hi.clone(), &*accumulator, transcript);
 
-        // lo
         let provider = ExpReadRafProvider {
             node: self.computation_node.clone(),
             table_size: lut.table_lo.len(),
             digit: ExpDigit::Lo,
         };
-        let lo_verifier = shout::read_raf_verifier(
-            &provider,
-            lut.table_lo.clone(),
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        );
+        let lo_verifier =
+            shout::read_raf_verifier(&provider, lut.table_lo.clone(), &*accumulator, transcript);
 
-        // rc sat diff
         let provider = SoftmaxRCProvider::sat_diff(self.computation_node.clone());
-        let rc_sat_diff_verifier =
-            identity_rangecheck_verifier(&provider, &mut verifier.accumulator);
+        let rc_sat_diff_verifier = identity_rangecheck_verifier(&provider, accumulator);
 
-        // one-hot checks for r_exp ra
-        let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), verifier.preprocessing.scale());
+        let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), scale_bits);
         let [r_exp_ra_verifier, r_exp_hw_verifier, r_exp_bool_verifier] =
-            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
+            shout::ra_onehot_verifiers(&encoding, &*accumulator, transcript);
 
-        BatchedSumcheck::verify(
-            verifier
-                .proofs
-                .get(&ProofId(self.idx(), ProofType::SoftmaxStage3))
-                .ok_or(ProofVerifyError::MissingProof(self.idx()))?,
-            vec![
-                &*hi_verifier,
-                &*lo_verifier,
-                &rc_sat_diff_verifier,
-                &*r_exp_ra_verifier,
-                &*r_exp_hw_verifier,
-                &*r_exp_bool_verifier,
-            ],
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        Ok(())
+        vec![
+            hi_verifier,
+            lo_verifier,
+            Box::new(rc_sat_diff_verifier),
+            r_exp_ra_verifier,
+            r_exp_hw_verifier,
+            r_exp_bool_verifier,
+        ]
     }
 
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::operand_link", skip_all)]
@@ -903,35 +1005,28 @@ impl SoftmaxLastAxisVerifier {
     ///
     /// `X(r2) = max_k(r2_lead) − z_c(r2) − sat_diff(r2)`
     /// where `z_c(r2) = z_hi(r2)·B + z_lo(r2)`.
-    fn operand_link<F: JoltField, T: Transcript>(
+    pub(crate) fn operand_link<F: JoltField>(
         &self,
-        verifier: &mut Verifier<'_, F, T>,
+        accumulator: &VerifierOpeningAccumulator<F>,
         lut: &VerifierLookupTableData,
     ) -> Result<(), ProofVerifyError> {
         let [f, _n] = self.F_N;
         let log_f = f.log_2();
-        let accessor = AccOpeningAccessor::new(&verifier.accumulator, &self.computation_node);
+        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
 
-        // Get r2
         let r2 = accessor.get_advice(VirtualPoly::SoftmaxExpHi).0;
         let r2_lead = r2.split_at(log_f).0;
 
-        // max_k(r2_lead) — verifier evaluates from sent max_k
         let max_k_eval = MultilinearPolynomial::from(self.max_k.clone()).evaluate(&r2_lead.r);
 
-        // z_c(r2) = z_hi(r2)·B + z_lo(r2)
         let z_hi_eval = accessor.get_advice(VirtualPoly::SoftmaxZHi).1;
         let z_lo_eval = accessor.get_advice(VirtualPoly::SoftmaxZLo).1;
         let z_c_eval = z_hi_eval * F::from_u64(lut.base) + z_lo_eval;
 
-        // sat_diff(r2)
         let sat_diff_eval = accessor.get_advice(VirtualPoly::SoftmaxSatDiff).1;
 
-        // X(r2) = max_k(r2_lead) − z_c(r2) − sat_diff(r2)
         let x_r2 = max_k_eval - z_c_eval - sat_diff_eval;
 
-        // Verify the operand link: prover's claimed X(r2) must match the
-        // algebraic derivation from max_k, z_c, and sat_diff.
         let prover_x_r2 = accessor.get_nodeio(Target::Input(0)).1;
         if prover_x_r2 != x_r2 {
             return Err(ProofVerifyError::InvalidOpeningProof(
@@ -942,49 +1037,37 @@ impl SoftmaxLastAxisVerifier {
         Ok(())
     }
 
-    #[tracing::instrument(name = "SoftmaxLastAxisVerifier::stage4", skip_all)]
-    fn stage4<F: JoltField, T: Transcript>(
+    /// Build stage 4 verifier instances.
+    #[tracing::instrument(name = "SoftmaxLastAxisVerifier::build_stage4_verifiers", skip_all)]
+    pub(crate) fn build_stage4_verifiers<F: JoltField, T: Transcript>(
         &self,
-        verifier: &mut Verifier<'_, F, T>,
+        accumulator: &VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
         lut: &VerifierLookupTableData,
-    ) -> Result<(), ProofVerifyError> {
-        // one-hot checks for z_hi_ra and z_lo_ra
-
-        // hi
+    ) -> Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> {
         let encoding = SoftmaxRaEncoding::exp_hi(self.idx(), lut.table_hi.len().log_2());
         let [hi_ra_verifier, hi_hw_verifier, hi_bool_verifier] =
-            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
+            shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
 
-        // lo
         let encoding = SoftmaxRaEncoding::exp_lo(self.idx(), lut.table_lo.len().log_2());
         let [lo_ra_verifier, lo_hw_verifier, lo_bool_verifier] =
-            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
+            shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
 
-        // one-hot checks for sat_diff ra
         let encoding = SoftmaxRaEncoding::sat_diff(self.idx());
         let [sat_diff_ra_verifier, sat_diff_hw_verifier, sat_diff_bool_verifier] =
-            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
+            shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
 
-        BatchedSumcheck::verify(
-            verifier
-                .proofs
-                .get(&ProofId(self.idx(), ProofType::SoftmaxStage4))
-                .ok_or(ProofVerifyError::MissingProof(self.idx()))?,
-            vec![
-                &*hi_ra_verifier,
-                &*hi_hw_verifier,
-                &*hi_bool_verifier,
-                &*lo_ra_verifier,
-                &*lo_hw_verifier,
-                &*lo_bool_verifier,
-                &*sat_diff_ra_verifier,
-                &*sat_diff_hw_verifier,
-                &*sat_diff_bool_verifier,
-            ],
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-        Ok(())
+        vec![
+            hi_ra_verifier,
+            hi_hw_verifier,
+            hi_bool_verifier,
+            lo_ra_verifier,
+            lo_hw_verifier,
+            lo_bool_verifier,
+            sat_diff_ra_verifier,
+            sat_diff_hw_verifier,
+            sat_diff_bool_verifier,
+        ]
     }
 }
 
@@ -993,12 +1076,12 @@ impl SoftmaxLastAxisVerifier {
 // ---------------------------------------------------------------------------
 
 /// Convert `i32` trace values to usize indices.
-fn to_indices(values: &[i32]) -> Vec<usize> {
+pub(crate) fn to_indices(values: &[i32]) -> Vec<usize> {
     values.iter().map(|&v| v as usize).collect()
 }
 
 /// Convert `i32` trace values to `LookupBits` with the given bit-width.
-fn to_lookup_bits(values: &[i32], bits: usize) -> Vec<LookupBits> {
+pub(crate) fn to_lookup_bits(values: &[i32], bits: usize) -> Vec<LookupBits> {
     values
         .iter()
         .map(|&v| LookupBits::new(v as u64, bits))
@@ -1006,7 +1089,7 @@ fn to_lookup_bits(values: &[i32], bits: usize) -> Vec<LookupBits> {
 }
 
 /// Pad a vector in-place to the next power of two with zeros.
-fn pad_to_power_of_two(v: &mut Vec<i32>) {
+pub(crate) fn pad_to_power_of_two(v: &mut Vec<i32>) {
     v.resize(v.len().next_power_of_two(), 0);
 }
 
@@ -1024,29 +1107,29 @@ fn run_batched_prove<F: JoltField, T: Transcript>(
 }
 
 /// Pre-computed lookup table data shared between stage3 and stage4.
-struct LookupTableData {
-    table_hi: Vec<i32>,
-    table_lo: Vec<i32>,
-    z_hi_indices: Vec<usize>,
-    z_lo_indices: Vec<usize>,
+pub(crate) struct LookupTableData {
+    pub(crate) table_hi: Vec<i32>,
+    pub(crate) table_lo: Vec<i32>,
+    pub(crate) z_hi_indices: Vec<usize>,
+    pub(crate) z_lo_indices: Vec<usize>,
     /// `z_bound - 1 = K_hi * B - 1` (unpadded).
-    z_bound_minus_1: u64,
+    pub(crate) z_bound_minus_1: u64,
     /// Digit base B.
-    base: u64,
+    pub(crate) base: u64,
 }
 
 /// Pre-computed verifier lookup table data (shared across stage3, operand_link, stage4).
-struct VerifierLookupTableData {
-    table_hi: Vec<i32>,
-    table_lo: Vec<i32>,
-    base: u64,
+pub(crate) struct VerifierLookupTableData {
+    pub(crate) table_hi: Vec<i32>,
+    pub(crate) table_lo: Vec<i32>,
+    pub(crate) base: u64,
     /// `z_bound − 1 = K_hi * B − 1`, the maximum clamped logit value.
     /// Used in the complementary-slackness check.
-    z_bound_minus_1: u64,
+    pub(crate) z_bound_minus_1: u64,
 }
 
 impl VerifierLookupTableData {
-    fn new(scale: i32) -> Self {
+    pub(crate) fn new(scale: i32) -> Self {
         let decomp = generate_exp_lut_decomposed(scale);
         let z_bound_minus_1 = (decomp.lut_hi.len() * decomp.base - 1) as u64;
         let mut table_hi = decomp.lut_hi;

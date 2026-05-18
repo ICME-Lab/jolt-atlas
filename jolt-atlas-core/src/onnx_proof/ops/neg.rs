@@ -8,6 +8,10 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
     ops::Neg,
 };
+#[cfg(feature = "zk")]
+use joltworks::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -73,8 +77,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for NegParams<F> {
     }
 
     #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> joltworks::subprotocols::blindfold::InputClaimConstraint {
-        joltworks::subprotocols::blindfold::InputClaimConstraint::default()
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
     }
 
     #[cfg(feature = "zk")]
@@ -87,11 +91,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for NegParams<F> {
 
     // output = eq_eval * (-operand) = (-eq_eval) * operand
     #[cfg(feature = "zk")]
-    fn output_claim_constraint(
-        &self,
-    ) -> Option<joltworks::subprotocols::blindfold::OutputClaimConstraint> {
-        use joltworks::subprotocols::blindfold::{OutputClaimConstraint, ProductTerm, ValueSource};
-
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
         let operand_id =
             crate::utils::opening_access::OpeningIdBuilder::new(&self.computation_node)
                 .nodeio(Target::Input(0));

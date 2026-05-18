@@ -11,6 +11,10 @@ use atlas_onnx_tracer::{
     ops::{Concat, Operator},
 };
 use common::parallel::par_enabled;
+#[cfg(feature = "zk")]
+use joltworks::subprotocols::blindfold::{
+    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -163,8 +167,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ConcatSumcheckParams<F> {
     }
 
     #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> joltworks::subprotocols::blindfold::InputClaimConstraint {
-        joltworks::subprotocols::blindfold::InputClaimConstraint::default()
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::default()
     }
 
     #[cfg(feature = "zk")]
@@ -177,11 +181,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ConcatSumcheckParams<F> {
 
     // output = sum_i(selector_claim_i * input_claim_i)
     #[cfg(feature = "zk")]
-    fn output_claim_constraint(
-        &self,
-    ) -> Option<joltworks::subprotocols::blindfold::OutputClaimConstraint> {
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
         use crate::utils::opening_access::OpeningIdBuilder;
-        use joltworks::subprotocols::blindfold::{OutputClaimConstraint, ProductTerm, ValueSource};
         let builder = OpeningIdBuilder::new(&self.computation_node);
         let terms: Vec<ProductTerm> = (0..self.computation_node.inputs.len())
             .map(|i| {

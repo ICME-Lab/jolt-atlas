@@ -1,6 +1,9 @@
 pub mod cpu;
+pub mod float;
+pub mod illm;
 pub mod lut;
 pub mod rand;
+pub mod rebase;
 pub mod text;
 pub mod weights;
 

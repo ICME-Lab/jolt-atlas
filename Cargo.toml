@@ -23,6 +23,7 @@ members = [
     "qwen2-prover",
     "qwen2-awy",
     "qwen3-awy",
+    "qwen3-layer-prover",
 ]
 
 [workspace.dependencies]
@@ -33,6 +34,7 @@ joltworks = { path = "./joltworks" }
 qwen2-prover = { path = "./qwen2-prover" }
 qwen2-awy = { path = "./qwen2-awy" }
 qwen3-awy = { path = "./qwen3-awy" }
+qwen3-layer-prover = { path = "./qwen3-layer-prover" }
 
 # Cryptography and Math
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }

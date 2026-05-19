@@ -203,8 +203,10 @@ impl Args {
                 }
                 "--temperature" => {
                     sampling.enabled = true;
-                    sampling.temperature =
-                        args.next().ok_or("--temperature requires a value")?.parse()?;
+                    sampling.temperature = args
+                        .next()
+                        .ok_or("--temperature requires a value")?
+                        .parse()?;
                     if sampling.temperature <= 0.0 {
                         return Err(err("--temperature must be positive"));
                     }
@@ -2844,16 +2846,8 @@ impl IntWidthStats {
 }
 
 fn qx0_signed_bits(xs: &[f32]) -> u8 {
-    let min = xs
-        .iter()
-        .map(|&x| x.round() as i64)
-        .min()
-        .unwrap_or(0);
-    let max = xs
-        .iter()
-        .map(|&x| x.round() as i64)
-        .max()
-        .unwrap_or(0);
+    let min = xs.iter().map(|&x| x.round() as i64).min().unwrap_or(0);
+    let max = xs.iter().map(|&x| x.round() as i64).max().unwrap_or(0);
     for bits in 1..=63 {
         let lo = -(1i64 << (bits - 1));
         let hi = (1i64 << (bits - 1)) - 1;

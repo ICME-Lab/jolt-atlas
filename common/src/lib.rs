@@ -247,6 +247,87 @@ canonical_serde_enum! {
         /// nodes; no parameters).
         HammingWeight,
 
+        /// Qwen fixed-point round/rebase bit polynomial.
+        ///
+        /// * `0` – bit index
+        QwenRoundBit(usize),
+
+        /// Qwen fixed-point round/rebase output polynomial.
+        QwenRebaseY,
+
+        /// Qwen fixed-point round/rebase accumulator polynomial.
+        QwenRebaseAcc,
+
+        /// Qwen fixed-point matmul left input polynomial.
+        QwenMatMulA,
+
+        /// Qwen fixed-point matmul right input polynomial.
+        QwenMatMulW,
+
+        /// Qwen fixed-point matmul accumulator polynomial.
+        QwenMatMulAcc,
+
+        /// Qwen matmul partial left polynomial after fixing the row point.
+        QwenMatMulPartialA,
+
+        /// Qwen matmul partial right polynomial after fixing the column point.
+        QwenMatMulPartialW,
+
+        /// Qwen elementwise multiplication input polynomial.
+        QwenMulX,
+
+        /// Qwen attention-style contraction left input polynomial.
+        QwenAttentionLeft,
+
+        /// Qwen attention-style contraction right input polynomial.
+        QwenAttentionRight,
+
+        /// Qwen RoPE even-parity input polynomial.
+        QwenRopeXEven,
+
+        /// Qwen RoPE odd-parity input polynomial.
+        QwenRopeXOdd,
+
+        /// Qwen Hadamard multiplication left input polynomial.
+        QwenHadamardA,
+
+        /// Qwen Hadamard multiplication right input polynomial.
+        QwenHadamardB,
+
+        /// Qwen batched elementwise-add left input polynomial.
+        QwenMatAddA,
+
+        /// Qwen batched elementwise-add right input polynomial.
+        QwenMatAddB,
+
+        /// Qwen RMSNorm input hidden-state polynomial.
+        QwenRmsNormX,
+
+        /// Qwen SiLU gate input polynomial.
+        QwenSiluGate,
+
+        /// Qwen SiLU gate fractional bit polynomial.
+        ///
+        /// * `0` – bit index
+        QwenSiluFracBit(usize),
+
+        /// Qwen SiLU LUT one-hot read-address polynomial.
+        QwenSiluRa,
+
+        /// Qwen softmax pre-softmax score polynomial.
+        QwenSoftmaxInput,
+
+        /// Qwen softmax exp lookup output polynomial.
+        QwenSoftmaxExp,
+
+        /// Qwen softmax LUT one-hot read-address polynomial.
+        QwenSoftmaxRa,
+
+        /// Qwen softmax input fractional bit polynomial.
+        ///
+        /// * `0` – bit index
+        QwenSoftmaxInputFracBit(usize),
+
         // ----- Advice-derived polynomials (proven via ReadRafSumcheckProver) -----
 
         /// Read-address polynomial derived from [`CommittedPoly::DivRangeCheckRaD`].

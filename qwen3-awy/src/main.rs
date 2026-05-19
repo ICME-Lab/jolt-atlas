@@ -25,6 +25,7 @@ const KV_GROUP: usize = HEADS / KV_HEADS;
 const VOCAB: usize = 151_936;
 const ROPE_THETA: f64 = 1_000_000.0;
 const DEFAULT_FIXED_FRAC: u8 = 8;
+const SOFTMAX_INV_FRAC: u8 = 16;
 const FIXED_CACHE_MAGIC: &[u8; 16] = b"QWEN3AWYQ8CACHE1";
 const EOS_IM_END: u32 = 151_645;
 const EOS_END_OF_TEXT: u32 = 151_643;
@@ -39,7 +40,7 @@ const ROUND_LUT_Q8: [i64; 256] = [
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 ];
-const EXP_LUT_Q8: [i64; 9] = [0, 0, 1, 2, 5, 13, 35, 94, 256];
+const EXP_LUT_Q8: [i64; 17] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 5, 13, 35, 94, 256];
 const SIGMOID_LUT_Q8: [i64; 16] = [
     0, 0, 1, 2, 5, 12, 31, 69, 128, 187, 225, 244, 251, 254, 255, 256,
 ];
@@ -78,6 +79,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         "sigmoid_input_rounding: {}",
         args.cfg.sigmoid_input_rounding.name()
     );
+    println!(
+        "silu_gate_mul_input: {}",
+        args.cfg.silu_gate_mul_input.name()
+    );
     println!("seq_len: {}", args.seq_len);
     println!("sample: {}", args.sampling.enabled);
     println!("temperature: {:.3}", args.sampling.temperature);
@@ -112,7 +117,7 @@ struct Args {
     thinking: bool,
     sampling: Sampling,
     timing: bool,
-    dump_final_awy: Option<PathBuf>,
+    dump_full_awy: Option<PathBuf>,
     cfg: ForwardConfig,
 }
 
@@ -132,7 +137,7 @@ impl Args {
         let mut sampling = Sampling::default();
         let mut greedy = false;
         let mut timing = false;
-        let mut dump_final_awy = None;
+        let mut dump_full_awy = None;
         let mut cfg = ForwardConfig::default();
 
         let mut args = std::env::args().skip(1);
@@ -154,6 +159,13 @@ impl Args {
                         &args
                             .next()
                             .ok_or("--sigmoid-input-rounding requires round|floor|ceil")?,
+                    )?;
+                }
+                "--silu-gate-mul-input" => {
+                    cfg.silu_gate_mul_input = SiluGateMulInput::parse(
+                        &args
+                            .next()
+                            .ok_or("--silu-gate-mul-input requires fixed|integer")?,
                     )?;
                 }
                 "--seq-len" => {
@@ -212,9 +224,9 @@ impl Args {
                     }
                 }
                 "--timing" => timing = true,
-                "--dump-final-awy" => {
-                    dump_final_awy = Some(PathBuf::from(
-                        args.next().ok_or("--dump-final-awy requires a path")?,
+                "--dump-full-awy" => {
+                    dump_full_awy = Some(PathBuf::from(
+                        args.next().ok_or("--dump-full-awy requires a path")?,
                     ));
                 }
                 "--help" | "-h" => {
@@ -246,7 +258,7 @@ impl Args {
             thinking,
             sampling,
             timing,
-            dump_final_awy,
+            dump_full_awy,
             cfg,
         })
     }
@@ -263,6 +275,7 @@ fn print_help() {
            --tokenizer PATH      tokenizer.json path\n\
           --matmul-rebase-rounding round|floor|ceil MatMul accumulator rebase rounding; default round\n\
            --sigmoid-input-rounding round|floor|ceil sigmoid input integer rounding; default round\n\
+           --silu-gate-mul-input fixed|integer|linear gate value used in gate*sigmoid(round(gate)); default linear\n\
            --seq-len N           context length; default 128\n\
            --generate N          generate up to N new tokens\n\
            --thinking            use Qwen3 thinking chat prompt instead of no-think\n\
@@ -276,7 +289,7 @@ fn print_help() {
            --top-k K             keep only top K candidates before top-p; default 20\n\
 --repetition-penalty R penalize previously generated tokens; default 1.0\n\
 --timing              print detailed timing breakdowns\n\
---dump-final-awy PATH replay and dump AWY/nonlinear tensors for the final token\n"
+--dump-full-awy PATH  after generation, replay full token sequence and dump all layer AWY tensors\n"
     );
 }
 
@@ -383,6 +396,7 @@ impl Default for Sampling {
 struct ForwardConfig {
     matmul_rebase_rounding: RoundingMode,
     sigmoid_input_rounding: RoundingMode,
+    silu_gate_mul_input: SiluGateMulInput,
 }
 
 impl Default for ForwardConfig {
@@ -390,6 +404,34 @@ impl Default for ForwardConfig {
         Self {
             matmul_rebase_rounding: RoundingMode::Round,
             sigmoid_input_rounding: RoundingMode::Round,
+            silu_gate_mul_input: SiluGateMulInput::Linear,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SiluGateMulInput {
+    Fixed,
+    Integer,
+    #[default]
+    Linear,
+}
+
+impl SiluGateMulInput {
+    fn parse(value: &str) -> Result<Self, Box<dyn Error>> {
+        match value {
+            "fixed" | "qx8" => Ok(Self::Fixed),
+            "integer" | "int" | "rounded" => Ok(Self::Integer),
+            "linear" | "corrected" | "frac" => Ok(Self::Linear),
+            _ => Err(err(format!("unknown SiLU gate input mode {value:?}"))),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Fixed => "fixed",
+            Self::Integer => "integer",
+            Self::Linear => "linear",
         }
     }
 }
@@ -973,11 +1015,11 @@ fn generate_with_kv_cache(
         decode_lm_head_elapsed += decode_lm_head_started.elapsed();
     }
 
-    if let Some(path) = &args.dump_final_awy {
+    if let Some(path) = &args.dump_full_awy {
         let dump_started = Instant::now();
-        dump_final_awy_trace(st, &fixed, &rotary, &real_ids, args, path)?;
+        dump_full_awy_trace(st, &fixed, &rotary, &real_ids, args, path)?;
         if args.timing {
-            println!("timing.dump_final_awy: {:.3?}", dump_started.elapsed());
+            println!("timing.dump_full_awy: {:.3?}", dump_started.elapsed());
         }
     }
 
@@ -1078,7 +1120,7 @@ fn stream_generated_delta(
     Ok(())
 }
 
-fn dump_final_awy_trace(
+fn dump_full_awy_trace(
     st: &SafeTensors<'_>,
     fixed: &FixedWeights,
     r: &Rotary,
@@ -1086,43 +1128,43 @@ fn dump_final_awy_trace(
     args: &Args,
     path: &PathBuf,
 ) -> Result<(), Box<dyn Error>> {
-    if ids.len() < 2 {
-        return Err(err("need at least two tokens to dump final AWY replay"));
+    if ids.is_empty() {
+        return Err(err("need at least one token to dump full AWY replay"));
     }
-    let final_pos = ids.len() - 1;
-    let final_id = ids[final_pos];
-    let prefix = &ids[..final_pos];
-    let (_last_hidden, mut caches) =
-        prefill_prompt_with_kv_cache(st, &fixed.layers, r, prefix, &args.cfg)?;
-
+    let seq = ids.len();
     let mut trace = TraceRecorder::create(path.clone())?;
     trace.metadata(json!({
         "event": "metadata",
-        "format": "qwen3-awy-final-token-v1",
+        "format": "qwen3-awy-full-sequence-v2",
         "fixed_frac": DEFAULT_FIXED_FRAC,
         "seq_len": args.seq_len,
-        "tokens_total": ids.len(),
-        "replay_prefix_tokens": prefix.len(),
-        "final_pos": final_pos,
-        "final_token_id": final_id,
-        "note": "A/Y tensors are stored as i32_le files. W tensors are referenced by fixed weight name to avoid duplicating the q8 cache.",
+        "tokens_total": seq,
+        "token_ids": ids,
+        "witness_generation": {
+            "strategy": "compact_trace_replay",
+            "note": "The trace stores i32 checkpoint tensors and op metadata. Derived witness data such as accumulators, frac bits, LUT selectors, sums, and max advice should be regenerated deterministically from checkpoints, weights, and public shapes.",
+            "causal_mask": "attention_scores.Y stores raw QK scores. Future-token masking is applied only inside softmax using the verifier-known key_pos <= query_pos selector."
+        },
+        "note": "The generated token sequence is replayed as one full prefill forward pass. Checkpoint tensors are stored as i32_le files. W tensors are referenced by fixed weight name or LUT name.",
     }))?;
 
-    let mut timing = DecodeTiming::default();
-    let hidden = decode_one_token_with_kv_cache(
-        st,
-        &fixed.layers,
-        r,
-        final_id,
-        final_pos,
-        &mut caches,
-        &args.cfg,
-        &mut timing,
-        Some(&mut trace),
-    )?;
-    let h_int = rms_norm_fixed_i32(&hidden, &fixed.norm, 1, HIDDEN);
-    let input = trace.tensor_i32("final_norm.A", &[1, HIDDEN], &hidden)?;
-    let output = trace.tensor_i32("final_norm.Y", &[1, HIDDEN], &h_int)?;
+    let mut x = embed_fixed_from_safetensors(st, ids)?;
+    let embed_ref = trace.tensor_i32("embed.Y", &[seq, HIDDEN], &x)?;
+    trace.op(json!({
+        "event": "op",
+        "op": "embedding",
+        "name": "embed",
+        "W": {"ref": "model.embed_tokens.weight", "shape": [VOCAB, HIDDEN]},
+        "Y": embed_ref,
+    }))?;
+
+    for (layer_idx, layer) in fixed.layers.iter().enumerate() {
+        x = full_layer_trace(&x, layer, r, seq, &args.cfg, layer_idx, &mut trace)?;
+    }
+
+    let h_int = rms_norm_fixed_i32(&x, &fixed.norm, seq, HIDDEN);
+    let input = trace.tensor_i32("final_norm.A", &[seq, HIDDEN], &x)?;
+    let output = trace.tensor_i32("final_norm.Y", &[seq, HIDDEN], &h_int)?;
     trace.op(json!({
         "event": "op",
         "op": "rms_norm",
@@ -1132,20 +1174,49 @@ fn dump_final_awy_trace(
         "Y": output,
     }))?;
 
-    let mut logits = Vec::with_capacity(VOCAB);
-    lm_head_scores_fixed_loaded_into(&fixed.lm_head, &h_int, &mut logits)?;
-    let input = trace.tensor_i32("lm_head.A", &[1, HIDDEN], &h_int)?;
-    let output = trace.tensor_i32("lm_head.Y", &[1, VOCAB], &logits)?;
-    trace.op(json!({
-        "event": "op",
-        "op": "matmul",
-        "name": "lm_head",
-        "A": input,
-        "W": {"ref": "model.embed_tokens.weight", "shape": [HIDDEN, VOCAB]},
-        "Y": output,
-    }))?;
     trace.metadata(json!({"event": "done"}))?;
     Ok(())
+}
+
+fn full_layer_trace(
+    x: &[i32],
+    w: &FixedLayerWeights,
+    r: &Rotary,
+    seq: usize,
+    cfg: &ForwardConfig,
+    layer_idx: usize,
+    trace: &mut TraceRecorder,
+) -> Result<Vec<i32>, Box<dyn Error>> {
+    let n1 = rms_norm_fixed_i32(x, &w.ln1, seq, HIDDEN);
+    record_unary_weight_op(
+        trace,
+        layer_idx,
+        "rms_norm",
+        "ln1",
+        x,
+        &[seq, HIDDEN],
+        "input_layernorm.weight",
+        &[HIDDEN],
+        &n1,
+        &[seq, HIDDEN],
+    )?;
+
+    let attn = run_attention_prefill_fixed_traced(&n1, w, r, seq, cfg, layer_idx, trace)?;
+    let h = add_fixed_i32(x, &attn.hidden);
+    record_binary_op(
+        trace,
+        layer_idx,
+        "add",
+        "residual_attn",
+        x,
+        &[seq, HIDDEN],
+        &attn.hidden,
+        &[seq, HIDDEN],
+        &h,
+        &[seq, HIDDEN],
+    )?;
+
+    run_mlp_fixed(&h, w, seq, cfg, None, layer_idx, Some(trace))
 }
 
 fn apply_repetition_penalty_fixed(scores: &mut [i32], ids: &[u32], penalty: f32) {
@@ -1448,6 +1519,188 @@ fn run_attention_prefill_fixed(
     AttentionPrefillOutput { hidden: a, k, v }
 }
 
+fn run_attention_prefill_fixed_traced(
+    n1: &[i32],
+    w: &FixedLayerWeights,
+    r: &Rotary,
+    seq: usize,
+    cfg: &ForwardConfig,
+    layer: usize,
+    trace: &mut TraceRecorder,
+) -> Result<AttentionPrefillOutput, Box<dyn Error>> {
+    let q = matmul_fixed_i32(&n1, &w.q.wq, seq, HIDDEN, Q_DIM, cfg.matmul_rebase_rounding);
+    let k = matmul_fixed_i32(
+        &n1,
+        &w.q.wk,
+        seq,
+        HIDDEN,
+        KV_DIM,
+        cfg.matmul_rebase_rounding,
+    );
+    let v = matmul_fixed_i32(
+        &n1,
+        &w.q.wv,
+        seq,
+        HIDDEN,
+        KV_DIM,
+        cfg.matmul_rebase_rounding,
+    );
+    record_matmul_op(
+        trace,
+        layer,
+        "q_proj",
+        n1,
+        &[seq, HIDDEN],
+        "self_attn.q_proj.weight",
+        &[HIDDEN, Q_DIM],
+        &q,
+        &[seq, Q_DIM],
+    )?;
+    record_matmul_op(
+        trace,
+        layer,
+        "k_proj",
+        n1,
+        &[seq, HIDDEN],
+        "self_attn.k_proj.weight",
+        &[HIDDEN, KV_DIM],
+        &k,
+        &[seq, KV_DIM],
+    )?;
+    record_matmul_op(
+        trace,
+        layer,
+        "v_proj",
+        n1,
+        &[seq, HIDDEN],
+        "self_attn.v_proj.weight",
+        &[HIDDEN, KV_DIM],
+        &v,
+        &[seq, KV_DIM],
+    )?;
+
+    let q_norm = rms_norm_fixed_i32(&q, &w.q_norm, seq * HEADS, HEAD_DIM);
+    let k_norm = rms_norm_fixed_i32(&k, &w.k_norm, seq * KV_HEADS, HEAD_DIM);
+    record_unary_weight_op(
+        trace,
+        layer,
+        "rms_norm",
+        "q_norm",
+        &q,
+        &[seq, HEADS, HEAD_DIM],
+        "self_attn.q_norm.weight",
+        &[HEAD_DIM],
+        &q_norm,
+        &[seq, HEADS, HEAD_DIM],
+    )?;
+    record_unary_weight_op(
+        trace,
+        layer,
+        "rms_norm",
+        "k_norm",
+        &k,
+        &[seq, KV_HEADS, HEAD_DIM],
+        "self_attn.k_norm.weight",
+        &[HEAD_DIM],
+        &k_norm,
+        &[seq, KV_HEADS, HEAD_DIM],
+    )?;
+
+    let q_rope = rope_fixed_i32(&q_norm, &r.table, seq, HEADS);
+    let k_rope = rope_fixed_i32(&k_norm, &r.table, seq, KV_HEADS);
+    record_unary_ref_op(
+        trace,
+        layer,
+        "rope",
+        "q_rope",
+        &q_norm,
+        &[seq, HEADS, HEAD_DIM],
+        "rope.table",
+        &[seq, HEAD_DIM],
+        &q_rope,
+        &[seq, HEADS, HEAD_DIM],
+    )?;
+    record_unary_ref_op(
+        trace,
+        layer,
+        "rope",
+        "k_rope",
+        &k_norm,
+        &[seq, KV_HEADS, HEAD_DIM],
+        "rope.table",
+        &[seq, HEAD_DIM],
+        &k_rope,
+        &[seq, KV_HEADS, HEAD_DIM],
+    )?;
+
+    let scores = score_qk_fixed_i32_raw(&q_rope, &k_rope, seq);
+    let scores_ref = trace.tensor_i32(
+        &format!("layer{layer}.attention_scores.Y"),
+        &[HEADS, seq, seq],
+        &scores,
+    )?;
+    trace.op(json!({
+        "event": "op",
+        "layer": layer,
+        "op": "attention_scores",
+        "name": "qk_scores",
+        "A": {"ref": format!("layer{layer}.q_rope.Y")},
+        "B": {"ref": format!("layer{layer}.k_rope.Y")},
+        "Y": scores_ref,
+    }))?;
+
+    let probs = softmax_causal_fixed_i32(&scores, HEADS, seq);
+    let probs_ref = trace.tensor_i32(
+        &format!("layer{layer}.softmax.Y"),
+        &[HEADS, seq, seq],
+        &probs,
+    )?;
+    trace.op(json!({
+        "event": "op",
+        "layer": layer,
+        "op": "softmax",
+        "name": "attention_probs",
+        "A": {"ref": format!("layer{layer}.attention_scores.Y")},
+        "W": {"ref": "EXP_LUT_Q8", "shape": [17]},
+        "Y": probs_ref,
+    }))?;
+
+    let c = attn_v_fixed_i32(&probs, &v, seq);
+    let c_ref = trace.tensor_i32(
+        &format!("layer{layer}.attention_value.Y"),
+        &[seq, Q_DIM],
+        &c,
+    )?;
+    trace.op(json!({
+        "event": "op",
+        "layer": layer,
+        "op": "attention_value",
+        "name": "p_times_v",
+        "A": {"ref": format!("layer{layer}.softmax.Y")},
+        "B": {"ref": format!("layer{layer}.v_proj.Y")},
+        "Y": c_ref,
+    }))?;
+
+    let a = matmul_fixed_i32(&c, &w.q.wo, seq, Q_DIM, HIDDEN, cfg.matmul_rebase_rounding);
+    record_matmul_op(
+        trace,
+        layer,
+        "o_proj",
+        &c,
+        &[seq, Q_DIM],
+        "self_attn.o_proj.weight",
+        &[Q_DIM, HIDDEN],
+        &a,
+        &[seq, HIDDEN],
+    )?;
+
+    Ok(AttentionPrefillOutput {
+        hidden: a,
+        k: k_rope,
+        v,
+    })
+}
+
 fn run_attention_decode_fixed(
     n1: &[i32],
     w: &FixedLayerWeights,
@@ -1568,7 +1821,7 @@ fn run_attention_decode_fixed(
     let context_len = cache.v.len() / KV_DIM;
     let started = Instant::now();
     let c = if let Some(trace) = trace.as_deref_mut() {
-        attn_v_decode_fixed_i32_traced(&q, &cache.k, &cache.v, context_len, trace, layer_idx)?
+        attn_v_decode_fixed_i32_traced(&q, &cache.k, &cache.v, context_len, trace, layer_idx, pos)?
     } else {
         attn_v_decode_fixed_i32(&q, &cache.k, &cache.v, context_len)
     };
@@ -1665,7 +1918,7 @@ fn run_mlp_fixed(
         )?;
     }
     let started = Instant::now();
-    let m = silu_mul_fixed_i32(&g, &u, cfg.sigmoid_input_rounding);
+    let m = silu_mul_fixed_i32(&g, &u, cfg.sigmoid_input_rounding, cfg.silu_gate_mul_input);
     if let Some(timing) = timing.as_deref_mut() {
         timing.mlp_silu += started.elapsed();
     }
@@ -2138,7 +2391,54 @@ fn score_qk_fixed_i32(q: &[i32], k: &[i32], seq: usize) -> Vec<i32> {
     y
 }
 
+fn score_qk_fixed_i32_raw(q: &[i32], k: &[i32], seq: usize) -> Vec<i32> {
+    assert_eq!(q.len(), seq * HEADS * HEAD_DIM);
+    assert_eq!(k.len(), seq * KV_DIM);
+    let inv_sqrt_int =
+        ((1.0 / (HEAD_DIM as f32).sqrt()) * (1u64 << DEFAULT_FIXED_FRAC) as f32).round() as i64;
+    let mut y = vec![0i32; HEADS * seq * seq];
+    y.par_chunks_mut(seq * seq).enumerate().for_each(|(h, ys)| {
+        let kh = h / KV_GROUP;
+        for i in 0..seq {
+            for j in 0..seq {
+                let mut acc = 0i64;
+                for d in 0..HEAD_DIM {
+                    let qi = (i * HEADS + h) * HEAD_DIM + d;
+                    let ki = (j * KV_HEADS + kh) * HEAD_DIM + d;
+                    acc += q[qi] as i64 * k[ki] as i64;
+                }
+                let dot_int = round_shift_signed_i64(acc, DEFAULT_FIXED_FRAC);
+                ys[i * seq + j] =
+                    round_shift_signed_i64(dot_int * inv_sqrt_int, DEFAULT_FIXED_FRAC) as i32;
+            }
+        }
+    });
+    y
+}
+
 fn softmax_fixed_i32(x: &[i32], rows: usize, cols: usize) -> Vec<i32> {
+    // Prover-facing witness note:
+    //
+    // The layer prover's causal softmax does not feed the large negative mask
+    // value into the exp LUT.  It uses a known valid bit instead:
+    //
+    //   valid = key_pos <= query_pos
+    //   valid=1: diff = round((max - score) / 2^8)
+    //   valid=0: diff = 0
+    //   exp_raw = EXP_LUT(diff)
+    //   acc = valid * exp_raw * inv_sum(sum_exp)
+    //
+    // Therefore a future full-AWY softmax dump must record `exp_raw`, not the
+    // masked exp after multiplying by valid.  For masked positions this means:
+    //
+    //   input/qk_score may still contain the large negative mask sentinel,
+    //   input_frac_bits must be zero,
+    //   ra must select diff=0,
+    //   exp_raw must be EXP_LUT(0) = 256,
+    //   acc and output must be zero because valid=0.
+    //
+    // `max_index` and `max` must be selected from valid positions only, and
+    // `min_diff` must include 0 so masked positions can read the diff=0 entry.
     assert_eq!(x.len(), rows * cols);
     let mut y = vec![0i32; x.len()];
     y.par_chunks_mut(cols).enumerate().for_each(|(r, row)| {
@@ -2157,9 +2457,39 @@ fn softmax_fixed_i32(x: &[i32], rows: usize, cols: usize) -> Vec<i32> {
         if sum == 0 {
             return;
         }
+        let inv = inv_sum_q16(sum);
         for c in 0..cols {
-            row[c] = div_round_i128((exps[c] as i128) << DEFAULT_FIXED_FRAC, sum as i128)
-                .clamp(0, 1i128 << DEFAULT_FIXED_FRAC) as i32;
+            row[c] = softmax_prob_from_exp_inv(exps[c], inv);
+        }
+    });
+    y
+}
+
+fn softmax_causal_fixed_i32(x: &[i32], heads: usize, seq: usize) -> Vec<i32> {
+    assert_eq!(x.len(), heads * seq * seq);
+    let mut y = vec![0i32; x.len()];
+    y.par_chunks_mut(seq * seq).enumerate().for_each(|(h, ys)| {
+        let scores = &x[h * seq * seq..(h + 1) * seq * seq];
+        for i in 0..seq {
+            let row = &scores[i * seq..(i + 1) * seq];
+            let out = &mut ys[i * seq..(i + 1) * seq];
+            let mx = row[..=i].iter().copied().max().unwrap_or(0);
+            let mut exps = vec![0i64; i + 1];
+            let mut sum = 0i64;
+            for c in 0..=i {
+                exps[c] = softmax_exp_coarse((row[c] - mx) as i64);
+                sum += exps[c];
+            }
+            if sum == 0 {
+                continue;
+            }
+            let inv = inv_sum_q16(sum);
+            for c in 0..=i {
+                out[c] = softmax_prob_from_exp_inv(exps[c], inv);
+            }
+            for slot in &mut out[i + 1..] {
+                *slot = 0;
+            }
         }
     });
     y
@@ -2176,12 +2506,38 @@ fn div_round_i128(num: i128, den: i128) -> i128 {
 }
 
 fn softmax_exp_coarse(diff_int: i64) -> i64 {
-    let clipped = diff_int.clamp(-(8i64 << DEFAULT_FIXED_FRAC), 0);
-    let n = floor_shift_signed_i64(clipped, DEFAULT_FIXED_FRAC).clamp(-8, 0);
-    let f_int = clipped - (n << DEFAULT_FIXED_FRAC);
-    let exp_n = EXP_LUT_Q8[(n + 8) as usize];
+    let n = floor_shift_signed_i64(diff_int, DEFAULT_FIXED_FRAC);
+    let f_int = diff_int - (n << DEFAULT_FIXED_FRAC);
+    let exp_n = exp_lut_q8(n);
     let corr = ((1i64 << DEFAULT_FIXED_FRAC) + f_int).max(0);
     round_shift_signed_i64(exp_n * corr, DEFAULT_FIXED_FRAC)
+}
+
+fn exp_lut_q8(n: i64) -> i64 {
+    let n = n.clamp(-16, 0);
+    EXP_LUT_Q8[(n + 16) as usize]
+}
+
+fn inv_sum_q16(sum: i64) -> i64 {
+    assert!(sum > 0);
+    ((1i64 << (DEFAULT_FIXED_FRAC + SOFTMAX_INV_FRAC)) as f64 / sum as f64).round() as i64
+}
+
+fn softmax_prob_from_exp_inv(exp_int: i64, inv_sum: i64) -> i32 {
+    debug_assert_eq!(SOFTMAX_INV_FRAC, 16);
+    // exp is Q0.8 and inv_sum is Q0.16, so their product is Q0.24.
+    // To return Q0.8 we need a 16-bit downscale.  We intentionally express it
+    // as floor-by-8 followed by the existing 8-bit round: for this softmax path
+    // the product is nonnegative, so the second round still sees the original
+    // bit 15 and matches a single 16-bit round.  This keeps the runtime aligned
+    // with the prover's 8-bit floor + 8-bit round protocols.
+    let q16 = floor_shift_signed_i64(exp_int * inv_sum, DEFAULT_FIXED_FRAC);
+    let y = round_shift_signed_i64(q16, DEFAULT_FIXED_FRAC);
+    debug_assert!(
+        (0..=(1i64 << DEFAULT_FIXED_FRAC)).contains(&y),
+        "softmax probability out of Q0.8 range: {y}"
+    );
+    y as i32
 }
 
 fn shift_signed_i64(x: i64, shift: u8, rounding: RoundingMode) -> i64 {
@@ -2277,11 +2633,11 @@ fn attn_v_decode_fixed_i32(q: &[i32], k: &[i32], v: &[i32], context_len: usize) 
             exps[j] = softmax_exp_coarse((scores[j] - mx) as i64);
             denom += exps[j];
         }
+        let inv = inv_sum_q16(denom);
         for (d, slot) in out.iter_mut().enumerate() {
             let mut acc = 0i64;
             for (j, &exp_int) in exps.iter().enumerate() {
-                let p_int = div_round_i128((exp_int as i128) << DEFAULT_FIXED_FRAC, denom as i128)
-                    .clamp(0, 1i128 << DEFAULT_FIXED_FRAC) as i64;
+                let p_int = i64::from(softmax_prob_from_exp_inv(exp_int, inv));
                 let vi = (j * KV_HEADS + kh) * HEAD_DIM + d;
                 acc += p_int * v[vi] as i64;
             }
@@ -2298,6 +2654,7 @@ fn attn_v_decode_fixed_i32_traced(
     context_len: usize,
     trace: &mut TraceRecorder,
     layer: usize,
+    _pos: usize,
 ) -> Result<Vec<i32>, Box<dyn Error>> {
     assert_eq!(q.len(), Q_DIM);
     assert_eq!(k.len(), context_len * KV_DIM);
@@ -2327,10 +2684,9 @@ fn attn_v_decode_fixed_i32_traced(
             exps[j] = softmax_exp_coarse((scores[j] - mx) as i64);
             denom += exps[j];
         }
+        let inv = inv_sum_q16(denom);
         for j in 0..context_len {
-            all_probs[h * context_len + j] =
-                div_round_i128((exps[j] as i128) << DEFAULT_FIXED_FRAC, denom as i128)
-                    .clamp(0, 1i128 << DEFAULT_FIXED_FRAC) as i32;
+            all_probs[h * context_len + j] = softmax_prob_from_exp_inv(exps[j], inv);
         }
         let out = &mut y[h * HEAD_DIM..(h + 1) * HEAD_DIM];
         for (d, slot) in out.iter_mut().enumerate() {
@@ -2378,7 +2734,7 @@ fn attn_v_decode_fixed_i32_traced(
         "op": "softmax",
         "name": "attention_probs",
         "A": {"ref": format!("layer{layer}.attention_scores.Y")},
-        "W": {"ref": "EXP_LUT_Q8", "shape": [9]},
+        "W": {"ref": "EXP_LUT_Q8", "shape": [17]},
         "Y": probs_ref,
     }))?;
     let v_ref = trace.tensor_i32(
@@ -2399,14 +2755,39 @@ fn attn_v_decode_fixed_i32_traced(
     Ok(y)
 }
 
-fn silu_mul_fixed_i32(g: &[i32], u: &[i32], sigmoid_rounding: RoundingMode) -> Vec<i32> {
+fn silu_mul_fixed_i32(
+    g: &[i32],
+    u: &[i32],
+    sigmoid_rounding: RoundingMode,
+    gate_mul_input: SiluGateMulInput,
+) -> Vec<i32> {
     assert_eq!(g.len(), u.len());
     g.par_iter()
         .zip(u)
         .map(|(&g, &u)| {
             let g_index = shift_signed_i64(g as i64, DEFAULT_FIXED_FRAC, sigmoid_rounding);
             let sig_int = sigmoid_from_integer_index(g_index);
-            let silu_int = round_shift_signed_i64(g as i64 * sig_int, DEFAULT_FIXED_FRAC);
+            let silu_int = match gate_mul_input {
+                SiluGateMulInput::Fixed => {
+                    round_shift_signed_i64(g as i64 * sig_int, DEFAULT_FIXED_FRAC)
+                }
+                SiluGateMulInput::Integer => round_shift_signed_i64(
+                    (g_index << DEFAULT_FIXED_FRAC) * sig_int,
+                    DEFAULT_FIXED_FRAC,
+                ),
+                SiluGateMulInput::Linear => {
+                    let n_q8 = g_index << DEFAULT_FIXED_FRAC;
+                    let frac_q8 = g as i64 - n_q8;
+                    let base_q16 = n_q8 * sig_int;
+                    let sig_slope = round_shift_signed_i64(
+                        sig_int * ((1i64 << DEFAULT_FIXED_FRAC) - sig_int),
+                        DEFAULT_FIXED_FRAC,
+                    );
+                    let slope =
+                        sig_int + round_shift_signed_i64(n_q8 * sig_slope, DEFAULT_FIXED_FRAC);
+                    round_shift_signed_i64(base_q16 + frac_q8 * slope, DEFAULT_FIXED_FRAC)
+                }
+            };
             round_shift_signed_i64(silu_int * u as i64, DEFAULT_FIXED_FRAC) as i32
         })
         .collect()

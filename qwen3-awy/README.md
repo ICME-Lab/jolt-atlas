@@ -123,7 +123,7 @@ cargo run --release -p qwen3-awy -- \
   "Tell a fairy tale about a quiet fox helping a lost rabbit home."
 ```
 
-The same run with final-token AWY tracing enabled:
+The same run with full-sequence AWY tracing enabled:
 
 ```bash
 cargo run --release -p qwen3-awy -- \
@@ -136,7 +136,7 @@ cargo run --release -p qwen3-awy -- \
   --repetition-penalty 1.0 \
   --matmul-rebase-rounding round \
   --sigmoid-input-rounding round \
-  --dump-final-awy qwen3-awy/traces/fox_eos_final_awy \
+  --dump-full-awy qwen3-awy/traces/fox_eos_full_awy \
   --timing \
   "Tell a fairy tale about a quiet fox helping a lost rabbit home."
 ```
@@ -155,7 +155,7 @@ cargo run --release -p qwen3-awy -- \
   --repetition-penalty 1.0 \
   --matmul-rebase-rounding round \
   --sigmoid-input-rounding round \
-  --dump-final-awy qwen3-awy/traces/fox_eos_thinking_final_awy \
+  --dump-full-awy qwen3-awy/traces/fox_eos_thinking_full_awy \
   --timing \
   "Tell a fairy tale about a quiet fox helping a lost rabbit home."
 ```
@@ -184,6 +184,64 @@ attention score/value products, fixed-point `lm_head`, and fixed-point
 decode-time softmax weights. The remaining float use is `rsqrt` advice plus
 one-time conversion of sampling controls such as temperature/top-p.
 
+One Qwen3 layer has the following forward dependency structure. This omits KV
+cache bookkeeping and shows only the tensor flow inside a single layer:
+
+```mermaid
+flowchart LR
+  x["hidden_in"] --> ln1["RMSNorm 1"]
+
+  subgraph qkv["QKV projections"]
+    direction TB
+    qproj["q_proj"]
+    kproj["k_proj"]
+    vproj["v_proj"]
+  end
+
+  ln1 --> qproj
+  ln1 --> kproj
+  ln1 --> vproj
+
+  subgraph attn["Attention"]
+    direction LR
+    qnorm["q_norm"] --> qrope["RoPE q"]
+    knorm["k_norm"] --> krope["RoPE k"]
+
+    qrope --> scores["QK score"]
+    krope --> scores
+
+    scores --> softmax["softmax"]
+    softmax --> pv["PV matmul"]
+  end
+
+  qproj --> qnorm
+  kproj --> knorm
+  vproj --> pv
+
+  pv --> oproj["o_proj"]
+
+  x --> residual_attn["residual add 1"]
+  oproj --> residual_attn
+
+  residual_attn --> ln2["RMSNorm 2"]
+
+  subgraph mlp["MLP"]
+    direction LR
+
+    gate["gate_proj"] --> silu["SiLU(gate) * up"]
+    up["up_proj"] --> silu
+    silu --> down["down_proj"]
+  end
+
+  ln2 --> gate
+  ln2 --> up
+
+  residual_attn --> residual_mlp["residual add 2"]
+  down --> residual_mlp
+
+  residual_mlp --> out["hidden_out"]
+```
+
 On first run, the executable writes a fixed-weight cache next to the safetensors
 model, using the same path with a `.q8.bin` extension. The cache stores QX.8
 i32 weights after quantization and transposition, including layer weights,
@@ -195,20 +253,30 @@ be committed.
 attention, QKV projection, RoPE, attention value product, output projection,
 MLP gate/up/down, SiLU, residual adds, `lm_head`, and token choice.
 
-`--dump-final-awy PATH` records the final generated token only. Generation runs
-normally first, then the executable rebuilds the KV cache for the prefix and
-replays the last token with tracing enabled. The output directory contains a
-`manifest.jsonl` plus raw little-endian `i32` tensor files. MatMul, RMSNorm,
-RoPE, residual adds, attention score/value products, softmax probabilities,
-SwiGLU/SiLU, final norm, and `lm_head` are recorded. `A` and `Y` tensors are
-stored as files; `W` tensors are referenced by model weight name or LUT name so
-the fixed-weight cache is not duplicated into the trace.
+`--dump-full-awy PATH` records the complete generated token sequence. Generation
+runs normally first, then the executable replays `prompt + generated` as one
+full prefill forward pass and records all layer AWY tensors. The output
+directory contains a `manifest.jsonl` plus raw little-endian `i32` tensor files.
+MatMul, RMSNorm, RoPE, residual adds, attention score/value products, softmax
+probabilities, and SwiGLU/SiLU tensors are recorded for every layer and token
+position. `A` and `Y` tensors are stored as files; `W` tensors are referenced by
+model weight name or LUT name so the fixed-weight cache is not duplicated into
+the trace.
+
+The trace is intentionally compact. It does not store derived prover witness
+data such as MatMul accumulators, round fractional bits, lookup selectors,
+softmax sums, or RMSNorm square sums. Those values are deterministic from the
+checkpoint tensors, public shapes, fixed QX.8 rules, and model weights, so the
+layer-prover witness builder should regenerate them when loading the trace.
+For prover compatibility, `attention_scores.Y` stores the raw QK score without
+the causal-mask sentinel. Future-token masking is applied by softmax using the
+public `key_pos <= query_pos` selector.
 
 ```bash
 cargo run --release -p qwen3-awy -- \
   --seq-len 128 \
   --generate 64 \
-  --dump-final-awy /private/tmp/qwen3-awy-final-awy \
+  --dump-full-awy /private/tmp/qwen3-awy-full-awy \
   "Tell a fairy tale about a quiet fox helping a lost rabbit home."
 ```
 

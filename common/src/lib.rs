@@ -160,6 +160,21 @@ canonical_serde_enum! {
         /// * `0` – node index
         /// * `1` – decomposition index `d`
         SoftmaxSatDiffRaD(usize, usize),
+
+        /// One-hot read-address decomposition for the Qwen SiLU base lookup.
+        ///
+        /// * `0` – decomposition index `d`
+        QwenSiluBaseRaD(usize),
+
+        /// One-hot read-address decomposition for the Qwen SiLU slope lookup.
+        ///
+        /// * `0` – decomposition index `d`
+        QwenSiluSlopeRaD(usize),
+
+        /// One-hot read-address decomposition for the Qwen softmax exp lookup.
+        ///
+        /// * `0` – decomposition index `d`
+        QwenSoftmaxExpRaD(usize),
     }
 }
 
@@ -313,6 +328,30 @@ canonical_serde_enum! {
 
         /// Qwen SiLU LUT one-hot read-address polynomial.
         QwenSiluRa,
+
+        /// Qwen SiLU base lookup output polynomial.
+        QwenSiluBase,
+
+        /// Qwen SiLU slope lookup output polynomial.
+        QwenSiluSlope,
+
+        /// Qwen SiLU lookup index polynomial.
+        QwenSiluIndex,
+
+        /// One-hot read-address polynomial for the Qwen SiLU base lookup.
+        QwenSiluBaseRa,
+
+        /// One-hot read-address polynomial for the Qwen SiLU slope lookup.
+        QwenSiluSlopeRa,
+
+        /// Qwen softmax exp LUT output polynomial.
+        QwenSoftmaxExpLut,
+
+        /// Qwen softmax exp lookup index polynomial.
+        QwenSoftmaxIndex,
+
+        /// One-hot read-address polynomial for the Qwen softmax exp lookup.
+        QwenSoftmaxExpRa,
 
         /// Qwen softmax pre-softmax score polynomial.
         QwenSoftmaxInput,

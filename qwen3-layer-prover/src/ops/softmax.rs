@@ -1,7 +1,8 @@
-use common::VirtualPoly;
+use common::{CommittedPoly, VirtualPoly};
 use std::time::Instant;
 
 use joltworks::{
+    config::{OneHotConfig, OneHotParams},
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
@@ -13,7 +14,8 @@ use joltworks::{
         unipoly::UniPoly,
     },
     subprotocols::{
-        sumcheck::{Sumcheck, SumcheckInstanceProof},
+        shout::{self, RaOneHotEncoding, ReadRafProvider},
+        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -174,15 +176,39 @@ pub struct SoftmaxProof<F: JoltField, T: Transcript> {
     pub acc: SumcheckInstanceProof<F, T>,
     pub exp_round: RoundProof<F, T>,
     pub lookup: SumcheckInstanceProof<F, T>,
+    pub exp_lookup: SumcheckInstanceProof<F, T>,
+    pub exp_ra_onehot: SumcheckInstanceProof<F, T>,
     pub exp_opening: F,
     pub input_opening: F,
     pub input_frac_bit_openings: [F; ROUND_FRAC_BITS],
+    pub exp_lut_opening: F,
+    pub index_opening: F,
     pub ra_opening: F,
+    pub exp_ra_committed_openings: SoftmaxRaCommittedOpenings<F>,
     pub max_index: Vec<usize>,
     pub max: Vec<i32>,
     pub min_diff: i64,
     pub max_diff: i64,
     pub sum: Vec<i32>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SoftmaxRaCommittedOpenings<F: JoltField> {
+    pub ra_virtual: Vec<F>,
+    pub hamming_weight: Vec<F>,
+    pub booleanity: Vec<F>,
+}
+
+struct SoftmaxLookupProveResult<F: JoltField, T: Transcript> {
+    relation: SumcheckInstanceProof<F, T>,
+    exp_lookup: SumcheckInstanceProof<F, T>,
+    exp_ra_onehot: SumcheckInstanceProof<F, T>,
+    input_claim: Claim<F>,
+    input_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
+    ra_claim: Claim<F>,
+    exp_lut_opening: F,
+    index_opening: F,
+    exp_ra_committed_openings: SoftmaxRaCommittedOpenings<F>,
 }
 
 pub fn prove_softmax_round<F, T>(
@@ -328,8 +354,7 @@ where
     );
 
     step_start = Instant::now();
-    let (lookup_proof, input_claim, input_frac_bits, ra_claim) =
-        prove_lookup(exp_acc_claim, witness, params, transcript)?;
+    let lookup = prove_lookup(exp_acc_claim, witness, params, transcript)?;
     eprintln!(
         "timing: prove_softmax.lookup_total {:.3}s",
         step_start.elapsed().as_secs_f64()
@@ -345,22 +370,27 @@ where
             floor: floor_proof,
             acc: acc_proof,
             exp_round: exp_round_proof,
-            lookup: lookup_proof,
+            lookup: lookup.relation,
+            exp_lookup: lookup.exp_lookup,
+            exp_ra_onehot: lookup.exp_ra_onehot,
             exp_opening,
-            input_opening: input_claim.value,
-            input_frac_bit_openings: input_frac_bits.each_ref().map(|claim| claim.value),
-            ra_opening: ra_claim.value,
+            input_opening: lookup.input_claim.value,
+            input_frac_bit_openings: lookup.input_frac_bits.each_ref().map(|claim| claim.value),
+            exp_lut_opening: lookup.exp_lut_opening,
+            index_opening: lookup.index_opening,
+            ra_opening: lookup.ra_claim.value,
+            exp_ra_committed_openings: lookup.exp_ra_committed_openings,
             max_index: witness.max_index.clone(),
             max: witness.max.clone(),
             min_diff: witness.min_diff,
             max_diff: witness.max_diff,
             sum: witness.sum.clone(),
         },
-        input_claim,
+        lookup.input_claim,
         frac_bits,
         floor_frac_bits,
-        input_frac_bits,
-        ra_claim,
+        lookup.input_frac_bits,
+        lookup.ra_claim,
     ))
 }
 
@@ -449,12 +479,7 @@ fn prove_lookup<F, T>(
     witness: &SoftmaxWitness,
     params: &SoftmaxParams,
     transcript: &mut T,
-) -> Result<(
-    SumcheckInstanceProof<F, T>,
-    Claim<F>,
-    [Claim<F>; ROUND_FRAC_BITS],
-    Claim<F>,
-)>
+) -> Result<SoftmaxLookupProveResult<F, T>>
 where
     F: JoltField,
     T: Transcript,
@@ -462,50 +487,47 @@ where
     let total_start = Instant::now();
     let mut step_start = Instant::now();
     let entries = entries_from_min_max(witness.min_diff, witness.max_diff)?;
+    let lut_len = padded_softmax_lut_len(entries);
     eprintln!(
         "timing: prove_softmax.lookup.setup {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
 
     step_start = Instant::now();
-    let eq_exp = lift_tensor_evals(&EqPolynomial::<F>::evals(&exp_claim.point), entries);
+    let eq_exp = masked_eq_poly(&exp_claim, &params.shape);
     let row_point = row_point_from_tensor_point(&exp_claim.point, params);
-    let row_eq = lift_tensor_evals(&row_eq_lifted(&row_point, params), entries);
+    let row_eq = row_eq_lifted(&row_point, params);
     eprintln!(
         "timing: prove_softmax.lookup.eq_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
 
     step_start = Instant::now();
-    let max_selector = lift_tensor_evals(
-        &max_selector_tensor::<F>(&witness.max_index, params),
-        entries,
-    );
-    let valid = lift_tensor_evals(&valid_tensor(params), entries);
-    let max = lift_tensor_evals(
-        &expand_rows_to_padded_tensor_i32(&witness.max, params),
-        entries,
-    );
+    let max_selector = max_selector_tensor::<F>(&witness.max_index, params);
+    let valid = valid_tensor(params);
+    let max = expand_rows_to_padded_tensor_i32(&witness.max, params);
     eprintln!(
         "timing: prove_softmax.lookup.row_valid_max_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
 
     step_start = Instant::now();
-    let input = lift_i32_tensor(&witness.input, &params.shape, entries);
-    let bits = std::array::from_fn(|idx| {
-        lift_u8_tensor(&witness.input_frac_bits[idx], &params.shape, entries)
-    });
-    let ra = padded_ra_tensor(&witness.ra, params, entries);
+    let logical_lookup_indices = softmax_logical_lookup_indices(witness, params, entries)?;
+    let padded_lookup_indices = padded_lookup_indices(&logical_lookup_indices, params, entries);
+    let exp_lut_values =
+        softmax_lookup_values(&logical_lookup_indices, witness.min_diff, exp_lut_q8_unclipped);
+    let input = padded_i32_tensor(&witness.input, &params.shape);
+    let bits =
+        std::array::from_fn(|idx| padded_u8_tensor(&witness.input_frac_bits[idx], &params.shape));
+    let exp_lut = padded_i64_tensor(&exp_lut_values, &params.shape);
+    let index = padded_usize_evals(&padded_lookup_indices);
     eprintln!(
         "timing: prove_softmax.lookup.witness_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
 
     step_start = Instant::now();
-    let id = softmax_table_tensor(params, entries, &id_table::<F>(entries));
-    let exp_table =
-        softmax_table_tensor(params, entries, &exp_table::<F>(witness.min_diff, entries));
+    let exp_table = padded_i32_table(witness.min_diff, entries, lut_len, exp_lut_q8_unclipped)?;
     eprintln!(
         "timing: prove_softmax.lookup.table_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
@@ -514,14 +536,10 @@ where
     step_start = Instant::now();
     let max_eval = eval_i32_advice(&witness.max, &params.row_shape(), &row_point);
     let max_mix = transcript.challenge_scalar();
-    let sum_mix = transcript.challenge_scalar();
-    let onehot_mix = transcript.challenge_scalar();
     let diff_mix = transcript.challenge_scalar();
-    let ra_booleanity_mix = transcript.challenge_scalar();
     let bit_booleanity_mix = transcript.challenge_scalar();
     let bit_weights = transcript.challenge_scalar_powers(ROUND_FRAC_BITS);
-    let mask_eval = eval_logical_mask(&params.shape, &exp_claim.point);
-    let input_claim = exp_claim.value + max_mix * max_eval + onehot_mix * mask_eval;
+    let input_claim = exp_claim.value + max_mix * max_eval;
     eprintln!(
         "timing: prove_softmax.lookup.challenges_claim {:.3}s",
         step_start.elapsed().as_secs_f64()
@@ -529,7 +547,7 @@ where
 
     step_start = Instant::now();
     let sc_params = LookupSumcheckParams::new(
-        params.ra_shape(entries).padded_power_of_two().point_len(),
+        params.shape.padded_power_of_two().point_len(),
         input_claim,
     );
     let mut prover = LookupSumcheckProver::new(
@@ -541,14 +559,10 @@ where
         max,
         input,
         bits,
-        ra,
-        id,
-        exp_table,
+        exp_lut,
+        index,
         max_mix,
-        sum_mix,
-        onehot_mix,
         diff_mix,
-        ra_booleanity_mix,
         bit_booleanity_mix,
         bit_weights,
         field_from_i64(witness.min_diff),
@@ -581,45 +595,74 @@ where
         )
         .expect("softmax input frac-bit opening must be produced")
     });
-    let ra_opening = prover_opening(
+    let exp_lut_opening = prover_opening(
         &accumulator,
-        OpeningId::new(VirtualPoly::QwenSoftmaxRa, softmax_lookup_sumcheck_id()),
+        OpeningId::new(
+            VirtualPoly::QwenSoftmaxExpLut,
+            softmax_lookup_sumcheck_id(),
+        ),
+    )?;
+    let index_opening = prover_opening(
+        &accumulator,
+        OpeningId::new(VirtualPoly::QwenSoftmaxIndex, softmax_lookup_sumcheck_id()),
     )?;
     let full_point = normalize_sumcheck_point::<F>(&challenges.into_opening());
-    let tensor_point = tensor_point_from_full(&full_point, params);
+    let tensor_point = full_point;
     eprintln!(
         "timing: prove_softmax.lookup.openings_claims {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
+
+    step_start = Instant::now();
+    let shout_lookup = prove_softmax_shout_lookup(
+        lut_len,
+        tensor_point.clone(),
+        exp_lut_opening,
+        index_opening,
+        padded_lookup_indices,
+        exp_table,
+        &mut accumulator,
+        transcript,
+    )?;
+    eprintln!(
+        "timing: prove_softmax.lookup.shout {:.3}s",
+        step_start.elapsed().as_secs_f64()
+    );
+
     eprintln!(
         "timing: prove_softmax.lookup.total {:.3}s",
         total_start.elapsed().as_secs_f64()
     );
 
-    Ok((
-        proof,
-        Claim {
+    Ok(SoftmaxLookupProveResult {
+        relation: proof,
+        exp_lookup: shout_lookup.read_raf,
+        exp_ra_onehot: shout_lookup.ra_onehot,
+        input_claim: Claim {
             tensor: params.input_tensor.clone(),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
             point: tensor_point.clone(),
             value: input_opening,
         },
-        std::array::from_fn(|idx| Claim {
+        input_frac_bits: std::array::from_fn(|idx| Claim {
             tensor: params.input_frac_bit_tensors[idx].clone(),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
             point: tensor_point.clone(),
             value: bit_openings[idx],
         }),
-        Claim {
+        ra_claim: Claim {
             tensor: params.ra_tensor.clone(),
-            logical_shape: params.ra_shape(entries),
-            domain_shape: params.ra_shape(entries).padded_power_of_two(),
-            point: full_point,
-            value: ra_opening,
+            logical_shape: params.ra_shape(lut_len),
+            domain_shape: params.ra_shape(lut_len).padded_power_of_two(),
+            point: shout_lookup.ra_point,
+            value: shout_lookup.ra_opening,
         },
-    ))
+        exp_lut_opening,
+        index_opening,
+        exp_ra_committed_openings: shout_lookup.committed_openings,
+    })
 }
 
 fn verify_lookup<F, T>(
@@ -634,37 +677,30 @@ where
 {
     let entries = entries_from_min_max(proof.min_diff, proof.max_diff)
         .map_err(|_| ProofVerifyError::InvalidInputLength(MAX_SOFTMAX_LUT_ENTRIES, 0))?;
+    let lut_len = padded_softmax_lut_len(entries);
     let row_point = row_point_from_tensor_point(&exp_claim.point, params);
     let max_eval = eval_i32_advice(&proof.max, &params.row_shape(), &row_point);
     let max_mix = transcript.challenge_scalar();
-    let sum_mix = transcript.challenge_scalar();
-    let onehot_mix = transcript.challenge_scalar();
     let diff_mix = transcript.challenge_scalar();
-    let ra_booleanity_mix = transcript.challenge_scalar();
     let bit_booleanity_mix = transcript.challenge_scalar();
     let bit_weights = transcript.challenge_scalar_powers(ROUND_FRAC_BITS);
-    let mask_eval = eval_logical_mask(&params.shape, &exp_claim.point);
-    let input_claim = exp_claim.value + max_mix * max_eval + onehot_mix * mask_eval;
+    let input_claim = exp_claim.value + max_mix * max_eval;
 
     let verifier = LookupSumcheckVerifier {
         params: LookupSumcheckParams::new(
-            params.ra_shape(entries).padded_power_of_two().point_len(),
+            params.shape.padded_power_of_two().point_len(),
             input_claim,
         ),
         exp_point: exp_claim.point.clone(),
         row_point,
         max_index: proof.max_index.clone(),
         max: proof.max.clone(),
-        entries,
         min_diff: proof.min_diff,
         causal: params.causal,
         shape: params.shape.clone(),
         row_shape: params.row_shape(),
         max_mix,
-        sum_mix,
-        onehot_mix,
         diff_mix,
-        ra_booleanity_mix,
         bit_booleanity_mix,
         bit_weights,
     };
@@ -689,12 +725,39 @@ where
         );
     }
     accumulator.openings.insert(
-        OpeningId::new(VirtualPoly::QwenSoftmaxRa, softmax_lookup_sumcheck_id()),
-        (OpeningPoint::<BIG_ENDIAN, F>::default(), proof.ra_opening),
+        OpeningId::new(
+            VirtualPoly::QwenSoftmaxExpLut,
+            softmax_lookup_sumcheck_id(),
+        ),
+        (
+            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            proof.exp_lut_opening,
+        ),
+    );
+    accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenSoftmaxIndex, softmax_lookup_sumcheck_id()),
+        (
+            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            proof.index_opening,
+        ),
     );
     let challenges = Sumcheck::verify(&proof.lookup, &verifier, &mut accumulator, transcript)?;
-    let full_point = normalize_sumcheck_point::<F>(&challenges.into_opening());
-    let tensor_point = tensor_point_from_full(&full_point, params);
+    let tensor_point = normalize_sumcheck_point::<F>(&challenges.into_opening());
+    let shout_lookup = verify_softmax_shout_lookup(
+        entries,
+        lut_len,
+        proof.min_diff,
+        params.shape.numel(),
+        tensor_point.clone(),
+        proof.exp_lut_opening,
+        proof.index_opening,
+        proof.ra_opening,
+        &proof.exp_ra_committed_openings,
+        &proof.exp_lookup,
+        &proof.exp_ra_onehot,
+        &mut accumulator,
+        transcript,
+    )?;
 
     Ok((
         Claim {
@@ -713,9 +776,9 @@ where
         }),
         Claim {
             tensor: params.ra_tensor.clone(),
-            logical_shape: params.ra_shape(entries),
-            domain_shape: params.ra_shape(entries).padded_power_of_two(),
-            point: full_point,
+            logical_shape: params.ra_shape(lut_len),
+            domain_shape: params.ra_shape(lut_len).padded_power_of_two(),
+            point: shout_lookup.ra_point,
             value: proof.ra_opening,
         },
     ))
@@ -891,14 +954,10 @@ struct LookupSumcheckProver<F: JoltField> {
     max: MultilinearPolynomial<F>,
     input: MultilinearPolynomial<F>,
     bits: [MultilinearPolynomial<F>; ROUND_FRAC_BITS],
-    ra: MultilinearPolynomial<F>,
-    id: MultilinearPolynomial<F>,
-    exp_table: MultilinearPolynomial<F>,
+    exp_lut: MultilinearPolynomial<F>,
+    index: MultilinearPolynomial<F>,
     max_mix: F,
-    sum_mix: F,
-    onehot_mix: F,
     diff_mix: F,
-    ra_booleanity_mix: F,
     bit_booleanity_mix: F,
     bit_weights: Vec<F>,
     min_diff: F,
@@ -916,14 +975,10 @@ impl<F: JoltField> LookupSumcheckProver<F> {
         max: Vec<F>,
         input: Vec<F>,
         bits: [Vec<F>; ROUND_FRAC_BITS],
-        ra: Vec<F>,
-        id: Vec<F>,
-        exp_table: Vec<F>,
+        exp_lut: Vec<F>,
+        index: Vec<F>,
         max_mix: F,
-        sum_mix: F,
-        onehot_mix: F,
         diff_mix: F,
-        ra_booleanity_mix: F,
         bit_booleanity_mix: F,
         bit_weights: Vec<F>,
         min_diff: F,
@@ -936,14 +991,10 @@ impl<F: JoltField> LookupSumcheckProver<F> {
             max: MultilinearPolynomial::from(max),
             input: MultilinearPolynomial::from(input),
             bits: bits.map(MultilinearPolynomial::from),
-            ra: MultilinearPolynomial::from(ra),
-            id: MultilinearPolynomial::from(id),
-            exp_table: MultilinearPolynomial::from(exp_table),
+            exp_lut: MultilinearPolynomial::from(exp_lut),
+            index: MultilinearPolynomial::from(index),
             max_mix,
-            sum_mix,
-            onehot_mix,
             diff_mix,
-            ra_booleanity_mix,
             bit_booleanity_mix,
             bit_weights,
             min_diff,
@@ -958,7 +1009,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for LookupSumchec
     }
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         let mut evals = [F::zero(); 4];
-        for g in 0..self.ra.len() / 2 {
+        for g in 0..self.eq_exp.len() / 2 {
             let v = LookupPairValues::from_prover(self, g);
             for (idx, t) in [F::zero(), F::from_u64(2), F::from_u64(3), F::from_u64(4)]
                 .into_iter()
@@ -980,9 +1031,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for LookupSumchec
         for bit in &mut self.bits {
             bit.bind_parallel(r_j, BindingOrder::LowToHigh);
         }
-        self.ra.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.id.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.exp_table.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.exp_lut.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.index.bind_parallel(r_j, BindingOrder::LowToHigh);
     }
     fn cache_openings(
         &self,
@@ -1012,9 +1062,18 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for LookupSumchec
         }
         accumulator.append_virtual(
             transcript,
-            OpeningId::new(VirtualPoly::QwenSoftmaxRa, softmax_lookup_sumcheck_id()),
+            OpeningId::new(
+                VirtualPoly::QwenSoftmaxExpLut,
+                softmax_lookup_sumcheck_id(),
+            ),
+            point.clone(),
+            self.exp_lut.final_claim(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenSoftmaxIndex, softmax_lookup_sumcheck_id()),
             point,
-            self.ra.final_claim(),
+            self.index.final_claim(),
         );
     }
 }
@@ -1025,16 +1084,12 @@ struct LookupSumcheckVerifier<F: JoltField> {
     row_point: Vec<F>,
     max_index: Vec<usize>,
     max: Vec<i32>,
-    entries: usize,
     min_diff: i64,
     causal: bool,
     shape: Shape,
     row_shape: Shape,
     max_mix: F,
-    sum_mix: F,
-    onehot_mix: F,
     diff_mix: F,
-    ra_booleanity_mix: F,
     bit_booleanity_mix: F,
     bit_weights: Vec<F>,
 }
@@ -1050,7 +1105,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for LookupSumch
     ) -> F {
         let full_point = normalize_sumcheck_point::<F>(&sumcheck_challenges.into_opening());
         let tensor_point = tensor_point_from_full_shape(&full_point, &self.shape);
-        let lut_point = &full_point[tensor_point.len()..];
         let input = accumulator
             .get_virtual_polynomial_opening(OpeningId::new(
                 VirtualPoly::QwenSoftmaxInput,
@@ -1065,24 +1119,25 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for LookupSumch
                 ))
                 .1
         });
-        let ra = accumulator
+        let exp_lut = accumulator
             .get_virtual_polynomial_opening(OpeningId::new(
-                VirtualPoly::QwenSoftmaxRa,
+                VirtualPoly::QwenSoftmaxExpLut,
                 softmax_lookup_sumcheck_id(),
             ))
             .1;
-        let eq_exp = EqPolynomial::mle(&self.exp_point, &tensor_point);
+        let index = accumulator
+            .get_virtual_polynomial_opening(OpeningId::new(
+                VirtualPoly::QwenSoftmaxIndex,
+                softmax_lookup_sumcheck_id(),
+            ))
+            .1;
+        let eq_exp = eval_masked_eq(&self.exp_point, &self.shape, &tensor_point);
         let row_eq = EqPolynomial::mle(
             &self.row_point,
             row_point_from_tensor_point_shape(&tensor_point, &self.shape),
         );
         let max_selector = eval_max_selector(&self.max_index, &self.shape, &tensor_point);
         let valid = eval_valid(self.causal, &self.shape, &tensor_point);
-        let id = eval_table_at_point(&padded_table(&id_table::<F>(self.entries)), lut_point);
-        let exp_table = eval_table_at_point(
-            &padded_table(&exp_table::<F>(self.min_diff, self.entries)),
-            lut_point,
-        );
         let max = eval_i32_advice(
             &self.max,
             &self.row_shape,
@@ -1095,15 +1150,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for LookupSumch
             valid,
             input,
             bits,
-            ra,
-            id,
-            exp_table,
+            exp_lut,
+            index,
             max,
             self.max_mix,
-            self.sum_mix,
-            self.onehot_mix,
             self.diff_mix,
-            self.ra_booleanity_mix,
             self.bit_booleanity_mix,
             &self.bit_weights,
             field_from_i64(self.min_diff),
@@ -1135,7 +1186,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for LookupSumch
         }
         accumulator.append_virtual(
             transcript,
-            OpeningId::new(VirtualPoly::QwenSoftmaxRa, softmax_lookup_sumcheck_id()),
+            OpeningId::new(
+                VirtualPoly::QwenSoftmaxExpLut,
+                softmax_lookup_sumcheck_id(),
+            ),
+            point.clone(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenSoftmaxIndex, softmax_lookup_sumcheck_id()),
             point,
         );
     }
@@ -1149,9 +1208,8 @@ struct LookupPairValues<F: JoltField> {
     max: [F; 2],
     input: [F; 2],
     bits: [[F; 2]; ROUND_FRAC_BITS],
-    ra: [F; 2],
-    id: [F; 2],
-    exp_table: [F; 2],
+    exp_lut: [F; 2],
+    index: [F; 2],
 }
 
 impl<F: JoltField> LookupPairValues<F> {
@@ -1187,11 +1245,13 @@ impl<F: JoltField> LookupPairValues<F> {
                     p.bits[idx].get_bound_coeff(2 * g + 1),
                 ]
             }),
-            ra: [p.ra.get_bound_coeff(2 * g), p.ra.get_bound_coeff(2 * g + 1)],
-            id: [p.id.get_bound_coeff(2 * g), p.id.get_bound_coeff(2 * g + 1)],
-            exp_table: [
-                p.exp_table.get_bound_coeff(2 * g),
-                p.exp_table.get_bound_coeff(2 * g + 1),
+            exp_lut: [
+                p.exp_lut.get_bound_coeff(2 * g),
+                p.exp_lut.get_bound_coeff(2 * g + 1),
+            ],
+            index: [
+                p.index.get_bound_coeff(2 * g),
+                p.index.get_bound_coeff(2 * g + 1),
             ],
         }
     }
@@ -1204,15 +1264,11 @@ impl<F: JoltField> LookupPairValues<F> {
             lerp(self.valid[0], self.valid[1], t),
             lerp(self.input[0], self.input[1], t),
             std::array::from_fn(|idx| lerp(self.bits[idx][0], self.bits[idx][1], t)),
-            lerp(self.ra[0], self.ra[1], t),
-            lerp(self.id[0], self.id[1], t),
-            lerp(self.exp_table[0], self.exp_table[1], t),
+            lerp(self.exp_lut[0], self.exp_lut[1], t),
+            lerp(self.index[0], self.index[1], t),
             lerp(self.max[0], self.max[1], t),
             p.max_mix,
-            p.sum_mix,
-            p.onehot_mix,
             p.diff_mix,
-            p.ra_booleanity_mix,
             p.bit_booleanity_mix,
             &p.bit_weights,
             p.min_diff,
@@ -1228,20 +1284,16 @@ fn eval_lookup_relation<F: JoltField>(
     valid: F,
     input: F,
     bits: [F; ROUND_FRAC_BITS],
-    ra: F,
-    id: F,
-    exp_table: F,
+    exp_lut: F,
+    index: F,
     max: F,
     max_mix: F,
-    sum_mix: F,
-    onehot_mix: F,
     diff_mix: F,
-    ra_booleanity_mix: F,
     bit_booleanity_mix: F,
     bit_weights: &[F],
     min_diff: F,
 ) -> F {
-    let n = min_diff + id;
+    let n = min_diff + index;
     let frac = bits.iter().enumerate().fold(F::zero(), |acc, (idx, bit)| {
         acc + F::from_u64(1_u64 << idx) * *bit
     });
@@ -1253,13 +1305,278 @@ fn eval_lookup_relation<F: JoltField>(
         .fold(F::zero(), |acc, (bit, weight)| {
             acc + *weight * *bit * (*bit - F::one())
         });
-    eq_exp * ra * exp_table * corr
-        + max_mix * row_eq * max_selector * ra * input
-        + sum_mix * F::zero()
-        + onehot_mix * eq_exp * ra
-        + diff_mix * eq_exp * ra * diff_expr
-        + ra_booleanity_mix * ra * (ra - F::one())
+    eq_exp * exp_lut * corr
+        + max_mix * row_eq * max_selector * input
+        + diff_mix * eq_exp * diff_expr
         + bit_booleanity_mix * bit_booleanity
+}
+
+#[derive(Clone)]
+struct SoftmaxReadRafProvider<F: JoltField> {
+    log_k: usize,
+    r_cycle: OpeningPoint<BIG_ENDIAN, F>,
+    rv_claim: F,
+    raf_claim: F,
+}
+
+impl<F: JoltField> ReadRafProvider<F> for SoftmaxReadRafProvider<F> {
+    fn rv_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
+        self.rv_claim
+    }
+
+    fn raf_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
+        self.raf_claim
+    }
+
+    fn r(&self, _accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
+        self.r_cycle.clone()
+    }
+
+    fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
+        (
+            VirtualPoly::QwenSoftmaxExpRa,
+            softmax_shout_sumcheck_id(),
+        )
+    }
+
+    fn log_K(&self) -> usize {
+        self.log_k
+    }
+}
+
+struct SoftmaxRaEncoding {
+    log_k: usize,
+}
+
+impl RaOneHotEncoding for SoftmaxRaEncoding {
+    fn committed_poly(&self, d: usize) -> CommittedPoly {
+        CommittedPoly::QwenSoftmaxExpRaD(d)
+    }
+
+    fn r_cycle_source(&self) -> OpeningId {
+        OpeningId::new(VirtualPoly::QwenSoftmaxExpLut, softmax_lookup_sumcheck_id())
+    }
+
+    fn ra_source(&self) -> OpeningId {
+        OpeningId::new(VirtualPoly::QwenSoftmaxExpRa, softmax_shout_sumcheck_id())
+    }
+
+    fn log_k(&self) -> usize {
+        self.log_k
+    }
+
+    fn one_hot_params(&self) -> OneHotParams {
+        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.log_k)
+    }
+}
+
+struct SoftmaxShoutProof<F: JoltField, T: Transcript> {
+    read_raf: SumcheckInstanceProof<F, T>,
+    ra_onehot: SumcheckInstanceProof<F, T>,
+    ra_point: Vec<F>,
+    ra_opening: F,
+    committed_openings: SoftmaxRaCommittedOpenings<F>,
+}
+
+fn prove_softmax_shout_lookup<F, T>(
+    lut_len: usize,
+    tensor_point: Vec<F>,
+    exp_lut_opening: F,
+    index_opening: F,
+    lookup_indices: Vec<usize>,
+    table: Vec<i32>,
+    accumulator: &mut ProverOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> Result<SoftmaxShoutProof<F, T>>
+where
+    F: JoltField,
+    T: Transcript,
+{
+    let log_k = lut_len.trailing_zeros() as usize;
+    let r_cycle = OpeningPoint::<BIG_ENDIAN, F>::new(tensor_point);
+    let provider = SoftmaxReadRafProvider {
+        log_k,
+        r_cycle,
+        rv_claim: exp_lut_opening,
+        raf_claim: index_opening,
+    };
+    let mut read_prover =
+        shout::read_raf_prover(&provider, &lookup_indices, &table, accumulator, transcript);
+    let (read_raf, _) = Sumcheck::prove(&mut *read_prover, accumulator, transcript);
+
+    let encoding = SoftmaxRaEncoding { log_k };
+    let [ra_prover, hw_prover, bool_prover] =
+        shout::ra_onehot_provers(&encoding, &lookup_indices, accumulator, transcript);
+    let use_ra_virtual = lookup_indices.len().next_power_of_two() >= 8;
+    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = if !use_ra_virtual {
+        // JoltWorks' RaPolynomial specialization only exposes final_claim after
+        // at least three cycle bindings.  Real Qwen tensors have many more
+        // variables; this branch only keeps tiny unit-test domains executable.
+        vec![hw_prover]
+    } else {
+        vec![ra_prover, hw_prover, bool_prover]
+    };
+    let (ra_onehot, _) = BatchedSumcheck::prove(
+        instances.iter_mut().map(|v| &mut **v as _).collect(),
+        accumulator,
+        transcript,
+    );
+    let (ra_point, ra_opening) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
+        VirtualPoly::QwenSoftmaxExpRa,
+        softmax_shout_sumcheck_id(),
+    ));
+    let committed_openings =
+        softmax_ra_committed_openings(log_k, use_ra_virtual, accumulator)?;
+    Ok(SoftmaxShoutProof {
+        read_raf,
+        ra_onehot,
+        ra_point: ra_point.r,
+        ra_opening,
+        committed_openings,
+    })
+}
+
+fn verify_softmax_shout_lookup<F, T>(
+    entries: usize,
+    lut_len: usize,
+    min_diff: i64,
+    logical_len: usize,
+    tensor_point: Vec<F>,
+    exp_lut_opening: F,
+    index_opening: F,
+    ra_opening: F,
+    committed_openings: &SoftmaxRaCommittedOpenings<F>,
+    read_raf: &SumcheckInstanceProof<F, T>,
+    ra_onehot: &SumcheckInstanceProof<F, T>,
+    accumulator: &mut VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> std::result::Result<SoftmaxShoutProof<F, T>, ProofVerifyError>
+where
+    F: JoltField,
+    T: Transcript,
+{
+    let log_k = lut_len.trailing_zeros() as usize;
+    let r_cycle = OpeningPoint::<BIG_ENDIAN, F>::new(tensor_point);
+    accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenSoftmaxExpLut, softmax_lookup_sumcheck_id()),
+        (r_cycle.clone(), exp_lut_opening),
+    );
+    accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenSoftmaxIndex, softmax_lookup_sumcheck_id()),
+        (r_cycle.clone(), index_opening),
+    );
+    accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenSoftmaxExpRa, softmax_shout_sumcheck_id()),
+        (OpeningPoint::<BIG_ENDIAN, F>::default(), ra_opening),
+    );
+    let provider = SoftmaxReadRafProvider {
+        log_k,
+        r_cycle,
+        rv_claim: exp_lut_opening,
+        raf_claim: index_opening,
+    };
+    let table = padded_i32_table(min_diff, entries, lut_len, exp_lut_q8_unclipped)
+        .map_err(|_| ProofVerifyError::InvalidInputLength(lut_len, 0))?;
+    let read_verifier = shout::read_raf_verifier(&provider, table, accumulator, transcript);
+    Sumcheck::verify(read_raf, &*read_verifier, accumulator, transcript)?;
+
+    let encoding = SoftmaxRaEncoding { log_k };
+    let [ra_verifier, hw_verifier, bool_verifier] =
+        shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
+    let use_ra_virtual = logical_len.next_power_of_two() >= 8;
+    insert_softmax_ra_committed_openings(
+        log_k,
+        use_ra_virtual,
+        committed_openings,
+        accumulator,
+    )?;
+    let verifier_instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = if !use_ra_virtual {
+        vec![&*hw_verifier]
+    } else {
+        vec![&*ra_verifier, &*hw_verifier, &*bool_verifier]
+    };
+    BatchedSumcheck::verify(ra_onehot, verifier_instances, accumulator, transcript)?;
+    let (ra_point, ra_opening) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
+        VirtualPoly::QwenSoftmaxExpRa,
+        softmax_shout_sumcheck_id(),
+    ));
+    Ok(SoftmaxShoutProof {
+        read_raf: read_raf.clone(),
+        ra_onehot: ra_onehot.clone(),
+        ra_point: ra_point.r,
+        ra_opening,
+        committed_openings: committed_openings.clone(),
+    })
+}
+
+fn softmax_ra_committed_openings<F: JoltField>(
+    log_k: usize,
+    include_full_checks: bool,
+    accumulator: &ProverOpeningAccumulator<F>,
+) -> Result<SoftmaxRaCommittedOpenings<F>> {
+    let d = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
+    let collect = |sumcheck| -> Vec<F> {
+        (0..d)
+            .map(|idx| {
+                accumulator
+                    .get_committed_polynomial_opening(OpeningId::new(
+                        CommittedPoly::QwenSoftmaxExpRaD(idx),
+                        sumcheck,
+                    ))
+                    .1
+            })
+            .collect()
+    };
+    Ok(SoftmaxRaCommittedOpenings {
+        ra_virtual: if include_full_checks {
+            collect(SumcheckId::RaVirtualization)
+        } else {
+            vec![]
+        },
+        hamming_weight: collect(SumcheckId::HammingWeight),
+        booleanity: if include_full_checks {
+            collect(SumcheckId::Booleanity)
+        } else {
+            vec![]
+        },
+    })
+}
+
+fn insert_softmax_ra_committed_openings<F: JoltField>(
+    log_k: usize,
+    include_full_checks: bool,
+    openings: &SoftmaxRaCommittedOpenings<F>,
+    accumulator: &mut VerifierOpeningAccumulator<F>,
+) -> std::result::Result<(), ProofVerifyError> {
+    let d = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
+    if openings.hamming_weight.len() != d {
+        return Err(ProofVerifyError::InvalidInputLength(
+            d,
+            openings.hamming_weight.len(),
+        ));
+    }
+    if include_full_checks && (openings.ra_virtual.len() != d || openings.booleanity.len() != d) {
+        return Err(ProofVerifyError::InvalidInputLength(
+            d,
+            openings.ra_virtual.len().min(openings.booleanity.len()),
+        ));
+    }
+    let mut insert_group = |sumcheck, values: &[F]| {
+        for (idx, &value) in values.iter().enumerate() {
+            accumulator.openings.insert(
+                OpeningId::new(CommittedPoly::QwenSoftmaxExpRaD(idx), sumcheck),
+                (OpeningPoint::<BIG_ENDIAN, F>::default(), value),
+            );
+        }
+    };
+    if include_full_checks {
+        insert_group(SumcheckId::RaVirtualization, &openings.ra_virtual);
+    }
+    insert_group(SumcheckId::HammingWeight, &openings.hamming_weight);
+    if include_full_checks {
+        insert_group(SumcheckId::Booleanity, &openings.booleanity);
+    }
+    Ok(())
 }
 
 fn validate_inputs(w: &SoftmaxWitness, params: &SoftmaxParams) -> Result<()> {
@@ -1540,14 +1857,11 @@ fn entries_from_min_max(min: i64, max: i64) -> Result<usize> {
     Ok(entries)
 }
 
-fn id_table<F: JoltField>(entries: usize) -> Vec<F> {
-    (0..entries).map(|i| F::from_u64(i as u64)).collect()
-}
-
-fn exp_table<F: JoltField>(min_diff: i64, entries: usize) -> Vec<F> {
-    (0..entries)
-        .map(|i| field_from_i64(exp_lut_q8_unclipped(min_diff + i as i64)))
-        .collect()
+fn padded_softmax_lut_len(entries: usize) -> usize {
+    // Same convention as SiLU: reserve one extra zero row for padded tensor
+    // slots, and keep the Shout one-hot chunks at their minimum practical
+    // size.  Real attention tensors are far larger than this minimum.
+    (entries + 1).next_power_of_two().max(16)
 }
 
 fn max_selector_tensor<F: JoltField>(max_index: &[usize], params: &SoftmaxParams) -> Vec<F> {
@@ -1672,68 +1986,6 @@ fn expand_rows_to_padded_tensor_i32<F: JoltField>(
     out
 }
 
-fn lift_tensor_evals<F: JoltField>(values: &[F], entries: usize) -> Vec<F> {
-    let padded_entries = entries.next_power_of_two();
-    let mut out = Vec::with_capacity(values.len() * padded_entries);
-    for &value in values {
-        out.extend(std::iter::repeat_n(value, padded_entries));
-    }
-    out
-}
-
-fn lift_i32_tensor<F: JoltField>(values: &[i32], shape: &Shape, entries: usize) -> Vec<F> {
-    lift_tensor_evals(&padded_i32_tensor(values, shape), entries)
-}
-
-fn lift_u8_tensor<F: JoltField>(values: &[u8], shape: &Shape, entries: usize) -> Vec<F> {
-    lift_tensor_evals(&padded_u8_tensor(values, shape), entries)
-}
-
-fn padded_ra_tensor<F: JoltField>(values: &[u8], params: &SoftmaxParams, entries: usize) -> Vec<F> {
-    let shape = params.ra_shape(entries);
-    let padded_dims = shape.padded_power_of_two().0;
-    let len = padded_dims.iter().product();
-    let mut out = vec![F::zero(); len];
-    let strides = row_major_strides(shape.dims());
-    let padded_strides = row_major_strides(&padded_dims);
-    for (flat, &value) in values.iter().enumerate() {
-        let mut padded_flat = 0;
-        for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate() {
-            let coord = (flat / stride) % shape.dims()[dim];
-            padded_flat += coord * padded_stride;
-        }
-        out[padded_flat] = F::from_u64(u64::from(value));
-    }
-    out
-}
-
-fn softmax_table_tensor<F: JoltField>(
-    params: &SoftmaxParams,
-    _entries: usize,
-    table: &[F],
-) -> Vec<F> {
-    let tensor_len = params.shape.padded_power_of_two().numel();
-    let table = padded_table(table);
-    let mut out = Vec::with_capacity(tensor_len * table.len());
-    for _ in 0..tensor_len {
-        out.extend(table.iter().copied());
-    }
-    out
-}
-
-fn padded_table<F: JoltField>(table: &[F]) -> Vec<F> {
-    let mut out = vec![F::zero(); table.len().next_power_of_two()];
-    out[..table.len()].copy_from_slice(table);
-    out
-}
-
-fn eval_table_at_point<F: JoltField>(table: &[F], point: &[F]) -> F {
-    EqPolynomial::<F>::evals(point)
-        .into_iter()
-        .zip(table)
-        .fold(F::zero(), |acc, (eq, value)| acc + eq * *value)
-}
-
 fn padded_i32_tensor<F: JoltField>(values: &[i32], shape: &Shape) -> Vec<F> {
     let padded_dims = shape.padded_power_of_two().0;
     let len = padded_dims.iter().product();
@@ -1749,6 +2001,30 @@ fn padded_i32_tensor<F: JoltField>(values: &[i32], shape: &Shape) -> Vec<F> {
         out[padded_flat] = field_from_i64(i64::from(value));
     }
     out
+}
+
+fn padded_i64_tensor<F: JoltField>(values: &[i64], shape: &Shape) -> Vec<F> {
+    let padded_dims = shape.padded_power_of_two().0;
+    let len = padded_dims.iter().product();
+    let mut out = vec![F::zero(); len];
+    let strides = row_major_strides(shape.dims());
+    let padded_strides = row_major_strides(&padded_dims);
+    for (flat, &value) in values.iter().enumerate() {
+        let mut padded_flat = 0;
+        for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate() {
+            let coord = (flat / stride) % shape.dims()[dim];
+            padded_flat += coord * padded_stride;
+        }
+        out[padded_flat] = field_from_i64(value);
+    }
+    out
+}
+
+fn padded_usize_evals<F: JoltField>(values: &[usize]) -> Vec<F> {
+    values
+        .iter()
+        .map(|&value| F::from_u64(value as u64))
+        .collect()
 }
 
 fn padded_u8_tensor<F: JoltField>(values: &[u8], shape: &Shape) -> Vec<F> {
@@ -1785,40 +2061,166 @@ fn padded_field_tensor<F: JoltField>(values: &[F], shape: &Shape) -> Vec<F> {
     out
 }
 
+fn softmax_logical_lookup_indices(
+    witness: &SoftmaxWitness,
+    params: &SoftmaxParams,
+    entries: usize,
+) -> Result<Vec<usize>> {
+    let mut indices = Vec::with_capacity(params.shape.numel());
+    let cols = params.cols();
+    for row in 0..params.rows() {
+        for col in 0..cols {
+            let idx = row * cols + col;
+            let diff = if is_valid_position(params.causal, &params.shape, row, col) {
+                i64::from(witness.input[idx]) - i64::from(witness.max[row])
+            } else {
+                0
+            };
+            let n = i64::from(floor_shift_q8(diff));
+            let shifted = n - witness.min_diff;
+            if shifted < 0 || shifted >= entries as i64 {
+                return Err(ProverError::InvalidSumcheckDomain(entries));
+            }
+            indices.push(shifted as usize);
+        }
+    }
+    Ok(indices)
+}
+
+fn padded_lookup_indices(
+    logical_indices: &[usize],
+    params: &SoftmaxParams,
+    padding_index: usize,
+) -> Vec<usize> {
+    let padded_dims = params.shape.padded_power_of_two().0;
+    let len = padded_dims.iter().product();
+    let mut out = vec![padding_index; len];
+    let strides = row_major_strides(params.shape.dims());
+    let padded_strides = row_major_strides(&padded_dims);
+    for (flat, &value) in logical_indices.iter().enumerate() {
+        let mut padded_flat = 0;
+        for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate() {
+            let coord = (flat / stride) % params.shape.dims()[dim];
+            padded_flat += coord * padded_stride;
+        }
+        out[padded_flat] = value;
+    }
+    out
+}
+
+fn softmax_lookup_values(indices: &[usize], min_diff: i64, table_fn: fn(i64) -> i64) -> Vec<i64> {
+    indices
+        .iter()
+        .map(|&idx| table_fn(min_diff + idx as i64))
+        .collect()
+}
+
+fn padded_i32_table(
+    min_diff: i64,
+    entries: usize,
+    padded_len: usize,
+    table_fn: fn(i64) -> i64,
+) -> Result<Vec<i32>> {
+    if padded_len < entries || !padded_len.is_power_of_two() {
+        return Err(ProverError::InvalidSumcheckDomain(padded_len));
+    }
+    let mut table = Vec::with_capacity(padded_len);
+    for idx in 0..entries {
+        let value = table_fn(min_diff + idx as i64);
+        let value =
+            i32::try_from(value).map_err(|_| ProverError::InvalidSumcheckDomain(entries))?;
+        table.push(value);
+    }
+    table.resize(padded_len, 0);
+    Ok(table)
+}
+
 fn eval_i32_advice<F: JoltField>(values: &[i32], shape: &Shape, point: &[F]) -> F {
-    values
-        .iter()
-        .enumerate()
-        .fold(F::zero(), |acc, (idx, &value)| {
-            acc + eq_for_flat(idx, shape, point) * field_from_i64::<F>(i64::from(value))
-        })
-}
-
-fn eval_field_tensor<F: JoltField>(values: &[F], shape: &Shape, point: &[F]) -> F {
-    values
-        .iter()
-        .enumerate()
-        .fold(F::zero(), |acc, (idx, &value)| {
-            acc + eq_for_flat(idx, shape, point) * value
-        })
-}
-
-fn eval_logical_mask<F: JoltField>(shape: &Shape, point: &[F]) -> F {
-    (0..shape.numel()).fold(F::zero(), |acc, idx| acc + eq_for_flat(idx, shape, point))
-}
-
-fn eq_for_flat<F: JoltField>(flat: usize, shape: &Shape, point: &[F]) -> F {
     let eq_by_dim = split_point(shape, point)
         .into_iter()
         .map(EqPolynomial::<F>::evals)
         .collect::<Vec<_>>();
     let strides = row_major_strides(shape.dims());
-    let mut weight = F::one();
-    for (dim, (&stride, eq)) in strides.iter().zip(&eq_by_dim).enumerate() {
-        let coord = (flat / stride) % shape.dims()[dim];
-        weight *= eq[coord];
+    values
+        .iter()
+        .enumerate()
+        .fold(F::zero(), |acc, (flat, &value)| {
+            let mut weight = F::one();
+            for (dim, (&stride, eq)) in strides.iter().zip(&eq_by_dim).enumerate() {
+                let coord = (flat / stride) % shape.dims()[dim];
+                weight *= eq[coord];
+            }
+            acc + weight * field_from_i64::<F>(i64::from(value))
+        })
+}
+
+fn eval_field_tensor<F: JoltField>(values: &[F], shape: &Shape, point: &[F]) -> F {
+    let eq_by_dim = split_point(shape, point)
+        .into_iter()
+        .map(EqPolynomial::<F>::evals)
+        .collect::<Vec<_>>();
+    let strides = row_major_strides(shape.dims());
+    values
+        .iter()
+        .enumerate()
+        .fold(F::zero(), |acc, (flat, &value)| {
+            let mut weight = F::one();
+            for (dim, (&stride, eq)) in strides.iter().zip(&eq_by_dim).enumerate() {
+                let coord = (flat / stride) % shape.dims()[dim];
+                weight *= eq[coord];
+            }
+            acc + weight * value
+        })
+}
+
+fn masked_eq_poly<F: JoltField>(claim: &Claim<F>, shape: &Shape) -> Vec<F> {
+    let padded_dims = claim.domain_shape.dims();
+    let mut out = vec![F::zero(); padded_dims.iter().product()];
+    let strides = row_major_strides(shape.dims());
+    let padded_strides = row_major_strides(padded_dims);
+    let eq_evals = EqPolynomial::<F>::evals(&claim.point);
+    for flat in 0..shape.numel() {
+        let mut padded_flat = 0;
+        for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate() {
+            let coord = (flat / stride) % shape.dims()[dim];
+            padded_flat += coord * padded_stride;
+        }
+        out[padded_flat] = eq_evals[padded_flat];
     }
-    weight
+    out
+}
+
+fn eval_masked_eq<F: JoltField>(claim_point: &[F], shape: &Shape, point: &[F]) -> F {
+    let claim_eq_by_dim = split_point(shape, claim_point)
+        .into_iter()
+        .map(EqPolynomial::<F>::evals)
+        .collect::<Vec<_>>();
+    let point_eq_by_dim = split_point(shape, point)
+        .into_iter()
+        .map(EqPolynomial::<F>::evals)
+        .collect::<Vec<_>>();
+    let combined_eq_by_dim = claim_eq_by_dim
+        .iter()
+        .zip(&point_eq_by_dim)
+        .map(|(lhs, rhs)| {
+            lhs.iter()
+                .zip(rhs)
+                .map(|(lhs, rhs)| *lhs * *rhs)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let strides = row_major_strides(shape.dims());
+
+    let mut sum = F::zero();
+    for flat in 0..shape.numel() {
+        let mut weight = F::one();
+        for (dim, (&stride, eq)) in strides.iter().zip(&combined_eq_by_dim).enumerate() {
+            let coord = (flat / stride) % shape.dims()[dim];
+            weight *= eq[coord];
+        }
+        sum += weight;
+    }
+    sum
 }
 
 fn split_point<'a, F>(shape: &Shape, point: &'a [F]) -> Vec<&'a [F]> {
@@ -1830,10 +2232,6 @@ fn split_point<'a, F>(shape: &Shape, point: &'a [F]) -> Vec<&'a [F]> {
         offset += vars;
     }
     out
-}
-
-fn tensor_point_from_full<F: Clone>(point: &[F], params: &SoftmaxParams) -> Vec<F> {
-    tensor_point_from_full_shape(point, &params.shape)
 }
 
 fn tensor_point_from_full_shape<F: Clone>(point: &[F], shape: &Shape) -> Vec<F> {
@@ -1907,6 +2305,10 @@ fn softmax_acc_sumcheck_id() -> SumcheckId {
 
 fn softmax_lookup_sumcheck_id() -> SumcheckId {
     SumcheckId::NodeExecution(1)
+}
+
+fn softmax_shout_sumcheck_id() -> SumcheckId {
+    SumcheckId::NodeExecution(2)
 }
 
 #[cfg(test)]
@@ -2215,11 +2617,6 @@ mod tests {
     }
 
     fn eval_i32<F: JoltField>(values: &[i32], shape: &Shape, point: &[F]) -> F {
-        values
-            .iter()
-            .enumerate()
-            .fold(F::zero(), |acc, (idx, &value)| {
-                acc + eq_for_flat(idx, shape, point) * field_from_i64::<F>(i64::from(value))
-            })
+        eval_i32_advice(values, shape, point)
     }
 }

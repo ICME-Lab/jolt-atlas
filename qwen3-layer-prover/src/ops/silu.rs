@@ -1,7 +1,8 @@
-use common::VirtualPoly;
 use std::time::Instant;
 
+use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
+    config::{OneHotConfig, OneHotParams},
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
@@ -13,7 +14,8 @@ use joltworks::{
         unipoly::UniPoly,
     },
     subprotocols::{
-        sumcheck::{Sumcheck, SumcheckInstanceProof},
+        shout::{self, RaOneHotEncoding, ReadRafProvider},
+        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -41,9 +43,11 @@ use crate::{
 // This file proves the `acc` relation.  The final `round(acc) -> silu` is
 // handled by `silu_round.rs`, which calls the generic round protocol first.
 //
-// The sumcheck domain is `tensor_domain x LUT_domain`.  Gate values and
-// frac-bit tensors are lifted over the LUT axis.  The RA polynomial lives on the
-// full domain and selects one LUT row per tensor element.
+// The main relation sumcheck now runs only over the tensor domain.  It proves
+// the linearized SiLU arithmetic and exposes two virtual lookup claims:
+// `base(n)` and `slope(n)`, plus the integer table index.  Those lookups are
+// proven separately with JoltWorks Shout, avoiding the old tensor x LUT
+// one-hot expansion that was too slow for Qwen-sized tensors.
 //
 // Range handling should be done through the lookup relation, not a separate
 // range check.  Let n_t be the rounded integer part.  If the prover supplies
@@ -115,10 +119,27 @@ pub struct SiluWitness {
 pub struct SiluProof<F: JoltField, T: Transcript> {
     pub min_n: i64,
     pub max_n: i64,
-    pub sumcheck: SumcheckInstanceProof<F, T>,
+    pub relation: SumcheckInstanceProof<F, T>,
+    pub base_lookup: SumcheckInstanceProof<F, T>,
+    pub base_ra_onehot: SumcheckInstanceProof<F, T>,
+    pub slope_lookup: SumcheckInstanceProof<F, T>,
+    pub slope_ra_onehot: SumcheckInstanceProof<F, T>,
     pub gate_opening: F,
     pub frac_bit_openings: [F; ROUND_FRAC_BITS],
-    pub ra_opening: F,
+    pub base_opening: F,
+    pub slope_opening: F,
+    pub index_opening: F,
+    pub base_ra_opening: F,
+    pub slope_ra_opening: F,
+    pub base_ra_committed_openings: SiluRaCommittedOpenings<F>,
+    pub slope_ra_committed_openings: SiluRaCommittedOpenings<F>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SiluRaCommittedOpenings<F: JoltField> {
+    pub ra_virtual: Vec<F>,
+    pub hamming_weight: Vec<F>,
+    pub booleanity: Vec<F>,
 }
 
 pub fn prove_silu<F, T>(
@@ -139,7 +160,7 @@ where
     let total_start = Instant::now();
     let mut step_start = Instant::now();
     let entries = entries_from_min_max(witness.min_n, witness.max_n)?;
-    let lut_len = entries.next_power_of_two();
+    let lut_len = padded_silu_lut_len(entries);
     validate_inputs(&output_claims, witness, params, entries)?;
     append_range_advice::<F, T>(witness.min_n, witness.max_n, transcript);
     eprintln!(
@@ -149,9 +170,7 @@ where
 
     step_start = Instant::now();
     let alphas = transcript.challenge_scalar_powers(output_claims.len());
-    let onehot_mix = transcript.challenge_scalar();
     let round_mix = transcript.challenge_scalar();
-    let ra_booleanity_mix = transcript.challenge_scalar();
     let bit_booleanity_mix = transcript.challenge_scalar();
     let bit_weights = transcript.challenge_scalar_powers(ROUND_FRAC_BITS);
     eprintln!(
@@ -160,60 +179,48 @@ where
     );
 
     step_start = Instant::now();
-    let mask_eval = eval_logical_mask(&params.shape, &output_claims[0].point);
-    let input_claim = batched_input_claim(&output_claims, &alphas) + onehot_mix * mask_eval;
-    let eq_batch = lift_tensor_evals(&batched_eq_poly(&output_claims, &alphas), lut_len);
-    let eq_onehot = lift_tensor_evals(&EqPolynomial::<F>::evals(&output_claims[0].point), lut_len);
+    let input_claim = batched_input_claim(&output_claims, &alphas);
+    let eq_batch = batched_masked_eq_poly(&output_claims, &alphas, &params.shape);
     eprintln!(
         "timing: prove_silu.eq_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
 
     step_start = Instant::now();
-    let gate = lift_i32_tensor(&witness.gate_proj_round, &params.shape, lut_len);
-    let bits =
-        std::array::from_fn(|idx| lift_u8_tensor(&witness.frac_bits[idx], &params.shape, lut_len));
-    let ra = padded_ra_tensor(&witness.ra, params, entries);
+    let logical_lookup_indices = silu_logical_lookup_indices(witness, params, entries)?;
+    let padded_lookup_indices = padded_lookup_indices(&logical_lookup_indices, params, entries);
+    let base_values = silu_lookup_values(&logical_lookup_indices, witness.min_n, silu_base);
+    let slope_values = silu_lookup_values(&logical_lookup_indices, witness.min_n, silu_slope);
+    let gate = padded_i32_tensor(&witness.gate_proj_round, &params.shape);
+    let bits = std::array::from_fn(|idx| padded_u8_tensor(&witness.frac_bits[idx], &params.shape));
+    let base = padded_i64_tensor(&base_values, &params.shape);
+    let slope = padded_i64_tensor(&slope_values, &params.shape);
+    let index = padded_usize_evals(&padded_lookup_indices);
     eprintln!(
         "timing: prove_silu.witness_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
 
     step_start = Instant::now();
-    let id = silu_table_tensor(params, entries, &silu_id_table::<F>(entries));
-    let base = silu_table_tensor(
-        params,
-        entries,
-        &silu_base_table::<F>(witness.min_n, entries),
-    );
-    let slope = silu_table_tensor(
-        params,
-        entries,
-        &silu_slope_table::<F>(witness.min_n, entries),
-    );
+    let base_table = padded_i32_table(witness.min_n, entries, lut_len, silu_base)?;
+    let slope_table = padded_i32_table(witness.min_n, entries, lut_len, silu_slope)?;
     eprintln!(
         "timing: prove_silu.table_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
 
     step_start = Instant::now();
-    let sc_params = SiluSumcheckParams::new(
-        params.ra_shape(entries).padded_power_of_two().point_len(),
-        input_claim,
-    );
+    let sc_params =
+        SiluSumcheckParams::new(params.shape.padded_power_of_two().point_len(), input_claim);
     let mut prover = SiluSumcheckProver::new(
         sc_params,
         eq_batch,
-        eq_onehot,
         gate,
         bits,
-        ra,
-        id,
         base,
         slope,
-        onehot_mix,
+        index,
         round_mix,
-        ra_booleanity_mix,
         bit_booleanity_mix,
         bit_weights,
         field_from_i64(witness.min_n),
@@ -225,9 +232,9 @@ where
 
     step_start = Instant::now();
     let mut accumulator = ProverOpeningAccumulator::new();
-    let (sumcheck, challenges) = Sumcheck::prove(&mut prover, &mut accumulator, transcript);
+    let (relation, challenges) = Sumcheck::prove(&mut prover, &mut accumulator, transcript);
     eprintln!(
-        "timing: prove_silu.sumcheck {:.3}s",
+        "timing: prove_silu.relation_sumcheck {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
 
@@ -243,16 +250,59 @@ where
         )
         .expect("SiLU frac-bit opening must be produced")
     });
-    let ra_opening = prover_opening(
+    let base_opening = prover_opening(
         &accumulator,
-        OpeningId::new(VirtualPoly::QwenSiluRa, silu_sumcheck_id()),
+        OpeningId::new(VirtualPoly::QwenSiluBase, silu_sumcheck_id()),
+    )?;
+    let slope_opening = prover_opening(
+        &accumulator,
+        OpeningId::new(VirtualPoly::QwenSiluSlope, silu_sumcheck_id()),
+    )?;
+    let index_opening = prover_opening(
+        &accumulator,
+        OpeningId::new(VirtualPoly::QwenSiluIndex, silu_sumcheck_id()),
     )?;
     let full_point = normalize_sumcheck_point::<F>(&challenges.into_opening());
-    let tensor_point = tensor_point_from_full(&full_point, params);
+    let tensor_point = full_point;
     eprintln!(
-        "timing: prove_silu.openings_claims {:.3}s",
+        "timing: prove_silu.relation_openings {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
+
+    step_start = Instant::now();
+    let base_lookup = prove_silu_shout_lookup(
+        SiluLookupKind::Base,
+        lut_len,
+        tensor_point.clone(),
+        base_opening,
+        index_opening,
+        padded_lookup_indices.clone(),
+        base_table,
+        &mut accumulator,
+        transcript,
+    )?;
+    eprintln!(
+        "timing: prove_silu.base_shout {:.3}s",
+        step_start.elapsed().as_secs_f64()
+    );
+
+    step_start = Instant::now();
+    let slope_lookup = prove_silu_shout_lookup(
+        SiluLookupKind::Slope,
+        lut_len,
+        tensor_point.clone(),
+        slope_opening,
+        index_opening,
+        padded_lookup_indices,
+        slope_table,
+        &mut accumulator,
+        transcript,
+    )?;
+    eprintln!(
+        "timing: prove_silu.slope_shout {:.3}s",
+        step_start.elapsed().as_secs_f64()
+    );
+
     eprintln!(
         "timing: prove_silu.total {:.3}s",
         total_start.elapsed().as_secs_f64()
@@ -262,10 +312,20 @@ where
         SiluProof {
             min_n: witness.min_n,
             max_n: witness.max_n,
-            sumcheck,
+            relation,
+            base_lookup: base_lookup.read_raf,
+            base_ra_onehot: base_lookup.ra_onehot,
+            slope_lookup: slope_lookup.read_raf,
+            slope_ra_onehot: slope_lookup.ra_onehot,
             gate_opening,
             frac_bit_openings,
-            ra_opening,
+            base_opening,
+            slope_opening,
+            index_opening,
+            base_ra_opening: base_lookup.ra_opening,
+            slope_ra_opening: slope_lookup.ra_opening,
+            base_ra_committed_openings: base_lookup.committed_openings,
+            slope_ra_committed_openings: slope_lookup.committed_openings,
         },
         Claim {
             tensor: params.gate_proj_round_tensor.clone(),
@@ -283,10 +343,10 @@ where
         }),
         Claim {
             tensor: params.ra_tensor.clone(),
-            logical_shape: params.ra_shape(entries),
-            domain_shape: params.ra_shape(entries).padded_power_of_two(),
-            point: full_point,
-            value: ra_opening,
+            logical_shape: params.ra_shape(lut_len),
+            domain_shape: params.ra_shape(lut_len).padded_power_of_two(),
+            point: base_lookup.ra_point,
+            value: base_lookup.ra_opening,
         },
     ))
 }
@@ -301,22 +361,26 @@ where
     F: JoltField,
     T: Transcript,
 {
+    let total_start = Instant::now();
+    let mut step_start = Instant::now();
     let entries = entries_from_min_max(proof.min_n, proof.max_n)
         .map_err(|_| ProofVerifyError::InvalidInputLength(MAX_SILU_LUT_LEN, 0))?;
     verify_inputs(&output_claims, params, entries)?;
     append_range_advice::<F, T>(proof.min_n, proof.max_n, transcript);
+    eprintln!(
+        "timing: verify_silu.setup_validate {:.3}s",
+        step_start.elapsed().as_secs_f64()
+    );
 
+    step_start = Instant::now();
     let alphas = transcript.challenge_scalar_powers(output_claims.len());
-    let onehot_mix = transcript.challenge_scalar();
     let round_mix = transcript.challenge_scalar();
-    let ra_booleanity_mix = transcript.challenge_scalar();
     let bit_booleanity_mix = transcript.challenge_scalar();
     let bit_weights = transcript.challenge_scalar_powers(ROUND_FRAC_BITS);
-    let mask_eval = eval_logical_mask(&params.shape, &output_claims[0].point);
-    let input_claim = batched_input_claim(&output_claims, &alphas) + onehot_mix * mask_eval;
+    let input_claim = batched_input_claim(&output_claims, &alphas);
     let verifier = SiluSumcheckVerifier {
         params: SiluSumcheckParams::new(
-            params.ra_shape(entries).padded_power_of_two().point_len(),
+            params.shape.padded_power_of_two().point_len(),
             input_claim,
         ),
         output_points: output_claims
@@ -324,16 +388,18 @@ where
             .map(|claim| claim.point.clone())
             .collect(),
         alphas,
-        onehot_point: output_claims[0].point.clone(),
-        onehot_mix,
         round_mix,
-        ra_booleanity_mix,
         bit_booleanity_mix,
         bit_weights,
         shape: params.shape.clone(),
         min_n: proof.min_n,
-        entries,
     };
+    eprintln!(
+        "timing: verify_silu.challenges {:.3}s",
+        step_start.elapsed().as_secs_f64()
+    );
+
+    step_start = Instant::now();
     let mut accumulator = VerifierOpeningAccumulator::new();
     accumulator.openings.insert(
         OpeningId::new(VirtualPoly::QwenSiluGate, silu_sumcheck_id()),
@@ -349,12 +415,77 @@ where
         );
     }
     accumulator.openings.insert(
-        OpeningId::new(VirtualPoly::QwenSiluRa, silu_sumcheck_id()),
-        (OpeningPoint::<BIG_ENDIAN, F>::default(), proof.ra_opening),
+        OpeningId::new(VirtualPoly::QwenSiluBase, silu_sumcheck_id()),
+        (OpeningPoint::<BIG_ENDIAN, F>::default(), proof.base_opening),
     );
-    let challenges = Sumcheck::verify(&proof.sumcheck, &verifier, &mut accumulator, transcript)?;
-    let full_point = normalize_sumcheck_point::<F>(&challenges.into_opening());
-    let tensor_point = tensor_point_from_full(&full_point, params);
+    accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenSiluSlope, silu_sumcheck_id()),
+        (
+            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            proof.slope_opening,
+        ),
+    );
+    accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenSiluIndex, silu_sumcheck_id()),
+        (
+            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            proof.index_opening,
+        ),
+    );
+    let challenges = Sumcheck::verify(&proof.relation, &verifier, &mut accumulator, transcript)?;
+    let tensor_point = normalize_sumcheck_point::<F>(&challenges.into_opening());
+    let lut_len = padded_silu_lut_len(entries);
+    eprintln!(
+        "timing: verify_silu.relation_sumcheck {:.3}s",
+        step_start.elapsed().as_secs_f64()
+    );
+
+    step_start = Instant::now();
+    let base_lookup = verify_silu_shout_lookup(
+        SiluLookupKind::Base,
+        entries,
+        lut_len,
+        proof.min_n,
+        params.shape.numel(),
+        tensor_point.clone(),
+        proof.base_opening,
+        proof.index_opening,
+        proof.base_ra_opening,
+        &proof.base_ra_committed_openings,
+        &proof.base_lookup,
+        &proof.base_ra_onehot,
+        &mut accumulator,
+        transcript,
+    )?;
+    eprintln!(
+        "timing: verify_silu.base_shout {:.3}s",
+        step_start.elapsed().as_secs_f64()
+    );
+    step_start = Instant::now();
+    verify_silu_shout_lookup(
+        SiluLookupKind::Slope,
+        entries,
+        lut_len,
+        proof.min_n,
+        params.shape.numel(),
+        tensor_point.clone(),
+        proof.slope_opening,
+        proof.index_opening,
+        proof.slope_ra_opening,
+        &proof.slope_ra_committed_openings,
+        &proof.slope_lookup,
+        &proof.slope_ra_onehot,
+        &mut accumulator,
+        transcript,
+    )?;
+    eprintln!(
+        "timing: verify_silu.slope_shout {:.3}s",
+        step_start.elapsed().as_secs_f64()
+    );
+    eprintln!(
+        "timing: verify_silu.total {:.3}s",
+        total_start.elapsed().as_secs_f64()
+    );
 
     Ok((
         Claim {
@@ -373,10 +504,10 @@ where
         }),
         Claim {
             tensor: params.ra_tensor.clone(),
-            logical_shape: params.ra_shape(entries),
-            domain_shape: params.ra_shape(entries).padded_power_of_two(),
-            point: full_point,
-            value: proof.ra_opening,
+            logical_shape: params.ra_shape(lut_len),
+            domain_shape: params.ra_shape(lut_len).padded_power_of_two(),
+            point: base_lookup.ra_point,
+            value: proof.base_ra_opening,
         },
     ))
 }
@@ -415,16 +546,12 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SiluSumcheckParams<F> {
 
 struct SiluSumcheckProver<F: JoltField> {
     eq_batch: MultilinearPolynomial<F>,
-    eq_onehot: MultilinearPolynomial<F>,
     gate: MultilinearPolynomial<F>,
     bits: [MultilinearPolynomial<F>; ROUND_FRAC_BITS],
-    ra: MultilinearPolynomial<F>,
-    id: MultilinearPolynomial<F>,
     base: MultilinearPolynomial<F>,
     slope: MultilinearPolynomial<F>,
-    onehot_mix: F,
+    index: MultilinearPolynomial<F>,
     round_mix: F,
-    ra_booleanity_mix: F,
     bit_booleanity_mix: F,
     bit_weights: Vec<F>,
     min_n: F,
@@ -436,32 +563,24 @@ impl<F: JoltField> SiluSumcheckProver<F> {
     fn new(
         params: SiluSumcheckParams<F>,
         eq_batch: Vec<F>,
-        eq_onehot: Vec<F>,
         gate: Vec<F>,
         bits: [Vec<F>; ROUND_FRAC_BITS],
-        ra: Vec<F>,
-        id: Vec<F>,
         base: Vec<F>,
         slope: Vec<F>,
-        onehot_mix: F,
+        index: Vec<F>,
         round_mix: F,
-        ra_booleanity_mix: F,
         bit_booleanity_mix: F,
         bit_weights: Vec<F>,
         min_n: F,
     ) -> Self {
         Self {
             eq_batch: MultilinearPolynomial::from(eq_batch),
-            eq_onehot: MultilinearPolynomial::from(eq_onehot),
             gate: MultilinearPolynomial::from(gate),
             bits: bits.map(MultilinearPolynomial::from),
-            ra: MultilinearPolynomial::from(ra),
-            id: MultilinearPolynomial::from(id),
             base: MultilinearPolynomial::from(base),
             slope: MultilinearPolynomial::from(slope),
-            onehot_mix,
+            index: MultilinearPolynomial::from(index),
             round_mix,
-            ra_booleanity_mix,
             bit_booleanity_mix,
             bit_weights,
             min_n,
@@ -477,7 +596,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SiluSumcheckP
 
     fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
         let mut evals = [F::zero(); 3];
-        for g in 0..self.ra.len() / 2 {
+        for g in 0..self.eq_batch.len() / 2 {
             let values = SiluPairValues::from_prover(self, g);
             for (idx, t) in [F::zero(), F::from_u64(2), F::from_u64(3)]
                 .into_iter()
@@ -491,15 +610,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SiluSumcheckP
 
     fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
         self.eq_batch.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.eq_onehot.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.gate.bind_parallel(r_j, BindingOrder::LowToHigh);
         for bit in &mut self.bits {
             bit.bind_parallel(r_j, BindingOrder::LowToHigh);
         }
-        self.ra.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.id.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.base.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.slope.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.index.bind_parallel(r_j, BindingOrder::LowToHigh);
     }
 
     fn cache_openings(
@@ -527,9 +644,21 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SiluSumcheckP
         }
         accumulator.append_virtual(
             transcript,
-            OpeningId::new(VirtualPoly::QwenSiluRa, silu_sumcheck_id()),
+            OpeningId::new(VirtualPoly::QwenSiluBase, silu_sumcheck_id()),
+            point.clone(),
+            self.base.final_claim(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenSiluSlope, silu_sumcheck_id()),
+            point.clone(),
+            self.slope.final_claim(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenSiluIndex, silu_sumcheck_id()),
             point,
-            self.ra.final_claim(),
+            self.index.final_claim(),
         );
     }
 }
@@ -538,15 +667,11 @@ struct SiluSumcheckVerifier<F: JoltField> {
     params: SiluSumcheckParams<F>,
     output_points: Vec<Vec<F>>,
     alphas: Vec<F>,
-    onehot_point: Vec<F>,
-    onehot_mix: F,
     round_mix: F,
-    ra_booleanity_mix: F,
     bit_booleanity_mix: F,
     bit_weights: Vec<F>,
     shape: Shape,
     min_n: i64,
-    entries: usize,
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SiluSumcheckVerifier<F> {
@@ -561,7 +686,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SiluSumchec
     ) -> F {
         let full_point = normalize_sumcheck_point::<F>(&sumcheck_challenges.into_opening());
         let tensor_point = tensor_point_from_full_shape(&full_point, &self.shape);
-        let lut_point = &full_point[tensor_point.len()..];
         let gate = accumulator
             .get_virtual_polynomial_opening(OpeningId::new(
                 VirtualPoly::QwenSiluGate,
@@ -576,41 +700,38 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SiluSumchec
                 ))
                 .1
         });
-        let ra = accumulator
+        let base = accumulator
             .get_virtual_polynomial_opening(OpeningId::new(
-                VirtualPoly::QwenSiluRa,
+                VirtualPoly::QwenSiluBase,
                 silu_sumcheck_id(),
             ))
             .1;
-        let eq_batch = self
-            .output_points
-            .iter()
-            .zip(&self.alphas)
-            .fold(F::zero(), |acc, (point, alpha)| {
-                acc + *alpha * EqPolynomial::mle(point, &tensor_point)
-            });
-        let eq_onehot = EqPolynomial::mle(&self.onehot_point, &tensor_point);
-        let id = eval_table_at_point(&padded_table(&silu_id_table::<F>(self.entries)), lut_point);
-        let base = eval_table_at_point(
-            &padded_table(&silu_base_table::<F>(self.min_n, self.entries)),
-            lut_point,
-        );
-        let slope = eval_table_at_point(
-            &padded_table(&silu_slope_table::<F>(self.min_n, self.entries)),
-            lut_point,
+        let slope = accumulator
+            .get_virtual_polynomial_opening(OpeningId::new(
+                VirtualPoly::QwenSiluSlope,
+                silu_sumcheck_id(),
+            ))
+            .1;
+        let index = accumulator
+            .get_virtual_polynomial_opening(OpeningId::new(
+                VirtualPoly::QwenSiluIndex,
+                silu_sumcheck_id(),
+            ))
+            .1;
+        let eq_batch = eval_batched_masked_eq(
+            &self.output_points,
+            &self.alphas,
+            &self.shape,
+            &tensor_point,
         );
         eval_silu_relation(
             eq_batch,
-            eq_onehot,
             gate,
             bits,
-            ra,
-            id,
             base,
             slope,
-            self.onehot_mix,
+            index,
             self.round_mix,
-            self.ra_booleanity_mix,
             self.bit_booleanity_mix,
             &self.bit_weights,
             field_from_i64(self.min_n),
@@ -640,7 +761,17 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SiluSumchec
         }
         accumulator.append_virtual(
             transcript,
-            OpeningId::new(VirtualPoly::QwenSiluRa, silu_sumcheck_id()),
+            OpeningId::new(VirtualPoly::QwenSiluBase, silu_sumcheck_id()),
+            point.clone(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenSiluSlope, silu_sumcheck_id()),
+            point.clone(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenSiluIndex, silu_sumcheck_id()),
             point,
         );
     }
@@ -648,13 +779,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SiluSumchec
 
 struct SiluPairValues<F: JoltField> {
     eq_batch: [F; 2],
-    eq_onehot: [F; 2],
     gate: [F; 2],
     bits: [[F; 2]; ROUND_FRAC_BITS],
-    ra: [F; 2],
-    id: [F; 2],
     base: [F; 2],
     slope: [F; 2],
+    index: [F; 2],
 }
 
 impl<F: JoltField> SiluPairValues<F> {
@@ -663,10 +792,6 @@ impl<F: JoltField> SiluPairValues<F> {
             eq_batch: [
                 prover.eq_batch.get_bound_coeff(2 * g),
                 prover.eq_batch.get_bound_coeff(2 * g + 1),
-            ],
-            eq_onehot: [
-                prover.eq_onehot.get_bound_coeff(2 * g),
-                prover.eq_onehot.get_bound_coeff(2 * g + 1),
             ],
             gate: [
                 prover.gate.get_bound_coeff(2 * g),
@@ -678,14 +803,6 @@ impl<F: JoltField> SiluPairValues<F> {
                     prover.bits[idx].get_bound_coeff(2 * g + 1),
                 ]
             }),
-            ra: [
-                prover.ra.get_bound_coeff(2 * g),
-                prover.ra.get_bound_coeff(2 * g + 1),
-            ],
-            id: [
-                prover.id.get_bound_coeff(2 * g),
-                prover.id.get_bound_coeff(2 * g + 1),
-            ],
             base: [
                 prover.base.get_bound_coeff(2 * g),
                 prover.base.get_bound_coeff(2 * g + 1),
@@ -694,22 +811,22 @@ impl<F: JoltField> SiluPairValues<F> {
                 prover.slope.get_bound_coeff(2 * g),
                 prover.slope.get_bound_coeff(2 * g + 1),
             ],
+            index: [
+                prover.index.get_bound_coeff(2 * g),
+                prover.index.get_bound_coeff(2 * g + 1),
+            ],
         }
     }
 
     fn eval(&self, t: F, prover: &SiluSumcheckProver<F>) -> F {
         eval_silu_relation(
             lerp(self.eq_batch[0], self.eq_batch[1], t),
-            lerp(self.eq_onehot[0], self.eq_onehot[1], t),
             lerp(self.gate[0], self.gate[1], t),
             std::array::from_fn(|idx| lerp(self.bits[idx][0], self.bits[idx][1], t)),
-            lerp(self.ra[0], self.ra[1], t),
-            lerp(self.id[0], self.id[1], t),
             lerp(self.base[0], self.base[1], t),
             lerp(self.slope[0], self.slope[1], t),
-            prover.onehot_mix,
+            lerp(self.index[0], self.index[1], t),
             prover.round_mix,
-            prover.ra_booleanity_mix,
             prover.bit_booleanity_mix,
             &prover.bit_weights,
             prover.min_n,
@@ -720,16 +837,12 @@ impl<F: JoltField> SiluPairValues<F> {
 #[allow(clippy::too_many_arguments)]
 fn eval_silu_relation<F: JoltField>(
     eq_batch: F,
-    eq_onehot: F,
     gate: F,
     bits: [F; ROUND_FRAC_BITS],
-    ra: F,
-    id: F,
     base: F,
     slope: F,
-    onehot_mix: F,
+    index: F,
     round_mix: F,
-    ra_booleanity_mix: F,
     bit_booleanity_mix: F,
     bit_weights: &[F],
     min_n: F,
@@ -739,7 +852,7 @@ fn eval_silu_relation<F: JoltField>(
     });
     let bit7 = bits[ROUND_FRAC_BITS - 1];
     let scale = F::from_u64(FIXED_SCALE as u64);
-    let n = min_n + id;
+    let n = min_n + index;
     let acc_expr = base + (gate - n * scale) * slope;
     let round_expr = gate + bit7 * scale - frac - n * scale;
     let bit_booleanity = bits
@@ -749,11 +862,350 @@ fn eval_silu_relation<F: JoltField>(
             acc + *weight * *bit * (*bit - F::one())
         });
 
-    eq_batch * ra * acc_expr
-        + onehot_mix * eq_onehot * ra
-        + round_mix * eq_batch * ra * round_expr
-        + ra_booleanity_mix * ra * (ra - F::one())
-        + bit_booleanity_mix * bit_booleanity
+    eq_batch * acc_expr + round_mix * eq_batch * round_expr + bit_booleanity_mix * bit_booleanity
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SiluLookupKind {
+    Base,
+    Slope,
+}
+
+impl SiluLookupKind {
+    fn value_poly(self) -> VirtualPoly {
+        match self {
+            Self::Base => VirtualPoly::QwenSiluBase,
+            Self::Slope => VirtualPoly::QwenSiluSlope,
+        }
+    }
+
+    fn ra_poly(self) -> VirtualPoly {
+        match self {
+            Self::Base => VirtualPoly::QwenSiluBaseRa,
+            Self::Slope => VirtualPoly::QwenSiluSlopeRa,
+        }
+    }
+
+    fn committed_poly(self, d: usize) -> CommittedPoly {
+        match self {
+            Self::Base => CommittedPoly::QwenSiluBaseRaD(d),
+            Self::Slope => CommittedPoly::QwenSiluSlopeRaD(d),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SiluReadRafProvider<F: JoltField> {
+    kind: SiluLookupKind,
+    log_k: usize,
+    r_cycle: OpeningPoint<BIG_ENDIAN, F>,
+    rv_claim: F,
+    raf_claim: F,
+}
+
+impl<F: JoltField> ReadRafProvider<F> for SiluReadRafProvider<F> {
+    fn rv_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
+        self.rv_claim
+    }
+
+    fn raf_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
+        self.raf_claim
+    }
+
+    fn r(&self, _accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
+        self.r_cycle.clone()
+    }
+
+    fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
+        (self.kind.ra_poly(), silu_shout_sumcheck_id(self.kind))
+    }
+
+    fn log_K(&self) -> usize {
+        self.log_k
+    }
+}
+
+struct SiluRaEncoding {
+    kind: SiluLookupKind,
+    log_k: usize,
+}
+
+impl RaOneHotEncoding for SiluRaEncoding {
+    fn committed_poly(&self, d: usize) -> CommittedPoly {
+        self.kind.committed_poly(d)
+    }
+
+    fn r_cycle_source(&self) -> OpeningId {
+        OpeningId::new(self.kind.value_poly(), silu_sumcheck_id())
+    }
+
+    fn ra_source(&self) -> OpeningId {
+        OpeningId::new(self.kind.ra_poly(), silu_shout_sumcheck_id(self.kind))
+    }
+
+    fn log_k(&self) -> usize {
+        self.log_k
+    }
+
+    fn one_hot_params(&self) -> OneHotParams {
+        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.log_k)
+    }
+}
+
+struct SiluShoutProof<F: JoltField, T: Transcript> {
+    read_raf: SumcheckInstanceProof<F, T>,
+    ra_onehot: SumcheckInstanceProof<F, T>,
+    ra_point: Vec<F>,
+    ra_opening: F,
+    committed_openings: SiluRaCommittedOpenings<F>,
+}
+
+fn prove_silu_shout_lookup<F, T>(
+    kind: SiluLookupKind,
+    lut_len: usize,
+    tensor_point: Vec<F>,
+    value_opening: F,
+    index_opening: F,
+    lookup_indices: Vec<usize>,
+    table: Vec<i32>,
+    accumulator: &mut ProverOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> Result<SiluShoutProof<F, T>>
+where
+    F: JoltField,
+    T: Transcript,
+{
+    let log_k = lut_len.trailing_zeros() as usize;
+    let r_cycle = OpeningPoint::<BIG_ENDIAN, F>::new(tensor_point);
+    let provider = SiluReadRafProvider {
+        kind,
+        log_k,
+        r_cycle: r_cycle.clone(),
+        rv_claim: value_opening,
+        raf_claim: index_opening,
+    };
+    let mut read_prover =
+        shout::read_raf_prover(&provider, &lookup_indices, &table, accumulator, transcript);
+    let (read_raf, _) = Sumcheck::prove(&mut *read_prover, accumulator, transcript);
+
+    let encoding = SiluRaEncoding { kind, log_k };
+    let [ra_prover, hw_prover, bool_prover] =
+        shout::ra_onehot_provers(&encoding, &lookup_indices, accumulator, transcript);
+    let use_ra_virtual = lookup_indices.len().next_power_of_two() >= 8;
+    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = if !use_ra_virtual {
+        // JoltWorks' RaPolynomial specialization only exposes final_claim after
+        // at least three cycle bindings.  Real Qwen tensors have many more
+        // variables; this branch only keeps tiny unit-test domains executable.
+        vec![hw_prover]
+    } else {
+        vec![ra_prover, hw_prover, bool_prover]
+    };
+    let (ra_onehot, _) = BatchedSumcheck::prove(
+        instances.iter_mut().map(|v| &mut **v as _).collect(),
+        accumulator,
+        transcript,
+    );
+    let (ra_point, ra_opening) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
+        kind.ra_poly(),
+        silu_shout_sumcheck_id(kind),
+    ));
+    let committed_openings = silu_ra_committed_openings(kind, log_k, use_ra_virtual, accumulator)?;
+    Ok(SiluShoutProof {
+        read_raf,
+        ra_onehot,
+        ra_point: ra_point.r,
+        ra_opening,
+        committed_openings,
+    })
+}
+
+fn verify_silu_shout_lookup<F, T>(
+    kind: SiluLookupKind,
+    entries: usize,
+    lut_len: usize,
+    min_n: i64,
+    logical_len: usize,
+    tensor_point: Vec<F>,
+    value_opening: F,
+    index_opening: F,
+    ra_opening: F,
+    committed_openings: &SiluRaCommittedOpenings<F>,
+    read_raf: &SumcheckInstanceProof<F, T>,
+    ra_onehot: &SumcheckInstanceProof<F, T>,
+    accumulator: &mut VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> std::result::Result<SiluShoutProof<F, T>, ProofVerifyError>
+where
+    F: JoltField,
+    T: Transcript,
+{
+    let total_start = Instant::now();
+    let mut step_start = Instant::now();
+    let log_k = lut_len.trailing_zeros() as usize;
+    let r_cycle = OpeningPoint::<BIG_ENDIAN, F>::new(tensor_point);
+    accumulator.openings.insert(
+        OpeningId::new(kind.value_poly(), silu_sumcheck_id()),
+        (r_cycle.clone(), value_opening),
+    );
+    accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenSiluIndex, silu_sumcheck_id()),
+        (r_cycle.clone(), index_opening),
+    );
+    accumulator.openings.insert(
+        OpeningId::new(kind.ra_poly(), silu_shout_sumcheck_id(kind)),
+        (OpeningPoint::<BIG_ENDIAN, F>::default(), ra_opening),
+    );
+    let provider = SiluReadRafProvider {
+        kind,
+        log_k,
+        r_cycle: r_cycle.clone(),
+        rv_claim: value_opening,
+        raf_claim: index_opening,
+    };
+    let table_fn = match kind {
+        SiluLookupKind::Base => silu_base,
+        SiluLookupKind::Slope => silu_slope,
+    };
+    let table = padded_i32_table(min_n, entries, lut_len, table_fn)
+        .map_err(|_| ProofVerifyError::InvalidInputLength(lut_len, 0))?;
+    let read_verifier = shout::read_raf_verifier(&provider, table, accumulator, transcript);
+    eprintln!(
+        "timing: verify_silu.{:?}.shout_setup {:.3}s",
+        kind,
+        step_start.elapsed().as_secs_f64()
+    );
+    step_start = Instant::now();
+    Sumcheck::verify(read_raf, &*read_verifier, accumulator, transcript)?;
+    eprintln!(
+        "timing: verify_silu.{:?}.read_raf {:.3}s",
+        kind,
+        step_start.elapsed().as_secs_f64()
+    );
+
+    step_start = Instant::now();
+    let encoding = SiluRaEncoding { kind, log_k };
+    let [ra_verifier, hw_verifier, bool_verifier] =
+        shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
+    let use_ra_virtual = logical_len.next_power_of_two() >= 8;
+    insert_silu_ra_committed_openings(
+        kind,
+        log_k,
+        use_ra_virtual,
+        committed_openings,
+        accumulator,
+    )?;
+    let verifier_instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = if !use_ra_virtual {
+        vec![&*hw_verifier]
+    } else {
+        vec![&*ra_verifier, &*hw_verifier, &*bool_verifier]
+    };
+    eprintln!(
+        "timing: verify_silu.{:?}.ra_setup {:.3}s",
+        kind,
+        step_start.elapsed().as_secs_f64()
+    );
+    step_start = Instant::now();
+    BatchedSumcheck::verify(ra_onehot, verifier_instances, accumulator, transcript)?;
+    eprintln!(
+        "timing: verify_silu.{:?}.ra_onehot {:.3}s",
+        kind,
+        step_start.elapsed().as_secs_f64()
+    );
+    step_start = Instant::now();
+    let (ra_point, ra_opening) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
+        kind.ra_poly(),
+        silu_shout_sumcheck_id(kind),
+    ));
+    eprintln!(
+        "timing: verify_silu.{:?}.ra_opening {:.3}s",
+        kind,
+        step_start.elapsed().as_secs_f64()
+    );
+    eprintln!(
+        "timing: verify_silu.{:?}.shout_total {:.3}s",
+        kind,
+        total_start.elapsed().as_secs_f64()
+    );
+    Ok(SiluShoutProof {
+        read_raf: read_raf.clone(),
+        ra_onehot: ra_onehot.clone(),
+        ra_point: ra_point.r,
+        ra_opening,
+        committed_openings: committed_openings.clone(),
+    })
+}
+
+fn silu_ra_committed_openings<F: JoltField>(
+    kind: SiluLookupKind,
+    log_k: usize,
+    include_full_checks: bool,
+    accumulator: &ProverOpeningAccumulator<F>,
+) -> Result<SiluRaCommittedOpenings<F>> {
+    let d = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
+    let collect = |sumcheck| -> Vec<F> {
+        (0..d)
+            .map(|idx| {
+                accumulator
+                    .get_committed_polynomial_opening(OpeningId::new(
+                        kind.committed_poly(idx),
+                        sumcheck,
+                    ))
+                    .1
+            })
+            .collect()
+    };
+    Ok(SiluRaCommittedOpenings {
+        ra_virtual: if include_full_checks {
+            collect(SumcheckId::RaVirtualization)
+        } else {
+            vec![]
+        },
+        hamming_weight: collect(SumcheckId::HammingWeight),
+        booleanity: if include_full_checks {
+            collect(SumcheckId::Booleanity)
+        } else {
+            vec![]
+        },
+    })
+}
+
+fn insert_silu_ra_committed_openings<F: JoltField>(
+    kind: SiluLookupKind,
+    log_k: usize,
+    include_full_checks: bool,
+    openings: &SiluRaCommittedOpenings<F>,
+    accumulator: &mut VerifierOpeningAccumulator<F>,
+) -> std::result::Result<(), ProofVerifyError> {
+    let d = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
+    if openings.hamming_weight.len() != d {
+        return Err(ProofVerifyError::InvalidInputLength(
+            d,
+            openings.hamming_weight.len(),
+        ));
+    }
+    if include_full_checks && (openings.ra_virtual.len() != d || openings.booleanity.len() != d) {
+        return Err(ProofVerifyError::InvalidInputLength(
+            d,
+            openings.ra_virtual.len().min(openings.booleanity.len()),
+        ));
+    }
+
+    let mut insert_group = |sumcheck, values: &[F]| {
+        for (idx, &value) in values.iter().enumerate() {
+            accumulator.openings.insert(
+                OpeningId::new(kind.committed_poly(idx), sumcheck),
+                (OpeningPoint::<BIG_ENDIAN, F>::default(), value),
+            );
+        }
+    };
+    if include_full_checks {
+        insert_group(SumcheckId::RaVirtualization, &openings.ra_virtual);
+    }
+    insert_group(SumcheckId::HammingWeight, &openings.hamming_weight);
+    if include_full_checks {
+        insert_group(SumcheckId::Booleanity, &openings.booleanity);
+    }
+    Ok(())
 }
 
 fn validate_inputs<F: JoltField>(
@@ -900,6 +1352,18 @@ fn entries_from_min_max(min_n: i64, max_n: i64) -> Result<usize> {
     Ok(needed)
 }
 
+fn padded_silu_lut_len(entries: usize) -> usize {
+    // JoltWorks Shout uses one-hot chunks with a minimum chunk size of 16.
+    // Keeping tiny unit tests on the same minimum domain avoids the compact
+    // polynomial edge cases that occur with 1- or 2-bit lookup tables, while
+    // real Qwen SiLU ranges are already small enough that this padding is
+    // irrelevant to performance.  The extra entry is a dedicated zero row for
+    // padded tensor elements: Shout's trace length is the padded tensor domain,
+    // so invalid tensor slots must still read a table value, and that value
+    // must match the zero-padded base/slope/index polynomials.
+    (entries + 1).next_power_of_two().max(16)
+}
+
 fn append_range_advice<F: JoltField, T: Transcript>(min_n: i64, max_n: i64, transcript: &mut T) {
     transcript.append_scalar(&field_from_i64::<F>(min_n));
     transcript.append_scalar(&field_from_i64::<F>(max_n));
@@ -912,66 +1376,26 @@ fn batched_input_claim<F: JoltField>(claims: &[Claim<F>], alphas: &[F]) -> F {
         .fold(F::zero(), |acc, (claim, alpha)| acc + *alpha * claim.value)
 }
 
-fn batched_eq_poly<F: JoltField>(claims: &[Claim<F>], alphas: &[F]) -> Vec<F> {
+fn batched_masked_eq_poly<F: JoltField>(
+    claims: &[Claim<F>],
+    alphas: &[F],
+    shape: &Shape,
+) -> Vec<F> {
     let mut out = vec![F::zero(); claims[0].domain_shape.dims().iter().product()];
+    let strides = row_major_strides(shape.dims());
+    let padded_strides = row_major_strides(claims[0].domain_shape.dims());
     for (claim, alpha) in claims.iter().zip(alphas) {
-        for (dst, value) in out.iter_mut().zip(EqPolynomial::<F>::evals(&claim.point)) {
-            *dst += *alpha * value;
+        let eq_evals = EqPolynomial::<F>::evals(&claim.point);
+        for flat in 0..shape.numel() {
+            let mut padded_flat = 0;
+            for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate()
+            {
+                let coord = (flat / stride) % shape.dims()[dim];
+                padded_flat += coord * padded_stride;
+            }
+            out[padded_flat] += *alpha * eq_evals[padded_flat];
         }
     }
-    out
-}
-
-fn lift_tensor_evals<F: JoltField>(values: &[F], table_len: usize) -> Vec<F> {
-    let mut out = Vec::with_capacity(values.len() * table_len.next_power_of_two());
-    let padded_table_len = table_len.next_power_of_two();
-    for &value in values {
-        out.extend(std::iter::repeat_n(value, padded_table_len));
-    }
-    out
-}
-
-fn lift_i32_tensor<F: JoltField>(values: &[i32], shape: &Shape, table_len: usize) -> Vec<F> {
-    lift_tensor_evals(&padded_i32_tensor(values, shape), table_len)
-}
-
-fn lift_u8_tensor<F: JoltField>(values: &[u8], shape: &Shape, table_len: usize) -> Vec<F> {
-    lift_tensor_evals(&padded_u8_tensor(values, shape), table_len)
-}
-
-fn padded_ra_tensor<F: JoltField>(values: &[u8], params: &SiluParams, entries: usize) -> Vec<F> {
-    let shape = params.ra_shape(entries);
-    let padded_dims = shape.padded_power_of_two().0;
-    let len = padded_dims.iter().product();
-    let mut out = vec![F::zero(); len];
-    let logical = shape.dims();
-    let strides = row_major_strides(logical);
-    let padded_strides = row_major_strides(&padded_dims);
-    for (flat, &value) in values.iter().enumerate() {
-        let mut padded_flat = 0;
-        for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate() {
-            let coord = (flat / stride) % logical[dim];
-            padded_flat += coord * padded_stride;
-        }
-        out[padded_flat] = F::from_u64(u64::from(value));
-    }
-    out
-}
-
-fn silu_table_tensor<F: JoltField>(params: &SiluParams, entries: usize, table: &[F]) -> Vec<F> {
-    let tensor_len = params.shape.padded_power_of_two().dims().iter().product();
-    let padded = padded_table(table);
-    let padded_table_len = entries.next_power_of_two();
-    let mut out = Vec::with_capacity(tensor_len * padded_table_len);
-    for _ in 0..tensor_len {
-        out.extend(padded.iter().copied());
-    }
-    out
-}
-
-fn padded_table<F: JoltField>(table: &[F]) -> Vec<F> {
-    let mut out = vec![F::zero(); table.len().next_power_of_two()];
-    out[..table.len()].copy_from_slice(table);
     out
 }
 
@@ -992,6 +1416,30 @@ fn padded_i32_tensor<F: JoltField>(values: &[i32], shape: &Shape) -> Vec<F> {
     out
 }
 
+fn padded_i64_tensor<F: JoltField>(values: &[i64], shape: &Shape) -> Vec<F> {
+    let padded_dims = shape.padded_power_of_two().0;
+    let len = padded_dims.iter().product();
+    let mut out = vec![F::zero(); len];
+    let strides = row_major_strides(shape.dims());
+    let padded_strides = row_major_strides(&padded_dims);
+    for (flat, &value) in values.iter().enumerate() {
+        let mut padded_flat = 0;
+        for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate() {
+            let coord = (flat / stride) % shape.dims()[dim];
+            padded_flat += coord * padded_stride;
+        }
+        out[padded_flat] = field_from_i64(value);
+    }
+    out
+}
+
+fn padded_usize_evals<F: JoltField>(values: &[usize]) -> Vec<F> {
+    values
+        .iter()
+        .map(|&value| F::from_u64(value as u64))
+        .collect()
+}
+
 fn padded_u8_tensor<F: JoltField>(values: &[u8], shape: &Shape) -> Vec<F> {
     let padded_dims = shape.padded_power_of_two().0;
     let len = padded_dims.iter().product();
@@ -1009,27 +1457,118 @@ fn padded_u8_tensor<F: JoltField>(values: &[u8], shape: &Shape) -> Vec<F> {
     out
 }
 
-fn eval_table_at_point<F: JoltField>(table: &[F], point: &[F]) -> F {
-    EqPolynomial::<F>::evals(point)
+fn silu_logical_lookup_indices(
+    witness: &SiluWitness,
+    params: &SiluParams,
+    entries: usize,
+) -> Result<Vec<usize>> {
+    let len = params.shape.numel();
+    let mut indices = Vec::with_capacity(len);
+    for idx in 0..len {
+        let n = i64::from(round_shift_signed_i64(
+            i64::from(witness.gate_proj_round[idx]),
+            FIXED_FRAC_BITS,
+        ) as i32);
+        let shifted = n - witness.min_n;
+        if shifted < 0 || shifted >= entries as i64 {
+            return Err(ProverError::InvalidSumcheckDomain(entries));
+        }
+        indices.push(shifted as usize);
+    }
+    Ok(indices)
+}
+
+fn padded_lookup_indices(
+    logical_indices: &[usize],
+    params: &SiluParams,
+    padding_index: usize,
+) -> Vec<usize> {
+    let padded_dims = params.shape.padded_power_of_two().0;
+    let len = padded_dims.iter().product();
+    let mut out = vec![padding_index; len];
+    let strides = row_major_strides(params.shape.dims());
+    let padded_strides = row_major_strides(&padded_dims);
+    for (flat, &value) in logical_indices.iter().enumerate() {
+        let mut padded_flat = 0;
+        for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate() {
+            let coord = (flat / stride) % params.shape.dims()[dim];
+            padded_flat += coord * padded_stride;
+        }
+        out[padded_flat] = value;
+    }
+    out
+}
+
+fn silu_lookup_values(indices: &[usize], min_n: i64, table_fn: fn(i64) -> i64) -> Vec<i64> {
+    indices
+        .iter()
+        .map(|&idx| table_fn(min_n + idx as i64))
+        .collect()
+}
+
+fn padded_i32_table(
+    min_n: i64,
+    entries: usize,
+    padded_len: usize,
+    table_fn: fn(i64) -> i64,
+) -> Result<Vec<i32>> {
+    if padded_len < entries || !padded_len.is_power_of_two() {
+        return Err(ProverError::InvalidSumcheckDomain(padded_len));
+    }
+    let mut table = Vec::with_capacity(padded_len);
+    for idx in 0..entries {
+        let value = table_fn(min_n + idx as i64);
+        let value =
+            i32::try_from(value).map_err(|_| ProverError::InvalidSumcheckDomain(entries))?;
+        table.push(value);
+    }
+    table.resize(padded_len, 0);
+    Ok(table)
+}
+
+fn eval_batched_masked_eq<F: JoltField>(
+    points: &[Vec<F>],
+    alphas: &[F],
+    shape: &Shape,
+    point: &[F],
+) -> F {
+    let rhs_eq_by_dim = split_point(shape, point)
         .into_iter()
-        .zip(table)
-        .fold(F::zero(), |acc, (eq, value)| acc + eq * *value)
-}
+        .map(EqPolynomial::<F>::evals)
+        .collect::<Vec<_>>();
+    let strides = row_major_strides(shape.dims());
 
-fn silu_id_table<F: JoltField>(lut_len: usize) -> Vec<F> {
-    (0..lut_len).map(|idx| field_from_i64(idx as i64)).collect()
-}
+    points
+        .iter()
+        .zip(alphas)
+        .map(|(claim_point, alpha)| {
+            let lhs_eq_by_dim = split_point(shape, claim_point)
+                .into_iter()
+                .map(EqPolynomial::<F>::evals)
+                .collect::<Vec<_>>();
+            let combined_eq_by_dim = lhs_eq_by_dim
+                .iter()
+                .zip(&rhs_eq_by_dim)
+                .map(|(lhs, rhs)| {
+                    lhs.iter()
+                        .zip(rhs)
+                        .map(|(lhs, rhs)| *lhs * *rhs)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
 
-fn silu_base_table<F: JoltField>(min_n: i64, lut_len: usize) -> Vec<F> {
-    (0..lut_len)
-        .map(|idx| field_from_i64(silu_base(min_n + idx as i64)))
-        .collect()
-}
-
-fn silu_slope_table<F: JoltField>(min_n: i64, lut_len: usize) -> Vec<F> {
-    (0..lut_len)
-        .map(|idx| field_from_i64(silu_slope(min_n + idx as i64)))
-        .collect()
+            let mut sum = F::zero();
+            for flat in 0..shape.numel() {
+                let mut weight = F::one();
+                for (dim, (&stride, eq)) in strides.iter().zip(&combined_eq_by_dim).enumerate() {
+                    let coord = (flat / stride) % shape.dims()[dim];
+                    weight *= eq[coord];
+                }
+                sum += weight;
+            }
+            *alpha * sum
+        })
+        .sum()
 }
 
 fn silu_base(n: i64) -> i64 {
@@ -1081,31 +1620,9 @@ fn ensure_len(name: &'static str, shape: &Shape, expected: usize, actual: usize)
     Ok(())
 }
 
-fn tensor_point_from_full<F: JoltField>(point: &[F], params: &SiluParams) -> Vec<F> {
-    tensor_point_from_full_shape(point, &params.shape)
-}
-
 fn tensor_point_from_full_shape<F: Clone>(point: &[F], shape: &Shape) -> Vec<F> {
     let tensor_vars = shape.padded_power_of_two().point_len();
     point[..tensor_vars].to_vec()
-}
-
-fn eval_logical_mask<F: JoltField>(shape: &Shape, point: &[F]) -> F {
-    (0..shape.numel()).fold(F::zero(), |acc, idx| acc + eq_for_flat(idx, shape, point))
-}
-
-fn eq_for_flat<F: JoltField>(flat: usize, shape: &Shape, point: &[F]) -> F {
-    let eq_by_dim = split_point(shape, point)
-        .into_iter()
-        .map(EqPolynomial::<F>::evals)
-        .collect::<Vec<_>>();
-    let strides = row_major_strides(shape.dims());
-    let mut weight = F::one();
-    for (dim, (&stride, eq)) in strides.iter().zip(&eq_by_dim).enumerate() {
-        let coord = (flat / stride) % shape.dims()[dim];
-        weight *= eq[coord];
-    }
-    weight
 }
 
 fn split_point<'a, F>(shape: &Shape, point: &'a [F]) -> Vec<&'a [F]> {
@@ -1160,6 +1677,13 @@ fn lerp<F: JoltField>(v0: F, v1: F, t: F) -> F {
 
 fn silu_sumcheck_id() -> SumcheckId {
     SumcheckId::NodeExecution(0)
+}
+
+fn silu_shout_sumcheck_id(kind: SiluLookupKind) -> SumcheckId {
+    match kind {
+        SiluLookupKind::Base => SumcheckId::NodeExecution(1),
+        SiluLookupKind::Slope => SumcheckId::NodeExecution(2),
+    }
 }
 
 #[cfg(test)]
@@ -1262,6 +1786,67 @@ mod tests {
         let n = min_n + selected as i64;
         let output = vec![silu_base(n) + (i64::from(gate[0]) - n * FIXED_SCALE) * silu_slope(n)];
         let point = vec![];
+        let output_claim = Claim {
+            tensor: TensorId::new("silu_acc"),
+            logical_shape: params.shape.clone(),
+            domain_shape: params.shape.padded_power_of_two(),
+            point: point.clone(),
+            value: eval_i64(&output, &params.shape, &point),
+        };
+        let witness = SiluWitness {
+            min_n,
+            max_n,
+            gate_proj_round: gate,
+            frac_bits,
+            ra,
+            output,
+        };
+
+        let mut prover_transcript = Blake2bTranscript::default();
+        let (proof, _, _, _) = prove_silu::<Fr, _>(
+            vec![output_claim.clone()],
+            &witness,
+            &params,
+            &mut prover_transcript,
+        )
+        .unwrap();
+
+        let mut verifier_transcript = Blake2bTranscript::default();
+        verify_silu::<Fr, _>(
+            vec![output_claim],
+            &proof,
+            &params,
+            &mut verifier_transcript,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn proves_silu_with_non_power_of_two_tensor_shape() {
+        let params = SiluParams::new(
+            vec![2, 3],
+            "gate",
+            "silu_acc",
+            std::array::from_fn(|idx| format!("silu_frac_bit_{idx}")),
+            "silu_ra",
+        );
+        let gate = vec![-384, -129, 0, 255, 512, 769];
+        let min_n = -2;
+        let max_n = 3;
+        let entries = entries_from_min_max(min_n, max_n).unwrap();
+        let frac_bits = frac_bits_for(&gate);
+        let mut ra = vec![0; gate.len() * entries];
+        let mut output = vec![0; gate.len()];
+        for (idx, &gate_value) in gate.iter().enumerate() {
+            let n = i64::from(round_shift_signed_i64(
+                i64::from(gate_value),
+                FIXED_FRAC_BITS,
+            ));
+            let selected = (n - min_n) as usize;
+            ra[idx * entries + selected] = 1;
+            output[idx] = silu_base(n) + (i64::from(gate_value) - n * FIXED_SCALE) * silu_slope(n);
+        }
+        let point = vec![Fr::from(3u64), Fr::from(5u64), Fr::from(7u64)];
         let output_claim = Claim {
             tensor: TensorId::new("silu_acc"),
             logical_shape: params.shape.clone(),

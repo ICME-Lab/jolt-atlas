@@ -390,7 +390,6 @@ pub fn build_layer_witness_from_trace_dir(
             softmax_max_index: softmax.max_index,
             softmax_min_diff: softmax.min_diff,
             softmax_max_diff: softmax.max_diff,
-            softmax_input_frac_bits: softmax.input_frac_bits,
             softmax_ra: softmax.ra,
             softmax_exp_acc: softmax.exp_acc,
             softmax_exp_frac_bits: softmax.exp_frac_bits,
@@ -610,7 +609,6 @@ struct SoftmaxFixture {
     max: Vec<i32>,
     min_diff: i64,
     max_diff: i64,
-    input_frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
     ra: Vec<u8>,
     exp_acc: Vec<i64>,
     exp: Vec<i32>,
@@ -873,21 +871,6 @@ fn causal_softmax(scores: &[i32], shape: &LayerShape) -> SoftmaxFixture {
     for (idx, &diff) in diffs.iter().enumerate() {
         ra[idx * entries + (diff - min_diff) as usize] = 1;
     }
-    let input_frac_bits = frac_bits_i64(
-        &scores
-            .iter()
-            .enumerate()
-            .map(|(idx, &score)| {
-                let row = idx / cols;
-                let col = idx % cols;
-                if col <= row % shape.seq {
-                    i64::from(score) - i64::from(max[row])
-                } else {
-                    0
-                }
-            })
-            .collect::<Vec<_>>(),
-    );
     let floor_frac_bits = frac_bits_i64(&acc);
     let frac_bits = frac_bits_i32(&floor);
     let exp_frac_bits = frac_bits_i64(&exp_acc);
@@ -901,7 +884,6 @@ fn causal_softmax(scores: &[i32], shape: &LayerShape) -> SoftmaxFixture {
         max,
         min_diff,
         max_diff,
-        input_frac_bits,
         ra,
         exp_acc,
         exp,

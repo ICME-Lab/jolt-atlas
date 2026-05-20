@@ -94,7 +94,6 @@ pub struct LayerTensorIds {
     pub softmax_acc: String,
     pub softmax: String,
     pub softmax_frac_bits: [String; ROUND_FRAC_BITS],
-    pub softmax_input_frac_bits: [String; ROUND_FRAC_BITS],
     pub softmax_ra: String,
     pub qk_score_acc: String,
     pub qk_score_dot: String,
@@ -175,9 +174,6 @@ impl Default for LayerTensorIds {
             softmax_acc: "softmax_acc".to_string(),
             softmax: "softmax".to_string(),
             softmax_frac_bits: std::array::from_fn(|idx| format!("softmax_frac_bit_{idx}")),
-            softmax_input_frac_bits: std::array::from_fn(|idx| {
-                format!("softmax_input_frac_bit_{idx}")
-            }),
             softmax_ra: "softmax_ra".to_string(),
             qk_score_acc: "qk_score_acc".to_string(),
             qk_score_dot: "qk_score_dot".to_string(),
@@ -304,7 +300,6 @@ impl LayerTensorIds {
             self.qk_score.clone(),
             self.softmax.clone(),
             self.softmax_frac_bits.clone(),
-            self.softmax_input_frac_bits.clone(),
             self.softmax_ra.clone(),
             2,
             true,
@@ -536,7 +531,6 @@ impl LayerTensorIds {
                 vec![shape.seq, shape.intermediate],
                 self.gate_proj.clone(),
                 self.silu_acc.clone(),
-                self.silu_frac_bits.clone(),
                 self.silu_ra.clone(),
             ),
         )
@@ -602,7 +596,6 @@ pub struct LayerWitness {
     pub softmax_max_index: Vec<usize>,
     pub softmax_min_diff: i64,
     pub softmax_max_diff: i64,
-    pub softmax_input_frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
     pub softmax_ra: Vec<u8>,
     pub softmax_exp_acc: Vec<i64>,
     pub softmax_exp_frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
@@ -692,7 +685,6 @@ impl LayerWitness {
             max: self.softmax_max.clone(),
             min_diff: self.softmax_min_diff,
             max_diff: self.softmax_max_diff,
-            input_frac_bits: self.softmax_input_frac_bits.clone(),
             ra: self.softmax_ra.clone(),
             exp_acc: self.softmax_exp_acc.clone(),
             exp: self.softmax_exp.clone(),
@@ -859,10 +851,8 @@ impl LayerWitness {
             max_n: self.silu_max_n,
             gate_proj: self.gate_proj.clone(),
             silu_acc: self.silu_acc.clone(),
-            silu_frac_bits: self.silu_frac_bits.clone(),
             silu_ra: self.silu_ra.clone(),
             silu: self.silu.clone(),
-            silu_out_frac_bits: self.silu_out_frac_bits.clone(),
         }
     }
 
@@ -881,30 +871,30 @@ impl LayerWitness {
 pub struct LayerClaims<F> {
     pub hidden_in_a: Claim<F>,
     pub hidden_in_b: Claim<F>,
-    pub context_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub o_proj_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub softmax_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub softmax_floor_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub softmax_input_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
+    pub context_round_ra: Claim<F>,
+    pub o_proj_round_ra: Claim<F>,
+    pub softmax_round_ra: Claim<F>,
+    pub softmax_floor_round_ra: Claim<F>,
+    pub softmax_input_remainder_ra: Claim<F>,
     pub softmax_ra: Claim<F>,
-    pub qk_score_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub qk_score_dot_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub q_rope_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub k_rope_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub q_norm_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub k_norm_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub q_proj_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub k_proj_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub v_proj_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub rms_norm_atten_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub rms_norm_mlp_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub gate_proj_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub silu_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
+    pub qk_score_round_ra: Claim<F>,
+    pub qk_score_dot_round_ra: Claim<F>,
+    pub q_rope_round_ra: Claim<F>,
+    pub k_rope_round_ra: Claim<F>,
+    pub q_norm_round_ra: Claim<F>,
+    pub k_norm_round_ra: Claim<F>,
+    pub q_proj_round_ra: Claim<F>,
+    pub k_proj_round_ra: Claim<F>,
+    pub v_proj_round_ra: Claim<F>,
+    pub rms_norm_atten_round_ra: Claim<F>,
+    pub rms_norm_mlp_round_ra: Claim<F>,
+    pub gate_proj_round_ra: Claim<F>,
+    pub silu_gate_round_ra: Claim<F>,
     pub silu_ra: Claim<F>,
-    pub silu_out_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub silu_up_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub up_proj_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
-    pub down_proj_frac_bits: [Claim<F>; ROUND_FRAC_BITS],
+    pub silu_out_round_ra: Claim<F>,
+    pub silu_up_round_ra: Claim<F>,
+    pub up_proj_round_ra: Claim<F>,
+    pub down_proj_round_ra: Claim<F>,
 }
 
 #[derive(Debug, Clone)]
@@ -970,7 +960,7 @@ where
     )?;
 
     // down_proj = silu_up @ W_down
-    let (down_proj_proof, silu_up, down_proj_frac_bits) = timed!(
+    let (down_proj_proof, silu_up, down_proj_round_ra) = timed!(
         "down_proj",
         prove_matmul_round(
             down_proj,
@@ -982,7 +972,7 @@ where
     )?;
 
     // silu_up = silu * up_proj
-    let (silu_up_proof, silu, up_proj, silu_up_frac_bits) = timed!(
+    let (silu_up_proof, silu, up_proj, silu_up_round_ra) = timed!(
         "silu_up",
         prove_hadamard_round(
             silu_up,
@@ -993,7 +983,7 @@ where
     )?;
 
     // silu = SiLU(gate_proj, frac_bits, ra)
-    let (silu_proof, gate_proj, silu_frac_bits, silu_ra, silu_out_frac_bits) = timed!(
+    let (silu_proof, gate_proj, silu_gate_round_ra, silu_ra, silu_out_round_ra) = timed!(
         "silu",
         prove_silu_round(
             silu,
@@ -1004,7 +994,7 @@ where
     )?;
 
     // gate_proj = rms_norm_mlp @ W_gate
-    let (gate_proj_proof, rms_norm_mlp_a, gate_proj_frac_bits) = timed!(
+    let (gate_proj_proof, rms_norm_mlp_a, gate_proj_round_ra) = timed!(
         "gate_proj",
         prove_matmul_round(
             gate_proj,
@@ -1016,7 +1006,7 @@ where
     )?;
 
     // up_proj = rms_norm_mlp @ W_up
-    let (up_proj_proof, rms_norm_mlp_b, up_proj_frac_bits) = timed!(
+    let (up_proj_proof, rms_norm_mlp_b, up_proj_round_ra) = timed!(
         "up_proj",
         prove_matmul_round(
             up_proj,
@@ -1028,7 +1018,7 @@ where
     )?;
 
     // rms_norm_mlp = RMSNorm(residual_add_attn)
-    let (rms_norm_mlp_proof, residual_add_attn_b, rms_norm_mlp_frac_bits) = timed!(
+    let (rms_norm_mlp_proof, residual_add_attn_b, rms_norm_mlp_round_ra) = timed!(
         "rms_norm_mlp",
         prove_rmsnorm_round(
             vec![rms_norm_mlp_a, rms_norm_mlp_b],
@@ -1052,7 +1042,7 @@ where
     )?;
 
     // o_proj = context @ W_o
-    let (o_proj_proof, context, o_proj_frac_bits) = timed!(
+    let (o_proj_proof, context, o_proj_round_ra) = timed!(
         "o_proj",
         prove_matmul_round(
             o_proj,
@@ -1068,7 +1058,7 @@ where
     );
 
     // context = softmax @ v_proj
-    let (pv_matmul_proof, softmax, v_proj, context_frac_bits) = timed!(
+    let (pv_matmul_proof, softmax, v_proj, context_round_ra) = timed!(
         "pv_matmul",
         prove_pv_matmul_round(
             context,
@@ -1086,9 +1076,9 @@ where
     let (
         softmax_proof,
         qk_score,
-        softmax_frac_bits,
-        softmax_floor_frac_bits,
-        softmax_input_frac_bits,
+        softmax_round_ra,
+        softmax_floor_round_ra,
+        softmax_input_remainder_ra,
         softmax_ra,
     ) = timed!(
         "softmax",
@@ -1101,7 +1091,7 @@ where
     )?;
 
     // qk_score = round(round(q_rope @ k_rope) * inv_sqrt(head_dim))
-    let (qk_score_proof, q_rope, k_rope, qk_score_frac_bits, qk_score_dot_frac_bits) = timed!(
+    let (qk_score_proof, q_rope, k_rope, qk_score_round_ra, qk_score_dot_round_ra) = timed!(
         "qk_score",
         prove_qk_score_round(
             qk_score,
@@ -1112,7 +1102,7 @@ where
     )?;
 
     // q_rope = RoPE(q_norm)
-    let (q_rope_proof, q_norm_a, q_norm_b, q_rope_frac_bits) = timed!(
+    let (q_rope_proof, q_norm_a, q_norm_b, q_rope_round_ra) = timed!(
         "q_rope",
         prove_rope_round(
             q_rope,
@@ -1125,7 +1115,7 @@ where
     )?;
 
     // k_rope = RoPE(k_norm)
-    let (k_rope_proof, k_norm_a, k_norm_b, k_rope_frac_bits) = timed!(
+    let (k_rope_proof, k_norm_a, k_norm_b, k_rope_round_ra) = timed!(
         "k_rope",
         prove_rope_round(
             k_rope,
@@ -1138,7 +1128,7 @@ where
     )?;
 
     // q_norm = RMSNorm(q_proj)
-    let (q_norm_proof, q_proj, q_norm_frac_bits) = timed!(
+    let (q_norm_proof, q_proj, q_norm_round_ra) = timed!(
         "q_norm",
         prove_rmsnorm_round(
             vec![q_norm_a, q_norm_b],
@@ -1151,7 +1141,7 @@ where
     let q_proj = reshape_claim(q_proj, Shape::new(vec![shape.seq, shape.attention_width()]));
 
     // k_norm = RMSNorm(k_proj)
-    let (k_norm_proof, k_proj, k_norm_frac_bits) = timed!(
+    let (k_norm_proof, k_proj, k_norm_round_ra) = timed!(
         "k_norm",
         prove_rmsnorm_round(
             vec![k_norm_a, k_norm_b],
@@ -1167,7 +1157,7 @@ where
     );
 
     // q_proj = rms_norm_atten @ W_q
-    let (q_proj_proof, rms_norm_atten_a, q_proj_frac_bits) = timed!(
+    let (q_proj_proof, rms_norm_atten_a, q_proj_round_ra) = timed!(
         "q_proj",
         prove_matmul_round(
             q_proj,
@@ -1179,7 +1169,7 @@ where
     )?;
 
     // k_proj = rms_norm_atten @ W_k
-    let (k_proj_proof, rms_norm_atten_b, k_proj_frac_bits) = timed!(
+    let (k_proj_proof, rms_norm_atten_b, k_proj_round_ra) = timed!(
         "k_proj",
         prove_matmul_round(
             k_proj,
@@ -1191,7 +1181,7 @@ where
     )?;
 
     // v_proj = rms_norm_atten @ W_v
-    let (v_proj_proof, rms_norm_atten_c, v_proj_frac_bits) = timed!(
+    let (v_proj_proof, rms_norm_atten_c, v_proj_round_ra) = timed!(
         "v_proj",
         prove_matmul_round(
             v_proj,
@@ -1203,7 +1193,7 @@ where
     )?;
 
     // rms_norm_atten = RMSNorm(hidden_in)
-    let (rms_norm_atten_proof, hidden_in_b, rms_norm_atten_frac_bits) = timed!(
+    let (rms_norm_atten_proof, hidden_in_b, rms_norm_atten_round_ra) = timed!(
         "rms_norm_atten",
         prove_rmsnorm_round(
             vec![rms_norm_atten_a, rms_norm_atten_b, rms_norm_atten_c],
@@ -1218,30 +1208,30 @@ where
         LayerClaims {
             hidden_in_a,
             hidden_in_b,
-            context_frac_bits,
-            o_proj_frac_bits,
-            softmax_frac_bits,
-            softmax_floor_frac_bits,
-            softmax_input_frac_bits,
+            context_round_ra,
+            o_proj_round_ra,
+            softmax_round_ra,
+            softmax_floor_round_ra,
+            softmax_input_remainder_ra,
             softmax_ra,
-            qk_score_frac_bits,
-            qk_score_dot_frac_bits,
-            q_rope_frac_bits,
-            k_rope_frac_bits,
-            q_norm_frac_bits,
-            k_norm_frac_bits,
-            q_proj_frac_bits,
-            k_proj_frac_bits,
-            v_proj_frac_bits,
-            rms_norm_atten_frac_bits,
-            rms_norm_mlp_frac_bits,
-            gate_proj_frac_bits,
-            silu_frac_bits,
+            qk_score_round_ra,
+            qk_score_dot_round_ra,
+            q_rope_round_ra,
+            k_rope_round_ra,
+            q_norm_round_ra,
+            k_norm_round_ra,
+            q_proj_round_ra,
+            k_proj_round_ra,
+            v_proj_round_ra,
+            rms_norm_atten_round_ra,
+            rms_norm_mlp_round_ra,
+            gate_proj_round_ra,
+            silu_gate_round_ra,
             silu_ra,
-            silu_out_frac_bits,
-            silu_up_frac_bits,
-            up_proj_frac_bits,
-            down_proj_frac_bits,
+            silu_out_round_ra,
+            silu_up_round_ra,
+            up_proj_round_ra,
+            down_proj_round_ra,
         },
         LayerProof {
             residual_add_mlp_proof,
@@ -1306,7 +1296,7 @@ where
     )?;
 
     // down_proj = silu_up @ W_down
-    let (silu_up, down_proj_frac_bits) = timed!(
+    let (silu_up, down_proj_round_ra) = timed!(
         "down_proj",
         verify_matmul_round(
             down_proj,
@@ -1318,7 +1308,7 @@ where
     )?;
 
     // silu_up = silu * up_proj
-    let (silu, up_proj, silu_up_frac_bits) = timed!(
+    let (silu, up_proj, silu_up_round_ra) = timed!(
         "silu_up",
         verify_hadamard_round(
             silu_up,
@@ -1329,7 +1319,7 @@ where
     )?;
 
     // silu = SiLU(gate_proj, frac_bits, ra)
-    let (gate_proj, silu_frac_bits, silu_ra, silu_out_frac_bits) = timed!(
+    let (gate_proj, silu_gate_round_ra, silu_ra, silu_out_round_ra) = timed!(
         "silu",
         verify_silu_round(
             silu,
@@ -1340,7 +1330,7 @@ where
     )?;
 
     // gate_proj = rms_norm_mlp @ W_gate
-    let (rms_norm_mlp_a, gate_proj_frac_bits) = timed!(
+    let (rms_norm_mlp_a, gate_proj_round_ra) = timed!(
         "gate_proj",
         verify_matmul_round(
             gate_proj,
@@ -1352,7 +1342,7 @@ where
     )?;
 
     // up_proj = rms_norm_mlp @ W_up
-    let (rms_norm_mlp_b, up_proj_frac_bits) = timed!(
+    let (rms_norm_mlp_b, up_proj_round_ra) = timed!(
         "up_proj",
         verify_matmul_round(
             up_proj,
@@ -1364,7 +1354,7 @@ where
     )?;
 
     // rms_norm_mlp = RMSNorm(residual_add_attn)
-    let (residual_add_attn_b, rms_norm_mlp_frac_bits) = timed!(
+    let (residual_add_attn_b, rms_norm_mlp_round_ra) = timed!(
         "rms_norm_mlp",
         verify_rmsnorm_round(
             vec![rms_norm_mlp_a, rms_norm_mlp_b],
@@ -1387,7 +1377,7 @@ where
     )?;
 
     // o_proj = context @ W_o
-    let (context, o_proj_frac_bits) = timed!(
+    let (context, o_proj_round_ra) = timed!(
         "o_proj",
         verify_matmul_round(
             o_proj,
@@ -1403,7 +1393,7 @@ where
     );
 
     // context = softmax @ v_proj
-    let (softmax, v_proj, context_frac_bits) = timed!(
+    let (softmax, v_proj, context_round_ra) = timed!(
         "pv_matmul",
         verify_pv_matmul_round(
             context,
@@ -1418,7 +1408,13 @@ where
     );
 
     // softmax = softmax(qk_score)
-    let (qk_score, softmax_frac_bits, softmax_floor_frac_bits, softmax_input_frac_bits, softmax_ra) =
+    let (
+        qk_score,
+        softmax_round_ra,
+        softmax_floor_round_ra,
+        softmax_input_remainder_ra,
+        softmax_ra,
+    ) =
         timed!(
             "softmax",
             verify_softmax_round(
@@ -1430,7 +1426,7 @@ where
         )?;
 
     // qk_score = round(round(q_rope @ k_rope) * inv_sqrt(head_dim))
-    let (q_rope, k_rope, qk_score_frac_bits, qk_score_dot_frac_bits) = timed!(
+    let (q_rope, k_rope, qk_score_round_ra, qk_score_dot_round_ra) = timed!(
         "qk_score",
         verify_qk_score_round(
             qk_score,
@@ -1441,7 +1437,7 @@ where
     )?;
 
     // q_rope = RoPE(q_norm)
-    let (q_norm_a, q_norm_b, q_rope_frac_bits) = timed!(
+    let (q_norm_a, q_norm_b, q_rope_round_ra) = timed!(
         "q_rope",
         verify_rope_round(
             q_rope,
@@ -1454,7 +1450,7 @@ where
     )?;
 
     // k_rope = RoPE(k_norm)
-    let (k_norm_a, k_norm_b, k_rope_frac_bits) = timed!(
+    let (k_norm_a, k_norm_b, k_rope_round_ra) = timed!(
         "k_rope",
         verify_rope_round(
             k_rope,
@@ -1467,7 +1463,7 @@ where
     )?;
 
     // q_norm = RMSNorm(q_proj)
-    let (q_proj, q_norm_frac_bits) = timed!(
+    let (q_proj, q_norm_round_ra) = timed!(
         "q_norm",
         verify_rmsnorm_round(
             vec![q_norm_a, q_norm_b],
@@ -1480,7 +1476,7 @@ where
     let q_proj = reshape_claim(q_proj, Shape::new(vec![shape.seq, shape.attention_width()]));
 
     // k_norm = RMSNorm(k_proj)
-    let (k_proj, k_norm_frac_bits) = timed!(
+    let (k_proj, k_norm_round_ra) = timed!(
         "k_norm",
         verify_rmsnorm_round(
             vec![k_norm_a, k_norm_b],
@@ -1496,7 +1492,7 @@ where
     );
 
     // q_proj = rms_norm_atten @ W_q
-    let (rms_norm_atten_a, q_proj_frac_bits) = timed!(
+    let (rms_norm_atten_a, q_proj_round_ra) = timed!(
         "q_proj",
         verify_matmul_round(
             q_proj,
@@ -1508,7 +1504,7 @@ where
     )?;
 
     // k_proj = rms_norm_atten @ W_k
-    let (rms_norm_atten_b, k_proj_frac_bits) = timed!(
+    let (rms_norm_atten_b, k_proj_round_ra) = timed!(
         "k_proj",
         verify_matmul_round(
             k_proj,
@@ -1520,7 +1516,7 @@ where
     )?;
 
     // v_proj = rms_norm_atten @ W_v
-    let (rms_norm_atten_c, v_proj_frac_bits) = timed!(
+    let (rms_norm_atten_c, v_proj_round_ra) = timed!(
         "v_proj",
         verify_matmul_round(
             v_proj,
@@ -1532,7 +1528,7 @@ where
     )?;
 
     // rms_norm_atten = RMSNorm(hidden_in)
-    let (hidden_in_b, rms_norm_atten_frac_bits) = timed!(
+    let (hidden_in_b, rms_norm_atten_round_ra) = timed!(
         "rms_norm_atten",
         verify_rmsnorm_round(
             vec![rms_norm_atten_a, rms_norm_atten_b, rms_norm_atten_c],
@@ -1546,30 +1542,30 @@ where
     Ok(LayerClaims {
         hidden_in_a,
         hidden_in_b,
-        context_frac_bits,
-        o_proj_frac_bits,
-        softmax_frac_bits,
-        softmax_floor_frac_bits,
-        softmax_input_frac_bits,
+        context_round_ra,
+        o_proj_round_ra,
+        softmax_round_ra,
+        softmax_floor_round_ra,
+        softmax_input_remainder_ra,
         softmax_ra,
-        qk_score_frac_bits,
-        qk_score_dot_frac_bits,
-        q_rope_frac_bits,
-        k_rope_frac_bits,
-        q_norm_frac_bits,
-        k_norm_frac_bits,
-        q_proj_frac_bits,
-        k_proj_frac_bits,
-        v_proj_frac_bits,
-        rms_norm_atten_frac_bits,
-        rms_norm_mlp_frac_bits,
-        gate_proj_frac_bits,
-        silu_frac_bits,
+        qk_score_round_ra,
+        qk_score_dot_round_ra,
+        q_rope_round_ra,
+        k_rope_round_ra,
+        q_norm_round_ra,
+        k_norm_round_ra,
+        q_proj_round_ra,
+        k_proj_round_ra,
+        v_proj_round_ra,
+        rms_norm_atten_round_ra,
+        rms_norm_mlp_round_ra,
+        gate_proj_round_ra,
+        silu_gate_round_ra,
         silu_ra,
-        silu_out_frac_bits,
-        silu_up_frac_bits,
-        up_proj_frac_bits,
-        down_proj_frac_bits,
+        silu_out_round_ra,
+        silu_up_round_ra,
+        up_proj_round_ra,
+        down_proj_round_ra,
     })
 }
 
@@ -1807,7 +1803,6 @@ mod tests {
             softmax_max_index: softmax.max_index,
             softmax_min_diff: softmax.min_diff,
             softmax_max_diff: softmax.max_diff,
-            softmax_input_frac_bits: softmax.input_frac_bits,
             softmax_ra: softmax.ra,
             softmax_exp_acc: softmax.exp_acc,
             softmax_exp_frac_bits: softmax.exp_frac_bits,
@@ -1889,7 +1884,6 @@ mod tests {
         max: Vec<i32>,
         min_diff: i64,
         max_diff: i64,
-        input_frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
         ra: Vec<u8>,
         exp_acc: Vec<i64>,
         exp: Vec<i32>,
@@ -2148,21 +2142,6 @@ mod tests {
         for (idx, &diff) in diffs.iter().enumerate() {
             ra[idx * entries + (diff - min_diff) as usize] = 1;
         }
-        let input_frac_bits = frac_bits_i64(
-            &scores
-                .iter()
-                .enumerate()
-                .map(|(idx, &score)| {
-                    let row = idx / cols;
-                    let col = idx % cols;
-                    if col <= row % shape.seq {
-                        i64::from(score) - i64::from(max[row])
-                    } else {
-                        0
-                    }
-                })
-                .collect::<Vec<_>>(),
-        );
         let floor_frac_bits = frac_bits_i64(&acc);
         let frac_bits = frac_bits_i32(&floor);
         let exp_frac_bits = frac_bits_i64(&exp_acc);
@@ -2174,7 +2153,6 @@ mod tests {
             max,
             min_diff,
             max_diff,
-            input_frac_bits,
             ra,
             exp_acc,
             exp,

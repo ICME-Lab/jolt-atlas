@@ -191,18 +191,14 @@ pub fn prove_rmsnorm_round<F, T>(
     weight: &[i32],
     params: &RmsNormParams,
     transcript: &mut T,
-) -> Result<(RmsNormProof<F, T>, Claim<F>, [Claim<F>; ROUND_FRAC_BITS])>
+) -> Result<(RmsNormProof<F, T>, Claim<F>, Claim<F>)>
 where
     F: JoltField,
     T: Transcript,
 {
     validate_inputs(witness, weight, params)?;
-    let round_witness = RoundWitness {
-        input: witness.acc.clone(),
-        output: witness.output.clone(),
-        frac_bits: witness.frac_bits.clone(),
-    };
-    let (round_proof, acc_claim, frac_bits) =
+    let round_witness = RoundWitness::from_input_output(witness.acc.clone(), witness.output.clone());
+    let (round_proof, acc_claim, round_ra) =
         prove_round(output_claims, &round_witness, &params.round, transcript)?;
 
     let weight_mul_result = prove_mul_by_vector(
@@ -214,12 +210,9 @@ where
     )?;
     let norm_claim = weight_mul_result.claims.x;
 
-    let norm_round_witness = RoundWitness {
-        input: witness.norm_acc.clone(),
-        output: witness.norm.clone(),
-        frac_bits: witness.norm_frac_bits.clone(),
-    };
-    let (norm_round_proof, norm_acc_claim, _norm_frac_bits) = prove_round(
+    let norm_round_witness =
+        RoundWitness::from_input_output(witness.norm_acc.clone(), witness.norm.clone());
+    let (norm_round_proof, norm_acc_claim, _norm_ra) = prove_round(
         vec![norm_claim],
         &norm_round_witness,
         &params.norm_round,
@@ -266,7 +259,7 @@ where
             point,
             value: input_opening,
         },
-        frac_bits,
+        round_ra,
     ))
 }
 
@@ -276,13 +269,13 @@ pub fn verify_rmsnorm_round<F, T>(
     weight: &[i32],
     params: &RmsNormParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, [Claim<F>; ROUND_FRAC_BITS]), ProofVerifyError>
+) -> std::result::Result<(Claim<F>, Claim<F>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,
 {
     verify_advice(params, &proof.sum_x2, weight)?;
-    let (acc_claim, frac_bits) =
+    let (acc_claim, round_ra) =
         verify_round(output_claims, &proof.round, &params.round, transcript)?;
     let norm_claim = verify_mul_by_vector(
         acc_claim,
@@ -293,7 +286,7 @@ where
     )
     .map_err(|_| ProofVerifyError::InvalidInputLength(1, 0))?
     .x;
-    let (norm_acc_claim, _norm_frac_bits) = verify_round(
+    let (norm_acc_claim, _norm_ra) = verify_round(
         vec![norm_claim],
         &proof.norm_round,
         &params.norm_round,
@@ -339,7 +332,7 @@ where
             point,
             value: proof.input_opening,
         },
-        frac_bits,
+        round_ra,
     ))
 }
 

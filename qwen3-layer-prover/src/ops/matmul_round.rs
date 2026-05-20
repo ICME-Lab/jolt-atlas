@@ -56,18 +56,14 @@ pub fn prove_matmul_round<F, T>(
 ) -> Result<(
     MatMulRoundProof<F, T>,
     Claim<F>,
-    [Claim<F>; ROUND_FRAC_BITS],
+    Claim<F>,
 )>
 where
     F: JoltField,
     T: Transcript,
 {
-    let round_witness = RoundWitness {
-        input: witness.acc.clone(),
-        output: witness.output.clone(),
-        frac_bits: witness.frac_bits.clone(),
-    };
-    let (round_proof, acc_claim, frac_bits) = prove_round(
+    let round_witness = RoundWitness::from_input_output(witness.acc.clone(), witness.output.clone());
+    let (round_proof, acc_claim, round_ra) = prove_round(
         vec![y_round_claim],
         &round_witness,
         &params.round,
@@ -83,7 +79,7 @@ where
             matmul: matmul_result.proof,
         },
         input,
-        frac_bits,
+        round_ra,
     ))
 }
 
@@ -93,14 +89,14 @@ pub fn verify_matmul_round<F, T>(
     w: &[i32],
     params: &MatMulRoundParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, [Claim<F>; ROUND_FRAC_BITS]), ProofVerifyError>
+) -> std::result::Result<(Claim<F>, Claim<F>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,
 {
-    let (acc_claim, frac_bits) =
+    let (acc_claim, round_ra) =
         verify_round(vec![y_round_claim], &proof.round, &params.round, transcript)?;
     let matmul_claims = verify_matmul(acc_claim, &proof.matmul, w, &params.matmul, transcript)?;
 
-    Ok((matmul_claims.input, frac_bits))
+    Ok((matmul_claims.input, round_ra))
 }

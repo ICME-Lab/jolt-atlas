@@ -63,18 +63,14 @@ pub fn prove_hadamard_round<F, T>(
     HadamardRoundProof<F, T>,
     Claim<F>,
     Claim<F>,
-    [Claim<F>; ROUND_FRAC_BITS],
+    Claim<F>,
 )>
 where
     F: JoltField,
     T: Transcript,
 {
-    let round_witness = RoundWitness {
-        input: witness.acc.clone(),
-        output: witness.output.clone(),
-        frac_bits: witness.frac_bits.clone(),
-    };
-    let (round_proof, acc_claim, frac_bits) =
+    let round_witness = RoundWitness::from_input_output(witness.acc.clone(), witness.output.clone());
+    let (round_proof, acc_claim, round_ra) =
         prove_round(vec![y_claim], &round_witness, &params.round, transcript)?;
 
     let (hadamard_proof, lhs, rhs) = prove_hadamard_mul(
@@ -92,7 +88,7 @@ where
         },
         lhs,
         rhs,
-        frac_bits,
+        round_ra,
     ))
 }
 
@@ -101,14 +97,14 @@ pub fn verify_hadamard_round<F, T>(
     proof: &HadamardRoundProof<F, T>,
     params: &HadamardRoundParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>, [Claim<F>; ROUND_FRAC_BITS]), ProofVerifyError>
+) -> std::result::Result<(Claim<F>, Claim<F>, Claim<F>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,
 {
-    let (acc_claim, frac_bits) =
+    let (acc_claim, round_ra) =
         verify_round(vec![y_claim], &proof.round, &params.round, transcript)?;
     let (lhs, rhs) = verify_hadamard_mul(acc_claim, &proof.hadamard, &params.hadamard, transcript)?;
 
-    Ok((lhs, rhs, frac_bits))
+    Ok((lhs, rhs, round_ra))
 }

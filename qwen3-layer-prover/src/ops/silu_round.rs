@@ -4,9 +4,7 @@ use crate::{
     claim::Claim,
     error::Result,
     ops::{
-        round::{
-            ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
-        },
+        round::{RoundParams, RoundProof, RoundWitness, prove_round, verify_round},
         silu::{SiluParams, SiluProof, SiluWitness, prove_silu, verify_silu},
     },
 };
@@ -14,7 +12,7 @@ use crate::{
 // Design note for future us:
 //
 // The MLP path uses:
-//     silu = SiLU(gate_proj, frac_bits, ra)
+//     silu = SiLU(gate_proj, round_ra, ra)
 //
 // Keep this internally as two simple protocols, `round` then `silu`, but expose
 // it as one op to the layer prover so the layer graph does not have to carry the
@@ -38,10 +36,8 @@ pub struct SiluRoundWitness {
     pub max_n: i64,
     pub gate_proj: Vec<i32>,
     pub silu_acc: Vec<i64>,
-    pub silu_frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
     pub silu_ra: Vec<u8>,
     pub silu: Vec<i32>,
-    pub silu_out_frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
 }
 
 #[derive(Debug, Clone)]
@@ -58,20 +54,16 @@ pub fn prove_silu_round<F, T>(
 ) -> Result<(
     SiluRoundProof<F, T>,
     Claim<F>,
-    [Claim<F>; ROUND_FRAC_BITS],
     Claim<F>,
-    [Claim<F>; ROUND_FRAC_BITS],
+    Claim<F>,
+    Claim<F>,
 )>
 where
     F: JoltField,
     T: Transcript,
 {
-    let round_witness = RoundWitness {
-        input: witness.silu_acc.clone(),
-        output: witness.silu.clone(),
-        frac_bits: witness.silu_out_frac_bits.clone(),
-    };
-    let (round_proof, silu_claim, silu_round_frac_bits) = prove_round(
+    let round_witness = RoundWitness::from_input_output(witness.silu_acc.clone(), witness.silu.clone());
+    let (round_proof, silu_claim, silu_round_ra) = prove_round(
         vec![silu_round_claim],
         &round_witness,
         &params.round,
@@ -82,11 +74,10 @@ where
         min_n: witness.min_n,
         max_n: witness.max_n,
         gate_proj_round: witness.gate_proj.clone(),
-        frac_bits: witness.silu_frac_bits.clone(),
         ra: witness.silu_ra.clone(),
         output: witness.silu_acc.clone(),
     };
-    let (silu_proof, gate_proj_round, silu_frac_bits, silu_ra) =
+    let (silu_proof, gate_proj_round, gate_round_ra, silu_ra) =
         prove_silu(vec![silu_claim], &silu_witness, &params.silu, transcript)?;
 
     Ok((
@@ -95,9 +86,9 @@ where
             silu: silu_proof,
         },
         gate_proj_round,
-        silu_frac_bits,
+        gate_round_ra,
         silu_ra,
-        silu_round_frac_bits,
+        silu_round_ra,
     ))
 }
 
@@ -109,9 +100,9 @@ pub fn verify_silu_round<F, T>(
 ) -> std::result::Result<
     (
         Claim<F>,
-        [Claim<F>; ROUND_FRAC_BITS],
         Claim<F>,
-        [Claim<F>; ROUND_FRAC_BITS],
+        Claim<F>,
+        Claim<F>,
     ),
     ProofVerifyError,
 >
@@ -119,19 +110,19 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let (silu_claim, silu_round_frac_bits) = verify_round(
+    let (silu_claim, silu_round_ra) = verify_round(
         vec![silu_round_claim],
         &proof.round,
         &params.round,
         transcript,
     )?;
-    let (gate_proj_round, silu_frac_bits, silu_ra) =
+    let (gate_proj_round, gate_round_ra, silu_ra) =
         verify_silu(vec![silu_claim], &proof.silu, &params.silu, transcript)?;
 
     Ok((
         gate_proj_round,
-        silu_frac_bits,
+        gate_round_ra,
         silu_ra,
-        silu_round_frac_bits,
+        silu_round_ra,
     ))
 }

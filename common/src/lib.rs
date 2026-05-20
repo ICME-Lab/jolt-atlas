@@ -171,10 +171,25 @@ canonical_serde_enum! {
         /// * `0` – decomposition index `d`
         QwenSiluSlopeRaD(usize),
 
+        /// One-hot read-address decomposition for the Qwen SiLU embedded round lookup.
+        ///
+        /// * `0` – decomposition index `d`
+        QwenSiluRoundRaD(usize),
+
         /// One-hot read-address decomposition for the Qwen softmax exp lookup.
         ///
         /// * `0` – decomposition index `d`
         QwenSoftmaxExpRaD(usize),
+
+        /// One-hot read-address decomposition for the Qwen softmax input remainder lookup.
+        ///
+        /// * `0` – decomposition index `d`
+        QwenSoftmaxInputRemainderRaD(usize),
+
+        /// One-hot read-address decomposition for the Qwen round lookup.
+        ///
+        /// * `0` – decomposition index `d`
+        QwenRoundRaD(usize),
     }
 }
 
@@ -267,6 +282,15 @@ canonical_serde_enum! {
         /// * `0` – bit index
         QwenRoundBit(usize),
 
+        /// Qwen fixed-point round lookup remainder polynomial.
+        QwenRoundRemainder,
+
+        /// Qwen fixed-point round lookup output polynomial.
+        QwenRoundLut,
+
+        /// One-hot read-address polynomial for the Qwen round lookup.
+        QwenRoundRa,
+
         /// Qwen fixed-point round/rebase output polynomial.
         QwenRebaseY,
 
@@ -326,6 +350,15 @@ canonical_serde_enum! {
         /// * `0` – bit index
         QwenSiluFracBit(usize),
 
+        /// Qwen SiLU embedded-round remainder polynomial.
+        QwenSiluRoundRemainder,
+
+        /// Qwen SiLU embedded-round lookup output polynomial.
+        QwenSiluRoundLut,
+
+        /// One-hot read-address polynomial for the Qwen SiLU embedded round lookup.
+        QwenSiluRoundRa,
+
         /// Qwen SiLU LUT one-hot read-address polynomial.
         QwenSiluRa,
 
@@ -350,8 +383,14 @@ canonical_serde_enum! {
         /// Qwen softmax exp lookup index polynomial.
         QwenSoftmaxIndex,
 
+        /// Qwen softmax input remainder polynomial.
+        QwenSoftmaxInputRemainder,
+
         /// One-hot read-address polynomial for the Qwen softmax exp lookup.
         QwenSoftmaxExpRa,
+
+        /// One-hot read-address polynomial for the Qwen softmax input remainder lookup.
+        QwenSoftmaxInputRemainderRa,
 
         /// Qwen softmax pre-softmax score polynomial.
         QwenSoftmaxInput,

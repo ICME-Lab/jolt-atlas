@@ -125,18 +125,14 @@ pub fn prove_rope_round<F, T>(
     RopeProof<F, T>,
     Claim<F>,
     Claim<F>,
-    [Claim<F>; ROUND_FRAC_BITS],
+    Claim<F>,
 )>
 where
     F: JoltField,
     T: Transcript,
 {
-    let round_witness = RoundWitness {
-        input: witness.acc.clone(),
-        output: witness.output.clone(),
-        frac_bits: witness.frac_bits.clone(),
-    };
-    let (round_proof, acc_claim, frac_bits) =
+    let round_witness = RoundWitness::from_input_output(witness.acc.clone(), witness.output.clone());
+    let (round_proof, acc_claim, round_ra) =
         prove_round(vec![y_claim], &round_witness, &params.round, transcript)?;
     let (rope_proof, x_even, x_odd) = prove_rope_acc(
         acc_claim,
@@ -154,7 +150,7 @@ where
         },
         x_even,
         x_odd,
-        frac_bits,
+        round_ra,
     ))
 }
 
@@ -165,17 +161,17 @@ pub fn verify_rope_round<F, T>(
     sin: &[i32],
     params: &RopeRoundParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>, [Claim<F>; ROUND_FRAC_BITS]), ProofVerifyError>
+) -> std::result::Result<(Claim<F>, Claim<F>, Claim<F>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,
 {
-    let (acc_claim, frac_bits) =
+    let (acc_claim, round_ra) =
         verify_round(vec![y_claim], &proof.round, &params.round, transcript)?;
     let (x_even, x_odd) =
         verify_rope_acc(acc_claim, &proof.rope, cos, sin, &params.rope, transcript)?;
 
-    Ok((x_even, x_odd, frac_bits))
+    Ok((x_even, x_odd, round_ra))
 }
 
 fn prove_rope_acc<F, T>(

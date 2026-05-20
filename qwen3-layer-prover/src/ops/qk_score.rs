@@ -136,19 +136,16 @@ pub fn prove_qk_score_round<F, T>(
     QkScoreProof<F, T>,
     Claim<F>,
     Claim<F>,
-    [Claim<F>; ROUND_FRAC_BITS],
-    [Claim<F>; ROUND_FRAC_BITS],
+    Claim<F>,
+    Claim<F>,
 )>
 where
     F: JoltField,
     T: Transcript,
 {
-    let score_round_witness = RoundWitness {
-        input: witness.scale_acc.clone(),
-        output: witness.output.clone(),
-        frac_bits: witness.frac_bits.clone(),
-    };
-    let (score_round_proof, scale_acc_claim, frac_bits) = prove_round(
+    let score_round_witness =
+        RoundWitness::from_input_output(witness.scale_acc.clone(), witness.output.clone());
+    let (score_round_proof, scale_acc_claim, score_ra) = prove_round(
         vec![score_claim],
         &score_round_witness,
         &params.score_round,
@@ -174,12 +171,9 @@ where
         value: dot_opening,
     };
 
-    let dot_round_witness = RoundWitness {
-        input: witness.raw_acc.clone(),
-        output: witness.dot.clone(),
-        frac_bits: witness.dot_frac_bits.clone(),
-    };
-    let (dot_round_proof, raw_acc_claim, dot_frac_bits) = prove_round(
+    let dot_round_witness =
+        RoundWitness::from_input_output(witness.raw_acc.clone(), witness.dot.clone());
+    let (dot_round_proof, raw_acc_claim, dot_ra) = prove_round(
         vec![dot_claim],
         &dot_round_witness,
         &params.dot_round,
@@ -202,8 +196,8 @@ where
         },
         q,
         k,
-        frac_bits,
-        dot_frac_bits,
+        score_ra,
+        dot_ra,
     ))
 }
 
@@ -216,8 +210,8 @@ pub fn verify_qk_score_round<F, T>(
     (
         Claim<F>,
         Claim<F>,
-        [Claim<F>; ROUND_FRAC_BITS],
-        [Claim<F>; ROUND_FRAC_BITS],
+        Claim<F>,
+        Claim<F>,
     ),
     ProofVerifyError,
 >
@@ -225,7 +219,7 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let (scale_acc_claim, frac_bits) = verify_round(
+    let (scale_acc_claim, score_ra) = verify_round(
         vec![score_claim],
         &proof.score_round,
         &params.score_round,
@@ -242,7 +236,7 @@ where
         point: scale_acc_claim.point,
         value: proof.dot_opening,
     };
-    let (raw_acc_claim, dot_frac_bits) = verify_round(
+    let (raw_acc_claim, dot_ra) = verify_round(
         vec![dot_claim],
         &proof.dot_round,
         &params.dot_round,
@@ -250,7 +244,7 @@ where
     )?;
     let (q, k) = verify_qk_score_acc(raw_acc_claim, &proof.qk, &params.qk, transcript)?;
 
-    Ok((q, k, frac_bits, dot_frac_bits))
+    Ok((q, k, score_ra, dot_ra))
 }
 
 fn prove_qk_score_acc<F, T>(

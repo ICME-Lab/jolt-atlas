@@ -292,7 +292,6 @@ where
 
     step_start = Instant::now();
     let acc_eq = EqPolynomial::<F>::evals(&acc_claim.point);
-    let inv = expand_rows_to_tensor(&inv_sum, params);
     let exp_poly = padded_i32_tensor(&witness.exp, &params.shape);
     let valid_poly = valid_tensor_u8(params);
     op_timing!(
@@ -308,7 +307,9 @@ where
         ),
         acc_eq,
         exp_poly,
-        inv,
+        inv_sum,
+        params.row_shape(),
+        params.cols(),
         valid_poly,
     );
     op_timing!(
@@ -437,15 +438,15 @@ where
     );
 
     let inv_sum = inv_sum_from_sum::<F>(&proof.sum);
-    let inv = expand_rows_to_tensor(&inv_sum, params);
     let acc_verifier = AccSumcheckVerifier {
         params: BasicSumcheckParams::new(
             params.shape.padded_power_of_two().point_len(),
             acc_claim.value,
         ),
         acc_point: acc_claim.point.clone(),
-        inv,
+        inv: inv_sum,
         valid: valid_tensor(params),
+        row_shape: params.row_shape(),
         shape: params.shape.clone(),
     };
     let mut acc_accumulator = VerifierOpeningAccumulator::new();
@@ -504,7 +505,7 @@ where
     step_start = Instant::now();
     let eq_exp = masked_eq_poly(&exp_claim, &params.shape);
     let row_point = row_point_from_tensor_point(&exp_claim.point, params);
-    let row_eq = row_eq_lifted(&row_point, params);
+    let row_eq = EqPolynomial::<F>::evals(&row_point);
     op_timing!(
         "timing: prove_softmax.lookup.eq_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
@@ -562,6 +563,7 @@ where
         sc_params,
         eq_exp,
         row_eq,
+        params.cols(),
         max_selector,
         valid,
         max,
@@ -846,10 +848,47 @@ impl<F: JoltField> SumcheckInstanceParams<F> for BasicSumcheckParams<F> {
 
 type LookupSumcheckParams<F> = BasicSumcheckParams<F>;
 
+struct RowExpandedPoly<F: JoltField> {
+    row: MultilinearPolynomial<F>,
+    remaining_col_vars: usize,
+}
+
+impl<F: JoltField> RowExpandedPoly<F> {
+    fn from_logical_rows(row_values: Vec<F>, row_shape: Shape, cols: usize) -> Self {
+        Self::from_padded_rows(padded_field_tensor(&row_values, &row_shape), cols)
+    }
+
+    fn from_padded_rows(row_values: Vec<F>, cols: usize) -> Self {
+        debug_assert!(row_values.len().is_power_of_two());
+        Self {
+            row: MultilinearPolynomial::from(row_values),
+            remaining_col_vars: cols.next_power_of_two().trailing_zeros() as usize,
+        }
+    }
+
+    fn get_bound_coeff(&self, index: usize) -> F {
+        self.row.get_bound_coeff(index >> self.remaining_col_vars)
+    }
+
+    fn bind_parallel(&mut self, r_j: F::Challenge) {
+        if self.remaining_col_vars > 0 {
+            // The polynomial is constant along the softmax column variables:
+            // binding a column variable only removes that variable from the
+            // domain.  Row variables are bound after all column variables
+            // because all softmax sumchecks bind LowToHigh on row-major tensors.
+            let _ = r_j;
+            self.remaining_col_vars -= 1;
+        } else {
+            self.row.bind_parallel(r_j, BindingOrder::LowToHigh);
+        }
+    }
+
+}
+
 struct AccSumcheckProver<F: JoltField> {
     eq: MultilinearPolynomial<F>,
     exp: MultilinearPolynomial<F>,
-    inv: MultilinearPolynomial<F>,
+    inv: RowExpandedPoly<F>,
     valid: MultilinearPolynomial<F>,
     params: BasicSumcheckParams<F>,
 }
@@ -860,12 +899,14 @@ impl<F: JoltField> AccSumcheckProver<F> {
         eq: Vec<F>,
         exp: Vec<i32>,
         inv: Vec<F>,
+        row_shape: Shape,
+        cols: usize,
         valid: Vec<u8>,
     ) -> Self {
         Self {
             eq: MultilinearPolynomial::from(eq),
             exp: MultilinearPolynomial::from(exp),
-            inv: MultilinearPolynomial::from(inv),
+            inv: RowExpandedPoly::from_logical_rows(inv, row_shape, cols),
             valid: MultilinearPolynomial::from(valid),
             params,
         }
@@ -910,7 +951,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for AccSumcheckPr
     fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
         self.eq.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.exp.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.inv.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.inv.bind_parallel(r_j);
         self.valid.bind_parallel(r_j, BindingOrder::LowToHigh);
     }
     fn cache_openings(
@@ -936,6 +977,7 @@ struct AccSumcheckVerifier<F: JoltField> {
     acc_point: Vec<F>,
     inv: Vec<F>,
     valid: Vec<F>,
+    row_shape: Shape,
     shape: Shape,
 }
 
@@ -956,7 +998,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for AccSumcheck
             ))
             .1;
         let eq = EqPolynomial::mle(&self.acc_point, &point);
-        let inv = eval_field_tensor(&self.inv, &self.shape.padded_power_of_two(), &point);
+        let inv = eval_field_tensor(
+            &padded_field_tensor(&self.inv, &self.row_shape),
+            &self.row_shape.padded_power_of_two(),
+            row_point_from_tensor_point_shape(&point, &self.shape),
+        );
         let valid = eval_field_tensor(&self.valid, &self.shape.padded_power_of_two(), &point);
         eq * valid * exp * inv
     }
@@ -979,7 +1025,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for AccSumcheck
 
 struct LookupSumcheckProver<F: JoltField> {
     eq_exp: MultilinearPolynomial<F>,
-    row_eq: MultilinearPolynomial<F>,
+    row_eq: RowExpandedPoly<F>,
     max_selector: MultilinearPolynomial<F>,
     valid: MultilinearPolynomial<F>,
     max: MultilinearPolynomial<F>,
@@ -999,6 +1045,7 @@ impl<F: JoltField> LookupSumcheckProver<F> {
         params: LookupSumcheckParams<F>,
         eq_exp: Vec<F>,
         row_eq: Vec<F>,
+        cols: usize,
         max_selector: Vec<u8>,
         valid: Vec<u8>,
         max: Vec<i32>,
@@ -1012,7 +1059,7 @@ impl<F: JoltField> LookupSumcheckProver<F> {
     ) -> Self {
         Self {
             eq_exp: MultilinearPolynomial::from(eq_exp),
-            row_eq: MultilinearPolynomial::from(row_eq),
+            row_eq: RowExpandedPoly::from_padded_rows(row_eq, cols),
             max_selector: MultilinearPolynomial::from(max_selector),
             valid: MultilinearPolynomial::from(valid),
             max: MultilinearPolynomial::from(max),
@@ -1047,7 +1094,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for LookupSumchec
     }
     fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
         self.eq_exp.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.row_eq.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.row_eq.bind_parallel(r_j);
         self.max_selector
             .bind_parallel(r_j, BindingOrder::LowToHigh);
         self.valid.bind_parallel(r_j, BindingOrder::LowToHigh);
@@ -1990,27 +2037,6 @@ fn row_point_from_tensor_point_shape<'a, F>(point: &'a [F], shape: &Shape) -> &'
         .next_power_of_two()
         .trailing_zeros() as usize;
     &point[..point.len() - col_vars]
-}
-
-fn row_eq_lifted<F: JoltField>(row_point: &[F], params: &SoftmaxParams) -> Vec<F> {
-    let row_eq = EqPolynomial::<F>::evals(row_point);
-    let cols = params.cols().next_power_of_two();
-    let mut out = Vec::with_capacity(row_eq.len() * cols);
-    for value in row_eq {
-        out.extend(std::iter::repeat_n(value, cols));
-    }
-    out
-}
-
-fn expand_rows_to_tensor<F: JoltField>(row_values: &[F], params: &SoftmaxParams) -> Vec<F> {
-    let cols = params.cols();
-    let mut values = vec![F::zero(); params.shape.numel()];
-    for row in 0..params.rows() {
-        for col in 0..cols {
-            values[row * cols + col] = row_values[row];
-        }
-    }
-    padded_field_tensor(&values, &params.shape)
 }
 
 fn expand_rows_to_padded_tensor_i32(row_values: &[i32], params: &SoftmaxParams) -> Vec<i32> {

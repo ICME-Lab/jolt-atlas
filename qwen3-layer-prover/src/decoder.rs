@@ -311,14 +311,28 @@ fn validate_parallel_layer_count(
     weight_layers: usize,
     tensor_layers: usize,
 ) -> Result<()> {
-    if proof_layers != QWEN3_DECODER_LAYERS {
+    if proof_layers == 0 || proof_layers > QWEN3_DECODER_LAYERS {
         return Err(crate::ProverError::InvalidClaimCount {
             name: "parallel layer count",
             expected: QWEN3_DECODER_LAYERS,
             actual: proof_layers,
         });
     }
-    validate_layer_count(proof_layers, weight_layers, tensor_layers)
+    if weight_layers != proof_layers {
+        return Err(crate::ProverError::InvalidClaimCount {
+            name: "parallel layer weights",
+            expected: proof_layers,
+            actual: weight_layers,
+        });
+    }
+    if tensor_layers != proof_layers {
+        return Err(crate::ProverError::InvalidClaimCount {
+            name: "parallel layer tensors",
+            expected: proof_layers,
+            actual: tensor_layers,
+        });
+    }
+    Ok(())
 }
 
 fn layer_transcript<T: Transcript>(layer_idx: usize) -> T {
@@ -332,23 +346,17 @@ fn verify_layer_count(
     weight_layers: usize,
     tensor_layers: usize,
 ) -> std::result::Result<(), ProofVerifyError> {
-    if proof_layers != QWEN3_DECODER_LAYERS {
+    if proof_layers == 0 || proof_layers > QWEN3_DECODER_LAYERS {
         return Err(ProofVerifyError::InvalidInputLength(
             QWEN3_DECODER_LAYERS,
             proof_layers,
         ));
     }
-    if weight_layers != QWEN3_DECODER_LAYERS {
-        return Err(ProofVerifyError::InvalidInputLength(
-            QWEN3_DECODER_LAYERS,
-            weight_layers,
-        ));
+    if weight_layers != proof_layers {
+        return Err(ProofVerifyError::InvalidInputLength(proof_layers, weight_layers));
     }
-    if tensor_layers != QWEN3_DECODER_LAYERS {
-        return Err(ProofVerifyError::InvalidInputLength(
-            QWEN3_DECODER_LAYERS,
-            tensor_layers,
-        ));
+    if tensor_layers != proof_layers {
+        return Err(ProofVerifyError::InvalidInputLength(proof_layers, tensor_layers));
     }
     Ok(())
 }

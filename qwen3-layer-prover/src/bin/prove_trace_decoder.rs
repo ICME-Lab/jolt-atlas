@@ -45,6 +45,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let cache = args
         .q8_cache
         .unwrap_or_else(|| fixed_cache_path(&args.model));
+    let layers_to_run = args.layers;
     let start = Instant::now();
     let weights = DecoderWeights {
         layers: read_all_layer_weights(&cache, seq)?,
@@ -54,7 +55,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let hidden_shape = shape.hidden_shape();
     let point_len = hidden_shape.padded_power_of_two().point_len();
     let start = Instant::now();
-    let layer_witnesses = (0..LAYERS)
+    let layer_witnesses = (0..layers_to_run)
         .into_par_iter()
         .map(|layer| {
             let traced = build_layer_witness_from_trace_dir(
@@ -81,7 +82,10 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         })
         .collect::<Result<Vec<_>, Box<dyn Error + Send + Sync>>>()?;
     eprintln!("timing: decoder.build_witness {:.3}s", start.elapsed().as_secs_f64());
-    let tensors = (0..LAYERS)
+    let weights = DecoderWeights {
+        layers: weights.layers[..layers_to_run].to_vec(),
+    };
+    let tensors = (0..layers_to_run)
         .map(|_| LayerTensorIds::default())
         .collect::<Vec<_>>();
 
@@ -115,7 +119,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("prove_trace_decoder: ok");
     println!("trace: {}", args.trace.display());
     println!("q8_cache: {}", cache.display());
-    println!("layers: {LAYERS}");
+    println!("layers: {layers_to_run}");
     println!("seq: {seq}");
     eprintln!("timing: decoder.total {:.3}s", total_start.elapsed().as_secs_f64());
     Ok(())
@@ -127,6 +131,7 @@ struct Args {
     model: PathBuf,
     q8_cache: Option<PathBuf>,
     seq: Option<usize>,
+    layers: usize,
 }
 
 impl Args {
@@ -135,6 +140,7 @@ impl Args {
         let mut model = PathBuf::from("qwen3-awy/models/qwen3-0.6b/model.safetensors");
         let mut q8_cache = None;
         let mut seq = None;
+        let mut layers = LAYERS;
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -148,6 +154,12 @@ impl Args {
                     ));
                 }
                 "--seq" => seq = Some(args.next().ok_or("--seq requires a value")?.parse()?),
+                "--layers" => {
+                    layers = args.next().ok_or("--layers requires a value")?.parse()?;
+                    if layers == 0 || layers > LAYERS {
+                        return Err(format!("--layers must be in 1..={LAYERS}, got {layers}").into());
+                    }
+                }
                 "--help" | "-h" => {
                     print_help();
                     std::process::exit(0);
@@ -160,6 +172,7 @@ impl Args {
             model,
             q8_cache,
             seq,
+            layers,
         })
     }
 }
@@ -174,7 +187,8 @@ fn print_help() {
            --trace PATH     qwen3-awy --dump-full-awy output directory\n\
            --model PATH     safetensors path; used only to derive default .q8.bin cache path\n\
            --q8-cache PATH  explicit qwen3-awy fixed weight cache path\n\
-           --seq N          override seq length instead of reading manifest metadata"
+           --seq N          override seq length instead of reading manifest metadata\n\
+           --layers N       prove only the first N layers through the parallel path"
     );
 }
 

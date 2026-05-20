@@ -10,7 +10,7 @@ use joltworks::{
         unipoly::UniPoly,
     },
     subprotocols::{
-        sumcheck::Sumcheck,
+        sumcheck::{Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -28,7 +28,8 @@ use crate::{
             validate_gqa, verify_claim,
         },
         round::{
-            ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
+            ROUND_FRAC_BITS, ROUND_LUT_LEN, RoundLookupProof, RoundParams, RoundWitness,
+            padded_lookup_indices, prove_round_lookup, round_lut_table, verify_round_lookup,
         },
     },
 };
@@ -108,8 +109,17 @@ pub struct PvMatmulWitness {
 
 #[derive(Debug, Clone)]
 pub struct PvMatmulProof<F: JoltField, T: Transcript> {
-    pub round: RoundProof<F, T>,
-    pub pv: AttentionMatmulProof<F, T>,
+    pub pv: PvMatmulRoundRelationProof<F, T>,
+    pub(crate) round_lookup: RoundLookupProof<F, T>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PvMatmulRoundRelationProof<F: JoltField, T: Transcript> {
+    pub sumcheck: SumcheckInstanceProof<F, T>,
+    pub left_opening: F,
+    pub right_opening: F,
+    pub remainder_opening: F,
+    pub round_bit_opening: F,
 }
 
 pub fn prove_pv_matmul_round<F, T>(
@@ -128,19 +138,56 @@ where
     T: Transcript,
 {
     let round_witness = RoundWitness::from_input_output(witness.acc.clone(), witness.output.clone());
-    let (round_proof, acc_claim, round_ra) = prove_round(
-        vec![context_claim],
-        &round_witness,
-        &params.round,
+    let (pv_proof, p, v, round_point, round_bit_opening, remainder_opening) =
+        prove_pv_matmul_round_relation(
+            context_claim,
+            &witness.p,
+            &witness.v,
+            &round_witness.remainder,
+            &round_witness.round_bit,
+            &params.pv,
+            transcript,
+        )?;
+    let mut round_accumulator = ProverOpeningAccumulator::new();
+    let round_opening_point = OpeningPoint::<BIG_ENDIAN, F>::new(round_point.clone());
+    round_accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenRoundLut, SumcheckId::NodeExecution(0)),
+        (round_opening_point.clone(), round_bit_opening),
+    );
+    round_accumulator.openings.insert(
+        OpeningId::new(
+            VirtualPoly::QwenRoundRemainder,
+            SumcheckId::NodeExecution(0),
+        ),
+        (round_opening_point, remainder_opening),
+    );
+    let round_lookup = prove_round_lookup(
+        round_point,
+        round_bit_opening,
+        remainder_opening,
+        padded_lookup_indices(&round_witness.remainder, &params.round.shape),
+        round_lut_table(),
+        &mut round_accumulator,
         transcript,
     )?;
-    let (pv_proof, p, v) =
-        prove_pv_matmul_acc(acc_claim, &witness.p, &witness.v, &params.pv, transcript)?;
+    let round_ra = Claim {
+        tensor: TensorId::new(format!("{}_round_ra", params.round.input_tensor.0)),
+        logical_shape: Shape::new(vec![
+            params.round.shape.padded_power_of_two().numel(),
+            ROUND_LUT_LEN,
+        ]),
+        domain_shape: Shape::new(vec![
+            params.round.shape.padded_power_of_two().numel(),
+            ROUND_LUT_LEN,
+        ]),
+        point: round_lookup.ra_point.clone(),
+        value: round_lookup.ra_opening,
+    };
 
     Ok((
         PvMatmulProof {
-            round: round_proof,
             pv: pv_proof,
+            round_lookup,
         },
         p,
         v,
@@ -158,13 +205,38 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let (acc_claim, round_ra) =
-        verify_round(vec![context_claim], &proof.round, &params.round, transcript)?;
-    let (p, v) = verify_pv_matmul_acc(acc_claim, &proof.pv, &params.pv, transcript)?;
+    let (p, v, round_point, round_bit_opening, remainder_opening) =
+        verify_pv_matmul_round_relation(context_claim, &proof.pv, &params.pv, transcript)?;
+    let round_lookup = verify_round_lookup(
+        params.round.shape.padded_power_of_two().numel(),
+        round_point,
+        round_bit_opening,
+        remainder_opening,
+        proof.round_lookup.ra_opening,
+        &proof.round_lookup.committed_openings,
+        &proof.round_lookup.read_raf,
+        &proof.round_lookup.ra_onehot,
+        &mut VerifierOpeningAccumulator::new(),
+        transcript,
+    )?;
+    let round_ra = Claim {
+        tensor: TensorId::new(format!("{}_round_ra", params.round.input_tensor.0)),
+        logical_shape: Shape::new(vec![
+            params.round.shape.padded_power_of_two().numel(),
+            ROUND_LUT_LEN,
+        ]),
+        domain_shape: Shape::new(vec![
+            params.round.shape.padded_power_of_two().numel(),
+            ROUND_LUT_LEN,
+        ]),
+        point: round_lookup.ra_point,
+        value: proof.round_lookup.ra_opening,
+    };
 
     Ok((p, v, round_ra))
 }
 
+#[allow(dead_code)]
 fn prove_pv_matmul_acc<F, T>(
     context_claim: Claim<F>,
     p: &[i32],
@@ -212,6 +284,7 @@ where
     ))
 }
 
+#[allow(dead_code)]
 fn verify_pv_matmul_acc<F, T>(
     context_claim: Claim<F>,
     proof: &AttentionMatmulProof<F, T>,
@@ -248,6 +321,120 @@ where
             point: [r_kpos, kv_h, r_d].concat(),
             value: proof.right_opening,
         },
+    ))
+}
+
+#[allow(clippy::type_complexity)]
+fn prove_pv_matmul_round_relation<F, T>(
+    context_claim: Claim<F>,
+    p: &[i32],
+    v: &[i32],
+    remainder: &[usize],
+    round_bit: &[i32],
+    params: &PvMatmulParams,
+    transcript: &mut T,
+) -> Result<(PvMatmulRoundRelationProof<F, T>, Claim<F>, Claim<F>, Vec<F>, F, F)>
+where
+    F: JoltField,
+    T: Transcript,
+{
+    validate_pv_inputs(&context_claim, p, v, params)?;
+    validate_round_witness(remainder, round_bit, &params.context_shape())?;
+    let (r_q, r_h, r_d) = split3(
+        &context_claim.point,
+        params.seq,
+        params.q_heads,
+        params.head_dim,
+    );
+    let left = partial_p(p, params, r_q);
+    let right = partial_v(v, params, r_d);
+    let selector = expanded_head_eq(r_h, params);
+    let remainder = eval_round_tensor(remainder, &params.context_shape(), &context_claim.point);
+    let round_bit = eval_i32_tensor(round_bit, &params.context_shape(), &context_claim.point);
+    let (proof, r_h_kpos) = prove_pv_round_product(
+        context_claim.value * scale_q8::<F>(),
+        left,
+        right,
+        selector,
+        remainder,
+        round_bit,
+        transcript,
+    )?;
+    let (r_head, r_kpos) = r_h_kpos.split_at(log2_ceil(params.q_heads));
+    let kv_h = drop_gqa_lsb_for_dims(r_head, params.q_heads, params.kv_heads)?;
+    let p_opening = proof.left_opening;
+    let v_opening = proof.right_opening;
+    let remainder_opening = proof.remainder_opening;
+    let round_bit_opening = proof.round_bit_opening;
+
+    Ok((
+        proof,
+        Claim {
+            tensor: params.p_tensor.clone(),
+            logical_shape: params.p_shape(),
+            domain_shape: params.p_shape().padded_power_of_two(),
+            point: [r_head, r_q, r_kpos].concat(),
+            value: p_opening,
+        },
+        Claim {
+            tensor: params.v_tensor.clone(),
+            logical_shape: params.v_shape(),
+            domain_shape: params.v_shape().padded_power_of_two(),
+            point: [r_kpos, kv_h, r_d].concat(),
+            value: v_opening,
+        },
+        context_claim.point,
+        round_bit_opening,
+        remainder_opening,
+    ))
+}
+
+#[allow(clippy::type_complexity)]
+fn verify_pv_matmul_round_relation<F, T>(
+    context_claim: Claim<F>,
+    proof: &PvMatmulRoundRelationProof<F, T>,
+    params: &PvMatmulParams,
+    transcript: &mut T,
+) -> std::result::Result<(Claim<F>, Claim<F>, Vec<F>, F, F), ProofVerifyError>
+where
+    F: JoltField,
+    T: Transcript,
+{
+    verify_pv_inputs(&context_claim, params)?;
+    let (r_q, r_h, r_d) = split3(
+        &context_claim.point,
+        params.seq,
+        params.q_heads,
+        params.head_dim,
+    );
+    let r_h_kpos = verify_pv_round_product(
+        context_claim.value * scale_q8::<F>(),
+        proof,
+        r_h,
+        params,
+        transcript,
+    )?;
+    let (r_head, r_kpos) = r_h_kpos.split_at(log2_ceil(params.q_heads));
+    let kv_h = drop_gqa_lsb_for_dims_verify(r_head, params.q_heads, params.kv_heads)?;
+
+    Ok((
+        Claim {
+            tensor: params.p_tensor.clone(),
+            logical_shape: params.p_shape(),
+            domain_shape: params.p_shape().padded_power_of_two(),
+            point: [r_head, r_q, r_kpos].concat(),
+            value: proof.left_opening,
+        },
+        Claim {
+            tensor: params.v_tensor.clone(),
+            logical_shape: params.v_shape(),
+            domain_shape: params.v_shape().padded_power_of_two(),
+            point: [r_kpos, kv_h, r_d].concat(),
+            value: proof.right_opening,
+        },
+        context_claim.point,
+        proof.round_bit_opening,
+        proof.remainder_opening,
     ))
 }
 
@@ -300,6 +487,7 @@ fn expanded_head_eq<F: JoltField>(r_h: &[F], params: &PvMatmulParams) -> Vec<F> 
     out
 }
 
+#[allow(dead_code)]
 fn prove_pv_product<F, T>(
     input_claim: F,
     left: Vec<F>,
@@ -338,6 +526,7 @@ where
     ))
 }
 
+#[allow(dead_code)]
 fn verify_pv_product<F, T>(
     input_claim: F,
     proof: &AttentionMatmulProof<F, T>,
@@ -363,6 +552,102 @@ where
         (
             OpeningPoint::<BIG_ENDIAN, F>::default(),
             proof.right_opening,
+        ),
+    );
+    let challenges = Sumcheck::verify(&proof.sumcheck, &verifier, &mut accumulator, transcript)?;
+    Ok(normalize_sumcheck_point::<F>(&challenges.into_opening()))
+}
+
+fn prove_pv_round_product<F, T>(
+    input_claim: F,
+    left: Vec<F>,
+    right: Vec<F>,
+    selector: Vec<F>,
+    remainder: F,
+    round_bit: F,
+    transcript: &mut T,
+) -> Result<(PvMatmulRoundRelationProof<F, T>, Vec<F>)>
+where
+    F: JoltField,
+    T: Transcript,
+{
+    let params = PvProductParams::new(
+        left.len().trailing_zeros() as usize,
+        input_claim,
+        Vec::new(),
+    );
+    let mut prover =
+        PvRoundProductProver::new(params, left, right, selector, remainder, round_bit);
+    let mut accumulator = ProverOpeningAccumulator::new();
+    let (sumcheck, challenges) = Sumcheck::prove(&mut prover, &mut accumulator, transcript);
+    let left_opening = opening(
+        &accumulator,
+        OpeningId::new(VirtualPoly::QwenAttentionLeft, pv_sumcheck_id()),
+    )?;
+    let right_opening = opening(
+        &accumulator,
+        OpeningId::new(VirtualPoly::QwenAttentionRight, pv_sumcheck_id()),
+    )?;
+    let remainder_opening = opening(
+        &accumulator,
+        OpeningId::new(VirtualPoly::QwenRoundRemainder, pv_sumcheck_id()),
+    )?;
+    let round_bit_opening = opening(
+        &accumulator,
+        OpeningId::new(VirtualPoly::QwenRoundLut, pv_sumcheck_id()),
+    )?;
+    let r = normalize_sumcheck_point::<F>(&challenges.into_opening());
+    Ok((
+        PvMatmulRoundRelationProof {
+            sumcheck,
+            left_opening,
+            right_opening,
+            remainder_opening,
+            round_bit_opening,
+        },
+        r,
+    ))
+}
+
+fn verify_pv_round_product<F, T>(
+    input_claim: F,
+    proof: &PvMatmulRoundRelationProof<F, T>,
+    output_head_point: &[F],
+    params: &PvMatmulParams,
+    transcript: &mut T,
+) -> std::result::Result<Vec<F>, ProofVerifyError>
+where
+    F: JoltField,
+    T: Transcript,
+{
+    let num_rounds = log2_ceil(params.q_heads) + log2_ceil(params.seq);
+    let verifier = PvRoundProductVerifier {
+        params: PvProductParams::new(num_rounds, input_claim, output_head_point.to_vec()),
+    };
+    let mut accumulator = VerifierOpeningAccumulator::new();
+    accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenAttentionLeft, pv_sumcheck_id()),
+        (OpeningPoint::<BIG_ENDIAN, F>::default(), proof.left_opening),
+    );
+    accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenAttentionRight, pv_sumcheck_id()),
+        (
+            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            proof.right_opening,
+        ),
+    );
+    accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenRoundRemainder, pv_sumcheck_id()),
+        (
+            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            proof.remainder_opening,
+        ),
+    );
+    accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenRoundLut, pv_sumcheck_id()),
+        (
+            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            proof.round_bit_opening,
         ),
     );
     let challenges = Sumcheck::verify(&proof.sumcheck, &verifier, &mut accumulator, transcript)?;
@@ -403,6 +688,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for PvProductParams<F> {
     }
 }
 
+#[allow(dead_code)]
 struct PvProductProver<F: JoltField> {
     left: MultilinearPolynomial<F>,
     right: MultilinearPolynomial<F>,
@@ -418,6 +704,110 @@ impl<F: JoltField> PvProductProver<F> {
             selector: MultilinearPolynomial::from(selector),
             params,
         }
+    }
+}
+
+struct PvRoundProductProver<F: JoltField> {
+    left: MultilinearPolynomial<F>,
+    right: MultilinearPolynomial<F>,
+    selector: MultilinearPolynomial<F>,
+    eq_zero: MultilinearPolynomial<F>,
+    remainder: F,
+    round_bit: F,
+    params: PvProductParams<F>,
+}
+
+impl<F: JoltField> PvRoundProductProver<F> {
+    fn new(
+        params: PvProductParams<F>,
+        left: Vec<F>,
+        right: Vec<F>,
+        selector: Vec<F>,
+        remainder: F,
+        round_bit: F,
+    ) -> Self {
+        let zero = vec![F::zero(); params.num_rounds];
+        Self {
+            left: MultilinearPolynomial::from(left),
+            right: MultilinearPolynomial::from(right),
+            selector: MultilinearPolynomial::from(selector),
+            eq_zero: MultilinearPolynomial::from(EqPolynomial::<F>::evals(&zero)),
+            remainder,
+            round_bit,
+            params,
+        }
+    }
+}
+
+impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for PvRoundProductProver<F> {
+    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+        &self.params
+    }
+
+    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
+        let mut evals = [F::zero(); 3];
+        let round_term = self.round_bit * scale_q8::<F>() - self.remainder;
+        for g in 0..self.left.len() / 2 {
+            let l0 = self.left.get_bound_coeff(2 * g);
+            let l1 = self.left.get_bound_coeff(2 * g + 1);
+            let r0 = self.right.get_bound_coeff(2 * g);
+            let r1 = self.right.get_bound_coeff(2 * g + 1);
+            let s0 = self.selector.get_bound_coeff(2 * g);
+            let s1 = self.selector.get_bound_coeff(2 * g + 1);
+            let z0 = self.eq_zero.get_bound_coeff(2 * g);
+            let z1 = self.eq_zero.get_bound_coeff(2 * g + 1);
+            evals[0] += l0 * r0 * s0 + z0 * round_term;
+            evals[1] +=
+                (l1 + l1 - l0) * (r1 + r1 - r0) * (s1 + s1 - s0)
+                    + (z1 + z1 - z0) * round_term;
+            evals[2] += (l1 * F::from_u64(3) - l0 - l0)
+                * (r1 * F::from_u64(3) - r0 - r0)
+                * (s1 * F::from_u64(3) - s0 - s0)
+                + (z1 * F::from_u64(3) - z0 - z0) * round_term;
+        }
+        UniPoly::from_evals_and_hint(previous_claim, &evals)
+    }
+
+    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
+        self.left.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.right.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.selector.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.eq_zero.bind_parallel(r_j, BindingOrder::LowToHigh);
+    }
+
+    fn cache_openings(
+        &self,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenAttentionLeft, pv_sumcheck_id()),
+            point.clone(),
+            self.left.final_claim(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenAttentionRight, pv_sumcheck_id()),
+            point.clone(),
+            self.right.final_claim(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenRoundRemainder, pv_sumcheck_id()),
+            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            self.remainder,
+        );
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenRoundLut, pv_sumcheck_id()),
+            point,
+            self.round_bit,
+        );
     }
 }
 
@@ -474,8 +864,89 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for PvProductProv
     }
 }
 
+#[allow(dead_code)]
 struct PvProductVerifier<F: JoltField> {
     params: PvProductParams<F>,
+}
+
+struct PvRoundProductVerifier<F: JoltField> {
+    params: PvProductParams<F>,
+}
+
+impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for PvRoundProductVerifier<F> {
+    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+        &self.params
+    }
+
+    fn expected_output_claim(
+        &self,
+        accumulator: &VerifierOpeningAccumulator<F>,
+        sumcheck_challenges: &[F::Challenge],
+    ) -> F {
+        let left = accumulator
+            .get_virtual_polynomial_opening(OpeningId::new(
+                VirtualPoly::QwenAttentionLeft,
+                pv_sumcheck_id(),
+            ))
+            .1;
+        let right = accumulator
+            .get_virtual_polynomial_opening(OpeningId::new(
+                VirtualPoly::QwenAttentionRight,
+                pv_sumcheck_id(),
+            ))
+            .1;
+        let remainder = accumulator
+            .get_virtual_polynomial_opening(OpeningId::new(
+                VirtualPoly::QwenRoundRemainder,
+                pv_sumcheck_id(),
+            ))
+            .1;
+        let round_bit = accumulator
+            .get_virtual_polynomial_opening(OpeningId::new(
+                VirtualPoly::QwenRoundLut,
+                pv_sumcheck_id(),
+            ))
+            .1;
+        let point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r;
+        let head_vars = self.params.output_head_point.len();
+        let selector = EqPolynomial::<F>::mle(&self.params.output_head_point, &point[..head_vars]);
+        let eq_zero = EqPolynomial::<F>::mle(&vec![F::zero(); self.params.num_rounds], &point);
+        left * right * selector + eq_zero * (round_bit * scale_q8::<F>() - remainder)
+    }
+
+    fn cache_openings(
+        &self,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenAttentionLeft, pv_sumcheck_id()),
+            point.clone(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenAttentionRight, pv_sumcheck_id()),
+            point,
+        );
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenRoundRemainder, pv_sumcheck_id()),
+            OpeningPoint::<BIG_ENDIAN, F>::default(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenRoundLut, pv_sumcheck_id()),
+            OpeningPoint::<BIG_ENDIAN, F>::default(),
+        );
+    }
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for PvProductVerifier<F> {
@@ -572,6 +1043,94 @@ fn verify_pv_inputs<F: JoltField>(
         ));
     }
     verify_claim(context_claim, &params.context_shape())
+}
+
+fn validate_round_witness(remainder: &[usize], round_bit: &[i32], shape: &Shape) -> Result<()> {
+    let expected = shape.numel();
+    if remainder.len() != expected {
+        return Err(ProverError::TensorLenMismatch {
+            name: "pv round remainder",
+            shape: shape.0.clone(),
+            expected,
+            actual: remainder.len(),
+        });
+    }
+    if round_bit.len() != expected {
+        return Err(ProverError::TensorLenMismatch {
+            name: "pv round bit",
+            shape: shape.0.clone(),
+            expected,
+            actual: round_bit.len(),
+        });
+    }
+    for (&rem, &bit) in remainder.iter().zip(round_bit) {
+        if rem >= 256 || !(bit == 0 || bit == 1) {
+            return Err(ProverError::InvalidSumcheckDomain(rem));
+        }
+    }
+    Ok(())
+}
+
+fn eval_round_tensor<F: JoltField>(values: &[usize], shape: &Shape, point: &[F]) -> F {
+    let eq_by_dim = split_point_for_shape(shape, point)
+        .into_iter()
+        .map(EqPolynomial::<F>::evals)
+        .collect::<Vec<_>>();
+    let strides = row_major_strides(shape.dims());
+    let mut out = F::zero();
+    for (flat, &value) in values.iter().enumerate() {
+        let mut weight = F::one();
+        for (dim, (&stride, eq)) in strides.iter().zip(&eq_by_dim).enumerate() {
+            let coord = (flat / stride) % shape.dims()[dim];
+            weight *= eq[coord];
+        }
+        out += weight * F::from_u64(value as u64);
+    }
+    out
+}
+
+fn eval_i32_tensor<F: JoltField>(values: &[i32], shape: &Shape, point: &[F]) -> F {
+    let eq_by_dim = split_point_for_shape(shape, point)
+        .into_iter()
+        .map(EqPolynomial::<F>::evals)
+        .collect::<Vec<_>>();
+    let strides = row_major_strides(shape.dims());
+    let mut out = F::zero();
+    for (flat, &value) in values.iter().enumerate() {
+        let mut weight = F::one();
+        for (dim, (&stride, eq)) in strides.iter().zip(&eq_by_dim).enumerate() {
+            let coord = (flat / stride) % shape.dims()[dim];
+            weight *= eq[coord];
+        }
+        out += weight * F::from_i32(value);
+    }
+    out
+}
+
+fn split_point_for_shape<'a, F: Clone>(shape: &Shape, point: &'a [F]) -> Vec<&'a [F]> {
+    let mut offset = 0;
+    shape
+        .dims()
+        .iter()
+        .map(|dim| {
+            let bits = dim.next_power_of_two().trailing_zeros() as usize;
+            let out = &point[offset..offset + bits];
+            offset += bits;
+            out
+        })
+        .collect()
+}
+
+fn row_major_strides(dims: &[usize]) -> Vec<usize> {
+    let mut strides = vec![1; dims.len()];
+    for idx in (0..dims.len()).rev().skip(1) {
+        strides[idx] = strides[idx + 1] * dims[idx + 1];
+    }
+    strides
+}
+
+fn scale_q8<F: JoltField>() -> F {
+    F::from_u64(256)
 }
 
 #[cfg(test)]

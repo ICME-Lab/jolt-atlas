@@ -39,7 +39,7 @@ pub const ROUND_FRAC_BITS: usize = 8;
 // Shout proves `rem -> round_bit`, including the read-address onehot checks, so
 // the public API no longer returns eight frac-bit claims.
 
-const ROUND_LUT_LEN: usize = 1 << ROUND_FRAC_BITS;
+pub(crate) const ROUND_LUT_LEN: usize = 1 << ROUND_FRAC_BITS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoundParams {
@@ -572,15 +572,16 @@ impl RaOneHotEncoding for RoundRaEncoding {
     }
 }
 
-struct RoundLookupProof<F: JoltField, T: Transcript> {
-    read_raf: SumcheckInstanceProof<F, T>,
-    ra_onehot: SumcheckInstanceProof<F, T>,
-    ra_point: Vec<F>,
-    ra_opening: F,
-    committed_openings: RoundRaCommittedOpenings<F>,
+#[derive(Debug, Clone)]
+pub(crate) struct RoundLookupProof<F: JoltField, T: Transcript> {
+    pub(crate) read_raf: SumcheckInstanceProof<F, T>,
+    pub(crate) ra_onehot: SumcheckInstanceProof<F, T>,
+    pub(crate) ra_point: Vec<F>,
+    pub(crate) ra_opening: F,
+    pub(crate) committed_openings: RoundRaCommittedOpenings<F>,
 }
 
-fn prove_round_lookup<F, T>(
+pub(crate) fn prove_round_lookup<F, T>(
     tensor_point: Vec<F>,
     round_bit_opening: F,
     remainder_opening: F,
@@ -633,7 +634,7 @@ where
     })
 }
 
-fn verify_round_lookup<F, T>(
+pub(crate) fn verify_round_lookup<F, T>(
     logical_len: usize,
     tensor_point: Vec<F>,
     round_bit_opening: F,
@@ -904,7 +905,7 @@ fn padded_usize_tensor<F: JoltField>(values: &[usize], shape: &Shape) -> Vec<F> 
     out
 }
 
-fn padded_lookup_indices(values: &[usize], shape: &Shape) -> Vec<usize> {
+pub(crate) fn padded_lookup_indices(values: &[usize], shape: &Shape) -> Vec<usize> {
     let padded_dims = shape.padded_power_of_two().0;
     let len = padded_dims.iter().product();
     let mut out = vec![0; len];
@@ -921,7 +922,7 @@ fn padded_lookup_indices(values: &[usize], shape: &Shape) -> Vec<usize> {
     out
 }
 
-fn round_lut_table() -> Vec<i32> {
+pub(crate) fn round_lut_table() -> Vec<i32> {
     (0..ROUND_LUT_LEN).map(round_lut_q8).collect()
 }
 

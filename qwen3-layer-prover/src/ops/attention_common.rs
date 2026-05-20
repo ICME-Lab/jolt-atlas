@@ -11,6 +11,7 @@ use crate::{
 pub(crate) const QWEN3_GQA_GROUP_SIZE: usize = 2;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AttentionMatmulProof<F: JoltField, T: Transcript> {
     pub sumcheck: SumcheckInstanceProof<F, T>,
     pub left_opening: F,

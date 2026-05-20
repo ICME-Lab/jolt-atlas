@@ -1,14 +1,25 @@
-use joltworks::{field::JoltField, transcripts::Transcript, utils::errors::ProofVerifyError};
+use common::VirtualPoly;
+use joltworks::{
+    field::JoltField,
+    poly::opening_proof::{
+        BIG_ENDIAN, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+        VerifierOpeningAccumulator,
+    },
+    transcripts::Transcript,
+    utils::errors::ProofVerifyError,
+};
 
 use crate::{
-    claim::Claim,
+    claim::{Claim, Shape, TensorId},
     error::Result,
     ops::{
         hadamard_mul::{
-            HadamardMulParams, HadamardMulProof, prove_hadamard_mul, verify_hadamard_mul,
+            HadamardMulParams, HadamardRoundRelationProof, prove_hadamard_round_relation,
+            verify_hadamard_round_relation,
         },
         round::{
-            ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
+            ROUND_FRAC_BITS, ROUND_LUT_LEN, RoundLookupProof, RoundParams, RoundWitness,
+            padded_lookup_indices, prove_round_lookup, round_lut_table, verify_round_lookup,
         },
     },
 };
@@ -20,12 +31,11 @@ use crate::{
 //     acc = lhs * rhs
 //
 // The layer graph wants the rebased tensor, not this accumulator.  Keep the
-// proof internally as `round` then `hadamard_mul`, but expose it as one op so
-// the layer prover sees only:
-//     output = lhs * rhs
+// The hadamard relation directly includes the fixed-point round relation:
+//     lhs * rhs + round_bit * 2^8 - rem = output * 2^8
 //
-// This mirrors `MatMulRound`: simple protocols stay reusable, while accumulator
-// claims do not leak into the layer-level wiring.
+// This removes the separate round-relation sumcheck.  The SHOUT lookup proving
+// `round_bit = ROUND_LUT_Q8[rem]` remains.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HadamardRoundParams {
@@ -50,8 +60,8 @@ pub struct HadamardRoundWitness {
 
 #[derive(Debug, Clone)]
 pub struct HadamardRoundProof<F: JoltField, T: Transcript> {
-    pub round: RoundProof<F, T>,
-    pub hadamard: HadamardMulProof<F, T>,
+    pub hadamard: HadamardRoundRelationProof<F, T>,
+    pub(crate) round_lookup: RoundLookupProof<F, T>,
 }
 
 pub fn prove_hadamard_round<F, T>(
@@ -70,24 +80,58 @@ where
     T: Transcript,
 {
     let round_witness = RoundWitness::from_input_output(witness.acc.clone(), witness.output.clone());
-    let (round_proof, acc_claim, round_ra) =
-        prove_round(vec![y_claim], &round_witness, &params.round, transcript)?;
-
-    let (hadamard_proof, lhs, rhs) = prove_hadamard_mul(
-        acc_claim,
+    let (hadamard_proof, hadamard_claims) = prove_hadamard_round_relation(
+        y_claim,
         &witness.lhs,
         &witness.rhs,
+        &round_witness.remainder,
+        &round_witness.round_bit,
         &params.hadamard,
         transcript,
     )?;
+    let mut round_accumulator = ProverOpeningAccumulator::new();
+    let round_point = OpeningPoint::<BIG_ENDIAN, F>::new(hadamard_claims.round_point.clone());
+    round_accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenRoundLut, SumcheckId::NodeExecution(0)),
+        (round_point.clone(), hadamard_claims.round_bit_opening),
+    );
+    round_accumulator.openings.insert(
+        OpeningId::new(
+            VirtualPoly::QwenRoundRemainder,
+            SumcheckId::NodeExecution(0),
+        ),
+        (round_point, hadamard_claims.remainder_opening),
+    );
+    let round_lookup = prove_round_lookup(
+        hadamard_claims.round_point,
+        hadamard_claims.round_bit_opening,
+        hadamard_claims.remainder_opening,
+        padded_lookup_indices(&round_witness.remainder, &params.round.shape),
+        round_lut_table(),
+        &mut round_accumulator,
+        transcript,
+    )?;
+    let round_ra = Claim {
+        tensor: TensorId::new(format!("{}_round_ra", params.round.input_tensor.0)),
+        logical_shape: Shape::new(vec![
+            params.round.shape.padded_power_of_two().numel(),
+            ROUND_LUT_LEN,
+        ]),
+        domain_shape: Shape::new(vec![
+            params.round.shape.padded_power_of_two().numel(),
+            ROUND_LUT_LEN,
+        ]),
+        point: round_lookup.ra_point.clone(),
+        value: round_lookup.ra_opening,
+    };
 
     Ok((
         HadamardRoundProof {
-            round: round_proof,
             hadamard: hadamard_proof,
+            round_lookup,
         },
-        lhs,
-        rhs,
+        hadamard_claims.lhs,
+        hadamard_claims.rhs,
         round_ra,
     ))
 }
@@ -102,9 +146,33 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let (acc_claim, round_ra) =
-        verify_round(vec![y_claim], &proof.round, &params.round, transcript)?;
-    let (lhs, rhs) = verify_hadamard_mul(acc_claim, &proof.hadamard, &params.hadamard, transcript)?;
+    let hadamard_claims =
+        verify_hadamard_round_relation(y_claim, &proof.hadamard, &params.hadamard, transcript)?;
+    let round_lookup = verify_round_lookup(
+        params.round.shape.padded_power_of_two().numel(),
+        hadamard_claims.round_point,
+        hadamard_claims.round_bit_opening,
+        hadamard_claims.remainder_opening,
+        proof.round_lookup.ra_opening,
+        &proof.round_lookup.committed_openings,
+        &proof.round_lookup.read_raf,
+        &proof.round_lookup.ra_onehot,
+        &mut VerifierOpeningAccumulator::new(),
+        transcript,
+    )?;
+    let round_ra = Claim {
+        tensor: TensorId::new(format!("{}_round_ra", params.round.input_tensor.0)),
+        logical_shape: Shape::new(vec![
+            params.round.shape.padded_power_of_two().numel(),
+            ROUND_LUT_LEN,
+        ]),
+        domain_shape: Shape::new(vec![
+            params.round.shape.padded_power_of_two().numel(),
+            ROUND_LUT_LEN,
+        ]),
+        point: round_lookup.ra_point,
+        value: proof.round_lookup.ra_opening,
+    };
 
-    Ok((lhs, rhs, round_ra))
+    Ok((hadamard_claims.lhs, hadamard_claims.rhs, round_ra))
 }

@@ -55,6 +55,34 @@ use crate::{
 //
 //      eq_acc(row,col) * x * inv_rms(row)
 //        + gamma * eq_row(row) * x^2
+//
+// Future optimization note:
+//
+// RMSNorm still exposes the two round steps as standalone generic round
+// protocols:
+//
+//   norm = round(x * inv_rms / 2^8)
+//   output = round(norm * weight / 2^8)
+//
+// The matmul-like ops already fuse their final round relation into the main
+// arithmetic sumcheck and keep only the SHOUT lookup for `rem -> round_bit`.
+// RMSNorm can use the same idea later.
+//
+// A conservative first step is to fuse only the final output round:
+//
+//   norm * weight + round_bit_out * 2^8 - rem_out = output * 2^8
+//
+// The stronger version batches both elementwise relations into one sumcheck
+// with a random coefficient:
+//
+//   alpha * (x * inv_rms + round_bit_norm * 2^8 - rem_norm - norm * 2^8)
+//       + (norm * weight + round_bit_out * 2^8 - rem_out - output * 2^8)
+//     = 0
+//
+// The `sum_x2 = sum_col x^2` relation should stay separate unless there is a
+// clear reason to combine it: it is a row-wise reduction, while the two round
+// relations are elementwise.  Combining them would make the protocol harder to
+// read for less obvious benefit.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RmsNormParams {

@@ -34,6 +34,14 @@ use crate::{
     },
 };
 
+macro_rules! op_timing {
+    ($($arg:tt)*) => {
+        if crate::timing::op_timing_enabled() {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
 const FIXED_FRAC_BITS: usize = ROUND_FRAC_BITS;
 const FIXED_SCALE: i64 = 1_i64 << FIXED_FRAC_BITS;
 const MAX_SOFTMAX_LUT_ENTRIES: usize = 1 << 12;
@@ -236,7 +244,7 @@ where
     let total_start = Instant::now();
     let mut step_start = Instant::now();
     validate_inputs(witness, params)?;
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.validate {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -248,7 +256,7 @@ where
     );
     let (round_proof, floor_claim, output_round_ra) =
         prove_round(output_claims, &round_witness, &params.round, transcript)?;
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.output_round {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -261,7 +269,7 @@ where
     };
     let (floor_proof, acc_claim, floor_round_ra) =
         prove_floor(vec![floor_claim], &floor_witness, &params.floor, transcript)?;
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.floor {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -277,7 +285,7 @@ where
     );
 
     let inv_sum = inv_sum_from_sum::<F>(&witness.sum);
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.advice_inv_sum {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -286,9 +294,8 @@ where
     let acc_eq = EqPolynomial::<F>::evals(&acc_claim.point);
     let inv = expand_rows_to_tensor(&inv_sum, params);
     let exp_poly = padded_i32_tensor(&witness.exp, &params.shape);
-    let inv_poly = inv.clone();
-    let valid_poly = valid_tensor::<F>(params);
-    eprintln!(
+    let valid_poly = valid_tensor_u8(params);
+    op_timing!(
         "timing: prove_softmax.acc_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -301,10 +308,10 @@ where
         ),
         acc_eq,
         exp_poly,
-        inv_poly,
+        inv,
         valid_poly,
     );
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.acc_prover_init {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -313,7 +320,7 @@ where
     let mut acc_accumulator = ProverOpeningAccumulator::new();
     let (acc_proof, acc_challenges) =
         Sumcheck::prove(&mut acc_prover, &mut acc_accumulator, transcript);
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.acc_sumcheck {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -331,7 +338,7 @@ where
         point: exp_point,
         value: exp_opening,
     };
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.acc_opening_claim {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -345,18 +352,18 @@ where
         &params.exp_round,
         transcript,
     )?;
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.exp_round {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
 
     step_start = Instant::now();
     let lookup = prove_lookup(exp_acc_claim, witness, params, transcript)?;
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.lookup_total {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.total {:.3}s",
         total_start.elapsed().as_secs_f64()
     );
@@ -489,7 +496,7 @@ where
     let mut step_start = Instant::now();
     let entries = entries_from_min_max(witness.min_diff, witness.max_diff)?;
     let lut_len = padded_softmax_lut_len(entries);
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.lookup.setup {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -498,16 +505,16 @@ where
     let eq_exp = masked_eq_poly(&exp_claim, &params.shape);
     let row_point = row_point_from_tensor_point(&exp_claim.point, params);
     let row_eq = row_eq_lifted(&row_point, params);
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.lookup.eq_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
 
     step_start = Instant::now();
-    let max_selector = max_selector_tensor::<F>(&witness.max_index, params);
-    let valid = valid_tensor(params);
+    let max_selector = max_selector_tensor(&witness.max_index, params);
+    let valid = valid_tensor_u8(params);
     let max = expand_rows_to_padded_tensor_i32(&witness.max, params);
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.lookup.row_valid_max_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -526,14 +533,14 @@ where
     let remainder = padded_usize_evals(&padded_remainders);
     let exp_lut = padded_i64_tensor(&exp_lut_values, &params.shape);
     let index = padded_usize_evals(&padded_exp_indices);
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.lookup.witness_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
 
     step_start = Instant::now();
     let exp_table = padded_i32_table(witness.min_diff, entries, lut_len, exp_lut_q8_unclipped)?;
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.lookup.table_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -543,7 +550,7 @@ where
     let max_mix = transcript.challenge_scalar();
     let diff_mix = transcript.challenge_scalar();
     let input_claim = exp_claim.value + max_mix * max_eval;
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.lookup.challenges_claim {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -566,7 +573,7 @@ where
         diff_mix,
         field_from_i64(witness.min_diff),
     );
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.lookup.prover_init {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -574,7 +581,7 @@ where
     step_start = Instant::now();
     let mut accumulator = ProverOpeningAccumulator::new();
     let (proof, challenges) = Sumcheck::prove(&mut prover, &mut accumulator, transcript);
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.lookup.sumcheck {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -601,7 +608,7 @@ where
     )?;
     let full_point = normalize_sumcheck_point::<F>(&challenges.into_opening());
     let tensor_point = full_point;
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.lookup.openings_claims {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -618,7 +625,7 @@ where
         &mut accumulator,
         transcript,
     )?;
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.lookup.shout {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -635,12 +642,12 @@ where
         &mut accumulator,
         transcript,
     )?;
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.lookup.remainder_shout {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
 
-    eprintln!(
+    op_timing!(
         "timing: prove_softmax.lookup.total {:.3}s",
         total_start.elapsed().as_secs_f64()
     );
@@ -851,9 +858,9 @@ impl<F: JoltField> AccSumcheckProver<F> {
     fn new(
         params: BasicSumcheckParams<F>,
         eq: Vec<F>,
-        exp: Vec<F>,
+        exp: Vec<i32>,
         inv: Vec<F>,
-        valid: Vec<F>,
+        valid: Vec<u8>,
     ) -> Self {
         Self {
             eq: MultilinearPolynomial::from(eq),
@@ -992,13 +999,13 @@ impl<F: JoltField> LookupSumcheckProver<F> {
         params: LookupSumcheckParams<F>,
         eq_exp: Vec<F>,
         row_eq: Vec<F>,
-        max_selector: Vec<F>,
-        valid: Vec<F>,
-        max: Vec<F>,
-        input: Vec<F>,
-        remainder: Vec<F>,
-        exp_lut: Vec<F>,
-        index: Vec<F>,
+        max_selector: Vec<u8>,
+        valid: Vec<u8>,
+        max: Vec<i32>,
+        input: Vec<i32>,
+        remainder: Vec<u32>,
+        exp_lut: Vec<i64>,
+        index: Vec<u32>,
         max_mix: F,
         diff_mix: F,
         min_diff: F,
@@ -1894,13 +1901,13 @@ fn padded_softmax_lut_len(entries: usize) -> usize {
     (entries + 1).next_power_of_two().max(16)
 }
 
-fn max_selector_tensor<F: JoltField>(max_index: &[usize], params: &SoftmaxParams) -> Vec<F> {
-    let mut values = vec![F::zero(); params.shape.numel()];
+fn max_selector_tensor(max_index: &[usize], params: &SoftmaxParams) -> Vec<u8> {
+    let mut values = vec![0; params.shape.numel()];
     let cols = params.cols();
     for (row, &col) in max_index.iter().enumerate() {
-        values[row * cols + col] = F::one();
+        values[row * cols + col] = 1;
     }
-    padded_field_tensor(&values, &params.shape)
+    padded_u8_tensor(&values, &params.shape)
 }
 
 fn eval_max_selector<F: JoltField>(max_index: &[usize], shape: &Shape, point: &[F]) -> F {
@@ -1913,8 +1920,26 @@ fn eval_max_selector<F: JoltField>(max_index: &[usize], shape: &Shape, point: &[
     eval_field_tensor(&values, shape, point)
 }
 
+fn valid_tensor_u8(params: &SoftmaxParams) -> Vec<u8> {
+    valid_tensor_u8_for_shape(params.causal, &params.shape)
+}
+
 fn valid_tensor<F: JoltField>(params: &SoftmaxParams) -> Vec<F> {
     valid_tensor_for_shape(params.causal, &params.shape)
+}
+
+fn valid_tensor_u8_for_shape(causal: bool, shape: &Shape) -> Vec<u8> {
+    let cols = *shape.dims().last().unwrap();
+    let rows = shape.numel() / cols;
+    let mut values = vec![0; shape.numel()];
+    for row in 0..rows {
+        for col in 0..cols {
+            if is_valid_position(causal, shape, row, col) {
+                values[row * cols + col] = 1;
+            }
+        }
+    }
+    padded_u8_tensor(&values, shape)
 }
 
 fn valid_tensor_for_shape<F: JoltField>(causal: bool, shape: &Shape) -> Vec<F> {
@@ -1988,10 +2013,7 @@ fn expand_rows_to_tensor<F: JoltField>(row_values: &[F], params: &SoftmaxParams)
     padded_field_tensor(&values, &params.shape)
 }
 
-fn expand_rows_to_padded_tensor_i32<F: JoltField>(
-    row_values: &[i32],
-    params: &SoftmaxParams,
-) -> Vec<F> {
+fn expand_rows_to_padded_tensor_i32(row_values: &[i32], params: &SoftmaxParams) -> Vec<i32> {
     let padded_dims = params.shape.padded_power_of_two().0;
     let len = padded_dims.iter().product();
     let padded_cols = *padded_dims.last().unwrap();
@@ -1999,7 +2021,7 @@ fn expand_rows_to_padded_tensor_i32<F: JoltField>(
     let padded_row_dims = &padded_dims[..padded_dims.len() - 1];
     let row_strides = row_major_strides(row_dims);
     let padded_row_strides = row_major_strides(padded_row_dims);
-    let mut out = vec![F::zero(); len];
+    let mut out = vec![0; len];
     for (row, &value) in row_values.iter().enumerate() {
         let mut padded_row = 0;
         for (dim, (&stride, &padded_stride)) in
@@ -2010,16 +2032,16 @@ fn expand_rows_to_padded_tensor_i32<F: JoltField>(
         }
         let base = padded_row * padded_cols;
         for col in 0..padded_cols {
-            out[base + col] = field_from_i64(i64::from(value));
+            out[base + col] = value;
         }
     }
     out
 }
 
-fn padded_i32_tensor<F: JoltField>(values: &[i32], shape: &Shape) -> Vec<F> {
+fn padded_i32_tensor(values: &[i32], shape: &Shape) -> Vec<i32> {
     let padded_dims = shape.padded_power_of_two().0;
     let len = padded_dims.iter().product();
-    let mut out = vec![F::zero(); len];
+    let mut out = vec![0; len];
     let strides = row_major_strides(shape.dims());
     let padded_strides = row_major_strides(&padded_dims);
     for (flat, &value) in values.iter().enumerate() {
@@ -2028,15 +2050,15 @@ fn padded_i32_tensor<F: JoltField>(values: &[i32], shape: &Shape) -> Vec<F> {
             let coord = (flat / stride) % shape.dims()[dim];
             padded_flat += coord * padded_stride;
         }
-        out[padded_flat] = field_from_i64(i64::from(value));
+        out[padded_flat] = value;
     }
     out
 }
 
-fn padded_i64_tensor<F: JoltField>(values: &[i64], shape: &Shape) -> Vec<F> {
+fn padded_i64_tensor(values: &[i64], shape: &Shape) -> Vec<i64> {
     let padded_dims = shape.padded_power_of_two().0;
     let len = padded_dims.iter().product();
-    let mut out = vec![F::zero(); len];
+    let mut out = vec![0; len];
     let strides = row_major_strides(shape.dims());
     let padded_strides = row_major_strides(&padded_dims);
     for (flat, &value) in values.iter().enumerate() {
@@ -2045,16 +2067,30 @@ fn padded_i64_tensor<F: JoltField>(values: &[i64], shape: &Shape) -> Vec<F> {
             let coord = (flat / stride) % shape.dims()[dim];
             padded_flat += coord * padded_stride;
         }
-        out[padded_flat] = field_from_i64(value);
+        out[padded_flat] = value;
     }
     out
 }
 
-fn padded_usize_evals<F: JoltField>(values: &[usize]) -> Vec<F> {
-    values
-        .iter()
-        .map(|&value| F::from_u64(value as u64))
-        .collect()
+fn padded_u8_tensor(values: &[u8], shape: &Shape) -> Vec<u8> {
+    let padded_dims = shape.padded_power_of_two().0;
+    let len = padded_dims.iter().product();
+    let mut out = vec![0; len];
+    let strides = row_major_strides(shape.dims());
+    let padded_strides = row_major_strides(&padded_dims);
+    for (flat, &value) in values.iter().enumerate() {
+        let mut padded_flat = 0;
+        for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate() {
+            let coord = (flat / stride) % shape.dims()[dim];
+            padded_flat += coord * padded_stride;
+        }
+        out[padded_flat] = value;
+    }
+    out
+}
+
+fn padded_usize_evals(values: &[usize]) -> Vec<u32> {
+    values.iter().map(|&value| value as u32).collect()
 }
 
 fn padded_field_tensor<F: JoltField>(values: &[F], shape: &Shape) -> Vec<F> {

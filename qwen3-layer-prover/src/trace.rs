@@ -102,170 +102,145 @@ pub fn build_layer_witness_from_trace_dir(
     validate_shape(shape)?;
     let trace = TraceIndex::load(trace_dir)?;
     let hidden_in = trace.i32(&format!("layer{layer}.ln1.A"), &[shape.seq, shape.hidden])?;
-    let hidden_out = trace.i32(
-        &format!("layer{layer}.residual_mlp.Y"),
+
+    let rms_norm_atten = rms_norm_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.ln1"),
+        &hidden_in,
+        &weights.rms_norm_atten,
+        shape.seq,
+        shape.hidden,
         &[shape.seq, shape.hidden],
     )?;
 
-    let rms_norm_atten = rms_norm(&hidden_in, &weights.rms_norm_atten, shape.seq, shape.hidden);
-    check(
-        &format!("layer{layer}.ln1.Y"),
-        &trace.i32(&format!("layer{layer}.ln1.Y"), &[shape.seq, shape.hidden])?,
-        &rms_norm_atten.output,
+    let q_proj = round_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.q_proj"),
+        &[shape.seq, shape.attention_width()],
+        || {
+            matmul(
+                &rms_norm_atten.output,
+                &weights.q_proj,
+                shape.seq,
+                shape.hidden,
+                shape.attention_width(),
+            )
+        },
+    )?;
+    let k_proj = round_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.k_proj"),
+        &[shape.seq, shape.kv_heads * shape.head_dim],
+        || {
+            matmul(
+                &rms_norm_atten.output,
+                &weights.k_proj,
+                shape.seq,
+                shape.hidden,
+                shape.kv_heads * shape.head_dim,
+            )
+        },
+    )?;
+    let v_proj = round_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.v_proj"),
+        &[shape.seq, shape.kv_heads * shape.head_dim],
+        || {
+            matmul(
+                &rms_norm_atten.output,
+                &weights.v_proj,
+                shape.seq,
+                shape.hidden,
+                shape.kv_heads * shape.head_dim,
+            )
+        },
     )?;
 
-    let q_proj = matmul(
-        &rms_norm_atten.output,
-        &weights.q_proj,
-        shape.seq,
-        shape.hidden,
-        shape.attention_width(),
-    );
-    let k_proj = matmul(
-        &rms_norm_atten.output,
-        &weights.k_proj,
-        shape.seq,
-        shape.hidden,
-        shape.kv_heads * shape.head_dim,
-    );
-    let v_proj = matmul(
-        &rms_norm_atten.output,
-        &weights.v_proj,
-        shape.seq,
-        shape.hidden,
-        shape.kv_heads * shape.head_dim,
-    );
-    check(
-        &format!("layer{layer}.q_proj.Y"),
-        &trace.i32(
-            &format!("layer{layer}.q_proj.Y"),
-            &[shape.seq, shape.attention_width()],
-        )?,
-        &q_proj.output,
-    )?;
-    check(
-        &format!("layer{layer}.k_proj.Y"),
-        &trace.i32(
-            &format!("layer{layer}.k_proj.Y"),
-            &[shape.seq, shape.kv_heads * shape.head_dim],
-        )?,
-        &k_proj.output,
-    )?;
-    check(
-        &format!("layer{layer}.v_proj.Y"),
-        &trace.i32(
-            &format!("layer{layer}.v_proj.Y"),
-            &[shape.seq, shape.kv_heads * shape.head_dim],
-        )?,
-        &v_proj.output,
-    )?;
-
-    let q_norm = rms_norm(
+    let q_norm = rms_norm_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.q_norm"),
         &q_proj.output,
         &weights.q_norm,
         shape.seq * shape.q_heads,
         shape.head_dim,
-    );
-    let k_norm = rms_norm(
+        &[shape.seq, shape.q_heads, shape.head_dim],
+    )?;
+    let k_norm = rms_norm_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.k_norm"),
         &k_proj.output,
         &weights.k_norm,
         shape.seq * shape.kv_heads,
         shape.head_dim,
-    );
-    check(
-        &format!("layer{layer}.q_norm.Y"),
-        &trace.i32(
-            &format!("layer{layer}.q_norm.Y"),
-            &[shape.seq, shape.q_heads, shape.head_dim],
-        )?,
-        &q_norm.output,
-    )?;
-    check(
-        &format!("layer{layer}.k_norm.Y"),
-        &trace.i32(
-            &format!("layer{layer}.k_norm.Y"),
-            &[shape.seq, shape.kv_heads, shape.head_dim],
-        )?,
-        &k_norm.output,
+        &[shape.seq, shape.kv_heads, shape.head_dim],
     )?;
 
-    let q_rope = rope(
-        &q_norm.output,
-        &weights.rope_cos,
-        &weights.rope_sin,
-        shape.seq,
-        shape.q_heads,
-        shape.head_dim,
-    );
-    let k_rope = rope(
-        &k_norm.output,
-        &weights.rope_cos,
-        &weights.rope_sin,
-        shape.seq,
-        shape.kv_heads,
-        shape.head_dim,
-    );
-    check(
-        &format!("layer{layer}.q_rope.Y"),
-        &trace.i32(
-            &format!("layer{layer}.q_rope.Y"),
-            &[shape.seq, shape.q_heads, shape.head_dim],
-        )?,
+    let q_rope = round_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.q_rope"),
+        &[shape.seq, shape.q_heads, shape.head_dim],
+        || {
+            rope(
+                &q_norm.output,
+                &weights.rope_cos,
+                &weights.rope_sin,
+                shape.seq,
+                shape.q_heads,
+                shape.head_dim,
+            )
+        },
+    )?;
+    let k_rope = round_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.k_rope"),
+        &[shape.seq, shape.kv_heads, shape.head_dim],
+        || {
+            rope(
+                &k_norm.output,
+                &weights.rope_cos,
+                &weights.rope_sin,
+                shape.seq,
+                shape.kv_heads,
+                shape.head_dim,
+            )
+        },
+    )?;
+
+    let qk_score = qk_score_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.attention_scores"),
         &q_rope.output,
-    )?;
-    check(
-        &format!("layer{layer}.k_rope.Y"),
-        &trace.i32(
-            &format!("layer{layer}.k_rope.Y"),
-            &[shape.seq, shape.kv_heads, shape.head_dim],
-        )?,
         &k_rope.output,
+        shape,
     )?;
 
-    let qk_score = qk_score(&q_rope.output, &k_rope.output, shape);
-    check(
-        &format!("layer{layer}.attention_scores.Y"),
-        &trace.i32(
-            &format!("layer{layer}.attention_scores.Y"),
-            &[shape.q_heads, shape.seq, shape.seq],
-        )?,
+    let softmax = causal_softmax_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.softmax"),
         &qk_score.output,
+        shape,
     )?;
 
-    let softmax = causal_softmax(&qk_score.output, shape);
-    check(
-        &format!("layer{layer}.softmax.Y"),
-        &trace.i32(
-            &format!("layer{layer}.softmax.Y"),
-            &[shape.q_heads, shape.seq, shape.seq],
-        )?,
-        &softmax.output,
+    let context = round_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.attention_value"),
+        &[shape.seq, shape.attention_width()],
+        || pv_matmul(&softmax.output, &v_proj.output, shape),
     )?;
 
-    let context = pv_matmul(&softmax.output, &v_proj.output, shape);
-    check(
-        &format!("layer{layer}.attention_value.Y"),
-        &trace.i32(
-            &format!("layer{layer}.attention_value.Y"),
-            &[shape.seq, shape.attention_width()],
-        )?,
-        &context.output,
-    )?;
-
-    let o_proj = matmul(
-        &context.output,
-        &weights.o_proj,
-        shape.seq,
-        shape.attention_width(),
-        shape.hidden,
-    );
-    check(
-        &format!("layer{layer}.o_proj.Y"),
-        &trace.i32(
-            &format!("layer{layer}.o_proj.Y"),
-            &[shape.seq, shape.hidden],
-        )?,
-        &o_proj.output,
+    let o_proj = round_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.o_proj"),
+        &[shape.seq, shape.hidden],
+        || {
+            matmul(
+                &context.output,
+                &weights.o_proj,
+                shape.seq,
+                shape.attention_width(),
+                shape.hidden,
+            )
+        },
     )?;
 
     let residual_add_attn = hidden_in
@@ -273,95 +248,76 @@ pub fn build_layer_witness_from_trace_dir(
         .zip(&o_proj.output)
         .map(|(&lhs, &rhs)| lhs + rhs)
         .collect::<Vec<_>>();
-    check(
-        &format!("layer{layer}.residual_attn.Y"),
-        &trace.i32(
-            &format!("layer{layer}.residual_attn.Y"),
-            &[shape.seq, shape.hidden],
-        )?,
-        &residual_add_attn,
-    )?;
 
-    let rms_norm_mlp = rms_norm(
+    let rms_norm_mlp = rms_norm_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.ln2"),
         &residual_add_attn,
         &weights.rms_norm_mlp,
         shape.seq,
         shape.hidden,
-    );
-    check(
-        &format!("layer{layer}.ln2.Y"),
-        &trace.i32(&format!("layer{layer}.ln2.Y"), &[shape.seq, shape.hidden])?,
-        &rms_norm_mlp.output,
+        &[shape.seq, shape.hidden],
     )?;
 
-    let gate_proj = matmul(
-        &rms_norm_mlp.output,
-        &weights.gate_proj,
-        shape.seq,
-        shape.hidden,
-        shape.intermediate,
+    let gate_proj = round_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.gate_proj"),
+        &[shape.seq, shape.intermediate],
+        || {
+            matmul(
+                &rms_norm_mlp.output,
+                &weights.gate_proj,
+                shape.seq,
+                shape.hidden,
+                shape.intermediate,
+            )
+        },
     );
-    let up_proj = matmul(
-        &rms_norm_mlp.output,
-        &weights.up_proj,
-        shape.seq,
-        shape.hidden,
-        shape.intermediate,
+    let up_proj = round_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.up_proj"),
+        &[shape.seq, shape.intermediate],
+        || {
+            matmul(
+                &rms_norm_mlp.output,
+                &weights.up_proj,
+                shape.seq,
+                shape.hidden,
+                shape.intermediate,
+            )
+        },
     );
-    check(
-        &format!("layer{layer}.gate_proj.Y"),
-        &trace.i32(
-            &format!("layer{layer}.gate_proj.Y"),
-            &[shape.seq, shape.intermediate],
-        )?,
-        &gate_proj.output,
-    )?;
-    check(
-        &format!("layer{layer}.up_proj.Y"),
-        &trace.i32(
-            &format!("layer{layer}.up_proj.Y"),
-            &[shape.seq, shape.intermediate],
-        )?,
-        &up_proj.output,
-    )?;
+    let gate_proj = gate_proj?;
+    let up_proj = up_proj?;
 
     let silu = silu(&gate_proj.output);
-    let silu_up = hadamard(&silu.output, &up_proj.output);
-    check(
-        &format!("layer{layer}.silu_gate_times_up.Y"),
-        &trace.i32(
-            &format!("layer{layer}.silu_gate_times_up.Y"),
-            &[shape.seq, shape.intermediate],
-        )?,
-        &silu_up.output,
+    let silu_up = round_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.silu_gate_times_up"),
+        &[shape.seq, shape.intermediate],
+        || hadamard(&silu.output, &up_proj.output),
     )?;
 
-    let down_proj = matmul(
-        &silu_up.output,
-        &weights.down_proj,
-        shape.seq,
-        shape.intermediate,
-        shape.hidden,
-    );
-    check(
-        &format!("layer{layer}.down_proj.Y"),
-        &trace.i32(
-            &format!("layer{layer}.down_proj.Y"),
-            &[shape.seq, shape.hidden],
-        )?,
-        &down_proj.output,
+    let down_proj = round_from_trace_or_compute(
+        &trace,
+        &format!("layer{layer}.down_proj"),
+        &[shape.seq, shape.hidden],
+        || {
+            matmul(
+                &silu_up.output,
+                &weights.down_proj,
+                shape.seq,
+                shape.intermediate,
+                shape.hidden,
+            )
+        },
     )?;
 
-    let hidden_out_expected = residual_add_attn
+    let hidden_out = residual_add_attn
         .iter()
         .zip(&down_proj.output)
         .map(|(&lhs, &rhs)| lhs + rhs)
         .collect::<Vec<_>>();
-    check(
-        &format!("layer{layer}.residual_mlp.Y"),
-        &hidden_out,
-        &hidden_out_expected,
-    )?;
 
     Ok(TraceLayerWitness {
         hidden_out,
@@ -479,6 +435,10 @@ impl TraceIndex {
         Ok(Self { root, tensors })
     }
 
+    fn has(&self, label: &str) -> bool {
+        self.tensors.contains_key(label)
+    }
+
     fn i32(&self, label: &str, expected_shape: &[usize]) -> TraceWitnessResult<Vec<i32>> {
         let tensor = self
             .tensors
@@ -511,6 +471,41 @@ impl TraceIndex {
         Ok(bytes
             .chunks_exact(4)
             .map(|chunk| i32::from_le_bytes(chunk.try_into().expect("chunk length is 4")))
+            .collect())
+    }
+
+    fn i64(&self, label: &str, expected_shape: &[usize]) -> TraceWitnessResult<Vec<i64>> {
+        let tensor = self
+            .tensors
+            .get(label)
+            .ok_or_else(|| TraceWitnessError::MissingTensor(label.to_string()))?;
+        if tensor.dtype != "i64_le" {
+            return Err(TraceWitnessError::DtypeMismatch {
+                label: label.to_string(),
+                expected: "i64_le".to_string(),
+                actual: tensor.dtype.clone(),
+            });
+        }
+        if tensor.shape != expected_shape {
+            return Err(TraceWitnessError::ShapeMismatch {
+                label: label.to_string(),
+                expected: expected_shape.to_vec(),
+                actual: tensor.shape.clone(),
+            });
+        }
+        let mut bytes = Vec::new();
+        File::open(self.root.join(&tensor.file))?.read_to_end(&mut bytes)?;
+        let expected_len = expected_shape.iter().product::<usize>();
+        if bytes.len() != expected_len * std::mem::size_of::<i64>() {
+            return Err(TraceWitnessError::LenMismatch {
+                label: label.to_string(),
+                expected: expected_len,
+                actual: bytes.len() / std::mem::size_of::<i64>(),
+            });
+        }
+        Ok(bytes
+            .chunks_exact(8)
+            .map(|chunk| i64::from_le_bytes(chunk.try_into().expect("chunk length is 8")))
             .collect())
     }
 }
@@ -614,6 +609,142 @@ struct SoftmaxFixture {
     exp: Vec<i32>,
     exp_frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
     frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
+}
+
+fn round_from_trace_or_compute(
+    trace: &TraceIndex,
+    label: &str,
+    shape: &[usize],
+    compute: impl FnOnce() -> RoundFixture,
+) -> TraceWitnessResult<RoundFixture> {
+    let acc_label = format!("{label}.Acc");
+    if trace.has(&acc_label) {
+        return Ok(round_fixture(trace.i64(&acc_label, shape)?));
+    }
+    let computed = compute();
+    check(
+        &format!("{label}.Y"),
+        &trace.i32(&format!("{label}.Y"), shape)?,
+        &computed.output,
+    )?;
+    Ok(computed)
+}
+
+fn rms_norm_from_trace_or_compute(
+    trace: &TraceIndex,
+    label: &str,
+    input: &[i32],
+    weight: &[i32],
+    rows: usize,
+    cols: usize,
+    trace_shape: &[usize],
+) -> TraceWitnessResult<RmsFixture> {
+    let acc_label = format!("{label}.Acc");
+    if !trace.has(&acc_label) {
+        let computed = rms_norm(input, weight, rows, cols);
+        check(
+            &format!("{label}.Y"),
+            &trace.i32(&format!("{label}.Y"), trace_shape)?,
+            &computed.output,
+        )?;
+        return Ok(computed);
+    }
+
+    let mut sum_x2 = vec![0_i64; rows];
+    for row in 0..rows {
+        sum_x2[row] = input[row * cols..(row + 1) * cols]
+            .iter()
+            .map(|&value| i64::from(value) * i64::from(value))
+            .sum();
+    }
+    let norm_acc_label = format!("{label}.NormAcc");
+    let norm_acc = if trace.has(&norm_acc_label) {
+        trace.i64(&norm_acc_label, trace_shape)?
+    } else {
+        let mut norm_acc = vec![0_i64; rows * cols];
+        for row in 0..rows {
+            let inv = rms_inv_from_square_sum(sum_x2[row], cols);
+            for col in 0..cols {
+                norm_acc[row * cols + col] = i64::from(input[row * cols + col]) * inv;
+            }
+        }
+        norm_acc
+    };
+    let norm = round_fixture(norm_acc);
+    let acc = trace.i64(&acc_label, trace_shape)?;
+    let rounded = round_fixture(acc);
+    Ok(RmsFixture {
+        sum_x2,
+        norm_acc: norm.acc,
+        norm: norm.output,
+        norm_frac_bits: norm.frac_bits,
+        acc: rounded.acc,
+        output: rounded.output,
+        frac_bits: rounded.frac_bits,
+    })
+}
+
+fn qk_score_from_trace_or_compute(
+    trace: &TraceIndex,
+    label: &str,
+    q: &[i32],
+    k: &[i32],
+    shape: &LayerShape,
+) -> TraceWitnessResult<QkFixture> {
+    let acc_label = format!("{label}.Acc");
+    if !trace.has(&acc_label) {
+        let computed = qk_score(q, k, shape);
+        check(
+            &format!("{label}.Y"),
+            &trace.i32(&format!("{label}.Y"), &[shape.q_heads, shape.seq, shape.seq])?,
+            &computed.output,
+        )?;
+        return Ok(computed);
+    }
+    let dot_acc = trace.i64(&format!("{label}.DotAcc"), &[shape.q_heads, shape.seq, shape.seq])?;
+    let dot = round_fixture(dot_acc);
+    let scale_acc = trace.i64(&acc_label, &[shape.q_heads, shape.seq, shape.seq])?;
+    let score = round_fixture(scale_acc);
+    Ok(QkFixture {
+        acc: dot.acc,
+        dot: dot.output,
+        dot_frac_bits: dot.frac_bits,
+        scale_acc: score.acc,
+        output: score.output,
+        frac_bits: score.frac_bits,
+    })
+}
+
+fn causal_softmax_from_trace_or_compute(
+    trace: &TraceIndex,
+    label: &str,
+    scores: &[i32],
+    shape: &LayerShape,
+) -> TraceWitnessResult<SoftmaxFixture> {
+    let mut computed = causal_softmax(scores, shape);
+    let acc_label = format!("{label}.Acc");
+    if trace.has(&acc_label) {
+        computed.acc = trace.i64(&acc_label, &[shape.q_heads, shape.seq, shape.seq])?;
+        computed.floor = computed
+            .acc
+            .iter()
+            .map(|&value| floor_q8(value))
+            .collect();
+        computed.output = computed
+            .floor
+            .iter()
+            .map(|&value| round_q8(i64::from(value)))
+            .collect();
+        computed.floor_frac_bits = frac_bits_i64(&computed.acc);
+        computed.frac_bits = frac_bits_i32(&computed.floor);
+    } else {
+        check(
+            &format!("{label}.Y"),
+            &trace.i32(&format!("{label}.Y"), &[shape.q_heads, shape.seq, shape.seq])?,
+            &computed.output,
+        )?;
+    }
+    Ok(computed)
 }
 
 fn validate_shape(shape: &LayerShape) -> TraceWitnessResult<()> {

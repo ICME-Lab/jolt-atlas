@@ -3,16 +3,20 @@ use std::{
     fs::File,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
+    time::Instant,
 };
 
 use ark_bn254::Fr;
 use joltworks::{field::JoltField, poly::eq_poly::EqPolynomial, transcripts::Blake2bTranscript};
 use qwen3_layer_prover::{
     Claim, Shape, TensorId,
-    decoder::{DecoderWeights, DecoderWitness, prove_decoder, verify_decoder},
+    decoder::{
+        DecoderWeights, ParallelLayerWitness, prove_layers_parallel, verify_layers_parallel,
+    },
     layer::{LayerShape, LayerTensorIds, LayerWeights},
     trace::build_layer_witness_from_trace_dir,
 };
+use rayon::prelude::*;
 use serde_json::Value;
 
 const FIXED_CACHE_MAGIC: &[u8; 16] = b"QWEN3AWYQ8CACHE1";
@@ -26,7 +30,8 @@ const HEAD_DIM: usize = 128;
 const VOCAB: usize = 151_936;
 const ROPE_THETA: f64 = 1_000_000.0;
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    let total_start = Instant::now();
     let args = Args::parse()?;
     let seq = args.seq.unwrap_or(read_trace_seq_len(&args.trace)?);
     let shape = LayerShape {
@@ -40,57 +45,71 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cache = args
         .q8_cache
         .unwrap_or_else(|| fixed_cache_path(&args.model));
+    let start = Instant::now();
     let weights = DecoderWeights {
         layers: read_all_layer_weights(&cache, seq)?,
     };
+    eprintln!("timing: decoder.read_weights {:.3}s", start.elapsed().as_secs_f64());
 
-    let mut layer_witnesses = Vec::with_capacity(LAYERS);
-    let mut final_hidden = None;
-    for layer in 0..LAYERS {
-        let traced =
-            build_layer_witness_from_trace_dir(&args.trace, layer, &weights.layers[layer], &shape)?;
-        if layer + 1 == LAYERS {
-            final_hidden = Some(traced.hidden_out.clone());
-        }
-        layer_witnesses.push(traced.witness);
-    }
-    let witness = DecoderWitness {
-        layers: layer_witnesses,
-    };
-    let final_hidden = final_hidden.ok_or("decoder trace did not produce final hidden")?;
     let hidden_shape = shape.hidden_shape();
     let point_len = hidden_shape.padded_power_of_two().point_len();
-    let hidden_out_a =
-        hidden_out_claim(&final_hidden, &hidden_shape, challenge_point(point_len, 3));
-    let hidden_out_b =
-        hidden_out_claim(&final_hidden, &hidden_shape, challenge_point(point_len, 37));
+    let start = Instant::now();
+    let layer_witnesses = (0..LAYERS)
+        .into_par_iter()
+        .map(|layer| {
+            let traced = build_layer_witness_from_trace_dir(
+                &args.trace,
+                layer,
+                &weights.layers[layer],
+                &shape,
+            )?;
+            let hidden_out_a = hidden_out_claim(
+                &traced.hidden_out,
+                &hidden_shape,
+                challenge_point(point_len, 3),
+            );
+            let hidden_out_b = hidden_out_claim(
+                &traced.hidden_out,
+                &hidden_shape,
+                challenge_point(point_len, 37),
+            );
+            Ok(ParallelLayerWitness {
+                hidden_out_a,
+                hidden_out_b,
+                witness: traced.witness,
+            })
+        })
+        .collect::<Result<Vec<_>, Box<dyn Error + Send + Sync>>>()?;
+    eprintln!("timing: decoder.build_witness {:.3}s", start.elapsed().as_secs_f64());
     let tensors = (0..LAYERS)
         .map(|_| LayerTensorIds::default())
         .collect::<Vec<_>>();
 
-    let mut prover_transcript = Blake2bTranscript::default();
-    let proof = prove_decoder::<Fr, _>(
-        hidden_out_a.clone(),
-        hidden_out_b.clone(),
-        &witness,
+    let start = Instant::now();
+    let proof = prove_layers_parallel::<Fr, Blake2bTranscript>(
+        &layer_witnesses,
         &weights,
         &shape,
         &tensors,
-        &mut prover_transcript,
     )?;
+    eprintln!(
+        "timing: decoder.prove_layers_parallel {:.3}s",
+        start.elapsed().as_secs_f64()
+    );
 
-    let mut verifier_transcript = Blake2bTranscript::default();
-    let claims = verify_decoder::<Fr, _>(
-        hidden_out_a,
-        hidden_out_b,
+    let start = Instant::now();
+    let claims = verify_layers_parallel::<Fr, Blake2bTranscript>(
         &proof.proof,
         &weights,
         &shape,
         &tensors,
-        &mut verifier_transcript,
     )?;
+    eprintln!(
+        "timing: decoder.verify_layers_parallel {:.3}s",
+        start.elapsed().as_secs_f64()
+    );
     if claims != proof.claims {
-        return Err("verify_decoder claims differ from prove_decoder claims".into());
+        return Err("verify_layers_parallel claims differ from prove_layers_parallel claims".into());
     }
 
     println!("prove_trace_decoder: ok");
@@ -98,6 +117,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("q8_cache: {}", cache.display());
     println!("layers: {LAYERS}");
     println!("seq: {seq}");
+    eprintln!("timing: decoder.total {:.3}s", total_start.elapsed().as_secs_f64());
     Ok(())
 }
 
@@ -110,7 +130,7 @@ struct Args {
 }
 
 impl Args {
-    fn parse() -> Result<Self, Box<dyn Error>> {
+    fn parse() -> Result<Self, Box<dyn Error + Send + Sync>> {
         let mut trace = None;
         let mut model = PathBuf::from("qwen3-awy/models/qwen3-0.6b/model.safetensors");
         let mut q8_cache = None;
@@ -164,7 +184,7 @@ fn fixed_cache_path(model: &Path) -> PathBuf {
     path
 }
 
-fn read_trace_seq_len(trace: &Path) -> Result<usize, Box<dyn Error>> {
+fn read_trace_seq_len(trace: &Path) -> Result<usize, Box<dyn Error + Send + Sync>> {
     let manifest = BufReader::new(File::open(trace.join("manifest.jsonl"))?);
     for line in manifest.lines() {
         let line = line?;
@@ -181,7 +201,10 @@ fn read_trace_seq_len(trace: &Path) -> Result<usize, Box<dyn Error>> {
     Err("trace metadata did not contain tokens_total".into())
 }
 
-fn read_all_layer_weights(path: &Path, seq: usize) -> Result<Vec<LayerWeights>, Box<dyn Error>> {
+fn read_all_layer_weights(
+    path: &Path,
+    seq: usize,
+) -> Result<Vec<LayerWeights>, Box<dyn Error + Send + Sync>> {
     let mut r = BufReader::new(File::open(path)?);
     let mut magic = [0u8; 16];
     r.read_exact(&mut magic)?;
@@ -243,13 +266,13 @@ fn read_all_layer_weights(path: &Path, seq: usize) -> Result<Vec<LayerWeights>, 
     Ok(layers)
 }
 
-fn read_u64(r: &mut impl Read) -> Result<u64, Box<dyn Error>> {
+fn read_u64(r: &mut impl Read) -> Result<u64, Box<dyn Error + Send + Sync>> {
     let mut bytes = [0u8; 8];
     r.read_exact(&mut bytes)?;
     Ok(u64::from_le_bytes(bytes))
 }
 
-fn read_i32_vec(r: &mut impl Read) -> Result<Vec<i32>, Box<dyn Error>> {
+fn read_i32_vec(r: &mut impl Read) -> Result<Vec<i32>, Box<dyn Error + Send + Sync>> {
     let len = read_u64(r)? as usize;
     let mut bytes = vec![0u8; len * std::mem::size_of::<i32>()];
     r.read_exact(&mut bytes)?;

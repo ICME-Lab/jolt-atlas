@@ -373,6 +373,35 @@ impl TraceRecorder {
         }))
     }
 
+    fn tensor_i64(
+        &mut self,
+        label: &str,
+        shape: &[usize],
+        xs: &[i64],
+    ) -> Result<serde_json::Value, Box<dyn Error>> {
+        let safe_label = label.replace(|c: char| !c.is_ascii_alphanumeric(), "_");
+        let file = format!("{:05}_{safe_label}.i64.bin", self.next_id);
+        self.next_id += 1;
+        let path = self.dir.join(&file);
+        let mut out = BufWriter::new(File::create(path)?);
+        if cfg!(target_endian = "little") {
+            let bytes = unsafe {
+                std::slice::from_raw_parts(xs.as_ptr() as *const u8, std::mem::size_of_val(xs))
+            };
+            out.write_all(bytes)?;
+        } else {
+            for &x in xs {
+                out.write_all(&x.to_le_bytes())?;
+            }
+        }
+        Ok(json!({
+            "label": label,
+            "dtype": "i64_le",
+            "shape": shape,
+            "file": file,
+        }))
+    }
+
     fn op(&mut self, value: serde_json::Value) -> Result<(), Box<dyn Error>> {
         writeln!(self.manifest, "{}", value)?;
         Ok(())
@@ -1135,15 +1164,15 @@ fn dump_full_awy_trace(
     let mut trace = TraceRecorder::create(path.clone())?;
     trace.metadata(json!({
         "event": "metadata",
-        "format": "qwen3-awy-full-sequence-v2",
+        "format": "qwen3-awy-full-sequence-v3",
         "fixed_frac": DEFAULT_FIXED_FRAC,
         "seq_len": args.seq_len,
         "tokens_total": seq,
         "token_ids": ids,
         "witness_generation": {
             "strategy": "compact_trace_replay",
-            "note": "The trace stores i32 checkpoint tensors and op metadata. Derived witness data such as accumulators, frac bits, LUT selectors, sums, and max advice should be regenerated deterministically from checkpoints, weights, and public shapes.",
-            "causal_mask": "attention_scores.Y stores raw QK scores. Future-token masking is applied only inside softmax using the verifier-known key_pos <= query_pos selector."
+            "note": "The trace stores i32 input checkpoints and i64 accumulator checkpoints for round-producing ops. Rounded Y tensors are regenerated from Acc during witness construction. Derived lookup data such as frac bits, LUT selectors, sums, and max advice should be regenerated deterministically from checkpoints, weights, and public shapes.",
+            "causal_mask": "attention_scores.Acc stores the scaled QK accumulator. Rounded raw QK scores are regenerated from Acc. Future-token masking is applied only inside softmax using the verifier-known key_pos <= query_pos selector."
         },
         "note": "The generated token sequence is replayed as one full prefill forward pass. Checkpoint tensors are stored as i32_le files. W tensors are referenced by fixed weight name or LUT name.",
     }))?;
@@ -1187,8 +1216,9 @@ fn full_layer_trace(
     layer_idx: usize,
     trace: &mut TraceRecorder,
 ) -> Result<Vec<i32>, Box<dyn Error>> {
-    let n1 = rms_norm_fixed_i32(x, &w.ln1, seq, HIDDEN);
-    record_unary_weight_op(
+    let n1_trace = rms_norm_fixed_i32_with_acc(x, &w.ln1, seq, HIDDEN);
+    let n1 = n1_trace.output;
+    record_unary_weight_op_acc(
         trace,
         layer_idx,
         "rms_norm",
@@ -1197,13 +1227,25 @@ fn full_layer_trace(
         &[seq, HIDDEN],
         "input_layernorm.weight",
         &[HIDDEN],
-        &n1,
+        &n1_trace.acc,
         &[seq, HIDDEN],
     )?;
+    let norm_acc_ref = trace.tensor_i64(
+        &format!("layer{layer_idx}.ln1.NormAcc"),
+        &[seq, HIDDEN],
+        &n1_trace.norm_acc,
+    )?;
+    trace.op(json!({
+        "event": "op_aux",
+        "layer": layer_idx,
+        "op": "rms_norm",
+        "name": "ln1_norm_acc",
+        "NormAcc": norm_acc_ref,
+    }))?;
 
     let attn = run_attention_prefill_fixed_traced(&n1, w, r, seq, cfg, layer_idx, trace)?;
     let h = add_fixed_i32(x, &attn.hidden);
-    record_binary_op(
+    record_binary_op_inputs(
         trace,
         layer_idx,
         "add",
@@ -1211,8 +1253,6 @@ fn full_layer_trace(
         x,
         &[seq, HIDDEN],
         &attn.hidden,
-        &[seq, HIDDEN],
-        &h,
         &[seq, HIDDEN],
     )?;
 
@@ -1524,28 +1564,17 @@ fn run_attention_prefill_fixed_traced(
     w: &FixedLayerWeights,
     r: &Rotary,
     seq: usize,
-    cfg: &ForwardConfig,
+    _cfg: &ForwardConfig,
     layer: usize,
     trace: &mut TraceRecorder,
 ) -> Result<AttentionPrefillOutput, Box<dyn Error>> {
-    let q = matmul_fixed_i32(&n1, &w.q.wq, seq, HIDDEN, Q_DIM, cfg.matmul_rebase_rounding);
-    let k = matmul_fixed_i32(
-        &n1,
-        &w.q.wk,
-        seq,
-        HIDDEN,
-        KV_DIM,
-        cfg.matmul_rebase_rounding,
-    );
-    let v = matmul_fixed_i32(
-        &n1,
-        &w.q.wv,
-        seq,
-        HIDDEN,
-        KV_DIM,
-        cfg.matmul_rebase_rounding,
-    );
-    record_matmul_op(
+    let q_trace = matmul_fixed_i32_with_acc(&n1, &w.q.wq, seq, HIDDEN, Q_DIM);
+    let k_trace = matmul_fixed_i32_with_acc(&n1, &w.q.wk, seq, HIDDEN, KV_DIM);
+    let v_trace = matmul_fixed_i32_with_acc(&n1, &w.q.wv, seq, HIDDEN, KV_DIM);
+    let q = q_trace.output;
+    let k = k_trace.output;
+    let v = v_trace.output;
+    record_matmul_op_acc(
         trace,
         layer,
         "q_proj",
@@ -1553,10 +1582,10 @@ fn run_attention_prefill_fixed_traced(
         &[seq, HIDDEN],
         "self_attn.q_proj.weight",
         &[HIDDEN, Q_DIM],
-        &q,
+        &q_trace.acc,
         &[seq, Q_DIM],
     )?;
-    record_matmul_op(
+    record_matmul_op_acc(
         trace,
         layer,
         "k_proj",
@@ -1564,10 +1593,10 @@ fn run_attention_prefill_fixed_traced(
         &[seq, HIDDEN],
         "self_attn.k_proj.weight",
         &[HIDDEN, KV_DIM],
-        &k,
+        &k_trace.acc,
         &[seq, KV_DIM],
     )?;
-    record_matmul_op(
+    record_matmul_op_acc(
         trace,
         layer,
         "v_proj",
@@ -1575,13 +1604,15 @@ fn run_attention_prefill_fixed_traced(
         &[seq, HIDDEN],
         "self_attn.v_proj.weight",
         &[HIDDEN, KV_DIM],
-        &v,
+        &v_trace.acc,
         &[seq, KV_DIM],
     )?;
 
-    let q_norm = rms_norm_fixed_i32(&q, &w.q_norm, seq * HEADS, HEAD_DIM);
-    let k_norm = rms_norm_fixed_i32(&k, &w.k_norm, seq * KV_HEADS, HEAD_DIM);
-    record_unary_weight_op(
+    let q_norm_trace = rms_norm_fixed_i32_with_acc(&q, &w.q_norm, seq * HEADS, HEAD_DIM);
+    let k_norm_trace = rms_norm_fixed_i32_with_acc(&k, &w.k_norm, seq * KV_HEADS, HEAD_DIM);
+    let q_norm = q_norm_trace.output;
+    let k_norm = k_norm_trace.output;
+    record_unary_weight_op_acc(
         trace,
         layer,
         "rms_norm",
@@ -1590,10 +1621,10 @@ fn run_attention_prefill_fixed_traced(
         &[seq, HEADS, HEAD_DIM],
         "self_attn.q_norm.weight",
         &[HEAD_DIM],
-        &q_norm,
+        &q_norm_trace.acc,
         &[seq, HEADS, HEAD_DIM],
     )?;
-    record_unary_weight_op(
+    record_unary_weight_op_acc(
         trace,
         layer,
         "rms_norm",
@@ -1602,13 +1633,33 @@ fn run_attention_prefill_fixed_traced(
         &[seq, KV_HEADS, HEAD_DIM],
         "self_attn.k_norm.weight",
         &[HEAD_DIM],
-        &k_norm,
+        &k_norm_trace.acc,
         &[seq, KV_HEADS, HEAD_DIM],
     )?;
+    let q_norm_acc_ref = trace.tensor_i64(
+        &format!("layer{layer}.q_norm.NormAcc"),
+        &[seq, HEADS, HEAD_DIM],
+        &q_norm_trace.norm_acc,
+    )?;
+    let k_norm_acc_ref = trace.tensor_i64(
+        &format!("layer{layer}.k_norm.NormAcc"),
+        &[seq, KV_HEADS, HEAD_DIM],
+        &k_norm_trace.norm_acc,
+    )?;
+    trace.op(json!({
+        "event": "op_aux",
+        "layer": layer,
+        "op": "rms_norm",
+        "name": "qk_norm_acc",
+        "q_NormAcc": q_norm_acc_ref,
+        "k_NormAcc": k_norm_acc_ref,
+    }))?;
 
-    let q_rope = rope_fixed_i32(&q_norm, &r.table, seq, HEADS);
-    let k_rope = rope_fixed_i32(&k_norm, &r.table, seq, KV_HEADS);
-    record_unary_ref_op(
+    let q_rope_trace = rope_fixed_i32_with_acc(&q_norm, &r.table, seq, HEADS);
+    let k_rope_trace = rope_fixed_i32_with_acc(&k_norm, &r.table, seq, KV_HEADS);
+    let q_rope = q_rope_trace.output;
+    let k_rope = k_rope_trace.output;
+    record_unary_ref_op_acc(
         trace,
         layer,
         "rope",
@@ -1617,10 +1668,10 @@ fn run_attention_prefill_fixed_traced(
         &[seq, HEADS, HEAD_DIM],
         "rope.table",
         &[seq, HEAD_DIM],
-        &q_rope,
+        &q_rope_trace.acc,
         &[seq, HEADS, HEAD_DIM],
     )?;
-    record_unary_ref_op(
+    record_unary_ref_op_acc(
         trace,
         layer,
         "rope",
@@ -1629,60 +1680,70 @@ fn run_attention_prefill_fixed_traced(
         &[seq, KV_HEADS, HEAD_DIM],
         "rope.table",
         &[seq, HEAD_DIM],
-        &k_rope,
+        &k_rope_trace.acc,
         &[seq, KV_HEADS, HEAD_DIM],
     )?;
 
-    let scores = score_qk_fixed_i32_raw(&q_rope, &k_rope, seq);
-    let scores_ref = trace.tensor_i32(
-        &format!("layer{layer}.attention_scores.Y"),
+    let scores_trace = score_qk_fixed_i32_raw_with_acc(&q_rope, &k_rope, seq);
+    let scores = scores_trace.output;
+    let dot_acc_ref = trace.tensor_i64(
+        &format!("layer{layer}.attention_scores.DotAcc"),
         &[HEADS, seq, seq],
-        &scores,
+        &scores_trace.dot_acc,
+    )?;
+    let acc_ref = trace.tensor_i64(
+        &format!("layer{layer}.attention_scores.Acc"),
+        &[HEADS, seq, seq],
+        &scores_trace.acc,
     )?;
     trace.op(json!({
         "event": "op",
         "layer": layer,
         "op": "attention_scores",
         "name": "qk_scores",
-        "A": {"ref": format!("layer{layer}.q_rope.Y")},
-        "B": {"ref": format!("layer{layer}.k_rope.Y")},
-        "Y": scores_ref,
+        "A": {"ref": format!("layer{layer}.q_rope.output")},
+        "B": {"ref": format!("layer{layer}.k_rope.output")},
+        "DotAcc": dot_acc_ref,
+        "Acc": acc_ref,
     }))?;
 
-    let probs = softmax_causal_fixed_i32(&scores, HEADS, seq);
-    let probs_ref = trace.tensor_i32(
-        &format!("layer{layer}.softmax.Y"),
+    let probs_trace = softmax_causal_fixed_i32_with_acc(&scores, HEADS, seq);
+    let probs = probs_trace.output;
+    let probs_acc_ref = trace.tensor_i64(
+        &format!("layer{layer}.softmax.Acc"),
         &[HEADS, seq, seq],
-        &probs,
+        &probs_trace.acc,
     )?;
     trace.op(json!({
         "event": "op",
         "layer": layer,
         "op": "softmax",
         "name": "attention_probs",
-        "A": {"ref": format!("layer{layer}.attention_scores.Y")},
+        "A": {"ref": format!("layer{layer}.attention_scores.output")},
         "W": {"ref": "EXP_LUT_Q8", "shape": [17]},
-        "Y": probs_ref,
+        "Acc": probs_acc_ref,
     }))?;
 
-    let c = attn_v_fixed_i32(&probs, &v, seq);
-    let c_ref = trace.tensor_i32(
-        &format!("layer{layer}.attention_value.Y"),
+    let c_trace = attn_v_fixed_i32_with_acc(&probs, &v, seq);
+    let c = c_trace.output;
+    let c_ref = trace.tensor_i64(
+        &format!("layer{layer}.attention_value.Acc"),
         &[seq, Q_DIM],
-        &c,
+        &c_trace.acc,
     )?;
     trace.op(json!({
         "event": "op",
         "layer": layer,
         "op": "attention_value",
         "name": "p_times_v",
-        "A": {"ref": format!("layer{layer}.softmax.Y")},
-        "B": {"ref": format!("layer{layer}.v_proj.Y")},
-        "Y": c_ref,
+        "A": {"ref": format!("layer{layer}.softmax.output")},
+        "B": {"ref": format!("layer{layer}.v_proj.output")},
+        "Acc": c_ref,
     }))?;
 
-    let a = matmul_fixed_i32(&c, &w.q.wo, seq, Q_DIM, HIDDEN, cfg.matmul_rebase_rounding);
-    record_matmul_op(
+    let a_trace = matmul_fixed_i32_with_acc(&c, &w.q.wo, seq, Q_DIM, HIDDEN);
+    let a = a_trace.output;
+    record_matmul_op_acc(
         trace,
         layer,
         "o_proj",
@@ -1690,7 +1751,7 @@ fn run_attention_prefill_fixed_traced(
         &[seq, Q_DIM],
         "self_attn.o_proj.weight",
         &[Q_DIM, HIDDEN],
-        &a,
+        &a_trace.acc,
         &[seq, HIDDEN],
     )?;
 
@@ -1855,12 +1916,21 @@ fn run_mlp_fixed(
     mut trace: Option<&mut TraceRecorder>,
 ) -> Result<Vec<i32>, Box<dyn Error>> {
     let started = Instant::now();
-    let n2 = rms_norm_fixed_i32(x, &w.ln2, rows, HIDDEN);
+    let n2_trace = if trace.is_some() {
+        Some(rms_norm_fixed_i32_with_acc(x, &w.ln2, rows, HIDDEN))
+    } else {
+        None
+    };
+    let n2 = n2_trace
+        .as_ref()
+        .map(|trace| trace.output.clone())
+        .unwrap_or_else(|| rms_norm_fixed_i32(x, &w.ln2, rows, HIDDEN));
     if let Some(timing) = timing.as_deref_mut() {
         timing.layer_norm2 += started.elapsed();
     }
     if let Some(trace) = trace.as_deref_mut() {
-        record_unary_weight_op(
+        let n2_trace = n2_trace.as_ref().expect("trace RMSNorm data exists");
+        record_unary_weight_op_acc(
             trace,
             layer_idx,
             "rms_norm",
@@ -1869,32 +1939,54 @@ fn run_mlp_fixed(
             &[rows, HIDDEN],
             "post_attention_layernorm.weight",
             &[HIDDEN],
-            &n2,
+            &n2_trace.acc,
             &[rows, HIDDEN],
         )?;
+        let norm_acc_ref = trace.tensor_i64(
+            &format!("layer{layer_idx}.ln2.NormAcc"),
+            &[rows, HIDDEN],
+            &n2_trace.norm_acc,
+        )?;
+        trace.op(json!({
+            "event": "op_aux",
+            "layer": layer_idx,
+            "op": "rms_norm",
+            "name": "ln2_norm_acc",
+            "NormAcc": norm_acc_ref,
+        }))?;
     }
     let started = Instant::now();
-    let g = matmul_fixed_i32(
-        &n2,
-        &w.q.wg,
-        rows,
-        HIDDEN,
-        INTERMEDIATE,
-        cfg.matmul_rebase_rounding,
-    );
-    let u = matmul_fixed_i32(
-        &n2,
-        &w.q.wu,
-        rows,
-        HIDDEN,
-        INTERMEDIATE,
-        cfg.matmul_rebase_rounding,
-    );
+    let (g, g_acc, u, u_acc) = if trace.is_some() {
+        let g_trace = matmul_fixed_i32_with_acc(&n2, &w.q.wg, rows, HIDDEN, INTERMEDIATE);
+        let u_trace = matmul_fixed_i32_with_acc(&n2, &w.q.wu, rows, HIDDEN, INTERMEDIATE);
+        (g_trace.output, Some(g_trace.acc), u_trace.output, Some(u_trace.acc))
+    } else {
+        (
+            matmul_fixed_i32(
+                &n2,
+                &w.q.wg,
+                rows,
+                HIDDEN,
+                INTERMEDIATE,
+                cfg.matmul_rebase_rounding,
+            ),
+            None,
+            matmul_fixed_i32(
+                &n2,
+                &w.q.wu,
+                rows,
+                HIDDEN,
+                INTERMEDIATE,
+                cfg.matmul_rebase_rounding,
+            ),
+            None,
+        )
+    };
     if let Some(timing) = timing.as_deref_mut() {
         timing.mlp_gate_up += started.elapsed();
     }
     if let Some(trace) = trace.as_deref_mut() {
-        record_matmul_op(
+        record_matmul_op_acc(
             trace,
             layer_idx,
             "gate_proj",
@@ -1902,10 +1994,10 @@ fn run_mlp_fixed(
             &[rows, HIDDEN],
             "mlp.gate_proj.weight",
             &[HIDDEN, INTERMEDIATE],
-            &g,
+            g_acc.as_ref().expect("trace gate acc exists"),
             &[rows, INTERMEDIATE],
         )?;
-        record_matmul_op(
+        record_matmul_op_acc(
             trace,
             layer_idx,
             "up_proj",
@@ -1913,43 +2005,64 @@ fn run_mlp_fixed(
             &[rows, HIDDEN],
             "mlp.up_proj.weight",
             &[HIDDEN, INTERMEDIATE],
-            &u,
+            u_acc.as_ref().expect("trace up acc exists"),
             &[rows, INTERMEDIATE],
         )?;
     }
     let started = Instant::now();
-    let m = silu_mul_fixed_i32(&g, &u, cfg.sigmoid_input_rounding, cfg.silu_gate_mul_input);
+    let (m, m_acc) = if trace.is_some() {
+        let m_trace =
+            silu_mul_fixed_i32_with_acc(&g, &u, cfg.sigmoid_input_rounding, cfg.silu_gate_mul_input);
+        (m_trace.output, Some(m_trace.acc))
+    } else {
+        (
+            silu_mul_fixed_i32(&g, &u, cfg.sigmoid_input_rounding, cfg.silu_gate_mul_input),
+            None,
+        )
+    };
     if let Some(timing) = timing.as_deref_mut() {
         timing.mlp_silu += started.elapsed();
     }
     if let Some(trace) = trace.as_deref_mut() {
-        record_binary_op(
-            trace,
-            layer_idx,
-            "silu_mul",
-            "silu_gate_times_up",
-            &g,
+        let a_ref = trace.tensor_i32(&format!("layer{layer_idx}.silu_gate_times_up.A"), &[rows, INTERMEDIATE], &g)?;
+        let b_ref = trace.tensor_i32(&format!("layer{layer_idx}.silu_gate_times_up.B"), &[rows, INTERMEDIATE], &u)?;
+        let acc_ref = trace.tensor_i64(
+            &format!("layer{layer_idx}.silu_gate_times_up.Acc"),
             &[rows, INTERMEDIATE],
-            &u,
-            &[rows, INTERMEDIATE],
-            &m,
-            &[rows, INTERMEDIATE],
+            m_acc.as_ref().expect("trace silu_up acc exists"),
         )?;
+        trace.op(json!({
+            "event": "op",
+            "layer": layer_idx,
+            "op": "silu_mul",
+            "name": "silu_gate_times_up",
+            "A": a_ref,
+            "B": b_ref,
+            "Acc": acc_ref,
+        }))?;
     }
     let started = Instant::now();
-    let d = matmul_fixed_i32(
-        &m,
-        &w.q.wd,
-        rows,
-        INTERMEDIATE,
-        HIDDEN,
-        cfg.matmul_rebase_rounding,
-    );
+    let (d, d_acc) = if trace.is_some() {
+        let d_trace = matmul_fixed_i32_with_acc(&m, &w.q.wd, rows, INTERMEDIATE, HIDDEN);
+        (d_trace.output, Some(d_trace.acc))
+    } else {
+        (
+            matmul_fixed_i32(
+                &m,
+                &w.q.wd,
+                rows,
+                INTERMEDIATE,
+                HIDDEN,
+                cfg.matmul_rebase_rounding,
+            ),
+            None,
+        )
+    };
     if let Some(timing) = timing.as_deref_mut() {
         timing.mlp_down += started.elapsed();
     }
     if let Some(trace) = trace.as_deref_mut() {
-        record_matmul_op(
+        record_matmul_op_acc(
             trace,
             layer_idx,
             "down_proj",
@@ -1957,7 +2070,7 @@ fn run_mlp_fixed(
             &[rows, INTERMEDIATE],
             "mlp.down_proj.weight",
             &[INTERMEDIATE, HIDDEN],
-            &d,
+            d_acc.as_ref().expect("trace down acc exists"),
             &[rows, HIDDEN],
         )?;
     }
@@ -1967,7 +2080,7 @@ fn run_mlp_fixed(
         timing.residual2 += started.elapsed();
     }
     if let Some(trace) = trace.as_deref_mut() {
-        record_binary_op(
+        record_binary_op_inputs(
             trace,
             layer_idx,
             "add",
@@ -1975,8 +2088,6 @@ fn run_mlp_fixed(
             x,
             &[rows, HIDDEN],
             &d,
-            &[rows, HIDDEN],
-            &y,
             &[rows, HIDDEN],
         )?;
     }
@@ -2030,6 +2141,67 @@ fn matmul_fixed_i32(
     y
 }
 
+struct RoundTrace {
+    acc: Vec<i64>,
+    output: Vec<i32>,
+}
+
+fn round_trace(acc: Vec<i64>) -> RoundTrace {
+    let output = acc
+        .iter()
+        .map(|&value| round_shift_signed_i64(value, DEFAULT_FIXED_FRAC) as i32)
+        .collect();
+    RoundTrace { acc, output }
+}
+
+fn matmul_fixed_i32_with_acc(
+    a: &[i32],
+    w: &[i32],
+    m: usize,
+    k: usize,
+    n: usize,
+) -> RoundTrace {
+    assert_eq!(a.len(), m * k);
+    assert_eq!(w.len(), k * n);
+    let mut acc = vec![0i64; m * n];
+    acc.par_chunks_mut(n).enumerate().for_each(|(row, out)| {
+        let a_row = &a[row * k..(row + 1) * k];
+        for col in 0..n {
+            let mut sum = 0i64;
+            for kk in 0..k {
+                sum += a_row[kk] as i64 * w[kk * n + col] as i64;
+            }
+            out[col] = sum;
+        }
+    });
+    round_trace(acc)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_matmul_op_acc(
+    trace: &mut TraceRecorder,
+    layer: usize,
+    name: &str,
+    a: &[i32],
+    a_shape: &[usize],
+    w_ref: &str,
+    w_shape: &[usize],
+    acc: &[i64],
+    y_shape: &[usize],
+) -> Result<(), Box<dyn Error>> {
+    let a_ref = trace.tensor_i32(&format!("layer{layer}.{name}.A"), a_shape, a)?;
+    let acc_ref = trace.tensor_i64(&format!("layer{layer}.{name}.Acc"), y_shape, acc)?;
+    trace.op(json!({
+        "event": "op",
+        "layer": layer,
+        "op": "matmul",
+        "name": name,
+        "A": a_ref,
+        "W": {"ref": format!("model.layers.{layer}.{w_ref}"), "shape": w_shape},
+        "Acc": acc_ref,
+    }))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn record_matmul_op(
     trace: &mut TraceRecorder,
@@ -2081,6 +2253,32 @@ fn record_unary_weight_op(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn record_unary_weight_op_acc(
+    trace: &mut TraceRecorder,
+    layer: usize,
+    op: &str,
+    name: &str,
+    a: &[i32],
+    a_shape: &[usize],
+    w_ref: &str,
+    w_shape: &[usize],
+    acc: &[i64],
+    y_shape: &[usize],
+) -> Result<(), Box<dyn Error>> {
+    let a_ref = trace.tensor_i32(&format!("layer{layer}.{name}.A"), a_shape, a)?;
+    let acc_ref = trace.tensor_i64(&format!("layer{layer}.{name}.Acc"), y_shape, acc)?;
+    trace.op(json!({
+        "event": "op",
+        "layer": layer,
+        "op": op,
+        "name": name,
+        "A": a_ref,
+        "W": {"ref": format!("model.layers.{layer}.{w_ref}"), "shape": w_shape},
+        "Acc": acc_ref,
+    }))
+}
+
 fn record_unary_ref_op(
     trace: &mut TraceRecorder,
     layer: usize,
@@ -2103,6 +2301,32 @@ fn record_unary_ref_op(
         "A": a_ref,
         "W": {"ref": w_ref, "shape": w_shape},
         "Y": y_ref,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_unary_ref_op_acc(
+    trace: &mut TraceRecorder,
+    layer: usize,
+    op: &str,
+    name: &str,
+    a: &[i32],
+    a_shape: &[usize],
+    w_ref: &str,
+    w_shape: &[usize],
+    acc: &[i64],
+    y_shape: &[usize],
+) -> Result<(), Box<dyn Error>> {
+    let a_ref = trace.tensor_i32(&format!("layer{layer}.{name}.A"), a_shape, a)?;
+    let acc_ref = trace.tensor_i64(&format!("layer{layer}.{name}.Acc"), y_shape, acc)?;
+    trace.op(json!({
+        "event": "op",
+        "layer": layer,
+        "op": op,
+        "name": name,
+        "A": a_ref,
+        "W": {"ref": w_ref, "shape": w_shape},
+        "Acc": acc_ref,
     }))
 }
 
@@ -2130,6 +2354,29 @@ fn record_binary_op(
         "A": a_ref,
         "B": b_ref,
         "Y": y_ref,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_binary_op_inputs(
+    trace: &mut TraceRecorder,
+    layer: usize,
+    op: &str,
+    name: &str,
+    a: &[i32],
+    a_shape: &[usize],
+    b: &[i32],
+    b_shape: &[usize],
+) -> Result<(), Box<dyn Error>> {
+    let a_ref = trace.tensor_i32(&format!("layer{layer}.{name}.A"), a_shape, a)?;
+    let b_ref = trace.tensor_i32(&format!("layer{layer}.{name}.B"), b_shape, b)?;
+    trace.op(json!({
+        "event": "op",
+        "layer": layer,
+        "op": op,
+        "name": name,
+        "A": a_ref,
+        "B": b_ref,
     }))
 }
 
@@ -2320,6 +2567,46 @@ fn rms_norm_fixed_i32(x: &[i32], w: &[i32], rows: usize, cols: usize) -> Vec<i32
     y
 }
 
+struct RmsTrace {
+    norm_acc: Vec<i64>,
+    acc: Vec<i64>,
+    output: Vec<i32>,
+}
+
+fn rms_norm_fixed_i32_with_acc(x: &[i32], w: &[i32], rows: usize, cols: usize) -> RmsTrace {
+    assert_eq!(x.len(), rows * cols);
+    assert_eq!(w.len(), cols);
+    let mut norm_acc = vec![0i64; x.len()];
+    let mut norm = vec![0i32; x.len()];
+    let mut acc = vec![0i64; x.len()];
+    let mut output = vec![0i32; x.len()];
+    norm_acc
+        .par_chunks_mut(cols)
+        .zip(norm.par_chunks_mut(cols))
+        .zip(acc.par_chunks_mut(cols))
+        .zip(output.par_chunks_mut(cols))
+        .enumerate()
+        .for_each(|(r, (((norm_acc_row, norm_row), acc_row), output_row))| {
+            let xs = &x[r * cols..(r + 1) * cols];
+            let mut sq_acc = 0i128;
+            for &xi in xs {
+                sq_acc += xi as i128 * xi as i128;
+            }
+            let inv_int = rms_inv_from_square_sum(sq_acc, cols);
+            for c in 0..cols {
+                norm_acc_row[c] = xs[c] as i64 * inv_int;
+                norm_row[c] = round_shift_signed_i64(norm_acc_row[c], DEFAULT_FIXED_FRAC) as i32;
+                acc_row[c] = norm_row[c] as i64 * w[c] as i64;
+                output_row[c] = round_shift_signed_i64(acc_row[c], DEFAULT_FIXED_FRAC) as i32;
+            }
+        });
+    RmsTrace {
+        norm_acc,
+        acc,
+        output,
+    }
+}
+
 fn rope_fixed_i32(x: &[i32], table: &[f32], seq: usize, heads: usize) -> Vec<i32> {
     assert_eq!(x.len(), seq * heads * HEAD_DIM);
     assert!(table.len() >= seq * HEAD_DIM);
@@ -2335,6 +2622,25 @@ fn rope_fixed_i32(x: &[i32], table: &[f32], seq: usize, heads: usize) -> Vec<i32
         );
     });
     y
+}
+
+fn rope_fixed_i32_with_acc(x: &[i32], table: &[f32], seq: usize, heads: usize) -> RoundTrace {
+    assert_eq!(x.len(), seq * heads * HEAD_DIM);
+    assert!(table.len() >= seq * HEAD_DIM);
+    let mut acc = vec![0i64; x.len()];
+    acc.par_chunks_mut(HEAD_DIM)
+        .enumerate()
+        .for_each(|(i, out)| {
+            let pos = i / heads;
+            let base = i * HEAD_DIM;
+            let rbase = pos * HEAD_DIM;
+            rope_fixed_i32_chunk_acc(
+                &x[base..base + HEAD_DIM],
+                &table[rbase..rbase + HEAD_DIM],
+                out,
+            );
+        });
+    round_trace(acc)
 }
 
 fn rope_one_fixed_i32(x: &[i32], table: &[f32], pos: usize, heads: usize) -> Vec<i32> {
@@ -2359,6 +2665,18 @@ fn rope_fixed_i32_chunk(x: &[i32], r: &[f32], out: &mut [i32]) {
         let s = quantize_fixed_i64_scalar(r[half + d]);
         out[d] = round_shift_signed_i64(a * c - b * s, DEFAULT_FIXED_FRAC) as i32;
         out[half + d] = round_shift_signed_i64(b * c + a * s, DEFAULT_FIXED_FRAC) as i32;
+    }
+}
+
+fn rope_fixed_i32_chunk_acc(x: &[i32], r: &[f32], out: &mut [i64]) {
+    let half = x.len() / 2;
+    for d in 0..half {
+        let a = x[d] as i64;
+        let b = x[half + d] as i64;
+        let c = quantize_fixed_i64_scalar(r[d]);
+        let s = quantize_fixed_i64_scalar(r[half + d]);
+        out[d] = a * c - b * s;
+        out[half + d] = b * c + a * s;
     }
 }
 
@@ -2391,6 +2709,7 @@ fn score_qk_fixed_i32(q: &[i32], k: &[i32], seq: usize) -> Vec<i32> {
     y
 }
 
+#[allow(dead_code)]
 fn score_qk_fixed_i32_raw(q: &[i32], k: &[i32], seq: usize) -> Vec<i32> {
     assert_eq!(q.len(), seq * HEADS * HEAD_DIM);
     assert_eq!(k.len(), seq * KV_DIM);
@@ -2414,6 +2733,54 @@ fn score_qk_fixed_i32_raw(q: &[i32], k: &[i32], seq: usize) -> Vec<i32> {
         }
     });
     y
+}
+
+struct QkTrace {
+    dot_acc: Vec<i64>,
+    acc: Vec<i64>,
+    output: Vec<i32>,
+}
+
+fn score_qk_fixed_i32_raw_with_acc(q: &[i32], k: &[i32], seq: usize) -> QkTrace {
+    assert_eq!(q.len(), seq * HEADS * HEAD_DIM);
+    assert_eq!(k.len(), seq * KV_DIM);
+    let inv_sqrt_int =
+        ((1.0 / (HEAD_DIM as f32).sqrt()) * (1u64 << DEFAULT_FIXED_FRAC) as f32).round() as i64;
+    let mut dot_acc = vec![0i64; HEADS * seq * seq];
+    dot_acc
+        .par_chunks_mut(seq * seq)
+        .enumerate()
+        .for_each(|(h, accs)| {
+            let kh = h / KV_GROUP;
+            for i in 0..seq {
+                for j in 0..seq {
+                    let mut acc = 0i64;
+                    for d in 0..HEAD_DIM {
+                        let qi = (i * HEADS + h) * HEAD_DIM + d;
+                        let ki = (j * KV_HEADS + kh) * HEAD_DIM + d;
+                        acc += q[qi] as i64 * k[ki] as i64;
+                    }
+                    accs[i * seq + j] = acc;
+                }
+            }
+        });
+    let dot = dot_acc
+        .iter()
+        .map(|&acc| round_shift_signed_i64(acc, DEFAULT_FIXED_FRAC) as i32)
+        .collect::<Vec<_>>();
+    let acc = dot
+        .iter()
+        .map(|&value| value as i64 * inv_sqrt_int)
+        .collect::<Vec<_>>();
+    let output = acc
+        .iter()
+        .map(|&acc| round_shift_signed_i64(acc, DEFAULT_FIXED_FRAC) as i32)
+        .collect();
+    QkTrace {
+        dot_acc,
+        acc,
+        output,
+    }
 }
 
 fn softmax_fixed_i32(x: &[i32], rows: usize, cols: usize) -> Vec<i32> {
@@ -2465,6 +2832,7 @@ fn softmax_fixed_i32(x: &[i32], rows: usize, cols: usize) -> Vec<i32> {
     y
 }
 
+#[allow(dead_code)]
 fn softmax_causal_fixed_i32(x: &[i32], heads: usize, seq: usize) -> Vec<i32> {
     assert_eq!(x.len(), heads * seq * seq);
     let mut y = vec![0i32; x.len()];
@@ -2493,6 +2861,42 @@ fn softmax_causal_fixed_i32(x: &[i32], heads: usize, seq: usize) -> Vec<i32> {
         }
     });
     y
+}
+
+fn softmax_causal_fixed_i32_with_acc(x: &[i32], heads: usize, seq: usize) -> RoundTrace {
+    assert_eq!(x.len(), heads * seq * seq);
+    let mut acc = vec![0i64; x.len()];
+    let mut y = vec![0i32; x.len()];
+    acc.par_chunks_mut(seq * seq)
+        .zip(y.par_chunks_mut(seq * seq))
+        .enumerate()
+        .for_each(|(h, (accs, ys))| {
+            let scores = &x[h * seq * seq..(h + 1) * seq * seq];
+            for i in 0..seq {
+                let row = &scores[i * seq..(i + 1) * seq];
+                let out_acc = &mut accs[i * seq..(i + 1) * seq];
+                let out = &mut ys[i * seq..(i + 1) * seq];
+                let mx = row[..=i].iter().copied().max().unwrap_or(0);
+                let mut exps = vec![0i64; i + 1];
+                let mut sum = 0i64;
+                for c in 0..=i {
+                    exps[c] = softmax_exp_coarse((row[c] - mx) as i64);
+                    sum += exps[c];
+                }
+                if sum == 0 {
+                    continue;
+                }
+                let inv = inv_sum_q16(sum);
+                for c in 0..=i {
+                    out_acc[c] = exps[c] * inv;
+                    out[c] = softmax_prob_from_exp_inv(exps[c], inv);
+                }
+                for slot in &mut out[i + 1..] {
+                    *slot = 0;
+                }
+            }
+        });
+    RoundTrace { acc, output: y }
 }
 
 fn div_round_i128(num: i128, den: i128) -> i128 {
@@ -2604,6 +3008,29 @@ fn attn_v_fixed_i32(p: &[i32], v: &[i32], seq: usize) -> Vec<i32> {
             }
         });
     y
+}
+
+fn attn_v_fixed_i32_with_acc(p: &[i32], v: &[i32], seq: usize) -> RoundTrace {
+    assert_eq!(p.len(), HEADS * seq * seq);
+    assert_eq!(v.len(), seq * KV_DIM);
+    let mut acc = vec![0i64; seq * Q_DIM];
+    acc.par_chunks_mut(HEAD_DIM)
+        .enumerate()
+        .for_each(|(oh, out)| {
+            let pos = oh / HEADS;
+            let h = oh % HEADS;
+            let kh = h / KV_GROUP;
+            for (d, slot) in out.iter_mut().enumerate() {
+                let mut sum = 0i64;
+                for j in 0..seq {
+                    let pi = (h * seq + pos) * seq + j;
+                    let vi = (j * KV_HEADS + kh) * HEAD_DIM + d;
+                    sum += p[pi] as i64 * v[vi] as i64;
+                }
+                *slot = sum;
+            }
+        });
+    round_trace(acc)
 }
 
 fn attn_v_decode_fixed_i32(q: &[i32], k: &[i32], v: &[i32], context_len: usize) -> Vec<i32> {
@@ -2791,6 +3218,46 @@ fn silu_mul_fixed_i32(
             round_shift_signed_i64(silu_int * u as i64, DEFAULT_FIXED_FRAC) as i32
         })
         .collect()
+}
+
+fn silu_mul_fixed_i32_with_acc(
+    g: &[i32],
+    u: &[i32],
+    sigmoid_rounding: RoundingMode,
+    gate_mul_input: SiluGateMulInput,
+) -> RoundTrace {
+    assert_eq!(g.len(), u.len());
+    let acc = g
+        .par_iter()
+        .zip(u)
+        .map(|(&g, &u)| {
+            let g_index = shift_signed_i64(g as i64, DEFAULT_FIXED_FRAC, sigmoid_rounding);
+            let sig_int = sigmoid_from_integer_index(g_index);
+            let silu_int = match gate_mul_input {
+                SiluGateMulInput::Fixed => {
+                    round_shift_signed_i64(g as i64 * sig_int, DEFAULT_FIXED_FRAC)
+                }
+                SiluGateMulInput::Integer => round_shift_signed_i64(
+                    (g_index << DEFAULT_FIXED_FRAC) * sig_int,
+                    DEFAULT_FIXED_FRAC,
+                ),
+                SiluGateMulInput::Linear => {
+                    let n_q8 = g_index << DEFAULT_FIXED_FRAC;
+                    let frac_q8 = g as i64 - n_q8;
+                    let base_q16 = n_q8 * sig_int;
+                    let sig_slope = round_shift_signed_i64(
+                        sig_int * ((1i64 << DEFAULT_FIXED_FRAC) - sig_int),
+                        DEFAULT_FIXED_FRAC,
+                    );
+                    let slope =
+                        sig_int + round_shift_signed_i64(n_q8 * sig_slope, DEFAULT_FIXED_FRAC);
+                    round_shift_signed_i64(base_q16 + frac_q8 * slope, DEFAULT_FIXED_FRAC)
+                }
+            };
+            silu_int * u as i64
+        })
+        .collect();
+    round_trace(acc)
 }
 
 fn quantize_fixed_i64_scalar(x: f32) -> i64 {

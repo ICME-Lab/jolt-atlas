@@ -41,6 +41,14 @@ use crate::{
     proof::ProveResult,
 };
 
+macro_rules! op_timing {
+    ($($arg:tt)*) => {
+        if crate::timing::op_timing_enabled() {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
 // Layer prover skeleton, written in reverse claim flow.
 //
 // Keep the flow expanded here.  Do not split every node into a tiny layer-level
@@ -938,7 +946,7 @@ where
         ($name:literal, $expr:expr) => {{
             let start = Instant::now();
             let out = $expr;
-            eprintln!(
+            op_timing!(
                 "timing: prove_layer.{} {:.3}s",
                 $name,
                 start.elapsed().as_secs_f64()
@@ -1275,7 +1283,7 @@ where
         ($name:literal, $expr:expr) => {{
             let start = Instant::now();
             let out = $expr;
-            eprintln!(
+            op_timing!(
                 "timing: verify_layer.{} {:.3}s",
                 $name,
                 start.elapsed().as_secs_f64()

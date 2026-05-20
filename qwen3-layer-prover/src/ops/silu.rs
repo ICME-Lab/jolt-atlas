@@ -31,6 +31,14 @@ use crate::{
     },
 };
 
+macro_rules! op_timing {
+    ($($arg:tt)*) => {
+        if crate::timing::op_timing_enabled() {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
 // Design note for future us:
 //
 // The current Qwen3 fixed runtime uses the linearized SiLU approximation:
@@ -261,7 +269,7 @@ where
     let lut_len = padded_silu_lut_len(entries);
     validate_inputs(&output_claims, witness, params, entries)?;
     append_range_advice::<F, T>(witness.min_n, witness.max_n, transcript);
-    eprintln!(
+    op_timing!(
         "timing: prove_silu.setup_validate {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -269,7 +277,7 @@ where
     step_start = Instant::now();
     let alphas = transcript.challenge_scalar_powers(output_claims.len());
     let round_mix = transcript.challenge_scalar();
-    eprintln!(
+    op_timing!(
         "timing: prove_silu.challenges {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -277,7 +285,7 @@ where
     step_start = Instant::now();
     let input_claim = batched_input_claim(&output_claims, &alphas);
     let eq_batch = batched_masked_eq_poly(&output_claims, &alphas, &params.shape);
-    eprintln!(
+    op_timing!(
         "timing: prove_silu.eq_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -291,11 +299,11 @@ where
     let remainders = round_remainders(&witness.gate_proj_round);
     let round_bits = round_bits_from_remainders(&remainders);
     let remainder = padded_usize_tensor(&remainders, &params.shape);
-    let round_bit = padded_i32_tensor(&round_bits, &params.shape);
+    let round_bit = padded_u8_tensor(&round_bits, &params.shape);
     let base = padded_i64_tensor(&base_values, &params.shape);
     let slope = padded_i64_tensor(&slope_values, &params.shape);
     let index = padded_usize_evals(&padded_lookup_indices);
-    eprintln!(
+    op_timing!(
         "timing: prove_silu.witness_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -303,7 +311,7 @@ where
     step_start = Instant::now();
     let base_table = padded_i32_table(witness.min_n, entries, lut_len, silu_base)?;
     let slope_table = padded_i32_table(witness.min_n, entries, lut_len, silu_slope)?;
-    eprintln!(
+    op_timing!(
         "timing: prove_silu.table_polys {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -323,7 +331,7 @@ where
         round_mix,
         field_from_i64(witness.min_n),
     );
-    eprintln!(
+    op_timing!(
         "timing: prove_silu.prover_init {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -331,7 +339,7 @@ where
     step_start = Instant::now();
     let mut accumulator = ProverOpeningAccumulator::new();
     let (relation, challenges) = Sumcheck::prove(&mut prover, &mut accumulator, transcript);
-    eprintln!(
+    op_timing!(
         "timing: prove_silu.relation_sumcheck {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -366,7 +374,7 @@ where
     )?;
     let full_point = normalize_sumcheck_point::<F>(&challenges.into_opening());
     let tensor_point = full_point;
-    eprintln!(
+    op_timing!(
         "timing: prove_silu.relation_openings {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -383,7 +391,7 @@ where
         &mut accumulator,
         transcript,
     )?;
-    eprintln!(
+    op_timing!(
         "timing: prove_silu.base_shout {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -400,7 +408,7 @@ where
         &mut accumulator,
         transcript,
     )?;
-    eprintln!(
+    op_timing!(
         "timing: prove_silu.slope_shout {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -417,12 +425,12 @@ where
         &mut accumulator,
         transcript,
     )?;
-    eprintln!(
+    op_timing!(
         "timing: prove_silu.round_shout {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
 
-    eprintln!(
+    op_timing!(
         "timing: prove_silu.total {:.3}s",
         total_start.elapsed().as_secs_f64()
     );
@@ -497,7 +505,7 @@ where
         .map_err(|_| ProofVerifyError::InvalidInputLength(MAX_SILU_LUT_LEN, 0))?;
     verify_inputs(&output_claims, params, entries)?;
     append_range_advice::<F, T>(proof.min_n, proof.max_n, transcript);
-    eprintln!(
+    op_timing!(
         "timing: verify_silu.setup_validate {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -520,7 +528,7 @@ where
         shape: params.shape.clone(),
         min_n: proof.min_n,
     };
-    eprintln!(
+    op_timing!(
         "timing: verify_silu.challenges {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -569,7 +577,7 @@ where
     let challenges = Sumcheck::verify(&proof.relation, &verifier, &mut accumulator, transcript)?;
     let tensor_point = normalize_sumcheck_point::<F>(&challenges.into_opening());
     let lut_len = padded_silu_lut_len(entries);
-    eprintln!(
+    op_timing!(
         "timing: verify_silu.relation_sumcheck {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -591,7 +599,7 @@ where
         &mut accumulator,
         transcript,
     )?;
-    eprintln!(
+    op_timing!(
         "timing: verify_silu.base_shout {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -612,7 +620,7 @@ where
         &mut accumulator,
         transcript,
     )?;
-    eprintln!(
+    op_timing!(
         "timing: verify_silu.slope_shout {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
@@ -633,11 +641,11 @@ where
         &mut accumulator,
         transcript,
     )?;
-    eprintln!(
+    op_timing!(
         "timing: verify_silu.round_shout {:.3}s",
         step_start.elapsed().as_secs_f64()
     );
-    eprintln!(
+    op_timing!(
         "timing: verify_silu.total {:.3}s",
         total_start.elapsed().as_secs_f64()
     );
@@ -723,12 +731,12 @@ impl<F: JoltField> SiluSumcheckProver<F> {
     fn new(
         params: SiluSumcheckParams<F>,
         eq_batch: Vec<F>,
-        gate: Vec<F>,
-        remainder: Vec<F>,
-        round_bit: Vec<F>,
-        base: Vec<F>,
-        slope: Vec<F>,
-        index: Vec<F>,
+        gate: Vec<i32>,
+        remainder: Vec<u32>,
+        round_bit: Vec<u8>,
+        base: Vec<i64>,
+        slope: Vec<i64>,
+        index: Vec<u32>,
         round_mix: F,
         min_n: F,
     ) -> Self {
@@ -1242,14 +1250,14 @@ where
     }
     .map_err(|_| ProofVerifyError::InvalidInputLength(lut_len, 0))?;
     let read_verifier = shout::read_raf_verifier(&provider, table, accumulator, transcript);
-    eprintln!(
+    op_timing!(
         "timing: verify_silu.{:?}.shout_setup {:.3}s",
         kind,
         step_start.elapsed().as_secs_f64()
     );
     step_start = Instant::now();
     Sumcheck::verify(read_raf, &*read_verifier, accumulator, transcript)?;
-    eprintln!(
+    op_timing!(
         "timing: verify_silu.{:?}.read_raf {:.3}s",
         kind,
         step_start.elapsed().as_secs_f64()
@@ -1272,14 +1280,14 @@ where
     } else {
         vec![&*ra_verifier, &*hw_verifier, &*bool_verifier]
     };
-    eprintln!(
+    op_timing!(
         "timing: verify_silu.{:?}.ra_setup {:.3}s",
         kind,
         step_start.elapsed().as_secs_f64()
     );
     step_start = Instant::now();
     BatchedSumcheck::verify(ra_onehot, verifier_instances, accumulator, transcript)?;
-    eprintln!(
+    op_timing!(
         "timing: verify_silu.{:?}.ra_onehot {:.3}s",
         kind,
         step_start.elapsed().as_secs_f64()
@@ -1289,12 +1297,12 @@ where
         kind.ra_poly(),
         silu_shout_sumcheck_id(kind),
     ));
-    eprintln!(
+    op_timing!(
         "timing: verify_silu.{:?}.ra_opening {:.3}s",
         kind,
         step_start.elapsed().as_secs_f64()
     );
-    eprintln!(
+    op_timing!(
         "timing: verify_silu.{:?}.shout_total {:.3}s",
         kind,
         total_start.elapsed().as_secs_f64()
@@ -1554,10 +1562,10 @@ fn batched_masked_eq_poly<F: JoltField>(
     out
 }
 
-fn padded_i32_tensor<F: JoltField>(values: &[i32], shape: &Shape) -> Vec<F> {
+fn padded_i32_tensor(values: &[i32], shape: &Shape) -> Vec<i32> {
     let padded_dims = shape.padded_power_of_two().0;
     let len = padded_dims.iter().product();
-    let mut out = vec![F::zero(); len];
+    let mut out = vec![0; len];
     let strides = row_major_strides(shape.dims());
     let padded_strides = row_major_strides(&padded_dims);
     for (flat, &value) in values.iter().enumerate() {
@@ -1566,15 +1574,15 @@ fn padded_i32_tensor<F: JoltField>(values: &[i32], shape: &Shape) -> Vec<F> {
             let coord = (flat / stride) % shape.dims()[dim];
             padded_flat += coord * padded_stride;
         }
-        out[padded_flat] = field_from_i64(i64::from(value));
+        out[padded_flat] = value;
     }
     out
 }
 
-fn padded_i64_tensor<F: JoltField>(values: &[i64], shape: &Shape) -> Vec<F> {
+fn padded_i64_tensor(values: &[i64], shape: &Shape) -> Vec<i64> {
     let padded_dims = shape.padded_power_of_two().0;
     let len = padded_dims.iter().product();
-    let mut out = vec![F::zero(); len];
+    let mut out = vec![0; len];
     let strides = row_major_strides(shape.dims());
     let padded_strides = row_major_strides(&padded_dims);
     for (flat, &value) in values.iter().enumerate() {
@@ -1583,15 +1591,15 @@ fn padded_i64_tensor<F: JoltField>(values: &[i64], shape: &Shape) -> Vec<F> {
             let coord = (flat / stride) % shape.dims()[dim];
             padded_flat += coord * padded_stride;
         }
-        out[padded_flat] = field_from_i64(value);
+        out[padded_flat] = value;
     }
     out
 }
 
-fn padded_usize_tensor<F: JoltField>(values: &[usize], shape: &Shape) -> Vec<F> {
+fn padded_u8_tensor(values: &[u8], shape: &Shape) -> Vec<u8> {
     let padded_dims = shape.padded_power_of_two().0;
     let len = padded_dims.iter().product();
-    let mut out = vec![F::zero(); len];
+    let mut out = vec![0; len];
     let strides = row_major_strides(shape.dims());
     let padded_strides = row_major_strides(&padded_dims);
     for (flat, &value) in values.iter().enumerate() {
@@ -1600,16 +1608,30 @@ fn padded_usize_tensor<F: JoltField>(values: &[usize], shape: &Shape) -> Vec<F> 
             let coord = (flat / stride) % shape.dims()[dim];
             padded_flat += coord * padded_stride;
         }
-        out[padded_flat] = F::from_u64(value as u64);
+        out[padded_flat] = value;
     }
     out
 }
 
-fn padded_usize_evals<F: JoltField>(values: &[usize]) -> Vec<F> {
-    values
-        .iter()
-        .map(|&value| F::from_u64(value as u64))
-        .collect()
+fn padded_usize_tensor(values: &[usize], shape: &Shape) -> Vec<u32> {
+    let padded_dims = shape.padded_power_of_two().0;
+    let len = padded_dims.iter().product();
+    let mut out = vec![0; len];
+    let strides = row_major_strides(shape.dims());
+    let padded_strides = row_major_strides(&padded_dims);
+    for (flat, &value) in values.iter().enumerate() {
+        let mut padded_flat = 0;
+        for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate() {
+            let coord = (flat / stride) % shape.dims()[dim];
+            padded_flat += coord * padded_stride;
+        }
+        out[padded_flat] = value as u32;
+    }
+    out
+}
+
+fn padded_usize_evals(values: &[usize]) -> Vec<u32> {
+    values.iter().map(|&value| value as u32).collect()
 }
 
 fn padded_lookup_indices_for_shape(values: &[usize], shape: &Shape) -> Vec<usize> {
@@ -1657,8 +1679,11 @@ fn round_remainders(values: &[i32]) -> Vec<usize> {
         .collect()
 }
 
-fn round_bits_from_remainders(remainders: &[usize]) -> Vec<i32> {
-    remainders.iter().map(|&rem| round_lut_q8(rem)).collect()
+fn round_bits_from_remainders(remainders: &[usize]) -> Vec<u8> {
+    remainders
+        .iter()
+        .map(|&rem| round_lut_q8(rem) as u8)
+        .collect()
 }
 
 fn round_lut_table() -> Vec<i32> {

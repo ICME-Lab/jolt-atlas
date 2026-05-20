@@ -1,7 +1,4 @@
-use joltworks::{
-    field::JoltField, subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
-    utils::errors::ProofVerifyError,
-};
+use joltworks::{field::JoltField, utils::errors::ProofVerifyError};
 
 use crate::{
     claim::{Claim, Shape},
@@ -9,14 +6,6 @@ use crate::{
 };
 
 pub(crate) const QWEN3_GQA_GROUP_SIZE: usize = 2;
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct AttentionMatmulProof<F: JoltField, T: Transcript> {
-    pub sumcheck: SumcheckInstanceProof<F, T>,
-    pub left_opening: F,
-    pub right_opening: F,
-}
 
 pub(crate) fn validate_gqa(q_heads: usize, kv_heads: usize) -> Result<()> {
     if kv_heads == 0 || q_heads / kv_heads != QWEN3_GQA_GROUP_SIZE {

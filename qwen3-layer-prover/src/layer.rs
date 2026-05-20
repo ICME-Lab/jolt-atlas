@@ -5,14 +5,14 @@ use joltworks::{field::JoltField, transcripts::Transcript, utils::errors::ProofV
 use crate::{
     claim::{Claim, Shape},
     error::Result,
-    ops::hadamard_mul::HadamardMulParams,
-    ops::hadamard_round::{
+    ops::hadamard_mul::{
+        HadamardMulParams,
         HadamardRoundParams, HadamardRoundProof, HadamardRoundWitness, prove_hadamard_round,
         verify_hadamard_round,
     },
     ops::matadd::{MatAddParams, MatAddProof, prove_matadd, verify_matadd},
-    ops::matmul::MatMulParams,
-    ops::matmul_round::{
+    ops::matmul::{
+        MatMulParams,
         MatMulRoundParams, MatMulRoundProof, MatMulRoundWitness, prove_matmul_round,
         verify_matmul_round,
     },
@@ -31,9 +31,9 @@ use crate::{
         RopeParams, RopeProof, RopeRoundParams, RopeWitness, prove_rope_round, verify_rope_round,
     },
     ops::round::{ROUND_FRAC_BITS, RoundParams},
-    ops::silu::SiluParams,
-    ops::silu_round::{
-        SiluRoundParams, SiluRoundProof, SiluRoundWitness, prove_silu_round, verify_silu_round,
+    ops::silu::{
+        SiluParams, SiluRoundParams, SiluRoundProof, SiluRoundWitness, prove_silu_round,
+        verify_silu_round,
     },
     ops::softmax::{
         SoftmaxParams, SoftmaxProof, SoftmaxWitness, prove_softmax_round, verify_softmax_round,

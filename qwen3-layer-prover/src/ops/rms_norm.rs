@@ -22,12 +22,10 @@ use joltworks::{
 use crate::{
     claim::{Claim, Shape, TensorId},
     error::{ProverError, Result},
-    ops::{
-        mul::{MulByVectorParams, MulByVectorProof, prove_mul_by_vector, verify_mul_by_vector},
-        round::{
-            ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
-        },
+    ops::round::{
+        ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
     },
+    proof::ProveResult,
 };
 
 // RMSNorm proof shape:
@@ -85,10 +83,322 @@ use crate::{
 // read for less obvious benefit.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct MulByVectorParams {
+    shape: Shape,
+    x_tensor: TensorId,
+    coeff_tensor: TensorId,
+    axis: usize,
+}
+
+impl MulByVectorParams {
+    fn new(
+        shape: impl Into<Vec<usize>>,
+        x_tensor: impl Into<String>,
+        coeff_tensor: impl Into<String>,
+        axis: usize,
+    ) -> Self {
+        Self {
+            shape: Shape::new(shape),
+            x_tensor: TensorId::new(x_tensor),
+            coeff_tensor: TensorId::new(coeff_tensor),
+            axis,
+        }
+    }
+
+    fn coeff_shape(&self) -> Shape {
+        Shape::new(vec![self.shape.dims()[self.axis]])
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MulByVectorProof<F: JoltField, T: Transcript> {
+    sumcheck: SumcheckInstanceProof<F, T>,
+    x_opening: F,
+    coeff_opening: F,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MulByVectorClaims<F> {
+    x: Claim<F>,
+    coeff: Claim<F>,
+}
+
+fn prove_mul_by_vector<F, T>(
+    y_claim: Claim<F>,
+    x: &[i32],
+    coeff: &[i32],
+    params: &MulByVectorParams,
+    transcript: &mut T,
+) -> Result<ProveResult<MulByVectorClaims<F>, MulByVectorProof<F, T>>>
+where
+    F: JoltField,
+    T: Transcript,
+{
+    validate_mul_by_vector_inputs(&y_claim, x, params)?;
+    validate_mul_by_vector_coeff(coeff, params)?;
+
+    let sc_params = MulByVectorSumcheckParams::new(
+        params.shape.padded_power_of_two().point_len(),
+        y_claim.value,
+        y_claim.point.clone(),
+        params.clone(),
+        coeff.to_vec(),
+    );
+    let x_poly = padded_i32_tensor(x, &params.shape);
+    let coeff_poly = expanded_coeff_tensor(coeff, params);
+    let mut prover = MulByVectorSumcheckProver::new(sc_params, x_poly, coeff_poly);
+    let mut accumulator = ProverOpeningAccumulator::new();
+    let (sumcheck, challenges) = Sumcheck::prove(&mut prover, &mut accumulator, transcript);
+    let x_opening = accumulator
+        .openings
+        .get(&OpeningId::new(VirtualPoly::QwenMulX, mul_sumcheck_id()))
+        .map(|(_, value)| *value)
+        .ok_or(ProverError::MissingOpening)?;
+    let point = normalize_sumcheck_point::<F>(&challenges.into_opening());
+    let coeff_point = axis_point(&point, &params.shape, params.axis);
+    let coeff_opening = eval_vector_at_point(coeff, coeff_point);
+
+    Ok(ProveResult::new(
+        MulByVectorClaims {
+            x: Claim {
+                tensor: params.x_tensor.clone(),
+                logical_shape: params.shape.clone(),
+                domain_shape: params.shape.padded_power_of_two(),
+                point: point.clone(),
+                value: x_opening,
+            },
+            coeff: Claim {
+                tensor: params.coeff_tensor.clone(),
+                logical_shape: params.coeff_shape(),
+                domain_shape: params.coeff_shape().padded_power_of_two(),
+                point: coeff_point.to_vec(),
+                value: coeff_opening,
+            },
+        },
+        MulByVectorProof {
+            sumcheck,
+            x_opening,
+            coeff_opening,
+        },
+    ))
+}
+
+fn verify_mul_by_vector<F, T>(
+    y_claim: Claim<F>,
+    proof: &MulByVectorProof<F, T>,
+    coeff: &[i32],
+    params: &MulByVectorParams,
+    transcript: &mut T,
+) -> Result<MulByVectorClaims<F>>
+where
+    F: JoltField,
+    T: Transcript,
+{
+    validate_mul_by_vector_claim(&y_claim, &params.shape)?;
+    validate_mul_by_vector_axis(params)?;
+    validate_mul_by_vector_coeff(coeff, params)?;
+
+    let sc_params = MulByVectorSumcheckParams::new(
+        params.shape.padded_power_of_two().point_len(),
+        y_claim.value,
+        y_claim.point.clone(),
+        params.clone(),
+        coeff.to_vec(),
+    );
+    let verifier = MulByVectorSumcheckVerifier { params: sc_params };
+    let mut accumulator = VerifierOpeningAccumulator::new();
+    accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenMulX, mul_sumcheck_id()),
+        (OpeningPoint::<BIG_ENDIAN, F>::default(), proof.x_opening),
+    );
+    let challenges = Sumcheck::verify(&proof.sumcheck, &verifier, &mut accumulator, transcript)
+        .map_err(|_| ProverError::MulMismatch)?;
+    let point = normalize_sumcheck_point::<F>(&challenges.into_opening());
+    let coeff_point = axis_point(&point, &params.shape, params.axis);
+    let expected_coeff = eval_vector_at_point(coeff, coeff_point);
+    if proof.coeff_opening != expected_coeff {
+        return Err(ProverError::MulMismatch);
+    }
+
+    Ok(MulByVectorClaims {
+        x: Claim {
+            tensor: params.x_tensor.clone(),
+            logical_shape: params.shape.clone(),
+            domain_shape: params.shape.padded_power_of_two(),
+            point: point.clone(),
+            value: proof.x_opening,
+        },
+        coeff: Claim {
+            tensor: params.coeff_tensor.clone(),
+            logical_shape: params.coeff_shape(),
+            domain_shape: params.coeff_shape().padded_power_of_two(),
+            point: coeff_point.to_vec(),
+            value: proof.coeff_opening,
+        },
+    })
+}
+
+struct MulByVectorSumcheckParams<F: JoltField> {
+    num_rounds: usize,
+    input_claim: F,
+    y_point: Vec<F>,
+    op: MulByVectorParams,
+    coeff: Vec<i32>,
+}
+
+impl<F: JoltField> MulByVectorSumcheckParams<F> {
+    fn new(
+        num_rounds: usize,
+        input_claim: F,
+        y_point: Vec<F>,
+        op: MulByVectorParams,
+        coeff: Vec<i32>,
+    ) -> Self {
+        Self {
+            num_rounds,
+            input_claim,
+            y_point,
+            op,
+            coeff,
+        }
+    }
+}
+
+impl<F: JoltField> SumcheckInstanceParams<F> for MulByVectorSumcheckParams<F> {
+    fn degree(&self) -> usize {
+        3
+    }
+
+    fn num_rounds(&self) -> usize {
+        self.num_rounds
+    }
+
+    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
+        self.input_claim
+    }
+
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
+    }
+}
+
+struct MulByVectorSumcheckProver<F: JoltField> {
+    eq_y: MultilinearPolynomial<F>,
+    x: MultilinearPolynomial<F>,
+    coeff: MultilinearPolynomial<F>,
+    params: MulByVectorSumcheckParams<F>,
+}
+
+impl<F: JoltField> MulByVectorSumcheckProver<F> {
+    fn new(params: MulByVectorSumcheckParams<F>, x: Vec<F>, coeff: Vec<F>) -> Self {
+        let eq_y = MultilinearPolynomial::from(EqPolynomial::<F>::evals(&params.y_point));
+        Self {
+            eq_y,
+            x: MultilinearPolynomial::from(x),
+            coeff: MultilinearPolynomial::from(coeff),
+            params,
+        }
+    }
+}
+
+impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MulByVectorSumcheckProver<F> {
+    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+        &self.params
+    }
+
+    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
+        let mut evals = [F::zero(); 3];
+        for g in 0..self.x.len() / 2 {
+            let e0 = self.eq_y.get_bound_coeff(2 * g);
+            let e1 = self.eq_y.get_bound_coeff(2 * g + 1);
+            let x0 = self.x.get_bound_coeff(2 * g);
+            let x1 = self.x.get_bound_coeff(2 * g + 1);
+            let c0 = self.coeff.get_bound_coeff(2 * g);
+            let c1 = self.coeff.get_bound_coeff(2 * g + 1);
+            evals[0] += e0 * x0 * c0;
+            evals[1] += (e1 + e1 - e0) * (x1 + x1 - x0) * (c1 + c1 - c0);
+            evals[2] += (e1 * F::from_u64(3) - e0 - e0)
+                * (x1 * F::from_u64(3) - x0 - x0)
+                * (c1 * F::from_u64(3) - c0 - c0);
+        }
+        UniPoly::from_evals_and_hint(previous_claim, &evals)
+    }
+
+    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
+        self.eq_y.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.x.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.coeff.bind_parallel(r_j, BindingOrder::LowToHigh);
+    }
+
+    fn cache_openings(
+        &self,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenMulX, mul_sumcheck_id()),
+            point,
+            self.x.final_claim(),
+        );
+    }
+}
+
+struct MulByVectorSumcheckVerifier<F: JoltField> {
+    params: MulByVectorSumcheckParams<F>,
+}
+
+impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
+    for MulByVectorSumcheckVerifier<F>
+{
+    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+        &self.params
+    }
+
+    fn expected_output_claim(
+        &self,
+        accumulator: &VerifierOpeningAccumulator<F>,
+        sumcheck_challenges: &[F::Challenge],
+    ) -> F {
+        let x = accumulator
+            .get_virtual_polynomial_opening(OpeningId::new(
+                VirtualPoly::QwenMulX,
+                mul_sumcheck_id(),
+            ))
+            .1;
+        let point = normalize_sumcheck_point::<F>(&sumcheck_challenges.into_opening());
+        let coeff_point = axis_point(&point, &self.params.op.shape, self.params.op.axis);
+        EqPolynomial::mle(&self.params.y_point, &point)
+            * x
+            * eval_vector_at_point(&self.params.coeff, coeff_point)
+    }
+
+    fn cache_openings(
+        &self,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenMulX, mul_sumcheck_id()),
+            point,
+        );
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RmsNormParams {
     pub round: RoundParams,
     pub norm_round: RoundParams,
-    pub weight_mul: MulByVectorParams,
+    weight_mul: MulByVectorParams,
     pub rows: usize,
     pub cols: usize,
     pub shape: Shape,
@@ -206,7 +516,7 @@ pub struct RmsNormWitness {
 #[derive(Debug, Clone)]
 pub struct RmsNormProof<F: JoltField, T: Transcript> {
     pub round: RoundProof<F, T>,
-    pub weight_mul: MulByVectorProof<F, T>,
+    weight_mul: MulByVectorProof<F, T>,
     pub norm_round: RoundProof<F, T>,
     pub sumcheck: SumcheckInstanceProof<F, T>,
     pub input_opening: F,
@@ -537,6 +847,140 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RmsNormSumc
             point,
         );
     }
+}
+
+fn validate_mul_by_vector_inputs<F: JoltField>(
+    y_claim: &Claim<F>,
+    x: &[i32],
+    params: &MulByVectorParams,
+) -> Result<()> {
+    validate_mul_by_vector_shape(&params.shape)?;
+    if x.len() != params.shape.numel() {
+        return Err(ProverError::TensorLenMismatch {
+            name: "X",
+            shape: params.shape.0.clone(),
+            expected: params.shape.numel(),
+            actual: x.len(),
+        });
+    }
+    validate_mul_by_vector_claim(y_claim, &params.shape)
+}
+
+fn validate_mul_by_vector_claim<F: JoltField>(claim: &Claim<F>, shape: &Shape) -> Result<()> {
+    validate_mul_by_vector_shape(shape)?;
+    if claim.logical_shape != *shape {
+        return Err(ProverError::ShapeMismatch {
+            name: "Y claim",
+            expected: shape.0.clone(),
+            actual: claim.logical_shape.0.clone(),
+        });
+    }
+    let expected_domain = shape.padded_power_of_two();
+    if claim.domain_shape != expected_domain {
+        return Err(ProverError::ShapeMismatch {
+            name: "Y claim domain",
+            expected: expected_domain.0,
+            actual: claim.domain_shape.0.clone(),
+        });
+    }
+    let expected_point_len = claim.domain_shape.point_len();
+    if claim.point.len() != expected_point_len {
+        return Err(ProverError::ShapeMismatch {
+            name: "Y claim point",
+            expected: vec![expected_point_len],
+            actual: vec![claim.point.len()],
+        });
+    }
+    Ok(())
+}
+
+fn validate_mul_by_vector_shape(shape: &Shape) -> Result<()> {
+    if shape.dims().contains(&0) {
+        return Err(ProverError::InvalidTensorShape(shape.0.clone()));
+    }
+    Ok(())
+}
+
+fn validate_mul_by_vector_axis(params: &MulByVectorParams) -> Result<()> {
+    if params.axis >= params.shape.dims().len() {
+        return Err(ProverError::InvalidAxis {
+            axis: params.axis,
+            rank: params.shape.dims().len(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_mul_by_vector_coeff(coeff: &[i32], params: &MulByVectorParams) -> Result<()> {
+    validate_mul_by_vector_axis(params)?;
+    if coeff.len() != params.shape.dims()[params.axis] {
+        return Err(ProverError::TensorLenMismatch {
+            name: "coeff",
+            shape: vec![params.shape.dims()[params.axis]],
+            expected: params.shape.dims()[params.axis],
+            actual: coeff.len(),
+        });
+    }
+    Ok(())
+}
+
+fn expanded_coeff_tensor<F: JoltField>(coeff: &[i32], params: &MulByVectorParams) -> Vec<F> {
+    let padded_dims = padded_dims(&params.shape);
+    let len = padded_dims.iter().product();
+    let padded_strides = row_major_strides(&padded_dims);
+    let mut out = vec![F::zero(); len];
+
+    for (flat, out_value) in out.iter_mut().enumerate() {
+        let mut axis_coord = 0;
+        for (dim, &stride) in padded_strides.iter().enumerate() {
+            let coord = (flat / stride) % padded_dims[dim];
+            if dim == params.axis {
+                axis_coord = coord;
+            }
+        }
+        // The coefficient is a function only of `axis`. Padding in other
+        // dimensions must still carry the same coefficient so that
+        // y = x * coeff(axis) remains true on padded boolean points where
+        // x and y are both zero. Only padding on the coefficient axis itself
+        // is outside the vector domain and therefore uses zero.
+        if axis_coord < params.shape.dims()[params.axis] {
+            *out_value = F::from_i32(coeff[axis_coord]);
+        }
+    }
+    out
+}
+
+fn padded_dims(shape: &Shape) -> Vec<usize> {
+    shape
+        .dims()
+        .iter()
+        .map(|dim| dim.next_power_of_two())
+        .collect()
+}
+
+fn eval_vector_at_point<F: JoltField>(values: &[i32], point: &[F]) -> F {
+    let eq = EqPolynomial::<F>::evals(point);
+    values
+        .iter()
+        .enumerate()
+        .map(|(idx, &value)| eq[idx] * F::from_i32(value))
+        .sum()
+}
+
+fn axis_point<'a, F>(point: &'a [F], shape: &Shape, axis: usize) -> &'a [F] {
+    let mut offset = 0;
+    for (dim_idx, &dim) in shape.dims().iter().enumerate() {
+        let vars = dim.next_power_of_two().trailing_zeros() as usize;
+        if dim_idx == axis {
+            return &point[offset..offset + vars];
+        }
+        offset += vars;
+    }
+    &point[0..0]
+}
+
+fn mul_sumcheck_id() -> SumcheckId {
+    SumcheckId::NodeExecution(0)
 }
 
 fn validate_inputs(witness: &RmsNormWitness, weight: &[i32], params: &RmsNormParams) -> Result<()> {

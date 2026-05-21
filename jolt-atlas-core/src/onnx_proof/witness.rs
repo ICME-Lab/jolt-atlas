@@ -429,6 +429,15 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     st.decomposed_exp.z_lo.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_lo, *d)
             }
+            CommittedPoly::QwenSiluBaseRaD(_)
+            | CommittedPoly::QwenSiluSlopeRaD(_)
+            | CommittedPoly::QwenSiluRoundRaD(_)
+            | CommittedPoly::QwenSoftmaxExpRaD(_)
+            | CommittedPoly::QwenSoftmaxInputRemainderRaD(_)
+            | CommittedPoly::QwenRoundRaD(_)
+            | CommittedPoly::QwenLayerTensor(_) => {
+                panic!("Qwen committed polynomials are supplied by qwen3-layer-prover")
+            }
         }
     }
 }

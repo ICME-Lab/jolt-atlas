@@ -3,6 +3,7 @@ pub mod decoder;
 pub mod error;
 pub mod layer;
 pub mod ops;
+pub mod pcs;
 pub mod proof;
 pub mod timing;
 pub mod trace;

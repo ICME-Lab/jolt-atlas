@@ -1,19 +1,22 @@
-use std::time::Instant;
+use std::{path::Path, time::Instant};
 
-use joltworks::{field::JoltField, transcripts::Transcript, utils::errors::ProofVerifyError};
+use joltworks::{
+    field::JoltField,
+    poly::{commitment::commitment_scheme::CommitmentScheme, eq_poly::EqPolynomial},
+    transcripts::Transcript,
+    utils::errors::ProofVerifyError,
+};
 
 use crate::{
-    claim::{Claim, Shape},
-    error::Result,
+    claim::{Claim, Shape, TensorId},
+    error::{ProverError, Result},
     ops::hadamard_mul::{
-        HadamardMulParams,
-        HadamardRoundParams, HadamardRoundProof, HadamardRoundWitness, prove_hadamard_round,
-        verify_hadamard_round,
+        HadamardMulParams, HadamardRoundParams, HadamardRoundProof, HadamardRoundWitness,
+        prove_hadamard_round, verify_hadamard_round,
     },
     ops::matadd::{MatAddParams, MatAddProof, prove_matadd, verify_matadd},
     ops::matmul::{
-        MatMulParams,
-        MatMulRoundParams, MatMulRoundProof, MatMulRoundWitness, prove_matmul_round,
+        MatMulParams, MatMulRoundParams, MatMulRoundProof, MatMulRoundWitness, prove_matmul_round,
         verify_matmul_round,
     },
     ops::pv_matmul::{
@@ -38,7 +41,13 @@ use crate::{
     ops::softmax::{
         SoftmaxParams, SoftmaxProof, SoftmaxWitness, prove_softmax_round, verify_softmax_round,
     },
+    pcs::{
+        LayerCommitments, LayerOpeningReductionProof, LayerPcsCommitments, LayerPolynomialMap,
+        absorb_layer_commitments, commit_layer_polynomials, prove_layer_openings_core_style,
+        verify_layer_openings_core_style,
+    },
     proof::ProveResult,
+    trace::build_layer_witness_from_trace_dir,
 };
 
 macro_rules! op_timing {
@@ -677,200 +686,206 @@ pub struct LayerWitness {
 }
 
 impl LayerWitness {
-    fn o_proj_witness(&self) -> MatMulRoundWitness {
+    fn o_proj_witness(&self) -> MatMulRoundWitness<'_> {
         MatMulRoundWitness {
-            input: self.context.clone(),
-            acc: self.o_proj_acc.clone(),
-            output: self.o_proj.clone(),
-            frac_bits: self.o_proj_frac_bits.clone(),
+            input: &self.context,
+            acc: &self.o_proj_acc,
+            output: &self.o_proj,
+            frac_bits: self.o_proj_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn softmax_witness(&self) -> SoftmaxWitness {
+    fn softmax_witness(&self) -> SoftmaxWitness<'_> {
         SoftmaxWitness {
-            input: self.qk_score.clone(),
-            max_index: self.softmax_max_index.clone(),
-            max: self.softmax_max.clone(),
+            input: &self.qk_score,
+            max_index: &self.softmax_max_index,
+            max: &self.softmax_max,
             min_diff: self.softmax_min_diff,
             max_diff: self.softmax_max_diff,
-            ra: self.softmax_ra.clone(),
-            exp_acc: self.softmax_exp_acc.clone(),
-            exp: self.softmax_exp.clone(),
-            exp_frac_bits: self.softmax_exp_frac_bits.clone(),
-            sum: self.softmax_sum.clone(),
-            acc: self.softmax_acc.clone(),
-            floor: self.softmax_floor.clone(),
-            floor_frac_bits: self.softmax_floor_frac_bits.clone(),
-            output: self.softmax.clone(),
-            frac_bits: self.softmax_frac_bits.clone(),
+            ra: &self.softmax_ra,
+            exp_acc: &self.softmax_exp_acc,
+            exp: &self.softmax_exp,
+            exp_frac_bits: self.softmax_exp_frac_bits.each_ref().map(Vec::as_slice),
+            sum: &self.softmax_sum,
+            acc: &self.softmax_acc,
+            floor: &self.softmax_floor,
+            floor_frac_bits: self.softmax_floor_frac_bits.each_ref().map(Vec::as_slice),
+            output: &self.softmax,
+            frac_bits: self.softmax_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn qk_score_witness(&self) -> QkScoreWitness {
+    fn qk_score_witness(&self) -> QkScoreWitness<'_> {
         QkScoreWitness {
-            q: self.q_rope.clone(),
-            k: self.k_rope.clone(),
-            raw_acc: self.qk_score_acc.clone(),
-            dot: self.qk_score_dot.clone(),
-            dot_frac_bits: self.qk_score_dot_frac_bits.clone(),
-            scale_acc: self.qk_score_scale_acc.clone(),
-            output: self.qk_score.clone(),
-            frac_bits: self.qk_score_frac_bits.clone(),
+            q: &self.q_rope,
+            k: &self.k_rope,
+            raw_acc: &self.qk_score_acc,
+            dot: &self.qk_score_dot,
+            dot_frac_bits: self.qk_score_dot_frac_bits.each_ref().map(Vec::as_slice),
+            scale_acc: &self.qk_score_scale_acc,
+            output: &self.qk_score,
+            frac_bits: self.qk_score_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn q_rope_witness(&self) -> RopeWitness {
+    fn q_rope_witness(&self) -> RopeWitness<'_> {
         RopeWitness {
-            input: self.q_norm.clone(),
-            acc: self.q_rope_acc.clone(),
-            output: self.q_rope.clone(),
-            frac_bits: self.q_rope_frac_bits.clone(),
+            input: &self.q_norm,
+            acc: &self.q_rope_acc,
+            output: &self.q_rope,
+            frac_bits: self.q_rope_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn k_rope_witness(&self) -> RopeWitness {
+    fn k_rope_witness(&self) -> RopeWitness<'_> {
         RopeWitness {
-            input: self.k_norm.clone(),
-            acc: self.k_rope_acc.clone(),
-            output: self.k_rope.clone(),
-            frac_bits: self.k_rope_frac_bits.clone(),
+            input: &self.k_norm,
+            acc: &self.k_rope_acc,
+            output: &self.k_rope,
+            frac_bits: self.k_rope_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn q_norm_witness(&self) -> RmsNormWitness {
+    fn q_norm_witness(&self) -> RmsNormWitness<'_> {
         RmsNormWitness {
-            input: self.q_proj.clone(),
-            sum_x2: self.q_norm_sum_x2.clone(),
-            norm_acc: self.q_norm_norm_acc.clone(),
-            norm: self.q_norm_norm.clone(),
-            norm_frac_bits: self.q_norm_norm_frac_bits.clone(),
-            acc: self.q_norm_acc.clone(),
-            output: self.q_norm.clone(),
-            frac_bits: self.q_norm_frac_bits.clone(),
+            input: &self.q_proj,
+            sum_x2: &self.q_norm_sum_x2,
+            norm_acc: &self.q_norm_norm_acc,
+            norm: &self.q_norm_norm,
+            norm_frac_bits: self.q_norm_norm_frac_bits.each_ref().map(Vec::as_slice),
+            acc: &self.q_norm_acc,
+            output: &self.q_norm,
+            frac_bits: self.q_norm_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn k_norm_witness(&self) -> RmsNormWitness {
+    fn k_norm_witness(&self) -> RmsNormWitness<'_> {
         RmsNormWitness {
-            input: self.k_proj.clone(),
-            sum_x2: self.k_norm_sum_x2.clone(),
-            norm_acc: self.k_norm_norm_acc.clone(),
-            norm: self.k_norm_norm.clone(),
-            norm_frac_bits: self.k_norm_norm_frac_bits.clone(),
-            acc: self.k_norm_acc.clone(),
-            output: self.k_norm.clone(),
-            frac_bits: self.k_norm_frac_bits.clone(),
+            input: &self.k_proj,
+            sum_x2: &self.k_norm_sum_x2,
+            norm_acc: &self.k_norm_norm_acc,
+            norm: &self.k_norm_norm,
+            norm_frac_bits: self.k_norm_norm_frac_bits.each_ref().map(Vec::as_slice),
+            acc: &self.k_norm_acc,
+            output: &self.k_norm,
+            frac_bits: self.k_norm_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn q_proj_witness(&self) -> MatMulRoundWitness {
+    fn q_proj_witness(&self) -> MatMulRoundWitness<'_> {
         MatMulRoundWitness {
-            input: self.rms_norm_atten_a.clone(),
-            acc: self.q_proj_acc.clone(),
-            output: self.q_proj.clone(),
-            frac_bits: self.q_proj_frac_bits.clone(),
+            input: &self.rms_norm_atten_a,
+            acc: &self.q_proj_acc,
+            output: &self.q_proj,
+            frac_bits: self.q_proj_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn k_proj_witness(&self) -> MatMulRoundWitness {
+    fn k_proj_witness(&self) -> MatMulRoundWitness<'_> {
         MatMulRoundWitness {
-            input: self.rms_norm_atten_b.clone(),
-            acc: self.k_proj_acc.clone(),
-            output: self.k_proj.clone(),
-            frac_bits: self.k_proj_frac_bits.clone(),
+            input: &self.rms_norm_atten_b,
+            acc: &self.k_proj_acc,
+            output: &self.k_proj,
+            frac_bits: self.k_proj_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn v_proj_witness(&self) -> MatMulRoundWitness {
+    fn v_proj_witness(&self) -> MatMulRoundWitness<'_> {
         MatMulRoundWitness {
-            input: self.rms_norm_atten_c.clone(),
-            acc: self.v_proj_acc.clone(),
-            output: self.v_proj.clone(),
-            frac_bits: self.v_proj_frac_bits.clone(),
+            input: &self.rms_norm_atten_c,
+            acc: &self.v_proj_acc,
+            output: &self.v_proj,
+            frac_bits: self.v_proj_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn rms_norm_atten_witness(&self) -> RmsNormWitness {
+    fn rms_norm_atten_witness(&self) -> RmsNormWitness<'_> {
         RmsNormWitness {
-            input: self.hidden_in.clone(),
-            sum_x2: self.rms_norm_atten_sum_x2.clone(),
-            norm_acc: self.rms_norm_atten_norm_acc.clone(),
-            norm: self.rms_norm_atten_norm.clone(),
-            norm_frac_bits: self.rms_norm_atten_norm_frac_bits.clone(),
-            acc: self.rms_norm_atten_acc.clone(),
-            output: self.rms_norm_atten_a.clone(),
-            frac_bits: self.rms_norm_atten_frac_bits.clone(),
+            input: &self.hidden_in,
+            sum_x2: &self.rms_norm_atten_sum_x2,
+            norm_acc: &self.rms_norm_atten_norm_acc,
+            norm: &self.rms_norm_atten_norm,
+            norm_frac_bits: self
+                .rms_norm_atten_norm_frac_bits
+                .each_ref()
+                .map(Vec::as_slice),
+            acc: &self.rms_norm_atten_acc,
+            output: &self.rms_norm_atten_a,
+            frac_bits: self.rms_norm_atten_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn pv_matmul_witness(&self) -> PvMatmulWitness {
+    fn pv_matmul_witness(&self) -> PvMatmulWitness<'_> {
         PvMatmulWitness {
-            p: self.softmax.clone(),
-            v: self.v_proj.clone(),
-            acc: self.context_acc.clone(),
-            output: self.context.clone(),
-            frac_bits: self.context_frac_bits.clone(),
+            p: &self.softmax,
+            v: &self.v_proj,
+            acc: &self.context_acc,
+            output: &self.context,
+            frac_bits: self.context_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn down_proj_witness(&self) -> MatMulRoundWitness {
+    fn down_proj_witness(&self) -> MatMulRoundWitness<'_> {
         MatMulRoundWitness {
-            input: self.silu_up.clone(),
-            acc: self.down_proj_acc.clone(),
-            output: self.down_proj.clone(),
-            frac_bits: self.down_proj_frac_bits.clone(),
+            input: &self.silu_up,
+            acc: &self.down_proj_acc,
+            output: &self.down_proj,
+            frac_bits: self.down_proj_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn rms_norm_mlp_witness(&self) -> RmsNormWitness {
+    fn rms_norm_mlp_witness(&self) -> RmsNormWitness<'_> {
         RmsNormWitness {
-            input: self.residual_add_attn_b.clone(),
-            sum_x2: self.rms_norm_mlp_sum_x2.clone(),
-            norm_acc: self.rms_norm_mlp_norm_acc.clone(),
-            norm: self.rms_norm_mlp_norm.clone(),
-            norm_frac_bits: self.rms_norm_mlp_norm_frac_bits.clone(),
-            acc: self.rms_norm_mlp_acc.clone(),
-            output: self.rms_norm_mlp_a.clone(),
-            frac_bits: self.rms_norm_mlp_frac_bits.clone(),
+            input: &self.residual_add_attn_b,
+            sum_x2: &self.rms_norm_mlp_sum_x2,
+            norm_acc: &self.rms_norm_mlp_norm_acc,
+            norm: &self.rms_norm_mlp_norm,
+            norm_frac_bits: self
+                .rms_norm_mlp_norm_frac_bits
+                .each_ref()
+                .map(Vec::as_slice),
+            acc: &self.rms_norm_mlp_acc,
+            output: &self.rms_norm_mlp_a,
+            frac_bits: self.rms_norm_mlp_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn gate_proj_witness(&self) -> MatMulRoundWitness {
+    fn gate_proj_witness(&self) -> MatMulRoundWitness<'_> {
         MatMulRoundWitness {
-            input: self.rms_norm_mlp_a.clone(),
-            acc: self.gate_proj_acc.clone(),
-            output: self.gate_proj.clone(),
-            frac_bits: self.gate_proj_frac_bits.clone(),
+            input: &self.rms_norm_mlp_a,
+            acc: &self.gate_proj_acc,
+            output: &self.gate_proj,
+            frac_bits: self.gate_proj_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn up_proj_witness(&self) -> MatMulRoundWitness {
+    fn up_proj_witness(&self) -> MatMulRoundWitness<'_> {
         MatMulRoundWitness {
-            input: self.rms_norm_mlp_b.clone(),
-            acc: self.up_proj_acc.clone(),
-            output: self.up_proj.clone(),
-            frac_bits: self.up_proj_frac_bits.clone(),
+            input: &self.rms_norm_mlp_b,
+            acc: &self.up_proj_acc,
+            output: &self.up_proj,
+            frac_bits: self.up_proj_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 
-    fn silu_witness(&self) -> SiluRoundWitness {
+    fn silu_witness(&self) -> SiluRoundWitness<'_> {
         SiluRoundWitness {
             min_n: self.silu_min_n,
             max_n: self.silu_max_n,
-            gate_proj: self.gate_proj.clone(),
-            silu_acc: self.silu_acc.clone(),
-            silu_ra: self.silu_ra.clone(),
-            silu: self.silu.clone(),
+            gate_proj: &self.gate_proj,
+            silu_acc: &self.silu_acc,
+            silu_ra: &self.silu_ra,
+            silu: &self.silu,
         }
     }
 
-    fn silu_up_witness(&self) -> HadamardRoundWitness {
+    fn silu_up_witness(&self) -> HadamardRoundWitness<'_> {
         HadamardRoundWitness {
-            lhs: self.silu.clone(),
-            rhs: self.up_proj.clone(),
-            acc: self.silu_up_acc.clone(),
-            output: self.silu_up.clone(),
-            frac_bits: self.silu_up_frac_bits.clone(),
+            lhs: &self.silu,
+            rhs: &self.up_proj,
+            acc: &self.silu_up_acc,
+            output: &self.silu_up,
+            frac_bits: self.silu_up_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 }
@@ -905,6 +920,39 @@ pub struct LayerClaims<F> {
     pub down_proj_round_ra: Claim<F>,
 }
 
+impl<F: Clone> LayerClaims<F> {
+    pub fn opening_claims(&self) -> Vec<Claim<F>> {
+        vec![
+            self.hidden_in_a.clone(),
+            self.hidden_in_b.clone(),
+            self.context_round_ra.clone(),
+            self.o_proj_round_ra.clone(),
+            self.softmax_round_ra.clone(),
+            self.softmax_floor_round_ra.clone(),
+            self.softmax_input_remainder_ra.clone(),
+            self.softmax_ra.clone(),
+            self.qk_score_round_ra.clone(),
+            self.qk_score_dot_round_ra.clone(),
+            self.q_rope_round_ra.clone(),
+            self.k_rope_round_ra.clone(),
+            self.q_norm_round_ra.clone(),
+            self.k_norm_round_ra.clone(),
+            self.q_proj_round_ra.clone(),
+            self.k_proj_round_ra.clone(),
+            self.v_proj_round_ra.clone(),
+            self.rms_norm_atten_round_ra.clone(),
+            self.rms_norm_mlp_round_ra.clone(),
+            self.gate_proj_round_ra.clone(),
+            self.silu_gate_round_ra.clone(),
+            self.silu_ra.clone(),
+            self.silu_out_round_ra.clone(),
+            self.silu_up_round_ra.clone(),
+            self.up_proj_round_ra.clone(),
+            self.down_proj_round_ra.clone(),
+        ]
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LayerProof<F: JoltField, T: Transcript> {
     pub residual_add_mlp_proof: MatAddProof<F, T>,
@@ -929,7 +977,158 @@ pub struct LayerProof<F: JoltField, T: Transcript> {
     pub rms_norm_atten_proof: RmsNormProof<F, T>,
 }
 
+#[derive(Debug, Clone)]
+pub struct LayerTraceProof<F: JoltField, T: Transcript> {
+    pub hidden_out_a: Claim<F>,
+    pub hidden_out_b: Claim<F>,
+    pub proof: LayerProof<F, T>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LayerCommittedTraceProof<F, T, PCS>
+where
+    F: JoltField,
+    T: Transcript,
+    PCS: CommitmentScheme<Field = F>,
+{
+    pub hidden_out_a: Claim<F>,
+    pub hidden_out_b: Claim<F>,
+    pub commitments: LayerCommitments<PCS::Commitment>,
+    pub iop_proof: LayerProof<F, T>,
+    pub opening_reduction: LayerOpeningReductionProof<F, T, PCS>,
+}
+
 pub fn prove_layer<F, T>(
+    trace_dir: impl AsRef<Path>,
+    layer: usize,
+    hidden_out_a_point: Vec<F>,
+    hidden_out_b_point: Vec<F>,
+    weights: &LayerWeights,
+    shape: &LayerShape,
+    tensors: &LayerTensorIds,
+    transcript: &mut T,
+) -> Result<ProveResult<LayerClaims<F>, LayerTraceProof<F, T>>>
+where
+    F: JoltField,
+    T: Transcript,
+{
+    let traced = build_layer_witness_from_trace_dir(trace_dir, layer, weights, shape)?;
+    let (hidden_out_a, hidden_out_b) = hidden_out_claims(
+        &traced.hidden_out,
+        shape,
+        hidden_out_a_point,
+        hidden_out_b_point,
+    );
+    let result = prove_layer_iop(
+        hidden_out_a.clone(),
+        hidden_out_b.clone(),
+        &traced.witness,
+        weights,
+        shape,
+        tensors,
+        transcript,
+    )?;
+    Ok(ProveResult::new(
+        result.claims,
+        LayerTraceProof {
+            hidden_out_a,
+            hidden_out_b,
+            proof: result.proof,
+        },
+    ))
+}
+
+fn hidden_out_claims<F: JoltField>(
+    hidden_out: &[i32],
+    shape: &LayerShape,
+    hidden_out_a_point: Vec<F>,
+    hidden_out_b_point: Vec<F>,
+) -> (Claim<F>, Claim<F>) {
+    let hidden_shape = shape.hidden_shape();
+    let hidden_out_a = Claim {
+        tensor: TensorId::new("hidden_out"),
+        logical_shape: hidden_shape.clone(),
+        domain_shape: hidden_shape.padded_power_of_two(),
+        value: evaluate_i32_mle(hidden_out, &hidden_shape, &hidden_out_a_point),
+        point: hidden_out_a_point,
+    };
+    let hidden_out_b = Claim {
+        tensor: TensorId::new("hidden_out"),
+        logical_shape: hidden_shape.clone(),
+        domain_shape: hidden_shape.padded_power_of_two(),
+        value: evaluate_i32_mle(hidden_out, &hidden_shape, &hidden_out_b_point),
+        point: hidden_out_b_point,
+    };
+    (hidden_out_a, hidden_out_b)
+}
+
+pub fn prove_layer_committed<F, T, PCS>(
+    trace_dir: impl AsRef<Path>,
+    layer: usize,
+    hidden_out_a_point: Vec<F>,
+    hidden_out_b_point: Vec<F>,
+    weights: &LayerWeights,
+    shape: &LayerShape,
+    tensors: &LayerTensorIds,
+    pcs_setup: &PCS::ProverSetup,
+    transcript: &mut T,
+) -> Result<ProveResult<LayerClaims<F>, LayerCommittedTraceProof<F, T, PCS>>>
+where
+    F: JoltField,
+    T: Transcript,
+    PCS: CommitmentScheme<Field = F>,
+{
+    let traced = build_layer_witness_from_trace_dir(trace_dir, layer, weights, shape)?;
+    let (hidden_out_a, hidden_out_b) = hidden_out_claims(
+        &traced.hidden_out,
+        shape,
+        hidden_out_a_point,
+        hidden_out_b_point,
+    );
+    let polynomials =
+        LayerPolynomialMap::from_layer(&traced.hidden_out, &traced.witness, weights, shape, tensors);
+    let LayerPcsCommitments { commitments, hints } =
+        commit_layer_polynomials::<F, PCS>(&polynomials, pcs_setup);
+    drop(hints);
+    absorb_layer_commitments(
+        transcript,
+        layer,
+        shape,
+        &hidden_out_a,
+        &hidden_out_b,
+        &commitments,
+    );
+
+    let result = prove_layer_iop(
+        hidden_out_a.clone(),
+        hidden_out_b.clone(),
+        &traced.witness,
+        weights,
+        shape,
+        tensors,
+        transcript,
+    )?;
+    let opening_claims = result.claims.opening_claims();
+    let missing = polynomials.missing_opening_claims(&opening_claims);
+    if !missing.is_empty() {
+        return Err(ProverError::MissingCommittedPolynomials(missing));
+    }
+    let opening_reduction =
+        prove_layer_openings_core_style::<F, T, PCS>(&polynomials, opening_claims, pcs_setup, transcript)?;
+
+    Ok(ProveResult::new(
+        result.claims,
+        LayerCommittedTraceProof {
+            hidden_out_a,
+            hidden_out_b,
+            commitments,
+            iop_proof: result.proof,
+            opening_reduction,
+        },
+    ))
+}
+
+pub fn prove_layer_iop<F, T>(
     hidden_out_a: Claim<F>,
     hidden_out_b: Claim<F>,
     witness: &LayerWitness,
@@ -1266,6 +1465,18 @@ where
     ))
 }
 
+fn evaluate_i32_mle<F: JoltField>(values: &[i32], shape: &Shape, point: &[F]) -> F {
+    let padded_len = shape.padded_power_of_two().numel();
+    assert_eq!(point.len(), shape.padded_power_of_two().point_len());
+    let eq = EqPolynomial::<F>::evals(point);
+    (0..padded_len)
+        .map(|idx| {
+            let value = values.get(idx).copied().unwrap_or(0);
+            F::from_i32(value) * eq[idx]
+        })
+        .sum()
+}
+
 pub fn verify_layer<F, T>(
     hidden_out_a: Claim<F>,
     hidden_out_b: Claim<F>,
@@ -1422,16 +1633,15 @@ where
         softmax_floor_round_ra,
         softmax_input_remainder_ra,
         softmax_ra,
-    ) =
-        timed!(
-            "softmax",
-            verify_softmax_round(
-                vec![softmax],
-                &proof.softmax_proof,
-                &tensors.softmax_params(shape),
-                transcript,
-            )
-        )?;
+    ) = timed!(
+        "softmax",
+        verify_softmax_round(
+            vec![softmax],
+            &proof.softmax_proof,
+            &tensors.softmax_params(shape),
+            transcript,
+        )
+    )?;
 
     // qk_score = round(round(q_rope @ k_rope) * inv_sqrt(head_dim))
     let (q_rope, k_rope, qk_score_round_ra, qk_score_dot_round_ra) = timed!(
@@ -1577,6 +1787,48 @@ where
     })
 }
 
+pub fn verify_layer_committed_iop<F, T, PCS>(
+    layer: usize,
+    hidden_out_a: Claim<F>,
+    hidden_out_b: Claim<F>,
+    proof: &LayerCommittedTraceProof<F, T, PCS>,
+    pcs_setup: &PCS::VerifierSetup,
+    weights: &LayerWeights,
+    shape: &LayerShape,
+    tensors: &LayerTensorIds,
+    transcript: &mut T,
+) -> std::result::Result<LayerClaims<F>, ProofVerifyError>
+where
+    F: JoltField,
+    T: Transcript,
+    PCS: CommitmentScheme<Field = F>,
+{
+    absorb_layer_commitments(
+        transcript,
+        layer,
+        shape,
+        &hidden_out_a,
+        &hidden_out_b,
+        &proof.commitments,
+    );
+    let claims = verify_layer(
+        hidden_out_a,
+        hidden_out_b,
+        &proof.iop_proof,
+        weights,
+        shape,
+        tensors,
+        transcript,
+    )?;
+    verify_layer_openings_core_style::<F, T, PCS>(
+        &proof.commitments,
+        &proof.opening_reduction,
+        pcs_setup,
+        transcript,
+    )?;
+    Ok(claims)
+}
+
 fn reshape_claim<F>(mut claim: Claim<F>, logical_shape: Shape) -> Claim<F> {
     // Projection ops use flattened `[seq, heads * head_dim]` tensors while
     // attention ops use `[seq, heads, head_dim]`.  For Qwen these split
@@ -1589,9 +1841,11 @@ fn reshape_claim<F>(mut claim: Claim<F>, logical_shape: Shape) -> Claim<F> {
 
 #[cfg(test)]
 mod tests {
-    use ark_bn254::Fr;
+    use ark_bn254::{Bn254, Fr};
     use joltworks::{
-        field::JoltField, poly::eq_poly::EqPolynomial, transcripts::Blake2bTranscript,
+        field::JoltField,
+        poly::{commitment::commitment_scheme::CommitmentScheme, commitment::hyperkzg::HyperKZG, eq_poly::EqPolynomial},
+        transcripts::Blake2bTranscript,
     };
 
     use super::*;
@@ -1633,7 +1887,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let result = prove_layer::<Fr, _>(
+        let result = prove_layer_iop::<Fr, _>(
             hidden_out_claims[0].clone(),
             hidden_out_claims[1].clone(),
             &witness,
@@ -1659,6 +1913,37 @@ mod tests {
         assert_eq!(claims, result.claims);
         assert_eq!(claims.hidden_in_a.tensor.0, "hidden_in_a");
         assert_eq!(claims.hidden_in_b.tensor.0, "hidden_in_b");
+
+        let polynomials =
+            LayerPolynomialMap::from_layer(&hidden_out, &witness, &weights, &shape, &tensors);
+        assert_eq!(
+            polynomials.missing_opening_claims(&claims.opening_claims()),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            polynomials.opening_value_mismatches(&claims.opening_claims()),
+            Vec::<String>::new()
+        );
+
+        type PCS = HyperKZG<Bn254>;
+        let pcs_setup = PCS::setup_prover(16);
+        let verifier_setup = PCS::setup_verifier(&pcs_setup);
+        let LayerPcsCommitments { commitments, .. } =
+            commit_layer_polynomials::<Fr, PCS>(&polynomials, &pcs_setup);
+        let opening_proof = prove_layer_openings_core_style::<Fr, _, PCS>(
+            &polynomials,
+            claims.opening_claims(),
+            &pcs_setup,
+            &mut prover_transcript,
+        )
+        .unwrap();
+        verify_layer_openings_core_style::<Fr, _, PCS>(
+            &commitments,
+            &opening_proof,
+            &verifier_setup,
+            &mut verifier_transcript,
+        )
+        .unwrap();
     }
 
     fn nonzero_layer_weights(shape: &LayerShape) -> LayerWeights {

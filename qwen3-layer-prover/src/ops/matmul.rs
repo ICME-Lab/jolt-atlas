@@ -118,12 +118,12 @@ impl MatMulRoundParams {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct MatMulRoundWitness {
-    pub input: Vec<i32>,
-    pub acc: Vec<i64>,
-    pub output: Vec<i32>,
-    pub frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
+#[derive(Debug, Clone)]
+pub struct MatMulRoundWitness<'a> {
+    pub input: &'a [i32],
+    pub acc: &'a [i64],
+    pub output: &'a [i32],
+    pub frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
 }
 
 #[derive(Debug, Clone)]
@@ -134,7 +134,7 @@ pub struct MatMulRoundProof<F: JoltField, T: Transcript> {
 
 pub fn prove_matmul_round<F, T>(
     y_round_claim: Claim<F>,
-    witness: &MatMulRoundWitness,
+    witness: &MatMulRoundWitness<'_>,
     w: &[i32],
     params: &MatMulRoundParams,
     transcript: &mut T,
@@ -143,8 +143,7 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let round_witness =
-        RoundWitness::from_input_output(witness.acc.clone(), witness.output.clone());
+    let round_witness = RoundWitness::from_input_output(witness.acc, witness.output);
     let matmul_result = prove_matmul_round_relation(
         y_round_claim,
         &witness.input,
@@ -212,13 +211,8 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let matmul_claims = verify_matmul_round_relation(
-        y_round_claim,
-        &proof.matmul,
-        w,
-        &params.matmul,
-        transcript,
-    )?;
+    let matmul_claims =
+        verify_matmul_round_relation(y_round_claim, &proof.matmul, w, &params.matmul, transcript)?;
     let round_lookup = verify_round_lookup(
         params.round.shape.padded_power_of_two().numel(),
         matmul_claims.round_point,
@@ -496,7 +490,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for KSumcheckParams<F> {
 struct KRoundSumcheckProver<F: JoltField> {
     a_r: MultilinearPolynomial<F>,
     w_r: MultilinearPolynomial<F>,
-    eq_zero_k: MultilinearPolynomial<F>,
+    eq_zero_k: LazyEqZeroLowToHigh<F>,
     remainder: F,
     round_bit: F,
     y_point: Vec<F>,
@@ -512,11 +506,10 @@ impl<F: JoltField> KRoundSumcheckProver<F> {
         round_bit: F,
         y_point: Vec<F>,
     ) -> Self {
-        let zero = vec![F::zero(); params.k_vars];
         Self {
             a_r: MultilinearPolynomial::from(a_r),
             w_r: MultilinearPolynomial::from(w_r),
-            eq_zero_k: MultilinearPolynomial::from(EqPolynomial::<F>::evals(&zero)),
+            eq_zero_k: LazyEqZeroLowToHigh::new(params.k_vars),
             remainder,
             round_bit,
             y_point,
@@ -554,7 +547,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for KRoundSumchec
     fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
         self.a_r.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.w_r.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.eq_zero_k.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.eq_zero_k.bind(r_j);
     }
 
     fn cache_openings(
@@ -670,6 +663,36 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for KRoundSumch
             OpeningId::new(VirtualPoly::QwenRoundLut, k_sumcheck_id()),
             round_point,
         );
+    }
+}
+
+struct LazyEqZeroLowToHigh<F: JoltField> {
+    remaining_len: usize,
+    bound_scale: F,
+}
+
+impl<F: JoltField> LazyEqZeroLowToHigh<F> {
+    fn new(vars: usize) -> Self {
+        Self {
+            remaining_len: 1usize << vars,
+            bound_scale: F::one(),
+        }
+    }
+
+    fn get_bound_coeff(&self, index: usize) -> F {
+        debug_assert!(index < self.remaining_len);
+        if index == 0 {
+            self.bound_scale
+        } else {
+            F::zero()
+        }
+    }
+
+    fn bind(&mut self, r_j: F::Challenge) {
+        debug_assert!(self.remaining_len > 1);
+        let r_j: F = r_j.into();
+        self.bound_scale *= F::one() - r_j;
+        self.remaining_len /= 2;
     }
 }
 
@@ -1076,10 +1099,10 @@ mod tests {
             value: eval_matrix(&y, 3, 5, &r_m, &r_n),
         };
         let witness = MatMulRoundWitness {
-            input: a,
-            acc,
-            output: y,
-            frac_bits: std::array::from_fn(|_| Vec::new()),
+            input: &a,
+            acc: &acc,
+            output: &y,
+            frac_bits: std::array::from_fn(|_| &[][..]),
         };
 
         let mut prover_transcript = Blake2bTranscript::default();

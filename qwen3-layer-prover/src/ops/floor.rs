@@ -1,14 +1,14 @@
 use joltworks::{
-    field::JoltField,
-    poly::eq_poly::EqPolynomial,
-    transcripts::Transcript,
+    field::JoltField, poly::eq_poly::EqPolynomial, transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
 
 use crate::{
     claim::{Claim, Shape, TensorId},
     error::{ProverError, Result},
-    ops::round::{ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round},
+    ops::round::{
+        ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
+    },
 };
 
 // Floor rebase implemented through the canonical Shout-backed round op.
@@ -64,11 +64,11 @@ impl FloorParams {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct FloorWitness {
-    pub input: Vec<i64>,
-    pub output: Vec<i32>,
-    pub frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
+#[derive(Debug, Clone)]
+pub struct FloorWitness<'a> {
+    pub input: &'a [i64],
+    pub output: &'a [i32],
+    pub frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
 }
 
 #[derive(Debug, Clone)]
@@ -78,7 +78,7 @@ pub struct FloorProof<F: JoltField, T: Transcript> {
 
 pub fn prove_floor<F, T>(
     output_claims: Vec<Claim<F>>,
-    witness: &FloorWitness,
+    witness: &FloorWitness<'_>,
     params: &FloorParams,
     transcript: &mut T,
 ) -> Result<(FloorProof<F, T>, Claim<F>, Claim<F>)>
@@ -92,7 +92,7 @@ where
         .iter()
         .map(|value| value - HALF_SCALE)
         .collect::<Vec<_>>();
-    let round_witness = RoundWitness::from_input_output(shifted, witness.output.clone());
+    let round_witness = RoundWitness::from_input_output(&shifted, witness.output);
     let (round, shifted_claim, ra_claim) = prove_round(
         output_claims,
         &round_witness,
@@ -116,8 +116,12 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let (shifted_claim, ra_claim) =
-        verify_round(output_claims, &proof.round, &params.round_params(), transcript)?;
+    let (shifted_claim, ra_claim) = verify_round(
+        output_claims,
+        &proof.round,
+        &params.round_params(),
+        transcript,
+    )?;
     Ok((unshift_claim(shifted_claim, params), ra_claim))
 }
 
@@ -143,7 +147,7 @@ fn valid_eval<F: JoltField>(shape: &Shape, point: &[F]) -> F {
 
 fn validate_inputs<F: JoltField>(
     output_claims: &[Claim<F>],
-    witness: &FloorWitness,
+    witness: &FloorWitness<'_>,
     params: &FloorParams,
 ) -> Result<()> {
     let len = params.shape.numel();
@@ -158,9 +162,9 @@ fn validate_inputs<F: JoltField>(
             });
         }
     }
-    for (idx, (&input, &output)) in witness.input.iter().zip(&witness.output).enumerate() {
-        let expected = ((input - input.rem_euclid(1_i64 << ROUND_FRAC_BITS)) >> ROUND_FRAC_BITS)
-            as i32;
+    for (idx, (&input, &output)) in witness.input.iter().zip(witness.output.iter()).enumerate() {
+        let expected =
+            ((input - input.rem_euclid(1_i64 << ROUND_FRAC_BITS)) >> ROUND_FRAC_BITS) as i32;
         if expected != output {
             return Err(ProverError::MatMulAccumulatorMismatch {
                 row: idx,
@@ -188,7 +192,9 @@ fn ensure_len(name: &'static str, expected: usize, actual: usize) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use ark_bn254::Fr;
-    use joltworks::{field::JoltField, poly::eq_poly::EqPolynomial, transcripts::Blake2bTranscript};
+    use joltworks::{
+        field::JoltField, poly::eq_poly::EqPolynomial, transcripts::Blake2bTranscript,
+    };
 
     use super::*;
 
@@ -206,9 +212,9 @@ mod tests {
             .map(|&x| ((x - x.rem_euclid(256)) / 256) as i32)
             .collect::<Vec<_>>();
         let witness = FloorWitness {
-            input: input.clone(),
-            output: output.clone(),
-            frac_bits: std::array::from_fn(|_| Vec::new()),
+            input: &input,
+            output: &output,
+            frac_bits: std::array::from_fn(|_| &[][..]),
         };
         let point = vec![Fr::from(7_u64), Fr::from(11_u64), Fr::from(13_u64)];
         let output_claim = Claim {
@@ -220,25 +226,42 @@ mod tests {
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, input_claim, _) =
-            prove_floor::<Fr, _>(vec![output_claim.clone()], &witness, &params, &mut prover_transcript)
-                .unwrap();
+        let (proof, input_claim, _) = prove_floor::<Fr, _>(
+            vec![output_claim.clone()],
+            &witness,
+            &params,
+            &mut prover_transcript,
+        )
+        .unwrap();
 
         let mut verifier_transcript = Blake2bTranscript::default();
-        let (verified_input, _) =
-            verify_floor::<Fr, _>(vec![output_claim], &proof, &params, &mut verifier_transcript)
-                .unwrap();
+        let (verified_input, _) = verify_floor::<Fr, _>(
+            vec![output_claim],
+            &proof,
+            &params,
+            &mut verifier_transcript,
+        )
+        .unwrap();
         assert_eq!(verified_input, input_claim);
-        assert_eq!(input_claim.value, eval_i64(&input, &params.shape, &input_claim.point));
+        assert_eq!(
+            input_claim.value,
+            eval_i64(&input, &params.shape, &input_claim.point)
+        );
     }
 
     fn eval_i32<F: JoltField>(values: &[i32], shape: &Shape, point: &[F]) -> F {
-        let values = values.iter().map(|&v| field_from_i64::<F>(i64::from(v))).collect::<Vec<_>>();
+        let values = values
+            .iter()
+            .map(|&v| field_from_i64::<F>(i64::from(v)))
+            .collect::<Vec<_>>();
         eval_padded(&values, shape, point)
     }
 
     fn eval_i64<F: JoltField>(values: &[i64], shape: &Shape, point: &[F]) -> F {
-        let values = values.iter().map(|&v| field_from_i64::<F>(v)).collect::<Vec<_>>();
+        let values = values
+            .iter()
+            .map(|&v| field_from_i64::<F>(v))
+            .collect::<Vec<_>>();
         eval_padded(&values, shape, point)
     }
 

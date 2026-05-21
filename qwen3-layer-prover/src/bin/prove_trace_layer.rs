@@ -7,11 +7,9 @@ use std::{
 };
 
 use ark_bn254::Fr;
-use joltworks::{field::JoltField, poly::eq_poly::EqPolynomial, transcripts::Blake2bTranscript};
-use qwen3_layer_prover::{
-    Claim, Shape, TensorId,
-    layer::{LayerShape, LayerTensorIds, LayerWeights, prove_layer, verify_layer},
-    trace::build_layer_witness_from_trace_dir,
+use joltworks::transcripts::Blake2bTranscript;
+use qwen3_layer_prover::layer::{
+    LayerShape, LayerTensorIds, LayerWeights, prove_layer, verify_layer,
 };
 use serde_json::Value;
 
@@ -47,27 +45,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         t0.elapsed().as_secs_f64()
     );
 
-    let t0 = Instant::now();
-    let traced = build_layer_witness_from_trace_dir(&args.trace, args.layer, &weights, &shape)?;
-    eprintln!(
-        "timing: build_layer_witness {:.3}s",
-        t0.elapsed().as_secs_f64()
-    );
-
     let hidden_shape = shape.hidden_shape();
     let point_len = hidden_shape.padded_power_of_two().point_len();
     let point_a = challenge_point(point_len, 3);
     let point_b = challenge_point(point_len, 37);
-    let hidden_out_a = hidden_out_claim(&traced.hidden_out, &hidden_shape, point_a);
-    let hidden_out_b = hidden_out_claim(&traced.hidden_out, &hidden_shape, point_b);
     let tensors = LayerTensorIds::default();
 
     let mut prover_transcript = Blake2bTranscript::default();
     let t0 = Instant::now();
     let proof = prove_layer::<Fr, _>(
-        hidden_out_a.clone(),
-        hidden_out_b.clone(),
-        &traced.witness,
+        &args.trace,
+        args.layer,
+        point_a,
+        point_b,
         &weights,
         &shape,
         &tensors,
@@ -78,9 +68,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut verifier_transcript = Blake2bTranscript::default();
     let t0 = Instant::now();
     let claims = verify_layer::<Fr, _>(
-        hidden_out_a,
-        hidden_out_b,
-        &proof.proof,
+        proof.proof.hidden_out_a.clone(),
+        proof.proof.hidden_out_b.clone(),
+        &proof.proof.proof,
         &weights,
         &shape,
         &tensors,
@@ -297,54 +287,4 @@ fn challenge_point(len: usize, seed: u64) -> Vec<Fr> {
     (0..len)
         .map(|idx| Fr::from(seed + (idx as u64) * 17))
         .collect()
-}
-
-fn hidden_out_claim(values: &[i32], shape: &Shape, point: Vec<Fr>) -> Claim<Fr> {
-    Claim {
-        tensor: TensorId::new("hidden_out"),
-        logical_shape: shape.clone(),
-        domain_shape: shape.padded_power_of_two(),
-        value: eval_tensor(values, shape, &point),
-        point,
-    }
-}
-
-fn eval_tensor<F: JoltField>(values: &[i32], shape: &Shape, point: &[F]) -> F {
-    let eq_by_dim = split_point(shape, point)
-        .into_iter()
-        .map(EqPolynomial::<F>::evals)
-        .collect::<Vec<_>>();
-    let strides = row_major_strides(shape.dims());
-    let mut out = F::zero();
-    for (flat, &value) in values.iter().enumerate() {
-        let mut weight = F::one();
-        for (dim, (&stride, eq)) in strides.iter().zip(&eq_by_dim).enumerate() {
-            let coord = (flat / stride) % shape.dims()[dim];
-            weight *= eq[coord];
-        }
-        out += weight * F::from_i32(value);
-    }
-    out
-}
-
-fn split_point<'a, F>(shape: &Shape, point: &'a [F]) -> Vec<&'a [F]> {
-    let mut offset = 0;
-    shape
-        .dims()
-        .iter()
-        .map(|dim| {
-            let bits = dim.next_power_of_two().trailing_zeros() as usize;
-            let out = &point[offset..offset + bits];
-            offset += bits;
-            out
-        })
-        .collect()
-}
-
-fn row_major_strides(dims: &[usize]) -> Vec<usize> {
-    let mut strides = vec![1; dims.len()];
-    for idx in (0..dims.len()).rev().skip(1) {
-        strides[idx] = strides[idx + 1] * dims[idx + 1];
-    }
-    strides
 }

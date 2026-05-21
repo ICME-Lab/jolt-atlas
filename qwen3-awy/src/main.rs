@@ -118,6 +118,7 @@ struct Args {
     sampling: Sampling,
     timing: bool,
     dump_full_awy: Option<PathBuf>,
+    logit_outliers: usize,
     cfg: ForwardConfig,
 }
 
@@ -138,6 +139,7 @@ impl Args {
         let mut greedy = false;
         let mut timing = false;
         let mut dump_full_awy = None;
+        let mut logit_outliers = 0;
         let mut cfg = ForwardConfig::default();
 
         let mut args = std::env::args().skip(1);
@@ -229,6 +231,12 @@ impl Args {
                         args.next().ok_or("--dump-full-awy requires a path")?,
                     ));
                 }
+                "--logit-outliers" => {
+                    logit_outliers = args
+                        .next()
+                        .ok_or("--logit-outliers requires a count")?
+                        .parse()?;
+                }
                 "--help" | "-h" => {
                     print_help();
                     std::process::exit(0);
@@ -259,6 +267,7 @@ impl Args {
             sampling,
             timing,
             dump_full_awy,
+            logit_outliers,
             cfg,
         })
     }
@@ -289,7 +298,8 @@ fn print_help() {
            --top-k K             keep only top K candidates before top-p; default 20\n\
 --repetition-penalty R penalize previously generated tokens; default 1.0\n\
 --timing              print detailed timing breakdowns\n\
---dump-full-awy PATH  after generation, replay full token sequence and dump all layer AWY tensors\n"
+--dump-full-awy PATH  after generation, replay full token sequence and dump all layer AWY tensors\n\
+--logit-outliers N    print top-N absolute raw lm_head logits before repetition penalty\n"
     );
 }
 
@@ -1010,7 +1020,9 @@ fn generate_with_kv_cache(
     let mut decode_lm_head_elapsed = Duration::ZERO;
     let mut choose_elapsed = Duration::ZERO;
     let mut decode_timing = DecodeTiming::default();
+    let mut logit_outliers = LogitOutlierTracker::new(args.logit_outliers);
     for _ in 0..max_new_tokens {
+        logit_outliers.observe(real_ids.len() - prompt_tokens, real_ids.len(), &logits);
         let choose_started = Instant::now();
         apply_repetition_penalty_fixed(&mut logits, &real_ids, args.sampling.repetition_penalty);
         let next = choose_next_token_fixed(&logits, args.sampling, &mut rng) as u32;
@@ -1043,6 +1055,7 @@ fn generate_with_kv_cache(
         lm_head_scores_fixed_loaded_into(&fixed.lm_head, &h_int, &mut logits)?;
         decode_lm_head_elapsed += decode_lm_head_started.elapsed();
     }
+    logit_outliers.print(&args.tokenizer)?;
 
     if let Some(path) = &args.dump_full_awy {
         let dump_started = Instant::now();
@@ -1130,6 +1143,79 @@ fn generate_with_kv_cache(
         ended_with_eos,
         text,
     })
+}
+
+#[derive(Clone, Debug)]
+struct LogitOutlier {
+    generated_step: usize,
+    prefix_tokens: usize,
+    token_id: usize,
+    value_q8: i32,
+}
+
+#[derive(Default)]
+struct LogitOutlierTracker {
+    limit: usize,
+    entries: Vec<LogitOutlier>,
+}
+
+impl LogitOutlierTracker {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            entries: Vec::new(),
+        }
+    }
+
+    fn observe(&mut self, generated_step: usize, prefix_tokens: usize, logits: &[i32]) {
+        if self.limit == 0 {
+            return;
+        }
+        for (token_id, &value_q8) in logits.iter().enumerate() {
+            self.entries.push(LogitOutlier {
+                generated_step,
+                prefix_tokens,
+                token_id,
+                value_q8,
+            });
+        }
+        self.entries
+            .sort_unstable_by_key(|entry| std::cmp::Reverse(i64::from(entry.value_q8).abs()));
+        self.entries.truncate(self.limit);
+    }
+
+    fn print(&self, tokenizer: &PathBuf) -> Result<(), Box<dyn Error>> {
+        if self.limit == 0 {
+            return Ok(());
+        }
+        println!();
+        println!("lm_head raw logit outliers before repetition penalty");
+        println!(
+            "{:<5} {:<8} {:<13} {:<10} {:>12} {:>12}  token",
+            "rank", "step", "prefix_tokens", "token_id", "q8", "real"
+        );
+        for (rank, entry) in self.entries.iter().enumerate() {
+            let token = decode_tokens(tokenizer, &[entry.token_id as u32])?;
+            println!(
+                "{:<5} {:<8} {:<13} {:<10} {:>12} {:>12.4}  {}",
+                rank + 1,
+                entry.generated_step,
+                entry.prefix_tokens,
+                entry.token_id,
+                entry.value_q8,
+                entry.value_q8 as f64 / (1u64 << DEFAULT_FIXED_FRAC) as f64,
+                printable_token(&token)
+            );
+        }
+        Ok(())
+    }
+}
+
+fn printable_token(token: &str) -> String {
+    token
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 fn stream_generated_delta(

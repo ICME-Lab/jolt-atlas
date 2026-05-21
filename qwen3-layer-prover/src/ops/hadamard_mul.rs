@@ -95,13 +95,13 @@ impl HadamardRoundParams {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct HadamardRoundWitness {
-    pub lhs: Vec<i32>,
-    pub rhs: Vec<i32>,
-    pub acc: Vec<i64>,
-    pub output: Vec<i32>,
-    pub frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
+#[derive(Debug, Clone)]
+pub struct HadamardRoundWitness<'a> {
+    pub lhs: &'a [i32],
+    pub rhs: &'a [i32],
+    pub acc: &'a [i64],
+    pub output: &'a [i32],
+    pub frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
 }
 
 #[derive(Debug, Clone)]
@@ -112,7 +112,7 @@ pub struct HadamardRoundProof<F: JoltField, T: Transcript> {
 
 pub fn prove_hadamard_round<F, T>(
     y_claim: Claim<F>,
-    witness: &HadamardRoundWitness,
+    witness: &HadamardRoundWitness<'_>,
     params: &HadamardRoundParams,
     transcript: &mut T,
 ) -> Result<(HadamardRoundProof<F, T>, Claim<F>, Claim<F>, Claim<F>)>
@@ -120,8 +120,7 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let round_witness =
-        RoundWitness::from_input_output(witness.acc.clone(), witness.output.clone());
+    let round_witness = RoundWitness::from_input_output(witness.acc, witness.output);
     let (hadamard_proof, hadamard_claims) = prove_hadamard_round_relation(
         y_claim,
         &witness.lhs,

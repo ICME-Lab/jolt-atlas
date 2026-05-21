@@ -108,16 +108,16 @@ impl QkScoreRoundParams {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct QkScoreWitness {
-    pub q: Vec<i32>,
-    pub k: Vec<i32>,
-    pub raw_acc: Vec<i64>,
-    pub dot: Vec<i32>,
-    pub dot_frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
-    pub scale_acc: Vec<i64>,
-    pub output: Vec<i32>,
-    pub frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
+#[derive(Debug, Clone)]
+pub struct QkScoreWitness<'a> {
+    pub q: &'a [i32],
+    pub k: &'a [i32],
+    pub raw_acc: &'a [i64],
+    pub dot: &'a [i32],
+    pub dot_frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
+    pub scale_acc: &'a [i64],
+    pub output: &'a [i32],
+    pub frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
 }
 
 #[derive(Debug, Clone)]
@@ -139,7 +139,7 @@ pub struct QkScoreRoundRelationProof<F: JoltField, T: Transcript> {
 
 pub fn prove_qk_score_round<F, T>(
     score_claim: Claim<F>,
-    witness: &QkScoreWitness,
+    witness: &QkScoreWitness<'_>,
     params: &QkScoreRoundParams,
     transcript: &mut T,
 ) -> Result<(QkScoreProof<F, T>, Claim<F>, Claim<F>, Claim<F>, Claim<F>)>
@@ -147,8 +147,7 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let score_round_witness =
-        RoundWitness::from_input_output(witness.scale_acc.clone(), witness.output.clone());
+    let score_round_witness = RoundWitness::from_input_output(witness.scale_acc, witness.output);
     let (score_round_proof, scale_acc_claim, score_ra) = prove_round(
         vec![score_claim],
         &score_round_witness,
@@ -175,8 +174,7 @@ where
         value: dot_opening,
     };
 
-    let dot_round_witness =
-        RoundWitness::from_input_output(witness.raw_acc.clone(), witness.dot.clone());
+    let dot_round_witness = RoundWitness::from_input_output(witness.raw_acc, witness.dot);
     let (qk_proof, q, k, dot_round_point, dot_round_bit_opening, dot_remainder_opening) =
         prove_qk_score_round_relation(
             dot_claim,
@@ -940,14 +938,14 @@ mod tests {
             point,
         };
         let witness = QkScoreWitness {
-            q,
-            k,
-            raw_acc,
-            dot,
-            dot_frac_bits,
-            scale_acc,
-            output,
-            frac_bits,
+            q: &q,
+            k: &k,
+            raw_acc: &raw_acc,
+            dot: &dot,
+            dot_frac_bits: dot_frac_bits.each_ref().map(Vec::as_slice),
+            scale_acc: &scale_acc,
+            output: &output,
+            frac_bits: frac_bits.each_ref().map(Vec::as_slice),
         };
 
         let mut prover_transcript = Blake2bTranscript::default();

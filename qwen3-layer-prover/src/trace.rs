@@ -3,6 +3,7 @@ use std::{
     fs::File,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
+    time::Instant,
 };
 
 use serde_json::Value;
@@ -14,6 +15,14 @@ use crate::{
 };
 
 const FIXED_SCALE: i64 = 1 << ROUND_FRAC_BITS;
+
+macro_rules! trace_timing {
+    ($($arg:tt)*) => {
+        if crate::timing::op_timing_enabled() {
+            eprintln!($($arg)*);
+        }
+    };
+}
 
 #[derive(Debug, Error)]
 pub enum TraceWitnessError {
@@ -99,10 +108,22 @@ pub fn build_layer_witness_from_trace_dir(
     weights: &LayerWeights,
     shape: &LayerShape,
 ) -> TraceWitnessResult<TraceLayerWitness> {
+    let total_start = Instant::now();
     validate_shape(shape)?;
+    let step = Instant::now();
     let trace = TraceIndex::load(trace_dir)?;
+    trace_timing!(
+        "timing: build_witness.layer{layer}.manifest {:.3}s",
+        step.elapsed().as_secs_f64()
+    );
+    let step = Instant::now();
     let hidden_in = trace.i32(&format!("layer{layer}.ln1.A"), &[shape.seq, shape.hidden])?;
+    trace_timing!(
+        "timing: build_witness.layer{layer}.hidden_in {:.3}s",
+        step.elapsed().as_secs_f64()
+    );
 
+    let step = Instant::now();
     let rms_norm_atten = rms_norm_from_trace_or_compute(
         &trace,
         &format!("layer{layer}.ln1"),
@@ -112,7 +133,12 @@ pub fn build_layer_witness_from_trace_dir(
         shape.hidden,
         &[shape.seq, shape.hidden],
     )?;
+    trace_timing!(
+        "timing: build_witness.layer{layer}.ln1 {:.3}s",
+        step.elapsed().as_secs_f64()
+    );
 
+    let step = Instant::now();
     let q_proj = round_from_trace_or_compute(
         &trace,
         &format!("layer{layer}.q_proj"),
@@ -155,7 +181,12 @@ pub fn build_layer_witness_from_trace_dir(
             )
         },
     )?;
+    trace_timing!(
+        "timing: build_witness.layer{layer}.qkv_proj {:.3}s",
+        step.elapsed().as_secs_f64()
+    );
 
+    let step = Instant::now();
     let q_norm = rms_norm_from_trace_or_compute(
         &trace,
         &format!("layer{layer}.q_norm"),
@@ -174,7 +205,12 @@ pub fn build_layer_witness_from_trace_dir(
         shape.head_dim,
         &[shape.seq, shape.kv_heads, shape.head_dim],
     )?;
+    trace_timing!(
+        "timing: build_witness.layer{layer}.qk_norm {:.3}s",
+        step.elapsed().as_secs_f64()
+    );
 
+    let step = Instant::now();
     let q_rope = round_from_trace_or_compute(
         &trace,
         &format!("layer{layer}.q_rope"),
@@ -205,7 +241,12 @@ pub fn build_layer_witness_from_trace_dir(
             )
         },
     )?;
+    trace_timing!(
+        "timing: build_witness.layer{layer}.qk_rope {:.3}s",
+        step.elapsed().as_secs_f64()
+    );
 
+    let step = Instant::now();
     let qk_score = qk_score_from_trace_or_compute(
         &trace,
         &format!("layer{layer}.attention_scores"),
@@ -213,14 +254,24 @@ pub fn build_layer_witness_from_trace_dir(
         &k_rope.output,
         shape,
     )?;
+    trace_timing!(
+        "timing: build_witness.layer{layer}.qk_score {:.3}s",
+        step.elapsed().as_secs_f64()
+    );
 
+    let step = Instant::now();
     let softmax = causal_softmax_from_trace_or_compute(
         &trace,
         &format!("layer{layer}.softmax"),
         &qk_score.output,
         shape,
     )?;
+    trace_timing!(
+        "timing: build_witness.layer{layer}.softmax {:.3}s",
+        step.elapsed().as_secs_f64()
+    );
 
+    let step = Instant::now();
     let context = round_from_trace_or_compute(
         &trace,
         &format!("layer{layer}.attention_value"),
@@ -242,7 +293,12 @@ pub fn build_layer_witness_from_trace_dir(
             )
         },
     )?;
+    trace_timing!(
+        "timing: build_witness.layer{layer}.attn_out {:.3}s",
+        step.elapsed().as_secs_f64()
+    );
 
+    let step = Instant::now();
     let residual_add_attn = hidden_in
         .iter()
         .zip(&o_proj.output)
@@ -258,7 +314,12 @@ pub fn build_layer_witness_from_trace_dir(
         shape.hidden,
         &[shape.seq, shape.hidden],
     )?;
+    trace_timing!(
+        "timing: build_witness.layer{layer}.ln2 {:.3}s",
+        step.elapsed().as_secs_f64()
+    );
 
+    let step = Instant::now();
     let gate_proj = round_from_trace_or_compute(
         &trace,
         &format!("layer{layer}.gate_proj"),
@@ -289,7 +350,12 @@ pub fn build_layer_witness_from_trace_dir(
     );
     let gate_proj = gate_proj?;
     let up_proj = up_proj?;
+    trace_timing!(
+        "timing: build_witness.layer{layer}.gate_up_proj {:.3}s",
+        step.elapsed().as_secs_f64()
+    );
 
+    let step = Instant::now();
     let silu = silu(&gate_proj.output);
     let silu_up = round_from_trace_or_compute(
         &trace,
@@ -312,14 +378,23 @@ pub fn build_layer_witness_from_trace_dir(
             )
         },
     )?;
+    trace_timing!(
+        "timing: build_witness.layer{layer}.silu_down {:.3}s",
+        step.elapsed().as_secs_f64()
+    );
 
+    let step = Instant::now();
     let hidden_out = residual_add_attn
         .iter()
         .zip(&down_proj.output)
         .map(|(&lhs, &rhs)| lhs + rhs)
         .collect::<Vec<_>>();
+    trace_timing!(
+        "timing: build_witness.layer{layer}.pack_start {:.3}s",
+        step.elapsed().as_secs_f64()
+    );
 
-    Ok(TraceLayerWitness {
+    let out = TraceLayerWitness {
         hidden_out,
         witness: LayerWitness {
             hidden_in: hidden_in.clone(),
@@ -417,7 +492,12 @@ pub fn build_layer_witness_from_trace_dir(
             down_proj: down_proj.output,
             down_proj_frac_bits: down_proj.frac_bits,
         },
-    })
+    };
+    trace_timing!(
+        "timing: build_witness.layer{layer}.total {:.3}s",
+        total_start.elapsed().as_secs_f64()
+    );
+    Ok(out)
 }
 
 impl TraceIndex {
@@ -696,12 +776,18 @@ fn qk_score_from_trace_or_compute(
         let computed = qk_score(q, k, shape);
         check(
             &format!("{label}.Y"),
-            &trace.i32(&format!("{label}.Y"), &[shape.q_heads, shape.seq, shape.seq])?,
+            &trace.i32(
+                &format!("{label}.Y"),
+                &[shape.q_heads, shape.seq, shape.seq],
+            )?,
             &computed.output,
         )?;
         return Ok(computed);
     }
-    let dot_acc = trace.i64(&format!("{label}.DotAcc"), &[shape.q_heads, shape.seq, shape.seq])?;
+    let dot_acc = trace.i64(
+        &format!("{label}.DotAcc"),
+        &[shape.q_heads, shape.seq, shape.seq],
+    )?;
     let dot = round_fixture(dot_acc);
     let scale_acc = trace.i64(&acc_label, &[shape.q_heads, shape.seq, shape.seq])?;
     let score = round_fixture(scale_acc);
@@ -725,11 +811,7 @@ fn causal_softmax_from_trace_or_compute(
     let acc_label = format!("{label}.Acc");
     if trace.has(&acc_label) {
         computed.acc = trace.i64(&acc_label, &[shape.q_heads, shape.seq, shape.seq])?;
-        computed.floor = computed
-            .acc
-            .iter()
-            .map(|&value| floor_q8(value))
-            .collect();
+        computed.floor = computed.acc.iter().map(|&value| floor_q8(value)).collect();
         computed.output = computed
             .floor
             .iter()
@@ -740,7 +822,10 @@ fn causal_softmax_from_trace_or_compute(
     } else {
         check(
             &format!("{label}.Y"),
-            &trace.i32(&format!("{label}.Y"), &[shape.q_heads, shape.seq, shape.seq])?,
+            &trace.i32(
+                &format!("{label}.Y"),
+                &[shape.q_heads, shape.seq, shape.seq],
+            )?,
             &computed.output,
         )?;
     }

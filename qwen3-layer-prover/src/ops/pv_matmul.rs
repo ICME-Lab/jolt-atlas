@@ -97,13 +97,13 @@ impl PvMatmulRoundParams {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct PvMatmulWitness {
-    pub p: Vec<i32>,
-    pub v: Vec<i32>,
-    pub acc: Vec<i64>,
-    pub output: Vec<i32>,
-    pub frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
+#[derive(Debug, Clone)]
+pub struct PvMatmulWitness<'a> {
+    pub p: &'a [i32],
+    pub v: &'a [i32],
+    pub acc: &'a [i64],
+    pub output: &'a [i32],
+    pub frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
 }
 
 #[derive(Debug, Clone)]
@@ -123,7 +123,7 @@ pub struct PvMatmulRoundRelationProof<F: JoltField, T: Transcript> {
 
 pub fn prove_pv_matmul_round<F, T>(
     context_claim: Claim<F>,
-    witness: &PvMatmulWitness,
+    witness: &PvMatmulWitness<'_>,
     params: &PvMatmulRoundParams,
     transcript: &mut T,
 ) -> Result<(PvMatmulProof<F, T>, Claim<F>, Claim<F>, Claim<F>)>
@@ -131,8 +131,7 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let round_witness =
-        RoundWitness::from_input_output(witness.acc.clone(), witness.output.clone());
+    let round_witness = RoundWitness::from_input_output(witness.acc, witness.output);
     let (pv_proof, p, v, round_point, round_bit_opening, remainder_opening) =
         prove_pv_matmul_round_relation(
             context_claim,
@@ -876,11 +875,11 @@ mod tests {
             point,
         };
         let witness = PvMatmulWitness {
-            p,
-            v,
-            acc,
-            output,
-            frac_bits,
+            p: &p,
+            v: &v,
+            acc: &acc,
+            output: &output,
+            frac_bits: frac_bits.each_ref().map(Vec::as_slice),
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
@@ -933,11 +932,11 @@ mod tests {
             point,
         };
         let witness = PvMatmulWitness {
-            p,
-            v,
-            acc,
-            output,
-            frac_bits,
+            p: &p,
+            v: &v,
+            acc: &acc,
+            output: &output,
+            frac_bits: frac_bits.each_ref().map(Vec::as_slice),
         };
 
         let mut prover_transcript = Blake2bTranscript::default();

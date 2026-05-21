@@ -84,16 +84,16 @@ impl RoundParams {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct RoundWitness {
-    pub input: Vec<i64>,
-    pub output: Vec<i32>,
+#[derive(Debug, Clone)]
+pub struct RoundWitness<'a> {
+    pub input: &'a [i64],
+    pub output: &'a [i32],
     pub remainder: Vec<usize>,
     pub round_bit: Vec<i32>,
 }
 
-impl RoundWitness {
-    pub fn from_input_output(input: Vec<i64>, output: Vec<i32>) -> Self {
+impl<'a> RoundWitness<'a> {
+    pub fn from_input_output(input: &'a [i64], output: &'a [i32]) -> Self {
         let remainder = input
             .iter()
             .map(|value| value.rem_euclid(ROUND_LUT_LEN as i64) as usize)
@@ -132,7 +132,7 @@ pub struct RoundRaCommittedOpenings<F: JoltField> {
 
 pub fn prove_round<F, T>(
     output_claims: Vec<Claim<F>>,
-    witness: &RoundWitness,
+    witness: &RoundWitness<'_>,
     params: &RoundParams,
     transcript: &mut T,
 ) -> Result<(RoundProof<F, T>, Claim<F>, Claim<F>)>
@@ -773,7 +773,7 @@ fn insert_round_ra_committed_openings<F: JoltField>(
 
 fn validate_inputs<F: JoltField>(
     output_claims: &[Claim<F>],
-    witness: &RoundWitness,
+    witness: &RoundWitness<'_>,
     params: &RoundParams,
 ) -> Result<()> {
     if params.frac_bits != ROUND_FRAC_BITS {
@@ -1014,7 +1014,7 @@ mod tests {
             .iter()
             .map(|&x| ((x + ((x.rem_euclid(256) >> 7) * 256) - x.rem_euclid(256)) / 256) as i32)
             .collect::<Vec<_>>();
-        let witness = RoundWitness::from_input_output(input, output.clone());
+        let witness = RoundWitness::from_input_output(&input, &output);
         let point = vec![Fr::from(7_u64), Fr::from(11_u64), Fr::from(13_u64)];
         let output_claim = Claim {
             tensor: params.output_tensor.clone(),

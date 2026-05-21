@@ -17,7 +17,16 @@ use crate::{
 };
 
 use ark_serialize::*;
-use std::marker::PhantomData;
+use std::{marker::PhantomData, sync::OnceLock, time::Instant};
+
+fn sumcheck_timing_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("JOLTWORKS_SUMCHECK_TIMING")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
+    })
+}
 
 /// Implements the standard technique for batching parallel sumchecks to reduce
 /// verifier cost and proof size.
@@ -567,34 +576,127 @@ impl Sumcheck {
         opening_accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut ProofTranscript,
     ) -> (SumcheckInstanceProof<F, ProofTranscript>, Vec<F::Challenge>) {
+        let timing_enabled = sumcheck_timing_enabled();
+        if !timing_enabled {
+            let num_rounds = sumcheck_instance.num_rounds();
+
+            // Append input claims to transcript
+            let input_claim = sumcheck_instance.input_claim(opening_accumulator);
+            transcript.append_scalar(&input_claim);
+            let mut previous_claim = input_claim;
+            let mut r_sumcheck: Vec<F::Challenge> = Vec::with_capacity(num_rounds);
+            let mut compressed_polys: Vec<CompressedUniPoly<F>> = Vec::with_capacity(num_rounds);
+            for round in 0..num_rounds {
+                let univariate_poly = sumcheck_instance.compute_message(round, previous_claim);
+                // append the prover's message to the transcript
+                let compressed_poly = univariate_poly.compress();
+                compressed_poly.append_to_transcript(transcript);
+                let r_j = transcript.challenge_scalar_optimized::<F>();
+                r_sumcheck.push(r_j);
+
+                // Cache claim for this round
+                previous_claim = univariate_poly.evaluate(&r_j);
+                sumcheck_instance.ingest_challenge(r_j, round);
+                compressed_polys.push(compressed_poly);
+            }
+
+            // Allow the sumcheck instance to perform any end-of-protocol work (e.g. flushing
+            // delayed bindings) after the final challenge has been ingested and before we cache
+            // openings.
+            sumcheck_instance.finalize();
+
+            sumcheck_instance.cache_openings(opening_accumulator, transcript, &r_sumcheck);
+            return (SumcheckInstanceProof::new(compressed_polys), r_sumcheck);
+        }
+
+        let total_start = Instant::now();
+        let mut input_transcript_time = 0.0;
+        let mut compute_message_time = 0.0;
+        let mut compress_time = 0.0;
+        let mut transcript_time = 0.0;
+        let mut challenge_time = 0.0;
+        let mut evaluate_time = 0.0;
+        let mut ingest_time = 0.0;
+        let mut finalize_time = 0.0;
+        let mut cache_openings_time = 0.0;
         let num_rounds = sumcheck_instance.num_rounds();
 
         // Append input claims to transcript
         let input_claim = sumcheck_instance.input_claim(opening_accumulator);
+        let step_start = Instant::now();
         transcript.append_scalar(&input_claim);
+        if timing_enabled {
+            input_transcript_time += step_start.elapsed().as_secs_f64();
+        }
         let mut previous_claim = input_claim;
         let mut r_sumcheck: Vec<F::Challenge> = Vec::with_capacity(num_rounds);
         let mut compressed_polys: Vec<CompressedUniPoly<F>> = Vec::with_capacity(num_rounds);
         for round in 0..num_rounds {
+            let step_start = Instant::now();
             let univariate_poly = sumcheck_instance.compute_message(round, previous_claim);
+            if timing_enabled {
+                compute_message_time += step_start.elapsed().as_secs_f64();
+            }
             // append the prover's message to the transcript
+            let step_start = Instant::now();
             let compressed_poly = univariate_poly.compress();
+            if timing_enabled {
+                compress_time += step_start.elapsed().as_secs_f64();
+            }
+            let step_start = Instant::now();
             compressed_poly.append_to_transcript(transcript);
+            if timing_enabled {
+                transcript_time += step_start.elapsed().as_secs_f64();
+            }
+            let step_start = Instant::now();
             let r_j = transcript.challenge_scalar_optimized::<F>();
+            if timing_enabled {
+                challenge_time += step_start.elapsed().as_secs_f64();
+            }
             r_sumcheck.push(r_j);
 
             // Cache claim for this round
+            let step_start = Instant::now();
             previous_claim = univariate_poly.evaluate(&r_j);
+            if timing_enabled {
+                evaluate_time += step_start.elapsed().as_secs_f64();
+            }
+            let step_start = Instant::now();
             sumcheck_instance.ingest_challenge(r_j, round);
+            if timing_enabled {
+                ingest_time += step_start.elapsed().as_secs_f64();
+            }
             compressed_polys.push(compressed_poly);
         }
 
         // Allow the sumcheck instance to perform any end-of-protocol work (e.g. flushing
         // delayed bindings) after the final challenge has been ingested and before we cache
         // openings.
+        let step_start = Instant::now();
         sumcheck_instance.finalize();
+        if timing_enabled {
+            finalize_time += step_start.elapsed().as_secs_f64();
+        }
 
+        let step_start = Instant::now();
         sumcheck_instance.cache_openings(opening_accumulator, transcript, &r_sumcheck);
+        if timing_enabled {
+            cache_openings_time += step_start.elapsed().as_secs_f64();
+            eprintln!(
+                "timing: sumcheck.prove rounds={} total={:.6}s input_transcript={:.6}s compute_message={:.6}s compress={:.6}s transcript={:.6}s challenge={:.6}s evaluate={:.6}s ingest={:.6}s finalize={:.6}s cache_openings={:.6}s",
+                num_rounds,
+                total_start.elapsed().as_secs_f64(),
+                input_transcript_time,
+                compute_message_time,
+                compress_time,
+                transcript_time,
+                challenge_time,
+                evaluate_time,
+                ingest_time,
+                finalize_time,
+                cache_openings_time
+            );
+        }
         (SumcheckInstanceProof::new(compressed_polys), r_sumcheck)
     }
 

@@ -17,4 +17,5 @@
 #![warn(missing_docs)]
 
 pub mod onnx_proof;
+pub mod opening_reduction;
 pub mod utils;

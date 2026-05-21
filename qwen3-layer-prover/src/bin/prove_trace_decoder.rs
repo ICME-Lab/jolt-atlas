@@ -1,7 +1,7 @@
 use std::{
     error::Error,
     fs::File,
-    io::{BufRead, BufReader, Read},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     time::Instant,
 };
@@ -48,9 +48,12 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let layers_to_run = args.layers;
     let start = Instant::now();
     let weights = DecoderWeights {
-        layers: read_all_layer_weights(&cache, seq)?,
+        layers: read_layer_weights_prefix(&cache, seq, layers_to_run)?,
     };
-    eprintln!("timing: decoder.read_weights {:.3}s", start.elapsed().as_secs_f64());
+    eprintln!(
+        "timing: decoder.read_weights {:.3}s",
+        start.elapsed().as_secs_f64()
+    );
 
     let hidden_shape = shape.hidden_shape();
     let point_len = hidden_shape.padded_power_of_two().point_len();
@@ -81,10 +84,10 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             })
         })
         .collect::<Result<Vec<_>, Box<dyn Error + Send + Sync>>>()?;
-    eprintln!("timing: decoder.build_witness {:.3}s", start.elapsed().as_secs_f64());
-    let weights = DecoderWeights {
-        layers: weights.layers[..layers_to_run].to_vec(),
-    };
+    eprintln!(
+        "timing: decoder.build_witness {:.3}s",
+        start.elapsed().as_secs_f64()
+    );
     let tensors = (0..layers_to_run)
         .map(|_| LayerTensorIds::default())
         .collect::<Vec<_>>();
@@ -102,18 +105,16 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     );
 
     let start = Instant::now();
-    let claims = verify_layers_parallel::<Fr, Blake2bTranscript>(
-        &proof.proof,
-        &weights,
-        &shape,
-        &tensors,
-    )?;
+    let claims =
+        verify_layers_parallel::<Fr, Blake2bTranscript>(&proof.proof, &weights, &shape, &tensors)?;
     eprintln!(
         "timing: decoder.verify_layers_parallel {:.3}s",
         start.elapsed().as_secs_f64()
     );
     if claims != proof.claims {
-        return Err("verify_layers_parallel claims differ from prove_layers_parallel claims".into());
+        return Err(
+            "verify_layers_parallel claims differ from prove_layers_parallel claims".into(),
+        );
     }
 
     println!("prove_trace_decoder: ok");
@@ -121,7 +122,10 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("q8_cache: {}", cache.display());
     println!("layers: {layers_to_run}");
     println!("seq: {seq}");
-    eprintln!("timing: decoder.total {:.3}s", total_start.elapsed().as_secs_f64());
+    eprintln!(
+        "timing: decoder.total {:.3}s",
+        total_start.elapsed().as_secs_f64()
+    );
     Ok(())
 }
 
@@ -157,7 +161,9 @@ impl Args {
                 "--layers" => {
                     layers = args.next().ok_or("--layers requires a value")?.parse()?;
                     if layers == 0 || layers > LAYERS {
-                        return Err(format!("--layers must be in 1..={LAYERS}, got {layers}").into());
+                        return Err(
+                            format!("--layers must be in 1..={LAYERS}, got {layers}").into()
+                        );
                     }
                 }
                 "--help" | "-h" => {
@@ -215,9 +221,10 @@ fn read_trace_seq_len(trace: &Path) -> Result<usize, Box<dyn Error + Send + Sync
     Err("trace metadata did not contain tokens_total".into())
 }
 
-fn read_all_layer_weights(
+fn read_layer_weights_prefix(
     path: &Path,
     seq: usize,
+    layers_to_read: usize,
 ) -> Result<Vec<LayerWeights>, Box<dyn Error + Send + Sync>> {
     let mut r = BufReader::new(File::open(path)?);
     let mut magic = [0u8; 16];
@@ -245,11 +252,11 @@ fn read_all_layer_weights(
         }
     }
 
-    let _final_norm = read_i32_vec(&mut r)?;
-    let _lm_head = read_i32_vec(&mut r)?;
+    skip_i32_vec(&mut r)?;
+    skip_i32_vec(&mut r)?;
     let (rope_cos, rope_sin) = rope_tables(seq);
-    let mut layers = Vec::with_capacity(LAYERS);
-    for _ in 0..LAYERS {
+    let mut layers = Vec::with_capacity(layers_to_read);
+    for _ in 0..layers_to_read {
         let ln1 = read_i32_vec(&mut r)?;
         let ln2 = read_i32_vec(&mut r)?;
         let q_norm = read_i32_vec(&mut r)?;
@@ -294,6 +301,18 @@ fn read_i32_vec(r: &mut impl Read) -> Result<Vec<i32>, Box<dyn Error + Send + Sy
         .chunks_exact(4)
         .map(|chunk| i32::from_le_bytes(chunk.try_into().expect("chunk length is 4")))
         .collect())
+}
+
+fn skip_i32_vec<R>(r: &mut R) -> Result<(), Box<dyn Error + Send + Sync>>
+where
+    R: Read + Seek,
+{
+    let len = read_u64(r)?;
+    let bytes = len
+        .checked_mul(std::mem::size_of::<i32>() as u64)
+        .ok_or("fixed cache vector byte length overflow")?;
+    r.seek(SeekFrom::Current(bytes as i64))?;
+    Ok(())
 }
 
 fn rope_tables(seq: usize) -> (Vec<i32>, Vec<i32>) {

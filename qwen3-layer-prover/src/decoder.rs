@@ -7,7 +7,7 @@ use crate::{
     error::Result,
     layer::{
         LayerClaims, LayerProof, LayerShape, LayerTensorIds, LayerWeights, LayerWitness,
-        prove_layer, verify_layer,
+        prove_layer_iop, verify_layer,
     },
     proof::ProveResult,
 };
@@ -108,7 +108,7 @@ where
     let mut layer_proofs = Vec::with_capacity(QWEN3_DECODER_LAYERS);
 
     for idx in (0..QWEN3_DECODER_LAYERS).rev() {
-        let result = prove_layer(
+        let result = prove_layer_iop(
             hidden_a,
             hidden_b,
             &witness.layers[idx],
@@ -206,7 +206,8 @@ where
         .enumerate()
         .map(|(idx, layer)| {
             let mut transcript = layer_transcript::<T>(idx);
-            prove_layer(
+            let start = std::time::Instant::now();
+            let result = prove_layer_iop(
                 layer.hidden_out_a.clone(),
                 layer.hidden_out_b.clone(),
                 &layer.witness,
@@ -214,8 +215,14 @@ where
                 shape,
                 &tensors[idx],
                 &mut transcript,
-            )
-            .map(|result| {
+            );
+            if crate::timing::layer_timing_enabled() {
+                eprintln!(
+                    "timing: prove_layers_parallel.layer{idx}.prove_layer {:.3}s",
+                    start.elapsed().as_secs_f64()
+                );
+            }
+            result.map(|result| {
                 (
                     result.claims,
                     ParallelLayerProof {
@@ -353,10 +360,16 @@ fn verify_layer_count(
         ));
     }
     if weight_layers != proof_layers {
-        return Err(ProofVerifyError::InvalidInputLength(proof_layers, weight_layers));
+        return Err(ProofVerifyError::InvalidInputLength(
+            proof_layers,
+            weight_layers,
+        ));
     }
     if tensor_layers != proof_layers {
-        return Err(ProofVerifyError::InvalidInputLength(proof_layers, tensor_layers));
+        return Err(ProofVerifyError::InvalidInputLength(
+            proof_layers,
+            tensor_layers,
+        ));
     }
     Ok(())
 }

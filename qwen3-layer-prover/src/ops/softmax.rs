@@ -154,23 +154,23 @@ impl SoftmaxParams {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct SoftmaxWitness {
-    pub input: Vec<i32>,
-    pub max_index: Vec<usize>,
-    pub max: Vec<i32>,
+#[derive(Debug, Clone)]
+pub struct SoftmaxWitness<'a> {
+    pub input: &'a [i32],
+    pub max_index: &'a [usize],
+    pub max: &'a [i32],
     pub min_diff: i64,
     pub max_diff: i64,
-    pub ra: Vec<u8>,
-    pub exp_acc: Vec<i64>,
-    pub exp: Vec<i32>,
-    pub exp_frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
-    pub sum: Vec<i32>,
-    pub acc: Vec<i64>,
-    pub floor: Vec<i32>,
-    pub floor_frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
-    pub output: Vec<i32>,
-    pub frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
+    pub ra: &'a [u8],
+    pub exp_acc: &'a [i64],
+    pub exp: &'a [i32],
+    pub exp_frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
+    pub sum: &'a [i32],
+    pub acc: &'a [i64],
+    pub floor: &'a [i32],
+    pub floor_frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
+    pub output: &'a [i32],
+    pub frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
 }
 
 #[derive(Debug, Clone)]
@@ -226,7 +226,7 @@ struct SoftmaxLookupProveResult<F: JoltField, T: Transcript> {
 
 pub fn prove_softmax_round<F, T>(
     output_claims: Vec<Claim<F>>,
-    witness: &SoftmaxWitness,
+    witness: &SoftmaxWitness<'_>,
     params: &SoftmaxParams,
     transcript: &mut T,
 ) -> Result<(
@@ -250,10 +250,12 @@ where
     );
 
     step_start = Instant::now();
-    let round_witness = RoundWitness::from_input_output(
-        witness.floor.iter().map(|&value| i64::from(value)).collect(),
-        witness.output.clone(),
-    );
+    let floor_as_i64 = witness
+        .floor
+        .iter()
+        .map(|&value| i64::from(value))
+        .collect::<Vec<_>>();
+    let round_witness = RoundWitness::from_input_output(&floor_as_i64, witness.output);
     let (round_proof, floor_claim, output_round_ra) =
         prove_round(output_claims, &round_witness, &params.round, transcript)?;
     op_timing!(
@@ -263,9 +265,9 @@ where
 
     step_start = Instant::now();
     let floor_witness = FloorWitness {
-        input: witness.acc.clone(),
-        output: witness.floor.clone(),
-        frac_bits: witness.floor_frac_bits.clone(),
+        input: witness.acc,
+        output: witness.floor,
+        frac_bits: witness.floor_frac_bits,
     };
     let (floor_proof, acc_claim, floor_round_ra) =
         prove_floor(vec![floor_claim], &floor_witness, &params.floor, transcript)?;
@@ -345,8 +347,7 @@ where
     );
 
     step_start = Instant::now();
-    let exp_round_witness =
-        RoundWitness::from_input_output(witness.exp_acc.clone(), witness.exp.clone());
+    let exp_round_witness = RoundWitness::from_input_output(witness.exp_acc, witness.exp);
     let (exp_round_proof, exp_acc_claim, _exp_ra) = prove_round(
         vec![exp_claim],
         &exp_round_witness,
@@ -389,11 +390,11 @@ where
             input_remainder_ra_opening: lookup.input_remainder_ra_opening,
             exp_ra_committed_openings: lookup.exp_ra_committed_openings,
             input_remainder_ra_committed_openings: lookup.input_remainder_ra_committed_openings,
-            max_index: witness.max_index.clone(),
-            max: witness.max.clone(),
+            max_index: witness.max_index.to_vec(),
+            max: witness.max.to_vec(),
             min_diff: witness.min_diff,
             max_diff: witness.max_diff,
-            sum: witness.sum.clone(),
+            sum: witness.sum.to_vec(),
         },
         lookup.input_claim,
         output_round_ra,
@@ -408,16 +409,7 @@ pub fn verify_softmax_round<F, T>(
     proof: &SoftmaxProof<F, T>,
     params: &SoftmaxParams,
     transcript: &mut T,
-) -> std::result::Result<
-    (
-        Claim<F>,
-        Claim<F>,
-        Claim<F>,
-        Claim<F>,
-        Claim<F>,
-    ),
-    ProofVerifyError,
->
+) -> std::result::Result<(Claim<F>, Claim<F>, Claim<F>, Claim<F>, Claim<F>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,
@@ -485,7 +477,7 @@ where
 
 fn prove_lookup<F, T>(
     exp_claim: Claim<F>,
-    witness: &SoftmaxWitness,
+    witness: &SoftmaxWitness<'_>,
     params: &SoftmaxParams,
     transcript: &mut T,
 ) -> Result<SoftmaxLookupProveResult<F, T>>
@@ -882,7 +874,6 @@ impl<F: JoltField> RowExpandedPoly<F> {
             self.row.bind_parallel(r_j, BindingOrder::LowToHigh);
         }
     }
-
 }
 
 struct AccSumcheckProver<F: JoltField> {
@@ -1100,8 +1091,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for LookupSumchec
         self.valid.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.max.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.input.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.remainder
-            .bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.remainder.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.exp_lut.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.index.bind_parallel(r_j, BindingOrder::LowToHigh);
     }
@@ -1507,10 +1497,8 @@ where
         accumulator,
         transcript,
     );
-    let (ra_point, ra_opening) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
-        kind.ra_poly(),
-        kind.sumcheck_id(),
-    ));
+    let (ra_point, ra_opening) = accumulator
+        .get_virtual_polynomial_opening(OpeningId::new(kind.ra_poly(), kind.sumcheck_id()));
     let committed_openings =
         softmax_ra_committed_openings(&kind, log_k, use_ra_virtual, accumulator)?;
     Ok(SoftmaxShoutProof {
@@ -1564,8 +1552,10 @@ where
         raf_claim: index_opening,
     };
     let table = match kind {
-        SoftmaxLookupKind::Exp => padded_i32_table(min_diff, entries, lut_len, exp_lut_q8_unclipped)
-            .map_err(|_| ProofVerifyError::InvalidInputLength(lut_len, 0))?,
+        SoftmaxLookupKind::Exp => {
+            padded_i32_table(min_diff, entries, lut_len, exp_lut_q8_unclipped)
+                .map_err(|_| ProofVerifyError::InvalidInputLength(lut_len, 0))?
+        }
         SoftmaxLookupKind::InputRemainder => (0..lut_len)
             .map(|idx| if idx < entries { idx as i32 } else { 0 })
             .collect(),
@@ -1593,10 +1583,8 @@ where
         vec![&*ra_verifier, &*hw_verifier, &*bool_verifier]
     };
     BatchedSumcheck::verify(ra_onehot, verifier_instances, accumulator, transcript)?;
-    let (ra_point, ra_opening) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
-        kind.ra_poly(),
-        kind.sumcheck_id(),
-    ));
+    let (ra_point, ra_opening) = accumulator
+        .get_virtual_polynomial_opening(OpeningId::new(kind.ra_poly(), kind.sumcheck_id()));
     Ok(SoftmaxShoutProof {
         read_raf: read_raf.clone(),
         ra_onehot: ra_onehot.clone(),
@@ -1678,7 +1666,7 @@ fn insert_softmax_ra_committed_openings<F: JoltField>(
     Ok(())
 }
 
-fn validate_inputs(w: &SoftmaxWitness, params: &SoftmaxParams) -> Result<()> {
+fn validate_inputs(w: &SoftmaxWitness<'_>, params: &SoftmaxParams) -> Result<()> {
     if params.softmax_axis + 1 != params.shape.dims().len() {
         return Err(ProverError::InvalidAxis {
             axis: params.softmax_axis,
@@ -2137,7 +2125,7 @@ fn padded_field_tensor<F: JoltField>(values: &[F], shape: &Shape) -> Vec<F> {
 }
 
 fn softmax_logical_lookup_indices(
-    witness: &SoftmaxWitness,
+    witness: &SoftmaxWitness<'_>,
     params: &SoftmaxParams,
     entries: usize,
 ) -> Result<Vec<usize>> {
@@ -2162,7 +2150,7 @@ fn softmax_logical_lookup_indices(
     Ok(indices)
 }
 
-fn softmax_input_remainders(witness: &SoftmaxWitness, params: &SoftmaxParams) -> Vec<usize> {
+fn softmax_input_remainders(witness: &SoftmaxWitness<'_>, params: &SoftmaxParams) -> Vec<usize> {
     let mut remainders = Vec::with_capacity(params.shape.numel());
     let cols = params.cols();
     for row in 0..params.rows() {
@@ -2438,39 +2426,37 @@ mod tests {
             point: point.clone(),
             value: eval_i32(&output, &params.shape, &point),
         };
+        let ra = onehot_rows(&[1, 0], entries);
+        let exp_frac_bits = frac_bits_for(&exp_acc);
+        let floor_frac_bits = frac_bits_for(&acc);
+        let frac_bits = frac_bits_for_i32(&floor);
         let witness = SoftmaxWitness {
-            input,
-            max_index,
-            max,
+            input: &input,
+            max_index: &max_index,
+            max: &max,
             min_diff,
             max_diff,
-            ra: onehot_rows(&[1, 0], entries),
-            exp_acc: exp_acc.clone(),
-            exp,
-            exp_frac_bits: frac_bits_for(&exp_acc),
-            sum,
-            acc: acc.clone(),
-            floor: floor.clone(),
-            floor_frac_bits: frac_bits_for(&acc),
-            output,
-            frac_bits: frac_bits_for_i32(&floor),
+            ra: &ra,
+            exp_acc: &exp_acc,
+            exp: &exp,
+            exp_frac_bits: exp_frac_bits.each_ref().map(Vec::as_slice),
+            sum: &sum,
+            acc: &acc,
+            floor: &floor,
+            floor_frac_bits: floor_frac_bits.each_ref().map(Vec::as_slice),
+            output: &output,
+            frac_bits: frac_bits.each_ref().map(Vec::as_slice),
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (
-            proof,
-            input_claim,
-            output_round_ra,
-            floor_round_ra,
-            input_remainder_ra,
-            ra_claim,
-        ) = prove_softmax_round::<Fr, _>(
-            vec![output_claim.clone()],
-            &witness,
-            &params,
-            &mut prover_transcript,
-        )
-        .unwrap();
+        let (proof, input_claim, output_round_ra, floor_round_ra, input_remainder_ra, ra_claim) =
+            prove_softmax_round::<Fr, _>(
+                vec![output_claim.clone()],
+                &witness,
+                &params,
+                &mut prover_transcript,
+            )
+            .unwrap();
 
         let mut verifier_transcript = Blake2bTranscript::default();
         let (
@@ -2537,22 +2523,26 @@ mod tests {
             point: point.clone(),
             value: eval_i32(&output, &params.shape, &point),
         };
+        let ra = onehot_rows(&[2, 1, 0], entries);
+        let exp_frac_bits = frac_bits_for(&exp_acc);
+        let floor_frac_bits = frac_bits_for(&acc);
+        let frac_bits = frac_bits_for_i32(&floor);
         let witness = SoftmaxWitness {
-            input,
-            max_index,
-            max,
+            input: &input,
+            max_index: &max_index,
+            max: &max,
             min_diff,
             max_diff,
-            ra: onehot_rows(&[2, 1, 0], entries),
-            exp_acc: exp_acc.clone(),
-            exp,
-            exp_frac_bits: frac_bits_for(&exp_acc),
-            sum,
-            acc: acc.clone(),
-            floor: floor.clone(),
-            floor_frac_bits: frac_bits_for(&acc),
-            output,
-            frac_bits: frac_bits_for_i32(&floor),
+            ra: &ra,
+            exp_acc: &exp_acc,
+            exp: &exp,
+            exp_frac_bits: exp_frac_bits.each_ref().map(Vec::as_slice),
+            sum: &sum,
+            acc: &acc,
+            floor: &floor,
+            floor_frac_bits: floor_frac_bits.each_ref().map(Vec::as_slice),
+            output: &output,
+            frac_bits: frac_bits.each_ref().map(Vec::as_slice),
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
@@ -2623,22 +2613,26 @@ mod tests {
             point: point.clone(),
             value: eval_i32(&output, &params.shape, &point),
         };
+        let ra = onehot_rows(&[1, 1, 0, 1], entries);
+        let exp_frac_bits = frac_bits_for(&exp_acc);
+        let floor_frac_bits = frac_bits_for(&acc);
+        let frac_bits = frac_bits_for_i32(&floor);
         let witness = SoftmaxWitness {
-            input,
-            max_index,
-            max,
+            input: &input,
+            max_index: &max_index,
+            max: &max,
             min_diff,
             max_diff,
-            ra: onehot_rows(&[1, 1, 0, 1], entries),
-            exp_acc: exp_acc.clone(),
-            exp,
-            exp_frac_bits: frac_bits_for(&exp_acc),
-            sum,
-            acc: acc.clone(),
-            floor: floor.clone(),
-            floor_frac_bits: frac_bits_for(&acc),
-            output,
-            frac_bits: frac_bits_for_i32(&floor),
+            ra: &ra,
+            exp_acc: &exp_acc,
+            exp: &exp,
+            exp_frac_bits: exp_frac_bits.each_ref().map(Vec::as_slice),
+            sum: &sum,
+            acc: &acc,
+            floor: &floor,
+            floor_frac_bits: floor_frac_bits.each_ref().map(Vec::as_slice),
+            output: &output,
+            frac_bits: frac_bits.each_ref().map(Vec::as_slice),
         };
 
         let mut prover_transcript = Blake2bTranscript::default();

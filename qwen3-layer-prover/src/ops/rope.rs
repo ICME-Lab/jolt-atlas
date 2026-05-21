@@ -93,12 +93,12 @@ impl RopeRoundParams {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct RopeWitness {
-    pub input: Vec<i32>,
-    pub acc: Vec<i64>,
-    pub output: Vec<i32>,
-    pub frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
+#[derive(Debug, Clone)]
+pub struct RopeWitness<'a> {
+    pub input: &'a [i32],
+    pub acc: &'a [i64],
+    pub output: &'a [i32],
+    pub frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
 }
 
 #[derive(Debug, Clone)]
@@ -116,22 +116,17 @@ pub struct RopeSumcheckProof<F: JoltField, T: Transcript> {
 
 pub fn prove_rope_round<F, T>(
     y_claim: Claim<F>,
-    witness: &RopeWitness,
+    witness: &RopeWitness<'_>,
     cos: &[i32],
     sin: &[i32],
     params: &RopeRoundParams,
     transcript: &mut T,
-) -> Result<(
-    RopeProof<F, T>,
-    Claim<F>,
-    Claim<F>,
-    Claim<F>,
-)>
+) -> Result<(RopeProof<F, T>, Claim<F>, Claim<F>, Claim<F>)>
 where
     F: JoltField,
     T: Transcript,
 {
-    let round_witness = RoundWitness::from_input_output(witness.acc.clone(), witness.output.clone());
+    let round_witness = RoundWitness::from_input_output(witness.acc, witness.output);
     let (round_proof, acc_claim, round_ra) =
         prove_round(vec![y_claim], &round_witness, &params.round, transcript)?;
     let (rope_proof, x_even, x_odd) = prove_rope_acc(
@@ -780,10 +775,10 @@ mod tests {
             point,
         };
         let witness = RopeWitness {
-            input: x,
-            acc,
-            output,
-            frac_bits,
+            input: &x,
+            acc: &acc,
+            output: &output,
+            frac_bits: frac_bits.each_ref().map(Vec::as_slice),
         };
 
         let mut prover_transcript = Blake2bTranscript::default();

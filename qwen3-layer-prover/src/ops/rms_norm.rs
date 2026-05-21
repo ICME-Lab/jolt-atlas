@@ -501,16 +501,16 @@ impl RmsNormParams {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct RmsNormWitness {
-    pub input: Vec<i32>,
-    pub sum_x2: Vec<i64>,
-    pub norm_acc: Vec<i64>,
-    pub norm: Vec<i32>,
-    pub norm_frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
-    pub acc: Vec<i64>,
-    pub output: Vec<i32>,
-    pub frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
+#[derive(Debug, Clone)]
+pub struct RmsNormWitness<'a> {
+    pub input: &'a [i32],
+    pub sum_x2: &'a [i64],
+    pub norm_acc: &'a [i64],
+    pub norm: &'a [i32],
+    pub norm_frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
+    pub acc: &'a [i64],
+    pub output: &'a [i32],
+    pub frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
 }
 
 #[derive(Debug, Clone)]
@@ -525,7 +525,7 @@ pub struct RmsNormProof<F: JoltField, T: Transcript> {
 
 pub fn prove_rmsnorm_round<F, T>(
     output_claims: Vec<Claim<F>>,
-    witness: &RmsNormWitness,
+    witness: &RmsNormWitness<'_>,
     weight: &[i32],
     params: &RmsNormParams,
     transcript: &mut T,
@@ -535,7 +535,7 @@ where
     T: Transcript,
 {
     validate_inputs(witness, weight, params)?;
-    let round_witness = RoundWitness::from_input_output(witness.acc.clone(), witness.output.clone());
+    let round_witness = RoundWitness::from_input_output(witness.acc, witness.output);
     let (round_proof, acc_claim, round_ra) =
         prove_round(output_claims, &round_witness, &params.round, transcript)?;
 
@@ -548,8 +548,7 @@ where
     )?;
     let norm_claim = weight_mul_result.claims.x;
 
-    let norm_round_witness =
-        RoundWitness::from_input_output(witness.norm_acc.clone(), witness.norm.clone());
+    let norm_round_witness = RoundWitness::from_input_output(witness.norm_acc, witness.norm);
     let (norm_round_proof, norm_acc_claim, _norm_ra) = prove_round(
         vec![norm_claim],
         &norm_round_witness,
@@ -588,7 +587,7 @@ where
             norm_round: norm_round_proof,
             sumcheck,
             input_opening,
-            sum_x2: witness.sum_x2.clone(),
+            sum_x2: witness.sum_x2.to_vec(),
         },
         Claim {
             tensor: params.input_tensor.clone(),
@@ -983,7 +982,11 @@ fn mul_sumcheck_id() -> SumcheckId {
     SumcheckId::NodeExecution(0)
 }
 
-fn validate_inputs(witness: &RmsNormWitness, weight: &[i32], params: &RmsNormParams) -> Result<()> {
+fn validate_inputs(
+    witness: &RmsNormWitness<'_>,
+    weight: &[i32],
+    params: &RmsNormParams,
+) -> Result<()> {
     if params.rows == 0 || params.cols == 0 {
         return Err(ProverError::InvalidTensorShape(params.shape.0.clone()));
     }
@@ -1324,7 +1327,7 @@ mod tests {
             .iter()
             .map(|&value| ((value + 128).div_euclid(256)) as i32)
             .collect::<Vec<_>>();
-        let norm_frac_bits = std::array::from_fn(|bit| {
+        let norm_frac_bits: [Vec<u8>; ROUND_FRAC_BITS] = std::array::from_fn(|bit| {
             norm_acc
                 .iter()
                 .map(|value| ((value.rem_euclid(256) >> bit) & 1) as u8)
@@ -1340,7 +1343,7 @@ mod tests {
             .iter()
             .map(|&value| ((value + 128).div_euclid(256)) as i32)
             .collect::<Vec<_>>();
-        let frac_bits = std::array::from_fn(|bit| {
+        let frac_bits: [Vec<u8>; ROUND_FRAC_BITS] = std::array::from_fn(|bit| {
             acc.iter()
                 .map(|value| ((value.rem_euclid(256) >> bit) & 1) as u8)
                 .collect()
@@ -1354,14 +1357,14 @@ mod tests {
             value: eval_i32(&output, &params.shape, &point),
         };
         let witness = RmsNormWitness {
-            input,
-            sum_x2,
-            norm_acc,
-            norm,
-            norm_frac_bits,
-            acc,
-            output,
-            frac_bits,
+            input: &input,
+            sum_x2: &sum_x2,
+            norm_acc: &norm_acc,
+            norm: &norm,
+            norm_frac_bits: norm_frac_bits.each_ref().map(Vec::as_slice),
+            acc: &acc,
+            output: &output,
+            frac_bits: frac_bits.each_ref().map(Vec::as_slice),
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
@@ -1419,7 +1422,7 @@ mod tests {
             .iter()
             .map(|&value| ((value + 128).div_euclid(256)) as i32)
             .collect::<Vec<_>>();
-        let norm_frac_bits = std::array::from_fn(|bit| {
+        let norm_frac_bits: [Vec<u8>; ROUND_FRAC_BITS] = std::array::from_fn(|bit| {
             norm_acc
                 .iter()
                 .map(|value| ((value.rem_euclid(256) >> bit) & 1) as u8)
@@ -1437,7 +1440,7 @@ mod tests {
             .iter()
             .map(|&value| ((value + 128).div_euclid(256)) as i32)
             .collect::<Vec<_>>();
-        let frac_bits = std::array::from_fn(|bit| {
+        let frac_bits: [Vec<u8>; ROUND_FRAC_BITS] = std::array::from_fn(|bit| {
             acc.iter()
                 .map(|value| ((value.rem_euclid(256) >> bit) & 1) as u8)
                 .collect()
@@ -1456,14 +1459,14 @@ mod tests {
             value: eval_i32(&output, &params.shape, &point),
         };
         let witness = RmsNormWitness {
-            input,
-            sum_x2,
-            norm_acc,
-            norm,
-            norm_frac_bits,
-            acc,
-            output,
-            frac_bits,
+            input: &input,
+            sum_x2: &sum_x2,
+            norm_acc: &norm_acc,
+            norm: &norm,
+            norm_frac_bits: norm_frac_bits.each_ref().map(Vec::as_slice),
+            acc: &acc,
+            output: &output,
+            frac_bits: frac_bits.each_ref().map(Vec::as_slice),
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
@@ -1520,7 +1523,7 @@ mod tests {
             .iter()
             .map(|&value| ((value + 128).div_euclid(256)) as i32)
             .collect::<Vec<_>>();
-        let norm_frac_bits = std::array::from_fn(|bit| {
+        let norm_frac_bits: [Vec<u8>; ROUND_FRAC_BITS] = std::array::from_fn(|bit| {
             norm_acc
                 .iter()
                 .map(|value| ((value.rem_euclid(256) >> bit) & 1) as u8)
@@ -1538,7 +1541,7 @@ mod tests {
             .iter()
             .map(|&value| ((value + 128).div_euclid(256)) as i32)
             .collect::<Vec<_>>();
-        let frac_bits = std::array::from_fn(|bit| {
+        let frac_bits: [Vec<u8>; ROUND_FRAC_BITS] = std::array::from_fn(|bit| {
             acc.iter()
                 .map(|value| ((value.rem_euclid(256) >> bit) & 1) as u8)
                 .collect()
@@ -1568,14 +1571,14 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let witness = RmsNormWitness {
-            input,
-            sum_x2,
-            norm_acc,
-            norm,
-            norm_frac_bits,
-            acc,
-            output,
-            frac_bits,
+            input: &input,
+            sum_x2: &sum_x2,
+            norm_acc: &norm_acc,
+            norm: &norm,
+            norm_frac_bits: norm_frac_bits.each_ref().map(Vec::as_slice),
+            acc: &acc,
+            output: &output,
+            frac_bits: frac_bits.each_ref().map(Vec::as_slice),
         };
 
         let mut prover_transcript = Blake2bTranscript::default();

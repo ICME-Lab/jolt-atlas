@@ -190,6 +190,13 @@ canonical_serde_enum! {
         ///
         /// * `0` – decomposition index `d`
         QwenRoundRaD(usize),
+
+        /// Generic committed tensor used by the standalone Qwen layer prover.
+        ///
+        /// The payload is a layer-local tensor registry index.  The qwen3-layer
+        /// wrapper maps its human-readable `TensorId` strings to this compact
+        /// identifier before handing openings to JoltWorks' core PCS reduction.
+        QwenLayerTensor(usize),
     }
 }
 

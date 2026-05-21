@@ -180,5 +180,5 @@ pub struct ReducedOpeningProof<F: JoltField, T: Transcript, PCS: CommitmentSchem
     /// Evaluation claims at the sumcheck point.
     pub sumcheck_claims: Vec<F>,
     /// Joint opening proof for the batched polynomial.
-    joint_opening_proof: PCS::Proof,
+    pub joint_opening_proof: PCS::Proof,
 }

@@ -6,9 +6,9 @@ use joltworks::{
 
 use super::{
     claims::{claim_hidden_out_after_commitments, draw_hidden_out_point, point_matches_claim},
-    commitments::{LayerPolynomialMap, absorb_layer_commitments, commit_layer_polynomials},
+    commitments::{LayerPolySet, absorb_layer_commitments, commit_layer_polynomials},
     iop::{prove_layer_iop, verify_layer_iop},
-    openings::{prove_layer_claim_openings, verify_layer_openings},
+    openings::{prove_layer_openings, verify_layer_openings},
     *,
 };
 use crate::ops::round::ROUND_FRAC_BITS;
@@ -32,8 +32,7 @@ fn proves_and_verifies_layer_first_step() {
         .zip(&witness.down_proj)
         .map(|(&lhs, &rhs)| lhs + rhs)
         .collect::<Vec<_>>();
-    let polynomials =
-        LayerPolynomialMap::from_layer(&hidden_out, &witness, &weights, &shape, &tensors);
+    let poly_set = LayerPolySet::from_layer(&hidden_out, &witness, &weights, &shape, &tensors);
 
     type Pcs = HyperKZG<Bn254>;
     let pcs_setup = Pcs::setup_prover(16);
@@ -51,7 +50,7 @@ fn proves_and_verifies_layer_first_step() {
         &pcs_setup,
     );
     let commitments = commit_layer_polynomials::<Fr, Pcs>(
-        &polynomials,
+        &poly_set,
         HiddenStateCommitments {
             hidden_in: hidden_in_commitment,
             hidden_out: hidden_out_commitment,
@@ -91,26 +90,29 @@ fn proves_and_verifies_layer_first_step() {
     )
     .unwrap();
 
-    assert_eq!(claims, result.claims);
+    assert_eq!(claims.hidden_in_a, result.claims.hidden_in_a);
+    assert_eq!(claims.hidden_in_b, result.claims.hidden_in_b);
+    assert!(!result.claims.ra_claims.is_empty());
     assert_eq!(claims.hidden_in_a.tensor.0, "hidden_in");
     assert_eq!(claims.hidden_in_b.tensor.0, "hidden_in");
     assert_eq!(
-        polynomials.missing_opening_claims(&claims.opening_claims()),
+        poly_set.missing_opening_claims(&claims.tensor_opening_requests()),
         Vec::<String>::new()
     );
     assert_eq!(
-        polynomials.opening_value_mismatches(&claims.opening_claims()),
+        poly_set.opening_value_mismatches(&claims.tensor_opening_requests()),
         Vec::<String>::new()
     );
     assert_eq!(
-        polynomials.committed_opening_value_mismatches(&result.proof.committed_opening_claims()),
+        poly_set.pcs_opening_value_mismatches(&result.proof.pcs_opening_requests()),
         Vec::<String>::new()
     );
 
-    let opening_proof = prove_layer_claim_openings::<Fr, _, Pcs>(
-        &polynomials,
-        claims.opening_claims(),
-        result.proof.committed_opening_claims(),
+    let committed_polys = poly_set.clone().attach_commitments(&commitments).unwrap();
+    let opening_proof = prove_layer_openings::<Fr, _, Pcs>(
+        &committed_polys,
+        claims.tensor_opening_requests(),
+        result.proof.pcs_opening_requests(),
         hidden_out_claim,
         &pcs_setup,
         &mut prover_transcript,

@@ -512,7 +512,9 @@ where
     ) -> OpeningReductionState<F> {
         // Extract claims and polynomials from cached opening claims (populated by cache_openings)
         let (opening_ids, sumcheck_claims): (Vec<OpeningId>, Vec<F>) =
-            std::mem::take(&mut self.cached_opening_claims).into_iter().unzip();
+            std::mem::take(&mut self.cached_opening_claims)
+                .into_iter()
+                .unzip();
         let polynomials = opening_ids
             .iter()
             .map(|id| id.committed_poly().expect("expected committed polynomial"))

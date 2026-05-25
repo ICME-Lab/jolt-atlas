@@ -1,23 +1,4 @@
 use common::VirtualPoly;
-// Design note for future us:
-//
-// This is the reverse-claim version of a rounded 2D matmul.  The caller
-// already has a claim for rounded `Y(r_m, r_n)` from the consumer of the matmul
-// output.  The verifier does not receive `A`; `W` is public for this op.  We
-// therefore prove the relation in two stages:
-//
-// 1. Fold the output axes with the incoming claim point and prove
-//      Y(r_m, r_n) * 2^8
-//        = sum_k A_{r_m}(k) * W_{r_n}(k) + round_bit * 2^8 - rem.
-// 2. Expand `A_{r_m}(r_k)` back into a claim on the original `A` tensor:
-//      A_{r_m}(r_k) = sum_m eq(m, r_m) * A(m, r_k).
-//
-// The SHOUT lookup proving `rem -> round_bit` is handled by
-// `prove_matmul_round` below.
-// `verify_matmul_round_relation` returns the remaining `A` opening claim.  This
-// keeps the Qwen layer prover pure and lets a later commitment/opening layer
-// discharge the returned claim.  Shapes are logical shapes; each summed
-// dimension is padded to the next power of two inside the polynomial domain.
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -39,14 +20,28 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
+    claim::{Claim, Poly, Shape, TensorId},
     error::{ProverError, Result},
     ops::round::{
-        ROUND_FRAC_BITS, RoundLookupProof, RoundParams, RoundWitness, padded_lookup_indices,
-        prove_round_lookup, round_lut_table, verify_round_lookup,
+        RoundLookupProof, RoundParams, prove_round_lookup_from_ra, round_lookup_openings_from_ra,
+        verify_round_lookup_from_ra,
     },
-    proof::ProveResult,
 };
+
+/// Rounded fixed-point matmul:
+///
+///   Y = round((A @ W) / 2^8)
+///
+/// The op is written in reverse claim flow. The caller gives a claim on `Y`.
+/// This op proves that claim from `A`, `W`, and the round lookup RA polys, then
+/// returns exactly the claims that still need to be discharged:
+///
+/// - `A` claim: consumed by the previous op in the layer graph.
+/// - `W` claim: directly evaluated because weights are fixed inputs.
+/// - round RA claims: opened by PCS.
+///
+/// No witness struct is accepted here. `A`, `W`, and RA are already represented
+/// as `Poly`, which is the only value container used by the layer IOP.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatMulParams {
@@ -87,25 +82,6 @@ impl MatMulParams {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct MatMulRoundRelationProof<F: JoltField, T: Transcript> {
-    pub k_sumcheck: SumcheckInstanceProof<F, T>,
-    pub m_sumcheck: SumcheckInstanceProof<F, T>,
-    pub a_r_opening: F,
-    pub w_r_opening: F,
-    pub a_opening: F,
-    pub remainder_opening: F,
-    pub round_bit_opening: F,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MatMulRoundRelationClaims<F> {
-    pub input: Claim<F>,
-    pub round_point: Vec<F>,
-    pub remainder_opening: F,
-    pub round_bit_opening: F,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatMulRoundParams {
     pub round: RoundParams,
@@ -119,11 +95,14 @@ impl MatMulRoundParams {
 }
 
 #[derive(Debug, Clone)]
-pub struct MatMulRoundWitness<'a> {
-    pub input: &'a [i32],
-    pub acc: &'a [i64],
-    pub output: &'a [i32],
-    pub frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
+pub struct MatMulRoundRelationProof<F: JoltField, T: Transcript> {
+    pub k_sumcheck: SumcheckInstanceProof<F, T>,
+    pub m_sumcheck: SumcheckInstanceProof<F, T>,
+    pub a_r_opening: F,
+    pub w_r_opening: F,
+    pub a_opening: F,
+    pub remainder_opening: F,
+    pub round_bit_opening: F,
 }
 
 #[derive(Debug, Clone)]
@@ -132,139 +111,187 @@ pub struct MatMulRoundProof<F: JoltField, T: Transcript> {
     pub(crate) round_lookup: RoundLookupProof<F, T>,
 }
 
-impl<F: JoltField, T: Transcript> MatMulRoundProof<F, T> {
-    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
-        self.round_lookup.committed_opening_claims()
-    }
-}
-
-pub fn prove_matmul_round<F, T>(
-    y_round_claim: Claim<F>,
-    witness: &MatMulRoundWitness<'_>,
-    w: &[i32],
+pub fn prove_matmul_round<F, T, C>(
+    y_claim: Claim<F, C>,
+    a_poly: Poly<F, C>,
+    w_poly: Poly<F, C>,
+    round_ra: Vec<Poly<F, C>>,
     params: &MatMulRoundParams,
     transcript: &mut T,
 ) -> Result<(
     MatMulRoundProof<F, T>,
-    Claim<F>,
-    Vec<CommittedOpeningClaim<F>>,
+    Claim<F, C>,
+    Claim<F, C>,
+    Vec<Claim<F, C>>,
+)>
+where
+    F: JoltField,
+    T: Transcript,
+    C: Clone,
+{
+    validate_claim_shape(&y_claim, &params.matmul.y_shape(), "Y claim")?;
+    validate_poly_shape(&a_poly, &params.matmul.a_shape(), "A")?;
+    validate_poly_shape(&w_poly, &params.matmul.w_shape(), "W")?;
+    let (remainder_opening, round_bit_opening) =
+        round_lookup_openings_from_ra(&round_ra, &y_claim.point, &params.round.shape)?;
+
+    let (
+        relation,
+        a_point,
+        a_value,
+        w_point,
+        w_value,
+        round_point,
+        remainder_opening,
+        round_bit_opening,
+    ) = prove_matmul_round_relation(
+        y_claim.point.clone(),
+        y_claim.value,
+        &a_poly,
+        &w_poly,
+        remainder_opening,
+        round_bit_opening,
+        &params.matmul,
+        transcript,
+    )?;
+
+    let mut round_accumulator = ProverOpeningAccumulator::new();
+    let round_opening_point = OpeningPoint::<BIG_ENDIAN, F>::new(round_point);
+    round_accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenRoundLut, k_sumcheck_id()),
+        (round_opening_point.clone(), round_bit_opening),
+    );
+    round_accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenRoundRemainder, k_sumcheck_id()),
+        (round_opening_point, remainder_opening),
+    );
+
+    let (round_lookup, round_ra_claims) = prove_round_lookup_from_ra(
+        params.round.lookup_site,
+        y_claim.point,
+        round_ra,
+        &params.round.shape,
+        round_bit_opening,
+        remainder_opening,
+        &mut round_accumulator,
+        transcript,
+    )?;
+
+    Ok((
+        MatMulRoundProof {
+            matmul: relation,
+            round_lookup,
+        },
+        Claim::new(a_poly, a_point, a_value),
+        Claim::new(w_poly, w_point, w_value),
+        round_ra_claims,
+    ))
+}
+
+pub fn verify_matmul_round<F, T, C>(
+    y_claim: Claim<F, C>,
+    proof: &MatMulRoundProof<F, T>,
+    w_poly: Poly<F, C>,
+    round_ra: Vec<Poly<F, C>>,
+    params: &MatMulRoundParams,
+    transcript: &mut T,
+) -> std::result::Result<(Claim<F, C>, Claim<F, C>, Vec<Claim<F, C>>), ProofVerifyError>
+where
+    F: JoltField,
+    T: Transcript,
+    C: Clone,
+{
+    verify_claim_shape(&y_claim, &params.matmul.y_shape())?;
+    verify_poly_shape(&w_poly, &params.matmul.w_shape())?;
+    let (remainder_opening, round_bit_opening) =
+        round_lookup_openings_from_ra(&round_ra, &y_claim.point, &params.round.shape)
+            .map_err(|_| ProofVerifyError::SumcheckVerificationError)?;
+
+    let (a_point, a_value, w_point, w_value, round_point) = verify_matmul_round_relation(
+        y_claim.point.clone(),
+        y_claim.value,
+        proof,
+        &w_poly,
+        remainder_opening,
+        round_bit_opening,
+        &params.matmul,
+        transcript,
+    )?;
+
+    let mut round_accumulator = VerifierOpeningAccumulator::new();
+    let round_opening_point = OpeningPoint::<BIG_ENDIAN, F>::new(round_point);
+    round_accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenRoundLut, k_sumcheck_id()),
+        (round_opening_point.clone(), round_bit_opening),
+    );
+    round_accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenRoundRemainder, k_sumcheck_id()),
+        (round_opening_point, remainder_opening),
+    );
+    let (_round_lookup, round_ra_claims) = verify_round_lookup_from_ra(
+        params.round.lookup_site,
+        y_claim.point,
+        round_ra,
+        &params.round.shape,
+        round_bit_opening,
+        remainder_opening,
+        &proof.round_lookup,
+        &mut round_accumulator,
+        transcript,
+    )?;
+
+    let a_poly = Poly::new(
+        MultilinearPolynomial::from(vec![
+            F::zero();
+            params.matmul.a_shape().padded_power_of_two().numel()
+        ]),
+        None,
+    );
+    Ok((
+        Claim::new(a_poly, a_point, a_value),
+        Claim::new(w_poly, w_point, w_value),
+        round_ra_claims,
+    ))
+}
+
+fn prove_matmul_round_relation<F, T, C>(
+    y_point: Vec<F>,
+    y_value: F,
+    a_poly: &Poly<F, C>,
+    w_poly: &Poly<F, C>,
+    remainder_opening_at_y: F,
+    round_bit_opening_at_y: F,
+    params: &MatMulParams,
+    transcript: &mut T,
+) -> Result<(
+    MatMulRoundRelationProof<F, T>,
+    Vec<F>,
+    F,
+    Vec<F>,
+    F,
+    Vec<F>,
+    F,
+    F,
 )>
 where
     F: JoltField,
     T: Transcript,
 {
-    let round_witness = RoundWitness::from_input_output(witness.acc, witness.output);
-    let matmul_result = prove_matmul_round_relation(
-        y_round_claim,
-        witness.input,
-        w,
-        &round_witness.remainder,
-        &round_witness.round_bit,
-        &params.matmul,
-        transcript,
-    )?;
-    let mut round_accumulator = ProverOpeningAccumulator::new();
-    let round_point = OpeningPoint::<BIG_ENDIAN, F>::new(matmul_result.claims.round_point.clone());
-    round_accumulator.openings.insert(
-        OpeningId::new(VirtualPoly::QwenRoundLut, SumcheckId::NodeExecution(0)),
-        (round_point.clone(), matmul_result.claims.round_bit_opening),
-    );
-    round_accumulator.openings.insert(
-        OpeningId::new(
-            VirtualPoly::QwenRoundRemainder,
-            SumcheckId::NodeExecution(0),
-        ),
-        (round_point, matmul_result.claims.remainder_opening),
-    );
-    let round_lookup = prove_round_lookup(
-        params.round.lookup_site,
-        matmul_result.claims.round_point.clone(),
-        matmul_result.claims.round_bit_opening,
-        matmul_result.claims.remainder_opening,
-        padded_lookup_indices(&round_witness.remainder, &params.round.shape),
-        round_lut_table(),
-        &mut round_accumulator,
-        transcript,
-    )?;
-    let input = matmul_result.claims.input;
-    let round_ra = round_lookup.committed_opening_claims();
+    validate_dimensions(params)?;
+    validate_poly_shape(a_poly, &params.a_shape(), "A")?;
+    validate_poly_shape(w_poly, &params.w_shape(), "W")?;
+    let (r_m, r_n) = split_y_point(&y_point, params)?;
 
-    Ok((
-        MatMulRoundProof {
-            matmul: matmul_result.proof,
-            round_lookup,
-        },
-        input,
-        round_ra,
-    ))
-}
+    let partials = MatMulPartials::new(a_poly, w_poly, params, r_m, r_n);
 
-pub fn verify_matmul_round<F, T>(
-    y_round_claim: Claim<F>,
-    proof: &MatMulRoundProof<F, T>,
-    w: &[i32],
-    params: &MatMulRoundParams,
-    transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Vec<CommittedOpeningClaim<F>>), ProofVerifyError>
-where
-    F: JoltField,
-    T: Transcript,
-{
-    let matmul_claims =
-        verify_matmul_round_relation(y_round_claim, &proof.matmul, w, &params.matmul, transcript)?;
-    let round_lookup = verify_round_lookup(
-        params.round.lookup_site,
-        params.round.shape.padded_power_of_two().numel(),
-        matmul_claims.round_point,
-        matmul_claims.round_bit_opening,
-        matmul_claims.remainder_opening,
-        proof.round_lookup.ra_opening,
-        &proof.round_lookup.committed_openings,
-        &proof.round_lookup.read_raf,
-        &proof.round_lookup.ra_onehot,
-        &mut VerifierOpeningAccumulator::new(),
-        transcript,
-    )?;
-    let round_ra = round_lookup.committed_opening_claims();
-
-    Ok((matmul_claims.input, round_ra))
-}
-
-pub fn prove_matmul_round_relation<F, T>(
-    y_round_claim: Claim<F>,
-    a: &[i32],
-    w: &[i32],
-    remainder: &[usize],
-    round_bit: &[i32],
-    params: &MatMulParams,
-    transcript: &mut T,
-) -> Result<ProveResult<MatMulRoundRelationClaims<F>, MatMulRoundRelationProof<F, T>>>
-where
-    F: JoltField,
-    T: Transcript,
-{
-    validate_inputs(&y_round_claim, a, w, params)?;
-    validate_round_witness(remainder, round_bit, params)?;
-    let (r_m, r_n) = split_y_point(&y_round_claim, params)?;
-
-    let partials = MatMulPartials::new(a, w, params, r_m, r_n);
-    let round_shape = params.y_shape();
-    let padded_remainder = super::round::padded_lookup_indices(remainder, &round_shape);
-    let round_bit_as_usize = round_bit
-        .iter()
-        .map(|&bit| bit as usize)
-        .collect::<Vec<_>>();
-    let padded_round_bit = super::round::padded_lookup_indices(&round_bit_as_usize, &round_shape);
-    let remainder_opening_at_y = eval_flat_usize(&padded_remainder, &y_round_claim.point);
-    let round_bit_opening_at_y = eval_flat_usize(&padded_round_bit, &y_round_claim.point);
-    let k_params = KSumcheckParams::new(log2_ceil(params.k), y_round_claim.value * scale_q8::<F>());
+    let k_params = KSumcheckParams::new(log2_ceil(params.k), y_value * scale_q8::<F>());
     let mut k_prover = KRoundSumcheckProver::new(
         k_params,
         partials.a_r,
         partials.w_r,
         remainder_opening_at_y,
         round_bit_opening_at_y,
-        y_round_claim.point.clone(),
+        y_point.clone(),
     );
     let mut k_accumulator = ProverOpeningAccumulator::new();
     let (k_sumcheck, k_challenges) = Sumcheck::prove(&mut k_prover, &mut k_accumulator, transcript);
@@ -287,7 +314,7 @@ where
     let k_challenges = k_challenges.into_opening();
     let r_k = normalize_sumcheck_point::<F>(&k_challenges);
 
-    let a_by_m = fix_a_k(a, params, &r_k);
+    let a_by_m = fix_a_k(a_poly, params, &r_k);
     let m_params = MSumcheckParams::new(log2_ceil(params.m), a_r_opening, r_m.to_vec());
     let mut m_prover = MSumcheckProver::new(m_params, a_by_m);
     let mut m_accumulator = ProverOpeningAccumulator::new();
@@ -298,23 +325,12 @@ where
     )?;
 
     let m_challenges = m_challenges.into_opening();
-    let mut point = normalize_sumcheck_point::<F>(&m_challenges);
-    point.extend(r_k);
-    let a_claim = Claim {
-        tensor: params.a_tensor.clone(),
-        logical_shape: params.a_shape(),
-        domain_shape: params.a_shape().padded_power_of_two(),
-        point,
-        value: a_opening,
-    };
+    let mut a_point = normalize_sumcheck_point::<F>(&m_challenges);
+    a_point.extend(r_k.clone());
+    let mut w_point = r_k;
+    w_point.extend(r_n);
 
-    Ok(ProveResult::new(
-        MatMulRoundRelationClaims {
-            input: a_claim,
-            round_point: y_round_claim.point,
-            remainder_opening,
-            round_bit_opening,
-        },
+    Ok((
         MatMulRoundRelationProof {
             k_sumcheck,
             m_sumcheck,
@@ -324,53 +340,70 @@ where
             remainder_opening,
             round_bit_opening,
         },
+        a_point,
+        a_opening,
+        w_point,
+        w_r_opening,
+        y_point,
+        remainder_opening,
+        round_bit_opening,
     ))
 }
 
-pub fn verify_matmul_round_relation<F, T>(
-    y_round_claim: Claim<F>,
-    proof: &MatMulRoundRelationProof<F, T>,
-    w: &[i32],
+fn verify_matmul_round_relation<F, T, C>(
+    y_point: Vec<F>,
+    y_value: F,
+    proof: &MatMulRoundProof<F, T>,
+    w_poly: &Poly<F, C>,
+    remainder_opening_at_y: F,
+    round_bit_opening_at_y: F,
     params: &MatMulParams,
     transcript: &mut T,
-) -> std::result::Result<MatMulRoundRelationClaims<F>, ProofVerifyError>
+) -> std::result::Result<(Vec<F>, F, Vec<F>, F, Vec<F>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,
 {
-    verify_inputs(&y_round_claim, w, params)?;
-    let (r_m, r_n) = split_y_point_verify(&y_round_claim, params)?;
+    verify_dimensions(params)?;
+    verify_poly_shape(w_poly, &params.w_shape())?;
+    let (r_m, r_n) = split_y_point_verify(&y_point, params)?;
 
-    let k_params = KSumcheckParams::new(log2_ceil(params.k), y_round_claim.value * scale_q8::<F>());
+    let k_params = KSumcheckParams::new(log2_ceil(params.k), y_value * scale_q8::<F>());
     let k_verifier = KRoundSumcheckVerifier {
         params: k_params,
-        y_point: y_round_claim.point.clone(),
+        y_point: y_point.clone(),
     };
     let mut k_accumulator = VerifierOpeningAccumulator::new();
     k_accumulator.openings.insert(
         OpeningId::new(VirtualPoly::QwenMatMulPartialA, k_sumcheck_id()),
-        (OpeningPoint::<BIG_ENDIAN, F>::default(), proof.a_r_opening),
+        (
+            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            proof.matmul.a_r_opening,
+        ),
     );
     k_accumulator.openings.insert(
         OpeningId::new(VirtualPoly::QwenMatMulPartialW, k_sumcheck_id()),
-        (OpeningPoint::<BIG_ENDIAN, F>::default(), proof.w_r_opening),
+        (
+            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            proof.matmul.w_r_opening,
+        ),
     );
     k_accumulator.openings.insert(
         OpeningId::new(VirtualPoly::QwenRoundRemainder, k_sumcheck_id()),
         (
             OpeningPoint::<BIG_ENDIAN, F>::default(),
-            proof.remainder_opening,
+            remainder_opening_at_y,
         ),
     );
     k_accumulator.openings.insert(
         OpeningId::new(VirtualPoly::QwenRoundLut, k_sumcheck_id()),
         (
             OpeningPoint::<BIG_ENDIAN, F>::default(),
-            proof.round_bit_opening,
+            round_bit_opening_at_y,
         ),
     );
     let r_k_challenges = Sumcheck::verify(
-        &proof.k_sumcheck,
+        &proof.matmul.k_sumcheck,
         &k_verifier,
         &mut k_accumulator,
         transcript,
@@ -378,40 +411,41 @@ where
     .into_opening();
     let r_k = normalize_sumcheck_point::<F>(&r_k_challenges);
 
-    let expected_w = eval_w(w, params, &r_k, r_n);
-    if proof.w_r_opening != expected_w {
+    let expected_w = eval_w_poly(w_poly, params, &r_k, r_n);
+    if proof.matmul.w_r_opening != expected_w {
         return Err(ProofVerifyError::SumcheckVerificationError);
     }
 
-    let m_params = MSumcheckParams::new(log2_ceil(params.m), proof.a_r_opening, r_m.to_vec());
+    let m_params =
+        MSumcheckParams::new(log2_ceil(params.m), proof.matmul.a_r_opening, r_m.to_vec());
     let m_verifier = MSumcheckVerifier { params: m_params };
     let mut m_accumulator = VerifierOpeningAccumulator::new();
     m_accumulator.openings.insert(
         OpeningId::new(VirtualPoly::QwenMatMulA, m_sumcheck_id()),
-        (OpeningPoint::<BIG_ENDIAN, F>::default(), proof.a_opening),
+        (
+            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            proof.matmul.a_opening,
+        ),
     );
     let r_m_prime_challenges = Sumcheck::verify(
-        &proof.m_sumcheck,
+        &proof.matmul.m_sumcheck,
         &m_verifier,
         &mut m_accumulator,
         transcript,
     )?
     .into_opening();
 
-    let mut point = normalize_sumcheck_point::<F>(&r_m_prime_challenges);
-    point.extend(r_k);
-    Ok(MatMulRoundRelationClaims {
-        input: Claim {
-            tensor: params.a_tensor.clone(),
-            logical_shape: params.a_shape(),
-            domain_shape: params.a_shape().padded_power_of_two(),
-            point,
-            value: proof.a_opening,
-        },
-        round_point: y_round_claim.point,
-        remainder_opening: proof.remainder_opening,
-        round_bit_opening: proof.round_bit_opening,
-    })
+    let mut a_point = normalize_sumcheck_point::<F>(&r_m_prime_challenges);
+    a_point.extend(r_k.clone());
+    let mut w_point = r_k;
+    w_point.extend(r_n);
+    Ok((
+        a_point,
+        proof.matmul.a_opening,
+        w_point,
+        proof.matmul.w_r_opening,
+        y_point,
+    ))
 }
 
 struct MatMulPartials<F: JoltField> {
@@ -420,7 +454,13 @@ struct MatMulPartials<F: JoltField> {
 }
 
 impl<F: JoltField> MatMulPartials<F> {
-    fn new(a: &[i32], w: &[i32], params: &MatMulParams, r_m: &[F], r_n: &[F]) -> Self {
+    fn new<C>(
+        a_poly: &Poly<F, C>,
+        w_poly: &Poly<F, C>,
+        params: &MatMulParams,
+        r_m: &[F],
+        r_n: &[F],
+    ) -> Self {
         let k_pad = params.k.next_power_of_two();
         let row_eq = EqPolynomial::<F>::evals(r_m);
         let col_eq = EqPolynomial::<F>::evals(r_n);
@@ -428,14 +468,14 @@ impl<F: JoltField> MatMulPartials<F> {
         let mut a_r = vec![F::zero(); k_pad];
         for (kk, out) in a_r.iter_mut().enumerate().take(params.k) {
             *out = (0..params.m)
-                .map(|row| row_eq[row] * F::from_i32(a[row * params.k + kk]))
+                .map(|row| row_eq[row] * logical_matrix_coeff(a_poly, &params.a_shape(), row, kk))
                 .sum();
         }
 
         let mut w_r = vec![F::zero(); k_pad];
         for (kk, out) in w_r.iter_mut().enumerate().take(params.k) {
             *out = (0..params.n)
-                .map(|col| col_eq[col] * F::from_i32(w[kk * params.n + col]))
+                .map(|col| col_eq[col] * logical_matrix_coeff(w_poly, &params.w_shape(), kk, col))
                 .sum();
         }
 
@@ -466,7 +506,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for KSumcheckParams<F> {
         self.k_vars
     }
 
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
+    fn input_claim(
+        &self,
+        _accumulator: &dyn joltworks::poly::opening_proof::OpeningAccumulator<F>,
+    ) -> F {
         self.input_claim
     }
 
@@ -709,7 +752,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MSumcheckParams<F> {
         self.m_vars
     }
 
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
+    fn input_claim(
+        &self,
+        _accumulator: &dyn joltworks::poly::opening_proof::OpeningAccumulator<F>,
+    ) -> F {
         self.input_claim
     }
 
@@ -820,12 +866,47 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MSumcheckVe
     }
 }
 
-fn validate_inputs<F: JoltField>(
-    y_claim: &Claim<F>,
-    a: &[i32],
-    w: &[i32],
-    params: &MatMulParams,
+fn validate_claim_shape<F: JoltField, C>(
+    claim: &Claim<F, C>,
+    shape: &Shape,
+    name: &'static str,
 ) -> Result<()> {
+    let domain = shape.padded_power_of_two();
+    if claim.poly.data.len() != domain.numel() {
+        return Err(ProverError::ShapeMismatch {
+            name,
+            expected: domain.0,
+            actual: vec![claim.poly.data.len()],
+        });
+    }
+    if claim.point.len() != domain.point_len() {
+        return Err(ProverError::ShapeMismatch {
+            name,
+            expected: vec![domain.point_len()],
+            actual: vec![claim.point.len()],
+        });
+    }
+    Ok(())
+}
+
+fn validate_poly_shape<F: JoltField, C>(
+    poly: &Poly<F, C>,
+    shape: &Shape,
+    name: &'static str,
+) -> Result<()> {
+    let expected = shape.padded_power_of_two().numel();
+    if poly.data.len() != expected {
+        return Err(ProverError::TensorLenMismatch {
+            name,
+            shape: shape.0.clone(),
+            expected,
+            actual: poly.data.len(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_dimensions(params: &MatMulParams) -> Result<()> {
     if params.m == 0 {
         return Err(ProverError::InvalidMatrixDimension { name: "m" });
     }
@@ -835,177 +916,120 @@ fn validate_inputs<F: JoltField>(
     if params.n == 0 {
         return Err(ProverError::InvalidMatrixDimension { name: "n" });
     }
-    if a.len() != params.m * params.k {
-        return Err(ProverError::TensorLenMismatch {
-            name: "A",
-            shape: params.a_shape().0,
-            expected: params.m * params.k,
-            actual: a.len(),
-        });
+    Ok(())
+}
+
+fn verify_claim_shape<F: JoltField, C>(
+    claim: &Claim<F, C>,
+    shape: &Shape,
+) -> std::result::Result<(), ProofVerifyError> {
+    let domain = shape.padded_power_of_two();
+    if claim.poly.data.len() != domain.numel() {
+        return Err(ProofVerifyError::InvalidInputLength(
+            domain.numel(),
+            claim.poly.data.len(),
+        ));
     }
-    if w.len() != params.k * params.n {
-        return Err(ProverError::TensorLenMismatch {
-            name: "W",
-            shape: params.w_shape().0,
-            expected: params.k * params.n,
-            actual: w.len(),
-        });
-    }
-    if y_claim.logical_shape != params.y_shape() {
-        return Err(ProverError::ShapeMismatch {
-            name: "Y claim",
-            expected: params.y_shape().0,
-            actual: y_claim.logical_shape.0.clone(),
-        });
-    }
-    let expected_domain = params.y_shape().padded_power_of_two();
-    if y_claim.domain_shape != expected_domain {
-        return Err(ProverError::ShapeMismatch {
-            name: "Y claim domain",
-            expected: expected_domain.0,
-            actual: y_claim.domain_shape.0.clone(),
-        });
-    }
-    let expected_point_len = log2_ceil(params.m) + log2_ceil(params.n);
-    if y_claim.point.len() != expected_point_len {
-        return Err(ProverError::ShapeMismatch {
-            name: "Y claim point",
-            expected: vec![expected_point_len],
-            actual: vec![y_claim.point.len()],
-        });
+    if claim.point.len() != domain.point_len() {
+        return Err(ProofVerifyError::InvalidInputLength(
+            domain.point_len(),
+            claim.point.len(),
+        ));
     }
     Ok(())
 }
 
-fn verify_inputs<F: JoltField>(
-    y_claim: &Claim<F>,
-    w: &[i32],
-    params: &MatMulParams,
+fn verify_poly_shape<F: JoltField, C>(
+    poly: &Poly<F, C>,
+    shape: &Shape,
 ) -> std::result::Result<(), ProofVerifyError> {
+    let expected = shape.padded_power_of_two().numel();
+    if poly.data.len() != expected {
+        return Err(ProofVerifyError::InvalidInputLength(
+            expected,
+            poly.data.len(),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_dimensions(params: &MatMulParams) -> std::result::Result<(), ProofVerifyError> {
     if params.m == 0 || params.k == 0 || params.n == 0 {
         return Err(ProofVerifyError::InvalidInputLength(1, 0));
-    }
-    if w.len() != params.k * params.n {
-        return Err(ProofVerifyError::InvalidInputLength(
-            params.k * params.n,
-            w.len(),
-        ));
-    }
-    if y_claim.logical_shape != params.y_shape() {
-        return Err(ProofVerifyError::InvalidInputLength(
-            params.y_shape().numel(),
-            y_claim.logical_shape.numel(),
-        ));
-    }
-    if y_claim.domain_shape != params.y_shape().padded_power_of_two() {
-        return Err(ProofVerifyError::InvalidInputLength(
-            params.y_shape().padded_power_of_two().numel(),
-            y_claim.domain_shape.numel(),
-        ));
-    }
-    let expected_point_len = log2_ceil(params.m) + log2_ceil(params.n);
-    if y_claim.point.len() != expected_point_len {
-        return Err(ProofVerifyError::InvalidInputLength(
-            expected_point_len,
-            y_claim.point.len(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_round_witness(
-    remainder: &[usize],
-    round_bit: &[i32],
-    params: &MatMulParams,
-) -> Result<()> {
-    let expected = params.m * params.n;
-    if remainder.len() != expected {
-        return Err(ProverError::TensorLenMismatch {
-            name: "matmul round remainder",
-            shape: params.y_shape().0,
-            expected,
-            actual: remainder.len(),
-        });
-    }
-    if round_bit.len() != expected {
-        return Err(ProverError::TensorLenMismatch {
-            name: "matmul round bit",
-            shape: params.y_shape().0,
-            expected,
-            actual: round_bit.len(),
-        });
-    }
-    for (&rem, &bit) in remainder.iter().zip(round_bit) {
-        if rem >= 256 || !(bit == 0 || bit == 1) {
-            return Err(ProverError::InvalidSumcheckDomain(rem));
-        }
     }
     Ok(())
 }
 
 fn split_y_point<'a, F: JoltField>(
-    y_claim: &'a Claim<F>,
+    point: &'a [F],
     params: &MatMulParams,
 ) -> Result<(&'a [F], &'a [F])> {
     let row_vars = log2_ceil(params.m);
     let col_vars = log2_ceil(params.n);
-    if y_claim.point.len() != row_vars + col_vars {
+    if point.len() != row_vars + col_vars {
         return Err(ProverError::ShapeMismatch {
             name: "Y claim point",
             expected: vec![row_vars + col_vars],
-            actual: vec![y_claim.point.len()],
+            actual: vec![point.len()],
         });
     }
-    Ok(y_claim.point.split_at(row_vars))
+    Ok(point.split_at(row_vars))
 }
 
 fn split_y_point_verify<'a, F: JoltField>(
-    y_claim: &'a Claim<F>,
+    point: &'a [F],
     params: &MatMulParams,
 ) -> std::result::Result<(&'a [F], &'a [F]), ProofVerifyError> {
     let row_vars = log2_ceil(params.m);
     let col_vars = log2_ceil(params.n);
-    if y_claim.point.len() != row_vars + col_vars {
+    if point.len() != row_vars + col_vars {
         return Err(ProofVerifyError::InvalidInputLength(
             row_vars + col_vars,
-            y_claim.point.len(),
+            point.len(),
         ));
     }
-    Ok(y_claim.point.split_at(row_vars))
+    Ok(point.split_at(row_vars))
 }
 
-fn fix_a_k<F: JoltField>(a: &[i32], params: &MatMulParams, r_k: &[F]) -> Vec<F> {
+fn fix_a_k<F: JoltField, C>(a_poly: &Poly<F, C>, params: &MatMulParams, r_k: &[F]) -> Vec<F> {
     let m_pad = params.m.next_power_of_two();
     let k_eq = EqPolynomial::<F>::evals(r_k);
     let mut out = vec![F::zero(); m_pad];
     for row in 0..params.m {
         out[row] = (0..params.k)
-            .map(|kk| k_eq[kk] * F::from_i32(a[row * params.k + kk]))
+            .map(|kk| k_eq[kk] * logical_matrix_coeff(a_poly, &params.a_shape(), row, kk))
             .sum();
     }
     out
 }
 
-fn eval_w<F: JoltField>(w: &[i32], params: &MatMulParams, r_k: &[F], r_n: &[F]) -> F {
+fn eval_w_poly<F: JoltField, C>(
+    w_poly: &Poly<F, C>,
+    params: &MatMulParams,
+    r_k: &[F],
+    r_n: &[F],
+) -> F {
     let k_eq = EqPolynomial::<F>::evals(r_k);
     let n_eq = EqPolynomial::<F>::evals(r_n);
     let mut out = F::zero();
     for kk in 0..params.k {
         for col in 0..params.n {
-            out += k_eq[kk] * n_eq[col] * F::from_i32(w[kk * params.n + col]);
+            out += k_eq[kk] * n_eq[col] * logical_matrix_coeff(w_poly, &params.w_shape(), kk, col);
         }
     }
     out
 }
 
-fn eval_flat_usize<F: JoltField>(values: &[usize], point: &[F]) -> F {
-    let eq = EqPolynomial::<F>::evals(point);
-    values
-        .iter()
-        .enumerate()
-        .fold(F::zero(), |acc, (flat, &value)| {
-            acc + eq[flat] * F::from_u64(value as u64)
-        })
+fn logical_matrix_coeff<F: JoltField, C>(
+    poly: &Poly<F, C>,
+    shape: &Shape,
+    row: usize,
+    col: usize,
+) -> F {
+    debug_assert_eq!(shape.dims().len(), 2);
+    let padded = shape.padded_power_of_two();
+    let index = row * padded.dims()[1] + col;
+    poly.data.get_coeff(index)
 }
 
 fn prover_opening<F: JoltField>(
@@ -1019,14 +1043,14 @@ fn prover_opening<F: JoltField>(
         .ok_or(ProverError::MissingOpening)
 }
 
-fn log2_ceil(value: usize) -> usize {
-    value.next_power_of_two().trailing_zeros() as usize
-}
-
 fn normalize_sumcheck_point<F: JoltField>(challenges: &[F]) -> Vec<F> {
     OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec())
         .match_endianness::<BIG_ENDIAN>()
         .r
+}
+
+fn log2_ceil(value: usize) -> usize {
+    value.next_power_of_two().trailing_zeros() as usize
 }
 
 fn scale_q8<F: JoltField>() -> F {
@@ -1044,71 +1068,129 @@ fn m_sumcheck_id() -> SumcheckId {
 #[cfg(test)]
 mod tests {
     use ark_bn254::Fr;
-    use joltworks::transcripts::Blake2bTranscript;
+    use joltworks::{
+        config::{OneHotConfig, OneHotParams},
+        poly::{
+            eq_poly::EqPolynomial, multilinear_polynomial::MultilinearPolynomial,
+            one_hot_polynomial::OneHotPolynomial,
+        },
+        transcripts::Blake2bTranscript,
+    };
 
     use super::*;
+    use crate::ops::round::{ROUND_LUT_LEN, round_lut_q8};
 
     #[test]
-    fn proves_and_verifies_matmul_round_non_power_shapes() {
-        use crate::ops::round::{ROUND_FRAC_BITS, RoundParams};
+    fn proves_matmul_round_from_poly_and_ra() {
+        let matmul = MatMulParams::new(2, 2, 2, "A", "W");
+        let round = RoundParams::new(vec![2, 2], "acc", "Y");
+        let params = MatMulRoundParams::new(round, matmul);
 
-        let params = MatMulParams::new(3, 5, 5, "A", "W");
-        let round_params = RoundParams::with_frac_bit_tensors(
-            vec![params.m, params.n],
-            "acc",
-            "Y",
-            std::array::from_fn(|idx| format!("acc_frac_bit_{idx}")),
+        let a = vec![3, 5, 7, 11];
+        let w = vec![13, 17, 19, 23];
+        let acc = matmul_acc_for_test(&a, &w, &params.matmul);
+        let y = acc.iter().map(|&v| round_q8_to_i32(v)).collect::<Vec<_>>();
+
+        let y_point = vec![Fr::from(3_u64), Fr::from(5_u64)];
+        let y_claim = Claim::new(
+            poly_from_i32(&y),
+            y_point.clone(),
+            eval_matrix(&y, 2, 2, &[y_point[0]], &[y_point[1]]),
         );
-        let params = MatMulRoundParams::new(round_params, params);
-        let a = vec![3, -5, 2, 7, -9, 4, 1, -3, 6, 8, -2, 5, -7, 9, 11];
-        let w = vec![
-            2, -1, 4, -3, 5, 7, 6, -8, 1, -4, 3, 9, 10, -2, -6, 8, -7, 12, -11, 13, 14, -15, 16,
-            -17, 18,
-        ];
-        let mut acc = vec![0i64; 15];
-        for row in 0..3 {
-            for col in 0..5 {
-                acc[row * 5 + col] = (0..5)
-                    .map(|kk| a[row * 5 + kk] as i64 * w[kk * 5 + col] as i64)
-                    .sum::<i64>();
-            }
-        }
-        let y = acc
-            .iter()
-            .map(|&value| ((value + (1 << (ROUND_FRAC_BITS - 1))) >> ROUND_FRAC_BITS) as i32)
-            .collect::<Vec<_>>();
-        let r_m = vec![Fr::from(3u64), Fr::from(11u64)];
-        let r_n = vec![Fr::from(5u64), Fr::from(13u64), Fr::from(17u64)];
-        let y_claim = Claim {
-            tensor: TensorId::new("Y"),
-            logical_shape: params.round.shape.clone(),
-            domain_shape: params.round.shape.padded_power_of_two(),
-            point: [r_m.as_slice(), r_n.as_slice()].concat(),
-            value: eval_matrix(&y, 3, 5, &r_m, &r_n),
-        };
-        let witness = MatMulRoundWitness {
-            input: &a,
-            acc: &acc,
-            output: &y,
-            frac_bits: std::array::from_fn(|_| &[][..]),
-        };
 
+        let round_ra = round_ra_from_acc(&acc, params.round.shape.padded_power_of_two().numel());
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, input, _) = prove_matmul_round::<Fr, _>(
-            y_claim.clone(),
-            &witness,
-            &w,
+        let (proof, a_claim, w_claim, ra_claims) = prove_matmul_round(
+            y_claim,
+            poly_from_i32(&a),
+            poly_from_i32(&w),
+            round_ra,
             &params,
             &mut prover_transcript,
         )
         .unwrap();
 
-        let mut verifier_transcript = Blake2bTranscript::default();
-        let (verified_input, _) =
-            verify_matmul_round::<Fr, _>(y_claim, &proof, &w, &params, &mut verifier_transcript)
-                .unwrap();
+        assert_eq!(
+            a_claim.point.len(),
+            params.matmul.a_shape().padded_power_of_two().point_len()
+        );
+        assert_eq!(
+            w_claim.point.len(),
+            params.matmul.w_shape().padded_power_of_two().point_len()
+        );
+        assert!(!ra_claims.is_empty());
 
-        assert_eq!(verified_input, input);
+        let round_ra = round_ra_from_acc(&acc, params.round.shape.padded_power_of_two().numel());
+        let y_claim = Claim::new(
+            poly_from_i32(&y),
+            y_point.clone(),
+            eval_matrix(&y, 2, 2, &[y_point[0]], &[y_point[1]]),
+        );
+        let mut verifier_transcript = Blake2bTranscript::default();
+        let (verified_a, verified_w, verified_ra) = verify_matmul_round(
+            y_claim,
+            &proof,
+            poly_from_i32(&w),
+            round_ra,
+            &params,
+            &mut verifier_transcript,
+        )
+        .unwrap();
+
+        assert_eq!(verified_a.point, a_claim.point);
+        assert_eq!(verified_a.value, a_claim.value);
+        assert_eq!(verified_w.point, w_claim.point);
+        assert_eq!(verified_w.value, w_claim.value);
+        assert_eq!(verified_ra.len(), ra_claims.len());
+    }
+
+    fn poly_from_i32(values: &[i32]) -> Poly<Fr, ()> {
+        Poly::new(MultilinearPolynomial::from(values.to_vec()), None)
+    }
+
+    fn matmul_acc_for_test(a: &[i32], w: &[i32], params: &MatMulParams) -> Vec<i64> {
+        let mut out = vec![0; params.m * params.n];
+        for row in 0..params.m {
+            for col in 0..params.n {
+                out[row * params.n + col] = (0..params.k)
+                    .map(|kk| i64::from(a[row * params.k + kk]) * i64::from(w[kk * params.n + col]))
+                    .sum();
+            }
+        }
+        out
+    }
+
+    fn round_q8_to_i32(value: i64) -> i32 {
+        let rem = value.rem_euclid(ROUND_LUT_LEN as i64);
+        let rounded = (value + i64::from(round_lut_q8(rem as usize)) * 256 - rem) / 256;
+        i32::try_from(rounded).expect("rounded output exceeds i32")
+    }
+
+    fn round_ra_from_acc(acc: &[i64], padded_len: usize) -> Vec<Poly<Fr, ()>> {
+        let log_k = ROUND_LUT_LEN.trailing_zeros() as usize;
+        let params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k);
+        (0..params.instruction_d)
+            .map(|chunk| {
+                let indices = (0..padded_len)
+                    .map(|idx| {
+                        let rem = acc
+                            .get(idx)
+                            .copied()
+                            .unwrap_or_default()
+                            .rem_euclid(ROUND_LUT_LEN as i64)
+                            as u64;
+                        Some(u16::from(params.lookup_index_chunk(rem, chunk)))
+                    })
+                    .collect::<Vec<_>>();
+                Poly::new(
+                    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                        indices,
+                        params.k_chunk,
+                    )),
+                    None,
+                )
+            })
+            .collect()
     }
 
     fn eval_matrix<F: JoltField>(

@@ -22,10 +22,12 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
+    claim::{Claim, LegacyClaim, PcsOpeningRequest, Poly, Shape, TensorId},
     error::{ProverError, Result},
+    ops::poly_bridge::{claim_from_legacy, legacy_from_claim, one_hot_claims_from_requests},
     ops::round::{
-        ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
+        ROUND_FRAC_BITS, ROUND_LUT_LEN, RoundParams, RoundProof, RoundWitness, prove_round,
+        verify_round,
     },
 };
 
@@ -169,22 +171,22 @@ pub struct SiluRoundProof<F: JoltField, T: Transcript> {
 }
 
 impl<F: JoltField, T: Transcript> SiluRoundProof<F, T> {
-    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
-        let mut out = self.round.committed_opening_claims();
-        out.extend(self.silu.committed_opening_claims());
+    pub fn pcs_opening_requests(&self) -> Vec<PcsOpeningRequest<F>> {
+        let mut out = self.round.pcs_opening_requests();
+        out.extend(self.silu.pcs_opening_requests());
         out
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct SiluRaCommittedOpenings<F: JoltField> {
-    pub ra_virtual: Vec<CommittedOpeningClaim<F>>,
-    pub hamming_weight: Vec<CommittedOpeningClaim<F>>,
-    pub booleanity: Vec<CommittedOpeningClaim<F>>,
+    pub ra_virtual: Vec<PcsOpeningRequest<F>>,
+    pub hamming_weight: Vec<PcsOpeningRequest<F>>,
+    pub booleanity: Vec<PcsOpeningRequest<F>>,
 }
 
 impl<F: JoltField> SiluRaCommittedOpenings<F> {
-    fn all(&self) -> impl Iterator<Item = &CommittedOpeningClaim<F>> {
+    fn all(&self) -> impl Iterator<Item = &PcsOpeningRequest<F>> {
         self.ra_virtual
             .iter()
             .chain(self.hamming_weight.iter())
@@ -193,7 +195,7 @@ impl<F: JoltField> SiluRaCommittedOpenings<F> {
 }
 
 impl<F: JoltField, T: Transcript> SiluProof<F, T> {
-    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
+    pub fn pcs_opening_requests(&self) -> Vec<PcsOpeningRequest<F>> {
         self.base_ra_committed_openings
             .all()
             .chain(self.slope_ra_committed_openings.all())
@@ -203,17 +205,17 @@ impl<F: JoltField, T: Transcript> SiluProof<F, T> {
     }
 }
 
-pub fn prove_silu_round<F, T>(
-    silu_round_claim: Claim<F>,
+pub fn prove_silu_round_from_witness<F, T>(
+    silu_round_claim: LegacyClaim<F>,
     witness: &SiluRoundWitness<'_>,
     params: &SiluRoundParams,
     transcript: &mut T,
 ) -> Result<(
     SiluRoundProof<F, T>,
-    Claim<F>,
-    Vec<CommittedOpeningClaim<F>>,
-    Vec<CommittedOpeningClaim<F>>,
-    Vec<CommittedOpeningClaim<F>>,
+    LegacyClaim<F>,
+    Vec<PcsOpeningRequest<F>>,
+    Vec<PcsOpeningRequest<F>>,
+    Vec<PcsOpeningRequest<F>>,
 )>
 where
     F: JoltField,
@@ -249,17 +251,78 @@ where
     ))
 }
 
+pub fn prove_silu_round<F, T, C>(
+    silu_round_claim: Claim<F, C>,
+    gate_poly: Poly<F, C>,
+    witness: &SiluRoundWitness<'_>,
+    params: &SiluRoundParams,
+    transcript: &mut T,
+) -> Result<(
+    SiluRoundProof<F, T>,
+    Claim<F, C>,
+    Vec<Claim<F, C>>,
+    Vec<Claim<F, C>>,
+    Vec<Claim<F, C>>,
+)>
+where
+    F: JoltField,
+    T: Transcript,
+    C: Clone,
+{
+    let (proof, gate, gate_round_ra, silu_ra, silu_round_ra) = prove_silu_round(
+        legacy_from_claim(silu_round_claim, "silu", params.silu.shape.clone()),
+        witness,
+        params,
+        transcript,
+    )?;
+    let silu_round_witness = RoundWitness::from_input_output(witness.silu_acc, witness.silu);
+    let gate_round_remainders = round_remainders(witness.gate_proj);
+    let silu_witness = SiluWitness {
+        min_n: witness.min_n,
+        max_n: witness.max_n,
+        gate_proj_round: witness.gate_proj,
+        ra: witness.silu_ra,
+        output: witness.silu_acc,
+    };
+    let entries = entries_from_min_max(witness.min_n, witness.max_n)?;
+    let lut_len = padded_silu_lut_len(entries);
+    let logical_lookup_indices = silu_logical_lookup_indices(&silu_witness, &params.silu, entries)?;
+
+    let silu_round_ra = one_hot_claims_from_requests(
+        &silu_round_ra,
+        &padded_lookup_indices_for_shape(&silu_round_witness.remainder, &params.round.shape),
+        ROUND_LUT_LEN,
+    );
+    let gate_round_ra = one_hot_claims_from_requests(
+        &gate_round_ra,
+        &padded_lookup_indices_for_shape(&gate_round_remainders, &params.silu.shape),
+        ROUND_LUT_LEN,
+    );
+    let silu_ra = one_hot_claims_from_requests(
+        &silu_ra,
+        &padded_lookup_indices(&logical_lookup_indices, &params.silu, entries),
+        lut_len,
+    );
+    Ok((
+        proof,
+        claim_from_legacy(gate, gate_poly),
+        gate_round_ra,
+        silu_ra,
+        silu_round_ra,
+    ))
+}
+
 pub fn verify_silu_round<F, T>(
-    silu_round_claim: Claim<F>,
+    silu_round_claim: LegacyClaim<F>,
     proof: &SiluRoundProof<F, T>,
     params: &SiluRoundParams,
     transcript: &mut T,
 ) -> std::result::Result<
     (
-        Claim<F>,
-        Vec<CommittedOpeningClaim<F>>,
-        Vec<CommittedOpeningClaim<F>>,
-        Vec<CommittedOpeningClaim<F>>,
+        LegacyClaim<F>,
+        Vec<PcsOpeningRequest<F>>,
+        Vec<PcsOpeningRequest<F>>,
+        Vec<PcsOpeningRequest<F>>,
     ),
     ProofVerifyError,
 >
@@ -280,15 +343,15 @@ where
 }
 
 pub fn prove_silu<F, T>(
-    output_claims: Vec<Claim<F>>,
+    output_claims: Vec<LegacyClaim<F>>,
     witness: &SiluWitness<'_>,
     params: &SiluParams,
     transcript: &mut T,
 ) -> Result<(
     SiluProof<F, T>,
-    Claim<F>,
-    Vec<CommittedOpeningClaim<F>>,
-    Vec<CommittedOpeningClaim<F>>,
+    LegacyClaim<F>,
+    Vec<PcsOpeningRequest<F>>,
+    Vec<PcsOpeningRequest<F>>,
 )>
 where
     F: JoltField,
@@ -424,7 +487,7 @@ where
             slope_ra_committed_openings: slope_lookup.committed_openings,
             round_ra_committed_openings: round_lookup.committed_openings,
         },
-        Claim {
+        LegacyClaim {
             tensor: params.gate_proj_round_tensor.clone(),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
@@ -437,15 +500,15 @@ where
 }
 
 pub fn verify_silu<F, T>(
-    output_claims: Vec<Claim<F>>,
+    output_claims: Vec<LegacyClaim<F>>,
     proof: &SiluProof<F, T>,
     params: &SiluParams,
     transcript: &mut T,
 ) -> std::result::Result<
     (
-        Claim<F>,
-        Vec<CommittedOpeningClaim<F>>,
-        Vec<CommittedOpeningClaim<F>>,
+        LegacyClaim<F>,
+        Vec<PcsOpeningRequest<F>>,
+        Vec<PcsOpeningRequest<F>>,
     ),
     ProofVerifyError,
 >
@@ -569,7 +632,7 @@ where
         transcript,
     )?;
     Ok((
-        Claim {
+        LegacyClaim {
             tensor: params.gate_proj_round_tensor.clone(),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
@@ -1177,13 +1240,13 @@ fn silu_ra_committed_openings<F: JoltField>(
     accumulator: &ProverOpeningAccumulator<F>,
 ) -> Result<SiluRaCommittedOpenings<F>> {
     let d = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
-    let collect = |sumcheck| -> Vec<CommittedOpeningClaim<F>> {
+    let collect = |sumcheck| -> Vec<PcsOpeningRequest<F>> {
         (0..d)
             .map(|idx| {
                 let poly = kind.committed_poly(idx);
                 let (point, value) =
                     accumulator.get_committed_polynomial_opening(OpeningId::new(poly, sumcheck));
-                CommittedOpeningClaim {
+                PcsOpeningRequest {
                     poly,
                     sumcheck,
                     point: point.r,
@@ -1229,7 +1292,7 @@ fn insert_silu_ra_committed_openings<F: JoltField>(
         ));
     }
 
-    let mut insert_group = |sumcheck, values: &[CommittedOpeningClaim<F>]| {
+    let mut insert_group = |sumcheck, values: &[PcsOpeningRequest<F>]| {
         for (idx, opening) in values.iter().enumerate() {
             accumulator.openings.insert(
                 OpeningId::new(kind.committed_poly(idx), sumcheck),
@@ -1251,7 +1314,7 @@ fn insert_silu_ra_committed_openings<F: JoltField>(
 }
 
 fn validate_inputs<F: JoltField>(
-    output_claims: &[Claim<F>],
+    output_claims: &[LegacyClaim<F>],
     witness: &SiluWitness<'_>,
     params: &SiluParams,
     entries: usize,
@@ -1341,7 +1404,7 @@ fn validate_inputs<F: JoltField>(
 }
 
 fn verify_inputs<F: JoltField>(
-    output_claims: &[Claim<F>],
+    output_claims: &[LegacyClaim<F>],
     params: &SiluParams,
     entries: usize,
 ) -> std::result::Result<(), ProofVerifyError> {
@@ -1393,7 +1456,7 @@ fn append_range_advice<F: JoltField, T: Transcript>(min_n: i64, max_n: i64, tran
     transcript.append_scalar(&field_from_i64::<F>(max_n));
 }
 
-fn batched_input_claim<F: JoltField>(claims: &[Claim<F>], alphas: &[F]) -> F {
+fn batched_input_claim<F: JoltField>(claims: &[LegacyClaim<F>], alphas: &[F]) -> F {
     claims
         .iter()
         .zip(alphas)
@@ -1401,7 +1464,7 @@ fn batched_input_claim<F: JoltField>(claims: &[Claim<F>], alphas: &[F]) -> F {
 }
 
 fn batched_masked_eq_poly<F: JoltField>(
-    claims: &[Claim<F>],
+    claims: &[LegacyClaim<F>],
     alphas: &[F],
     shape: &Shape,
 ) -> Vec<F> {
@@ -1789,7 +1852,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let point = vec![Fr::from(7u64)];
-        let output_claim = Claim {
+        let output_claim = LegacyClaim {
             tensor: TensorId::new("silu_acc"),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
@@ -1844,7 +1907,7 @@ mod tests {
         let n = min_n + selected as i64;
         let output = vec![silu_base(n) + (i64::from(gate[0]) - n * FIXED_SCALE) * silu_slope(n)];
         let point = vec![];
-        let output_claim = Claim {
+        let output_claim = LegacyClaim {
             tensor: TensorId::new("silu_acc"),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
@@ -1894,7 +1957,7 @@ mod tests {
             output[idx] = silu_base(n) + (i64::from(gate_value) - n * FIXED_SCALE) * silu_slope(n);
         }
         let point = vec![Fr::from(3u64), Fr::from(5u64), Fr::from(7u64)];
-        let output_claim = Claim {
+        let output_claim = LegacyClaim {
             tensor: TensorId::new("silu_acc"),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
@@ -1939,7 +2002,7 @@ mod tests {
         ra[3] = 1;
         let output = vec![0];
         let point = vec![];
-        let output_claim = Claim {
+        let output_claim = LegacyClaim {
             tensor: TensorId::new("silu_acc"),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),

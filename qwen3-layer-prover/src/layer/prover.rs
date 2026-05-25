@@ -5,13 +5,14 @@ use joltworks::{
     transcripts::Transcript,
 };
 
-use crate::{error::Result, proof::ProveResult};
+use crate::{claim::Claim, error::Result, proof::ProveResult};
 
 use super::{
     claims::claim_hidden_out_after_commitments,
-    commitments::{HiddenStateCommitments, absorb_layer_commitments, commit_layer_tensors},
+    commitments::{HiddenStateCommitments, absorb_layer_commitments, commit_layer_witness_polys},
     iop::prove_layer_iop,
-    openings::prove_layer_claim_openings,
+    openings::prove_layer_openings,
+    polys::LayerPolys,
     tensors::LayerTensorIds,
     types::{LayerClaims, LayerProof, LayerShape, LayerWeights},
     witness::build_layer_witness_from_trace_dir,
@@ -45,10 +46,12 @@ where
     // 1. Materialize exactly one layer.  This function does not reason about
     // neighbouring layers; hidden_in/hidden_out are supplied as commitments.
     let traced = build_layer_witness_from_trace_dir(trace_dir, layer, weights, shape)?;
+    let layer_polys =
+        LayerPolys::from_witness(&traced.hidden_out, &traced.witness, weights, shape, tensors);
 
-    // 2. Commit all tensors that may be opened by the layer proof.  The two
-    // hidden-state tensors use the commitments supplied by the caller.
-    let committed = commit_layer_tensors::<F, PCS>(
+    // 2. Build the layer polynomial set and attach commitments.  The two
+    // hidden-state polynomials use the commitments supplied by the caller.
+    let committed = commit_layer_witness_polys::<F, PCS>(
         &traced.hidden_out,
         &traced.witness,
         hidden_state_commitments,
@@ -65,24 +68,20 @@ where
 
     // 4. Prove the layer equations.  IOP code returns claims to be opened, but
     // does not know about PCS commitment state.
-    let iop = prove_layer_iop(
-        hidden_out.clone(),
-        &traced.witness,
-        weights,
-        shape,
-        tensors,
-        transcript,
-    )?;
+    let hidden_out = Claim::new(
+        layer_polys.hidden_out.clone(),
+        hidden_out.point,
+        hidden_out.value,
+    );
+
+    let iop = prove_layer_iop(hidden_out.clone(), layer_polys, shape, tensors, transcript)?;
 
     // 5. Reduce all requested openings to the PCS proof for this layer.
-    let opening_reduction = prove_layer_claim_openings::<F, T, PCS>(
-        &committed.polynomials,
-        iop.claims.opening_claims(),
-        iop.proof.committed_opening_claims(),
-        hidden_out.clone(),
-        pcs_setup,
-        transcript,
-    )?;
+    let mut opening_claims = iop.claims.boundary_claims();
+    opening_claims.extend(iop.claims.direct_eval_claims.clone());
+    opening_claims.extend(iop.claims.pcs_claims());
+    let opening_reduction =
+        prove_layer_openings::<F, T, PCS>(opening_claims, pcs_setup, transcript)?;
 
     Ok(ProveResult::new(
         iop.claims,

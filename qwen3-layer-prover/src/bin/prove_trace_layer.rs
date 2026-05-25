@@ -18,7 +18,7 @@ use joltworks::{
 use qwen3_layer_prover::trace::build_layer_witness_from_trace_dir;
 use qwen3_layer_prover::{
     layer::{
-        HiddenStateCommitments, LayerPolynomialMap, LayerShape, LayerTensorIds, LayerWeights,
+        HiddenStateCommitments, LayerPolySet, LayerShape, LayerTensorIds, LayerWeights,
         commit_layer_polynomials, commit_layer_polynomials_streaming_onehot, prove_layer,
         verify_layer,
     },
@@ -89,7 +89,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     if args.map_only {
         let t0 = Instant::now();
-        let polynomials = LayerPolynomialMap::<Fr>::from_layer(
+        let poly_set = LayerPolySet::<Fr>::from_layer(
             &traced.hidden_out,
             &traced.witness,
             &weights,
@@ -100,8 +100,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             "timing: build_layer_polynomial_map {:.3}s",
             t0.elapsed().as_secs_f64()
         );
-        println!("map_only: polynomial_count {}", polynomials.entries.len());
-        for entry in &polynomials.entries {
+        println!("map_only: polynomial_count {}", poly_set.entries.len());
+        for entry in &poly_set.entries {
             println!("poly {} len {}", entry.name, entry.poly.len());
         }
         println!("map_only: ok");
@@ -167,7 +167,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let polynomials_for_setup = LayerPolynomialMap::<Fr>::from_layer(
+    let poly_set_for_setup = LayerPolySet::<Fr>::from_layer(
         &traced.hidden_out,
         &traced.witness,
         &weights,
@@ -183,7 +183,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             traced.hidden_out.as_slice(),
         ])
     } else {
-        required_pcs_num_vars_for_polynomials(&polynomials_for_setup)
+        required_pcs_num_vars_for_polynomials(&poly_set_for_setup)
     };
     let t0 = Instant::now();
     let pcs_setup = PCS::setup_prover(pcs_num_vars);
@@ -208,9 +208,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.commit_only {
         println!(
             "commit_only: polynomial_count {}",
-            polynomials_for_setup.entries.len()
+            poly_set_for_setup.entries.len()
         );
-        for entry in &polynomials_for_setup.entries {
+        for entry in &poly_set_for_setup.entries {
             println!("poly {} len {}", entry.name, entry.poly.len());
         }
 
@@ -218,7 +218,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let commitments = if let Some(flat_srs) = &args.flat_srs {
             let reader = FlatG1SrsReader::open(flat_srs)?;
             commit_layer_polynomials_streaming_onehot(
-                &polynomials_for_setup,
+                &poly_set_for_setup,
                 hidden_state_commitments,
                 &pcs_setup,
                 &reader,
@@ -229,7 +229,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             )?
         } else {
             commit_layer_polynomials::<Fr, PCS>(
-                &polynomials_for_setup,
+                &poly_set_for_setup,
                 hidden_state_commitments,
                 &pcs_setup,
             )
@@ -273,7 +273,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         &mut verifier_transcript,
     )?;
     eprintln!("timing: verify_layer {:.3}s", t0.elapsed().as_secs_f64());
-    if claims != proof.claims {
+    if claims.hidden_in_a != proof.claims.hidden_in_a
+        || claims.hidden_in_b != proof.claims.hidden_in_b
+    {
         return Err("verify_layer claims differ from prove_layer claims".into());
     }
 
@@ -285,8 +287,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn required_pcs_num_vars_for_polynomials(polynomials: &LayerPolynomialMap<Fr>) -> usize {
-    polynomials
+fn required_pcs_num_vars_for_polynomials(poly_set: &LayerPolySet<Fr>) -> usize {
+    poly_set
         .entries
         .iter()
         .map(|entry| entry.poly.get_num_vars())
@@ -319,15 +321,15 @@ fn commit_all_layers_onehot_only(
         let t_layer = Instant::now();
         let weights = read_layer_weights(cache, layer, seq)?;
         let traced = build_layer_witness_from_trace_dir(&args.trace, layer, &weights, shape)?;
-        let polynomials = LayerPolynomialMap::<Fr>::from_layer(
+        let poly_set = LayerPolySet::<Fr>::from_layer(
             &traced.hidden_out,
             &traced.witness,
             &weights,
             shape,
             &tensors,
         );
-        total_polynomial_count += polynomials.entries.len();
-        for (idx, entry) in polynomials.entries.iter().enumerate() {
+        total_polynomial_count += poly_set.entries.len();
+        for (idx, entry) in poly_set.entries.iter().enumerate() {
             if let MultilinearPolynomial::OneHot(one_hot) = &entry.poly {
                 let global_idx = layer * 10_000 + idx;
                 committer.add_one_hot(CommittedPoly::QwenLayerTensor(global_idx), one_hot)?;

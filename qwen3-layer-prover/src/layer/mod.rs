@@ -11,6 +11,7 @@ mod claims;
 mod commitments;
 mod iop;
 mod openings;
+mod polys;
 mod prover;
 mod tensors;
 #[cfg(test)]
@@ -20,9 +21,10 @@ mod verifier;
 mod witness;
 
 pub use commitments::{
-    HiddenStateCommitments, LayerPolynomialMap, absorb_layer_commitments, commit_layer_polynomials,
+    HiddenStateCommitments, LayerPolySet, absorb_layer_commitments, commit_layer_polynomials,
     commit_layer_polynomials_streaming_onehot,
 };
+pub use polys::LayerPolys;
 pub use prover::prove_layer;
 pub use tensors::LayerTensorIds;
 pub use types::{LayerClaims, LayerProof, LayerShape, LayerWeights};

@@ -1,6 +1,6 @@
 use joltworks::{field::JoltField, poly::eq_poly::EqPolynomial, transcripts::Transcript};
 
-use crate::claim::{Claim, Shape, TensorId};
+use crate::claim::{Claim, Poly, Shape};
 
 use super::types::LayerShape;
 
@@ -38,12 +38,17 @@ pub(crate) fn hidden_out_claim<F: JoltField>(
     point: Vec<F>,
 ) -> Claim<F> {
     let hidden_shape = shape.hidden_shape();
+    let poly = Poly::new(
+        joltworks::poly::multilinear_polynomial::MultilinearPolynomial::from(padded_i32(
+            hidden_out,
+            &hidden_shape,
+        )),
+        None,
+    );
     Claim {
-        tensor: TensorId::new("hidden_out"),
-        logical_shape: hidden_shape.clone(),
-        domain_shape: hidden_shape.padded_power_of_two(),
         value: evaluate_i32_mle(hidden_out, &hidden_shape, &point),
         point,
+        poly,
     }
 }
 
@@ -61,4 +66,11 @@ pub(crate) fn evaluate_i32_mle<F: JoltField>(values: &[i32], shape: &Shape, poin
 
 pub(crate) fn point_matches_claim<F: JoltField>(claim: &Claim<F>, point: &[F]) -> bool {
     claim.point == point
+}
+
+fn padded_i32(values: &[i32], shape: &Shape) -> Vec<i32> {
+    let len = shape.padded_power_of_two().numel();
+    let mut out = vec![0; len];
+    out[..values.len()].copy_from_slice(values);
+    out
 }

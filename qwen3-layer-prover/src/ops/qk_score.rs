@@ -1,3 +1,4 @@
+use common::VirtualPoly;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -19,35 +20,23 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
+    claim::{Claim, Poly, Shape, TensorId},
     error::{ProverError, Result},
-    ops::{
-        attention_common::{
-            QWEN3_GQA_GROUP_SIZE, drop_gqa_lsb_for_dims, drop_gqa_lsb_for_dims_verify, ensure_len,
-            log2_ceil, split3, validate_claim, validate_gqa, verify_claim,
-        },
-        round::{
-            ROUND_FRAC_BITS, RoundLookupProof, RoundParams, RoundProof, RoundWitness,
-            padded_lookup_indices, prove_round, prove_round_lookup, round_lut_table, verify_round,
-            verify_round_lookup,
-        },
+    ops::round::{
+        RoundLookupProof, RoundParams, prove_round_lookup_from_ra, round_lookup_openings_from_ra,
+        verify_round_lookup_from_ra,
     },
 };
-use common::VirtualPoly;
 
-// QK score is the attention contraction:
-//     raw_acc = sum_d Q[qpos, h, d] * K[kpos, h/2, d]
-//     dot     = round(raw_acc / 2^8)
-//     S       = round(dot * round(2^8 / sqrt(head_dim)) / 2^8)
-//
-// The two-step rounding matches the qwen3-awy runtime.  The `dot` tensor is
-// not a semantic graph node in Qwen; it exists only to make both fixed-point
-// rebases explicit in the proof.
-//
-// The h/2 mapping is Qwen3's Grouped-Query Attention (GQA) with group_size=2.
-// As with PV matmul, the MLE cannot factor the random head point as
-// `Q(r_h) * K(drop_lsb(r_h))`.  `Q` and `K` share the head variable, so the
-// sumcheck ranges over `h` and `d` and uses `eq(h, r_h)` as a known selector.
+/// Rounded QK score:
+///
+///   dot   = round(sum_d Q[qpos, h, d] * K[kpos, h/2, d] / 2^8)
+///   score = round(dot * round(2^8 / sqrt(head_dim)) / 2^8)
+///
+/// The fixed runtime has two explicit rebases, so this proof has two round
+/// lookups: one for the raw QK dot product, and one for the head-dim scale.
+
+const QWEN3_GQA_GROUP_SIZE: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QkScoreParams {
@@ -109,302 +98,320 @@ impl QkScoreRoundParams {
 }
 
 #[derive(Debug, Clone)]
-pub struct QkScoreWitness<'a> {
-    pub q: &'a [i32],
-    pub k: &'a [i32],
-    pub raw_acc: &'a [i64],
-    pub dot: &'a [i32],
-    pub dot_frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
-    pub scale_acc: &'a [i64],
-    pub output: &'a [i32],
-    pub frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
-}
-
-#[derive(Debug, Clone)]
 pub struct QkScoreProof<F: JoltField, T: Transcript> {
-    pub score_round: RoundProof<F, T>,
     pub dot_opening: F,
-    pub(crate) dot_round_lookup: RoundLookupProof<F, T>,
+    pub(crate) score_round_lookup: RoundLookupProof<F, T>,
     pub qk: QkScoreRoundRelationProof<F, T>,
-}
-
-impl<F: JoltField, T: Transcript> QkScoreProof<F, T> {
-    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
-        let mut out = self.score_round.committed_opening_claims();
-        out.extend(self.dot_round_lookup.committed_opening_claims());
-        out
-    }
+    pub(crate) dot_round_lookup: RoundLookupProof<F, T>,
 }
 
 #[derive(Debug, Clone)]
 pub struct QkScoreRoundRelationProof<F: JoltField, T: Transcript> {
     pub sumcheck: SumcheckInstanceProof<F, T>,
-    pub left_opening: F,
-    pub right_opening: F,
+    pub q_opening: F,
+    pub k_opening: F,
     pub remainder_opening: F,
     pub round_bit_opening: F,
 }
 
-pub fn prove_qk_score_round<F, T>(
-    score_claim: Claim<F>,
-    witness: &QkScoreWitness<'_>,
+pub fn prove_qk_score_round<F, T, C>(
+    score_claim: Claim<F, C>,
+    q_poly: Poly<F, C>,
+    k_poly: Poly<F, C>,
+    score_round_ra: Vec<Poly<F, C>>,
+    dot_round_ra: Vec<Poly<F, C>>,
     params: &QkScoreRoundParams,
     transcript: &mut T,
 ) -> Result<(
     QkScoreProof<F, T>,
-    Claim<F>,
-    Claim<F>,
-    Vec<CommittedOpeningClaim<F>>,
-    Vec<CommittedOpeningClaim<F>>,
+    Claim<F, C>,
+    Claim<F, C>,
+    Vec<Claim<F, C>>,
+    Vec<Claim<F, C>>,
 )>
 where
     F: JoltField,
     T: Transcript,
+    C: Clone,
 {
-    let score_round_witness = RoundWitness::from_input_output(witness.scale_acc, witness.output);
-    let (score_round_proof, scale_acc_claim, score_ra) = prove_round(
-        vec![score_claim],
-        &score_round_witness,
-        &params.score_round,
+    validate_claim_shape(&score_claim, &params.qk.score_shape(), "QK score claim")?;
+    validate_poly_shape(&q_poly, &params.qk.q_shape(), "QK Q")?;
+    validate_poly_shape(&k_poly, &params.qk.k_shape(), "QK K")?;
+    validate_qk_params(&params.qk)?;
+
+    let (score_remainder, score_round_bit) = round_lookup_openings_from_ra(
+        &score_round_ra,
+        &score_claim.point,
+        &params.score_round.shape,
+    )?;
+    let inv_sqrt = inv_sqrt_head_dim::<F>(params.qk.head_dim);
+    let dot_opening = (score_claim.value * scale_q8::<F>() - score_round_bit * scale_q8::<F>()
+        + score_remainder)
+        * inv_sqrt.inverse().expect("non-zero inv sqrt");
+    transcript.append_scalar(&dot_opening);
+
+    let mut score_round_accumulator = ProverOpeningAccumulator::new();
+    let score_round_point = OpeningPoint::<BIG_ENDIAN, F>::new(score_claim.point.clone());
+    score_round_accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenRoundLut, score_sumcheck_id()),
+        (score_round_point.clone(), score_round_bit),
+    );
+    score_round_accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenRoundRemainder, score_sumcheck_id()),
+        (score_round_point, score_remainder),
+    );
+    let (score_round_lookup, score_ra_claims) = prove_round_lookup_from_ra(
+        params.score_round.lookup_site,
+        score_claim.point.clone(),
+        score_round_ra,
+        &params.score_round.shape,
+        score_round_bit,
+        score_remainder,
+        &mut score_round_accumulator,
         transcript,
     )?;
 
-    let dot_opening = eval_tensor(
-        witness.dot,
-        &params.qk.score_shape(),
-        &scale_acc_claim.point,
-    );
-    let inv_sqrt = inv_sqrt_head_dim::<F>(params.qk.head_dim);
-    if scale_acc_claim.value != dot_opening * inv_sqrt {
-        return Err(ProverError::MulMismatch);
-    }
-    transcript.append_scalar(&dot_opening);
-
-    let dot_claim = Claim {
-        tensor: params.dot_round.output_tensor.clone(),
-        logical_shape: params.qk.score_shape(),
-        domain_shape: params.qk.score_shape().padded_power_of_two(),
-        point: scale_acc_claim.point,
-        value: dot_opening,
-    };
-
-    let dot_round_witness = RoundWitness::from_input_output(witness.raw_acc, witness.dot);
-    let (qk_proof, q, k, dot_round_point, dot_round_bit_opening, dot_remainder_opening) =
+    let (dot_remainder, dot_round_bit) =
+        round_lookup_openings_from_ra(&dot_round_ra, &score_claim.point, &params.dot_round.shape)?;
+    let (relation, q_point, q_value, k_point, k_value, dot_round_point) =
         prove_qk_score_round_relation(
-            dot_claim,
-            witness.q,
-            witness.k,
-            &dot_round_witness.remainder,
-            &dot_round_witness.round_bit,
+            score_claim.point.clone(),
+            dot_opening,
+            &q_poly,
+            &k_poly,
+            dot_remainder,
+            dot_round_bit,
             &params.qk,
             transcript,
         )?;
+
     let mut dot_round_accumulator = ProverOpeningAccumulator::new();
-    let dot_round_opening_point = OpeningPoint::<BIG_ENDIAN, F>::new(dot_round_point.clone());
+    let dot_round_opening_point = OpeningPoint::<BIG_ENDIAN, F>::new(dot_round_point);
     dot_round_accumulator.openings.insert(
-        OpeningId::new(VirtualPoly::QwenRoundLut, SumcheckId::NodeExecution(0)),
-        (dot_round_opening_point.clone(), dot_round_bit_opening),
+        OpeningId::new(VirtualPoly::QwenRoundLut, qk_sumcheck_id()),
+        (dot_round_opening_point.clone(), dot_round_bit),
     );
     dot_round_accumulator.openings.insert(
-        OpeningId::new(
-            VirtualPoly::QwenRoundRemainder,
-            SumcheckId::NodeExecution(0),
-        ),
-        (dot_round_opening_point, dot_remainder_opening),
+        OpeningId::new(VirtualPoly::QwenRoundRemainder, qk_sumcheck_id()),
+        (dot_round_opening_point, dot_remainder),
     );
-    let dot_round_lookup = prove_round_lookup(
+    let (dot_round_lookup, dot_ra_claims) = prove_round_lookup_from_ra(
         params.dot_round.lookup_site,
-        dot_round_point,
-        dot_round_bit_opening,
-        dot_remainder_opening,
-        padded_lookup_indices(&dot_round_witness.remainder, &params.dot_round.shape),
-        round_lut_table(),
+        score_claim.point,
+        dot_round_ra,
+        &params.dot_round.shape,
+        dot_round_bit,
+        dot_remainder,
         &mut dot_round_accumulator,
         transcript,
     )?;
-    let dot_ra = dot_round_lookup.committed_opening_claims();
 
     Ok((
         QkScoreProof {
-            score_round: score_round_proof,
             dot_opening,
+            score_round_lookup,
+            qk: relation,
             dot_round_lookup,
-            qk: qk_proof,
         },
-        q,
-        k,
-        score_ra,
-        dot_ra,
+        Claim::new(q_poly, q_point, q_value),
+        Claim::new(k_poly, k_point, k_value),
+        score_ra_claims,
+        dot_ra_claims,
     ))
 }
 
-pub fn verify_qk_score_round<F, T>(
-    score_claim: Claim<F>,
+pub fn verify_qk_score_round<F, T, C>(
+    score_claim: Claim<F, C>,
     proof: &QkScoreProof<F, T>,
+    score_round_ra: Vec<Poly<F, C>>,
+    dot_round_ra: Vec<Poly<F, C>>,
     params: &QkScoreRoundParams,
     transcript: &mut T,
 ) -> std::result::Result<
-    (
-        Claim<F>,
-        Claim<F>,
-        Vec<CommittedOpeningClaim<F>>,
-        Vec<CommittedOpeningClaim<F>>,
-    ),
+    (Claim<F, C>, Claim<F, C>, Vec<Claim<F, C>>, Vec<Claim<F, C>>),
     ProofVerifyError,
 >
 where
     F: JoltField,
     T: Transcript,
+    C: Clone,
 {
-    let (scale_acc_claim, score_ra) = verify_round(
-        vec![score_claim],
-        &proof.score_round,
-        &params.score_round,
-        transcript,
-    )?;
-    transcript.append_scalar(&proof.dot_opening);
-    if scale_acc_claim.value != proof.dot_opening * inv_sqrt_head_dim::<F>(params.qk.head_dim) {
-        return Err(ProofVerifyError::InvalidInputLength(1, 0));
-    }
-    let dot_claim = Claim {
-        tensor: params.dot_round.output_tensor.clone(),
-        logical_shape: params.qk.score_shape(),
-        domain_shape: params.qk.score_shape().padded_power_of_two(),
-        point: scale_acc_claim.point,
-        value: proof.dot_opening,
-    };
-    let (q, k, dot_round_point, dot_round_bit_opening, dot_remainder_opening) =
-        verify_qk_score_round_relation(dot_claim, &proof.qk, &params.qk, transcript)?;
-    let dot_round_lookup = verify_round_lookup(
-        params.dot_round.lookup_site,
-        params.dot_round.shape.padded_power_of_two().numel(),
-        dot_round_point,
-        dot_round_bit_opening,
-        dot_remainder_opening,
-        proof.dot_round_lookup.ra_opening,
-        &proof.dot_round_lookup.committed_openings,
-        &proof.dot_round_lookup.read_raf,
-        &proof.dot_round_lookup.ra_onehot,
-        &mut VerifierOpeningAccumulator::new(),
-        transcript,
-    )?;
-    let dot_ra = dot_round_lookup.committed_opening_claims();
+    verify_claim_shape(&score_claim, &params.qk.score_shape())?;
+    verify_qk_params(&params.qk)?;
 
-    Ok((q, k, score_ra, dot_ra))
+    let (score_remainder, score_round_bit) = round_lookup_openings_from_ra(
+        &score_round_ra,
+        &score_claim.point,
+        &params.score_round.shape,
+    )
+    .map_err(|_| ProofVerifyError::SumcheckVerificationError)?;
+    let inv_sqrt = inv_sqrt_head_dim::<F>(params.qk.head_dim);
+    if score_claim.value * scale_q8::<F>()
+        != proof.dot_opening * inv_sqrt + score_round_bit * scale_q8::<F>() - score_remainder
+    {
+        return Err(ProofVerifyError::SumcheckVerificationError);
+    }
+    transcript.append_scalar(&proof.dot_opening);
+
+    let mut score_round_accumulator = VerifierOpeningAccumulator::new();
+    let score_round_point = OpeningPoint::<BIG_ENDIAN, F>::new(score_claim.point.clone());
+    score_round_accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenRoundLut, score_sumcheck_id()),
+        (score_round_point.clone(), score_round_bit),
+    );
+    score_round_accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenRoundRemainder, score_sumcheck_id()),
+        (score_round_point, score_remainder),
+    );
+    let (_score_lookup, score_ra_claims) = verify_round_lookup_from_ra(
+        params.score_round.lookup_site,
+        score_claim.point.clone(),
+        score_round_ra,
+        &params.score_round.shape,
+        score_round_bit,
+        score_remainder,
+        &proof.score_round_lookup,
+        &mut score_round_accumulator,
+        transcript,
+    )?;
+
+    let (dot_remainder, dot_round_bit) =
+        round_lookup_openings_from_ra(&dot_round_ra, &score_claim.point, &params.dot_round.shape)
+            .map_err(|_| ProofVerifyError::SumcheckVerificationError)?;
+    let (q_point, k_point, dot_round_point) = verify_qk_score_round_relation(
+        score_claim.point.clone(),
+        proof.dot_opening,
+        proof,
+        dot_remainder,
+        dot_round_bit,
+        &params.qk,
+        transcript,
+    )?;
+
+    let mut dot_round_accumulator = VerifierOpeningAccumulator::new();
+    let dot_round_opening_point = OpeningPoint::<BIG_ENDIAN, F>::new(dot_round_point);
+    dot_round_accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenRoundLut, qk_sumcheck_id()),
+        (dot_round_opening_point.clone(), dot_round_bit),
+    );
+    dot_round_accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenRoundRemainder, qk_sumcheck_id()),
+        (dot_round_opening_point, dot_remainder),
+    );
+    let (_dot_lookup, dot_ra_claims) = verify_round_lookup_from_ra(
+        params.dot_round.lookup_site,
+        score_claim.point,
+        dot_round_ra,
+        &params.dot_round.shape,
+        dot_round_bit,
+        dot_remainder,
+        &proof.dot_round_lookup,
+        &mut dot_round_accumulator,
+        transcript,
+    )?;
+
+    Ok((
+        Claim::new(
+            dummy_poly(&params.qk.q_shape()),
+            q_point,
+            proof.qk.q_opening,
+        ),
+        Claim::new(
+            dummy_poly(&params.qk.k_shape()),
+            k_point,
+            proof.qk.k_opening,
+        ),
+        score_ra_claims,
+        dot_ra_claims,
+    ))
 }
 
-#[allow(clippy::type_complexity)]
-fn prove_qk_score_round_relation<F, T>(
-    score_claim: Claim<F>,
-    q: &[i32],
-    k: &[i32],
-    remainder: &[usize],
-    round_bit: &[i32],
+fn prove_qk_score_round_relation<F, T, C>(
+    score_point: Vec<F>,
+    dot_value: F,
+    q_poly: &Poly<F, C>,
+    k_poly: &Poly<F, C>,
+    remainder_opening: F,
+    round_bit_opening: F,
     params: &QkScoreParams,
     transcript: &mut T,
 ) -> Result<(
     QkScoreRoundRelationProof<F, T>,
-    Claim<F>,
-    Claim<F>,
     Vec<F>,
     F,
+    Vec<F>,
     F,
+    Vec<F>,
 )>
 where
     F: JoltField,
     T: Transcript,
 {
-    validate_qk_inputs(&score_claim, q, k, params)?;
-    validate_round_witness(remainder, round_bit, &params.score_shape())?;
-    let (r_h, r_q, r_kpos) = split3(&score_claim.point, params.q_heads, params.seq, params.seq);
-    let left = partial_q(q, params, r_q);
-    let right = partial_k(k, params, r_kpos);
+    let (r_h, r_q, r_kpos) = split3(&score_point, params.q_heads, params.seq);
+    let left = partial_q(q_poly, params, r_q);
+    let right = partial_k(k_poly, params, r_kpos);
     let selector = expanded_head_eq(r_h, params);
-    let remainder = eval_round_tensor(remainder, &params.score_shape(), &score_claim.point);
-    let round_bit = eval_tensor(round_bit, &params.score_shape(), &score_claim.point);
-    let (proof, r_h_d) = prove_qk_round_product(
-        score_claim.value * scale_q8::<F>(),
+    let (relation, r_h_d) = prove_qk_round_product(
+        dot_value * scale_q8::<F>(),
         left,
         right,
         selector,
-        remainder,
-        round_bit,
+        remainder_opening,
+        round_bit_opening,
         transcript,
     )?;
     let (r_head, r_d) = r_h_d.split_at(log2_ceil(params.q_heads));
-    let kv_h = drop_gqa_lsb_for_dims(r_head, params.q_heads, params.kv_heads)?;
-    let q_opening = proof.left_opening;
-    let k_opening = proof.right_opening;
-    let remainder_opening = proof.remainder_opening;
-    let round_bit_opening = proof.round_bit_opening;
+    let kv_h = drop_gqa_lsb_for_dims(r_head, params)?;
 
     Ok((
-        proof,
-        Claim {
-            tensor: params.q_tensor.clone(),
-            logical_shape: params.q_shape(),
-            domain_shape: params.q_shape().padded_power_of_two(),
-            point: [r_q, r_head, r_d].concat(),
-            value: q_opening,
+        QkScoreRoundRelationProof {
+            q_opening: relation.q_opening,
+            k_opening: relation.k_opening,
+            remainder_opening: relation.remainder_opening,
+            round_bit_opening: relation.round_bit_opening,
+            sumcheck: relation.sumcheck,
         },
-        Claim {
-            tensor: params.k_tensor.clone(),
-            logical_shape: params.k_shape(),
-            domain_shape: params.k_shape().padded_power_of_two(),
-            point: [r_kpos, kv_h, r_d].concat(),
-            value: k_opening,
-        },
-        score_claim.point,
-        round_bit_opening,
-        remainder_opening,
+        [r_q, r_head, r_d].concat(),
+        relation.q_opening,
+        [r_kpos, kv_h, r_d].concat(),
+        relation.k_opening,
+        score_point,
     ))
 }
 
-#[allow(clippy::type_complexity)]
 fn verify_qk_score_round_relation<F, T>(
-    score_claim: Claim<F>,
-    proof: &QkScoreRoundRelationProof<F, T>,
+    score_point: Vec<F>,
+    dot_value: F,
+    proof: &QkScoreProof<F, T>,
+    remainder_opening: F,
+    round_bit_opening: F,
     params: &QkScoreParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>, Vec<F>, F, F), ProofVerifyError>
+) -> std::result::Result<(Vec<F>, Vec<F>, Vec<F>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,
 {
-    verify_qk_inputs(&score_claim, params)?;
-    let (r_h, r_q, r_kpos) = split3(&score_claim.point, params.q_heads, params.seq, params.seq);
+    let (r_h, r_q, r_kpos) = split3(&score_point, params.q_heads, params.seq);
     let r_h_d = verify_qk_round_product(
-        score_claim.value * scale_q8::<F>(),
+        dot_value * scale_q8::<F>(),
         proof,
         r_h,
+        remainder_opening,
+        round_bit_opening,
         params,
         transcript,
     )?;
     let (r_head, r_d) = r_h_d.split_at(log2_ceil(params.q_heads));
-    let kv_h = drop_gqa_lsb_for_dims_verify(r_head, params.q_heads, params.kv_heads)?;
-
+    let kv_h = drop_gqa_lsb_for_dims_verify(r_head, params)?;
     Ok((
-        Claim {
-            tensor: params.q_tensor.clone(),
-            logical_shape: params.q_shape(),
-            domain_shape: params.q_shape().padded_power_of_two(),
-            point: [r_q, r_head, r_d].concat(),
-            value: proof.left_opening,
-        },
-        Claim {
-            tensor: params.k_tensor.clone(),
-            logical_shape: params.k_shape(),
-            domain_shape: params.k_shape().padded_power_of_two(),
-            point: [r_kpos, kv_h, r_d].concat(),
-            value: proof.right_opening,
-        },
-        score_claim.point,
-        proof.round_bit_opening,
-        proof.remainder_opening,
+        [r_q, r_head, r_d].concat(),
+        [r_kpos, kv_h, r_d].concat(),
+        score_point,
     ))
 }
 
-fn partial_q<F: JoltField>(q: &[i32], params: &QkScoreParams, r_q: &[F]) -> Vec<F> {
+fn partial_q<F: JoltField, C>(q: &Poly<F, C>, params: &QkScoreParams, r_q: &[F]) -> Vec<F> {
     let head_pad = params.q_heads.next_power_of_two();
     let dim_pad = params.head_dim.next_power_of_two();
     let seq_eq = EqPolynomial::<F>::evals(r_q);
@@ -412,17 +419,14 @@ fn partial_q<F: JoltField>(q: &[i32], params: &QkScoreParams, r_q: &[F]) -> Vec<
     for head in 0..params.q_heads {
         for d in 0..params.head_dim {
             out[head * dim_pad + d] = (0..params.seq)
-                .map(|pos| {
-                    seq_eq[pos]
-                        * F::from_i32(q[(pos * params.q_heads + head) * params.head_dim + d])
-                })
+                .map(|pos| seq_eq[pos] * coeff3(q, &params.q_shape(), pos, head, d))
                 .sum();
         }
     }
     out
 }
 
-fn partial_k<F: JoltField>(k: &[i32], params: &QkScoreParams, r_kpos: &[F]) -> Vec<F> {
+fn partial_k<F: JoltField, C>(k: &Poly<F, C>, params: &QkScoreParams, r_kpos: &[F]) -> Vec<F> {
     let head_pad = params.q_heads.next_power_of_two();
     let dim_pad = params.head_dim.next_power_of_two();
     let seq_eq = EqPolynomial::<F>::evals(r_kpos);
@@ -431,10 +435,7 @@ fn partial_k<F: JoltField>(k: &[i32], params: &QkScoreParams, r_kpos: &[F]) -> V
         let kv_head = head / QWEN3_GQA_GROUP_SIZE;
         for d in 0..params.head_dim {
             out[head * dim_pad + d] = (0..params.seq)
-                .map(|pos| {
-                    seq_eq[pos]
-                        * F::from_i32(k[(pos * params.kv_heads + kv_head) * params.head_dim + d])
-                })
+                .map(|pos| seq_eq[pos] * coeff3(k, &params.k_shape(), pos, kv_head, d))
                 .sum();
         }
     }
@@ -475,11 +476,11 @@ where
     let mut prover = QkRoundProductProver::new(params, left, right, selector, remainder, round_bit);
     let mut accumulator = ProverOpeningAccumulator::new();
     let (sumcheck, challenges) = Sumcheck::prove(&mut prover, &mut accumulator, transcript);
-    let left_opening = opening(
+    let q_opening = opening(
         &accumulator,
         OpeningId::new(VirtualPoly::QwenAttentionLeft, qk_sumcheck_id()),
     )?;
-    let right_opening = opening(
+    let k_opening = opening(
         &accumulator,
         OpeningId::new(VirtualPoly::QwenAttentionRight, qk_sumcheck_id()),
     )?;
@@ -491,23 +492,24 @@ where
         &accumulator,
         OpeningId::new(VirtualPoly::QwenRoundLut, qk_sumcheck_id()),
     )?;
-    let r = normalize_sumcheck_point::<F>(&challenges.into_opening());
     Ok((
         QkScoreRoundRelationProof {
             sumcheck,
-            left_opening,
-            right_opening,
+            q_opening,
+            k_opening,
             remainder_opening,
             round_bit_opening,
         },
-        r,
+        normalize_sumcheck_point::<F>(&challenges.into_opening()),
     ))
 }
 
 fn verify_qk_round_product<F, T>(
     input_claim: F,
-    proof: &QkScoreRoundRelationProof<F, T>,
+    proof: &QkScoreProof<F, T>,
     output_head_point: &[F],
+    remainder_opening: F,
+    round_bit_opening: F,
     params: &QkScoreParams,
     transcript: &mut T,
 ) -> std::result::Result<Vec<F>, ProofVerifyError>
@@ -522,30 +524,21 @@ where
     let mut accumulator = VerifierOpeningAccumulator::new();
     accumulator.openings.insert(
         OpeningId::new(VirtualPoly::QwenAttentionLeft, qk_sumcheck_id()),
-        (OpeningPoint::<BIG_ENDIAN, F>::default(), proof.left_opening),
+        (OpeningPoint::<BIG_ENDIAN, F>::default(), proof.qk.q_opening),
     );
     accumulator.openings.insert(
         OpeningId::new(VirtualPoly::QwenAttentionRight, qk_sumcheck_id()),
-        (
-            OpeningPoint::<BIG_ENDIAN, F>::default(),
-            proof.right_opening,
-        ),
+        (OpeningPoint::<BIG_ENDIAN, F>::default(), proof.qk.k_opening),
     );
     accumulator.openings.insert(
         OpeningId::new(VirtualPoly::QwenRoundRemainder, qk_sumcheck_id()),
-        (
-            OpeningPoint::<BIG_ENDIAN, F>::default(),
-            proof.remainder_opening,
-        ),
+        (OpeningPoint::<BIG_ENDIAN, F>::default(), remainder_opening),
     );
     accumulator.openings.insert(
         OpeningId::new(VirtualPoly::QwenRoundLut, qk_sumcheck_id()),
-        (
-            OpeningPoint::<BIG_ENDIAN, F>::default(),
-            proof.round_bit_opening,
-        ),
+        (OpeningPoint::<BIG_ENDIAN, F>::default(), round_bit_opening),
     );
-    let challenges = Sumcheck::verify(&proof.sumcheck, &verifier, &mut accumulator, transcript)?;
+    let challenges = Sumcheck::verify(&proof.qk.sumcheck, &verifier, &mut accumulator, transcript)?;
     Ok(normalize_sumcheck_point::<F>(&challenges.into_opening()))
 }
 
@@ -624,21 +617,29 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for QkRoundProduc
         let mut evals = [F::zero(); 3];
         let round_term = self.round_bit * scale_q8::<F>() - self.remainder;
         for g in 0..self.left.len() / 2 {
-            let l0 = self.left.get_bound_coeff(2 * g);
-            let l1 = self.left.get_bound_coeff(2 * g + 1);
-            let r0 = self.right.get_bound_coeff(2 * g);
-            let r1 = self.right.get_bound_coeff(2 * g + 1);
-            let s0 = self.selector.get_bound_coeff(2 * g);
-            let s1 = self.selector.get_bound_coeff(2 * g + 1);
-            let z0 = self.eq_zero.get_bound_coeff(2 * g);
-            let z1 = self.eq_zero.get_bound_coeff(2 * g + 1);
-            evals[0] += l0 * r0 * s0 + z0 * round_term;
-            evals[1] +=
-                (l1 + l1 - l0) * (r1 + r1 - r0) * (s1 + s1 - s0) + (z1 + z1 - z0) * round_term;
-            evals[2] += (l1 * F::from_u64(3) - l0 - l0)
-                * (r1 * F::from_u64(3) - r0 - r0)
-                * (s1 * F::from_u64(3) - s0 - s0)
-                + (z1 * F::from_u64(3) - z0 - z0) * round_term;
+            let l = [
+                self.left.get_bound_coeff(2 * g),
+                self.left.get_bound_coeff(2 * g + 1),
+            ];
+            let r = [
+                self.right.get_bound_coeff(2 * g),
+                self.right.get_bound_coeff(2 * g + 1),
+            ];
+            let s = [
+                self.selector.get_bound_coeff(2 * g),
+                self.selector.get_bound_coeff(2 * g + 1),
+            ];
+            let z = [
+                self.eq_zero.get_bound_coeff(2 * g),
+                self.eq_zero.get_bound_coeff(2 * g + 1),
+            ];
+            for (idx, t) in [F::zero(), F::from_u64(2), F::from_u64(3)]
+                .into_iter()
+                .enumerate()
+            {
+                evals[idx] += lerp(l[0], l[1], t) * lerp(r[0], r[1], t) * lerp(s[0], s[1], t)
+                    + lerp(z[0], z[1], t) * round_term;
+            }
         }
         UniPoly::from_evals_and_hint(previous_claim, &evals)
     }
@@ -668,19 +669,19 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for QkRoundProduc
         accumulator.append_virtual(
             transcript,
             OpeningId::new(VirtualPoly::QwenAttentionRight, qk_sumcheck_id()),
-            point,
+            point.clone(),
             self.right.final_claim(),
         );
         accumulator.append_virtual(
             transcript,
             OpeningId::new(VirtualPoly::QwenRoundRemainder, qk_sumcheck_id()),
-            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            point.clone(),
             self.remainder,
         );
         accumulator.append_virtual(
             transcript,
             OpeningId::new(VirtualPoly::QwenRoundLut, qk_sumcheck_id()),
-            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            point,
             self.round_bit,
         );
     }
@@ -751,19 +752,157 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for QkRoundProd
         accumulator.append_virtual(
             transcript,
             OpeningId::new(VirtualPoly::QwenAttentionRight, qk_sumcheck_id()),
-            point,
+            point.clone(),
         );
         accumulator.append_virtual(
             transcript,
             OpeningId::new(VirtualPoly::QwenRoundRemainder, qk_sumcheck_id()),
-            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            point.clone(),
         );
         accumulator.append_virtual(
             transcript,
             OpeningId::new(VirtualPoly::QwenRoundLut, qk_sumcheck_id()),
-            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            point,
         );
     }
+}
+
+fn validate_qk_params(params: &QkScoreParams) -> Result<()> {
+    if params.seq == 0 || params.q_heads == 0 || params.kv_heads == 0 || params.head_dim == 0 {
+        return Err(ProverError::InvalidTensorShape(vec![
+            params.seq,
+            params.q_heads,
+            params.kv_heads,
+            params.head_dim,
+        ]));
+    }
+    if params.q_heads / params.kv_heads != QWEN3_GQA_GROUP_SIZE {
+        return Err(ProverError::InvalidGqa {
+            q_heads: params.q_heads,
+            kv_heads: params.kv_heads,
+        });
+    }
+    Ok(())
+}
+
+fn verify_qk_params(params: &QkScoreParams) -> std::result::Result<(), ProofVerifyError> {
+    if params.q_heads / params.kv_heads != QWEN3_GQA_GROUP_SIZE {
+        return Err(ProofVerifyError::InvalidInputLength(
+            QWEN3_GQA_GROUP_SIZE,
+            params.q_heads / params.kv_heads,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_claim_shape<F: JoltField, C>(
+    claim: &Claim<F, C>,
+    shape: &Shape,
+    name: &'static str,
+) -> Result<()> {
+    let domain = shape.padded_power_of_two();
+    if claim.poly.data.len() != domain.numel() {
+        return Err(ProverError::ShapeMismatch {
+            name,
+            expected: domain.0,
+            actual: vec![claim.poly.data.len()],
+        });
+    }
+    if claim.point.len() != domain.point_len() {
+        return Err(ProverError::ShapeMismatch {
+            name,
+            expected: vec![domain.point_len()],
+            actual: vec![claim.point.len()],
+        });
+    }
+    Ok(())
+}
+
+fn validate_poly_shape<F: JoltField, C>(
+    poly: &Poly<F, C>,
+    shape: &Shape,
+    name: &'static str,
+) -> Result<()> {
+    let expected = shape.padded_power_of_two().numel();
+    if poly.data.len() != expected {
+        return Err(ProverError::TensorLenMismatch {
+            name,
+            shape: shape.0.clone(),
+            expected,
+            actual: poly.data.len(),
+        });
+    }
+    Ok(())
+}
+
+fn verify_claim_shape<F: JoltField, C>(
+    claim: &Claim<F, C>,
+    shape: &Shape,
+) -> std::result::Result<(), ProofVerifyError> {
+    let domain = shape.padded_power_of_two();
+    if claim.poly.data.len() != domain.numel() {
+        return Err(ProofVerifyError::InvalidInputLength(
+            domain.numel(),
+            claim.poly.data.len(),
+        ));
+    }
+    if claim.point.len() != domain.point_len() {
+        return Err(ProofVerifyError::InvalidInputLength(
+            domain.point_len(),
+            claim.point.len(),
+        ));
+    }
+    Ok(())
+}
+
+fn split3<F>(point: &[F], dim0: usize, dim1: usize) -> (&[F], &[F], &[F]) {
+    let v0 = log2_ceil(dim0);
+    let v1 = log2_ceil(dim1);
+    (&point[..v0], &point[v0..v0 + v1], &point[v0 + v1..])
+}
+
+fn drop_gqa_lsb_for_dims<'a, F>(r_h: &'a [F], params: &QkScoreParams) -> Result<&'a [F]> {
+    let q_vars = log2_ceil(params.q_heads);
+    let kv_vars = log2_ceil(params.kv_heads);
+    if r_h.len() != q_vars || kv_vars + 1 != q_vars {
+        return Err(ProverError::InvalidGqa {
+            q_heads: params.q_heads,
+            kv_heads: params.kv_heads,
+        });
+    }
+    Ok(&r_h[..kv_vars])
+}
+
+fn drop_gqa_lsb_for_dims_verify<'a, F>(
+    r_h: &'a [F],
+    params: &QkScoreParams,
+) -> std::result::Result<&'a [F], ProofVerifyError> {
+    let q_vars = log2_ceil(params.q_heads);
+    let kv_vars = log2_ceil(params.kv_heads);
+    if r_h.len() != q_vars || kv_vars + 1 != q_vars {
+        return Err(ProofVerifyError::InvalidInputLength(q_vars, r_h.len()));
+    }
+    Ok(&r_h[..kv_vars])
+}
+
+fn coeff3<F: JoltField, C>(poly: &Poly<F, C>, shape: &Shape, i0: usize, i1: usize, i2: usize) -> F {
+    let dims = shape.dims();
+    debug_assert_eq!(dims.len(), 3);
+    let p1 = dims[1].next_power_of_two();
+    let p2 = dims[2].next_power_of_two();
+    poly.data.get_bound_coeff((i0 * p1 + i1) * p2 + i2)
+}
+
+fn dummy_poly<F: JoltField, C>(shape: &Shape) -> Poly<F, C> {
+    Poly::new(
+        MultilinearPolynomial::from(vec![F::zero(); shape.padded_power_of_two().numel()]),
+        None,
+    )
+}
+
+fn inv_sqrt_head_dim<F: JoltField>(head_dim: usize) -> F {
+    let inv = ((1.0 / (head_dim as f64).sqrt()) * 256.0).round() as i32;
+    F::from_i32(inv)
 }
 
 fn opening<F: JoltField>(accumulator: &ProverOpeningAccumulator<F>, id: OpeningId) -> Result<F> {
@@ -780,263 +919,189 @@ fn normalize_sumcheck_point<F: JoltField>(challenges: &[F]) -> Vec<F> {
         .r
 }
 
-fn qk_sumcheck_id() -> SumcheckId {
-    SumcheckId::NodeExecution(0)
-}
-
-fn validate_qk_inputs<F: JoltField>(
-    score_claim: &Claim<F>,
-    q: &[i32],
-    k: &[i32],
-    params: &QkScoreParams,
-) -> Result<()> {
-    validate_gqa(params.q_heads, params.kv_heads)?;
-    ensure_len("Q", &params.q_shape(), q.len())?;
-    ensure_len("K", &params.k_shape(), k.len())?;
-    validate_claim(score_claim, &params.score_shape())
-}
-
-fn verify_qk_inputs<F: JoltField>(
-    score_claim: &Claim<F>,
-    params: &QkScoreParams,
-) -> std::result::Result<(), ProofVerifyError> {
-    if params.q_heads / params.kv_heads != QWEN3_GQA_GROUP_SIZE {
-        return Err(ProofVerifyError::InvalidInputLength(
-            QWEN3_GQA_GROUP_SIZE,
-            params.q_heads / params.kv_heads,
-        ));
-    }
-    verify_claim(score_claim, &params.score_shape())
-}
-
-fn validate_round_witness(remainder: &[usize], round_bit: &[i32], shape: &Shape) -> Result<()> {
-    let expected = shape.numel();
-    if remainder.len() != expected {
-        return Err(ProverError::TensorLenMismatch {
-            name: "qk round remainder",
-            shape: shape.0.clone(),
-            expected,
-            actual: remainder.len(),
-        });
-    }
-    if round_bit.len() != expected {
-        return Err(ProverError::TensorLenMismatch {
-            name: "qk round bit",
-            shape: shape.0.clone(),
-            expected,
-            actual: round_bit.len(),
-        });
-    }
-    for (&rem, &bit) in remainder.iter().zip(round_bit) {
-        if rem >= 256 || !(bit == 0 || bit == 1) {
-            return Err(ProverError::InvalidSumcheckDomain(rem));
-        }
-    }
-    Ok(())
-}
-
-fn inv_sqrt_head_dim<F: JoltField>(head_dim: usize) -> F {
-    let inv = ((1.0 / (head_dim as f64).sqrt()) * 256.0).round() as i32;
-    F::from_i32(inv)
-}
-
-fn eval_round_tensor<F: JoltField>(values: &[usize], shape: &Shape, point: &[F]) -> F {
-    let eq_by_dim = split_point_for_shape(shape, point)
-        .into_iter()
-        .map(EqPolynomial::<F>::evals)
-        .collect::<Vec<_>>();
-    let strides = row_major_strides(shape.dims());
-    let mut out = F::zero();
-    for (flat, &value) in values.iter().enumerate() {
-        let mut weight = F::one();
-        for (dim, (&stride, eq)) in strides.iter().zip(&eq_by_dim).enumerate() {
-            let coord = (flat / stride) % shape.dims()[dim];
-            weight *= eq[coord];
-        }
-        out += weight * F::from_u64(value as u64);
-    }
-    out
-}
-
-fn eval_tensor<F: JoltField>(values: &[i32], shape: &Shape, point: &[F]) -> F {
-    let eq_by_dim = split_point_for_shape(shape, point)
-        .into_iter()
-        .map(EqPolynomial::<F>::evals)
-        .collect::<Vec<_>>();
-    let strides = row_major_strides(shape.dims());
-    let mut out = F::zero();
-    for (flat, &value) in values.iter().enumerate() {
-        let mut weight = F::one();
-        for (dim, (&stride, eq)) in strides.iter().zip(&eq_by_dim).enumerate() {
-            let coord = (flat / stride) % shape.dims()[dim];
-            weight *= eq[coord];
-        }
-        out += weight * F::from_i32(value);
-    }
-    out
+fn lerp<F: JoltField>(v0: F, v1: F, t: F) -> F {
+    v0 + t * (v1 - v0)
 }
 
 fn scale_q8<F: JoltField>() -> F {
     F::from_u64(256)
 }
 
-fn split_point_for_shape<'a, F: Clone>(shape: &Shape, point: &'a [F]) -> Vec<&'a [F]> {
-    let mut offset = 0;
-    shape
-        .dims()
-        .iter()
-        .map(|dim| {
-            let bits = dim.next_power_of_two().trailing_zeros() as usize;
-            let out = &point[offset..offset + bits];
-            offset += bits;
-            out
-        })
-        .collect()
+fn log2_ceil(value: usize) -> usize {
+    value.next_power_of_two().trailing_zeros() as usize
 }
 
-fn row_major_strides(dims: &[usize]) -> Vec<usize> {
-    let mut strides = vec![1; dims.len()];
-    for idx in (0..dims.len()).rev().skip(1) {
-        strides[idx] = strides[idx + 1] * dims[idx + 1];
-    }
-    strides
+fn qk_sumcheck_id() -> SumcheckId {
+    SumcheckId::NodeExecution(0)
+}
+
+fn score_sumcheck_id() -> SumcheckId {
+    SumcheckId::NodeExecution(0)
 }
 
 #[cfg(test)]
 mod tests {
     use ark_bn254::Fr;
-    use joltworks::transcripts::Blake2bTranscript;
+    use joltworks::{
+        config::{OneHotConfig, OneHotParams},
+        poly::{
+            eq_poly::EqPolynomial, multilinear_polynomial::MultilinearPolynomial,
+            one_hot_polynomial::OneHotPolynomial,
+        },
+        transcripts::Blake2bTranscript,
+    };
 
     use super::*;
+    use crate::ops::round::{ROUND_LUT_LEN, round_lut_q8};
 
     #[test]
-    fn proves_and_verifies_qk_score() {
-        let qk_params = QkScoreParams::new(2, 2, 1, 2, "Q", "K");
+    fn proves_and_verifies_qk_score_round_from_poly_and_ra() {
+        let qk = QkScoreParams::new(2, 2, 1, 2, "Q", "K");
         let params = QkScoreRoundParams::new(
-            RoundParams::new(vec![2, 2, 2], "S_scale_acc", "S"),
-            RoundParams::new(vec![2, 2, 2], "S_raw_acc", "S_dot"),
-            qk_params.clone(),
+            RoundParams::new(vec![2, 2, 2], "scaled_acc", "score"),
+            RoundParams::new(vec![2, 2, 2], "raw_acc", "dot"),
+            qk,
         );
-        let q = vec![1, 2, 3, 4, 5, 6, 7, 8];
-        let k = vec![2, 1, 4, 3];
-        let raw_acc = qk_scores(&q, &k, &qk_params);
-        let dot = round_outputs(&raw_acc);
-        let dot_frac_bits = frac_bits_for(&raw_acc);
-        let inv_sqrt = ((1.0 / (qk_params.head_dim as f64).sqrt()) * 256.0).round() as i64;
-        let scale_acc = dot
+        let q = vec![300, 200, 100, 400, 250, 350, 150, 450];
+        let k = vec![120, 220, 320, 420];
+        let raw_acc = qk_raw_scores(&q, &k, &params.qk);
+        let dot = raw_acc
+            .iter()
+            .map(|&value| round_q8_to_i32(value))
+            .collect::<Vec<_>>();
+        let inv_sqrt = ((1.0 / (params.qk.head_dim as f64).sqrt()) * 256.0).round() as i64;
+        let scaled_acc = dot
             .iter()
             .map(|&value| i64::from(value) * inv_sqrt)
             .collect::<Vec<_>>();
-        let output = round_outputs(&scale_acc);
-        let frac_bits = frac_bits_for(&scale_acc);
-        let point = vec![Fr::from(3u64), Fr::from(5u64), Fr::from(7u64)];
-        let claim = Claim {
-            tensor: TensorId::new("S"),
-            logical_shape: qk_params.score_shape(),
-            domain_shape: qk_params.score_shape().padded_power_of_two(),
-            value: eval_tensor(&output, &qk_params.score_shape(), &point),
-            point,
-        };
-        let witness = QkScoreWitness {
-            q: &q,
-            k: &k,
-            raw_acc: &raw_acc,
-            dot: &dot,
-            dot_frac_bits: dot_frac_bits.each_ref().map(Vec::as_slice),
-            scale_acc: &scale_acc,
-            output: &output,
-            frac_bits: frac_bits.each_ref().map(Vec::as_slice),
-        };
+        let score = scaled_acc
+            .iter()
+            .map(|&value| round_q8_to_i32(value))
+            .collect::<Vec<_>>();
+        let point = vec![Fr::from(3_u64), Fr::from(5_u64), Fr::from(7_u64)];
+        let score_claim = Claim::new(
+            poly_from_i32(&score),
+            point.clone(),
+            eval_flat(&score, &point),
+        );
+        let score_ra = round_ra_from_acc(
+            &scaled_acc,
+            params.qk.score_shape().padded_power_of_two().numel(),
+        );
+        let dot_ra = round_ra_from_acc(
+            &raw_acc,
+            params.qk.score_shape().padded_power_of_two().numel(),
+        );
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, q_claim, k_claim, _, _) =
-            prove_qk_score_round::<Fr, _>(claim.clone(), &witness, &params, &mut prover_transcript)
-                .unwrap();
+        let (proof, q_claim, k_claim, score_ra_claims, dot_ra_claims) = prove_qk_score_round(
+            score_claim,
+            poly_from_i32(&q),
+            poly_from_i32(&k),
+            score_ra,
+            dot_ra,
+            &params,
+            &mut prover_transcript,
+        )
+        .unwrap();
+        assert!(!score_ra_claims.is_empty());
+        assert!(!dot_ra_claims.is_empty());
 
+        let score_claim = Claim::new(
+            poly_from_i32(&score),
+            point.clone(),
+            eval_flat(&score, &point),
+        );
+        let score_ra = round_ra_from_acc(
+            &scaled_acc,
+            params.qk.score_shape().padded_power_of_two().numel(),
+        );
+        let dot_ra = round_ra_from_acc(
+            &raw_acc,
+            params.qk.score_shape().padded_power_of_two().numel(),
+        );
         let mut verifier_transcript = Blake2bTranscript::default();
-        let (verified_q, verified_k, _, _) =
-            verify_qk_score_round::<Fr, _>(claim, &proof, &params, &mut verifier_transcript)
-                .unwrap();
+        let (verified_q, verified_k, verified_score_ra, verified_dot_ra) = verify_qk_score_round(
+            score_claim,
+            &proof,
+            score_ra,
+            dot_ra,
+            &params,
+            &mut verifier_transcript,
+        )
+        .unwrap();
 
-        assert_eq!(verified_q, q_claim);
-        assert_eq!(verified_k, k_claim);
-        assert_eq!(verified_q.tensor.0, "Q");
-        assert_eq!(verified_k.tensor.0, "K");
+        assert_eq!(verified_q.point, q_claim.point);
+        assert_eq!(verified_q.value, q_claim.value);
+        assert_eq!(verified_k.point, k_claim.point);
+        assert_eq!(verified_k.value, k_claim.value);
+        assert_eq!(verified_score_ra.len(), score_ra_claims.len());
+        assert_eq!(verified_dot_ra.len(), dot_ra_claims.len());
     }
 
-    fn qk_scores(q: &[i32], k: &[i32], params: &QkScoreParams) -> Vec<i64> {
-        let mut out = vec![0; params.q_heads * params.seq * params.seq];
-        for h in 0..params.q_heads {
+    fn qk_raw_scores(q: &[i32], k: &[i32], params: &QkScoreParams) -> Vec<i64> {
+        let mut out = vec![0_i64; params.q_heads * params.seq * params.seq];
+        for head in 0..params.q_heads {
+            let kv_head = head / QWEN3_GQA_GROUP_SIZE;
             for qpos in 0..params.seq {
                 for kpos in 0..params.seq {
-                    let kvh = h / QWEN3_GQA_GROUP_SIZE;
                     let mut sum = 0_i64;
                     for d in 0..params.head_dim {
-                        sum += i64::from(q[(qpos * params.q_heads + h) * params.head_dim + d])
-                            * i64::from(k[(kpos * params.kv_heads + kvh) * params.head_dim + d]);
+                        let q_idx = (qpos * params.q_heads + head) * params.head_dim + d;
+                        let k_idx = (kpos * params.kv_heads + kv_head) * params.head_dim + d;
+                        sum += i64::from(q[q_idx]) * i64::from(k[k_idx]);
                     }
-                    out[(h * params.seq + qpos) * params.seq + kpos] = sum;
+                    out[(head * params.seq + qpos) * params.seq + kpos] = sum;
                 }
             }
         }
         out
     }
 
-    fn round_outputs(values: &[i64]) -> Vec<i32> {
+    fn poly_from_i32(values: &[i32]) -> Poly<Fr, ()> {
+        Poly::new(MultilinearPolynomial::from(values.to_vec()), None)
+    }
+
+    fn eval_flat(values: &[i32], point: &[Fr]) -> Fr {
+        let eq = EqPolynomial::<Fr>::evals(point);
         values
             .iter()
-            .map(|&value| {
-                let frac = value.rem_euclid(256);
-                ((value + i64::from(frac >= 128) * 256 - frac) / 256) as i32
+            .zip(eq)
+            .fold(Fr::from_u64(0), |acc, (&value, eq)| {
+                acc + Fr::from_i32(value) * eq
+            })
+    }
+
+    fn round_q8_to_i32(value: i64) -> i32 {
+        let rem = value.rem_euclid(ROUND_LUT_LEN as i64);
+        let rounded = (value + i64::from(round_lut_q8(rem as usize)) * 256 - rem) / 256;
+        i32::try_from(rounded).expect("rounded output exceeds i32")
+    }
+
+    fn round_ra_from_acc(acc: &[i64], padded_len: usize) -> Vec<Poly<Fr, ()>> {
+        let log_k = ROUND_LUT_LEN.trailing_zeros() as usize;
+        let params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k);
+        (0..params.instruction_d)
+            .map(|chunk| {
+                let indices = (0..padded_len)
+                    .map(|idx| {
+                        let rem = acc
+                            .get(idx)
+                            .copied()
+                            .unwrap_or_default()
+                            .rem_euclid(ROUND_LUT_LEN as i64)
+                            as u64;
+                        Some(u16::from(params.lookup_index_chunk(rem, chunk)))
+                    })
+                    .collect::<Vec<_>>();
+                Poly::new(
+                    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                        indices,
+                        params.k_chunk,
+                    )),
+                    None,
+                )
             })
             .collect()
-    }
-
-    fn frac_bits_for(values: &[i64]) -> [Vec<u8>; 8] {
-        std::array::from_fn(|bit| {
-            values
-                .iter()
-                .map(|value| ((value.rem_euclid(256) >> bit) & 1) as u8)
-                .collect()
-        })
-    }
-
-    fn eval_tensor<F: JoltField>(values: &[i32], shape: &Shape, point: &[F]) -> F {
-        let eq_by_dim = split_point(shape, point)
-            .into_iter()
-            .map(EqPolynomial::<F>::evals)
-            .collect::<Vec<_>>();
-        let strides = row_major_strides(shape.dims());
-        let mut out = F::zero();
-        for (flat, &value) in values.iter().enumerate() {
-            let mut weight = F::one();
-            for (dim, (&stride, eq)) in strides.iter().zip(&eq_by_dim).enumerate() {
-                let coord = (flat / stride) % shape.dims()[dim];
-                weight *= eq[coord];
-            }
-            out += weight * F::from_i32(value);
-        }
-        out
-    }
-
-    fn split_point<'a, F>(shape: &Shape, point: &'a [F]) -> Vec<&'a [F]> {
-        let mut out = Vec::with_capacity(shape.dims().len());
-        let mut offset = 0;
-        for &dim in shape.dims() {
-            let vars = log2_ceil(dim);
-            out.push(&point[offset..offset + vars]);
-            offset += vars;
-        }
-        out
-    }
-
-    fn row_major_strides(dims: &[usize]) -> Vec<usize> {
-        let mut strides = vec![1; dims.len()];
-        let mut stride = 1;
-        for (idx, &dim) in dims.iter().enumerate().rev() {
-            strides[idx] = stride;
-            stride *= dim;
-        }
-        strides
     }
 }

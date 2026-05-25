@@ -1,3 +1,9 @@
+use common::CommittedPoly;
+use joltworks::{
+    field::JoltField, poly::multilinear_polynomial::MultilinearPolynomial,
+    poly::opening_proof::SumcheckId,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TensorId(pub String);
 
@@ -37,13 +43,42 @@ impl Shape {
     }
 }
 
-/// A tensor claim in the Qwen3 layer prover.
+/// Polynomial material consumed by a layer op.
 ///
-/// This is intentionally explicit and independent from core's opening
-/// accumulator. The core wrappers can translate this into accumulator openings
-/// internally, while the Qwen3 layer flow remains claim-in/claim-out.
+/// This is the only value container used by the layer IOP. It owns the actual
+/// polynomial body. A commitment may be attached when this polynomial must be
+/// discharged by PCS after the IOP; otherwise `commitment` is `None` and the
+/// caller is responsible for direct evaluation or for proving it upstream.
+#[derive(Debug, Clone)]
+pub struct Poly<F: JoltField, C = ()> {
+    pub data: MultilinearPolynomial<F>,
+    pub commitment: Option<C>,
+}
+
+impl<F: JoltField, C> Poly<F, C> {
+    pub fn new(data: MultilinearPolynomial<F>, commitment: Option<C>) -> Self {
+        Self { data, commitment }
+    }
+}
+
+/// A claim that one concrete polynomial evaluates to `value` at `point`.
+///
+/// A `Claim` is not a tensor reference and not an opening request. It carries
+/// the polynomial itself. Prove functions consume an output claim plus the
+/// polynomials needed to justify it, then return the new claims produced by the
+/// sumcheck.
+#[derive(Debug, Clone)]
+pub struct Claim<F: JoltField, C = ()> {
+    pub poly: Poly<F, C>,
+    pub point: Vec<F>,
+    pub value: F,
+}
+
+// Temporary compatibility for the still-unmigrated round SHOUT wrapper. The
+// layer-facing ops must not use these types; they remain only so the matmul
+// migration can be tested before the rest of the op directory is rewritten.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Claim<F = ()> {
+pub struct LegacyClaim<F: JoltField> {
     pub tensor: TensorId,
     pub logical_shape: Shape,
     pub domain_shape: Shape,
@@ -52,7 +87,7 @@ pub struct Claim<F = ()> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommittedOpeningClaim<F> {
+pub struct PcsOpeningRequest<F: JoltField> {
     pub poly: CommittedPoly,
     pub sumcheck: SumcheckId,
     pub point: Vec<F>,
@@ -60,24 +95,8 @@ pub struct CommittedOpeningClaim<F> {
     pub sparse: bool,
 }
 
-impl<F> CommittedOpeningClaim<F> {
-    pub fn opening_id(&self) -> OpeningId {
-        OpeningId::new(self.poly, self.sumcheck)
+impl<F: JoltField, C> Claim<F, C> {
+    pub fn new(poly: Poly<F, C>, point: Vec<F>, value: F) -> Self {
+        Self { poly, point, value }
     }
 }
-
-impl Claim<()> {
-    pub fn structural(tensor: impl Into<String>, logical_shape: impl Into<Vec<usize>>) -> Self {
-        let logical_shape = Shape::new(logical_shape);
-        let domain_shape = logical_shape.padded_power_of_two();
-        Self {
-            tensor: TensorId::new(tensor),
-            logical_shape,
-            domain_shape,
-            point: Vec::new(),
-            value: (),
-        }
-    }
-}
-use common::CommittedPoly;
-use joltworks::poly::opening_proof::{OpeningId, SumcheckId};

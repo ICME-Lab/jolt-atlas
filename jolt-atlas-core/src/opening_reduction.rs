@@ -46,7 +46,12 @@ where
     let ordered_polys = state
         .polynomials
         .iter()
-        .map(|poly| (*poly, poly_map.get(poly).expect("missing reduced opening poly")))
+        .map(|poly| {
+            (
+                *poly,
+                poly_map.get(poly).expect("missing reduced opening poly"),
+            )
+        })
         .collect::<Vec<_>>();
     let rlc = build_materialized_rlc_ordered(&state.gamma_powers, &ordered_polys);
     let joint_opening_proof = PCS::prove(setup, &rlc, &state.r_sumcheck, None, transcript);

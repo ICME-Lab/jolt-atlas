@@ -23,12 +23,14 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
+    claim::{Claim, LegacyClaim, PcsOpeningRequest, Poly, Shape, TensorId},
     error::{ProverError, Result},
     ops::{
         floor::{FloorParams, FloorProof, FloorWitness, prove_floor, verify_floor},
+        poly_bridge::{claim_from_legacy, legacy_from_claim, one_hot_claims_from_requests},
         round::{
-            ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
+            ROUND_FRAC_BITS, ROUND_LUT_LEN, RoundParams, RoundProof, RoundWitness, prove_round,
+            verify_round,
         },
     },
 };
@@ -204,10 +206,10 @@ pub struct SoftmaxProof<F: JoltField, T: Transcript> {
 }
 
 impl<F: JoltField, T: Transcript> SoftmaxProof<F, T> {
-    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
-        let mut out = self.round.committed_opening_claims();
-        out.extend(self.floor.committed_opening_claims());
-        out.extend(self.exp_round.committed_opening_claims());
+    pub fn pcs_opening_requests(&self) -> Vec<PcsOpeningRequest<F>> {
+        let mut out = self.round.pcs_opening_requests();
+        out.extend(self.floor.pcs_opening_requests());
+        out.extend(self.exp_round.pcs_opening_requests());
         out.extend(self.exp_ra_committed_openings.all().cloned());
         out.extend(self.input_remainder_ra_committed_openings.all().cloned());
         out
@@ -216,13 +218,13 @@ impl<F: JoltField, T: Transcript> SoftmaxProof<F, T> {
 
 #[derive(Debug, Clone, Default)]
 pub struct SoftmaxRaCommittedOpenings<F: JoltField> {
-    pub ra_virtual: Vec<CommittedOpeningClaim<F>>,
-    pub hamming_weight: Vec<CommittedOpeningClaim<F>>,
-    pub booleanity: Vec<CommittedOpeningClaim<F>>,
+    pub ra_virtual: Vec<PcsOpeningRequest<F>>,
+    pub hamming_weight: Vec<PcsOpeningRequest<F>>,
+    pub booleanity: Vec<PcsOpeningRequest<F>>,
 }
 
 impl<F: JoltField> SoftmaxRaCommittedOpenings<F> {
-    fn all(&self) -> impl Iterator<Item = &CommittedOpeningClaim<F>> {
+    fn all(&self) -> impl Iterator<Item = &PcsOpeningRequest<F>> {
         self.ra_virtual
             .iter()
             .chain(self.hamming_weight.iter())
@@ -236,9 +238,9 @@ struct SoftmaxLookupProveResult<F: JoltField, T: Transcript> {
     exp_ra_onehot: SumcheckInstanceProof<F, T>,
     input_remainder_lookup: SumcheckInstanceProof<F, T>,
     input_remainder_ra_onehot: SumcheckInstanceProof<F, T>,
-    input_claim: Claim<F>,
-    input_remainder_ra_claims: Vec<CommittedOpeningClaim<F>>,
-    ra_claims: Vec<CommittedOpeningClaim<F>>,
+    input_claim: LegacyClaim<F>,
+    input_remainder_ra_claims: Vec<PcsOpeningRequest<F>>,
+    ra_claims: Vec<PcsOpeningRequest<F>>,
     input_remainder_opening: F,
     exp_lut_opening: F,
     index_opening: F,
@@ -248,18 +250,18 @@ struct SoftmaxLookupProveResult<F: JoltField, T: Transcript> {
     input_remainder_ra_committed_openings: SoftmaxRaCommittedOpenings<F>,
 }
 
-pub fn prove_softmax_round<F, T>(
-    output_claims: Vec<Claim<F>>,
+pub fn prove_softmax_round_from_witness<F, T>(
+    output_claims: Vec<LegacyClaim<F>>,
     witness: &SoftmaxWitness<'_>,
     params: &SoftmaxParams,
     transcript: &mut T,
 ) -> Result<(
     SoftmaxProof<F, T>,
-    Claim<F>,
-    Vec<CommittedOpeningClaim<F>>,
-    Vec<CommittedOpeningClaim<F>>,
-    Vec<CommittedOpeningClaim<F>>,
-    Vec<CommittedOpeningClaim<F>>,
+    LegacyClaim<F>,
+    Vec<PcsOpeningRequest<F>>,
+    Vec<PcsOpeningRequest<F>>,
+    Vec<PcsOpeningRequest<F>>,
+    Vec<PcsOpeningRequest<F>>,
 )>
 where
     F: JoltField,
@@ -314,7 +316,7 @@ where
         OpeningId::new(VirtualPoly::QwenSoftmaxExp, softmax_acc_sumcheck_id()),
     )?;
     let exp_point = normalize_sumcheck_point::<F>(&acc_challenges.into_opening());
-    let exp_claim = Claim {
+    let exp_claim = LegacyClaim {
         tensor: TensorId::new(format!("{}_exp", params.output_tensor.0)),
         logical_shape: params.shape.clone(),
         domain_shape: params.shape.padded_power_of_two(),
@@ -363,18 +365,107 @@ where
     ))
 }
 
+pub fn prove_softmax_round<F, T, C>(
+    output_claims: Vec<Claim<F, C>>,
+    input_poly: Poly<F, C>,
+    witness: &SoftmaxWitness<'_>,
+    params: &SoftmaxParams,
+    transcript: &mut T,
+) -> Result<(
+    SoftmaxProof<F, T>,
+    Claim<F, C>,
+    Vec<Claim<F, C>>,
+    Vec<Claim<F, C>>,
+    Vec<Claim<F, C>>,
+    Vec<Claim<F, C>>,
+    Vec<Claim<F, C>>,
+)>
+where
+    F: JoltField,
+    T: Transcript,
+    C: Clone,
+{
+    let output_claims = output_claims
+        .into_iter()
+        .map(|claim| legacy_from_claim(claim, params.output_tensor.0.clone(), params.shape.clone()))
+        .collect::<Vec<_>>();
+    let (proof, input, output_round_ra, floor_round_ra, input_remainder_ra, softmax_ra) =
+        prove_softmax_round(output_claims, witness, params, transcript)?;
+    let floor_as_i64 = witness
+        .floor
+        .iter()
+        .map(|&value| i64::from(value))
+        .collect::<Vec<_>>();
+    let floor_shifted = witness
+        .acc
+        .iter()
+        .map(|value| value - (FIXED_SCALE >> 1))
+        .collect::<Vec<_>>();
+    let output_round_witness = RoundWitness::from_input_output(&floor_as_i64, witness.output);
+    let floor_round_witness = RoundWitness::from_input_output(&floor_shifted, witness.floor);
+    let exp_round_witness = RoundWitness::from_input_output(witness.exp_acc, witness.exp);
+    let entries = entries_from_min_max(witness.min_diff, witness.max_diff)?;
+    let lut_len = padded_softmax_lut_len(entries);
+    let logical_lookup_indices = softmax_logical_lookup_indices(witness, params, entries)?;
+    let logical_remainders = softmax_input_remainders(witness, params);
+
+    let softmax_output_round_ra = one_hot_claims_from_requests(
+        &output_round_ra,
+        &crate::ops::round::padded_lookup_indices(
+            &output_round_witness.remainder,
+            &params.round.shape,
+        ),
+        ROUND_LUT_LEN,
+    );
+    let softmax_floor_round_ra = one_hot_claims_from_requests(
+        &floor_round_ra,
+        &crate::ops::round::padded_lookup_indices(
+            &floor_round_witness.remainder,
+            &params.floor.shape,
+        ),
+        ROUND_LUT_LEN,
+    );
+    let softmax_exp_round_ra = one_hot_claims_from_requests(
+        &proof.exp_round.pcs_opening_requests(),
+        &crate::ops::round::padded_lookup_indices(
+            &exp_round_witness.remainder,
+            &params.exp_round.shape,
+        ),
+        ROUND_LUT_LEN,
+    );
+    let softmax_input_remainder_ra = one_hot_claims_from_requests(
+        &input_remainder_ra,
+        &padded_lookup_indices(&logical_remainders, params, 0),
+        ROUND_LUT_LEN,
+    );
+    let softmax_ra = one_hot_claims_from_requests(
+        &softmax_ra,
+        &padded_lookup_indices(&logical_lookup_indices, params, entries),
+        lut_len,
+    );
+    Ok((
+        proof,
+        claim_from_legacy(input, input_poly),
+        softmax_output_round_ra,
+        softmax_floor_round_ra,
+        softmax_exp_round_ra,
+        softmax_input_remainder_ra,
+        softmax_ra,
+    ))
+}
+
 pub fn verify_softmax_round<F, T>(
-    output_claims: Vec<Claim<F>>,
+    output_claims: Vec<LegacyClaim<F>>,
     proof: &SoftmaxProof<F, T>,
     params: &SoftmaxParams,
     transcript: &mut T,
 ) -> std::result::Result<
     (
-        Claim<F>,
-        Vec<CommittedOpeningClaim<F>>,
-        Vec<CommittedOpeningClaim<F>>,
-        Vec<CommittedOpeningClaim<F>>,
-        Vec<CommittedOpeningClaim<F>>,
+        LegacyClaim<F>,
+        Vec<PcsOpeningRequest<F>>,
+        Vec<PcsOpeningRequest<F>>,
+        Vec<PcsOpeningRequest<F>>,
+        Vec<PcsOpeningRequest<F>>,
     ),
     ProofVerifyError,
 >
@@ -416,7 +507,7 @@ where
     );
     let acc_challenges =
         Sumcheck::verify(&proof.acc, &acc_verifier, &mut acc_accumulator, transcript)?;
-    let exp_claim = Claim {
+    let exp_claim = LegacyClaim {
         tensor: TensorId::new(format!("{}_exp", params.output_tensor.0)),
         logical_shape: params.shape.clone(),
         domain_shape: params.shape.padded_power_of_two(),
@@ -444,7 +535,7 @@ where
 }
 
 fn prove_lookup<F, T>(
-    exp_claim: Claim<F>,
+    exp_claim: LegacyClaim<F>,
     witness: &SoftmaxWitness<'_>,
     params: &SoftmaxParams,
     transcript: &mut T,
@@ -547,7 +638,7 @@ where
         relation: proof,
         exp_lookup: exp_shout_lookup.read_raf,
         exp_ra_onehot: exp_shout_lookup.ra_onehot,
-        input_claim: Claim {
+        input_claim: LegacyClaim {
             tensor: params.input_tensor.clone(),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
@@ -573,15 +664,15 @@ where
 }
 
 fn verify_lookup<F, T>(
-    exp_claim: Claim<F>,
+    exp_claim: LegacyClaim<F>,
     proof: &SoftmaxProof<F, T>,
     params: &SoftmaxParams,
     transcript: &mut T,
 ) -> std::result::Result<
     (
-        Claim<F>,
-        Vec<CommittedOpeningClaim<F>>,
-        Vec<CommittedOpeningClaim<F>>,
+        LegacyClaim<F>,
+        Vec<PcsOpeningRequest<F>>,
+        Vec<PcsOpeningRequest<F>>,
     ),
     ProofVerifyError,
 >
@@ -682,7 +773,7 @@ where
     )?;
 
     Ok((
-        Claim {
+        LegacyClaim {
             tensor: params.input_tensor.clone(),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
@@ -1487,13 +1578,13 @@ fn softmax_ra_committed_openings<F: JoltField>(
     accumulator: &ProverOpeningAccumulator<F>,
 ) -> Result<SoftmaxRaCommittedOpenings<F>> {
     let d = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
-    let collect = |sumcheck| -> Vec<CommittedOpeningClaim<F>> {
+    let collect = |sumcheck| -> Vec<PcsOpeningRequest<F>> {
         (0..d)
             .map(|idx| {
                 let poly = kind.committed_poly(idx);
                 let (point, value) =
                     accumulator.get_committed_polynomial_opening(OpeningId::new(poly, sumcheck));
-                CommittedOpeningClaim {
+                PcsOpeningRequest {
                     poly,
                     sumcheck,
                     point: point.r,
@@ -1538,7 +1629,7 @@ fn insert_softmax_ra_committed_openings<F: JoltField>(
             openings.ra_virtual.len().min(openings.booleanity.len()),
         ));
     }
-    let mut insert_group = |sumcheck, values: &[CommittedOpeningClaim<F>]| {
+    let mut insert_group = |sumcheck, values: &[PcsOpeningRequest<F>]| {
         for (idx, opening) in values.iter().enumerate() {
             accumulator.openings.insert(
                 OpeningId::new(kind.committed_poly(idx), sumcheck),
@@ -2145,7 +2236,7 @@ fn eval_field_tensor<F: JoltField>(values: &[F], shape: &Shape, point: &[F]) -> 
         })
 }
 
-fn masked_eq_poly<F: JoltField>(claim: &Claim<F>, shape: &Shape) -> Vec<F> {
+fn masked_eq_poly<F: JoltField>(claim: &LegacyClaim<F>, shape: &Shape) -> Vec<F> {
     let padded_dims = claim.domain_shape.dims();
     let mut out = vec![F::zero(); padded_dims.iter().product()];
     let strides = row_major_strides(shape.dims());
@@ -2311,7 +2402,7 @@ mod tests {
             .map(|&value| round_q8(i64::from(value)))
             .collect::<Vec<_>>();
         let point = vec![Fr::from(7_u64)];
-        let output_claim = Claim {
+        let output_claim = LegacyClaim {
             tensor: TensorId::new("softmax"),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
@@ -2408,7 +2499,7 @@ mod tests {
             .map(|&value| round_q8(i64::from(value)))
             .collect::<Vec<_>>();
         let point = vec![Fr::from(5_u64), Fr::from(9_u64)];
-        let output_claim = Claim {
+        let output_claim = LegacyClaim {
             tensor: TensorId::new("softmax"),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
@@ -2498,7 +2589,7 @@ mod tests {
             .map(|&value| round_q8(i64::from(value)))
             .collect::<Vec<_>>();
         let point = vec![Fr::from(3_u64), Fr::from(7_u64)];
-        let output_claim = Claim {
+        let output_claim = LegacyClaim {
             tensor: TensorId::new("softmax"),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),

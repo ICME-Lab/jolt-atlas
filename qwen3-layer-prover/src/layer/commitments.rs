@@ -14,9 +14,11 @@ use joltworks::{
     subprotocols::shout::compute_instruction_h_indices,
     transcripts::{AppendToTranscript, Transcript},
 };
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::collections::BTreeSet;
 
 use crate::{
+    claim::{Claim, Poly},
     ops::round::ROUND_LUT_LEN,
     streaming_srs::{FlatG1SrsReader, StreamingOneHotCommitter},
 };
@@ -32,15 +34,30 @@ use super::{
 // in `openings.rs`.
 
 #[derive(Debug, Clone)]
-pub struct LayerPolynomialEntry<F: JoltField> {
+pub struct LayerPolySetEntry<F: JoltField> {
     pub name: String,
     pub committed_poly: CommittedPoly,
     pub poly: MultilinearPolynomial<F>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CommittedLayerPolyEntry<F: JoltField, C> {
+    pub name: String,
+    // Adapter-only handle for the current core PCS/opening-reduction API.
+    // The claim flow should use `poly` below; this handle disappears once the
+    // core accumulator accepts owned polys directly.
+    pub committed_poly: CommittedPoly,
+    pub poly: Poly<F, C>,
+}
+
 #[derive(Debug, Clone, Default)]
-pub struct LayerPolynomialMap<F: JoltField> {
-    pub entries: Vec<LayerPolynomialEntry<F>>,
+pub struct CommittedLayerPolys<F: JoltField, C> {
+    pub entries: Vec<CommittedLayerPolyEntry<F, C>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct LayerPolySet<F: JoltField> {
+    pub entries: Vec<LayerPolySetEntry<F>>,
 }
 
 #[derive(Debug, Clone)]
@@ -56,11 +73,14 @@ pub struct LayerCommitments<C> {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct LayerCommitmentsAndPolynomials<F, C>
+pub(crate) struct CommittedLayer<F, C>
 where
     F: JoltField,
 {
-    pub polynomials: LayerPolynomialMap<F>,
+    // Each entry carries the polynomial body and its commitment together.
+    // Layer proving code consumes this view instead of looking up commitments
+    // through a separate name registry.
+    pub polys: CommittedLayerPolys<F, C>,
     pub commitments: LayerCommitments<C>,
 }
 
@@ -95,7 +115,7 @@ impl<C: Clone> LayerCommitments<C> {
     }
 }
 
-impl<F: JoltField> LayerPolynomialMap<F> {
+impl<F: JoltField> LayerPolySet<F> {
     pub fn from_layer(
         hidden_out: &[i32],
         witness: &LayerWitness,
@@ -339,146 +359,23 @@ impl<F: JoltField> LayerPolynomialMap<F> {
         out
     }
 
-    pub fn committed_poly_for_tensor(&self, tensor: &str) -> Option<CommittedPoly> {
-        self.entries
-            .iter()
-            .find(|entry| entry.name == tensor)
-            .map(|entry| entry.committed_poly)
-    }
-
-    pub fn core_poly_map_for_claims(
-        &self,
-        claims: &[crate::Claim<F>],
-    ) -> Result<BTreeMap<CommittedPoly, MultilinearPolynomial<F>>, crate::ProverError> {
-        let mut out = BTreeMap::new();
-        for claim in claims {
-            let Some(entry) = self
-                .entries
-                .iter()
-                .find(|entry| entry.name == claim.tensor.0)
-            else {
-                return Err(crate::ProverError::MissingCommittedPolynomials(vec![
-                    claim.tensor.0.clone(),
-                ]));
-            };
-            let expected = claim.domain_shape.numel();
-            let actual = entry.poly.len();
-            if actual != expected {
-                return Err(crate::ProverError::CommittedPolynomialDomainMismatch {
-                    tensor: claim.tensor.0.clone(),
-                    domain_shape: claim.domain_shape.0.clone(),
-                    expected,
-                    actual,
-                });
-            }
-            out.insert(entry.committed_poly, entry.poly.clone());
-        }
-        Ok(out)
-    }
-
-    pub fn core_poly_map_for_openings(
-        &self,
-        claims: &[crate::Claim<F>],
-        committed_claims: &[crate::CommittedOpeningClaim<F>],
-    ) -> Result<BTreeMap<CommittedPoly, MultilinearPolynomial<F>>, crate::ProverError> {
-        let mut out = self.core_poly_map_for_claims(claims)?;
-        for claim in committed_claims {
-            let Some(entry) = self.entry_for_committed_poly(claim.poly) else {
-                return Err(crate::ProverError::MissingCommittedPolynomials(vec![
-                    format!("{:?}", claim.poly),
-                ]));
-            };
-            out.insert(entry.committed_poly, entry.poly.clone());
-        }
-        Ok(out)
-    }
-
-    pub fn entry_for_committed_poly(
-        &self,
-        poly: CommittedPoly,
-    ) -> Option<&LayerPolynomialEntry<F>> {
+    #[cfg(test)]
+    pub fn entry_for_committed_poly(&self, poly: CommittedPoly) -> Option<&LayerPolySetEntry<F>> {
         self.entries
             .iter()
             .find(|entry| entry.committed_poly == poly)
     }
 
-    pub fn one_hot_log_k(&self, poly: CommittedPoly) -> Option<usize> {
-        let entry = self.entry_for_committed_poly(poly)?;
-        match &entry.poly {
-            MultilinearPolynomial::OneHot(one_hot) => Some(one_hot.K.trailing_zeros() as usize),
-            _ => None,
-        }
-    }
-
-    pub fn missing_opening_claims(&self, claims: &[crate::Claim<F>]) -> Vec<String> {
-        let committed = self
-            .entries
-            .iter()
-            .map(|entry| entry.name.as_str())
-            .collect::<BTreeSet<_>>();
-        claims
-            .iter()
-            .filter_map(|claim| {
-                let name = claim.tensor.0.as_str();
-                (!committed.contains(name)).then(|| name.to_string())
-            })
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
-    }
-
     #[cfg(test)]
-    pub fn opening_value_mismatches(&self, claims: &[crate::Claim<F>]) -> Vec<String> {
+    pub fn opening_value_mismatches<C>(&self, claims: &[Claim<F, C>]) -> Vec<String> {
         let mut mismatches = Vec::new();
-        for claim in claims {
-            let Some(entry) = self
-                .entries
-                .iter()
-                .find(|entry| entry.name == claim.tensor.0)
-            else {
-                mismatches.push(format!("{}: missing", claim.tensor.0));
-                continue;
-            };
-            if entry.poly.len() != claim.domain_shape.numel() {
-                mismatches.push(format!(
-                    "{}: len {} != {}",
-                    claim.tensor.0,
-                    entry.poly.len(),
-                    claim.domain_shape.numel()
-                ));
-                continue;
-            }
+        for (idx, claim) in claims.iter().enumerate() {
             let value = joltworks::poly::multilinear_polynomial::PolynomialEvaluation::evaluate(
-                &entry.poly,
+                &claim.poly.data,
                 &claim.point,
             );
             if value != claim.value {
-                mismatches.push(format!("{}: value mismatch", claim.tensor.0));
-            }
-        }
-        mismatches
-    }
-
-    #[cfg(test)]
-    pub fn committed_opening_value_mismatches(
-        &self,
-        claims: &[crate::CommittedOpeningClaim<F>],
-    ) -> Vec<String> {
-        let mut mismatches = Vec::new();
-        for claim in claims {
-            let Some(entry) = self.entry_for_committed_poly(claim.poly) else {
-                mismatches.push(format!("{:?}: missing", claim.poly));
-                continue;
-            };
-            let value = joltworks::poly::multilinear_polynomial::PolynomialEvaluation::evaluate(
-                &entry.poly,
-                &claim.point,
-            );
-            if value != claim.value {
-                mismatches.push(format!(
-                    "{:?}/{:?}: value mismatch",
-                    claim.poly, claim.sumcheck
-                ));
+                mismatches.push(format!("claim {idx}: value mismatch"));
             }
         }
         mismatches
@@ -486,7 +383,7 @@ impl<F: JoltField> LayerPolynomialMap<F> {
 
     fn push_i32(&mut self, name: impl Into<String>, values: &[i32]) {
         let committed_poly = CommittedPoly::QwenLayerTensor(self.entries.len());
-        self.entries.push(LayerPolynomialEntry {
+        self.entries.push(LayerPolySetEntry {
             name: name.into(),
             committed_poly,
             poly: MultilinearPolynomial::from(pad_power_of_two(values)),
@@ -651,7 +548,7 @@ impl<F: JoltField> LayerPolynomialMap<F> {
         let chunks = compute_instruction_h_indices(&lookup_indices, &one_hot_params);
         let name = name.into();
         for (d, chunk) in chunks.into_iter().enumerate() {
-            self.entries.push(LayerPolynomialEntry {
+            self.entries.push(LayerPolySetEntry {
                 name: format!("{name}.rad.{d}"),
                 committed_poly: committed_poly(d),
                 poly: MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
@@ -660,6 +557,42 @@ impl<F: JoltField> LayerPolynomialMap<F> {
                 )),
             });
         }
+    }
+}
+
+impl<F: JoltField, C: Clone> CommittedLayerPolys<F, C> {
+    pub fn find(&self, name: &str) -> crate::Result<&CommittedLayerPolyEntry<F, C>> {
+        self.entries
+            .iter()
+            .find(|entry| entry.name == name)
+            .ok_or_else(|| crate::ProverError::MissingCommittedPolynomials(vec![name.to_string()]))
+    }
+}
+
+impl<F: JoltField> LayerPolySet<F> {
+    pub fn attach_commitments<C: Clone>(
+        self,
+        commitments: &LayerCommitments<C>,
+    ) -> crate::Result<CommittedLayerPolys<F, C>> {
+        let mut entries = Vec::with_capacity(self.entries.len());
+        for entry in self.entries {
+            let Some(commitment) = commitments
+                .entries
+                .iter()
+                .find(|candidate| candidate.committed_poly == entry.committed_poly)
+                .map(|candidate| candidate.commitment.clone())
+            else {
+                return Err(crate::ProverError::MissingCommittedPolynomials(vec![
+                    format!("{:?}", entry.committed_poly),
+                ]));
+            };
+            entries.push(CommittedLayerPolyEntry {
+                name: entry.name,
+                committed_poly: entry.committed_poly,
+                poly: Poly::new(entry.poly, Some(commitment)),
+            });
+        }
+        Ok(CommittedLayerPolys { entries })
     }
 }
 fn pad_power_of_two<T: Copy + Default>(values: &[T]) -> Vec<T> {
@@ -702,7 +635,7 @@ fn padded_silu_lut_len(entries: usize) -> usize {
 }
 
 pub fn commit_layer_polynomials<F, PCS>(
-    polynomials: &LayerPolynomialMap<F>,
+    poly_set: &LayerPolySet<F>,
     hidden_state_commitments: HiddenStateCommitments<PCS::Commitment>,
     setup: &PCS::ProverSetup,
 ) -> LayerCommitments<PCS::Commitment>
@@ -710,8 +643,8 @@ where
     F: JoltField,
     PCS: CommitmentScheme<Field = F>,
 {
-    let mut commitments = Vec::with_capacity(polynomials.entries.len());
-    for entry in &polynomials.entries {
+    let mut commitments = Vec::with_capacity(poly_set.entries.len());
+    for entry in &poly_set.entries {
         let commitment = match entry.name.as_str() {
             "hidden_in" => hidden_state_commitments.hidden_in.clone(),
             "hidden_out" => hidden_state_commitments.hidden_out.clone(),
@@ -732,7 +665,7 @@ where
 }
 
 pub fn commit_layer_polynomials_streaming_onehot(
-    polynomials: &LayerPolynomialMap<Fr>,
+    poly_set: &LayerPolySet<Fr>,
     hidden_state_commitments: HiddenStateCommitments<HyperKZGCommitment<Bn254>>,
     dense_setup: &HyperKZGProverKey<Bn254>,
     flat_srs: &FlatG1SrsReader,
@@ -741,14 +674,14 @@ pub fn commit_layer_polynomials_streaming_onehot(
     report_metrics: bool,
     sort_onehot_indices: bool,
 ) -> crate::Result<LayerCommitments<HyperKZGCommitment<Bn254>>> {
-    let mut commitments = Vec::with_capacity(polynomials.entries.len());
+    let mut commitments = Vec::with_capacity(poly_set.entries.len());
     let mut onehot_positions = Vec::new();
     let mut onehot_committer =
         StreamingOneHotCommitter::with_threads(flat_srs.clone(), srs_chunk_len, onehot_threads)?
             .with_sorted_indices(sort_onehot_indices)
             .with_metrics(report_metrics);
 
-    for entry in &polynomials.entries {
+    for entry in &poly_set.entries {
         match entry.name.as_str() {
             "hidden_in" => commitments.push(LayerCommitmentEntry {
                 name: entry.name.clone(),
@@ -795,7 +728,7 @@ pub fn commit_layer_polynomials_streaming_onehot(
     })
 }
 
-pub(crate) fn commit_layer_tensors<F, PCS>(
+pub(crate) fn commit_layer_witness_polys<F, PCS>(
     hidden_out: &[i32],
     witness: &LayerWitness,
     hidden_state_commitments: HiddenStateCommitments<PCS::Commitment>,
@@ -803,20 +736,21 @@ pub(crate) fn commit_layer_tensors<F, PCS>(
     shape: &LayerShape,
     tensors: &LayerTensorIds,
     setup: &PCS::ProverSetup,
-) -> LayerCommitmentsAndPolynomials<F, PCS::Commitment>
+) -> CommittedLayer<F, PCS::Commitment>
 where
     F: JoltField,
     PCS: CommitmentScheme<Field = F>,
 {
     // Build the committed polynomial set in one place so `prover.rs` does not
-    // need to know which witness tensors are opened later by individual ops.
-    let polynomials = LayerPolynomialMap::from_layer(hidden_out, witness, weights, shape, tensors);
+    // need to know which witness values are opened later by individual ops.
+    let poly_set = LayerPolySet::from_layer(hidden_out, witness, weights, shape, tensors);
     let commitments =
-        commit_layer_polynomials::<F, PCS>(&polynomials, hidden_state_commitments, setup);
-    LayerCommitmentsAndPolynomials {
-        polynomials,
-        commitments,
-    }
+        commit_layer_polynomials::<F, PCS>(&poly_set, hidden_state_commitments, setup);
+    let polys = poly_set
+        .clone()
+        .attach_commitments(&commitments)
+        .expect("commit_layer_polynomials must commit every layer polynomial");
+    CommittedLayer { polys, commitments }
 }
 
 pub fn absorb_layer_commitments<T, C>(

@@ -1,7 +1,7 @@
 use joltworks::{field::JoltField, utils::errors::ProofVerifyError};
 
 use crate::{
-    claim::{Claim, Shape},
+    claim::{LegacyClaim, Shape},
     error::{ProverError, Result},
 };
 
@@ -14,7 +14,7 @@ pub(crate) fn validate_gqa(q_heads: usize, kv_heads: usize) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn validate_claim<F: JoltField>(claim: &Claim<F>, shape: &Shape) -> Result<()> {
+pub(crate) fn validate_claim<F: JoltField>(claim: &LegacyClaim<F>, shape: &Shape) -> Result<()> {
     if shape.dims().contains(&0) {
         return Err(ProverError::InvalidTensorShape(shape.0.clone()));
     }
@@ -45,7 +45,7 @@ pub(crate) fn validate_claim<F: JoltField>(claim: &Claim<F>, shape: &Shape) -> R
 }
 
 pub(crate) fn verify_claim<F: JoltField>(
-    claim: &Claim<F>,
+    claim: &LegacyClaim<F>,
     shape: &Shape,
 ) -> std::result::Result<(), ProofVerifyError> {
     if claim.logical_shape != *shape {

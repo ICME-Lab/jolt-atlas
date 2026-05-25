@@ -1,624 +1,341 @@
-use joltworks::{field::JoltField, transcripts::Transcript, utils::errors::ProofVerifyError};
+use joltworks::{field::JoltField, transcripts::Transcript};
 
 use crate::{
-    claim::{Claim, Shape},
+    claim::Claim,
     error::Result,
     ops::{
-        hadamard_mul::{prove_hadamard_round, verify_hadamard_round},
-        matadd::{prove_matadd, verify_matadd},
-        matmul::{prove_matmul_round, verify_matmul_round},
-        pv_matmul::{prove_pv_matmul_round, verify_pv_matmul_round},
-        qk_score::{prove_qk_score_round, verify_qk_score_round},
-        rms_norm::{prove_rmsnorm_round, verify_rmsnorm_round},
-        rope::{prove_rope_round, verify_rope_round},
-        silu::{prove_silu_round, verify_silu_round},
-        softmax::{prove_softmax_round, verify_softmax_round},
+        hadamard_mul::prove_hadamard_round, matadd::prove_matadd, matmul::prove_matmul_round,
+        pv_matmul::prove_pv_matmul_round, qk_score::prove_qk_score_round,
+        rms_norm::prove_rmsnorm_round, rope::prove_rope_round, silu::prove_silu_round,
+        softmax::prove_softmax_round,
     },
     proof::ProveResult,
 };
 
 use super::{
+    polys::LayerPolys,
     tensors::LayerTensorIds,
-    types::{LayerClaims, LayerIopProof, LayerShape, LayerWeights},
-    witness::LayerWitness,
+    types::{LayerClaims, LayerIopProof, LayerShape},
 };
 
-// Layer IOP only. No trace loading, no commitments, no PCS accumulator.
-// It consumes output claims and walks the Qwen block backward to input claims.
-
-pub(crate) fn prove_layer_iop<F, T>(
-    hidden_out: Claim<F>,
-    witness: &LayerWitness,
-    weights: &LayerWeights,
+/// Pure layer IOP.
+///
+/// Every op returns a tuple. This file deliberately names every tuple element at
+/// the call site so the claim flow stays visible and no hidden aggregate claim
+/// bucket can swallow a missing RA claim.
+pub(crate) fn prove_layer_iop<F, T, C>(
+    hidden_out: Claim<F, C>,
+    polys: LayerPolys<F, C>,
     shape: &LayerShape,
     tensors: &LayerTensorIds,
     transcript: &mut T,
-) -> Result<ProveResult<LayerClaims<F>, LayerIopProof<F, T>>>
+) -> Result<ProveResult<LayerClaims<F, C>, LayerIopProof<F, T>>>
 where
     F: JoltField,
     T: Transcript,
+    C: Clone,
 {
-    macro_rules! timed {
-        ($name:literal, $expr:expr) => {{ $expr }};
-    }
+    let hidden_in_for_residual = polys.hidden_in.clone();
+    let rope_cos_for_q = polys.rope_cos.clone();
+    let rope_sin_for_q = polys.rope_sin.clone();
 
-    // hidden_out = residual_add_attn + down_proj
-    let (residual_add_mlp_proof, residual_add_attn_a, down_proj) = timed!(
-        "residual_add_mlp",
-        prove_matadd(
-            vec![hidden_out],
-            &witness.residual_add_attn_a,
-            &witness.down_proj,
-            &tensors.residual_add_mlp_params(shape),
-            transcript,
-        )
+    // residual_add_mlp = residual_add_attn + down_proj
+    let (residual_add_mlp_proof, residual_add_attn_a, down_proj) = prove_matadd(
+        vec![hidden_out],
+        polys.residual_add_attn_a,
+        polys.down_proj,
+        &tensors.residual_add_mlp_params(shape),
+        transcript,
     )?;
 
     // down_proj = silu_up @ W_down
-    let (down_proj_proof, silu_up, _down_proj_round_ra_chunks) = timed!(
-        "down_proj",
-        prove_matmul_round(
-            down_proj,
-            &witness.down_proj_witness(),
-            &weights.down_proj,
-            &tensors.down_proj_params(shape),
-            transcript,
-        )
+    let (down_proj_proof, silu_up, w_down_proj, down_proj_round_ra) = prove_matmul_round(
+        down_proj,
+        polys.silu_up,
+        polys.w_down_proj,
+        polys.down_proj_round_ra,
+        &tensors.down_proj_params(shape),
+        transcript,
     )?;
 
     // silu_up = silu * up_proj
-    let (silu_up_proof, silu, up_proj, _silu_up_round_ra_chunks) = timed!(
-        "silu_up",
-        prove_hadamard_round(
-            silu_up,
-            &witness.silu_up_witness(),
-            &tensors.silu_up_params(shape),
-            transcript,
-        )
+    let (silu_up_proof, silu, up_proj, silu_up_round_ra) = prove_hadamard_round(
+        silu_up,
+        polys.silu,
+        polys.up_proj,
+        polys.silu_up_round_ra,
+        &tensors.silu_up_params(shape),
+        transcript,
     )?;
 
-    // silu = SiLU(gate_proj, frac_bits, ra)
-    let (
-        silu_proof,
-        gate_proj,
-        _silu_gate_round_ra_chunks,
-        _silu_ra_chunks,
-        _silu_out_round_ra_chunks,
-    ) = timed!(
-        "silu",
-        prove_silu_round(
-            silu,
-            &witness.silu_witness(),
-            &tensors.silu_params(shape),
-            transcript,
-        )
+    // silu = SiLU(gate_proj)
+    let (silu_proof, gate_proj, silu_gate_round_ra, silu_ra, silu_round_ra) = prove_silu_round(
+        silu,
+        polys.gate_proj,
+        polys.silu_gate_round_ra,
+        polys.silu_ra,
+        polys.silu_round_ra,
+        &tensors.silu_params(shape),
+        transcript,
     )?;
 
     // gate_proj = rms_norm_mlp @ W_gate
-    let (gate_proj_proof, rms_norm_mlp_a, _gate_proj_round_ra_chunks) = timed!(
-        "gate_proj",
-        prove_matmul_round(
-            gate_proj,
-            &witness.gate_proj_witness(),
-            &weights.gate_proj,
-            &tensors.gate_proj_params(shape),
-            transcript,
-        )
+    let (gate_proj_proof, rms_norm_mlp_a, w_gate_proj, gate_proj_round_ra) = prove_matmul_round(
+        gate_proj,
+        polys.rms_norm_mlp_a,
+        polys.w_gate_proj,
+        polys.gate_proj_round_ra,
+        &tensors.gate_proj_params(shape),
+        transcript,
     )?;
 
     // up_proj = rms_norm_mlp @ W_up
-    let (up_proj_proof, rms_norm_mlp_b, _up_proj_round_ra_chunks) = timed!(
-        "up_proj",
-        prove_matmul_round(
-            up_proj,
-            &witness.up_proj_witness(),
-            &weights.up_proj,
-            &tensors.up_proj_params(shape),
-            transcript,
-        )
+    let (up_proj_proof, rms_norm_mlp_b, w_up_proj, up_proj_round_ra) = prove_matmul_round(
+        up_proj,
+        polys.rms_norm_mlp_b,
+        polys.w_up_proj,
+        polys.up_proj_round_ra,
+        &tensors.up_proj_params(shape),
+        transcript,
     )?;
 
     // rms_norm_mlp = RMSNorm(residual_add_attn)
-    let (rms_norm_mlp_proof, residual_add_attn_b, _rms_norm_mlp_round_ra_chunks) = timed!(
-        "rms_norm_mlp",
-        prove_rmsnorm_round(
-            vec![rms_norm_mlp_a, rms_norm_mlp_b],
-            &witness.rms_norm_mlp_witness(),
-            &weights.rms_norm_mlp,
-            &tensors.rms_norm_mlp_params(shape),
-            transcript,
-        )
+    let (
+        rms_norm_mlp_proof,
+        residual_add_attn_b,
+        w_rms_norm_mlp,
+        rms_norm_mlp_norm_round_ra,
+        rms_norm_mlp_round_ra,
+    ) = prove_rmsnorm_round(
+        vec![rms_norm_mlp_a, rms_norm_mlp_b],
+        polys.residual_add_attn_b,
+        polys.w_rms_norm_mlp,
+        polys.rms_norm_mlp_norm_round_ra,
+        polys.rms_norm_mlp_round_ra,
+        &tensors.rms_norm_mlp_params(shape),
+        transcript,
     )?;
 
-    // residual_add_attn = hidden_in_a + o_proj
-    let (residual_add_attn_proof, hidden_in_a, o_proj) = timed!(
-        "residual_add_attn",
-        prove_matadd(
-            vec![residual_add_attn_a, residual_add_attn_b],
-            &witness.hidden_in,
-            &witness.o_proj,
-            &tensors.residual_add_attn_params(shape),
-            transcript,
-        )
+    // residual_add_attn = hidden_in + o_proj
+    let (residual_add_attn_proof, hidden_in_a, o_proj) = prove_matadd(
+        vec![residual_add_attn_a, residual_add_attn_b],
+        hidden_in_for_residual,
+        polys.o_proj,
+        &tensors.residual_add_attn_params(shape),
+        transcript,
     )?;
 
     // o_proj = context @ W_o
-    let (o_proj_proof, context, _o_proj_round_ra_chunks) = timed!(
-        "o_proj",
-        prove_matmul_round(
-            o_proj,
-            &witness.o_proj_witness(),
-            &weights.o_proj,
-            &tensors.o_proj_params(shape),
-            transcript,
-        )
+    let (o_proj_proof, context, w_o_proj, o_proj_round_ra) = prove_matmul_round(
+        o_proj,
+        polys.context,
+        polys.w_o_proj,
+        polys.o_proj_round_ra,
+        &tensors.o_proj_params(shape),
+        transcript,
     )?;
-    let context = reshape_claim(
-        context,
-        Shape::new(vec![shape.seq, shape.q_heads, shape.head_dim]),
-    );
 
     // context = softmax @ v_proj
-    let (pv_matmul_proof, softmax, v_proj, _context_round_ra_chunks) = timed!(
-        "pv_matmul",
-        prove_pv_matmul_round(
-            context,
-            &witness.pv_matmul_witness(),
-            &tensors.pv_matmul_params(shape),
-            transcript,
-        )
+    let (pv_matmul_proof, softmax, v_proj, pv_matmul_round_ra) = prove_pv_matmul_round(
+        context,
+        polys.softmax,
+        polys.v_proj,
+        polys.pv_matmul_round_ra,
+        &tensors.pv_matmul_params(shape),
+        transcript,
     )?;
-    let v_proj = reshape_claim(
-        v_proj,
-        Shape::new(vec![shape.seq, shape.kv_heads * shape.head_dim]),
-    );
 
     // softmax = softmax(qk_score)
     let (
         softmax_proof,
         qk_score,
-        _softmax_round_ra_chunks,
-        _softmax_floor_round_ra_chunks,
-        _softmax_input_remainder_ra_chunks,
-        _softmax_ra_chunks,
-    ) = timed!(
-        "softmax",
-        prove_softmax_round(
-            vec![softmax],
-            &witness.softmax_witness(),
-            &tensors.softmax_params(shape),
-            transcript,
-        )
+        softmax_round_ra,
+        softmax_floor_round_ra,
+        softmax_exp_round_ra,
+        softmax_ra,
+    ) = prove_softmax_round(
+        vec![softmax],
+        polys.qk_score,
+        polys.softmax_round_ra,
+        polys.softmax_floor_round_ra,
+        polys.softmax_exp_round_ra,
+        polys.softmax_ra,
+        &tensors.softmax_params(shape),
+        transcript,
     )?;
 
-    // qk_score = round(round(q_rope @ k_rope) * inv_sqrt(head_dim))
-    let (qk_score_proof, q_rope, k_rope, _qk_score_round_ra_chunks, _qk_score_dot_round_ra_chunks) =
-        timed!(
-            "qk_score",
-            prove_qk_score_round(
-                qk_score,
-                &witness.qk_score_witness(),
-                &tensors.qk_score_params(shape),
-                transcript,
-            )
+    // qk_score = q_rope @ k_rope^T
+    let (qk_score_proof, q_rope, k_rope, qk_score_round_ra, qk_score_dot_round_ra) =
+        prove_qk_score_round(
+            qk_score,
+            polys.q_rope,
+            polys.k_rope,
+            polys.qk_score_round_ra,
+            polys.qk_score_dot_round_ra,
+            &tensors.qk_score_params(shape),
+            transcript,
         )?;
 
     // q_rope = RoPE(q_norm)
-    let (q_rope_proof, q_norm_a, q_norm_b, _q_rope_round_ra_chunks) = timed!(
-        "q_rope",
-        prove_rope_round(
-            q_rope,
-            &witness.q_rope_witness(),
-            &weights.rope_cos,
-            &weights.rope_sin,
-            &tensors.q_rope_params(shape),
-            transcript,
-        )
+    let (q_rope_proof, q_norm_a, q_norm_b, q_rope_round_ra) = prove_rope_round(
+        q_rope,
+        polys.q_norm,
+        rope_cos_for_q,
+        rope_sin_for_q,
+        polys.q_rope_round_ra,
+        &tensors.q_rope_params(shape),
+        transcript,
     )?;
 
     // k_rope = RoPE(k_norm)
-    let (k_rope_proof, k_norm_a, k_norm_b, _k_rope_round_ra_chunks) = timed!(
-        "k_rope",
-        prove_rope_round(
-            k_rope,
-            &witness.k_rope_witness(),
-            &weights.rope_cos,
-            &weights.rope_sin,
-            &tensors.k_rope_params(shape),
-            transcript,
-        )
+    let (k_rope_proof, k_norm_a, k_norm_b, k_rope_round_ra) = prove_rope_round(
+        k_rope,
+        polys.k_norm,
+        polys.rope_cos,
+        polys.rope_sin,
+        polys.k_rope_round_ra,
+        &tensors.k_rope_params(shape),
+        transcript,
     )?;
 
     // q_norm = RMSNorm(q_proj)
-    let (q_norm_proof, q_proj, _q_norm_round_ra_chunks) = timed!(
-        "q_norm",
+    let (q_norm_proof, q_proj, w_q_norm, q_norm_norm_round_ra, q_norm_round_ra) =
         prove_rmsnorm_round(
             vec![q_norm_a, q_norm_b],
-            &witness.q_norm_witness(),
-            &weights.q_norm,
+            polys.q_proj,
+            polys.w_q_norm,
+            polys.q_norm_norm_round_ra,
+            polys.q_norm_round_ra,
             &tensors.q_norm_params(shape),
             transcript,
-        )
-    )?;
-    let q_proj = reshape_claim(q_proj, Shape::new(vec![shape.seq, shape.attention_width()]));
+        )?;
 
     // k_norm = RMSNorm(k_proj)
-    let (k_norm_proof, k_proj, _k_norm_round_ra_chunks) = timed!(
-        "k_norm",
+    let (k_norm_proof, k_proj, w_k_norm, k_norm_norm_round_ra, k_norm_round_ra) =
         prove_rmsnorm_round(
             vec![k_norm_a, k_norm_b],
-            &witness.k_norm_witness(),
-            &weights.k_norm,
+            polys.k_proj,
+            polys.w_k_norm,
+            polys.k_norm_norm_round_ra,
+            polys.k_norm_round_ra,
             &tensors.k_norm_params(shape),
             transcript,
-        )
-    )?;
-    let k_proj = reshape_claim(
-        k_proj,
-        Shape::new(vec![shape.seq, shape.kv_heads * shape.head_dim]),
-    );
+        )?;
 
     // q_proj = rms_norm_atten @ W_q
-    let (q_proj_proof, rms_norm_atten_a, _q_proj_round_ra_chunks) = timed!(
-        "q_proj",
-        prove_matmul_round(
-            q_proj,
-            &witness.q_proj_witness(),
-            &weights.q_proj,
-            &tensors.q_proj_params(shape),
-            transcript,
-        )
+    let (q_proj_proof, rms_norm_atten_a, w_q_proj, q_proj_round_ra) = prove_matmul_round(
+        q_proj,
+        polys.rms_norm_atten_a,
+        polys.w_q_proj,
+        polys.q_proj_round_ra,
+        &tensors.q_proj_params(shape),
+        transcript,
     )?;
 
     // k_proj = rms_norm_atten @ W_k
-    let (k_proj_proof, rms_norm_atten_b, _k_proj_round_ra_chunks) = timed!(
-        "k_proj",
-        prove_matmul_round(
-            k_proj,
-            &witness.k_proj_witness(),
-            &weights.k_proj,
-            &tensors.k_proj_params(shape),
-            transcript,
-        )
+    let (k_proj_proof, rms_norm_atten_b, w_k_proj, k_proj_round_ra) = prove_matmul_round(
+        k_proj,
+        polys.rms_norm_atten_b,
+        polys.w_k_proj,
+        polys.k_proj_round_ra,
+        &tensors.k_proj_params(shape),
+        transcript,
     )?;
 
     // v_proj = rms_norm_atten @ W_v
-    let (v_proj_proof, rms_norm_atten_c, _v_proj_round_ra_chunks) = timed!(
-        "v_proj",
-        prove_matmul_round(
-            v_proj,
-            &witness.v_proj_witness(),
-            &weights.v_proj,
-            &tensors.v_proj_params(shape),
-            transcript,
-        )
+    let (v_proj_proof, rms_norm_atten_c, w_v_proj, v_proj_round_ra) = prove_matmul_round(
+        v_proj,
+        polys.rms_norm_atten_c,
+        polys.w_v_proj,
+        polys.v_proj_round_ra,
+        &tensors.v_proj_params(shape),
+        transcript,
     )?;
 
     // rms_norm_atten = RMSNorm(hidden_in)
-    let (rms_norm_atten_proof, hidden_in_b, _rms_norm_atten_round_ra_chunks) = timed!(
-        "rms_norm_atten",
-        prove_rmsnorm_round(
-            vec![rms_norm_atten_a, rms_norm_atten_b, rms_norm_atten_c],
-            &witness.rms_norm_atten_witness(),
-            &weights.rms_norm_atten,
-            &tensors.rms_norm_atten_params(shape),
-            transcript,
-        )
+    let (
+        rms_norm_atten_proof,
+        hidden_in_b,
+        w_rms_norm_atten,
+        rms_norm_atten_norm_round_ra,
+        rms_norm_atten_round_ra,
+    ) = prove_rmsnorm_round(
+        vec![rms_norm_atten_a, rms_norm_atten_b, rms_norm_atten_c],
+        polys.hidden_in,
+        polys.w_rms_norm_atten,
+        polys.rms_norm_atten_norm_round_ra,
+        polys.rms_norm_atten_round_ra,
+        &tensors.rms_norm_atten_params(shape),
+        transcript,
     )?;
 
     Ok(ProveResult::new(
         LayerClaims {
             hidden_in_a,
             hidden_in_b,
+            direct_eval_claims: vec![
+                w_down_proj,
+                w_gate_proj,
+                w_up_proj,
+                w_rms_norm_mlp,
+                w_o_proj,
+                w_q_norm,
+                w_k_norm,
+                w_q_proj,
+                w_k_proj,
+                w_v_proj,
+                w_rms_norm_atten,
+            ],
+            down_proj_round_ra,
+            silu_up_round_ra,
+            silu_gate_round_ra,
+            silu_ra,
+            silu_round_ra,
+            gate_proj_round_ra,
+            up_proj_round_ra,
+            rms_norm_mlp_round_ra,
+            rms_norm_mlp_norm_round_ra,
+            o_proj_round_ra,
+            pv_matmul_round_ra,
+            softmax_round_ra,
+            softmax_floor_round_ra,
+            softmax_exp_round_ra,
+            softmax_ra,
+            qk_score_round_ra,
+            qk_score_dot_round_ra,
+            q_rope_round_ra,
+            k_rope_round_ra,
+            q_norm_round_ra,
+            q_norm_norm_round_ra,
+            k_norm_round_ra,
+            k_norm_norm_round_ra,
+            q_proj_round_ra,
+            k_proj_round_ra,
+            v_proj_round_ra,
+            rms_norm_atten_round_ra,
+            rms_norm_atten_norm_round_ra,
         },
         LayerIopProof {
-            residual_add_mlp_proof,
-            down_proj_proof,
-            silu_up_proof,
-            silu_proof,
-            gate_proj_proof,
-            up_proj_proof,
-            rms_norm_mlp_proof,
-            residual_add_attn_proof,
-            o_proj_proof,
-            pv_matmul_proof,
-            softmax_proof,
-            qk_score_proof,
-            q_rope_proof,
-            k_rope_proof,
-            q_norm_proof,
-            k_norm_proof,
-            q_proj_proof,
-            k_proj_proof,
-            v_proj_proof,
-            rms_norm_atten_proof,
+            residual_add_mlp: residual_add_mlp_proof,
+            down_proj: down_proj_proof,
+            silu_up: silu_up_proof,
+            silu: silu_proof,
+            gate_proj: gate_proj_proof,
+            up_proj: up_proj_proof,
+            rms_norm_mlp: rms_norm_mlp_proof,
+            residual_add_attn: residual_add_attn_proof,
+            o_proj: o_proj_proof,
+            pv_matmul: pv_matmul_proof,
+            softmax: softmax_proof,
+            qk_score: qk_score_proof,
+            q_rope: q_rope_proof,
+            k_rope: k_rope_proof,
+            q_norm: q_norm_proof,
+            k_norm: k_norm_proof,
+            q_proj: q_proj_proof,
+            k_proj: k_proj_proof,
+            v_proj: v_proj_proof,
+            rms_norm_atten: rms_norm_atten_proof,
         },
     ))
-}
-pub(crate) fn verify_layer_iop<F, T>(
-    hidden_out: Claim<F>,
-    proof: &LayerIopProof<F, T>,
-    weights: &LayerWeights,
-    shape: &LayerShape,
-    tensors: &LayerTensorIds,
-    transcript: &mut T,
-) -> std::result::Result<LayerClaims<F>, ProofVerifyError>
-where
-    F: JoltField,
-    T: Transcript,
-{
-    macro_rules! timed {
-        ($name:literal, $expr:expr) => {{ $expr }};
-    }
-
-    // hidden_out = residual_add_attn + down_proj
-    let (residual_add_attn_a, down_proj) = timed!(
-        "residual_add_mlp",
-        verify_matadd(
-            vec![hidden_out],
-            &proof.residual_add_mlp_proof,
-            &tensors.residual_add_mlp_params(shape),
-            transcript,
-        )
-    )?;
-
-    // down_proj = silu_up @ W_down
-    let (silu_up, _down_proj_round_ra_chunks) = timed!(
-        "down_proj",
-        verify_matmul_round(
-            down_proj,
-            &proof.down_proj_proof,
-            &weights.down_proj,
-            &tensors.down_proj_params(shape),
-            transcript,
-        )
-    )?;
-
-    // silu_up = silu * up_proj
-    let (silu, up_proj, _silu_up_round_ra_chunks) = timed!(
-        "silu_up",
-        verify_hadamard_round(
-            silu_up,
-            &proof.silu_up_proof,
-            &tensors.silu_up_params(shape),
-            transcript,
-        )
-    )?;
-
-    // silu = SiLU(gate_proj, frac_bits, ra)
-    let (gate_proj, _silu_gate_round_ra_chunks, _silu_ra_chunks, _silu_out_round_ra_chunks) = timed!(
-        "silu",
-        verify_silu_round(
-            silu,
-            &proof.silu_proof,
-            &tensors.silu_params(shape),
-            transcript,
-        )
-    )?;
-
-    // gate_proj = rms_norm_mlp @ W_gate
-    let (rms_norm_mlp_a, _gate_proj_round_ra_chunks) = timed!(
-        "gate_proj",
-        verify_matmul_round(
-            gate_proj,
-            &proof.gate_proj_proof,
-            &weights.gate_proj,
-            &tensors.gate_proj_params(shape),
-            transcript,
-        )
-    )?;
-
-    // up_proj = rms_norm_mlp @ W_up
-    let (rms_norm_mlp_b, _up_proj_round_ra_chunks) = timed!(
-        "up_proj",
-        verify_matmul_round(
-            up_proj,
-            &proof.up_proj_proof,
-            &weights.up_proj,
-            &tensors.up_proj_params(shape),
-            transcript,
-        )
-    )?;
-
-    // rms_norm_mlp = RMSNorm(residual_add_attn)
-    let (residual_add_attn_b, _rms_norm_mlp_round_ra_chunks) = timed!(
-        "rms_norm_mlp",
-        verify_rmsnorm_round(
-            vec![rms_norm_mlp_a, rms_norm_mlp_b],
-            &proof.rms_norm_mlp_proof,
-            &weights.rms_norm_mlp,
-            &tensors.rms_norm_mlp_params(shape),
-            transcript,
-        )
-    )?;
-
-    // residual_add_attn = hidden_in_a + o_proj
-    let (hidden_in_a, o_proj) = timed!(
-        "residual_add_attn",
-        verify_matadd(
-            vec![residual_add_attn_a, residual_add_attn_b],
-            &proof.residual_add_attn_proof,
-            &tensors.residual_add_attn_params(shape),
-            transcript,
-        )
-    )?;
-
-    // o_proj = context @ W_o
-    let (context, _o_proj_round_ra_chunks) = timed!(
-        "o_proj",
-        verify_matmul_round(
-            o_proj,
-            &proof.o_proj_proof,
-            &weights.o_proj,
-            &tensors.o_proj_params(shape),
-            transcript,
-        )
-    )?;
-    let context = reshape_claim(
-        context,
-        Shape::new(vec![shape.seq, shape.q_heads, shape.head_dim]),
-    );
-
-    // context = softmax @ v_proj
-    let (softmax, v_proj, _context_round_ra_chunks) = timed!(
-        "pv_matmul",
-        verify_pv_matmul_round(
-            context,
-            &proof.pv_matmul_proof,
-            &tensors.pv_matmul_params(shape),
-            transcript,
-        )
-    )?;
-    let v_proj = reshape_claim(
-        v_proj,
-        Shape::new(vec![shape.seq, shape.kv_heads * shape.head_dim]),
-    );
-
-    // softmax = softmax(qk_score)
-    let (
-        qk_score,
-        _softmax_round_ra_chunks,
-        _softmax_floor_round_ra_chunks,
-        _softmax_input_remainder_ra_chunks,
-        _softmax_ra_chunks,
-    ) = timed!(
-        "softmax",
-        verify_softmax_round(
-            vec![softmax],
-            &proof.softmax_proof,
-            &tensors.softmax_params(shape),
-            transcript,
-        )
-    )?;
-
-    // qk_score = round(round(q_rope @ k_rope) * inv_sqrt(head_dim))
-    let (q_rope, k_rope, _qk_score_round_ra_chunks, _qk_score_dot_round_ra_chunks) = timed!(
-        "qk_score",
-        verify_qk_score_round(
-            qk_score,
-            &proof.qk_score_proof,
-            &tensors.qk_score_params(shape),
-            transcript,
-        )
-    )?;
-
-    // q_rope = RoPE(q_norm)
-    let (q_norm_a, q_norm_b, _q_rope_round_ra_chunks) = timed!(
-        "q_rope",
-        verify_rope_round(
-            q_rope,
-            &proof.q_rope_proof,
-            &weights.rope_cos,
-            &weights.rope_sin,
-            &tensors.q_rope_params(shape),
-            transcript,
-        )
-    )?;
-
-    // k_rope = RoPE(k_norm)
-    let (k_norm_a, k_norm_b, _k_rope_round_ra_chunks) = timed!(
-        "k_rope",
-        verify_rope_round(
-            k_rope,
-            &proof.k_rope_proof,
-            &weights.rope_cos,
-            &weights.rope_sin,
-            &tensors.k_rope_params(shape),
-            transcript,
-        )
-    )?;
-
-    // q_norm = RMSNorm(q_proj)
-    let (q_proj, _q_norm_round_ra_chunks) = timed!(
-        "q_norm",
-        verify_rmsnorm_round(
-            vec![q_norm_a, q_norm_b],
-            &proof.q_norm_proof,
-            &weights.q_norm,
-            &tensors.q_norm_params(shape),
-            transcript,
-        )
-    )?;
-    let q_proj = reshape_claim(q_proj, Shape::new(vec![shape.seq, shape.attention_width()]));
-
-    // k_norm = RMSNorm(k_proj)
-    let (k_proj, _k_norm_round_ra_chunks) = timed!(
-        "k_norm",
-        verify_rmsnorm_round(
-            vec![k_norm_a, k_norm_b],
-            &proof.k_norm_proof,
-            &weights.k_norm,
-            &tensors.k_norm_params(shape),
-            transcript,
-        )
-    )?;
-    let k_proj = reshape_claim(
-        k_proj,
-        Shape::new(vec![shape.seq, shape.kv_heads * shape.head_dim]),
-    );
-
-    // q_proj = rms_norm_atten @ W_q
-    let (rms_norm_atten_a, _q_proj_round_ra_chunks) = timed!(
-        "q_proj",
-        verify_matmul_round(
-            q_proj,
-            &proof.q_proj_proof,
-            &weights.q_proj,
-            &tensors.q_proj_params(shape),
-            transcript,
-        )
-    )?;
-
-    // k_proj = rms_norm_atten @ W_k
-    let (rms_norm_atten_b, _k_proj_round_ra_chunks) = timed!(
-        "k_proj",
-        verify_matmul_round(
-            k_proj,
-            &proof.k_proj_proof,
-            &weights.k_proj,
-            &tensors.k_proj_params(shape),
-            transcript,
-        )
-    )?;
-
-    // v_proj = rms_norm_atten @ W_v
-    let (rms_norm_atten_c, _v_proj_round_ra_chunks) = timed!(
-        "v_proj",
-        verify_matmul_round(
-            v_proj,
-            &proof.v_proj_proof,
-            &weights.v_proj,
-            &tensors.v_proj_params(shape),
-            transcript,
-        )
-    )?;
-
-    // rms_norm_atten = RMSNorm(hidden_in)
-    let (hidden_in_b, _rms_norm_atten_round_ra_chunks) = timed!(
-        "rms_norm_atten",
-        verify_rmsnorm_round(
-            vec![rms_norm_atten_a, rms_norm_atten_b, rms_norm_atten_c],
-            &proof.rms_norm_atten_proof,
-            &weights.rms_norm_atten,
-            &tensors.rms_norm_atten_params(shape),
-            transcript,
-        )
-    )?;
-
-    Ok(LayerClaims {
-        hidden_in_a,
-        hidden_in_b,
-    })
-}
-
-// === Shape bridge ==========================================================
-
-fn reshape_claim<F>(mut claim: Claim<F>, logical_shape: Shape) -> Claim<F> {
-    // Projection ops use flattened `[seq, heads * head_dim]` tensors while
-    // attention ops use `[seq, heads, head_dim]`.  For Qwen these split
-    // dimensions are powers of two, so the row-major MLE point is the same
-    // concatenation of bits and this shape bridge needs no sumcheck.
-    claim.logical_shape = logical_shape.clone();
-    claim.domain_shape = logical_shape.padded_power_of_two();
-    claim
 }

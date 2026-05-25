@@ -22,7 +22,7 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
+    claim::{Claim, LegacyClaim, PcsOpeningRequest, Poly, Shape, TensorId},
     error::{ProverError, Result},
 };
 
@@ -132,20 +132,20 @@ pub struct RoundProof<F: JoltField, T: Transcript> {
 }
 
 impl<F: JoltField, T: Transcript> RoundProof<F, T> {
-    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
+    pub fn pcs_opening_requests(&self) -> Vec<PcsOpeningRequest<F>> {
         self.ra_committed_openings.all().cloned().collect()
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct RoundRaCommittedOpenings<F: JoltField> {
-    pub ra_virtual: Vec<CommittedOpeningClaim<F>>,
-    pub hamming_weight: Vec<CommittedOpeningClaim<F>>,
-    pub booleanity: Vec<CommittedOpeningClaim<F>>,
+    pub ra_virtual: Vec<PcsOpeningRequest<F>>,
+    pub hamming_weight: Vec<PcsOpeningRequest<F>>,
+    pub booleanity: Vec<PcsOpeningRequest<F>>,
 }
 
 impl<F: JoltField> RoundRaCommittedOpenings<F> {
-    pub fn all(&self) -> impl Iterator<Item = &CommittedOpeningClaim<F>> {
+    pub fn all(&self) -> impl Iterator<Item = &PcsOpeningRequest<F>> {
         self.ra_virtual
             .iter()
             .chain(self.hamming_weight.iter())
@@ -154,11 +154,11 @@ impl<F: JoltField> RoundRaCommittedOpenings<F> {
 }
 
 pub fn prove_round<F, T>(
-    output_claims: Vec<Claim<F>>,
+    output_claims: Vec<LegacyClaim<F>>,
     witness: &RoundWitness<'_>,
     params: &RoundParams,
     transcript: &mut T,
-) -> Result<(RoundProof<F, T>, Claim<F>, Vec<CommittedOpeningClaim<F>>)>
+) -> Result<(RoundProof<F, T>, LegacyClaim<F>, Vec<PcsOpeningRequest<F>>)>
 where
     F: JoltField,
     T: Transcript,
@@ -229,7 +229,7 @@ where
             ra_opening: shout.ra_opening,
             ra_committed_openings: shout.committed_openings,
         },
-        Claim {
+        LegacyClaim {
             tensor: params.input_tensor.clone(),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
@@ -241,11 +241,11 @@ where
 }
 
 pub fn verify_round<F, T>(
-    output_claims: Vec<Claim<F>>,
+    output_claims: Vec<LegacyClaim<F>>,
     proof: &RoundProof<F, T>,
     params: &RoundParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Vec<CommittedOpeningClaim<F>>), ProofVerifyError>
+) -> std::result::Result<(LegacyClaim<F>, Vec<PcsOpeningRequest<F>>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,
@@ -314,14 +314,14 @@ where
     )?;
 
     Ok((
-        Claim {
+        LegacyClaim {
             tensor: params.input_tensor.clone(),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
             point: relation_point,
             value: proof.input_opening,
         },
-        shout.committed_opening_claims(),
+        shout.pcs_opening_requests(),
     ))
 }
 
@@ -585,7 +585,7 @@ pub(crate) struct RoundLookupProof<F: JoltField, T: Transcript> {
 }
 
 impl<F: JoltField, T: Transcript> RoundLookupProof<F, T> {
-    pub(crate) fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
+    pub(crate) fn pcs_opening_requests(&self) -> Vec<PcsOpeningRequest<F>> {
         self.committed_openings.all().cloned().collect()
     }
 }
@@ -642,6 +642,163 @@ where
         ra_opening,
         committed_openings,
     })
+}
+
+pub(crate) fn round_lookup_openings_from_ra<F: JoltField, C>(
+    round_ra: &[Poly<F, C>],
+    tensor_point: &[F],
+    shape: &Shape,
+) -> Result<(F, F)> {
+    let lookup_indices =
+        lookup_indices_from_round_ra(round_ra, shape.padded_power_of_two().numel())?;
+    let rem = eval_flat_usize(&lookup_indices, tensor_point);
+    let round_bit_values = lookup_indices
+        .iter()
+        .map(|&idx| round_lut_q8(idx) as usize)
+        .collect::<Vec<_>>();
+    let round_bit = eval_flat_usize(&round_bit_values, tensor_point);
+    Ok((rem, round_bit))
+}
+
+pub(crate) fn prove_round_lookup_from_ra<F, T, C>(
+    lookup_site: usize,
+    tensor_point: Vec<F>,
+    round_ra: Vec<Poly<F, C>>,
+    shape: &Shape,
+    round_bit_opening: F,
+    remainder_opening: F,
+    accumulator: &mut ProverOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> Result<(RoundLookupProof<F, T>, Vec<Claim<F, C>>)>
+where
+    F: JoltField,
+    T: Transcript,
+    C: Clone,
+{
+    let lookup_indices =
+        lookup_indices_from_round_ra(&round_ra, shape.padded_power_of_two().numel())?;
+    let lookup = prove_round_lookup(
+        lookup_site,
+        tensor_point,
+        round_bit_opening,
+        remainder_opening,
+        lookup_indices,
+        round_lut_table(),
+        accumulator,
+        transcript,
+    )?;
+    let openings = lookup.pcs_opening_requests();
+    if openings.len() % round_ra.len() != 0 {
+        return Err(ProverError::InvalidInput(format!(
+            "round RA opening count mismatch: openings {} is not a multiple of chunks {}",
+            openings.len(),
+            round_ra.len()
+        )));
+    }
+    let claims = openings
+        .into_iter()
+        .enumerate()
+        .map(|(idx, opening)| {
+            Claim::new(
+                round_ra[idx % round_ra.len()].clone(),
+                opening.point,
+                opening.value,
+            )
+        })
+        .collect();
+    Ok((lookup, claims))
+}
+
+pub(crate) fn verify_round_lookup_from_ra<F, T, C>(
+    lookup_site: usize,
+    tensor_point: Vec<F>,
+    round_ra: Vec<Poly<F, C>>,
+    shape: &Shape,
+    round_bit_opening: F,
+    remainder_opening: F,
+    proof: &RoundLookupProof<F, T>,
+    accumulator: &mut VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> std::result::Result<(RoundLookupProof<F, T>, Vec<Claim<F, C>>), ProofVerifyError>
+where
+    F: JoltField,
+    T: Transcript,
+    C: Clone,
+{
+    let lookup = verify_round_lookup(
+        lookup_site,
+        shape.padded_power_of_two().numel(),
+        tensor_point,
+        round_bit_opening,
+        remainder_opening,
+        proof.ra_opening,
+        &proof.committed_openings,
+        &proof.read_raf,
+        &proof.ra_onehot,
+        accumulator,
+        transcript,
+    )?;
+    let openings = lookup.pcs_opening_requests();
+    if openings.len() % round_ra.len() != 0 {
+        return Err(ProofVerifyError::InvalidInputLength(
+            round_ra.len(),
+            openings.len(),
+        ));
+    }
+    let claims = openings
+        .into_iter()
+        .enumerate()
+        .map(|(idx, opening)| {
+            Claim::new(
+                round_ra[idx % round_ra.len()].clone(),
+                opening.point,
+                opening.value,
+            )
+        })
+        .collect();
+    Ok((lookup, claims))
+}
+
+fn lookup_indices_from_round_ra<F: JoltField, C>(
+    round_ra: &[Poly<F, C>],
+    len: usize,
+) -> Result<Vec<usize>> {
+    let log_k = ROUND_LUT_LEN.trailing_zeros() as usize;
+    let params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k);
+    if round_ra.len() != params.instruction_d {
+        return Err(ProverError::InvalidInput(format!(
+            "round RA chunk count mismatch: expected {}, got {}",
+            params.instruction_d,
+            round_ra.len()
+        )));
+    }
+
+    let mut out = vec![0usize; len];
+    for poly in round_ra {
+        let onehot = match &poly.data {
+            MultilinearPolynomial::OneHot(onehot) => onehot,
+            _ => {
+                return Err(ProverError::InvalidInput(
+                    "round RA must be OneHot polynomial".to_string(),
+                ));
+            }
+        };
+        if onehot.nonzero_indices.len() != len {
+            return Err(ProverError::TensorLenMismatch {
+                name: "round RA",
+                shape: vec![len],
+                expected: len,
+                actual: onehot.nonzero_indices.len(),
+            });
+        }
+        for (idx, chunk) in onehot.nonzero_indices.iter().enumerate() {
+            let chunk = chunk.ok_or_else(|| {
+                ProverError::InvalidInput(format!("round RA has empty onehot at element {idx}"))
+            })?;
+            out[idx] = out[idx] * params.k_chunk + usize::from(chunk);
+        }
+    }
+    Ok(out)
 }
 
 pub(crate) fn verify_round_lookup<F, T>(
@@ -723,13 +880,13 @@ fn round_ra_committed_openings<F: JoltField>(
     accumulator: &ProverOpeningAccumulator<F>,
 ) -> Result<RoundRaCommittedOpenings<F>> {
     let d = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
-    let collect = |sumcheck| -> Vec<CommittedOpeningClaim<F>> {
+    let collect = |sumcheck| -> Vec<PcsOpeningRequest<F>> {
         (0..d)
             .map(|idx| {
                 let poly = CommittedPoly::QwenRoundRaD(lookup_site, idx);
                 let (point, value) =
                     accumulator.get_committed_polynomial_opening(OpeningId::new(poly, sumcheck));
-                CommittedOpeningClaim {
+                PcsOpeningRequest {
                     poly,
                     sumcheck,
                     point: point.r,
@@ -774,7 +931,7 @@ fn insert_round_ra_committed_openings<F: JoltField>(
             openings.ra_virtual.len().min(openings.booleanity.len()),
         ));
     }
-    let mut insert_group = |sumcheck, values: &[CommittedOpeningClaim<F>]| {
+    let mut insert_group = |sumcheck, values: &[PcsOpeningRequest<F>]| {
         for (idx, opening) in values.iter().enumerate() {
             accumulator.openings.insert(
                 OpeningId::new(CommittedPoly::QwenRoundRaD(lookup_site, idx), sumcheck),
@@ -796,7 +953,7 @@ fn insert_round_ra_committed_openings<F: JoltField>(
 }
 
 fn validate_inputs<F: JoltField>(
-    output_claims: &[Claim<F>],
+    output_claims: &[LegacyClaim<F>],
     witness: &RoundWitness<'_>,
     params: &RoundParams,
 ) -> Result<()> {
@@ -835,7 +992,7 @@ fn validate_inputs<F: JoltField>(
 }
 
 fn verify_inputs<F: JoltField>(
-    output_claims: &[Claim<F>],
+    output_claims: &[LegacyClaim<F>],
     params: &RoundParams,
 ) -> std::result::Result<(), ProofVerifyError> {
     if params.frac_bits != ROUND_FRAC_BITS {
@@ -858,7 +1015,7 @@ fn verify_inputs<F: JoltField>(
     Ok(())
 }
 
-fn batched_input_claim<F: JoltField>(claims: &[Claim<F>], alphas: &[F]) -> F {
+fn batched_input_claim<F: JoltField>(claims: &[LegacyClaim<F>], alphas: &[F]) -> F {
     claims
         .iter()
         .zip(alphas)
@@ -866,7 +1023,7 @@ fn batched_input_claim<F: JoltField>(claims: &[Claim<F>], alphas: &[F]) -> F {
         .sum()
 }
 
-fn batched_eq_poly<F: JoltField>(claims: &[Claim<F>], alphas: &[F]) -> Vec<F> {
+fn batched_eq_poly<F: JoltField>(claims: &[LegacyClaim<F>], alphas: &[F]) -> Vec<F> {
     let len = claims[0].domain_shape.numel();
     let mut out = vec![F::zero(); len];
     for (claim, alpha) in claims.iter().zip(alphas) {
@@ -929,6 +1086,16 @@ fn padded_usize_tensor<F: JoltField>(values: &[usize], shape: &Shape) -> Vec<F> 
     out
 }
 
+fn eval_flat_usize<F: JoltField>(values: &[usize], point: &[F]) -> F {
+    let eq = EqPolynomial::<F>::evals(point);
+    values
+        .iter()
+        .enumerate()
+        .fold(F::zero(), |acc, (idx, &value)| {
+            acc + eq[idx] * F::from_u64(value as u64)
+        })
+}
+
 pub(crate) fn padded_lookup_indices(values: &[usize], shape: &Shape) -> Vec<usize> {
     let padded_dims = shape.padded_power_of_two().0;
     let len = padded_dims.iter().product();
@@ -950,7 +1117,7 @@ pub(crate) fn round_lut_table() -> Vec<i32> {
     (0..ROUND_LUT_LEN).map(round_lut_q8).collect()
 }
 
-fn round_lut_q8(rem: usize) -> i32 {
+pub(crate) fn round_lut_q8(rem: usize) -> i32 {
     if rem >= ROUND_LUT_LEN / 2 { 1 } else { 0 }
 }
 
@@ -1040,7 +1207,7 @@ mod tests {
             .collect::<Vec<_>>();
         let witness = RoundWitness::from_input_output(&input, &output);
         let point = vec![Fr::from(7_u64), Fr::from(11_u64), Fr::from(13_u64)];
-        let output_claim = Claim {
+        let output_claim = LegacyClaim {
             tensor: params.output_tensor.clone(),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),

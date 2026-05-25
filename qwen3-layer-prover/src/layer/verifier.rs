@@ -50,17 +50,17 @@ where
         tensors,
         transcript,
     )?;
-    let mut expected_openings = claims.opening_claims();
+    let mut expected_openings = claims.tensor_opening_requests();
     expected_openings.push(hidden_out_for_opening);
-    if expected_openings != proof.opening_reduction.opening_claims {
+    if expected_openings != proof.opening_reduction.tensor_opening_requests {
         return Err(ProofVerifyError::InvalidOpeningProof(
             "layer opening claims do not match verified IOP claims".to_string(),
         ));
     }
-    let expected_committed_openings = proof.iop_proof.committed_opening_claims();
-    if expected_committed_openings != proof.opening_reduction.committed_opening_claims {
+    let expected_pcs_requests = proof.iop_proof.pcs_opening_requests();
+    if expected_pcs_requests != proof.opening_reduction.pcs_opening_requests {
         return Err(ProofVerifyError::InvalidOpeningProof(
-            "layer committed opening claims do not match verified IOP claims".to_string(),
+            "layer PCS opening requests do not match verified IOP requests".to_string(),
         ));
     }
     verify_layer_openings::<F, T, PCS>(

@@ -4,7 +4,7 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
+    claim::{LegacyClaim, PcsOpeningRequest, Shape, TensorId},
     error::{ProverError, Result},
     ops::round::{
         ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
@@ -82,11 +82,11 @@ pub struct FloorWitness<'a> {
 pub type FloorProof<F, T> = RoundProof<F, T>;
 
 pub fn prove_floor<F, T>(
-    output_claims: Vec<Claim<F>>,
+    output_claims: Vec<LegacyClaim<F>>,
     witness: &FloorWitness<'_>,
     params: &FloorParams,
     transcript: &mut T,
-) -> Result<(FloorProof<F, T>, Claim<F>, Vec<CommittedOpeningClaim<F>>)>
+) -> Result<(FloorProof<F, T>, LegacyClaim<F>, Vec<PcsOpeningRequest<F>>)>
 where
     F: JoltField,
     T: Transcript,
@@ -108,11 +108,11 @@ where
 }
 
 pub fn verify_floor<F, T>(
-    output_claims: Vec<Claim<F>>,
+    output_claims: Vec<LegacyClaim<F>>,
     proof: &FloorProof<F, T>,
     params: &FloorParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Vec<CommittedOpeningClaim<F>>), ProofVerifyError>
+) -> std::result::Result<(LegacyClaim<F>, Vec<PcsOpeningRequest<F>>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,
@@ -122,7 +122,7 @@ where
     Ok((unshift_claim(shifted_claim, params), ra_claim))
 }
 
-fn unshift_claim<F: JoltField>(mut claim: Claim<F>, params: &FloorParams) -> Claim<F> {
+fn unshift_claim<F: JoltField>(mut claim: LegacyClaim<F>, params: &FloorParams) -> LegacyClaim<F> {
     let valid = valid_eval(&params.shape, &claim.point);
     claim.tensor = params.input_tensor.clone();
     claim.value += F::from_u64(HALF_SCALE as u64) * valid;
@@ -143,7 +143,7 @@ fn valid_eval<F: JoltField>(shape: &Shape, point: &[F]) -> F {
 }
 
 fn validate_inputs<F: JoltField>(
-    output_claims: &[Claim<F>],
+    output_claims: &[LegacyClaim<F>],
     witness: &FloorWitness<'_>,
     params: &FloorParams,
 ) -> Result<()> {
@@ -214,7 +214,7 @@ mod tests {
             frac_bits: std::array::from_fn(|_| &[][..]),
         };
         let point = vec![Fr::from(7_u64), Fr::from(11_u64), Fr::from(13_u64)];
-        let output_claim = Claim {
+        let output_claim = LegacyClaim {
             tensor: params.output_tensor.clone(),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),

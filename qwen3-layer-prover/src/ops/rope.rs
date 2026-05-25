@@ -47,10 +47,14 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
+    claim::{Claim, LegacyClaim, PcsOpeningRequest, Poly, Shape, TensorId},
     error::{ProverError, Result},
+    ops::poly_bridge::{
+        claim_from_legacy, legacy_from_claim, logical_i32_values, one_hot_claims_from_requests,
+    },
     ops::round::{
-        ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
+        ROUND_FRAC_BITS, ROUND_LUT_LEN, RoundParams, RoundProof, RoundWitness,
+        padded_lookup_indices, prove_round, verify_round,
     },
 };
 
@@ -108,8 +112,8 @@ pub struct RopeProof<F: JoltField, T: Transcript> {
 }
 
 impl<F: JoltField, T: Transcript> RopeProof<F, T> {
-    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
-        self.round.committed_opening_claims()
+    pub fn pcs_opening_requests(&self) -> Vec<PcsOpeningRequest<F>> {
+        self.round.pcs_opening_requests()
     }
 }
 
@@ -120,8 +124,8 @@ pub struct RopeSumcheckProof<F: JoltField, T: Transcript> {
     pub x_odd_opening: F,
 }
 
-pub fn prove_rope_round<F, T>(
-    y_claim: Claim<F>,
+pub fn prove_rope_round_from_witness<F, T>(
+    y_claim: LegacyClaim<F>,
     witness: &RopeWitness<'_>,
     cos: &[i32],
     sin: &[i32],
@@ -129,9 +133,9 @@ pub fn prove_rope_round<F, T>(
     transcript: &mut T,
 ) -> Result<(
     RopeProof<F, T>,
-    Claim<F>,
-    Claim<F>,
-    Vec<CommittedOpeningClaim<F>>,
+    LegacyClaim<F>,
+    LegacyClaim<F>,
+    Vec<PcsOpeningRequest<F>>,
 )>
 where
     F: JoltField,
@@ -154,14 +158,55 @@ where
     ))
 }
 
+pub fn prove_rope_round<F, T, C>(
+    y_claim: Claim<F, C>,
+    x_poly: Poly<F, C>,
+    cos_poly: Poly<F, C>,
+    sin_poly: Poly<F, C>,
+    witness: &RopeWitness<'_>,
+    params: &RopeRoundParams,
+    transcript: &mut T,
+) -> Result<(RopeProof<F, T>, Claim<F, C>, Claim<F, C>, Vec<Claim<F, C>>)>
+where
+    F: JoltField,
+    T: Transcript,
+    C: Clone,
+{
+    let cos = logical_i32_values(&cos_poly, &params.rope.coeff_shape())?;
+    let sin = logical_i32_values(&sin_poly, &params.rope.coeff_shape())?;
+    let (proof, x_even, x_odd, round_ra) = prove_rope_round(
+        legacy_from_claim(y_claim, "rope", params.rope.tensor_shape()),
+        witness,
+        &cos,
+        &sin,
+        params,
+        transcript,
+    )?;
+    let round_witness = RoundWitness::from_input_output(witness.acc, witness.output);
+    let ra_claims = one_hot_claims_from_requests(
+        &round_ra,
+        &padded_lookup_indices(&round_witness.remainder, &params.round.shape),
+        ROUND_LUT_LEN,
+    );
+    Ok((
+        proof,
+        claim_from_legacy(x_even, x_poly.clone()),
+        claim_from_legacy(x_odd, x_poly),
+        ra_claims,
+    ))
+}
+
 pub fn verify_rope_round<F, T>(
-    y_claim: Claim<F>,
+    y_claim: LegacyClaim<F>,
     proof: &RopeProof<F, T>,
     cos: &[i32],
     sin: &[i32],
     params: &RopeRoundParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>, Vec<CommittedOpeningClaim<F>>), ProofVerifyError>
+) -> std::result::Result<
+    (LegacyClaim<F>, LegacyClaim<F>, Vec<PcsOpeningRequest<F>>),
+    ProofVerifyError,
+>
 where
     F: JoltField,
     T: Transcript,
@@ -175,13 +220,13 @@ where
 }
 
 fn prove_rope_acc<F, T>(
-    y_claim: Claim<F>,
+    y_claim: LegacyClaim<F>,
     x: &[i32],
     cos: &[i32],
     sin: &[i32],
     params: &RopeParams,
     transcript: &mut T,
-) -> Result<(RopeSumcheckProof<F, T>, Claim<F>, Claim<F>)>
+) -> Result<(RopeSumcheckProof<F, T>, LegacyClaim<F>, LegacyClaim<F>)>
 where
     F: JoltField,
     T: Transcript,
@@ -224,14 +269,14 @@ where
             x_even_opening: x_even,
             x_odd_opening: x_odd,
         },
-        Claim {
+        LegacyClaim {
             tensor: params.x_tensor.clone(),
             logical_shape: params.tensor_shape(),
             domain_shape: params.tensor_shape().padded_power_of_two(),
             point: even_point,
             value: x_even,
         },
-        Claim {
+        LegacyClaim {
             tensor: params.x_tensor.clone(),
             logical_shape: params.tensor_shape(),
             domain_shape: params.tensor_shape().padded_power_of_two(),
@@ -242,13 +287,13 @@ where
 }
 
 fn verify_rope_acc<F, T>(
-    y_claim: Claim<F>,
+    y_claim: LegacyClaim<F>,
     proof: &RopeSumcheckProof<F, T>,
     cos: &[i32],
     sin: &[i32],
     params: &RopeParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>), ProofVerifyError>
+) -> std::result::Result<(LegacyClaim<F>, LegacyClaim<F>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,
@@ -288,14 +333,14 @@ where
     let odd_point = [r_seq, r_head, &[F::one()], r_pair].concat();
 
     Ok((
-        Claim {
+        LegacyClaim {
             tensor: params.x_tensor.clone(),
             logical_shape: params.tensor_shape(),
             domain_shape: params.tensor_shape().padded_power_of_two(),
             point: even_point,
             value: proof.x_even_opening,
         },
-        Claim {
+        LegacyClaim {
             tensor: params.x_tensor.clone(),
             logical_shape: params.tensor_shape(),
             domain_shape: params.tensor_shape().padded_power_of_two(),
@@ -537,7 +582,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RopeSumchec
 }
 
 fn validate_inputs<F: JoltField>(
-    y_claim: &Claim<F>,
+    y_claim: &LegacyClaim<F>,
     x: &[i32],
     cos: &[i32],
     sin: &[i32],
@@ -549,7 +594,7 @@ fn validate_inputs<F: JoltField>(
 }
 
 fn validate_claim_and_coeffs<F: JoltField>(
-    y_claim: &Claim<F>,
+    y_claim: &LegacyClaim<F>,
     cos: &[i32],
     sin: &[i32],
     params: &RopeParams,
@@ -772,7 +817,7 @@ mod tests {
             Fr::from(29u64),
             Fr::from(31u64),
         ];
-        let y_claim = Claim {
+        let y_claim = LegacyClaim {
             tensor: TensorId::new("Y"),
             logical_shape: rope_params.tensor_shape(),
             domain_shape: rope_params.tensor_shape().padded_power_of_two(),

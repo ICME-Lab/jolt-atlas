@@ -20,10 +20,14 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
+    claim::{Claim, LegacyClaim, PcsOpeningRequest, Poly, Shape, TensorId},
     error::{ProverError, Result},
+    ops::poly_bridge::{
+        claim_from_legacy, legacy_from_claim, logical_i32_values, one_hot_claims_from_requests,
+    },
     ops::round::{
-        ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
+        ROUND_FRAC_BITS, ROUND_LUT_LEN, RoundParams, RoundProof, RoundWitness,
+        padded_lookup_indices, prove_round, verify_round,
     },
     proof::ProveResult,
 };
@@ -119,12 +123,12 @@ struct MulByVectorProof<F: JoltField, T: Transcript> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MulByVectorClaims<F> {
-    x: Claim<F>,
-    coeff: Claim<F>,
+    x: LegacyClaim<F>,
+    coeff: LegacyClaim<F>,
 }
 
 fn prove_mul_by_vector<F, T>(
-    y_claim: Claim<F>,
+    y_claim: LegacyClaim<F>,
     x: &[i32],
     coeff: &[i32],
     params: &MulByVectorParams,
@@ -160,14 +164,14 @@ where
 
     Ok(ProveResult::new(
         MulByVectorClaims {
-            x: Claim {
+            x: LegacyClaim {
                 tensor: params.x_tensor.clone(),
                 logical_shape: params.shape.clone(),
                 domain_shape: params.shape.padded_power_of_two(),
                 point: point.clone(),
                 value: x_opening,
             },
-            coeff: Claim {
+            coeff: LegacyClaim {
                 tensor: params.coeff_tensor.clone(),
                 logical_shape: params.coeff_shape(),
                 domain_shape: params.coeff_shape().padded_power_of_two(),
@@ -184,7 +188,7 @@ where
 }
 
 fn verify_mul_by_vector<F, T>(
-    y_claim: Claim<F>,
+    y_claim: LegacyClaim<F>,
     proof: &MulByVectorProof<F, T>,
     coeff: &[i32],
     params: &MulByVectorParams,
@@ -221,14 +225,14 @@ where
     }
 
     Ok(MulByVectorClaims {
-        x: Claim {
+        x: LegacyClaim {
             tensor: params.x_tensor.clone(),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
             point: point.clone(),
             value: proof.x_opening,
         },
-        coeff: Claim {
+        coeff: LegacyClaim {
             tensor: params.coeff_tensor.clone(),
             logical_shape: params.coeff_shape(),
             domain_shape: params.coeff_shape().padded_power_of_two(),
@@ -530,20 +534,24 @@ pub struct RmsNormProof<F: JoltField, T: Transcript> {
 }
 
 impl<F: JoltField, T: Transcript> RmsNormProof<F, T> {
-    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
-        let mut out = self.round.committed_opening_claims();
-        out.extend(self.norm_round.committed_opening_claims());
+    pub fn pcs_opening_requests(&self) -> Vec<PcsOpeningRequest<F>> {
+        let mut out = self.round.pcs_opening_requests();
+        out.extend(self.norm_round.pcs_opening_requests());
         out
     }
 }
 
-pub fn prove_rmsnorm_round<F, T>(
-    output_claims: Vec<Claim<F>>,
+pub fn prove_rmsnorm_round_from_witness<F, T>(
+    output_claims: Vec<LegacyClaim<F>>,
     witness: &RmsNormWitness<'_>,
     weight: &[i32],
     params: &RmsNormParams,
     transcript: &mut T,
-) -> Result<(RmsNormProof<F, T>, Claim<F>, Vec<CommittedOpeningClaim<F>>)>
+) -> Result<(
+    RmsNormProof<F, T>,
+    LegacyClaim<F>,
+    Vec<PcsOpeningRequest<F>>,
+)>
 where
     F: JoltField,
     T: Transcript,
@@ -603,7 +611,7 @@ where
             input_opening,
             sum_x2: witness.sum_x2.to_vec(),
         },
-        Claim {
+        LegacyClaim {
             tensor: params.input_tensor.clone(),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
@@ -614,13 +622,58 @@ where
     ))
 }
 
+pub fn prove_rmsnorm_round<F, T, C>(
+    output_claims: Vec<Claim<F, C>>,
+    input_poly: Poly<F, C>,
+    weight_poly: Poly<F, C>,
+    witness: &RmsNormWitness<'_>,
+    params: &RmsNormParams,
+    transcript: &mut T,
+) -> Result<(
+    RmsNormProof<F, T>,
+    Claim<F, C>,
+    Vec<Claim<F, C>>,
+    Vec<Claim<F, C>>,
+)>
+where
+    F: JoltField,
+    T: Transcript,
+    C: Clone,
+{
+    let weight = logical_i32_values(&weight_poly, &Shape::new(vec![params.cols]))?;
+    let output_claims = output_claims
+        .into_iter()
+        .map(|claim| legacy_from_claim(claim, "Y", params.shape.clone()))
+        .collect::<Vec<_>>();
+    let (proof, input, _pcs_requests) =
+        prove_rmsnorm_round(output_claims, witness, &weight, params, transcript)?;
+    let round_witness = RoundWitness::from_input_output(witness.acc, witness.output);
+    let norm_round_witness = RoundWitness::from_input_output(witness.norm_acc, witness.norm);
+    let round_ra = one_hot_claims_from_requests(
+        &proof.round.pcs_opening_requests(),
+        &padded_lookup_indices(&round_witness.remainder, &params.round.shape),
+        ROUND_LUT_LEN,
+    );
+    let norm_round_ra = one_hot_claims_from_requests(
+        &proof.norm_round.pcs_opening_requests(),
+        &padded_lookup_indices(&norm_round_witness.remainder, &params.norm_round.shape),
+        ROUND_LUT_LEN,
+    );
+    Ok((
+        proof,
+        claim_from_legacy(input, input_poly),
+        round_ra,
+        norm_round_ra,
+    ))
+}
+
 pub fn verify_rmsnorm_round<F, T>(
-    output_claims: Vec<Claim<F>>,
+    output_claims: Vec<LegacyClaim<F>>,
     proof: &RmsNormProof<F, T>,
     weight: &[i32],
     params: &RmsNormParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Vec<CommittedOpeningClaim<F>>), ProofVerifyError>
+) -> std::result::Result<(LegacyClaim<F>, Vec<PcsOpeningRequest<F>>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,
@@ -676,7 +729,7 @@ where
     let point = normalize_sumcheck_point::<F>(&challenges.into_opening());
 
     Ok((
-        Claim {
+        LegacyClaim {
             tensor: params.input_tensor.clone(),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
@@ -863,7 +916,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RmsNormSumc
 }
 
 fn validate_mul_by_vector_inputs<F: JoltField>(
-    y_claim: &Claim<F>,
+    y_claim: &LegacyClaim<F>,
     x: &[i32],
     params: &MulByVectorParams,
 ) -> Result<()> {
@@ -879,7 +932,7 @@ fn validate_mul_by_vector_inputs<F: JoltField>(
     validate_mul_by_vector_claim(y_claim, &params.shape)
 }
 
-fn validate_mul_by_vector_claim<F: JoltField>(claim: &Claim<F>, shape: &Shape) -> Result<()> {
+fn validate_mul_by_vector_claim<F: JoltField>(claim: &LegacyClaim<F>, shape: &Shape) -> Result<()> {
     validate_mul_by_vector_shape(shape)?;
     if claim.logical_shape != *shape {
         return Err(ProverError::ShapeMismatch {
@@ -1131,7 +1184,7 @@ fn ensure_len(name: &'static str, shape: &Shape, expected: usize, actual: usize)
     Ok(())
 }
 
-fn acc_row_point<F: JoltField>(acc_claim: &Claim<F>, params: &RmsNormParams) -> Vec<F> {
+fn acc_row_point<F: JoltField>(acc_claim: &LegacyClaim<F>, params: &RmsNormParams) -> Vec<F> {
     let row_len = params.row_shape().padded_power_of_two().point_len();
     acc_claim.point[..row_len].to_vec()
 }
@@ -1363,7 +1416,7 @@ mod tests {
                 .collect()
         });
         let point = vec![Fr::from(3u64), Fr::from(5u64)];
-        let output_claim = Claim {
+        let output_claim = LegacyClaim {
             tensor: TensorId::new("y"),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
@@ -1465,7 +1518,7 @@ mod tests {
             Fr::from(7u64),
             Fr::from(11u64),
         ];
-        let output_claim = Claim {
+        let output_claim = LegacyClaim {
             tensor: TensorId::new("y"),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
@@ -1576,7 +1629,7 @@ mod tests {
         ];
         let output_claims = points
             .iter()
-            .map(|point| Claim {
+            .map(|point| LegacyClaim {
                 tensor: TensorId::new("y"),
                 logical_shape: params.shape.clone(),
                 domain_shape: params.shape.padded_power_of_two(),

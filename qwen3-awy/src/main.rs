@@ -2045,7 +2045,12 @@ fn run_mlp_fixed(
     let (g, g_acc, u, u_acc) = if trace.is_some() {
         let g_trace = matmul_fixed_i32_with_acc(&n2, &w.q.wg, rows, HIDDEN, INTERMEDIATE);
         let u_trace = matmul_fixed_i32_with_acc(&n2, &w.q.wu, rows, HIDDEN, INTERMEDIATE);
-        (g_trace.output, Some(g_trace.acc), u_trace.output, Some(u_trace.acc))
+        (
+            g_trace.output,
+            Some(g_trace.acc),
+            u_trace.output,
+            Some(u_trace.acc),
+        )
     } else {
         (
             matmul_fixed_i32(
@@ -2097,8 +2102,12 @@ fn run_mlp_fixed(
     }
     let started = Instant::now();
     let (m, m_acc) = if trace.is_some() {
-        let m_trace =
-            silu_mul_fixed_i32_with_acc(&g, &u, cfg.sigmoid_input_rounding, cfg.silu_gate_mul_input);
+        let m_trace = silu_mul_fixed_i32_with_acc(
+            &g,
+            &u,
+            cfg.sigmoid_input_rounding,
+            cfg.silu_gate_mul_input,
+        );
         (m_trace.output, Some(m_trace.acc))
     } else {
         (
@@ -2110,8 +2119,16 @@ fn run_mlp_fixed(
         timing.mlp_silu += started.elapsed();
     }
     if let Some(trace) = trace.as_deref_mut() {
-        let a_ref = trace.tensor_i32(&format!("layer{layer_idx}.silu_gate_times_up.A"), &[rows, INTERMEDIATE], &g)?;
-        let b_ref = trace.tensor_i32(&format!("layer{layer_idx}.silu_gate_times_up.B"), &[rows, INTERMEDIATE], &u)?;
+        let a_ref = trace.tensor_i32(
+            &format!("layer{layer_idx}.silu_gate_times_up.A"),
+            &[rows, INTERMEDIATE],
+            &g,
+        )?;
+        let b_ref = trace.tensor_i32(
+            &format!("layer{layer_idx}.silu_gate_times_up.B"),
+            &[rows, INTERMEDIATE],
+            &u,
+        )?;
         let acc_ref = trace.tensor_i64(
             &format!("layer{layer_idx}.silu_gate_times_up.Acc"),
             &[rows, INTERMEDIATE],
@@ -2240,13 +2257,7 @@ fn round_trace(acc: Vec<i64>) -> RoundTrace {
     RoundTrace { acc, output }
 }
 
-fn matmul_fixed_i32_with_acc(
-    a: &[i32],
-    w: &[i32],
-    m: usize,
-    k: usize,
-    n: usize,
-) -> RoundTrace {
+fn matmul_fixed_i32_with_acc(a: &[i32], w: &[i32], m: usize, k: usize, n: usize) -> RoundTrace {
     assert_eq!(a.len(), m * k);
     assert_eq!(w.len(), k * n);
     let mut acc = vec![0i64; m * n];

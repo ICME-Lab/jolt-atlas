@@ -78,9 +78,6 @@ pub enum ProverError {
     #[error("internal sumcheck opening was not produced")]
     MissingOpening,
 
-    #[error("trace witness error: {0}")]
-    TraceWitness(#[from] crate::trace::TraceWitnessError),
-
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 

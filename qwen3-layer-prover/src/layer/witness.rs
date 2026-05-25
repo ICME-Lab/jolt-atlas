@@ -1,7 +1,7 @@
 use crate::ops::{
-    hadamard_mul::HadamardRoundWitness, matmul::MatMulRoundWitness, pv_matmul::PvMatmulWitness,
-    qk_score::QkScoreWitness, rms_norm::RmsNormWitness, rope::RopeWitness, round::ROUND_FRAC_BITS,
-    silu::SiluRoundWitness, softmax::SoftmaxWitness,
+    hadamard_mul::HadamardRoundWitness, pv_matmul::PvMatmulWitness, qk_score::QkScoreWitness,
+    rms_norm::RmsNormWitness, rope::RopeWitness, round::ROUND_FRAC_BITS, silu::SiluRoundWitness,
+    softmax::SoftmaxWitness,
 };
 
 pub(crate) use crate::trace::build_layer_witness_from_trace_dir;
@@ -108,15 +108,6 @@ pub struct LayerWitness {
 }
 
 impl LayerWitness {
-    pub(crate) fn o_proj_witness(&self) -> MatMulRoundWitness<'_> {
-        MatMulRoundWitness {
-            input: &self.context,
-            acc: &self.o_proj_acc,
-            output: &self.o_proj,
-            frac_bits: self.o_proj_frac_bits.each_ref().map(Vec::as_slice),
-        }
-    }
-
     pub(crate) fn softmax_witness(&self) -> SoftmaxWitness<'_> {
         SoftmaxWitness {
             input: &self.qk_score,
@@ -194,33 +185,6 @@ impl LayerWitness {
         }
     }
 
-    pub(crate) fn q_proj_witness(&self) -> MatMulRoundWitness<'_> {
-        MatMulRoundWitness {
-            input: &self.rms_norm_atten_a,
-            acc: &self.q_proj_acc,
-            output: &self.q_proj,
-            frac_bits: self.q_proj_frac_bits.each_ref().map(Vec::as_slice),
-        }
-    }
-
-    pub(crate) fn k_proj_witness(&self) -> MatMulRoundWitness<'_> {
-        MatMulRoundWitness {
-            input: &self.rms_norm_atten_b,
-            acc: &self.k_proj_acc,
-            output: &self.k_proj,
-            frac_bits: self.k_proj_frac_bits.each_ref().map(Vec::as_slice),
-        }
-    }
-
-    pub(crate) fn v_proj_witness(&self) -> MatMulRoundWitness<'_> {
-        MatMulRoundWitness {
-            input: &self.rms_norm_atten_c,
-            acc: &self.v_proj_acc,
-            output: &self.v_proj,
-            frac_bits: self.v_proj_frac_bits.each_ref().map(Vec::as_slice),
-        }
-    }
-
     pub(crate) fn rms_norm_atten_witness(&self) -> RmsNormWitness<'_> {
         RmsNormWitness {
             input: &self.hidden_in,
@@ -247,15 +211,6 @@ impl LayerWitness {
         }
     }
 
-    pub(crate) fn down_proj_witness(&self) -> MatMulRoundWitness<'_> {
-        MatMulRoundWitness {
-            input: &self.silu_up,
-            acc: &self.down_proj_acc,
-            output: &self.down_proj,
-            frac_bits: self.down_proj_frac_bits.each_ref().map(Vec::as_slice),
-        }
-    }
-
     pub(crate) fn rms_norm_mlp_witness(&self) -> RmsNormWitness<'_> {
         RmsNormWitness {
             input: &self.residual_add_attn_b,
@@ -269,24 +224,6 @@ impl LayerWitness {
             acc: &self.rms_norm_mlp_acc,
             output: &self.rms_norm_mlp_a,
             frac_bits: self.rms_norm_mlp_frac_bits.each_ref().map(Vec::as_slice),
-        }
-    }
-
-    pub(crate) fn gate_proj_witness(&self) -> MatMulRoundWitness<'_> {
-        MatMulRoundWitness {
-            input: &self.rms_norm_mlp_a,
-            acc: &self.gate_proj_acc,
-            output: &self.gate_proj,
-            frac_bits: self.gate_proj_frac_bits.each_ref().map(Vec::as_slice),
-        }
-    }
-
-    pub(crate) fn up_proj_witness(&self) -> MatMulRoundWitness<'_> {
-        MatMulRoundWitness {
-            input: &self.rms_norm_mlp_b,
-            acc: &self.up_proj_acc,
-            output: &self.up_proj,
-            frac_bits: self.up_proj_frac_bits.each_ref().map(Vec::as_slice),
         }
     }
 

@@ -18,24 +18,20 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
-// Design note for future us:
-//
-// Elementwise add is linear as an MLE for one point:
-//     Y(r) = A(r) + B(r).
-// However residual add is the main layer-boundary branching point.  When multiple
-// downstream claims refer to the same add output, direct opening at every point
-// would leak branching into the rest of the graph.  `prove_matadd` batches
-// those claims with random coefficients and runs one sumcheck:
-//     sum_t alpha_t Y(r_t)
-//       = sum_i (sum_t alpha_t eq(i, r_t)) * (A(i) + B(i)).
-// This produces one `A` claim and one `B` claim at the sumcheck point.  The
-// batched API is also used for a single output claim, so there is only one add
-// proof path.
 
 use crate::{
-    claim::{Claim, Shape, TensorId},
+    claim::{Claim, Poly, Shape, TensorId},
     error::{ProverError, Result},
 };
+
+/// Elementwise add:
+///
+///   Y = A + B
+///
+/// Add is linear as an MLE, but residual add is a fanout point in the layer
+/// graph. `prove_matadd` therefore accepts one or more claims on `Y`, batches
+/// them with transcript challenges, and returns one claim for `A` and one claim
+/// for `B`.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatAddParams {
@@ -65,26 +61,30 @@ pub struct MatAddProof<F: JoltField, T: Transcript> {
     pub b_opening: F,
 }
 
-pub fn prove_matadd<F, T>(
-    y_claims: Vec<Claim<F>>,
-    a: &[i32],
-    b: &[i32],
+pub fn prove_matadd<F, T, C>(
+    y_claims: Vec<Claim<F, C>>,
+    a_poly: Poly<F, C>,
+    b_poly: Poly<F, C>,
     params: &MatAddParams,
     transcript: &mut T,
-) -> Result<(MatAddProof<F, T>, Claim<F>, Claim<F>)>
+) -> Result<(MatAddProof<F, T>, Claim<F, C>, Claim<F, C>)>
 where
     F: JoltField,
     T: Transcript,
+    C: Clone,
 {
-    validate_batched_inputs(&y_claims, a, b, params)?;
+    validate_batched_inputs(&y_claims, &a_poly, &b_poly, params)?;
     let alphas = transcript.challenge_scalar_powers(y_claims.len());
     let input_claim = batched_input_claim(&y_claims, &alphas);
-    let eq_batch = batched_eq_poly(&y_claims, &alphas);
-    let a_poly = padded_tensor(a, &params.shape);
-    let b_poly = padded_tensor(b, &params.shape);
+    let eq_batch = batched_eq_poly(&y_claims, &alphas, params);
     let sc_params =
         MatAddSumcheckParams::new(params.shape.padded_power_of_two().point_len(), input_claim);
-    let mut prover = MatAddSumcheckProver::new(sc_params, eq_batch, a_poly, b_poly);
+    let mut prover = MatAddSumcheckProver::new(
+        sc_params,
+        eq_batch,
+        coeffs_for_domain(&a_poly, params)?,
+        coeffs_for_domain(&b_poly, params)?,
+    );
     let mut accumulator = ProverOpeningAccumulator::new();
     let (sumcheck, challenges) = Sumcheck::prove(&mut prover, &mut accumulator, transcript);
     let a_opening = opening(
@@ -103,32 +103,21 @@ where
             a_opening,
             b_opening,
         },
-        Claim {
-            tensor: params.a_tensor.clone(),
-            logical_shape: params.shape.clone(),
-            domain_shape: params.shape.padded_power_of_two(),
-            point: point.clone(),
-            value: a_opening,
-        },
-        Claim {
-            tensor: params.b_tensor.clone(),
-            logical_shape: params.shape.clone(),
-            domain_shape: params.shape.padded_power_of_two(),
-            point,
-            value: b_opening,
-        },
+        Claim::new(a_poly, point.clone(), a_opening),
+        Claim::new(b_poly, point, b_opening),
     ))
 }
 
-pub fn verify_matadd<F, T>(
-    y_claims: Vec<Claim<F>>,
+pub fn verify_matadd<F, T, C>(
+    y_claims: Vec<Claim<F, C>>,
     proof: &MatAddProof<F, T>,
     params: &MatAddParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>), ProofVerifyError>
+) -> std::result::Result<(Claim<F, C>, Claim<F, C>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,
+    C: Clone,
 {
     verify_batched_inputs(&y_claims, params)?;
     let alphas = transcript.challenge_scalar_powers(y_claims.len());
@@ -158,134 +147,92 @@ where
     let point = normalize_sumcheck_point::<F>(&challenges.into_opening());
 
     Ok((
-        Claim {
-            tensor: params.a_tensor.clone(),
-            logical_shape: params.shape.clone(),
-            domain_shape: params.shape.padded_power_of_two(),
-            point: point.clone(),
-            value: proof.a_opening,
-        },
-        Claim {
-            tensor: params.b_tensor.clone(),
-            logical_shape: params.shape.clone(),
-            domain_shape: params.shape.padded_power_of_two(),
-            point,
-            value: proof.b_opening,
-        },
+        Claim::new(dummy_poly(&params.shape), point.clone(), proof.a_opening),
+        Claim::new(dummy_poly(&params.shape), point, proof.b_opening),
     ))
 }
 
-fn validate_inputs<F: JoltField>(
-    y_claim: &Claim<F>,
-    a: &[i32],
-    b: &[i32],
-    params: &MatAddParams,
-) -> Result<()> {
-    if params.shape.dims().contains(&0) {
-        return Err(ProverError::InvalidTensorShape(params.shape.0.clone()));
-    }
-    let expected_len = params.shape.numel();
-    if a.len() != expected_len {
-        return Err(ProverError::TensorLenMismatch {
-            name: "A",
-            shape: params.shape.0.clone(),
-            expected: expected_len,
-            actual: a.len(),
-        });
-    }
-    if b.len() != expected_len {
-        return Err(ProverError::TensorLenMismatch {
-            name: "B",
-            shape: params.shape.0.clone(),
-            expected: expected_len,
-            actual: b.len(),
-        });
-    }
-    if y_claim.logical_shape != params.shape {
-        return Err(ProverError::ShapeMismatch {
-            name: "Y claim",
-            expected: params.shape.0.clone(),
-            actual: y_claim.logical_shape.0.clone(),
-        });
-    }
-    let expected_domain = params.shape.padded_power_of_two();
-    if y_claim.domain_shape != expected_domain {
-        return Err(ProverError::ShapeMismatch {
-            name: "Y claim domain",
-            expected: expected_domain.0,
-            actual: y_claim.domain_shape.0.clone(),
-        });
-    }
-    let expected_point_len = y_claim.domain_shape.point_len();
-    if y_claim.point.len() != expected_point_len {
-        return Err(ProverError::ShapeMismatch {
-            name: "Y claim point",
-            expected: vec![expected_point_len],
-            actual: vec![y_claim.point.len()],
-        });
-    }
-    Ok(())
-}
-
-fn verify_inputs<F: JoltField>(
-    y_claim: &Claim<F>,
-    params: &MatAddParams,
-) -> std::result::Result<(), ProofVerifyError> {
-    if params.shape.dims().contains(&0) {
-        return Err(ProofVerifyError::InvalidInputLength(1, 0));
-    }
-    if y_claim.logical_shape != params.shape {
-        return Err(ProofVerifyError::InvalidInputLength(
-            params.shape.numel(),
-            y_claim.logical_shape.numel(),
-        ));
-    }
-    let expected_domain = params.shape.padded_power_of_two();
-    if y_claim.domain_shape != expected_domain {
-        return Err(ProofVerifyError::InvalidInputLength(
-            expected_domain.numel(),
-            y_claim.domain_shape.numel(),
-        ));
-    }
-    let expected_point_len = y_claim.domain_shape.point_len();
-    if y_claim.point.len() != expected_point_len {
-        return Err(ProofVerifyError::InvalidInputLength(
-            expected_point_len,
-            y_claim.point.len(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_batched_inputs<F: JoltField>(
-    y_claims: &[Claim<F>],
-    a: &[i32],
-    b: &[i32],
+fn validate_batched_inputs<F: JoltField, C>(
+    y_claims: &[Claim<F, C>],
+    a: &Poly<F, C>,
+    b: &Poly<F, C>,
     params: &MatAddParams,
 ) -> Result<()> {
     if y_claims.is_empty() {
         return Err(ProverError::InvalidTensorShape(vec![]));
     }
+    if params.shape.dims().contains(&0) {
+        return Err(ProverError::InvalidTensorShape(params.shape.0.clone()));
+    }
+    validate_poly_domain("A", a, params)?;
+    validate_poly_domain("B", b, params)?;
     for claim in y_claims {
-        validate_inputs(claim, a, b, params)?;
+        validate_claim_domain("Y claim", claim, params)?;
     }
     Ok(())
 }
 
-fn verify_batched_inputs<F: JoltField>(
-    y_claims: &[Claim<F>],
+fn validate_poly_domain<F: JoltField, C>(
+    name: &'static str,
+    poly: &Poly<F, C>,
+    params: &MatAddParams,
+) -> Result<()> {
+    let expected = params.shape.padded_power_of_two().numel();
+    if poly.data.len() != expected {
+        return Err(ProverError::TensorLenMismatch {
+            name,
+            shape: params.shape.padded_power_of_two().0,
+            expected,
+            actual: poly.data.len(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_claim_domain<F: JoltField, C>(
+    name: &'static str,
+    claim: &Claim<F, C>,
+    params: &MatAddParams,
+) -> Result<()> {
+    validate_poly_domain(name, &claim.poly, params)?;
+    let expected = params.shape.padded_power_of_two().point_len();
+    if claim.point.len() != expected {
+        return Err(ProverError::ShapeMismatch {
+            name,
+            expected: vec![expected],
+            actual: vec![claim.point.len()],
+        });
+    }
+    Ok(())
+}
+
+fn verify_batched_inputs<F: JoltField, C>(
+    y_claims: &[Claim<F, C>],
     params: &MatAddParams,
 ) -> std::result::Result<(), ProofVerifyError> {
     if y_claims.is_empty() {
         return Err(ProofVerifyError::InvalidInputLength(1, 0));
     }
+    let expected_point_len = params.shape.padded_power_of_two().point_len();
+    let expected_domain_len = params.shape.padded_power_of_two().numel();
     for claim in y_claims {
-        verify_inputs(claim, params)?;
+        if claim.point.len() != expected_point_len {
+            return Err(ProofVerifyError::InvalidInputLength(
+                expected_point_len,
+                claim.point.len(),
+            ));
+        }
+        if claim.poly.data.len() != expected_domain_len {
+            return Err(ProofVerifyError::InvalidInputLength(
+                expected_domain_len,
+                claim.poly.data.len(),
+            ));
+        }
     }
     Ok(())
 }
 
-fn batched_input_claim<F: JoltField>(claims: &[Claim<F>], alphas: &[F]) -> F {
+fn batched_input_claim<F: JoltField, C>(claims: &[Claim<F, C>], alphas: &[F]) -> F {
     claims
         .iter()
         .zip(alphas)
@@ -293,8 +240,12 @@ fn batched_input_claim<F: JoltField>(claims: &[Claim<F>], alphas: &[F]) -> F {
         .sum()
 }
 
-fn batched_eq_poly<F: JoltField>(claims: &[Claim<F>], alphas: &[F]) -> Vec<F> {
-    let len = claims[0].domain_shape.numel();
+fn batched_eq_poly<F: JoltField, C>(
+    claims: &[Claim<F, C>],
+    alphas: &[F],
+    params: &MatAddParams,
+) -> Vec<F> {
+    let len = params.shape.padded_power_of_two().numel();
     let mut out = vec![F::zero(); len];
     for (claim, alpha) in claims.iter().zip(alphas) {
         let eq = EqPolynomial::<F>::evals(&claim.point);
@@ -303,6 +254,11 @@ fn batched_eq_poly<F: JoltField>(claims: &[Claim<F>], alphas: &[F]) -> Vec<F> {
         }
     }
     out
+}
+
+fn coeffs_for_domain<F: JoltField, C>(poly: &Poly<F, C>, params: &MatAddParams) -> Result<Vec<F>> {
+    validate_poly_domain("poly", poly, params)?;
+    Ok(poly.data.coeffs())
 }
 
 struct MatAddSumcheckParams<F: JoltField> {
@@ -465,32 +421,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MatAddSumch
     }
 }
 
-fn padded_tensor<F: JoltField>(values: &[i32], shape: &Shape) -> Vec<F> {
-    let padded_dims = shape.padded_power_of_two().0;
-    let len = padded_dims.iter().product();
-    let mut out = vec![F::zero(); len];
-    let strides = row_major_strides(shape.dims());
-    let padded_strides = row_major_strides(&padded_dims);
-
-    for (flat, &value) in values.iter().enumerate() {
-        let mut padded_flat = 0;
-        for (dim, &stride) in strides.iter().enumerate() {
-            let coord = (flat / stride) % shape.dims()[dim];
-            padded_flat += coord * padded_strides[dim];
-        }
-        out[padded_flat] = F::from_i32(value);
-    }
-    out
-}
-
-fn row_major_strides(dims: &[usize]) -> Vec<usize> {
-    let mut strides = vec![1; dims.len()];
-    let mut stride = 1;
-    for (idx, &dim) in dims.iter().enumerate().rev() {
-        strides[idx] = stride;
-        stride *= dim;
-    }
-    strides
+fn dummy_poly<F: JoltField, C>(shape: &Shape) -> Poly<F, C> {
+    Poly::new(
+        MultilinearPolynomial::from(vec![F::zero(); shape.padded_power_of_two().numel()]),
+        None,
+    )
 }
 
 fn opening<F: JoltField>(accumulator: &ProverOpeningAccumulator<F>, id: OpeningId) -> Result<F> {
@@ -514,184 +449,130 @@ fn matadd_sumcheck_id() -> SumcheckId {
 #[cfg(test)]
 mod tests {
     use ark_bn254::Fr;
-    use joltworks::poly::eq_poly::EqPolynomial;
-    use joltworks::transcripts::Blake2bTranscript;
+    use joltworks::{
+        poly::{eq_poly::EqPolynomial, multilinear_polynomial::MultilinearPolynomial},
+        transcripts::Blake2bTranscript,
+    };
 
     use super::*;
 
     #[test]
-    fn proves_and_verifies_matadd() {
-        let params = MatAddParams::new(vec![2, 3], "A", "B");
-        let a = vec![1, 2, 3, 4, 5, 6];
-        let b = vec![10, 20, 30, 40, 50, 60];
-        let y = vec![11, 22, 33, 44, 55, 66];
-        let points = [
-            vec![Fr::from(3u64), Fr::from(5u64), Fr::from(7u64)],
-            vec![Fr::from(11u64), Fr::from(13u64), Fr::from(17u64)],
-        ];
-        let y_claims = points
-            .iter()
-            .map(|point| Claim {
-                tensor: TensorId::new("Y"),
-                logical_shape: params.shape.clone(),
-                domain_shape: params.shape.padded_power_of_two(),
-                value: eval_tensor_at_point(&y, &params.shape, point),
-                point: point.clone(),
-            })
-            .collect::<Vec<_>>();
+    fn proves_and_verifies_matadd_from_poly_claims() {
+        let params = MatAddParams::new(vec![2, 2], "A", "B");
+        let a = vec![1, 2, 3, 4];
+        let b = vec![10, 20, 30, 40];
+        let y = vec![11, 22, 33, 44];
+        let point = vec![Fr::from(3_u64), Fr::from(5_u64)];
+        let y_claim = Claim::new(
+            poly_from_i32(&y, &params.shape),
+            point.clone(),
+            eval_flat(&y, &params.shape, &point),
+        );
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, lhs, rhs) =
-            prove_matadd::<Fr, _>(y_claims.clone(), &a, &b, &params, &mut prover_transcript)
-                .unwrap();
+        let (proof, lhs, rhs) = prove_matadd(
+            vec![y_claim.clone()],
+            poly_from_i32(&a, &params.shape),
+            poly_from_i32(&b, &params.shape),
+            &params,
+            &mut prover_transcript,
+        )
+        .unwrap();
 
         let mut verifier_transcript = Blake2bTranscript::default();
-        let (verify_lhs, verify_rhs) =
-            verify_matadd::<Fr, _>(y_claims, &proof, &params, &mut verifier_transcript).unwrap();
+        let (verified_lhs, verified_rhs) =
+            verify_matadd(vec![y_claim], &proof, &params, &mut verifier_transcript).unwrap();
 
-        assert_eq!(verify_lhs, lhs);
-        assert_eq!(verify_rhs, rhs);
-        assert_eq!(verify_lhs.tensor.0, "A");
-        assert_eq!(verify_rhs.tensor.0, "B");
+        assert_eq!(verified_lhs.point, lhs.point);
+        assert_eq!(verified_lhs.value, lhs.value);
+        assert_eq!(verified_rhs.point, rhs.point);
+        assert_eq!(verified_rhs.value, rhs.value);
     }
 
     #[test]
-    fn proves_and_verifies_matadd_non_power_rows() {
+    fn batches_multiple_output_claims() {
         let params = MatAddParams::new(vec![3, 4], "A", "B");
         let a = (1..=12).collect::<Vec<_>>();
         let b = (10..=21).collect::<Vec<_>>();
         let y = a.iter().zip(&b).map(|(&a, &b)| a + b).collect::<Vec<_>>();
         let points = [
             vec![
-                Fr::from(3u64),
-                Fr::from(5u64),
-                Fr::from(7u64),
-                Fr::from(11u64),
+                Fr::from(3_u64),
+                Fr::from(5_u64),
+                Fr::from(7_u64),
+                Fr::from(11_u64),
             ],
             vec![
-                Fr::from(13u64),
-                Fr::from(17u64),
-                Fr::from(19u64),
-                Fr::from(23u64),
+                Fr::from(13_u64),
+                Fr::from(17_u64),
+                Fr::from(19_u64),
+                Fr::from(23_u64),
             ],
         ];
         let y_claims = points
             .iter()
-            .map(|point| Claim {
-                tensor: TensorId::new("Y"),
-                logical_shape: params.shape.clone(),
-                domain_shape: params.shape.padded_power_of_two(),
-                value: eval_tensor_at_point(&y, &params.shape, point),
-                point: point.clone(),
+            .map(|point| {
+                Claim::new(
+                    poly_from_i32(&y, &params.shape),
+                    point.clone(),
+                    eval_flat(&y, &params.shape, point),
+                )
             })
             .collect::<Vec<_>>();
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, lhs, rhs) =
-            prove_matadd::<Fr, _>(y_claims.clone(), &a, &b, &params, &mut prover_transcript)
-                .unwrap();
-
-        let mut verifier_transcript = Blake2bTranscript::default();
-        let (verify_lhs, verify_rhs) =
-            verify_matadd::<Fr, _>(y_claims, &proof, &params, &mut verifier_transcript).unwrap();
-
-        assert_eq!(verify_lhs, lhs);
-        assert_eq!(verify_rhs, rhs);
-    }
-
-    #[test]
-    fn matadd_handles_single_claim() {
-        let params = MatAddParams::new(vec![2, 2], "A", "B");
-        let a = vec![1, 2, 3, 4];
-        let b = vec![10, 20, 30, 40];
-        let y = vec![11, 22, 33, 44];
-        let point = vec![Fr::from(3u64), Fr::from(5u64)];
-        let y_claim = Claim {
-            tensor: TensorId::new("Y"),
-            logical_shape: params.shape.clone(),
-            domain_shape: params.shape.padded_power_of_two(),
-            value: eval_tensor_at_point(&y, &params.shape, &point),
-            point,
-        };
-
-        let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, lhs, rhs) = prove_matadd::<Fr, _>(
-            vec![y_claim.clone()],
-            &a,
-            &b,
+        let (proof, lhs, rhs) = prove_matadd(
+            y_claims.clone(),
+            poly_from_i32(&a, &params.shape),
+            poly_from_i32(&b, &params.shape),
             &params,
             &mut prover_transcript,
         )
         .unwrap();
 
         let mut verifier_transcript = Blake2bTranscript::default();
-        let (verify_lhs, verify_rhs) =
-            verify_matadd::<Fr, _>(vec![y_claim], &proof, &params, &mut verifier_transcript)
-                .unwrap();
+        let (verified_lhs, verified_rhs) =
+            verify_matadd(y_claims, &proof, &params, &mut verifier_transcript).unwrap();
 
-        assert_eq!(verify_lhs, lhs);
-        assert_eq!(verify_rhs, rhs);
+        assert_eq!(verified_lhs.point, lhs.point);
+        assert_eq!(verified_lhs.value, lhs.value);
+        assert_eq!(verified_rhs.point, rhs.point);
+        assert_eq!(verified_rhs.value, rhs.value);
     }
 
-    #[test]
-    fn matadd_verifier_rejects_tampered_opening() {
-        let params = MatAddParams::new(vec![2, 2], "A", "B");
-        let a = vec![1, 2, 3, 4];
-        let b = vec![10, 20, 30, 40];
-        let y = vec![11, 22, 33, 44];
-        let point = vec![Fr::from(3u64), Fr::from(5u64)];
-        let y_claim = Claim {
-            tensor: TensorId::new("Y"),
-            logical_shape: params.shape.clone(),
-            domain_shape: params.shape.padded_power_of_two(),
-            value: eval_tensor_at_point(&y, &params.shape, &point),
-            point,
-        };
-
-        let mut prover_transcript = Blake2bTranscript::default();
-        let (mut proof, _, _) = prove_matadd::<Fr, _>(
-            vec![y_claim.clone()],
-            &a,
-            &b,
-            &params,
-            &mut prover_transcript,
-        )
-        .unwrap();
-        proof.a_opening += Fr::from(1u64);
-
-        let mut verifier_transcript = Blake2bTranscript::default();
-        let err = verify_matadd::<Fr, _>(vec![y_claim], &proof, &params, &mut verifier_transcript);
-
-        assert!(err.is_err());
-    }
-
-    fn eval_tensor_at_point<F: JoltField>(values: &[i32], shape: &Shape, point: &[F]) -> F {
-        let eq_by_dim = split_point(shape, point)
-            .into_iter()
-            .map(EqPolynomial::<F>::evals)
-            .collect::<Vec<_>>();
+    fn poly_from_i32(values: &[i32], shape: &Shape) -> Poly<Fr, ()> {
+        let padded_dims = shape.padded_power_of_two().0;
+        let mut out = vec![0; padded_dims.iter().product()];
         let strides = row_major_strides(shape.dims());
-        let mut out = F::zero();
-
+        let padded_strides = row_major_strides(&padded_dims);
         for (flat, &value) in values.iter().enumerate() {
-            let mut weight = F::one();
-            for (dim, (&stride, eq)) in strides.iter().zip(&eq_by_dim).enumerate() {
+            let mut padded_flat = 0;
+            for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate()
+            {
                 let coord = (flat / stride) % shape.dims()[dim];
-                weight *= eq[coord];
+                padded_flat += coord * padded_stride;
             }
-            out += weight * F::from_i32(value);
+            out[padded_flat] = value;
         }
-        out
+        Poly::new(MultilinearPolynomial::from(out), None)
     }
 
-    fn split_point<'a, F>(shape: &Shape, point: &'a [F]) -> Vec<&'a [F]> {
-        let mut out = Vec::with_capacity(shape.dims().len());
-        let mut offset = 0;
-        for &dim in shape.dims() {
-            let vars = dim.next_power_of_two().trailing_zeros() as usize;
-            out.push(&point[offset..offset + vars]);
-            offset += vars;
+    fn eval_flat(values: &[i32], shape: &Shape, point: &[Fr]) -> Fr {
+        let padded = poly_from_i32(values, shape).data.coeffs();
+        let eq = EqPolynomial::<Fr>::evals(point);
+        padded
+            .iter()
+            .zip(eq)
+            .fold(Fr::from_u64(0), |acc, (value, eq)| acc + *value * eq)
+    }
+
+    fn row_major_strides(dims: &[usize]) -> Vec<usize> {
+        let mut strides = vec![1; dims.len()];
+        let mut stride = 1;
+        for (idx, &dim) in dims.iter().enumerate().rev() {
+            strides[idx] = stride;
+            stride *= dim;
         }
-        out
+        strides
     }
 }

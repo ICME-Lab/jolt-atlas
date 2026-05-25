@@ -4,7 +4,7 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, Shape, TensorId},
+    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
     error::{ProverError, Result},
     ops::round::{
         ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
@@ -36,6 +36,7 @@ pub struct FloorParams {
     pub input_tensor: TensorId,
     pub output_tensor: TensorId,
     pub frac_bit_tensors: [TensorId; ROUND_FRAC_BITS],
+    pub lookup_site: usize,
 }
 
 impl FloorParams {
@@ -50,7 +51,13 @@ impl FloorParams {
             input_tensor: TensorId::new(input_tensor),
             output_tensor: TensorId::new(output_tensor),
             frac_bit_tensors: frac_bit_tensors.map(TensorId::new),
+            lookup_site: 0,
         }
+    }
+
+    pub fn with_lookup_site(mut self, lookup_site: usize) -> Self {
+        self.lookup_site = lookup_site;
+        self
     }
 
     fn round_params(&self) -> RoundParams {
@@ -60,6 +67,7 @@ impl FloorParams {
             output_tensor: self.output_tensor.clone(),
             frac_bit_tensors: self.frac_bit_tensors.clone(),
             frac_bits: ROUND_FRAC_BITS,
+            lookup_site: self.lookup_site,
         }
     }
 }
@@ -78,7 +86,7 @@ pub fn prove_floor<F, T>(
     witness: &FloorWitness<'_>,
     params: &FloorParams,
     transcript: &mut T,
-) -> Result<(FloorProof<F, T>, Claim<F>, Claim<F>)>
+) -> Result<(FloorProof<F, T>, Claim<F>, Vec<CommittedOpeningClaim<F>>)>
 where
     F: JoltField,
     T: Transcript,
@@ -104,7 +112,7 @@ pub fn verify_floor<F, T>(
     proof: &FloorProof<F, T>,
     params: &FloorParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>), ProofVerifyError>
+) -> std::result::Result<(Claim<F>, Vec<CommittedOpeningClaim<F>>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,

@@ -69,6 +69,9 @@ pub enum ProverError {
     #[error("invalid GQA layout: q_heads={q_heads}, kv_heads={kv_heads}")]
     InvalidGqa { q_heads: usize, kv_heads: usize },
 
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+
     #[error("RoPE witness is inconsistent with the output claim")]
     RopeMismatch,
 
@@ -77,6 +80,12 @@ pub enum ProverError {
 
     #[error("trace witness error: {0}")]
     TraceWitness(#[from] crate::trace::TraceWitnessError),
+
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("serialization error: {0}")]
+    Serialization(#[from] ark_serialize::SerializationError),
 
     #[error("missing committed polynomial(s) for opening claims: {0:?}")]
     MissingCommittedPolynomials(Vec<String>),

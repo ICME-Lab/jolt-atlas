@@ -19,7 +19,7 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, Shape, TensorId},
+    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
     error::{ProverError, Result},
     ops::{
         attention_common::{
@@ -27,8 +27,8 @@ use crate::{
             log2_ceil, split3, validate_claim, validate_gqa, verify_claim,
         },
         round::{
-            ROUND_FRAC_BITS, ROUND_LUT_LEN, RoundLookupProof, RoundParams, RoundWitness,
-            padded_lookup_indices, prove_round_lookup, round_lut_table, verify_round_lookup,
+            ROUND_FRAC_BITS, RoundLookupProof, RoundParams, RoundWitness, padded_lookup_indices,
+            prove_round_lookup, round_lut_table, verify_round_lookup,
         },
     },
 };
@@ -112,6 +112,12 @@ pub struct PvMatmulProof<F: JoltField, T: Transcript> {
     pub(crate) round_lookup: RoundLookupProof<F, T>,
 }
 
+impl<F: JoltField, T: Transcript> PvMatmulProof<F, T> {
+    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
+        self.round_lookup.committed_opening_claims()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PvMatmulRoundRelationProof<F: JoltField, T: Transcript> {
     pub sumcheck: SumcheckInstanceProof<F, T>,
@@ -126,7 +132,12 @@ pub fn prove_pv_matmul_round<F, T>(
     witness: &PvMatmulWitness<'_>,
     params: &PvMatmulRoundParams,
     transcript: &mut T,
-) -> Result<(PvMatmulProof<F, T>, Claim<F>, Claim<F>, Claim<F>)>
+) -> Result<(
+    PvMatmulProof<F, T>,
+    Claim<F>,
+    Claim<F>,
+    Vec<CommittedOpeningClaim<F>>,
+)>
 where
     F: JoltField,
     T: Transcript,
@@ -156,6 +167,7 @@ where
         (round_opening_point, remainder_opening),
     );
     let round_lookup = prove_round_lookup(
+        params.round.lookup_site,
         round_point,
         round_bit_opening,
         remainder_opening,
@@ -164,19 +176,7 @@ where
         &mut round_accumulator,
         transcript,
     )?;
-    let round_ra = Claim {
-        tensor: TensorId::new(format!("{}_round_ra", params.round.input_tensor.0)),
-        logical_shape: Shape::new(vec![
-            params.round.shape.padded_power_of_two().numel(),
-            ROUND_LUT_LEN,
-        ]),
-        domain_shape: Shape::new(vec![
-            params.round.shape.padded_power_of_two().numel(),
-            ROUND_LUT_LEN,
-        ]),
-        point: round_lookup.ra_point.clone(),
-        value: round_lookup.ra_opening,
-    };
+    let round_ra = round_lookup.committed_opening_claims();
 
     Ok((
         PvMatmulProof {
@@ -194,7 +194,7 @@ pub fn verify_pv_matmul_round<F, T>(
     proof: &PvMatmulProof<F, T>,
     params: &PvMatmulRoundParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>, Claim<F>), ProofVerifyError>
+) -> std::result::Result<(Claim<F>, Claim<F>, Vec<CommittedOpeningClaim<F>>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,
@@ -202,6 +202,7 @@ where
     let (p, v, round_point, round_bit_opening, remainder_opening) =
         verify_pv_matmul_round_relation(context_claim, &proof.pv, &params.pv, transcript)?;
     let round_lookup = verify_round_lookup(
+        params.round.lookup_site,
         params.round.shape.padded_power_of_two().numel(),
         round_point,
         round_bit_opening,
@@ -213,19 +214,7 @@ where
         &mut VerifierOpeningAccumulator::new(),
         transcript,
     )?;
-    let round_ra = Claim {
-        tensor: TensorId::new(format!("{}_round_ra", params.round.input_tensor.0)),
-        logical_shape: Shape::new(vec![
-            params.round.shape.padded_power_of_two().numel(),
-            ROUND_LUT_LEN,
-        ]),
-        domain_shape: Shape::new(vec![
-            params.round.shape.padded_power_of_two().numel(),
-            ROUND_LUT_LEN,
-        ]),
-        point: round_lookup.ra_point,
-        value: proof.round_lookup.ra_opening,
-    };
+    let round_ra = round_lookup.committed_opening_claims();
 
     Ok((p, v, round_ra))
 }

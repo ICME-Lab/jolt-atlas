@@ -36,11 +36,11 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, Shape, TensorId},
+    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
     error::{ProverError, Result},
     ops::round::{
-        ROUND_FRAC_BITS, ROUND_LUT_LEN, RoundLookupProof, RoundParams, RoundWitness,
-        padded_lookup_indices, prove_round_lookup, round_lut_table, verify_round_lookup,
+        ROUND_FRAC_BITS, RoundLookupProof, RoundParams, RoundWitness, padded_lookup_indices,
+        prove_round_lookup, round_lut_table, verify_round_lookup,
     },
 };
 
@@ -110,12 +110,23 @@ pub struct HadamardRoundProof<F: JoltField, T: Transcript> {
     pub(crate) round_lookup: RoundLookupProof<F, T>,
 }
 
+impl<F: JoltField, T: Transcript> HadamardRoundProof<F, T> {
+    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
+        self.round_lookup.committed_opening_claims()
+    }
+}
+
 pub fn prove_hadamard_round<F, T>(
     y_claim: Claim<F>,
     witness: &HadamardRoundWitness<'_>,
     params: &HadamardRoundParams,
     transcript: &mut T,
-) -> Result<(HadamardRoundProof<F, T>, Claim<F>, Claim<F>, Claim<F>)>
+) -> Result<(
+    HadamardRoundProof<F, T>,
+    Claim<F>,
+    Claim<F>,
+    Vec<CommittedOpeningClaim<F>>,
+)>
 where
     F: JoltField,
     T: Transcript,
@@ -144,6 +155,7 @@ where
         (round_point, hadamard_claims.remainder_opening),
     );
     let round_lookup = prove_round_lookup(
+        params.round.lookup_site,
         hadamard_claims.round_point,
         hadamard_claims.round_bit_opening,
         hadamard_claims.remainder_opening,
@@ -152,19 +164,7 @@ where
         &mut round_accumulator,
         transcript,
     )?;
-    let round_ra = Claim {
-        tensor: TensorId::new(format!("{}_round_ra", params.round.input_tensor.0)),
-        logical_shape: Shape::new(vec![
-            params.round.shape.padded_power_of_two().numel(),
-            ROUND_LUT_LEN,
-        ]),
-        domain_shape: Shape::new(vec![
-            params.round.shape.padded_power_of_two().numel(),
-            ROUND_LUT_LEN,
-        ]),
-        point: round_lookup.ra_point.clone(),
-        value: round_lookup.ra_opening,
-    };
+    let round_ra = round_lookup.committed_opening_claims();
 
     Ok((
         HadamardRoundProof {
@@ -182,7 +182,7 @@ pub fn verify_hadamard_round<F, T>(
     proof: &HadamardRoundProof<F, T>,
     params: &HadamardRoundParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>, Claim<F>), ProofVerifyError>
+) -> std::result::Result<(Claim<F>, Claim<F>, Vec<CommittedOpeningClaim<F>>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,
@@ -190,6 +190,7 @@ where
     let hadamard_claims =
         verify_hadamard_round_relation(y_claim, &proof.hadamard, &params.hadamard, transcript)?;
     let round_lookup = verify_round_lookup(
+        params.round.lookup_site,
         params.round.shape.padded_power_of_two().numel(),
         hadamard_claims.round_point,
         hadamard_claims.round_bit_opening,
@@ -201,19 +202,7 @@ where
         &mut VerifierOpeningAccumulator::new(),
         transcript,
     )?;
-    let round_ra = Claim {
-        tensor: TensorId::new(format!("{}_round_ra", params.round.input_tensor.0)),
-        logical_shape: Shape::new(vec![
-            params.round.shape.padded_power_of_two().numel(),
-            ROUND_LUT_LEN,
-        ]),
-        domain_shape: Shape::new(vec![
-            params.round.shape.padded_power_of_two().numel(),
-            ROUND_LUT_LEN,
-        ]),
-        point: round_lookup.ra_point,
-        value: proof.round_lookup.ra_opening,
-    };
+    let round_ra = round_lookup.committed_opening_claims();
 
     Ok((hadamard_claims.lhs, hadamard_claims.rhs, round_ra))
 }

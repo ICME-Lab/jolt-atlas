@@ -1,18 +1,28 @@
+use ark_bn254::{Bn254, Fr};
 use common::CommittedPoly;
 use joltworks::{
+    config::{OneHotConfig, OneHotParams},
     field::JoltField,
     poly::{
-        commitment::commitment_scheme::CommitmentScheme,
-        multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial,
+        commitment::{
+            commitment_scheme::CommitmentScheme,
+            hyperkzg::{HyperKZG, HyperKZGCommitment, HyperKZGProverKey},
+        },
+        multilinear_polynomial::MultilinearPolynomial,
+        one_hot_polynomial::OneHotPolynomial,
     },
+    subprotocols::shout::compute_instruction_h_indices,
     transcripts::{AppendToTranscript, Transcript},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::ops::round::ROUND_LUT_LEN;
+use crate::{
+    ops::round::ROUND_LUT_LEN,
+    streaming_srs::{FlatG1SrsReader, StreamingOneHotCommitter},
+};
 
 use super::{
-    tensors::LayerTensorIds,
+    tensors::{LayerTensorIds, round_site},
     types::{LayerShape, LayerWeights},
     witness::LayerWitness,
 };
@@ -24,6 +34,7 @@ use super::{
 #[derive(Debug, Clone)]
 pub struct LayerPolynomialEntry<F: JoltField> {
     pub name: String,
+    pub committed_poly: CommittedPoly,
     pub poly: MultilinearPolynomial<F>,
 }
 
@@ -35,6 +46,7 @@ pub struct LayerPolynomialMap<F: JoltField> {
 #[derive(Debug, Clone)]
 pub struct LayerCommitmentEntry<C> {
     pub name: String,
+    pub committed_poly: CommittedPoly,
     pub commitment: C,
 }
 
@@ -74,6 +86,7 @@ impl<C: Clone> LayerCommitments<C> {
                 };
                 LayerCommitmentEntry {
                     name: entry.name.clone(),
+                    committed_poly: entry.committed_poly,
                     commitment,
                 }
             })
@@ -103,11 +116,13 @@ impl<F: JoltField> LayerPolynomialMap<F> {
             format!("{}_round_ra", tensors.context_acc),
             &witness.context_acc,
             &[shape.seq, shape.q_heads, shape.head_dim],
+            round_site::CONTEXT,
         );
         out.push_round_ra(
             format!("{}_round_ra", tensors.o_proj_acc),
             &witness.o_proj_acc,
             &[shape.seq, shape.hidden],
+            round_site::O_PROJ,
         );
 
         let softmax_floor_as_i64 = witness
@@ -121,14 +136,22 @@ impl<F: JoltField> LayerPolynomialMap<F> {
             .map(|&value| value - (1_i64 << 7))
             .collect::<Vec<_>>();
         out.push_round_ra(
-            "softmax_floor_round_ra",
+            "softmax_output_round_ra",
             &softmax_floor_as_i64,
             &[shape.q_heads, shape.seq, shape.seq],
+            round_site::SOFTMAX_OUTPUT,
         );
         out.push_round_ra(
-            "softmax_acc_shifted_round_ra",
+            "softmax_floor_round_ra",
             &softmax_acc_shifted,
             &[shape.q_heads, shape.seq, shape.seq],
+            round_site::SOFTMAX_FLOOR,
+        );
+        out.push_round_ra(
+            "softmax_exp_acc_round_ra",
+            &witness.softmax_exp_acc,
+            &[shape.q_heads, shape.seq, shape.seq],
+            round_site::SOFTMAX_EXP,
         );
         out.push_lookup_ra(
             "softmax_ra",
@@ -140,6 +163,7 @@ impl<F: JoltField> LayerPolynomialMap<F> {
                 witness.softmax_max_diff,
             )),
             softmax_entries(witness.softmax_min_diff, witness.softmax_max_diff),
+            |d| CommittedPoly::QwenSoftmaxExpRaD(d),
         );
         out.push_softmax_input_remainder_ra(
             "softmax_input_remainder_ra",
@@ -153,71 +177,108 @@ impl<F: JoltField> LayerPolynomialMap<F> {
             format!("{}_round_ra", tensors.qk_score_scale_acc),
             &witness.qk_score_scale_acc,
             &[shape.q_heads, shape.seq, shape.seq],
+            round_site::QK_SCORE_SCALE,
         );
         out.push_round_ra(
             format!("{}_round_ra", tensors.qk_score_acc),
             &witness.qk_score_acc,
             &[shape.q_heads, shape.seq, shape.seq],
+            round_site::QK_SCORE_DOT,
         );
 
         out.push_round_ra(
             format!("{}_round_ra", tensors.q_rope_acc),
             &witness.q_rope_acc,
             &[shape.seq, shape.q_heads, shape.head_dim],
+            round_site::Q_ROPE,
         );
         out.push_round_ra(
             format!("{}_round_ra", tensors.k_rope_acc),
             &witness.k_rope_acc,
             &[shape.seq, shape.kv_heads, shape.head_dim],
+            round_site::K_ROPE,
         );
 
         out.push_round_ra(
             format!("{}_round_ra", tensors.q_proj_acc),
             &witness.q_proj_acc,
             &[shape.seq, shape.attention_width()],
+            round_site::Q_PROJ,
         );
         out.push_round_ra(
             format!("{}_round_ra", tensors.k_proj_acc),
             &witness.k_proj_acc,
             &[shape.seq, shape.kv_heads * shape.head_dim],
+            round_site::K_PROJ,
         );
         out.push_round_ra(
             format!("{}_round_ra", tensors.v_proj_acc),
             &witness.v_proj_acc,
             &[shape.seq, shape.kv_heads * shape.head_dim],
+            round_site::V_PROJ,
         );
 
         out.push_round_ra(
             format!("{}_round_ra", tensors.q_norm_acc),
             &witness.q_norm_acc,
             &[shape.seq, shape.q_heads, shape.head_dim],
+            round_site::Q_NORM,
+        );
+        out.push_round_ra(
+            "q_norm_norm_acc_round_ra",
+            &witness.q_norm_norm_acc,
+            &[shape.seq, shape.q_heads, shape.head_dim],
+            round_site::Q_NORM_INTERNAL,
         );
         out.push_round_ra(
             format!("{}_round_ra", tensors.k_norm_acc),
             &witness.k_norm_acc,
             &[shape.seq, shape.kv_heads, shape.head_dim],
+            round_site::K_NORM,
+        );
+        out.push_round_ra(
+            "k_norm_norm_acc_round_ra",
+            &witness.k_norm_norm_acc,
+            &[shape.seq, shape.kv_heads, shape.head_dim],
+            round_site::K_NORM_INTERNAL,
         );
 
         out.push_round_ra(
             format!("{}_round_ra", tensors.rms_norm_atten_acc),
             &witness.rms_norm_atten_acc,
             &[witness.rms_norm_atten_a.len()],
+            round_site::RMS_NORM_ATTEN,
+        );
+        out.push_round_ra(
+            "rms_norm_atten_norm_acc_round_ra",
+            &witness.rms_norm_atten_norm_acc,
+            &[shape.seq, shape.hidden],
+            round_site::RMS_NORM_ATTEN_INTERNAL,
         );
         out.push_round_ra(
             format!("{}_round_ra", tensors.rms_norm_mlp_acc),
             &witness.rms_norm_mlp_acc,
             &[shape.seq, shape.hidden],
+            round_site::RMS_NORM_MLP,
+        );
+        out.push_round_ra(
+            "rms_norm_mlp_norm_acc_round_ra",
+            &witness.rms_norm_mlp_norm_acc,
+            &[shape.seq, shape.hidden],
+            round_site::RMS_NORM_MLP_INTERNAL,
         );
 
         out.push_round_ra(
             format!("{}_round_ra", tensors.gate_proj_acc),
             &witness.gate_proj_acc,
             &[shape.seq, shape.intermediate],
+            round_site::GATE_PROJ,
         );
         out.push_round_ra(
             format!("{}_round_ra", tensors.up_proj_acc),
             &witness.up_proj_acc,
             &[shape.seq, shape.intermediate],
+            round_site::UP_PROJ,
         );
         out.push_round_ra(
             format!("{}_round_ra", tensors.gate_proj),
@@ -227,11 +288,23 @@ impl<F: JoltField> LayerPolynomialMap<F> {
                 .map(|&v| i64::from(v))
                 .collect::<Vec<_>>(),
             &[shape.seq, shape.intermediate],
+            round_site::SILU_GATE,
+        );
+        out.push_round_index_ra(
+            "silu_round_ra",
+            &witness
+                .gate_proj
+                .iter()
+                .map(|&v| i64::from(v))
+                .collect::<Vec<_>>(),
+            &[shape.seq, shape.intermediate],
+            |d| CommittedPoly::QwenSiluRoundRaD(d),
         );
         out.push_round_ra(
             format!("{}_round_ra", tensors.silu_acc),
             &witness.silu_acc,
             &[shape.seq, shape.intermediate],
+            round_site::SILU_OUTPUT,
         );
         out.push_lookup_ra(
             "silu_ra",
@@ -240,16 +313,28 @@ impl<F: JoltField> LayerPolynomialMap<F> {
             silu_entries(witness.silu_min_n, witness.silu_max_n),
             padded_silu_lut_len(silu_entries(witness.silu_min_n, witness.silu_max_n)),
             silu_entries(witness.silu_min_n, witness.silu_max_n),
+            |d| CommittedPoly::QwenSiluBaseRaD(d),
+        );
+        out.push_lookup_ra(
+            "silu_slope_ra",
+            &witness.silu_ra,
+            &[shape.seq, shape.intermediate],
+            silu_entries(witness.silu_min_n, witness.silu_max_n),
+            padded_silu_lut_len(silu_entries(witness.silu_min_n, witness.silu_max_n)),
+            silu_entries(witness.silu_min_n, witness.silu_max_n),
+            |d| CommittedPoly::QwenSiluSlopeRaD(d),
         );
         out.push_round_ra(
             format!("{}_round_ra", tensors.silu_up_acc),
             &witness.silu_up_acc,
             &[shape.seq, shape.intermediate],
+            round_site::SILU_UP,
         );
         out.push_round_ra(
             format!("{}_round_ra", tensors.down_proj_acc),
             &witness.down_proj_acc,
             &[shape.seq, shape.hidden],
+            round_site::DOWN_PROJ,
         );
         out
     }
@@ -257,8 +342,8 @@ impl<F: JoltField> LayerPolynomialMap<F> {
     pub fn committed_poly_for_tensor(&self, tensor: &str) -> Option<CommittedPoly> {
         self.entries
             .iter()
-            .position(|entry| entry.name == tensor)
-            .map(CommittedPoly::QwenLayerTensor)
+            .find(|entry| entry.name == tensor)
+            .map(|entry| entry.committed_poly)
     }
 
     pub fn core_poly_map_for_claims(
@@ -267,11 +352,10 @@ impl<F: JoltField> LayerPolynomialMap<F> {
     ) -> Result<BTreeMap<CommittedPoly, MultilinearPolynomial<F>>, crate::ProverError> {
         let mut out = BTreeMap::new();
         for claim in claims {
-            let Some((idx, entry)) = self
+            let Some(entry) = self
                 .entries
                 .iter()
-                .enumerate()
-                .find(|(_, entry)| entry.name == claim.tensor.0)
+                .find(|entry| entry.name == claim.tensor.0)
             else {
                 return Err(crate::ProverError::MissingCommittedPolynomials(vec![
                     claim.tensor.0.clone(),
@@ -287,9 +371,43 @@ impl<F: JoltField> LayerPolynomialMap<F> {
                     actual,
                 });
             }
-            out.insert(CommittedPoly::QwenLayerTensor(idx), entry.poly.clone());
+            out.insert(entry.committed_poly, entry.poly.clone());
         }
         Ok(out)
+    }
+
+    pub fn core_poly_map_for_openings(
+        &self,
+        claims: &[crate::Claim<F>],
+        committed_claims: &[crate::CommittedOpeningClaim<F>],
+    ) -> Result<BTreeMap<CommittedPoly, MultilinearPolynomial<F>>, crate::ProverError> {
+        let mut out = self.core_poly_map_for_claims(claims)?;
+        for claim in committed_claims {
+            let Some(entry) = self.entry_for_committed_poly(claim.poly) else {
+                return Err(crate::ProverError::MissingCommittedPolynomials(vec![
+                    format!("{:?}", claim.poly),
+                ]));
+            };
+            out.insert(entry.committed_poly, entry.poly.clone());
+        }
+        Ok(out)
+    }
+
+    pub fn entry_for_committed_poly(
+        &self,
+        poly: CommittedPoly,
+    ) -> Option<&LayerPolynomialEntry<F>> {
+        self.entries
+            .iter()
+            .find(|entry| entry.committed_poly == poly)
+    }
+
+    pub fn one_hot_log_k(&self, poly: CommittedPoly) -> Option<usize> {
+        let entry = self.entry_for_committed_poly(poly)?;
+        match &entry.poly {
+            MultilinearPolynomial::OneHot(one_hot) => Some(one_hot.K.trailing_zeros() as usize),
+            _ => None,
+        }
     }
 
     pub fn missing_opening_claims(&self, claims: &[crate::Claim<F>]) -> Vec<String> {
@@ -341,14 +459,47 @@ impl<F: JoltField> LayerPolynomialMap<F> {
         mismatches
     }
 
+    #[cfg(test)]
+    pub fn committed_opening_value_mismatches(
+        &self,
+        claims: &[crate::CommittedOpeningClaim<F>],
+    ) -> Vec<String> {
+        let mut mismatches = Vec::new();
+        for claim in claims {
+            let Some(entry) = self.entry_for_committed_poly(claim.poly) else {
+                mismatches.push(format!("{:?}: missing", claim.poly));
+                continue;
+            };
+            let value = joltworks::poly::multilinear_polynomial::PolynomialEvaluation::evaluate(
+                &entry.poly,
+                &claim.point,
+            );
+            if value != claim.value {
+                mismatches.push(format!(
+                    "{:?}/{:?}: value mismatch",
+                    claim.poly, claim.sumcheck
+                ));
+            }
+        }
+        mismatches
+    }
+
     fn push_i32(&mut self, name: impl Into<String>, values: &[i32]) {
+        let committed_poly = CommittedPoly::QwenLayerTensor(self.entries.len());
         self.entries.push(LayerPolynomialEntry {
             name: name.into(),
+            committed_poly,
             poly: MultilinearPolynomial::from(pad_power_of_two(values)),
         });
     }
 
-    fn push_round_ra(&mut self, name: impl Into<String>, input: &[i64], logical_shape: &[usize]) {
+    fn push_round_ra(
+        &mut self,
+        name: impl Into<String>,
+        input: &[i64],
+        logical_shape: &[usize],
+        lookup_site: usize,
+    ) {
         let logical_len = logical_shape.iter().product::<usize>();
         debug_assert_eq!(logical_len, input.len());
         let padded_dims = power_of_two_dims(logical_shape);
@@ -366,7 +517,35 @@ impl<F: JoltField> LayerPolynomialMap<F> {
             let remainder = value.rem_euclid(ROUND_LUT_LEN as i64) as usize;
             indices[padded_flat] = Some(remainder as u16);
         }
-        self.push_one_hot(name, indices, ROUND_LUT_LEN);
+        self.push_one_hot_decomposition(name, indices, ROUND_LUT_LEN, |d| {
+            CommittedPoly::QwenRoundRaD(lookup_site, d)
+        });
+    }
+
+    fn push_round_index_ra(
+        &mut self,
+        name: impl Into<String>,
+        input: &[i64],
+        logical_shape: &[usize],
+        committed_poly: impl Fn(usize) -> CommittedPoly,
+    ) {
+        let logical_len = logical_shape.iter().product::<usize>();
+        debug_assert_eq!(logical_len, input.len());
+        let padded_dims = power_of_two_dims(logical_shape);
+        let padded_len = padded_dims.iter().product::<usize>();
+        let mut indices = vec![Some(0_u16); padded_len];
+        let strides = row_major_strides(logical_shape);
+        let padded_strides = row_major_strides(&padded_dims);
+        for (flat, &value) in input.iter().enumerate() {
+            let mut padded_flat = 0;
+            for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate()
+            {
+                let coord = (flat / stride) % logical_shape[dim];
+                padded_flat += coord * padded_stride;
+            }
+            indices[padded_flat] = Some(value.rem_euclid(ROUND_LUT_LEN as i64) as u16);
+        }
+        self.push_one_hot_decomposition(name, indices, ROUND_LUT_LEN, committed_poly);
     }
 
     fn push_softmax_input_remainder_ra(
@@ -407,7 +586,9 @@ impl<F: JoltField> LayerPolynomialMap<F> {
                 indices[padded_flat] = Some(rem as u16);
             }
         }
-        self.push_one_hot(name, indices, ROUND_LUT_LEN);
+        self.push_one_hot_decomposition(name, indices, ROUND_LUT_LEN, |d| {
+            CommittedPoly::QwenSoftmaxInputRemainderRaD(d)
+        });
     }
 
     fn push_lookup_ra(
@@ -418,6 +599,7 @@ impl<F: JoltField> LayerPolynomialMap<F> {
         logical_entries: usize,
         padded_entries: usize,
         padding_index: usize,
+        committed_poly: impl Fn(usize) -> CommittedPoly,
     ) {
         let logical_len = logical_shape.iter().product::<usize>();
         debug_assert_eq!(logical_onehot.len(), logical_len * logical_entries);
@@ -446,24 +628,38 @@ impl<F: JoltField> LayerPolynomialMap<F> {
             indices[padded_flat] = Some(entry as u16);
         }
 
-        self.push_one_hot(name, indices, padded_entries);
+        self.push_one_hot_decomposition(name, indices, padded_entries, committed_poly);
     }
 
-    fn push_one_hot(
+    fn push_one_hot_decomposition(
         &mut self,
         name: impl Into<String>,
         nonzero_indices: Vec<Option<u16>>,
         entries: usize,
+        committed_poly: impl Fn(usize) -> CommittedPoly,
     ) {
         debug_assert!(entries.is_power_of_two());
         debug_assert!(nonzero_indices.len().is_power_of_two());
-        self.entries.push(LayerPolynomialEntry {
-            name: name.into(),
-            poly: MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
-                nonzero_indices,
-                entries,
-            )),
-        });
+        let one_hot_params = OneHotParams::from_config_and_log_K(
+            &OneHotConfig::default(),
+            entries.trailing_zeros() as usize,
+        );
+        let lookup_indices = nonzero_indices
+            .into_iter()
+            .map(|idx| idx.map(usize::from).unwrap_or(0))
+            .collect::<Vec<_>>();
+        let chunks = compute_instruction_h_indices(&lookup_indices, &one_hot_params);
+        let name = name.into();
+        for (d, chunk) in chunks.into_iter().enumerate() {
+            self.entries.push(LayerPolynomialEntry {
+                name: format!("{name}.rad.{d}"),
+                committed_poly: committed_poly(d),
+                poly: MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                    chunk.into_iter().map(|idx| idx.map(u16::from)).collect(),
+                    one_hot_params.k_chunk,
+                )),
+            });
+        }
     }
 }
 fn pad_power_of_two<T: Copy + Default>(values: &[T]) -> Vec<T> {
@@ -526,12 +722,77 @@ where
         };
         commitments.push(LayerCommitmentEntry {
             name: entry.name.clone(),
+            committed_poly: entry.committed_poly,
             commitment,
         });
     }
     LayerCommitments {
         entries: commitments,
     }
+}
+
+pub fn commit_layer_polynomials_streaming_onehot(
+    polynomials: &LayerPolynomialMap<Fr>,
+    hidden_state_commitments: HiddenStateCommitments<HyperKZGCommitment<Bn254>>,
+    dense_setup: &HyperKZGProverKey<Bn254>,
+    flat_srs: &FlatG1SrsReader,
+    srs_chunk_len: usize,
+    onehot_threads: Option<usize>,
+    report_metrics: bool,
+    sort_onehot_indices: bool,
+) -> crate::Result<LayerCommitments<HyperKZGCommitment<Bn254>>> {
+    let mut commitments = Vec::with_capacity(polynomials.entries.len());
+    let mut onehot_positions = Vec::new();
+    let mut onehot_committer =
+        StreamingOneHotCommitter::with_threads(flat_srs.clone(), srs_chunk_len, onehot_threads)?
+            .with_sorted_indices(sort_onehot_indices)
+            .with_metrics(report_metrics);
+
+    for entry in &polynomials.entries {
+        match entry.name.as_str() {
+            "hidden_in" => commitments.push(LayerCommitmentEntry {
+                name: entry.name.clone(),
+                committed_poly: entry.committed_poly,
+                commitment: hidden_state_commitments.hidden_in.clone(),
+            }),
+            "hidden_out" => commitments.push(LayerCommitmentEntry {
+                name: entry.name.clone(),
+                committed_poly: entry.committed_poly,
+                commitment: hidden_state_commitments.hidden_out.clone(),
+            }),
+            _ => match &entry.poly {
+                MultilinearPolynomial::OneHot(one_hot) => {
+                    let poly = entry.committed_poly;
+                    onehot_committer.add_one_hot(poly, one_hot)?;
+                    onehot_positions.push((commitments.len(), poly));
+                    commitments.push(LayerCommitmentEntry {
+                        name: entry.name.clone(),
+                        committed_poly: entry.committed_poly,
+                        commitment: HyperKZGCommitment::default(),
+                    });
+                }
+                _ => {
+                    let (commitment, _) = HyperKZG::<Bn254>::commit(&entry.poly, dense_setup);
+                    commitments.push(LayerCommitmentEntry {
+                        name: entry.name.clone(),
+                        committed_poly: entry.committed_poly,
+                        commitment,
+                    });
+                }
+            },
+        }
+    }
+
+    let mut onehot_commitments = onehot_committer.commit_all()?;
+    for (pos, poly) in onehot_positions {
+        commitments[pos].commitment = onehot_commitments.remove(&poly).ok_or_else(|| {
+            crate::ProverError::MissingCommittedPolynomials(vec![format!("{poly:?}")])
+        })?;
+    }
+
+    Ok(LayerCommitments {
+        entries: commitments,
+    })
 }
 
 pub(crate) fn commit_layer_tensors<F, PCS>(

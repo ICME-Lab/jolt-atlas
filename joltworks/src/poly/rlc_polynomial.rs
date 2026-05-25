@@ -14,6 +14,17 @@ pub fn build_materialized_rlc<F: JoltField>(
     coeffs: &[F],
     polynomials: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
 ) -> MultilinearPolynomial<F> {
+    let ordered = polynomials
+        .iter()
+        .map(|(poly, value)| (*poly, value))
+        .collect::<Vec<_>>();
+    build_materialized_rlc_ordered(coeffs, &ordered)
+}
+
+pub fn build_materialized_rlc_ordered<F: JoltField>(
+    coeffs: &[F],
+    polynomials: &[(CommittedPoly, &MultilinearPolynomial<F>)],
+) -> MultilinearPolynomial<F> {
     // Partition into dense and one-hot polynomials (like RLCPolynomial::linear_combination)
     let (dense, one_hot): (Vec<_>, Vec<_>) = polynomials
         .iter()

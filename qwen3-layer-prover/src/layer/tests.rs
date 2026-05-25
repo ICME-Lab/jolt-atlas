@@ -102,10 +102,15 @@ fn proves_and_verifies_layer_first_step() {
         polynomials.opening_value_mismatches(&claims.opening_claims()),
         Vec::<String>::new()
     );
+    assert_eq!(
+        polynomials.committed_opening_value_mismatches(&result.proof.committed_opening_claims()),
+        Vec::<String>::new()
+    );
 
     let opening_proof = prove_layer_claim_openings::<Fr, _, Pcs>(
         &polynomials,
         claims.opening_claims(),
+        result.proof.committed_opening_claims(),
         hidden_out_claim,
         &pcs_setup,
         &mut prover_transcript,

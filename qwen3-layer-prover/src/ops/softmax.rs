@@ -23,7 +23,7 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, Shape, TensorId},
+    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
     error::{ProverError, Result},
     ops::{
         floor::{FloorParams, FloorProof, FloorWitness, prove_floor, verify_floor},
@@ -124,6 +124,18 @@ impl SoftmaxParams {
         }
     }
 
+    pub fn with_lookup_sites(
+        mut self,
+        output_round_site: usize,
+        floor_round_site: usize,
+        exp_round_site: usize,
+    ) -> Self {
+        self.round.lookup_site = output_round_site;
+        self.floor.lookup_site = floor_round_site;
+        self.exp_round.lookup_site = exp_round_site;
+        self
+    }
+
     fn rows(&self) -> usize {
         self.shape.dims()[..self.shape.dims().len() - 1]
             .iter()
@@ -191,11 +203,31 @@ pub struct SoftmaxProof<F: JoltField, T: Transcript> {
     pub sum: Vec<i32>,
 }
 
+impl<F: JoltField, T: Transcript> SoftmaxProof<F, T> {
+    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
+        let mut out = self.round.committed_opening_claims();
+        out.extend(self.floor.committed_opening_claims());
+        out.extend(self.exp_round.committed_opening_claims());
+        out.extend(self.exp_ra_committed_openings.all().cloned());
+        out.extend(self.input_remainder_ra_committed_openings.all().cloned());
+        out
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SoftmaxRaCommittedOpenings<F: JoltField> {
-    pub ra_virtual: Vec<F>,
-    pub hamming_weight: Vec<F>,
-    pub booleanity: Vec<F>,
+    pub ra_virtual: Vec<CommittedOpeningClaim<F>>,
+    pub hamming_weight: Vec<CommittedOpeningClaim<F>>,
+    pub booleanity: Vec<CommittedOpeningClaim<F>>,
+}
+
+impl<F: JoltField> SoftmaxRaCommittedOpenings<F> {
+    fn all(&self) -> impl Iterator<Item = &CommittedOpeningClaim<F>> {
+        self.ra_virtual
+            .iter()
+            .chain(self.hamming_weight.iter())
+            .chain(self.booleanity.iter())
+    }
 }
 
 struct SoftmaxLookupProveResult<F: JoltField, T: Transcript> {
@@ -205,11 +237,12 @@ struct SoftmaxLookupProveResult<F: JoltField, T: Transcript> {
     input_remainder_lookup: SumcheckInstanceProof<F, T>,
     input_remainder_ra_onehot: SumcheckInstanceProof<F, T>,
     input_claim: Claim<F>,
-    input_remainder_ra_claim: Claim<F>,
-    ra_claim: Claim<F>,
+    input_remainder_ra_claims: Vec<CommittedOpeningClaim<F>>,
+    ra_claims: Vec<CommittedOpeningClaim<F>>,
     input_remainder_opening: F,
     exp_lut_opening: F,
     index_opening: F,
+    ra_opening: F,
     input_remainder_ra_opening: F,
     exp_ra_committed_openings: SoftmaxRaCommittedOpenings<F>,
     input_remainder_ra_committed_openings: SoftmaxRaCommittedOpenings<F>,
@@ -223,10 +256,10 @@ pub fn prove_softmax_round<F, T>(
 ) -> Result<(
     SoftmaxProof<F, T>,
     Claim<F>,
-    Claim<F>,
-    Claim<F>,
-    Claim<F>,
-    Claim<F>,
+    Vec<CommittedOpeningClaim<F>>,
+    Vec<CommittedOpeningClaim<F>>,
+    Vec<CommittedOpeningClaim<F>>,
+    Vec<CommittedOpeningClaim<F>>,
 )>
 where
     F: JoltField,
@@ -312,7 +345,7 @@ where
             input_remainder_opening: lookup.input_remainder_opening,
             exp_lut_opening: lookup.exp_lut_opening,
             index_opening: lookup.index_opening,
-            ra_opening: lookup.ra_claim.value,
+            ra_opening: lookup.ra_opening,
             input_remainder_ra_opening: lookup.input_remainder_ra_opening,
             exp_ra_committed_openings: lookup.exp_ra_committed_openings,
             input_remainder_ra_committed_openings: lookup.input_remainder_ra_committed_openings,
@@ -325,8 +358,8 @@ where
         lookup.input_claim,
         output_round_ra,
         floor_round_ra,
-        lookup.input_remainder_ra_claim,
-        lookup.ra_claim,
+        lookup.input_remainder_ra_claims,
+        lookup.ra_claims,
     ))
 }
 
@@ -335,7 +368,16 @@ pub fn verify_softmax_round<F, T>(
     proof: &SoftmaxProof<F, T>,
     params: &SoftmaxParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>, Claim<F>, Claim<F>, Claim<F>), ProofVerifyError>
+) -> std::result::Result<
+    (
+        Claim<F>,
+        Vec<CommittedOpeningClaim<F>>,
+        Vec<CommittedOpeningClaim<F>>,
+        Vec<CommittedOpeningClaim<F>>,
+        Vec<CommittedOpeningClaim<F>>,
+    ),
+    ProofVerifyError,
+>
 where
     F: JoltField,
     T: Transcript,
@@ -512,23 +554,16 @@ where
             point: tensor_point.clone(),
             value: input_opening,
         },
-        ra_claim: Claim {
-            tensor: params.ra_tensor.clone(),
-            logical_shape: params.ra_shape(lut_len),
-            domain_shape: params.ra_shape(lut_len).padded_power_of_two(),
-            point: exp_shout_lookup.ra_point,
-            value: exp_shout_lookup.ra_opening,
-        },
-        input_remainder_ra_claim: Claim {
-            tensor: TensorId::new(format!("{}_input_remainder_ra", params.output_tensor.0)),
-            logical_shape: params.ra_shape(256),
-            domain_shape: params.ra_shape(256).padded_power_of_two(),
-            point: input_remainder_shout_lookup.ra_point,
-            value: input_remainder_shout_lookup.ra_opening,
-        },
+        ra_claims: exp_shout_lookup.committed_openings.all().cloned().collect(),
+        input_remainder_ra_claims: input_remainder_shout_lookup
+            .committed_openings
+            .all()
+            .cloned()
+            .collect(),
         input_remainder_opening,
         exp_lut_opening,
         index_opening,
+        ra_opening: exp_shout_lookup.ra_opening,
         input_remainder_ra_opening: input_remainder_shout_lookup.ra_opening,
         input_remainder_lookup: input_remainder_shout_lookup.read_raf,
         input_remainder_ra_onehot: input_remainder_shout_lookup.ra_onehot,
@@ -542,7 +577,14 @@ fn verify_lookup<F, T>(
     proof: &SoftmaxProof<F, T>,
     params: &SoftmaxParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>, Claim<F>), ProofVerifyError>
+) -> std::result::Result<
+    (
+        Claim<F>,
+        Vec<CommittedOpeningClaim<F>>,
+        Vec<CommittedOpeningClaim<F>>,
+    ),
+    ProofVerifyError,
+>
 where
     F: JoltField,
     T: Transcript,
@@ -647,20 +689,12 @@ where
             point: tensor_point.clone(),
             value: proof.input_opening,
         },
-        Claim {
-            tensor: TensorId::new(format!("{}_input_remainder_ra", params.output_tensor.0)),
-            logical_shape: params.ra_shape(256),
-            domain_shape: params.ra_shape(256).padded_power_of_two(),
-            point: input_remainder_shout_lookup.ra_point,
-            value: proof.input_remainder_ra_opening,
-        },
-        Claim {
-            tensor: params.ra_tensor.clone(),
-            logical_shape: params.ra_shape(lut_len),
-            domain_shape: params.ra_shape(lut_len).padded_power_of_two(),
-            point: exp_shout_lookup.ra_point,
-            value: proof.ra_opening,
-        },
+        input_remainder_shout_lookup
+            .committed_openings
+            .all()
+            .cloned()
+            .collect(),
+        exp_shout_lookup.committed_openings.all().cloned().collect(),
     ))
 }
 
@@ -1299,7 +1333,6 @@ impl RaOneHotEncoding for SoftmaxRaEncoding {
 struct SoftmaxShoutProof<F: JoltField, T: Transcript> {
     read_raf: SumcheckInstanceProof<F, T>,
     ra_onehot: SumcheckInstanceProof<F, T>,
-    ra_point: Vec<F>,
     ra_opening: F,
     committed_openings: SoftmaxRaCommittedOpenings<F>,
 }
@@ -1352,14 +1385,13 @@ where
         accumulator,
         transcript,
     );
-    let (ra_point, ra_opening) = accumulator
+    let (_ra_point, ra_opening) = accumulator
         .get_virtual_polynomial_opening(OpeningId::new(kind.ra_poly(), kind.sumcheck_id()));
     let committed_openings =
         softmax_ra_committed_openings(&kind, log_k, use_ra_virtual, accumulator)?;
     Ok(SoftmaxShoutProof {
         read_raf,
         ra_onehot,
-        ra_point: ra_point.r,
         ra_opening,
         committed_openings,
     })
@@ -1438,12 +1470,11 @@ where
         vec![&*ra_verifier, &*hw_verifier, &*bool_verifier]
     };
     BatchedSumcheck::verify(ra_onehot, verifier_instances, accumulator, transcript)?;
-    let (ra_point, ra_opening) = accumulator
+    let (_ra_point, ra_opening) = accumulator
         .get_virtual_polynomial_opening(OpeningId::new(kind.ra_poly(), kind.sumcheck_id()));
     Ok(SoftmaxShoutProof {
         read_raf: read_raf.clone(),
         ra_onehot: ra_onehot.clone(),
-        ra_point: ra_point.r,
         ra_opening,
         committed_openings: committed_openings.clone(),
     })
@@ -1456,15 +1487,19 @@ fn softmax_ra_committed_openings<F: JoltField>(
     accumulator: &ProverOpeningAccumulator<F>,
 ) -> Result<SoftmaxRaCommittedOpenings<F>> {
     let d = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
-    let collect = |sumcheck| -> Vec<F> {
+    let collect = |sumcheck| -> Vec<CommittedOpeningClaim<F>> {
         (0..d)
             .map(|idx| {
-                accumulator
-                    .get_committed_polynomial_opening(OpeningId::new(
-                        kind.committed_poly(idx),
-                        sumcheck,
-                    ))
-                    .1
+                let poly = kind.committed_poly(idx);
+                let (point, value) =
+                    accumulator.get_committed_polynomial_opening(OpeningId::new(poly, sumcheck));
+                CommittedOpeningClaim {
+                    poly,
+                    sumcheck,
+                    point: point.r,
+                    value,
+                    sparse: true,
+                }
             })
             .collect()
     };
@@ -1503,11 +1538,14 @@ fn insert_softmax_ra_committed_openings<F: JoltField>(
             openings.ra_virtual.len().min(openings.booleanity.len()),
         ));
     }
-    let mut insert_group = |sumcheck, values: &[F]| {
-        for (idx, &value) in values.iter().enumerate() {
+    let mut insert_group = |sumcheck, values: &[CommittedOpeningClaim<F>]| {
+        for (idx, opening) in values.iter().enumerate() {
             accumulator.openings.insert(
                 OpeningId::new(kind.committed_poly(idx), sumcheck),
-                (OpeningPoint::<BIG_ENDIAN, F>::default(), value),
+                (
+                    OpeningPoint::<BIG_ENDIAN, F>::new(opening.point.clone()),
+                    opening.value,
+                ),
             );
         }
     };

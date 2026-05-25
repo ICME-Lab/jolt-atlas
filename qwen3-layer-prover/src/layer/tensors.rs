@@ -17,6 +17,35 @@ use super::types::LayerShape;
 // answers "which tensors does this op prover connect?" after `iop.rs` shows the
 // proof order.
 
+pub(crate) mod round_site {
+    pub const O_PROJ: usize = 0;
+    pub const CONTEXT: usize = 1;
+    pub const SOFTMAX_OUTPUT: usize = 2;
+    pub const SOFTMAX_FLOOR: usize = 3;
+    pub const SOFTMAX_EXP: usize = 4;
+    pub const QK_SCORE_SCALE: usize = 5;
+    pub const QK_SCORE_DOT: usize = 6;
+    pub const Q_ROPE: usize = 7;
+    pub const K_ROPE: usize = 8;
+    pub const Q_NORM: usize = 9;
+    pub const Q_NORM_INTERNAL: usize = 10;
+    pub const K_NORM: usize = 11;
+    pub const K_NORM_INTERNAL: usize = 12;
+    pub const Q_PROJ: usize = 13;
+    pub const K_PROJ: usize = 14;
+    pub const V_PROJ: usize = 15;
+    pub const RMS_NORM_ATTEN: usize = 16;
+    pub const RMS_NORM_ATTEN_INTERNAL: usize = 17;
+    pub const RMS_NORM_MLP: usize = 18;
+    pub const RMS_NORM_MLP_INTERNAL: usize = 19;
+    pub const DOWN_PROJ: usize = 20;
+    pub const GATE_PROJ: usize = 21;
+    pub const UP_PROJ: usize = 22;
+    pub const SILU_GATE: usize = 23;
+    pub const SILU_OUTPUT: usize = 24;
+    pub const SILU_UP: usize = 25;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayerTensorIds {
     pub hidden_in_a: String,
@@ -204,7 +233,8 @@ impl LayerTensorIds {
                 self.o_proj_acc.clone(),
                 self.o_proj.clone(),
                 self.o_proj_frac_bits.clone(),
-            ),
+            )
+            .with_lookup_site(round_site::O_PROJ),
             MatMulParams::new(
                 shape.seq,
                 shape.attention_width(),
@@ -222,7 +252,8 @@ impl LayerTensorIds {
                 self.context_acc.clone(),
                 self.context.clone(),
                 self.context_frac_bits.clone(),
-            ),
+            )
+            .with_lookup_site(round_site::CONTEXT),
             PvMatmulParams::new(
                 shape.seq,
                 shape.q_heads,
@@ -245,6 +276,11 @@ impl LayerTensorIds {
             2,
             true,
         )
+        .with_lookup_sites(
+            round_site::SOFTMAX_OUTPUT,
+            round_site::SOFTMAX_FLOOR,
+            round_site::SOFTMAX_EXP,
+        )
     }
 
     pub(crate) fn qk_score_params(&self, shape: &LayerShape) -> QkScoreRoundParams {
@@ -254,13 +290,15 @@ impl LayerTensorIds {
                 self.qk_score_scale_acc.clone(),
                 self.qk_score.clone(),
                 self.qk_score_frac_bits.clone(),
-            ),
+            )
+            .with_lookup_site(round_site::QK_SCORE_SCALE),
             RoundParams::with_frac_bit_tensors(
                 vec![shape.q_heads, shape.seq, shape.seq],
                 self.qk_score_acc.clone(),
                 self.qk_score_dot.clone(),
                 self.qk_score_dot_frac_bits.clone(),
-            ),
+            )
+            .with_lookup_site(round_site::QK_SCORE_DOT),
             QkScoreParams::new(
                 shape.seq,
                 shape.q_heads,
@@ -279,7 +317,8 @@ impl LayerTensorIds {
                 self.q_rope_acc.clone(),
                 self.q_rope.clone(),
                 self.q_rope_frac_bits.clone(),
-            ),
+            )
+            .with_lookup_site(round_site::Q_ROPE),
             RopeParams::new(
                 shape.seq,
                 shape.q_heads,
@@ -296,7 +335,8 @@ impl LayerTensorIds {
                 self.k_rope_acc.clone(),
                 self.k_rope.clone(),
                 self.k_rope_frac_bits.clone(),
-            ),
+            )
+            .with_lookup_site(round_site::K_ROPE),
             RopeParams::new(
                 shape.seq,
                 shape.kv_heads,
@@ -315,6 +355,7 @@ impl LayerTensorIds {
             self.q_norm.clone(),
             self.q_norm_frac_bits.clone(),
         )
+        .with_lookup_sites(round_site::Q_NORM, round_site::Q_NORM_INTERNAL)
     }
 
     pub(crate) fn k_norm_params(&self, shape: &LayerShape) -> RmsNormParams {
@@ -326,6 +367,7 @@ impl LayerTensorIds {
             self.k_norm.clone(),
             self.k_norm_frac_bits.clone(),
         )
+        .with_lookup_sites(round_site::K_NORM, round_site::K_NORM_INTERNAL)
     }
 
     pub(crate) fn q_proj_params(&self, shape: &LayerShape) -> MatMulRoundParams {
@@ -335,7 +377,8 @@ impl LayerTensorIds {
                 self.q_proj_acc.clone(),
                 self.q_proj.clone(),
                 self.q_proj_frac_bits.clone(),
-            ),
+            )
+            .with_lookup_site(round_site::Q_PROJ),
             MatMulParams::new(
                 shape.seq,
                 shape.hidden,
@@ -353,7 +396,8 @@ impl LayerTensorIds {
                 self.k_proj_acc.clone(),
                 self.k_proj.clone(),
                 self.k_proj_frac_bits.clone(),
-            ),
+            )
+            .with_lookup_site(round_site::K_PROJ),
             MatMulParams::new(
                 shape.seq,
                 shape.hidden,
@@ -374,6 +418,10 @@ impl LayerTensorIds {
             self.rms_norm_atten_a.clone(),
             self.rms_norm_atten_frac_bits.clone(),
         )
+        .with_lookup_sites(
+            round_site::RMS_NORM_ATTEN,
+            round_site::RMS_NORM_ATTEN_INTERNAL,
+        )
     }
 
     pub(crate) fn v_proj_params(&self, shape: &LayerShape) -> MatMulRoundParams {
@@ -383,7 +431,8 @@ impl LayerTensorIds {
                 self.v_proj_acc.clone(),
                 self.v_proj.clone(),
                 self.v_proj_frac_bits.clone(),
-            ),
+            )
+            .with_lookup_site(round_site::V_PROJ),
             MatMulParams::new(
                 shape.seq,
                 shape.hidden,
@@ -404,6 +453,7 @@ impl LayerTensorIds {
             self.rms_norm_mlp_a.clone(),
             self.rms_norm_mlp_frac_bits.clone(),
         )
+        .with_lookup_sites(round_site::RMS_NORM_MLP, round_site::RMS_NORM_MLP_INTERNAL)
     }
 
     pub(crate) fn down_proj_params(&self, shape: &LayerShape) -> MatMulRoundParams {
@@ -413,7 +463,8 @@ impl LayerTensorIds {
                 self.down_proj_acc.clone(),
                 self.down_proj.clone(),
                 self.down_proj_frac_bits.clone(),
-            ),
+            )
+            .with_lookup_site(round_site::DOWN_PROJ),
             MatMulParams::new(
                 shape.seq,
                 shape.intermediate,
@@ -431,7 +482,8 @@ impl LayerTensorIds {
                 self.gate_proj_acc.clone(),
                 self.gate_proj.clone(),
                 self.gate_proj_frac_bits.clone(),
-            ),
+            )
+            .with_lookup_site(round_site::GATE_PROJ),
             MatMulParams::new(
                 shape.seq,
                 shape.hidden,
@@ -449,7 +501,8 @@ impl LayerTensorIds {
                 self.up_proj_acc.clone(),
                 self.up_proj.clone(),
                 self.up_proj_frac_bits.clone(),
-            ),
+            )
+            .with_lookup_site(round_site::UP_PROJ),
             MatMulParams::new(
                 shape.seq,
                 shape.hidden,
@@ -467,7 +520,8 @@ impl LayerTensorIds {
                 self.silu_acc.clone(),
                 self.silu.clone(),
                 self.silu_out_frac_bits.clone(),
-            ),
+            )
+            .with_lookup_site(round_site::SILU_OUTPUT),
             SiluParams::new(
                 vec![shape.seq, shape.intermediate],
                 self.gate_proj.clone(),
@@ -484,7 +538,8 @@ impl LayerTensorIds {
                 self.silu_up_acc.clone(),
                 self.silu_up.clone(),
                 self.silu_up_frac_bits.clone(),
-            ),
+            )
+            .with_lookup_site(round_site::SILU_UP),
             HadamardMulParams::new(
                 vec![shape.seq, shape.intermediate],
                 self.silu.clone(),

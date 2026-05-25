@@ -15,7 +15,7 @@ use joltworks::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::MultilinearPolynomial,
         opening_proof::{ProverOpeningAccumulator, VerifierOpeningAccumulator},
-        rlc_polynomial::build_materialized_rlc,
+        rlc_polynomial::build_materialized_rlc_ordered,
     },
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
@@ -43,7 +43,12 @@ where
     let (sumcheck_proof, r_sumcheck) = accumulator.prove_batch_opening_sumcheck(transcript);
     let state = accumulator.finalize_batch_opening_sumcheck(r_sumcheck, transcript);
     let sumcheck_claims = state.sumcheck_claims.clone();
-    let rlc = build_materialized_rlc(&state.gamma_powers, poly_map);
+    let ordered_polys = state
+        .polynomials
+        .iter()
+        .map(|poly| (*poly, poly_map.get(poly).expect("missing reduced opening poly")))
+        .collect::<Vec<_>>();
+    let rlc = build_materialized_rlc_ordered(&state.gamma_powers, &ordered_polys);
     let joint_opening_proof = PCS::prove(setup, &rlc, &state.r_sumcheck, None, transcript);
 
     Some(ReducedOpeningProof {

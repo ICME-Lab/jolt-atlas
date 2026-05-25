@@ -2341,9 +2341,14 @@ name = "qwen3-layer-prover"
 version = "0.1.0"
 dependencies = [
  "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "ark-serialize",
+ "ark-std",
  "common",
  "jolt-atlas-core",
  "joltworks",
+ "rand_chacha 0.3.1",
  "rayon",
  "serde_json",
  "thiserror 1.0.69",

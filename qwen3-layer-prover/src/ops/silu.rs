@@ -22,7 +22,7 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, Shape, TensorId},
+    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
     error::{ProverError, Result},
     ops::round::{
         ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
@@ -168,11 +168,39 @@ pub struct SiluRoundProof<F: JoltField, T: Transcript> {
     pub silu: SiluProof<F, T>,
 }
 
+impl<F: JoltField, T: Transcript> SiluRoundProof<F, T> {
+    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
+        let mut out = self.round.committed_opening_claims();
+        out.extend(self.silu.committed_opening_claims());
+        out
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SiluRaCommittedOpenings<F: JoltField> {
-    pub ra_virtual: Vec<F>,
-    pub hamming_weight: Vec<F>,
-    pub booleanity: Vec<F>,
+    pub ra_virtual: Vec<CommittedOpeningClaim<F>>,
+    pub hamming_weight: Vec<CommittedOpeningClaim<F>>,
+    pub booleanity: Vec<CommittedOpeningClaim<F>>,
+}
+
+impl<F: JoltField> SiluRaCommittedOpenings<F> {
+    fn all(&self) -> impl Iterator<Item = &CommittedOpeningClaim<F>> {
+        self.ra_virtual
+            .iter()
+            .chain(self.hamming_weight.iter())
+            .chain(self.booleanity.iter())
+    }
+}
+
+impl<F: JoltField, T: Transcript> SiluProof<F, T> {
+    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
+        self.base_ra_committed_openings
+            .all()
+            .chain(self.slope_ra_committed_openings.all())
+            .chain(self.round_ra_committed_openings.all())
+            .cloned()
+            .collect()
+    }
 }
 
 pub fn prove_silu_round<F, T>(
@@ -180,7 +208,13 @@ pub fn prove_silu_round<F, T>(
     witness: &SiluRoundWitness<'_>,
     params: &SiluRoundParams,
     transcript: &mut T,
-) -> Result<(SiluRoundProof<F, T>, Claim<F>, Claim<F>, Claim<F>, Claim<F>)>
+) -> Result<(
+    SiluRoundProof<F, T>,
+    Claim<F>,
+    Vec<CommittedOpeningClaim<F>>,
+    Vec<CommittedOpeningClaim<F>>,
+    Vec<CommittedOpeningClaim<F>>,
+)>
 where
     F: JoltField,
     T: Transcript,
@@ -220,7 +254,15 @@ pub fn verify_silu_round<F, T>(
     proof: &SiluRoundProof<F, T>,
     params: &SiluRoundParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>, Claim<F>, Claim<F>), ProofVerifyError>
+) -> std::result::Result<
+    (
+        Claim<F>,
+        Vec<CommittedOpeningClaim<F>>,
+        Vec<CommittedOpeningClaim<F>>,
+        Vec<CommittedOpeningClaim<F>>,
+    ),
+    ProofVerifyError,
+>
 where
     F: JoltField,
     T: Transcript,
@@ -242,7 +284,12 @@ pub fn prove_silu<F, T>(
     witness: &SiluWitness<'_>,
     params: &SiluParams,
     transcript: &mut T,
-) -> Result<(SiluProof<F, T>, Claim<F>, Claim<F>, Claim<F>)>
+) -> Result<(
+    SiluProof<F, T>,
+    Claim<F>,
+    Vec<CommittedOpeningClaim<F>>,
+    Vec<CommittedOpeningClaim<F>>,
+)>
 where
     F: JoltField,
     T: Transcript,
@@ -345,6 +392,14 @@ where
         transcript,
     )?;
 
+    let round_ra_claims = round_lookup.committed_openings.all().cloned().collect();
+    let silu_ra_claims = base_lookup
+        .committed_openings
+        .all()
+        .chain(slope_lookup.committed_openings.all())
+        .cloned()
+        .collect();
+
     Ok((
         SiluProof {
             min_n: witness.min_n,
@@ -376,26 +431,8 @@ where
             point: tensor_point.clone(),
             value: gate_opening,
         },
-        Claim {
-            tensor: params.round_ra_tensor.clone(),
-            logical_shape: Shape::new(vec![
-                params.shape.padded_power_of_two().numel(),
-                1 << ROUND_FRAC_BITS,
-            ]),
-            domain_shape: Shape::new(vec![
-                params.shape.padded_power_of_two().numel(),
-                1 << ROUND_FRAC_BITS,
-            ]),
-            point: round_lookup.ra_point,
-            value: round_lookup.ra_opening,
-        },
-        Claim {
-            tensor: params.ra_tensor.clone(),
-            logical_shape: params.ra_shape(lut_len),
-            domain_shape: params.ra_shape(lut_len).padded_power_of_two(),
-            point: base_lookup.ra_point,
-            value: base_lookup.ra_opening,
-        },
+        round_ra_claims,
+        silu_ra_claims,
     ))
 }
 
@@ -404,7 +441,14 @@ pub fn verify_silu<F, T>(
     proof: &SiluProof<F, T>,
     params: &SiluParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>, Claim<F>), ProofVerifyError>
+) -> std::result::Result<
+    (
+        Claim<F>,
+        Vec<CommittedOpeningClaim<F>>,
+        Vec<CommittedOpeningClaim<F>>,
+    ),
+    ProofVerifyError,
+>
 where
     F: JoltField,
     T: Transcript,
@@ -470,7 +514,7 @@ where
     let challenges = Sumcheck::verify(&proof.relation, &verifier, &mut accumulator, transcript)?;
     let tensor_point = normalize_sumcheck_point::<F>(&challenges.into_opening());
     let lut_len = padded_silu_lut_len(entries);
-    let base_lookup = verify_silu_shout_lookup(
+    let _base_lookup = verify_silu_shout_lookup(
         SiluLookupKind::Base,
         entries,
         lut_len,
@@ -502,13 +546,12 @@ where
         &mut accumulator,
         transcript,
     )?;
-    let silu_ra_claim = Claim {
-        tensor: params.ra_tensor.clone(),
-        logical_shape: params.ra_shape(lut_len),
-        domain_shape: params.ra_shape(lut_len).padded_power_of_two(),
-        point: base_lookup.ra_point,
-        value: proof.base_ra_opening,
-    };
+    let silu_ra_claims = proof
+        .base_ra_committed_openings
+        .all()
+        .chain(proof.slope_ra_committed_openings.all())
+        .cloned()
+        .collect();
     let round_lookup = verify_silu_shout_lookup(
         SiluLookupKind::Round,
         1 << ROUND_FRAC_BITS,
@@ -533,20 +576,8 @@ where
             point: tensor_point.clone(),
             value: proof.gate_opening,
         },
-        Claim {
-            tensor: params.round_ra_tensor.clone(),
-            logical_shape: Shape::new(vec![
-                params.shape.padded_power_of_two().numel(),
-                1 << ROUND_FRAC_BITS,
-            ]),
-            domain_shape: Shape::new(vec![
-                params.shape.padded_power_of_two().numel(),
-                1 << ROUND_FRAC_BITS,
-            ]),
-            point: round_lookup.ra_point,
-            value: proof.round_ra_opening,
-        },
-        silu_ra_claim,
+        round_lookup.committed_openings.all().cloned().collect(),
+        silu_ra_claims,
     ))
 }
 
@@ -999,7 +1030,6 @@ impl RaOneHotEncoding for SiluRaEncoding {
 struct SiluShoutProof<F: JoltField, T: Transcript> {
     read_raf: SumcheckInstanceProof<F, T>,
     ra_onehot: SumcheckInstanceProof<F, T>,
-    ra_point: Vec<F>,
     ra_opening: F,
     committed_openings: SiluRaCommittedOpenings<F>,
 }
@@ -1049,7 +1079,7 @@ where
         accumulator,
         transcript,
     );
-    let (ra_point, ra_opening) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
+    let (_ra_point, ra_opening) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
         kind.ra_poly(),
         silu_shout_sumcheck_id(kind),
     ));
@@ -1057,7 +1087,6 @@ where
     Ok(SiluShoutProof {
         read_raf,
         ra_onehot,
-        ra_point: ra_point.r,
         ra_opening,
         committed_openings,
     })
@@ -1129,14 +1158,13 @@ where
         vec![&*ra_verifier, &*hw_verifier, &*bool_verifier]
     };
     BatchedSumcheck::verify(ra_onehot, verifier_instances, accumulator, transcript)?;
-    let (ra_point, ra_opening) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
+    let (_ra_point, ra_opening) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
         kind.ra_poly(),
         silu_shout_sumcheck_id(kind),
     ));
     Ok(SiluShoutProof {
         read_raf: read_raf.clone(),
         ra_onehot: ra_onehot.clone(),
-        ra_point: ra_point.r,
         ra_opening,
         committed_openings: committed_openings.clone(),
     })
@@ -1149,15 +1177,19 @@ fn silu_ra_committed_openings<F: JoltField>(
     accumulator: &ProverOpeningAccumulator<F>,
 ) -> Result<SiluRaCommittedOpenings<F>> {
     let d = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
-    let collect = |sumcheck| -> Vec<F> {
+    let collect = |sumcheck| -> Vec<CommittedOpeningClaim<F>> {
         (0..d)
             .map(|idx| {
-                accumulator
-                    .get_committed_polynomial_opening(OpeningId::new(
-                        kind.committed_poly(idx),
-                        sumcheck,
-                    ))
-                    .1
+                let poly = kind.committed_poly(idx);
+                let (point, value) =
+                    accumulator.get_committed_polynomial_opening(OpeningId::new(poly, sumcheck));
+                CommittedOpeningClaim {
+                    poly,
+                    sumcheck,
+                    point: point.r,
+                    value,
+                    sparse: true,
+                }
             })
             .collect()
     };
@@ -1197,11 +1229,14 @@ fn insert_silu_ra_committed_openings<F: JoltField>(
         ));
     }
 
-    let mut insert_group = |sumcheck, values: &[F]| {
-        for (idx, &value) in values.iter().enumerate() {
+    let mut insert_group = |sumcheck, values: &[CommittedOpeningClaim<F>]| {
+        for (idx, opening) in values.iter().enumerate() {
             accumulator.openings.insert(
                 OpeningId::new(kind.committed_poly(idx), sumcheck),
-                (OpeningPoint::<BIG_ENDIAN, F>::default(), value),
+                (
+                    OpeningPoint::<BIG_ENDIAN, F>::new(opening.point.clone()),
+                    opening.value,
+                ),
             );
         }
     };

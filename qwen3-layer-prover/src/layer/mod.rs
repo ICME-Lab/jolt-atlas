@@ -21,6 +21,7 @@ mod witness;
 
 pub use commitments::{
     HiddenStateCommitments, LayerPolynomialMap, absorb_layer_commitments, commit_layer_polynomials,
+    commit_layer_polynomials_streaming_onehot,
 };
 pub use prover::prove_layer;
 pub use tensors::LayerTensorIds;

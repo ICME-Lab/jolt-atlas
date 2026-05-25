@@ -47,7 +47,7 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, Shape, TensorId},
+    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
     error::{ProverError, Result},
     ops::round::{
         ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
@@ -107,6 +107,12 @@ pub struct RopeProof<F: JoltField, T: Transcript> {
     pub rope: RopeSumcheckProof<F, T>,
 }
 
+impl<F: JoltField, T: Transcript> RopeProof<F, T> {
+    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
+        self.round.committed_opening_claims()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RopeSumcheckProof<F: JoltField, T: Transcript> {
     pub sumcheck: SumcheckInstanceProof<F, T>,
@@ -121,7 +127,12 @@ pub fn prove_rope_round<F, T>(
     sin: &[i32],
     params: &RopeRoundParams,
     transcript: &mut T,
-) -> Result<(RopeProof<F, T>, Claim<F>, Claim<F>, Claim<F>)>
+) -> Result<(
+    RopeProof<F, T>,
+    Claim<F>,
+    Claim<F>,
+    Vec<CommittedOpeningClaim<F>>,
+)>
 where
     F: JoltField,
     T: Transcript,
@@ -150,7 +161,7 @@ pub fn verify_rope_round<F, T>(
     sin: &[i32],
     params: &RopeRoundParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>, Claim<F>), ProofVerifyError>
+) -> std::result::Result<(Claim<F>, Claim<F>, Vec<CommittedOpeningClaim<F>>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,

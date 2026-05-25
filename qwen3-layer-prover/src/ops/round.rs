@@ -22,7 +22,7 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, Shape, TensorId},
+    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
     error::{ProverError, Result},
 };
 
@@ -48,6 +48,7 @@ pub struct RoundParams {
     pub output_tensor: TensorId,
     pub frac_bit_tensors: [TensorId; ROUND_FRAC_BITS],
     pub frac_bits: usize,
+    pub lookup_site: usize,
 }
 
 impl RoundParams {
@@ -65,6 +66,7 @@ impl RoundParams {
                 TensorId::new(format!("{input_tensor}_frac_bit_{idx}"))
             }),
             frac_bits: ROUND_FRAC_BITS,
+            lookup_site: 0,
         }
     }
 
@@ -80,7 +82,13 @@ impl RoundParams {
             output_tensor: TensorId::new(output_tensor),
             frac_bit_tensors: frac_bit_tensors.map(TensorId::new),
             frac_bits: ROUND_FRAC_BITS,
+            lookup_site: 0,
         }
+    }
+
+    pub fn with_lookup_site(mut self, lookup_site: usize) -> Self {
+        self.lookup_site = lookup_site;
+        self
     }
 }
 
@@ -123,11 +131,26 @@ pub struct RoundProof<F: JoltField, T: Transcript> {
     pub ra_committed_openings: RoundRaCommittedOpenings<F>,
 }
 
+impl<F: JoltField, T: Transcript> RoundProof<F, T> {
+    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
+        self.ra_committed_openings.all().cloned().collect()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RoundRaCommittedOpenings<F: JoltField> {
-    pub ra_virtual: Vec<F>,
-    pub hamming_weight: Vec<F>,
-    pub booleanity: Vec<F>,
+    pub ra_virtual: Vec<CommittedOpeningClaim<F>>,
+    pub hamming_weight: Vec<CommittedOpeningClaim<F>>,
+    pub booleanity: Vec<CommittedOpeningClaim<F>>,
+}
+
+impl<F: JoltField> RoundRaCommittedOpenings<F> {
+    pub fn all(&self) -> impl Iterator<Item = &CommittedOpeningClaim<F>> {
+        self.ra_virtual
+            .iter()
+            .chain(self.hamming_weight.iter())
+            .chain(self.booleanity.iter())
+    }
 }
 
 pub fn prove_round<F, T>(
@@ -135,7 +158,7 @@ pub fn prove_round<F, T>(
     witness: &RoundWitness<'_>,
     params: &RoundParams,
     transcript: &mut T,
-) -> Result<(RoundProof<F, T>, Claim<F>, Claim<F>)>
+) -> Result<(RoundProof<F, T>, Claim<F>, Vec<CommittedOpeningClaim<F>>)>
 where
     F: JoltField,
     T: Transcript,
@@ -183,6 +206,7 @@ where
     let lookup_indices = padded_lookup_indices(&witness.remainder, &params.shape);
     let table = round_lut_table();
     let shout = prove_round_lookup(
+        params.lookup_site,
         relation_point.clone(),
         round_bit_opening,
         remainder_opening,
@@ -191,6 +215,8 @@ where
         &mut accumulator,
         transcript,
     )?;
+
+    let ra_claims = shout.committed_openings.all().cloned().collect();
 
     Ok((
         RoundProof {
@@ -210,19 +236,7 @@ where
             point: relation_point.clone(),
             value: input_opening,
         },
-        Claim {
-            tensor: TensorId::new(format!("{}_round_ra", params.input_tensor.0)),
-            logical_shape: Shape::new(vec![
-                params.shape.padded_power_of_two().numel(),
-                ROUND_LUT_LEN,
-            ]),
-            domain_shape: Shape::new(vec![
-                params.shape.padded_power_of_two().numel(),
-                ROUND_LUT_LEN,
-            ]),
-            point: shout.ra_point,
-            value: shout.ra_opening,
-        },
+        ra_claims,
     ))
 }
 
@@ -231,7 +245,7 @@ pub fn verify_round<F, T>(
     proof: &RoundProof<F, T>,
     params: &RoundParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>), ProofVerifyError>
+) -> std::result::Result<(Claim<F>, Vec<CommittedOpeningClaim<F>>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,
@@ -286,6 +300,7 @@ where
     let relation_point = normalize_sumcheck_point::<F>(&relation_challenges.into_opening());
 
     let shout = verify_round_lookup(
+        params.lookup_site,
         params.shape.padded_power_of_two().numel(),
         relation_point.clone(),
         proof.round_bit_opening,
@@ -306,19 +321,7 @@ where
             point: relation_point,
             value: proof.input_opening,
         },
-        Claim {
-            tensor: TensorId::new(format!("{}_round_ra", params.input_tensor.0)),
-            logical_shape: Shape::new(vec![
-                params.shape.padded_power_of_two().numel(),
-                ROUND_LUT_LEN,
-            ]),
-            domain_shape: Shape::new(vec![
-                params.shape.padded_power_of_two().numel(),
-                ROUND_LUT_LEN,
-            ]),
-            point: shout.ra_point,
-            value: proof.ra_opening,
-        },
+        shout.committed_opening_claims(),
     ))
 }
 
@@ -548,11 +551,12 @@ impl<F: JoltField> ReadRafProvider<F> for RoundReadRafProvider<F> {
 
 struct RoundRaEncoding {
     log_k: usize,
+    lookup_site: usize,
 }
 
 impl RaOneHotEncoding for RoundRaEncoding {
     fn committed_poly(&self, d: usize) -> CommittedPoly {
-        CommittedPoly::QwenRoundRaD(d)
+        CommittedPoly::QwenRoundRaD(self.lookup_site, d)
     }
 
     fn r_cycle_source(&self) -> OpeningId {
@@ -576,12 +580,18 @@ impl RaOneHotEncoding for RoundRaEncoding {
 pub(crate) struct RoundLookupProof<F: JoltField, T: Transcript> {
     pub(crate) read_raf: SumcheckInstanceProof<F, T>,
     pub(crate) ra_onehot: SumcheckInstanceProof<F, T>,
-    pub(crate) ra_point: Vec<F>,
     pub(crate) ra_opening: F,
     pub(crate) committed_openings: RoundRaCommittedOpenings<F>,
 }
 
+impl<F: JoltField, T: Transcript> RoundLookupProof<F, T> {
+    pub(crate) fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
+        self.committed_openings.all().cloned().collect()
+    }
+}
+
 pub(crate) fn prove_round_lookup<F, T>(
+    lookup_site: usize,
     tensor_point: Vec<F>,
     round_bit_opening: F,
     remainder_opening: F,
@@ -606,7 +616,7 @@ where
         shout::read_raf_prover(&provider, &lookup_indices, &table, accumulator, transcript);
     let (read_raf, _) = Sumcheck::prove(&mut *read_prover, accumulator, transcript);
 
-    let encoding = RoundRaEncoding { log_k };
+    let encoding = RoundRaEncoding { log_k, lookup_site };
     let [ra_prover, hw_prover, bool_prover] =
         shout::ra_onehot_provers(&encoding, &lookup_indices, accumulator, transcript);
     let use_ra_virtual = lookup_indices.len().next_power_of_two() >= 8;
@@ -620,21 +630,22 @@ where
         accumulator,
         transcript,
     );
-    let (ra_point, ra_opening) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
+    let (_ra_point, ra_opening) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
         VirtualPoly::QwenRoundRa,
         round_sumcheck_id(),
     ));
-    let committed_openings = round_ra_committed_openings(log_k, use_ra_virtual, accumulator)?;
+    let committed_openings =
+        round_ra_committed_openings(lookup_site, log_k, use_ra_virtual, accumulator)?;
     Ok(RoundLookupProof {
         read_raf,
         ra_onehot,
-        ra_point: ra_point.r,
         ra_opening,
         committed_openings,
     })
 }
 
 pub(crate) fn verify_round_lookup<F, T>(
+    lookup_site: usize,
     logical_len: usize,
     tensor_point: Vec<F>,
     round_bit_opening: F,
@@ -677,45 +688,54 @@ where
         shout::read_raf_verifier(&provider, round_lut_table(), accumulator, transcript);
     Sumcheck::verify(read_raf, &*read_verifier, accumulator, transcript)?;
 
-    let encoding = RoundRaEncoding { log_k };
+    let encoding = RoundRaEncoding { log_k, lookup_site };
     let [ra_verifier, hw_verifier, bool_verifier] =
         shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
     let use_ra_virtual = logical_len.next_power_of_two() >= 8;
-    insert_round_ra_committed_openings(use_ra_virtual, committed_openings, accumulator)?;
+    insert_round_ra_committed_openings(
+        lookup_site,
+        use_ra_virtual,
+        committed_openings,
+        accumulator,
+    )?;
     let verifier_instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = if !use_ra_virtual {
         vec![&*hw_verifier]
     } else {
         vec![&*ra_verifier, &*hw_verifier, &*bool_verifier]
     };
     BatchedSumcheck::verify(ra_onehot, verifier_instances, accumulator, transcript)?;
-    let (ra_point, ra_opening) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
+    let (_ra_point, ra_opening) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
         VirtualPoly::QwenRoundRa,
         round_sumcheck_id(),
     ));
     Ok(RoundLookupProof {
         read_raf: read_raf.clone(),
         ra_onehot: ra_onehot.clone(),
-        ra_point: ra_point.r,
         ra_opening,
         committed_openings: committed_openings.clone(),
     })
 }
 
 fn round_ra_committed_openings<F: JoltField>(
+    lookup_site: usize,
     log_k: usize,
     include_full_checks: bool,
     accumulator: &ProverOpeningAccumulator<F>,
 ) -> Result<RoundRaCommittedOpenings<F>> {
     let d = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
-    let collect = |sumcheck| -> Vec<F> {
+    let collect = |sumcheck| -> Vec<CommittedOpeningClaim<F>> {
         (0..d)
             .map(|idx| {
-                accumulator
-                    .get_committed_polynomial_opening(OpeningId::new(
-                        CommittedPoly::QwenRoundRaD(idx),
-                        sumcheck,
-                    ))
-                    .1
+                let poly = CommittedPoly::QwenRoundRaD(lookup_site, idx);
+                let (point, value) =
+                    accumulator.get_committed_polynomial_opening(OpeningId::new(poly, sumcheck));
+                CommittedOpeningClaim {
+                    poly,
+                    sumcheck,
+                    point: point.r,
+                    value,
+                    sparse: true,
+                }
             })
             .collect()
     };
@@ -735,6 +755,7 @@ fn round_ra_committed_openings<F: JoltField>(
 }
 
 fn insert_round_ra_committed_openings<F: JoltField>(
+    lookup_site: usize,
     include_full_checks: bool,
     openings: &RoundRaCommittedOpenings<F>,
     accumulator: &mut VerifierOpeningAccumulator<F>,
@@ -753,11 +774,14 @@ fn insert_round_ra_committed_openings<F: JoltField>(
             openings.ra_virtual.len().min(openings.booleanity.len()),
         ));
     }
-    let mut insert_group = |sumcheck, values: &[F]| {
-        for (idx, &value) in values.iter().enumerate() {
+    let mut insert_group = |sumcheck, values: &[CommittedOpeningClaim<F>]| {
+        for (idx, opening) in values.iter().enumerate() {
             accumulator.openings.insert(
-                OpeningId::new(CommittedPoly::QwenRoundRaD(idx), sumcheck),
-                (OpeningPoint::<BIG_ENDIAN, F>::default(), value),
+                OpeningId::new(CommittedPoly::QwenRoundRaD(lookup_site, idx), sumcheck),
+                (
+                    OpeningPoint::<BIG_ENDIAN, F>::new(opening.point.clone()),
+                    opening.value,
+                ),
             );
         }
     };

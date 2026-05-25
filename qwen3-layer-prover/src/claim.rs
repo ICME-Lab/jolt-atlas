@@ -51,6 +51,21 @@ pub struct Claim<F = ()> {
     pub value: F,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommittedOpeningClaim<F> {
+    pub poly: CommittedPoly,
+    pub sumcheck: SumcheckId,
+    pub point: Vec<F>,
+    pub value: F,
+    pub sparse: bool,
+}
+
+impl<F> CommittedOpeningClaim<F> {
+    pub fn opening_id(&self) -> OpeningId {
+        OpeningId::new(self.poly, self.sumcheck)
+    }
+}
+
 impl Claim<()> {
     pub fn structural(tensor: impl Into<String>, logical_shape: impl Into<Vec<usize>>) -> Self {
         let logical_shape = Shape::new(logical_shape);
@@ -64,3 +79,5 @@ impl Claim<()> {
         }
     }
 }
+use common::CommittedPoly;
+use joltworks::poly::opening_proof::{OpeningId, SumcheckId};

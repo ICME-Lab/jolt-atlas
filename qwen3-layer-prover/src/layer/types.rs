@@ -62,62 +62,11 @@ pub struct LayerWeights {
 pub struct LayerClaims<F> {
     pub hidden_in_a: Claim<F>,
     pub hidden_in_b: Claim<F>,
-    pub context_round_ra: Claim<F>,
-    pub o_proj_round_ra: Claim<F>,
-    pub softmax_round_ra: Claim<F>,
-    pub softmax_floor_round_ra: Claim<F>,
-    pub softmax_input_remainder_ra: Claim<F>,
-    pub softmax_ra: Claim<F>,
-    pub qk_score_round_ra: Claim<F>,
-    pub qk_score_dot_round_ra: Claim<F>,
-    pub q_rope_round_ra: Claim<F>,
-    pub k_rope_round_ra: Claim<F>,
-    pub q_norm_round_ra: Claim<F>,
-    pub k_norm_round_ra: Claim<F>,
-    pub q_proj_round_ra: Claim<F>,
-    pub k_proj_round_ra: Claim<F>,
-    pub v_proj_round_ra: Claim<F>,
-    pub rms_norm_atten_round_ra: Claim<F>,
-    pub rms_norm_mlp_round_ra: Claim<F>,
-    pub gate_proj_round_ra: Claim<F>,
-    pub silu_gate_round_ra: Claim<F>,
-    pub silu_ra: Claim<F>,
-    pub silu_out_round_ra: Claim<F>,
-    pub silu_up_round_ra: Claim<F>,
-    pub up_proj_round_ra: Claim<F>,
-    pub down_proj_round_ra: Claim<F>,
 }
 
 impl<F: Clone> LayerClaims<F> {
     pub fn opening_claims(&self) -> Vec<Claim<F>> {
-        vec![
-            self.hidden_in_a.clone(),
-            self.hidden_in_b.clone(),
-            self.context_round_ra.clone(),
-            self.o_proj_round_ra.clone(),
-            self.softmax_round_ra.clone(),
-            self.softmax_floor_round_ra.clone(),
-            self.softmax_input_remainder_ra.clone(),
-            self.softmax_ra.clone(),
-            self.qk_score_round_ra.clone(),
-            self.qk_score_dot_round_ra.clone(),
-            self.q_rope_round_ra.clone(),
-            self.k_rope_round_ra.clone(),
-            self.q_norm_round_ra.clone(),
-            self.k_norm_round_ra.clone(),
-            self.q_proj_round_ra.clone(),
-            self.k_proj_round_ra.clone(),
-            self.v_proj_round_ra.clone(),
-            self.rms_norm_atten_round_ra.clone(),
-            self.rms_norm_mlp_round_ra.clone(),
-            self.gate_proj_round_ra.clone(),
-            self.silu_gate_round_ra.clone(),
-            self.silu_ra.clone(),
-            self.silu_out_round_ra.clone(),
-            self.silu_up_round_ra.clone(),
-            self.up_proj_round_ra.clone(),
-            self.down_proj_round_ra.clone(),
-        ]
+        vec![self.hidden_in_a.clone(), self.hidden_in_b.clone()]
     }
 }
 
@@ -143,6 +92,31 @@ pub(crate) struct LayerIopProof<F: JoltField, T: Transcript> {
     pub k_proj_proof: MatMulRoundProof<F, T>,
     pub v_proj_proof: MatMulRoundProof<F, T>,
     pub rms_norm_atten_proof: RmsNormProof<F, T>,
+}
+
+impl<F: JoltField, T: Transcript> LayerIopProof<F, T> {
+    pub fn committed_opening_claims(&self) -> Vec<crate::CommittedOpeningClaim<F>> {
+        let mut out = Vec::new();
+        out.extend(self.down_proj_proof.committed_opening_claims());
+        out.extend(self.silu_up_proof.committed_opening_claims());
+        out.extend(self.silu_proof.committed_opening_claims());
+        out.extend(self.gate_proj_proof.committed_opening_claims());
+        out.extend(self.up_proj_proof.committed_opening_claims());
+        out.extend(self.rms_norm_mlp_proof.committed_opening_claims());
+        out.extend(self.o_proj_proof.committed_opening_claims());
+        out.extend(self.pv_matmul_proof.committed_opening_claims());
+        out.extend(self.softmax_proof.committed_opening_claims());
+        out.extend(self.qk_score_proof.committed_opening_claims());
+        out.extend(self.q_rope_proof.committed_opening_claims());
+        out.extend(self.k_rope_proof.committed_opening_claims());
+        out.extend(self.q_norm_proof.committed_opening_claims());
+        out.extend(self.k_norm_proof.committed_opening_claims());
+        out.extend(self.q_proj_proof.committed_opening_claims());
+        out.extend(self.k_proj_proof.committed_opening_claims());
+        out.extend(self.v_proj_proof.committed_opening_claims());
+        out.extend(self.rms_norm_atten_proof.committed_opening_claims());
+        out
+    }
 }
 
 #[derive(Debug, Clone)]

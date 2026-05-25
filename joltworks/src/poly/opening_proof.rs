@@ -54,7 +54,7 @@ pub struct ProverOpeningAccumulator<F>
 where
     F: JoltField,
 {
-    pub sumchecks: BTreeMap<CommittedPoly, OpeningProofReductionSumcheckProver<F>>,
+    pub sumchecks: BTreeMap<OpeningId, OpeningProofReductionSumcheckProver<F>>,
     /// Openings for polynomials claimed during proving.
     /// Identified by the kind of polynomial, the node to which it corresponds (both held in Committed/VirtualPoly variant),
     /// and the sumcheck for which the opening is claimed.
@@ -69,7 +69,7 @@ where
     eq_cycle_map: HashMap<Vec<F>, Arc<RwLock<EqCycleState<F>>>>,
     #[cfg(any(test, feature = "test-feature"))]
     pub appended_virtual_openings: RefCell<Vec<OpeningId>>,
-    pub cached_opening_claims: BTreeMap<CommittedPoly, F>,
+    pub cached_opening_claims: BTreeMap<OpeningId, F>,
     #[cfg(feature = "zk")]
     pending_claims: Vec<F>,
     #[cfg(feature = "zk")]
@@ -82,7 +82,7 @@ pub struct VerifierOpeningAccumulator<F>
 where
     F: JoltField,
 {
-    sumchecks: BTreeMap<CommittedPoly, OpeningProofReductionSumcheckVerifier<F>>,
+    sumchecks: BTreeMap<OpeningId, OpeningProofReductionSumcheckVerifier<F>>,
     pub openings: Openings<F>,
     /// Mapping for nodes reduced opening points
     pub reduced_evaluations: BTreeMap<usize, ReducedInstance<F>>,
@@ -213,8 +213,8 @@ where
 
     /// Caches an opening claim from the opening reduction sumcheck.
     /// Called from `OpeningProofReductionSumcheckProver::cache_openings`.
-    pub fn cache_opening_reduction_claim(&mut self, polynomial: CommittedPoly, claim: F) {
-        self.cached_opening_claims.insert(polynomial, claim);
+    pub fn cache_opening_reduction_claim(&mut self, opening_id: OpeningId, claim: F) {
+        self.cached_opening_claims.insert(opening_id, claim);
     }
 
     pub fn evaluation_openings_mut(&mut self) -> &mut Openings<F> {
@@ -289,7 +289,7 @@ where
             opening_point,
             claim,
         );
-        self.sumchecks.insert(polynomial, sumcheck);
+        self.sumchecks.insert(opening_id, sumcheck);
     }
 
     #[tracing::instrument(skip_all, name = "ProverOpeningAccumulator::append_sparse")]
@@ -326,6 +326,7 @@ where
         }
 
         for (label, claim) in polynomials.iter().copied().zip(claims.into_iter()) {
+            let key = OpeningId::new(label, sumcheck);
             let sumcheck = OpeningProofReductionSumcheckProver::new_one_hot(
                 label,
                 sumcheck,
@@ -334,7 +335,7 @@ where
                 r_concat.clone(),
                 claim,
             );
-            self.sumchecks.insert(label, sumcheck);
+            self.sumchecks.insert(key, sumcheck);
         }
     }
 
@@ -411,15 +412,17 @@ where
         &mut self,
         polynomials: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
     ) {
-        if self.sumchecks.len() != polynomials.len() {
-            let missing_sumchecks: Vec<CommittedPoly> = polynomials
-                .keys()
-                .filter(|poly| !self.sumchecks.contains_key(poly))
-                .cloned()
-                .collect();
+        let missing_sumchecks: Vec<CommittedPoly> = self
+            .sumchecks
+            .values()
+            .map(|sumcheck| sumcheck.polynomial)
+            .filter(|poly| !polynomials.contains_key(poly))
+            .collect();
+        if !missing_sumchecks.is_empty() {
             println!("Missing sumcheck instances for polynomials: {missing_sumchecks:?}");
             panic!(
-                "Expected {} sumcheck instances, but found {}",
+                "Missing committed polynomials for {} of {} committed polynomials across {} sumcheck instances",
+                missing_sumchecks.len(),
                 polynomials.len(),
                 self.sumchecks.len()
             );
@@ -508,10 +511,12 @@ where
         transcript: &mut T,
     ) -> OpeningReductionState<F> {
         // Extract claims and polynomials from cached opening claims (populated by cache_openings)
-        let (polynomials, sumcheck_claims): (Vec<CommittedPoly>, Vec<F>) =
-            std::mem::take(&mut self.cached_opening_claims)
-                .into_iter()
-                .unzip();
+        let (opening_ids, sumcheck_claims): (Vec<OpeningId>, Vec<F>) =
+            std::mem::take(&mut self.cached_opening_claims).into_iter().unzip();
+        let polynomials = opening_ids
+            .iter()
+            .map(|id| id.committed_poly().expect("expected committed polynomial"))
+            .collect();
 
         // Append claims and derive gamma powers
         transcript.append_scalars(&sumcheck_claims);
@@ -685,7 +690,7 @@ where
             .committed_poly()
             .expect("expected committed polynomial");
         self.sumchecks.insert(
-            polynomial,
+            opening_id,
             OpeningProofReductionSumcheckVerifier::new(polynomial, opening_point, claim),
         );
     }
@@ -720,7 +725,7 @@ where
             );
 
             self.sumchecks.insert(
-                label,
+                key,
                 OpeningProofReductionSumcheckVerifier::new(label, opening_point.clone(), claim),
             );
         }
@@ -854,7 +859,7 @@ where
         let commitments: Vec<PCS::Commitment> = state
             .polynomials
             .iter()
-            .map(|poly| commitment_map.remove(poly).unwrap())
+            .map(|poly| commitment_map.get(poly).unwrap().clone())
             .collect();
         PCS::combine_commitments(&commitments, &state.gamma_powers)
     }

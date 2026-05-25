@@ -7,6 +7,7 @@ use std::{
 };
 
 use ark_bn254::{Bn254, Fr};
+use common::CommittedPoly;
 use joltworks::{
     poly::{
         commitment::{commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG},
@@ -14,11 +15,15 @@ use joltworks::{
     },
     transcripts::Blake2bTranscript,
 };
-use qwen3_layer_prover::layer::{
-    HiddenStateCommitments, LayerPolynomialMap, LayerShape, LayerTensorIds, LayerWeights,
-    commit_layer_polynomials, prove_layer, verify_layer,
-};
 use qwen3_layer_prover::trace::build_layer_witness_from_trace_dir;
+use qwen3_layer_prover::{
+    layer::{
+        HiddenStateCommitments, LayerPolynomialMap, LayerShape, LayerTensorIds, LayerWeights,
+        commit_layer_polynomials, commit_layer_polynomials_streaming_onehot, prove_layer,
+        verify_layer,
+    },
+    streaming_srs::{FlatG1SrsReader, StreamingOneHotCommitter, write_flat_g1_srs},
+};
 use serde_json::Value;
 
 const FIXED_CACHE_MAGIC: &[u8; 16] = b"QWEN3AWYQ8CACHE1";
@@ -34,6 +39,23 @@ const ROPE_THETA: f64 = 1_000_000.0;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse()?;
+    if let Some(path) = &args.write_flat_srs {
+        let vars = args
+            .srs_vars
+            .ok_or("--write-flat-srs requires --srs-vars")?;
+        let t0 = Instant::now();
+        write_flat_g1_srs(path, vars, args.srs_chunk_len)?;
+        eprintln!(
+            "timing: write_flat_srs vars={} chunk_len={} {:.3}s",
+            vars,
+            args.srs_chunk_len,
+            t0.elapsed().as_secs_f64()
+        );
+        println!("write_flat_srs: ok");
+        println!("path: {}", path.display());
+        println!("vars: {}", vars);
+        return Ok(());
+    }
     let seq = args.seq.unwrap_or(read_trace_seq_len(&args.trace)?);
     let shape = LayerShape {
         seq,
@@ -45,7 +67,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     let cache = args
         .q8_cache
+        .clone()
         .unwrap_or_else(|| fixed_cache_path(&args.model));
+    if args.commit_all_layers_onehot_only {
+        return commit_all_layers_onehot_only(&args, seq, &shape, &cache);
+    }
     let t0 = Instant::now();
     let weights = read_layer_weights(&cache, args.layer, seq)?;
     eprintln!(
@@ -148,7 +174,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         &shape,
         &tensors,
     );
-    let pcs_num_vars = required_pcs_num_vars_for_polynomials(&polynomials_for_setup);
+    if args.flat_srs.is_some() && !args.commit_only {
+        return Err("--flat-srs is currently wired only for --commit-only".into());
+    }
+    let pcs_num_vars = if args.flat_srs.is_some() {
+        required_pcs_num_vars_for_slices([
+            traced.witness.hidden_in.as_slice(),
+            traced.hidden_out.as_slice(),
+        ])
+    } else {
+        required_pcs_num_vars_for_polynomials(&polynomials_for_setup)
+    };
     let t0 = Instant::now();
     let pcs_setup = PCS::setup_prover(pcs_num_vars);
     eprintln!(
@@ -179,11 +215,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
 
         let t0 = Instant::now();
-        let commitments = commit_layer_polynomials::<Fr, PCS>(
-            &polynomials_for_setup,
-            hidden_state_commitments,
-            &pcs_setup,
-        );
+        let commitments = if let Some(flat_srs) = &args.flat_srs {
+            let reader = FlatG1SrsReader::open(flat_srs)?;
+            commit_layer_polynomials_streaming_onehot(
+                &polynomials_for_setup,
+                hidden_state_commitments,
+                &pcs_setup,
+                &reader,
+                args.srs_chunk_len,
+                args.onehot_threads,
+                args.onehot_metrics,
+                args.sort_onehot_indices,
+            )?
+        } else {
+            commit_layer_polynomials::<Fr, PCS>(
+                &polynomials_for_setup,
+                hidden_state_commitments,
+                &pcs_setup,
+            )
+        };
         eprintln!(
             "timing: commit_layer_polynomials {:.3}s",
             t0.elapsed().as_secs_f64()
@@ -244,6 +294,86 @@ fn required_pcs_num_vars_for_polynomials(polynomials: &LayerPolynomialMap<Fr>) -
         .unwrap_or(0)
 }
 
+fn commit_all_layers_onehot_only(
+    args: &Args,
+    seq: usize,
+    shape: &LayerShape,
+    cache: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let flat_srs = args
+        .flat_srs
+        .as_ref()
+        .ok_or("--commit-all-layers-onehot-only requires --flat-srs")?;
+    let tensors = LayerTensorIds::default();
+    let reader = FlatG1SrsReader::open(flat_srs)?;
+    let mut committer =
+        StreamingOneHotCommitter::with_threads(reader, args.srs_chunk_len, args.onehot_threads)?
+            .with_sorted_indices(args.sort_onehot_indices)
+            .with_metrics(args.onehot_metrics);
+
+    let mut onehot_count = 0usize;
+    let mut max_onehot_domain = 0usize;
+    let mut total_polynomial_count = 0usize;
+    let t0 = Instant::now();
+    for layer in 0..LAYERS {
+        let t_layer = Instant::now();
+        let weights = read_layer_weights(cache, layer, seq)?;
+        let traced = build_layer_witness_from_trace_dir(&args.trace, layer, &weights, shape)?;
+        let polynomials = LayerPolynomialMap::<Fr>::from_layer(
+            &traced.hidden_out,
+            &traced.witness,
+            &weights,
+            shape,
+            &tensors,
+        );
+        total_polynomial_count += polynomials.entries.len();
+        for (idx, entry) in polynomials.entries.iter().enumerate() {
+            if let MultilinearPolynomial::OneHot(one_hot) = &entry.poly {
+                let global_idx = layer * 10_000 + idx;
+                committer.add_one_hot(CommittedPoly::QwenLayerTensor(global_idx), one_hot)?;
+                max_onehot_domain =
+                    max_onehot_domain.max(one_hot.K * one_hot.nonzero_indices.len());
+                onehot_count += 1;
+            }
+        }
+        eprintln!(
+            "timing: collect_layer_onehots layer={} {:.3}s",
+            layer,
+            t_layer.elapsed().as_secs_f64()
+        );
+    }
+    eprintln!(
+        "timing: collect_all_layer_onehots {:.3}s",
+        t0.elapsed().as_secs_f64()
+    );
+
+    let t0 = Instant::now();
+    let commitments = committer.commit_all()?;
+    eprintln!(
+        "timing: commit_all_layers_onehot_only {:.3}s",
+        t0.elapsed().as_secs_f64()
+    );
+    println!("commit_all_layers_onehot_only: layers {}", LAYERS);
+    println!(
+        "commit_all_layers_onehot_only: total_polynomial_count {}",
+        total_polynomial_count
+    );
+    println!(
+        "commit_all_layers_onehot_only: onehot_count {}",
+        onehot_count
+    );
+    println!(
+        "commit_all_layers_onehot_only: max_onehot_domain {}",
+        max_onehot_domain
+    );
+    println!(
+        "commit_all_layers_onehot_only: commitment_count {}",
+        commitments.len()
+    );
+    println!("commit_all_layers_onehot_only: ok");
+    Ok(())
+}
+
 fn required_pcs_num_vars_for_slices<'a>(slices: impl IntoIterator<Item = &'a [i32]>) -> usize {
     slices
         .into_iter()
@@ -264,10 +394,18 @@ struct Args {
     q8_cache: Option<PathBuf>,
     layer: usize,
     seq: Option<usize>,
+    flat_srs: Option<PathBuf>,
+    write_flat_srs: Option<PathBuf>,
+    srs_vars: Option<usize>,
+    srs_chunk_len: usize,
+    onehot_threads: Option<usize>,
+    onehot_metrics: bool,
+    sort_onehot_indices: bool,
     map_only: bool,
     commit_hidden_in_only: bool,
     commit_hidden_only: bool,
     commit_only: bool,
+    commit_all_layers_onehot_only: bool,
 }
 
 impl Args {
@@ -277,10 +415,18 @@ impl Args {
         let mut q8_cache = None;
         let mut layer = 0usize;
         let mut seq = None;
+        let mut flat_srs = None;
+        let mut write_flat_srs = None;
+        let mut srs_vars = None;
+        let mut srs_chunk_len = 1usize << 20;
+        let mut onehot_threads = None;
+        let mut onehot_metrics = false;
+        let mut sort_onehot_indices = false;
         let mut map_only = false;
         let mut commit_hidden_in_only = false;
         let mut commit_hidden_only = false;
         let mut commit_only = false;
+        let mut commit_all_layers_onehot_only = false;
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -295,10 +441,39 @@ impl Args {
                 }
                 "--layer" => layer = args.next().ok_or("--layer requires a value")?.parse()?,
                 "--seq" => seq = Some(args.next().ok_or("--seq requires a value")?.parse()?),
+                "--flat-srs" => {
+                    flat_srs = Some(PathBuf::from(
+                        args.next().ok_or("--flat-srs requires a path")?,
+                    ))
+                }
+                "--write-flat-srs" => {
+                    write_flat_srs = Some(PathBuf::from(
+                        args.next().ok_or("--write-flat-srs requires a path")?,
+                    ))
+                }
+                "--srs-vars" => {
+                    srs_vars = Some(args.next().ok_or("--srs-vars requires a value")?.parse()?)
+                }
+                "--srs-chunk-len" => {
+                    srs_chunk_len = args
+                        .next()
+                        .ok_or("--srs-chunk-len requires a value")?
+                        .parse()?
+                }
+                "--onehot-threads" => {
+                    onehot_threads = Some(
+                        args.next()
+                            .ok_or("--onehot-threads requires a value")?
+                            .parse()?,
+                    )
+                }
+                "--onehot-metrics" => onehot_metrics = true,
+                "--sort-onehot-indices" => sort_onehot_indices = true,
                 "--map-only" => map_only = true,
                 "--commit-hidden-in-only" => commit_hidden_in_only = true,
                 "--commit-hidden-only" => commit_hidden_only = true,
                 "--commit-only" => commit_only = true,
+                "--commit-all-layers-onehot-only" => commit_all_layers_onehot_only = true,
                 "--help" | "-h" => {
                     print_help();
                     std::process::exit(0);
@@ -309,16 +484,29 @@ impl Args {
         if layer >= LAYERS {
             return Err(format!("--layer must be < {LAYERS}, got {layer}").into());
         }
+        let trace = match trace {
+            Some(trace) => trace,
+            None if write_flat_srs.is_some() => PathBuf::new(),
+            None => return Err("--trace is required".into()),
+        };
         Ok(Self {
-            trace: trace.ok_or("--trace is required")?,
+            trace,
             model,
             q8_cache,
             layer,
             seq,
+            flat_srs,
+            write_flat_srs,
+            srs_vars,
+            srs_chunk_len,
+            onehot_threads,
+            onehot_metrics,
+            sort_onehot_indices,
             map_only,
             commit_hidden_in_only,
             commit_hidden_only,
             commit_only,
+            commit_all_layers_onehot_only,
         })
     }
 }
@@ -336,9 +524,17 @@ fn print_help() {
            --q8-cache PATH  explicit qwen3-awy fixed weight cache path\n\
            --layer N        layer index to prove\n\
            --seq N          override seq length instead of reading manifest metadata\n\
+           --write-flat-srs PATH write a streaming flat G1 SRS and exit\n\
+           --flat-srs PATH  use a streaming flat G1 SRS for onehot commitments in --commit-only\n\
+           --srs-vars N     max vars for --write-flat-srs\n\
+           --srs-chunk-len N number of G1 points to generate/read per SRS chunk\n\
+           --onehot-threads N thread count for streaming onehot commitment\n\
+           --onehot-metrics print streaming onehot read/sum timing\n\
+           --sort-onehot-indices sort onehot SRS offsets inside each chunk before summing\n\
            --map-only       stop after building the layer polynomial map\n\
            --commit-hidden-in-only stop after committing hidden_in only\n\
            --commit-hidden-only stop after committing hidden_in and hidden_out\n\
+           --commit-all-layers-onehot-only collect all 28 layers' onehot RA polys and stream-commit them together\n\
            --commit-only    stop after building and committing layer polynomials"
     );
 }

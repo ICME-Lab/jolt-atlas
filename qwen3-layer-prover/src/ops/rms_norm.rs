@@ -20,7 +20,7 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, Shape, TensorId},
+    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
     error::{ProverError, Result},
     ops::round::{
         ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
@@ -491,6 +491,12 @@ impl RmsNormParams {
         self.shape.clone()
     }
 
+    pub fn with_lookup_sites(mut self, output_round_site: usize, norm_round_site: usize) -> Self {
+        self.round.lookup_site = output_round_site;
+        self.norm_round.lookup_site = norm_round_site;
+        self
+    }
+
     fn row_shape(&self) -> Shape {
         let dims = self.shape.dims();
         if dims.len() <= 1 {
@@ -523,13 +529,21 @@ pub struct RmsNormProof<F: JoltField, T: Transcript> {
     pub sum_x2: Vec<i64>,
 }
 
+impl<F: JoltField, T: Transcript> RmsNormProof<F, T> {
+    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
+        let mut out = self.round.committed_opening_claims();
+        out.extend(self.norm_round.committed_opening_claims());
+        out
+    }
+}
+
 pub fn prove_rmsnorm_round<F, T>(
     output_claims: Vec<Claim<F>>,
     witness: &RmsNormWitness<'_>,
     weight: &[i32],
     params: &RmsNormParams,
     transcript: &mut T,
-) -> Result<(RmsNormProof<F, T>, Claim<F>, Claim<F>)>
+) -> Result<(RmsNormProof<F, T>, Claim<F>, Vec<CommittedOpeningClaim<F>>)>
 where
     F: JoltField,
     T: Transcript,
@@ -606,7 +620,7 @@ pub fn verify_rmsnorm_round<F, T>(
     weight: &[i32],
     params: &RmsNormParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>), ProofVerifyError>
+) -> std::result::Result<(Claim<F>, Vec<CommittedOpeningClaim<F>>), ProofVerifyError>
 where
     F: JoltField,
     T: Transcript,

@@ -434,7 +434,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             | CommittedPoly::QwenSiluRoundRaD(_)
             | CommittedPoly::QwenSoftmaxExpRaD(_)
             | CommittedPoly::QwenSoftmaxInputRemainderRaD(_)
-            | CommittedPoly::QwenRoundRaD(_)
+            | CommittedPoly::QwenRoundRaD(_, _)
             | CommittedPoly::QwenLayerTensor(_) => {
                 panic!("Qwen committed polynomials are supplied by qwen3-layer-prover")
             }

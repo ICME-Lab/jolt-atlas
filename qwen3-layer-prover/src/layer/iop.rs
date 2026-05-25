@@ -55,7 +55,7 @@ where
     )?;
 
     // down_proj = silu_up @ W_down
-    let (down_proj_proof, silu_up, down_proj_round_ra) = timed!(
+    let (down_proj_proof, silu_up, _down_proj_round_ra_chunks) = timed!(
         "down_proj",
         prove_matmul_round(
             down_proj,
@@ -67,7 +67,7 @@ where
     )?;
 
     // silu_up = silu * up_proj
-    let (silu_up_proof, silu, up_proj, silu_up_round_ra) = timed!(
+    let (silu_up_proof, silu, up_proj, _silu_up_round_ra_chunks) = timed!(
         "silu_up",
         prove_hadamard_round(
             silu_up,
@@ -78,7 +78,13 @@ where
     )?;
 
     // silu = SiLU(gate_proj, frac_bits, ra)
-    let (silu_proof, gate_proj, silu_gate_round_ra, silu_ra, silu_out_round_ra) = timed!(
+    let (
+        silu_proof,
+        gate_proj,
+        _silu_gate_round_ra_chunks,
+        _silu_ra_chunks,
+        _silu_out_round_ra_chunks,
+    ) = timed!(
         "silu",
         prove_silu_round(
             silu,
@@ -89,7 +95,7 @@ where
     )?;
 
     // gate_proj = rms_norm_mlp @ W_gate
-    let (gate_proj_proof, rms_norm_mlp_a, gate_proj_round_ra) = timed!(
+    let (gate_proj_proof, rms_norm_mlp_a, _gate_proj_round_ra_chunks) = timed!(
         "gate_proj",
         prove_matmul_round(
             gate_proj,
@@ -101,7 +107,7 @@ where
     )?;
 
     // up_proj = rms_norm_mlp @ W_up
-    let (up_proj_proof, rms_norm_mlp_b, up_proj_round_ra) = timed!(
+    let (up_proj_proof, rms_norm_mlp_b, _up_proj_round_ra_chunks) = timed!(
         "up_proj",
         prove_matmul_round(
             up_proj,
@@ -113,7 +119,7 @@ where
     )?;
 
     // rms_norm_mlp = RMSNorm(residual_add_attn)
-    let (rms_norm_mlp_proof, residual_add_attn_b, rms_norm_mlp_round_ra) = timed!(
+    let (rms_norm_mlp_proof, residual_add_attn_b, _rms_norm_mlp_round_ra_chunks) = timed!(
         "rms_norm_mlp",
         prove_rmsnorm_round(
             vec![rms_norm_mlp_a, rms_norm_mlp_b],
@@ -137,7 +143,7 @@ where
     )?;
 
     // o_proj = context @ W_o
-    let (o_proj_proof, context, o_proj_round_ra) = timed!(
+    let (o_proj_proof, context, _o_proj_round_ra_chunks) = timed!(
         "o_proj",
         prove_matmul_round(
             o_proj,
@@ -153,7 +159,7 @@ where
     );
 
     // context = softmax @ v_proj
-    let (pv_matmul_proof, softmax, v_proj, context_round_ra) = timed!(
+    let (pv_matmul_proof, softmax, v_proj, _context_round_ra_chunks) = timed!(
         "pv_matmul",
         prove_pv_matmul_round(
             context,
@@ -171,10 +177,10 @@ where
     let (
         softmax_proof,
         qk_score,
-        softmax_round_ra,
-        softmax_floor_round_ra,
-        softmax_input_remainder_ra,
-        softmax_ra,
+        _softmax_round_ra_chunks,
+        _softmax_floor_round_ra_chunks,
+        _softmax_input_remainder_ra_chunks,
+        _softmax_ra_chunks,
     ) = timed!(
         "softmax",
         prove_softmax_round(
@@ -186,18 +192,19 @@ where
     )?;
 
     // qk_score = round(round(q_rope @ k_rope) * inv_sqrt(head_dim))
-    let (qk_score_proof, q_rope, k_rope, qk_score_round_ra, qk_score_dot_round_ra) = timed!(
-        "qk_score",
-        prove_qk_score_round(
-            qk_score,
-            &witness.qk_score_witness(),
-            &tensors.qk_score_params(shape),
-            transcript,
-        )
-    )?;
+    let (qk_score_proof, q_rope, k_rope, _qk_score_round_ra_chunks, _qk_score_dot_round_ra_chunks) =
+        timed!(
+            "qk_score",
+            prove_qk_score_round(
+                qk_score,
+                &witness.qk_score_witness(),
+                &tensors.qk_score_params(shape),
+                transcript,
+            )
+        )?;
 
     // q_rope = RoPE(q_norm)
-    let (q_rope_proof, q_norm_a, q_norm_b, q_rope_round_ra) = timed!(
+    let (q_rope_proof, q_norm_a, q_norm_b, _q_rope_round_ra_chunks) = timed!(
         "q_rope",
         prove_rope_round(
             q_rope,
@@ -210,7 +217,7 @@ where
     )?;
 
     // k_rope = RoPE(k_norm)
-    let (k_rope_proof, k_norm_a, k_norm_b, k_rope_round_ra) = timed!(
+    let (k_rope_proof, k_norm_a, k_norm_b, _k_rope_round_ra_chunks) = timed!(
         "k_rope",
         prove_rope_round(
             k_rope,
@@ -223,7 +230,7 @@ where
     )?;
 
     // q_norm = RMSNorm(q_proj)
-    let (q_norm_proof, q_proj, q_norm_round_ra) = timed!(
+    let (q_norm_proof, q_proj, _q_norm_round_ra_chunks) = timed!(
         "q_norm",
         prove_rmsnorm_round(
             vec![q_norm_a, q_norm_b],
@@ -236,7 +243,7 @@ where
     let q_proj = reshape_claim(q_proj, Shape::new(vec![shape.seq, shape.attention_width()]));
 
     // k_norm = RMSNorm(k_proj)
-    let (k_norm_proof, k_proj, k_norm_round_ra) = timed!(
+    let (k_norm_proof, k_proj, _k_norm_round_ra_chunks) = timed!(
         "k_norm",
         prove_rmsnorm_round(
             vec![k_norm_a, k_norm_b],
@@ -252,7 +259,7 @@ where
     );
 
     // q_proj = rms_norm_atten @ W_q
-    let (q_proj_proof, rms_norm_atten_a, q_proj_round_ra) = timed!(
+    let (q_proj_proof, rms_norm_atten_a, _q_proj_round_ra_chunks) = timed!(
         "q_proj",
         prove_matmul_round(
             q_proj,
@@ -264,7 +271,7 @@ where
     )?;
 
     // k_proj = rms_norm_atten @ W_k
-    let (k_proj_proof, rms_norm_atten_b, k_proj_round_ra) = timed!(
+    let (k_proj_proof, rms_norm_atten_b, _k_proj_round_ra_chunks) = timed!(
         "k_proj",
         prove_matmul_round(
             k_proj,
@@ -276,7 +283,7 @@ where
     )?;
 
     // v_proj = rms_norm_atten @ W_v
-    let (v_proj_proof, rms_norm_atten_c, v_proj_round_ra) = timed!(
+    let (v_proj_proof, rms_norm_atten_c, _v_proj_round_ra_chunks) = timed!(
         "v_proj",
         prove_matmul_round(
             v_proj,
@@ -288,7 +295,7 @@ where
     )?;
 
     // rms_norm_atten = RMSNorm(hidden_in)
-    let (rms_norm_atten_proof, hidden_in_b, rms_norm_atten_round_ra) = timed!(
+    let (rms_norm_atten_proof, hidden_in_b, _rms_norm_atten_round_ra_chunks) = timed!(
         "rms_norm_atten",
         prove_rmsnorm_round(
             vec![rms_norm_atten_a, rms_norm_atten_b, rms_norm_atten_c],
@@ -303,30 +310,6 @@ where
         LayerClaims {
             hidden_in_a,
             hidden_in_b,
-            context_round_ra,
-            o_proj_round_ra,
-            softmax_round_ra,
-            softmax_floor_round_ra,
-            softmax_input_remainder_ra,
-            softmax_ra,
-            qk_score_round_ra,
-            qk_score_dot_round_ra,
-            q_rope_round_ra,
-            k_rope_round_ra,
-            q_norm_round_ra,
-            k_norm_round_ra,
-            q_proj_round_ra,
-            k_proj_round_ra,
-            v_proj_round_ra,
-            rms_norm_atten_round_ra,
-            rms_norm_mlp_round_ra,
-            gate_proj_round_ra,
-            silu_gate_round_ra,
-            silu_ra,
-            silu_out_round_ra,
-            silu_up_round_ra,
-            up_proj_round_ra,
-            down_proj_round_ra,
         },
         LayerIopProof {
             residual_add_mlp_proof,
@@ -380,7 +363,7 @@ where
     )?;
 
     // down_proj = silu_up @ W_down
-    let (silu_up, down_proj_round_ra) = timed!(
+    let (silu_up, _down_proj_round_ra_chunks) = timed!(
         "down_proj",
         verify_matmul_round(
             down_proj,
@@ -392,7 +375,7 @@ where
     )?;
 
     // silu_up = silu * up_proj
-    let (silu, up_proj, silu_up_round_ra) = timed!(
+    let (silu, up_proj, _silu_up_round_ra_chunks) = timed!(
         "silu_up",
         verify_hadamard_round(
             silu_up,
@@ -403,7 +386,7 @@ where
     )?;
 
     // silu = SiLU(gate_proj, frac_bits, ra)
-    let (gate_proj, silu_gate_round_ra, silu_ra, silu_out_round_ra) = timed!(
+    let (gate_proj, _silu_gate_round_ra_chunks, _silu_ra_chunks, _silu_out_round_ra_chunks) = timed!(
         "silu",
         verify_silu_round(
             silu,
@@ -414,7 +397,7 @@ where
     )?;
 
     // gate_proj = rms_norm_mlp @ W_gate
-    let (rms_norm_mlp_a, gate_proj_round_ra) = timed!(
+    let (rms_norm_mlp_a, _gate_proj_round_ra_chunks) = timed!(
         "gate_proj",
         verify_matmul_round(
             gate_proj,
@@ -426,7 +409,7 @@ where
     )?;
 
     // up_proj = rms_norm_mlp @ W_up
-    let (rms_norm_mlp_b, up_proj_round_ra) = timed!(
+    let (rms_norm_mlp_b, _up_proj_round_ra_chunks) = timed!(
         "up_proj",
         verify_matmul_round(
             up_proj,
@@ -438,7 +421,7 @@ where
     )?;
 
     // rms_norm_mlp = RMSNorm(residual_add_attn)
-    let (residual_add_attn_b, rms_norm_mlp_round_ra) = timed!(
+    let (residual_add_attn_b, _rms_norm_mlp_round_ra_chunks) = timed!(
         "rms_norm_mlp",
         verify_rmsnorm_round(
             vec![rms_norm_mlp_a, rms_norm_mlp_b],
@@ -461,7 +444,7 @@ where
     )?;
 
     // o_proj = context @ W_o
-    let (context, o_proj_round_ra) = timed!(
+    let (context, _o_proj_round_ra_chunks) = timed!(
         "o_proj",
         verify_matmul_round(
             o_proj,
@@ -477,7 +460,7 @@ where
     );
 
     // context = softmax @ v_proj
-    let (softmax, v_proj, context_round_ra) = timed!(
+    let (softmax, v_proj, _context_round_ra_chunks) = timed!(
         "pv_matmul",
         verify_pv_matmul_round(
             context,
@@ -494,10 +477,10 @@ where
     // softmax = softmax(qk_score)
     let (
         qk_score,
-        softmax_round_ra,
-        softmax_floor_round_ra,
-        softmax_input_remainder_ra,
-        softmax_ra,
+        _softmax_round_ra_chunks,
+        _softmax_floor_round_ra_chunks,
+        _softmax_input_remainder_ra_chunks,
+        _softmax_ra_chunks,
     ) = timed!(
         "softmax",
         verify_softmax_round(
@@ -509,7 +492,7 @@ where
     )?;
 
     // qk_score = round(round(q_rope @ k_rope) * inv_sqrt(head_dim))
-    let (q_rope, k_rope, qk_score_round_ra, qk_score_dot_round_ra) = timed!(
+    let (q_rope, k_rope, _qk_score_round_ra_chunks, _qk_score_dot_round_ra_chunks) = timed!(
         "qk_score",
         verify_qk_score_round(
             qk_score,
@@ -520,7 +503,7 @@ where
     )?;
 
     // q_rope = RoPE(q_norm)
-    let (q_norm_a, q_norm_b, q_rope_round_ra) = timed!(
+    let (q_norm_a, q_norm_b, _q_rope_round_ra_chunks) = timed!(
         "q_rope",
         verify_rope_round(
             q_rope,
@@ -533,7 +516,7 @@ where
     )?;
 
     // k_rope = RoPE(k_norm)
-    let (k_norm_a, k_norm_b, k_rope_round_ra) = timed!(
+    let (k_norm_a, k_norm_b, _k_rope_round_ra_chunks) = timed!(
         "k_rope",
         verify_rope_round(
             k_rope,
@@ -546,7 +529,7 @@ where
     )?;
 
     // q_norm = RMSNorm(q_proj)
-    let (q_proj, q_norm_round_ra) = timed!(
+    let (q_proj, _q_norm_round_ra_chunks) = timed!(
         "q_norm",
         verify_rmsnorm_round(
             vec![q_norm_a, q_norm_b],
@@ -559,7 +542,7 @@ where
     let q_proj = reshape_claim(q_proj, Shape::new(vec![shape.seq, shape.attention_width()]));
 
     // k_norm = RMSNorm(k_proj)
-    let (k_proj, k_norm_round_ra) = timed!(
+    let (k_proj, _k_norm_round_ra_chunks) = timed!(
         "k_norm",
         verify_rmsnorm_round(
             vec![k_norm_a, k_norm_b],
@@ -575,7 +558,7 @@ where
     );
 
     // q_proj = rms_norm_atten @ W_q
-    let (rms_norm_atten_a, q_proj_round_ra) = timed!(
+    let (rms_norm_atten_a, _q_proj_round_ra_chunks) = timed!(
         "q_proj",
         verify_matmul_round(
             q_proj,
@@ -587,7 +570,7 @@ where
     )?;
 
     // k_proj = rms_norm_atten @ W_k
-    let (rms_norm_atten_b, k_proj_round_ra) = timed!(
+    let (rms_norm_atten_b, _k_proj_round_ra_chunks) = timed!(
         "k_proj",
         verify_matmul_round(
             k_proj,
@@ -599,7 +582,7 @@ where
     )?;
 
     // v_proj = rms_norm_atten @ W_v
-    let (rms_norm_atten_c, v_proj_round_ra) = timed!(
+    let (rms_norm_atten_c, _v_proj_round_ra_chunks) = timed!(
         "v_proj",
         verify_matmul_round(
             v_proj,
@@ -611,7 +594,7 @@ where
     )?;
 
     // rms_norm_atten = RMSNorm(hidden_in)
-    let (hidden_in_b, rms_norm_atten_round_ra) = timed!(
+    let (hidden_in_b, _rms_norm_atten_round_ra_chunks) = timed!(
         "rms_norm_atten",
         verify_rmsnorm_round(
             vec![rms_norm_atten_a, rms_norm_atten_b, rms_norm_atten_c],
@@ -625,30 +608,6 @@ where
     Ok(LayerClaims {
         hidden_in_a,
         hidden_in_b,
-        context_round_ra,
-        o_proj_round_ra,
-        softmax_round_ra,
-        softmax_floor_round_ra,
-        softmax_input_remainder_ra,
-        softmax_ra,
-        qk_score_round_ra,
-        qk_score_dot_round_ra,
-        q_rope_round_ra,
-        k_rope_round_ra,
-        q_norm_round_ra,
-        k_norm_round_ra,
-        q_proj_round_ra,
-        k_proj_round_ra,
-        v_proj_round_ra,
-        rms_norm_atten_round_ra,
-        rms_norm_mlp_round_ra,
-        gate_proj_round_ra,
-        silu_gate_round_ra,
-        silu_ra,
-        silu_out_round_ra,
-        silu_up_round_ra,
-        up_proj_round_ra,
-        down_proj_round_ra,
     })
 }
 

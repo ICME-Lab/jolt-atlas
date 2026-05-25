@@ -78,6 +78,7 @@ where
     let opening_reduction = prove_layer_claim_openings::<F, T, PCS>(
         &committed.polynomials,
         iop.claims.opening_claims(),
+        iop.proof.committed_opening_claims(),
         hidden_out.clone(),
         pcs_setup,
         transcript,

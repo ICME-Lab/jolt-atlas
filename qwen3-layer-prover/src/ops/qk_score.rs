@@ -19,7 +19,7 @@ use joltworks::{
 };
 
 use crate::{
-    claim::{Claim, Shape, TensorId},
+    claim::{Claim, CommittedOpeningClaim, Shape, TensorId},
     error::{ProverError, Result},
     ops::{
         attention_common::{
@@ -27,9 +27,9 @@ use crate::{
             log2_ceil, split3, validate_claim, validate_gqa, verify_claim,
         },
         round::{
-            ROUND_FRAC_BITS, ROUND_LUT_LEN, RoundLookupProof, RoundParams, RoundProof,
-            RoundWitness, padded_lookup_indices, prove_round, prove_round_lookup, round_lut_table,
-            verify_round, verify_round_lookup,
+            ROUND_FRAC_BITS, RoundLookupProof, RoundParams, RoundProof, RoundWitness,
+            padded_lookup_indices, prove_round, prove_round_lookup, round_lut_table, verify_round,
+            verify_round_lookup,
         },
     },
 };
@@ -128,6 +128,14 @@ pub struct QkScoreProof<F: JoltField, T: Transcript> {
     pub qk: QkScoreRoundRelationProof<F, T>,
 }
 
+impl<F: JoltField, T: Transcript> QkScoreProof<F, T> {
+    pub fn committed_opening_claims(&self) -> Vec<CommittedOpeningClaim<F>> {
+        let mut out = self.score_round.committed_opening_claims();
+        out.extend(self.dot_round_lookup.committed_opening_claims());
+        out
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct QkScoreRoundRelationProof<F: JoltField, T: Transcript> {
     pub sumcheck: SumcheckInstanceProof<F, T>,
@@ -142,7 +150,13 @@ pub fn prove_qk_score_round<F, T>(
     witness: &QkScoreWitness<'_>,
     params: &QkScoreRoundParams,
     transcript: &mut T,
-) -> Result<(QkScoreProof<F, T>, Claim<F>, Claim<F>, Claim<F>, Claim<F>)>
+) -> Result<(
+    QkScoreProof<F, T>,
+    Claim<F>,
+    Claim<F>,
+    Vec<CommittedOpeningClaim<F>>,
+    Vec<CommittedOpeningClaim<F>>,
+)>
 where
     F: JoltField,
     T: Transcript,
@@ -199,6 +213,7 @@ where
         (dot_round_opening_point, dot_remainder_opening),
     );
     let dot_round_lookup = prove_round_lookup(
+        params.dot_round.lookup_site,
         dot_round_point,
         dot_round_bit_opening,
         dot_remainder_opening,
@@ -207,19 +222,7 @@ where
         &mut dot_round_accumulator,
         transcript,
     )?;
-    let dot_ra = Claim {
-        tensor: TensorId::new(format!("{}_round_ra", params.dot_round.input_tensor.0)),
-        logical_shape: Shape::new(vec![
-            params.dot_round.shape.padded_power_of_two().numel(),
-            ROUND_LUT_LEN,
-        ]),
-        domain_shape: Shape::new(vec![
-            params.dot_round.shape.padded_power_of_two().numel(),
-            ROUND_LUT_LEN,
-        ]),
-        point: dot_round_lookup.ra_point.clone(),
-        value: dot_round_lookup.ra_opening,
-    };
+    let dot_ra = dot_round_lookup.committed_opening_claims();
 
     Ok((
         QkScoreProof {
@@ -240,7 +243,15 @@ pub fn verify_qk_score_round<F, T>(
     proof: &QkScoreProof<F, T>,
     params: &QkScoreRoundParams,
     transcript: &mut T,
-) -> std::result::Result<(Claim<F>, Claim<F>, Claim<F>, Claim<F>), ProofVerifyError>
+) -> std::result::Result<
+    (
+        Claim<F>,
+        Claim<F>,
+        Vec<CommittedOpeningClaim<F>>,
+        Vec<CommittedOpeningClaim<F>>,
+    ),
+    ProofVerifyError,
+>
 where
     F: JoltField,
     T: Transcript,
@@ -265,6 +276,7 @@ where
     let (q, k, dot_round_point, dot_round_bit_opening, dot_remainder_opening) =
         verify_qk_score_round_relation(dot_claim, &proof.qk, &params.qk, transcript)?;
     let dot_round_lookup = verify_round_lookup(
+        params.dot_round.lookup_site,
         params.dot_round.shape.padded_power_of_two().numel(),
         dot_round_point,
         dot_round_bit_opening,
@@ -276,19 +288,7 @@ where
         &mut VerifierOpeningAccumulator::new(),
         transcript,
     )?;
-    let dot_ra = Claim {
-        tensor: TensorId::new(format!("{}_round_ra", params.dot_round.input_tensor.0)),
-        logical_shape: Shape::new(vec![
-            params.dot_round.shape.padded_power_of_two().numel(),
-            ROUND_LUT_LEN,
-        ]),
-        domain_shape: Shape::new(vec![
-            params.dot_round.shape.padded_power_of_two().numel(),
-            ROUND_LUT_LEN,
-        ]),
-        point: dot_round_lookup.ra_point,
-        value: proof.dot_round_lookup.ra_opening,
-    };
+    let dot_ra = dot_round_lookup.committed_opening_claims();
 
     Ok((q, k, score_ra, dot_ra))
 }

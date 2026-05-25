@@ -186,10 +186,11 @@ canonical_serde_enum! {
         /// * `0` – decomposition index `d`
         QwenSoftmaxInputRemainderRaD(usize),
 
-        /// One-hot read-address decomposition for the Qwen round lookup.
+        /// One-hot read-address decomposition for a Qwen round lookup.
         ///
-        /// * `0` – decomposition index `d`
-        QwenRoundRaD(usize),
+        /// * `0` – layer-local round lookup site
+        /// * `1` – decomposition index `d`
+        QwenRoundRaD(usize, usize),
 
         /// Generic committed tensor used by the standalone Qwen layer prover.
         ///

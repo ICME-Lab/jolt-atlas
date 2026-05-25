@@ -10,7 +10,7 @@ use crate::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         one_hot_polynomial::OneHotPolynomial,
         opening_proof::{
-            Opening, OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            Opening, OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN,
         },
         ra_poly::RaPolynomial,
@@ -56,6 +56,7 @@ where
     pub polynomial: CommittedPoly,
     /// The ID of the sumcheck these openings originated from
     pub sumcheck_id: SumcheckId,
+    pub opening_id: OpeningId,
     pub opening: Opening<F>,
     pub sumcheck_claim: Option<F>,
 }
@@ -81,6 +82,7 @@ where
         Self {
             polynomial,
             sumcheck_id,
+            opening_id: OpeningId::new(polynomial, sumcheck_id),
             opening: (opening_point.into(), claim),
             prover_state: opening.into(),
             sumcheck_claim: None,
@@ -102,6 +104,7 @@ where
         Self {
             polynomial,
             sumcheck_id,
+            opening_id: OpeningId::new(polynomial, sumcheck_id),
             opening: (opening_point.into(), claim),
             prover_state: opening.into(),
             sumcheck_claim: None,
@@ -214,7 +217,7 @@ where
             ProverOpening::Dense(opening) => opening.final_claim(),
             ProverOpening::OneHot(opening) => opening.final_claim(),
         };
-        accumulator.cache_opening_reduction_claim(self.polynomial, claim);
+        accumulator.cache_opening_reduction_claim(self.opening_id, claim);
     }
 }
 

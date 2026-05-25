@@ -57,6 +57,12 @@ where
             "layer opening claims do not match verified IOP claims".to_string(),
         ));
     }
+    let expected_committed_openings = proof.iop_proof.committed_opening_claims();
+    if expected_committed_openings != proof.opening_reduction.committed_opening_claims {
+        return Err(ProofVerifyError::InvalidOpeningProof(
+            "layer committed opening claims do not match verified IOP claims".to_string(),
+        ));
+    }
     verify_layer_openings::<F, T, PCS>(
         &commitments,
         &proof.opening_reduction,

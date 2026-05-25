@@ -129,14 +129,8 @@ where
     let round_witness = RoundWitness::from_input_output(witness.acc, witness.output);
     let (round_proof, acc_claim, round_ra) =
         prove_round(vec![y_claim], &round_witness, &params.round, transcript)?;
-    let (rope_proof, x_even, x_odd) = prove_rope_acc(
-        acc_claim,
-        &witness.input,
-        cos,
-        sin,
-        &params.rope,
-        transcript,
-    )?;
+    let (rope_proof, x_even, x_odd) =
+        prove_rope_acc(acc_claim, witness.input, cos, sin, &params.rope, transcript)?;
 
     Ok((
         RopeProof {

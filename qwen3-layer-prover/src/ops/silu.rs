@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -30,14 +28,6 @@ use crate::{
         ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
     },
 };
-
-macro_rules! op_timing {
-    ($($arg:tt)*) => {
-        if crate::timing::op_timing_enabled() {
-            eprintln!($($arg)*);
-        }
-    };
-}
 
 // Design note for future us:
 //
@@ -129,7 +119,6 @@ pub struct SiluWitness<'a> {
 pub struct SiluProof<F: JoltField, T: Transcript> {
     pub min_n: i64,
     pub max_n: i64,
-    pub skipped_sigmoid_ra_claim: Option<Claim<F>>,
     pub relation: SumcheckInstanceProof<F, T>,
     pub base_lookup: SumcheckInstanceProof<F, T>,
     pub base_ra_onehot: SumcheckInstanceProof<F, T>,
@@ -174,17 +163,9 @@ pub struct SiluRoundWitness<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub enum SiluRoundProof<F: JoltField, T: Transcript> {
-    Proven {
-        round: RoundProof<F, T>,
-        silu: SiluProof<F, T>,
-    },
-    Skipped {
-        gate_proj_round: Claim<F>,
-        gate_round_ra: Claim<F>,
-        silu_ra: Claim<F>,
-        silu_round_ra: Claim<F>,
-    },
+pub struct SiluRoundProof<F: JoltField, T: Transcript> {
+    pub round: RoundProof<F, T>,
+    pub silu: SiluProof<F, T>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -204,23 +185,6 @@ where
     F: JoltField,
     T: Transcript,
 {
-    if crate::timing::skip_silu_enabled() {
-        let claims = skipped_silu_round_claims(&silu_round_claim, witness, params)?;
-        op_timing!("timing: prove_silu_round.skipped 0.000s");
-        return Ok((
-            SiluRoundProof::Skipped {
-                gate_proj_round: claims.0.clone(),
-                gate_round_ra: claims.1.clone(),
-                silu_ra: claims.2.clone(),
-                silu_round_ra: claims.3.clone(),
-            },
-            claims.0,
-            claims.1,
-            claims.2,
-            claims.3,
-        ));
-    }
-
     let round_witness = RoundWitness::from_input_output(witness.silu_acc, witness.silu);
     let (round_proof, silu_claim, silu_round_ra) = prove_round(
         vec![silu_round_claim],
@@ -240,7 +204,7 @@ where
         prove_silu(vec![silu_claim], &silu_witness, &params.silu, transcript)?;
 
     Ok((
-        SiluRoundProof::Proven {
+        SiluRoundProof {
             round: round_proof,
             silu: silu_proof,
         },
@@ -249,76 +213,6 @@ where
         silu_ra,
         silu_round_ra,
     ))
-}
-
-fn skipped_silu_round_claims<F: JoltField>(
-    silu_round_claim: &Claim<F>,
-    witness: &SiluRoundWitness<'_>,
-    params: &SiluRoundParams,
-) -> Result<(Claim<F>, Claim<F>, Claim<F>, Claim<F>)> {
-    validate_skip_tensor_claim(silu_round_claim, &params.silu.shape)?;
-
-    let tensor_point = silu_round_claim.point.clone();
-    let gate_proj_round = Claim {
-        tensor: params.silu.gate_proj_round_tensor.clone(),
-        logical_shape: params.silu.shape.clone(),
-        domain_shape: params.silu.shape.padded_power_of_two(),
-        point: tensor_point.clone(),
-        value: eval_i32_tensor(witness.gate_proj, &params.silu.shape, &tensor_point),
-    };
-
-    let entries = entries_from_min_max(witness.min_n, witness.max_n)?;
-    let lut_len = padded_silu_lut_len(entries);
-    // These RA claims are not consumed by any downstream op in the diagnostic
-    // skip path.  Keep their shapes stable but avoid evaluating the full
-    // one-hot tensors; otherwise "skipping" SiLU is dominated by RA materialize.
-    let gate_round_ra = skipped_placeholder_claim(
-        params.silu.round_ra_tensor.clone(),
-        Shape::new(vec![
-            params.silu.shape.padded_power_of_two().numel(),
-            1 << ROUND_FRAC_BITS,
-        ]),
-    );
-    let silu_ra =
-        skipped_placeholder_claim(params.silu.ra_tensor.clone(), params.silu.ra_shape(lut_len));
-    let silu_round_ra = skipped_placeholder_claim(
-        TensorId::new(format!("{}_round_ra", params.round.input_tensor.0)),
-        Shape::new(vec![
-            params.round.shape.padded_power_of_two().numel(),
-            1 << ROUND_FRAC_BITS,
-        ]),
-    );
-
-    Ok((gate_proj_round, gate_round_ra, silu_ra, silu_round_ra))
-}
-
-fn validate_skip_tensor_claim<F: JoltField>(claim: &Claim<F>, shape: &Shape) -> Result<()> {
-    if claim.logical_shape != *shape || claim.domain_shape != shape.padded_power_of_two() {
-        return Err(ProverError::ShapeMismatch {
-            name: "silu_skip_claim",
-            expected: shape.dims().to_vec(),
-            actual: claim.logical_shape.dims().to_vec(),
-        });
-    }
-    Ok(())
-}
-
-fn skipped_placeholder_claim<F: JoltField>(tensor: TensorId, shape: Shape) -> Claim<F> {
-    Claim {
-        tensor,
-        logical_shape: shape.clone(),
-        domain_shape: shape.padded_power_of_two(),
-        value: F::zero(),
-        point: vec![F::zero(); shape.padded_power_of_two().point_len()],
-    }
-}
-
-fn append_zero_lookup_point<F: JoltField>(tensor_point: &[F], lut_len: usize) -> Vec<F> {
-    let target_len = tensor_point.len() + lut_len.ilog2() as usize;
-    let mut point = Vec::with_capacity(target_len);
-    point.extend_from_slice(tensor_point);
-    point.resize(target_len, F::zero());
-    point
 }
 
 pub fn verify_silu_round<F, T>(
@@ -331,31 +225,14 @@ where
     F: JoltField,
     T: Transcript,
 {
-    if crate::timing::skip_silu_enabled() {
-        if let SiluRoundProof::Skipped {
-            gate_proj_round,
-            gate_round_ra,
-            silu_ra,
-            silu_round_ra,
-        } = proof
-        {
-            return Ok((
-                gate_proj_round.clone(),
-                gate_round_ra.clone(),
-                silu_ra.clone(),
-                silu_round_ra.clone(),
-            ));
-        }
-        return Err(ProofVerifyError::InternalError);
-    }
-
-    let SiluRoundProof::Proven { round, silu } = proof else {
-        return Err(ProofVerifyError::InternalError);
-    };
-    let (silu_claim, silu_round_ra) =
-        verify_round(vec![silu_round_claim], round, &params.round, transcript)?;
+    let (silu_claim, silu_round_ra) = verify_round(
+        vec![silu_round_claim],
+        &proof.round,
+        &params.round,
+        transcript,
+    )?;
     let (gate_proj_round, gate_round_ra, silu_ra) =
-        verify_silu(vec![silu_claim], silu, &params.silu, transcript)?;
+        verify_silu(vec![silu_claim], &proof.silu, &params.silu, transcript)?;
 
     Ok((gate_proj_round, gate_round_ra, silu_ra, silu_round_ra))
 }
@@ -370,60 +247,28 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let total_start = Instant::now();
-    let mut step_start = Instant::now();
     let entries = entries_from_min_max(witness.min_n, witness.max_n)?;
     let lut_len = padded_silu_lut_len(entries);
     validate_inputs(&output_claims, witness, params, entries)?;
     append_range_advice::<F, T>(witness.min_n, witness.max_n, transcript);
-    op_timing!(
-        "timing: prove_silu.setup_validate {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let alphas = transcript.challenge_scalar_powers(output_claims.len());
     let round_mix = transcript.challenge_scalar();
-    op_timing!(
-        "timing: prove_silu.challenges {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let input_claim = batched_input_claim(&output_claims, &alphas);
     let eq_batch = batched_masked_eq_poly(&output_claims, &alphas, &params.shape);
-    op_timing!(
-        "timing: prove_silu.eq_polys {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let logical_lookup_indices = silu_logical_lookup_indices(witness, params, entries)?;
     let padded_lookup_indices = padded_lookup_indices(&logical_lookup_indices, params, entries);
     let base_values = silu_lookup_values(&logical_lookup_indices, witness.min_n, silu_base);
     let slope_values = silu_lookup_values(&logical_lookup_indices, witness.min_n, silu_slope);
-    let gate = padded_i32_tensor(&witness.gate_proj_round, &params.shape);
-    let remainders = round_remainders(&witness.gate_proj_round);
+    let gate = padded_i32_tensor(witness.gate_proj_round, &params.shape);
+    let remainders = round_remainders(witness.gate_proj_round);
     let round_bits = round_bits_from_remainders(&remainders);
     let remainder = padded_usize_tensor(&remainders, &params.shape);
     let round_bit = padded_u8_tensor(&round_bits, &params.shape);
     let base = padded_i64_tensor(&base_values, &params.shape);
     let slope = padded_i64_tensor(&slope_values, &params.shape);
     let index = padded_usize_evals(&padded_lookup_indices);
-    op_timing!(
-        "timing: prove_silu.witness_polys {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let base_table = padded_i32_table(witness.min_n, entries, lut_len, silu_base)?;
     let slope_table = padded_i32_table(witness.min_n, entries, lut_len, silu_slope)?;
-    op_timing!(
-        "timing: prove_silu.table_polys {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let sc_params =
         SiluSumcheckParams::new(params.shape.padded_power_of_two().point_len(), input_claim);
     let mut prover = SiluSumcheckProver::new(
@@ -438,20 +283,8 @@ where
         round_mix,
         field_from_i64(witness.min_n),
     );
-    op_timing!(
-        "timing: prove_silu.prover_init {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let mut accumulator = ProverOpeningAccumulator::new();
     let (relation, challenges) = Sumcheck::prove(&mut prover, &mut accumulator, transcript);
-    op_timing!(
-        "timing: prove_silu.relation_sumcheck {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let gate_opening = prover_opening(
         &accumulator,
         OpeningId::new(VirtualPoly::QwenSiluGate, silu_sumcheck_id()),
@@ -478,67 +311,28 @@ where
     )?;
     let full_point = normalize_sumcheck_point::<F>(&challenges.into_opening());
     let tensor_point = full_point;
-    op_timing!(
-        "timing: prove_silu.relation_openings {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    let skip_sigmoid = crate::timing::skip_sigmoid_enabled();
-    step_start = Instant::now();
-    let (base_lookup, slope_lookup, skipped_sigmoid_ra_claim) = if skip_sigmoid {
-        let ra_shape = params.ra_shape(lut_len);
-        let ra_point = append_zero_lookup_point(&tensor_point, lut_len);
-        let ra_claim = Claim {
-            tensor: params.ra_tensor.clone(),
-            logical_shape: ra_shape.clone(),
-            domain_shape: ra_shape.padded_power_of_two(),
-            value: eval_u8_tensor(witness.ra, &ra_shape, &ra_point),
-            point: ra_point,
-        };
-        op_timing!("timing: prove_silu.base_shout.skipped 0.000s");
-        op_timing!("timing: prove_silu.slope_shout.skipped 0.000s");
-        (
-            SiluShoutProof::skipped(),
-            SiluShoutProof::skipped(),
-            Some(ra_claim),
-        )
-    } else {
-        let base_lookup = prove_silu_shout_lookup(
-            SiluLookupKind::Base,
-            lut_len,
-            tensor_point.clone(),
-            base_opening,
-            index_opening,
-            padded_lookup_indices.clone(),
-            base_table,
-            &mut accumulator,
-            transcript,
-        )?;
-        op_timing!(
-            "timing: prove_silu.base_shout {:.3}s",
-            step_start.elapsed().as_secs_f64()
-        );
-
-        step_start = Instant::now();
-        let slope_lookup = prove_silu_shout_lookup(
-            SiluLookupKind::Slope,
-            lut_len,
-            tensor_point.clone(),
-            slope_opening,
-            index_opening,
-            padded_lookup_indices,
-            slope_table,
-            &mut accumulator,
-            transcript,
-        )?;
-        op_timing!(
-            "timing: prove_silu.slope_shout {:.3}s",
-            step_start.elapsed().as_secs_f64()
-        );
-        (base_lookup, slope_lookup, None)
-    };
-
-    step_start = Instant::now();
+    let base_lookup = prove_silu_shout_lookup(
+        SiluLookupKind::Base,
+        lut_len,
+        tensor_point.clone(),
+        base_opening,
+        index_opening,
+        padded_lookup_indices.clone(),
+        base_table,
+        &mut accumulator,
+        transcript,
+    )?;
+    let slope_lookup = prove_silu_shout_lookup(
+        SiluLookupKind::Slope,
+        lut_len,
+        tensor_point.clone(),
+        slope_opening,
+        index_opening,
+        padded_lookup_indices,
+        slope_table,
+        &mut accumulator,
+        transcript,
+    )?;
     let round_lookup = prove_silu_shout_lookup(
         SiluLookupKind::Round,
         1 << ROUND_FRAC_BITS,
@@ -550,21 +344,11 @@ where
         &mut accumulator,
         transcript,
     )?;
-    op_timing!(
-        "timing: prove_silu.round_shout {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    op_timing!(
-        "timing: prove_silu.total {:.3}s",
-        total_start.elapsed().as_secs_f64()
-    );
 
     Ok((
         SiluProof {
             min_n: witness.min_n,
             max_n: witness.max_n,
-            skipped_sigmoid_ra_claim: skipped_sigmoid_ra_claim.clone(),
             relation,
             base_lookup: base_lookup.read_raf,
             base_ra_onehot: base_lookup.ra_onehot,
@@ -605,13 +389,13 @@ where
             point: round_lookup.ra_point,
             value: round_lookup.ra_opening,
         },
-        skipped_sigmoid_ra_claim.unwrap_or_else(|| Claim {
+        Claim {
             tensor: params.ra_tensor.clone(),
             logical_shape: params.ra_shape(lut_len),
             domain_shape: params.ra_shape(lut_len).padded_power_of_two(),
             point: base_lookup.ra_point,
             value: base_lookup.ra_opening,
-        }),
+        },
     ))
 }
 
@@ -625,18 +409,10 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let total_start = Instant::now();
-    let mut step_start = Instant::now();
     let entries = entries_from_min_max(proof.min_n, proof.max_n)
         .map_err(|_| ProofVerifyError::InvalidInputLength(MAX_SILU_LUT_LEN, 0))?;
     verify_inputs(&output_claims, params, entries)?;
     append_range_advice::<F, T>(proof.min_n, proof.max_n, transcript);
-    op_timing!(
-        "timing: verify_silu.setup_validate {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let alphas = transcript.challenge_scalar_powers(output_claims.len());
     let round_mix = transcript.challenge_scalar();
     let input_claim = batched_input_claim(&output_claims, &alphas);
@@ -654,12 +430,6 @@ where
         shape: params.shape.clone(),
         min_n: proof.min_n,
     };
-    op_timing!(
-        "timing: verify_silu.challenges {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let mut accumulator = VerifierOpeningAccumulator::new();
     accumulator.openings.insert(
         OpeningId::new(VirtualPoly::QwenSiluGate, silu_sumcheck_id()),
@@ -700,71 +470,45 @@ where
     let challenges = Sumcheck::verify(&proof.relation, &verifier, &mut accumulator, transcript)?;
     let tensor_point = normalize_sumcheck_point::<F>(&challenges.into_opening());
     let lut_len = padded_silu_lut_len(entries);
-    op_timing!(
-        "timing: verify_silu.relation_sumcheck {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    let skip_sigmoid = crate::timing::skip_sigmoid_enabled();
-    let silu_ra_claim = if skip_sigmoid {
-        let Some(claim) = proof.skipped_sigmoid_ra_claim.clone() else {
-            return Err(ProofVerifyError::InternalError);
-        };
-        op_timing!("timing: verify_silu.base_shout.skipped 0.000s");
-        op_timing!("timing: verify_silu.slope_shout.skipped 0.000s");
-        claim
-    } else {
-        step_start = Instant::now();
-        let base_lookup = verify_silu_shout_lookup(
-            SiluLookupKind::Base,
-            entries,
-            lut_len,
-            proof.min_n,
-            params.shape.numel(),
-            tensor_point.clone(),
-            proof.base_opening,
-            proof.index_opening,
-            proof.base_ra_opening,
-            &proof.base_ra_committed_openings,
-            &proof.base_lookup,
-            &proof.base_ra_onehot,
-            &mut accumulator,
-            transcript,
-        )?;
-        op_timing!(
-            "timing: verify_silu.base_shout {:.3}s",
-            step_start.elapsed().as_secs_f64()
-        );
-        step_start = Instant::now();
-        verify_silu_shout_lookup(
-            SiluLookupKind::Slope,
-            entries,
-            lut_len,
-            proof.min_n,
-            params.shape.numel(),
-            tensor_point.clone(),
-            proof.slope_opening,
-            proof.index_opening,
-            proof.slope_ra_opening,
-            &proof.slope_ra_committed_openings,
-            &proof.slope_lookup,
-            &proof.slope_ra_onehot,
-            &mut accumulator,
-            transcript,
-        )?;
-        op_timing!(
-            "timing: verify_silu.slope_shout {:.3}s",
-            step_start.elapsed().as_secs_f64()
-        );
-        Claim {
-            tensor: params.ra_tensor.clone(),
-            logical_shape: params.ra_shape(lut_len),
-            domain_shape: params.ra_shape(lut_len).padded_power_of_two(),
-            point: base_lookup.ra_point,
-            value: proof.base_ra_opening,
-        }
+    let base_lookup = verify_silu_shout_lookup(
+        SiluLookupKind::Base,
+        entries,
+        lut_len,
+        proof.min_n,
+        params.shape.numel(),
+        tensor_point.clone(),
+        proof.base_opening,
+        proof.index_opening,
+        proof.base_ra_opening,
+        &proof.base_ra_committed_openings,
+        &proof.base_lookup,
+        &proof.base_ra_onehot,
+        &mut accumulator,
+        transcript,
+    )?;
+    verify_silu_shout_lookup(
+        SiluLookupKind::Slope,
+        entries,
+        lut_len,
+        proof.min_n,
+        params.shape.numel(),
+        tensor_point.clone(),
+        proof.slope_opening,
+        proof.index_opening,
+        proof.slope_ra_opening,
+        &proof.slope_ra_committed_openings,
+        &proof.slope_lookup,
+        &proof.slope_ra_onehot,
+        &mut accumulator,
+        transcript,
+    )?;
+    let silu_ra_claim = Claim {
+        tensor: params.ra_tensor.clone(),
+        logical_shape: params.ra_shape(lut_len),
+        domain_shape: params.ra_shape(lut_len).padded_power_of_two(),
+        point: base_lookup.ra_point,
+        value: proof.base_ra_opening,
     };
-    step_start = Instant::now();
     let round_lookup = verify_silu_shout_lookup(
         SiluLookupKind::Round,
         1 << ROUND_FRAC_BITS,
@@ -781,15 +525,6 @@ where
         &mut accumulator,
         transcript,
     )?;
-    op_timing!(
-        "timing: verify_silu.round_shout {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-    op_timing!(
-        "timing: verify_silu.total {:.3}s",
-        total_start.elapsed().as_secs_f64()
-    );
-
     Ok((
         Claim {
             tensor: params.gate_proj_round_tensor.clone(),
@@ -1269,18 +1004,6 @@ struct SiluShoutProof<F: JoltField, T: Transcript> {
     committed_openings: SiluRaCommittedOpenings<F>,
 }
 
-impl<F: JoltField, T: Transcript> SiluShoutProof<F, T> {
-    fn skipped() -> Self {
-        Self {
-            read_raf: SumcheckInstanceProof::new(Vec::new()),
-            ra_onehot: SumcheckInstanceProof::new(Vec::new()),
-            ra_point: Vec::new(),
-            ra_opening: F::zero(),
-            committed_openings: SiluRaCommittedOpenings::default(),
-        }
-    }
-}
-
 fn prove_silu_shout_lookup<F, T>(
     kind: SiluLookupKind,
     lut_len: usize,
@@ -1360,8 +1083,6 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let total_start = Instant::now();
-    let mut step_start = Instant::now();
     let log_k = lut_len.trailing_zeros() as usize;
     let r_cycle = OpeningPoint::<BIG_ENDIAN, F>::new(tensor_point);
     accumulator.openings.insert(
@@ -1390,20 +1111,7 @@ where
     }
     .map_err(|_| ProofVerifyError::InvalidInputLength(lut_len, 0))?;
     let read_verifier = shout::read_raf_verifier(&provider, table, accumulator, transcript);
-    op_timing!(
-        "timing: verify_silu.{:?}.shout_setup {:.3}s",
-        kind,
-        step_start.elapsed().as_secs_f64()
-    );
-    step_start = Instant::now();
     Sumcheck::verify(read_raf, &*read_verifier, accumulator, transcript)?;
-    op_timing!(
-        "timing: verify_silu.{:?}.read_raf {:.3}s",
-        kind,
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let encoding = SiluRaEncoding { kind, log_k };
     let [ra_verifier, hw_verifier, bool_verifier] =
         shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
@@ -1420,33 +1128,11 @@ where
     } else {
         vec![&*ra_verifier, &*hw_verifier, &*bool_verifier]
     };
-    op_timing!(
-        "timing: verify_silu.{:?}.ra_setup {:.3}s",
-        kind,
-        step_start.elapsed().as_secs_f64()
-    );
-    step_start = Instant::now();
     BatchedSumcheck::verify(ra_onehot, verifier_instances, accumulator, transcript)?;
-    op_timing!(
-        "timing: verify_silu.{:?}.ra_onehot {:.3}s",
-        kind,
-        step_start.elapsed().as_secs_f64()
-    );
-    step_start = Instant::now();
     let (ra_point, ra_opening) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
         kind.ra_poly(),
         silu_shout_sumcheck_id(kind),
     ));
-    op_timing!(
-        "timing: verify_silu.{:?}.ra_opening {:.3}s",
-        kind,
-        step_start.elapsed().as_secs_f64()
-    );
-    op_timing!(
-        "timing: verify_silu.{:?}.shout_total {:.3}s",
-        kind,
-        total_start.elapsed().as_secs_f64()
-    );
     Ok(SiluShoutProof {
         read_raf: read_raf.clone(),
         ra_onehot: ra_onehot.clone(),
@@ -1976,42 +1662,6 @@ fn tensor_point_from_full_shape<F: Clone>(point: &[F], shape: &Shape) -> Vec<F> 
     point[..tensor_vars].to_vec()
 }
 
-fn eval_i32_tensor<F: JoltField>(values: &[i32], shape: &Shape, point: &[F]) -> F {
-    let padded = padded_i32_tensor(values, shape);
-    eval_padded_i64_like(
-        padded.iter().map(|&value| i64::from(value)),
-        &shape.padded_power_of_two(),
-        point,
-    )
-}
-
-fn eval_u8_tensor<F: JoltField>(values: &[u8], shape: &Shape, point: &[F]) -> F {
-    eval_padded_i64_like(values.iter().map(|&value| i64::from(value)), shape, point)
-}
-
-fn eval_padded_i64_like<F: JoltField>(
-    values: impl IntoIterator<Item = i64>,
-    shape: &Shape,
-    point: &[F],
-) -> F {
-    let eq_by_dim = split_point(shape, point)
-        .into_iter()
-        .map(EqPolynomial::<F>::evals)
-        .collect::<Vec<_>>();
-    let strides = row_major_strides(shape.dims());
-    values
-        .into_iter()
-        .enumerate()
-        .fold(F::zero(), |acc, (flat, value)| {
-            let mut weight = F::one();
-            for (dim, (&stride, eq)) in strides.iter().zip(&eq_by_dim).enumerate() {
-                let coord = (flat / stride) % shape.dims()[dim];
-                weight *= eq[coord];
-            }
-            acc + weight * field_from_i64::<F>(value)
-        })
-}
-
 fn split_point<'a, F>(shape: &Shape, point: &'a [F]) -> Vec<&'a [F]> {
     let mut out = Vec::with_capacity(shape.dims().len());
     let mut offset = 0;
@@ -2203,10 +1853,7 @@ mod tests {
         let mut ra = vec![0; gate.len() * entries];
         let mut output = vec![0; gate.len()];
         for (idx, &gate_value) in gate.iter().enumerate() {
-            let n = i64::from(round_shift_signed_i64(
-                i64::from(gate_value),
-                FIXED_FRAC_BITS,
-            ));
+            let n = round_shift_signed_i64(i64::from(gate_value), FIXED_FRAC_BITS);
             let selected = (n - min_n) as usize;
             ra[idx * entries + selected] = 1;
             output[idx] = silu_base(n) + (i64::from(gate_value) - n * FIXED_SCALE) * silu_slope(n);

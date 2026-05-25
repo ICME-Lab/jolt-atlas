@@ -1,5 +1,4 @@
 use common::{CommittedPoly, VirtualPoly};
-use std::time::Instant;
 
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -33,14 +32,6 @@ use crate::{
         },
     },
 };
-
-macro_rules! op_timing {
-    ($($arg:tt)*) => {
-        if crate::timing::op_timing_enabled() {
-            eprintln!($($arg)*);
-        }
-    };
-}
 
 const FIXED_FRAC_BITS: usize = ROUND_FRAC_BITS;
 const FIXED_SCALE: i64 = 1_i64 << FIXED_FRAC_BITS;
@@ -241,15 +232,7 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let total_start = Instant::now();
-    let mut step_start = Instant::now();
     validate_inputs(witness, params)?;
-    op_timing!(
-        "timing: prove_softmax.validate {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let floor_as_i64 = witness
         .floor
         .iter()
@@ -258,12 +241,6 @@ where
     let round_witness = RoundWitness::from_input_output(&floor_as_i64, witness.output);
     let (round_proof, floor_claim, output_round_ra) =
         prove_round(output_claims, &round_witness, &params.round, transcript)?;
-    op_timing!(
-        "timing: prove_softmax.output_round {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let floor_witness = FloorWitness {
         input: witness.acc,
         output: witness.floor,
@@ -271,37 +248,19 @@ where
     };
     let (floor_proof, acc_claim, floor_round_ra) =
         prove_floor(vec![floor_claim], &floor_witness, &params.floor, transcript)?;
-    op_timing!(
-        "timing: prove_softmax.floor {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     append_row_advice::<F, T>(
-        &witness.max_index,
-        &witness.max,
+        witness.max_index,
+        witness.max,
         witness.min_diff,
         witness.max_diff,
-        &witness.sum,
+        witness.sum,
         transcript,
     );
 
-    let inv_sum = inv_sum_from_sum::<F>(&witness.sum);
-    op_timing!(
-        "timing: prove_softmax.advice_inv_sum {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
+    let inv_sum = inv_sum_from_sum::<F>(witness.sum);
     let acc_eq = EqPolynomial::<F>::evals(&acc_claim.point);
-    let exp_poly = padded_i32_tensor(&witness.exp, &params.shape);
+    let exp_poly = padded_i32_tensor(witness.exp, &params.shape);
     let valid_poly = valid_tensor_u8(params);
-    op_timing!(
-        "timing: prove_softmax.acc_polys {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let mut acc_prover = AccSumcheckProver::new(
         BasicSumcheckParams::new(
             params.shape.padded_power_of_two().point_len(),
@@ -314,21 +273,9 @@ where
         params.cols(),
         valid_poly,
     );
-    op_timing!(
-        "timing: prove_softmax.acc_prover_init {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let mut acc_accumulator = ProverOpeningAccumulator::new();
     let (acc_proof, acc_challenges) =
         Sumcheck::prove(&mut acc_prover, &mut acc_accumulator, transcript);
-    op_timing!(
-        "timing: prove_softmax.acc_sumcheck {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let exp_opening = prover_opening(
         &acc_accumulator,
         OpeningId::new(VirtualPoly::QwenSoftmaxExp, softmax_acc_sumcheck_id()),
@@ -341,12 +288,6 @@ where
         point: exp_point,
         value: exp_opening,
     };
-    op_timing!(
-        "timing: prove_softmax.acc_opening_claim {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let exp_round_witness = RoundWitness::from_input_output(witness.exp_acc, witness.exp);
     let (exp_round_proof, exp_acc_claim, _exp_ra) = prove_round(
         vec![exp_claim],
@@ -354,22 +295,7 @@ where
         &params.exp_round,
         transcript,
     )?;
-    op_timing!(
-        "timing: prove_softmax.exp_round {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let lookup = prove_lookup(exp_acc_claim, witness, params, transcript)?;
-    op_timing!(
-        "timing: prove_softmax.lookup_total {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-    op_timing!(
-        "timing: prove_softmax.total {:.3}s",
-        total_start.elapsed().as_secs_f64()
-    );
-
     Ok((
         SoftmaxProof {
             round: round_proof,
@@ -485,34 +411,14 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let total_start = Instant::now();
-    let mut step_start = Instant::now();
     let entries = entries_from_min_max(witness.min_diff, witness.max_diff)?;
     let lut_len = padded_softmax_lut_len(entries);
-    op_timing!(
-        "timing: prove_softmax.lookup.setup {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let eq_exp = masked_eq_poly(&exp_claim, &params.shape);
     let row_point = row_point_from_tensor_point(&exp_claim.point, params);
     let row_eq = EqPolynomial::<F>::evals(&row_point);
-    op_timing!(
-        "timing: prove_softmax.lookup.eq_polys {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
-    let max_selector = max_selector_tensor(&witness.max_index, params);
+    let max_selector = max_selector_tensor(witness.max_index, params);
     let valid = valid_tensor_u8(params);
-    let max = expand_rows_to_padded_tensor_i32(&witness.max, params);
-    op_timing!(
-        "timing: prove_softmax.lookup.row_valid_max_polys {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
+    let max = expand_rows_to_padded_tensor_i32(witness.max, params);
     let logical_lookup_indices = softmax_logical_lookup_indices(witness, params, entries)?;
     let padded_exp_indices = padded_lookup_indices(&logical_lookup_indices, params, entries);
     let exp_lut_values = softmax_lookup_values(
@@ -522,33 +428,15 @@ where
     );
     let logical_remainders = softmax_input_remainders(witness, params);
     let padded_remainders = padded_lookup_indices(&logical_remainders, params, 0);
-    let input = padded_i32_tensor(&witness.input, &params.shape);
+    let input = padded_i32_tensor(witness.input, &params.shape);
     let remainder = padded_usize_evals(&padded_remainders);
     let exp_lut = padded_i64_tensor(&exp_lut_values, &params.shape);
     let index = padded_usize_evals(&padded_exp_indices);
-    op_timing!(
-        "timing: prove_softmax.lookup.witness_polys {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let exp_table = padded_i32_table(witness.min_diff, entries, lut_len, exp_lut_q8_unclipped)?;
-    op_timing!(
-        "timing: prove_softmax.lookup.table_polys {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
-    let max_eval = eval_i32_advice(&witness.max, &params.row_shape(), &row_point);
+    let max_eval = eval_i32_advice(witness.max, &params.row_shape(), &row_point);
     let max_mix = transcript.challenge_scalar();
     let diff_mix = transcript.challenge_scalar();
     let input_claim = exp_claim.value + max_mix * max_eval;
-    op_timing!(
-        "timing: prove_softmax.lookup.challenges_claim {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let sc_params =
         LookupSumcheckParams::new(params.shape.padded_power_of_two().point_len(), input_claim);
     let mut prover = LookupSumcheckProver::new(
@@ -567,20 +455,8 @@ where
         diff_mix,
         field_from_i64(witness.min_diff),
     );
-    op_timing!(
-        "timing: prove_softmax.lookup.prover_init {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let mut accumulator = ProverOpeningAccumulator::new();
     let (proof, challenges) = Sumcheck::prove(&mut prover, &mut accumulator, transcript);
-    op_timing!(
-        "timing: prove_softmax.lookup.sumcheck {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let input_opening = prover_opening(
         &accumulator,
         OpeningId::new(VirtualPoly::QwenSoftmaxInput, softmax_lookup_sumcheck_id()),
@@ -602,12 +478,6 @@ where
     )?;
     let full_point = normalize_sumcheck_point::<F>(&challenges.into_opening());
     let tensor_point = full_point;
-    op_timing!(
-        "timing: prove_softmax.lookup.openings_claims {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let exp_shout_lookup = prove_softmax_shout_lookup(
         SoftmaxLookupKind::Exp,
         lut_len,
@@ -619,12 +489,6 @@ where
         &mut accumulator,
         transcript,
     )?;
-    op_timing!(
-        "timing: prove_softmax.lookup.shout {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    step_start = Instant::now();
     let input_remainder_shout_lookup = prove_softmax_shout_lookup(
         SoftmaxLookupKind::InputRemainder,
         256,
@@ -636,15 +500,6 @@ where
         &mut accumulator,
         transcript,
     )?;
-    op_timing!(
-        "timing: prove_softmax.lookup.remainder_shout {:.3}s",
-        step_start.elapsed().as_secs_f64()
-    );
-
-    op_timing!(
-        "timing: prove_softmax.lookup.total {:.3}s",
-        total_start.elapsed().as_secs_f64()
-    );
 
     Ok(SoftmaxLookupProveResult {
         relation: proof,
@@ -1744,8 +1599,7 @@ fn validate_inputs(w: &SoftmaxWitness<'_>, params: &SoftmaxParams) -> Result<()>
             let idx = row * cols + col;
             let valid = is_valid_position(params.causal, &params.shape, row, col);
             let diff = if valid {
-                let raw_diff = i64::from(w.input[idx]) - i64::from(w.max[row]);
-                raw_diff
+                i64::from(w.input[idx]) - i64::from(w.max[row])
             } else {
                 0
             };

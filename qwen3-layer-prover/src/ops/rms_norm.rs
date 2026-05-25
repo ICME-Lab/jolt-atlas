@@ -541,7 +541,7 @@ where
 
     let weight_mul_result = prove_mul_by_vector(
         acc_claim,
-        &witness.norm,
+        witness.norm,
         weight,
         &params.weight_mul,
         transcript,
@@ -556,14 +556,14 @@ where
         transcript,
     )?;
 
-    append_sum_x2_advice::<F, T>(&witness.sum_x2, transcript);
+    append_sum_x2_advice::<F, T>(witness.sum_x2, transcript);
     let gamma = transcript.challenge_scalar();
     let row_point = acc_row_point(&norm_acc_claim, params);
-    let sum_x2_eval = eval_i64_advice(&witness.sum_x2, &params.row_shape(), &row_point);
+    let sum_x2_eval = eval_i64_advice(witness.sum_x2, &params.row_shape(), &row_point);
     let input_claim = norm_acc_claim.value + gamma * sum_x2_eval;
-    let inv_rms = inv_rms_from_sum_x2::<F>(&witness.sum_x2, params.cols);
+    let inv_rms = inv_rms_from_sum_x2::<F>(witness.sum_x2, params.cols);
     let coeff = coeff_tensor(&inv_rms, params);
-    let x_poly = padded_i32_tensor(&witness.input, &params.shape);
+    let x_poly = padded_i32_tensor(witness.input, &params.shape);
     let eq_acc = EqPolynomial::<F>::evals(&norm_acc_claim.point);
     let row_eq = row_eq_lifted(&row_point, params);
     let coeff_poly = padded_field_tensor(&coeff, &params.shape);
@@ -1053,10 +1053,10 @@ fn validate_inputs(
         .iter()
         .map(|&sum| rms_inv_from_square_sum(sum, params.cols))
         .collect::<Vec<_>>();
-    for row in 0..params.rows {
-        for col in 0..params.cols {
+    for (row, &inv) in inv_i64.iter().enumerate().take(params.rows) {
+        for (col, &weight_col) in weight.iter().enumerate().take(params.cols) {
             let idx = row * params.cols + col;
-            let expected_norm_acc = i64::from(witness.input[idx]) * inv_i64[row];
+            let expected_norm_acc = i64::from(witness.input[idx]) * inv;
             if witness.norm_acc[idx] != expected_norm_acc {
                 return Err(ProverError::MatMulAccumulatorMismatch {
                     row,
@@ -1065,7 +1065,7 @@ fn validate_inputs(
                     actual: witness.norm_acc[idx],
                 });
             }
-            let expected_acc = i64::from(witness.norm[idx]) * i64::from(weight[col]);
+            let expected_acc = i64::from(witness.norm[idx]) * i64::from(weight_col);
             if witness.acc[idx] != expected_acc {
                 return Err(ProverError::MatMulAccumulatorMismatch {
                     row,

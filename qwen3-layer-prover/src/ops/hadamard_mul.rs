@@ -123,8 +123,8 @@ where
     let round_witness = RoundWitness::from_input_output(witness.acc, witness.output);
     let (hadamard_proof, hadamard_claims) = prove_hadamard_round_relation(
         y_claim,
-        &witness.lhs,
-        &witness.rhs,
+        witness.lhs,
+        witness.rhs,
         &round_witness.remainder,
         &round_witness.round_bit,
         &params.hadamard,

@@ -146,7 +146,7 @@ where
     let round_witness = RoundWitness::from_input_output(witness.acc, witness.output);
     let matmul_result = prove_matmul_round_relation(
         y_round_claim,
-        &witness.input,
+        witness.input,
         w,
         &round_witness.remainder,
         &round_witness.round_bit,

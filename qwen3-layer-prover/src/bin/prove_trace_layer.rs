@@ -6,11 +6,19 @@ use std::{
     time::Instant,
 };
 
-use ark_bn254::Fr;
-use joltworks::transcripts::Blake2bTranscript;
-use qwen3_layer_prover::layer::{
-    LayerShape, LayerTensorIds, LayerWeights, prove_layer, verify_layer,
+use ark_bn254::{Bn254, Fr};
+use joltworks::{
+    poly::{
+        commitment::{commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG},
+        multilinear_polynomial::MultilinearPolynomial,
+    },
+    transcripts::Blake2bTranscript,
 };
+use qwen3_layer_prover::layer::{
+    HiddenStateCommitments, LayerPolynomialMap, LayerShape, LayerTensorIds, LayerWeights,
+    commit_layer_polynomials, prove_layer, verify_layer,
+};
+use qwen3_layer_prover::trace::build_layer_witness_from_trace_dir;
 use serde_json::Value;
 
 const FIXED_CACHE_MAGIC: &[u8; 16] = b"QWEN3AWYQ8CACHE1";
@@ -45,32 +53,170 @@ fn main() -> Result<(), Box<dyn Error>> {
         t0.elapsed().as_secs_f64()
     );
 
-    let hidden_shape = shape.hidden_shape();
-    let point_len = hidden_shape.padded_power_of_two().point_len();
-    let point_a = challenge_point(point_len, 3);
-    let point_b = challenge_point(point_len, 37);
     let tensors = LayerTensorIds::default();
-
-    let mut prover_transcript = Blake2bTranscript::default();
+    type PCS = HyperKZG<Bn254>;
     let t0 = Instant::now();
-    let proof = prove_layer::<Fr, _>(
-        &args.trace,
-        args.layer,
-        point_a,
-        point_b,
+    let traced = build_layer_witness_from_trace_dir(&args.trace, args.layer, &weights, &shape)?;
+    eprintln!(
+        "timing: build_layer_witness {:.3}s",
+        t0.elapsed().as_secs_f64()
+    );
+    if args.map_only {
+        let t0 = Instant::now();
+        let polynomials = LayerPolynomialMap::<Fr>::from_layer(
+            &traced.hidden_out,
+            &traced.witness,
+            &weights,
+            &shape,
+            &tensors,
+        );
+        eprintln!(
+            "timing: build_layer_polynomial_map {:.3}s",
+            t0.elapsed().as_secs_f64()
+        );
+        println!("map_only: polynomial_count {}", polynomials.entries.len());
+        for entry in &polynomials.entries {
+            println!("poly {} len {}", entry.name, entry.poly.len());
+        }
+        println!("map_only: ok");
+        return Ok(());
+    }
+
+    if args.commit_hidden_in_only {
+        let pcs_num_vars = required_pcs_num_vars_for_slices([traced.witness.hidden_in.as_slice()]);
+        let t0 = Instant::now();
+        let pcs_setup = PCS::setup_prover(pcs_num_vars);
+        eprintln!(
+            "timing: setup_prover vars={} {:.3}s",
+            pcs_num_vars,
+            t0.elapsed().as_secs_f64()
+        );
+        let t0 = Instant::now();
+        let (_hidden_in_commitment, _) = PCS::commit(
+            &MultilinearPolynomial::from(pad_power_of_two(&traced.witness.hidden_in)),
+            &pcs_setup,
+        );
+        eprintln!(
+            "timing: commit_hidden_in {:.3}s",
+            t0.elapsed().as_secs_f64()
+        );
+        println!("commit_hidden_in_only: ok");
+        return Ok(());
+    }
+    if args.commit_hidden_only {
+        let pcs_num_vars = required_pcs_num_vars_for_slices([
+            traced.witness.hidden_in.as_slice(),
+            traced.hidden_out.as_slice(),
+        ]);
+        let t0 = Instant::now();
+        let pcs_setup = PCS::setup_prover(pcs_num_vars);
+        eprintln!(
+            "timing: setup_prover vars={} {:.3}s",
+            pcs_num_vars,
+            t0.elapsed().as_secs_f64()
+        );
+        let t0 = Instant::now();
+        let (hidden_in_commitment, _) = PCS::commit(
+            &MultilinearPolynomial::from(pad_power_of_two(&traced.witness.hidden_in)),
+            &pcs_setup,
+        );
+        eprintln!(
+            "timing: commit_hidden_in {:.3}s",
+            t0.elapsed().as_secs_f64()
+        );
+        let t0 = Instant::now();
+        let (hidden_out_commitment, _) = PCS::commit(
+            &MultilinearPolynomial::from(pad_power_of_two(&traced.hidden_out)),
+            &pcs_setup,
+        );
+        eprintln!(
+            "timing: commit_hidden_out {:.3}s",
+            t0.elapsed().as_secs_f64()
+        );
+        let _hidden_state_commitments = HiddenStateCommitments {
+            hidden_in: hidden_in_commitment,
+            hidden_out: hidden_out_commitment,
+        };
+        println!("commit_hidden_only: ok");
+        return Ok(());
+    }
+
+    let polynomials_for_setup = LayerPolynomialMap::<Fr>::from_layer(
+        &traced.hidden_out,
+        &traced.witness,
         &weights,
         &shape,
         &tensors,
+    );
+    let pcs_num_vars = required_pcs_num_vars_for_polynomials(&polynomials_for_setup);
+    let t0 = Instant::now();
+    let pcs_setup = PCS::setup_prover(pcs_num_vars);
+    eprintln!(
+        "timing: setup_prover vars={} {:.3}s",
+        pcs_num_vars,
+        t0.elapsed().as_secs_f64()
+    );
+    let verifier_setup = PCS::setup_verifier(&pcs_setup);
+    let (hidden_in_commitment, _) = PCS::commit(
+        &MultilinearPolynomial::from(pad_power_of_two(&traced.witness.hidden_in)),
+        &pcs_setup,
+    );
+    let (hidden_out_commitment, _) = PCS::commit(
+        &MultilinearPolynomial::from(pad_power_of_two(&traced.hidden_out)),
+        &pcs_setup,
+    );
+    let hidden_state_commitments = HiddenStateCommitments {
+        hidden_in: hidden_in_commitment,
+        hidden_out: hidden_out_commitment,
+    };
+    if args.commit_only {
+        println!(
+            "commit_only: polynomial_count {}",
+            polynomials_for_setup.entries.len()
+        );
+        for entry in &polynomials_for_setup.entries {
+            println!("poly {} len {}", entry.name, entry.poly.len());
+        }
+
+        let t0 = Instant::now();
+        let commitments = commit_layer_polynomials::<Fr, PCS>(
+            &polynomials_for_setup,
+            hidden_state_commitments,
+            &pcs_setup,
+        );
+        eprintln!(
+            "timing: commit_layer_polynomials {:.3}s",
+            t0.elapsed().as_secs_f64()
+        );
+        println!(
+            "commit_only: commitment_count {}",
+            commitments.entries.len()
+        );
+        println!("commit_only: ok");
+        return Ok(());
+    }
+
+    let mut prover_transcript = Blake2bTranscript::default();
+    let t0 = Instant::now();
+    let proof = prove_layer::<Fr, _, PCS>(
+        &args.trace,
+        args.layer,
+        hidden_state_commitments.clone(),
+        &weights,
+        &shape,
+        &tensors,
+        &pcs_setup,
         &mut prover_transcript,
     )?;
     eprintln!("timing: prove_layer {:.3}s", t0.elapsed().as_secs_f64());
 
     let mut verifier_transcript = Blake2bTranscript::default();
     let t0 = Instant::now();
-    let claims = verify_layer::<Fr, _>(
-        proof.proof.hidden_out_a.clone(),
-        proof.proof.hidden_out_b.clone(),
-        &proof.proof.proof,
+    let claims = verify_layer::<Fr, _, PCS>(
+        args.layer,
+        &proof.proof,
+        hidden_state_commitments,
+        &verifier_setup,
         &weights,
         &shape,
         &tensors,
@@ -89,6 +235,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn required_pcs_num_vars_for_polynomials(polynomials: &LayerPolynomialMap<Fr>) -> usize {
+    polynomials
+        .entries
+        .iter()
+        .map(|entry| entry.poly.get_num_vars())
+        .max()
+        .unwrap_or(0)
+}
+
+fn required_pcs_num_vars_for_slices<'a>(slices: impl IntoIterator<Item = &'a [i32]>) -> usize {
+    slices
+        .into_iter()
+        .map(|slice| ceil_log2_len(slice.len()))
+        .max()
+        .unwrap_or(0)
+}
+
+fn ceil_log2_len(len: usize) -> usize {
+    debug_assert!(len > 0);
+    len.next_power_of_two().trailing_zeros() as usize
+}
+
 #[derive(Debug)]
 struct Args {
     trace: PathBuf,
@@ -96,6 +264,10 @@ struct Args {
     q8_cache: Option<PathBuf>,
     layer: usize,
     seq: Option<usize>,
+    map_only: bool,
+    commit_hidden_in_only: bool,
+    commit_hidden_only: bool,
+    commit_only: bool,
 }
 
 impl Args {
@@ -105,6 +277,10 @@ impl Args {
         let mut q8_cache = None;
         let mut layer = 0usize;
         let mut seq = None;
+        let mut map_only = false;
+        let mut commit_hidden_in_only = false;
+        let mut commit_hidden_only = false;
+        let mut commit_only = false;
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -119,6 +295,10 @@ impl Args {
                 }
                 "--layer" => layer = args.next().ok_or("--layer requires a value")?.parse()?,
                 "--seq" => seq = Some(args.next().ok_or("--seq requires a value")?.parse()?),
+                "--map-only" => map_only = true,
+                "--commit-hidden-in-only" => commit_hidden_in_only = true,
+                "--commit-hidden-only" => commit_hidden_only = true,
+                "--commit-only" => commit_only = true,
                 "--help" | "-h" => {
                     print_help();
                     std::process::exit(0);
@@ -135,6 +315,10 @@ impl Args {
             q8_cache,
             layer,
             seq,
+            map_only,
+            commit_hidden_in_only,
+            commit_hidden_only,
+            commit_only,
         })
     }
 }
@@ -151,7 +335,11 @@ fn print_help() {
            --model PATH     safetensors path; used only to derive default .q8.bin cache path\n\
            --q8-cache PATH  explicit qwen3-awy fixed weight cache path\n\
            --layer N        layer index to prove\n\
-           --seq N          override seq length instead of reading manifest metadata"
+           --seq N          override seq length instead of reading manifest metadata\n\
+           --map-only       stop after building the layer polynomial map\n\
+           --commit-hidden-in-only stop after committing hidden_in only\n\
+           --commit-hidden-only stop after committing hidden_in and hidden_out\n\
+           --commit-only    stop after building and committing layer polynomials"
     );
 }
 
@@ -283,8 +471,9 @@ fn quantize_q8_f32(x: f32) -> i32 {
     (x * 256.0).round() as i32
 }
 
-fn challenge_point(len: usize, seed: u64) -> Vec<Fr> {
-    (0..len)
-        .map(|idx| Fr::from(seed + (idx as u64) * 17))
-        .collect()
+fn pad_power_of_two<T: Copy + Default>(values: &[T]) -> Vec<T> {
+    let len = values.len().next_power_of_two();
+    let mut out = vec![T::default(); len];
+    out[..values.len()].copy_from_slice(values);
+    out
 }

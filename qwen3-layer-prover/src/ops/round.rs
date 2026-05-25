@@ -145,7 +145,7 @@ where
     let alphas = transcript.challenge_scalar_powers(output_claims.len());
     let relation_claim = round_scale::<F>() * batched_input_claim(&output_claims, &alphas);
     let eq_batch = batched_eq_poly(&output_claims, &alphas);
-    let input_poly = padded_i64_tensor(&witness.input, &params.shape);
+    let input_poly = padded_i64_tensor(witness.input, &params.shape);
     let remainder_poly = padded_usize_tensor(&witness.remainder, &params.shape);
     let round_bit_poly = padded_i32_tensor(&witness.round_bit, &params.shape);
 

@@ -156,7 +156,7 @@ where
     )?;
 
     let dot_opening = eval_tensor(
-        &witness.dot,
+        witness.dot,
         &params.qk.score_shape(),
         &scale_acc_claim.point,
     );
@@ -178,8 +178,8 @@ where
     let (qk_proof, q, k, dot_round_point, dot_round_bit_opening, dot_remainder_opening) =
         prove_qk_score_round_relation(
             dot_claim,
-            &witness.q,
-            &witness.k,
+            witness.q,
+            witness.k,
             &dot_round_witness.remainder,
             &dot_round_witness.round_bit,
             &params.qk,

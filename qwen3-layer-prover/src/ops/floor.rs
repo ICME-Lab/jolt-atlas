@@ -71,10 +71,7 @@ pub struct FloorWitness<'a> {
     pub frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
 }
 
-#[derive(Debug, Clone)]
-pub struct FloorProof<F: JoltField, T: Transcript> {
-    pub round: RoundProof<F, T>,
-}
+pub type FloorProof<F, T> = RoundProof<F, T>;
 
 pub fn prove_floor<F, T>(
     output_claims: Vec<Claim<F>>,
@@ -99,11 +96,7 @@ where
         &params.round_params(),
         transcript,
     )?;
-    Ok((
-        FloorProof { round },
-        unshift_claim(shifted_claim, params),
-        ra_claim,
-    ))
+    Ok((round, unshift_claim(shifted_claim, params), ra_claim))
 }
 
 pub fn verify_floor<F, T>(
@@ -116,12 +109,8 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let (shifted_claim, ra_claim) = verify_round(
-        output_claims,
-        &proof.round,
-        &params.round_params(),
-        transcript,
-    )?;
+    let (shifted_claim, ra_claim) =
+        verify_round(output_claims, proof, &params.round_params(), transcript)?;
     Ok((unshift_claim(shifted_claim, params), ra_claim))
 }
 

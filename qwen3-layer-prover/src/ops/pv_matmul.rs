@@ -135,8 +135,8 @@ where
     let (pv_proof, p, v, round_point, round_bit_opening, remainder_opening) =
         prove_pv_matmul_round_relation(
             context_claim,
-            &witness.p,
-            &witness.v,
+            witness.p,
+            witness.v,
             &round_witness.remainder,
             &round_witness.round_bit,
             &params.pv,

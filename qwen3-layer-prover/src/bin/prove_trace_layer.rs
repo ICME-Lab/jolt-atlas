@@ -20,7 +20,7 @@ use qwen3_layer_prover::{
     layer::{
         HiddenStateCommitments, LayerPolySet, LayerShape, LayerTensorIds, LayerWeights,
         commit_layer_polynomials, commit_layer_polynomials_streaming_onehot, prove_layer,
-        prove_layer_iop_only_from_witness, verify_layer,
+        prove_and_verify_layer_iop_only_from_witness, verify_layer,
     },
     streaming_srs::{FlatG1SrsReader, StreamingOneHotCommitter, write_flat_g1_srs},
 };
@@ -109,20 +109,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if args.iop_only {
         let mut prover_transcript = Blake2bTranscript::default();
+        let mut verifier_transcript = Blake2bTranscript::default();
         let t0 = Instant::now();
-        let claims = prove_layer_iop_only_from_witness::<Fr, _>(
+        let claims = prove_and_verify_layer_iop_only_from_witness::<Fr, _>(
             &traced.hidden_out,
             &traced.witness,
             &weights,
             &shape,
             &tensors,
             &mut prover_transcript,
+            &mut verifier_transcript,
         )?;
         eprintln!(
-            "timing: prove_layer_iop_only {:.3}s",
+            "timing: prove_and_verify_layer_iop_only {:.3}s",
             t0.elapsed().as_secs_f64()
         );
-        println!("iop_only: ok");
+        println!("iop_only_prove_verify: ok");
         println!("trace: {}", args.trace.display());
         println!("q8_cache: {}", cache.display());
         println!("layer: {}", args.layer);

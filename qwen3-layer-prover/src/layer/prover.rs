@@ -10,7 +10,7 @@ use crate::{claim::Claim, error::Result, proof::ProveResult};
 use super::{
     claims::claim_hidden_out_after_commitments,
     commitments::{HiddenStateCommitments, absorb_layer_commitments, commit_layer_witness_polys},
-    iop::prove_layer_iop,
+    iop::{prove_layer_iop, verify_layer_iop},
     openings::prove_layer_openings,
     polys::LayerPolys,
     tensors::LayerTensorIds,
@@ -120,4 +120,70 @@ where
         hidden_out_claim.value,
     );
     Ok(prove_layer_iop(hidden_out_claim, layer_polys, shape, tensors, transcript)?.claims)
+}
+
+/// Smoke-test the layer IOP by proving and immediately verifying it.
+///
+/// This intentionally stays before PCS.  The verifier receives the same
+/// materialized polynomials so we can test the reverse claim flow and op-level
+/// sumchecks against a real trace before wiring the opening proof.
+pub fn prove_and_verify_layer_iop_only_from_witness<F, T>(
+    hidden_out: &[i32],
+    witness: &super::witness::LayerWitness,
+    weights: &LayerWeights,
+    shape: &LayerShape,
+    tensors: &LayerTensorIds,
+    prover_transcript: &mut T,
+    verifier_transcript: &mut T,
+) -> Result<LayerClaims<F>>
+where
+    F: JoltField,
+    T: Transcript,
+{
+    let prover_polys = LayerPolys::from_witness(hidden_out, witness, weights, shape, tensors);
+    let prover_hidden_out = claim_hidden_out_after_commitments(prover_transcript, hidden_out, shape);
+    let prover_hidden_out = Claim::new(
+        prover_polys.hidden_out.clone(),
+        prover_hidden_out.point,
+        prover_hidden_out.value,
+    );
+    let proved = prove_layer_iop(
+        prover_hidden_out,
+        prover_polys,
+        shape,
+        tensors,
+        prover_transcript,
+    )?;
+
+    let verifier_polys = LayerPolys::from_witness(hidden_out, witness, weights, shape, tensors);
+    let verifier_hidden_out =
+        claim_hidden_out_after_commitments(verifier_transcript, hidden_out, shape);
+    let verifier_hidden_out = Claim::new(
+        verifier_polys.hidden_out.clone(),
+        verifier_hidden_out.point,
+        verifier_hidden_out.value,
+    );
+    let verified = verify_layer_iop(
+        verifier_hidden_out,
+        &proved.proof,
+        verifier_polys,
+        weights,
+        shape,
+        tensors,
+        verifier_transcript,
+    )?;
+
+    if !same_claim(&proved.claims.hidden_in_a, &verified.hidden_in_a)
+        || !same_claim(&proved.claims.hidden_in_b, &verified.hidden_in_b)
+    {
+        return Err(crate::ProverError::InvalidInput(
+            "IOP verifier claims differ from prover claims".to_string(),
+        ));
+    }
+
+    Ok(verified)
+}
+
+fn same_claim<F: JoltField, C1, C2>(lhs: &Claim<F, C1>, rhs: &Claim<F, C2>) -> bool {
+    lhs.point == rhs.point && lhs.value == rhs.value
 }

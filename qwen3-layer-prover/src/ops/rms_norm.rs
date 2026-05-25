@@ -723,7 +723,15 @@ pub fn verify_rmsnorm_round<F, T>(
     weight: &[i32],
     params: &RmsNormParams,
     transcript: &mut T,
-) -> std::result::Result<(LegacyClaim<F>, Vec<PcsOpeningRequest<F>>), ProofVerifyError>
+) -> std::result::Result<
+    (
+        LegacyClaim<F>,
+        LegacyClaim<F>,
+        Vec<PcsOpeningRequest<F>>,
+        Vec<PcsOpeningRequest<F>>,
+    ),
+    ProofVerifyError,
+>
 where
     F: JoltField,
     T: Transcript,
@@ -731,16 +739,17 @@ where
     verify_advice(params, &proof.sum_x2, weight)?;
     let (acc_claim, round_ra) =
         verify_round(output_claims, &proof.round, &params.round, transcript)?;
-    let norm_claim = verify_mul_by_vector(
+    let mul_claims = verify_mul_by_vector(
         acc_claim,
         &proof.weight_mul,
         weight,
         &params.weight_mul,
         transcript,
     )
-    .map_err(|_| ProofVerifyError::InvalidInputLength(1, 0))?
-    .x;
-    let (norm_acc_claim, _norm_ra) = verify_round(
+    .map_err(|_| ProofVerifyError::InvalidInputLength(1, 0))?;
+    let norm_claim = mul_claims.x;
+    let weight_claim = mul_claims.coeff;
+    let (norm_acc_claim, norm_ra) = verify_round(
         vec![norm_claim],
         &proof.norm_round,
         &params.norm_round,
@@ -786,6 +795,8 @@ where
             point,
             value: proof.input_opening,
         },
+        weight_claim,
+        norm_ra,
         round_ra,
     ))
 }
@@ -1573,7 +1584,7 @@ mod tests {
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, input_claim, _weight_claim, _norm_round_ra, output_round_ra) =
+        let (proof, input_claim, weight_claim, norm_round_ra, output_round_ra) =
             prove_rmsnorm_round_from_witness::<Fr, _>(
                 vec![output_claim.clone()],
                 &witness,
@@ -1584,7 +1595,12 @@ mod tests {
             .unwrap();
 
         let mut verifier_transcript = Blake2bTranscript::default();
-        let (verified_input_claim, verified_frac_bit_claims) = verify_rmsnorm_round::<Fr, _>(
+        let (
+            verified_input_claim,
+            verified_weight_claim,
+            verified_norm_round_ra,
+            verified_output_round_ra,
+        ) = verify_rmsnorm_round::<Fr, _>(
             vec![output_claim],
             &proof,
             &weight,
@@ -1594,7 +1610,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(verified_input_claim, input_claim);
-        assert_eq!(verified_frac_bit_claims, output_round_ra);
+        assert_eq!(verified_weight_claim, weight_claim);
+        assert_eq!(verified_norm_round_ra, norm_round_ra);
+        assert_eq!(verified_output_round_ra, output_round_ra);
         assert_eq!(verified_input_claim.tensor.0, "x");
     }
 
@@ -1676,7 +1694,7 @@ mod tests {
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, input_claim, _weight_claim, _norm_round_ra, output_round_ra) =
+        let (proof, input_claim, weight_claim, norm_round_ra, output_round_ra) =
             prove_rmsnorm_round_from_witness::<Fr, _>(
                 vec![output_claim.clone()],
                 &witness,
@@ -1687,7 +1705,12 @@ mod tests {
             .unwrap();
 
         let mut verifier_transcript = Blake2bTranscript::default();
-        let (verified_input_claim, verified_frac_bit_claims) = verify_rmsnorm_round::<Fr, _>(
+        let (
+            verified_input_claim,
+            verified_weight_claim,
+            verified_norm_round_ra,
+            verified_output_round_ra,
+        ) = verify_rmsnorm_round::<Fr, _>(
             vec![output_claim],
             &proof,
             &weight,
@@ -1697,7 +1720,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(verified_input_claim, input_claim);
-        assert_eq!(verified_frac_bit_claims, output_round_ra);
+        assert_eq!(verified_weight_claim, weight_claim);
+        assert_eq!(verified_norm_round_ra, norm_round_ra);
+        assert_eq!(verified_output_round_ra, output_round_ra);
     }
 
     #[test]
@@ -1789,7 +1814,7 @@ mod tests {
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, input_claim, _weight_claim, _norm_round_ra, output_round_ra) =
+        let (proof, input_claim, weight_claim, norm_round_ra, output_round_ra) =
             prove_rmsnorm_round_from_witness::<Fr, _>(
                 output_claims.clone(),
                 &witness,
@@ -1800,7 +1825,12 @@ mod tests {
             .unwrap();
 
         let mut verifier_transcript = Blake2bTranscript::default();
-        let (verified_input_claim, verified_frac_bit_claims) = verify_rmsnorm_round::<Fr, _>(
+        let (
+            verified_input_claim,
+            verified_weight_claim,
+            verified_norm_round_ra,
+            verified_output_round_ra,
+        ) = verify_rmsnorm_round::<Fr, _>(
             output_claims,
             &proof,
             &weight,
@@ -1810,7 +1840,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(verified_input_claim, input_claim);
-        assert_eq!(verified_frac_bit_claims, output_round_ra);
+        assert_eq!(verified_weight_claim, weight_claim);
+        assert_eq!(verified_norm_round_ra, norm_round_ra);
+        assert_eq!(verified_output_round_ra, output_round_ra);
     }
 
     fn eval_i32<F: JoltField>(values: &[i32], shape: &Shape, point: &[F]) -> F {

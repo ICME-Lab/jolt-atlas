@@ -77,6 +77,7 @@ pub struct LayerClaims<F: JoltField, C = ()> {
     pub softmax_round_ra: Vec<Claim<F, C>>,
     pub softmax_floor_round_ra: Vec<Claim<F, C>>,
     pub softmax_exp_round_ra: Vec<Claim<F, C>>,
+    pub softmax_input_frac_ra: Vec<Claim<F, C>>,
     pub softmax_ra: Vec<Claim<F, C>>,
     pub qk_score_round_ra: Vec<Claim<F, C>>,
     pub qk_score_dot_round_ra: Vec<Claim<F, C>>,
@@ -114,6 +115,7 @@ impl<F: JoltField + Clone, C: Clone> LayerClaims<F, C> {
         out.extend(self.softmax_round_ra.clone());
         out.extend(self.softmax_floor_round_ra.clone());
         out.extend(self.softmax_exp_round_ra.clone());
+        out.extend(self.softmax_input_frac_ra.clone());
         out.extend(self.softmax_ra.clone());
         out.extend(self.qk_score_round_ra.clone());
         out.extend(self.qk_score_dot_round_ra.clone());
@@ -163,7 +165,7 @@ where
     T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 {
-    pub(crate) hidden_out: Claim<F, PCS::Commitment>,
+    pub(crate) hidden_out: Claim<F>,
     pub(crate) commitments: LayerCommitments<PCS::Commitment>,
     pub(crate) iop_proof: LayerIopProof<F, T>,
     pub(crate) opening_reduction: LayerOpeningReductionProof<F, T, PCS>,
@@ -175,7 +177,7 @@ where
     T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 {
-    pub fn hidden_out(&self) -> &Claim<F, PCS::Commitment> {
+    pub fn hidden_out(&self) -> &Claim<F> {
         &self.hidden_out
     }
 }

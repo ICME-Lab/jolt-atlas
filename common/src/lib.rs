@@ -176,15 +176,20 @@ canonical_serde_enum! {
         /// * `0` – decomposition index `d`
         QwenSiluRoundRaD(usize),
 
+        /// One-hot read-address decomposition for the Qwen SiLU output round lookup.
+        ///
+        /// * `0` – decomposition index `d`
+        QwenSiluOutputRoundRaD(usize),
+
         /// One-hot read-address decomposition for the Qwen softmax exp lookup.
         ///
         /// * `0` – decomposition index `d`
         QwenSoftmaxExpRaD(usize),
 
-        /// One-hot read-address decomposition for the Qwen softmax input remainder lookup.
+        /// One-hot read-address decomposition for the Qwen softmax input-frac lookup.
         ///
         /// * `0` – decomposition index `d`
-        QwenSoftmaxInputRemainderRaD(usize),
+        QwenSoftmaxInputFracRaD(usize),
 
         /// One-hot read-address decomposition for a Qwen round lookup.
         ///
@@ -367,6 +372,15 @@ canonical_serde_enum! {
         /// One-hot read-address polynomial for the Qwen SiLU embedded round lookup.
         QwenSiluRoundRa,
 
+        /// Qwen SiLU output-round remainder polynomial.
+        QwenSiluOutputRoundRemainder,
+
+        /// Qwen SiLU output-round lookup output polynomial.
+        QwenSiluOutputRoundLut,
+
+        /// One-hot read-address polynomial for the Qwen SiLU output-round lookup.
+        QwenSiluOutputRoundRa,
+
         /// Qwen SiLU LUT one-hot read-address polynomial.
         QwenSiluRa,
 
@@ -391,14 +405,14 @@ canonical_serde_enum! {
         /// Qwen softmax exp lookup index polynomial.
         QwenSoftmaxIndex,
 
-        /// Qwen softmax input remainder polynomial.
-        QwenSoftmaxInputRemainder,
+        /// Qwen softmax input fractional part polynomial.
+        QwenSoftmaxInputFrac,
 
         /// One-hot read-address polynomial for the Qwen softmax exp lookup.
         QwenSoftmaxExpRa,
 
-        /// One-hot read-address polynomial for the Qwen softmax input remainder lookup.
-        QwenSoftmaxInputRemainderRa,
+        /// One-hot read-address polynomial for the Qwen softmax input-frac lookup.
+        QwenSoftmaxInputFracRa,
 
         /// Qwen softmax pre-softmax score polynomial.
         QwenSoftmaxInput,

@@ -152,6 +152,7 @@ where
         softmax_round_ra,
         softmax_floor_round_ra,
         softmax_exp_round_ra,
+        softmax_input_frac_ra,
         softmax_ra,
     ) = prove_softmax_round(
         vec![softmax],
@@ -159,6 +160,7 @@ where
         polys.softmax_round_ra,
         polys.softmax_floor_round_ra,
         polys.softmax_exp_round_ra,
+        polys.softmax_input_frac_ra,
         polys.softmax_ra,
         &tensors.softmax_params(shape),
         transcript,
@@ -300,6 +302,7 @@ where
             softmax_round_ra,
             softmax_floor_round_ra,
             softmax_exp_round_ra,
+            softmax_input_frac_ra,
             softmax_ra,
             qk_score_round_ra,
             qk_score_dot_round_ra,

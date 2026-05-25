@@ -22,12 +22,8 @@ use joltworks::{
 use crate::{
     claim::{Claim, LegacyClaim, PcsOpeningRequest, Poly, Shape, TensorId},
     error::{ProverError, Result},
-    ops::poly_bridge::{
-        claim_from_legacy, legacy_from_claim, logical_i32_values, one_hot_claims_from_requests,
-    },
     ops::round::{
-        ROUND_FRAC_BITS, ROUND_LUT_LEN, RoundParams, RoundProof, RoundWitness,
-        padded_lookup_indices, prove_round, verify_round,
+        ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
     },
     proof::ProveResult,
 };
@@ -122,7 +118,7 @@ struct MulByVectorProof<F: JoltField, T: Transcript> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct MulByVectorClaims<F> {
+struct MulByVectorClaims<F: JoltField> {
     x: LegacyClaim<F>,
     coeff: LegacyClaim<F>,
 }
@@ -550,6 +546,8 @@ pub fn prove_rmsnorm_round_from_witness<F, T>(
 ) -> Result<(
     RmsNormProof<F, T>,
     LegacyClaim<F>,
+    LegacyClaim<F>,
+    Vec<PcsOpeningRequest<F>>,
     Vec<PcsOpeningRequest<F>>,
 )>
 where
@@ -569,9 +567,10 @@ where
         transcript,
     )?;
     let norm_claim = weight_mul_result.claims.x;
+    let weight_claim = weight_mul_result.claims.coeff;
 
     let norm_round_witness = RoundWitness::from_input_output(witness.norm_acc, witness.norm);
-    let (norm_round_proof, norm_acc_claim, _norm_ra) = prove_round(
+    let (norm_round_proof, norm_acc_claim, norm_ra) = prove_round(
         vec![norm_claim],
         &norm_round_witness,
         &params.norm_round,
@@ -618,6 +617,8 @@ where
             point,
             value: input_opening,
         },
+        weight_claim,
+        norm_ra,
         round_ra,
     ))
 }
@@ -626,11 +627,13 @@ pub fn prove_rmsnorm_round<F, T, C>(
     output_claims: Vec<Claim<F, C>>,
     input_poly: Poly<F, C>,
     weight_poly: Poly<F, C>,
-    witness: &RmsNormWitness<'_>,
+    norm_round_ra: Vec<Poly<F, C>>,
+    output_round_ra: Vec<Poly<F, C>>,
     params: &RmsNormParams,
     transcript: &mut T,
 ) -> Result<(
     RmsNormProof<F, T>,
+    Claim<F, C>,
     Claim<F, C>,
     Vec<Claim<F, C>>,
     Vec<Claim<F, C>>,
@@ -640,30 +643,77 @@ where
     T: Transcript,
     C: Clone,
 {
+    if output_claims.is_empty() {
+        return Err(ProverError::InvalidInput(
+            "RMSNorm requires at least one output claim".to_string(),
+        ));
+    }
+    for claim in &output_claims {
+        validate_claim_shape(claim, &params.shape, "RMSNorm output claim")?;
+    }
+    validate_poly_shape(&input_poly, &params.shape, "RMSNorm input")?;
+    validate_poly_shape(
+        &weight_poly,
+        &Shape::new(vec![params.cols]),
+        "RMSNorm weight",
+    )?;
+
+    let input = logical_i32_values(&input_poly, &params.shape)?;
     let weight = logical_i32_values(&weight_poly, &Shape::new(vec![params.cols]))?;
-    let output_claims = output_claims
-        .into_iter()
-        .map(|claim| legacy_from_claim(claim, "Y", params.shape.clone()))
+    let output = logical_i32_values(&output_claims[0].poly, &params.shape)?;
+    let sum_x2 = rms_sum_x2(&input, params);
+    let inv = sum_x2
+        .iter()
+        .map(|&sum| rms_inv_from_square_sum(sum, params.cols))
         .collect::<Vec<_>>();
-    let (proof, input, _pcs_requests) =
-        prove_rmsnorm_round(output_claims, witness, &weight, params, transcript)?;
-    let round_witness = RoundWitness::from_input_output(witness.acc, witness.output);
-    let norm_round_witness = RoundWitness::from_input_output(witness.norm_acc, witness.norm);
-    let round_ra = one_hot_claims_from_requests(
-        &proof.round.pcs_opening_requests(),
-        &padded_lookup_indices(&round_witness.remainder, &params.round.shape),
-        ROUND_LUT_LEN,
-    );
-    let norm_round_ra = one_hot_claims_from_requests(
-        &proof.norm_round.pcs_opening_requests(),
-        &padded_lookup_indices(&norm_round_witness.remainder, &params.norm_round.shape),
-        ROUND_LUT_LEN,
-    );
+    let norm_acc = input
+        .chunks_exact(params.cols)
+        .zip(&inv)
+        .flat_map(|(row, &inv)| row.iter().map(move |&x| i64::from(x) * inv))
+        .collect::<Vec<_>>();
+    let norm = norm_acc
+        .iter()
+        .map(|&value| round_q8(value))
+        .collect::<Vec<_>>();
+    let acc = norm
+        .chunks_exact(params.cols)
+        .flat_map(|row| {
+            row.iter()
+                .zip(&weight)
+                .map(|(&n, &w)| i64::from(n) * i64::from(w))
+        })
+        .collect::<Vec<_>>();
+
+    let legacy_claims = output_claims
+        .iter()
+        .map(|claim| LegacyClaim {
+            tensor: params.output_tensor.clone(),
+            logical_shape: params.shape.clone(),
+            domain_shape: params.shape.padded_power_of_two(),
+            point: claim.point.clone(),
+            value: claim.value,
+        })
+        .collect::<Vec<_>>();
+    let empty_bits: [&[u8]; ROUND_FRAC_BITS] = std::array::from_fn(|_| &[][..]);
+    let witness = RmsNormWitness {
+        input: &input,
+        sum_x2: &sum_x2,
+        norm_acc: &norm_acc,
+        norm: &norm,
+        norm_frac_bits: empty_bits,
+        acc: &acc,
+        output: &output,
+        frac_bits: empty_bits,
+    };
+    let (proof, input, weight, norm_round_requests, output_round_requests) =
+        prove_rmsnorm_round_from_witness(legacy_claims, &witness, &weight, params, transcript)?;
+
     Ok((
         proof,
-        claim_from_legacy(input, input_poly),
-        round_ra,
-        norm_round_ra,
+        Claim::new(input_poly, input.point, input.value),
+        Claim::new(weight_poly, weight.point, weight.value),
+        claims_from_requests(&norm_round_ra, norm_round_requests)?,
+        claims_from_requests(&output_round_ra, output_round_requests)?,
     ))
 }
 
@@ -1166,6 +1216,94 @@ fn verify_advice(
     Ok(())
 }
 
+fn validate_claim_shape<F: JoltField, C>(
+    claim: &Claim<F, C>,
+    shape: &Shape,
+    name: &'static str,
+) -> Result<()> {
+    if claim.point.len() != shape.padded_power_of_two().point_len() {
+        return Err(ProverError::ShapeMismatch {
+            name,
+            expected: vec![shape.padded_power_of_two().point_len()],
+            actual: vec![claim.point.len()],
+        });
+    }
+    Ok(())
+}
+
+fn validate_poly_shape<F: JoltField, C>(
+    poly: &Poly<F, C>,
+    shape: &Shape,
+    name: &'static str,
+) -> Result<()> {
+    let expected = shape.padded_power_of_two().numel();
+    if poly.data.len() != expected {
+        return Err(ProverError::TensorLenMismatch {
+            name,
+            shape: shape.padded_power_of_two().0,
+            expected,
+            actual: poly.data.len(),
+        });
+    }
+    Ok(())
+}
+
+fn logical_i32_values<F: JoltField, C>(poly: &Poly<F, C>, shape: &Shape) -> Result<Vec<i32>> {
+    let padded_dims = shape.padded_power_of_two().0;
+    let strides = row_major_strides(shape.dims());
+    let padded_strides = row_major_strides(&padded_dims);
+    let mut out = Vec::with_capacity(shape.numel());
+    for flat in 0..shape.numel() {
+        let mut padded_flat = 0;
+        for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate() {
+            let coord = (flat / stride) % shape.dims()[dim];
+            padded_flat += coord * padded_stride;
+        }
+        out.push(poly.data.get_coeff_i64(padded_flat) as i32);
+    }
+    Ok(out)
+}
+
+fn claims_from_requests<F: JoltField, C: Clone>(
+    polys: &[Poly<F, C>],
+    requests: Vec<PcsOpeningRequest<F>>,
+) -> Result<Vec<Claim<F, C>>> {
+    if polys.is_empty() {
+        return Ok(Vec::new());
+    }
+    if requests.len() % polys.len() != 0 {
+        return Err(ProverError::InvalidInput(format!(
+            "RA opening count mismatch: openings {} is not a multiple of chunks {}",
+            requests.len(),
+            polys.len()
+        )));
+    }
+    Ok(requests
+        .into_iter()
+        .enumerate()
+        .map(|(idx, opening)| {
+            Claim::new(
+                polys[idx % polys.len()].clone(),
+                opening.point,
+                opening.value,
+            )
+        })
+        .collect())
+}
+
+fn rms_sum_x2(input: &[i32], params: &RmsNormParams) -> Vec<i64> {
+    input
+        .chunks_exact(params.cols)
+        .map(|row| row.iter().map(|&v| i64::from(v) * i64::from(v)).sum())
+        .collect()
+}
+
+fn round_q8(value: i64) -> i32 {
+    let rem = value.rem_euclid(1_i64 << ROUND_FRAC_BITS);
+    let bit = i64::from(rem >= (1_i64 << (ROUND_FRAC_BITS - 1)));
+    ((value + bit * (1_i64 << ROUND_FRAC_BITS) - rem) / (1_i64 << ROUND_FRAC_BITS)) as i32
+}
+
 fn append_sum_x2_advice<F: JoltField, T: Transcript>(sum_x2: &[i64], transcript: &mut T) {
     for &value in sum_x2 {
         transcript.append_scalar(&field_from_i64::<F>(value));
@@ -1435,14 +1573,15 @@ mod tests {
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, input_claim, frac_bit_claims) = prove_rmsnorm_round::<Fr, _>(
-            vec![output_claim.clone()],
-            &witness,
-            &weight,
-            &params,
-            &mut prover_transcript,
-        )
-        .unwrap();
+        let (proof, input_claim, _weight_claim, _norm_round_ra, output_round_ra) =
+            prove_rmsnorm_round_from_witness::<Fr, _>(
+                vec![output_claim.clone()],
+                &witness,
+                &weight,
+                &params,
+                &mut prover_transcript,
+            )
+            .unwrap();
 
         let mut verifier_transcript = Blake2bTranscript::default();
         let (verified_input_claim, verified_frac_bit_claims) = verify_rmsnorm_round::<Fr, _>(
@@ -1455,7 +1594,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(verified_input_claim, input_claim);
-        assert_eq!(verified_frac_bit_claims, frac_bit_claims);
+        assert_eq!(verified_frac_bit_claims, output_round_ra);
         assert_eq!(verified_input_claim.tensor.0, "x");
     }
 
@@ -1537,14 +1676,15 @@ mod tests {
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, input_claim, frac_bit_claims) = prove_rmsnorm_round::<Fr, _>(
-            vec![output_claim.clone()],
-            &witness,
-            &weight,
-            &params,
-            &mut prover_transcript,
-        )
-        .unwrap();
+        let (proof, input_claim, _weight_claim, _norm_round_ra, output_round_ra) =
+            prove_rmsnorm_round_from_witness::<Fr, _>(
+                vec![output_claim.clone()],
+                &witness,
+                &weight,
+                &params,
+                &mut prover_transcript,
+            )
+            .unwrap();
 
         let mut verifier_transcript = Blake2bTranscript::default();
         let (verified_input_claim, verified_frac_bit_claims) = verify_rmsnorm_round::<Fr, _>(
@@ -1557,7 +1697,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(verified_input_claim, input_claim);
-        assert_eq!(verified_frac_bit_claims, frac_bit_claims);
+        assert_eq!(verified_frac_bit_claims, output_round_ra);
     }
 
     #[test]
@@ -1649,14 +1789,15 @@ mod tests {
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, input_claim, frac_bit_claims) = prove_rmsnorm_round::<Fr, _>(
-            output_claims.clone(),
-            &witness,
-            &weight,
-            &params,
-            &mut prover_transcript,
-        )
-        .unwrap();
+        let (proof, input_claim, _weight_claim, _norm_round_ra, output_round_ra) =
+            prove_rmsnorm_round_from_witness::<Fr, _>(
+                output_claims.clone(),
+                &witness,
+                &weight,
+                &params,
+                &mut prover_transcript,
+            )
+            .unwrap();
 
         let mut verifier_transcript = Blake2bTranscript::default();
         let (verified_input_claim, verified_frac_bit_claims) = verify_rmsnorm_round::<Fr, _>(
@@ -1669,7 +1810,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(verified_input_claim, input_claim);
-        assert_eq!(verified_frac_bit_claims, frac_bit_claims);
+        assert_eq!(verified_frac_bit_claims, output_round_ra);
     }
 
     fn eval_i32<F: JoltField>(values: &[i32], shape: &Shape, point: &[F]) -> F {

@@ -14,11 +14,11 @@ use joltworks::{
     subprotocols::shout::compute_instruction_h_indices,
     transcripts::{AppendToTranscript, Transcript},
 };
-#[cfg(test)]
-use std::collections::BTreeSet;
 
+#[cfg(test)]
+use crate::claim::Claim;
 use crate::{
-    claim::{Claim, Poly},
+    claim::Poly,
     ops::round::ROUND_LUT_LEN,
     streaming_srs::{FlatG1SrsReader, StreamingOneHotCommitter},
 };
@@ -185,8 +185,8 @@ impl<F: JoltField> LayerPolySet<F> {
             softmax_entries(witness.softmax_min_diff, witness.softmax_max_diff),
             |d| CommittedPoly::QwenSoftmaxExpRaD(d),
         );
-        out.push_softmax_input_remainder_ra(
-            "softmax_input_remainder_ra",
+        out.push_softmax_input_frac_ra(
+            "softmax_input_frac_ra",
             &witness.qk_score,
             &witness.softmax_max,
             shape.q_heads,
@@ -445,7 +445,7 @@ impl<F: JoltField> LayerPolySet<F> {
         self.push_one_hot_decomposition(name, indices, ROUND_LUT_LEN, committed_poly);
     }
 
-    fn push_softmax_input_remainder_ra(
+    fn push_softmax_input_frac_ra(
         &mut self,
         name: impl Into<String>,
         input: &[i32],
@@ -484,7 +484,7 @@ impl<F: JoltField> LayerPolySet<F> {
             }
         }
         self.push_one_hot_decomposition(name, indices, ROUND_LUT_LEN, |d| {
-            CommittedPoly::QwenSoftmaxInputRemainderRaD(d)
+            CommittedPoly::QwenSoftmaxInputFracRaD(d)
         });
     }
 

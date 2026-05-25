@@ -20,7 +20,7 @@ use qwen3_layer_prover::{
     layer::{
         HiddenStateCommitments, LayerPolySet, LayerShape, LayerTensorIds, LayerWeights,
         commit_layer_polynomials, commit_layer_polynomials_streaming_onehot, prove_layer,
-        verify_layer,
+        prove_layer_iop_only_from_witness, verify_layer,
     },
     streaming_srs::{FlatG1SrsReader, StreamingOneHotCommitter, write_flat_g1_srs},
 };
@@ -105,6 +105,31 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("poly {} len {}", entry.name, entry.poly.len());
         }
         println!("map_only: ok");
+        return Ok(());
+    }
+    if args.iop_only {
+        let mut prover_transcript = Blake2bTranscript::default();
+        let t0 = Instant::now();
+        let claims = prove_layer_iop_only_from_witness::<Fr, _>(
+            &traced.hidden_out,
+            &traced.witness,
+            &weights,
+            &shape,
+            &tensors,
+            &mut prover_transcript,
+        )?;
+        eprintln!(
+            "timing: prove_layer_iop_only {:.3}s",
+            t0.elapsed().as_secs_f64()
+        );
+        println!("iop_only: ok");
+        println!("trace: {}", args.trace.display());
+        println!("q8_cache: {}", cache.display());
+        println!("layer: {}", args.layer);
+        println!("seq: {}", seq);
+        println!("boundary_claims: {}", claims.boundary_claims().len());
+        println!("pcs_claims: {}", claims.pcs_claims().len());
+        println!("direct_eval_claims: {}", claims.direct_eval_claims.len());
         return Ok(());
     }
 
@@ -273,8 +298,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         &mut verifier_transcript,
     )?;
     eprintln!("timing: verify_layer {:.3}s", t0.elapsed().as_secs_f64());
-    if claims.hidden_in_a != proof.claims.hidden_in_a
-        || claims.hidden_in_b != proof.claims.hidden_in_b
+    if !same_claim(&claims.hidden_in_a, &proof.claims.hidden_in_a)
+        || !same_claim(&claims.hidden_in_b, &proof.claims.hidden_in_b)
     {
         return Err("verify_layer claims differ from prove_layer claims".into());
     }
@@ -285,6 +310,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("layer: {}", args.layer);
     println!("seq: {}", seq);
     Ok(())
+}
+
+fn same_claim<F, C1, C2>(lhs: &qwen3_layer_prover::Claim<F, C1>, rhs: &qwen3_layer_prover::Claim<F, C2>) -> bool
+where
+    F: joltworks::field::JoltField,
+{
+    lhs.point == rhs.point && lhs.value == rhs.value
 }
 
 fn required_pcs_num_vars_for_polynomials(poly_set: &LayerPolySet<Fr>) -> usize {
@@ -408,6 +440,7 @@ struct Args {
     commit_hidden_only: bool,
     commit_only: bool,
     commit_all_layers_onehot_only: bool,
+    iop_only: bool,
 }
 
 impl Args {
@@ -429,6 +462,7 @@ impl Args {
         let mut commit_hidden_only = false;
         let mut commit_only = false;
         let mut commit_all_layers_onehot_only = false;
+        let mut iop_only = false;
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -476,6 +510,7 @@ impl Args {
                 "--commit-hidden-only" => commit_hidden_only = true,
                 "--commit-only" => commit_only = true,
                 "--commit-all-layers-onehot-only" => commit_all_layers_onehot_only = true,
+                "--iop-only" => iop_only = true,
                 "--help" | "-h" => {
                     print_help();
                     std::process::exit(0);
@@ -509,6 +544,7 @@ impl Args {
             commit_hidden_only,
             commit_only,
             commit_all_layers_onehot_only,
+            iop_only,
         })
     }
 }
@@ -537,6 +573,7 @@ fn print_help() {
            --commit-hidden-in-only stop after committing hidden_in only\n\
            --commit-hidden-only stop after committing hidden_in and hidden_out\n\
            --commit-all-layers-onehot-only collect all 28 layers' onehot RA polys and stream-commit them together\n\
+           --iop-only       stop after proving the layer IOP; no PCS/opening reduction\n\
            --commit-only    stop after building and committing layer polynomials"
     );
 }

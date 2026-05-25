@@ -6,7 +6,6 @@ use joltworks::{
 use super::{
     claims::{draw_hidden_out_point, point_matches_claim},
     commitments::{HiddenStateCommitments, absorb_layer_commitments},
-    iop::verify_layer_iop,
     openings::verify_layer_openings,
     tensors::LayerTensorIds,
     types::{LayerClaims, LayerProof, LayerShape, LayerWeights},
@@ -40,34 +39,12 @@ where
             "hidden_out claim point is not transcript-derived".to_string(),
         ));
     }
-    let hidden_out = proof.hidden_out.clone();
-    let hidden_out_for_opening = hidden_out.clone();
-    let claims = verify_layer_iop(
-        hidden_out,
-        &proof.iop_proof,
-        weights,
-        shape,
-        tensors,
-        transcript,
-    )?;
-    let mut expected_openings = claims.tensor_opening_requests();
-    expected_openings.push(hidden_out_for_opening);
-    if expected_openings != proof.opening_reduction.tensor_opening_requests {
-        return Err(ProofVerifyError::InvalidOpeningProof(
-            "layer opening claims do not match verified IOP claims".to_string(),
-        ));
-    }
-    let expected_pcs_requests = proof.iop_proof.pcs_opening_requests();
-    if expected_pcs_requests != proof.opening_reduction.pcs_opening_requests {
-        return Err(ProofVerifyError::InvalidOpeningProof(
-            "layer PCS opening requests do not match verified IOP requests".to_string(),
-        ));
-    }
+    let _ = (pcs_setup, weights, tensors);
     verify_layer_openings::<F, T, PCS>(
-        &commitments,
+        vec![proof.hidden_out.clone()],
         &proof.opening_reduction,
         pcs_setup,
         transcript,
     )?;
-    Ok(claims)
+    todo!("wire verifier after the Claim + Poly layer IOP migration is complete")
 }

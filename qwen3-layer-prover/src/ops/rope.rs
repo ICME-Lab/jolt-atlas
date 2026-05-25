@@ -49,12 +49,8 @@ use joltworks::{
 use crate::{
     claim::{Claim, LegacyClaim, PcsOpeningRequest, Poly, Shape, TensorId},
     error::{ProverError, Result},
-    ops::poly_bridge::{
-        claim_from_legacy, legacy_from_claim, logical_i32_values, one_hot_claims_from_requests,
-    },
     ops::round::{
-        ROUND_FRAC_BITS, ROUND_LUT_LEN, RoundParams, RoundProof, RoundWitness,
-        padded_lookup_indices, prove_round, verify_round,
+        ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
     },
 };
 
@@ -163,7 +159,7 @@ pub fn prove_rope_round<F, T, C>(
     x_poly: Poly<F, C>,
     cos_poly: Poly<F, C>,
     sin_poly: Poly<F, C>,
-    witness: &RopeWitness<'_>,
+    round_ra: Vec<Poly<F, C>>,
     params: &RopeRoundParams,
     transcript: &mut T,
 ) -> Result<(RopeProof<F, T>, Claim<F, C>, Claim<F, C>, Vec<Claim<F, C>>)>
@@ -172,27 +168,41 @@ where
     T: Transcript,
     C: Clone,
 {
+    validate_claim_shape(&y_claim, &params.rope.tensor_shape(), "RoPE Y claim")?;
+    validate_poly_shape(&x_poly, &params.rope.tensor_shape(), "RoPE X")?;
+    validate_poly_shape(&cos_poly, &params.rope.coeff_shape(), "RoPE cos")?;
+    validate_poly_shape(&sin_poly, &params.rope.coeff_shape(), "RoPE sin")?;
+
+    let input = logical_i32_values(&x_poly, &params.rope.tensor_shape())?;
     let cos = logical_i32_values(&cos_poly, &params.rope.coeff_shape())?;
     let sin = logical_i32_values(&sin_poly, &params.rope.coeff_shape())?;
-    let (proof, x_even, x_odd, round_ra) = prove_rope_round(
-        legacy_from_claim(y_claim, "rope", params.rope.tensor_shape()),
-        witness,
+    let acc = rope_acc(&input, &cos, &sin, &params.rope);
+    let output = logical_i32_values(&y_claim.poly, &params.rope.tensor_shape())?;
+    let witness = RopeWitness {
+        input: &input,
+        acc: &acc,
+        output: &output,
+        frac_bits: std::array::from_fn(|_| &[][..]),
+    };
+    let (proof, x_even, x_odd, round_requests) = prove_rope_round_from_witness(
+        LegacyClaim {
+            tensor: params.round.output_tensor.clone(),
+            logical_shape: params.rope.tensor_shape(),
+            domain_shape: params.rope.tensor_shape().padded_power_of_two(),
+            point: y_claim.point,
+            value: y_claim.value,
+        },
+        &witness,
         &cos,
         &sin,
         params,
         transcript,
     )?;
-    let round_witness = RoundWitness::from_input_output(witness.acc, witness.output);
-    let ra_claims = one_hot_claims_from_requests(
-        &round_ra,
-        &padded_lookup_indices(&round_witness.remainder, &params.round.shape),
-        ROUND_LUT_LEN,
-    );
     Ok((
         proof,
-        claim_from_legacy(x_even, x_poly.clone()),
-        claim_from_legacy(x_odd, x_poly),
-        ra_claims,
+        Claim::new(x_poly.clone(), x_even.point, x_even.value),
+        Claim::new(x_poly, x_odd.point, x_odd.value),
+        claims_from_requests(&round_ra, round_requests)?,
     ))
 }
 
@@ -630,6 +640,81 @@ fn validate_claim_and_coeffs<F: JoltField>(
     Ok(())
 }
 
+fn validate_claim_shape<F: JoltField, C>(
+    claim: &Claim<F, C>,
+    shape: &Shape,
+    name: &'static str,
+) -> Result<()> {
+    if claim.point.len() != shape.padded_power_of_two().point_len() {
+        return Err(ProverError::ShapeMismatch {
+            name,
+            expected: vec![shape.padded_power_of_two().point_len()],
+            actual: vec![claim.point.len()],
+        });
+    }
+    Ok(())
+}
+
+fn validate_poly_shape<F: JoltField, C>(
+    poly: &Poly<F, C>,
+    shape: &Shape,
+    name: &'static str,
+) -> Result<()> {
+    let expected = shape.padded_power_of_two().numel();
+    if poly.data.len() != expected {
+        return Err(ProverError::TensorLenMismatch {
+            name,
+            shape: shape.padded_power_of_two().0,
+            expected,
+            actual: poly.data.len(),
+        });
+    }
+    Ok(())
+}
+
+fn logical_i32_values<F: JoltField, C>(poly: &Poly<F, C>, shape: &Shape) -> Result<Vec<i32>> {
+    let padded_dims = shape.padded_power_of_two().0;
+    let strides = row_major_strides(shape.dims());
+    let padded_strides = row_major_strides(&padded_dims);
+    let mut out = Vec::with_capacity(shape.numel());
+    for flat in 0..shape.numel() {
+        let mut padded_flat = 0;
+        for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate() {
+            let coord = (flat / stride) % shape.dims()[dim];
+            padded_flat += coord * padded_stride;
+        }
+        out.push(poly.data.get_coeff_i64(padded_flat) as i32);
+    }
+    Ok(out)
+}
+
+fn claims_from_requests<F: JoltField, C: Clone>(
+    polys: &[Poly<F, C>],
+    requests: Vec<PcsOpeningRequest<F>>,
+) -> Result<Vec<Claim<F, C>>> {
+    if polys.is_empty() {
+        return Ok(Vec::new());
+    }
+    if requests.len() % polys.len() != 0 {
+        return Err(ProverError::InvalidInput(format!(
+            "RA opening count mismatch: openings {} is not a multiple of chunks {}",
+            requests.len(),
+            polys.len()
+        )));
+    }
+    Ok(requests
+        .into_iter()
+        .enumerate()
+        .map(|(idx, opening)| {
+            Claim::new(
+                polys[idx % polys.len()].clone(),
+                opening.point,
+                opening.value,
+            )
+        })
+        .collect())
+}
+
 fn ensure_len(name: &'static str, shape: &Shape, actual: usize) -> Result<()> {
     let expected = shape.numel();
     if actual == expected {
@@ -642,6 +727,24 @@ fn ensure_len(name: &'static str, shape: &Shape, actual: usize) -> Result<()> {
             actual,
         })
     }
+}
+
+fn rope_acc(x: &[i32], cos: &[i32], sin: &[i32], params: &RopeParams) -> Vec<i64> {
+    let mut y = vec![0; x.len()];
+    for s in 0..params.seq {
+        for h in 0..params.heads {
+            for pair in 0..params.head_dim / 2 {
+                let even = ((s * params.heads + h) * params.head_dim) + pair;
+                let odd = even + params.head_dim / 2;
+                let coeff = s * (params.head_dim / 2) + pair;
+                y[even] = i64::from(x[even]) * i64::from(cos[coeff])
+                    - i64::from(x[odd]) * i64::from(sin[coeff]);
+                y[odd] = i64::from(x[even]) * i64::from(sin[coeff])
+                    + i64::from(x[odd]) * i64::from(cos[coeff]);
+            }
+        }
+    }
+    y
 }
 
 fn rope_x_parity_poly<F: JoltField>(x: &[i32], params: &RopeParams, parity: usize) -> Vec<F> {
@@ -832,7 +935,7 @@ mod tests {
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, x_even, x_odd, _) = prove_rope_round::<Fr, _>(
+        let (proof, x_even, x_odd, _) = prove_rope_round_from_witness::<Fr, _>(
             y_claim.clone(),
             &witness,
             &cos,

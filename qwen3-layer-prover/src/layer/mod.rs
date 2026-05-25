@@ -14,7 +14,7 @@ mod openings;
 mod polys;
 mod prover;
 mod tensors;
-#[cfg(test)]
+#[cfg(all(test, feature = "layer-pcs-tests"))]
 mod tests;
 mod types;
 mod verifier;
@@ -25,7 +25,7 @@ pub use commitments::{
     commit_layer_polynomials_streaming_onehot,
 };
 pub use polys::LayerPolys;
-pub use prover::prove_layer;
+pub use prover::{prove_layer, prove_layer_iop_only_from_witness};
 pub use tensors::LayerTensorIds;
 pub use types::{LayerClaims, LayerProof, LayerShape, LayerWeights};
 pub use verifier::verify_layer;

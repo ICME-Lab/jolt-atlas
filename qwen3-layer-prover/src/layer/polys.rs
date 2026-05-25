@@ -3,7 +3,7 @@ use joltworks::{field::JoltField, poly::multilinear_polynomial::MultilinearPolyn
 use crate::claim::{Poly, Shape};
 
 use super::{
-    commitments::CommittedLayerPolys,
+    commitments::{CommittedLayerPolys, LayerPolySet},
     tensors::LayerTensorIds,
     types::{LayerShape, LayerWeights},
     witness::LayerWitness,
@@ -87,6 +87,7 @@ pub struct LayerPolys<F: JoltField, C = ()> {
     pub softmax_round_ra: Vec<Poly<F, C>>,
     pub softmax_floor_round_ra: Vec<Poly<F, C>>,
     pub softmax_exp_round_ra: Vec<Poly<F, C>>,
+    pub softmax_input_frac_ra: Vec<Poly<F, C>>,
     pub softmax_ra: Vec<Poly<F, C>>,
 }
 
@@ -96,8 +97,9 @@ impl<F: JoltField> LayerPolys<F, ()> {
         witness: &LayerWitness,
         weights: &LayerWeights,
         shape: &LayerShape,
-        _tensors: &LayerTensorIds,
+        tensors: &LayerTensorIds,
     ) -> Self {
+        let pcs_polys = LayerPolySet::<F>::from_layer(hidden_out, witness, weights, shape, tensors);
         Self {
             hidden_in: i32_poly(&witness.hidden_in, &shape.hidden_shape()),
             hidden_out: i32_poly(hidden_out, &shape.hidden_shape()),
@@ -203,34 +205,98 @@ impl<F: JoltField> LayerPolys<F, ()> {
                 &Shape::new(vec![shape.seq, shape.head_dim / 2]),
             ),
 
-            down_proj_round_ra: Vec::new(),
-            silu_up_round_ra: Vec::new(),
-            gate_proj_round_ra: Vec::new(),
-            up_proj_round_ra: Vec::new(),
-            rms_norm_mlp_round_ra: Vec::new(),
-            rms_norm_mlp_norm_round_ra: Vec::new(),
-            o_proj_round_ra: Vec::new(),
-            pv_matmul_round_ra: Vec::new(),
-            qk_score_round_ra: Vec::new(),
-            qk_score_dot_round_ra: Vec::new(),
-            q_rope_round_ra: Vec::new(),
-            k_rope_round_ra: Vec::new(),
-            q_norm_round_ra: Vec::new(),
-            q_norm_norm_round_ra: Vec::new(),
-            k_norm_round_ra: Vec::new(),
-            k_norm_norm_round_ra: Vec::new(),
-            q_proj_round_ra: Vec::new(),
-            k_proj_round_ra: Vec::new(),
-            v_proj_round_ra: Vec::new(),
-            rms_norm_atten_round_ra: Vec::new(),
-            rms_norm_atten_norm_round_ra: Vec::new(),
-            silu_gate_round_ra: Vec::new(),
-            silu_round_ra: Vec::new(),
-            silu_ra: Vec::new(),
-            softmax_round_ra: Vec::new(),
-            softmax_floor_round_ra: Vec::new(),
-            softmax_exp_round_ra: Vec::new(),
-            softmax_ra: Vec::new(),
+            down_proj_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.down_proj_acc),
+            ),
+            silu_up_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.silu_up_acc),
+            ),
+            gate_proj_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.gate_proj_acc),
+            ),
+            up_proj_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.up_proj_acc),
+            ),
+            rms_norm_mlp_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.rms_norm_mlp_acc),
+            ),
+            rms_norm_mlp_norm_round_ra: onehot_group(
+                &pcs_polys,
+                "rms_norm_mlp_norm_acc_round_ra.rad.",
+            ),
+            o_proj_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.o_proj_acc),
+            ),
+            pv_matmul_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.context_acc),
+            ),
+            qk_score_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.qk_score_scale_acc),
+            ),
+            qk_score_dot_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.qk_score_acc),
+            ),
+            q_rope_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.q_rope_acc),
+            ),
+            k_rope_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.k_rope_acc),
+            ),
+            q_norm_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.q_norm_acc),
+            ),
+            q_norm_norm_round_ra: onehot_group(&pcs_polys, "q_norm_norm_acc_round_ra.rad."),
+            k_norm_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.k_norm_acc),
+            ),
+            k_norm_norm_round_ra: onehot_group(&pcs_polys, "k_norm_norm_acc_round_ra.rad."),
+            q_proj_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.q_proj_acc),
+            ),
+            k_proj_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.k_proj_acc),
+            ),
+            v_proj_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.v_proj_acc),
+            ),
+            rms_norm_atten_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.rms_norm_atten_acc),
+            ),
+            rms_norm_atten_norm_round_ra: onehot_group(
+                &pcs_polys,
+                "rms_norm_atten_norm_acc_round_ra.rad.",
+            ),
+            silu_gate_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.gate_proj),
+            ),
+            silu_round_ra: onehot_group(
+                &pcs_polys,
+                &format!("{}_round_ra.rad.", tensors.silu_acc),
+            ),
+            silu_ra: [onehot_group(&pcs_polys, "silu_ra.rad."), onehot_group(&pcs_polys, "silu_slope_ra.rad.")].concat(),
+            softmax_round_ra: onehot_group(&pcs_polys, "softmax_output_round_ra.rad."),
+            softmax_floor_round_ra: onehot_group(&pcs_polys, "softmax_floor_round_ra.rad."),
+            softmax_exp_round_ra: onehot_group(&pcs_polys, "softmax_exp_acc_round_ra.rad."),
+            softmax_input_frac_ra: onehot_group(&pcs_polys, "softmax_input_frac_ra.rad."),
+            softmax_ra: onehot_group(&pcs_polys, "softmax_ra.rad."),
         }
     }
 }
@@ -243,6 +309,24 @@ impl<F: JoltField, C: Clone> LayerPolys<F, C> {
 
 pub fn i32_poly<F: JoltField>(values: &[i32], shape: &Shape) -> Poly<F> {
     Poly::new(MultilinearPolynomial::from(padded_i32(values, shape)), None)
+}
+
+fn onehot_group<F: JoltField>(set: &LayerPolySet<F>, prefix: &str) -> Vec<Poly<F>> {
+    let mut entries = set
+        .entries
+        .iter()
+        .filter(|entry| entry.name.starts_with(prefix))
+        .map(|entry| {
+            let chunk = entry
+                .name
+                .rsplit_once('.')
+                .and_then(|(_, suffix)| suffix.parse::<usize>().ok())
+                .unwrap_or(0);
+            (chunk, Poly::new(entry.poly.clone(), None))
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|(chunk, _)| *chunk);
+    entries.into_iter().map(|(_, poly)| poly).collect()
 }
 
 fn padded_i32(values: &[i32], shape: &Shape) -> Vec<i32> {

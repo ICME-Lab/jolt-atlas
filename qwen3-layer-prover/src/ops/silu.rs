@@ -24,11 +24,7 @@ use joltworks::{
 use crate::{
     claim::{Claim, LegacyClaim, PcsOpeningRequest, Poly, Shape, TensorId},
     error::{ProverError, Result},
-    ops::poly_bridge::{claim_from_legacy, legacy_from_claim, one_hot_claims_from_requests},
-    ops::round::{
-        ROUND_FRAC_BITS, ROUND_LUT_LEN, RoundParams, RoundProof, RoundWitness, prove_round,
-        verify_round,
-    },
+    ops::round::{ROUND_FRAC_BITS, RoundParams},
 };
 
 // Design note for future us:
@@ -114,7 +110,7 @@ pub struct SiluWitness<'a> {
     pub max_n: i64,
     pub gate_proj_round: &'a [i32],
     pub ra: &'a [u8],
-    pub output: &'a [i64],
+    pub output: &'a [i32],
 }
 
 #[derive(Debug, Clone)]
@@ -126,20 +122,26 @@ pub struct SiluProof<F: JoltField, T: Transcript> {
     pub base_ra_onehot: SumcheckInstanceProof<F, T>,
     pub slope_lookup: SumcheckInstanceProof<F, T>,
     pub slope_ra_onehot: SumcheckInstanceProof<F, T>,
-    pub round_lookup: SumcheckInstanceProof<F, T>,
-    pub round_ra_onehot: SumcheckInstanceProof<F, T>,
+    pub gate_round_lookup: SumcheckInstanceProof<F, T>,
+    pub gate_round_ra_onehot: SumcheckInstanceProof<F, T>,
+    pub output_round_lookup: SumcheckInstanceProof<F, T>,
+    pub output_round_ra_onehot: SumcheckInstanceProof<F, T>,
     pub gate_opening: F,
-    pub remainder_opening: F,
-    pub round_bit_opening: F,
+    pub gate_remainder_opening: F,
+    pub gate_round_bit_opening: F,
+    pub output_remainder_opening: F,
+    pub output_round_bit_opening: F,
     pub base_opening: F,
     pub slope_opening: F,
     pub index_opening: F,
     pub base_ra_opening: F,
     pub slope_ra_opening: F,
-    pub round_ra_opening: F,
+    pub gate_round_ra_opening: F,
+    pub output_round_ra_opening: F,
     pub base_ra_committed_openings: SiluRaCommittedOpenings<F>,
     pub slope_ra_committed_openings: SiluRaCommittedOpenings<F>,
-    pub round_ra_committed_openings: SiluRaCommittedOpenings<F>,
+    pub gate_round_ra_committed_openings: SiluRaCommittedOpenings<F>,
+    pub output_round_ra_committed_openings: SiluRaCommittedOpenings<F>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,15 +168,12 @@ pub struct SiluRoundWitness<'a> {
 
 #[derive(Debug, Clone)]
 pub struct SiluRoundProof<F: JoltField, T: Transcript> {
-    pub round: RoundProof<F, T>,
     pub silu: SiluProof<F, T>,
 }
 
 impl<F: JoltField, T: Transcript> SiluRoundProof<F, T> {
     pub fn pcs_opening_requests(&self) -> Vec<PcsOpeningRequest<F>> {
-        let mut out = self.round.pcs_opening_requests();
-        out.extend(self.silu.pcs_opening_requests());
-        out
+        self.silu.pcs_opening_requests()
     }
 }
 
@@ -199,7 +198,8 @@ impl<F: JoltField, T: Transcript> SiluProof<F, T> {
         self.base_ra_committed_openings
             .all()
             .chain(self.slope_ra_committed_openings.all())
-            .chain(self.round_ra_committed_openings.all())
+            .chain(self.gate_round_ra_committed_openings.all())
+            .chain(self.output_round_ra_committed_openings.all())
             .cloned()
             .collect()
     }
@@ -221,29 +221,22 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let round_witness = RoundWitness::from_input_output(witness.silu_acc, witness.silu);
-    let (round_proof, silu_claim, silu_round_ra) = prove_round(
-        vec![silu_round_claim],
-        &round_witness,
-        &params.round,
-        transcript,
-    )?;
-
     let silu_witness = SiluWitness {
         min_n: witness.min_n,
         max_n: witness.max_n,
         gate_proj_round: witness.gate_proj,
         ra: witness.silu_ra,
-        output: witness.silu_acc,
+        output: witness.silu,
     };
-    let (silu_proof, gate_proj_round, gate_round_ra, silu_ra) =
-        prove_silu(vec![silu_claim], &silu_witness, &params.silu, transcript)?;
+    let (silu_proof, gate_proj_round, gate_round_ra, silu_ra, silu_round_ra) = prove_silu(
+        vec![silu_round_claim],
+        &silu_witness,
+        &params.silu,
+        transcript,
+    )?;
 
     Ok((
-        SiluRoundProof {
-            round: round_proof,
-            silu: silu_proof,
-        },
+        SiluRoundProof { silu: silu_proof },
         gate_proj_round,
         gate_round_ra,
         silu_ra,
@@ -254,7 +247,9 @@ where
 pub fn prove_silu_round<F, T, C>(
     silu_round_claim: Claim<F, C>,
     gate_poly: Poly<F, C>,
-    witness: &SiluRoundWitness<'_>,
+    gate_round_ra: Vec<Poly<F, C>>,
+    silu_ra: Vec<Poly<F, C>>,
+    silu_round_ra: Vec<Poly<F, C>>,
     params: &SiluRoundParams,
     transcript: &mut T,
 ) -> Result<(
@@ -269,47 +264,15 @@ where
     T: Transcript,
     C: Clone,
 {
-    let (proof, gate, gate_round_ra, silu_ra, silu_round_ra) = prove_silu_round(
-        legacy_from_claim(silu_round_claim, "silu", params.silu.shape.clone()),
-        witness,
-        params,
-        transcript,
-    )?;
-    let silu_round_witness = RoundWitness::from_input_output(witness.silu_acc, witness.silu);
-    let gate_round_remainders = round_remainders(witness.gate_proj);
-    let silu_witness = SiluWitness {
-        min_n: witness.min_n,
-        max_n: witness.max_n,
-        gate_proj_round: witness.gate_proj,
-        ra: witness.silu_ra,
-        output: witness.silu_acc,
-    };
-    let entries = entries_from_min_max(witness.min_n, witness.max_n)?;
-    let lut_len = padded_silu_lut_len(entries);
-    let logical_lookup_indices = silu_logical_lookup_indices(&silu_witness, &params.silu, entries)?;
-
-    let silu_round_ra = one_hot_claims_from_requests(
-        &silu_round_ra,
-        &padded_lookup_indices_for_shape(&silu_round_witness.remainder, &params.round.shape),
-        ROUND_LUT_LEN,
-    );
-    let gate_round_ra = one_hot_claims_from_requests(
-        &gate_round_ra,
-        &padded_lookup_indices_for_shape(&gate_round_remainders, &params.silu.shape),
-        ROUND_LUT_LEN,
-    );
-    let silu_ra = one_hot_claims_from_requests(
-        &silu_ra,
-        &padded_lookup_indices(&logical_lookup_indices, &params.silu, entries),
-        lut_len,
-    );
-    Ok((
-        proof,
-        claim_from_legacy(gate, gate_poly),
+    prove_silu_round_from_polys(
+        vec![silu_round_claim],
+        gate_poly,
         gate_round_ra,
         silu_ra,
         silu_round_ra,
-    ))
+        params,
+        transcript,
+    )
 }
 
 pub fn verify_silu_round<F, T>(
@@ -330,16 +293,135 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let (silu_claim, silu_round_ra) = verify_round(
+    let (gate_proj_round, gate_round_ra, silu_ra, silu_round_ra) = verify_silu(
         vec![silu_round_claim],
-        &proof.round,
-        &params.round,
+        &proof.silu,
+        &params.silu,
         transcript,
     )?;
-    let (gate_proj_round, gate_round_ra, silu_ra) =
-        verify_silu(vec![silu_claim], &proof.silu, &params.silu, transcript)?;
 
     Ok((gate_proj_round, gate_round_ra, silu_ra, silu_round_ra))
+}
+
+fn prove_silu_round_from_polys<F, T, C>(
+    output_claims: Vec<Claim<F, C>>,
+    gate_poly: Poly<F, C>,
+    gate_round_ra: Vec<Poly<F, C>>,
+    silu_ra: Vec<Poly<F, C>>,
+    output_round_ra: Vec<Poly<F, C>>,
+    params: &SiluRoundParams,
+    transcript: &mut T,
+) -> Result<(
+    SiluRoundProof<F, T>,
+    Claim<F, C>,
+    Vec<Claim<F, C>>,
+    Vec<Claim<F, C>>,
+    Vec<Claim<F, C>>,
+)>
+where
+    F: JoltField,
+    T: Transcript,
+    C: Clone,
+{
+    let gate_values = logical_i32_values(&gate_poly, &params.silu.shape)?;
+    let gate_remainders = if gate_round_ra.is_empty() {
+        round_remainders(&gate_values)
+    } else {
+        logical_lookup_indices_from_onehot_polys(
+            &gate_round_ra,
+            1 << ROUND_FRAC_BITS,
+            &params.silu.shape,
+        )?
+    };
+    let gate_round_bits = round_bits_from_remainders(&gate_remainders);
+    let n_values = gate_values
+        .iter()
+        .zip(&gate_remainders)
+        .zip(&gate_round_bits)
+        .map(|((&gate, &rem), &bit)| {
+            (i64::from(gate) + i64::from(bit) * FIXED_SCALE - rem as i64) / FIXED_SCALE
+        })
+        .collect::<Vec<_>>();
+    let min_n = *n_values.iter().min().unwrap_or(&0);
+    let max_n = *n_values.iter().max().unwrap_or(&0);
+    let entries = entries_from_min_max(min_n, max_n)?;
+
+    let expected_silu_indices = n_values
+        .iter()
+        .map(|&n| {
+            usize::try_from(n - min_n).map_err(|_| ProverError::InvalidSumcheckDomain(entries))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let silu_indices = if silu_ra.is_empty() {
+        expected_silu_indices.clone()
+    } else {
+        let silu_ra_chunks = onehot_chunk_count(padded_silu_lut_len(entries));
+        if silu_ra.len() % silu_ra_chunks != 0 {
+            return Err(ProverError::InvalidInput(format!(
+                "SiLU RA chunk count mismatch: chunks {} is not a multiple of lookup chunks {}",
+                silu_ra.len(),
+                silu_ra_chunks
+            )));
+        }
+        logical_lookup_indices_from_onehot_polys(
+            &silu_ra[..silu_ra_chunks],
+            padded_silu_lut_len(entries),
+            &params.silu.shape,
+        )?
+    };
+    if silu_indices != expected_silu_indices {
+        return Err(ProverError::InvalidInput(
+            "SiLU lookup RA does not match rounded gate indices".to_string(),
+        ));
+    }
+    let mut raw_silu_ra = vec![0u8; params.silu.shape.numel() * entries];
+    for (idx, &selected) in silu_indices.iter().enumerate() {
+        if selected >= entries {
+            return Err(ProverError::InvalidSumcheckDomain(entries));
+        }
+        raw_silu_ra[idx * entries + selected] = 1;
+    }
+    let output_values = logical_i32_values(&output_claims[0].poly, &params.silu.shape)?;
+    let legacy_claims = output_claims
+        .iter()
+        .map(|claim| LegacyClaim {
+            tensor: params.silu.output_tensor.clone(),
+            logical_shape: params.silu.shape.clone(),
+            domain_shape: params.silu.shape.padded_power_of_two(),
+            point: claim.point.clone(),
+            value: claim.value,
+        })
+        .collect::<Vec<_>>();
+    let witness = SiluWitness {
+        min_n,
+        max_n,
+        gate_proj_round: &gate_values,
+        ra: &raw_silu_ra,
+        output: &output_values,
+    };
+    if !output_round_ra.is_empty() {
+        let output_round_indices = logical_lookup_indices_from_onehot_polys(
+            &output_round_ra,
+            1 << ROUND_FRAC_BITS,
+            &params.silu.shape,
+        )?;
+        let expected_output_round_indices =
+            round_remainders_i64(&silu_acc_values(&witness, &params.silu, entries)?);
+        if output_round_indices != expected_output_round_indices {
+            return Err(ProverError::InvalidInput(
+                "SiLU output round RA does not match computed accumulator".to_string(),
+            ));
+        }
+    }
+    let (proof, gate, gate_round_requests, silu_requests, output_round_requests) =
+        prove_silu(legacy_claims, &witness, &params.silu, transcript)?;
+    Ok((
+        SiluRoundProof { silu: proof },
+        Claim::new(gate_poly, gate.point, gate.value),
+        claims_from_requests(&gate_round_ra, gate_round_requests)?,
+        claims_from_requests(&silu_ra, silu_requests)?,
+        claims_from_requests(&output_round_ra, output_round_requests)?,
+    ))
 }
 
 pub fn prove_silu<F, T>(
@@ -350,6 +432,7 @@ pub fn prove_silu<F, T>(
 ) -> Result<(
     SiluProof<F, T>,
     LegacyClaim<F>,
+    Vec<PcsOpeningRequest<F>>,
     Vec<PcsOpeningRequest<F>>,
     Vec<PcsOpeningRequest<F>>,
 )>
@@ -363,17 +446,23 @@ where
     append_range_advice::<F, T>(witness.min_n, witness.max_n, transcript);
     let alphas = transcript.challenge_scalar_powers(output_claims.len());
     let round_mix = transcript.challenge_scalar();
-    let input_claim = batched_input_claim(&output_claims, &alphas);
+    let input_claim =
+        F::from_u64(FIXED_SCALE as u64) * batched_input_claim(&output_claims, &alphas);
     let eq_batch = batched_masked_eq_poly(&output_claims, &alphas, &params.shape);
     let logical_lookup_indices = silu_logical_lookup_indices(witness, params, entries)?;
     let padded_lookup_indices = padded_lookup_indices(&logical_lookup_indices, params, entries);
     let base_values = silu_lookup_values(&logical_lookup_indices, witness.min_n, silu_base);
     let slope_values = silu_lookup_values(&logical_lookup_indices, witness.min_n, silu_slope);
     let gate = padded_i32_tensor(witness.gate_proj_round, &params.shape);
-    let remainders = round_remainders(witness.gate_proj_round);
-    let round_bits = round_bits_from_remainders(&remainders);
-    let remainder = padded_usize_tensor(&remainders, &params.shape);
-    let round_bit = padded_u8_tensor(&round_bits, &params.shape);
+    let gate_remainders = round_remainders(witness.gate_proj_round);
+    let gate_round_bits = round_bits_from_remainders(&gate_remainders);
+    let output_acc = silu_acc_values(witness, params, entries)?;
+    let output_remainders = round_remainders_i64(&output_acc);
+    let output_round_bits = round_bits_from_remainders(&output_remainders);
+    let gate_remainder = padded_usize_tensor(&gate_remainders, &params.shape);
+    let gate_round_bit = padded_u8_tensor(&gate_round_bits, &params.shape);
+    let output_remainder = padded_usize_tensor(&output_remainders, &params.shape);
+    let output_round_bit = padded_u8_tensor(&output_round_bits, &params.shape);
     let base = padded_i64_tensor(&base_values, &params.shape);
     let slope = padded_i64_tensor(&slope_values, &params.shape);
     let index = padded_usize_evals(&padded_lookup_indices);
@@ -385,8 +474,10 @@ where
         sc_params,
         eq_batch,
         gate,
-        remainder,
-        round_bit,
+        gate_remainder,
+        gate_round_bit,
+        output_remainder,
+        output_round_bit,
         base,
         slope,
         index,
@@ -399,13 +490,24 @@ where
         &accumulator,
         OpeningId::new(VirtualPoly::QwenSiluGate, silu_sumcheck_id()),
     )?;
-    let remainder_opening = prover_opening(
+    let gate_remainder_opening = prover_opening(
         &accumulator,
         OpeningId::new(VirtualPoly::QwenSiluRoundRemainder, silu_sumcheck_id()),
     )?;
-    let round_bit_opening = prover_opening(
+    let gate_round_bit_opening = prover_opening(
         &accumulator,
         OpeningId::new(VirtualPoly::QwenSiluRoundLut, silu_sumcheck_id()),
+    )?;
+    let output_remainder_opening = prover_opening(
+        &accumulator,
+        OpeningId::new(
+            VirtualPoly::QwenSiluOutputRoundRemainder,
+            silu_sumcheck_id(),
+        ),
+    )?;
+    let output_round_bit_opening = prover_opening(
+        &accumulator,
+        OpeningId::new(VirtualPoly::QwenSiluOutputRoundLut, silu_sumcheck_id()),
     )?;
     let base_opening = prover_opening(
         &accumulator,
@@ -443,19 +545,39 @@ where
         &mut accumulator,
         transcript,
     )?;
-    let round_lookup = prove_silu_shout_lookup(
-        SiluLookupKind::Round,
+    let gate_round_lookup = prove_silu_shout_lookup(
+        SiluLookupKind::GateRound,
         1 << ROUND_FRAC_BITS,
         tensor_point.clone(),
-        round_bit_opening,
-        remainder_opening,
-        padded_lookup_indices_for_shape(&remainders, &params.shape),
+        gate_round_bit_opening,
+        gate_remainder_opening,
+        padded_lookup_indices_for_shape(&gate_remainders, &params.shape),
+        round_lut_table(),
+        &mut accumulator,
+        transcript,
+    )?;
+    let output_round_lookup = prove_silu_shout_lookup(
+        SiluLookupKind::OutputRound,
+        1 << ROUND_FRAC_BITS,
+        tensor_point.clone(),
+        output_round_bit_opening,
+        output_remainder_opening,
+        padded_lookup_indices_for_shape(&output_remainders, &params.shape),
         round_lut_table(),
         &mut accumulator,
         transcript,
     )?;
 
-    let round_ra_claims = round_lookup.committed_openings.all().cloned().collect();
+    let gate_round_ra_claims = gate_round_lookup
+        .committed_openings
+        .all()
+        .cloned()
+        .collect();
+    let output_round_ra_claims = output_round_lookup
+        .committed_openings
+        .all()
+        .cloned()
+        .collect();
     let silu_ra_claims = base_lookup
         .committed_openings
         .all()
@@ -472,20 +594,26 @@ where
             base_ra_onehot: base_lookup.ra_onehot,
             slope_lookup: slope_lookup.read_raf,
             slope_ra_onehot: slope_lookup.ra_onehot,
-            round_lookup: round_lookup.read_raf,
-            round_ra_onehot: round_lookup.ra_onehot,
+            gate_round_lookup: gate_round_lookup.read_raf,
+            gate_round_ra_onehot: gate_round_lookup.ra_onehot,
+            output_round_lookup: output_round_lookup.read_raf,
+            output_round_ra_onehot: output_round_lookup.ra_onehot,
             gate_opening,
-            remainder_opening,
-            round_bit_opening,
+            gate_remainder_opening,
+            gate_round_bit_opening,
+            output_remainder_opening,
+            output_round_bit_opening,
             base_opening,
             slope_opening,
             index_opening,
             base_ra_opening: base_lookup.ra_opening,
             slope_ra_opening: slope_lookup.ra_opening,
-            round_ra_opening: round_lookup.ra_opening,
+            gate_round_ra_opening: gate_round_lookup.ra_opening,
+            output_round_ra_opening: output_round_lookup.ra_opening,
             base_ra_committed_openings: base_lookup.committed_openings,
             slope_ra_committed_openings: slope_lookup.committed_openings,
-            round_ra_committed_openings: round_lookup.committed_openings,
+            gate_round_ra_committed_openings: gate_round_lookup.committed_openings,
+            output_round_ra_committed_openings: output_round_lookup.committed_openings,
         },
         LegacyClaim {
             tensor: params.gate_proj_round_tensor.clone(),
@@ -494,8 +622,9 @@ where
             point: tensor_point.clone(),
             value: gate_opening,
         },
-        round_ra_claims,
+        gate_round_ra_claims,
         silu_ra_claims,
+        output_round_ra_claims,
     ))
 }
 
@@ -507,6 +636,7 @@ pub fn verify_silu<F, T>(
 ) -> std::result::Result<
     (
         LegacyClaim<F>,
+        Vec<PcsOpeningRequest<F>>,
         Vec<PcsOpeningRequest<F>>,
         Vec<PcsOpeningRequest<F>>,
     ),
@@ -522,7 +652,8 @@ where
     append_range_advice::<F, T>(proof.min_n, proof.max_n, transcript);
     let alphas = transcript.challenge_scalar_powers(output_claims.len());
     let round_mix = transcript.challenge_scalar();
-    let input_claim = batched_input_claim(&output_claims, &alphas);
+    let input_claim =
+        F::from_u64(FIXED_SCALE as u64) * batched_input_claim(&output_claims, &alphas);
     let verifier = SiluSumcheckVerifier {
         params: SiluSumcheckParams::new(
             params.shape.padded_power_of_two().point_len(),
@@ -546,14 +677,31 @@ where
         OpeningId::new(VirtualPoly::QwenSiluRoundRemainder, silu_sumcheck_id()),
         (
             OpeningPoint::<BIG_ENDIAN, F>::default(),
-            proof.remainder_opening,
+            proof.gate_remainder_opening,
         ),
     );
     accumulator.openings.insert(
         OpeningId::new(VirtualPoly::QwenSiluRoundLut, silu_sumcheck_id()),
         (
             OpeningPoint::<BIG_ENDIAN, F>::default(),
-            proof.round_bit_opening,
+            proof.gate_round_bit_opening,
+        ),
+    );
+    accumulator.openings.insert(
+        OpeningId::new(
+            VirtualPoly::QwenSiluOutputRoundRemainder,
+            silu_sumcheck_id(),
+        ),
+        (
+            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            proof.output_remainder_opening,
+        ),
+    );
+    accumulator.openings.insert(
+        OpeningId::new(VirtualPoly::QwenSiluOutputRoundLut, silu_sumcheck_id()),
+        (
+            OpeningPoint::<BIG_ENDIAN, F>::default(),
+            proof.output_round_bit_opening,
         ),
     );
     accumulator.openings.insert(
@@ -615,19 +763,35 @@ where
         .chain(proof.slope_ra_committed_openings.all())
         .cloned()
         .collect();
-    let round_lookup = verify_silu_shout_lookup(
-        SiluLookupKind::Round,
+    let gate_round_lookup = verify_silu_shout_lookup(
+        SiluLookupKind::GateRound,
         1 << ROUND_FRAC_BITS,
         1 << ROUND_FRAC_BITS,
         0,
         params.shape.padded_power_of_two().numel(),
         tensor_point.clone(),
-        proof.round_bit_opening,
-        proof.remainder_opening,
-        proof.round_ra_opening,
-        &proof.round_ra_committed_openings,
-        &proof.round_lookup,
-        &proof.round_ra_onehot,
+        proof.gate_round_bit_opening,
+        proof.gate_remainder_opening,
+        proof.gate_round_ra_opening,
+        &proof.gate_round_ra_committed_openings,
+        &proof.gate_round_lookup,
+        &proof.gate_round_ra_onehot,
+        &mut accumulator,
+        transcript,
+    )?;
+    let output_round_lookup = verify_silu_shout_lookup(
+        SiluLookupKind::OutputRound,
+        1 << ROUND_FRAC_BITS,
+        1 << ROUND_FRAC_BITS,
+        0,
+        params.shape.padded_power_of_two().numel(),
+        tensor_point.clone(),
+        proof.output_round_bit_opening,
+        proof.output_remainder_opening,
+        proof.output_round_ra_opening,
+        &proof.output_round_ra_committed_openings,
+        &proof.output_round_lookup,
+        &proof.output_round_ra_onehot,
         &mut accumulator,
         transcript,
     )?;
@@ -639,8 +803,17 @@ where
             point: tensor_point.clone(),
             value: proof.gate_opening,
         },
-        round_lookup.committed_openings.all().cloned().collect(),
+        gate_round_lookup
+            .committed_openings
+            .all()
+            .cloned()
+            .collect(),
         silu_ra_claims,
+        output_round_lookup
+            .committed_openings
+            .all()
+            .cloned()
+            .collect(),
     ))
 }
 
@@ -679,8 +852,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SiluSumcheckParams<F> {
 struct SiluSumcheckProver<F: JoltField> {
     eq_batch: MultilinearPolynomial<F>,
     gate: MultilinearPolynomial<F>,
-    remainder: MultilinearPolynomial<F>,
-    round_bit: MultilinearPolynomial<F>,
+    gate_remainder: MultilinearPolynomial<F>,
+    gate_round_bit: MultilinearPolynomial<F>,
+    output_remainder: MultilinearPolynomial<F>,
+    output_round_bit: MultilinearPolynomial<F>,
     base: MultilinearPolynomial<F>,
     slope: MultilinearPolynomial<F>,
     index: MultilinearPolynomial<F>,
@@ -695,8 +870,10 @@ impl<F: JoltField> SiluSumcheckProver<F> {
         params: SiluSumcheckParams<F>,
         eq_batch: Vec<F>,
         gate: Vec<i32>,
-        remainder: Vec<u32>,
-        round_bit: Vec<u8>,
+        gate_remainder: Vec<u32>,
+        gate_round_bit: Vec<u8>,
+        output_remainder: Vec<u32>,
+        output_round_bit: Vec<u8>,
         base: Vec<i64>,
         slope: Vec<i64>,
         index: Vec<u32>,
@@ -706,8 +883,10 @@ impl<F: JoltField> SiluSumcheckProver<F> {
         Self {
             eq_batch: MultilinearPolynomial::from(eq_batch),
             gate: MultilinearPolynomial::from(gate),
-            remainder: MultilinearPolynomial::from(remainder),
-            round_bit: MultilinearPolynomial::from(round_bit),
+            gate_remainder: MultilinearPolynomial::from(gate_remainder),
+            gate_round_bit: MultilinearPolynomial::from(gate_round_bit),
+            output_remainder: MultilinearPolynomial::from(output_remainder),
+            output_round_bit: MultilinearPolynomial::from(output_round_bit),
             base: MultilinearPolynomial::from(base),
             slope: MultilinearPolynomial::from(slope),
             index: MultilinearPolynomial::from(index),
@@ -740,8 +919,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SiluSumcheckP
     fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
         self.eq_batch.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.gate.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.remainder.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.round_bit.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.gate_remainder
+            .bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.gate_round_bit
+            .bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.output_remainder
+            .bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.output_round_bit
+            .bind_parallel(r_j, BindingOrder::LowToHigh);
         self.base.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.slope.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.index.bind_parallel(r_j, BindingOrder::LowToHigh);
@@ -766,13 +951,28 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SiluSumcheckP
             transcript,
             OpeningId::new(VirtualPoly::QwenSiluRoundRemainder, silu_sumcheck_id()),
             point.clone(),
-            self.remainder.final_claim(),
+            self.gate_remainder.final_claim(),
         );
         accumulator.append_virtual(
             transcript,
             OpeningId::new(VirtualPoly::QwenSiluRoundLut, silu_sumcheck_id()),
             point.clone(),
-            self.round_bit.final_claim(),
+            self.gate_round_bit.final_claim(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(
+                VirtualPoly::QwenSiluOutputRoundRemainder,
+                silu_sumcheck_id(),
+            ),
+            point.clone(),
+            self.output_remainder.final_claim(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenSiluOutputRoundLut, silu_sumcheck_id()),
+            point.clone(),
+            self.output_round_bit.final_claim(),
         );
         accumulator.append_virtual(
             transcript,
@@ -834,6 +1034,18 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SiluSumchec
                 silu_sumcheck_id(),
             ))
             .1;
+        let output_remainder = accumulator
+            .get_virtual_polynomial_opening(OpeningId::new(
+                VirtualPoly::QwenSiluOutputRoundRemainder,
+                silu_sumcheck_id(),
+            ))
+            .1;
+        let output_round_bit = accumulator
+            .get_virtual_polynomial_opening(OpeningId::new(
+                VirtualPoly::QwenSiluOutputRoundLut,
+                silu_sumcheck_id(),
+            ))
+            .1;
         let base = accumulator
             .get_virtual_polynomial_opening(OpeningId::new(
                 VirtualPoly::QwenSiluBase,
@@ -863,6 +1075,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SiluSumchec
             gate,
             remainder,
             round_bit,
+            output_remainder,
+            output_round_bit,
             base,
             slope,
             index,
@@ -897,6 +1111,19 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SiluSumchec
         );
         accumulator.append_virtual(
             transcript,
+            OpeningId::new(
+                VirtualPoly::QwenSiluOutputRoundRemainder,
+                silu_sumcheck_id(),
+            ),
+            point.clone(),
+        );
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(VirtualPoly::QwenSiluOutputRoundLut, silu_sumcheck_id()),
+            point.clone(),
+        );
+        accumulator.append_virtual(
+            transcript,
             OpeningId::new(VirtualPoly::QwenSiluBase, silu_sumcheck_id()),
             point.clone(),
         );
@@ -916,8 +1143,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SiluSumchec
 struct SiluPairValues<F: JoltField> {
     eq_batch: [F; 2],
     gate: [F; 2],
-    remainder: [F; 2],
-    round_bit: [F; 2],
+    gate_remainder: [F; 2],
+    gate_round_bit: [F; 2],
+    output_remainder: [F; 2],
+    output_round_bit: [F; 2],
     base: [F; 2],
     slope: [F; 2],
     index: [F; 2],
@@ -934,13 +1163,21 @@ impl<F: JoltField> SiluPairValues<F> {
                 prover.gate.get_bound_coeff(2 * g),
                 prover.gate.get_bound_coeff(2 * g + 1),
             ],
-            remainder: [
-                prover.remainder.get_bound_coeff(2 * g),
-                prover.remainder.get_bound_coeff(2 * g + 1),
+            gate_remainder: [
+                prover.gate_remainder.get_bound_coeff(2 * g),
+                prover.gate_remainder.get_bound_coeff(2 * g + 1),
             ],
-            round_bit: [
-                prover.round_bit.get_bound_coeff(2 * g),
-                prover.round_bit.get_bound_coeff(2 * g + 1),
+            gate_round_bit: [
+                prover.gate_round_bit.get_bound_coeff(2 * g),
+                prover.gate_round_bit.get_bound_coeff(2 * g + 1),
+            ],
+            output_remainder: [
+                prover.output_remainder.get_bound_coeff(2 * g),
+                prover.output_remainder.get_bound_coeff(2 * g + 1),
+            ],
+            output_round_bit: [
+                prover.output_round_bit.get_bound_coeff(2 * g),
+                prover.output_round_bit.get_bound_coeff(2 * g + 1),
             ],
             base: [
                 prover.base.get_bound_coeff(2 * g),
@@ -961,8 +1198,10 @@ impl<F: JoltField> SiluPairValues<F> {
         eval_silu_relation(
             lerp(self.eq_batch[0], self.eq_batch[1], t),
             lerp(self.gate[0], self.gate[1], t),
-            lerp(self.remainder[0], self.remainder[1], t),
-            lerp(self.round_bit[0], self.round_bit[1], t),
+            lerp(self.gate_remainder[0], self.gate_remainder[1], t),
+            lerp(self.gate_round_bit[0], self.gate_round_bit[1], t),
+            lerp(self.output_remainder[0], self.output_remainder[1], t),
+            lerp(self.output_round_bit[0], self.output_round_bit[1], t),
             lerp(self.base[0], self.base[1], t),
             lerp(self.slope[0], self.slope[1], t),
             lerp(self.index[0], self.index[1], t),
@@ -976,8 +1215,10 @@ impl<F: JoltField> SiluPairValues<F> {
 fn eval_silu_relation<F: JoltField>(
     eq_batch: F,
     gate: F,
-    remainder: F,
-    round_bit: F,
+    gate_remainder: F,
+    gate_round_bit: F,
+    output_remainder: F,
+    output_round_bit: F,
     base: F,
     slope: F,
     index: F,
@@ -987,16 +1228,18 @@ fn eval_silu_relation<F: JoltField>(
     let scale = F::from_u64(FIXED_SCALE as u64);
     let n = min_n + index;
     let acc_expr = base + (gate - n * scale) * slope;
-    let round_expr = gate + round_bit * scale - remainder - n * scale;
+    let gate_round_expr = gate + gate_round_bit * scale - gate_remainder - n * scale;
+    let output_round_expr = acc_expr + output_round_bit * scale - output_remainder;
 
-    eq_batch * acc_expr + round_mix * eq_batch * round_expr
+    eq_batch * output_round_expr + round_mix * eq_batch * gate_round_expr
 }
 
 #[derive(Debug, Clone, Copy)]
 enum SiluLookupKind {
     Base,
     Slope,
-    Round,
+    GateRound,
+    OutputRound,
 }
 
 impl SiluLookupKind {
@@ -1004,7 +1247,8 @@ impl SiluLookupKind {
         match self {
             Self::Base => VirtualPoly::QwenSiluBase,
             Self::Slope => VirtualPoly::QwenSiluSlope,
-            Self::Round => VirtualPoly::QwenSiluRoundLut,
+            Self::GateRound => VirtualPoly::QwenSiluRoundLut,
+            Self::OutputRound => VirtualPoly::QwenSiluOutputRoundLut,
         }
     }
 
@@ -1012,14 +1256,16 @@ impl SiluLookupKind {
         match self {
             Self::Base => VirtualPoly::QwenSiluBaseRa,
             Self::Slope => VirtualPoly::QwenSiluSlopeRa,
-            Self::Round => VirtualPoly::QwenSiluRoundRa,
+            Self::GateRound => VirtualPoly::QwenSiluRoundRa,
+            Self::OutputRound => VirtualPoly::QwenSiluOutputRoundRa,
         }
     }
 
     fn index_poly(self) -> VirtualPoly {
         match self {
             Self::Base | Self::Slope => VirtualPoly::QwenSiluIndex,
-            Self::Round => VirtualPoly::QwenSiluRoundRemainder,
+            Self::GateRound => VirtualPoly::QwenSiluRoundRemainder,
+            Self::OutputRound => VirtualPoly::QwenSiluOutputRoundRemainder,
         }
     }
 
@@ -1027,7 +1273,8 @@ impl SiluLookupKind {
         match self {
             Self::Base => CommittedPoly::QwenSiluBaseRaD(d),
             Self::Slope => CommittedPoly::QwenSiluSlopeRaD(d),
-            Self::Round => CommittedPoly::QwenSiluRoundRaD(d),
+            Self::GateRound => CommittedPoly::QwenSiluRoundRaD(d),
+            Self::OutputRound => CommittedPoly::QwenSiluOutputRoundRaD(d),
         }
     }
 }
@@ -1199,7 +1446,7 @@ where
     let table = match kind {
         SiluLookupKind::Base => padded_i32_table(min_n, entries, lut_len, silu_base),
         SiluLookupKind::Slope => padded_i32_table(min_n, entries, lut_len, silu_slope),
-        SiluLookupKind::Round => Ok(round_lut_table()),
+        SiluLookupKind::GateRound | SiluLookupKind::OutputRound => Ok(round_lut_table()),
     }
     .map_err(|_| ProofVerifyError::InvalidInputLength(lut_len, 0))?;
     let read_verifier = shout::read_raf_verifier(&provider, table, accumulator, transcript);
@@ -1390,13 +1637,16 @@ fn validate_inputs<F: JoltField>(
                 actual: actual_round,
             });
         }
-        let expected = silu_base(n) + (gate - n * FIXED_SCALE) * silu_slope(n);
-        if witness.output[element] != expected {
+        let acc = silu_base(n) + (gate - n * FIXED_SCALE) * silu_slope(n);
+        let rem = acc.rem_euclid(FIXED_SCALE) as usize;
+        let expected =
+            (acc + i64::from(round_lut_q8(rem)) * FIXED_SCALE - rem as i64) / FIXED_SCALE;
+        if i64::from(witness.output[element]) != expected {
             return Err(ProverError::MatMulAccumulatorMismatch {
                 row: element,
                 col: 0,
                 expected,
-                actual: witness.output[element],
+                actual: i64::from(witness.output[element]),
             });
         }
     }
@@ -1426,6 +1676,135 @@ fn verify_inputs<F: JoltField>(
         }
     }
     Ok(())
+}
+
+fn logical_i32_values<F: JoltField, C>(poly: &Poly<F, C>, shape: &Shape) -> Result<Vec<i32>> {
+    let padded_dims = shape.padded_power_of_two().0;
+    let strides = row_major_strides(shape.dims());
+    let padded_strides = row_major_strides(&padded_dims);
+    let mut out = Vec::with_capacity(shape.numel());
+    for flat in 0..shape.numel() {
+        let mut padded_flat = 0;
+        for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate() {
+            let coord = (flat / stride) % shape.dims()[dim];
+            padded_flat += coord * padded_stride;
+        }
+        out.push(poly.data.get_coeff_i64(padded_flat) as i32);
+    }
+    Ok(out)
+}
+
+fn logical_lookup_indices_from_onehot_polys<F: JoltField, C>(
+    ra: &[Poly<F, C>],
+    lut_len: usize,
+    shape: &Shape,
+) -> Result<Vec<usize>> {
+    let padded_dims = shape.padded_power_of_two().0;
+    let padded_len = padded_dims.iter().product();
+    let padded = lookup_indices_from_onehot_polys(ra, lut_len, padded_len)?;
+    let strides = row_major_strides(shape.dims());
+    let padded_strides = row_major_strides(&padded_dims);
+    let mut out = Vec::with_capacity(shape.numel());
+    for flat in 0..shape.numel() {
+        let mut padded_flat = 0;
+        for (dim, (&stride, &padded_stride)) in strides.iter().zip(&padded_strides).enumerate() {
+            let coord = (flat / stride) % shape.dims()[dim];
+            padded_flat += coord * padded_stride;
+        }
+        out.push(padded[padded_flat]);
+    }
+    Ok(out)
+}
+
+fn lookup_indices_from_onehot_polys<F: JoltField, C>(
+    ra: &[Poly<F, C>],
+    lut_len: usize,
+    len: usize,
+) -> Result<Vec<usize>> {
+    let log_k = lut_len.trailing_zeros() as usize;
+    let params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k);
+    if ra.len() != params.instruction_d {
+        return Err(ProverError::InvalidInput(format!(
+            "one-hot RA chunk count mismatch: expected {}, got {}",
+            params.instruction_d,
+            ra.len()
+        )));
+    }
+    let mut out = vec![0usize; len];
+    for poly in ra {
+        let onehot = match &poly.data {
+            MultilinearPolynomial::OneHot(onehot) => onehot,
+            _ => {
+                return Err(ProverError::InvalidInput(
+                    "RA must be OneHot polynomial".to_string(),
+                ));
+            }
+        };
+        if onehot.nonzero_indices.len() != len {
+            return Err(ProverError::TensorLenMismatch {
+                name: "SiLU RA",
+                shape: vec![len],
+                expected: len,
+                actual: onehot.nonzero_indices.len(),
+            });
+        }
+        for (idx, chunk) in onehot.nonzero_indices.iter().enumerate() {
+            let chunk = chunk.ok_or_else(|| {
+                ProverError::InvalidInput(format!("RA has empty onehot at element {idx}"))
+            })?;
+            out[idx] = out[idx] * params.k_chunk + usize::from(chunk);
+        }
+    }
+    Ok(out)
+}
+
+fn onehot_chunk_count(lut_len: usize) -> usize {
+    let log_k = lut_len.trailing_zeros() as usize;
+    OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d
+}
+
+fn claims_from_requests<F: JoltField, C: Clone>(
+    polys: &[Poly<F, C>],
+    requests: Vec<PcsOpeningRequest<F>>,
+) -> Result<Vec<Claim<F, C>>> {
+    if polys.is_empty() {
+        return Ok(Vec::new());
+    }
+    if requests.len() % polys.len() != 0 {
+        return Err(ProverError::InvalidInput(format!(
+            "RA opening count mismatch: openings {} is not a multiple of chunks {}",
+            requests.len(),
+            polys.len()
+        )));
+    }
+    Ok(requests
+        .into_iter()
+        .enumerate()
+        .map(|(idx, opening)| {
+            Claim::new(
+                polys[idx % polys.len()].clone(),
+                opening.point,
+                opening.value,
+            )
+        })
+        .collect())
+}
+
+fn silu_acc_values(
+    witness: &SiluWitness<'_>,
+    params: &SiluParams,
+    entries: usize,
+) -> Result<Vec<i64>> {
+    let lookup_indices = silu_logical_lookup_indices(witness, params, entries)?;
+    Ok(lookup_indices
+        .iter()
+        .enumerate()
+        .map(|(idx, &lookup)| {
+            let n = witness.min_n + lookup as i64;
+            let gate = i64::from(witness.gate_proj_round[idx]);
+            silu_base(n) + (gate - n * FIXED_SCALE) * silu_slope(n)
+        })
+        .collect())
 }
 
 fn entries_from_min_max(min_n: i64, max_n: i64) -> Result<usize> {
@@ -1600,6 +1979,13 @@ fn round_remainders(values: &[i32]) -> Vec<usize> {
     values
         .iter()
         .map(|&value| i64::from(value).rem_euclid(FIXED_SCALE) as usize)
+        .collect()
+}
+
+fn round_remainders_i64(values: &[i64]) -> Vec<usize> {
+    values
+        .iter()
+        .map(|&value| value.rem_euclid(FIXED_SCALE) as usize)
         .collect()
 }
 
@@ -1818,7 +2204,8 @@ fn silu_shout_sumcheck_id(kind: SiluLookupKind) -> SumcheckId {
     match kind {
         SiluLookupKind::Base => SumcheckId::NodeExecution(1),
         SiluLookupKind::Slope => SumcheckId::NodeExecution(2),
-        SiluLookupKind::Round => SumcheckId::NodeExecution(3),
+        SiluLookupKind::GateRound => SumcheckId::NodeExecution(3),
+        SiluLookupKind::OutputRound => SumcheckId::NodeExecution(4),
     }
 }
 
@@ -1848,16 +2235,17 @@ mod tests {
             .zip(selected)
             .map(|(&gate, idx)| {
                 let n = min_n + idx as i64;
-                silu_base(n) + (i64::from(gate) - n * FIXED_SCALE) * silu_slope(n)
+                round_acc_to_i32(silu_base(n) + (i64::from(gate) - n * FIXED_SCALE) * silu_slope(n))
             })
             .collect::<Vec<_>>();
+        let output_i64 = output.iter().map(|&v| i64::from(v)).collect::<Vec<_>>();
         let point = vec![Fr::from(7u64)];
         let output_claim = LegacyClaim {
             tensor: TensorId::new("silu_acc"),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
             point: point.clone(),
-            value: eval_i64(&output, &params.shape, &point),
+            value: eval_i64(&output_i64, &params.shape, &point),
         };
         let witness = SiluWitness {
             min_n,
@@ -1868,7 +2256,7 @@ mod tests {
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, gate_claim, gate_round_ra, ra_claim) = prove_silu::<Fr, _>(
+        let (proof, gate_claim, gate_round_ra, ra_claim, output_round_ra) = prove_silu::<Fr, _>(
             vec![output_claim.clone()],
             &witness,
             &params,
@@ -1877,18 +2265,23 @@ mod tests {
         .unwrap();
 
         let mut verifier_transcript = Blake2bTranscript::default();
-        let (verified_gate_claim, verified_gate_round_ra, verified_ra_claim) =
-            verify_silu::<Fr, _>(
-                vec![output_claim],
-                &proof,
-                &params,
-                &mut verifier_transcript,
-            )
-            .unwrap();
+        let (
+            verified_gate_claim,
+            verified_gate_round_ra,
+            verified_ra_claim,
+            verified_output_round_ra,
+        ) = verify_silu::<Fr, _>(
+            vec![output_claim],
+            &proof,
+            &params,
+            &mut verifier_transcript,
+        )
+        .unwrap();
 
         assert_eq!(verified_gate_claim, gate_claim);
         assert_eq!(verified_gate_round_ra, gate_round_ra);
         assert_eq!(verified_ra_claim, ra_claim);
+        assert_eq!(verified_output_round_ra, output_round_ra);
         assert_eq!(verified_gate_claim.tensor.0, "gate");
     }
 
@@ -1905,14 +2298,17 @@ mod tests {
         let mut ra = vec![0; entries];
         ra[selected] = 1;
         let n = min_n + selected as i64;
-        let output = vec![silu_base(n) + (i64::from(gate[0]) - n * FIXED_SCALE) * silu_slope(n)];
+        let output = vec![round_acc_to_i32(
+            silu_base(n) + (i64::from(gate[0]) - n * FIXED_SCALE) * silu_slope(n),
+        )];
+        let output_i64 = output.iter().map(|&v| i64::from(v)).collect::<Vec<_>>();
         let point = vec![];
         let output_claim = LegacyClaim {
             tensor: TensorId::new("silu_acc"),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
             point: point.clone(),
-            value: eval_i64(&output, &params.shape, &point),
+            value: eval_i64(&output_i64, &params.shape, &point),
         };
         let witness = SiluWitness {
             min_n,
@@ -1923,7 +2319,7 @@ mod tests {
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, _, _, _) = prove_silu::<Fr, _>(
+        let (proof, _, _, _, _) = prove_silu::<Fr, _>(
             vec![output_claim.clone()],
             &witness,
             &params,
@@ -1949,20 +2345,23 @@ mod tests {
         let max_n = 3;
         let entries = entries_from_min_max(min_n, max_n).unwrap();
         let mut ra = vec![0; gate.len() * entries];
-        let mut output = vec![0; gate.len()];
+        let mut output = vec![0i32; gate.len()];
         for (idx, &gate_value) in gate.iter().enumerate() {
             let n = round_shift_signed_i64(i64::from(gate_value), FIXED_FRAC_BITS);
             let selected = (n - min_n) as usize;
             ra[idx * entries + selected] = 1;
-            output[idx] = silu_base(n) + (i64::from(gate_value) - n * FIXED_SCALE) * silu_slope(n);
+            output[idx] = round_acc_to_i32(
+                silu_base(n) + (i64::from(gate_value) - n * FIXED_SCALE) * silu_slope(n),
+            );
         }
+        let output_i64 = output.iter().map(|&v| i64::from(v)).collect::<Vec<_>>();
         let point = vec![Fr::from(3u64), Fr::from(5u64), Fr::from(7u64)];
         let output_claim = LegacyClaim {
             tensor: TensorId::new("silu_acc"),
             logical_shape: params.shape.clone(),
             domain_shape: params.shape.padded_power_of_two(),
             point: point.clone(),
-            value: eval_i64(&output, &params.shape, &point),
+            value: eval_i64(&output_i64, &params.shape, &point),
         };
         let witness = SiluWitness {
             min_n,
@@ -1973,7 +2372,7 @@ mod tests {
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, _, _, _) = prove_silu::<Fr, _>(
+        let (proof, _, _, _, _) = prove_silu::<Fr, _>(
             vec![output_claim.clone()],
             &witness,
             &params,
@@ -2000,7 +2399,7 @@ mod tests {
         let entries = entries_from_min_max(min_n, max_n).unwrap();
         let mut ra = vec![0; entries.next_power_of_two()];
         ra[3] = 1;
-        let output = vec![0];
+        let output = vec![0i32];
         let point = vec![];
         let output_claim = LegacyClaim {
             tensor: TensorId::new("silu_acc"),
@@ -2046,6 +2445,11 @@ mod tests {
             out += weight * field_from_i64::<F>(value);
         }
         out
+    }
+
+    fn round_acc_to_i32(acc: i64) -> i32 {
+        let rem = acc.rem_euclid(FIXED_SCALE) as usize;
+        ((acc + i64::from(round_lut_q8(rem)) * FIXED_SCALE - rem as i64) / FIXED_SCALE) as i32
     }
 
     fn split_point<'a, F>(shape: &Shape, point: &'a [F]) -> Vec<&'a [F]> {

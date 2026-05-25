@@ -27,10 +27,9 @@ use crate::{
     error::{ProverError, Result},
     ops::{
         floor::{FloorParams, FloorProof, FloorWitness, prove_floor, verify_floor},
-        poly_bridge::{claim_from_legacy, legacy_from_claim, one_hot_claims_from_requests},
+        poly_bridge::logical_i32_values,
         round::{
-            ROUND_FRAC_BITS, ROUND_LUT_LEN, RoundParams, RoundProof, RoundWitness, prove_round,
-            verify_round,
+            ROUND_FRAC_BITS, RoundParams, RoundProof, RoundWitness, prove_round, verify_round,
         },
     },
 };
@@ -178,6 +177,46 @@ pub struct SoftmaxWitness<'a> {
     pub frac_bits: [&'a [u8]; ROUND_FRAC_BITS],
 }
 
+struct MaterializedSoftmaxWitness {
+    input: Vec<i32>,
+    max_index: Vec<usize>,
+    max: Vec<i32>,
+    min_diff: i64,
+    max_diff: i64,
+    ra: Vec<u8>,
+    exp_acc: Vec<i64>,
+    exp: Vec<i32>,
+    exp_frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
+    sum: Vec<i32>,
+    acc: Vec<i64>,
+    floor: Vec<i32>,
+    floor_frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
+    output: Vec<i32>,
+    frac_bits: [Vec<u8>; ROUND_FRAC_BITS],
+}
+
+impl MaterializedSoftmaxWitness {
+    fn as_witness(&self) -> SoftmaxWitness<'_> {
+        SoftmaxWitness {
+            input: &self.input,
+            max_index: &self.max_index,
+            max: &self.max,
+            min_diff: self.min_diff,
+            max_diff: self.max_diff,
+            ra: &self.ra,
+            exp_acc: &self.exp_acc,
+            exp: &self.exp,
+            exp_frac_bits: self.exp_frac_bits.each_ref().map(Vec::as_slice),
+            sum: &self.sum,
+            acc: &self.acc,
+            floor: &self.floor,
+            floor_frac_bits: self.floor_frac_bits.each_ref().map(Vec::as_slice),
+            output: &self.output,
+            frac_bits: self.frac_bits.each_ref().map(Vec::as_slice),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SoftmaxProof<F: JoltField, T: Transcript> {
     pub round: RoundProof<F, T>,
@@ -187,17 +226,17 @@ pub struct SoftmaxProof<F: JoltField, T: Transcript> {
     pub lookup: SumcheckInstanceProof<F, T>,
     pub exp_lookup: SumcheckInstanceProof<F, T>,
     pub exp_ra_onehot: SumcheckInstanceProof<F, T>,
-    pub input_remainder_lookup: SumcheckInstanceProof<F, T>,
-    pub input_remainder_ra_onehot: SumcheckInstanceProof<F, T>,
+    pub input_frac_lookup: SumcheckInstanceProof<F, T>,
+    pub input_frac_ra_onehot: SumcheckInstanceProof<F, T>,
     pub exp_opening: F,
     pub input_opening: F,
-    pub input_remainder_opening: F,
+    pub input_frac_opening: F,
     pub exp_lut_opening: F,
     pub index_opening: F,
     pub ra_opening: F,
-    pub input_remainder_ra_opening: F,
+    pub input_frac_ra_opening: F,
     pub exp_ra_committed_openings: SoftmaxRaCommittedOpenings<F>,
-    pub input_remainder_ra_committed_openings: SoftmaxRaCommittedOpenings<F>,
+    pub input_frac_ra_committed_openings: SoftmaxRaCommittedOpenings<F>,
     pub max_index: Vec<usize>,
     pub max: Vec<i32>,
     pub min_diff: i64,
@@ -211,7 +250,7 @@ impl<F: JoltField, T: Transcript> SoftmaxProof<F, T> {
         out.extend(self.floor.pcs_opening_requests());
         out.extend(self.exp_round.pcs_opening_requests());
         out.extend(self.exp_ra_committed_openings.all().cloned());
-        out.extend(self.input_remainder_ra_committed_openings.all().cloned());
+        out.extend(self.input_frac_ra_committed_openings.all().cloned());
         out
     }
 }
@@ -236,18 +275,18 @@ struct SoftmaxLookupProveResult<F: JoltField, T: Transcript> {
     relation: SumcheckInstanceProof<F, T>,
     exp_lookup: SumcheckInstanceProof<F, T>,
     exp_ra_onehot: SumcheckInstanceProof<F, T>,
-    input_remainder_lookup: SumcheckInstanceProof<F, T>,
-    input_remainder_ra_onehot: SumcheckInstanceProof<F, T>,
+    input_frac_lookup: SumcheckInstanceProof<F, T>,
+    input_frac_ra_onehot: SumcheckInstanceProof<F, T>,
     input_claim: LegacyClaim<F>,
-    input_remainder_ra_claims: Vec<PcsOpeningRequest<F>>,
+    input_frac_ra_claims: Vec<PcsOpeningRequest<F>>,
     ra_claims: Vec<PcsOpeningRequest<F>>,
-    input_remainder_opening: F,
+    input_frac_opening: F,
     exp_lut_opening: F,
     index_opening: F,
     ra_opening: F,
-    input_remainder_ra_opening: F,
+    input_frac_ra_opening: F,
     exp_ra_committed_openings: SoftmaxRaCommittedOpenings<F>,
-    input_remainder_ra_committed_openings: SoftmaxRaCommittedOpenings<F>,
+    input_frac_ra_committed_openings: SoftmaxRaCommittedOpenings<F>,
 }
 
 pub fn prove_softmax_round_from_witness<F, T>(
@@ -258,6 +297,7 @@ pub fn prove_softmax_round_from_witness<F, T>(
 ) -> Result<(
     SoftmaxProof<F, T>,
     LegacyClaim<F>,
+    Vec<PcsOpeningRequest<F>>,
     Vec<PcsOpeningRequest<F>>,
     Vec<PcsOpeningRequest<F>>,
     Vec<PcsOpeningRequest<F>>,
@@ -324,7 +364,7 @@ where
         value: exp_opening,
     };
     let exp_round_witness = RoundWitness::from_input_output(witness.exp_acc, witness.exp);
-    let (exp_round_proof, exp_acc_claim, _exp_ra) = prove_round(
+    let (exp_round_proof, exp_acc_claim, exp_round_ra) = prove_round(
         vec![exp_claim],
         &exp_round_witness,
         &params.exp_round,
@@ -340,17 +380,17 @@ where
             lookup: lookup.relation,
             exp_lookup: lookup.exp_lookup,
             exp_ra_onehot: lookup.exp_ra_onehot,
-            input_remainder_lookup: lookup.input_remainder_lookup,
-            input_remainder_ra_onehot: lookup.input_remainder_ra_onehot,
+            input_frac_lookup: lookup.input_frac_lookup,
+            input_frac_ra_onehot: lookup.input_frac_ra_onehot,
             exp_opening,
             input_opening: lookup.input_claim.value,
-            input_remainder_opening: lookup.input_remainder_opening,
+            input_frac_opening: lookup.input_frac_opening,
             exp_lut_opening: lookup.exp_lut_opening,
             index_opening: lookup.index_opening,
             ra_opening: lookup.ra_opening,
-            input_remainder_ra_opening: lookup.input_remainder_ra_opening,
+            input_frac_ra_opening: lookup.input_frac_ra_opening,
             exp_ra_committed_openings: lookup.exp_ra_committed_openings,
-            input_remainder_ra_committed_openings: lookup.input_remainder_ra_committed_openings,
+            input_frac_ra_committed_openings: lookup.input_frac_ra_committed_openings,
             max_index: witness.max_index.to_vec(),
             max: witness.max.to_vec(),
             min_diff: witness.min_diff,
@@ -360,7 +400,8 @@ where
         lookup.input_claim,
         output_round_ra,
         floor_round_ra,
-        lookup.input_remainder_ra_claims,
+        exp_round_ra,
+        lookup.input_frac_ra_claims,
         lookup.ra_claims,
     ))
 }
@@ -368,7 +409,11 @@ where
 pub fn prove_softmax_round<F, T, C>(
     output_claims: Vec<Claim<F, C>>,
     input_poly: Poly<F, C>,
-    witness: &SoftmaxWitness<'_>,
+    output_round_ra: Vec<Poly<F, C>>,
+    floor_round_ra: Vec<Poly<F, C>>,
+    exp_round_ra: Vec<Poly<F, C>>,
+    input_frac_ra: Vec<Poly<F, C>>,
+    softmax_ra: Vec<Poly<F, C>>,
     params: &SoftmaxParams,
     transcript: &mut T,
 ) -> Result<(
@@ -385,72 +430,42 @@ where
     T: Transcript,
     C: Clone,
 {
-    let output_claims = output_claims
-        .into_iter()
-        .map(|claim| legacy_from_claim(claim, params.output_tensor.0.clone(), params.shape.clone()))
-        .collect::<Vec<_>>();
-    let (proof, input, output_round_ra, floor_round_ra, input_remainder_ra, softmax_ra) =
-        prove_softmax_round(output_claims, witness, params, transcript)?;
-    let floor_as_i64 = witness
-        .floor
+    if output_claims.is_empty() {
+        return Err(ProverError::InvalidInput(
+            "softmax requires at least one output claim".to_string(),
+        ));
+    }
+    let input = logical_i32_values(&input_poly, &params.shape)?;
+    let output = logical_i32_values(&output_claims[0].poly, &params.shape)?;
+    let materialized = materialize_softmax_witness(&input, &output, params)?;
+    let legacy_output_claims = output_claims
         .iter()
-        .map(|&value| i64::from(value))
+        .map(|claim| LegacyClaim {
+            tensor: params.output_tensor.clone(),
+            logical_shape: params.shape.clone(),
+            domain_shape: params.shape.padded_power_of_two(),
+            point: claim.point.clone(),
+            value: claim.value,
+        })
         .collect::<Vec<_>>();
-    let floor_shifted = witness
-        .acc
-        .iter()
-        .map(|value| value - (FIXED_SCALE >> 1))
-        .collect::<Vec<_>>();
-    let output_round_witness = RoundWitness::from_input_output(&floor_as_i64, witness.output);
-    let floor_round_witness = RoundWitness::from_input_output(&floor_shifted, witness.floor);
-    let exp_round_witness = RoundWitness::from_input_output(witness.exp_acc, witness.exp);
-    let entries = entries_from_min_max(witness.min_diff, witness.max_diff)?;
-    let lut_len = padded_softmax_lut_len(entries);
-    let logical_lookup_indices = softmax_logical_lookup_indices(witness, params, entries)?;
-    let logical_remainders = softmax_input_remainders(witness, params);
-
-    let softmax_output_round_ra = one_hot_claims_from_requests(
-        &output_round_ra,
-        &crate::ops::round::padded_lookup_indices(
-            &output_round_witness.remainder,
-            &params.round.shape,
-        ),
-        ROUND_LUT_LEN,
-    );
-    let softmax_floor_round_ra = one_hot_claims_from_requests(
-        &floor_round_ra,
-        &crate::ops::round::padded_lookup_indices(
-            &floor_round_witness.remainder,
-            &params.floor.shape,
-        ),
-        ROUND_LUT_LEN,
-    );
-    let softmax_exp_round_ra = one_hot_claims_from_requests(
-        &proof.exp_round.pcs_opening_requests(),
-        &crate::ops::round::padded_lookup_indices(
-            &exp_round_witness.remainder,
-            &params.exp_round.shape,
-        ),
-        ROUND_LUT_LEN,
-    );
-    let softmax_input_remainder_ra = one_hot_claims_from_requests(
-        &input_remainder_ra,
-        &padded_lookup_indices(&logical_remainders, params, 0),
-        ROUND_LUT_LEN,
-    );
-    let softmax_ra = one_hot_claims_from_requests(
-        &softmax_ra,
-        &padded_lookup_indices(&logical_lookup_indices, params, entries),
-        lut_len,
-    );
+    let witness = materialized.as_witness();
+    let (
+        proof,
+        input,
+        output_round_requests,
+        floor_round_requests,
+        exp_round_requests,
+        input_frac_requests,
+        softmax_requests,
+    ) = prove_softmax_round_from_witness(legacy_output_claims, &witness, params, transcript)?;
     Ok((
         proof,
-        claim_from_legacy(input, input_poly),
-        softmax_output_round_ra,
-        softmax_floor_round_ra,
-        softmax_exp_round_ra,
-        softmax_input_remainder_ra,
-        softmax_ra,
+        Claim::new(input_poly, input.point, input.value),
+        claims_from_requests(&output_round_ra, output_round_requests)?,
+        claims_from_requests(&floor_round_ra, floor_round_requests)?,
+        claims_from_requests(&exp_round_ra, exp_round_requests)?,
+        claims_from_requests(&input_frac_ra, input_frac_requests)?,
+        claims_from_requests(&softmax_ra, softmax_requests)?,
     ))
 }
 
@@ -462,6 +477,7 @@ pub fn verify_softmax_round<F, T>(
 ) -> std::result::Result<
     (
         LegacyClaim<F>,
+        Vec<PcsOpeningRequest<F>>,
         Vec<PcsOpeningRequest<F>>,
         Vec<PcsOpeningRequest<F>>,
         Vec<PcsOpeningRequest<F>>,
@@ -515,21 +531,22 @@ where
         value: proof.exp_opening,
     };
 
-    let (exp_acc_claim, _exp_ra) = verify_round(
+    let (exp_acc_claim, exp_round_ra) = verify_round(
         vec![exp_claim],
         &proof.exp_round,
         &params.exp_round,
         transcript,
     )?;
 
-    let (input_claim, input_remainder_ra, ra_claim) =
+    let (input_claim, input_frac_ra, ra_claim) =
         verify_lookup(exp_acc_claim, proof, params, transcript)?;
 
     Ok((
         input_claim,
         output_round_ra,
         floor_round_ra,
-        input_remainder_ra,
+        exp_round_ra,
+        input_frac_ra,
         ra_claim,
     ))
 }
@@ -559,7 +576,7 @@ where
         witness.min_diff,
         exp_lut_q8_unclipped,
     );
-    let logical_remainders = softmax_input_remainders(witness, params);
+    let logical_remainders = softmax_input_fracs(witness, params);
     let padded_remainders = padded_lookup_indices(&logical_remainders, params, 0);
     let input = padded_i32_tensor(witness.input, &params.shape);
     let remainder = padded_usize_evals(&padded_remainders);
@@ -594,10 +611,10 @@ where
         &accumulator,
         OpeningId::new(VirtualPoly::QwenSoftmaxInput, softmax_lookup_sumcheck_id()),
     )?;
-    let input_remainder_opening = prover_opening(
+    let input_frac_opening = prover_opening(
         &accumulator,
         OpeningId::new(
-            VirtualPoly::QwenSoftmaxInputRemainder,
+            VirtualPoly::QwenSoftmaxInputFrac,
             softmax_lookup_sumcheck_id(),
         ),
     )?;
@@ -622,12 +639,12 @@ where
         &mut accumulator,
         transcript,
     )?;
-    let input_remainder_shout_lookup = prove_softmax_shout_lookup(
-        SoftmaxLookupKind::InputRemainder,
+    let input_frac_shout_lookup = prove_softmax_shout_lookup(
+        SoftmaxLookupKind::InputFrac,
         256,
         tensor_point.clone(),
-        input_remainder_opening,
-        input_remainder_opening,
+        input_frac_opening,
+        input_frac_opening,
         padded_remainders,
         (0..256).collect(),
         &mut accumulator,
@@ -646,20 +663,20 @@ where
             value: input_opening,
         },
         ra_claims: exp_shout_lookup.committed_openings.all().cloned().collect(),
-        input_remainder_ra_claims: input_remainder_shout_lookup
+        input_frac_ra_claims: input_frac_shout_lookup
             .committed_openings
             .all()
             .cloned()
             .collect(),
-        input_remainder_opening,
+        input_frac_opening,
         exp_lut_opening,
         index_opening,
         ra_opening: exp_shout_lookup.ra_opening,
-        input_remainder_ra_opening: input_remainder_shout_lookup.ra_opening,
-        input_remainder_lookup: input_remainder_shout_lookup.read_raf,
-        input_remainder_ra_onehot: input_remainder_shout_lookup.ra_onehot,
+        input_frac_ra_opening: input_frac_shout_lookup.ra_opening,
+        input_frac_lookup: input_frac_shout_lookup.read_raf,
+        input_frac_ra_onehot: input_frac_shout_lookup.ra_onehot,
         exp_ra_committed_openings: exp_shout_lookup.committed_openings,
-        input_remainder_ra_committed_openings: input_remainder_shout_lookup.committed_openings,
+        input_frac_ra_committed_openings: input_frac_shout_lookup.committed_openings,
     })
 }
 
@@ -715,12 +732,12 @@ where
     );
     accumulator.openings.insert(
         OpeningId::new(
-            VirtualPoly::QwenSoftmaxInputRemainder,
+            VirtualPoly::QwenSoftmaxInputFrac,
             softmax_lookup_sumcheck_id(),
         ),
         (
             OpeningPoint::<BIG_ENDIAN, F>::default(),
-            proof.input_remainder_opening,
+            proof.input_frac_opening,
         ),
     );
     accumulator.openings.insert(
@@ -755,19 +772,19 @@ where
         &mut accumulator,
         transcript,
     )?;
-    let input_remainder_shout_lookup = verify_softmax_shout_lookup(
-        SoftmaxLookupKind::InputRemainder,
+    let input_frac_shout_lookup = verify_softmax_shout_lookup(
+        SoftmaxLookupKind::InputFrac,
         256,
         256,
         0,
         params.shape.numel(),
         tensor_point.clone(),
-        proof.input_remainder_opening,
-        proof.input_remainder_opening,
-        proof.input_remainder_ra_opening,
-        &proof.input_remainder_ra_committed_openings,
-        &proof.input_remainder_lookup,
-        &proof.input_remainder_ra_onehot,
+        proof.input_frac_opening,
+        proof.input_frac_opening,
+        proof.input_frac_ra_opening,
+        &proof.input_frac_ra_committed_openings,
+        &proof.input_frac_lookup,
+        &proof.input_frac_ra_onehot,
         &mut accumulator,
         transcript,
     )?;
@@ -780,7 +797,7 @@ where
             point: tensor_point.clone(),
             value: proof.input_opening,
         },
-        input_remainder_shout_lookup
+        input_frac_shout_lookup
             .committed_openings
             .all()
             .cloned()
@@ -1093,7 +1110,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for LookupSumchec
         accumulator.append_virtual(
             transcript,
             OpeningId::new(
-                VirtualPoly::QwenSoftmaxInputRemainder,
+                VirtualPoly::QwenSoftmaxInputFrac,
                 softmax_lookup_sumcheck_id(),
             ),
             point.clone(),
@@ -1147,7 +1164,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for LookupSumch
             .1;
         let remainder = accumulator
             .get_virtual_polynomial_opening(OpeningId::new(
-                VirtualPoly::QwenSoftmaxInputRemainder,
+                VirtualPoly::QwenSoftmaxInputFrac,
                 softmax_lookup_sumcheck_id(),
             ))
             .1;
@@ -1207,7 +1224,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for LookupSumch
         accumulator.append_virtual(
             transcript,
             OpeningId::new(
-                VirtualPoly::QwenSoftmaxInputRemainder,
+                VirtualPoly::QwenSoftmaxInputFrac,
                 softmax_lookup_sumcheck_id(),
             ),
             point.clone(),
@@ -1323,42 +1340,42 @@ fn eval_lookup_relation<F: JoltField>(
 #[derive(Clone)]
 enum SoftmaxLookupKind {
     Exp,
-    InputRemainder,
+    InputFrac,
 }
 
 impl SoftmaxLookupKind {
     fn value_poly(&self) -> VirtualPoly {
         match self {
             Self::Exp => VirtualPoly::QwenSoftmaxExpLut,
-            Self::InputRemainder => VirtualPoly::QwenSoftmaxInputRemainder,
+            Self::InputFrac => VirtualPoly::QwenSoftmaxInputFrac,
         }
     }
 
     fn index_poly(&self) -> VirtualPoly {
         match self {
             Self::Exp => VirtualPoly::QwenSoftmaxIndex,
-            Self::InputRemainder => VirtualPoly::QwenSoftmaxInputRemainder,
+            Self::InputFrac => VirtualPoly::QwenSoftmaxInputFrac,
         }
     }
 
     fn ra_poly(&self) -> VirtualPoly {
         match self {
             Self::Exp => VirtualPoly::QwenSoftmaxExpRa,
-            Self::InputRemainder => VirtualPoly::QwenSoftmaxInputRemainderRa,
+            Self::InputFrac => VirtualPoly::QwenSoftmaxInputFracRa,
         }
     }
 
     fn committed_poly(&self, d: usize) -> CommittedPoly {
         match self {
             Self::Exp => CommittedPoly::QwenSoftmaxExpRaD(d),
-            Self::InputRemainder => CommittedPoly::QwenSoftmaxInputRemainderRaD(d),
+            Self::InputFrac => CommittedPoly::QwenSoftmaxInputFracRaD(d),
         }
     }
 
     fn sumcheck_id(&self) -> SumcheckId {
         match self {
             Self::Exp => softmax_shout_sumcheck_id(),
-            Self::InputRemainder => softmax_remainder_shout_sumcheck_id(),
+            Self::InputFrac => softmax_input_frac_shout_sumcheck_id(),
         }
     }
 }
@@ -1534,7 +1551,7 @@ where
             padded_i32_table(min_diff, entries, lut_len, exp_lut_q8_unclipped)
                 .map_err(|_| ProofVerifyError::InvalidInputLength(lut_len, 0))?
         }
-        SoftmaxLookupKind::InputRemainder => (0..lut_len)
+        SoftmaxLookupKind::InputFrac => (0..lut_len)
             .map(|idx| if idx < entries { idx as i32 } else { 0 })
             .collect(),
     };
@@ -1840,6 +1857,33 @@ fn verify_advice<F: JoltField, T: Transcript>(
     Ok(())
 }
 
+fn claims_from_requests<F: JoltField, C: Clone>(
+    polys: &[Poly<F, C>],
+    requests: Vec<PcsOpeningRequest<F>>,
+) -> Result<Vec<Claim<F, C>>> {
+    if polys.is_empty() {
+        return Ok(Vec::new());
+    }
+    if requests.len() % polys.len() != 0 {
+        return Err(ProverError::InvalidInput(format!(
+            "RA opening count mismatch: openings {} is not a multiple of chunks {}",
+            requests.len(),
+            polys.len()
+        )));
+    }
+    Ok(requests
+        .into_iter()
+        .enumerate()
+        .map(|(idx, opening)| {
+            Claim::new(
+                polys[idx % polys.len()].clone(),
+                opening.point,
+                opening.value,
+            )
+        })
+        .collect())
+}
+
 fn append_row_advice<F: JoltField, T: Transcript>(
     max_index: &[usize],
     max: &[i32],
@@ -1865,6 +1909,138 @@ fn inv_sum_from_sum<F: JoltField>(sum: &[i32]) -> Vec<F> {
     sum.iter()
         .map(|&s| field_from_i64(inv_sum_q16(s)))
         .collect()
+}
+
+fn materialize_softmax_witness(
+    input: &[i32],
+    output: &[i32],
+    params: &SoftmaxParams,
+) -> Result<MaterializedSoftmaxWitness> {
+    let len = params.shape.numel();
+    let rows = params.rows();
+    let cols = params.cols();
+    ensure_len("softmax input", &params.shape, len, input.len())?;
+    ensure_len("softmax output", &params.shape, len, output.len())?;
+
+    let mut max_index = vec![0; rows];
+    let mut max = vec![0; rows];
+    for row in 0..rows {
+        let mut found = false;
+        for col in 0..cols {
+            if !is_valid_position(params.causal, &params.shape, row, col) {
+                continue;
+            }
+            let idx = row * cols + col;
+            if !found || input[idx] > max[row] {
+                found = true;
+                max[row] = input[idx];
+                max_index[row] = col;
+            }
+        }
+        if !found {
+            return Err(ProverError::InvalidInput(format!(
+                "softmax row {row} has no valid entries"
+            )));
+        }
+    }
+
+    let mut n_values = Vec::with_capacity(len);
+    for row in 0..rows {
+        for col in 0..cols {
+            let idx = row * cols + col;
+            let diff = if is_valid_position(params.causal, &params.shape, row, col) {
+                i64::from(input[idx]) - i64::from(max[row])
+            } else {
+                0
+            };
+            n_values.push(i64::from(floor_shift_q8(diff)));
+        }
+    }
+    let min_diff = *n_values.iter().min().unwrap_or(&0);
+    let max_diff = *n_values.iter().max().unwrap_or(&0);
+    let entries = entries_from_min_max(min_diff, max_diff)?;
+
+    let mut exp_acc = vec![0; len];
+    let mut exp = vec![0; len];
+    let mut sum = vec![0; rows];
+    let mut ra = vec![0; len * entries];
+    for row in 0..rows {
+        for col in 0..cols {
+            let idx = row * cols + col;
+            let diff = if is_valid_position(params.causal, &params.shape, row, col) {
+                i64::from(input[idx]) - i64::from(max[row])
+            } else {
+                0
+            };
+            let n = i64::from(floor_shift_q8(diff));
+            let shifted = usize::try_from(n - min_diff)
+                .map_err(|_| ProverError::InvalidSumcheckDomain(entries))?;
+            ra[idx * entries + shifted] = 1;
+            exp_acc[idx] = softmax_exp_acc_q8(diff);
+            exp[idx] = softmax_exp_coarse_q8(diff);
+            if is_valid_position(params.causal, &params.shape, row, col) {
+                sum[row] += exp[idx];
+            }
+        }
+    }
+
+    let mut acc = vec![0; len];
+    let mut floor = vec![0; len];
+    let mut expected_output = vec![0; len];
+    for row in 0..rows {
+        let inv = inv_sum_q16(sum[row]);
+        for col in 0..cols {
+            let idx = row * cols + col;
+            acc[idx] = if is_valid_position(params.causal, &params.shape, row, col) {
+                i64::from(exp[idx]) * inv
+            } else {
+                0
+            };
+            floor[idx] = floor_shift_q8(acc[idx]);
+            expected_output[idx] = round_shift_q8(i64::from(floor[idx]));
+        }
+    }
+    if expected_output != output {
+        return Err(ProverError::InvalidInput(
+            "softmax output polynomial does not match materialized witness".to_string(),
+        ));
+    }
+
+    Ok(MaterializedSoftmaxWitness {
+        input: input.to_vec(),
+        max_index,
+        max,
+        min_diff,
+        max_diff,
+        ra,
+        exp_acc: exp_acc.clone(),
+        exp,
+        exp_frac_bits: frac_bits_for_i64(&exp_acc),
+        sum,
+        acc: acc.clone(),
+        floor: floor.clone(),
+        floor_frac_bits: frac_bits_for_i64(&acc),
+        output: output.to_vec(),
+        frac_bits: frac_bits_for_i32(&floor),
+    })
+}
+
+fn frac_bits_for_i64(values: &[i64]) -> [Vec<u8>; ROUND_FRAC_BITS] {
+    std::array::from_fn(|bit| {
+        values
+            .iter()
+            .map(|value| ((value.rem_euclid(FIXED_SCALE) >> bit) & 1) as u8)
+            .collect()
+    })
+}
+
+fn frac_bits_for_i32(values: &[i32]) -> [Vec<u8>; ROUND_FRAC_BITS] {
+    std::array::from_fn(|bit| {
+        values
+            .iter()
+            .map(|value| ((i64::from(*value).rem_euclid(FIXED_SCALE) >> bit) & 1) as u8)
+            .collect()
+    })
 }
 
 fn inv_sum_q16(sum: i32) -> i64 {
@@ -2133,7 +2309,7 @@ fn softmax_logical_lookup_indices(
     Ok(indices)
 }
 
-fn softmax_input_remainders(witness: &SoftmaxWitness<'_>, params: &SoftmaxParams) -> Vec<usize> {
+fn softmax_input_fracs(witness: &SoftmaxWitness<'_>, params: &SoftmaxParams) -> Vec<usize> {
     let mut remainders = Vec::with_capacity(params.shape.numel());
     let cols = params.cols();
     for row in 0..params.rows() {
@@ -2365,7 +2541,7 @@ fn softmax_shout_sumcheck_id() -> SumcheckId {
     SumcheckId::NodeExecution(2)
 }
 
-fn softmax_remainder_shout_sumcheck_id() -> SumcheckId {
+fn softmax_input_frac_shout_sumcheck_id() -> SumcheckId {
     SumcheckId::NodeExecution(3)
 }
 
@@ -2432,8 +2608,15 @@ mod tests {
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, input_claim, output_round_ra, floor_round_ra, input_remainder_ra, ra_claim) =
-            prove_softmax_round::<Fr, _>(
+        let (
+            proof,
+            input_claim,
+            output_round_ra,
+            floor_round_ra,
+            exp_round_ra,
+            input_frac_ra,
+            ra_claim,
+        ) = prove_softmax_round_from_witness::<Fr, _>(
                 vec![output_claim.clone()],
                 &witness,
                 &params,
@@ -2446,7 +2629,8 @@ mod tests {
             verified_input_claim,
             verified_output_round_ra,
             verified_floor_round_ra,
-            verified_input_remainder_ra,
+            verified_exp_round_ra,
+            verified_input_frac_ra,
             verified_ra,
         ) = verify_softmax_round::<Fr, _>(
             vec![output_claim],
@@ -2459,7 +2643,8 @@ mod tests {
         assert_eq!(verified_input_claim, input_claim);
         assert_eq!(verified_output_round_ra, output_round_ra);
         assert_eq!(verified_floor_round_ra, floor_round_ra);
-        assert_eq!(verified_input_remainder_ra, input_remainder_ra);
+        assert_eq!(verified_exp_round_ra, exp_round_ra);
+        assert_eq!(verified_input_frac_ra, input_frac_ra);
         assert_eq!(verified_ra, ra_claim);
     }
 
@@ -2529,7 +2714,7 @@ mod tests {
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, _, _, _, _, _) = prove_softmax_round::<Fr, _>(
+        let (proof, _, _, _, _, _, _) = prove_softmax_round_from_witness::<Fr, _>(
             vec![output_claim.clone()],
             &witness,
             &params,
@@ -2619,7 +2804,7 @@ mod tests {
         };
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let (proof, _, _, _, _, _) = prove_softmax_round::<Fr, _>(
+        let (proof, _, _, _, _, _, _) = prove_softmax_round_from_witness::<Fr, _>(
             vec![output_claim.clone()],
             &witness,
             &params,

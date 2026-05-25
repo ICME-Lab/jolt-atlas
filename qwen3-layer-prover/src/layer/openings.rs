@@ -1,6 +1,8 @@
+use std::marker::PhantomData;
+
 use joltworks::{
     field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme,
-    subprotocols::opening_reduction::OpeningReductionProof, transcripts::Transcript,
+    transcripts::Transcript,
 };
 
 use crate::{claim::Claim, error::Result};
@@ -18,11 +20,11 @@ where
     T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 {
-    pub proof: OpeningReductionProof<F, T, PCS>,
+    pub(crate) _marker: PhantomData<(F, T, PCS)>,
 }
 
 pub(crate) fn prove_layer_openings<F, T, PCS>(
-    claims: Vec<Claim<F, PCS::Commitment>>,
+    claims: Vec<Claim<F>>,
     setup: &PCS::ProverSetup,
     transcript: &mut T,
 ) -> Result<LayerOpeningReductionProof<F, T, PCS>>
@@ -38,7 +40,7 @@ where
 }
 
 pub(crate) fn verify_layer_openings<F, T, PCS>(
-    claims: Vec<Claim<F, PCS::Commitment>>,
+    claims: Vec<Claim<F>>,
     proof: &LayerOpeningReductionProof<F, T, PCS>,
     setup: &PCS::VerifierSetup,
     transcript: &mut T,

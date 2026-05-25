@@ -45,7 +45,8 @@ where
 {
     // 1. Materialize exactly one layer.  This function does not reason about
     // neighbouring layers; hidden_in/hidden_out are supplied as commitments.
-    let traced = build_layer_witness_from_trace_dir(trace_dir, layer, weights, shape)?;
+    let traced = build_layer_witness_from_trace_dir(trace_dir, layer, weights, shape)
+        .map_err(|err| crate::ProverError::InvalidInput(err.to_string()))?;
     let layer_polys =
         LayerPolys::from_witness(&traced.hidden_out, &traced.witness, weights, shape, tensors);
 
@@ -92,4 +93,31 @@ where
             opening_reduction,
         },
     ))
+}
+
+/// Smoke-test entry for the layer IOP only.
+///
+/// This stops before PCS commitment/opening reduction. It checks that a
+/// trace-derived witness satisfies the reverse layer claim flow and all
+/// op-level sumchecks.
+pub fn prove_layer_iop_only_from_witness<F, T>(
+    hidden_out: &[i32],
+    witness: &super::witness::LayerWitness,
+    weights: &LayerWeights,
+    shape: &LayerShape,
+    tensors: &LayerTensorIds,
+    transcript: &mut T,
+) -> Result<LayerClaims<F>>
+where
+    F: JoltField,
+    T: Transcript,
+{
+    let layer_polys = LayerPolys::from_witness(hidden_out, witness, weights, shape, tensors);
+    let hidden_out_claim = claim_hidden_out_after_commitments(transcript, hidden_out, shape);
+    let hidden_out_claim = Claim::new(
+        layer_polys.hidden_out.clone(),
+        hidden_out_claim.point,
+        hidden_out_claim.value,
+    );
+    Ok(prove_layer_iop(hidden_out_claim, layer_polys, shape, tensors, transcript)?.claims)
 }

@@ -15,23 +15,19 @@ use crate::{
 };
 
 use super::{
-    claims::claim_hidden_out_after_commitments,
-    commitments::{
-        HiddenStateCommitments, LayerCommitments, absorb_layer_commitments, commit_layer_ra_polys,
-    },
-    iop::{prove_layer_iop, verify_layer_iop},
+    commitments::{HiddenStateCommitments, LayerCommitments, absorb_layer_commitments},
+    iop::prove_layer_iop,
     openings::prove_layer_openings,
-    polys::{LayerPolys, hidden_state_poly},
+    polys::LayerPolys,
     tensors::LayerTensorIds,
-    types::{LayerClaims, LayerProof, LayerShape, LayerWeights},
-    witness::LayerWitness,
+    types::{LayerClaims, LayerProof, LayerShape},
 };
 
 // Complete layer prover.
 //
 // Responsibilities:
-// - accepts the boundary hidden_out claim and hidden_in polynomial
-// - commits only layer-local RA/lookup polynomials
+// - accepts the committed hidden_out polynomial and committed layer polynomials
+// - binds caller-supplied hidden-state and RA/lookup commitments
 // - delegates algebraic constraints to `iop`
 // - delegates PCS opening reduction to `openings`
 //
@@ -40,42 +36,6 @@ use super::{
 // boundary claim/poly.
 
 pub fn prove_layer<F, T, PCS>(
-    layer: usize,
-    hidden_out: Poly<F, PCS::Commitment>,
-    hidden_in: Poly<F, PCS::Commitment>,
-    witness: &LayerWitness,
-    weights: &LayerWeights,
-    shape: &LayerShape,
-    pcs_setup: &PCS::ProverSetup,
-    transcript: &mut T,
-) -> Result<ProveResult<LayerClaims<F, PCS::Commitment>, LayerProof<F, T, PCS>>>
-where
-    F: JoltField,
-    T: Transcript,
-    PCS: CommitmentScheme<Field = F>,
-{
-    let tensors = LayerTensorIds::default();
-
-    // 1. Assemble the exact polynomials consumed by the IOP.  At this point
-    // RA polys exist but have no commitment attached yet.
-    let mut layer_polys =
-        LayerPolys::from_witness_with_boundary(hidden_in, witness, weights, shape, &tensors);
-
-    // 2. Commit the layer-local RA/lookup polynomials.
-    let commitments = commit_layer_ra_polys::<F, PCS>(&mut layer_polys, &tensors, pcs_setup);
-
-    prove_layer_with_committed_polys::<F, T, PCS>(
-        layer,
-        hidden_out,
-        layer_polys,
-        commitments,
-        shape,
-        pcs_setup,
-        transcript,
-    )
-}
-
-pub fn prove_layer_with_committed_polys<F, T, PCS>(
     layer: usize,
     hidden_out: Poly<F, PCS::Commitment>,
     layer_polys: LayerPolys<F, PCS::Commitment>,
@@ -111,10 +71,7 @@ where
 
     let t0 = Instant::now();
     let iop = prove_layer_iop(hidden_out.clone(), layer_polys, shape, &tensors, transcript)?;
-    eprintln!(
-        "timing: prove_layer.iop {:.3}s",
-        t0.elapsed().as_secs_f64()
-    );
+    eprintln!("timing: prove_layer.iop {:.3}s", t0.elapsed().as_secs_f64());
 
     // 4. Reduce PCS-backed claims to the opening proof. `LayerClaims` is kept
     // structured here because the field names determine which
@@ -139,98 +96,4 @@ where
             opening_reduction,
         },
     ))
-}
-
-/// Smoke-test entry for the layer IOP only.
-///
-/// This stops before PCS commitment/opening reduction. It checks that a
-/// trace-derived witness satisfies the reverse layer claim flow and all
-/// op-level sumchecks.
-pub fn prove_layer_iop_only_from_witness<F, T>(
-    hidden_out: &[i32],
-    witness: &super::witness::LayerWitness,
-    weights: &LayerWeights,
-    shape: &LayerShape,
-    tensors: &LayerTensorIds,
-    transcript: &mut T,
-) -> Result<LayerClaims<F>>
-where
-    F: JoltField,
-    T: Transcript,
-{
-    let layer_polys = LayerPolys::from_witness(witness, weights, shape, tensors);
-    let hidden_out_claim = claim_hidden_out_after_commitments(transcript, hidden_out, shape);
-    let hidden_out_claim = Claim::new(
-        hidden_state_poly(hidden_out, shape),
-        hidden_out_claim.point,
-        hidden_out_claim.value,
-    );
-    Ok(prove_layer_iop(hidden_out_claim, layer_polys, shape, tensors, transcript)?.claims)
-}
-
-/// Smoke-test the layer IOP by proving and immediately verifying it.
-///
-/// This intentionally stays before PCS.  The verifier receives the same
-/// materialized polynomials so we can test the reverse claim flow and op-level
-/// sumchecks against a real trace before wiring the opening proof.
-pub fn prove_and_verify_layer_iop_only_from_witness<F, T>(
-    hidden_out: &[i32],
-    witness: &super::witness::LayerWitness,
-    weights: &LayerWeights,
-    shape: &LayerShape,
-    tensors: &LayerTensorIds,
-    prover_transcript: &mut T,
-    verifier_transcript: &mut T,
-) -> Result<LayerClaims<F>>
-where
-    F: JoltField,
-    T: Transcript,
-{
-    let prover_polys = LayerPolys::from_witness(witness, weights, shape, tensors);
-    let prover_hidden_out =
-        claim_hidden_out_after_commitments(prover_transcript, hidden_out, shape);
-    let prover_hidden_out = Claim::new(
-        hidden_state_poly(hidden_out, shape),
-        prover_hidden_out.point,
-        prover_hidden_out.value,
-    );
-    let proved = prove_layer_iop(
-        prover_hidden_out,
-        prover_polys,
-        shape,
-        tensors,
-        prover_transcript,
-    )?;
-
-    let verifier_polys = LayerPolys::from_witness(witness, weights, shape, tensors);
-    let verifier_hidden_out =
-        claim_hidden_out_after_commitments(verifier_transcript, hidden_out, shape);
-    let verifier_hidden_out = Claim::new(
-        hidden_state_poly(hidden_out, shape),
-        verifier_hidden_out.point,
-        verifier_hidden_out.value,
-    );
-    let verified = verify_layer_iop(
-        verifier_hidden_out,
-        &proved.proof,
-        verifier_polys,
-        weights,
-        shape,
-        tensors,
-        verifier_transcript,
-    )?;
-
-    if !same_claim(&proved.claims.hidden_in_a, &verified.hidden_in_a)
-        || !same_claim(&proved.claims.hidden_in_b, &verified.hidden_in_b)
-    {
-        return Err(crate::ProverError::InvalidInput(
-            "IOP verifier claims differ from prover claims".to_string(),
-        ));
-    }
-
-    Ok(verified)
-}
-
-fn same_claim<F: JoltField, C1, C2>(lhs: &Claim<F, C1>, rhs: &Claim<F, C2>) -> bool {
-    lhs.point == rhs.point && lhs.value == rhs.value
 }

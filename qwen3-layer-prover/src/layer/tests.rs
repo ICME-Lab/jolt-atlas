@@ -40,13 +40,26 @@ fn proves_and_verifies_layer_first_step() {
 
     let hidden_in_poly = Poly::new(hidden_in_poly, Some(hidden_in_commitment.clone()));
     let hidden_out_poly = Poly::new(hidden_out_poly, Some(hidden_out_commitment.clone()));
+    let tensors = LayerTensorIds::default();
+    let mut layer_polys = LayerPolys::from_witness_with_boundary(
+        hidden_in_poly,
+        &witness,
+        &weights,
+        &shape,
+        &tensors,
+    );
+    let layer_commitments = commit_layer_polynomials::<Fr, Pcs>(
+        &LayerPolySet::from_layer(&witness, &weights, &shape, &tensors),
+        &pcs_setup,
+    );
+    attach_layer_ra_commitments(&mut layer_polys, &layer_commitments).unwrap();
+
     let mut prover_transcript = Blake2bTranscript::default();
     let proved = prove_layer::<Fr, _, Pcs>(
         0,
         hidden_out_poly,
-        hidden_in_poly,
-        &witness,
-        &weights,
+        layer_polys,
+        layer_commitments,
         &shape,
         &pcs_setup,
         &mut prover_transcript,

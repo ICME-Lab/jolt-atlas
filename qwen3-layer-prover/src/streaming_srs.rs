@@ -504,7 +504,13 @@ mod tests {
         ];
         let opening = dense_poly.evaluate(&point);
         let mut prover_transcript = Blake2bTranscript::default();
-        let proof = PCS::prove(&loaded_setup, &dense_poly, &point, None, &mut prover_transcript);
+        let proof = PCS::prove(
+            &loaded_setup,
+            &dense_poly,
+            &point,
+            None,
+            &mut prover_transcript,
+        );
         let verifier_setup = PCS::setup_verifier(&loaded_setup);
         let mut verifier_transcript = Blake2bTranscript::default();
         PCS::verify(

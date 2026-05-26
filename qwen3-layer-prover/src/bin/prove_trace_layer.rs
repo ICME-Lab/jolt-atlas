@@ -19,8 +19,7 @@ use qwen3_layer_prover::trace::build_layer_witness_from_trace_dir;
 use qwen3_layer_prover::{
     layer::{
         HiddenStateCommitments, LayerPolySet, LayerPolys, LayerShape, LayerTensorIds, LayerWeights,
-        attach_layer_ra_commitments, commit_layer_polynomials_streaming_onehot,
-        prove_and_verify_layer_iop_only_from_witness, prove_layer_with_committed_polys,
+        attach_layer_ra_commitments, commit_layer_polynomials_streaming_onehot, prove_layer,
         verify_layer,
     },
     streaming_srs::{
@@ -105,34 +104,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("map_only: ok");
         return Ok(());
     }
-    if args.iop_only {
-        let mut prover_transcript = Blake2bTranscript::default();
-        let mut verifier_transcript = Blake2bTranscript::default();
-        let t0 = Instant::now();
-        let claims = prove_and_verify_layer_iop_only_from_witness::<Fr, _>(
-            &traced.hidden_out,
-            &traced.witness,
-            &weights,
-            &shape,
-            &tensors,
-            &mut prover_transcript,
-            &mut verifier_transcript,
-        )?;
-        eprintln!(
-            "timing: prove_and_verify_layer_iop_only {:.3}s",
-            t0.elapsed().as_secs_f64()
-        );
-        println!("iop_only_prove_verify: ok");
-        println!("trace: {}", args.trace.display());
-        println!("q8_cache: {}", cache.display());
-        println!("layer: {}", args.layer);
-        println!("seq: {}", seq);
-        println!("boundary_claims: {}", claims.boundary_claims().len());
-        println!("pcs_claims: {}", claims.pcs_claims().len());
-        println!("direct_eval_claims: {}", claims.direct_eval_claims.len());
-        return Ok(());
-    }
-
     if args.commit_hidden_in_only {
         let pcs_num_vars = required_pcs_num_vars_for_slices([traced.witness.hidden_in.as_slice()]);
         let flat_srs = args.flat_srs.as_ref().ok_or(
@@ -299,7 +270,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut prover_transcript = Blake2bTranscript::default();
     let t0 = Instant::now();
-    let proof = prove_layer_with_committed_polys::<Fr, _, PCS>(
+    let proof = prove_layer::<Fr, _, PCS>(
         args.layer,
         hidden_out_poly,
         layer_polys,
@@ -453,7 +424,6 @@ struct Args {
     commit_hidden_only: bool,
     commit_only: bool,
     commit_all_layers_onehot_only: bool,
-    iop_only: bool,
 }
 
 impl Args {
@@ -475,7 +445,6 @@ impl Args {
         let mut commit_hidden_only = false;
         let mut commit_only = false;
         let mut commit_all_layers_onehot_only = false;
-        let mut iop_only = false;
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -523,7 +492,6 @@ impl Args {
                 "--commit-hidden-only" => commit_hidden_only = true,
                 "--commit-only" => commit_only = true,
                 "--commit-all-layers-onehot-only" => commit_all_layers_onehot_only = true,
-                "--iop-only" => iop_only = true,
                 "--help" | "-h" => {
                     print_help();
                     std::process::exit(0);
@@ -557,7 +525,6 @@ impl Args {
             commit_hidden_only,
             commit_only,
             commit_all_layers_onehot_only,
-            iop_only,
         })
     }
 }
@@ -586,7 +553,6 @@ fn print_help() {
            --commit-hidden-in-only stop after committing hidden_in only\n\
            --commit-hidden-only stop after committing hidden_in and hidden_out\n\
            --commit-all-layers-onehot-only collect all 28 layers' onehot RA polys and stream-commit them together\n\
-           --iop-only       stop after proving the layer IOP; no PCS/opening reduction\n\
            --commit-only    stop after building and committing layer polynomials"
     );
 }

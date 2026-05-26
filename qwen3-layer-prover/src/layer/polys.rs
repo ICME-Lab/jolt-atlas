@@ -633,11 +633,6 @@ where
     out
 }
 
-pub(crate) fn hidden_state_poly<F: JoltField, C>(values: &[i32], shape: &LayerShape) -> Poly<F, C> {
-    let poly = i32_poly(values, &shape.hidden_shape());
-    Poly::new(poly.data, None)
-}
-
 fn padded_i32(values: &[i32], shape: &Shape) -> Vec<i32> {
     let padded_dims = shape.padded_power_of_two().0;
     let mut out = vec![0; padded_dims.iter().product()];

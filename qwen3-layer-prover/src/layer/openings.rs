@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, marker::PhantomData};
+use std::{collections::BTreeMap, marker::PhantomData, time::Instant};
 
 use common::CommittedPoly;
 use jolt_atlas_core::onnx_proof::ReducedOpeningProof;
@@ -61,6 +61,7 @@ where
     let mut accumulator = ProverOpeningAccumulator::new();
     let mut poly_map = BTreeMap::new();
 
+    let t0 = Instant::now();
     append_dense_claim(
         &mut accumulator,
         &mut poly_map,
@@ -99,12 +100,21 @@ where
             &mut ignored_transcript,
         )?;
     }
+    eprintln!(
+        "timing: prove_layer.openings.collect_claims {:.3}s",
+        t0.elapsed().as_secs_f64()
+    );
 
+    let t0 = Instant::now();
     let proof = jolt_atlas_core::opening_reduction::prove_reduced_openings::<F, T, PCS>(
         &mut accumulator,
         &poly_map,
         setup,
         transcript,
+    );
+    eprintln!(
+        "timing: prove_layer.openings.reduce_and_pcs {:.3}s",
+        t0.elapsed().as_secs_f64()
     );
     let opening_claims = accumulator.take();
 

@@ -20,7 +20,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Instant};
 
 /// Prove the standard core batched opening reduction and joint PCS opening.
 #[tracing::instrument(skip_all, name = "core::prove_reduced_openings")]
@@ -39,9 +39,24 @@ where
         return None;
     }
 
+    let t0 = Instant::now();
     accumulator.prepare_for_sumcheck(poly_map);
+    eprintln!(
+        "timing: opening_reduction.prepare_for_sumcheck {:.3}s",
+        t0.elapsed().as_secs_f64()
+    );
+    let t0 = Instant::now();
     let (sumcheck_proof, r_sumcheck) = accumulator.prove_batch_opening_sumcheck(transcript);
+    eprintln!(
+        "timing: opening_reduction.sumcheck {:.3}s",
+        t0.elapsed().as_secs_f64()
+    );
+    let t0 = Instant::now();
     let state = accumulator.finalize_batch_opening_sumcheck(r_sumcheck, transcript);
+    eprintln!(
+        "timing: opening_reduction.finalize_sumcheck {:.3}s",
+        t0.elapsed().as_secs_f64()
+    );
     let sumcheck_claims = state.sumcheck_claims.clone();
     let ordered_polys = state
         .polynomials
@@ -53,8 +68,18 @@ where
             )
         })
         .collect::<Vec<_>>();
+    let t0 = Instant::now();
     let rlc = build_materialized_rlc_ordered(&state.gamma_powers, &ordered_polys);
+    eprintln!(
+        "timing: opening_reduction.build_materialized_rlc {:.3}s",
+        t0.elapsed().as_secs_f64()
+    );
+    let t0 = Instant::now();
     let joint_opening_proof = PCS::prove(setup, &rlc, &state.r_sumcheck, None, transcript);
+    eprintln!(
+        "timing: opening_reduction.pcs_prove {:.3}s",
+        t0.elapsed().as_secs_f64()
+    );
 
     Some(ReducedOpeningProof {
         sumcheck_proof,

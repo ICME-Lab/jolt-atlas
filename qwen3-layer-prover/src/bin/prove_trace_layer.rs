@@ -18,11 +18,15 @@ use joltworks::{
 use qwen3_layer_prover::trace::build_layer_witness_from_trace_dir;
 use qwen3_layer_prover::{
     layer::{
-        HiddenStateCommitments, LayerPolySet, LayerShape, LayerTensorIds, LayerWeights,
-        commit_layer_polynomials, commit_layer_polynomials_streaming_onehot,
-        prove_and_verify_layer_iop_only_from_witness,
+        HiddenStateCommitments, LayerPolySet, LayerPolys, LayerShape, LayerTensorIds, LayerWeights,
+        attach_layer_ra_commitments, commit_layer_polynomials_streaming_onehot,
+        prove_and_verify_layer_iop_only_from_witness, prove_layer_with_committed_polys,
+        verify_layer,
     },
-    streaming_srs::{FlatG1SrsReader, StreamingOneHotCommitter, write_flat_g1_srs},
+    streaming_srs::{
+        FlatG1SrsReader, StreamingOneHotCommitter, load_hyperkzg_setup_from_flat_g1_srs,
+        write_flat_g1_srs,
+    },
 };
 use serde_json::Value;
 
@@ -131,10 +135,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     if args.commit_hidden_in_only {
         let pcs_num_vars = required_pcs_num_vars_for_slices([traced.witness.hidden_in.as_slice()]);
+        let flat_srs = args.flat_srs.as_ref().ok_or(
+            "--commit-hidden-in-only requires --flat-srs; generate it beforehand with --write-flat-srs",
+        )?;
+        let flat_srs_reader = FlatG1SrsReader::open(flat_srs)?;
         let t0 = Instant::now();
-        let pcs_setup = PCS::setup_prover(pcs_num_vars);
+        let pcs_setup = load_hyperkzg_setup_from_flat_g1_srs(
+            &flat_srs_reader,
+            pcs_num_vars,
+            args.srs_chunk_len,
+        )?;
         eprintln!(
-            "timing: setup_prover vars={} {:.3}s",
+            "timing: load_flat_srs_setup vars={} {:.3}s",
             pcs_num_vars,
             t0.elapsed().as_secs_f64()
         );
@@ -155,10 +167,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             traced.witness.hidden_in.as_slice(),
             traced.hidden_out.as_slice(),
         ]);
+        let flat_srs = args.flat_srs.as_ref().ok_or(
+            "--commit-hidden-only requires --flat-srs; generate it beforehand with --write-flat-srs",
+        )?;
+        let flat_srs_reader = FlatG1SrsReader::open(flat_srs)?;
         let t0 = Instant::now();
-        let pcs_setup = PCS::setup_prover(pcs_num_vars);
+        let pcs_setup = load_hyperkzg_setup_from_flat_g1_srs(
+            &flat_srs_reader,
+            pcs_num_vars,
+            args.srs_chunk_len,
+        )?;
         eprintln!(
-            "timing: setup_prover vars={} {:.3}s",
+            "timing: load_flat_srs_setup vars={} {:.3}s",
             pcs_num_vars,
             t0.elapsed().as_secs_f64()
         );
@@ -190,14 +210,17 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let poly_set_for_setup =
         LayerPolySet::<Fr>::from_layer(&traced.witness, &weights, &shape, &tensors);
-    if args.flat_srs.is_some() && !args.commit_only {
-        return Err("--flat-srs is currently wired only for --commit-only".into());
-    }
     let pcs_num_vars = required_pcs_num_vars_for_polynomials(&poly_set_for_setup);
+    let flat_srs = args
+        .flat_srs
+        .as_ref()
+        .ok_or("PCS proving requires --flat-srs; generate it beforehand with --write-flat-srs")?;
+    let flat_srs_reader = FlatG1SrsReader::open(flat_srs)?;
     let t0 = Instant::now();
-    let pcs_setup = PCS::setup_prover(pcs_num_vars);
+    let pcs_setup =
+        load_hyperkzg_setup_from_flat_g1_srs(&flat_srs_reader, pcs_num_vars, args.srs_chunk_len)?;
     eprintln!(
-        "timing: setup_prover vars={} {:.3}s",
+        "timing: load_flat_srs_setup vars={} {:.3}s",
         pcs_num_vars,
         t0.elapsed().as_secs_f64()
     );
@@ -211,20 +234,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
 
         let t0 = Instant::now();
-        let commitments = if let Some(flat_srs) = &args.flat_srs {
-            let reader = FlatG1SrsReader::open(flat_srs)?;
-            commit_layer_polynomials_streaming_onehot(
-                &poly_set_for_setup,
-                &pcs_setup,
-                &reader,
-                args.srs_chunk_len,
-                args.onehot_threads,
-                args.onehot_metrics,
-                args.sort_onehot_indices,
-            )?
-        } else {
-            commit_layer_polynomials::<Fr, PCS>(&poly_set_for_setup, &pcs_setup)
-        };
+        let commitments = commit_layer_polynomials_streaming_onehot(
+            &poly_set_for_setup,
+            &pcs_setup,
+            &flat_srs_reader,
+            args.srs_chunk_len,
+            args.onehot_threads,
+            args.onehot_metrics,
+            args.sort_onehot_indices,
+        )?;
         eprintln!(
             "timing: commit_layer_polynomials {:.3}s",
             t0.elapsed().as_secs_f64()
@@ -237,7 +255,87 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    Err("full prove_trace_layer now requires caller-provided hidden_out claim and hidden_in poly; use --iop-only or --commit-only until the model-level boundary wiring is added".into())
+    let hidden_in_poly = MultilinearPolynomial::from(pad_power_of_two(&traced.witness.hidden_in));
+    let hidden_out_poly = MultilinearPolynomial::from(pad_power_of_two(&traced.hidden_out));
+    let t0 = Instant::now();
+    let (hidden_in_commitment, _) = PCS::commit(&hidden_in_poly, &pcs_setup);
+    eprintln!(
+        "timing: commit_hidden_in {:.3}s",
+        t0.elapsed().as_secs_f64()
+    );
+    let t0 = Instant::now();
+    let (hidden_out_commitment, _) = PCS::commit(&hidden_out_poly, &pcs_setup);
+    eprintln!(
+        "timing: commit_hidden_out {:.3}s",
+        t0.elapsed().as_secs_f64()
+    );
+
+    let hidden_in_poly =
+        qwen3_layer_prover::Poly::new(hidden_in_poly, Some(hidden_in_commitment.clone()));
+    let hidden_out_poly =
+        qwen3_layer_prover::Poly::new(hidden_out_poly, Some(hidden_out_commitment.clone()));
+    let mut layer_polys = LayerPolys::from_witness_with_boundary(
+        hidden_in_poly,
+        &traced.witness,
+        &weights,
+        &shape,
+        &tensors,
+    );
+    let t0 = Instant::now();
+    let layer_commitments = commit_layer_polynomials_streaming_onehot(
+        &poly_set_for_setup,
+        &pcs_setup,
+        &flat_srs_reader,
+        args.srs_chunk_len,
+        args.onehot_threads,
+        args.onehot_metrics,
+        args.sort_onehot_indices,
+    )?;
+    attach_layer_ra_commitments(&mut layer_polys, &layer_commitments)?;
+    eprintln!(
+        "timing: commit_layer_ra_streaming {:.3}s",
+        t0.elapsed().as_secs_f64()
+    );
+
+    let mut prover_transcript = Blake2bTranscript::default();
+    let t0 = Instant::now();
+    let proof = prove_layer_with_committed_polys::<Fr, _, PCS>(
+        args.layer,
+        hidden_out_poly,
+        layer_polys,
+        layer_commitments,
+        &shape,
+        &pcs_setup,
+        &mut prover_transcript,
+    )?;
+    eprintln!("timing: prove_layer {:.3}s", t0.elapsed().as_secs_f64());
+
+    let verifier_setup = PCS::setup_verifier(&pcs_setup);
+    let mut verifier_transcript = Blake2bTranscript::default();
+    let t0 = Instant::now();
+    let verified = verify_layer::<Fr, _, PCS>(
+        args.layer,
+        &proof.proof,
+        HiddenStateCommitments {
+            hidden_in: hidden_in_commitment,
+            hidden_out: hidden_out_commitment,
+        },
+        &verifier_setup,
+        &weights,
+        &shape,
+        &mut verifier_transcript,
+    )?;
+    eprintln!("timing: verify_layer {:.3}s", t0.elapsed().as_secs_f64());
+
+    println!("prove_verify_layer: ok");
+    println!("trace: {}", args.trace.display());
+    println!("q8_cache: {}", cache.display());
+    println!("layer: {}", args.layer);
+    println!("seq: {}", seq);
+    println!("boundary_claims: {}", verified.boundary_claims().len());
+    println!("pcs_claims: {}", verified.pcs_claims().len());
+    println!("direct_eval_claims: {}", verified.direct_eval_claims.len());
+    Ok(())
 }
 
 fn required_pcs_num_vars_for_polynomials(poly_set: &LayerPolySet<Fr>) -> usize {
@@ -478,7 +576,7 @@ fn print_help() {
            --layer N        layer index to prove\n\
            --seq N          override seq length instead of reading manifest metadata\n\
            --write-flat-srs PATH write a streaming flat G1 SRS and exit\n\
-           --flat-srs PATH  use a streaming flat G1 SRS for onehot commitments in --commit-only\n\
+           --flat-srs PATH  read a pre-generated flat G1 SRS for PCS setup and streaming RA commitments\n\
            --srs-vars N     max vars for --write-flat-srs\n\
            --srs-chunk-len N number of G1 points to generate/read per SRS chunk\n\
            --onehot-threads N thread count for streaming onehot commitment\n\

@@ -894,6 +894,161 @@ where
     LayerCommitments { entries }
 }
 
+pub fn attach_layer_ra_commitments<F, C: Clone>(
+    polys: &mut LayerPolys<F, C>,
+    commitments: &LayerCommitments<C>,
+) -> crate::Result<()>
+where
+    F: JoltField,
+{
+    attach_ra_group(
+        &mut polys.pv_matmul_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::CONTEXT, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.o_proj_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::O_PROJ, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.softmax_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::SOFTMAX_OUTPUT, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.softmax_floor_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::SOFTMAX_FLOOR, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.softmax_exp_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::SOFTMAX_EXP, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.softmax_ra,
+        CommittedPoly::QwenSoftmaxExpRaD,
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.softmax_input_frac_ra,
+        CommittedPoly::QwenSoftmaxInputFracRaD,
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.qk_score_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::QK_SCORE_SCALE, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.qk_score_dot_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::QK_SCORE_DOT, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.q_rope_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::Q_ROPE, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.k_rope_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::K_ROPE, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.q_proj_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::Q_PROJ, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.k_proj_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::K_PROJ, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.v_proj_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::V_PROJ, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.q_norm_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::Q_NORM, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.q_norm_norm_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::Q_NORM_INTERNAL, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.k_norm_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::K_NORM, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.k_norm_norm_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::K_NORM_INTERNAL, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.rms_norm_atten_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::RMS_NORM_ATTEN, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.rms_norm_atten_norm_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::RMS_NORM_ATTEN_INTERNAL, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.rms_norm_mlp_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::RMS_NORM_MLP, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.rms_norm_mlp_norm_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::RMS_NORM_MLP_INTERNAL, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.gate_proj_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::GATE_PROJ, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.up_proj_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::UP_PROJ, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.silu_gate_round_ra,
+        CommittedPoly::QwenSiluRoundRaD,
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.silu_round_ra,
+        CommittedPoly::QwenSiluOutputRoundRaD,
+        commitments,
+    )?;
+    let silu_split = polys.silu_ra.len() / 2;
+    let (silu_base_ra, silu_slope_ra) = polys.silu_ra.split_at_mut(silu_split);
+    attach_ra_group(silu_base_ra, CommittedPoly::QwenSiluBaseRaD, commitments)?;
+    attach_ra_group(silu_slope_ra, CommittedPoly::QwenSiluSlopeRaD, commitments)?;
+    attach_ra_group(
+        &mut polys.silu_up_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::SILU_UP, d),
+        commitments,
+    )?;
+    attach_ra_group(
+        &mut polys.down_proj_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::DOWN_PROJ, d),
+        commitments,
+    )?;
+
+    Ok(())
+}
+
 fn commit_ra_group<F, PCS>(
     entries: &mut Vec<LayerCommitmentEntry<PCS::Commitment>>,
     name: impl Into<String>,
@@ -914,6 +1069,31 @@ fn commit_ra_group<F, PCS>(
             commitment,
         });
     }
+}
+
+fn attach_ra_group<F, C: Clone>(
+    polys: &mut [Poly<F, C>],
+    committed_poly: impl Fn(usize) -> CommittedPoly,
+    commitments: &LayerCommitments<C>,
+) -> crate::Result<()>
+where
+    F: JoltField,
+{
+    for (d, poly) in polys.iter_mut().enumerate() {
+        let id = committed_poly(d);
+        let Some(commitment) = commitments
+            .entries
+            .iter()
+            .find(|entry| entry.committed_poly == id)
+            .map(|entry| entry.commitment.clone())
+        else {
+            return Err(crate::ProverError::MissingCommittedPolynomials(vec![
+                format!("{id:?}"),
+            ]));
+        };
+        poly.commitment = Some(commitment);
+    }
+    Ok(())
 }
 
 pub fn absorb_layer_commitments<T, C>(

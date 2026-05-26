@@ -3,6 +3,7 @@ use std::{
     fs::File,
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -13,7 +14,10 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress};
 use ark_std::{UniformRand, Zero};
 use common::CommittedPoly;
 use joltworks::poly::{
-    commitment::hyperkzg::{HyperKZGCommitment, HyperKZGProverKey},
+    commitment::hyperkzg::{
+        HyperKZGCommitment, HyperKZGProverKey,
+        kzg::{KZGProverKey, SRS},
+    },
     one_hot_polynomial::OneHotPolynomial,
 };
 use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng};
@@ -146,6 +150,60 @@ pub fn write_flat_g1_srs(path: impl AsRef<Path>, num_vars: usize, chunk_len: usi
     }
     writer.flush()?;
     Ok(())
+}
+
+pub fn load_hyperkzg_setup_from_flat_g1_srs(
+    reader: &FlatG1SrsReader,
+    num_vars: usize,
+    chunk_len: usize,
+) -> Result<HyperKZGProverKey<Bn254>> {
+    if chunk_len == 0 {
+        return Err(ProverError::InvalidInput(
+            "flat SRS load chunk_len must be nonzero".to_string(),
+        ));
+    }
+    let required_points = (1usize << num_vars) + 1;
+    if reader.point_count() < required_points {
+        return Err(ProverError::InvalidInput(format!(
+            "flat SRS has {} G1 points but vars={num_vars} needs {required_points}",
+            reader.point_count()
+        )));
+    }
+
+    let mut g1_powers = Vec::with_capacity(required_points);
+    let mut start = 0usize;
+    while start < required_points {
+        let len = chunk_len.min(required_points - start);
+        let chunk = reader.read_chunk_bytes(start, len)?;
+        for point_bytes in chunk.bytes.chunks_exact(reader.point_size()) {
+            let point = G1Affine::deserialize_uncompressed_unchecked(point_bytes)?;
+            g1_powers.push(point);
+        }
+        start += len;
+    }
+
+    let mut rng = ChaCha20Rng::from_seed(*HYPERKZG_SEED);
+    let beta = Fr::rand(&mut rng);
+    let _g1 = <Bn254 as Pairing>::G1::rand(&mut rng);
+    let g2 = <Bn254 as Pairing>::G2::rand(&mut rng);
+    let mut beta_power = beta;
+    let mut g2_powers = Vec::with_capacity(3);
+    for _ in 0..3 {
+        g2_powers.push((g2 * beta_power).into_affine());
+        beta_power *= beta;
+    }
+
+    let srs = Arc::new(SRS::<Bn254> {
+        g1_powers,
+        g2_powers,
+        // HyperKZG's current commit/open/verify paths do not read this
+        // prefix-sum table. Leaving it empty avoids rebuilding the expensive
+        // full setup during proof execution.
+        g_products: Vec::new(),
+    });
+    Ok(HyperKZGProverKey {
+        kzg_pk: KZGProverKey::new(srs, 0, required_points),
+    })
 }
 
 #[derive(Debug)]
@@ -391,11 +449,15 @@ mod tests {
     use common::CommittedPoly;
     use joltworks::poly::{
         commitment::{commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG},
-        multilinear_polynomial::MultilinearPolynomial,
+        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
         one_hot_polynomial::OneHotPolynomial,
     };
+    use joltworks::transcripts::Blake2bTranscript;
 
-    use super::{FlatG1SrsReader, streaming_one_hot_commitment, write_flat_g1_srs};
+    use super::{
+        FlatG1SrsReader, load_hyperkzg_setup_from_flat_g1_srs, streaming_one_hot_commitment,
+        write_flat_g1_srs,
+    };
 
     #[test]
     fn streaming_onehot_commit_matches_hyperkzg() {
@@ -427,6 +489,33 @@ mod tests {
         let setup = PCS::setup_prover(8);
         let direct = PCS::commit(&MultilinearPolynomial::OneHot(one_hot), &setup).0;
         assert_eq!(streaming, direct);
+
+        let loaded_setup = load_hyperkzg_setup_from_flat_g1_srs(&reader, 8, 17).unwrap();
+        let dense_poly = MultilinearPolynomial::from(vec![Fr::from(3); 8]);
+        let loaded = PCS::commit(&dense_poly, &loaded_setup).0;
+        let direct = PCS::commit(&dense_poly, &setup).0;
+        assert_eq!(loaded, direct);
+
+        type Challenge = <Fr as joltworks::field::JoltField>::Challenge;
+        let point = vec![
+            Challenge::from(2u128),
+            Challenge::from(5u128),
+            Challenge::from(7u128),
+        ];
+        let opening = dense_poly.evaluate(&point);
+        let mut prover_transcript = Blake2bTranscript::default();
+        let proof = PCS::prove(&loaded_setup, &dense_poly, &point, None, &mut prover_transcript);
+        let verifier_setup = PCS::setup_verifier(&loaded_setup);
+        let mut verifier_transcript = Blake2bTranscript::default();
+        PCS::verify(
+            &proof,
+            &verifier_setup,
+            &mut verifier_transcript,
+            &point,
+            &opening,
+            &loaded,
+        )
+        .unwrap();
         let _ = std::fs::remove_file(path);
     }
 }

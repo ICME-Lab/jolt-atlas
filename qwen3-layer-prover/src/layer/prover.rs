@@ -6,6 +6,7 @@ use joltworks::{
     },
     transcripts::Transcript,
 };
+use std::time::Instant;
 
 use crate::{
     claim::{Claim, Poly},
@@ -15,7 +16,9 @@ use crate::{
 
 use super::{
     claims::claim_hidden_out_after_commitments,
-    commitments::{HiddenStateCommitments, absorb_layer_commitments, commit_layer_ra_polys},
+    commitments::{
+        HiddenStateCommitments, LayerCommitments, absorb_layer_commitments, commit_layer_ra_polys,
+    },
     iop::{prove_layer_iop, verify_layer_iop},
     openings::prove_layer_openings,
     polys::{LayerPolys, hidden_state_poly},
@@ -52,14 +55,6 @@ where
     PCS: CommitmentScheme<Field = F>,
 {
     let tensors = LayerTensorIds::default();
-    let hidden_state_commitments = HiddenStateCommitments {
-        hidden_out: hidden_out.commitment.clone().ok_or_else(|| {
-            crate::ProverError::InvalidInput("hidden_out commitment is required".to_string())
-        })?,
-        hidden_in: hidden_in.commitment.clone().ok_or_else(|| {
-            crate::ProverError::InvalidInput("hidden_in commitment is required".to_string())
-        })?,
-    };
 
     // 1. Assemble the exact polynomials consumed by the IOP.  At this point
     // RA polys exist but have no commitment attached yet.
@@ -68,28 +63,73 @@ where
 
     // 2. Commit the layer-local RA/lookup polynomials.
     let commitments = commit_layer_ra_polys::<F, PCS>(&mut layer_polys, &tensors, pcs_setup);
+
+    prove_layer_with_committed_polys::<F, T, PCS>(
+        layer,
+        hidden_out,
+        layer_polys,
+        commitments,
+        shape,
+        pcs_setup,
+        transcript,
+    )
+}
+
+pub fn prove_layer_with_committed_polys<F, T, PCS>(
+    layer: usize,
+    hidden_out: Poly<F, PCS::Commitment>,
+    layer_polys: LayerPolys<F, PCS::Commitment>,
+    commitments: LayerCommitments<PCS::Commitment>,
+    shape: &LayerShape,
+    pcs_setup: &PCS::ProverSetup,
+    transcript: &mut T,
+) -> Result<ProveResult<LayerClaims<F, PCS::Commitment>, LayerProof<F, T, PCS>>>
+where
+    F: JoltField,
+    T: Transcript,
+    PCS: CommitmentScheme<Field = F>,
+{
+    let tensors = LayerTensorIds::default();
+    let hidden_state_commitments = HiddenStateCommitments {
+        hidden_out: hidden_out.commitment.clone().ok_or_else(|| {
+            crate::ProverError::InvalidInput("hidden_out commitment is required".to_string())
+        })?,
+        hidden_in: layer_polys.hidden_in.commitment.clone().ok_or_else(|| {
+            crate::ProverError::InvalidInput("hidden_in commitment is required".to_string())
+        })?,
+    };
     let transcript_commitments =
         commitments.with_hidden_state_commitments(hidden_state_commitments);
 
-    // 3. Bind the layer-local commitments before any layer-internal
-    // challenges. The starting hidden_out claim is provided by the caller.
+    // Bind the layer-local commitments before any layer-internal challenges.
+    // The starting hidden_out evaluation point is derived only after this.
     absorb_layer_commitments(transcript, layer, shape, &transcript_commitments);
     let hidden_out_point =
         transcript.challenge_vector::<F>(shape.hidden_shape().padded_power_of_two().point_len());
     let hidden_out_value = hidden_out.data.evaluate(&hidden_out_point);
     let hidden_out = Claim::new(hidden_out, hidden_out_point, hidden_out_value);
 
+    let t0 = Instant::now();
     let iop = prove_layer_iop(hidden_out.clone(), layer_polys, shape, &tensors, transcript)?;
+    eprintln!(
+        "timing: prove_layer.iop {:.3}s",
+        t0.elapsed().as_secs_f64()
+    );
 
     // 4. Reduce PCS-backed claims to the opening proof. `LayerClaims` is kept
     // structured here because the field names determine which
     // CommittedPoly/SumcheckId pair each opening belongs to.
+    let t0 = Instant::now();
     let opening_reduction = prove_layer_openings::<F, T, PCS, PCS::Commitment>(
         &hidden_out,
         &iop.claims,
         pcs_setup,
         transcript,
     )?;
+    eprintln!(
+        "timing: prove_layer.openings {:.3}s",
+        t0.elapsed().as_secs_f64()
+    );
 
     Ok(ProveResult::new(
         iop.claims,

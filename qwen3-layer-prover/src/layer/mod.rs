@@ -21,12 +21,13 @@ mod verifier;
 mod witness;
 
 pub use commitments::{
-    HiddenStateCommitments, LayerPolySet, absorb_layer_commitments, commit_layer_polynomials,
-    commit_layer_polynomials_streaming_onehot,
+    HiddenStateCommitments, LayerPolySet, absorb_layer_commitments, attach_layer_ra_commitments,
+    commit_layer_polynomials, commit_layer_polynomials_streaming_onehot,
 };
 pub use polys::LayerPolys;
 pub use prover::{
     prove_and_verify_layer_iop_only_from_witness, prove_layer, prove_layer_iop_only_from_witness,
+    prove_layer_with_committed_polys,
 };
 pub use tensors::LayerTensorIds;
 pub use types::{LayerClaims, LayerProof, LayerShape, LayerWeights};

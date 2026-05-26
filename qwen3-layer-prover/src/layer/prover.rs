@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use joltworks::{
     field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme,
     transcripts::Transcript,
@@ -9,86 +7,73 @@ use crate::{claim::Claim, error::Result, proof::ProveResult};
 
 use super::{
     claims::claim_hidden_out_after_commitments,
-    commitments::{HiddenStateCommitments, absorb_layer_commitments, commit_layer_witness_polys},
+    commitments::{absorb_layer_commitments, commit_layer_ra_polys},
     iop::{prove_layer_iop, verify_layer_iop},
     openings::prove_layer_openings,
-    polys::LayerPolys,
+    polys::{LayerPolys, hidden_state_poly},
     tensors::LayerTensorIds,
     types::{LayerClaims, LayerProof, LayerShape, LayerWeights},
-    witness::build_layer_witness_from_trace_dir,
+    witness::LayerWitness,
 };
 
 // Complete layer prover.
 //
 // Responsibilities:
-// - owns trace -> witness materialization
-// - owns polynomial commitments and transcript binding
+// - accepts the boundary hidden_out claim and hidden_in polynomial
+// - commits only layer-local RA/lookup polynomials
 // - delegates algebraic constraints to `iop`
 // - delegates PCS opening reduction to `openings`
 //
-// Important invariant: commitments are absorbed before the IOP starts.
+// Important invariant: layer-local commitments are absorbed before the IOP
+// starts. Hidden-state commitments are owned by the caller and carried by the
+// boundary claim/poly.
 
 pub fn prove_layer<F, T, PCS>(
-    trace_dir: impl AsRef<Path>,
     layer: usize,
-    hidden_state_commitments: HiddenStateCommitments<PCS::Commitment>,
+    hidden_out: Claim<F, PCS::Commitment>,
+    hidden_in: crate::claim::Poly<F, PCS::Commitment>,
+    witness: &LayerWitness,
     weights: &LayerWeights,
     shape: &LayerShape,
-    tensors: &LayerTensorIds,
     pcs_setup: &PCS::ProverSetup,
     transcript: &mut T,
-) -> Result<ProveResult<LayerClaims<F>, LayerProof<F, T, PCS>>>
+) -> Result<ProveResult<LayerClaims<F, PCS::Commitment>, LayerProof<F, T, PCS>>>
 where
     F: JoltField,
     T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 {
-    // 1. Materialize exactly one layer.  This function does not reason about
-    // neighbouring layers; hidden_in/hidden_out are supplied as commitments.
-    let traced = build_layer_witness_from_trace_dir(trace_dir, layer, weights, shape)
-        .map_err(|err| crate::ProverError::InvalidInput(err.to_string()))?;
-    let layer_polys =
-        LayerPolys::from_witness(&traced.hidden_out, &traced.witness, weights, shape, tensors);
+    let tensors = LayerTensorIds::default();
 
-    // 2. Build the layer polynomial set and attach commitments.  The two
-    // hidden-state polynomials use the commitments supplied by the caller.
-    let committed = commit_layer_witness_polys::<F, PCS>(
-        &traced.hidden_out,
-        &traced.witness,
-        hidden_state_commitments,
+    // 1. Assemble the exact polynomials consumed by the IOP.  At this point
+    // RA polys exist but have no commitment attached yet.
+    let mut layer_polys = LayerPolys::from_witness_with_boundary(
+        hidden_in,
+        witness,
         weights,
         shape,
-        tensors,
-        pcs_setup,
+        &tensors,
     );
 
-    // 3. Bind commitments before sampling the first evaluation point.  The
-    // hidden_out claim is derived here; it is not caller-controlled.
-    absorb_layer_commitments(transcript, layer, shape, &committed.commitments);
-    let hidden_out = claim_hidden_out_after_commitments(transcript, &traced.hidden_out, shape);
+    // 2. Commit the layer-local RA/lookup polynomials.
+    let commitments = commit_layer_ra_polys::<F, PCS>(&mut layer_polys, &tensors, pcs_setup);
 
-    // 4. Prove the layer equations.  IOP code returns claims to be opened, but
-    // does not know about PCS commitment state.
-    let hidden_out = Claim::new(
-        layer_polys.hidden_out.clone(),
-        hidden_out.point,
-        hidden_out.value,
-    );
+    // 3. Bind the layer-local commitments before any layer-internal
+    // challenges. The starting hidden_out claim is provided by the caller.
+    absorb_layer_commitments(transcript, layer, shape, &commitments);
 
-    let iop = prove_layer_iop(hidden_out.clone(), layer_polys, shape, tensors, transcript)?;
+    let iop = prove_layer_iop(hidden_out.clone(), layer_polys, shape, &tensors, transcript)?;
 
-    // 5. Reduce all requested openings to the PCS proof for this layer.
-    let mut opening_claims = iop.claims.boundary_claims();
-    opening_claims.extend(iop.claims.direct_eval_claims.clone());
-    opening_claims.extend(iop.claims.pcs_claims());
+    // 4. Reduce PCS-backed claims to the opening proof. `LayerClaims` is kept
+    // structured here because the field names determine which
+    // CommittedPoly/SumcheckId pair each opening belongs to.
     let opening_reduction =
-        prove_layer_openings::<F, T, PCS>(opening_claims, pcs_setup, transcript)?;
+        prove_layer_openings::<F, T, PCS, PCS::Commitment>(&iop.claims, pcs_setup, transcript)?;
 
     Ok(ProveResult::new(
         iop.claims,
         LayerProof {
-            hidden_out,
-            commitments: committed.commitments,
+            commitments,
             iop_proof: iop.proof,
             opening_reduction,
         },
@@ -112,10 +97,10 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let layer_polys = LayerPolys::from_witness(hidden_out, witness, weights, shape, tensors);
+    let layer_polys = LayerPolys::from_witness(witness, weights, shape, tensors);
     let hidden_out_claim = claim_hidden_out_after_commitments(transcript, hidden_out, shape);
     let hidden_out_claim = Claim::new(
-        layer_polys.hidden_out.clone(),
+        hidden_state_poly(hidden_out, shape),
         hidden_out_claim.point,
         hidden_out_claim.value,
     );
@@ -140,10 +125,11 @@ where
     F: JoltField,
     T: Transcript,
 {
-    let prover_polys = LayerPolys::from_witness(hidden_out, witness, weights, shape, tensors);
-    let prover_hidden_out = claim_hidden_out_after_commitments(prover_transcript, hidden_out, shape);
+    let prover_polys = LayerPolys::from_witness(witness, weights, shape, tensors);
+    let prover_hidden_out =
+        claim_hidden_out_after_commitments(prover_transcript, hidden_out, shape);
     let prover_hidden_out = Claim::new(
-        prover_polys.hidden_out.clone(),
+        hidden_state_poly(hidden_out, shape),
         prover_hidden_out.point,
         prover_hidden_out.value,
     );
@@ -155,11 +141,11 @@ where
         prover_transcript,
     )?;
 
-    let verifier_polys = LayerPolys::from_witness(hidden_out, witness, weights, shape, tensors);
+    let verifier_polys = LayerPolys::from_witness(witness, weights, shape, tensors);
     let verifier_hidden_out =
         claim_hidden_out_after_commitments(verifier_transcript, hidden_out, shape);
     let verifier_hidden_out = Claim::new(
-        verifier_polys.hidden_out.clone(),
+        hidden_state_poly(hidden_out, shape),
         verifier_hidden_out.point,
         verifier_hidden_out.value,
     );

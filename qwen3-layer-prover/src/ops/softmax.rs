@@ -2617,12 +2617,12 @@ mod tests {
             input_frac_ra,
             ra_claim,
         ) = prove_softmax_round_from_witness::<Fr, _>(
-                vec![output_claim.clone()],
-                &witness,
-                &params,
-                &mut prover_transcript,
-            )
-            .unwrap();
+            vec![output_claim.clone()],
+            &witness,
+            &params,
+            &mut prover_transcript,
+        )
+        .unwrap();
 
         let mut verifier_transcript = Blake2bTranscript::default();
         let (

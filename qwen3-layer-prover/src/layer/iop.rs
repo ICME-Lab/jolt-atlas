@@ -399,7 +399,11 @@ where
     // silu = SiLU(gate_proj)
     let (gate_proj_legacy, silu_gate_round_ra_req, silu_ra_req, silu_round_ra_req) =
         verify_silu_round(
-            legacy(with_poly(silu, polys.silu), tensors.silu.clone(), shape.intermediate_shape()),
+            legacy(
+                with_poly(silu, polys.silu),
+                tensors.silu.clone(),
+                shape.intermediate_shape(),
+            ),
             &proof.silu,
             &tensors.silu_params(shape),
             transcript,
@@ -457,8 +461,10 @@ where
         transcript,
     )
     .map_err(verify_err)?;
-    let residual_add_attn_b =
-        claim_from_legacy(residual_add_attn_b_legacy, polys.residual_add_attn_b.clone());
+    let residual_add_attn_b = claim_from_legacy(
+        residual_add_attn_b_legacy,
+        polys.residual_add_attn_b.clone(),
+    );
     let w_rms_norm_mlp = claim_from_legacy(w_rms_norm_mlp_legacy, polys.w_rms_norm_mlp);
     let rms_norm_mlp_round_ra =
         claims_from_requests(polys.rms_norm_mlp_round_ra, rms_norm_mlp_round_ra_req);
@@ -579,23 +585,23 @@ where
     // q_norm = RMSNorm(q_proj)
     let (q_proj_legacy, w_q_norm_legacy, q_norm_norm_round_ra_req, q_norm_round_ra_req) =
         verify_rmsnorm_round(
-        vec![
-            legacy(
-                with_poly(q_norm_a, polys.q_norm.clone()),
-                tensors.q_norm.clone(),
-                Shape::new(vec![shape.seq, shape.q_heads, shape.head_dim]),
-            ),
-            legacy(
-                with_poly(q_norm_b, polys.q_norm),
-                tensors.q_norm.clone(),
-                Shape::new(vec![shape.seq, shape.q_heads, shape.head_dim]),
-            ),
-        ],
-        &proof.q_norm,
-        &weights.q_norm,
-        &tensors.q_norm_params(shape),
-        transcript,
-    )
+            vec![
+                legacy(
+                    with_poly(q_norm_a, polys.q_norm.clone()),
+                    tensors.q_norm.clone(),
+                    Shape::new(vec![shape.seq, shape.q_heads, shape.head_dim]),
+                ),
+                legacy(
+                    with_poly(q_norm_b, polys.q_norm),
+                    tensors.q_norm.clone(),
+                    Shape::new(vec![shape.seq, shape.q_heads, shape.head_dim]),
+                ),
+            ],
+            &proof.q_norm,
+            &weights.q_norm,
+            &tensors.q_norm_params(shape),
+            transcript,
+        )
         .map_err(verify_err)?;
     let q_proj = claim_from_legacy(q_proj_legacy, polys.q_proj.clone());
     let w_q_norm = claim_from_legacy(w_q_norm_legacy, polys.w_q_norm);
@@ -606,23 +612,23 @@ where
     // k_norm = RMSNorm(k_proj)
     let (k_proj_legacy, w_k_norm_legacy, k_norm_norm_round_ra_req, k_norm_round_ra_req) =
         verify_rmsnorm_round(
-        vec![
-            legacy(
-                with_poly(k_norm_a, polys.k_norm.clone()),
-                tensors.k_norm.clone(),
-                Shape::new(vec![shape.seq, shape.kv_heads, shape.head_dim]),
-            ),
-            legacy(
-                with_poly(k_norm_b, polys.k_norm),
-                tensors.k_norm.clone(),
-                Shape::new(vec![shape.seq, shape.kv_heads, shape.head_dim]),
-            ),
-        ],
-        &proof.k_norm,
-        &weights.k_norm,
-        &tensors.k_norm_params(shape),
-        transcript,
-    )
+            vec![
+                legacy(
+                    with_poly(k_norm_a, polys.k_norm.clone()),
+                    tensors.k_norm.clone(),
+                    Shape::new(vec![shape.seq, shape.kv_heads, shape.head_dim]),
+                ),
+                legacy(
+                    with_poly(k_norm_b, polys.k_norm),
+                    tensors.k_norm.clone(),
+                    Shape::new(vec![shape.seq, shape.kv_heads, shape.head_dim]),
+                ),
+            ],
+            &proof.k_norm,
+            &weights.k_norm,
+            &tensors.k_norm_params(shape),
+            transcript,
+        )
         .map_err(verify_err)?;
     let k_proj = claim_from_legacy(k_proj_legacy, polys.k_proj.clone());
     let w_k_norm = claim_from_legacy(w_k_norm_legacy, polys.w_k_norm);

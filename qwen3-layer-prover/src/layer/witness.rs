@@ -1,7 +1,5 @@
 use crate::ops::round::ROUND_FRAC_BITS;
 
-pub(crate) use crate::trace::build_layer_witness_from_trace_dir;
-
 // Prover-side tensor material. The complete prover owns materialization; the
 // IOP only borrows these views when proving individual equations.
 

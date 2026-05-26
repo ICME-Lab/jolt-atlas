@@ -3,6 +3,8 @@ use joltworks::{
     transcripts::Transcript, utils::errors::ProofVerifyError,
 };
 
+use crate::claim::Claim;
+
 use super::{
     claims::{draw_hidden_out_point, point_matches_claim},
     commitments::{HiddenStateCommitments, absorb_layer_commitments},
@@ -16,12 +18,12 @@ use super::{
 
 pub fn verify_layer<F, T, PCS>(
     layer: usize,
+    hidden_out: Claim<F, PCS::Commitment>,
     proof: &LayerProof<F, T, PCS>,
     hidden_state_commitments: HiddenStateCommitments<PCS::Commitment>,
     pcs_setup: &PCS::VerifierSetup,
     weights: &LayerWeights,
     shape: &LayerShape,
-    tensors: &LayerTensorIds,
     transcript: &mut T,
 ) -> std::result::Result<LayerClaims<F>, ProofVerifyError>
 where
@@ -29,19 +31,21 @@ where
     T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 {
+    let tensors = LayerTensorIds::default();
     let commitments = proof
         .commitments
         .with_hidden_state_commitments(hidden_state_commitments);
     absorb_layer_commitments(transcript, layer, shape, &commitments);
     let hidden_out_point = draw_hidden_out_point::<F, T>(transcript, shape);
-    if !point_matches_claim(&proof.hidden_out, &hidden_out_point) {
+    if !point_matches_claim(&hidden_out, &hidden_out_point) {
         return Err(ProofVerifyError::InvalidOpeningProof(
             "hidden_out claim point is not transcript-derived".to_string(),
         ));
     }
     let _ = (pcs_setup, weights, tensors);
-    verify_layer_openings::<F, T, PCS>(
-        vec![proof.hidden_out.clone()],
+    verify_layer_openings::<F, T, PCS, PCS::Commitment>(
+        &hidden_out,
+        None,
         &proof.opening_reduction,
         pcs_setup,
         transcript,

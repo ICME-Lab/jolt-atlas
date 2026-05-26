@@ -24,6 +24,7 @@ use crate::{
 };
 
 use super::{
+    polys::LayerPolys,
     tensors::{LayerTensorIds, round_site},
     types::{LayerShape, LayerWeights},
     witness::LayerWitness,
@@ -73,18 +74,6 @@ pub struct LayerCommitments<C> {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct CommittedLayer<F, C>
-where
-    F: JoltField,
-{
-    // Each entry carries the polynomial body and its commitment together.
-    // Layer proving code consumes this view instead of looking up commitments
-    // through a separate name registry.
-    pub polys: CommittedLayerPolys<F, C>,
-    pub commitments: LayerCommitments<C>,
-}
-
-#[derive(Debug, Clone)]
 pub struct HiddenStateCommitments<C> {
     pub hidden_in: C,
     pub hidden_out: C,
@@ -117,7 +106,6 @@ impl<C: Clone> LayerCommitments<C> {
 
 impl<F: JoltField> LayerPolySet<F> {
     pub fn from_layer(
-        hidden_out: &[i32],
         witness: &LayerWitness,
         _weights: &LayerWeights,
         shape: &LayerShape,
@@ -125,12 +113,9 @@ impl<F: JoltField> LayerPolySet<F> {
     ) -> Self {
         let mut out = Self::default();
 
-        // Commit only the claims that leave the layer IOP unresolved.
-        // Regular witness tensors and accumulators are consumed inside op
-        // sumchecks; committing them here is both unnecessary and too large for
-        // real traces.
-        out.push_i32("hidden_out", hidden_out);
-        out.push_i32(tensors.hidden_in_a.clone(), &witness.hidden_in);
+        // Commit only RA/lookup polynomials created inside this layer.
+        // Hidden state commitments are supplied by the caller, and ordinary
+        // witness tensors/accumulators are consumed by op sumchecks.
 
         out.push_round_ra(
             format!("{}_round_ra", tensors.context_acc),
@@ -300,16 +285,6 @@ impl<F: JoltField> LayerPolySet<F> {
             &[shape.seq, shape.intermediate],
             round_site::UP_PROJ,
         );
-        out.push_round_ra(
-            format!("{}_round_ra", tensors.gate_proj),
-            &witness
-                .gate_proj
-                .iter()
-                .map(|&v| i64::from(v))
-                .collect::<Vec<_>>(),
-            &[shape.seq, shape.intermediate],
-            round_site::SILU_GATE,
-        );
         out.push_round_index_ra(
             "silu_round_ra",
             &witness
@@ -320,11 +295,11 @@ impl<F: JoltField> LayerPolySet<F> {
             &[shape.seq, shape.intermediate],
             |d| CommittedPoly::QwenSiluRoundRaD(d),
         );
-        out.push_round_ra(
-            format!("{}_round_ra", tensors.silu_acc),
+        out.push_round_index_ra(
+            "silu_output_round_ra",
             &witness.silu_acc,
             &[shape.seq, shape.intermediate],
-            round_site::SILU_OUTPUT,
+            |d| CommittedPoly::QwenSiluOutputRoundRaD(d),
         );
         out.push_lookup_ra(
             "silu_ra",
@@ -379,15 +354,6 @@ impl<F: JoltField> LayerPolySet<F> {
             }
         }
         mismatches
-    }
-
-    fn push_i32(&mut self, name: impl Into<String>, values: &[i32]) {
-        let committed_poly = CommittedPoly::QwenLayerTensor(self.entries.len());
-        self.entries.push(LayerPolySetEntry {
-            name: name.into(),
-            committed_poly,
-            poly: MultilinearPolynomial::from(pad_power_of_two(values)),
-        });
     }
 
     fn push_round_ra(
@@ -595,13 +561,6 @@ impl<F: JoltField> LayerPolySet<F> {
         Ok(CommittedLayerPolys { entries })
     }
 }
-fn pad_power_of_two<T: Copy + Default>(values: &[T]) -> Vec<T> {
-    let len = values.len().next_power_of_two();
-    let mut out = vec![T::default(); len];
-    out[..values.len()].copy_from_slice(values);
-    out
-}
-
 fn row_major_strides(dims: &[usize]) -> Vec<usize> {
     let mut strides = vec![1; dims.len()];
     for idx in (0..dims.len()).rev() {
@@ -636,7 +595,6 @@ fn padded_silu_lut_len(entries: usize) -> usize {
 
 pub fn commit_layer_polynomials<F, PCS>(
     poly_set: &LayerPolySet<F>,
-    hidden_state_commitments: HiddenStateCommitments<PCS::Commitment>,
     setup: &PCS::ProverSetup,
 ) -> LayerCommitments<PCS::Commitment>
 where
@@ -645,14 +603,7 @@ where
 {
     let mut commitments = Vec::with_capacity(poly_set.entries.len());
     for entry in &poly_set.entries {
-        let commitment = match entry.name.as_str() {
-            "hidden_in" => hidden_state_commitments.hidden_in.clone(),
-            "hidden_out" => hidden_state_commitments.hidden_out.clone(),
-            _ => {
-                let (commitment, _) = PCS::commit(&entry.poly, setup);
-                commitment
-            }
-        };
+        let (commitment, _) = PCS::commit(&entry.poly, setup);
         commitments.push(LayerCommitmentEntry {
             name: entry.name.clone(),
             committed_poly: entry.committed_poly,
@@ -666,7 +617,6 @@ where
 
 pub fn commit_layer_polynomials_streaming_onehot(
     poly_set: &LayerPolySet<Fr>,
-    hidden_state_commitments: HiddenStateCommitments<HyperKZGCommitment<Bn254>>,
     dense_setup: &HyperKZGProverKey<Bn254>,
     flat_srs: &FlatG1SrsReader,
     srs_chunk_len: usize,
@@ -682,37 +632,25 @@ pub fn commit_layer_polynomials_streaming_onehot(
             .with_metrics(report_metrics);
 
     for entry in &poly_set.entries {
-        match entry.name.as_str() {
-            "hidden_in" => commitments.push(LayerCommitmentEntry {
-                name: entry.name.clone(),
-                committed_poly: entry.committed_poly,
-                commitment: hidden_state_commitments.hidden_in.clone(),
-            }),
-            "hidden_out" => commitments.push(LayerCommitmentEntry {
-                name: entry.name.clone(),
-                committed_poly: entry.committed_poly,
-                commitment: hidden_state_commitments.hidden_out.clone(),
-            }),
-            _ => match &entry.poly {
-                MultilinearPolynomial::OneHot(one_hot) => {
-                    let poly = entry.committed_poly;
-                    onehot_committer.add_one_hot(poly, one_hot)?;
-                    onehot_positions.push((commitments.len(), poly));
-                    commitments.push(LayerCommitmentEntry {
-                        name: entry.name.clone(),
-                        committed_poly: entry.committed_poly,
-                        commitment: HyperKZGCommitment::default(),
-                    });
-                }
-                _ => {
-                    let (commitment, _) = HyperKZG::<Bn254>::commit(&entry.poly, dense_setup);
-                    commitments.push(LayerCommitmentEntry {
-                        name: entry.name.clone(),
-                        committed_poly: entry.committed_poly,
-                        commitment,
-                    });
-                }
-            },
+        match &entry.poly {
+            MultilinearPolynomial::OneHot(one_hot) => {
+                let poly = entry.committed_poly;
+                onehot_committer.add_one_hot(poly, one_hot)?;
+                onehot_positions.push((commitments.len(), poly));
+                commitments.push(LayerCommitmentEntry {
+                    name: entry.name.clone(),
+                    committed_poly: entry.committed_poly,
+                    commitment: HyperKZGCommitment::default(),
+                });
+            }
+            _ => {
+                let (commitment, _) = HyperKZG::<Bn254>::commit(&entry.poly, dense_setup);
+                commitments.push(LayerCommitmentEntry {
+                    name: entry.name.clone(),
+                    committed_poly: entry.committed_poly,
+                    commitment,
+                });
+            }
         }
     }
 
@@ -728,29 +666,253 @@ pub fn commit_layer_polynomials_streaming_onehot(
     })
 }
 
-pub(crate) fn commit_layer_witness_polys<F, PCS>(
-    hidden_out: &[i32],
-    witness: &LayerWitness,
-    hidden_state_commitments: HiddenStateCommitments<PCS::Commitment>,
-    weights: &LayerWeights,
-    shape: &LayerShape,
+pub(crate) fn commit_layer_ra_polys<F, PCS>(
+    polys: &mut LayerPolys<F, PCS::Commitment>,
     tensors: &LayerTensorIds,
     setup: &PCS::ProverSetup,
-) -> CommittedLayer<F, PCS::Commitment>
+) -> LayerCommitments<PCS::Commitment>
 where
     F: JoltField,
     PCS: CommitmentScheme<Field = F>,
 {
-    // Build the committed polynomial set in one place so `prover.rs` does not
-    // need to know which witness values are opened later by individual ops.
-    let poly_set = LayerPolySet::from_layer(hidden_out, witness, weights, shape, tensors);
-    let commitments =
-        commit_layer_polynomials::<F, PCS>(&poly_set, hidden_state_commitments, setup);
-    let polys = poly_set
-        .clone()
-        .attach_commitments(&commitments)
-        .expect("commit_layer_polynomials must commit every layer polynomial");
-    CommittedLayer { polys, commitments }
+    let mut entries = Vec::new();
+
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.context_acc),
+        &mut polys.pv_matmul_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::CONTEXT, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.o_proj_acc),
+        &mut polys.o_proj_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::O_PROJ, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        "softmax_output_round_ra",
+        &mut polys.softmax_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::SOFTMAX_OUTPUT, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        "softmax_floor_round_ra",
+        &mut polys.softmax_floor_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::SOFTMAX_FLOOR, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        "softmax_exp_acc_round_ra",
+        &mut polys.softmax_exp_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::SOFTMAX_EXP, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        "softmax_ra",
+        &mut polys.softmax_ra,
+        CommittedPoly::QwenSoftmaxExpRaD,
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        "softmax_input_frac_ra",
+        &mut polys.softmax_input_frac_ra,
+        CommittedPoly::QwenSoftmaxInputFracRaD,
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.qk_score_scale_acc),
+        &mut polys.qk_score_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::QK_SCORE_SCALE, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.qk_score_acc),
+        &mut polys.qk_score_dot_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::QK_SCORE_DOT, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.q_rope_acc),
+        &mut polys.q_rope_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::Q_ROPE, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.k_rope_acc),
+        &mut polys.k_rope_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::K_ROPE, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.q_proj_acc),
+        &mut polys.q_proj_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::Q_PROJ, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.k_proj_acc),
+        &mut polys.k_proj_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::K_PROJ, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.v_proj_acc),
+        &mut polys.v_proj_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::V_PROJ, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.q_norm_acc),
+        &mut polys.q_norm_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::Q_NORM, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        "q_norm_norm_acc_round_ra",
+        &mut polys.q_norm_norm_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::Q_NORM_INTERNAL, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.k_norm_acc),
+        &mut polys.k_norm_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::K_NORM, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        "k_norm_norm_acc_round_ra",
+        &mut polys.k_norm_norm_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::K_NORM_INTERNAL, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.rms_norm_atten_acc),
+        &mut polys.rms_norm_atten_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::RMS_NORM_ATTEN, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        "rms_norm_atten_norm_acc_round_ra",
+        &mut polys.rms_norm_atten_norm_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::RMS_NORM_ATTEN_INTERNAL, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.rms_norm_mlp_acc),
+        &mut polys.rms_norm_mlp_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::RMS_NORM_MLP, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        "rms_norm_mlp_norm_acc_round_ra",
+        &mut polys.rms_norm_mlp_norm_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::RMS_NORM_MLP_INTERNAL, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.gate_proj_acc),
+        &mut polys.gate_proj_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::GATE_PROJ, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.up_proj_acc),
+        &mut polys.up_proj_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::UP_PROJ, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        "silu_round_ra",
+        &mut polys.silu_gate_round_ra,
+        CommittedPoly::QwenSiluRoundRaD,
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        "silu_output_round_ra",
+        &mut polys.silu_round_ra,
+        CommittedPoly::QwenSiluOutputRoundRaD,
+        setup,
+    );
+    let silu_split = polys.silu_ra.len() / 2;
+    let (silu_base_ra, silu_slope_ra) = polys.silu_ra.split_at_mut(silu_split);
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        "silu_ra",
+        silu_base_ra,
+        CommittedPoly::QwenSiluBaseRaD,
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        "silu_slope_ra",
+        silu_slope_ra,
+        CommittedPoly::QwenSiluSlopeRaD,
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.silu_up_acc),
+        &mut polys.silu_up_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::SILU_UP, d),
+        setup,
+    );
+    commit_ra_group::<F, PCS>(
+        &mut entries,
+        format!("{}_round_ra", tensors.down_proj_acc),
+        &mut polys.down_proj_round_ra,
+        |d| CommittedPoly::QwenRoundRaD(round_site::DOWN_PROJ, d),
+        setup,
+    );
+
+    LayerCommitments { entries }
+}
+
+fn commit_ra_group<F, PCS>(
+    entries: &mut Vec<LayerCommitmentEntry<PCS::Commitment>>,
+    name: impl Into<String>,
+    polys: &mut [Poly<F, PCS::Commitment>],
+    committed_poly: impl Fn(usize) -> CommittedPoly,
+    setup: &PCS::ProverSetup,
+) where
+    F: JoltField,
+    PCS: CommitmentScheme<Field = F>,
+{
+    let name = name.into();
+    for (d, poly) in polys.iter_mut().enumerate() {
+        let (commitment, _) = PCS::commit(&poly.data, setup);
+        poly.commitment = Some(commitment.clone());
+        entries.push(LayerCommitmentEntry {
+            name: format!("{name}.rad.{d}"),
+            committed_poly: committed_poly(d),
+            commitment,
+        });
+    }
 }
 
 pub fn absorb_layer_commitments<T, C>(

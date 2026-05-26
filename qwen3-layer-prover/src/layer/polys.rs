@@ -3,7 +3,7 @@ use joltworks::{field::JoltField, poly::multilinear_polynomial::MultilinearPolyn
 use crate::claim::{Poly, Shape};
 
 use super::{
-    commitments::{CommittedLayerPolys, LayerPolySet},
+    commitments::LayerPolySet,
     tensors::LayerTensorIds,
     types::{LayerShape, LayerWeights},
     witness::LayerWitness,
@@ -17,7 +17,6 @@ use super::{
 #[derive(Debug, Clone)]
 pub struct LayerPolys<F: JoltField, C = ()> {
     pub hidden_in: Poly<F, C>,
-    pub hidden_out: Poly<F, C>,
 
     pub residual_add_attn_a: Poly<F, C>,
     pub residual_add_attn_b: Poly<F, C>,
@@ -93,16 +92,14 @@ pub struct LayerPolys<F: JoltField, C = ()> {
 
 impl<F: JoltField> LayerPolys<F, ()> {
     pub fn from_witness(
-        hidden_out: &[i32],
         witness: &LayerWitness,
         weights: &LayerWeights,
         shape: &LayerShape,
         tensors: &LayerTensorIds,
     ) -> Self {
-        let pcs_polys = LayerPolySet::<F>::from_layer(hidden_out, witness, weights, shape, tensors);
+        let pcs_polys = LayerPolySet::<F>::from_layer(witness, weights, shape, tensors);
         Self {
             hidden_in: i32_poly(&witness.hidden_in, &shape.hidden_shape()),
-            hidden_out: i32_poly(hidden_out, &shape.hidden_shape()),
 
             residual_add_attn_a: i32_poly(&witness.residual_add_attn_a, &shape.hidden_shape()),
             residual_add_attn_b: i32_poly(&witness.residual_add_attn_b, &shape.hidden_shape()),
@@ -189,10 +186,7 @@ impl<F: JoltField> LayerPolys<F, ()> {
                 &weights.down_proj,
                 &Shape::new(vec![shape.intermediate, shape.hidden]),
             ),
-            w_rms_norm_atten: i32_poly(
-                &weights.rms_norm_atten,
-                &Shape::new(vec![shape.hidden]),
-            ),
+            w_rms_norm_atten: i32_poly(&weights.rms_norm_atten, &Shape::new(vec![shape.hidden])),
             w_q_norm: i32_poly(&weights.q_norm, &Shape::new(vec![shape.head_dim])),
             w_k_norm: i32_poly(&weights.k_norm, &Shape::new(vec![shape.head_dim])),
             w_rms_norm_mlp: i32_poly(&weights.rms_norm_mlp, &Shape::new(vec![shape.hidden])),
@@ -283,15 +277,13 @@ impl<F: JoltField> LayerPolys<F, ()> {
                 &pcs_polys,
                 "rms_norm_atten_norm_acc_round_ra.rad.",
             ),
-            silu_gate_round_ra: onehot_group(
-                &pcs_polys,
-                &format!("{}_round_ra.rad.", tensors.gate_proj),
-            ),
-            silu_round_ra: onehot_group(
-                &pcs_polys,
-                &format!("{}_round_ra.rad.", tensors.silu_acc),
-            ),
-            silu_ra: [onehot_group(&pcs_polys, "silu_ra.rad."), onehot_group(&pcs_polys, "silu_slope_ra.rad.")].concat(),
+            silu_gate_round_ra: onehot_group(&pcs_polys, "silu_round_ra.rad."),
+            silu_round_ra: onehot_group(&pcs_polys, "silu_output_round_ra.rad."),
+            silu_ra: [
+                onehot_group(&pcs_polys, "silu_ra.rad."),
+                onehot_group(&pcs_polys, "silu_slope_ra.rad."),
+            ]
+            .concat(),
             softmax_round_ra: onehot_group(&pcs_polys, "softmax_output_round_ra.rad."),
             softmax_floor_round_ra: onehot_group(&pcs_polys, "softmax_floor_round_ra.rad."),
             softmax_exp_round_ra: onehot_group(&pcs_polys, "softmax_exp_acc_round_ra.rad."),
@@ -302,8 +294,89 @@ impl<F: JoltField> LayerPolys<F, ()> {
 }
 
 impl<F: JoltField, C: Clone> LayerPolys<F, C> {
-    pub fn from_committed_polys(_committed: &CommittedLayerPolys<F, C>) -> Self {
-        todo!("wire committed layer polys into LayerPolys")
+    pub fn from_witness_with_boundary(
+        hidden_in: Poly<F, C>,
+        witness: &LayerWitness,
+        weights: &LayerWeights,
+        shape: &LayerShape,
+        tensors: &LayerTensorIds,
+    ) -> Self {
+        let base = LayerPolys::<F, ()>::from_witness(witness, weights, shape, tensors);
+
+        Self {
+            hidden_in,
+
+            residual_add_attn_a: without_commitment(base.residual_add_attn_a),
+            residual_add_attn_b: without_commitment(base.residual_add_attn_b),
+            down_proj: without_commitment(base.down_proj),
+            o_proj: without_commitment(base.o_proj),
+
+            rms_norm_atten_a: without_commitment(base.rms_norm_atten_a),
+            rms_norm_atten_b: without_commitment(base.rms_norm_atten_b),
+            rms_norm_atten_c: without_commitment(base.rms_norm_atten_c),
+            rms_norm_mlp_a: without_commitment(base.rms_norm_mlp_a),
+            rms_norm_mlp_b: without_commitment(base.rms_norm_mlp_b),
+
+            q_proj: without_commitment(base.q_proj),
+            k_proj: without_commitment(base.k_proj),
+            v_proj: without_commitment(base.v_proj),
+            q_norm: without_commitment(base.q_norm),
+            k_norm: without_commitment(base.k_norm),
+            q_rope: without_commitment(base.q_rope),
+            k_rope: without_commitment(base.k_rope),
+            qk_score: without_commitment(base.qk_score),
+            softmax: without_commitment(base.softmax),
+            context: without_commitment(base.context),
+
+            gate_proj: without_commitment(base.gate_proj),
+            up_proj: without_commitment(base.up_proj),
+            silu: without_commitment(base.silu),
+            silu_up: without_commitment(base.silu_up),
+
+            w_q_proj: without_commitment(base.w_q_proj),
+            w_k_proj: without_commitment(base.w_k_proj),
+            w_v_proj: without_commitment(base.w_v_proj),
+            w_o_proj: without_commitment(base.w_o_proj),
+            w_gate_proj: without_commitment(base.w_gate_proj),
+            w_up_proj: without_commitment(base.w_up_proj),
+            w_down_proj: without_commitment(base.w_down_proj),
+            w_rms_norm_atten: without_commitment(base.w_rms_norm_atten),
+            w_q_norm: without_commitment(base.w_q_norm),
+            w_k_norm: without_commitment(base.w_k_norm),
+            w_rms_norm_mlp: without_commitment(base.w_rms_norm_mlp),
+            rope_cos: without_commitment(base.rope_cos),
+            rope_sin: without_commitment(base.rope_sin),
+
+            down_proj_round_ra: without_commitment_vec(base.down_proj_round_ra),
+            silu_up_round_ra: without_commitment_vec(base.silu_up_round_ra),
+            gate_proj_round_ra: without_commitment_vec(base.gate_proj_round_ra),
+            up_proj_round_ra: without_commitment_vec(base.up_proj_round_ra),
+            rms_norm_mlp_round_ra: without_commitment_vec(base.rms_norm_mlp_round_ra),
+            rms_norm_mlp_norm_round_ra: without_commitment_vec(base.rms_norm_mlp_norm_round_ra),
+            o_proj_round_ra: without_commitment_vec(base.o_proj_round_ra),
+            pv_matmul_round_ra: without_commitment_vec(base.pv_matmul_round_ra),
+            qk_score_round_ra: without_commitment_vec(base.qk_score_round_ra),
+            qk_score_dot_round_ra: without_commitment_vec(base.qk_score_dot_round_ra),
+            q_rope_round_ra: without_commitment_vec(base.q_rope_round_ra),
+            k_rope_round_ra: without_commitment_vec(base.k_rope_round_ra),
+            q_norm_round_ra: without_commitment_vec(base.q_norm_round_ra),
+            q_norm_norm_round_ra: without_commitment_vec(base.q_norm_norm_round_ra),
+            k_norm_round_ra: without_commitment_vec(base.k_norm_round_ra),
+            k_norm_norm_round_ra: without_commitment_vec(base.k_norm_norm_round_ra),
+            q_proj_round_ra: without_commitment_vec(base.q_proj_round_ra),
+            k_proj_round_ra: without_commitment_vec(base.k_proj_round_ra),
+            v_proj_round_ra: without_commitment_vec(base.v_proj_round_ra),
+            rms_norm_atten_round_ra: without_commitment_vec(base.rms_norm_atten_round_ra),
+            rms_norm_atten_norm_round_ra: without_commitment_vec(base.rms_norm_atten_norm_round_ra),
+            silu_gate_round_ra: without_commitment_vec(base.silu_gate_round_ra),
+            silu_round_ra: without_commitment_vec(base.silu_round_ra),
+            silu_ra: without_commitment_vec(base.silu_ra),
+            softmax_round_ra: without_commitment_vec(base.softmax_round_ra),
+            softmax_floor_round_ra: without_commitment_vec(base.softmax_floor_round_ra),
+            softmax_exp_round_ra: without_commitment_vec(base.softmax_exp_round_ra),
+            softmax_input_frac_ra: without_commitment_vec(base.softmax_input_frac_ra),
+            softmax_ra: without_commitment_vec(base.softmax_ra),
+        }
     }
 }
 
@@ -327,6 +400,19 @@ fn onehot_group<F: JoltField>(set: &LayerPolySet<F>, prefix: &str) -> Vec<Poly<F
         .collect::<Vec<_>>();
     entries.sort_by_key(|(chunk, _)| *chunk);
     entries.into_iter().map(|(_, poly)| poly).collect()
+}
+
+fn without_commitment<F: JoltField, C>(poly: Poly<F, ()>) -> Poly<F, C> {
+    Poly::new(poly.data, None)
+}
+
+fn without_commitment_vec<F: JoltField, C>(polys: Vec<Poly<F, ()>>) -> Vec<Poly<F, C>> {
+    polys.into_iter().map(without_commitment).collect()
+}
+
+pub(crate) fn hidden_state_poly<F: JoltField, C>(values: &[i32], shape: &LayerShape) -> Poly<F, C> {
+    let poly = i32_poly(values, &shape.hidden_shape());
+    Poly::new(poly.data, None)
 }
 
 fn padded_i32(values: &[i32], shape: &Shape) -> Vec<i32> {

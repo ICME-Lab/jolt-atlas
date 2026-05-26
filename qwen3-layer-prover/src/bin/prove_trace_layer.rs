@@ -19,8 +19,8 @@ use qwen3_layer_prover::trace::build_layer_witness_from_trace_dir;
 use qwen3_layer_prover::{
     layer::{
         HiddenStateCommitments, LayerPolySet, LayerShape, LayerTensorIds, LayerWeights,
-        commit_layer_polynomials, commit_layer_polynomials_streaming_onehot, prove_layer,
-        prove_and_verify_layer_iop_only_from_witness, verify_layer,
+        commit_layer_polynomials, commit_layer_polynomials_streaming_onehot,
+        prove_and_verify_layer_iop_only_from_witness,
     },
     streaming_srs::{FlatG1SrsReader, StreamingOneHotCommitter, write_flat_g1_srs},
 };
@@ -89,13 +89,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     if args.map_only {
         let t0 = Instant::now();
-        let poly_set = LayerPolySet::<Fr>::from_layer(
-            &traced.hidden_out,
-            &traced.witness,
-            &weights,
-            &shape,
-            &tensors,
-        );
+        let poly_set = LayerPolySet::<Fr>::from_layer(&traced.witness, &weights, &shape, &tensors);
         eprintln!(
             "timing: build_layer_polynomial_map {:.3}s",
             t0.elapsed().as_secs_f64()
@@ -194,24 +188,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let poly_set_for_setup = LayerPolySet::<Fr>::from_layer(
-        &traced.hidden_out,
-        &traced.witness,
-        &weights,
-        &shape,
-        &tensors,
-    );
+    let poly_set_for_setup =
+        LayerPolySet::<Fr>::from_layer(&traced.witness, &weights, &shape, &tensors);
     if args.flat_srs.is_some() && !args.commit_only {
         return Err("--flat-srs is currently wired only for --commit-only".into());
     }
-    let pcs_num_vars = if args.flat_srs.is_some() {
-        required_pcs_num_vars_for_slices([
-            traced.witness.hidden_in.as_slice(),
-            traced.hidden_out.as_slice(),
-        ])
-    } else {
-        required_pcs_num_vars_for_polynomials(&poly_set_for_setup)
-    };
+    let pcs_num_vars = required_pcs_num_vars_for_polynomials(&poly_set_for_setup);
     let t0 = Instant::now();
     let pcs_setup = PCS::setup_prover(pcs_num_vars);
     eprintln!(
@@ -219,19 +201,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         pcs_num_vars,
         t0.elapsed().as_secs_f64()
     );
-    let verifier_setup = PCS::setup_verifier(&pcs_setup);
-    let (hidden_in_commitment, _) = PCS::commit(
-        &MultilinearPolynomial::from(pad_power_of_two(&traced.witness.hidden_in)),
-        &pcs_setup,
-    );
-    let (hidden_out_commitment, _) = PCS::commit(
-        &MultilinearPolynomial::from(pad_power_of_two(&traced.hidden_out)),
-        &pcs_setup,
-    );
-    let hidden_state_commitments = HiddenStateCommitments {
-        hidden_in: hidden_in_commitment,
-        hidden_out: hidden_out_commitment,
-    };
     if args.commit_only {
         println!(
             "commit_only: polynomial_count {}",
@@ -246,7 +215,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             let reader = FlatG1SrsReader::open(flat_srs)?;
             commit_layer_polynomials_streaming_onehot(
                 &poly_set_for_setup,
-                hidden_state_commitments,
                 &pcs_setup,
                 &reader,
                 args.srs_chunk_len,
@@ -255,11 +223,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 args.sort_onehot_indices,
             )?
         } else {
-            commit_layer_polynomials::<Fr, PCS>(
-                &poly_set_for_setup,
-                hidden_state_commitments,
-                &pcs_setup,
-            )
+            commit_layer_polynomials::<Fr, PCS>(&poly_set_for_setup, &pcs_setup)
         };
         eprintln!(
             "timing: commit_layer_polynomials {:.3}s",
@@ -273,52 +237,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let mut prover_transcript = Blake2bTranscript::default();
-    let t0 = Instant::now();
-    let proof = prove_layer::<Fr, _, PCS>(
-        &args.trace,
-        args.layer,
-        hidden_state_commitments.clone(),
-        &weights,
-        &shape,
-        &tensors,
-        &pcs_setup,
-        &mut prover_transcript,
-    )?;
-    eprintln!("timing: prove_layer {:.3}s", t0.elapsed().as_secs_f64());
-
-    let mut verifier_transcript = Blake2bTranscript::default();
-    let t0 = Instant::now();
-    let claims = verify_layer::<Fr, _, PCS>(
-        args.layer,
-        &proof.proof,
-        hidden_state_commitments,
-        &verifier_setup,
-        &weights,
-        &shape,
-        &tensors,
-        &mut verifier_transcript,
-    )?;
-    eprintln!("timing: verify_layer {:.3}s", t0.elapsed().as_secs_f64());
-    if !same_claim(&claims.hidden_in_a, &proof.claims.hidden_in_a)
-        || !same_claim(&claims.hidden_in_b, &proof.claims.hidden_in_b)
-    {
-        return Err("verify_layer claims differ from prove_layer claims".into());
-    }
-
-    println!("prove_trace_layer: ok");
-    println!("trace: {}", args.trace.display());
-    println!("q8_cache: {}", cache.display());
-    println!("layer: {}", args.layer);
-    println!("seq: {}", seq);
-    Ok(())
-}
-
-fn same_claim<F, C1, C2>(lhs: &qwen3_layer_prover::Claim<F, C1>, rhs: &qwen3_layer_prover::Claim<F, C2>) -> bool
-where
-    F: joltworks::field::JoltField,
-{
-    lhs.point == rhs.point && lhs.value == rhs.value
+    Err("full prove_trace_layer now requires caller-provided hidden_out claim and hidden_in poly; use --iop-only or --commit-only until the model-level boundary wiring is added".into())
 }
 
 fn required_pcs_num_vars_for_polynomials(poly_set: &LayerPolySet<Fr>) -> usize {
@@ -355,13 +274,7 @@ fn commit_all_layers_onehot_only(
         let t_layer = Instant::now();
         let weights = read_layer_weights(cache, layer, seq)?;
         let traced = build_layer_witness_from_trace_dir(&args.trace, layer, &weights, shape)?;
-        let poly_set = LayerPolySet::<Fr>::from_layer(
-            &traced.hidden_out,
-            &traced.witness,
-            &weights,
-            shape,
-            &tensors,
-        );
+        let poly_set = LayerPolySet::<Fr>::from_layer(&traced.witness, &weights, shape, &tensors);
         total_polynomial_count += poly_set.entries.len();
         for (idx, entry) in poly_set.entries.iter().enumerate() {
             if let MultilinearPolynomial::OneHot(one_hot) = &entry.poly {

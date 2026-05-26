@@ -32,7 +32,7 @@ fn proves_and_verifies_layer_first_step() {
         .zip(&witness.down_proj)
         .map(|(&lhs, &rhs)| lhs + rhs)
         .collect::<Vec<_>>();
-    let poly_set = LayerPolySet::from_layer(&hidden_out, &witness, &weights, &shape, &tensors);
+    let poly_set = LayerPolySet::from_layer(&witness, &weights, &shape, &tensors);
 
     type Pcs = HyperKZG<Bn254>;
     let pcs_setup = Pcs::setup_prover(16);

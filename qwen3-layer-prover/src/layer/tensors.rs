@@ -41,7 +41,6 @@ pub(crate) mod round_site {
     pub const DOWN_PROJ: usize = 20;
     pub const GATE_PROJ: usize = 21;
     pub const UP_PROJ: usize = 22;
-    pub const SILU_GATE: usize = 23;
     pub const SILU_OUTPUT: usize = 24;
     pub const SILU_UP: usize = 25;
 }

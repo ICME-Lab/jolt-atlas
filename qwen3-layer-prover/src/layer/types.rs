@@ -165,19 +165,8 @@ where
     T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 {
-    pub(crate) hidden_out: Claim<F>,
     pub(crate) commitments: LayerCommitments<PCS::Commitment>,
+    #[allow(dead_code)]
     pub(crate) iop_proof: LayerIopProof<F, T>,
     pub(crate) opening_reduction: LayerOpeningReductionProof<F, T, PCS>,
-}
-
-impl<F, T, PCS> LayerProof<F, T, PCS>
-where
-    F: JoltField,
-    T: Transcript,
-    PCS: CommitmentScheme<Field = F>,
-{
-    pub fn hidden_out(&self) -> &Claim<F> {
-        &self.hidden_out
-    }
 }

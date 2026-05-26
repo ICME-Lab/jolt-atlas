@@ -195,9 +195,8 @@ where
 {
     verify_claim_shape(&context_claim, &params.pv.context_shape())?;
     verify_pv_params(&params.pv)?;
-    let (remainder_opening, round_bit_opening) =
-        round_lookup_openings_from_ra(&round_ra, &context_claim.point, &params.round.shape)
-            .map_err(|_| ProofVerifyError::SumcheckVerificationError)?;
+    let remainder_opening = proof.round_lookup.remainder_opening;
+    let round_bit_opening = proof.round_lookup.round_bit_opening;
 
     let (p_point, v_point, round_point) = verify_pv_matmul_round_relation(
         context_claim.point.clone(),

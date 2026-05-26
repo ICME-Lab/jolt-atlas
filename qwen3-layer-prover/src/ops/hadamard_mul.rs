@@ -167,9 +167,8 @@ where
     C: Clone,
 {
     verify_claim_shape(&y_claim, &params.hadamard.shape)?;
-    let (remainder_opening, round_bit_opening) =
-        round_lookup_openings_from_ra(&round_ra, &y_claim.point, &params.round.shape)
-            .map_err(|_| ProofVerifyError::SumcheckVerificationError)?;
+    let remainder_opening = proof.round_lookup.remainder_opening;
+    let round_bit_opening = proof.round_lookup.round_bit_opening;
     let (point, a_value, b_value, round_point) = verify_hadamard_round_relation(
         y_claim.point.clone(),
         y_claim.value,

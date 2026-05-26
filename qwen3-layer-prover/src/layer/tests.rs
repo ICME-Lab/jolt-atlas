@@ -1,16 +1,14 @@
 use ark_bn254::{Bn254, Fr};
 use joltworks::{
-    poly::{commitment::commitment_scheme::CommitmentScheme, commitment::hyperkzg::HyperKZG},
+    poly::{
+        commitment::{commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG},
+        multilinear_polynomial::MultilinearPolynomial,
+    },
     transcripts::Blake2bTranscript,
 };
 
-use super::{
-    claims::{claim_hidden_out_after_commitments, draw_hidden_out_point, point_matches_claim},
-    commitments::{LayerPolySet, absorb_layer_commitments, commit_layer_polynomials},
-    iop::{prove_layer_iop, verify_layer_iop},
-    openings::{prove_layer_openings, verify_layer_openings},
-    *,
-};
+use super::*;
+use crate::Poly;
 use crate::ops::round::ROUND_FRAC_BITS;
 
 #[test]
@@ -23,7 +21,6 @@ fn proves_and_verifies_layer_first_step() {
         kv_heads: 1,
         head_dim: 2,
     };
-    let tensors = LayerTensorIds::default();
     let weights = nonzero_layer_weights(&shape);
     let witness = layer_witness(&shape, &weights);
     let hidden_out = witness
@@ -32,99 +29,49 @@ fn proves_and_verifies_layer_first_step() {
         .zip(&witness.down_proj)
         .map(|(&lhs, &rhs)| lhs + rhs)
         .collect::<Vec<_>>();
-    let poly_set = LayerPolySet::from_layer(&witness, &weights, &shape, &tensors);
 
     type Pcs = HyperKZG<Bn254>;
     let pcs_setup = Pcs::setup_prover(16);
     let verifier_setup = Pcs::setup_verifier(&pcs_setup);
-    let (hidden_in_commitment, _) = Pcs::commit(
-        &joltworks::poly::multilinear_polynomial::MultilinearPolynomial::from(pad_power_of_two(
-            &witness.hidden_in,
-        )),
-        &pcs_setup,
-    );
-    let (hidden_out_commitment, _) = Pcs::commit(
-        &joltworks::poly::multilinear_polynomial::MultilinearPolynomial::from(pad_power_of_two(
-            &hidden_out,
-        )),
-        &pcs_setup,
-    );
-    let commitments = commit_layer_polynomials::<Fr, Pcs>(
-        &poly_set,
-        HiddenStateCommitments {
-            hidden_in: hidden_in_commitment,
-            hidden_out: hidden_out_commitment,
-        },
-        &pcs_setup,
-    );
+    let hidden_in_poly = MultilinearPolynomial::from(pad_power_of_two(&witness.hidden_in));
+    let hidden_out_poly = MultilinearPolynomial::from(pad_power_of_two(&hidden_out));
+    let (hidden_in_commitment, _) = Pcs::commit(&hidden_in_poly, &pcs_setup);
+    let (hidden_out_commitment, _) = Pcs::commit(&hidden_out_poly, &pcs_setup);
 
+    let hidden_in_poly = Poly::new(hidden_in_poly, Some(hidden_in_commitment.clone()));
+    let hidden_out_poly = Poly::new(hidden_out_poly, Some(hidden_out_commitment.clone()));
     let mut prover_transcript = Blake2bTranscript::default();
-    absorb_layer_commitments(&mut prover_transcript, 0, &shape, &commitments);
-    let hidden_out_claim =
-        claim_hidden_out_after_commitments::<Fr, _>(&mut prover_transcript, &hidden_out, &shape);
-    let result = prove_layer_iop::<Fr, _>(
-        hidden_out_claim.clone(),
+    let proved = prove_layer::<Fr, _, Pcs>(
+        0,
+        hidden_out_poly,
+        hidden_in_poly,
         &witness,
         &weights,
         &shape,
-        &tensors,
+        &pcs_setup,
         &mut prover_transcript,
     )
     .unwrap();
 
     let mut verifier_transcript = Blake2bTranscript::default();
-    absorb_layer_commitments(&mut verifier_transcript, 0, &shape, &commitments);
-    let verifier_hidden_out_point =
-        draw_hidden_out_point::<Fr, _>(&mut verifier_transcript, &shape);
-    assert!(point_matches_claim(
-        &hidden_out_claim,
-        &verifier_hidden_out_point
-    ));
-    let claims = verify_layer_iop::<Fr, _>(
-        hidden_out_claim.clone(),
-        &result.proof,
+    let verified = verify_layer::<Fr, _, Pcs>(
+        0,
+        &proved.proof,
+        HiddenStateCommitments {
+            hidden_in: hidden_in_commitment,
+            hidden_out: hidden_out_commitment,
+        },
+        &verifier_setup,
         &weights,
         &shape,
-        &tensors,
         &mut verifier_transcript,
     )
     .unwrap();
 
-    assert_eq!(claims.hidden_in_a, result.claims.hidden_in_a);
-    assert_eq!(claims.hidden_in_b, result.claims.hidden_in_b);
-    assert!(!result.claims.ra_claims.is_empty());
-    assert_eq!(claims.hidden_in_a.tensor.0, "hidden_in");
-    assert_eq!(claims.hidden_in_b.tensor.0, "hidden_in");
-    assert_eq!(
-        poly_set.missing_opening_claims(&claims.tensor_opening_requests()),
-        Vec::<String>::new()
-    );
-    assert_eq!(
-        poly_set.opening_value_mismatches(&claims.tensor_opening_requests()),
-        Vec::<String>::new()
-    );
-    assert_eq!(
-        poly_set.pcs_opening_value_mismatches(&result.proof.pcs_opening_requests()),
-        Vec::<String>::new()
-    );
-
-    let committed_polys = poly_set.clone().attach_commitments(&commitments).unwrap();
-    let opening_proof = prove_layer_openings::<Fr, _, Pcs>(
-        &committed_polys,
-        claims.tensor_opening_requests(),
-        result.proof.pcs_opening_requests(),
-        hidden_out_claim,
-        &pcs_setup,
-        &mut prover_transcript,
-    )
-    .unwrap();
-    verify_layer_openings::<Fr, _, Pcs>(
-        &commitments,
-        &opening_proof,
-        &verifier_setup,
-        &mut verifier_transcript,
-    )
-    .unwrap();
+    assert_eq!(verified.hidden_in_a.point, proved.claims.hidden_in_a.point);
+    assert_eq!(verified.hidden_in_a.value, proved.claims.hidden_in_a.value);
+    assert_eq!(verified.hidden_in_b.point, proved.claims.hidden_in_b.point);
+    assert_eq!(verified.hidden_in_b.value, proved.claims.hidden_in_b.value);
 }
 
 fn nonzero_layer_weights(shape: &LayerShape) -> LayerWeights {

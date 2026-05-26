@@ -239,12 +239,8 @@ where
     verify_claim_shape(&score_claim, &params.qk.score_shape())?;
     verify_qk_params(&params.qk)?;
 
-    let (score_remainder, score_round_bit) = round_lookup_openings_from_ra(
-        &score_round_ra,
-        &score_claim.point,
-        &params.score_round.shape,
-    )
-    .map_err(|_| ProofVerifyError::SumcheckVerificationError)?;
+    let score_remainder = proof.score_round_lookup.remainder_opening;
+    let score_round_bit = proof.score_round_lookup.round_bit_opening;
     let inv_sqrt = inv_sqrt_head_dim::<F>(params.qk.head_dim);
     if score_claim.value * scale_q8::<F>()
         != proof.dot_opening * inv_sqrt + score_round_bit * scale_q8::<F>() - score_remainder
@@ -275,9 +271,8 @@ where
         transcript,
     )?;
 
-    let (dot_remainder, dot_round_bit) =
-        round_lookup_openings_from_ra(&dot_round_ra, &score_claim.point, &params.dot_round.shape)
-            .map_err(|_| ProofVerifyError::SumcheckVerificationError)?;
+    let dot_remainder = proof.dot_round_lookup.remainder_opening;
+    let dot_round_bit = proof.dot_round_lookup.round_bit_opening;
     let (q_point, k_point, dot_round_point) = verify_qk_score_round_relation(
         score_claim.point.clone(),
         proof.dot_opening,

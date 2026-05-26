@@ -1,10 +1,14 @@
-use joltworks::{field::JoltField, poly::multilinear_polynomial::MultilinearPolynomial};
+use common::CommittedPoly;
+use joltworks::{
+    field::JoltField,
+    poly::{multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial},
+};
 
 use crate::claim::{Poly, Shape};
 
 use super::{
-    commitments::LayerPolySet,
-    tensors::LayerTensorIds,
+    commitments::{LayerCommitments, LayerPolySet},
+    tensors::{LayerTensorIds, round_site},
     types::{LayerShape, LayerWeights},
     witness::LayerWitness,
 };
@@ -378,6 +382,189 @@ impl<F: JoltField, C: Clone> LayerPolys<F, C> {
             softmax_ra: without_commitment_vec(base.softmax_ra),
         }
     }
+
+    pub(crate) fn for_verifier(
+        hidden_in_commitment: C,
+        commitments: &LayerCommitments<C>,
+        weights: &LayerWeights,
+        shape: &LayerShape,
+        _tensors: &LayerTensorIds,
+    ) -> Self {
+        Self {
+            hidden_in: zero_poly_with_commitment(&shape.hidden_shape(), Some(hidden_in_commitment)),
+
+            residual_add_attn_a: zero_poly(&shape.hidden_shape()),
+            residual_add_attn_b: zero_poly(&shape.hidden_shape()),
+            down_proj: zero_poly(&shape.hidden_shape()),
+            o_proj: zero_poly(&shape.hidden_shape()),
+
+            rms_norm_atten_a: zero_poly(&shape.hidden_shape()),
+            rms_norm_atten_b: zero_poly(&shape.hidden_shape()),
+            rms_norm_atten_c: zero_poly(&shape.hidden_shape()),
+            rms_norm_mlp_a: zero_poly(&shape.hidden_shape()),
+            rms_norm_mlp_b: zero_poly(&shape.hidden_shape()),
+
+            q_proj: zero_poly(&Shape::new(vec![shape.seq, shape.attention_width()])),
+            k_proj: zero_poly(&Shape::new(vec![
+                shape.seq,
+                shape.kv_heads * shape.head_dim,
+            ])),
+            v_proj: zero_poly(&Shape::new(vec![
+                shape.seq,
+                shape.kv_heads * shape.head_dim,
+            ])),
+            q_norm: zero_poly(&Shape::new(vec![shape.seq, shape.q_heads, shape.head_dim])),
+            k_norm: zero_poly(&Shape::new(vec![shape.seq, shape.kv_heads, shape.head_dim])),
+            q_rope: zero_poly(&Shape::new(vec![shape.seq, shape.q_heads, shape.head_dim])),
+            k_rope: zero_poly(&Shape::new(vec![shape.seq, shape.kv_heads, shape.head_dim])),
+            qk_score: zero_poly(&Shape::new(vec![shape.q_heads, shape.seq, shape.seq])),
+            softmax: zero_poly(&Shape::new(vec![shape.q_heads, shape.seq, shape.seq])),
+            context: zero_poly(&Shape::new(vec![shape.seq, shape.q_heads, shape.head_dim])),
+
+            gate_proj: zero_poly(&shape.intermediate_shape()),
+            up_proj: zero_poly(&shape.intermediate_shape()),
+            silu: zero_poly(&shape.intermediate_shape()),
+            silu_up: zero_poly(&shape.intermediate_shape()),
+
+            w_q_proj: without_commitment(i32_poly(
+                &weights.q_proj,
+                &Shape::new(vec![shape.hidden, shape.attention_width()]),
+            )),
+            w_k_proj: without_commitment(i32_poly(
+                &weights.k_proj,
+                &Shape::new(vec![shape.hidden, shape.kv_heads * shape.head_dim]),
+            )),
+            w_v_proj: without_commitment(i32_poly(
+                &weights.v_proj,
+                &Shape::new(vec![shape.hidden, shape.kv_heads * shape.head_dim]),
+            )),
+            w_o_proj: without_commitment(i32_poly(
+                &weights.o_proj,
+                &Shape::new(vec![shape.attention_width(), shape.hidden]),
+            )),
+            w_gate_proj: without_commitment(i32_poly(
+                &weights.gate_proj,
+                &Shape::new(vec![shape.hidden, shape.intermediate]),
+            )),
+            w_up_proj: without_commitment(i32_poly(
+                &weights.up_proj,
+                &Shape::new(vec![shape.hidden, shape.intermediate]),
+            )),
+            w_down_proj: without_commitment(i32_poly(
+                &weights.down_proj,
+                &Shape::new(vec![shape.intermediate, shape.hidden]),
+            )),
+            w_rms_norm_atten: without_commitment(i32_poly(
+                &weights.rms_norm_atten,
+                &Shape::new(vec![shape.hidden]),
+            )),
+            w_q_norm: without_commitment(i32_poly(
+                &weights.q_norm,
+                &Shape::new(vec![shape.head_dim]),
+            )),
+            w_k_norm: without_commitment(i32_poly(
+                &weights.k_norm,
+                &Shape::new(vec![shape.head_dim]),
+            )),
+            w_rms_norm_mlp: without_commitment(i32_poly(
+                &weights.rms_norm_mlp,
+                &Shape::new(vec![shape.hidden]),
+            )),
+            rope_cos: without_commitment(i32_poly(
+                &weights.rope_cos,
+                &Shape::new(vec![shape.seq, shape.head_dim / 2]),
+            )),
+            rope_sin: without_commitment(i32_poly(
+                &weights.rope_sin,
+                &Shape::new(vec![shape.seq, shape.head_dim / 2]),
+            )),
+
+            down_proj_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::DOWN_PROJ, d)
+            }),
+            silu_up_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::SILU_UP, d)
+            }),
+            gate_proj_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::GATE_PROJ, d)
+            }),
+            up_proj_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::UP_PROJ, d)
+            }),
+            rms_norm_mlp_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::RMS_NORM_MLP, d)
+            }),
+            rms_norm_mlp_norm_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::RMS_NORM_MLP_INTERNAL, d)
+            }),
+            o_proj_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::O_PROJ, d)
+            }),
+            pv_matmul_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::CONTEXT, d)
+            }),
+            qk_score_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::QK_SCORE_SCALE, d)
+            }),
+            qk_score_dot_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::QK_SCORE_DOT, d)
+            }),
+            q_rope_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::Q_ROPE, d)
+            }),
+            k_rope_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::K_ROPE, d)
+            }),
+            q_norm_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::Q_NORM, d)
+            }),
+            q_norm_norm_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::Q_NORM_INTERNAL, d)
+            }),
+            k_norm_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::K_NORM, d)
+            }),
+            k_norm_norm_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::K_NORM_INTERNAL, d)
+            }),
+            q_proj_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::Q_PROJ, d)
+            }),
+            k_proj_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::K_PROJ, d)
+            }),
+            v_proj_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::V_PROJ, d)
+            }),
+            rms_norm_atten_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::RMS_NORM_ATTEN, d)
+            }),
+            rms_norm_atten_norm_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::RMS_NORM_ATTEN_INTERNAL, d)
+            }),
+            silu_gate_round_ra: commitment_group(commitments, CommittedPoly::QwenSiluRoundRaD),
+            silu_round_ra: commitment_group(commitments, CommittedPoly::QwenSiluOutputRoundRaD),
+            silu_ra: [
+                commitment_group(commitments, CommittedPoly::QwenSiluBaseRaD),
+                commitment_group(commitments, CommittedPoly::QwenSiluSlopeRaD),
+            ]
+            .concat(),
+            softmax_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::SOFTMAX_OUTPUT, d)
+            }),
+            softmax_floor_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::SOFTMAX_FLOOR, d)
+            }),
+            softmax_exp_round_ra: commitment_group(commitments, |d| {
+                CommittedPoly::QwenRoundRaD(round_site::SOFTMAX_EXP, d)
+            }),
+            softmax_input_frac_ra: commitment_group(
+                commitments,
+                CommittedPoly::QwenSoftmaxInputFracRaD,
+            ),
+            softmax_ra: commitment_group(commitments, CommittedPoly::QwenSoftmaxExpRaD),
+        }
+    }
 }
 
 pub fn i32_poly<F: JoltField>(values: &[i32], shape: &Shape) -> Poly<F> {
@@ -408,6 +595,42 @@ fn without_commitment<F: JoltField, C>(poly: Poly<F, ()>) -> Poly<F, C> {
 
 fn without_commitment_vec<F: JoltField, C>(polys: Vec<Poly<F, ()>>) -> Vec<Poly<F, C>> {
     polys.into_iter().map(without_commitment).collect()
+}
+
+fn zero_poly<F: JoltField, C>(shape: &Shape) -> Poly<F, C> {
+    zero_poly_with_commitment(shape, None)
+}
+
+fn zero_poly_with_commitment<F: JoltField, C>(shape: &Shape, commitment: Option<C>) -> Poly<F, C> {
+    Poly::new(
+        MultilinearPolynomial::from(vec![F::zero(); shape.padded_power_of_two().numel()]),
+        commitment,
+    )
+}
+
+fn commitment_group<F, C: Clone>(
+    commitments: &LayerCommitments<C>,
+    committed_poly: impl Fn(usize) -> CommittedPoly,
+) -> Vec<Poly<F, C>>
+where
+    F: JoltField,
+{
+    let mut out = Vec::new();
+    for d in 0.. {
+        let id = committed_poly(d);
+        let Some(entry) = commitments
+            .entries
+            .iter()
+            .find(|entry| entry.committed_poly == id)
+        else {
+            break;
+        };
+        out.push(Poly::new(
+            MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(vec![Some(0)], 1)),
+            Some(entry.commitment.clone()),
+        ));
+    }
+    out
 }
 
 pub(crate) fn hidden_state_poly<F: JoltField, C>(values: &[i32], shape: &LayerShape) -> Poly<F, C> {

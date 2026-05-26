@@ -84,22 +84,23 @@ impl<C: Clone> LayerCommitments<C> {
         &self,
         hidden_state_commitments: HiddenStateCommitments<C>,
     ) -> Self {
-        let entries = self
-            .entries
-            .iter()
-            .map(|entry| {
-                let commitment = match entry.name.as_str() {
-                    "hidden_in" => hidden_state_commitments.hidden_in.clone(),
-                    "hidden_out" => hidden_state_commitments.hidden_out.clone(),
-                    _ => entry.commitment.clone(),
-                };
-                LayerCommitmentEntry {
-                    name: entry.name.clone(),
-                    committed_poly: entry.committed_poly,
-                    commitment,
-                }
-            })
-            .collect();
+        let mut entries = Vec::with_capacity(self.entries.len() + 2);
+        entries.push(LayerCommitmentEntry {
+            name: "hidden_out".to_string(),
+            committed_poly: CommittedPoly::QwenLayerTensor(0),
+            commitment: hidden_state_commitments.hidden_out,
+        });
+        entries.push(LayerCommitmentEntry {
+            name: "hidden_in".to_string(),
+            committed_poly: CommittedPoly::QwenLayerTensor(1),
+            commitment: hidden_state_commitments.hidden_in,
+        });
+        entries.extend(
+            self.entries
+                .iter()
+                .filter(|entry| entry.name != "hidden_in" && entry.name != "hidden_out")
+                .cloned(),
+        );
         Self { entries }
     }
 }

@@ -64,6 +64,7 @@ pub(crate) fn evaluate_i32_mle<F: JoltField>(values: &[i32], shape: &Shape, poin
         .sum()
 }
 
+#[allow(dead_code)]
 pub(crate) fn point_matches_claim<F: JoltField, C>(claim: &Claim<F, C>, point: &[F]) -> bool {
     claim.point == point
 }

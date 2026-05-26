@@ -580,6 +580,8 @@ impl RaOneHotEncoding for RoundRaEncoding {
 pub(crate) struct RoundLookupProof<F: JoltField, T: Transcript> {
     pub(crate) read_raf: SumcheckInstanceProof<F, T>,
     pub(crate) ra_onehot: SumcheckInstanceProof<F, T>,
+    pub(crate) remainder_opening: F,
+    pub(crate) round_bit_opening: F,
     pub(crate) ra_opening: F,
     pub(crate) committed_openings: RoundRaCommittedOpenings<F>,
 }
@@ -639,6 +641,8 @@ where
     Ok(RoundLookupProof {
         read_raf,
         ra_onehot,
+        remainder_opening,
+        round_bit_opening,
         ra_opening,
         committed_openings,
     })
@@ -868,6 +872,8 @@ where
     Ok(RoundLookupProof {
         read_raf: read_raf.clone(),
         ra_onehot: ra_onehot.clone(),
+        remainder_opening,
+        round_bit_opening,
         ra_opening,
         committed_openings: committed_openings.clone(),
     })

@@ -2364,10 +2364,89 @@ pub fn prove_zk(
     //   joint_claim = sum_i gamma_i * y_P_i   AND   y_com = g * joint_claim + h * y_blinding.
     // The latter is enforced via BlindFold's `eval_commitment_gens` check; the
     // y_com is placed in `RelaxedR1CSInstance::eval_commitments` below.
-    let extra_constraints_for_r1cs: Vec<_> =
+    let mut extra_constraints_for_r1cs: Vec<_> =
         batch_opening_extra_constraint.clone().into_iter().collect();
-    let extra_constraint_witnesses: Vec<_> =
+    let mut extra_constraint_witnesses: Vec<_> =
         batch_opening_extra_witness.clone().into_iter().collect();
+
+    // Public-node opening binding: for each opening on a `Constant`/`Input`
+    // node, add an R1CS extra-constraint that ties the BlindFold witness's
+    // `Opening<F>` value to the verifier-known public value
+    // `public_mle(opening_point)`. Mechanism (mirrors Jolt's
+    // `ValueSource::Constant` baked binding for public data, adapted to
+    // arbitrary field values via a Challenge slot):
+    //   - Constraint: `output_var = Opening(id) - Challenge(0)`.
+    //   - Challenge value (baked, public): `public_mle(opening_point)`.
+    //   - Witness: `output_value = 0`, `blinding = 0`.
+    //   - `y_com = Pedersen([0], 0) = identity_G1`.
+    // The verifier independently computes the expected value, checks the
+    // baked challenge matches it, checks the corresponding y_com is the
+    // identity (which combined with BlindFold's R1CS algebra forces
+    // `output_var = 0` and `blinding = 0`, hence `Opening = expected`).
+    let mut public_node_binding_eval_commitments: Vec<joltworks::curve::Bn254G1> = Vec::new();
+    {
+        use common::VirtualPoly;
+        use joltworks::poly::multilinear_polynomial::{
+            MultilinearPolynomial, PolynomialEvaluation,
+        };
+        use joltworks::subprotocols::blindfold::output_constraint::{
+            OutputClaimConstraint, ValueSource,
+        };
+        use joltworks::subprotocols::blindfold::witness::ExtraConstraintWitness;
+        let model = pp.model();
+        // BTreeMap iteration is deterministic; the verifier-side iteration
+        // must use the same order so binding-constraint indices match.
+        for (opening_id, (opening_point, opening_value)) in prover.accumulator.openings.iter() {
+            let Some(VirtualPoly::NodeOutput(node_idx)) = opening_id.virtual_poly() else {
+                continue;
+            };
+            // Only bind openings where the consumer opens the raw NodeOutput
+            // directly (i.e., the cleartext value equals `node_mle(opening_point)`).
+            // Internal protocols (Raf, RaVirtualization, RamHammingBooleanity,
+            // ...) open transformed representations under the same NodeOutput
+            // polynomial-id, so the witness value there is not the raw MLE
+            // evaluation and a binding constraint against `public_mle(opening_point)`
+            // would (correctly) reject. Those internal openings are bound by
+            // their own protocol-specific algebraic constraints.
+            if !matches!(
+                opening_id.sumcheck,
+                joltworks::poly::opening_proof::SumcheckId::NodeExecution(_)
+            ) {
+                continue;
+            }
+            let node = &model[node_idx];
+            let expected_value: F = match &node.operator {
+                atlas_onnx_tracer::ops::Operator::Constant(c) => {
+                    MultilinearPolynomial::from(c.0.clone().padded_next_power_of_two())
+                        .evaluate(&opening_point.r)
+                }
+                atlas_onnx_tracer::ops::Operator::Input(_) => {
+                    let input_pos = io
+                        .input_indices
+                        .iter()
+                        .position(|&i| i == node_idx)
+                        .expect("Input node must be in io.input_indices");
+                    MultilinearPolynomial::from(io.inputs[input_pos].padded_next_power_of_two())
+                        .evaluate(&opening_point.r)
+                }
+                _ => continue,
+            };
+            let constraint = OutputClaimConstraint::linear(vec![
+                (ValueSource::Constant(1), ValueSource::Opening(*opening_id)),
+                (ValueSource::Constant(-1), ValueSource::Challenge(0)),
+            ]);
+            let witness = ExtraConstraintWitness {
+                output_value: F::zero(),
+                blinding: F::zero(),
+                challenge_values: vec![expected_value],
+                opening_values: vec![*opening_value],
+            };
+            let y_com = pedersen_gens.commit(&[F::zero()], &F::zero());
+            extra_constraints_for_r1cs.push(constraint);
+            extra_constraint_witnesses.push(witness);
+            public_node_binding_eval_commitments.push(y_com);
+        }
+    }
     let blindfold_witness = BlindFoldWitness::with_extra_constraints(
         initial_claims,
         all_stages,
@@ -2421,8 +2500,9 @@ pub fn prove_zk(
         w_row_blindings[R_coeff + row] = blinding;
     }
 
-    let eval_commitments: Vec<joltworks::curve::Bn254G1> =
+    let mut eval_commitments: Vec<joltworks::curve::Bn254G1> =
         joint_eval_commitment.into_iter().collect();
+    eval_commitments.extend(public_node_binding_eval_commitments);
     let (real_instance, real_witness) = RelaxedR1CSInstance::<F, C>::new_non_relaxed(
         &witness,
         r1cs.num_constraints,
@@ -2439,7 +2519,7 @@ pub fn prove_zk(
     // it verifies the folded `eval_commitment_i == g * folded_output_i + h *
     // folded_blinding_i`. With the batched-opening extra constraint in place,
     // this is what binds `y_com` to the BlindFold R1CS witness.
-    let eval_commitment_gens = if batch_opening_extra_constraint.is_some() {
+    let eval_commitment_gens = if !extra_constraints_for_r1cs.is_empty() {
         Some((
             pedersen_gens.message_generators[0],
             pedersen_gens.blinding_generator,
@@ -2535,6 +2615,27 @@ pub fn verify_zk(
     verify_zk_with_pcs_capture(bundle, pp, io, pedersen_gens, None)
 }
 
+/// Test-only helper used by the soundness regression test. Runs the
+/// `verify_zk` flow but, at the Input/Constant per-op check and the
+/// public-node binding section, writes what the verifier WOULD compute
+/// into `out` instead of comparing/rejecting. The function then returns
+/// `Ok(())` regardless of whether the bundle would otherwise verify.
+///
+/// A real attacker doesn't need this helper — the values are a
+/// deterministic function of the bundle and the public model — but
+/// exposing it as a small public hook lets the test reproduce the
+/// patching step concisely without re-implementing the transcript walk.
+#[cfg(any(test, feature = "test-feature"))]
+pub fn extract_verifier_expected_public_claims(
+    bundle: &ZkProofBundle,
+    pp: &AtlasVerifierPreprocessing<F, PCS>,
+    io: &ModelExecutionIO,
+    pedersen_gens: &PedersenGenerators<C>,
+    out: &mut BTreeMap<usize, F>,
+) -> Result<(), ProofVerifyError> {
+    verify_zk_with_pcs_capture_and_extract(bundle, pp, io, pedersen_gens, None, Some(out))
+}
+
 /// Same as [`verify_zk`] but exposes an optional slot for capturing the
 /// inputs to the final HyperKZG verification. When `capture` is `Some`,
 /// the slot is filled in right before `PCS::verify` runs; the verifier
@@ -2546,7 +2647,28 @@ pub fn verify_zk_with_pcs_capture(
     pp: &AtlasVerifierPreprocessing<F, PCS>,
     io: &ModelExecutionIO,
     pedersen_gens: &PedersenGenerators<C>,
+    capture: Option<&mut Option<PcsVerifyCapture>>,
+) -> Result<(), ProofVerifyError> {
+    verify_zk_with_pcs_capture_and_extract(bundle, pp, io, pedersen_gens, capture, None)
+}
+
+/// Internal: same as [`verify_zk_with_pcs_capture`] plus an optional
+/// extract slot. When `extract_public_claims` is `Some`, the
+/// Input/Constant per-op check writes the verifier-computed
+/// `public_mle(r_reduced)` value into the map and SKIPS the equality
+/// comparison, and the public-node binding section is bypassed
+/// entirely. The function then returns `Ok(())` regardless of what the
+/// bundle contains — used by the soundness regression test to recover
+/// what the verifier would compute given a malicious bundle so that
+/// `bundle.public_node_reduced_claims` can be patched before the real
+/// verify is invoked.
+fn verify_zk_with_pcs_capture_and_extract(
+    bundle: &ZkProofBundle,
+    pp: &AtlasVerifierPreprocessing<F, PCS>,
+    io: &ModelExecutionIO,
+    pedersen_gens: &PedersenGenerators<C>,
     mut capture: Option<&mut Option<PcsVerifyCapture>>,
+    mut extract_public_claims: Option<&mut BTreeMap<usize, F>>,
 ) -> Result<(), ProofVerifyError> {
     use joltworks::poly::opening_proof::VerifierOpeningAccumulator;
 
@@ -2674,21 +2796,28 @@ pub fn verify_zk_with_pcs_capture(
                 // binding the BlindFold witness to this cleartext (future work;
                 // see wiki/jolt-atlas/.../zk-prove-overhead.md).
                 if let Some(reduced) = accumulator.reduced_evaluations.get(&node.idx).cloned() {
-                    let prover_claim = bundle
-                        .public_node_reduced_claims
-                        .get(&node.idx)
-                        .copied()
-                        .ok_or_else(|| {
-                            ProofVerifyError::InvalidOpeningProof(format!(
-                                "Missing public_node_reduced_claims for node {} ({})",
-                                node.idx,
-                                match node.operator {
-                                    Operator::Input(_) => "Input",
-                                    Operator::Constant(_) => "Constant",
-                                    _ => unreachable!(),
-                                }
-                            ))
-                        })?;
+                    // In extract mode, skip the equality check (used by
+                    // soundness tests to recover what the verifier WOULD
+                    // compute, so they can patch a malicious bundle).
+                    let prover_claim = if extract_public_claims.is_some() {
+                        ark_std::Zero::zero()
+                    } else {
+                        bundle
+                            .public_node_reduced_claims
+                            .get(&node.idx)
+                            .copied()
+                            .ok_or_else(|| {
+                                ProofVerifyError::InvalidOpeningProof(format!(
+                                    "Missing public_node_reduced_claims for node {} ({})",
+                                    node.idx,
+                                    match node.operator {
+                                        Operator::Input(_) => "Input",
+                                        Operator::Constant(_) => "Constant",
+                                        _ => unreachable!(),
+                                    }
+                                ))
+                            })?
+                    };
                     let r_field: Vec<F> = reduced.r.clone();
                     let expected_claim = match &node.operator {
                         Operator::Constant(c) => {
@@ -2713,7 +2842,9 @@ pub fn verify_zk_with_pcs_capture(
                         }
                         _ => unreachable!(),
                     };
-                    if expected_claim != prover_claim {
+                    if let Some(extract) = extract_public_claims.as_mut() {
+                        extract.insert(node.idx, expected_claim);
+                    } else if expected_claim != prover_claim {
                         return Err(ProofVerifyError::InvalidOpeningProof(format!(
                             "Public node {} ({}) reduced-eval mismatch: prover claim {} != public MLE eval {}",
                             node.idx,
@@ -2816,6 +2947,16 @@ pub fn verify_zk_with_pcs_capture(
         }
     }
 
+    // Extract mode: all the per-op Input/Constant checks have populated
+    // `extract_public_claims` with the verifier-computed expected values.
+    // The remaining steps (Step 8 batched-opening replay, BlindFold verify,
+    // PCS verify, public-node R1CS binding checks) are skipped — the
+    // soundness test that uses this hook only needs the per-node expected
+    // values to patch a malicious bundle.
+    if extract_public_claims.is_some() {
+        return Ok(());
+    }
+
     // Batched-opening reduction (Steps 6-8 of the wiki plan): mirror the
     // prover-side flow. Order matches the prover:
     //   1. derive gamma_powers from transcript (the cleartext per-poly claim
@@ -2825,10 +2966,21 @@ pub fn verify_zk_with_pcs_capture(
     //   4. run BlindFold (R1CS proves sumcheck + extra constraint),
     //   5. run PCS::verify on the joint commitment so `bundle.commitments`
     //      bind to `joint_claim` at the reduced point (Step 8).
-    let extra_constraints_for_r1cs: Vec<_>;
+    let mut extra_constraints_for_r1cs: Vec<
+        joltworks::subprotocols::blindfold::output_constraint::OutputClaimConstraint,
+    > = Vec::new();
     let eval_commitment_gens_v;
     let gamma_powers_v: Vec<F>;
-    if let Some(y_com) = bundle.blindfold_verifier_input.eval_commitments.first() {
+    // Step 8 fires iff the prover ran the batched-opening sumcheck (i.e., the
+    // model had committed witness polynomials). The presence of the Step-8
+    // ZK sumcheck proof in the bundle is the unambiguous gate; `eval_commitments`
+    // is no longer reliable because the public-node binding y_coms (added
+    // below) also occupy `eval_commitments` slots.
+    if let Some(y_com) = bundle
+        .batch_opening_zk_sumcheck
+        .as_ref()
+        .and(bundle.blindfold_verifier_input.eval_commitments.first())
+    {
         // Replay the prover-side absorbs from `prove_batch_opening_sumcheck_zk`
         // and `finalize_batch_opening_sumcheck` into the main transcript:
         // (a) each round commitment from the batched-opening sumcheck (so
@@ -2875,16 +3027,153 @@ pub fn verify_zk_with_pcs_capture(
             .enumerate()
             .map(|(i, id)| (ValueSource::Challenge(i), ValueSource::Opening(*id)))
             .collect();
-        extra_constraints_for_r1cs = vec![OutputClaimConstraint::linear(terms)];
+        extra_constraints_for_r1cs.push(OutputClaimConstraint::linear(terms));
         eval_commitment_gens_v = Some((
             pedersen_gens.message_generators[0],
             pedersen_gens.blinding_generator,
         ));
     } else {
         gamma_powers_v = Vec::new();
-        extra_constraints_for_r1cs = Vec::new();
         eval_commitment_gens_v = None;
     }
+
+    // Public-node opening binding (mirror of the prover-side block in
+    // `prove_zk`): for each opening on a `Constant`/`Input` node, add an
+    // R1CS extra-constraint `Opening(id) - Challenge(0) = output_var` and
+    // verify two soundness invariants:
+    //   1. `bundle.baked.extra_constraint_challenges[binding_idx]` equals
+    //      the verifier-computed `public_mle(opening_point)`. This binds
+    //      the matrix coefficient to the public expected value.
+    //   2. The corresponding `bundle.blindfold_verifier_input.eval_commitments`
+    //      entry is the identity G1 point. Combined with BlindFold's
+    //      `eval_commitment_gens` check (which enforces
+    //      `y_com == g*output_var + h*blinding`), identity forces
+    //      `output_var = 0` AND `blinding = 0`. Then the R1CS row
+    //      `output_var = Opening - Challenge` forces `Opening = Challenge
+    //      = expected`.
+    //
+    // The challenge-value check is one `bundle.baked` lookup; the y_com
+    // identity check is one G1 comparison.
+    let binding_challenge_start = bundle
+        .baked
+        .extra_constraint_challenges
+        .len()
+        .checked_sub(0)
+        .unwrap_or(0);
+    // The Step 8 constraint contributes `opening_ids.len()` challenges; binding
+    // constraints contribute 1 challenge each. Step 8 (if present) is at
+    // baked index 0..opening_ids.len(); bindings come after.
+    let step8_num_challenges: usize = if !extra_constraints_for_r1cs.is_empty() {
+        extra_constraints_for_r1cs[0].num_challenges
+    } else {
+        0
+    };
+    let binding_baked_start = step8_num_challenges;
+    let step8_eval_commitments_count: usize = if !extra_constraints_for_r1cs.is_empty() {
+        1
+    } else {
+        0
+    };
+    let mut binding_idx_in_baked = binding_baked_start;
+    let mut binding_idx_in_eval = step8_eval_commitments_count;
+    {
+        use common::VirtualPoly;
+        use joltworks::poly::multilinear_polynomial::{
+            MultilinearPolynomial, PolynomialEvaluation,
+        };
+        use joltworks::subprotocols::blindfold::output_constraint::{
+            OutputClaimConstraint, ValueSource,
+        };
+        let model = pp.shared.model();
+        let _ = binding_challenge_start;
+        for (opening_id, (opening_point, _)) in accumulator.openings.iter() {
+            let Some(VirtualPoly::NodeOutput(node_idx)) = opening_id.virtual_poly() else {
+                continue;
+            };
+            // Mirror the prover-side filter: only bind `NodeExecution`
+            // openings (raw NodeOutput evaluations); skip internal
+            // protocol-specific sumchecks like `Raf`.
+            if !matches!(
+                opening_id.sumcheck,
+                joltworks::poly::opening_proof::SumcheckId::NodeExecution(_)
+            ) {
+                continue;
+            }
+            let node = &model[node_idx];
+            let expected_value: F = match &node.operator {
+                Operator::Constant(c) => {
+                    MultilinearPolynomial::from(c.0.clone().padded_next_power_of_two())
+                        .evaluate(&opening_point.r)
+                }
+                Operator::Input(_) => {
+                    let input_pos = io
+                        .input_indices
+                        .iter()
+                        .position(|&i| i == node_idx)
+                        .ok_or_else(|| {
+                            ProofVerifyError::InvalidOpeningProof(format!(
+                                "Input node {node_idx} missing from io.input_indices",
+                            ))
+                        })?;
+                    MultilinearPolynomial::from(io.inputs[input_pos].padded_next_power_of_two())
+                        .evaluate(&opening_point.r)
+                }
+                _ => continue,
+            };
+            // (1) baked challenge matches verifier-computed expected.
+            let baked_challenge = bundle
+                .baked
+                .extra_constraint_challenges
+                .get(binding_idx_in_baked)
+                .copied()
+                .ok_or_else(|| {
+                    ProofVerifyError::InvalidOpeningProof(format!(
+                        "Missing binding challenge at baked idx {binding_idx_in_baked}",
+                    ))
+                })?;
+            if baked_challenge != expected_value {
+                return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                    "Public-node binding mismatch for node {node_idx}: \
+                     baked challenge {baked_challenge} != public MLE eval {expected_value}",
+                )));
+            }
+            // (2) corresponding y_com is identity G1.
+            let y_com = bundle
+                .blindfold_verifier_input
+                .eval_commitments
+                .get(binding_idx_in_eval)
+                .ok_or_else(|| {
+                    ProofVerifyError::InvalidOpeningProof(format!(
+                        "Missing binding y_com at eval_commitments idx {binding_idx_in_eval}",
+                    ))
+                })?;
+            use joltworks::curve::JoltGroupElement;
+            if !y_com.is_zero() {
+                return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                    "Public-node binding y_com at idx {binding_idx_in_eval} is not identity G1 \
+                     (would let the prover commit a non-zero output_var, decoupling \
+                     witness opening from the public expected value)",
+                )));
+            }
+            // Add the constraint to the R1CS structure (must mirror prover).
+            extra_constraints_for_r1cs.push(OutputClaimConstraint::linear(vec![
+                (ValueSource::Constant(1), ValueSource::Opening(*opening_id)),
+                (ValueSource::Constant(-1), ValueSource::Challenge(0)),
+            ]));
+            binding_idx_in_baked += 1;
+            binding_idx_in_eval += 1;
+        }
+    }
+    // Activate eval_commitment_gens if we have any extra constraints (Step 8
+    // OR binding constraints).
+    let eval_commitment_gens_v = if !extra_constraints_for_r1cs.is_empty() {
+        Some((
+            pedersen_gens.message_generators[0],
+            pedersen_gens.blinding_generator,
+        ))
+    } else {
+        eval_commitment_gens_v
+    };
 
     // 4. Verify BlindFold proof
     let builder = VerifierR1CSBuilder::<F>::new_with_extra(

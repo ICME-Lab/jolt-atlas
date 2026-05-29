@@ -358,5 +358,14 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         SoftmaxRecipMultRemainder(usize),
+
+        /// A reduced variant of [`Self::NodeOutput`] for neural teleportation ops (tanh, erf, sigmoid).
+        /// During the neural teleport phase, a reduction sumcheck collapses the `NodeOutput` claim to
+        /// the same point as the div sumcheck challenges. [`Self::NodeOutput`] cannot be reused for this
+        /// reduced claim because the opening accumulator forbids appending `NodeOutput` claims after
+        /// the point-to-line evaluation reduction has already been performed for that node.
+        ///
+        /// * `0` – producer node index
+        NTReducedNodeOutput(usize),
     }
 }

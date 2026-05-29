@@ -16,6 +16,7 @@ use crate::{
             VerifierOpeningAccumulator, BIG_ENDIAN,
         },
         prefix_suffix::{Prefix, PrefixRegistry, PrefixSuffixDecomposition},
+        signed_identity_poly::{BinarySignedIdentityPoly, SignedOperandPoly},
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
     },
@@ -32,9 +33,9 @@ use crate::{
     },
 };
 use ark_std::Zero;
-use common::parallel::par_enabled;
 use common::{
     consts::{LOG_K, XLEN},
+    parallel::par_enabled,
     VirtualPoly,
 };
 use itertools::Itertools;
@@ -48,6 +49,7 @@ use crate::subprotocols::blindfold::{
 };
 
 const DEGREE_BOUND: usize = 2;
+const NUM_PHASES: usize = 8;
 
 /// Parameters for the Prefix suffix Read-raf checking sum-check protocol.
 ///
@@ -172,6 +174,9 @@ where
         ]))
     }
 
+    // TODO(zk): ReadRafSumcheckParams is not generic over SIGNED, so this always evaluates
+    // unsigned polys. If ZK is used with signed operations, move this to
+    // ReadRafSumcheckProver/Verifier impls where SIGNED is in scope.
     #[cfg(feature = "zk")]
     fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
         let opening_point = self.normalize_opening_point(&sumcheck_challenges.into_opening());
@@ -192,16 +197,35 @@ where
     }
 }
 
-/// Prover for the Prefix suffix Read-raf checking sum-check protocol.
+/// Prover for the Prefix-Suffix Read-RAF checking sum-check protocol.
 ///
-/// Proves correct instruction lookups by evaluating table values using prefix-suffix
-/// decomposition and combining them with RAF values that account for operand interleaving.
-/// The protocol combines the lookup output with gamma-batched operand contributions.
+/// The read-checking portion proves correct instruction lookups (read-values or rv-poly correctness)
+/// by encoding the lookup indices as one-hot addresses (ra) and using sum-check to compute:
+/// rv(r) = sum_{k,j} eq(r, j) * ra(k,j) * Val(k)
 ///
-/// The sumcheck has two phases:
-/// - Address phase: binds address variables (log K rounds), accumulating ra(k,j)·Val and ra(k,j)·RafVal
-/// - Cycle phase: binds cycle variables (log T rounds), evaluating with equality polynomials
-pub struct ReadRafSumcheckProver<F, LUT>
+/// The RAF checking portion allows the prover to virtualize the address polynomial
+/// via sum-check, reducing it to a claim on the one-hot address polynomial (which is committed).
+/// The RAF checking sum-check computes raf(r) = sum_{k,j} eq(r, j) * ra(k,j) * Int(k) where Int(k) is the
+/// canonical identity polynomial on the boolean hypercube (Int(k) = k), batched with the
+/// read-checking sum-check.
+///
+/// The protocol proceeds in two phases:
+/// - Address phase: binds address variables (log K rounds) using prefix-suffix decomposition
+///   for both read-checking and RAF components
+/// - Cycle phase: binds cycle variables via standard sum-check over log T rounds
+///
+/// # Const parameters
+///
+/// - `SIGNED`: when `true`, lookup addresses are interpreted as two's-complement signed integers;
+///   when `false`, they are unsigned. This controls whether `SignedIdentityPoly` (signed) or
+///   `IdentityPolynomial` (unsigned) is used for the RAF identity component.
+/// - `ORDER_OP`: the number of prefix-suffix polynomial pairs used to decompose each operand.
+///   Directly coupled to `SIGNED`: the signed operand decomposition (`SignedOperandPoly`) requires
+///   an extra term for the sign bit, giving `ORDER_OP = 3`, while the unsigned decomposition
+///   (`OperandPolynomial`) needs only `ORDER_OP = 2`. The two valid instantiations are the
+///   type aliases `SignedReadRafSumcheckProver` (`SIGNED=true, ORDER_OP=3`) and
+///   `UnsignedReadRafSumcheckProver` (`SIGNED=false, ORDER_OP=2`).
+pub struct ReadRafSumcheckProver<F, LUT, const SIGNED: bool, const ORDER_OP: usize>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
@@ -233,33 +257,30 @@ where
     eq_r_node_output: GruenSplitEqPolynomial<F>,
 
     // --- RAF stuff ---
-    /// Cycle indices with interleaved operands (used for left/right operand prefix-suffix Q).
-    lookup_indices_uninterleave: Vec<usize>,
-    /// Cycle indices with identity path (non-interleaved) used as the RAF flag source.
-    lookup_indices_identity: Vec<usize>,
     /// Registry holding prefix checkpoint values for `PrefixSuffixDecomposition` instances.
     prefix_registry: PrefixRegistry<F>,
     /// Prefix-suffix decomposition for right operand identity polynomial family.
-    right_operand_ps: PrefixSuffixDecomposition<F, 2>,
+    right_operand_ps: PrefixSuffixDecomposition<F, ORDER_OP, false>,
     /// Prefix-suffix decomposition for left operand identity polynomial family.
-    left_operand_ps: PrefixSuffixDecomposition<F, 2>,
+    left_operand_ps: PrefixSuffixDecomposition<F, ORDER_OP, false>,
     /// Prefix-suffix decomposition for the instruction-identity path (RAF flag path).
-    identity_ps: PrefixSuffixDecomposition<F, 2>,
+    identity_ps: PrefixSuffixDecomposition<F, 2, SIGNED>,
 }
 
-impl<F, LUT> ReadRafSumcheckProver<F, LUT>
+impl<F, LUT, const SIGNED: bool, const ORDER_OP: usize>
+    ReadRafSumcheckProver<F, LUT, SIGNED, ORDER_OP>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
-    /// Initializes the Prefix suffix Read-raf checking prover with trace data.
-    ///
-    /// Computes lookup indices from operand tensors, initializes prefix-suffix
-    /// decomposition structures for table values and RAF values, and prepares
-    /// expanding tables for accumulating results during the address phase.
-    pub fn gen(params: ReadRafSumcheckParams<F, LUT>, lookup_indices: Vec<LookupBits>) -> Self {
-        let T = 1 << params.log_T;
-        let phases = 8;
+    fn new_inner(
+        params: ReadRafSumcheckParams<F, LUT>,
+        lookup_indices: Vec<LookupBits>,
+        identity_ps: PrefixSuffixDecomposition<F, 2, SIGNED>,
+        left_operand_ps: PrefixSuffixDecomposition<F, ORDER_OP, false>,
+        right_operand_ps: PrefixSuffixDecomposition<F, ORDER_OP, false>,
+    ) -> Self {
+        let phases = NUM_PHASES;
         let log_m = LOG_K / phases;
         let u_evals = EqPolynomial::evals(&params.r_node_output.r);
         let prefix_checkpoints = vec![None.into(); Prefixes::COUNT];
@@ -272,27 +293,9 @@ where
             .with_min_len(par_enabled())
             .map(|_| DensePolynomial::default())
             .collect();
-        let is_interleaved_operands = params.is_interleaved_operands;
-        let right_operand_poly = OperandPolynomial::new(LOG_K, OperandSide::Right);
-        let left_operand_poly = OperandPolynomial::new(LOG_K, OperandSide::Left);
-        let identity_poly = IdentityPolynomial::new(LOG_K);
-        let span = tracing::span!(tracing::Level::INFO, "Init PrefixSuffixDecomposition");
-        let _guard = span.enter();
-        let right_operand_ps =
-            PrefixSuffixDecomposition::new(Box::new(right_operand_poly), log_m, LOG_K);
-        let left_operand_ps =
-            PrefixSuffixDecomposition::new(Box::new(left_operand_poly), log_m, LOG_K);
-        let identity_ps = PrefixSuffixDecomposition::new(Box::new(identity_poly), log_m, LOG_K);
-        drop(_guard);
-        drop(span);
+
         let eq_r_node_output =
             GruenSplitEqPolynomial::<F>::new(&params.r_node_output.r, BindingOrder::LowToHigh);
-        // TODO: Adjust [PrefixSuffixDecomposition::init_Q_dual] and [PrefixSuffixDecomposition::init_Q] to be compatible with jolt-atlas usage
-        let (lookup_indices_uninterleave, lookup_indices_identity) = if is_interleaved_operands {
-            ((0..T).collect(), vec![])
-        } else {
-            (vec![], (0..T).collect())
-        };
         let mut res = Self {
             r: Vec::with_capacity(params.log_T + LOG_K),
             params,
@@ -307,8 +310,6 @@ where
                 .map(|_| ExpandingTable::new(1 << log_m, BindingOrder::HighToLow))
                 .collect(),
             // raf
-            lookup_indices_identity,
-            lookup_indices_uninterleave,
             right_operand_ps,
             left_operand_ps,
             identity_ps,
@@ -341,24 +342,24 @@ where
                 });
         }
 
+        // When operands are interleaved (binary ops), each cycle contributes to the operand
+        // prefix-suffix decomposition and the identity poly is a no-op (empty indices).
+        // When non-interleaved (single-operand ops like tanh/erf/sigmoid), it is reversed:
+        // operand polys are no-ops and the identity poly processes all cycles.
+        let is_interleaved = self.params.is_interleaved_operands;
+        let empty: &[LookupBits] = &[];
+        let left_ps = &mut self.left_operand_ps;
+        let right_ps = &mut self.right_operand_ps;
+        let identity_ps = &mut self.identity_ps;
+        let u_evals = &self.u_evals;
+        let all_bits = &self.lookup_indices[..];
+        let operand_bits: &[LookupBits] = if is_interleaved { all_bits } else { empty };
+        let identity_bits: &[LookupBits] = if is_interleaved { empty } else { all_bits };
         rayon::scope(|s| {
-            // Single pass over lookup_indices_uninterleave for both operands
             s.spawn(|_| {
-                PrefixSuffixDecomposition::init_Q_dual(
-                    &mut self.left_operand_ps,
-                    &mut self.right_operand_ps,
-                    &self.u_evals,
-                    &self.lookup_indices_uninterleave,
-                    &self.lookup_indices,
-                )
+                PrefixSuffixDecomposition::init_Q_dual(left_ps, right_ps, u_evals, operand_bits)
             });
-            s.spawn(|_| {
-                self.identity_ps.init_Q(
-                    &self.u_evals,
-                    &self.lookup_indices_identity,
-                    &self.lookup_indices,
-                )
-            });
+            s.spawn(|_| identity_ps.init_Q(u_evals, identity_bits));
         });
 
         self.init_suffix_polys(phase);
@@ -589,7 +590,75 @@ where
     }
 }
 
-impl<F: JoltField, FS: Transcript, T> SumcheckInstanceProver<F, FS> for ReadRafSumcheckProver<F, T>
+impl<F, LUT> ReadRafSumcheckProver<F, LUT, true, 3>
+where
+    F: JoltField,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
+{
+    pub fn gen(params: ReadRafSumcheckParams<F, LUT>, lookup_indices: Vec<LookupBits>) -> Self {
+        let log_m = LOG_K / NUM_PHASES;
+        let span = tracing::span!(tracing::Level::INFO, "Init PrefixSuffixDecomposition");
+        let _guard = span.enter();
+        let identity_ps = PrefixSuffixDecomposition::new(
+            Box::new(BinarySignedIdentityPoly::<F, XLEN>::default()),
+            log_m,
+            LOG_K,
+        );
+        let left_operand_ps = PrefixSuffixDecomposition::new(
+            Box::new(SignedOperandPoly::<F, XLEN>::new(OperandSide::Left)),
+            log_m,
+            LOG_K,
+        );
+        let right_operand_ps = PrefixSuffixDecomposition::new(
+            Box::new(SignedOperandPoly::<F, XLEN>::new(OperandSide::Right)),
+            log_m,
+            LOG_K,
+        );
+        drop(_guard);
+        Self::new_inner(
+            params,
+            lookup_indices,
+            identity_ps,
+            left_operand_ps,
+            right_operand_ps,
+        )
+    }
+}
+
+impl<F, LUT> ReadRafSumcheckProver<F, LUT, false, 2>
+where
+    F: JoltField,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
+{
+    pub fn gen(params: ReadRafSumcheckParams<F, LUT>, lookup_indices: Vec<LookupBits>) -> Self {
+        let log_m = LOG_K / NUM_PHASES;
+        let span = tracing::span!(tracing::Level::INFO, "Init PrefixSuffixDecomposition");
+        let _guard = span.enter();
+        let identity_ps =
+            PrefixSuffixDecomposition::new(Box::new(IdentityPolynomial::new(LOG_K)), log_m, LOG_K);
+        let left_operand_ps = PrefixSuffixDecomposition::new(
+            Box::new(OperandPolynomial::new(LOG_K, OperandSide::Left)),
+            log_m,
+            LOG_K,
+        );
+        let right_operand_ps = PrefixSuffixDecomposition::new(
+            Box::new(OperandPolynomial::new(LOG_K, OperandSide::Right)),
+            log_m,
+            LOG_K,
+        );
+        drop(_guard);
+        Self::new_inner(
+            params,
+            lookup_indices,
+            identity_ps,
+            left_operand_ps,
+            right_operand_ps,
+        )
+    }
+}
+
+impl<F: JoltField, FS: Transcript, T, const SIGNED: bool, const ORDER_OP: usize>
+    SumcheckInstanceProver<F, FS> for ReadRafSumcheckProver<F, T, SIGNED, ORDER_OP>
 where
     T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
@@ -703,9 +772,19 @@ where
                 let gamma = self.params.gamma;
                 let gamma_sqr = self.params.gamma_sqr;
                 let raf_val = if self.params.is_interleaved_operands {
-                    gamma * self.prefix_registry.checkpoints[Prefix::LeftOperand].unwrap()
-                        + gamma_sqr
-                            * self.prefix_registry.checkpoints[Prefix::RightOperand].unwrap()
+                    let left = self.prefix_registry.checkpoints[Prefix::LeftOperand].unwrap();
+                    let right = self.prefix_registry.checkpoints[Prefix::RightOperand].unwrap();
+                    if SIGNED {
+                        let left_msb =
+                            self.prefix_registry.checkpoints[Prefix::LeftOperandMSB].unwrap();
+                        let right_msb =
+                            self.prefix_registry.checkpoints[Prefix::RightOperandMSB].unwrap();
+                        gamma * (left + left_msb) + gamma_sqr * (right + right_msb)
+                    } else {
+                        gamma * left + gamma_sqr * right
+                    }
+                } else if SIGNED {
+                    gamma_sqr * self.prefix_registry.checkpoints[Prefix::SignedIdentity].unwrap()
                 } else {
                     gamma_sqr * self.prefix_registry.checkpoints[Prefix::Identity].unwrap()
                 };
@@ -741,7 +820,7 @@ where
 }
 
 /// Verifier for the Prefix suffix Read-raf checking sum-check protocol.
-pub struct ReadRafSumcheckVerifier<F, T>
+pub struct ReadRafSumcheckVerifier<F, T, const SIGNED: bool>
 where
     F: JoltField,
     T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
@@ -749,7 +828,7 @@ where
     params: ReadRafSumcheckParams<F, T>,
 }
 
-impl<F, LUT> ReadRafSumcheckVerifier<F, LUT>
+impl<F, LUT, const SIGNED: bool> ReadRafSumcheckVerifier<F, LUT, SIGNED>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
@@ -760,8 +839,8 @@ where
     }
 }
 
-impl<F: JoltField, FS: Transcript, LUT> SumcheckInstanceVerifier<F, FS>
-    for ReadRafSumcheckVerifier<F, LUT>
+impl<F: JoltField, FS: Transcript, LUT, const SIGNED: bool> SumcheckInstanceVerifier<F, FS>
+    for ReadRafSumcheckVerifier<F, LUT, SIGNED>
 where
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
@@ -784,11 +863,23 @@ where
         let eq_eval = EqPolynomial::mle(&self.params.r_node_output.r, &r_node_output_prime.r);
 
         // RAF
-        let left_operand_eval =
-            OperandPolynomial::<F>::new(LOG_K, OperandSide::Left).evaluate(&r_address_prime.r);
-        let right_operand_eval =
-            OperandPolynomial::<F>::new(LOG_K, OperandSide::Right).evaluate(&r_address_prime.r);
-        let identity_poly_eval = IdentityPolynomial::<F>::new(LOG_K).evaluate(&r_address_prime.r);
+        let (identity_poly_eval, left_operand_eval, right_operand_eval) = if SIGNED {
+            let identity_poly_eval =
+                BinarySignedIdentityPoly::<F, XLEN>::default().evaluate(&r_address_prime.r);
+            let left_operand_eval =
+                SignedOperandPoly::<F, XLEN>::new(OperandSide::Left).evaluate(&r_address_prime.r);
+            let right_operand_eval =
+                SignedOperandPoly::<F, XLEN>::new(OperandSide::Right).evaluate(&r_address_prime.r);
+            (identity_poly_eval, left_operand_eval, right_operand_eval)
+        } else {
+            let left_operand_eval =
+                OperandPolynomial::<F>::new(LOG_K, OperandSide::Left).evaluate(&r_address_prime.r);
+            let right_operand_eval =
+                OperandPolynomial::<F>::new(LOG_K, OperandSide::Right).evaluate(&r_address_prime.r);
+            let identity_poly_eval =
+                IdentityPolynomial::<F>::new(LOG_K).evaluate(&r_address_prime.r);
+            (identity_poly_eval, left_operand_eval, right_operand_eval)
+        };
         let raf_flag_claim = F::from_bool(self.params.is_interleaved_operands);
         let raf_claim = raf_flag_claim
             * (left_operand_eval + self.params.gamma * right_operand_eval)
@@ -833,17 +924,17 @@ where
     /// Recovers the opening point sampled for the node output
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F>;
 
-    /// Returns the `OpeningId` that should be appended
-    /// as RAF claims to the opening accumulator. Used by both prover and verifier to
-    /// determine which virtual polynomial openings to register.
-    fn raf_claim_specs(&self) -> Vec<OpeningId>;
-
     fn table(&self) -> LUT {
         LUT::default()
     }
 }
 
-pub fn ps_read_raf_prover<
+pub type SignedReadRafSumcheckProver<F, LUT> = ReadRafSumcheckProver<F, LUT, true, 3>;
+pub type UnsignedReadRafSumcheckProver<F, LUT> = ReadRafSumcheckProver<F, LUT, false, 2>;
+pub type SignedReadRafSumcheckVerifier<F, LUT> = ReadRafSumcheckVerifier<F, LUT, true>;
+pub type UnsignedReadRafSumcheckVerifier<F, LUT> = ReadRafSumcheckVerifier<F, LUT, false>;
+
+pub fn ps_signed_read_raf_prover<
     F: JoltField,
     T: Transcript,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
@@ -852,12 +943,26 @@ pub fn ps_read_raf_prover<
     lookup_indices: Vec<LookupBits>,
     accumulator: &mut ProverOpeningAccumulator<F>,
     transcript: &mut T,
-) -> ReadRafSumcheckProver<F, LUT> {
+) -> SignedReadRafSumcheckProver<F, LUT> {
     let params = ReadRafSumcheckParams::new(provider, accumulator, transcript);
-    ReadRafSumcheckProver::gen(params, lookup_indices)
+    SignedReadRafSumcheckProver::gen(params, lookup_indices)
 }
 
-pub fn ps_read_raf_verifier<
+pub fn ps_unsigned_read_raf_prover<
+    F: JoltField,
+    T: Transcript,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
+>(
+    provider: &impl PrefixSuffixShoutProvider<F, LUT>,
+    lookup_indices: Vec<LookupBits>,
+    accumulator: &mut ProverOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> UnsignedReadRafSumcheckProver<F, LUT> {
+    let params = ReadRafSumcheckParams::new(provider, accumulator, transcript);
+    UnsignedReadRafSumcheckProver::gen(params, lookup_indices)
+}
+
+pub fn ps_signed_read_raf_verifier<
     F: JoltField,
     T: Transcript,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
@@ -865,9 +970,22 @@ pub fn ps_read_raf_verifier<
     provider: &impl PrefixSuffixShoutProvider<F, LUT>,
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut T,
-) -> ReadRafSumcheckVerifier<F, LUT> {
+) -> SignedReadRafSumcheckVerifier<F, LUT> {
     let params = ReadRafSumcheckParams::new(provider, accumulator, transcript);
-    ReadRafSumcheckVerifier::new(params)
+    SignedReadRafSumcheckVerifier::new(params)
+}
+
+pub fn ps_unsigned_read_raf_verifier<
+    F: JoltField,
+    T: Transcript,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
+>(
+    provider: &impl PrefixSuffixShoutProvider<F, LUT>,
+    accumulator: &mut VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> UnsignedReadRafSumcheckVerifier<F, LUT> {
+    let params = ReadRafSumcheckParams::new(provider, accumulator, transcript);
+    UnsignedReadRafSumcheckVerifier::new(params)
 }
 
 #[cfg(test)]
@@ -881,13 +999,14 @@ mod tests {
         poly::{
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
             opening_proof::{
-                OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+                OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
                 VerifierOpeningAccumulator, BIG_ENDIAN,
             },
         },
         subprotocols::{
             ps_shout::{
-                ps_read_raf_prover, ps_read_raf_verifier, PrefixSuffixShoutProvider, ReadRafClaims,
+                ps_unsigned_read_raf_prover, ps_unsigned_read_raf_verifier,
+                PrefixSuffixShoutProvider, ReadRafClaims,
             },
             sumcheck::Sumcheck,
         },
@@ -959,7 +1078,7 @@ mod tests {
             INTERLEAVED,
         );
 
-        let mut prover = ps_read_raf_prover(
+        let mut prover = ps_unsigned_read_raf_prover(
             &provider,
             trace.lookup_bits,
             &mut prover_accumulator,
@@ -974,7 +1093,7 @@ mod tests {
         let mut verifier_accumulator = VerifierOpeningAccumulator::new();
         transfer_openings(&prover_accumulator, &mut verifier_accumulator);
 
-        let verifier = ps_read_raf_verifier(
+        let verifier = ps_unsigned_read_raf_verifier(
             &provider,
             &mut verifier_accumulator,
             &mut verifier_transcript,
@@ -1120,10 +1239,6 @@ mod tests {
             _accumulator: &dyn OpeningAccumulator<Fr>,
         ) -> OpeningPoint<BIG_ENDIAN, Fr> {
             OpeningPoint::new(self.r_cycle.clone())
-        }
-
-        fn raf_claim_specs(&self) -> Vec<OpeningId> {
-            unimplemented!()
         }
     }
 }

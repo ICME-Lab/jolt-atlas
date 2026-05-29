@@ -24,14 +24,11 @@ use crate::{
     },
     transcripts::Transcript,
     utils::{
-        expanding_table::ExpandingTable, lookup_bits::LookupBits, math::Math,
-        thread::drop_in_background_thread,
+        expanding_table::ExpandingTable, lookup_bits::LookupBits, thread::drop_in_background_thread,
     },
 };
 use ark_std::Zero;
-use common::parallel::par_enabled;
-use common::VirtualPoly;
-use itertools::Itertools;
+use common::{parallel::par_enabled, VirtualPoly};
 use rayon::prelude::*;
 use std::array;
 
@@ -183,7 +180,7 @@ where
     /// Registry holding prefix checkpoint values for `PrefixSuffixDecomposition` instances.
     prefix_registry: PrefixRegistry<F>,
     /// Prefix-suffix decomposition for the instruction-identity path (RAF flag path).
-    identity_ps: PrefixSuffixDecomposition<F, 2>,
+    identity_ps: PrefixSuffixDecomposition<F, 2, false>,
 }
 
 impl<F> IdentityRCProver<F>
@@ -243,11 +240,7 @@ where
                     *u_eval *= self.v[phase - 1][k_bound];
                 });
         }
-        self.identity_ps.init_Q(
-            &self.u_evals,
-            &(0..self.params.log_T.pow2()).collect_vec(),
-            &self.lookup_indices,
-        );
+        self.identity_ps.init_Q(&self.u_evals, &self.lookup_indices);
         self.identity_ps.init_P(&mut self.prefix_registry);
         self.v[phase].reset(F::one());
     }

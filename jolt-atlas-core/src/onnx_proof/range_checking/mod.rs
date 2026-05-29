@@ -14,17 +14,14 @@ use joltworks::{
     config::OneHotParams,
     field::JoltField,
     lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
-    poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{
-            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN,
-        },
+    poly::opening_proof::{
+        OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+        VerifierOpeningAccumulator, BIG_ENDIAN,
     },
     subprotocols::{
         ps_shout::{
-            ps_read_raf_prover, ps_read_raf_verifier, PrefixSuffixShoutProvider, ReadRafClaims,
-            ReadRafSumcheckProver, ReadRafSumcheckVerifier,
+            ps_signed_read_raf_prover, ps_signed_read_raf_verifier, PrefixSuffixShoutProvider,
+            ReadRafClaims, SignedReadRafSumcheckProver, SignedReadRafSumcheckVerifier,
         },
         shout::RaOneHotEncoding,
     },
@@ -141,23 +138,16 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
         trace: &Trace,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> (ReadRafSumcheckProver<F, LUT>, Vec<usize>)
+    ) -> (SignedReadRafSumcheckProver<F, LUT>, Vec<usize>)
     where
         F: JoltField,
         T: Transcript,
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
-        append_raf_claims_prover::<F, LUT, H>(
-            &self.computation_node,
-            self,
-            trace,
-            accumulator,
-            transcript,
-        );
         let (left, right) = H::get_operands_tensors(trace, &self.computation_node);
         let lookup_bits = H::compute_lookup_indices(&left, &right);
         let lookup_indices: Vec<usize> = lookup_bits.iter().map(|&x| x.into()).collect();
-        let prover = ps_read_raf_prover(self, lookup_bits, accumulator, transcript);
+        let prover = ps_signed_read_raf_prover(self, lookup_bits, accumulator, transcript);
         (prover, lookup_indices)
     }
 
@@ -166,14 +156,13 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> ReadRafSumcheckVerifier<F, LUT>
+    ) -> SignedReadRafSumcheckVerifier<F, LUT>
     where
         F: JoltField,
         T: Transcript,
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
-        append_raf_claims_verifier::<F, LUT, H>(self, accumulator, transcript);
-        ps_read_raf_verifier(self, accumulator, transcript)
+        ps_signed_read_raf_verifier(self, accumulator, transcript)
     }
 }
 
@@ -206,15 +195,10 @@ where
     }
 
     fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
-        (self.operands.get_output_operand(), SumcheckId::Raf)
-    }
-
-    fn raf_claim_specs(&self) -> Vec<OpeningId> {
-        self.operands
-            .get_input_operands()
-            .into_iter()
-            .map(|p| OpeningId::new(p, SumcheckId::Raf))
-            .collect()
+        (
+            self.operands.get_output_operand(),
+            SumcheckId::NodeExecution(self.operands.node_idx()),
+        )
     }
 }
 
@@ -258,7 +242,10 @@ impl<H: RangeCheckingOperandsTrait> RaOneHotEncoding for RangeCheckEncoding<H> {
     }
 
     fn ra_source(&self) -> OpeningId {
-        OpeningId::new(self.operands.get_output_operand(), SumcheckId::Raf)
+        OpeningId::new(
+            self.operands.get_output_operand(),
+            SumcheckId::NodeExecution(self.operands.node_idx()),
+        )
     }
 
     fn log_k(&self) -> usize {
@@ -267,55 +254,5 @@ impl<H: RangeCheckingOperandsTrait> RaOneHotEncoding for RangeCheckEncoding<H> {
 
     fn one_hot_params(&self) -> OneHotParams {
         OneHotParams::new(self.log_t)
-    }
-}
-
-/// Temporary method to append RAF claims for range-checking operations
-/// It takes existing opening claims from tensors (as i32 values),
-/// and re-evaluates them at the same point as unsigned tensors.
-/// TODO(AntoineF4C5) Use directly the i32 claims, see #208
-fn append_raf_claims_prover<F: JoltField, LUT, H>(
-    computation_node: &ComputationNode,
-    provider: &RangeCheckProvider<H>,
-    trace: &Trace,
-    opening_accumulator: &mut ProverOpeningAccumulator<F>,
-    transcript: &mut impl Transcript,
-) where
-    H: RangeCheckingOperandsTrait,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
-{
-    let (left_operand, right_operand) = H::get_operands_tensors(trace, computation_node);
-    let r_cycle = <RangeCheckProvider<H> as PrefixSuffixShoutProvider<F, LUT>>::r_cycle(
-        provider,
-        opening_accumulator,
-    );
-
-    // Cache left/right operand claims. (In our case they have been cached in Execution sumcheck)
-    let operand_tensors = [left_operand, right_operand];
-    let raf_specs =
-        <RangeCheckProvider<H> as PrefixSuffixShoutProvider<F, LUT>>::raf_claim_specs(provider);
-    for (tensor, opening_id) in operand_tensors.into_iter().zip(raf_specs) {
-        let claim = MultilinearPolynomial::from(tensor.into_container_data()) // TODO: make this work with from_i32
-            .evaluate(&r_cycle.r);
-        opening_accumulator.append_virtual(transcript, opening_id, r_cycle.clone(), claim);
-    }
-}
-
-fn append_raf_claims_verifier<F: JoltField, LUT, H>(
-    provider: &RangeCheckProvider<H>,
-    opening_accumulator: &mut VerifierOpeningAccumulator<F>,
-    transcript: &mut impl Transcript,
-) where
-    H: RangeCheckingOperandsTrait,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
-{
-    let r_cycle = <RangeCheckProvider<H> as PrefixSuffixShoutProvider<F, LUT>>::r_cycle(
-        provider,
-        opening_accumulator,
-    );
-    for opening_id in
-        <RangeCheckProvider<H> as PrefixSuffixShoutProvider<F, LUT>>::raf_claim_specs(provider)
-    {
-        opening_accumulator.append_virtual(transcript, opening_id, r_cycle.clone());
     }
 }

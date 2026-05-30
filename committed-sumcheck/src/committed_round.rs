@@ -2,6 +2,7 @@
 //! consistency proofs.
 
 use ark_bn254::{Fr, G1Projective};
+use ark_ff::Zero;
 use ark_std::UniformRand;
 use joltworks::transcripts::Transcript;
 use rand_core::CryptoRngCore;
@@ -49,11 +50,37 @@ where
     }
 }
 
-pub fn scalar_round_poly(commitment: Commitment, opening: Opening) -> CommittedRoundPoly {
-    CommittedRoundPoly {
-        commitments: vec![commitment],
-        openings: vec![opening],
+pub fn scalar_round_poly(
+    commitment: Commitment,
+    opening: Opening,
+    coeffs_len: usize,
+) -> CommittedRoundPoly {
+    assert!(coeffs_len > 0, "scalar round polynomial cannot be empty");
+    let mut commitments = Vec::with_capacity(coeffs_len);
+    let mut openings = Vec::with_capacity(coeffs_len);
+    commitments.push(commitment);
+    openings.push(opening);
+    for _ in 1..coeffs_len {
+        commitments.push(Commitment(G1Projective::zero()));
+        openings.push(Opening {
+            value: Fr::zero(),
+            blinding: Fr::zero(),
+        });
     }
+    CommittedRoundPoly {
+        commitments,
+        openings,
+    }
+}
+
+pub fn scalar_round_commitments(commitment: Commitment, coeffs_len: usize) -> Vec<Commitment> {
+    assert!(coeffs_len > 0, "scalar round polynomial cannot be empty");
+    let mut commitments = Vec::with_capacity(coeffs_len);
+    commitments.push(commitment);
+    for _ in 1..coeffs_len {
+        commitments.push(Commitment(G1Projective::zero()));
+    }
+    commitments
 }
 
 pub fn evaluate_round_opening(round: &CommittedRoundPoly, r: Fr) -> Opening {

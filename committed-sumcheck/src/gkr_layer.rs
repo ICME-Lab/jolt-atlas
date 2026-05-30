@@ -13,6 +13,8 @@ use crate::{
     sumcheck::{CommittedSumCheckProof, SumCheck},
 };
 
+pub(crate) const PRODUCT_ROUND_COEFFS: usize = 4;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductLayerProof {
     pub sumcheck_proof: CommittedSumCheckProof,
@@ -46,13 +48,6 @@ impl CommitmentOpening {
         }
     }
 
-    fn sumcheck_eval_from_round(round: &CommittedRoundPoly, r: Fr) -> Self {
-        Self {
-            commitment: evaluate_round_commitments(&round.commitments, r),
-            opening: evaluate_round_opening(round, r),
-        }
-    }
-
     fn scalar_mul(&self, scalar: Fr) -> Self {
         Self {
             commitment: Commitment(self.commitment.0 * scalar),
@@ -71,7 +66,6 @@ pub(crate) fn prove_product_layer<T, R>(
     rhs: &[Fr],
     claim_point: &[<Fr as JoltField>::Challenge],
     previous_round: &CommittedRoundPoly,
-    previous_challenge: Fr,
     transcript: &mut T,
     rng: &mut R,
 ) -> Option<(ProductLayerProof, ProductLayerClaims)>
@@ -86,14 +80,15 @@ where
         DenseMleTable::new(rhs.to_vec()),
     );
     let mut sumcheck = SumCheck::<Fr, _, 3>::new(claim_point, relation);
-    let sumcheck_output =
-        sumcheck.prove(params, previous_round, previous_challenge, transcript, rng)?;
+    let sumcheck_output = sumcheck.prove(params, previous_round, transcript, rng)?;
 
     let sumcheck_point = sumcheck_output.challenges;
     let sumcheck_eval_challenge: Fr = (*sumcheck_point.last()?).into();
     let sumcheck_eval_round = sumcheck_output.rounds.last()?;
-    let sumcheck_eval_at_point =
-        CommitmentOpening::sumcheck_eval_from_round(sumcheck_eval_round, sumcheck_eval_challenge);
+    let sumcheck_eval_at_point_commitment =
+        evaluate_round_commitments(&sumcheck_eval_round.commitments, sumcheck_eval_challenge);
+    let sumcheck_eval_at_point_opening =
+        evaluate_round_opening(sumcheck_eval_round, sumcheck_eval_challenge);
 
     let lhs_at_sumcheck_point = CommitmentOpening::from_opening(
         params,
@@ -115,7 +110,8 @@ where
         &sumcheck_point,
         &lhs_at_sumcheck_point,
         &rhs_at_sumcheck_point,
-        &sumcheck_eval_at_point,
+        &sumcheck_eval_at_point_commitment,
+        &sumcheck_eval_at_point_opening,
         transcript,
         rng,
     )?;
@@ -139,7 +135,6 @@ pub(crate) fn verify_product_layer<T>(
     label: &'static [u8],
     params: &PedersenParams,
     previous_commitments: &[Commitment],
-    previous_challenge: Fr,
     claim_point: &[<Fr as JoltField>::Challenge],
     proof: &ProductLayerProof,
     num_rounds: usize,
@@ -157,7 +152,7 @@ where
         params,
         &proof.sumcheck_proof,
         previous_commitments,
-        previous_challenge,
+        claim_point,
         num_rounds,
         transcript,
     )?;
@@ -193,7 +188,8 @@ fn prove_product_relation_at_sumcheck_point<T, R>(
     sumcheck_point: &[<Fr as JoltField>::Challenge],
     lhs_at_sumcheck_point: &CommitmentOpening,
     rhs_at_sumcheck_point: &CommitmentOpening,
-    sumcheck_eval_at_point: &CommitmentOpening,
+    sumcheck_eval_at_point_commitment: &Commitment,
+    sumcheck_eval_at_point_opening: &Opening,
     transcript: &mut T,
     rng: &mut R,
 ) -> Option<MultiplicationProof>
@@ -207,10 +203,10 @@ where
         params,
         &binary_product_lhs.commitment,
         &rhs_at_sumcheck_point.commitment,
-        &sumcheck_eval_at_point.commitment,
+        sumcheck_eval_at_point_commitment,
         &binary_product_lhs.opening,
         &rhs_at_sumcheck_point.opening,
-        &sumcheck_eval_at_point.opening,
+        sumcheck_eval_at_point_opening,
         transcript,
         rng,
     )

@@ -19,8 +19,10 @@ use joltworks::{field::JoltField, transcripts::Transcript};
 use rand_core::CryptoRngCore;
 
 use crate::{
-    committed_round::scalar_round_poly,
-    gkr_layer::{prove_product_layer, verify_product_layer, ProductLayerProof},
+    committed_round::{scalar_round_commitments, scalar_round_poly},
+    gkr_layer::{
+        prove_product_layer, verify_product_layer, ProductLayerProof, PRODUCT_ROUND_COEFFS,
+    },
     gkr_util::{absorb_gkr_statement, evaluate_mle, hadamard_values, validate_tables},
     pedersen::{commit, Commitment, Opening, PedersenParams},
 };
@@ -58,7 +60,7 @@ where
         blinding: Fr::rand(rng),
     };
     let output_commitment = commit(params, &output_opening);
-    let output_round = scalar_round_poly(output_commitment, output_opening);
+    let output_round = scalar_round_poly(output_commitment, output_opening, PRODUCT_ROUND_COEFFS);
     absorb_gkr_statement(params, output_point, &output_commitment, transcript);
 
     // G = E * F
@@ -69,7 +71,6 @@ where
         &f,
         output_point,
         &output_round,
-        Fr::from(0_u64),
         transcript,
         rng,
     )?;
@@ -80,34 +81,19 @@ where
     let e_claim = scalar_round_poly(
         top_claims.lhs_at_sumcheck_point.commitment,
         top_claims.lhs_at_sumcheck_point.opening,
+        PRODUCT_ROUND_COEFFS,
     );
-    let (left_proof, _left_claims) = prove_product_layer(
-        b"left",
-        params,
-        a,
-        b,
-        &e_f_point,
-        &e_claim,
-        Fr::from(0_u64),
-        transcript,
-        rng,
-    )?;
+    let (left_proof, _left_claims) =
+        prove_product_layer(b"left", params, a, b, &e_f_point, &e_claim, transcript, rng)?;
 
     // F = C * D
     let f_claim = scalar_round_poly(
         top_claims.rhs_at_sumcheck_point.commitment,
         top_claims.rhs_at_sumcheck_point.opening,
+        PRODUCT_ROUND_COEFFS,
     );
     let (right_proof, _right_claims) = prove_product_layer(
-        b"right",
-        params,
-        c,
-        d,
-        &e_f_point,
-        &f_claim,
-        Fr::from(0_u64),
-        transcript,
-        rng,
+        b"right", params, c, d, &e_f_point, &f_claim, transcript, rng,
     )?;
 
     Some(ThreeProductGkrProof {
@@ -135,11 +121,12 @@ where
     absorb_gkr_statement(params, output_point, &proof.output_commitment, transcript);
 
     // G = E * F
+    let output_round_commitments =
+        scalar_round_commitments(proof.output_commitment, PRODUCT_ROUND_COEFFS);
     let Some(top_claims) = verify_product_layer(
         b"top",
         params,
-        &[proof.output_commitment],
-        Fr::from(0_u64),
+        &output_round_commitments,
         output_point,
         &proof.top,
         num_vars,
@@ -151,11 +138,14 @@ where
     let e_f_point = top_claims.sumcheck_point;
 
     // E = A * B
+    let e_claim_commitments = scalar_round_commitments(
+        top_claims.lhs_at_sumcheck_point_commitment,
+        PRODUCT_ROUND_COEFFS,
+    );
     if verify_product_layer(
         b"left",
         params,
-        &[top_claims.lhs_at_sumcheck_point_commitment],
-        Fr::from(0_u64),
+        &e_claim_commitments,
         &e_f_point,
         &proof.left,
         e_f_point.len(),
@@ -167,11 +157,14 @@ where
     }
 
     // F = C * D
+    let f_claim_commitments = scalar_round_commitments(
+        top_claims.rhs_at_sumcheck_point_commitment,
+        PRODUCT_ROUND_COEFFS,
+    );
     verify_product_layer(
         b"right",
         params,
-        &[top_claims.rhs_at_sumcheck_point_commitment],
-        Fr::from(0_u64),
+        &f_claim_commitments,
         &e_f_point,
         &proof.right,
         e_f_point.len(),

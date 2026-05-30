@@ -17,7 +17,8 @@ pub mod sumcheck;
 pub use committed_round::{
     absorb_round_poly_commitments, challenge_round_poly, challenge_round_poly_optimized,
     commit_round_poly, evaluate_round_commitments, evaluate_round_opening, prove_round_consistency,
-    scalar_round_poly, verify_round_consistency, CommittedRoundPoly, RoundConsistencyProof,
+    scalar_round_commitments, scalar_round_poly, verify_round_consistency, CommittedRoundPoly,
+    RoundConsistencyProof,
 };
 pub use gkr::{prove_three_product_gkr, verify_three_product_gkr, ThreeProductGkrProof};
 pub use gkr_layer::ProductLayerProof;

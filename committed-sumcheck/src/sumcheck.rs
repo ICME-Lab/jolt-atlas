@@ -29,6 +29,7 @@ where
     F: JoltField + PrimeField,
 {
     eq: GruenSplitEqPolynomial<F>,
+    claim_point: Vec<F::Challenge>,
     relation: R,
 }
 
@@ -69,7 +70,11 @@ where
             relation.len() * 2,
             "split-eq and relation length mismatch"
         );
-        Self { eq, relation }
+        Self {
+            eq,
+            claim_point: eq_point.to_vec(),
+            relation,
+        }
     }
 
     pub fn num_rounds(&self) -> usize {
@@ -200,7 +205,6 @@ where
         &mut self,
         params: &PedersenParams,
         previous_round: &CommittedRoundPoly,
-        previous_challenge: Fr,
         transcript: &mut T,
         rng: &mut Rng,
     ) -> Option<CommittedSumCheckProverOutput>
@@ -213,7 +217,7 @@ where
         let mut challenges = Vec::with_capacity(self.remaining_rounds());
         let mut rounds = Vec::with_capacity(self.remaining_rounds());
         let mut previous_round = previous_round.clone();
-        let mut previous_challenge = previous_challenge;
+        let mut previous_challenge = (*self.claim_point.last()?).into();
 
         while !self.is_complete() {
             let poly = self.round_poly();
@@ -253,14 +257,15 @@ where
         params: &PedersenParams,
         proof: &CommittedSumCheckProof,
         previous_commitments: &[Commitment],
-        previous_challenge: Fr,
+        claim_point: &[<Fr as JoltField>::Challenge],
         num_rounds: usize,
         transcript: &mut T,
     ) -> Option<Vec<<Fr as JoltField>::Challenge>>
     where
         T: Transcript,
     {
-        if previous_commitments.is_empty()
+        if claim_point.is_empty()
+            || previous_commitments.is_empty()
             || proof.round_commitments.len() != num_rounds
             || proof.consistency_proofs.len() != num_rounds
         {
@@ -270,7 +275,7 @@ where
         let expected_commitments_per_round = LANES + 1;
         let mut challenges: Vec<<Fr as JoltField>::Challenge> = Vec::with_capacity(num_rounds);
         let mut previous_commitments = previous_commitments;
-        let mut previous_challenge = previous_challenge;
+        let mut previous_challenge: Fr = (*claim_point.last()?).into();
         for (round, commitments) in proof.round_commitments.iter().enumerate() {
             if commitments.len() != expected_commitments_per_round {
                 return None;
@@ -306,7 +311,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        committed_round::challenge_round_poly_optimized,
+        committed_round::{challenge_round_poly_optimized, scalar_round_poly},
         ops::hadamard::Hadamard,
         pedersen::{commit, Opening, PedersenParams},
         round::{DenseMleTable, MleTable},
@@ -451,13 +456,7 @@ mod tests {
 
         let mut prover_transcript = Blake2bTranscript::default();
         let proof = sumcheck
-            .prove(
-                &params,
-                &previous_round,
-                Fr::from(0_u64),
-                &mut prover_transcript,
-                &mut rng,
-            )
+            .prove(&params, &previous_round, &mut prover_transcript, &mut rng)
             .expect("valid previous round consistency")
             .proof;
 
@@ -473,7 +472,7 @@ mod tests {
             &params,
             &proof,
             &previous_round.commitments,
-            Fr::from(0_u64),
+            &eq_challenges,
             eq_challenges.len(),
             &mut verifier_transcript,
         )
@@ -502,13 +501,7 @@ mod tests {
 
         let mut prover_transcript = Blake2bTranscript::default();
         let mut proof = sumcheck
-            .prove(
-                &params,
-                &previous_round,
-                Fr::from(0_u64),
-                &mut prover_transcript,
-                &mut rng,
-            )
+            .prove(&params, &previous_round, &mut prover_transcript, &mut rng)
             .expect("valid previous round consistency")
             .proof;
         proof.consistency_proofs[0]
@@ -521,7 +514,7 @@ mod tests {
                 &params,
                 &proof,
                 &previous_round.commitments,
-                Fr::from(0_u64),
+                &eq_challenges,
                 eq_challenges.len(),
                 &mut verifier_transcript,
             )
@@ -543,9 +536,6 @@ mod tests {
             value: poly.evaluate(Fr::zero()) + poly.evaluate(Fr::one()),
             blinding: Fr::random(rng),
         };
-        CommittedRoundPoly {
-            commitments: vec![commit(params, &opening)],
-            openings: vec![opening],
-        }
+        scalar_round_poly(commit(params, &opening), opening, LANES + 1)
     }
 }

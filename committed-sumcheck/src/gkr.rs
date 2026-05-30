@@ -19,27 +19,11 @@ use joltworks::{field::JoltField, transcripts::Transcript};
 use rand_core::CryptoRngCore;
 
 use crate::{
-    committed_round::{
-        evaluate_round_commitments, evaluate_round_opening, scalar_round_poly, CommittedRoundPoly,
-    },
-    gkr_util::{
-        absorb_gkr_statement, absorb_layer_label, evaluate_eq, evaluate_mle, hadamard_values,
-        reversed_challenges, validate_tables,
-    },
-    multiplication::{prove_multiplication, verify_multiplication, MultiplicationProof},
-    ops::hadamard::Hadamard,
+    committed_round::scalar_round_poly,
+    gkr_layer::{prove_product_layer, verify_product_layer, ProductLayerProof},
+    gkr_util::{absorb_gkr_statement, evaluate_mle, hadamard_values, validate_tables},
     pedersen::{commit, Commitment, Opening, PedersenParams},
-    round::DenseMleTable,
-    sumcheck::{CommittedSumCheckProof, SumCheck},
 };
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProductLayerProof {
-    pub sumcheck_proof: CommittedSumCheckProof,
-    pub left_eval_commitment: Commitment,
-    pub right_eval_commitment: Commitment,
-    pub multiplication_proof: MultiplicationProof,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreeProductGkrProof {
@@ -47,13 +31,6 @@ pub struct ThreeProductGkrProof {
     pub top: ProductLayerProof,
     pub left: ProductLayerProof,
     pub right: ProductLayerProof,
-}
-
-struct ProductLayerProverOutput {
-    proof: ProductLayerProof,
-    challenges: Vec<<Fr as JoltField>::Challenge>,
-    left_eval_opening: Opening,
-    right_eval_opening: Opening,
 }
 
 pub fn prove_three_product_gkr<T, R>(
@@ -84,42 +61,50 @@ where
     let output_round = scalar_round_poly(output_commitment, output_opening);
     absorb_gkr_statement(params, output_point, &output_commitment, transcript);
 
-    let top_eq_point = reversed_challenges(output_point);
-    let top = prove_product_layer(
+    // G = E * F
+    let (top_proof, top_claims) = prove_product_layer(
         b"top",
         params,
         &e,
         &f,
-        &top_eq_point,
+        output_point,
         &output_round,
         Fr::from(0_u64),
         transcript,
         rng,
     )?;
 
-    let child_eq_point = reversed_challenges(&top.challenges);
-    let top_left_round = scalar_round_poly(top.proof.left_eval_commitment, top.left_eval_opening);
-    let left = prove_product_layer(
+    let e_f_point = top_claims.sumcheck_point;
+
+    // E = A * B
+    let e_claim = scalar_round_poly(
+        top_claims.lhs_at_sumcheck_point.commitment,
+        top_claims.lhs_at_sumcheck_point.opening,
+    );
+    let (left_proof, _left_claims) = prove_product_layer(
         b"left",
         params,
         a,
         b,
-        &child_eq_point,
-        &top_left_round,
+        &e_f_point,
+        &e_claim,
         Fr::from(0_u64),
         transcript,
         rng,
     )?;
 
-    let top_right_round =
-        scalar_round_poly(top.proof.right_eval_commitment, top.right_eval_opening);
-    let right = prove_product_layer(
+    // F = C * D
+    let f_claim = scalar_round_poly(
+        top_claims.rhs_at_sumcheck_point.commitment,
+        top_claims.rhs_at_sumcheck_point.opening,
+    );
+    let (right_proof, _right_claims) = prove_product_layer(
         b"right",
         params,
         c,
         d,
-        &child_eq_point,
-        &top_right_round,
+        &e_f_point,
+        &f_claim,
         Fr::from(0_u64),
         transcript,
         rng,
@@ -127,9 +112,9 @@ where
 
     Some(ThreeProductGkrProof {
         output_commitment,
-        top: top.proof,
-        left: left.proof,
-        right: right.proof,
+        top: top_proof,
+        left: left_proof,
+        right: right_proof,
     })
 }
 
@@ -149,13 +134,13 @@ where
 
     absorb_gkr_statement(params, output_point, &proof.output_commitment, transcript);
 
-    let top_eq_point = reversed_challenges(output_point);
-    let Some(top_challenges) = verify_product_layer(
+    // G = E * F
+    let Some(top_claims) = verify_product_layer(
         b"top",
         params,
         &[proof.output_commitment],
         Fr::from(0_u64),
-        &top_eq_point,
+        output_point,
         &proof.top,
         num_vars,
         transcript,
@@ -163,15 +148,17 @@ where
         return false;
     };
 
-    let child_eq_point = reversed_challenges(&top_challenges);
+    let e_f_point = top_claims.sumcheck_point;
+
+    // E = A * B
     if verify_product_layer(
         b"left",
         params,
-        &[proof.top.left_eval_commitment],
+        &[top_claims.lhs_at_sumcheck_point_commitment],
         Fr::from(0_u64),
-        &child_eq_point,
+        &e_f_point,
         &proof.left,
-        top_challenges.len(),
+        e_f_point.len(),
         transcript,
     )
     .is_none()
@@ -179,137 +166,18 @@ where
         return false;
     }
 
+    // F = C * D
     verify_product_layer(
         b"right",
         params,
-        &[proof.top.right_eval_commitment],
+        &[top_claims.rhs_at_sumcheck_point_commitment],
         Fr::from(0_u64),
-        &child_eq_point,
+        &e_f_point,
         &proof.right,
-        top_challenges.len(),
+        e_f_point.len(),
         transcript,
     )
     .is_some()
-}
-
-fn prove_product_layer<T, R>(
-    label: &'static [u8],
-    params: &PedersenParams,
-    lhs: &[Fr],
-    rhs: &[Fr],
-    eq_point: &[<Fr as JoltField>::Challenge],
-    previous_round: &CommittedRoundPoly,
-    previous_challenge: Fr,
-    transcript: &mut T,
-    rng: &mut R,
-) -> Option<ProductLayerProverOutput>
-where
-    T: Transcript,
-    R: CryptoRngCore,
-{
-    absorb_layer_label(label, transcript);
-
-    let relation = Hadamard::new::<Fr>(
-        DenseMleTable::new(lhs.to_vec()),
-        DenseMleTable::new(rhs.to_vec()),
-    );
-    let mut sumcheck = SumCheck::<Fr, _, 3>::new(eq_point, relation);
-    let sumcheck_output =
-        sumcheck.prove(params, previous_round, previous_challenge, transcript, rng)?;
-
-    let final_challenge: Fr = (*sumcheck_output.challenges.last()?).into();
-    let final_round = sumcheck_output.rounds.last()?;
-    let output_eval_opening = evaluate_round_opening(final_round, final_challenge);
-    let output_eval_commitment =
-        evaluate_round_commitments(&final_round.commitments, final_challenge);
-
-    let left_eval_opening = Opening {
-        value: evaluate_mle(lhs, &sumcheck_output.challenges),
-        blinding: Fr::rand(rng),
-    };
-    let right_eval_opening = Opening {
-        value: evaluate_mle(rhs, &sumcheck_output.challenges),
-        blinding: Fr::rand(rng),
-    };
-    let left_eval_commitment = commit(params, &left_eval_opening);
-    let right_eval_commitment = commit(params, &right_eval_opening);
-    let eq_eval = evaluate_eq(eq_point, &sumcheck_output.challenges);
-    let scaled_left_eval_opening = Opening {
-        value: left_eval_opening.value * eq_eval,
-        blinding: left_eval_opening.blinding * eq_eval,
-    };
-    let scaled_left_eval_commitment = Commitment(left_eval_commitment.0 * eq_eval);
-    let multiplication_proof = prove_multiplication(
-        params,
-        &scaled_left_eval_commitment,
-        &right_eval_commitment,
-        &output_eval_commitment,
-        &scaled_left_eval_opening,
-        &right_eval_opening,
-        &output_eval_opening,
-        transcript,
-        rng,
-    )?;
-
-    Some(ProductLayerProverOutput {
-        proof: ProductLayerProof {
-            sumcheck_proof: sumcheck_output.proof,
-            left_eval_commitment,
-            right_eval_commitment,
-            multiplication_proof,
-        },
-        challenges: sumcheck_output.challenges,
-        left_eval_opening,
-        right_eval_opening,
-    })
-}
-
-fn verify_product_layer<T>(
-    label: &'static [u8],
-    params: &PedersenParams,
-    previous_commitments: &[Commitment],
-    previous_challenge: Fr,
-    eq_point: &[<Fr as JoltField>::Challenge],
-    proof: &ProductLayerProof,
-    num_rounds: usize,
-    transcript: &mut T,
-) -> Option<Vec<<Fr as JoltField>::Challenge>>
-where
-    T: Transcript,
-{
-    if num_rounds == 0 || previous_commitments.is_empty() {
-        return None;
-    }
-
-    absorb_layer_label(label, transcript);
-    let challenges = SumCheck::<Fr, Hadamard<DenseMleTable<Fr>, DenseMleTable<Fr>>, 3>::verify(
-        params,
-        &proof.sumcheck_proof,
-        previous_commitments,
-        previous_challenge,
-        num_rounds,
-        transcript,
-    )?;
-
-    let final_challenge: Fr = (*challenges.last()?).into();
-    let output_eval_commitment = evaluate_round_commitments(
-        proof.sumcheck_proof.round_commitments.last()?,
-        final_challenge,
-    );
-    let eq_eval = evaluate_eq(eq_point, &challenges);
-    let scaled_left_eval_commitment = Commitment(proof.left_eval_commitment.0 * eq_eval);
-    if !verify_multiplication(
-        params,
-        &scaled_left_eval_commitment,
-        &proof.right_eval_commitment,
-        &output_eval_commitment,
-        &proof.multiplication_proof,
-        transcript,
-    ) {
-        return None;
-    }
-
-    Some(challenges)
 }
 
 #[cfg(test)]

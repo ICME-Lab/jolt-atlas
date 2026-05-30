@@ -5,6 +5,7 @@
 
 pub mod committed_round;
 pub mod gkr;
+mod gkr_layer;
 mod gkr_util;
 pub mod multiplication;
 pub mod ops;
@@ -18,9 +19,8 @@ pub use committed_round::{
     commit_round_poly, evaluate_round_commitments, evaluate_round_opening, prove_round_consistency,
     scalar_round_poly, verify_round_consistency, CommittedRoundPoly, RoundConsistencyProof,
 };
-pub use gkr::{
-    prove_three_product_gkr, verify_three_product_gkr, ProductLayerProof, ThreeProductGkrProof,
-};
+pub use gkr::{prove_three_product_gkr, verify_three_product_gkr, ThreeProductGkrProof};
+pub use gkr_layer::ProductLayerProof;
 pub use multiplication::{
     absorb_multiplication_response, prove_multiplication, verify_multiplication,
     MultiplicationProof,

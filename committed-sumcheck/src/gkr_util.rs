@@ -49,7 +49,6 @@ pub(crate) fn evaluate_eq(
     assert_eq!(point.len(), eval_point.len(), "eq point length mismatch");
     point
         .iter()
-        .rev()
         .zip(eval_point)
         .map(|(x, y)| {
             let x: Fr = (*x).into();
@@ -57,12 +56,6 @@ pub(crate) fn evaluate_eq(
             Fr::from(1_u64) - x - y + Fr::from(2_u64) * x * y
         })
         .product()
-}
-
-pub(crate) fn reversed_challenges(
-    point: &[<Fr as JoltField>::Challenge],
-) -> Vec<<Fr as JoltField>::Challenge> {
-    point.iter().rev().copied().collect()
 }
 
 pub(crate) fn absorb_gkr_statement<T: Transcript>(

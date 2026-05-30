@@ -59,7 +59,11 @@ where
 {
     pub fn new(eq_point: &[F::Challenge], relation: R) -> Self {
         assert!(!eq_point.is_empty(), "SumCheck needs at least one variable");
-        let eq = GruenSplitEqPolynomial::new(eq_point, BindingOrder::LowToHigh);
+        // `eq_point` is supplied in the same variable order as the relation
+        // tables. GruenSplitEqPolynomial with LowToHigh consumes the current
+        // variable from the end, so reverse only at this boundary.
+        let split_eq_point = eq_point.iter().rev().copied().collect::<Vec<_>>();
+        let eq = GruenSplitEqPolynomial::new(&split_eq_point, BindingOrder::LowToHigh);
         assert_eq!(
             eq.len(),
             relation.len() * 2,
@@ -314,11 +318,12 @@ mod tests {
             <Fr as JoltField>::Challenge::from(2_u128),
             <Fr as JoltField>::Challenge::from(5_u128),
         ];
-        let eq_point = eq_challenges
+        let split_eq_point = eq_challenges
             .iter()
+            .rev()
             .map(|challenge| (*challenge).into())
             .collect::<Vec<Fr>>();
-        let eq = EqPolynomial::<Fr>::evals(&eq_point);
+        let eq = EqPolynomial::<Fr>::evals(&split_eq_point);
         let lhs = [1, 3, 2, 5].map(Fr::from);
         let rhs = [7, 11, 13, 17].map(Fr::from);
 

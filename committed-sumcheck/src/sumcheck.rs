@@ -200,12 +200,14 @@ where
         let mut previous_round: Option<CommittedSumCheckRound> = None;
 
         while !self.is_complete() {
-            let round = self.committed_round(params, transcript, rng);
+            let poly = self.round_poly();
+            let committed_poly = commit_round_poly(params, &poly, rng);
+
             if let Some(previous_round) = &previous_round {
                 let proof = prove_round_consistency(
                     params,
                     &previous_round.committed_poly,
-                    &round.committed_poly,
+                    &committed_poly,
                     previous_round.challenge.into(),
                     transcript,
                     rng,
@@ -214,7 +216,16 @@ where
                 consistency_proofs.push(proof);
             }
 
-            round_commitments.push(round.committed_poly.commitments.clone());
+            let challenge =
+                challenge_round_poly_optimized(params, &committed_poly.commitments, transcript);
+            self.bind(challenge);
+
+            round_commitments.push(committed_poly.commitments.clone());
+            let round = CommittedSumCheckRound {
+                poly,
+                committed_poly,
+                challenge,
+            };
             previous_round = Some(round);
         }
 
@@ -240,16 +251,11 @@ where
         }
 
         let expected_commitments_per_round = LANES + 1;
-        let mut challenges = Vec::with_capacity(num_rounds);
+        let mut challenges: Vec<<Fr as JoltField>::Challenge> = Vec::with_capacity(num_rounds);
         for (round, commitments) in proof.round_commitments.iter().enumerate() {
             if commitments.len() != expected_commitments_per_round {
                 return None;
             }
-            challenges.push(challenge_round_poly_optimized(
-                params,
-                commitments,
-                transcript,
-            ));
 
             if round > 0 {
                 let previous_commitments = &proof.round_commitments[round - 1];
@@ -266,6 +272,12 @@ where
                     return None;
                 }
             }
+
+            challenges.push(challenge_round_poly_optimized(
+                params,
+                commitments,
+                transcript,
+            ));
         }
         Some(challenges)
     }

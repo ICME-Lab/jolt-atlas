@@ -137,12 +137,14 @@ where
         + right.openings[0].blinding;
     let delta_blinding = left_blinding - right_blinding;
 
-    Some(RoundConsistencyProof {
+    let proof = RoundConsistencyProof {
         equality: EqualityProof {
             nonce_commitment,
             blinding_difference_response: nonce_blinding + challenge * delta_blinding,
         },
-    })
+    };
+    absorb_round_consistency_response(&proof, transcript);
+    Some(proof)
 }
 
 pub fn verify_round_consistency<T>(
@@ -185,8 +187,20 @@ where
         + right_commitments[0].0;
     let delta_commitment = left_commitment - right_commitment;
 
-    params.blinding_generator * proof.equality.blinding_difference_response
-        == proof.equality.nonce_commitment + delta_commitment * challenge
+    let accepted = params.blinding_generator * proof.equality.blinding_difference_response
+        == proof.equality.nonce_commitment + delta_commitment * challenge;
+    if accepted {
+        absorb_round_consistency_response(proof, transcript);
+    }
+    accepted
+}
+
+pub fn absorb_round_consistency_response<T: Transcript>(
+    proof: &RoundConsistencyProof,
+    transcript: &mut T,
+) {
+    transcript.append_message(b"cs/round-consistency-response/v1");
+    transcript.append_scalar(&proof.equality.blinding_difference_response);
 }
 
 fn absorb_round_consistency_statement<T: Transcript>(

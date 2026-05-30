@@ -25,6 +25,7 @@ members = [
     "qwen3-awy",
     "qwen3-layer-prover",
     "zk-sumcheck",
+    "committed-sumcheck",
 ]
 
 [workspace.dependencies]
@@ -37,6 +38,7 @@ qwen2-awy = { path = "./qwen2-awy" }
 qwen3-awy = { path = "./qwen3-awy" }
 qwen3-layer-prover = { path = "./qwen3-layer-prover" }
 zk-sumcheck = { path = "./zk-sumcheck" }
+committed-sumcheck = { path = "./committed-sumcheck" }
 
 # Cryptography and Math
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }

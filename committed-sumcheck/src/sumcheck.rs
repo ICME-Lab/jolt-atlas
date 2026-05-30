@@ -45,6 +45,13 @@ pub struct CommittedSumCheckProof {
     pub consistency_proofs: Vec<RoundConsistencyProof>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommittedSumCheckProverOutput {
+    pub proof: CommittedSumCheckProof,
+    pub challenges: Vec<<Fr as JoltField>::Challenge>,
+    pub rounds: Vec<CommittedRoundPoly>,
+}
+
 impl<F, R, const LANES: usize> SumCheck<F, R, LANES>
 where
     F: JoltField + PrimeField,
@@ -188,96 +195,98 @@ where
     pub fn prove<T, Rng>(
         &mut self,
         params: &PedersenParams,
+        previous_round: &CommittedRoundPoly,
+        previous_challenge: Fr,
         transcript: &mut T,
         rng: &mut Rng,
-    ) -> CommittedSumCheckProof
+    ) -> Option<CommittedSumCheckProverOutput>
     where
         T: Transcript,
         Rng: CryptoRngCore,
     {
         let mut round_commitments = Vec::with_capacity(self.remaining_rounds());
-        let mut consistency_proofs = Vec::with_capacity(self.remaining_rounds().saturating_sub(1));
-        let mut previous_round: Option<CommittedSumCheckRound> = None;
+        let mut consistency_proofs = Vec::with_capacity(self.remaining_rounds());
+        let mut challenges = Vec::with_capacity(self.remaining_rounds());
+        let mut rounds = Vec::with_capacity(self.remaining_rounds());
+        let mut previous_round = previous_round.clone();
+        let mut previous_challenge = previous_challenge;
 
         while !self.is_complete() {
             let poly = self.round_poly();
             let committed_poly = commit_round_poly(params, &poly, rng);
-
-            if let Some(previous_round) = &previous_round {
-                let proof = prove_round_consistency(
-                    params,
-                    &previous_round.committed_poly,
-                    &committed_poly,
-                    previous_round.challenge.into(),
-                    transcript,
-                    rng,
-                )
-                .expect("honest prover creates consistent adjacent rounds");
-                consistency_proofs.push(proof);
-            }
+            let proof = prove_round_consistency(
+                params,
+                &previous_round,
+                &committed_poly,
+                previous_challenge,
+                transcript,
+                rng,
+            )?;
+            consistency_proofs.push(proof);
 
             let challenge =
                 challenge_round_poly_optimized(params, &committed_poly.commitments, transcript);
             self.bind(challenge);
 
             round_commitments.push(committed_poly.commitments.clone());
-            let round = CommittedSumCheckRound {
-                poly,
-                committed_poly,
-                challenge,
-            };
-            previous_round = Some(round);
+            rounds.push(committed_poly.clone());
+            previous_round = committed_poly;
+            previous_challenge = challenge.into();
+            challenges.push(challenge);
         }
 
-        CommittedSumCheckProof {
-            round_commitments,
-            consistency_proofs,
-        }
+        Some(CommittedSumCheckProverOutput {
+            proof: CommittedSumCheckProof {
+                round_commitments,
+                consistency_proofs,
+            },
+            challenges,
+            rounds,
+        })
     }
 
     pub fn verify<T>(
         params: &PedersenParams,
         proof: &CommittedSumCheckProof,
+        previous_commitments: &[Commitment],
+        previous_challenge: Fr,
         num_rounds: usize,
         transcript: &mut T,
     ) -> Option<Vec<<Fr as JoltField>::Challenge>>
     where
         T: Transcript,
     {
-        if proof.round_commitments.len() != num_rounds
-            || proof.consistency_proofs.len() != num_rounds.saturating_sub(1)
+        if previous_commitments.is_empty()
+            || proof.round_commitments.len() != num_rounds
+            || proof.consistency_proofs.len() != num_rounds
         {
             return None;
         }
 
         let expected_commitments_per_round = LANES + 1;
         let mut challenges: Vec<<Fr as JoltField>::Challenge> = Vec::with_capacity(num_rounds);
+        let mut previous_commitments = previous_commitments;
+        let mut previous_challenge = previous_challenge;
         for (round, commitments) in proof.round_commitments.iter().enumerate() {
             if commitments.len() != expected_commitments_per_round {
                 return None;
             }
 
-            if round > 0 {
-                let previous_commitments = &proof.round_commitments[round - 1];
-                let previous_challenge: Fr = challenges[round - 1].into();
-                let consistency_proof = &proof.consistency_proofs[round - 1];
-                if !verify_round_consistency(
-                    params,
-                    previous_commitments,
-                    commitments,
-                    previous_challenge,
-                    consistency_proof,
-                    transcript,
-                ) {
-                    return None;
-                }
+            if !verify_round_consistency(
+                params,
+                previous_commitments,
+                commitments,
+                previous_challenge,
+                &proof.consistency_proofs[round],
+                transcript,
+            ) {
+                return None;
             }
 
-            challenges.push(challenge_round_poly_optimized(
-                params,
-                commitments,
-                transcript,
-            ));
+            let challenge = challenge_round_poly_optimized(params, commitments, transcript);
+            challenges.push(challenge);
+            previous_commitments = commitments;
+            previous_challenge = challenge.into();
         }
         Some(challenges)
     }
@@ -295,7 +304,7 @@ mod tests {
     use crate::{
         committed_round::challenge_round_poly_optimized,
         ops::hadamard::Hadamard,
-        pedersen::PedersenParams,
+        pedersen::{commit, Opening, PedersenParams},
         round::{DenseMleTable, MleTable},
     };
 
@@ -433,12 +442,22 @@ mod tests {
             DenseMleTable::new(rhs.to_vec()),
         );
         let mut sumcheck = SumCheck::<Fr, _, 3>::new(&eq_challenges, relation);
+        let previous_round = scalar_round_for_initial_claim(&params, &sumcheck, &mut rng);
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let proof = sumcheck.prove(&params, &mut prover_transcript, &mut rng);
+        let proof = sumcheck
+            .prove(
+                &params,
+                &previous_round,
+                Fr::from(0_u64),
+                &mut prover_transcript,
+                &mut rng,
+            )
+            .expect("valid previous round consistency")
+            .proof;
 
         assert_eq!(proof.round_commitments.len(), eq_challenges.len());
-        assert_eq!(proof.consistency_proofs.len(), eq_challenges.len() - 1);
+        assert_eq!(proof.consistency_proofs.len(), eq_challenges.len());
         assert!(proof
             .round_commitments
             .iter()
@@ -448,6 +467,8 @@ mod tests {
         let challenges = SumCheck::<Fr, Hadamard<DenseMleTable<Fr>, DenseMleTable<Fr>>, 3>::verify(
             &params,
             &proof,
+            &previous_round.commitments,
+            Fr::from(0_u64),
             eq_challenges.len(),
             &mut verifier_transcript,
         )
@@ -472,9 +493,19 @@ mod tests {
             DenseMleTable::new(rhs.to_vec()),
         );
         let mut sumcheck = SumCheck::<Fr, _, 3>::new(&eq_challenges, relation);
+        let previous_round = scalar_round_for_initial_claim(&params, &sumcheck, &mut rng);
 
         let mut prover_transcript = Blake2bTranscript::default();
-        let mut proof = sumcheck.prove(&params, &mut prover_transcript, &mut rng);
+        let mut proof = sumcheck
+            .prove(
+                &params,
+                &previous_round,
+                Fr::from(0_u64),
+                &mut prover_transcript,
+                &mut rng,
+            )
+            .expect("valid previous round consistency")
+            .proof;
         proof.consistency_proofs[0]
             .equality
             .blinding_difference_response += Fr::from(1_u64);
@@ -484,10 +515,32 @@ mod tests {
             SumCheck::<Fr, Hadamard<DenseMleTable<Fr>, DenseMleTable<Fr>>, 3>::verify(
                 &params,
                 &proof,
+                &previous_round.commitments,
+                Fr::from(0_u64),
                 eq_challenges.len(),
                 &mut verifier_transcript,
             )
             .is_none()
         );
+    }
+
+    fn scalar_round_for_initial_claim<R, Rel, const LANES: usize>(
+        params: &PedersenParams,
+        sumcheck: &SumCheck<Fr, Rel, LANES>,
+        rng: &mut R,
+    ) -> CommittedRoundPoly
+    where
+        R: rand_core::CryptoRngCore,
+        Rel: RoundRelation<Fr, LANES> + Sync,
+    {
+        let poly = sumcheck.round_poly();
+        let opening = Opening {
+            value: poly.evaluate(Fr::zero()) + poly.evaluate(Fr::one()),
+            blinding: Fr::random(rng),
+        };
+        CommittedRoundPoly {
+            commitments: vec![commit(params, &opening)],
+            openings: vec![opening],
+        }
     }
 }

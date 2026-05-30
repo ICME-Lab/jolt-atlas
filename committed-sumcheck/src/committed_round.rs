@@ -49,6 +49,33 @@ where
     }
 }
 
+pub fn scalar_round_poly(commitment: Commitment, opening: Opening) -> CommittedRoundPoly {
+    CommittedRoundPoly {
+        commitments: vec![commitment],
+        openings: vec![opening],
+    }
+}
+
+pub fn evaluate_round_opening(round: &CommittedRoundPoly, r: Fr) -> Opening {
+    let mut value = Fr::from(0_u64);
+    let mut blinding = Fr::from(0_u64);
+    for (opening, r_power) in round.openings.iter().zip(powers(r, round.openings.len())) {
+        value += opening.value * r_power;
+        blinding += opening.blinding * r_power;
+    }
+    Opening { value, blinding }
+}
+
+pub fn evaluate_round_commitments(commitments: &[Commitment], r: Fr) -> Commitment {
+    Commitment(
+        commitments
+            .iter()
+            .zip(powers(r, commitments.len()))
+            .map(|(commitment, r_power)| commitment.0 * r_power)
+            .sum::<G1Projective>(),
+    )
+}
+
 pub fn absorb_round_poly_commitments<T>(
     params: &PedersenParams,
     commitments: &[Commitment],
@@ -173,11 +200,7 @@ where
     let challenge = transcript.challenge_scalar::<Fr>();
 
     // C_l = Σ_j C_{i,j} r^j commits to g_i(r).
-    let left_commitment = left_commitments
-        .iter()
-        .zip(powers(r, left_commitments.len()))
-        .map(|(commitment, r_power)| commitment.0 * r_power)
-        .sum::<G1Projective>();
+    let left_commitment = evaluate_round_commitments(left_commitments, r).0;
 
     // C_r = C_{i+1,0} + Σ_j C_{i+1,j} commits to g_{i+1}(0) + g_{i+1}(1).
     let right_commitment = right_commitments

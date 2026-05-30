@@ -4,6 +4,7 @@
 //! by the committed round-polynomial sumcheck protocol.
 
 pub mod committed_round;
+pub mod multiplication;
 pub mod ops;
 pub mod pedersen;
 pub mod round;
@@ -14,6 +15,10 @@ pub use committed_round::{
     absorb_round_poly_commitments, challenge_round_poly, challenge_round_poly_optimized,
     commit_round_poly, prove_round_consistency, verify_round_consistency, CommittedRoundPoly,
     RoundConsistencyProof,
+};
+pub use multiplication::{
+    absorb_multiplication_response, prove_multiplication, verify_multiplication,
+    MultiplicationProof,
 };
 pub use ops::hadamard::Hadamard;
 pub use pedersen::{Commitment, Opening, PedersenParams};

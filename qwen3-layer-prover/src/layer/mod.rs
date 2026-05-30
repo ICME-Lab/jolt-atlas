@@ -25,8 +25,8 @@ pub use commitments::{
     commit_layer_polynomials, commit_layer_polynomials_streaming_onehot,
 };
 pub use polys::LayerPolys;
-pub use prover::prove_layer;
+pub use prover::{prove_layer, prove_layer_iop_round_stats};
 pub use tensors::LayerTensorIds;
-pub use types::{LayerClaims, LayerProof, LayerShape, LayerWeights};
+pub use types::{LayerClaims, LayerIopRoundStat, LayerProof, LayerShape, LayerWeights};
 pub use verifier::verify_layer;
 pub use witness::LayerWitness;

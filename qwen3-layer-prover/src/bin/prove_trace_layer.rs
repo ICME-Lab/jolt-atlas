@@ -20,7 +20,7 @@ use qwen3_layer_prover::{
     layer::{
         HiddenStateCommitments, LayerPolySet, LayerPolys, LayerShape, LayerTensorIds, LayerWeights,
         attach_layer_ra_commitments, commit_layer_polynomials_streaming_onehot, prove_layer,
-        verify_layer,
+        prove_layer_iop_round_stats, verify_layer,
     },
     streaming_srs::{
         FlatG1SrsReader, StreamingOneHotCommitter, load_hyperkzg_setup_from_flat_g1_srs,
@@ -102,6 +102,39 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("poly {} len {}", entry.name, entry.poly.len());
         }
         println!("map_only: ok");
+        return Ok(());
+    }
+    if args.iop_rounds_only {
+        let t0 = Instant::now();
+        let layer_polys =
+            LayerPolys::<Fr>::from_witness(&traced.witness, &weights, &shape, &tensors);
+        let hidden_out_poly = qwen3_layer_prover::Poly::new(
+            MultilinearPolynomial::from(pad_power_of_two(&traced.hidden_out)),
+            None,
+        );
+        let mut transcript = Blake2bTranscript::default();
+        let stats = prove_layer_iop_round_stats::<Fr, _, ()>(
+            hidden_out_poly,
+            layer_polys,
+            &shape,
+            &mut transcript,
+        )?;
+        eprintln!(
+            "timing: prove_layer.iop_rounds_only {:.3}s",
+            t0.elapsed().as_secs_f64()
+        );
+        let total_sumchecks: usize = stats.iter().map(|row| row.sumchecks).sum();
+        let total_rounds: usize = stats.iter().map(|row| row.rounds).sum();
+        println!("iop_rounds_only: layer {}", args.layer);
+        println!("iop_rounds_only: seq {}", seq);
+        println!("iop_rounds_only: op_count {}", stats.len());
+        println!("iop_rounds_only: sumchecks {}", total_sumchecks);
+        println!("iop_rounds_only: rounds {}", total_rounds);
+        println!();
+        println!("{:<20} {:>10} {:>10}", "op", "sumchecks", "rounds");
+        for row in stats {
+            println!("{:<20} {:>10} {:>10}", row.op, row.sumchecks, row.rounds);
+        }
         return Ok(());
     }
     if args.commit_hidden_in_only {
@@ -424,6 +457,7 @@ struct Args {
     commit_hidden_only: bool,
     commit_only: bool,
     commit_all_layers_onehot_only: bool,
+    iop_rounds_only: bool,
 }
 
 impl Args {
@@ -445,6 +479,7 @@ impl Args {
         let mut commit_hidden_only = false;
         let mut commit_only = false;
         let mut commit_all_layers_onehot_only = false;
+        let mut iop_rounds_only = false;
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -492,6 +527,7 @@ impl Args {
                 "--commit-hidden-only" => commit_hidden_only = true,
                 "--commit-only" => commit_only = true,
                 "--commit-all-layers-onehot-only" => commit_all_layers_onehot_only = true,
+                "--iop-rounds-only" => iop_rounds_only = true,
                 "--help" | "-h" => {
                     print_help();
                     std::process::exit(0);
@@ -525,6 +561,7 @@ impl Args {
             commit_hidden_only,
             commit_only,
             commit_all_layers_onehot_only,
+            iop_rounds_only,
         })
     }
 }
@@ -553,6 +590,7 @@ fn print_help() {
            --commit-hidden-in-only stop after committing hidden_in only\n\
            --commit-hidden-only stop after committing hidden_in and hidden_out\n\
            --commit-all-layers-onehot-only collect all 28 layers' onehot RA polys and stream-commit them together\n\
+           --iop-rounds-only run the layer IOP only and print per-op sumcheck round counts\n\
            --commit-only    stop after building and committing layer polynomials"
     );
 }

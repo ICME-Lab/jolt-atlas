@@ -245,6 +245,26 @@ pub struct SoftmaxProof<F: JoltField, T: Transcript> {
 }
 
 impl<F: JoltField, T: Transcript> SoftmaxProof<F, T> {
+    pub(crate) fn sumcheck_round_count(&self) -> usize {
+        self.round.sumcheck_round_count()
+            + self.floor.sumcheck_round_count()
+            + self.acc.compressed_polys.len()
+            + self.exp_round.sumcheck_round_count()
+            + self.lookup.compressed_polys.len()
+            + self.exp_lookup.compressed_polys.len()
+            + self.exp_ra_onehot.compressed_polys.len()
+            + self.input_frac_lookup.compressed_polys.len()
+            + self.input_frac_ra_onehot.compressed_polys.len()
+    }
+
+    pub(crate) fn sumcheck_count(&self) -> usize {
+        self.round.sumcheck_count()
+            + self.floor.sumcheck_count()
+            + 1
+            + self.exp_round.sumcheck_count()
+            + 5
+    }
+
     pub fn pcs_opening_requests(&self) -> Vec<PcsOpeningRequest<F>> {
         let mut out = self.round.pcs_opening_requests();
         out.extend(self.floor.pcs_opening_requests());

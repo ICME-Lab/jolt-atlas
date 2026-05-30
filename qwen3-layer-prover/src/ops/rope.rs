@@ -108,6 +108,14 @@ pub struct RopeProof<F: JoltField, T: Transcript> {
 }
 
 impl<F: JoltField, T: Transcript> RopeProof<F, T> {
+    pub(crate) fn sumcheck_round_count(&self) -> usize {
+        self.round.sumcheck_round_count() + self.rope.sumcheck.compressed_polys.len()
+    }
+
+    pub(crate) fn sumcheck_count(&self) -> usize {
+        self.round.sumcheck_count() + 1
+    }
+
     pub fn pcs_opening_requests(&self) -> Vec<PcsOpeningRequest<F>> {
         self.round.pcs_opening_requests()
     }

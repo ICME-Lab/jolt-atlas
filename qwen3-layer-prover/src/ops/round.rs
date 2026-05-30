@@ -132,6 +132,16 @@ pub struct RoundProof<F: JoltField, T: Transcript> {
 }
 
 impl<F: JoltField, T: Transcript> RoundProof<F, T> {
+    pub(crate) fn sumcheck_round_count(&self) -> usize {
+        self.relation.compressed_polys.len()
+            + self.read_raf.compressed_polys.len()
+            + self.ra_onehot.compressed_polys.len()
+    }
+
+    pub(crate) fn sumcheck_count(&self) -> usize {
+        3
+    }
+
     pub fn pcs_opening_requests(&self) -> Vec<PcsOpeningRequest<F>> {
         self.ra_committed_openings.all().cloned().collect()
     }
@@ -587,6 +597,14 @@ pub(crate) struct RoundLookupProof<F: JoltField, T: Transcript> {
 }
 
 impl<F: JoltField, T: Transcript> RoundLookupProof<F, T> {
+    pub(crate) fn sumcheck_round_count(&self) -> usize {
+        self.read_raf.compressed_polys.len() + self.ra_onehot.compressed_polys.len()
+    }
+
+    pub(crate) fn sumcheck_count(&self) -> usize {
+        2
+    }
+
     pub(crate) fn pcs_opening_requests(&self) -> Vec<PcsOpeningRequest<F>> {
         self.committed_openings.all().cloned().collect()
     }

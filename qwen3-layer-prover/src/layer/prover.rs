@@ -20,7 +20,7 @@ use super::{
     openings::prove_layer_openings,
     polys::LayerPolys,
     tensors::LayerTensorIds,
-    types::{LayerClaims, LayerProof, LayerShape},
+    types::{LayerClaims, LayerIopRoundStat, LayerProof, LayerShape},
 };
 
 // Complete layer prover.
@@ -96,4 +96,24 @@ where
             opening_reduction,
         },
     ))
+}
+
+pub fn prove_layer_iop_round_stats<F, T, C>(
+    hidden_out: Poly<F, C>,
+    layer_polys: LayerPolys<F, C>,
+    shape: &LayerShape,
+    transcript: &mut T,
+) -> Result<Vec<LayerIopRoundStat>>
+where
+    F: JoltField,
+    T: Transcript,
+    C: Clone,
+{
+    let tensors = LayerTensorIds::default();
+    let hidden_out_point =
+        transcript.challenge_vector::<F>(shape.hidden_shape().padded_power_of_two().point_len());
+    let hidden_out_value = hidden_out.data.evaluate(&hidden_out_point);
+    let hidden_out = Claim::new(hidden_out, hidden_out_point, hidden_out_value);
+    let iop = prove_layer_iop(hidden_out, layer_polys, shape, &tensors, transcript)?;
+    Ok(iop.proof.round_stats())
 }

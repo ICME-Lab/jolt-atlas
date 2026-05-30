@@ -99,6 +99,16 @@ pub struct PvMatmulProof<F: JoltField, T: Transcript> {
     pub(crate) round_lookup: RoundLookupProof<F, T>,
 }
 
+impl<F: JoltField, T: Transcript> PvMatmulProof<F, T> {
+    pub(crate) fn sumcheck_round_count(&self) -> usize {
+        self.pv.sumcheck.compressed_polys.len() + self.round_lookup.sumcheck_round_count()
+    }
+
+    pub(crate) fn sumcheck_count(&self) -> usize {
+        1 + self.round_lookup.sumcheck_count()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PvMatmulRoundRelationProof<F: JoltField, T: Transcript> {
     pub sumcheck: SumcheckInstanceProof<F, T>,

@@ -105,6 +105,18 @@ pub struct QkScoreProof<F: JoltField, T: Transcript> {
     pub(crate) dot_round_lookup: RoundLookupProof<F, T>,
 }
 
+impl<F: JoltField, T: Transcript> QkScoreProof<F, T> {
+    pub(crate) fn sumcheck_round_count(&self) -> usize {
+        self.score_round_lookup.sumcheck_round_count()
+            + self.qk.sumcheck.compressed_polys.len()
+            + self.dot_round_lookup.sumcheck_round_count()
+    }
+
+    pub(crate) fn sumcheck_count(&self) -> usize {
+        self.score_round_lookup.sumcheck_count() + 1 + self.dot_round_lookup.sumcheck_count()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct QkScoreRoundRelationProof<F: JoltField, T: Transcript> {
     pub sumcheck: SumcheckInstanceProof<F, T>,

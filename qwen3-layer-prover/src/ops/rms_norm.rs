@@ -530,6 +530,17 @@ pub struct RmsNormProof<F: JoltField, T: Transcript> {
 }
 
 impl<F: JoltField, T: Transcript> RmsNormProof<F, T> {
+    pub(crate) fn sumcheck_round_count(&self) -> usize {
+        self.round.sumcheck_round_count()
+            + self.weight_mul.sumcheck.compressed_polys.len()
+            + self.norm_round.sumcheck_round_count()
+            + self.sumcheck.compressed_polys.len()
+    }
+
+    pub(crate) fn sumcheck_count(&self) -> usize {
+        self.round.sumcheck_count() + 1 + self.norm_round.sumcheck_count() + 1
+    }
+
     pub fn pcs_opening_requests(&self) -> Vec<PcsOpeningRequest<F>> {
         let mut out = self.round.pcs_opening_requests();
         out.extend(self.norm_round.pcs_opening_requests());

@@ -172,8 +172,34 @@ pub struct SiluRoundProof<F: JoltField, T: Transcript> {
 }
 
 impl<F: JoltField, T: Transcript> SiluRoundProof<F, T> {
+    pub(crate) fn sumcheck_round_count(&self) -> usize {
+        self.silu.sumcheck_round_count()
+    }
+
+    pub(crate) fn sumcheck_count(&self) -> usize {
+        self.silu.sumcheck_count()
+    }
+
     pub fn pcs_opening_requests(&self) -> Vec<PcsOpeningRequest<F>> {
         self.silu.pcs_opening_requests()
+    }
+}
+
+impl<F: JoltField, T: Transcript> SiluProof<F, T> {
+    fn sumcheck_round_count(&self) -> usize {
+        self.relation.compressed_polys.len()
+            + self.base_lookup.compressed_polys.len()
+            + self.base_ra_onehot.compressed_polys.len()
+            + self.slope_lookup.compressed_polys.len()
+            + self.slope_ra_onehot.compressed_polys.len()
+            + self.gate_round_lookup.compressed_polys.len()
+            + self.gate_round_ra_onehot.compressed_polys.len()
+            + self.output_round_lookup.compressed_polys.len()
+            + self.output_round_ra_onehot.compressed_polys.len()
+    }
+
+    fn sumcheck_count(&self) -> usize {
+        9
     }
 }
 

@@ -158,6 +158,129 @@ pub(crate) struct LayerIopProof<F: JoltField, T: Transcript> {
     pub rms_norm_atten: RmsNormProof<F, T>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayerIopRoundStat {
+    pub op: &'static str,
+    pub sumchecks: usize,
+    pub rounds: usize,
+}
+
+impl<F: JoltField, T: Transcript> LayerIopProof<F, T> {
+    pub(crate) fn round_stats(&self) -> Vec<LayerIopRoundStat> {
+        let mut rows = Vec::new();
+        let mut push = |op: &'static str, sumchecks: usize, rounds: usize| {
+            rows.push(LayerIopRoundStat {
+                op,
+                sumchecks,
+                rounds,
+            });
+        };
+
+        push(
+            "residual_add_mlp",
+            self.residual_add_mlp.sumcheck_count(),
+            self.residual_add_mlp.sumcheck_round_count(),
+        );
+        push(
+            "down_proj",
+            self.down_proj.sumcheck_count(),
+            self.down_proj.sumcheck_round_count(),
+        );
+        push(
+            "silu_up",
+            self.silu_up.sumcheck_count(),
+            self.silu_up.sumcheck_round_count(),
+        );
+        push(
+            "silu",
+            self.silu.sumcheck_count(),
+            self.silu.sumcheck_round_count(),
+        );
+        push(
+            "gate_proj",
+            self.gate_proj.sumcheck_count(),
+            self.gate_proj.sumcheck_round_count(),
+        );
+        push(
+            "up_proj",
+            self.up_proj.sumcheck_count(),
+            self.up_proj.sumcheck_round_count(),
+        );
+        push(
+            "rms_norm_mlp",
+            self.rms_norm_mlp.sumcheck_count(),
+            self.rms_norm_mlp.sumcheck_round_count(),
+        );
+        push(
+            "residual_add_attn",
+            self.residual_add_attn.sumcheck_count(),
+            self.residual_add_attn.sumcheck_round_count(),
+        );
+        push(
+            "o_proj",
+            self.o_proj.sumcheck_count(),
+            self.o_proj.sumcheck_round_count(),
+        );
+        push(
+            "pv_matmul",
+            self.pv_matmul.sumcheck_count(),
+            self.pv_matmul.sumcheck_round_count(),
+        );
+        push(
+            "softmax",
+            self.softmax.sumcheck_count(),
+            self.softmax.sumcheck_round_count(),
+        );
+        push(
+            "qk_score",
+            self.qk_score.sumcheck_count(),
+            self.qk_score.sumcheck_round_count(),
+        );
+        push(
+            "q_rope",
+            self.q_rope.sumcheck_count(),
+            self.q_rope.sumcheck_round_count(),
+        );
+        push(
+            "k_rope",
+            self.k_rope.sumcheck_count(),
+            self.k_rope.sumcheck_round_count(),
+        );
+        push(
+            "q_norm",
+            self.q_norm.sumcheck_count(),
+            self.q_norm.sumcheck_round_count(),
+        );
+        push(
+            "k_norm",
+            self.k_norm.sumcheck_count(),
+            self.k_norm.sumcheck_round_count(),
+        );
+        push(
+            "q_proj",
+            self.q_proj.sumcheck_count(),
+            self.q_proj.sumcheck_round_count(),
+        );
+        push(
+            "k_proj",
+            self.k_proj.sumcheck_count(),
+            self.k_proj.sumcheck_round_count(),
+        );
+        push(
+            "v_proj",
+            self.v_proj.sumcheck_count(),
+            self.v_proj.sumcheck_round_count(),
+        );
+        push(
+            "rms_norm_atten",
+            self.rms_norm_atten.sumcheck_count(),
+            self.rms_norm_atten.sumcheck_round_count(),
+        );
+
+        rows
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LayerProof<F, T, PCS>
 where

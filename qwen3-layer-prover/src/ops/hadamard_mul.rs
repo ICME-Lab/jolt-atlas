@@ -85,6 +85,16 @@ pub struct HadamardRoundProof<F: JoltField, T: Transcript> {
     pub(crate) round_lookup: RoundLookupProof<F, T>,
 }
 
+impl<F: JoltField, T: Transcript> HadamardRoundProof<F, T> {
+    pub(crate) fn sumcheck_round_count(&self) -> usize {
+        self.hadamard.sumcheck.compressed_polys.len() + self.round_lookup.sumcheck_round_count()
+    }
+
+    pub(crate) fn sumcheck_count(&self) -> usize {
+        1 + self.round_lookup.sumcheck_count()
+    }
+}
+
 pub fn prove_hadamard_round<F, T, C>(
     y_claim: Claim<F, C>,
     lhs_poly: Poly<F, C>,

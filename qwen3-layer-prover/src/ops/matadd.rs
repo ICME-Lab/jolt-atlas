@@ -61,6 +61,16 @@ pub struct MatAddProof<F: JoltField, T: Transcript> {
     pub b_opening: F,
 }
 
+impl<F: JoltField, T: Transcript> MatAddProof<F, T> {
+    pub(crate) fn sumcheck_round_count(&self) -> usize {
+        self.sumcheck.compressed_polys.len()
+    }
+
+    pub(crate) fn sumcheck_count(&self) -> usize {
+        1
+    }
+}
+
 pub fn prove_matadd<F, T, C>(
     y_claims: Vec<Claim<F, C>>,
     a_poly: Poly<F, C>,

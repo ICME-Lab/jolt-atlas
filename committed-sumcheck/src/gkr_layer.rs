@@ -80,7 +80,7 @@ where
         DenseMleTable::new(rhs.to_vec()),
     );
     let mut sumcheck = SumCheck::<Fr, _, 3>::new(claim_point, relation);
-    let sumcheck_output = sumcheck.prove(params, previous_round, transcript, rng)?;
+    let sumcheck_output = sumcheck.prove(params, previous_round, None, transcript, rng)?;
 
     let sumcheck_point = sumcheck_output.challenges;
     let sumcheck_eval_challenge: Fr = (*sumcheck_point.last()?).into();
@@ -152,6 +152,7 @@ where
         params,
         &proof.sumcheck_proof,
         previous_commitments,
+        None,
         claim_point,
         num_rounds,
         transcript,

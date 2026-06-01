@@ -53,6 +53,22 @@ pub struct CommittedSumCheckProverOutput {
     pub rounds: Vec<CommittedRoundPoly>,
 }
 
+struct SumCheckProverState {
+    claim_round: CommittedRoundPoly,
+    claim_eval_point: Fr,
+}
+
+struct SumCheckVerifierState<'a> {
+    claim_commitments: &'a [Commitment],
+    claim_eval_point: Fr,
+}
+
+struct ProvedSumCheckRound {
+    proof: RoundConsistencyProof,
+    committed_poly: CommittedRoundPoly,
+    challenge: <Fr as JoltField>::Challenge,
+}
+
 impl<F, R, const LANES: usize> SumCheck<F, R, LANES>
 where
     F: JoltField + PrimeField,
@@ -204,7 +220,8 @@ where
     pub fn prove<T, Rng>(
         &mut self,
         params: &PedersenParams,
-        previous_round: &CommittedRoundPoly,
+        initial_claim_round: &CommittedRoundPoly,
+        g_commitments: Option<&[Commitment]>,
         transcript: &mut T,
         rng: &mut Rng,
     ) -> Option<CommittedSumCheckProverOutput>
@@ -216,32 +233,21 @@ where
         let mut consistency_proofs = Vec::with_capacity(self.remaining_rounds());
         let mut challenges = Vec::with_capacity(self.remaining_rounds());
         let mut rounds = Vec::with_capacity(self.remaining_rounds());
-        let mut previous_round = previous_round.clone();
-        let mut previous_challenge = (*self.claim_point.last()?).into();
+        let mut state = self.initialize_prover(initial_claim_round)?;
 
         while !self.is_complete() {
-            let poly = self.round_poly();
-            let committed_poly = commit_round_poly(params, &poly, rng);
-            let proof = prove_round_consistency(
-                params,
-                &previous_round,
-                &committed_poly,
-                previous_challenge,
-                transcript,
-                rng,
-            )?;
-            consistency_proofs.push(proof);
-
-            let challenge =
-                challenge_round_poly_optimized(params, &committed_poly.commitments, transcript);
-            self.bind(challenge);
-
-            round_commitments.push(committed_poly.commitments.clone());
-            rounds.push(committed_poly.clone());
-            previous_round = committed_poly;
-            previous_challenge = challenge.into();
-            challenges.push(challenge);
+            let round = self.prove_round_i(params, &state, transcript, rng)?;
+            consistency_proofs.push(round.proof);
+            round_commitments.push(round.committed_poly.commitments.clone());
+            rounds.push(round.committed_poly.clone());
+            state = SumCheckProverState {
+                claim_round: round.committed_poly,
+                claim_eval_point: round.challenge.into(),
+            };
+            challenges.push(round.challenge);
         }
+
+        self.finalize_prover(g_commitments, &state)?;
 
         Some(CommittedSumCheckProverOutput {
             proof: CommittedSumCheckProof {
@@ -253,10 +259,66 @@ where
         })
     }
 
+    fn initialize_prover(
+        &self,
+        initial_claim_round: &CommittedRoundPoly,
+    ) -> Option<SumCheckProverState> {
+        Some(SumCheckProverState {
+            claim_round: initial_claim_round.clone(),
+            claim_eval_point: (*self.claim_point.last()?).into(),
+        })
+    }
+
+    fn prove_round_i<T, Rng>(
+        &mut self,
+        params: &PedersenParams,
+        state: &SumCheckProverState,
+        transcript: &mut T,
+        rng: &mut Rng,
+    ) -> Option<ProvedSumCheckRound>
+    where
+        T: Transcript,
+        Rng: CryptoRngCore,
+    {
+        let poly = self.round_poly();
+        let committed_poly = commit_round_poly(params, &poly, rng);
+        let proof = prove_round_consistency(
+            params,
+            &state.claim_round,
+            &committed_poly,
+            state.claim_eval_point,
+            transcript,
+            rng,
+        )?;
+
+        let challenge =
+            challenge_round_poly_optimized(params, &committed_poly.commitments, transcript);
+        self.bind(challenge);
+
+        Some(ProvedSumCheckRound {
+            proof,
+            committed_poly,
+            challenge,
+        })
+    }
+
+    fn finalize_prover(
+        &self,
+        g_commitments: Option<&[Commitment]>,
+        terminal_claim: &SumCheckProverState,
+    ) -> Option<()> {
+        // Generic C_g evaluation proof hook. GKR reductions handle this outside
+        // the base sumcheck protocol for now.
+        let _ = g_commitments;
+        let _ = terminal_claim;
+        Some(())
+    }
+
     pub fn verify<T>(
         params: &PedersenParams,
         proof: &CommittedSumCheckProof,
-        previous_commitments: &[Commitment],
+        initial_claim_commitments: &[Commitment],
+        g_commitments: Option<&[Commitment]>,
         claim_point: &[<Fr as JoltField>::Challenge],
         num_rounds: usize,
         transcript: &mut T,
@@ -265,7 +327,7 @@ where
         T: Transcript,
     {
         if claim_point.is_empty()
-            || previous_commitments.is_empty()
+            || initial_claim_commitments.is_empty()
             || proof.round_commitments.len() != num_rounds
             || proof.consistency_proofs.len() != num_rounds
         {
@@ -274,30 +336,79 @@ where
 
         let expected_commitments_per_round = LANES + 1;
         let mut challenges: Vec<<Fr as JoltField>::Challenge> = Vec::with_capacity(num_rounds);
-        let mut previous_commitments = previous_commitments;
-        let mut previous_challenge: Fr = (*claim_point.last()?).into();
+        let mut state = Self::initialize_verifier(initial_claim_commitments, claim_point)?;
         for (round, commitments) in proof.round_commitments.iter().enumerate() {
             if commitments.len() != expected_commitments_per_round {
                 return None;
             }
 
-            if !verify_round_consistency(
+            let challenge = match Self::verify_round_i(
                 params,
-                previous_commitments,
+                &state,
                 commitments,
-                previous_challenge,
                 &proof.consistency_proofs[round],
                 transcript,
             ) {
-                return None;
-            }
-
-            let challenge = challenge_round_poly_optimized(params, commitments, transcript);
+                Some(challenge) => challenge,
+                None => return None,
+            };
             challenges.push(challenge);
-            previous_commitments = commitments;
-            previous_challenge = challenge.into();
+            state = SumCheckVerifierState {
+                claim_commitments: commitments,
+                claim_eval_point: challenge.into(),
+            };
         }
+        Self::finalize_verifier(g_commitments, &state)?;
         Some(challenges)
+    }
+
+    fn initialize_verifier<'a>(
+        initial_claim_commitments: &'a [Commitment],
+        claim_point: &[<Fr as JoltField>::Challenge],
+    ) -> Option<SumCheckVerifierState<'a>> {
+        Some(SumCheckVerifierState {
+            claim_commitments: initial_claim_commitments,
+            claim_eval_point: (*claim_point.last()?).into(),
+        })
+    }
+
+    fn verify_round_i<T>(
+        params: &PedersenParams,
+        state: &SumCheckVerifierState<'_>,
+        round_commitments: &[Commitment],
+        proof: &RoundConsistencyProof,
+        transcript: &mut T,
+    ) -> Option<<Fr as JoltField>::Challenge>
+    where
+        T: Transcript,
+    {
+        if !verify_round_consistency(
+            params,
+            state.claim_commitments,
+            round_commitments,
+            state.claim_eval_point,
+            proof,
+            transcript,
+        ) {
+            return None;
+        }
+
+        Some(challenge_round_poly_optimized(
+            params,
+            round_commitments,
+            transcript,
+        ))
+    }
+
+    fn finalize_verifier(
+        g_commitments: Option<&[Commitment]>,
+        terminal_claim: &SumCheckVerifierState<'_>,
+    ) -> Option<()> {
+        // Generic C_g evaluation proof hook. GKR reductions handle this outside
+        // the base sumcheck protocol for now.
+        let _ = g_commitments;
+        let _ = terminal_claim;
+        Some(())
     }
 }
 
@@ -456,7 +567,13 @@ mod tests {
 
         let mut prover_transcript = Blake2bTranscript::default();
         let proof = sumcheck
-            .prove(&params, &previous_round, &mut prover_transcript, &mut rng)
+            .prove(
+                &params,
+                &previous_round,
+                None,
+                &mut prover_transcript,
+                &mut rng,
+            )
             .expect("valid previous round consistency")
             .proof;
 
@@ -472,6 +589,7 @@ mod tests {
             &params,
             &proof,
             &previous_round.commitments,
+            None,
             &eq_challenges,
             eq_challenges.len(),
             &mut verifier_transcript,
@@ -501,7 +619,13 @@ mod tests {
 
         let mut prover_transcript = Blake2bTranscript::default();
         let mut proof = sumcheck
-            .prove(&params, &previous_round, &mut prover_transcript, &mut rng)
+            .prove(
+                &params,
+                &previous_round,
+                None,
+                &mut prover_transcript,
+                &mut rng,
+            )
             .expect("valid previous round consistency")
             .proof;
         proof.consistency_proofs[0]
@@ -514,6 +638,7 @@ mod tests {
                 &params,
                 &proof,
                 &previous_round.commitments,
+                None,
                 &eq_challenges,
                 eq_challenges.len(),
                 &mut verifier_transcript,

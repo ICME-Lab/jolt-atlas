@@ -10,6 +10,7 @@ mod gkr_util;
 pub mod multiplication;
 pub mod ops;
 pub mod pedersen;
+pub mod protocol_mock;
 pub mod round;
 pub mod schnorr;
 pub mod sumcheck;

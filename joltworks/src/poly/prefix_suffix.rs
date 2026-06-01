@@ -311,14 +311,15 @@ impl<F: JoltField, const ORDER: usize, const SIGNED: bool>
                         let k = lookup_bits[j];
                         let (prefix_bits, suffix_bits) = k.split(suffix_len);
                         let r_index: usize = (u64::from(&prefix_bits) as usize) & (poly_len - 1);
-                        let u = &u_evals[j];
-                        for (s_idx, suffix) in suffixes.iter().enumerate() {
-                            let t = suffix.suffix_mle(suffix_bits);
-                            if t != 0 {
-                                if SIGNED {
-                                    acc[r_index][s_idx] += u.mul_i64(t as i64);
-                                } else {
-                                    acc[r_index][s_idx] += u.mul_u64(t);
+                        if let Some(u) = u_evals.get(j) {
+                            for (s_idx, suffix) in suffixes.iter().enumerate() {
+                                let t = suffix.suffix_mle(suffix_bits);
+                                if t != 0 {
+                                    if SIGNED {
+                                        acc[r_index][s_idx] += u.mul_i64(t as i64);
+                                    } else {
+                                        acc[r_index][s_idx] += u.mul_u64(t);
+                                    }
                                 }
                             }
                         }
@@ -390,26 +391,27 @@ impl<F: JoltField, const ORDER: usize, const SIGNED: bool>
                         let k = lookup_bits[j];
                         let (prefix_bits, suffix_bits) = k.split(suffix_len);
                         let r_index: usize = (u64::from(&prefix_bits) as usize) & (poly_len - 1);
-                        let u = &u_evals[j];
-                        // Left
-                        for (s_idx, suffix) in suffixes_left.iter().enumerate() {
-                            let t = suffix.suffix_mle(suffix_bits);
-                            if t != 0 {
-                                if SIGNED {
-                                    acc_l[r_index][s_idx] += u.mul_i64(t as i64);
-                                } else {
-                                    acc_l[r_index][s_idx] += u.mul_u64(t);
+                        if let Some(u) = u_evals.get(j) {
+                            // Left
+                            for (s_idx, suffix) in suffixes_left.iter().enumerate() {
+                                let t = suffix.suffix_mle(suffix_bits);
+                                if t != 0 {
+                                    if SIGNED {
+                                        acc_l[r_index][s_idx] += u.mul_i64(t as i64);
+                                    } else {
+                                        acc_l[r_index][s_idx] += u.mul_u64(t);
+                                    }
                                 }
                             }
-                        }
-                        // Right
-                        for (s_idx, suffix) in suffixes_right.iter().enumerate() {
-                            let t = suffix.suffix_mle(suffix_bits);
-                            if t != 0 {
-                                if SIGNED {
-                                    acc_r[r_index][s_idx] += u.mul_i64(t as i64);
-                                } else {
-                                    acc_r[r_index][s_idx] += u.mul_u64(t);
+                            // Right
+                            for (s_idx, suffix) in suffixes_right.iter().enumerate() {
+                                let t = suffix.suffix_mle(suffix_bits);
+                                if t != 0 {
+                                    if SIGNED {
+                                        acc_r[r_index][s_idx] += u.mul_i64(t as i64);
+                                    } else {
+                                        acc_r[r_index][s_idx] += u.mul_u64(t);
+                                    }
                                 }
                             }
                         }

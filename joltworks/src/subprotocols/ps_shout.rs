@@ -629,7 +629,10 @@ where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
-    pub fn gen(params: ReadRafSumcheckParams<F, LUT, true>, lookup_indices: Vec<LookupBits>) -> Self {
+    pub fn gen(
+        params: ReadRafSumcheckParams<F, LUT, true>,
+        lookup_indices: Vec<LookupBits>,
+    ) -> Self {
         let log_m = LOG_K / NUM_PHASES;
         let span = tracing::span!(tracing::Level::INFO, "Init PrefixSuffixDecomposition");
         let _guard = span.enter();
@@ -664,7 +667,10 @@ where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
-    pub fn gen(params: ReadRafSumcheckParams<F, LUT, false>, lookup_indices: Vec<LookupBits>) -> Self {
+    pub fn gen(
+        params: ReadRafSumcheckParams<F, LUT, false>,
+        lookup_indices: Vec<LookupBits>,
+    ) -> Self {
         let log_m = LOG_K / NUM_PHASES;
         let span = tracing::span!(tracing::Level::INFO, "Init PrefixSuffixDecomposition");
         let _guard = span.enter();

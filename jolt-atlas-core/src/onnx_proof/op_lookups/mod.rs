@@ -355,8 +355,7 @@ fn append_raf_claims_verifier<F: JoltField, LUT>(
     let node = &provider.computation_node;
     opening_accumulator.get_node_output_opening(node.idx);
     let exec_id = SumcheckId::NodeExecution(node.idx);
-    let input_opening =
-        |i: usize| OpeningId::new(VirtualPoly::NodeOutput(node.inputs[i]), exec_id);
+    let input_opening = |i: usize| OpeningId::new(VirtualPoly::NodeOutput(node.inputs[i]), exec_id);
     opening_accumulator.append_virtual(transcript, input_opening(0), r_cycle.clone());
     if node.is_interleaved_operands() {
         opening_accumulator.append_virtual(transcript, input_opening(1), r_cycle.clone());

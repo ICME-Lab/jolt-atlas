@@ -61,7 +61,7 @@ const NUM_PHASES: usize = 8;
 /// The sumcheck proceeds in two phases:
 /// - Address phase (log K rounds): binds address variables using prefix-suffix decomposition
 /// - Cycle phase (log T rounds): binds cycle variables and evaluates equality polynomials
-pub struct ReadRafSumcheckParams<F, LUT>
+pub struct ReadRafSumcheckParams<F, LUT, const SIGNED: bool>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
@@ -90,7 +90,7 @@ where
     pub is_interleaved_operands: bool,
 }
 
-impl<F, LUT> ReadRafSumcheckParams<F, LUT>
+impl<F, LUT, const SIGNED: bool> ReadRafSumcheckParams<F, LUT, SIGNED>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
@@ -122,7 +122,7 @@ where
     }
 }
 
-impl<F, LUT> SumcheckInstanceParams<F> for ReadRafSumcheckParams<F, LUT>
+impl<F, LUT, const SIGNED: bool> SumcheckInstanceParams<F> for ReadRafSumcheckParams<F, LUT, SIGNED>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
@@ -174,9 +174,6 @@ where
         ]))
     }
 
-    // TODO(zk): ReadRafSumcheckParams is not generic over SIGNED, so this always evaluates
-    // unsigned polys. If ZK is used with signed operations, move this to
-    // ReadRafSumcheckProver/Verifier impls where SIGNED is in scope.
     #[cfg(feature = "zk")]
     fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
         let opening_point = self.normalize_opening_point(&sumcheck_challenges.into_opening());
@@ -184,11 +181,23 @@ where
         let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_node_output_prime.r);
         let val_claim = self.table.evaluate_mle(&r_address_prime.r);
 
-        let left_operand_eval =
-            OperandPolynomial::<F>::new(LOG_K, OperandSide::Left).evaluate(&r_address_prime.r);
-        let right_operand_eval =
-            OperandPolynomial::<F>::new(LOG_K, OperandSide::Right).evaluate(&r_address_prime.r);
-        let identity_poly_eval = IdentityPolynomial::<F>::new(LOG_K).evaluate(&r_address_prime.r);
+        let (identity_poly_eval, left_operand_eval, right_operand_eval) = if SIGNED {
+            let identity_poly_eval =
+                BinarySignedIdentityPoly::<F, XLEN>::default().evaluate(&r_address_prime.r);
+            let left_operand_eval =
+                SignedOperandPoly::<F, XLEN>::new(OperandSide::Left).evaluate(&r_address_prime.r);
+            let right_operand_eval =
+                SignedOperandPoly::<F, XLEN>::new(OperandSide::Right).evaluate(&r_address_prime.r);
+            (identity_poly_eval, left_operand_eval, right_operand_eval)
+        } else {
+            let left_operand_eval =
+                OperandPolynomial::<F>::new(LOG_K, OperandSide::Left).evaluate(&r_address_prime.r);
+            let right_operand_eval =
+                OperandPolynomial::<F>::new(LOG_K, OperandSide::Right).evaluate(&r_address_prime.r);
+            let identity_poly_eval =
+                IdentityPolynomial::<F>::new(LOG_K).evaluate(&r_address_prime.r);
+            (identity_poly_eval, left_operand_eval, right_operand_eval)
+        };
         let raf_flag_claim = F::from_bool(self.is_interleaved_operands);
         let raf_claim = raf_flag_claim * (left_operand_eval + self.gamma * right_operand_eval)
             + (F::one() - raf_flag_claim) * self.gamma * identity_poly_eval;
@@ -231,7 +240,7 @@ where
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
     /// Shared params between prover and verifier, including table info and opening claims.
-    params: ReadRafSumcheckParams<F, LUT>,
+    params: ReadRafSumcheckParams<F, LUT, SIGNED>,
     /// Materialized `ra(k, j)` MLE over (address, cycle) after the first log(K) rounds.
     /// Present only in the last log(T) rounds.
     ra: Option<MultilinearPolynomial<F>>,
@@ -274,7 +283,7 @@ where
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
     fn new_inner(
-        params: ReadRafSumcheckParams<F, LUT>,
+        params: ReadRafSumcheckParams<F, LUT, SIGNED>,
         lookup_indices: Vec<LookupBits>,
         identity_ps: PrefixSuffixDecomposition<F, 2, SIGNED>,
         left_operand_ps: PrefixSuffixDecomposition<F, ORDER_OP, false>,
@@ -595,7 +604,7 @@ where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
-    pub fn gen(params: ReadRafSumcheckParams<F, LUT>, lookup_indices: Vec<LookupBits>) -> Self {
+    pub fn gen(params: ReadRafSumcheckParams<F, LUT, true>, lookup_indices: Vec<LookupBits>) -> Self {
         let log_m = LOG_K / NUM_PHASES;
         let span = tracing::span!(tracing::Level::INFO, "Init PrefixSuffixDecomposition");
         let _guard = span.enter();
@@ -630,7 +639,7 @@ where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
-    pub fn gen(params: ReadRafSumcheckParams<F, LUT>, lookup_indices: Vec<LookupBits>) -> Self {
+    pub fn gen(params: ReadRafSumcheckParams<F, LUT, false>, lookup_indices: Vec<LookupBits>) -> Self {
         let log_m = LOG_K / NUM_PHASES;
         let span = tracing::span!(tracing::Level::INFO, "Init PrefixSuffixDecomposition");
         let _guard = span.enter();
@@ -825,7 +834,7 @@ where
     F: JoltField,
     T: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
-    params: ReadRafSumcheckParams<F, T>,
+    params: ReadRafSumcheckParams<F, T, SIGNED>,
 }
 
 impl<F, LUT, const SIGNED: bool> ReadRafSumcheckVerifier<F, LUT, SIGNED>
@@ -834,7 +843,7 @@ where
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
     /// Creates a new Prefix suffix Read-raf checking verifier.
-    pub fn new(params: ReadRafSumcheckParams<F, LUT>) -> Self {
+    pub fn new(params: ReadRafSumcheckParams<F, LUT, SIGNED>) -> Self {
         Self { params }
     }
 }

@@ -688,6 +688,7 @@ pub trait PolynomialEvaluation<F: JoltField> {
         let _ = (polys, r); // to silence unused variable warnings
         unimplemented!("Implemented batch evaluation for MultilinearPolynomial");
     }
+
     /// Computes this polynomial's contribution to the computation of a prover
     /// sumcheck message (i.e. a univariate polynomial of the given `degree`).
     fn sumcheck_evals(&self, index: usize, degree: usize, order: BindingOrder) -> Vec<F> {

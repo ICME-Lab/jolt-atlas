@@ -95,6 +95,24 @@ where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
+    /// Returns `(identity_eval, left_eval, right_eval)` at `r_address` using the
+    /// signed or unsigned operand polynomials depending on `SIGNED`.
+    pub fn raf_operand_evals(&self, r_address: &[F]) -> (F, F, F) {
+        if SIGNED {
+            (
+                BinarySignedIdentityPoly::<F, XLEN>::default().evaluate(r_address),
+                SignedOperandPoly::<F, XLEN>::new(OperandSide::Left).evaluate(r_address),
+                SignedOperandPoly::<F, XLEN>::new(OperandSide::Right).evaluate(r_address),
+            )
+        } else {
+            (
+                IdentityPolynomial::<F>::new(LOG_K).evaluate(r_address),
+                OperandPolynomial::<F>::new(LOG_K, OperandSide::Left).evaluate(r_address),
+                OperandPolynomial::<F>::new(LOG_K, OperandSide::Right).evaluate(r_address),
+            )
+        }
+    }
+
     pub fn new(
         provider: &impl PrefixSuffixShoutProvider<F, LUT>,
         accumulator: &dyn OpeningAccumulator<F>,
@@ -181,23 +199,8 @@ where
         let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_node_output_prime.r);
         let val_claim = self.table.evaluate_mle(&r_address_prime.r);
 
-        let (identity_poly_eval, left_operand_eval, right_operand_eval) = if SIGNED {
-            let identity_poly_eval =
-                BinarySignedIdentityPoly::<F, XLEN>::default().evaluate(&r_address_prime.r);
-            let left_operand_eval =
-                SignedOperandPoly::<F, XLEN>::new(OperandSide::Left).evaluate(&r_address_prime.r);
-            let right_operand_eval =
-                SignedOperandPoly::<F, XLEN>::new(OperandSide::Right).evaluate(&r_address_prime.r);
-            (identity_poly_eval, left_operand_eval, right_operand_eval)
-        } else {
-            let left_operand_eval =
-                OperandPolynomial::<F>::new(LOG_K, OperandSide::Left).evaluate(&r_address_prime.r);
-            let right_operand_eval =
-                OperandPolynomial::<F>::new(LOG_K, OperandSide::Right).evaluate(&r_address_prime.r);
-            let identity_poly_eval =
-                IdentityPolynomial::<F>::new(LOG_K).evaluate(&r_address_prime.r);
-            (identity_poly_eval, left_operand_eval, right_operand_eval)
-        };
+        let (identity_poly_eval, left_operand_eval, right_operand_eval) =
+            self.raf_operand_evals(&r_address_prime.r);
         let raf_flag_claim = F::from_bool(self.is_interleaved_operands);
         let raf_claim = raf_flag_claim * (left_operand_eval + self.gamma * right_operand_eval)
             + (F::one() - raf_flag_claim) * self.gamma * identity_poly_eval;
@@ -597,6 +600,28 @@ where
         drop_in_background_thread(std::mem::take(&mut self.v));
         self.ra = Some(ra.into());
     }
+
+    fn raf_val_from_checkpoints(&self) -> F {
+        let gamma = self.params.gamma;
+        let gamma_sqr = self.params.gamma_sqr;
+        let cp = &self.prefix_registry.checkpoints;
+        let left = cp[Prefix::LeftOperand].unwrap();
+        let right = cp[Prefix::RightOperand].unwrap();
+        let (effective_left, effective_right, effective_identity) = if SIGNED {
+            (
+                left + cp[Prefix::LeftOperandMSB].unwrap(),
+                right + cp[Prefix::RightOperandMSB].unwrap(),
+                cp[Prefix::SignedIdentity].unwrap(),
+            )
+        } else {
+            (left, right, cp[Prefix::Identity].unwrap())
+        };
+        if self.params.is_interleaved_operands {
+            gamma * effective_left + gamma_sqr * effective_right
+        } else {
+            gamma_sqr * effective_identity
+        }
+    }
 }
 
 impl<F, LUT> ReadRafSumcheckProver<F, LUT, true, 3>
@@ -778,26 +803,7 @@ where
                     .map(|suffix| F::from_u32(suffix.suffix_mle::<XLEN>(LookupBits::new(0, 0))))
                     .collect();
                 self.val = Some(self.params.table.combine(&prefixes, &suffixes));
-                let gamma = self.params.gamma;
-                let gamma_sqr = self.params.gamma_sqr;
-                let raf_val = if self.params.is_interleaved_operands {
-                    let left = self.prefix_registry.checkpoints[Prefix::LeftOperand].unwrap();
-                    let right = self.prefix_registry.checkpoints[Prefix::RightOperand].unwrap();
-                    if SIGNED {
-                        let left_msb =
-                            self.prefix_registry.checkpoints[Prefix::LeftOperandMSB].unwrap();
-                        let right_msb =
-                            self.prefix_registry.checkpoints[Prefix::RightOperandMSB].unwrap();
-                        gamma * (left + left_msb) + gamma_sqr * (right + right_msb)
-                    } else {
-                        gamma * left + gamma_sqr * right
-                    }
-                } else if SIGNED {
-                    gamma_sqr * self.prefix_registry.checkpoints[Prefix::SignedIdentity].unwrap()
-                } else {
-                    gamma_sqr * self.prefix_registry.checkpoints[Prefix::Identity].unwrap()
-                };
-                self.raf_val = Some(raf_val);
+                self.raf_val = Some(self.raf_val_from_checkpoints());
                 self.init_log_t_rounds();
             }
         } else {
@@ -871,24 +877,8 @@ where
         let val_claim = self.params.table.evaluate_mle(&r_address_prime.r);
         let eq_eval = EqPolynomial::mle(&self.params.r_node_output.r, &r_node_output_prime.r);
 
-        // RAF
-        let (identity_poly_eval, left_operand_eval, right_operand_eval) = if SIGNED {
-            let identity_poly_eval =
-                BinarySignedIdentityPoly::<F, XLEN>::default().evaluate(&r_address_prime.r);
-            let left_operand_eval =
-                SignedOperandPoly::<F, XLEN>::new(OperandSide::Left).evaluate(&r_address_prime.r);
-            let right_operand_eval =
-                SignedOperandPoly::<F, XLEN>::new(OperandSide::Right).evaluate(&r_address_prime.r);
-            (identity_poly_eval, left_operand_eval, right_operand_eval)
-        } else {
-            let left_operand_eval =
-                OperandPolynomial::<F>::new(LOG_K, OperandSide::Left).evaluate(&r_address_prime.r);
-            let right_operand_eval =
-                OperandPolynomial::<F>::new(LOG_K, OperandSide::Right).evaluate(&r_address_prime.r);
-            let identity_poly_eval =
-                IdentityPolynomial::<F>::new(LOG_K).evaluate(&r_address_prime.r);
-            (identity_poly_eval, left_operand_eval, right_operand_eval)
-        };
+        let (identity_poly_eval, left_operand_eval, right_operand_eval) =
+            self.params.raf_operand_evals(&r_address_prime.r);
         let raf_flag_claim = F::from_bool(self.params.is_interleaved_operands);
         let raf_claim = raf_flag_claim
             * (left_operand_eval + self.params.gamma * right_operand_eval)

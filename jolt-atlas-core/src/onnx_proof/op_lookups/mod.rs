@@ -352,27 +352,13 @@ fn append_raf_claims_verifier<F: JoltField, LUT>(
         provider,
         opening_accumulator,
     );
-    opening_accumulator.get_node_output_opening(provider.computation_node.idx);
-    let opening_ids = {
-        if provider.computation_node.is_interleaved_operands() {
-            vec![
-                OpeningId::new(
-                    VirtualPoly::NodeOutput(provider.computation_node.inputs[0]),
-                    SumcheckId::NodeExecution(provider.computation_node.idx),
-                ),
-                OpeningId::new(
-                    VirtualPoly::NodeOutput(provider.computation_node.inputs[1]),
-                    SumcheckId::NodeExecution(provider.computation_node.idx),
-                ),
-            ]
-        } else {
-            vec![OpeningId::new(
-                VirtualPoly::NodeOutput(provider.computation_node.inputs[0]),
-                SumcheckId::NodeExecution(provider.computation_node.idx),
-            )]
-        }
-    };
-    for opening_id in opening_ids {
-        opening_accumulator.append_virtual(transcript, opening_id, r_cycle.clone());
+    let node = &provider.computation_node;
+    opening_accumulator.get_node_output_opening(node.idx);
+    let exec_id = SumcheckId::NodeExecution(node.idx);
+    let input_opening =
+        |i: usize| OpeningId::new(VirtualPoly::NodeOutput(node.inputs[i]), exec_id);
+    opening_accumulator.append_virtual(transcript, input_opening(0), r_cycle.clone());
+    if node.is_interleaved_operands() {
+        opening_accumulator.append_virtual(transcript, input_opening(1), r_cycle.clone());
     }
 }

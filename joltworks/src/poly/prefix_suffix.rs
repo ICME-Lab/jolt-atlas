@@ -10,7 +10,6 @@ use crate::{
 };
 use allocative::Allocative;
 use common::parallel::par_enabled;
-use itertools::Itertools;
 use num_traits::Zero;
 use rayon::prelude::*;
 use std::{
@@ -301,25 +300,22 @@ impl<F: JoltField, const ORDER: usize, const SIGNED: bool>
         let chunk_size = (lookup_bits.len() / num_chunks).max(1);
 
         // Accumulate in row-major for write locality: rows are r_index in [0, poly_len)
-        let new_Q_rows: Vec<[F; ORDER]> = (0..lookup_bits.len())
-            .collect_vec()
+        let new_Q_rows: Vec<[F; ORDER]> = lookup_bits
             .par_chunks(chunk_size)
+            .zip(u_evals.par_chunks(chunk_size))
             .fold(
                 || vec![[F::zero(); ORDER]; poly_len],
-                |mut acc, chunk| {
-                    for &j in chunk {
-                        let k = lookup_bits[j];
+                |mut acc, (bits_chunk, u_chunk)| {
+                    for (k, u) in bits_chunk.iter().zip(u_chunk.iter()) {
                         let (prefix_bits, suffix_bits) = k.split(suffix_len);
                         let r_index: usize = (u64::from(&prefix_bits) as usize) & (poly_len - 1);
-                        if let Some(u) = u_evals.get(j) {
-                            for (s_idx, suffix) in suffixes.iter().enumerate() {
-                                let t = suffix.suffix_mle(suffix_bits);
-                                if t != 0 {
-                                    if SIGNED {
-                                        acc[r_index][s_idx] += u.mul_i64(t as i64);
-                                    } else {
-                                        acc[r_index][s_idx] += u.mul_u64(t);
-                                    }
+                        for (s_idx, suffix) in suffixes.iter().enumerate() {
+                            let t = suffix.suffix_mle(suffix_bits);
+                            if t != 0 {
+                                if SIGNED {
+                                    acc[r_index][s_idx] += u.mul_i64(t as i64);
+                                } else {
+                                    acc[r_index][s_idx] += u.mul_u64(t);
                                 }
                             }
                         }
@@ -375,10 +371,9 @@ impl<F: JoltField, const ORDER: usize, const SIGNED: bool>
         let chunk_size = (lookup_bits.len() / num_chunks).max(1);
 
         #[allow(clippy::type_complexity)]
-        let (new_left_rows, new_right_rows): (Vec<[F; ORDER]>, Vec<[F; ORDER]>) = (0..lookup_bits
-            .len())
-            .collect_vec()
+        let (new_left_rows, new_right_rows): (Vec<[F; ORDER]>, Vec<[F; ORDER]>) = lookup_bits
             .par_chunks(chunk_size)
+            .zip(u_evals.par_chunks(chunk_size))
             .fold(
                 || {
                     (
@@ -386,32 +381,29 @@ impl<F: JoltField, const ORDER: usize, const SIGNED: bool>
                         vec![[F::zero(); ORDER]; poly_len],
                     )
                 },
-                |(mut acc_l, mut acc_r), chunk| {
-                    for &j in chunk {
-                        let k = lookup_bits[j];
+                |(mut acc_l, mut acc_r), (bits_chunk, u_chunk)| {
+                    for (k, u) in bits_chunk.iter().zip(u_chunk.iter()) {
                         let (prefix_bits, suffix_bits) = k.split(suffix_len);
                         let r_index: usize = (u64::from(&prefix_bits) as usize) & (poly_len - 1);
-                        if let Some(u) = u_evals.get(j) {
-                            // Left
-                            for (s_idx, suffix) in suffixes_left.iter().enumerate() {
-                                let t = suffix.suffix_mle(suffix_bits);
-                                if t != 0 {
-                                    if SIGNED {
-                                        acc_l[r_index][s_idx] += u.mul_i64(t as i64);
-                                    } else {
-                                        acc_l[r_index][s_idx] += u.mul_u64(t);
-                                    }
+                        // Left
+                        for (s_idx, suffix) in suffixes_left.iter().enumerate() {
+                            let t = suffix.suffix_mle(suffix_bits);
+                            if t != 0 {
+                                if SIGNED {
+                                    acc_l[r_index][s_idx] += u.mul_i64(t as i64);
+                                } else {
+                                    acc_l[r_index][s_idx] += u.mul_u64(t);
                                 }
                             }
-                            // Right
-                            for (s_idx, suffix) in suffixes_right.iter().enumerate() {
-                                let t = suffix.suffix_mle(suffix_bits);
-                                if t != 0 {
-                                    if SIGNED {
-                                        acc_r[r_index][s_idx] += u.mul_i64(t as i64);
-                                    } else {
-                                        acc_r[r_index][s_idx] += u.mul_u64(t);
-                                    }
+                        }
+                        // Right
+                        for (s_idx, suffix) in suffixes_right.iter().enumerate() {
+                            let t = suffix.suffix_mle(suffix_bits);
+                            if t != 0 {
+                                if SIGNED {
+                                    acc_r[r_index][s_idx] += u.mul_i64(t as i64);
+                                } else {
+                                    acc_r[r_index][s_idx] += u.mul_u64(t);
                                 }
                             }
                         }

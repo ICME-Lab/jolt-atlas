@@ -272,9 +272,9 @@ where
     /// Registry holding prefix checkpoint values for `PrefixSuffixDecomposition` instances.
     prefix_registry: PrefixRegistry<F>,
     /// Prefix-suffix decomposition for right operand identity polynomial family.
-    right_operand_ps: PrefixSuffixDecomposition<F, ORDER_OP, false>,
+    right_operand_ps: PrefixSuffixDecomposition<F, ORDER_OP, SIGNED>,
     /// Prefix-suffix decomposition for left operand identity polynomial family.
-    left_operand_ps: PrefixSuffixDecomposition<F, ORDER_OP, false>,
+    left_operand_ps: PrefixSuffixDecomposition<F, ORDER_OP, SIGNED>,
     /// Prefix-suffix decomposition for the instruction-identity path (RAF flag path).
     identity_ps: PrefixSuffixDecomposition<F, 2, SIGNED>,
 }
@@ -289,8 +289,8 @@ where
         params: ReadRafSumcheckParams<F, LUT, SIGNED>,
         lookup_indices: Vec<LookupBits>,
         identity_ps: PrefixSuffixDecomposition<F, 2, SIGNED>,
-        left_operand_ps: PrefixSuffixDecomposition<F, ORDER_OP, false>,
-        right_operand_ps: PrefixSuffixDecomposition<F, ORDER_OP, false>,
+        left_operand_ps: PrefixSuffixDecomposition<F, ORDER_OP, SIGNED>,
+        right_operand_ps: PrefixSuffixDecomposition<F, ORDER_OP, SIGNED>,
     ) -> Self {
         let phases = NUM_PHASES;
         let log_m = LOG_K / phases;
@@ -624,13 +624,13 @@ where
     }
 }
 
-impl<F, LUT> ReadRafSumcheckProver<F, LUT, true, 3>
+impl<F, LUT, const SIGNED: bool> ReadRafSumcheckProver<F, LUT, SIGNED, 3>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
     pub fn gen(
-        params: ReadRafSumcheckParams<F, LUT, true>,
+        params: ReadRafSumcheckParams<F, LUT, SIGNED>,
         lookup_indices: Vec<LookupBits>,
     ) -> Self {
         let log_m = LOG_K / NUM_PHASES;
@@ -662,13 +662,13 @@ where
     }
 }
 
-impl<F, LUT> ReadRafSumcheckProver<F, LUT, false, 2>
+impl<F, LUT, const SIGNED: bool> ReadRafSumcheckProver<F, LUT, SIGNED, 2>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
     pub fn gen(
-        params: ReadRafSumcheckParams<F, LUT, false>,
+        params: ReadRafSumcheckParams<F, LUT, SIGNED>,
         lookup_indices: Vec<LookupBits>,
     ) -> Self {
         let log_m = LOG_K / NUM_PHASES;

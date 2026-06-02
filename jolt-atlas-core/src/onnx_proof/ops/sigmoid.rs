@@ -226,11 +226,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SigmoidParams<F> {
         );
         let rv_claim = accessor.get_custom(reduced_output_id).1;
 
-        let quotient_id = OpeningId::new(
-            VirtualPoly::TeleportQuotient(self.computation_node.idx),
-            SumcheckId::NodeExecution(self.computation_node.idx),
-        );
-        let quotient_claim = accessor.get_custom(quotient_id).1;
+        let quotient_claim = accessor.get_advice(VirtualPoly::TeleportQuotient).1;
 
         rv_claim + self.gamma * quotient_claim
     }

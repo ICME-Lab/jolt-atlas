@@ -105,7 +105,7 @@ impl JoltField for ark_bn254::Fr {
             let val = val.unsigned_abs();
             -<Self as JoltField>::from_u8(val)
         } else {
-            <Self as JoltField>::from_u32(val as u32)
+            <Self as JoltField>::from_u8(val as u8)
         }
     }
 

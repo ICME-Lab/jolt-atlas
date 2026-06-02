@@ -843,6 +843,139 @@ fn test_add_zk() {
         .expect("ZK verification should succeed");
 }
 
+/// Regression test for the `Constant`/`Input` opening-binding fix.
+///
+/// Setup: build two models M and M' with identical topology
+/// (`y = input + constant`) but different `Constant` tensors. A malicious
+/// prover runs the honest ZK prover on M' (so its BlindFold witness
+/// encodes M''s constant value) and submits the resulting bundle to a
+/// verifier configured for M. Two layers of defense are exercised:
+///
+/// 1. The cleartext `public_node_reduced_claims` check rejects the bundle
+///    as-is, because the bundle's claims are computed against M' but the
+///    verifier expects M's.
+/// 2. **The interesting test**: even if the attacker patches
+///    `public_node_reduced_claims` to match the verifier's expected
+///    values (which an attacker can do — it's a deterministic function
+///    of the bundle and the public M tensor), the R1CS binding
+///    constraints added in this commit reject the attempt. The binding
+///    constraints tie each `Opening(NodeOutput(constant), NodeExecution(consumer))`
+///    in the BlindFold witness to `public_mle(opening_point)` via a
+///    public Challenge slot and an identity-G1 y_com. The verifier
+///    independently computes the expected challenge values and compares
+///    them against `bundle.baked.extra_constraint_challenges`; on
+///    mismatch the verifier rejects with `Public-node binding mismatch`.
+///
+/// Before this commit the patched-bundle attack accepted (the
+/// `public_node_reduced_claims` check is decoupled from the BlindFold
+/// witness). This test pins the fix and acts as a regression.
+#[cfg(feature = "zk")]
+#[test]
+fn test_zk_constant_binding_rejects_cross_model_attack() {
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+
+    let size = 1 << 4;
+    let mut rng = StdRng::seed_from_u64(0xC0FFEE);
+    let input_data = Tensor::<i32>::random_small(&mut rng, &[size]);
+
+    let constant_m = Tensor::<i32>::random_small(&mut rng, &[size]);
+    let mut constant_mprime_data: Vec<i32> = constant_m.iter().copied().collect();
+    // Make sure they differ in at least one coordinate.
+    constant_mprime_data[0] = constant_mprime_data[0].wrapping_add(1);
+    let constant_mprime = Tensor::new(Some(&constant_mprime_data), constant_m.dims())
+        .expect("constant tensor should be valid");
+
+    let build = |c: Tensor<i32>| {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![size]);
+        let cnode = b.constant(c);
+        let res = b.add(i, cnode);
+        b.mark_output(res);
+        b.build()
+    };
+
+    let prover_pp_m = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(
+        AtlasSharedPreprocessing::preprocess(build(constant_m.clone())),
+    );
+    let verifier_pp_m = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp_m);
+
+    let prover_pp_mprime = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(
+        AtlasSharedPreprocessing::preprocess(build(constant_mprime.clone())),
+    );
+
+    let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
+        joltworks::curve::Bn254Curve,
+    >::deterministic(16);
+
+    // Malicious prover runs the honest ZK prover on M' (constant = constant_mprime).
+    // The resulting bundle's BlindFold witness encodes M''s constant value
+    // for every consumer-opening on the constant node.
+    let (mut bundle, io) =
+        crate::onnx_proof::zk::prove_zk(&prover_pp_mprime, &[input_data.clone()], &gens);
+
+    // Sanity 1: unpatched malicious bundle is rejected — the cleartext
+    // `public_node_reduced_claims` check fires first.
+    let unpatched = crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp_m, &io, &gens);
+    assert!(
+        unpatched.is_err(),
+        "unpatched malicious bundle should fail the cleartext public-node check; \
+         got {unpatched:?}",
+    );
+
+    // Now patch `public_node_reduced_claims` to the values the M-verifier
+    // would compute (a real attacker does this trivially — they're a
+    // deterministic function of the bundle and the public M tensor; we
+    // expose a test-only helper that runs the verifier flow once to
+    // extract them).
+    let mut expected_for_m: std::collections::BTreeMap<usize, Fr> =
+        std::collections::BTreeMap::new();
+    crate::onnx_proof::zk::extract_verifier_expected_public_claims(
+        &bundle,
+        &verifier_pp_m,
+        &io,
+        &gens,
+        &mut expected_for_m,
+    )
+    .expect("extract should run verifier flow without error");
+    for (node_idx, expected) in &expected_for_m {
+        bundle
+            .public_node_reduced_claims
+            .insert(*node_idx, *expected);
+    }
+
+    // With the cleartext check now passing, the R1CS binding constraints
+    // are the only thing standing between the malicious bundle and an
+    // accept. They should reject: the bundle's
+    // `extra_constraint_challenges` were baked from M''s constant
+    // (M'.constant_mle at the consumer opening points), but the M
+    // verifier computes M.constant_mle at the same points and these
+    // disagree. The verifier returns `Public-node binding mismatch`.
+    let patched = crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp_m, &io, &gens);
+    assert!(
+        patched.is_err(),
+        "binding fix should reject the patched malicious bundle; got Ok"
+    );
+    let err_msg = format!("{patched:?}");
+    assert!(
+        err_msg.contains("Public-node binding mismatch"),
+        "expected `Public-node binding mismatch`, got: {err_msg}"
+    );
+
+    // Cross-check: the bundle's IO carries M''s output (input + M'.constant),
+    // which differs from M's true output (input + M.constant). The
+    // binding rejection prevents this false statement from being accepted.
+    let honest_m_output: Vec<i32> = input_data
+        .iter()
+        .zip(constant_m.iter())
+        .map(|(a, b)| a + b)
+        .collect();
+    let claimed_output: Vec<i32> = io.outputs[0].iter().copied().collect();
+    assert_ne!(
+        honest_m_output, claimed_output,
+        "test precondition: malicious io.outputs[0] should differ from honest M(input)"
+    );
+}
+
 #[cfg(feature = "zk")]
 #[test]
 fn test_reshape_zk() {

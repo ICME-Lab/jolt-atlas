@@ -20,8 +20,8 @@ use joltworks::{
     },
     subprotocols::{
         ps_shout::{
-            ps_signed_read_raf_prover, ps_signed_read_raf_verifier, PrefixSuffixShoutProvider,
-            ReadRafClaims, SignedReadRafSumcheckProver, SignedReadRafSumcheckVerifier,
+            ps_read_raf_prover, ps_read_raf_verifier, PrefixSuffixShoutProvider, ReadRafClaims,
+            ReadRafSumcheckProver, ReadRafSumcheckVerifier,
         },
         shout::RaOneHotEncoding,
     },
@@ -138,7 +138,7 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
         trace: &Trace,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> (SignedReadRafSumcheckProver<F, LUT>, Vec<usize>)
+    ) -> (ReadRafSumcheckProver<F, LUT>, Vec<usize>)
     where
         F: JoltField,
         T: Transcript,
@@ -147,7 +147,7 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
         let (left, right) = H::get_operands_tensors(trace, &self.computation_node);
         let lookup_bits = H::compute_lookup_indices(&left, &right);
         let lookup_indices: Vec<usize> = lookup_bits.iter().map(|&x| x.into()).collect();
-        let prover = ps_signed_read_raf_prover(self, lookup_bits, accumulator, transcript);
+        let prover = ps_read_raf_prover(self, lookup_bits, accumulator, transcript);
         (prover, lookup_indices)
     }
 
@@ -156,13 +156,13 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> SignedReadRafSumcheckVerifier<F, LUT>
+    ) -> ReadRafSumcheckVerifier<F, LUT>
     where
         F: JoltField,
         T: Transcript,
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
-        ps_signed_read_raf_verifier(self, accumulator, transcript)
+        ps_read_raf_verifier(self, accumulator, transcript)
     }
 }
 

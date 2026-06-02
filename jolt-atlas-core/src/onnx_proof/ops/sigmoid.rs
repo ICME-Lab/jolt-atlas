@@ -9,7 +9,7 @@ use crate::{
             range_and_onehot::{
                 prove_range_and_onehot, verify_range_and_onehot, NeuralTeleportRangeOneHot,
             },
-            reduction::{ReductionParams, ReductionProver, ReductionVerifier},
+            eval_shift::{EvalShiftParams, EvalShiftProver, EvalShiftVerifier},
             utils::compute_ra_evals_nbits_2comp,
             SigmoidTable,
         },
@@ -71,11 +71,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sigmoid {
         let div_params = TeleportDivisionParams::new(node.clone(), &prover.accumulator, self.tau);
         let mut div_sumcheck = TeleportDivisionProver::new(&prover.trace, div_params);
 
-        let reduction_params = ReductionParams::new(node.clone(), &prover.accumulator);
-        let mut reduction_sumcheck = ReductionProver::initialize(&prover.trace, reduction_params);
+        let eval_shift_params = EvalShiftParams::new(node.clone(), &prover.accumulator);
+        let mut eval_shift_sumcheck = EvalShiftProver::initialize(&prover.trace, eval_shift_params);
 
         let (div_proof, _) = BatchedSumcheck::prove(
-            vec![&mut div_sumcheck, &mut reduction_sumcheck],
+            vec![&mut div_sumcheck, &mut eval_shift_sumcheck],
             &mut prover.accumulator,
             &mut prover.transcript,
         );
@@ -115,10 +115,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sigmoid {
 
         let div_verifier =
             TeleportDivisionVerifier::new(node.clone(), &verifier.accumulator, self.tau);
-        let reduction_verifier = ReductionVerifier::new(node.clone(), &verifier.accumulator);
+        let eval_shift_verifier = EvalShiftVerifier::new(node.clone(), &verifier.accumulator);
         BatchedSumcheck::verify(
             div_proof,
-            vec![&div_verifier, &reduction_verifier],
+            vec![&div_verifier, &eval_shift_verifier],
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
@@ -198,8 +198,8 @@ impl<F: JoltField> SigmoidParams<F> {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let gamma = transcript.challenge_scalar();
         let reduced_output_id = OpeningId::new(
-            VirtualPoly::NTReducedNodeOutput(computation_node.idx),
-            SumcheckId::NTReduction,
+            VirtualPoly::NTEvalShiftOutput(computation_node.idx),
+            SumcheckId::NTEvalShift,
         );
         let r_node_output = accessor.get_custom(reduced_output_id).0;
 
@@ -221,8 +221,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SigmoidParams<F> {
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
         let reduced_output_id = OpeningId::new(
-            VirtualPoly::NTReducedNodeOutput(self.computation_node.idx),
-            SumcheckId::NTReduction,
+            VirtualPoly::NTEvalShiftOutput(self.computation_node.idx),
+            SumcheckId::NTEvalShift,
         );
         let rv_claim = accessor.get_custom(reduced_output_id).1;
 

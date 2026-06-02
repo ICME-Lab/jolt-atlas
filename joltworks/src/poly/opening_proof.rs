@@ -1178,8 +1178,8 @@ pub enum SumcheckId {
     RLC(usize),
     /// Batch opening reduction (used by BlindFold y_com constraint).
     BlindFoldBatchOpening,
-    /// Evaluation reduction sum-check used in neural teleport ops
-    NTReduction,
+    /// Eval-shift sumcheck used in neural teleport ops
+    NTEvalShift,
 }
 
 impl CanonicalSerialize for SumcheckId {
@@ -1204,7 +1204,7 @@ impl CanonicalSerialize for SumcheckId {
                 idx.serialize_with_mode(&mut writer, compress)?;
             }
             Self::BlindFoldBatchOpening => 8u8.serialize_with_mode(&mut writer, compress)?,
-            Self::NTReduction => 9u8.serialize_with_mode(&mut writer, compress)?,
+            Self::NTEvalShift => 9u8.serialize_with_mode(&mut writer, compress)?,
         }
         Ok(())
     }
@@ -1248,7 +1248,7 @@ impl CanonicalDeserialize for SumcheckId {
                 Ok(Self::RLC(idx))
             }
             8 => Ok(Self::BlindFoldBatchOpening),
-            9 => Ok(Self::NTReduction),
+            9 => Ok(Self::NTEvalShift),
             _ => Err(SerializationError::InvalidData),
         }
     }

@@ -1,4 +1,4 @@
-//! Implements the reduction sumcheck used by tanh, erf, and sigmoid output
+//! Implements the eval-shift sumcheck used by tanh, erf, and sigmoid output
 //! polynomials to map their opening point (tied to their claim) to the shared
 //! opening point produced by the neural-teleport division sumcheck.
 use crate::utils::opening_access::AccOpeningAccessor;
@@ -30,14 +30,14 @@ use joltworks::{
     transcripts::Transcript,
 };
 
-/// Shared parameter block for the reduction sumcheck proof.
+/// Shared parameter block for the eval-shift sumcheck proof.
 #[derive(Clone)]
-pub struct ReductionParams<F: JoltField> {
+pub struct EvalShiftParams<F: JoltField> {
     pub(crate) r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     pub(crate) computation_node: ComputationNode,
 }
 
-impl<F: JoltField> ReductionParams<F> {
+impl<F: JoltField> EvalShiftParams<F> {
     /// Creates parameters from the current reduced-output opening in the accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
@@ -49,7 +49,7 @@ impl<F: JoltField> ReductionParams<F> {
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for ReductionParams<F> {
+impl<F: JoltField> SumcheckInstanceParams<F> for EvalShiftParams<F> {
     fn degree(&self) -> usize {
         2
     }
@@ -87,8 +87,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReductionParams<F> {
     #[cfg(feature = "zk")]
     fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
         let output_id = OpeningId::new(
-            VirtualPoly::NTReducedNodeOutput(self.computation_node.idx),
-            SumcheckId::NTReduction,
+            VirtualPoly::NTEvalShiftOutput(self.computation_node.idx),
+            SumcheckId::NTEvalShift,
         );
         let term = ProductTerm::scaled(
             ValueSource::Challenge(0),
@@ -107,20 +107,20 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReductionParams<F> {
     }
 }
 
-/// Prover state for the reduction sumcheck protocol.
+/// Prover state for the eval-shift sumcheck protocol.
 ///
 /// Maintains the equality polynomial and output polynomial needed to generate
 /// sumcheck messages for the reduced-output claim.
-pub struct ReductionProver<F: JoltField> {
-    params: ReductionParams<F>,
+pub struct EvalShiftProver<F: JoltField> {
+    params: EvalShiftParams<F>,
     eq_r_node_output: GruenSplitEqPolynomial<F>,
     output: MultilinearPolynomial<F>,
 }
 
-impl<F: JoltField> ReductionProver<F> {
+impl<F: JoltField> EvalShiftProver<F> {
     /// Initializes the prover with trace data and reduction parameters.
-    #[tracing::instrument(skip_all, name = "ReductionProver::initialize")]
-    pub fn initialize(trace: &Trace, params: ReductionParams<F>) -> Self {
+    #[tracing::instrument(skip_all, name = "EvalShiftProver::initialize")]
+    pub fn initialize(trace: &Trace, params: EvalShiftParams<F>) -> Self {
         let eq_r_node_output =
             GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
         let LayerData {
@@ -136,7 +136,7 @@ impl<F: JoltField> ReductionProver<F> {
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReductionProver<F> {
+impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for EvalShiftProver<F> {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
@@ -171,34 +171,34 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReductionProv
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
             .into_provider(transcript, opening_point);
         let opening_id = OpeningId::new(
-            VirtualPoly::NTReducedNodeOutput(self.params.computation_node.idx),
-            SumcheckId::NTReduction,
+            VirtualPoly::NTEvalShiftOutput(self.params.computation_node.idx),
+            SumcheckId::NTEvalShift,
         );
         provider.append_custom(opening_id, self.output.final_claim());
     }
 }
 
-/// Verifier for the reduction sumcheck protocol.
+/// Verifier for the eval-shift sumcheck protocol.
 ///
 /// Verifies that the prover's sumcheck messages are consistent with the
 /// reduced-output claim.
-pub struct ReductionVerifier<F: JoltField> {
-    params: ReductionParams<F>,
+pub struct EvalShiftVerifier<F: JoltField> {
+    params: EvalShiftParams<F>,
 }
 
-impl<F: JoltField> ReductionVerifier<F> {
+impl<F: JoltField> EvalShiftVerifier<F> {
     /// Creates a new verifier for the reduction operation.
-    #[tracing::instrument(skip_all, name = "ReductionVerifier::new")]
+    #[tracing::instrument(skip_all, name = "EvalShiftVerifier::new")]
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
     ) -> Self {
-        let params = ReductionParams::new(computation_node, accumulator);
+        let params = EvalShiftParams::new(computation_node, accumulator);
         Self { params }
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReductionVerifier<F> {
+impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for EvalShiftVerifier<F> {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
@@ -217,8 +217,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReductionVe
             .r;
         let eq_eval = EqPolynomial::mle(r_node_output, &r_node_output_prime);
         let opening_id = OpeningId::new(
-            VirtualPoly::NTReducedNodeOutput(self.params.computation_node.idx),
-            SumcheckId::NTReduction,
+            VirtualPoly::NTEvalShiftOutput(self.params.computation_node.idx),
+            SumcheckId::NTEvalShift,
         );
         let output_claim = accessor.get_custom(opening_id).1;
         eq_eval * output_claim
@@ -236,8 +236,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReductionVe
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
             .into_provider(transcript, opening_point);
         let opening_id = OpeningId::new(
-            VirtualPoly::NTReducedNodeOutput(self.params.computation_node.idx),
-            SumcheckId::NTReduction,
+            VirtualPoly::NTEvalShiftOutput(self.params.computation_node.idx),
+            SumcheckId::NTEvalShift,
         );
         provider.append_custom(opening_id);
     }

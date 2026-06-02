@@ -8,7 +8,7 @@
 pub mod cos;
 pub mod division;
 pub mod range_and_onehot;
-pub mod reduction;
+pub mod eval_shift;
 pub mod sin;
 pub mod utils;
 

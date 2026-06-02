@@ -366,6 +366,6 @@ canonical_serde_enum! {
         /// the point-to-line evaluation reduction has already been performed for that node.
         ///
         /// * `0` – producer node index
-        NTReducedNodeOutput(usize),
+        NTEvalShiftOutput(usize),
     }
 }

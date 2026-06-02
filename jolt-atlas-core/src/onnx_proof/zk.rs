@@ -725,7 +725,7 @@ fn verify_neural_teleport_zk(
     use crate::onnx_proof::{
         neural_teleport::{
             division::TeleportDivisionVerifier, range_and_onehot::NeuralTeleportRangeOneHot,
-            reduction::ReductionVerifier,
+            eval_shift::EvalShiftVerifier,
         },
         range_checking::{
             range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding,
@@ -749,10 +749,10 @@ fn verify_neural_teleport_zk(
         let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
         assert_eq!(*proof_node_idx, node.idx);
         let div_verifier = TeleportDivisionVerifier::new(node.clone(), accumulator, tau);
-        let reduction_verifier = ReductionVerifier::new(node.clone(), accumulator);
+        let eval_shift_verifier = EvalShiftVerifier::new(node.clone(), accumulator);
         verify_zk_sumcheck_instances(
             zk_proof,
-            vec![Box::new(div_verifier), Box::new(reduction_verifier)],
+            vec![Box::new(div_verifier), Box::new(eval_shift_verifier)],
             accumulator,
             transcript,
         )?;
@@ -954,7 +954,7 @@ fn prove_neural_teleport_zk(
         neural_teleport::{
             division::{TeleportDivisionParams, TeleportDivisionProver},
             range_and_onehot::NeuralTeleportRangeOneHot,
-            reduction::{ReductionParams, ReductionProver},
+            eval_shift::{EvalShiftParams, EvalShiftProver},
         },
         range_checking::{
             range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding,
@@ -983,10 +983,10 @@ fn prove_neural_teleport_zk(
     // 2. Division + Reduction sumchecks (batched, mirroring non-ZK path)
     let div_params = TeleportDivisionParams::<F>::new(node.clone(), &prover.accumulator, tau);
     let mut div_sc = TeleportDivisionProver::new(&prover.trace, div_params);
-    let reduction_params = ReductionParams::new(node.clone(), &prover.accumulator);
-    let mut reduction_sc = ReductionProver::initialize(&prover.trace, reduction_params);
+    let eval_shift_params = EvalShiftParams::new(node.clone(), &prover.accumulator);
+    let mut eval_shift_sc = EvalShiftProver::initialize(&prover.trace, eval_shift_params);
     let div_proof = run_zk_batched_sumcheck(
-        vec![&mut div_sc, &mut reduction_sc],
+        vec![&mut div_sc, &mut eval_shift_sc],
         prover,
         blindfold_accumulator,
         stage_configs,

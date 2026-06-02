@@ -3,7 +3,7 @@ use crate::{
         malicious_prover::MaliciousONNXProof,
         neural_teleport::{
             division::{compute_division, TeleportDivisionParams, TeleportDivisionProver},
-            reduction::{ReductionParams, ReductionProver},
+            eval_shift::{EvalShiftParams, EvalShiftProver},
         },
         ops::{
             eval_reduction::NodeEvalReduction,
@@ -283,7 +283,7 @@ fn soundness_tanh_tau_rangecheck_bypass_is_rejected() {
                 base: RangeCheckOperandsBase {
                     node_idx: node.idx,
                     remainder: VirtualPoly::TeleportRemainder(node.idx),
-                    bound: VirtualPoly::NodeOutput(node.inputs[0]),
+                    bound: None,
                     virtual_ra: VirtualPoly::TeleportRangeCheckRa(node.idx),
                     operator: node.operator.clone(),
                 },
@@ -468,11 +468,11 @@ fn soundness_tanh_tau_rangecheck_bypass_is_rejected() {
         let div_params = TeleportDivisionParams::new(node.clone(), &prover.accumulator, op.tau);
         let mut div_sumcheck = TeleportDivisionProver::new(&prover.trace, div_params);
 
-        let reduction_params = ReductionParams::new(node.clone(), &prover.accumulator);
-        let mut reduction_sumcheck = ReductionProver::initialize(&prover.trace, reduction_params);
+        let eval_shift_params = EvalShiftParams::new(node.clone(), &prover.accumulator);
+        let mut eval_shift_sumcheck = EvalShiftProver::initialize(&prover.trace, eval_shift_params);
 
         let (div_proof, _) = BatchedSumcheck::prove(
-            vec![&mut div_sumcheck as _, &mut reduction_sumcheck as _],
+            vec![&mut div_sumcheck as _, &mut eval_shift_sumcheck as _],
             &mut prover.accumulator,
             &mut prover.transcript,
         );

@@ -684,6 +684,7 @@ pub trait PolynomialEvaluation<F: JoltField> {
         Self: Sized,
         C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>;
+
     /// Computes this polynomial's contribution to the computation of a prover
     /// sumcheck message (i.e. a univariate polynomial of the given `degree`).
     fn sumcheck_evals(&self, index: usize, degree: usize, order: BindingOrder) -> Vec<F>;

@@ -385,11 +385,7 @@ where
             .expect("expected virtual polynomial");
         if let VirtualPoly::NodeOutput(node_idx) = virtual_poly {
             debug_assert!(
-                // TODO(AntoineF4C5) Temporary exception: RAF plumbing may still append NodeOutput after reduction
-                // until range-check identity polynomial wiring is fully implemented.
-                // See #208
-                opening_id.sumcheck == SumcheckId::Raf
-                    || !self.reduced_evaluations.contains_key(&node_idx),
+                !self.reduced_evaluations.contains_key(&node_idx),
                 "cannot append opening for node {node_idx} after evaluation reduction"
             );
         }
@@ -879,11 +875,7 @@ where
             .expect("expected virtual polynomial");
         if let VirtualPoly::NodeOutput(node_idx) = virtual_poly {
             debug_assert!(
-                // TODO(AntoineF4C5) Temporary exception: RAF plumbing may still append NodeOutput after reduction
-                // until range-check identity polynomial wiring is fully implemented.
-                // See #208
-                opening_id.sumcheck == SumcheckId::Raf
-                    || !self.reduced_evaluations.contains_key(&node_idx),
+                !self.reduced_evaluations.contains_key(&node_idx),
                 "cannot append opening for node {node_idx} after evaluation reduction"
             );
         }
@@ -1186,6 +1178,8 @@ pub enum SumcheckId {
     RLC(usize),
     /// Batch opening reduction (used by BlindFold y_com constraint).
     BlindFoldBatchOpening,
+    /// Eval-shift sumcheck used in neural teleport ops
+    NTEvalShift,
 }
 
 impl CanonicalSerialize for SumcheckId {
@@ -1210,6 +1204,7 @@ impl CanonicalSerialize for SumcheckId {
                 idx.serialize_with_mode(&mut writer, compress)?;
             }
             Self::BlindFoldBatchOpening => 8u8.serialize_with_mode(&mut writer, compress)?,
+            Self::NTEvalShift => 9u8.serialize_with_mode(&mut writer, compress)?,
         }
         Ok(())
     }
@@ -1253,6 +1248,7 @@ impl CanonicalDeserialize for SumcheckId {
                 Ok(Self::RLC(idx))
             }
             8 => Ok(Self::BlindFoldBatchOpening),
+            9 => Ok(Self::NTEvalShift),
             _ => Err(SerializationError::InvalidData),
         }
     }
@@ -1415,8 +1411,9 @@ mod guardrail_tests {
         );
     }
 
+    #[should_panic(expected = "cannot append opening for node 3 after evaluation reduction")]
     #[test]
-    fn append_virtual_node_output_raf_allowed_after_reduction() {
+    fn append_virtual_node_output_raf_rejected_after_reduction() {
         let mut acc = ProverOpeningAccumulator::<Fr>::new();
         acc.reduced_evaluations.insert(
             3,

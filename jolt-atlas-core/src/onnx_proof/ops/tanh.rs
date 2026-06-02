@@ -5,6 +5,7 @@ use crate::{
                 compute_division, TeleportDivisionParams, TeleportDivisionProver,
                 TeleportDivisionVerifier,
             },
+            eval_shift::{EvalShiftParams, EvalShiftProver, EvalShiftVerifier},
             n_bits_to_usize,
             range_and_onehot::{
                 prove_range_and_onehot, verify_range_and_onehot, NeuralTeleportRangeOneHot,
@@ -26,8 +27,7 @@ use atlas_onnx_tracer::{
     node::{handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE, ComputationNode},
     ops::Tanh,
 };
-use common::parallel::par_enabled;
-use common::{CommittedPoly, VirtualPoly};
+use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -43,12 +43,12 @@ use joltworks::{
             OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        teleport_id_poly::TeleportIdPolynomial,
+        signed_identity_poly::SignedIdentityPoly,
         unipoly::UniPoly,
     },
     subprotocols::{
         shout::RaOneHotEncoding,
-        sumcheck::{Sumcheck, SumcheckInstanceProof},
+        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -68,13 +68,16 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
         let mut results = Vec::new();
 
-        // Stage 1a: Neural teleportation division proof
+        // Stage 1a: Neural teleportation division proof + reduction on output
         let div_params = TeleportDivisionParams::new(node.clone(), &prover.accumulator, self.tau);
         let mut div_sumcheck = TeleportDivisionProver::new(&prover.trace, div_params);
 
+        let eval_shift_params = EvalShiftParams::new(node.clone(), &prover.accumulator);
+        let mut eval_shift_sumcheck = EvalShiftProver::initialize(&prover.trace, eval_shift_params);
+
         // Run division sumcheck first (output claim will be cached)
-        let (div_proof, _) = Sumcheck::prove(
-            &mut div_sumcheck,
+        let (div_proof, _) = BatchedSumcheck::prove(
+            vec![&mut div_sumcheck, &mut eval_shift_sumcheck],
             &mut prover.accumulator,
             &mut prover.transcript,
         );
@@ -90,12 +93,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             &mut prover.transcript,
             self.clone(),
         );
-        let mut exec_sumcheck = TanhProver::initialize(
-            &prover.trace,
-            params,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
+        let mut exec_sumcheck = TanhProver::initialize(&prover.trace, params);
 
         let (exec_proof, _) = Sumcheck::prove(
             &mut exec_sumcheck,
@@ -124,9 +122,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
 
         let div_verifier =
             TeleportDivisionVerifier::new(node.clone(), &verifier.accumulator, self.tau);
-        Sumcheck::verify(
+        let eval_shift_verifier = EvalShiftVerifier::new(node.clone(), &verifier.accumulator);
+        BatchedSumcheck::verify(
             div_proof,
-            &div_verifier,
+            vec![&div_verifier, &eval_shift_verifier],
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
@@ -196,7 +195,11 @@ impl<F: JoltField> TanhParams<F> {
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let gamma = transcript.challenge_scalar();
-        let r_node_output = accessor.get_reduced_opening().0;
+        let reduced_output_id = OpeningId::new(
+            VirtualPoly::NTEvalShiftOutput(computation_node.idx),
+            SumcheckId::NTEvalShift,
+        );
+        let r_node_output = accessor.get_custom(reduced_output_id).0;
 
         Self {
             gamma,
@@ -214,14 +217,14 @@ impl<F: JoltField> SumcheckInstanceParams<F> for TanhParams<F> {
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
-        let rv_claim = accessor.get_reduced_opening().1;
+        let reduced_output_id = OpeningId::new(
+            VirtualPoly::NTEvalShiftOutput(self.computation_node.idx),
+            SumcheckId::NTEvalShift,
+        );
+        let rv_claim = accessor.get_custom(reduced_output_id).1;
 
         // Use quotient claim instead of input claim (neural teleportation)
-        let quotient_id = OpeningId::new(
-            VirtualPoly::TeleportQuotient(self.computation_node.idx),
-            SumcheckId::Raf,
-        );
-        let quotient_claim = accessor.get_custom(quotient_id).1;
+        let quotient_claim = accessor.get_advice(VirtualPoly::TeleportQuotient).1;
 
         rv_claim + self.gamma * quotient_claim
     }
@@ -264,7 +267,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for TanhParams<F> {
         let table = TanhTable::new(self.op.log_table, self.op.tau);
         let tanh_table = MultilinearPolynomial::from(table.materialize());
         let table_claim = tanh_table.evaluate(&opening_point.r);
-        let int_eval = TeleportIdPolynomial::new(self.op.log_table).evaluate(&opening_point.r);
+        let int_eval = SignedIdentityPoly::new(self.op.log_table).evaluate(&opening_point.r);
         vec![table_claim + self.gamma * int_eval]
     }
 }
@@ -277,17 +280,12 @@ pub struct TanhProver<F: JoltField> {
     params: TanhParams<F>,
     tanh_table: MultilinearPolynomial<F>,
     input_onehot: MultilinearPolynomial<F>,
-    identity: TeleportIdPolynomial<F>,
+    identity: SignedIdentityPoly<F>,
 }
 
 impl<F: JoltField> TanhProver<F> {
     /// Initialize the prover with trace data, parameters, accumulator, and transcript.
-    pub fn initialize(
-        trace: &Trace,
-        params: TanhParams<F>,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Self {
+    pub fn initialize(trace: &Trace, params: TanhParams<F>) -> Self {
         let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
         let input = operands[0];
 
@@ -314,47 +312,9 @@ impl<F: JoltField> TanhProver<F> {
             params.op.log_table,
         );
 
-        // Cache quotient claim (used in tanh lookup)
-        // We do not reuse the claim from the division sumcheck, because the opening point is different
-        // TODO(AntoineF4C5): Reuse the quotient claim from proving division.
-        // TODO(ClankPan): erf.rs has a similar implementation
-        // REQUIRED:
-        // - Computing an opening for output at same opening point than quotient tensor (and later perfom n-to-1 opening reduction).
-        // - Handling the difference between polynomials built from u32 and i32 tensors,
-        //   Namely we currently always use polynomials built from i32 tensors, except for raf-checking.
-        let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data()) // TODO: unify tensor representations (always i32 or always u32)
-            .evaluate(&params.r_node_output.r);
-        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .into_provider(transcript, params.r_node_output.clone());
-        // Edge case where we need to insert for SumcheckId::Raf sumcheck
-        // TODO(AntoineF4C5): Clean once #208 is dealt with
-        let raf_opening_id = OpeningId::new(
-            VirtualPoly::TeleportQuotient(params.computation_node.idx),
-            SumcheckId::Raf,
-        );
-        provider.append_custom(raf_opening_id, quotient_claim);
-
         let input_onehot = MultilinearPolynomial::from(input_onehot);
         assert_eq!(input_onehot.len(), tanh_table.len());
-        let identity = TeleportIdPolynomial::new(params.op.log_table);
-
-        #[cfg(test)]
-        {
-            let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data())
-                .evaluate(&params.r_node_output.r);
-            let rv_claim = provider.get_reduced_opening().1;
-            let claim = (0..input_onehot.len())
-                .map(|i| {
-                    use crate::onnx_proof::neural_teleport::usize_to_n_bits;
-
-                    let a = input_onehot.get_bound_coeff(i);
-                    let b = tanh_table.get_bound_coeff(i);
-                    let int = F::from_u32(usize_to_n_bits(i, params.op.log_table) as u32);
-                    a * (b + params.gamma * int)
-                })
-                .sum();
-            assert_eq!(rv_claim + params.gamma * quotient_claim, claim)
-        }
+        let identity = SignedIdentityPoly::new(params.op.log_table);
 
         Self {
             params,
@@ -448,17 +408,6 @@ impl<F: JoltField> TanhVerifier<F> {
     ) -> Self {
         let params = TanhParams::new(computation_node, graph, accumulator, transcript, op);
 
-        // Cache quotient polynomial opening
-        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .into_provider(transcript, params.r_node_output.clone());
-        // Edge case where we need to insert for SumcheckId::Raf sumcheck
-        // TODO(AntoineF4C5): Clean once #208 is dealt with
-        let raf_opening_id = OpeningId::new(
-            VirtualPoly::TeleportQuotient(params.computation_node.idx),
-            SumcheckId::Raf,
-        );
-        provider.append_custom(raf_opening_id);
-
         // Materialize the tanh table for verification
         let tanh_table = TanhTable::new(params.op.log_table, params.op.tau);
         let tanh_table = MultilinearPolynomial::from(tanh_table.materialize());
@@ -487,8 +436,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifie
         // Evaluate tanh table at the opening point
         let table_claim = self.tanh_table.evaluate(&opening_point.r);
 
-        let int_eval =
-            TeleportIdPolynomial::new(self.params.op.log_table).evaluate(&opening_point.r);
+        let int_eval = SignedIdentityPoly::new(self.params.op.log_table).evaluate(&opening_point.r);
 
         ra_claim * (table_claim + self.params.gamma * int_eval)
     }

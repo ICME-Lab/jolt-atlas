@@ -553,10 +553,12 @@ fn verify_rsqrt_zk(
     transcript: &mut T,
     zk_proof_idx: &mut usize,
 ) -> Result<(), ProofVerifyError> {
-    use crate::onnx_proof::ops::rsqrt::RsqrtVerifier;
-    use crate::onnx_proof::range_checking::{
-        range_check_operands::{RiRangeCheckOperands, RsRangeCheckOperands},
-        RangeCheckEncoding, RangeCheckProvider,
+    use crate::onnx_proof::{
+        ops::rsqrt::RsqrtVerifier,
+        range_checking::{
+            range_check_operands::{RiRangeCheckOperands, RsRangeCheckOperands},
+            RangeCheckEncoding, RangeCheckProvider,
+        },
     };
     use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 
@@ -627,11 +629,15 @@ fn verify_div_zk(
     transcript: &mut T,
     zk_proof_idx: &mut usize,
 ) -> Result<(), ProofVerifyError> {
-    use crate::onnx_proof::ops::div::DivVerifier;
-    use crate::onnx_proof::range_checking::{
-        range_check_operands::DivRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+    use crate::{
+        onnx_proof::{
+            ops::div::DivVerifier,
+            range_checking::{
+                range_check_operands::DivRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+            },
+        },
+        utils::opening_access::AccOpeningAccessor,
     };
-    use crate::utils::opening_access::AccOpeningAccessor;
     use common::CommittedPoly;
     use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 
@@ -716,11 +722,15 @@ fn verify_neural_teleport_zk(
     transcript: &mut T,
     zk_proof_idx: &mut usize,
 ) -> Result<(), ProofVerifyError> {
-    use crate::onnx_proof::neural_teleport::{
-        division::TeleportDivisionVerifier, range_and_onehot::NeuralTeleportRangeOneHot,
-    };
-    use crate::onnx_proof::range_checking::{
-        range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+    use crate::onnx_proof::{
+        neural_teleport::{
+            division::TeleportDivisionVerifier, eval_shift::EvalShiftVerifier,
+            range_and_onehot::NeuralTeleportRangeOneHot,
+        },
+        range_checking::{
+            range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding,
+            RangeCheckProvider,
+        },
     };
     use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 
@@ -734,14 +744,15 @@ fn verify_neural_teleport_zk(
         _ => unreachable!(),
     };
 
-    // 2. Division sumcheck
+    // 2. Division + Reduction sumchecks (batched, mirroring non-ZK path)
     {
         let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
         assert_eq!(*proof_node_idx, node.idx);
         let div_verifier = TeleportDivisionVerifier::new(node.clone(), accumulator, tau);
+        let eval_shift_verifier = EvalShiftVerifier::new(node.clone(), accumulator);
         verify_zk_sumcheck_instances(
             zk_proof,
-            vec![Box::new(div_verifier)],
+            vec![Box::new(div_verifier), Box::new(eval_shift_verifier)],
             accumulator,
             transcript,
         )?;
@@ -827,13 +838,18 @@ fn verify_cos_sin_zk(
     transcript: &mut T,
     zk_proof_idx: &mut usize,
 ) -> Result<(), ProofVerifyError> {
-    use crate::onnx_proof::neural_teleport::{
-        division::TeleportDivisionVerifier, range_and_onehot::NeuralTeleportRangeOneHot,
+    use crate::{
+        onnx_proof::{
+            neural_teleport::{
+                division::TeleportDivisionVerifier, range_and_onehot::NeuralTeleportRangeOneHot,
+            },
+            range_checking::{
+                range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding,
+                RangeCheckProvider,
+            },
+        },
+        utils::opening_access::AccOpeningAccessor,
     };
-    use crate::onnx_proof::range_checking::{
-        range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
-    };
-    use crate::utils::opening_access::AccOpeningAccessor;
     use common::CommittedPoly;
     use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 
@@ -934,12 +950,16 @@ fn prove_neural_teleport_zk(
     eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
     zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
 ) {
-    use crate::onnx_proof::neural_teleport::{
-        division::{TeleportDivisionParams, TeleportDivisionProver},
-        range_and_onehot::NeuralTeleportRangeOneHot,
-    };
-    use crate::onnx_proof::range_checking::{
-        range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+    use crate::onnx_proof::{
+        neural_teleport::{
+            division::{TeleportDivisionParams, TeleportDivisionProver},
+            eval_shift::{EvalShiftParams, EvalShiftProver},
+            range_and_onehot::NeuralTeleportRangeOneHot,
+        },
+        range_checking::{
+            range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding,
+            RangeCheckProvider,
+        },
     };
     use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 
@@ -960,11 +980,13 @@ fn prove_neural_teleport_zk(
         _ => unreachable!(),
     };
 
-    // 2. Division sumcheck
+    // 2. Division + Reduction sumchecks (batched, mirroring non-ZK path)
     let div_params = TeleportDivisionParams::<F>::new(node.clone(), &prover.accumulator, tau);
     let mut div_sc = TeleportDivisionProver::new(&prover.trace, div_params);
-    let div_proof = run_zk_sumcheck(
-        &mut div_sc,
+    let eval_shift_params = EvalShiftParams::new(node.clone(), &prover.accumulator);
+    let mut eval_shift_sc = EvalShiftProver::initialize(&prover.trace, eval_shift_params);
+    let div_proof = run_zk_batched_sumcheck(
+        vec![&mut div_sc, &mut eval_shift_sc],
         prover,
         blindfold_accumulator,
         stage_configs,
@@ -982,12 +1004,7 @@ fn prove_neural_teleport_zk(
                 &mut prover.transcript,
                 $op.clone(),
             );
-            let mut sc = <$Prover>::initialize(
-                &prover.trace,
-                params,
-                &mut prover.accumulator,
-                &mut prover.transcript,
-            );
+            let mut sc = <$Prover>::initialize(&prover.trace, params);
             let proof = run_zk_sumcheck(
                 &mut sc,
                 prover,
@@ -1089,14 +1106,19 @@ fn prove_cos_sin_zk(
     eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
     zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
 ) {
-    use crate::onnx_proof::neural_teleport::{
-        division::{TeleportDivisionParams, TeleportDivisionProver},
-        range_and_onehot::NeuralTeleportRangeOneHot,
+    use crate::{
+        onnx_proof::{
+            neural_teleport::{
+                division::{TeleportDivisionParams, TeleportDivisionProver},
+                range_and_onehot::NeuralTeleportRangeOneHot,
+            },
+            range_checking::{
+                range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding,
+                RangeCheckProvider,
+            },
+        },
+        utils::opening_access::AccOpeningAccessor,
     };
-    use crate::onnx_proof::range_checking::{
-        range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
-    };
-    use crate::utils::opening_access::AccOpeningAccessor;
     use common::CommittedPoly;
     use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 
@@ -1241,9 +1263,8 @@ fn prove_softmax_zk(
     inter_stage_commitments: &mut BTreeMap<usize, Vec<joltworks::curve::Bn254G1>>,
     auxiliary_claims: &mut BTreeMap<joltworks::poly::opening_proof::OpeningId, F>,
 ) {
-    use crate::onnx_proof::ops::softmax_last_axis::rc::SAT_DIFF_RC_BITS;
     use crate::onnx_proof::ops::softmax_last_axis::{
-        pad_to_power_of_two, to_indices, to_lookup_bits, LookupTableData,
+        pad_to_power_of_two, rc::SAT_DIFF_RC_BITS, to_indices, to_lookup_bits, LookupTableData,
         SoftmaxLastAxisProver as SmProver,
     };
     use atlas_onnx_tracer::ops::softmax::softmax_last_axis_decomposed;
@@ -1428,8 +1449,7 @@ fn prove_gather_large_zk(
     eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
     zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
 ) {
-    use crate::onnx_proof::ops::gather::large::GatherRaEncoding;
-    use crate::onnx_proof::ops::gather::{GatherParams, GatherProver};
+    use crate::onnx_proof::ops::gather::{large::GatherRaEncoding, GatherParams, GatherProver};
 
     prove_zk_eval_reduction(
         node,
@@ -1494,8 +1514,10 @@ fn prove_gather_small_zk(
     eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
     zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
 ) {
-    use crate::onnx_proof::ops::gather::small::{build_stage2_provers, build_stage3_prover};
-    use crate::onnx_proof::ops::gather::{GatherParams, GatherProver};
+    use crate::onnx_proof::ops::gather::{
+        small::{build_stage2_provers, build_stage3_prover},
+        GatherParams, GatherProver,
+    };
 
     prove_zk_eval_reduction(
         node,
@@ -1624,10 +1646,12 @@ fn prove_rsqrt_zk(
     eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
     zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
 ) {
-    use crate::onnx_proof::ops::rsqrt::{RsqrtParams, RsqrtProver};
-    use crate::onnx_proof::range_checking::{
-        range_check_operands::{RiRangeCheckOperands, RsRangeCheckOperands},
-        RangeCheckEncoding, RangeCheckProvider,
+    use crate::onnx_proof::{
+        ops::rsqrt::{RsqrtParams, RsqrtProver},
+        range_checking::{
+            range_check_operands::{RiRangeCheckOperands, RsRangeCheckOperands},
+            RangeCheckEncoding, RangeCheckProvider,
+        },
     };
     use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 
@@ -1721,11 +1745,15 @@ fn prove_div_zk(
     eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
     zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
 ) {
-    use crate::onnx_proof::ops::div::{DivParams, DivProver};
-    use crate::onnx_proof::range_checking::{
-        range_check_operands::DivRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+    use crate::{
+        onnx_proof::{
+            ops::div::{DivParams, DivProver},
+            range_checking::{
+                range_check_operands::DivRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+            },
+        },
+        utils::opening_access::AccOpeningAccessor,
     };
-    use crate::utils::opening_access::AccOpeningAccessor;
     use common::CommittedPoly;
     use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 
@@ -2206,11 +2234,13 @@ pub fn prove_zk(
         // where each y_P_i is the opening registered by
         // `OpeningProofReductionSumcheckProver::cache_openings` at
         // (CommittedPoly_i, SumcheckId::BlindFoldBatchOpening).
-        use joltworks::poly::opening_proof::{OpeningId, SumcheckId as SId};
-        use joltworks::subprotocols::blindfold::output_constraint::{
-            OutputClaimConstraint, ValueSource,
+        use joltworks::{
+            poly::opening_proof::{OpeningId, SumcheckId as SId},
+            subprotocols::blindfold::{
+                output_constraint::{OutputClaimConstraint, ValueSource},
+                witness::ExtraConstraintWitness,
+            },
         };
-        use joltworks::subprotocols::blindfold::witness::ExtraConstraintWitness;
         let opening_ids: Vec<OpeningId> = state
             .polynomials
             .iter()

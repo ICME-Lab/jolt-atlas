@@ -1,20 +1,24 @@
-use crate::onnx_proof::neural_teleport::{
-    division::{
-        compute_division, TeleportDivisionParams, TeleportDivisionProver, TeleportDivisionVerifier,
+use crate::{
+    onnx_proof::{
+        neural_teleport::{
+            division::{
+                compute_division, TeleportDivisionParams, TeleportDivisionProver,
+                TeleportDivisionVerifier,
+            },
+            eval_shift::{EvalShiftParams, EvalShiftProver, EvalShiftVerifier},
+            n_bits_to_usize,
+            range_and_onehot::{
+                prove_range_and_onehot, verify_range_and_onehot, NeuralTeleportRangeOneHot,
+            },
+            utils::compute_ra_evals_nbits_2comp,
+            ErfTable,
+        },
+        ops::OperatorProofTrait,
+        range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding},
+        ProofId, ProofType, Prover, Verifier,
     },
-    n_bits_to_usize,
-    range_and_onehot::{
-        prove_range_and_onehot, verify_range_and_onehot, NeuralTeleportRangeOneHot,
-    },
-    utils::compute_ra_evals_nbits_2comp,
-    ErfTable,
+    utils::opening_access::AccOpeningAccessor,
 };
-use crate::onnx_proof::{
-    ops::OperatorProofTrait,
-    range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding},
-    ProofId, ProofType, Prover, Verifier,
-};
-use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_onnx_tracer::{
     model::{
         trace::{LayerData, Trace},
@@ -23,8 +27,7 @@ use atlas_onnx_tracer::{
     node::{handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE, ComputationNode},
     ops::Erf,
 };
-use common::parallel::par_enabled;
-use common::{CommittedPoly, VirtualPoly};
+use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -40,12 +43,12 @@ use joltworks::{
             OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        teleport_id_poly::TeleportIdPolynomial,
+        signed_identity_poly::SignedIdentityPoly,
         unipoly::UniPoly,
     },
     subprotocols::{
         shout::RaOneHotEncoding,
-        sumcheck::{Sumcheck, SumcheckInstanceProof},
+        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -64,11 +67,15 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
         let mut results = Vec::new();
 
-        // Stage 1a: Neural teleportation division proof
+        // Stage 1a: Neural teleportation division proof + reduction on output
         let div_params = TeleportDivisionParams::new(node.clone(), &prover.accumulator, self.tau);
         let mut div_sumcheck = TeleportDivisionProver::new(&prover.trace, div_params);
-        let (div_proof, _) = Sumcheck::prove(
-            &mut div_sumcheck,
+
+        let eval_shift_params = EvalShiftParams::new(node.clone(), &prover.accumulator);
+        let mut eval_shift_sumcheck = EvalShiftProver::initialize(&prover.trace, eval_shift_params);
+
+        let (div_proof, _) = BatchedSumcheck::prove(
+            vec![&mut div_sumcheck, &mut eval_shift_sumcheck],
             &mut prover.accumulator,
             &mut prover.transcript,
         );
@@ -82,12 +89,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
             &mut prover.transcript,
             self.clone(),
         );
-        let mut exec_sumcheck = ErfProver::initialize(
-            &prover.trace,
-            params,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
+        let mut exec_sumcheck = ErfProver::initialize(&prover.trace, params);
         let (exec_proof, _) = Sumcheck::prove(
             &mut exec_sumcheck,
             &mut prover.accumulator,
@@ -113,9 +115,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Erf {
 
         let div_verifier =
             TeleportDivisionVerifier::new(node.clone(), &verifier.accumulator, self.tau);
-        Sumcheck::verify(
+        let eval_shift_verifier = EvalShiftVerifier::new(node.clone(), &verifier.accumulator);
+        BatchedSumcheck::verify(
             div_proof,
-            &div_verifier,
+            vec![&div_verifier, &eval_shift_verifier],
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
@@ -194,7 +197,11 @@ impl<F: JoltField> ErfParams<F> {
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let gamma = transcript.challenge_scalar();
-        let r_node_output = accessor.get_reduced_opening().0;
+        let reduced_output_id = OpeningId::new(
+            VirtualPoly::NTEvalShiftOutput(computation_node.idx),
+            SumcheckId::NTEvalShift,
+        );
+        let r_node_output = accessor.get_custom(reduced_output_id).0;
 
         Self {
             gamma,
@@ -213,13 +220,13 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ErfParams<F> {
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
-        let rv_claim = accessor.get_reduced_opening().1;
-
-        let quotient_id = OpeningId::new(
-            VirtualPoly::TeleportQuotient(self.computation_node.idx),
-            SumcheckId::Raf,
+        let reduced_output_id = OpeningId::new(
+            VirtualPoly::NTEvalShiftOutput(self.computation_node.idx),
+            SumcheckId::NTEvalShift,
         );
-        let quotient_claim = accessor.get_custom(quotient_id).1;
+        let rv_claim = accessor.get_custom(reduced_output_id).1;
+
+        let quotient_claim = accessor.get_advice(VirtualPoly::TeleportQuotient).1;
 
         rv_claim + self.gamma * quotient_claim
     }
@@ -262,7 +269,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ErfParams<F> {
         let table = ErfTable::new(self.op.log_table, self.op.tau);
         let erf_table = MultilinearPolynomial::from(table.materialize());
         let table_claim = erf_table.evaluate(&opening_point.r);
-        let int_eval = TeleportIdPolynomial::new(self.op.log_table).evaluate(&opening_point.r);
+        let int_eval = SignedIdentityPoly::new(self.op.log_table).evaluate(&opening_point.r);
         vec![table_claim + self.gamma * int_eval]
     }
 }
@@ -279,17 +286,12 @@ pub struct ErfProver<F: JoltField> {
     /// One-hot Ra evaluations over lookup indices.
     pub input_onehot: MultilinearPolynomial<F>,
     /// Identity polynomial used for index folding in the lookup relation.
-    pub identity: TeleportIdPolynomial<F>,
+    pub identity: SignedIdentityPoly<F>,
 }
 
 impl<F: JoltField> ErfProver<F> {
     /// Initialize the prover with trace data, parameters, accumulator, and transcript.
-    pub fn initialize(
-        trace: &Trace,
-        params: ErfParams<F>,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Self {
+    pub fn initialize(trace: &Trace, params: ErfParams<F>) -> Self {
         let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
         let input = operands[0];
 
@@ -315,21 +317,9 @@ impl<F: JoltField> ErfProver<F> {
             params.op.log_table,
         );
 
-        // TODO(ClankPan): Follow up on the TODOs in tanh.rs.
-        let quotient_claim = MultilinearPolynomial::from(quotient_tensor.into_container_data())
-            .evaluate(&params.r_node_output.r);
-        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .into_provider(transcript, params.r_node_output.clone());
-        // TODO(AntoineF4C5): Clean once #208 is dealt with
-        let quotient_opening_id = OpeningId::new(
-            VirtualPoly::TeleportQuotient(params.computation_node.idx),
-            SumcheckId::Raf,
-        );
-        provider.append_custom(quotient_opening_id, quotient_claim);
-
         let input_onehot = MultilinearPolynomial::from(input_onehot);
         assert_eq!(input_onehot.len(), erf_table.len());
-        let identity = TeleportIdPolynomial::new(params.op.log_table);
+        let identity = SignedIdentityPoly::new(params.op.log_table);
 
         Self {
             params,
@@ -426,14 +416,6 @@ impl<F: JoltField> ErfVerifier<F> {
         op: Erf,
     ) -> Self {
         let params = ErfParams::new(computation_node, graph, accumulator, transcript, op);
-        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .into_provider(transcript, params.r_node_output.clone());
-        // TODO(AntoineF4C5): Clean once #208 is dealt with
-        let quotient_opening_id = OpeningId::new(
-            VirtualPoly::TeleportQuotient(params.computation_node.idx),
-            SumcheckId::Raf,
-        );
-        provider.append_custom(quotient_opening_id);
 
         let erf_table = ErfTable::new(params.op.log_table, params.op.tau);
         let erf_table = MultilinearPolynomial::from(erf_table.materialize());
@@ -462,8 +444,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ErfVerifier
         // Evaluate erf table at the opening point
         let table_claim = self.erf_table.evaluate(&opening_point.r);
 
-        let int_eval =
-            TeleportIdPolynomial::new(self.params.op.log_table).evaluate(&opening_point.r);
+        let int_eval = SignedIdentityPoly::new(self.params.op.log_table).evaluate(&opening_point.r);
 
         ra_claim * (table_claim + self.params.gamma * int_eval)
     }

@@ -5,11 +5,11 @@ use crate::{
                 compute_division, TeleportDivisionParams, TeleportDivisionProver,
                 TeleportDivisionVerifier,
             },
+            eval_shift::{EvalShiftParams, EvalShiftProver, EvalShiftVerifier},
             n_bits_to_usize,
             range_and_onehot::{
                 prove_range_and_onehot, verify_range_and_onehot, NeuralTeleportRangeOneHot,
             },
-            eval_shift::{EvalShiftParams, EvalShiftProver, EvalShiftVerifier},
             utils::compute_ra_evals_nbits_2comp,
             SigmoidTable,
         },

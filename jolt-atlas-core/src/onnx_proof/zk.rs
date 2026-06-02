@@ -724,8 +724,8 @@ fn verify_neural_teleport_zk(
 ) -> Result<(), ProofVerifyError> {
     use crate::onnx_proof::{
         neural_teleport::{
-            division::TeleportDivisionVerifier, range_and_onehot::NeuralTeleportRangeOneHot,
-            eval_shift::EvalShiftVerifier,
+            division::TeleportDivisionVerifier, eval_shift::EvalShiftVerifier,
+            range_and_onehot::NeuralTeleportRangeOneHot,
         },
         range_checking::{
             range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding,
@@ -953,8 +953,8 @@ fn prove_neural_teleport_zk(
     use crate::onnx_proof::{
         neural_teleport::{
             division::{TeleportDivisionParams, TeleportDivisionProver},
-            range_and_onehot::NeuralTeleportRangeOneHot,
             eval_shift::{EvalShiftParams, EvalShiftProver},
+            range_and_onehot::NeuralTeleportRangeOneHot,
         },
         range_checking::{
             range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding,

@@ -361,8 +361,10 @@ impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
 
     /// The right claim is the constant τ; only the remainder claim is fetched from the accumulator.
     fn operand_claims<F: JoltField>(&self, accumulator: &dyn OpeningAccumulator<F>) -> (F, F) {
-        let remainder_id =
-            OpeningId::new(self.base.remainder, SumcheckId::NodeExecution(self.base.node_idx));
+        let remainder_id = OpeningId::new(
+            self.base.remainder,
+            SumcheckId::NodeExecution(self.base.node_idx),
+        );
         let (_, remainder_claim) = accumulator.get_virtual_polynomial_opening(remainder_id);
         let tau = match &self.base().operator {
             Operator::Tanh(inner) => inner.tau,

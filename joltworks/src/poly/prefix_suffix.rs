@@ -296,8 +296,11 @@ impl<F: JoltField, const ORDER: usize, const SIGNED: bool>
         let suffix_len = self.suffix_len();
         let suffixes = self.poly.suffixes();
 
+        let n = lookup_bits.len().min(u_evals.len());
+        let lookup_bits = &lookup_bits[..n];
+        let u_evals = &u_evals[..n];
         let num_chunks = rayon::current_num_threads().next_power_of_two();
-        let chunk_size = (lookup_bits.len() / num_chunks).max(1);
+        let chunk_size = (n / num_chunks).max(1);
 
         // Accumulate in row-major for write locality: rows are r_index in [0, poly_len)
         let new_Q_rows: Vec<[F; ORDER]> = lookup_bits
@@ -367,8 +370,11 @@ impl<F: JoltField, const ORDER: usize, const SIGNED: bool>
         let suffixes_left = left.poly.suffixes();
         let suffixes_right = right.poly.suffixes();
 
+        let n = lookup_bits.len().min(u_evals.len());
+        let lookup_bits = &lookup_bits[..n];
+        let u_evals = &u_evals[..n];
         let num_chunks = rayon::current_num_threads().next_power_of_two();
-        let chunk_size = (lookup_bits.len() / num_chunks).max(1);
+        let chunk_size = (n / num_chunks).max(1);
 
         #[allow(clippy::type_complexity)]
         let (new_left_rows, new_right_rows): (Vec<[F; ORDER]>, Vec<[F; ORDER]>) = lookup_bits

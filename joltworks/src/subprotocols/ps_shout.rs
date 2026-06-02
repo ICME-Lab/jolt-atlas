@@ -624,13 +624,13 @@ where
     }
 }
 
-impl<F, LUT, const SIGNED: bool> ReadRafSumcheckProver<F, LUT, SIGNED, 3>
+impl<F, LUT> ReadRafSumcheckProver<F, LUT, true, 3>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
     pub fn gen(
-        params: ReadRafSumcheckParams<F, LUT, SIGNED>,
+        params: ReadRafSumcheckParams<F, LUT, true>,
         lookup_indices: Vec<LookupBits>,
     ) -> Self {
         let log_m = LOG_K / NUM_PHASES;
@@ -662,13 +662,13 @@ where
     }
 }
 
-impl<F, LUT, const SIGNED: bool> ReadRafSumcheckProver<F, LUT, SIGNED, 2>
+impl<F, LUT> ReadRafSumcheckProver<F, LUT, false, 2>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
     pub fn gen(
-        params: ReadRafSumcheckParams<F, LUT, SIGNED>,
+        params: ReadRafSumcheckParams<F, LUT, false>,
         lookup_indices: Vec<LookupBits>,
     ) -> Self {
         let log_m = LOG_K / NUM_PHASES;

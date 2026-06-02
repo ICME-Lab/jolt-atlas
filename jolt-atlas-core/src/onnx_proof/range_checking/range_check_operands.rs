@@ -32,8 +32,8 @@ pub struct RangeCheckOperandsBase {
     pub node_idx: usize,
     /// Polynomial to be range-checked
     pub remainder: VirtualPoly,
-    /// Bound polynomial
-    pub bound: VirtualPoly,
+    /// Bound polynomial, or `None` when the bound is a field constant (e.g. τ for neural-teleport).
+    pub bound: Option<VirtualPoly>,
     /// Virtual polynomial representing the range-check read-address (Ra).
     pub virtual_ra: VirtualPoly,
     /// The operator this range-check is associated with, used for operator-specific logic in operand extraction and claim transformation.
@@ -64,7 +64,11 @@ pub trait RangeCheckingOperandsTrait {
 
     /// Get the virtual polynomials representing the input operands for range-checking.
     fn get_input_operands(&self) -> Vec<VirtualPoly> {
-        vec![self.base().remainder, self.base().bound]
+        let mut ops = vec![self.base().remainder];
+        if let Some(bound) = self.base().bound {
+            ops.push(bound);
+        }
+        ops
     }
 
     /// Get the virtual polynomial representing the range-check read-address (Ra) output.
@@ -146,7 +150,7 @@ impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
             base: RangeCheckOperandsBase {
                 node_idx: node.idx,
                 remainder: VirtualPoly::DivRemainder(node.idx),
-                bound: VirtualPoly::NodeOutput(node.inputs[1]),
+                bound: Some(VirtualPoly::NodeOutput(node.inputs[1])),
                 virtual_ra: VirtualPoly::DivRangeCheckRa(node.idx),
                 operator: node.operator.clone(),
             },
@@ -188,7 +192,7 @@ impl RangeCheckingOperandsTrait for RiRangeCheckOperands {
             base: RangeCheckOperandsBase {
                 node_idx: node.idx,
                 remainder: VirtualPoly::DivRemainder(node.idx),
-                bound: VirtualPoly::NodeOutput(node.inputs[0]),
+                bound: Some(VirtualPoly::NodeOutput(node.inputs[0])),
                 virtual_ra: VirtualPoly::DivRangeCheckRa(node.idx),
                 operator: node.operator.clone(),
             },
@@ -228,7 +232,7 @@ impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
             base: RangeCheckOperandsBase {
                 node_idx: node.idx,
                 remainder: VirtualPoly::SqrtRemainder(node.idx),
-                bound: VirtualPoly::NodeOutput(node.idx),
+                bound: Some(VirtualPoly::NodeOutput(node.idx)),
                 virtual_ra: VirtualPoly::SqrtRangeCheckRa(node.idx),
                 operator: node.operator.clone(),
             },
@@ -313,7 +317,8 @@ impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
             base: RangeCheckOperandsBase {
                 node_idx: node.idx,
                 remainder: VirtualPoly::TeleportRemainder(node.idx),
-                bound: VirtualPoly::NodeOutput(node.inputs[0]), // FIXME: This is incorrect; bound is tau
+                // The bound is the constant τ, not a committed polynomial.
+                bound: None,
                 virtual_ra: VirtualPoly::TeleportRangeCheckRa(node.idx),
                 operator: node.operator.clone(),
             },
@@ -354,18 +359,11 @@ impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
         (remainder, divisor_tensor)
     }
 
-    /// Extract the operand claims from the accumulator for the left and right operands.
+    /// The right claim is the constant τ; only the remainder claim is fetched from the accumulator.
     fn operand_claims<F: JoltField>(&self, accumulator: &dyn OpeningAccumulator<F>) -> (F, F) {
-        let operand_claims = self
-            .get_input_operands()
-            .iter()
-            .map(|operand| {
-                let operand_id =
-                    OpeningId::new(*operand, SumcheckId::NodeExecution(self.base.node_idx));
-                let (_, claim) = accumulator.get_virtual_polynomial_opening(operand_id);
-                claim
-            })
-            .collect::<Vec<_>>();
+        let remainder_id =
+            OpeningId::new(self.base.remainder, SumcheckId::NodeExecution(self.base.node_idx));
+        let (_, remainder_claim) = accumulator.get_virtual_polynomial_opening(remainder_id);
         let tau = match &self.base().operator {
             Operator::Tanh(inner) => inner.tau,
             Operator::Erf(inner) => inner.tau,
@@ -377,10 +375,7 @@ impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
                 )
             }
         };
-        (
-            operand_claims[0],
-            self.transform_right_claim(F::from_i32(tau)),
-        )
+        (remainder_claim, F::from_i32(tau))
     }
 
     fn rad_poly(&self, d: usize) -> CommittedPoly {

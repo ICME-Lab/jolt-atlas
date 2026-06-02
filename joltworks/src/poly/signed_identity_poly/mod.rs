@@ -190,7 +190,7 @@ pub struct BinarySignedIdentityPoly<F: JoltField, const X_LEN: usize> {
 impl<F: JoltField, const X_LEN: usize> PolynomialEvaluation<F>
     for BinarySignedIdentityPoly<F, X_LEN>
 {
-    /// Self(x) = (sum_{i=0}^{X_LEN-1} x[X_LEN + i] * 2^i) - x[X_LEN] * 2^X_LEN
+    /// Self(x) = (sum_{i=0}^{X_LEN-1} x[X_LEN + i] * 2^(X_LEN - 1 - i)) - x[X_LEN] * 2^X_LEN
     fn evaluate<C>(&self, r: &[C]) -> F
     where
         C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
@@ -209,6 +209,19 @@ impl<F: JoltField, const X_LEN: usize> PolynomialEvaluation<F>
         let sign_bit = r[X_LEN];
         let w = F::from_u64(X_LEN.pow2() as u64);
         y - sign_bit * w
+    }
+
+    fn batch_evaluate<C>(_: &[&Self], _: &[C]) -> Vec<F>
+    where
+        Self: Sized,
+        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
+        F: FieldChallengeOps<C>,
+    {
+        unimplemented!("Currently unused")
+    }
+
+    fn sumcheck_evals(&self, _: usize, _: usize, _: BindingOrder) -> Vec<F> {
+        unimplemented!("Currently unused")
     }
 }
 
@@ -267,8 +280,8 @@ impl<F: JoltField, const X_LEN: usize> SignedOperandPoly<F, X_LEN> {
 }
 
 impl<F: JoltField, const X_LEN: usize> PolynomialEvaluation<F> for SignedOperandPoly<F, X_LEN> {
-    /// Left Operand Case: Self(x) = (sum_{i=0}^{X_LEN-1} x[2*i] * 2^i) - x[0] * 2^X_LEN
-    /// Right Operand Case: Self(x) = (sum_{i=0}^{X_LEN-1} x[2*i+1] * 2^i) - x[1] * 2^X_LEN
+    /// Left Operand Case: Self(x) = (sum_{i=0}^{X_LEN-1} x[2*i] * 2^(X_LEN - 1 - i)) - x[0] * 2^X_LEN
+    /// Right Operand Case: Self(x) = (sum_{i=0}^{X_LEN-1} x[2*i+1] * 2^(X_LEN - 1 - i)) - x[1] * 2^X_LEN
     fn evaluate<C>(&self, r: &[C]) -> F
     where
         C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
@@ -288,6 +301,19 @@ impl<F: JoltField, const X_LEN: usize> PolynomialEvaluation<F> for SignedOperand
             })
             .sum();
         y - sign_bit * F::from_u64(X_LEN.pow2() as u64)
+    }
+
+    fn batch_evaluate<C>(_: &[&Self], _: &[C]) -> Vec<F>
+    where
+        Self: Sized,
+        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
+        F: FieldChallengeOps<C>,
+    {
+        unimplemented!("Currently unused")
+    }
+
+    fn sumcheck_evals(&self, _: usize, _: usize, _: BindingOrder) -> Vec<F> {
+        unimplemented!("Currently unused")
     }
 }
 

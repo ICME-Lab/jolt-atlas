@@ -394,6 +394,28 @@ mod tests {
     use crate::{ops::hadamard::Hadamard, round::DenseMleTable};
     use joltworks::transcripts::Blake2bTranscript;
     use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
+    use std::{hint::black_box, time::Instant};
+
+    fn add_openings(left: Opening, right: Opening) -> Opening {
+        Opening {
+            value: left.value + right.value,
+            blinding: left.blinding + right.blinding,
+        }
+    }
+
+    fn scale_opening(opening: Opening, scalar: Fr) -> Opening {
+        Opening {
+            value: opening.value * scalar,
+            blinding: opening.blinding * scalar,
+        }
+    }
+
+    fn zero_opening() -> Opening {
+        Opening {
+            value: Fr::zero(),
+            blinding: Fr::zero(),
+        }
+    }
 
     #[test]
     fn proves_and_verifies_sumcheck_rounds() {
@@ -452,5 +474,64 @@ mod tests {
             verifier_polynomial.bind(challenge);
         }
         assert_eq!(prover_polynomial.challenges, verifier_polynomial.challenges);
+    }
+
+    #[test]
+    #[ignore]
+    fn measures_one_round_commitment_cost() {
+        let mut rng = ChaCha20Rng::from_seed([32; 32]);
+        let params = PedersenParams::random(&mut rng);
+        let coeffs = [3, 5, 7, 11].map(Fr::from);
+        let r = Fr::from(19_u64);
+        let iterations = 10_000;
+
+        let start = Instant::now();
+        let mut sink = Commitment(Zero::zero());
+
+        for _ in 0..iterations {
+            // 4 coefficient commitments.
+            let round = commit_round_poly(&params, coeffs, &mut rng);
+            for coeff in &round.coeffs {
+                sink.0 += coeff.commitment.0;
+            }
+
+            // 1 commitment to s_i(0) + s_i(1).
+            let sum_opening = add_openings(
+                round.coeffs[0].opening,
+                round.coeffs.iter().fold(zero_opening(), |acc, coeff| {
+                    add_openings(acc, coeff.opening)
+                }),
+            );
+            let sum_commitment = commit(&params, &sum_opening);
+
+            // 1 commitment to s_i(r).
+            let eval_opening = round
+                .coeffs
+                .iter()
+                .rev()
+                .fold(zero_opening(), |acc, coeff| {
+                    add_openings(scale_opening(acc, r), coeff.opening)
+                });
+            let eval_commitment = commit(&params, &eval_opening);
+
+            // 1 equality-proof nonce commitment A = aH.
+            let nonce_commitment = params.blinding_generator * Fr::rand(&mut rng);
+
+            sink.0 += sum_commitment.0 + eval_commitment.0 + nonce_commitment;
+        }
+
+        black_box(sink);
+
+        let elapsed = start.elapsed();
+        let per_round = elapsed.as_secs_f64() / iterations as f64;
+        let per_commitment = per_round / 7.0;
+
+        println!("iterations: {iterations}");
+        println!("total: {:?}", elapsed);
+        println!(
+            "per one-round 7-commitment batch: {:.3} us",
+            per_round * 1e6
+        );
+        println!("per commitment equivalent: {:.3} us", per_commitment * 1e6);
     }
 }

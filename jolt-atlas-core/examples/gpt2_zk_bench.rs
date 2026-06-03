@@ -95,7 +95,7 @@ fn main() {
     let (proof, io, _dbg) =
         ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_pp, &inputs);
     let nonzk_prove = t.elapsed();
-    println!("prove:  {:.2?}", nonzk_prove);
+    println!("prove:  {nonzk_prove:.2?}");
 
     let nonzk_proof_bytes = {
         use ark_serialize::CanonicalSerialize;
@@ -114,7 +114,7 @@ fn main() {
     let t = std::time::Instant::now();
     proof.verify(&verifier_pp, &io, None).unwrap();
     let nonzk_verify = t.elapsed();
-    println!("verify: {:.2?}", nonzk_verify);
+    println!("verify: {nonzk_verify:.2?}");
 
     drop(proof);
 
@@ -128,7 +128,7 @@ fn main() {
     let (bundle, zk_io) =
         zk_pool.install(|| jolt_atlas_core::onnx_proof::zk::prove_zk(&prover_pp, &inputs, &gens));
     let zk_prove = t.elapsed();
-    println!("prove:  {:.2?}", zk_prove);
+    println!("prove:  {zk_prove:.2?}");
 
     let zk_proof_bytes = zk_bundle_size(&bundle);
     println!(
@@ -144,7 +144,7 @@ fn main() {
         })
         .expect("ZK verification should succeed");
     let zk_verify = t.elapsed();
-    println!("verify: {:.2?}", zk_verify);
+    println!("verify: {zk_verify:.2?}");
 
     // ── Summary ──────────────────────────────────────────────────────────
     println!("\n=== summary ===");

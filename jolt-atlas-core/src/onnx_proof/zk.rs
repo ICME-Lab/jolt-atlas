@@ -2416,13 +2416,13 @@ pub fn prove_zk(
     let mut public_node_binding_eval_commitments: Vec<joltworks::curve::Bn254G1> = Vec::new();
     {
         use common::VirtualPoly;
-        use joltworks::poly::multilinear_polynomial::{
-            MultilinearPolynomial, PolynomialEvaluation,
+        use joltworks::{
+            poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+            subprotocols::blindfold::{
+                output_constraint::{OutputClaimConstraint, ValueSource},
+                witness::ExtraConstraintWitness,
+            },
         };
-        use joltworks::subprotocols::blindfold::output_constraint::{
-            OutputClaimConstraint, ValueSource,
-        };
-        use joltworks::subprotocols::blindfold::witness::ExtraConstraintWitness;
         let model = pp.model();
         // BTreeMap iteration is deterministic; the verifier-side iteration
         // must use the same order so binding-constraint indices match.
@@ -2620,6 +2620,7 @@ pub fn prove_zk(
 ///    sumcheck commitments into transcript (mirroring the prover's flow).
 /// 3. BlindFold proof verifies (covers sumcheck round consistency and
 ///    constraint satisfaction).
+///
 /// Snapshot of the inputs to the final HyperKZG verification step inside
 /// [`verify_zk`], captured by [`verify_zk_with_pcs_capture`] right before
 /// the call to `PCS::verify`. External tools (e.g., zkARc's pi-prime
@@ -2627,15 +2628,21 @@ pub fn prove_zk(
 /// transcript state that the verifier reaches.
 #[derive(Clone)]
 pub struct PcsVerifyCapture {
+    /// RLC of committed-polynomials commitments
     pub joint_commitment:
         <PCS as joltworks::poly::commitment::commitment_scheme::CommitmentScheme>::Commitment,
+    /// PCS proof
     pub opening_proof:
         <PCS as joltworks::poly::commitment::commitment_scheme::CommitmentScheme>::Proof,
+    /// Evaluation point for the PCS opening proof
     pub opening_point: Vec<<F as JoltField>::Challenge>,
+    /// Claimed evaluation of the joint polynomial at `opening_point`
     pub joint_claim: F,
+    /// Fiat shamir transcript
     pub transcript: T,
 }
 
+/// Verify a ZK proof bundle for an ONNX model execution.
 pub fn verify_zk(
     bundle: &ZkProofBundle,
     pp: &AtlasVerifierPreprocessing<F, PCS>,
@@ -2655,7 +2662,7 @@ pub fn verify_zk(
 /// deterministic function of the bundle and the public model — but
 /// exposing it as a small public hook lets the test reproduce the
 /// patching step concisely without re-implementing the transcript walk.
-#[cfg(any(test, feature = "test-feature"))]
+#[cfg(test)]
 pub fn extract_verifier_expected_public_claims(
     bundle: &ZkProofBundle,
     pp: &AtlasVerifierPreprocessing<F, PCS>,
@@ -2697,7 +2704,7 @@ fn verify_zk_with_pcs_capture_and_extract(
     pp: &AtlasVerifierPreprocessing<F, PCS>,
     io: &ModelExecutionIO,
     pedersen_gens: &PedersenGenerators<C>,
-    mut capture: Option<&mut Option<PcsVerifyCapture>>,
+    capture: Option<&mut Option<PcsVerifyCapture>>,
     mut extract_public_claims: Option<&mut BTreeMap<usize, F>>,
 ) -> Result<(), ProofVerifyError> {
     use joltworks::poly::opening_proof::VerifierOpeningAccumulator;
@@ -3088,8 +3095,7 @@ fn verify_zk_with_pcs_capture_and_extract(
         .baked
         .extra_constraint_challenges
         .len()
-        .checked_sub(0)
-        .unwrap_or(0);
+        .saturating_sub(0);
     // The Step 8 constraint contributes `opening_ids.len()` challenges; binding
     // constraints contribute 1 challenge each. Step 8 (if present) is at
     // baked index 0..opening_ids.len(); bindings come after.
@@ -3108,11 +3114,9 @@ fn verify_zk_with_pcs_capture_and_extract(
     let mut binding_idx_in_eval = step8_eval_commitments_count;
     {
         use common::VirtualPoly;
-        use joltworks::poly::multilinear_polynomial::{
-            MultilinearPolynomial, PolynomialEvaluation,
-        };
-        use joltworks::subprotocols::blindfold::output_constraint::{
-            OutputClaimConstraint, ValueSource,
+        use joltworks::{
+            poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+            subprotocols::blindfold::output_constraint::{OutputClaimConstraint, ValueSource},
         };
         let model = pp.shared.model();
         let _ = binding_challenge_start;
@@ -3243,7 +3247,7 @@ fn verify_zk_with_pcs_capture_and_extract(
         bundle.joint_opening_point.as_ref(),
     ) {
         let joint_commitment = PCS::combine_commitments(&bundle.commitments, &gamma_powers_v);
-        if let Some(slot) = capture.as_deref_mut() {
+        if let Some(slot) = capture {
             *slot = Some(PcsVerifyCapture {
                 joint_commitment: joint_commitment.clone(),
                 opening_proof: opening_proof.clone(),

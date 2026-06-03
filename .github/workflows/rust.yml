@@ -29,18 +29,28 @@ jobs:
         run: cargo fmt --all --check
 
   clippy-and-test:
-    name: Clippy & Test
+    name: Clippy & Test (${{ matrix.variant.name }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - name: default
+            clippy_args: --workspace --all-targets
+            test_args: --workspace
+          - name: zk
+            clippy_args: -p jolt-atlas-core --all-targets --features zk
+            test_args: -p jolt-atlas-core --features zk
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy ${{ matrix.variant.clippy_args }}
       - uses: taiki-e/install-action@nextest
       - name: Run tests
-        run: cargo nextest run --workspace
+        run: cargo nextest run ${{ matrix.variant.test_args }}
 
   test-gpt2:
     name: GPT-2 Prove & Verify

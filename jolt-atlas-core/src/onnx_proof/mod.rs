@@ -58,6 +58,51 @@ pub use verifier::Verifier;
 pub use ark_bn254::{Bn254, Fr};
 pub use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
 
+// ── Public-input transcript binding (soundness, issue #230) ──────────────
+
+/// Bind the model's public input tensors into the Fiat-Shamir transcript
+/// *before* any challenge is derived.
+///
+/// The input tensors are supplied by the prover through [`ModelExecutionIO`]
+/// and are not otherwise committed. If they are absent from the transcript,
+/// every challenge (hence every sumcheck/opening point) is independent of the
+/// inputs. A malicious prover can then run the honest prover on a real input,
+/// read the (input-independent) opening points, and swap `io.inputs` for any
+/// `Input'` that matches the baked evaluation claims at those points,
+/// producing an accepted proof of the false statement `out = Model(Input')`.
+/// See issue #230 (the adaptive forge that defeats the per-node evaluation
+/// check alone); #244 closed the naive instantiation via the per-node binding.
+///
+/// Absorbing the inputs here forces the opening points to depend on the input,
+/// so any change to `io.inputs` diverges the verifier's transcript from the
+/// proof and the IOP rejects before the evaluation check is even reached. The
+/// prover and verifier must call this at the same position (first append, right
+/// after the transcript is created) so their transcripts stay in lockstep.
+///
+/// Outputs are already bound (the output claim is checked against `io.outputs`
+/// at a transcript-derived point and the IOP ties the output to the trace), so
+/// only inputs need binding here.
+pub(crate) fn append_inputs_to_transcript<T: Transcript>(
+    transcript: &mut T,
+    io: &ModelExecutionIO,
+) {
+    transcript.append_message(b"model_inputs");
+    transcript.append_u64(io.inputs.len() as u64);
+    // `io.inputs[i]` corresponds to `io.input_indices[i]` (same order on both
+    // sides). Bind the node index, the shape, and every value so that any
+    // change to which-node / shape / contents perturbs all later challenges.
+    for (tensor, node_idx) in io.inputs.iter().zip(io.input_indices.iter()) {
+        transcript.append_u64(*node_idx as u64);
+        let dims = tensor.dims();
+        transcript.append_u64(dims.len() as u64);
+        for d in dims {
+            transcript.append_u64(*d as u64);
+        }
+        let bytes: Vec<u8> = tensor.iter().copied().flat_map(i32::to_le_bytes).collect();
+        transcript.append_bytes(&bytes);
+    }
+}
+
 // ── Core proof structures ────────────────────────────────────────────────
 
 /// Proof for an ONNX neural network computation.
@@ -99,6 +144,9 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         // TODO: Deduplicate shared preprocessing, which is present in both AtlasProverPreprocessing and Prover state
         let mut prover: Prover<F, T> = Prover::new(pp.shared.clone(), trace);
         let mut proofs = BTreeMap::new();
+
+        // Bind public inputs into the transcript before any challenge (issue #230).
+        append_inputs_to_transcript(&mut prover.transcript, &io);
 
         // Commit to witness polynomials and append commitments to transcript
         let (poly_map, commitments) = Self::commit_witness_polynomials(
@@ -155,6 +203,11 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                     .compare_to(debug_info.opening_accumulator);
             }
         }
+
+        // Bind public inputs into the transcript before any challenge (issue #230).
+        // Must mirror the prover's first append, after `compare_to` installs the
+        // expected state history and before any commitment is absorbed.
+        append_inputs_to_transcript(&mut verifier.transcript, io);
 
         // Populate claims and commitments in the verifier accumulator.
         self.populate_accumulator(&mut verifier);

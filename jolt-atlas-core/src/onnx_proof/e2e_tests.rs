@@ -976,6 +976,100 @@ fn test_zk_constant_binding_rejects_cross_model_attack() {
     );
 }
 
+/// Regression for issue #230 (the input-binding soundness bug).
+/// `verify_zk` once accepted a proof for `output =
+/// square(input)` when `ModelExecutionIO.inputs[0]` was rebound from `x` to
+/// `-x` with the output left unchanged (square(x) == square(-x)). With public
+/// inputs now absorbed into the transcript before any challenge
+/// (`append_inputs_to_transcript`), swapping `io.inputs` diverges the
+/// verifier's transcript from the proof, so verification rejects — and it does
+/// so for *any* rebound input, including ones an attacker would adaptively
+/// craft to satisfy the per-node evaluation check (issue #230), because the
+/// opening points now depend on the input.
+#[cfg(feature = "zk")]
+#[test]
+fn test_zk_rejects_rebound_input_for_square_model() {
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+
+    let size = 1 << 4;
+    let mut rng = StdRng::seed_from_u64(0x5EED);
+    let input_data = Tensor::<i32>::random_small(&mut rng, &[size]);
+
+    let build = || {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![size]);
+        let res = b.square(i);
+        b.mark_output(res);
+        b.build()
+    };
+
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(
+        AtlasSharedPreprocessing::preprocess(build()),
+    );
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
+
+    let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
+        joltworks::curve::Bn254Curve,
+    >::deterministic(16);
+
+    // Honest proof for input x.
+    let (bundle, mut io) =
+        crate::onnx_proof::zk::prove_zk(&prover_pp, &[input_data.clone()], &gens);
+
+    // Sanity: the honest bundle verifies against the honest io.
+    crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
+        .expect("honest square proof should verify");
+
+    // Attack: rebind the verifier-facing input from x to -x, leave the
+    // output (x^2 == (-x)^2) unchanged. Must be rejected.
+    let neg_data: Vec<i32> = io.inputs[0].iter().map(|v| -v).collect();
+    io.inputs[0] = Tensor::new(Some(&neg_data), io.inputs[0].dims())
+        .expect("negated input tensor should be valid");
+
+    let rebound = crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens);
+    assert!(
+        rebound.is_err(),
+        "rebound input (x -> -x) must be rejected; got Ok (#230)"
+    );
+}
+
+/// Unit test for the issue #230 fix mechanism: absorbing the public inputs
+/// makes every subsequent Fiat-Shamir challenge depend on the input values.
+/// This is what removes the adaptive forge's precondition (input-independent,
+/// prover-known opening points).
+#[test]
+fn test_input_binding_changes_transcript() {
+    use crate::onnx_proof::append_inputs_to_transcript;
+    use atlas_onnx_tracer::model::trace::ModelExecutionIO;
+    use joltworks::transcripts::{Blake2bTranscript, Transcript};
+
+    let io = |vals: &[i32]| ModelExecutionIO {
+        inputs: vec![Tensor::new(Some(vals), &[vals.len()]).unwrap()],
+        outputs: vec![],
+        input_indices: vec![0],
+        output_indices: vec![],
+    };
+
+    let challenge_for = |vals: &[i32]| -> Fr {
+        let mut t = Blake2bTranscript::new(b"ONNXProof");
+        append_inputs_to_transcript(&mut t, &io(vals));
+        t.challenge_scalar::<Fr>()
+    };
+
+    let base = [3, 1, 4, 1, 5, 9, 2, 6];
+    let mut flipped = base;
+    flipped[0] = -flipped[0];
+
+    // Identical inputs -> identical challenge (determinism / honest case).
+    assert_eq!(challenge_for(&base), challenge_for(&base));
+    // A single changed input element -> different challenge.
+    assert_ne!(
+        challenge_for(&base),
+        challenge_for(&flipped),
+        "changing an input must change the derived challenge (issue #230)"
+    );
+}
+
 #[cfg(feature = "zk")]
 #[test]
 fn test_reshape_zk() {

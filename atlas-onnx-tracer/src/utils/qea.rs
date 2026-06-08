@@ -117,8 +117,7 @@ pub fn print_comparison_metrics(a: &[f64], b: &[f64], pad: &str) {
 
 /// Return `(token_id, logit)` pairs sorted descending by logit.
 pub fn top_k_entries(logits: &[f64], k: usize) -> Vec<(usize, f64)> {
-    let mut indexed: Vec<(usize, f64)> =
-        logits.iter().enumerate().map(|(i, &v)| (i, v)).collect();
+    let mut indexed: Vec<(usize, f64)> = logits.iter().enumerate().map(|(i, &v)| (i, v)).collect();
     indexed.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
     indexed.truncate(k);
     indexed

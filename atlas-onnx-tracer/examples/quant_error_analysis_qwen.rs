@@ -14,7 +14,7 @@ use atlas_onnx_tracer::{
 use tokenizers::Tokenizer;
 use tracing::{debug, info};
 
-const SCALE: i32 = 20; // 2^20 = 1,048,576 multiplier for fixed-point representation (roughly 6 decimal digits of precision)
+const SCALE: i32 = 14;
 const ONNX_PATH: &str = "atlas-onnx-tracer/models/qwen/network.onnx";
 const TOKENIZER_PATH: &str = "atlas-onnx-tracer/models/qwen/tokenizer.json";
 const VOCAB_SIZE: usize = 151936;

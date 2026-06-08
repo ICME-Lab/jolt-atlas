@@ -197,6 +197,11 @@ pub fn make_f64_inputs(token_ids: &[u32], seq_len: usize) -> Vec<Tensor<f64>> {
 pub fn make_qwen_i32_inputs(token_ids: &[u32], seq_len: usize, scale: i32) -> Vec<Tensor<i32>> {
     let ids: Vec<i32> = token_ids.iter().map(|&id| id as i32).collect();
     // position_ids in fixed-point: i × 2^scale so Einsum(freq_q, pos_q)/2^scale = freq × i
+    let max_pos = (i32::MAX >> scale) as usize;
+    assert!(
+        seq_len.saturating_sub(1) <= max_pos,
+        "make_qwen_i32_inputs: seq_len={seq_len} too large for scale={scale} (max position index {max_pos})"
+    );
     let pos: Vec<i32> = (0..seq_len as i32).map(|i| i << scale).collect();
     let mask: Vec<i32> = vec![1 << scale; seq_len];
     vec![

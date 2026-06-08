@@ -21,17 +21,7 @@ const N_TOKENS: usize = 20;
 ///
 /// Runs greedy generation in two modes and prints both outputs side-by-side:
 ///
-/// **TRACT** (f32, ground truth): produces coherent English using Tract's native
-/// f32 inference engine — this is what the model should output.
-///
-/// **QUANT** (i32, our engine): runs the same model through the i32 fixed-point
-/// quantized path. `fused-ops` improvements over the un-fixed baseline:
-///   - Cos/Sin RoPE fix (removed scale=8-specific `const_rem` that corrupted RoPE)
-///   - Scale=16 (4× finer weight quantization than scale=14)
-///   - i64 softmax (`s² = S²` in i64 enabling scale>15)
-///   - Teleportation removed from Sigmoid/Tanh/Erf in fused-ops path
-///
-/// At scale=16 the quantized model produces valid English tokens; further
+/// At scale=20 the quantized model produces valid English tokens; further
 /// precision improvements are needed for fully coherent generation.
 ///
 /// # Setup

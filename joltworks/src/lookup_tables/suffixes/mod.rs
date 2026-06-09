@@ -6,7 +6,11 @@
 //! reconstruct the full lookup table evaluation without materializing the entire table.
 
 use crate::{
-    field::JoltField, lookup_tables::suffixes::neg_relu::NegReluSuffix,
+    field::JoltField,
+    lookup_tables::{
+        clamp::{CLAMP_OP1_LOWER, CLAMP_OP2_LOWER, CLAMP_OPS_UPPER},
+        suffixes::neg_relu::NegReluSuffix,
+    },
     utils::lookup_bits::LookupBits,
 };
 use num_derive::FromPrimitive;
@@ -14,7 +18,8 @@ use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 use self::{
     and::AndSuffix, less_than::LessThanSuffix, lower_word_no_msb::LowerWordNoMsbSuffix,
-    one::OneSuffix, or::OrSuffix, relu::ReluSuffix, xor::XorSuffix,
+    one::OneSuffix, or::OrSuffix, relu::ReluSuffix, word_lt_bound::WordLtBoundSuffix,
+    xor::XorSuffix, zero_gt_bound::ZeroGtBoundSuffix,
 };
 
 /// Bitwise AND suffix implementation.
@@ -31,8 +36,11 @@ pub mod one;
 pub mod or;
 /// ReLU activation suffix implementation.
 pub mod relu;
+pub mod word_lt_bound;
 /// Bitwise XOR suffix implementation.
 pub mod xor;
+/// Suffix that checks all bits with significance >= bound are zero.
+pub mod zero_gt_bound;
 
 /// Trait for suffix components that support sparse-dense MLE evaluation.
 ///
@@ -46,10 +54,22 @@ pub trait SparseDenseSuffix: 'static + Sync {
 
 /// An enum containing all suffixes used by Jolt's instruction lookup tables.
 #[repr(u8)]
-#[derive(EnumCountMacro, EnumIter, FromPrimitive)]
+#[derive(EnumCountMacro, EnumIter, FromPrimitive, Debug)]
 pub enum Suffixes {
     /// Bitwise AND suffix
     And,
+    /// ∑_{i >= HighBound} x_i * 2^i
+    OpsWordLtHigh,
+    /// ∑_{i >= Op1LowBound} x_i * 2^i
+    Op1WordLtLow,
+    /// ∑_{i >= Op2LowBound} x_i * 2^i
+    Op2WordLtLow,
+    /// ∀ i >= HighBound, x_i == 0
+    OpsZeroGtHigh,
+    /// ∀ i >= Op1LowBound, x_i == 0
+    Op1ZeroGtLow,
+    /// ∀ i >= Op2LowBound, x_i == 0
+    Op2ZeroGtLow,
     /// Less-than comparison suffix
     LessThan,
     /// Lower word without MSB suffix
@@ -69,12 +89,26 @@ pub enum Suffixes {
 /// Type alias for suffix evaluation results in the field.
 pub type SuffixEval<F: JoltField> = F;
 
+// Type aliases for specific suffix implementations with configured parameters.
+type OpsWordLtHighSuffix<const XLEN: usize> = WordLtBoundSuffix<XLEN, CLAMP_OPS_UPPER>;
+type Op1WordLtLowSuffix<const XLEN: usize> = WordLtBoundSuffix<XLEN, CLAMP_OP1_LOWER>;
+type Op2WordLtLowSuffix<const XLEN: usize> = WordLtBoundSuffix<XLEN, CLAMP_OP2_LOWER>;
+type OpsZeroGtHighSuffix<const XLEN: usize> = ZeroGtBoundSuffix<XLEN, CLAMP_OPS_UPPER>;
+type Op1ZeroGtLowSuffix<const XLEN: usize> = ZeroGtBoundSuffix<XLEN, CLAMP_OP1_LOWER>;
+type Op2ZeroGtLowSuffix<const XLEN: usize> = ZeroGtBoundSuffix<XLEN, CLAMP_OP2_LOWER>;
+
 impl Suffixes {
     /// Evaluates the MLE for this suffix on the bitvector `b`, where
     /// `b` represents `b.len()` variables, each assuming a Boolean value.
     pub fn suffix_mle<const XLEN: usize>(&self, b: LookupBits) -> u32 {
         match self {
             Suffixes::And => AndSuffix::suffix_mle(b),
+            Suffixes::OpsWordLtHigh => OpsWordLtHighSuffix::<XLEN>::suffix_mle(b),
+            Suffixes::Op1WordLtLow => Op1WordLtLowSuffix::<XLEN>::suffix_mle(b),
+            Suffixes::Op2WordLtLow => Op2WordLtLowSuffix::<XLEN>::suffix_mle(b),
+            Suffixes::OpsZeroGtHigh => OpsZeroGtHighSuffix::<XLEN>::suffix_mle(b),
+            Suffixes::Op1ZeroGtLow => Op1ZeroGtLowSuffix::<XLEN>::suffix_mle(b),
+            Suffixes::Op2ZeroGtLow => Op2ZeroGtLowSuffix::<XLEN>::suffix_mle(b),
             Suffixes::One => OneSuffix::suffix_mle(b),
             Suffixes::Or => OrSuffix::suffix_mle(b),
             Suffixes::LessThan => LessThanSuffix::suffix_mle(b),

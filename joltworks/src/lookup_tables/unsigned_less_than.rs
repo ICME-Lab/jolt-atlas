@@ -75,7 +75,8 @@ mod test {
     use common::consts::XLEN;
 
     use crate::lookup_tables::test::{
-        lookup_table_mle_full_hypercube_test, lookup_table_mle_random_test, prefix_suffix_test,
+        lookup_table_mle_full_hypercube_test, lookup_table_mle_linearity_test,
+        lookup_table_mle_random_test, prefix_suffix_test,
     };
 
     use super::UnsignedLessThanTable;
@@ -93,5 +94,10 @@ mod test {
     #[test]
     fn mle_random() {
         lookup_table_mle_random_test::<Fr, UnsignedLessThanTable<XLEN>>();
+    }
+
+    #[test]
+    fn mle_linearity() {
+        lookup_table_mle_linearity_test::<XLEN, Fr, UnsignedLessThanTable<XLEN>>();
     }
 }

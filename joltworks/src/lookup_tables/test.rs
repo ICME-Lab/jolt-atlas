@@ -46,6 +46,43 @@ pub fn lookup_table_mle_full_hypercube_test<F: JoltField, T: JoltLookupTable + D
     }
 }
 
+/// Tests that `evaluate_mle` is affine in each individual variable.
+///
+/// For each variable `x_i`, we freeze all other variables at random field points and
+/// evaluate at `x_i = 0, 1, 2`. Affineness is equivalent to:
+/// `f(2) - f(0) = 2 * (f(1) - f(0))`.
+pub fn lookup_table_mle_linearity_test<
+    const XLEN: usize,
+    F: JoltField,
+    T: JoltLookupTable + Default,
+>() {
+    const NUM_RANDOM_ASSIGNMENTS: usize = 16;
+    let mut rng = StdRng::seed_from_u64(12345);
+    let table = T::default();
+    let num_vars = 2 * XLEN;
+    let two = F::from_u64(2);
+
+    for var_idx in 0..num_vars {
+        for _ in 0..NUM_RANDOM_ASSIGNMENTS {
+            let mut eval_point: Vec<F> =
+                (0..num_vars).map(|_| F::from_u64(rng.next_u64())).collect();
+
+            eval_point[var_idx] = F::zero();
+            let y0 = table.evaluate_mle::<F, F>(&eval_point);
+
+            eval_point[var_idx] = F::one();
+            let y1 = table.evaluate_mle::<F, F>(&eval_point);
+
+            eval_point[var_idx] = two;
+            let y2 = table.evaluate_mle::<F, F>(&eval_point);
+
+            let lhs = y2 - y0;
+            let rhs = (y1 - y0) * two;
+            assert_eq!(lhs, rhs, "evaluate_mle is not affine in variable {var_idx}");
+        }
+    }
+}
+
 /// Generates a lookup index where right operand is 111..000
 pub fn gen_bitmask_lookup_index(rng: &mut StdRng) -> u64 {
     let x = rng.next_u32();
@@ -114,10 +151,10 @@ pub fn prefix_suffix_test<
                     println!("Lookup index: {lookup_index}");
                     println!("j: {j} {prefix_bits} {suffix_bits}");
                     for (i, x) in prefix_evals.iter().enumerate() {
-                        println!("prefix_evals[{i}] = {x}");
+                        println!("prefix_evals[{:?}] = {x}", Prefixes::iter().nth(i).unwrap());
                     }
                     for (i, x) in suffix_evals.iter().enumerate() {
-                        println!("suffix_evals[{i}] = {x}");
+                        println!("suffix_evals[{:?}] = {x}", T::default().suffixes()[i]);
                     }
                 }
 

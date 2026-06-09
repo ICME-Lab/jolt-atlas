@@ -7,11 +7,15 @@
 
 use self::{
     and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix,
-    lower_word_no_msb::LowerWordNoMsbPrefix, not_msb::NotMsbPrefix, or::OrPrefix, xor::XorPrefix,
+    lower_word_no_msb::LowerWordNoMsbPrefix, not_msb::NotMsbPrefix, or::OrPrefix,
+    word_lt_bound::WordLtBoundPrefix, xor::XorPrefix, zero_gt_bound::ZeroGtBoundPrefix,
 };
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
-    lookup_tables::prefixes::{msb::MsbPrefix, nlw::NotLowerWordPrefix},
+    lookup_tables::{
+        clamp::{CLAMP_OP1_LOWER, CLAMP_OP2_LOWER, CLAMP_OPS_UPPER},
+        prefixes::{msb::MsbPrefix, nlw::NotLowerWordPrefix},
+    },
     utils::lookup_bits::LookupBits,
 };
 use common::parallel::par_enabled;
@@ -41,8 +45,12 @@ pub mod nlw;
 pub mod not_msb;
 /// Bitwise OR prefix implementation.
 pub mod or;
+/// Prefix that checks all bits with significance >= given bound are less than the bound.
+pub mod word_lt_bound;
 /// Bitwise XOR prefix implementation.
 pub mod xor;
+/// Prefix that checks all bits with significance >= given bound are zero.
+pub mod zero_gt_bound;
 
 /// Trait for prefix components that support sparse-dense MLE evaluation.
 ///
@@ -94,10 +102,22 @@ pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
 
 /// An enum containing all prefixes used by Jolt's instruction lookup tables.
 #[repr(u8)]
-#[derive(EnumCountMacro, EnumIter, FromPrimitive)]
+#[derive(EnumCountMacro, EnumIter, FromPrimitive, Copy, Clone, Debug)]
 pub enum Prefixes {
     /// Bitwise AND prefix
     And,
+    /// ∑_{i < HighBound} x_i * 2^i
+    OpsWordLtHigh,
+    /// ∀i >= HighBound, x_i == 0
+    OpsZeroGtHigh,
+    /// ∑_{i < Op1LowBound} x_i * 2^i
+    Op1WordLtLow,
+    /// ∑_{i < Op2LowBound} x_i * 2^i
+    Op2WordLtLow,
+    /// ∀i >= Op2LowBound, x_i == 0
+    Op1ZeroGtLow,
+    /// ∀i >= Op1LowBound, x_i == 0
+    Op2ZeroGtLow,
     /// Equality comparison prefix
     Eq,
     /// Less-than comparison prefix
@@ -213,6 +233,20 @@ impl<F> Index<Prefixes> for &[PrefixEval<F>] {
     }
 }
 
+// Type aliases for specific prefix implementations with configured parameters.
+type OpsWordLtHighPrefix<const XLEN: usize> =
+    WordLtBoundPrefix<XLEN, CLAMP_OPS_UPPER, { Prefixes::OpsWordLtHigh as usize }>;
+type Op1WordLtLowPrefix<const XLEN: usize> =
+    WordLtBoundPrefix<XLEN, CLAMP_OP1_LOWER, { Prefixes::Op1WordLtLow as usize }>;
+type Op2WordLtLowPrefix<const XLEN: usize> =
+    WordLtBoundPrefix<XLEN, CLAMP_OP2_LOWER, { Prefixes::Op2WordLtLow as usize }>;
+type OpsZeroGtHighPrefix<const XLEN: usize> =
+    ZeroGtBoundPrefix<XLEN, CLAMP_OPS_UPPER, { Prefixes::OpsZeroGtHigh as usize }>;
+type Op1ZeroGtLowPrefix<const XLEN: usize> =
+    ZeroGtBoundPrefix<XLEN, CLAMP_OP1_LOWER, { Prefixes::Op1ZeroGtLow as usize }>;
+type Op2ZeroGtLowPrefix<const XLEN: usize> =
+    ZeroGtBoundPrefix<XLEN, CLAMP_OP2_LOWER, { Prefixes::Op2ZeroGtLow as usize }>;
+
 impl Prefixes {
     /// Evalautes the MLE for this prefix:
     /// - prefix(r, r_x, c, b)   if j is odd
@@ -242,6 +276,24 @@ impl Prefixes {
     {
         let eval = match self {
             Prefixes::And => AndPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::OpsWordLtHigh => {
+                OpsWordLtHighPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
+            }
+            Prefixes::Op1WordLtLow => {
+                Op1WordLtLowPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
+            }
+            Prefixes::Op2WordLtLow => {
+                Op2WordLtLowPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
+            }
+            Prefixes::OpsZeroGtHigh => {
+                OpsZeroGtHighPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
+            }
+            Prefixes::Op1ZeroGtLow => {
+                Op1ZeroGtLowPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
+            }
+            Prefixes::Op2ZeroGtLow => {
+                Op2ZeroGtLowPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
+            }
             Prefixes::Eq => EqPrefix::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::LessThan => LessThanPrefix::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::LowerWordNoMsb => {
@@ -313,6 +365,48 @@ impl Prefixes {
             Prefixes::And => {
                 AndPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
             }
+            Prefixes::OpsWordLtHigh => OpsWordLtHighPrefix::<XLEN>::update_prefix_checkpoint(
+                checkpoints,
+                r_x,
+                r_y,
+                j,
+                suffix_len,
+            ),
+            Prefixes::Op1WordLtLow => Op1WordLtLowPrefix::<XLEN>::update_prefix_checkpoint(
+                checkpoints,
+                r_x,
+                r_y,
+                j,
+                suffix_len,
+            ),
+            Prefixes::Op2WordLtLow => Op2WordLtLowPrefix::<XLEN>::update_prefix_checkpoint(
+                checkpoints,
+                r_x,
+                r_y,
+                j,
+                suffix_len,
+            ),
+            Prefixes::OpsZeroGtHigh => OpsZeroGtHighPrefix::<XLEN>::update_prefix_checkpoint(
+                checkpoints,
+                r_x,
+                r_y,
+                j,
+                suffix_len,
+            ),
+            Prefixes::Op1ZeroGtLow => Op1ZeroGtLowPrefix::<XLEN>::update_prefix_checkpoint(
+                checkpoints,
+                r_x,
+                r_y,
+                j,
+                suffix_len,
+            ),
+            Prefixes::Op2ZeroGtLow => Op2ZeroGtLowPrefix::<XLEN>::update_prefix_checkpoint(
+                checkpoints,
+                r_x,
+                r_y,
+                j,
+                suffix_len,
+            ),
             Prefixes::Eq => {
                 EqPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
             }

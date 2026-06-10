@@ -18,6 +18,7 @@ use qwen3_prover::{
     layer::{LayerOutput, prove_layer},
     layer_input::layer_prover_input,
 };
+use rayon::prelude::*;
 
 const LAYERS: usize = 28;
 
@@ -25,12 +26,19 @@ struct Args {
     trace: PathBuf,
     q8_cache: PathBuf,
     layers: Vec<usize>,
+    jobs: Option<usize>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     type Pcs = HyperKZG<Bn254>;
 
     let args = Args::parse()?;
+    if let Some(jobs) = args.jobs {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(jobs)
+            .stack_size(64 * 1024 * 1024)
+            .build_global()?;
+    }
     let load_start = Instant::now();
     let layers = args
         .layers
@@ -53,19 +61,23 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let prove_start = Instant::now();
-    let mut results = Vec::with_capacity(layers.len());
-    for (layer, traced) in layers {
-        let layer_start = Instant::now();
-        let mut transcript = Blake2bTranscript::default();
-        let output = prove_trace_layer(traced, commit_params, &setup, &mut transcript);
-        results.push((layer, output.is_some(), layer_start.elapsed()));
-    }
+    let mut results = layers
+        .into_par_iter()
+        .map(|(layer, traced)| {
+            let layer_start = Instant::now();
+            let mut transcript = Blake2bTranscript::default();
+            let output = prove_trace_layer(traced, commit_params, &setup, &mut transcript);
+            (layer, output.is_some(), layer_start.elapsed())
+        })
+        .collect::<Vec<_>>();
+    results.sort_by_key(|(layer, _, _)| *layer);
     let prove_elapsed = prove_start.elapsed();
 
     println!("qwen3 trace prove");
     println!("trace: {}", args.trace.display());
     println!("q8_cache: {}", args.q8_cache.display());
     println!("layers: {}", args.layers.len());
+    println!("rayon threads: {}", rayon::current_num_threads());
     println!("trace_load: {}", format_duration(load_elapsed));
     println!("pcs_setup: {}", format_duration(setup_elapsed));
     println!("prove_layers: {}", format_duration(prove_elapsed));
@@ -93,6 +105,7 @@ impl Args {
         let mut trace = None;
         let mut q8_cache = workspace.join("models/qwen3-0.6b/model.q8.bin");
         let mut layers = None;
+        let mut jobs = None;
 
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -107,6 +120,13 @@ impl Args {
                     layers = Some(parse_layers(
                         &args.next().ok_or("--layer requires a value")?,
                     )?);
+                }
+                "--jobs" => {
+                    let value = args.next().ok_or("--jobs requires a value")?.parse()?;
+                    if value == 0 {
+                        return Err("--jobs must be positive".into());
+                    }
+                    jobs = Some(value);
                 }
                 "--help" | "-h" => {
                     print_help();
@@ -131,6 +151,7 @@ impl Args {
             trace,
             q8_cache,
             layers,
+            jobs,
         })
     }
 }
@@ -159,6 +180,7 @@ fn print_help() {
            --trace PATH          trace directory produced by qwen3_generate --trace\n\
            --layer N            layer index to prove, or comma-separated indices\n\
            --layers LIST        alias for --layer; use all for every layer\n\
+           --jobs N             number of Rayon worker threads; default Rayon chooses\n\
            --q8-cache PATH      model.q8.bin path; default models/qwen3-0.6b/model.q8.bin\n"
     );
 }

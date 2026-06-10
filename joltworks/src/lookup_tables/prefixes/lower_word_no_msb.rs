@@ -1,4 +1,4 @@
-use super::{PrefixCheckpoint, Prefixes, SparseDensePrefix};
+use super::{PrefixCheckpoint, PrefixCheckpoints, Prefixes, SparseDensePrefix};
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     utils::lookup_bits::LookupBits,
@@ -9,7 +9,7 @@ pub enum LowerWordNoMsbPrefix<const XLEN: usize> {}
 
 impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for LowerWordNoMsbPrefix<XLEN> {
     fn prefix_mle<C>(
-        checkpoints: &[PrefixCheckpoint<F>],
+        checkpoints: &PrefixCheckpoints<F>,
         r_x: Option<C>,
         c: u32,
         mut b: LookupBits,
@@ -54,7 +54,7 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for LowerWordNoMsbPre
     }
 
     fn update_prefix_checkpoint<C>(
-        checkpoints: &[PrefixCheckpoint<F>],
+        checkpoints: &PrefixCheckpoints<F>,
         r_x: C,
         r_y: C,
         j: usize,

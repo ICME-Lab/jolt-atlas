@@ -18,7 +18,10 @@ use common::parallel::par_enabled;
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
 use rayon::prelude::*;
-use std::{fmt::Display, ops::Index};
+use std::{
+    fmt::Display,
+    ops::{Index, IndexMut},
+};
 use strum::EnumCount;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
@@ -62,7 +65,7 @@ pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
     /// over these variables as they range over the Boolean hypercube, so
     /// they can be represented by a single bitvector.
     fn prefix_mle<C>(
-        checkpoints: &[PrefixCheckpoint<F>],
+        checkpoints: &PrefixCheckpoints<F>,
         r_x: Option<C>,
         c: u32,
         b: LookupBits,
@@ -78,7 +81,7 @@ pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
     /// A checkpoint update may depend on the values of the other prefix checkpoints,
     /// so we pass in all such `checkpoints` to this function.
     fn update_prefix_checkpoint<C>(
-        checkpoints: &[PrefixCheckpoint<F>],
+        checkpoints: &PrefixCheckpoints<F>,
         r_x: C,
         r_y: C,
         j: usize,
@@ -119,6 +122,26 @@ pub struct PrefixEval<F>(F);
 /// Optional prefix evaluation cached after each pair of address-binding rounds (r_x, r_y).
 pub type PrefixCheckpoint<F: JoltField> = PrefixEval<Option<F>>;
 
+#[derive(Clone)]
+// Stores the checkpoints for all prefixes, updated every two rounds of sumcheck.
+pub struct PrefixCheckpoints<F: JoltField>([PrefixCheckpoint<F>; Prefixes::COUNT]);
+
+impl<F: JoltField> PrefixCheckpoints<F> {
+    pub fn new() -> Self {
+        Self(std::array::from_fn(|_| None.into()))
+    }
+
+    pub fn len(&self) -> usize {
+        Prefixes::COUNT
+    }
+}
+
+impl<F: JoltField> Default for PrefixCheckpoints<F> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<F: JoltField> std::ops::Mul<F> for PrefixEval<F> {
     type Output = F;
 
@@ -153,6 +176,34 @@ impl<F> PrefixCheckpoint<F> {
     }
 }
 
+impl<F: JoltField> Index<usize> for PrefixCheckpoints<F> {
+    type Output = Option<F>;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0.get(index).unwrap().0
+    }
+}
+
+impl<F: JoltField> IndexMut<usize> for PrefixCheckpoints<F> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0.get_mut(index).unwrap().0
+    }
+}
+
+impl<F: JoltField> Index<Prefixes> for PrefixCheckpoints<F> {
+    type Output = Option<F>;
+
+    fn index(&self, prefix: Prefixes) -> &Self::Output {
+        &self[prefix as usize]
+    }
+}
+
+impl<F: JoltField> IndexMut<Prefixes> for PrefixCheckpoints<F> {
+    fn index_mut(&mut self, prefix: Prefixes) -> &mut Self::Output {
+        &mut self[prefix as usize]
+    }
+}
+
 impl<F> Index<Prefixes> for &[PrefixEval<F>] {
     type Output = F;
 
@@ -179,7 +230,7 @@ impl Prefixes {
     /// they can be represented by a single bitvector.
     pub fn prefix_mle<const XLEN: usize, F, C>(
         &self,
-        checkpoints: &[PrefixCheckpoint<F>],
+        checkpoints: &PrefixCheckpoints<F>,
         r_x: Option<C>,
         c: u32,
         b: LookupBits,
@@ -213,7 +264,7 @@ impl Prefixes {
     /// This function updates all the prefix checkpoints.
     #[tracing::instrument(skip_all)]
     pub fn update_checkpoints<const XLEN: usize, F, C>(
-        checkpoints: &mut [PrefixCheckpoint<F>],
+        checkpoints: &mut PrefixCheckpoints<F>,
         r_x: C,
         r_y: C,
         j: usize,
@@ -223,8 +274,9 @@ impl Prefixes {
         F: JoltField + FieldChallengeOps<C>,
     {
         debug_assert_eq!(checkpoints.len(), Self::COUNT);
-        let previous_checkpoints = checkpoints.to_vec();
+        let previous_checkpoints = checkpoints.clone();
         checkpoints
+            .0
             .par_iter_mut()
             .with_min_len(par_enabled())
             .enumerate()
@@ -248,7 +300,7 @@ impl Prefixes {
     /// so we pass in all such `checkpoints` to this function.
     fn update_prefix_checkpoint<const XLEN: usize, F, C>(
         &self,
-        checkpoints: &[PrefixCheckpoint<F>],
+        checkpoints: &PrefixCheckpoints<F>,
         r_x: C,
         r_y: C,
         j: usize,

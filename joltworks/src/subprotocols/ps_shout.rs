@@ -1,7 +1,7 @@
 use crate::{
     field::{IntoOpening, JoltField, MulTrunc},
     lookup_tables::{
-        prefixes::{PrefixCheckpoint, PrefixEval, Prefixes},
+        prefixes::{PrefixCheckpoints, PrefixEval, Prefixes},
         JoltLookupTable, PrefixSuffixDecompositionTrait,
     },
     poly::{
@@ -41,7 +41,6 @@ use common::{
 use itertools::Itertools;
 use rayon::prelude::*;
 use std::array;
-use strum::EnumCount;
 
 #[cfg(feature = "zk")]
 use crate::subprotocols::blindfold::{
@@ -235,7 +234,7 @@ where
     /// u_evals for read-checking and RAF: eq(r_node_output, j).
     u_evals: Vec<F>,
     /// Prefix checkpoints for each registered `Prefix` variant, updated every two rounds.
-    prefix_checkpoints: Vec<PrefixCheckpoint<F>>,
+    prefix_checkpoints: PrefixCheckpoints<F>,
     /// For each lookup table, dense polynomials holding suffix contributions in the current phase.
     suffix_polys: Vec<DensePolynomial<F>>,
     /// Precomputed lookup keys k (bit-packed) per cycle j.
@@ -277,7 +276,7 @@ where
         let phases = NUM_PHASES;
         let log_m = LOG_K / phases;
         let u_evals = EqPolynomial::evals(&params.r_node_output.r);
-        let prefix_checkpoints = vec![None.into(); Prefixes::COUNT];
+        let prefix_checkpoints = PrefixCheckpoints::new();
         let suffix_polys: Vec<DensePolynomial<F>> = params
             .table
             .suffixes()
@@ -730,7 +729,7 @@ where
                     .table
                     .prefixes()
                     .into_iter()
-                    .map(|p| self.prefix_checkpoints[p as usize].unwrap())
+                    .map(|p| PrefixEval::from(self.prefix_checkpoints[p as usize].unwrap()))
                     .collect();
                 let suffixes: Vec<_> = self
                     .params

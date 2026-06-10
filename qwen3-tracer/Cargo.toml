@@ -4,8 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+half = "2.7"
 itertools = { workspace = true }
 qwen3-common = { workspace = true }
 qwen3-prover = { workspace = true }
+rayon = { workspace = true }
+safetensors = "0.7"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }

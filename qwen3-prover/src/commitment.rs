@@ -12,13 +12,11 @@ use joltworks::{
 };
 pub use qwen3_common::{
     ChunkedCommitments, FRAC_BITS, LayerBitCommitments, LayerCommitments, LayerHiddenCommitments,
+    LayerRawWitness,
 };
 use thiserror::Error;
 
-use crate::{
-    layer::{BitOpeningWitnesses, LayerOpeningWitnesses, LayerShape},
-    layer_input::LayerRawWitness,
-};
+use crate::layer::{BitOpeningWitnesses, LayerOpeningWitnesses, LayerShape};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommitLayerParams {

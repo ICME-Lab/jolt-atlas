@@ -2,10 +2,7 @@ use ark_bn254::{Bn254, Fr};
 use ark_ff::One;
 use joltworks::{
     field::JoltField,
-    poly::commitment::{
-        commitment_scheme::CommitmentScheme,
-        hyperkzg::HyperKZG,
-    },
+    poly::commitment::{commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG},
     transcripts::{Blake2bTranscript, Transcript},
 };
 use qwen3_common::{
@@ -13,9 +10,7 @@ use qwen3_common::{
     LayerSoftmaxVerifierInput, LayerVerifierPublicInput,
 };
 use qwen3_prover::{
-    commitment::{
-        CommitLayerParams, commit_layer_hidden_openings, commit_layer_openings,
-    },
+    commitment::{CommitLayerParams, commit_layer_hidden_openings, commit_layer_openings},
     layer::{EvalClaim, prove_iop_layer, prove_layer},
     opening::prove_layer_opening_reduction_sumcheck,
     ops::{
@@ -726,8 +721,8 @@ fn fox_trace_layer0() -> TraceLayerInput {
         .parent()
         .expect("qwen3-prover has a workspace parent");
     layer_input_from_trace_dir(
-        workspace.join("qwen3-awy/traces/fox_eos_full_awy"),
-        workspace.join("qwen3-awy/models/qwen3-0.6b/model.q8.bin"),
+        workspace.join("traces/qwen3-0.6b/fox_eos_full_awy"),
+        workspace.join("models/qwen3-0.6b/model.q8.bin"),
         0,
     )
     .expect("fox trace layer 0 converts")

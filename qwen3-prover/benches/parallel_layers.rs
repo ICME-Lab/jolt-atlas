@@ -1,7 +1,7 @@
 use std::{
     env,
     hint::black_box,
-    path::Path,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -44,8 +44,12 @@ fn main() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("qwen3-prover has a workspace parent");
-    let trace_dir = workspace.join("qwen3-awy/traces/fox_eos_full_awy");
-    let q8_cache = workspace.join("qwen3-awy/models/qwen3-0.6b/model.q8.bin");
+    let trace_dir = env::var_os("QWEN3_TRACE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.join("traces/qwen3-0.6b/fox_eos_full_awy"));
+    let q8_cache = env::var_os("QWEN3_Q8_CACHE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.join("models/qwen3-0.6b/model.q8.bin"));
 
     let layer_indices = bench_layers();
     let load_start = Instant::now();
@@ -119,7 +123,13 @@ where
 {
     let hidden_commitments =
         commit_layer_hidden_openings(&traced.input.opening_witnesses, commit_params, setup).ok()?;
-    prove_layer(traced.input, hidden_commitments, commit_params, setup, transcript)
+    prove_layer(
+        traced.input,
+        hidden_commitments,
+        commit_params,
+        setup,
+        transcript,
+    )
 }
 
 fn bench_layers() -> Vec<usize> {

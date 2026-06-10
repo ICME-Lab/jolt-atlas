@@ -3,6 +3,7 @@
 # Ignore only the Qwen setup
 /atlas-onnx-tracer/models/qwen/
 /models/qwen3-0.6b/
+/traces/qwen3-0.6b/
 # Ignore only the BGE small setup
 /atlas-onnx-tracer/models/bge-small-en-v1.5/
 # Ignore ONNX model files

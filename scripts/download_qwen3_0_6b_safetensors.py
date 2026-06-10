@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import argparse
+import subprocess
 from urllib.request import urlopen
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -45,9 +46,32 @@ def main() -> None:
         default=DEFAULT_OUT,
         help=f"output directory (default: {DEFAULT_OUT})",
     )
+    parser.add_argument(
+        "--no-q8-cache",
+        action="store_true",
+        help="download files only; do not build model.q8.bin",
+    )
     args = parser.parse_args()
     for name in FILES:
         download(args.out, name)
+    if not args.no_q8_cache:
+        model = args.out / "model.safetensors"
+        subprocess.run(
+            [
+                "cargo",
+                "run",
+                "-p",
+                "qwen3-tracer",
+                "--bin",
+                "qwen3_generate",
+                "--",
+                "--model",
+                str(model),
+                "--build-q8-cache",
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+        )
 
 
 if __name__ == "__main__":

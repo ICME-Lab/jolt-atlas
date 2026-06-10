@@ -6,6 +6,7 @@ pub mod opening;
 pub mod ops;
 pub mod round;
 pub mod shape;
+pub mod trace;
 
 pub use claim::{EvalClaim, append_eval_claim};
 pub use commitment::{
@@ -27,3 +28,7 @@ pub use round::{
     sumcheck_initial_claim, verify_sumcheck_rounds,
 };
 pub use shape::MatrixShape;
+pub use trace::{
+    LayerRawWitness, LayerWeights, TraceError, TraceLayerRawInput, layer_raw_input_from_trace_dir,
+    read_layer_weights,
+};

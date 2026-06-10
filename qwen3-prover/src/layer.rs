@@ -140,11 +140,8 @@ where
     })?;
     append_layer_commitments(transcript, &commitments);
 
-    let hidden_out = draw_hidden_out_claim_from_witness(
-        transcript,
-        &input.opening_witnesses.hidden_out,
-        shape,
-    )?;
+    let hidden_out =
+        draw_hidden_out_claim_from_witness(transcript, &input.opening_witnesses.hidden_out, shape)?;
     let iop = prove_iop_layer_from_claim(hidden_out, input, transcript)?;
     let opening = profile::measure("opening_reduction", || {
         prove_layer_opening_reduction_sumcheck(

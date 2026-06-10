@@ -1,0 +1,26 @@
+[package]
+name = "qwen3-prover"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+profile-detail = []
+
+[dependencies]
+ark-bn254 = { workspace = true }
+ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }
+ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }
+itertools = { workspace = true }
+joltworks = { workspace = true }
+qwen3-common = { workspace = true }
+rayon = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+qwen3-tracer = { workspace = true }
+qwen3-verifier = { workspace = true }
+
+[[bench]]
+name = "parallel_layers"
+harness = false

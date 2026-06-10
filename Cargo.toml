@@ -15,13 +15,26 @@ license-file = "LICENSE"
 keywords = ["SNARK", "cryptography", "proofs", "zkML"]
 
 [workspace]
-members = ["jolt-atlas-core", "atlas-onnx-tracer", "common", "joltworks"]
+members = [
+    "jolt-atlas-core",
+    "atlas-onnx-tracer",
+    "common",
+    "joltworks",
+    "qwen3-common",
+    "qwen3-tracer",
+    "qwen3-prover",
+    "qwen3-verifier",
+]
 
 [workspace.dependencies]
 # Internal
 atlas-onnx-tracer = { path = "./atlas-onnx-tracer" }
 common = { path = "./common" }
 joltworks = { path = "./joltworks" }
+qwen3-common = { path = "./qwen3-common" }
+qwen3-tracer = { path = "./qwen3-tracer" }
+qwen3-prover = { path = "./qwen3-prover" }
+qwen3-verifier = { path = "./qwen3-verifier" }
 
 # Cryptography and Math
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }

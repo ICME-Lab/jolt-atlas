@@ -1934,6 +1934,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "qwen3-common"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254",
+ "ark-ff",
+ "joltworks",
+]
+
+[[package]]
+name = "qwen3-prover"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "itertools 0.10.5",
+ "joltworks",
+ "qwen3-common",
+ "qwen3-tracer",
+ "qwen3-verifier",
+ "rayon",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "qwen3-tracer"
+version = "0.1.0"
+dependencies = [
+ "itertools 0.10.5",
+ "qwen3-common",
+ "qwen3-prover",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "qwen3-verifier"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "itertools 0.10.5",
+ "joltworks",
+ "qwen3-common",
+]
+
+[[package]]
 name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -146,6 +146,111 @@ cargo run --release --package jolt-atlas-core --example gpt2
 
 A successful run prints `Proof verified successfully!`.
 
+### Qwen3 0.6B trace and layer proving
+
+Qwen3 0.6B uses Hugging Face `safetensors` weights that are not checked into
+the repo. The Qwen3 flow has three stages:
+
+1. Download the model and build the fixed-point `model.q8.bin` cache.
+2. Run fixed-point generation and dump a trace.
+3. Prove one or more transformer layers from that trace.
+
+Run all commands from the repository root.
+
+#### 1. Download the model
+
+```bash
+python3 scripts/download_qwen3_0_6b_safetensors.py
+```
+
+This downloads Qwen3 0.6B into:
+
+```text
+models/qwen3-0.6b/
+```
+
+By default it also builds:
+
+```text
+models/qwen3-0.6b/model.q8.bin
+```
+
+That q8 cache is used by generation and proving. To download only, without
+building the q8 cache, pass `--no-q8-cache`.
+
+#### 2. Generate tokens without a trace
+
+Use this first as a quick smoke test:
+
+```bash
+cargo run --release -p qwen3-tracer --bin qwen3_generate -- \
+  --seq-len 256 \
+  --no-think \
+  "Explain why zero-knowledge proofs are useful for scalable blockchains in three short paragraphs."
+```
+
+Generated text is streamed to stdout by default. Metadata and timings are
+hidden by default. Add `--summary --timing` if you want the token counts and
+timing breakdown.
+
+#### 3. Generate a trace
+
+Add `--trace PATH` to dump all layer trace tensors after generation:
+
+```bash
+cargo run --release -p qwen3-tracer --bin qwen3_generate -- \
+  --seq-len 256 \
+  --no-think \
+  --trace traces/qwen3-0.6b/zkp_scalable_blockchains \
+  "Explain why zero-knowledge proofs are useful for scalable blockchains in three short paragraphs."
+```
+
+The trace directory contains `manifest.jsonl` plus tensor files for each layer.
+Trace output can be large. The default ignored location is:
+
+```text
+traces/qwen3-0.6b/
+```
+
+#### 4. Prove from the trace
+
+Start with one layer:
+
+```bash
+cargo run --release -p qwen3-prover --bin qwen3_prove_trace -- \
+  --trace traces/qwen3-0.6b/zkp_scalable_blockchains \
+  --layer 0
+```
+
+Prove multiple layers in parallel:
+
+```bash
+cargo run --release -p qwen3-prover --bin qwen3_prove_trace -- \
+  --trace traces/qwen3-0.6b/zkp_scalable_blockchains \
+  --layers 0,1,2
+```
+
+Prove all layers:
+
+```bash
+cargo run --release -p qwen3-prover --bin qwen3_prove_trace -- \
+  --trace traces/qwen3-0.6b/zkp_scalable_blockchains \
+  --layers all
+```
+
+By default Rayon chooses the worker thread count, usually the number of logical
+CPUs unless `RAYON_NUM_THREADS` is set. To pin it explicitly:
+
+```bash
+cargo run --release -p qwen3-prover --bin qwen3_prove_trace -- \
+  --trace traces/qwen3-0.6b/zkp_scalable_blockchains \
+  --layers 0,1,2 \
+  --jobs 3
+```
+
+The prover currently reports success and timing to stdout. It does not yet
+write proof objects to disk.
+
 ## Acknowledgments
 
 Thanks to the Jolt team for their foundational work. We are standing on the shoulders of giants.

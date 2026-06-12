@@ -729,7 +729,7 @@ where
                     .table
                     .prefixes()
                     .into_iter()
-                    .map(|p| PrefixEval::from(self.prefix_checkpoints[p as usize].unwrap()))
+                    .map(|p| PrefixEval::from(self.prefix_checkpoints[p].unwrap()))
                     .collect();
                 let suffixes: Vec<_> = self
                     .params

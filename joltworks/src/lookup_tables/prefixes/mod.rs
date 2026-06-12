@@ -180,13 +180,13 @@ impl<F: JoltField> Index<usize> for PrefixCheckpoints<F> {
     type Output = Option<F>;
 
     fn index(&self, index: usize) -> &Self::Output {
-        &self.0.get(index).unwrap().0
+        &self.0[index].0
     }
 }
 
 impl<F: JoltField> IndexMut<usize> for PrefixCheckpoints<F> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.0.get_mut(index).unwrap().0
+        &mut self.0[index].0
     }
 }
 

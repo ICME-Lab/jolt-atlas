@@ -62,7 +62,7 @@ pub fn generate_tanh_lut(scale: i64) -> Vec<i32> {
 /// Input `a_i` is a fixed-point value at scale `S`.  
 /// Returns `round(tanh(a_i / S) * S)` using odd symmetry + LUT.
 #[inline]
-pub fn tanh_lut_lookup(a_i: i32, scale: i32, lut: &[i32]) -> i32 {
+pub fn tanh_lut_lookup(a_i: i32, lut: &[i32]) -> i32 {
     let abs_val = (a_i.unsigned_abs() as usize).min(lut.len() - 1);
     let magnitude = lut[abs_val];
     if a_i >= 0 { magnitude } else { -magnitude }

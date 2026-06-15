@@ -17,9 +17,7 @@ impl Op for Tanh {
             let scale_i = self.scale.0 as i64;
             let lut = generate_tanh_lut(scale_i, self.tau);
             input
-                .par_enum_map(|_, a_i| {
-                    Ok::<_, TensorError>(tanh_lut_lookup(a_i, &lut))
-                })
+                .par_enum_map(|_, a_i| Ok::<_, TensorError>(tanh_lut_lookup(a_i, &lut)))
                 .unwrap()
         }
         #[cfg(not(feature = "fused-ops"))]

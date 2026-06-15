@@ -4,6 +4,7 @@ use crate::{
     ops::{Op, Tanh},
     tensor::{self, Tensor},
 };
+#[cfg(not(feature = "fused-ops"))]
 use std::ops::Mul;
 
 impl Op for Tanh {
@@ -14,17 +15,16 @@ impl Op for Tanh {
         #[cfg(feature = "fused-ops")]
         {
             let scale_i = self.scale.0 as i64;
-            let lut = generate_tanh_lut(scale_i);
+            let lut = generate_tanh_lut(scale_i, self.tau);
             input
                 .par_enum_map(|_, a_i| {
-                    Ok::<_, TensorError>(tanh_lut_lookup(a_i, scale_i as i32, &lut))
+                    Ok::<_, TensorError>(tanh_lut_lookup(a_i, &lut))
                 })
                 .unwrap()
         }
         #[cfg(not(feature = "fused-ops"))]
         {
-            // `Tanh` lookup table is built as: Tanh[x] = tanh(x * tau),
-            // so we multiply by tau to reciprocate teleportation division.
+            // Multiply by tau to undo the const_div, then compute float tanh.
             let teleport_recip = input.mul(self.tau).unwrap();
 
             crate::tensor::ops::nonlinearities::tanh(&teleport_recip, self.scale.into())
@@ -36,22 +36,28 @@ impl Op for Tanh {
     }
 }
 
-/// Generate a **tanh** lookup table for an arbitrary fixed-point scale `S`.
+/// Generate a **tanh** lookup table for neural-teleported fixed-point evaluation.
 ///
-/// Entry `i` = `round(tanh(i / S) * S)` for `i ∈ [0, table_size)`.
+/// After `const_div(z, tau)` produces quotient `q = floor(z / tau)`, this table
+/// maps `q → round(tanh(q * tau / S) * S)`.  Because the argument to tanh is
+/// `q * tau ≈ z`, the output approximates `tanh(z / S) * S` with at most
+/// 1 quantization unit of error (from the floor rounding).
+///
 /// Only the non-negative half is stored; `tanh` is odd so the caller
 /// negates the result for negative inputs.
 ///
-/// `tanh(x)` saturates to ±1 for `|x| > ~4`, so the table covers
-/// `[0, 4·S]` — beyond that the output is `±S`.
-pub fn generate_tanh_lut(scale: i64) -> Vec<i32> {
+/// The table covers quotients `q ∈ [0, 4·S / tau]`; beyond that tanh is
+/// saturated (output clamped to `±S`), giving a table `tau`-times smaller
+/// than the un-teleported case.
+pub fn generate_tanh_lut(scale: i64, tau: i32) -> Vec<i32> {
     let sf = scale as f64;
-    // tanh(4) ≈ 0.9993 — close enough to 1.0 for any practical scale.
-    let table_size = (4 * scale) as usize + 1;
+    let tau_f = tau as f64;
+    // tanh saturates at |q * tau / S| ≥ 4, i.e. |q| ≥ 4 * S / tau.
+    let table_size = (4 * scale / tau as i64) as usize + 1;
 
     let mut lut = vec![0i32; table_size];
     for i in 0..table_size {
-        let x = i as f64 / sf;
+        let x = i as f64 * tau_f / sf; // q * tau / scale
         lut[i] = (sf * x.tanh()).round() as i32;
     }
     *lut.last_mut().unwrap() = scale as i32;

@@ -10,50 +10,117 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-// const TABLE_SIZE: usize = 64;
+/// Configures one bound channel (upper or lower) for a clamp table.
+/// Bundles the bound exponent with the specific prefix/suffix enum variants that
+/// implement the "zero above bound" indicator and "word below bound" accumulator
+/// for that channel.
+pub struct BoundSpec {
+    /// log₂ of the bound value: the clamp boundary is 2^bound_log.
+    pub bound_log: usize,
+    /// Prefix variant: evaluates to 1 iff all bits with significance ≥ 2^bound_log are zero.
+    pub pre_zero_gtbound: Prefixes,
+    /// Prefix variant: accumulates the value of bits with significance < 2^bound_log.
+    pub pre_word_ltbound: Prefixes,
+    /// Suffix variant for the zero-above-bound indicator.
+    pub suf_zero_gtbound: Suffixes,
+    /// Suffix variant for the word-below-bound accumulator.
+    pub suf_word_ltbound: Suffixes,
+}
+
+/// Maps a concrete clamp table to its prefix/suffix variant channels.
+///
+/// Implementing this trait is all that is needed to get a full
+/// [`PrefixSuffixDecompositionTrait`] implementation via the blanket impl below.
+trait ClampSpec {
+    /// Spec for the upper bound channel (always present).
+    fn upper_spec() -> BoundSpec;
+    /// Spec for the lower bound channel.
+    /// Returns `None` for upper-only clamping (no lower correction term).
+    fn lower_spec() -> Option<BoundSpec>;
+}
+
+/// Core combine logic shared by both `combine` and `combine_test`.
+fn clamp_combine_inner<F: JoltField>(
+    upper: &BoundSpec,
+    lower: Option<&BoundSpec>,
+    prefixes: &[PrefixEval<F>],
+    suffixes: &[SuffixEval<F>],
+) -> F {
+    let const_upper = F::from_u64(1u64 << upper.bound_log);
+    let ps_zero_gtupper = prefixes[upper.pre_zero_gtbound] * suffixes[0];
+    let ps_word_ltupper = prefixes[upper.pre_word_ltbound] + suffixes[1];
+
+    let mut result = const_upper + ps_zero_gtupper * (ps_word_ltupper - const_upper);
+
+    if let Some(lower) = lower {
+        let const_lower = F::from_u64(1u64 << lower.bound_log);
+        let ps_zero_gtlower = prefixes[lower.pre_zero_gtbound] * suffixes[2];
+        let ps_word_ltlower = prefixes[lower.pre_word_ltbound] + suffixes[3];
+        result += ps_zero_gtlower * (const_lower - ps_word_ltlower);
+    }
+
+    result
+}
+
+/// Blanket [`PrefixSuffixDecompositionTrait`] impl for every [`ClampSpec`] type.
+///
+/// Prefix/suffix order: `[zero_gt_upper, word_lt_upper]` for upper-only tables,
+/// `[zero_gt_upper, word_lt_upper, zero_gt_lower, word_lt_lower]` for dual-bound.
+impl<const X_LEN: usize, T> PrefixSuffixDecompositionTrait<X_LEN> for T
+where
+    T: ClampSpec + JoltLookupTable + Default,
+{
+    fn prefixes(&self) -> Vec<Prefixes> {
+        let upper = Self::upper_spec();
+        let mut result = vec![upper.pre_zero_gtbound, upper.pre_word_ltbound];
+        if let Some(lower) = Self::lower_spec() {
+            result.push(lower.pre_zero_gtbound);
+            result.push(lower.pre_word_ltbound);
+        }
+        result
+    }
+
+    fn suffixes(&self) -> Vec<Suffixes> {
+        let upper = Self::upper_spec();
+        let mut result = vec![upper.suf_zero_gtbound, upper.suf_word_ltbound];
+        if let Some(lower) = Self::lower_spec() {
+            result.push(lower.suf_zero_gtbound);
+            result.push(lower.suf_word_ltbound);
+        }
+        result
+    }
+
+    fn combine<F: JoltField>(&self, _prefixes: &[PrefixEval<F>], _suffixes: &[SuffixEval<F>]) -> F {
+        todo!()
+    }
+
+    #[cfg(test)]
+    fn combine_test<F: JoltField>(
+        &self,
+        prefixes: &[PrefixEval<F>],
+        suffixes: &[SuffixEval<F>],
+    ) -> F {
+        clamp_combine_inner(
+            &Self::upper_spec(),
+            Self::lower_spec().as_ref(),
+            prefixes,
+            suffixes,
+        )
+    }
+}
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
-pub struct ClampTable<
+pub struct ClampTableDeBou<
     const X_LEN: usize,
     const LOWER_BOUND_LOG: usize,
     const UPPER_BOUND_LOG: usize,
 >;
 
-/// Structure that holds the prefixes required for a specific-bounds clamp table.
-struct ClampPrefixes {
-    /// Whether all bits x_i, where i >= UPPER_BOUND_LOG, are zero.
-    zero_gt_upper_bound: Prefixes,
-    /// Whether all bits x_i, where i >= LOWER_BOUND_LOG, are zero.
-    zero_gt_lower_bound: Prefixes,
-    /// The value of the word formed by bits x_i, where i < UPPER_BOUND_LOG.
-    word_lt_upper_bound: Prefixes,
-    /// The value of the word formed by bits x_i, where i < LOWER_BOUND_LOG.
-    word_lt_lower_bound: Prefixes,
-}
-
-/// Structure that holds the suffixes required for a specific-bounds clamp table.
-struct ClampSuffixes {
-    /// Whether all bits x_i, where i >= UPPER_BOUND_LOG, are zero.
-    zero_gt_upper_bound: Suffixes,
-    /// Whether all bits x_i, where i >= LOWER_BOUND_LOG, are zero.
-    zero_gt_lower_bound: Suffixes,
-    /// The value of the word formed by bits x_i, where i < UPPER_BOUND_LOG.
-    word_lt_upper_bound: Suffixes,
-    /// The value of the word formed by bits x_i, where i < LOWER_BOUND_LOG.
-    word_lt_lower_bound: Suffixes,
-}
-
-/// Holds the required bounds, prefixes and suffixes for a specific clamp table.
-trait ClampTableTrait<const X_LEN: usize> {
-    const LOWER_BOUND_LOG: usize;
-    const UPPER_BOUND_LOG: usize;
-
-    fn table_prefixes() -> ClampPrefixes;
-    fn table_suffixes() -> ClampSuffixes;
-}
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct ClampTableSiBou<const X_LEN: usize, const UPPER_BOUND_LOG: usize>;
 
 impl<const X_LEN: usize, const L: usize, const U: usize> JoltLookupTable
-    for ClampTable<X_LEN, L, U>
+    for ClampTableDeBou<X_LEN, L, U>
 {
     fn materialize_entry(&self, index: u64) -> u64 {
         if index > 1 << U {
@@ -70,117 +137,94 @@ impl<const X_LEN: usize, const L: usize, const U: usize> JoltLookupTable
         C: ChallengeFieldOps<F>,
         F: JoltField + FieldChallengeOps<C>,
     {
-        let indexed_r: Vec<_> = r.iter().enumerate().collect();
-        let ubound_index = 2 * X_LEN - U - 1; // index corresponding to the set bit in the upper bound
-        let lbound_index = 2 * X_LEN - L - 1; // index corresponding to the set bit in the lower bound
+        clamp_evaluate_mle_inner::<X_LEN, F, C>(r, U, Some(L))
+    }
+}
 
-        // this mle returns 1 if all bits with `significance >= upper bound` are zero.
-        let is_higher_zero_hbound: F = indexed_r[..ubound_index + 1]
-            .iter()
-            .map(|(_, &r_i)| F::one() - r_i)
-            .product();
-        // We split `is_higher_zero_lbound` as
-        // `is_higher_zero_hbound * something_else` where `something_else`
-        // only uses variables in indices `(ubound_index, lbound_index]`.
-        // This is valid because the two factors depend on disjoint variable sets.
-        let is_higher_zero_lbound: F = is_higher_zero_hbound
+impl<const X_LEN: usize, const U: usize> JoltLookupTable for ClampTableSiBou<X_LEN, U> {
+    fn materialize_entry(&self, index: u64) -> u64 {
+        if index > 1 << U {
+            1 << U
+        } else {
+            index
+        }
+    }
+
+    fn evaluate_mle<F, C>(&self, r: &[C]) -> F
+    where
+        C: ChallengeFieldOps<F>,
+        F: JoltField + FieldChallengeOps<C>,
+    {
+        clamp_evaluate_mle_inner::<X_LEN, F, C>(r, U, None)
+    }
+}
+
+/// Core MLE logic shared by all clamp variants.
+fn clamp_evaluate_mle_inner<const X_LEN: usize, F, C>(
+    r: &[C],
+    upper_log: usize,
+    lower_log: Option<usize>,
+) -> F
+where
+    C: ChallengeFieldOps<F>,
+    F: JoltField + FieldChallengeOps<C>,
+{
+    let indexed_r: Vec<_> = r.iter().enumerate().collect();
+    let ubound_index = 2 * X_LEN - upper_log - 1;
+
+    // Indicator that all bits with significance >= 2^U are zero.
+    let is_zero_gt_upper: F = indexed_r[..ubound_index + 1]
+        .iter()
+        .map(|(_, &r_i)| F::one() - r_i)
+        .product();
+
+    // Word value from bits with significance < 2^U.
+    let word_lt_upper: F = indexed_r[ubound_index + 1..]
+        .iter()
+        .map(|(i, &r_i)| {
+            let exponent = 2 * X_LEN - i - 1;
+            r_i * F::from_u64(1 << exponent)
+        })
+        .sum();
+
+    let const_upper = F::from_i64(1 << upper_log);
+
+    // Defaults to the upper bound
+    let mut res = const_upper;
+    // If input < 2^U (all high-significance bits = 0),
+    // then we cancel the upper bound contribution,
+    // and add the input value (which is fully represented by the lower bits).
+    res += is_zero_gt_upper * (word_lt_upper - const_upper);
+
+    if let Some(lower_log) = lower_log {
+        debug_assert!(lower_log <= upper_log);
+        let lbound_index = 2 * X_LEN - lower_log - 1;
+
+        // Split lower indicator into upper indicator and the disjoint middle range.
+        let is_zero_gt_lower: F = is_zero_gt_upper
             * indexed_r[ubound_index + 1..lbound_index + 1]
                 .iter()
                 .map(|(_, &r_i)| F::one() - r_i)
                 .product::<F>();
 
-        // this mle returns the value of the lower word, only including bits with `significance < lower bound`
-        let lbound_word: F = indexed_r[lbound_index + 1..]
+        // Word value from bits with significance < 2^L.
+        let word_lt_lower: F = indexed_r[lbound_index + 1..]
             .iter()
             .map(|(i, &r_i)| {
                 let exponent = 2 * X_LEN - i - 1;
                 r_i * F::from_u64(1 << exponent)
             })
             .sum();
-        // this mle returns the value of the lower word, only including bits with `significance < upper bound`
-        let hbound_word: F = lbound_word
-            + indexed_r[ubound_index + 1..lbound_index + 1]
-                .iter()
-                .map(|(i, &r_i)| {
-                    let exponent = 2 * X_LEN - i - 1;
-                    r_i * F::from_u64(1 << exponent)
-                })
-                .sum::<F>();
 
-        // Initialize the result with bounded value 2^U
-        let mut res = F::from_i64(1 << U);
-        // If the higher word is zero, means that x < 2^U.
-        // Hence we return the lower word as the result, and compensate the initial value by subtracting 2^U.
-        res += is_higher_zero_hbound * (hbound_word - F::from_i64(1 << U))
-            + is_higher_zero_lbound * (F::from_i64(1 << L) - lbound_word);
+        let const_lower = F::from_i64(1 << lower_log);
 
-        res
-    }
-}
-
-impl<T, const X_LEN: usize> PrefixSuffixDecompositionTrait<X_LEN> for T
-where
-    T: ClampTableTrait<X_LEN> + JoltLookupTable + Default,
-{
-    fn prefixes(&self) -> Vec<Prefixes> {
-        let pre = Self::table_prefixes();
-        vec![
-            pre.zero_gt_upper_bound,
-            pre.zero_gt_lower_bound,
-            pre.word_lt_upper_bound,
-            pre.word_lt_lower_bound,
-        ]
+        // if input < 2^L (all bits with significance >= 2^L are zero),
+        // then we cancel the input value (fully represented by the lower bits),
+        // and add the lower bound.
+        res += is_zero_gt_lower * (const_lower - word_lt_lower);
     }
 
-    fn suffixes(&self) -> Vec<Suffixes> {
-        let suf = Self::table_suffixes();
-        vec![
-            suf.zero_gt_upper_bound,
-            suf.zero_gt_lower_bound,
-            suf.word_lt_upper_bound,
-            suf.word_lt_lower_bound,
-        ]
-    }
-
-    #[cfg(test)]
-    fn combine_test<F: JoltField>(
-        &self,
-        prefixes: &[PrefixEval<F>],
-        suffixes: &[SuffixEval<F>],
-    ) -> F {
-        let [zero_gt_upper, zero_gt_lower, word_lt_upper, word_lt_lower] =
-            suffixes.try_into().unwrap();
-        let const_upper_bound_value = F::from_u64(1u64 << Self::UPPER_BOUND_LOG);
-        let const_lower_bound_value = F::from_u64(1u64 << Self::LOWER_BOUND_LOG);
-
-        let ps_zero_gtupper = prefixes[self.prefixes()[0]] * zero_gt_upper;
-        let ps_zero_gtlower = prefixes[self.prefixes()[1]] * zero_gt_lower;
-        let ps_word_ltupper = prefixes[self.prefixes()[2]] + word_lt_upper;
-        let ps_word_ltlower = prefixes[self.prefixes()[3]] + word_lt_lower;
-
-        const_upper_bound_value
-            + ps_zero_gtupper * (ps_word_ltupper - const_upper_bound_value)
-            + ps_zero_gtlower * (const_lower_bound_value - ps_word_ltlower)
-    }
-
-    fn combine<F: JoltField>(&self, _prefixes: &[PrefixEval<F>], _suffixes: &[SuffixEval<F>]) -> F {
-        todo!();
-        // let [s_zero_gt_upper, s_zero_gt_lower, s_word_lt_upper, s_word_lt_lower] =
-        //     suffixes.try_into().unwrap();
-        // let [p_zero_gt_upper, p_zero_gt_lower, p_word_lt_upper, p_word_lt_lower] =
-        //     prefixes.try_into().unwrap();
-        // let const_upper_bound_value = F::from_u64(1u64 << Self::UPPER_BOUND_LOG);
-        // let const_lower_bound_value = F::from_u64(1u64 << Self::LOWER_BOUND_LOG);
-
-        // let ps_zero_gtupper = p_zero_gt_upper * s_zero_gt_upper;
-        // let ps_zero_gtlower = p_zero_gt_lower * s_zero_gt_lower;
-        // let ps_word_ltupper = p_word_lt_upper + s_word_lt_upper;
-        // let ps_word_ltlower = p_word_lt_lower + s_word_lt_lower;
-
-        // const_upper_bound_value
-        //     + ps_zero_gtupper * (ps_word_ltupper - const_upper_bound_value)
-        //     + ps_zero_gtlower * (const_lower_bound_value - ps_word_ltlower)
-    }
+    res
 }
 
 // Simulate a common upper bound and two different lower bounds for use in two different operators.
@@ -189,54 +233,72 @@ pub const CLAMP_OPS_UPPER: usize = 10;
 pub const CLAMP_OP1_LOWER: usize = 5;
 pub const CLAMP_OP2_LOWER: usize = 0;
 
-pub type ClampTableOp1<const X_LEN: usize> = ClampTable<X_LEN, CLAMP_OP1_LOWER, CLAMP_OPS_UPPER>;
-pub type ClampTableOp2<const X_LEN: usize> = ClampTable<X_LEN, CLAMP_OP2_LOWER, CLAMP_OPS_UPPER>;
+pub type ClampTableOp1<const X_LEN: usize> =
+    ClampTableDeBou<X_LEN, CLAMP_OP1_LOWER, CLAMP_OPS_UPPER>;
+pub type ClampTableOp2<const X_LEN: usize> =
+    ClampTableDeBou<X_LEN, CLAMP_OP2_LOWER, CLAMP_OPS_UPPER>;
+pub type ClampTableOp3<const X_LEN: usize> = ClampTableSiBou<X_LEN, CLAMP_OPS_UPPER>;
 
-// Implementation of the ClampTableTrait for Op1's table.
-impl<const X_LEN: usize> ClampTableTrait<X_LEN> for ClampTableOp1<X_LEN> {
-    const LOWER_BOUND_LOG: usize = CLAMP_OP1_LOWER;
-    const UPPER_BOUND_LOG: usize = CLAMP_OPS_UPPER;
-
-    fn table_prefixes() -> ClampPrefixes {
-        ClampPrefixes {
-            zero_gt_upper_bound: Prefixes::OpsZeroGtHigh,
-            zero_gt_lower_bound: Prefixes::Op1ZeroGtLow,
-            word_lt_upper_bound: Prefixes::OpsWordLtHigh,
-            word_lt_lower_bound: Prefixes::Op1WordLtLow,
+// Implementation of ClampSpec for Op1's table (dual-bound: upper=10, lower=5).
+impl<const X_LEN: usize> ClampSpec for ClampTableOp1<X_LEN> {
+    fn upper_spec() -> BoundSpec {
+        BoundSpec {
+            bound_log: CLAMP_OPS_UPPER,
+            pre_zero_gtbound: Prefixes::OpsZeroGtHigh,
+            pre_word_ltbound: Prefixes::OpsWordLtHigh,
+            suf_zero_gtbound: Suffixes::OpsZeroGtHigh,
+            suf_word_ltbound: Suffixes::OpsWordLtHigh,
         }
     }
 
-    fn table_suffixes() -> ClampSuffixes {
-        ClampSuffixes {
-            zero_gt_upper_bound: Suffixes::OpsZeroGtHigh,
-            zero_gt_lower_bound: Suffixes::Op1ZeroGtLow,
-            word_lt_upper_bound: Suffixes::OpsWordLtHigh,
-            word_lt_lower_bound: Suffixes::Op1WordLtLow,
-        }
+    fn lower_spec() -> Option<BoundSpec> {
+        Some(BoundSpec {
+            bound_log: CLAMP_OP1_LOWER,
+            pre_zero_gtbound: Prefixes::Op1ZeroGtLow,
+            pre_word_ltbound: Prefixes::Op1WordLtLow,
+            suf_zero_gtbound: Suffixes::Op1ZeroGtLow,
+            suf_word_ltbound: Suffixes::Op1WordLtLow,
+        })
     }
 }
 
-// Implementation of the ClampTableTrait for Op2's table.
-impl<const X_LEN: usize> ClampTableTrait<X_LEN> for ClampTableOp2<X_LEN> {
-    const LOWER_BOUND_LOG: usize = CLAMP_OP2_LOWER;
-    const UPPER_BOUND_LOG: usize = CLAMP_OPS_UPPER;
-
-    fn table_prefixes() -> ClampPrefixes {
-        ClampPrefixes {
-            zero_gt_upper_bound: Prefixes::OpsZeroGtHigh,
-            zero_gt_lower_bound: Prefixes::Op2ZeroGtLow,
-            word_lt_upper_bound: Prefixes::OpsWordLtHigh,
-            word_lt_lower_bound: Prefixes::Op2WordLtLow,
+// Implementation of ClampSpec for Op2's table (dual-bound: upper=10, lower=0).
+impl<const X_LEN: usize> ClampSpec for ClampTableOp2<X_LEN> {
+    fn upper_spec() -> BoundSpec {
+        BoundSpec {
+            bound_log: CLAMP_OPS_UPPER,
+            pre_zero_gtbound: Prefixes::OpsZeroGtHigh,
+            pre_word_ltbound: Prefixes::OpsWordLtHigh,
+            suf_zero_gtbound: Suffixes::OpsZeroGtHigh,
+            suf_word_ltbound: Suffixes::OpsWordLtHigh,
         }
     }
 
-    fn table_suffixes() -> ClampSuffixes {
-        ClampSuffixes {
-            zero_gt_upper_bound: Suffixes::OpsZeroGtHigh,
-            zero_gt_lower_bound: Suffixes::Op2ZeroGtLow,
-            word_lt_upper_bound: Suffixes::OpsWordLtHigh,
-            word_lt_lower_bound: Suffixes::Op2WordLtLow,
+    fn lower_spec() -> Option<BoundSpec> {
+        Some(BoundSpec {
+            bound_log: CLAMP_OP2_LOWER,
+            pre_zero_gtbound: Prefixes::Op2ZeroGtLow,
+            pre_word_ltbound: Prefixes::Op2WordLtLow,
+            suf_zero_gtbound: Suffixes::Op2ZeroGtLow,
+            suf_word_ltbound: Suffixes::Op2WordLtLow,
+        })
+    }
+}
+
+// Implementation of ClampSpec for Op3's table (upper-only: no lower correction).
+impl<const X_LEN: usize> ClampSpec for ClampTableOp3<X_LEN> {
+    fn upper_spec() -> BoundSpec {
+        BoundSpec {
+            bound_log: CLAMP_OPS_UPPER,
+            pre_zero_gtbound: Prefixes::OpsZeroGtHigh,
+            pre_word_ltbound: Prefixes::OpsWordLtHigh,
+            suf_zero_gtbound: Suffixes::OpsZeroGtHigh,
+            suf_word_ltbound: Suffixes::OpsWordLtHigh,
         }
+    }
+
+    fn lower_spec() -> Option<BoundSpec> {
+        None
     }
 }
 
@@ -254,23 +316,27 @@ mod test {
     fn prefix_suffix() {
         prefix_suffix_test::<XLEN, Fr, ClampTableOp1<XLEN>>();
         prefix_suffix_test::<XLEN, Fr, ClampTableOp2<XLEN>>();
+        prefix_suffix_test::<XLEN, Fr, ClampTableOp3<XLEN>>();
     }
 
     #[test]
     fn mle_full_hypercube() {
         lookup_table_mle_full_hypercube_test::<Fr, ClampTableOp1<8>>();
         lookup_table_mle_full_hypercube_test::<Fr, ClampTableOp2<8>>();
+        lookup_table_mle_full_hypercube_test::<Fr, ClampTableOp3<8>>();
     }
 
     #[test]
     fn mle_random() {
         lookup_table_mle_random_test::<Fr, ClampTableOp1<XLEN>>();
         lookup_table_mle_random_test::<Fr, ClampTableOp2<XLEN>>();
+        lookup_table_mle_random_test::<Fr, ClampTableOp3<XLEN>>();
     }
 
     #[test]
     fn mle_linearity() {
         lookup_table_mle_linearity_test::<XLEN, Fr, ClampTableOp1<XLEN>>();
         lookup_table_mle_linearity_test::<XLEN, Fr, ClampTableOp2<XLEN>>();
+        lookup_table_mle_linearity_test::<XLEN, Fr, ClampTableOp3<XLEN>>();
     }
 }

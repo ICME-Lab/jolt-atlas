@@ -52,39 +52,43 @@ pub trait SparseDenseSuffix: 'static + Sync {
     fn suffix_mle(b: LookupBits) -> u32;
 }
 
-/// An enum containing all suffixes used by Jolt's instruction lookup tables.
-#[repr(u8)]
-#[derive(EnumCountMacro, EnumIter, FromPrimitive, Debug)]
-pub enum Suffixes {
-    /// Bitwise AND suffix
-    And,
-    /// ∑_{i >= HighBound} x_i * 2^i
-    OpsWordLtHigh,
-    /// ∑_{i >= Op1LowBound} x_i * 2^i
-    Op1WordLtLow,
-    /// ∑_{i >= Op2LowBound} x_i * 2^i
-    Op2WordLtLow,
-    /// ∀ i >= HighBound, x_i == 0
-    OpsZeroGtHigh,
-    /// ∀ i >= Op1LowBound, x_i == 0
-    Op1ZeroGtLow,
-    /// ∀ i >= Op2LowBound, x_i == 0
-    Op2ZeroGtLow,
-    /// Less-than comparison suffix
-    LessThan,
-    /// Lower word without MSB suffix
-    LowerWordNoMSB,
-    /// Constant one suffix
-    One,
-    /// Bitwise OR suffix
-    Or,
-    /// ReLU activation suffix
-    Relu,
-    /// Bitwise XOR suffix
-    Xor,
-    /// Suffix for Relu(-x) table
-    NegRelu,
+macro_rules! impl_sparse_dense_suffix {
+    ($($name:ident : $suffix:ident),* $(,)?) => {
+        /// An enum containing all suffixes used by Jolt's instruction lookup tables.
+        #[repr(u8)]
+        #[derive(EnumCountMacro, EnumIter, FromPrimitive, Debug, Clone, Copy)]
+        pub enum Suffixes {
+            $($name),*
+        }
+
+        impl Suffixes {
+            /// Evaluates the MLE for this suffix on the bitvector `b`, where
+            /// `b` represents `b.len()` variables, each assuming a Boolean value.
+            pub fn suffix_mle<const XLEN: usize>(&self, b: LookupBits) -> u32 {
+                match self {
+                    $(Suffixes::$name => $suffix::<XLEN>::suffix_mle(b),)*
+                }
+            }
+        }
+    };
 }
+
+impl_sparse_dense_suffix!(
+    And                 : AndSuffix,                // Bitwise AND suffix
+    LessThan            : LessThanSuffix,           // Less-than comparison suffix
+    LowerWordNoMSB      : LowerWordNoMsbSuffix,     // Lower word without MSB suffix
+    One                 : OneSuffix,                // Constant one suffix
+    Or                  : OrSuffix,                 // Bitwise OR suffix
+    Relu                : ReluSuffix,               // ReLU activation suffix
+    Xor                 : XorSuffix,                // Bitwise XOR suffix
+    NegRelu             : NegReluSuffix,            // Suffix for Relu(-x) table
+    OpsWordLtHigh       : OpsWordLtHighSuffix,      // ∑_{i >= HighBound} x_i * 2^i
+    Op1WordLtLow        : Op1WordLtLowSuffix,       // ∑_{i >= Op1LowBound} x_i * 2^i
+    Op2WordLtLow        : Op2WordLtLowSuffix,       // ∑_{i >= Op2LowBound} x_i * 2^i
+    OpsZeroGtHigh       : OpsZeroGtHighSuffix,      // ∀ i >= HighBound, x_i == 0
+    Op1ZeroGtLow        : Op1ZeroGtLowSuffix,       // ∀ i >= Op1LowBound, x_i == 0
+    Op2ZeroGtLow        : Op2ZeroGtLowSuffix,       // ∀ i >= Op2LowBound, x_i == 0
+);
 
 /// Type alias for suffix evaluation results in the field.
 pub type SuffixEval<F: JoltField> = F;
@@ -96,26 +100,3 @@ type Op2WordLtLowSuffix<const XLEN: usize> = WordLtBoundSuffix<XLEN, CLAMP_OP2_L
 type OpsZeroGtHighSuffix<const XLEN: usize> = ZeroGtBoundSuffix<XLEN, CLAMP_OPS_UPPER>;
 type Op1ZeroGtLowSuffix<const XLEN: usize> = ZeroGtBoundSuffix<XLEN, CLAMP_OP1_LOWER>;
 type Op2ZeroGtLowSuffix<const XLEN: usize> = ZeroGtBoundSuffix<XLEN, CLAMP_OP2_LOWER>;
-
-impl Suffixes {
-    /// Evaluates the MLE for this suffix on the bitvector `b`, where
-    /// `b` represents `b.len()` variables, each assuming a Boolean value.
-    pub fn suffix_mle<const XLEN: usize>(&self, b: LookupBits) -> u32 {
-        match self {
-            Suffixes::And => AndSuffix::suffix_mle(b),
-            Suffixes::OpsWordLtHigh => OpsWordLtHighSuffix::<XLEN>::suffix_mle(b),
-            Suffixes::Op1WordLtLow => Op1WordLtLowSuffix::<XLEN>::suffix_mle(b),
-            Suffixes::Op2WordLtLow => Op2WordLtLowSuffix::<XLEN>::suffix_mle(b),
-            Suffixes::OpsZeroGtHigh => OpsZeroGtHighSuffix::<XLEN>::suffix_mle(b),
-            Suffixes::Op1ZeroGtLow => Op1ZeroGtLowSuffix::<XLEN>::suffix_mle(b),
-            Suffixes::Op2ZeroGtLow => Op2ZeroGtLowSuffix::<XLEN>::suffix_mle(b),
-            Suffixes::One => OneSuffix::suffix_mle(b),
-            Suffixes::Or => OrSuffix::suffix_mle(b),
-            Suffixes::LessThan => LessThanSuffix::suffix_mle(b),
-            Suffixes::LowerWordNoMSB => LowerWordNoMsbSuffix::<XLEN>::suffix_mle(b),
-            Suffixes::Relu => ReluSuffix::<XLEN>::suffix_mle(b),
-            Suffixes::Xor => XorSuffix::suffix_mle(b),
-            Suffixes::NegRelu => NegReluSuffix::<XLEN>::suffix_mle(b),
-        }
-    }
-}

@@ -3,14 +3,14 @@ use crate::{
     utils::lookup_bits::LookupBits,
 };
 
-use super::{PrefixCheckpoint, Prefixes, SparseDensePrefix};
+use super::{PrefixCheckpoint, PrefixCheckpoints, Prefixes, SparseDensePrefix};
 
 /// Prefix component for less-than comparison lookup table decomposition.
 pub enum LessThanPrefix {}
 
 impl<F: JoltField> SparseDensePrefix<F> for LessThanPrefix {
     fn prefix_mle<C>(
-        checkpoints: &[PrefixCheckpoint<F>],
+        checkpoints: &PrefixCheckpoints<F>,
         r_x: Option<C>,
         c: u32,
         mut b: LookupBits,
@@ -46,7 +46,7 @@ impl<F: JoltField> SparseDensePrefix<F> for LessThanPrefix {
     }
 
     fn update_prefix_checkpoint<C>(
-        checkpoints: &[PrefixCheckpoint<F>],
+        checkpoints: &PrefixCheckpoints<F>,
         r_x: C,
         r_y: C,
         _: usize,

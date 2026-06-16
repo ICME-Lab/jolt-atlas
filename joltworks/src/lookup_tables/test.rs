@@ -5,10 +5,10 @@ use crate::{
 use common::consts::XLEN;
 use num::Integer;
 use rand::{rngs::StdRng, Rng, RngCore, SeedableRng};
-use strum::{EnumCount, IntoEnumIterator};
+use strum::IntoEnumIterator;
 
 use super::{
-    prefixes::{PrefixCheckpoint, Prefixes},
+    prefixes::{PrefixCheckpoints, Prefixes},
     suffixes::SuffixEval,
     JoltLookupTable, PrefixSuffixDecompositionTrait,
 };
@@ -68,7 +68,7 @@ pub fn prefix_suffix_test<
     let mut rng = StdRng::seed_from_u64(12345);
 
     for _ in 0..300 {
-        let mut prefix_checkpoints: Vec<PrefixCheckpoint<F>> = vec![None.into(); Prefixes::COUNT];
+        let mut prefix_checkpoints = PrefixCheckpoints::new();
         let lookup_index = T::random_lookup_index(&mut rng);
         let mut j = 0;
         let mut r: Vec<F> = vec![];

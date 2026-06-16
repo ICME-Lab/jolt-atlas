@@ -80,11 +80,17 @@ pub fn softmax_last_axis_decomposed(
     let last_dim = *dims.last().unwrap();
     let num_slices: usize = dims.iter().product::<usize>() / last_dim;
     let data = a.data();
+
+    // Under fused-ops, s_sq is i64 so scale can exceed 2^15.
+    #[cfg(not(feature = "fused-ops"))]
     debug_assert!(
         scale <= (1 << 15),
         "scale={scale} must be at most 2^15; i32 intermediates would overflow"
     );
     let s = scale;
+    #[cfg(feature = "fused-ops")]
+    let s_sq: i64 = (s as i64) * (s as i64);
+    #[cfg(not(feature = "fused-ops"))]
     let s_sq = s * s;
     let total = num_slices * last_dim;
 
@@ -163,12 +169,28 @@ pub fn softmax_last_axis_decomposed(
         exp_sum_q.push(sum_exp);
 
         // 5. inv_sum
+        #[cfg(feature = "fused-ops")]
+        let is: i64 = s_sq / (sum_exp as i64);
+        #[cfg(not(feature = "fused-ops"))]
         let is = s_sq / sum_exp;
+        #[cfg(feature = "fused-ops")]
+        inv_sum.push(is as i32);
+        #[cfg(not(feature = "fused-ops"))]
         inv_sum.push(is);
+
         debug_assert!(
             {
-                let ri = s_sq - is * sum_exp;
-                ri >= 0 && ri < sum_exp
+                #[cfg(feature = "fused-ops")]
+                let ok = {
+                    let ri = s_sq - is * (sum_exp as i64);
+                    ri >= 0 && ri < (sum_exp as i64)
+                };
+                #[cfg(not(feature = "fused-ops"))]
+                let ok = {
+                    let ri = s_sq - is * sum_exp;
+                    ri >= 0 && ri < sum_exp
+                };
+                ok
             },
             "r_inv out of range, sum={sum_exp}"
         );
@@ -176,12 +198,24 @@ pub fn softmax_last_axis_decomposed(
         // 6-7. softmax_q and R
         for j in 0..last_dim {
             let idx = offset + j;
-            let product = exp_q[idx] * is; // exp_q[j] · inv_sum
-            let sq = product / s; // ⌊product / S⌋
-            let rem = product - sq * s; // product − sq·S
-            softmax_q[idx] = sq;
-            R[idx] = rem;
-            debug_assert!(rem >= 0 && rem < s, "R out of range: {rem}, S={s}");
+            #[cfg(feature = "fused-ops")]
+            {
+                let product: i64 = (exp_q[idx] as i64) * is;
+                let sq: i64 = product / (s as i64);
+                let rem: i64 = product - sq * (s as i64);
+                softmax_q[idx] = sq as i32;
+                R[idx] = rem as i32;
+                debug_assert!(rem >= 0 && rem < (s as i64), "R out of range: {rem}, S={s}");
+            }
+            #[cfg(not(feature = "fused-ops"))]
+            {
+                let product = exp_q[idx] * is; // exp_q[j] · inv_sum
+                let sq = product / s; // ⌊product / S⌋
+                let rem = product - sq * s; // product − sq·S
+                softmax_q[idx] = sq;
+                R[idx] = rem;
+                debug_assert!(rem >= 0 && rem < s, "R out of range: {rem}, S={s}");
+            }
         }
     }
 

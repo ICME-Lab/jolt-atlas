@@ -13,11 +13,8 @@ use crate::{
 
 use super::{HandlerContext, OpHandlerFn};
 
-#[cfg(feature = "fused-ops")]
-const NEURAL_TELEPORT_TAU: i32 = 1;
-
-// TODO: These values should be finetuned based on input ranges and desired output precision.
-#[cfg(not(feature = "fused-ops"))]
+// tau=2 halves the LUT size (4·S/tau entries instead of 4·S).
+// Floor-division rounding introduces ≤ 1 quantization unit of error per element.
 const NEURAL_TELEPORT_TAU: i32 = 2;
 
 /// Log2 of the lookup table size used for activation functions.

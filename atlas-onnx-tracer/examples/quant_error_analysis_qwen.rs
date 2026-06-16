@@ -3,9 +3,10 @@ use atlas_onnx_tracer::{
     tensor::Tensor,
     utils::{
         qea::{
-            self, ShadowResult, extract_shadow_logits, init_logging, last_position_logits_f32,
-            last_position_logits_i32, make_f64_inputs, make_run_args, print_comparison_metrics,
-            print_step, run_tract_f32, top_k_entries, tract_greedy_generate,
+            self, ShadowResult, THIN, extract_shadow_logits, init_logging,
+            last_position_logits_f32, last_position_logits_i32, make_f64_inputs,
+            make_qwen_i32_inputs, make_run_args, print_comparison_metrics, print_step,
+            run_tract_f32, top_k_entries, tract_greedy_generate,
         },
         quantize,
     },
@@ -13,15 +14,12 @@ use atlas_onnx_tracer::{
 use tokenizers::Tokenizer;
 use tracing::{debug, info};
 
-const ONNX_PATH: &str = "atlas-onnx-tracer/models/gpt2/network.onnx";
-const TOKENIZER_PATH: &str = "atlas-onnx-tracer/models/gpt2/tokenizer.json";
-const VOCAB_SIZE: usize = 50257;
-#[cfg(feature = "fused-ops")]
-const SCALE: i32 = 12;
-#[cfg(not(feature = "fused-ops"))]
-const SCALE: i32 = 8;
+const SCALE: i32 = 14;
+const ONNX_PATH: &str = "atlas-onnx-tracer/models/qwen/network.onnx";
+const TOKENIZER_PATH: &str = "atlas-onnx-tracer/models/qwen/tokenizer.json";
+const VOCAB_SIZE: usize = 151936;
 
-/// Quantization error analysis for GPT-2.
+/// Quantization error analysis for Qwen2-0.5B.
 ///
 /// Compares four views of the same forward pass (see GLOSSARY in the output):
 ///
@@ -43,29 +41,23 @@ const SCALE: i32 = 8;
 /// # Setup
 ///
 /// ```sh
-/// pip install 'optimum[exporters]' 'optimum[onnxruntime]'
-/// python -m optimum.exporters.onnx --model gpt2 atlas-onnx-tracer/models/gpt2
+/// python atlas-onnx-tracer/.venv/bin/python scripts/download_qwen.py
 /// ```
 ///
 /// # Usage
 ///
 /// Default (info-level output, tract logs silenced):
 /// ```sh
-/// cargo run -r -p atlas-onnx-tracer --features fused-ops --example quant_error_analysis
+/// cargo run -r -p atlas-onnx-tracer --features fused-ops --example quant_error_analysis_qwen
 /// ```
 ///
 /// Show debug output (shapes, token details):
 /// ```sh
-/// RUST_LOG=debug cargo run -r -p atlas-onnx-tracer --features fused-ops --example quant_error_analysis
-/// ```
-///
-/// Show everything *including* tract internals:
-/// ```sh
-/// RUST_LOG=trace cargo run -r -p atlas-onnx-tracer --features fused-ops --example quant_error_analysis
+/// RUST_LOG=debug cargo run -r -p atlas-onnx-tracer --features fused-ops --example quant_error_analysis_qwen
 /// ```
 fn main() {
     init_logging();
-    let ctx = setup("The white man worked as a");
+    let ctx = setup("The quick brown fox jumps over the lazy dog");
 
     print_glossary(&ctx);
     step1_quant_vs_tract(&ctx);
@@ -94,7 +86,7 @@ struct Ctx {
 
 fn setup(text: &str) -> Ctx {
     let tokenizer = Tokenizer::from_file(TOKENIZER_PATH)
-        .expect("failed to load tokenizer.json – see doc-comment for setup");
+        .expect("failed to load tokenizer.json – run scripts/download_qwen.py first");
 
     info!("Input text : \"{text}\"");
     let encoding = tokenizer.encode(text, false).expect("tokenization failed");
@@ -104,7 +96,7 @@ fn setup(text: &str) -> Ctx {
     debug!(?token_ids, "Token IDs");
     debug!(seq_len, "Sequence length");
 
-    let run_args = local_make_run_args(seq_len);
+    let run_args = make_run_args(seq_len, SCALE);
     let scale = run_args.scale;
     let scale_mult = quantize::scale_to_multiplier(scale);
 
@@ -114,8 +106,10 @@ fn setup(text: &str) -> Ctx {
 
     info!("Running QUANT (i32 fixed-point, scale=2^{scale}) …");
     let model = Model::load(ONNX_PATH, &run_args);
-    let quant_inputs = make_gpt2_i32_inputs(&token_ids, seq_len, scale);
+
+    let quant_inputs = make_qwen_i32_inputs(&token_ids, seq_len, scale);
     let i32_outputs = model.forward(&quant_inputs);
+
     debug!(shape = ?i32_outputs[0].dims(), "QUANT output shape");
 
     let last_pos_start = (seq_len - 1) * VOCAB_SIZE;
@@ -143,7 +137,7 @@ fn setup(text: &str) -> Ctx {
 
 fn print_glossary(ctx: &Ctx) {
     qea::print_section("GLOSSARY");
-    info!("  This analysis compares four views of the same GPT-2 forward pass:");
+    info!("  This analysis compares four views of the same Qwen2-0.5B forward pass:");
     info!("");
     info!("    TRACT     ONNX model evaluated by Tract at f32 precision.");
     info!("              This is the ground-truth reference.");
@@ -182,7 +176,6 @@ fn step1_quant_vs_tract(ctx: &Ctx) {
 }
 
 fn step2_per_node_drift(ctx: &Ctx) -> ShadowResult {
-    use atlas_onnx_tracer::utils::qea::THIN;
     print_step(2, "SHADOW vs QUANT — per-node drift");
     info!("  Each row compares the dequantized i32 output against the f64 shadow");
     info!("  after every graph node. Shows where rounding error accumulates.");
@@ -222,7 +215,6 @@ fn step3_shadow_vs_tract(ctx: &Ctx, sr: &ShadowResult) {
 }
 
 fn step4_weight_quant_effect(ctx: &Ctx, sr: &ShadowResult) {
-    use atlas_onnx_tracer::utils::qea::THIN;
     print_step(4, "TRUE-F64 vs TRACT — weight quantization effect");
     info!("  TRUE-F64 uses original f32 weights + f64 arithmetic.");
     info!("  Comparing TRUE-F64 to TRACT should show near-zero error (just f64↔f32).");
@@ -263,6 +255,73 @@ fn step4_weight_quant_effect(ctx: &Ctx, sr: &ShadowResult) {
     info!("  [4b] SHADOW vs TRUE-F64  (difference = weight quantization error)");
     info!("{THIN}");
     print_comparison_metrics(&sr.logits, &true_logits, "  ");
+
+    info!("");
+    info!("{THIN}");
+    info!("  [4c] Per-node SHADOW vs TRUE-F64 (worst 20 nodes by CosSim)");
+    info!("{THIN}");
+    let mut diffs: Vec<(usize, String, f64, f64)> = sr
+        .trace
+        .f64_outputs
+        .iter()
+        .filter_map(|(node_idx, shadow_out)| {
+            let true_out = true_shadow.f64_outputs.get(node_idx)?;
+            if shadow_out.len() != true_out.len() || shadow_out.is_empty() {
+                return None;
+            }
+            let cos = atlas_onnx_tracer::utils::metrics::cosine_similarity(
+                shadow_out.data(),
+                true_out.data(),
+            );
+            let rel_mse =
+                atlas_onnx_tracer::utils::metrics::relative_mse(true_out.data(), shadow_out.data());
+            if cos.is_nan() || cos > 0.9999 {
+                return None;
+            }
+            let op_name = sr
+                .trace
+                .node_metrics
+                .iter()
+                .find(|m| m.idx == *node_idx)
+                .map(|m| m.op_name.clone())
+                .unwrap_or_else(|| "?".to_string());
+            Some((*node_idx, op_name, cos, rel_mse))
+        })
+        .collect();
+    diffs.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+    if diffs.is_empty() {
+        info!("  No nodes with CosSim < 0.9999 between SHADOW and TRUE-F64.");
+    } else {
+        info!(
+            "  {:<6} {:<20} {:<12} {:<12}",
+            "Node", "Op", "CosSim", "RelMSE"
+        );
+        info!("  {}", "-".repeat(54));
+        for (idx, op, cos, relmse) in diffs.iter().take(20) {
+            info!("  {:<6} {:<20} {:<12.6} {:<12.6}", idx, op, cos, relmse);
+        }
+        let mut by_idx = diffs.clone();
+        by_idx.sort_by_key(|x| x.0);
+        info!("");
+        info!("  First 5 diverging nodes (sorted by node index):");
+        for (idx, op, cos, relmse) in by_idx.iter().take(5) {
+            info!("  {:<6} {:<20} {:<12.6} {:<12.6}", idx, op, cos, relmse);
+        }
+        let mut by_op: std::collections::BTreeMap<String, (usize, f64)> =
+            std::collections::BTreeMap::new();
+        for (_, op, cos, _) in &diffs {
+            let e = by_op.entry(op.clone()).or_insert((0, 1.0f64));
+            e.0 += 1;
+            e.1 = e.1.min(*cos);
+        }
+        info!("");
+        info!("  Count by op type (nodes with CosSim < 0.9999):");
+        for (op, (cnt, worst)) in &by_op {
+            info!("  {:<20} count={:<4} worst_cos={:.6}", op, cnt, worst);
+        }
+        info!("");
+        info!("  Total diverging nodes: {}", diffs.len());
+    }
 }
 
 fn step5_greedy_generation(ctx: &Ctx) {
@@ -275,31 +334,6 @@ fn step5_greedy_generation(ctx: &Ctx) {
         .decode(&generated, false)
         .unwrap_or_else(|_| "<decode error>".to_string());
     info!("  \"{text}\"");
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  GPT-2-specific helpers
-// ═══════════════════════════════════════════════════════════════════════════
-
-fn local_make_run_args(seq_len: usize) -> RunArgs {
-    let mut args = make_run_args(seq_len, SCALE);
-    #[cfg(not(feature = "fused-ops"))]
-    {
-        args = args.with_pre_rebase_nonlinear(true);
-    }
-    args
-}
-
-/// GPT-2 quantized inputs: position IDs are NOT scaled (unlike Qwen).
-fn make_gpt2_i32_inputs(token_ids: &[u32], seq_len: usize, scale: i32) -> Vec<Tensor<i32>> {
-    let ids: Vec<i32> = token_ids.iter().map(|&id| id as i32).collect();
-    let pos: Vec<i32> = (0..seq_len as i32).collect();
-    let mask: Vec<i32> = vec![1 << scale; seq_len];
-    vec![
-        Tensor::new(Some(&ids), &[1, seq_len]).unwrap(),
-        Tensor::new(Some(&pos), &[1, seq_len]).unwrap(),
-        Tensor::new(Some(&mask), &[1, seq_len]).unwrap(),
-    ]
 }
 
 // ── Printing helpers ──────────────────────────────────────────────────────────

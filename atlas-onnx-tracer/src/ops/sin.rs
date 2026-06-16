@@ -6,8 +6,15 @@ use crate::{
 
 impl Op for Sin {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
-        let remainder = tensor::ops::nonlinearities::const_rem(inputs[0], FOUR_PI_APPROX);
-        tensor::ops::nonlinearities::sin(&remainder, self.scale.into())
+        #[cfg(feature = "fused-ops")]
+        {
+            tensor::ops::nonlinearities::sin(inputs[0], self.scale.into())
+        }
+        #[cfg(not(feature = "fused-ops"))]
+        {
+            let remainder = tensor::ops::nonlinearities::const_rem(inputs[0], FOUR_PI_APPROX);
+            tensor::ops::nonlinearities::sin(&remainder, self.scale.into())
+        }
     }
 
     fn requires_shape_equality(&self) -> bool {

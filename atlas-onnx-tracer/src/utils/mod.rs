@@ -10,4 +10,6 @@ pub mod parser;
 pub mod precision;
 /// Pretty-printing utilities for displaying tensors and models.
 pub mod pretty_print;
+/// Quantization Error Analysis (QEA) utilities: shared code for analyzing and improving quantization precision, and for running generation with both quantized and unquantized models.
+pub mod qea;
 pub mod quantize;

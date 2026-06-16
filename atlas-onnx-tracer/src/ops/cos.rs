@@ -1,13 +1,11 @@
 use crate::{
-    model::consts::FOUR_PI_APPROX,
-    ops::{Cos, Op},
+    ops::{Cos, Op, eval_trig},
     tensor::{self, Tensor},
 };
 
 impl Op for Cos {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
-        let remainder = tensor::ops::nonlinearities::const_rem(inputs[0], FOUR_PI_APPROX);
-        tensor::ops::nonlinearities::cos(&remainder, self.scale.into())
+        eval_trig(inputs[0], self.scale, tensor::ops::nonlinearities::cos)
     }
 
     fn requires_shape_equality(&self) -> bool {

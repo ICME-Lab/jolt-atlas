@@ -180,6 +180,21 @@ pub trait Op {
     }
 }
 
+/// Shared evaluation for the periodic trig operators ([`Sin`], [`Cos`]).
+///
+/// Both reduce the input modulo a `4π` approximation before applying their
+/// nonlinearity at the operator's scale, so the only thing that differs
+/// between them is the `nonlinearity` function itself.
+pub(crate) fn eval_trig(
+    input: &Tensor<i32>,
+    scale: F32,
+    nonlinearity: fn(&Tensor<i32>, f64) -> Tensor<i32>,
+) -> Tensor<i32> {
+    use crate::{model::consts::FOUR_PI_APPROX, tensor::ops::nonlinearities::const_rem};
+    let remainder = const_rem(input, FOUR_PI_APPROX);
+    nonlinearity(&remainder, scale.into())
+}
+
 impl Op for Operator {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         self.inner().f(inputs)

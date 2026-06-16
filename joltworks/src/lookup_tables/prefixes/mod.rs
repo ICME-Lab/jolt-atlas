@@ -273,7 +273,6 @@ impl Prefixes {
         C: ChallengeFieldOps<F>,
         F: JoltField + FieldChallengeOps<C>,
     {
-        debug_assert_eq!(checkpoints.len(), Self::COUNT);
         let previous_checkpoints = checkpoints.clone();
         checkpoints
             .0

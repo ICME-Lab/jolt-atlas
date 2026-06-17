@@ -130,14 +130,14 @@ fn duplicate_operand_sub_model(rng: &mut StdRng, t: usize) -> (Model, usize, usi
     (b.build(), x, y)
 }
 
-#[should_panic = "called `Result::unwrap()` on an `Err` value: InvalidOpeningProof(\"Const claim does not match expected claim\")"]
+#[should_panic = "InvalidOpeningProof(\"Sub output claim should equal the difference of operand claims\")"]
 #[test]
 fn soundness_sub_virtual_operand_attack_is_rejected() {
     // This test demonstrates the virtual-operand-claim attack shape:
-    // 1) malicious_sub forges operand claims (writes forged values into
-    //    openings[NodeOutput(input), NodeExecution(sub_node)] via append_virtual)
-    // 2) The forged claim propagates to the input/constant node verification,
-    //    which detects the mismatch against the known values.
+    // 1) malicious_sub forges the left operand opening (off by one) at the node's
+    //    reduced output point, leaving the right operand honest.
+    // 2) Sub is a no-sumcheck op, so the verifier checks `left - right == output`
+    //    directly at that point and rejects the forged opening at the Sub node.
     let t = 1 << 12;
     let mut rng = StdRng::seed_from_u64(0xA77ACCEE);
     let input = Tensor::<i32>::random_small(&mut rng, &[t]);
@@ -162,12 +162,12 @@ fn soundness_sub_virtual_operand_attack_is_rejected() {
         );
     }
 
-    // The forged NodeOutput claims propagate to input/constant verification,
-    // which panics on mismatch.
+    // The verifier's direct `left - right == output` check rejects the forged
+    // opening at the Sub node.
     proof.verify(&verifier_pp, &io, None).unwrap();
 }
 
-#[should_panic = "called `Result::unwrap()` on an `Err` value: InvalidOpeningProof(\"Const claim does not match expected claim\")"]
+#[should_panic = "InvalidOpeningProof(\"Sub output claim should equal the difference of operand claims\")"]
 #[test]
 fn soundness_sub_trace_tamper_3_minus_2_becomes_0_is_rejected() {
     let model = sub_model_const_2();

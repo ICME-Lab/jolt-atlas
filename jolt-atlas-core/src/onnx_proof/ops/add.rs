@@ -1,6 +1,5 @@
 use crate::{
-    impl_standard_sumcheck_proof_api,
-    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
+    onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
@@ -16,7 +15,9 @@ use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        multilinear_polynomial::{
+            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+        },
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
             BIG_ENDIAN, LITTLE_ENDIAN,
@@ -33,7 +34,69 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 
-impl_standard_sumcheck_proof_api!(Add, AddParams, AddProver, AddVerifier);
+/// No-sumcheck proof for element-wise addition.
+///
+/// `Add` is linear: `output(x) = left(x) + right(x)` for all `x` on the shared
+/// boolean hypercube, so the multilinear identity `output ≡ left + right` holds
+/// at the (random) output opening point `r` by Schwartz–Zippel. We therefore
+/// skip the sumcheck entirely (cf. [`super::identity`]): the prover opens both
+/// operands at the *same* `r` the output is opened at, and the verifier checks
+/// `left(r) + right(r) == output(r)` directly. The batched HyperKZG opening
+/// proof discharges the operand openings, exactly as for `Identity`.
+///
+/// The sumcheck structs below ([`AddParams`]/[`AddProver`]/[`AddVerifier`]) are
+/// retained because the ZK (BlindFold) path in `onnx_proof::zk` still proves
+/// `Add` via a batched sumcheck; converting that path requires a dedicated
+/// BlindFold algebraic-identity constraint and is tracked separately.
+impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Add {
+    #[tracing::instrument(skip_all, name = "Add::prove")]
+    fn prove(
+        &self,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+        let (opening_point, _claim) =
+            AccOpeningAccessor::new(&prover.accumulator, node).get_reduced_opening();
+
+        let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+        let [left, right] = operands[..] else {
+            panic!("Expected two operands for Add operation")
+        };
+        let left_claim =
+            MultilinearPolynomial::from(left.padded_next_power_of_two()).evaluate(&opening_point.r);
+        let right_claim = MultilinearPolynomial::from(right.padded_next_power_of_two())
+            .evaluate(&opening_point.r);
+
+        let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, node)
+            .into_provider(&mut prover.transcript, opening_point);
+        provider.append_nodeio(Target::Input(0), left_claim);
+        provider.append_nodeio(Target::Input(1), right_claim);
+        vec![]
+    }
+
+    #[tracing::instrument(skip_all, name = "Add::verify")]
+    fn verify(
+        &self,
+        node: &ComputationNode,
+        verifier: &mut Verifier<'_, F, T>,
+    ) -> Result<(), ProofVerifyError> {
+        let (opening_point, claim) =
+            AccOpeningAccessor::new(&verifier.accumulator, node).get_reduced_opening();
+        let mut provider = AccOpeningAccessor::new(&mut verifier.accumulator, node)
+            .into_provider(&mut verifier.transcript, opening_point);
+        provider.append_nodeio(Target::Input(0));
+        provider.append_nodeio(Target::Input(1));
+        let left_claim = provider.get_nodeio(Target::Input(0)).1;
+        let right_claim = provider.get_nodeio(Target::Input(1)).1;
+
+        if left_claim + right_claim != claim {
+            return Err(ProofVerifyError::InvalidOpeningProof(
+                "Add output claim should equal the sum of operand claims".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
 
 /// Shared parameter block for the element-wise addition sumcheck proof.
 #[derive(Clone)]

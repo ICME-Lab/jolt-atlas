@@ -1,6 +1,5 @@
 use crate::{
-    impl_standard_sumcheck_proof_api,
-    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
+    onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
@@ -16,7 +15,9 @@ use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        multilinear_polynomial::{
+            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+        },
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
             BIG_ENDIAN, LITTLE_ENDIAN,
@@ -33,7 +34,65 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 
-impl_standard_sumcheck_proof_api!(Sub, SubParams, SubProver, SubVerifier);
+/// No-sumcheck proof for element-wise subtraction.
+///
+/// `Sub` is linear: `output(x) = left(x) - right(x)` on the shared boolean
+/// hypercube, so the identity holds at the random output opening point `r`. The
+/// prover opens both operands at the same `r`, and the verifier checks
+/// `left(r) - right(r) == output(r)` directly — no sumcheck (cf. [`super::identity`]).
+///
+/// [`SubParams`]/[`SubProver`]/[`SubVerifier`] are retained for the ZK
+/// (BlindFold) path in `onnx_proof::zk`, which still proves `Sub` via a batched
+/// sumcheck; see the note on [`Add`](super::add) for details.
+impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sub {
+    #[tracing::instrument(skip_all, name = "Sub::prove")]
+    fn prove(
+        &self,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+        let (opening_point, _claim) =
+            AccOpeningAccessor::new(&prover.accumulator, node).get_reduced_opening();
+
+        let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+        let [left, right] = operands[..] else {
+            panic!("Expected two operands for Sub operation")
+        };
+        let left_claim =
+            MultilinearPolynomial::from(left.padded_next_power_of_two()).evaluate(&opening_point.r);
+        let right_claim = MultilinearPolynomial::from(right.padded_next_power_of_two())
+            .evaluate(&opening_point.r);
+
+        let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, node)
+            .into_provider(&mut prover.transcript, opening_point);
+        provider.append_nodeio(Target::Input(0), left_claim);
+        provider.append_nodeio(Target::Input(1), right_claim);
+        vec![]
+    }
+
+    #[tracing::instrument(skip_all, name = "Sub::verify")]
+    fn verify(
+        &self,
+        node: &ComputationNode,
+        verifier: &mut Verifier<'_, F, T>,
+    ) -> Result<(), ProofVerifyError> {
+        let (opening_point, claim) =
+            AccOpeningAccessor::new(&verifier.accumulator, node).get_reduced_opening();
+        let mut provider = AccOpeningAccessor::new(&mut verifier.accumulator, node)
+            .into_provider(&mut verifier.transcript, opening_point);
+        provider.append_nodeio(Target::Input(0));
+        provider.append_nodeio(Target::Input(1));
+        let left_claim = provider.get_nodeio(Target::Input(0)).1;
+        let right_claim = provider.get_nodeio(Target::Input(1)).1;
+
+        if left_claim - right_claim != claim {
+            return Err(ProofVerifyError::InvalidOpeningProof(
+                "Sub output claim should equal the difference of operand claims".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
 
 /// Shared parameter block for the element-wise subtraction sumcheck proof.
 #[derive(Clone)]

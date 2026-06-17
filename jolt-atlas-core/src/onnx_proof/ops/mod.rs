@@ -109,7 +109,6 @@ use atlas_onnx_tracer::{node::ComputationNode, ops::Operator};
 // Re-export handler types for convenient access
 
 // Re-export operator param/prover/verifier types for the handler macro
-pub use add::{AddParams, AddProver, AddVerifier};
 use common::CommittedPoly;
 pub use cube::{CubeParams, CubeProver, CubeVerifier};
 pub use div::{DivParams, DivProver, DivVerifier};
@@ -122,11 +121,9 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 pub use mul::{MulParams, MulProver, MulVerifier};
-pub use neg::{NegParams, NegProver, NegVerifier};
 pub use rsqrt::{RsqrtParams, RsqrtProver, RsqrtVerifier};
 pub use square::{SquareParams, SquareProver, SquareVerifier};
 use std::collections::BTreeMap;
-pub use sub::{SubParams, SubProver, SubVerifier};
 
 use crate::onnx_proof::{ProofId, Prover, Verifier};
 

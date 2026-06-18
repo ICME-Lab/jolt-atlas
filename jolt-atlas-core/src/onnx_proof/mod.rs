@@ -114,6 +114,7 @@ pub(crate) fn append_inputs_to_transcript<T: Transcript>(
         transcript.append_u64(*node_idx as u64);
         transcript.append_message(b"missing_tensor");
     }
+}
 
 // ── Core proof structures ────────────────────────────────────────────────
 

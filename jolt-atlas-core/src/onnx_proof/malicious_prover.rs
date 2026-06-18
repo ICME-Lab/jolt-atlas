@@ -24,6 +24,7 @@ use joltworks::{
 };
 
 use crate::onnx_proof::{
+    append_inputs_to_transcript,
     ops::{malicious_sub::malicious_sub_prove, OperatorProver},
     AtlasProverPreprocessing, ONNXProof, ProofId, Prover, ProverDebugInfo,
 };
@@ -58,6 +59,11 @@ impl MaliciousONNXProof {
         // Initialize prover state
         let mut prover: Prover<F, T> = Prover::new(pp.shared.clone(), trace);
         let mut proofs = BTreeMap::new();
+
+        // Mirror the honest protocol: bind public inputs into the transcript
+        // first (issue #230). A faithful attacker follows the protocol and only
+        // deviates in the specific forgery under test.
+        append_inputs_to_transcript(&mut prover.transcript, &io);
 
         // Commit to witness polynomials and append commitments to transcript
         let (poly_map, commitments) = ONNXProof::<F, T, PCS>::commit_witness_polynomials(
@@ -108,6 +114,9 @@ impl MaliciousONNXProof {
 
         let mut prover: Prover<F, T> = Prover::new(pp.shared.clone(), trace);
         let mut proofs = BTreeMap::new();
+
+        // Mirror the honest protocol: bind public inputs first (issue #230).
+        append_inputs_to_transcript(&mut prover.transcript, &io);
 
         let (poly_map, commitments) = ONNXProof::<F, T, PCS>::commit_witness_polynomials(
             pp.model(),

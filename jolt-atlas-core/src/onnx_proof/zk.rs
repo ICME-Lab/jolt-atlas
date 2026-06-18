@@ -1836,6 +1836,9 @@ pub fn prove_zk(
     let trace = pp.model().trace(inputs);
     let io = Trace::io(&trace, pp.model());
     let mut prover = Prover::<F, T>::new(pp.shared.clone(), trace);
+    // Bind public inputs into the transcript before any challenge (issue #230);
+    // mirrored in `verify_zk_with_pcs_capture_and_extract`.
+    super::append_inputs_to_transcript(&mut prover.transcript, &io);
     // Mirror the verifier's `VerifierOpeningAccumulator::new_zk` default: the
     // ZK pipeline hides cleartext opening claims behind Pedersen commitments
     // (emitted by BatchedSumcheck::prove_zk), so the prover must NOT append
@@ -2712,6 +2715,10 @@ fn verify_zk_with_pcs_capture_and_extract(
     let model = pp.shared.model();
     let mut accumulator = VerifierOpeningAccumulator::<F>::new_zk();
     let mut transcript = T::new(b"ONNXProof");
+
+    // 0. Bind public inputs into the transcript before any challenge (issue
+    //    #230); must mirror `prove_zk`'s first append.
+    super::append_inputs_to_transcript(&mut transcript, io);
 
     // 1. Absorb witness commitments into transcript
     for commitment in &bundle.commitments {

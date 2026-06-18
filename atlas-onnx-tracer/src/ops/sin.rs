@@ -1,13 +1,11 @@
 use crate::{
-    model::consts::FOUR_PI_APPROX,
-    ops::{Op, Sin},
+    ops::{Op, Sin, eval_trig},
     tensor::{self, Tensor},
 };
 
 impl Op for Sin {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
-        let remainder = tensor::ops::nonlinearities::const_rem(inputs[0], FOUR_PI_APPROX);
-        tensor::ops::nonlinearities::sin(&remainder, self.scale.into())
+        eval_trig(inputs[0], self.scale, tensor::ops::nonlinearities::sin)
     }
 
     fn requires_shape_equality(&self) -> bool {

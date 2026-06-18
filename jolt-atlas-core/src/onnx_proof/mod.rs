@@ -88,20 +88,32 @@ pub(crate) fn append_inputs_to_transcript<T: Transcript>(
 ) {
     transcript.append_message(b"model_inputs");
     transcript.append_u64(io.inputs.len() as u64);
-    // `io.inputs[i]` corresponds to `io.input_indices[i]` (same order on both
-    // sides). Bind the node index, the shape, and every value so that any
-    // change to which-node / shape / contents perturbs all later challenges.
-    for (tensor, node_idx) in io.inputs.iter().zip(io.input_indices.iter()) {
-        transcript.append_u64(*node_idx as u64);
+    transcript.append_u64(io.input_indices.len() as u64);
+
+    // Bind all inputs (and all indices) even if a malformed `ModelExecutionIO` is provided.
+    for (i, tensor) in io.inputs.iter().enumerate() {
+        let node_idx = io.input_indices.get(i).copied().unwrap_or(usize::MAX);
+        transcript.append_u64(node_idx as u64);
+
         let dims = tensor.dims();
         transcript.append_u64(dims.len() as u64);
         for d in dims {
             transcript.append_u64(*d as u64);
         }
-        let bytes: Vec<u8> = tensor.iter().copied().flat_map(i32::to_le_bytes).collect();
+
+        // Encode values explicitly in LE for cross-platform determinism.
+        let mut bytes = Vec::with_capacity(tensor.inner.len() * 4);
+        for v in &tensor.inner {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
         transcript.append_bytes(&bytes);
     }
-}
+
+    // Ensure any extra indices also perturb the transcript.
+    for node_idx in io.input_indices.iter().skip(io.inputs.len()) {
+        transcript.append_u64(*node_idx as u64);
+        transcript.append_message(b"missing_tensor");
+    }
 
 // ── Core proof structures ────────────────────────────────────────────────
 

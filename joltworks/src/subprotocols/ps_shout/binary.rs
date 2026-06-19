@@ -135,7 +135,7 @@ pub struct ReadRafClaims<F: JoltField> {
     pub right_operand_claim: F,
 }
 
-pub trait PrefixSuffixShoutProvider<F, LUT>: super::RafShoutProvider<F, LUT>
+pub trait PrefixSuffixShoutProvider<F, LUT>: super::RafShoutProvider<F>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
@@ -422,7 +422,7 @@ mod tests {
         }
     }
 
-    impl<LUT> RafShoutProvider<Fr, LUT> for TestProvider<LUT>
+    impl<LUT> RafShoutProvider<Fr> for TestProvider<LUT>
     where
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {

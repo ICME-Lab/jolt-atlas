@@ -6,9 +6,9 @@ use crate::{
 use super::{PrefixCheckpoint, PrefixCheckpoints, Prefixes, SparseDensePrefix};
 
 /// Prefix component for equality comparison lookup table decomposition.
-pub enum EqPrefix {}
+pub enum EqPrefix<const XLEN: usize> {}
 
-impl<F: JoltField> SparseDensePrefix<F> for EqPrefix {
+impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for EqPrefix<XLEN> {
     fn prefix_mle<C>(
         checkpoints: &PrefixCheckpoints<F>,
         r_x: Option<C>,

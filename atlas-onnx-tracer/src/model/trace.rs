@@ -42,6 +42,15 @@ impl Trace {
             .collect()
     }
 
+    /// Return all input tensors feeding the provided computation node,
+    /// with power-of-two padding applied to each tensor's dimensions.
+    pub fn padded_operand_tensors(&self, computation_node: &ComputationNode) -> Vec<Tensor<i32>> {
+        self.operand_tensors(computation_node)
+            .iter()
+            .map(|tensor| tensor.padded_next_power_of_two())
+            .collect()
+    }
+
     /// Construct an [ModelExecutionIO] instance
     pub fn io(&self, model: &Model) -> ModelExecutionIO {
         let inputs = model

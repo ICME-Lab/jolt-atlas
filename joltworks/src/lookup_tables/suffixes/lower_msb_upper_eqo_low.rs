@@ -10,9 +10,9 @@ use super::SparseDenseSuffix;
 /// - b.len() > 32:  bit[31] * (bits 32..b.len()-1 all one) * (bits 0..30)
 /// - b.len() == 32: bit[31] * (bits 0..30)
 /// - b.len() < 32:  (bits 0..30 of b)   — m and eqo are fully in prefix
-pub enum LowerMsbUpperEqoLowSuffix {}
+pub enum LowerMsbUpperEqoLowSuffix<const XLEN: usize> {}
 
-impl SparseDenseSuffix for LowerMsbUpperEqoLowSuffix {
+impl<const XLEN: usize> SparseDenseSuffix for LowerMsbUpperEqoLowSuffix<XLEN> {
     fn suffix_mle(b: LookupBits) -> u32 {
         let b_val: u64 = b.into();
         let low = (b_val % (1u64 << 31)) as u32;

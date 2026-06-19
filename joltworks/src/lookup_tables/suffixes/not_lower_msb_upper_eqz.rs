@@ -7,9 +7,9 @@ use super::SparseDenseSuffix;
 /// - b.len() < 32:  1  — m and eqz are fully in prefix
 /// - b.len() == 32: (1 − bit[31])
 /// - b.len() > 32:  (1 − bit[31]) * (bits 32..b.len()-1 all zero)
-pub enum NotLowerMsbUpperEqzSuffix {}
+pub enum NotLowerMsbUpperEqzSuffix<const XLEN: usize> {}
 
-impl SparseDenseSuffix for NotLowerMsbUpperEqzSuffix {
+impl<const XLEN: usize> SparseDenseSuffix for NotLowerMsbUpperEqzSuffix<XLEN> {
     fn suffix_mle(b: LookupBits) -> u32 {
         let bits: u64 = b.into();
 

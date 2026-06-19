@@ -49,7 +49,7 @@ pub(crate) const DEGREE_BOUND: usize = 2;
 /// Contains the three methods that are structurally identical across
 /// `binary::PrefixSuffixShoutProvider` and `unary::PrefixSuffixShoutProvider`,
 /// so implementations only write them once regardless of which variant is used.
-pub trait RafShoutProvider<F: JoltField, LUT: JoltLookupTable + Default> {
+pub trait RafShoutProvider<F: JoltField> {
     fn ra_poly(&self) -> (VirtualPoly, SumcheckId);
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F>;
 }

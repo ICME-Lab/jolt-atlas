@@ -12,7 +12,7 @@ use crate::{
             utils::compute_ra_evals_direct,
         },
         ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
-        range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding},
+        range_checking::range_check_operands::{RangeCheckOperands, TeleportRangeCheckOperands},
         ProofId, ProofType, Prover, Verifier,
     },
     utils::opening_access::{AccOpeningAccessor, Target},
@@ -203,7 +203,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
         let cos_encoding = CosRaEncoding { node_idx: node.idx };
-        let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+        let rc_operands = RangeCheckOperands::<TeleportRangeCheckOperands>::new(node);
+        let rc_encoding = rc_operands.get_encoding(node);
         let cos_d = cos_encoding.one_hot_params().instruction_d;
         let rc_d = rc_encoding.one_hot_params().instruction_d;
         let mut polys = vec![CommittedPoly::TeleportNodeQuotient(node.idx)];

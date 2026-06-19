@@ -90,7 +90,7 @@ pub struct ReadRafClaims<F: JoltField> {
 }
 
 pub trait PrefixSuffixShoutProvider<F, LUT, const LOG_K: usize>:
-    super::RafShoutProvider<F, LUT>
+    super::RafShoutProvider<F>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
@@ -351,7 +351,7 @@ mod tests {
         }
     }
 
-    impl<LUT, const XLEN: usize> RafShoutProvider<Fr, LUT> for TestProvider<LUT, XLEN>
+    impl<LUT, const XLEN: usize> RafShoutProvider<Fr> for TestProvider<LUT, XLEN>
     where
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {

@@ -4,7 +4,9 @@
 //! It uses the prefix-suffix read-checking sumcheck protocol from the Twist and Shout paper to
 //! efficiently verify that remainder values are within valid bounds using lookup tables.
 
-use crate::onnx_proof::range_checking::range_check_operands::RangeCheckingOperandsTrait;
+use crate::onnx_proof::range_checking::range_check_operands::{
+    RangeCheckOperands, RangeCheckingOperandsTrait,
+};
 use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode};
 use common::{
     consts::{LOG_K, XLEN},
@@ -89,7 +91,7 @@ pub mod range_check_operands;
 /// - [`PrefixSuffixShoutProvider`] - The trait this struct implements
 pub struct RangeCheckProvider<H: RangeCheckingOperandsTrait> {
     /// Operands providing operation-specific range-checking logic (e.g., Div, Rsqrt, Tanh).
-    pub operands: H,
+    pub operands: RangeCheckOperands<H>,
     /// The computation node being proven, containing operation type, inputs, and dimensionality.
     pub computation_node: ComputationNode,
 }
@@ -127,7 +129,7 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
     /// ```
     pub fn new(computation_node: &ComputationNode) -> Self {
         Self {
-            operands: H::new(computation_node),
+            operands: RangeCheckOperands::new(computation_node),
             computation_node: computation_node.clone(),
         }
     }
@@ -147,8 +149,12 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
         T: Transcript,
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
-        let (left, right) = H::get_operands_tensors(trace, &self.computation_node);
-        let lookup_bits = H::compute_lookup_indices(&left, &right);
+        let padded_operands = trace.padded_operand_tensors(&self.computation_node);
+        let lookup_operands = self.operands.build_lookup_operands(&padded_operands);
+
+        let lookup_bits = self
+            .operands
+            .compute_lookup_indices(&lookup_operands[0], &lookup_operands[1]);
         let lookup_indices: Vec<usize> = lookup_bits.iter().map(|&x| x.into()).collect();
         let prover = ps_read_raf_prover(self, lookup_bits, accumulator, transcript);
         (prover, lookup_indices)
@@ -169,15 +175,14 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
     }
 }
 
-impl<F, LUT, H> RafShoutProvider<F, LUT> for RangeCheckProvider<H>
+impl<F, H> RafShoutProvider<F> for RangeCheckProvider<H>
 where
     F: JoltField,
-    LUT: JoltLookupTable + Default,
     H: RangeCheckingOperandsTrait,
 {
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
         let id = OpeningId::new(
-            self.operands.get_input_operands()[0],
+            self.operands.get_input_operands_id()[0],
             SumcheckId::NodeExecution(self.operands.node_idx()),
         );
         let (r_node_output, _) = accumulator.get_virtual_polynomial_opening(id);
@@ -186,7 +191,7 @@ where
 
     fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
         (
-            self.operands.get_output_operand(),
+            self.operands.get_output_operand_id(),
             SumcheckId::NodeExecution(self.operands.node_idx()),
         )
     }
@@ -218,40 +223,46 @@ where
 /// This struct encapsulates the information needed to perform one-hot-encoding checks for
 /// operations that produce remainders (Div, Rsqrt, Tanh). It implements the
 /// [`RaOneHotEncoding`] trait to integrate with the one-hot checking protocol.
-pub struct RangeCheckEncoding<H: RangeCheckingOperandsTrait> {
-    /// Operands providing operation-specific range-checking logic.
-    pub operands: H,
+pub struct RangeCheckEncoding {
+    /// Computation node index
+    pub node_idx: usize,
+    /// Virtual polynomial identifier, mapping to the one-hot encoding of the range-check output claim.
+    pub one_hot_poly: VirtualPoly,
+    /// Committed polynomial function for the one-hot encoding, representing `one_hot_poly`.
+    pub one_hot_committed_fn: fn(usize, usize) -> CommittedPoly,
     /// log2 of the number of elements in the computation (T).
     pub log_t: usize,
 }
 
-impl<H: RangeCheckingOperandsTrait> RangeCheckEncoding<H> {
+impl RangeCheckEncoding {
     /// Create a new range-check encoding from a computation node.
-    pub fn new(computation_node: &ComputationNode) -> Self {
+    pub fn new<H: RangeCheckingOperandsTrait>(
+        computation_node: &ComputationNode,
+        rc_op: &RangeCheckOperands<H>,
+    ) -> Self {
         Self {
-            operands: H::new(computation_node),
+            node_idx: computation_node.idx,
+            one_hot_poly: rc_op.get_output_operand_id(),
+            one_hot_committed_fn: H::rad_poly,
             log_t: computation_node.pow2_padded_num_output_elements().log_2(),
         }
     }
 }
 
-impl<H: RangeCheckingOperandsTrait> RaOneHotEncoding for RangeCheckEncoding<H> {
+impl RaOneHotEncoding for RangeCheckEncoding {
     fn committed_poly(&self, d: usize) -> CommittedPoly {
-        self.operands.rad_poly(d)
+        (self.one_hot_committed_fn)(self.node_idx, d)
     }
 
     fn r_cycle_source(&self) -> OpeningId {
         OpeningId::new(
-            VirtualPoly::NodeOutput(self.operands.node_idx()),
-            SumcheckId::NodeExecution(self.operands.node_idx()),
+            VirtualPoly::NodeOutput(self.node_idx),
+            SumcheckId::NodeExecution(self.node_idx),
         )
     }
 
     fn ra_source(&self) -> OpeningId {
-        OpeningId::new(
-            self.operands.get_output_operand(),
-            SumcheckId::NodeExecution(self.operands.node_idx()),
-        )
+        OpeningId::new(self.one_hot_poly, SumcheckId::NodeExecution(self.node_idx))
     }
 
     fn log_k(&self) -> usize {

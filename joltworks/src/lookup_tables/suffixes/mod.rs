@@ -52,50 +52,39 @@ pub trait SparseDenseSuffix: 'static + Sync {
     fn suffix_mle(b: LookupBits) -> u32;
 }
 
-/// An enum containing all suffixes used by Jolt's instruction lookup tables.
-#[repr(u8)]
-#[derive(EnumCountMacro, EnumIter, FromPrimitive)]
-pub enum Suffixes {
-    /// Bitwise AND suffix
-    And,
-    /// Less-than comparison suffix
-    LessThan,
-    /// Lower word without MSB suffix (XLEN-bit layout)
-    WordNoMSB,
-    /// Constant one suffix
-    One,
-    /// Bitwise OR suffix
-    Or,
-    /// Bitwise XOR suffix
-    Xor,
-    /// Suffix for Relu(-x) table
-    NegRelu,
-    /// `(1-m) * upper_eqz` suffix, used in `sat_clamp` decomposition
-    NotLowerMsbUpperEqz,
-    /// `(1-m) * upper_eqz * low` suffix, used in `sat_clamp` decomposition
-    NotLowerMsbUpperEqzLow,
-    /// `m * upper_eqo * low` suffix, used in `sat_clamp` decomposition
-    LowerMsbUpperEqoLow,
+macro_rules! impl_sparse_dense_suffix {
+    ($($name:ident : $suffix:ident),* $(,)?) => {
+        /// An enum containing all suffixes used by Jolt's instruction lookup tables.
+        #[repr(u8)]
+        #[derive(EnumCountMacro, EnumIter, FromPrimitive)]
+        pub enum Suffixes {
+            $($name),*
+        }
+
+        impl Suffixes {
+            /// Evaluates the MLE for this suffix on the bitvector `b`, where
+            /// `b` represents `b.len()` variables, each assuming a Boolean value.
+            pub fn suffix_mle<const XLEN: usize>(&self, b: LookupBits) -> u32 {
+                match self {
+                    $(Suffixes::$name => $suffix::<XLEN>::suffix_mle(b),)*
+                }
+            }
+        }
+    };
 }
+
+impl_sparse_dense_suffix!(
+    And                     : AndSuffix,                    // Bitwise AND suffix
+    LessThan                : LessThanSuffix,               // Less-than comparison suffix
+    WordNoMSB               : WordNoMsbSuffix,              // Lower word without MSB suffix
+    One                     : OneSuffix,                    // Constant one suffix
+    Or                      : OrSuffix,                     // Bitwise OR suffix
+    Xor                     : XorSuffix,                    // Bitwise XOR suffix
+    NegRelu                 : NegReluSuffix,                // Suffix for Relu(-x) table
+    NotLowerMsbUpperEqz     : NotLowerMsbUpperEqzSuffix,    // `(1-m) * upper_eqz` suffix, used in `sat_clamp` decomposition
+    NotLowerMsbUpperEqzLow  : NotLowerMsbUpperEqzLowSuffix, // `(1-m) * upper_eqz * low` suffix, used in `sat_clamp` decomposition
+    LowerMsbUpperEqoLow     : LowerMsbUpperEqoLowSuffix,    // `m * upper_eqo * low` suffix, used in `sat_clamp` decomposition
+);
 
 /// Type alias for suffix evaluation results in the field.
 pub type SuffixEval<F: JoltField> = F;
-
-impl Suffixes {
-    /// Evaluates the MLE for this suffix on the bitvector `b`, where
-    /// `b` represents `b.len()` variables, each assuming a Boolean value.
-    pub fn suffix_mle<const XLEN: usize>(&self, b: LookupBits) -> u32 {
-        match self {
-            Suffixes::And => AndSuffix::suffix_mle(b),
-            Suffixes::One => OneSuffix::suffix_mle(b),
-            Suffixes::Or => OrSuffix::suffix_mle(b),
-            Suffixes::LessThan => LessThanSuffix::suffix_mle(b),
-            Suffixes::WordNoMSB => WordNoMsbSuffix::<XLEN>::suffix_mle(b),
-            Suffixes::Xor => XorSuffix::suffix_mle(b),
-            Suffixes::NegRelu => NegReluSuffix::<XLEN>::suffix_mle(b),
-            Suffixes::NotLowerMsbUpperEqz => NotLowerMsbUpperEqzSuffix::suffix_mle(b),
-            Suffixes::NotLowerMsbUpperEqzLow => NotLowerMsbUpperEqzLowSuffix::suffix_mle(b),
-            Suffixes::LowerMsbUpperEqoLow => LowerMsbUpperEqoLowSuffix::suffix_mle(b),
-        }
-    }
-}

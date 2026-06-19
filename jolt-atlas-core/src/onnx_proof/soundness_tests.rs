@@ -40,7 +40,7 @@ use joltworks::{
         commitment::{commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG},
         multilinear_polynomial::MultilinearPolynomial,
         one_hot_polynomial::OneHotPolynomial,
-        opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
+        opening_proof::{OpeningId, SumcheckId},
     },
     subprotocols::{
         evaluation_reduction::EvalReductionProof,
@@ -269,29 +269,21 @@ fn soundness_tanh_tau_rangecheck_bypass_is_rejected() {
 
     struct TauRangecheckBypassProof;
 
-    struct TauBypassTeleportRangeCheckOperands {
-        base: RangeCheckOperandsBase,
-    }
+    struct TauBypassTeleportRangeCheckOperands;
 
     type TestPCS = HyperKZG<Bn254>;
     type TestField = Fr;
     type TestTranscript = Blake2bTranscript;
 
     impl RangeCheckingOperandsTrait for TauBypassTeleportRangeCheckOperands {
-        fn new(node: &ComputationNode) -> Self {
-            Self {
-                base: RangeCheckOperandsBase {
-                    node_idx: node.idx,
-                    remainder: VirtualPoly::TeleportRemainder(node.idx),
-                    bound: None,
-                    virtual_ra: VirtualPoly::TeleportRangeCheckRa(node.idx),
-                    operator: node.operator.clone(),
-                },
+        fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase {
+            RangeCheckOperandsBase {
+                node_idx: node.idx,
+                remainder: VirtualPoly::TeleportRemainder(node.idx),
+                bound: None,
+                virtual_ra: VirtualPoly::TeleportRangeCheckRa(node.idx),
+                operator: node.operator.clone(),
             }
-        }
-
-        fn base(&self) -> &RangeCheckOperandsBase {
-            &self.base
         }
 
         fn get_operands_tensors(
@@ -310,37 +302,23 @@ fn soundness_tanh_tau_rangecheck_bypass_is_rejected() {
             (remainder, divisor_tensor)
         }
 
-        fn rad_poly(&self, d: usize) -> CommittedPoly {
-            CommittedPoly::TeleportRangeCheckRaD(self.base.node_idx, d)
+        fn rad_poly(index: usize, d: usize) -> CommittedPoly {
+            CommittedPoly::TeleportRangeCheckRaD(index, d)
         }
 
-        /// Extract the operand claims from the accumulator for the left and right operands.
-        fn operand_claims<F: JoltField>(&self, accumulator: &dyn OpeningAccumulator<F>) -> (F, F) {
-            let operand_claims = self
-                .get_input_operands()
-                .iter()
-                .map(|operand| {
-                    let operand_id =
-                        OpeningId::new(*operand, SumcheckId::NodeExecution(self.base.node_idx));
-                    let (_, claim) = accumulator.get_virtual_polynomial_opening(operand_id);
-                    claim
-                })
-                .collect::<Vec<_>>();
-            let tau = match &self.base().operator {
+        fn transform_operand_claims<F: JoltField>(claims: Vec<F>, op: Operator) -> (F, F) {
+            let tau = match op {
                 Operator::Tanh(inner) => inner.tau,
                 Operator::Erf(inner) => inner.tau,
                 Operator::Sigmoid(inner) => inner.tau,
                 Operator::Cos(_) | Operator::Sin(_) => FOUR_PI_APPROX,
                 _ => {
                     panic!(
-                    "Expected Tanh, Erf, Sigmoid, Cos, or Sin operator for neural teleportation division"
-                )
+                        "Expected Tanh, Erf, Sigmoid, Cos, or Sin operator for neural teleportation division"
+                    )
                 }
             };
-            (
-                operand_claims[0],
-                self.transform_right_claim(F::from_i32(tau)),
-            )
+            (claims[0], F::from_i32(tau))
         }
     }
 

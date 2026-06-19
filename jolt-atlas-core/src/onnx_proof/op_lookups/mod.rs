@@ -10,6 +10,7 @@ use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::Operator,
+    tensor::Tensor,
 };
 use common::{
     consts::{LOG_K, XLEN},
@@ -73,12 +74,48 @@ use joltworks::{
 /// - [`PrefixSuffixShoutProvider`] - The trait this struct implements
 /// - [`OpLookupEncoding`] - The struct that provides one-hot encoding parameters for one-hot checks related to these lookups
 /// - [`ps_read_raf_prover`] and [`ps_read_raf_verifier`] - Underlying read-raf protocol
-pub struct OpLookupProvider {
+pub struct OpLookupProvider<Helper = DefaultLookupOperands>
+where
+    Helper: LookupOperandsTrait,
+{
+    /// Helper providing operation-specific range-checking logic for the node's operands.
+    helper: Helper,
     /// The computation node being proven, containing operation type, inputs, and dimensionality.
     computation_node: ComputationNode,
 }
 
-impl OpLookupProvider {
+/// Trait for custom lookup operation handling.
+/// Allows to specify the link between model operands the the lookup table operands.
+pub trait LookupOperandsTrait {
+    /// Transforms the operand claims, accounting for lookup-specific adjustments (e.g., offsetting).
+    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F);
+
+    /// Transforms the output claim, accounting for lookup-specific adjustments (e.g., offsetting).
+    fn transform_output_claim<F: JoltField>(&self, claim: F) -> F;
+
+    /// Builds the one-hot encoding operands for the lookup table from the model's operand tensors.
+    fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>>;
+}
+
+#[derive(Default)]
+/// Default helper for operator lookup.
+pub struct DefaultLookupOperands;
+
+impl LookupOperandsTrait for DefaultLookupOperands {
+    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
+        (claims[0], claims[1])
+    }
+
+    fn transform_output_claim<F: JoltField>(&self, claim: F) -> F {
+        claim
+    }
+
+    fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>> {
+        operand_tensors.to_vec()
+    }
+}
+
+impl<H: LookupOperandsTrait + Default> OpLookupProvider<H> {
     /// Creates a new lookup provider for the specified computation node.
     ///
     /// # Parameters
@@ -98,7 +135,10 @@ impl OpLookupProvider {
     /// let provider = OpLookupProvider::new(node);
     /// ```
     pub fn new(computation_node: ComputationNode) -> Self {
-        Self { computation_node }
+        Self {
+            helper: H::default(),
+            computation_node,
+        }
     }
 
     /// Combined prover flow: appends RAF claims + computes lookup indices + creates sumcheck prover.
@@ -116,14 +156,15 @@ impl OpLookupProvider {
         T: Transcript,
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
-        append_raf_claims_prover::<F, LUT>(self, trace, accumulator, transcript);
+        append_raf_claims_prover(&self.computation_node, trace, accumulator, transcript);
         let padded_operands: Vec<_> = trace
             .layer_data(&self.computation_node)
             .operands
             .iter()
             .map(|tensor| tensor.padded_next_power_of_two())
             .collect();
-        let operand_refs: Vec<_> = padded_operands.iter().collect();
+        let lookup_operands = self.helper.build_lookup_operands(&padded_operands);
+        let operand_refs: Vec<_> = lookup_operands.iter().collect();
         let lookup_bits = compute_lookup_indices_from_operands(
             &operand_refs,
             self.computation_node.is_interleaved_operands(),
@@ -144,15 +185,16 @@ impl OpLookupProvider {
         T: Transcript,
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
-        append_raf_claims_verifier::<F, LUT>(self, accumulator, transcript);
+        append_raf_claims_verifier(&self.computation_node, accumulator, transcript);
         ps_read_raf_verifier(self, accumulator, transcript)
     }
 }
 
-impl<F, LUT> PrefixSuffixShoutProvider<F, LUT> for OpLookupProvider
+impl<F, LUT, H> PrefixSuffixShoutProvider<F, LUT> for OpLookupProvider<H>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
+    H: LookupOperandsTrait,
 {
     fn read_raf_claims(&self, accumulator: &dyn OpeningAccumulator<F>) -> ReadRafClaims<F> {
         let (_, rv_claim) = accumulator.get_node_output_opening(self.computation_node.idx);
@@ -180,6 +222,11 @@ where
                     accumulator.get_virtual_polynomial_opening(right_operand_id);
                 (F::zero(), right_operand_claim)
             };
+
+        let rv_claim = self.helper.transform_output_claim(rv_claim);
+        let (left_operand_claim, right_operand_claim) = self
+            .helper
+            .transform_operand_claims(vec![left_operand_claim, right_operand_claim]);
 
         ReadRafClaims {
             rv_claim,
@@ -277,23 +324,19 @@ impl InterleavedBitsMarker for ComputationNode {
     }
 }
 
-fn append_raf_claims_prover<F: JoltField, LUT>(
-    provider: &OpLookupProvider,
+fn append_raf_claims_prover<F: JoltField>(
+    node: &ComputationNode,
     trace: &Trace,
     opening_accumulator: &mut ProverOpeningAccumulator<F>,
     transcript: &mut impl Transcript,
-) where
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
-{
-    let r_cycle = <OpLookupProvider as PrefixSuffixShoutProvider<F, LUT>>::r_cycle(
-        provider,
-        opening_accumulator,
-    );
+) {
+    let r_cycle = opening_accumulator.get_node_output_opening(node.idx).0;
+
     let LayerData {
         output: _,
         operands,
-    } = Trace::layer_data(trace, &provider.computation_node);
-    let is_interleaved_operands = provider.computation_node.is_interleaved_operands();
+    } = Trace::layer_data(trace, node);
+    let is_interleaved_operands = node.is_interleaved_operands();
     if is_interleaved_operands {
         let [left_operand_tensor, right_operand_tensor] = operands[..] else {
             panic!("Expected exactly two input tensors")
@@ -303,8 +346,8 @@ fn append_raf_claims_prover<F: JoltField, LUT>(
         let left_operand_claim = MultilinearPolynomial::from(left_operand_tensor.clone()) // TODO: make this work with from_i32
             .evaluate(&r_cycle.r);
         let left_exec_id = OpeningId::new(
-            VirtualPoly::NodeOutput(provider.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(provider.computation_node.idx),
+            VirtualPoly::NodeOutput(node.inputs[0]),
+            SumcheckId::NodeExecution(node.idx),
         );
         opening_accumulator.append_virtual(
             transcript,
@@ -315,8 +358,8 @@ fn append_raf_claims_prover<F: JoltField, LUT>(
         let right_operand_claim =
             MultilinearPolynomial::from(right_operand_tensor.clone()).evaluate(&r_cycle.r);
         let right_exec_id = OpeningId::new(
-            VirtualPoly::NodeOutput(provider.computation_node.inputs[1]),
-            SumcheckId::NodeExecution(provider.computation_node.idx),
+            VirtualPoly::NodeOutput(node.inputs[1]),
+            SumcheckId::NodeExecution(node.idx),
         );
         opening_accumulator.append_virtual(
             transcript,
@@ -329,8 +372,8 @@ fn append_raf_claims_prover<F: JoltField, LUT>(
         let right_operand_claim =
             MultilinearPolynomial::from(right_operand_tensor.clone()).evaluate(&r_cycle.r);
         let right_exec_id = OpeningId::new(
-            VirtualPoly::NodeOutput(provider.computation_node.inputs[0]),
-            SumcheckId::NodeExecution(provider.computation_node.idx),
+            VirtualPoly::NodeOutput(node.inputs[0]),
+            SumcheckId::NodeExecution(node.idx),
         );
         opening_accumulator.append_virtual(
             transcript,
@@ -341,18 +384,13 @@ fn append_raf_claims_prover<F: JoltField, LUT>(
     };
 }
 
-fn append_raf_claims_verifier<F: JoltField, LUT>(
-    provider: &OpLookupProvider,
+fn append_raf_claims_verifier<F: JoltField>(
+    node: &ComputationNode,
     opening_accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut impl Transcript,
-) where
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
-{
-    let r_cycle = <OpLookupProvider as PrefixSuffixShoutProvider<F, LUT>>::r_cycle(
-        provider,
-        opening_accumulator,
-    );
-    let node = &provider.computation_node;
+) {
+    let r_cycle = opening_accumulator.get_node_output_opening(node.idx).0;
+
     opening_accumulator.get_node_output_opening(node.idx);
     let exec_id = SumcheckId::NodeExecution(node.idx);
     let input_opening = |i: usize| OpeningId::new(VirtualPoly::NodeOutput(node.inputs[i]), exec_id);

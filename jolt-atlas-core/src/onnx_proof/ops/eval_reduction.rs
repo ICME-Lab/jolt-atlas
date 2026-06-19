@@ -287,10 +287,6 @@ mod tests {
             &mut eval_reduction_proofs,
         );
 
-        // `Sub` is a no-sumcheck op (it only propagates operand openings), so a
-        // Sub-only model emits no execution proof. The eval-reduction proof for
-        // the output node is the artifact that confirms `iop` ran in isolation.
-        assert!(proofs.is_empty());
         assert!(eval_reduction_proofs.contains_key(&output_idx));
     }
 

@@ -10,17 +10,12 @@ use atlas_onnx_tracer::{
 };
 use joltworks::{
     field::JoltField,
-    poly::{
-        commitment::commitment_scheme::CommitmentScheme,
-        opening_proof::ProverOpeningAccumulator,
-        unipoly::{CompressedUniPoly, UniPoly},
-    },
+    poly::{commitment::commitment_scheme::CommitmentScheme, unipoly::UniPoly},
     subprotocols::{
         evaluation_reduction::{EvalReductionProof, ReducedInstance},
         sumcheck::SumcheckInstanceProof,
-        sumcheck_prover::SumcheckInstanceProver,
     },
-    transcripts::{AppendToTranscript, Transcript},
+    transcripts::Transcript,
 };
 
 use crate::onnx_proof::{
@@ -181,55 +176,6 @@ impl MaliciousONNXProof {
             }
         }
     }
-}
-
-/// Variant of `Sumcheck::prove` that also returns the final claim and leaves
-/// opening caching to the caller (for adversarial experiments).
-pub fn malicious_sumcheck_prove<F: JoltField, ProofTranscript: Transcript>(
-    sumcheck_instance: &mut dyn SumcheckInstanceProver<F, ProofTranscript>,
-    opening_accumulator: &mut ProverOpeningAccumulator<F>,
-    transcript: &mut ProofTranscript,
-) -> (
-    SumcheckInstanceProof<F, ProofTranscript>,
-    Vec<F::Challenge>,
-    F,
-) {
-    let num_rounds = sumcheck_instance.num_rounds();
-
-    // Append input claims to transcript
-    let input_claim = sumcheck_instance.input_claim(opening_accumulator);
-    transcript.append_scalar(&input_claim);
-    let mut previous_claim = input_claim;
-    let mut r_sumcheck: Vec<F::Challenge> = Vec::with_capacity(num_rounds);
-    let mut compressed_polys: Vec<CompressedUniPoly<F>> = Vec::with_capacity(num_rounds);
-    for round in 0..num_rounds {
-        let univariate_poly = sumcheck_instance.compute_message(round, previous_claim);
-        // append the prover's message to the transcript
-        let compressed_poly = univariate_poly.compress();
-        compressed_poly.append_to_transcript(transcript);
-        let r_j = transcript.challenge_scalar_optimized::<F>();
-        r_sumcheck.push(r_j);
-
-        // Cache claim for this round
-        previous_claim = univariate_poly.evaluate(&r_j);
-        sumcheck_instance.ingest_challenge(r_j, round);
-        compressed_polys.push(compressed_poly);
-    }
-
-    let final_claim = previous_claim;
-
-    // Allow the sumcheck instance to perform any end-of-protocol work (e.g. flushing
-    // delayed bindings) after the final challenge has been ingested and before we cache
-    // openings.
-    sumcheck_instance.finalize();
-
-    // Deliberately do not call `cache_openings` here. The caller controls how
-    // openings and operand claims are cached for attack experiments.
-    (
-        SumcheckInstanceProof::new(compressed_polys),
-        r_sumcheck,
-        final_claim,
-    )
 }
 
 /// Simulate the evaluation reduction protocol, only we just consider the case where num_use = 1 for simplicity.

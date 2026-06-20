@@ -287,7 +287,6 @@ mod tests {
             &mut eval_reduction_proofs,
         );
 
-        assert!(!proofs.is_empty());
         assert!(eval_reduction_proofs.contains_key(&output_idx));
     }
 

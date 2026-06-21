@@ -105,6 +105,8 @@ pub mod suffixes;
 
 /// Bitwise AND lookup table.
 pub mod and;
+/// Clamp lookup table.
+pub mod clamp;
 /// Negated ReLU lookup table: `f(x) = max(−x, 0)`.
 ///
 /// Returns the magnitude of `x` when negative, and `0` otherwise.

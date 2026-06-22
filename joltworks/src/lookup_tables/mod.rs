@@ -113,6 +113,7 @@ pub mod neg_relu;
 pub mod or;
 /// ReLU (Rectified Linear Unit) activation lookup table.
 pub mod relu;
+pub mod relu_2;
 /// Unsigned absolute value lookup table.
 ///
 /// Computes `abs(x)` by interpreting the input as a signed integer and returning

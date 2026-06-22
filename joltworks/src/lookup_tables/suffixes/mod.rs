@@ -6,21 +6,26 @@
 //! reconstruct the full lookup table evaluation without materializing the entire table.
 
 use crate::{
-    field::JoltField, lookup_tables::suffixes::neg_relu::NegReluSuffix,
+    field::JoltField,
+    lookup_tables::suffixes::{
+        lower_word::LowerWordNoMsbSuffix, lower_word_no_msb::LowerWordNoMsbSuffix2,
+        neg_relu::NegReluSuffix,
+    },
     utils::lookup_bits::LookupBits,
 };
 use num_derive::FromPrimitive;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 use self::{
-    and::AndSuffix, less_than::LessThanSuffix, lower_word_no_msb::LowerWordNoMsbSuffix,
-    one::OneSuffix, or::OrSuffix, relu::ReluSuffix, xor::XorSuffix,
+    and::AndSuffix, less_than::LessThanSuffix, one::OneSuffix, or::OrSuffix, relu::ReluSuffix,
+    xor::XorSuffix,
 };
 
 /// Bitwise AND suffix implementation.
 pub mod and;
 /// Less-than comparison suffix implementation.
 pub mod less_than;
+pub mod lower_word;
 /// Lower word without MSB suffix implementation.
 pub mod lower_word_no_msb;
 /// Negated ReLU suffix (Relu(-x)): `neg_relu(x) = max(-x, 0)`.
@@ -54,6 +59,7 @@ pub enum Suffixes {
     LessThan,
     /// Lower word without MSB suffix
     LowerWordNoMSB,
+    LowerWordNoMSB2,
     /// Constant one suffix
     One,
     /// Bitwise OR suffix
@@ -82,6 +88,7 @@ impl Suffixes {
             Suffixes::Relu => ReluSuffix::<XLEN>::suffix_mle(b),
             Suffixes::Xor => XorSuffix::suffix_mle(b),
             Suffixes::NegRelu => NegReluSuffix::<XLEN>::suffix_mle(b),
+            Suffixes::LowerWordNoMSB2 => LowerWordNoMsbSuffix2::<XLEN>::suffix_mle(b),
         }
     }
 }

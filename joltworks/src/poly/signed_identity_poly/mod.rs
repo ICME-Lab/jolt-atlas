@@ -2,7 +2,9 @@ use super::multilinear_polynomial::{BindingOrder, PolynomialBinding, PolynomialE
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     poly::{
-        identity_poly::{OperandPolynomial, OperandSide, ShiftHalfSuffixPolynomial},
+        identity_poly::{
+            IdentityPolynomial, OperandPolynomial, OperandSide, ShiftHalfSuffixPolynomial,
+        },
         prefix_suffix::{
             CachedPolynomial, Prefix, PrefixPolynomial, PrefixRegistry, PrefixSuffixPolynomial,
             SuffixPolynomial,
@@ -15,6 +17,7 @@ use crate::{
     utils::math::Math,
 };
 use allocative::Allocative;
+use common::consts::XLEN;
 use std::sync::{Arc, RwLock};
 
 mod prefixes;
@@ -243,6 +246,27 @@ impl<F: JoltField, const X_LEN: usize> PrefixSuffixPolynomial<F, 2>
     ) -> [Option<Arc<RwLock<CachedPolynomial<F>>>>; 2] {
         let identity = registry.get_or_insert(Prefix::SignedIdentity, |cp| {
             SignedIdentityPrefixPoly::<F, X_LEN>::default().prefix_polynomial(cp, chunk_len, phase)
+        });
+        [Some(identity), None]
+    }
+}
+
+impl<F: JoltField> PrefixSuffixPolynomial<F, 2> for SignedIdentityPoly<F> {
+    fn suffixes(&self) -> [Box<dyn SuffixPolynomial<F> + Sync>; 2] {
+        [
+            Box::new(OneSuffixPolynomial),
+            Box::new(IdentityPolynomial::<F>::new(0)),
+        ]
+    }
+
+    fn prefixes(
+        &self,
+        chunk_len: usize,
+        phase: usize,
+        registry: &mut PrefixRegistry<F>,
+    ) -> [Option<Arc<RwLock<CachedPolynomial<F>>>>; 2] {
+        let identity = registry.get_or_insert(Prefix::SignedIdentity, |cp| {
+            self.clone().prefix_polynomial(cp, chunk_len, phase)
         });
         [Some(identity), None]
     }
@@ -477,6 +501,14 @@ mod tests {
     fn binary_signed_identity_poly_prefix_suffix_decomposition() {
         prefix_suffix_decomposition_test::<16, 2, 2, true, _>(
             BinarySignedIdentityPoly::<Fr, 8>::default(),
+            vec![Prefix::SignedIdentity],
+        );
+    }
+
+    #[test]
+    fn signed_identity_poly_prefix_suffix_decomposition() {
+        prefix_suffix_decomposition_test::<16, 2, 2, true, _>(
+            SignedIdentityPoly::<Fr>::new(16),
             vec![Prefix::SignedIdentity],
         );
     }

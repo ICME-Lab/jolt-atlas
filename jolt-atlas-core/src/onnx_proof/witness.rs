@@ -18,7 +18,6 @@
 use crate::{
     onnx_proof::{
         neural_teleport::{division::compute_division, n_bits_to_usize},
-        op_lookups::InterleavedBitsMarker,
         ops::{rsqrt::Q_SQUARE, softmax_last_axis::rc::SAT_DIFF_RC_BITS},
         range_checking::range_check_operands::{
             DivRangeCheckOperands, RangeCheckingOperandsTrait, RiRangeCheckOperands,
@@ -172,15 +171,13 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             CommittedPoly::NodeOutputRaD(node_idx, d) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 let layer_data = Trace::layer_data(trace, computation_node);
-                let is_interleaved_operands = computation_node.is_interleaved_operands();
                 let padded_operands: Vec<_> = layer_data
                     .operands
                     .iter()
                     .map(|tensor| tensor.padded_next_power_of_two())
                     .collect();
                 let operand_refs: Vec<_> = padded_operands.iter().collect();
-                let lookup_indices =
-                    compute_lookup_indices_from_operands(&operand_refs, is_interleaved_operands);
+                let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
                 build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
             }
             CommittedPoly::DivNodeQuotient(node_idx) => {

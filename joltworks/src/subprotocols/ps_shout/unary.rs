@@ -202,10 +202,7 @@ mod tests {
         utils::lookup_bits::LookupBits,
     };
     use ark_bn254::Fr;
-    use common::{
-        consts::{LOG_K, XLEN},
-        VirtualPoly,
-    };
+    use common::{consts::XLEN, VirtualPoly};
     use itertools::Itertools;
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use std::marker::PhantomData;
@@ -299,7 +296,7 @@ mod tests {
         let lookup_indices: Vec<u64> = (0..NUM_LOOKUPS).map(|_| rng.gen()).collect();
         let lookup_bits = lookup_indices
             .iter()
-            .map(|&i| LookupBits::new(i, LOG_K))
+            .map(|&i| LookupBits::new(i, XLEN))
             .collect();
         let rv = MultilinearPolynomial::from(
             lookup_indices

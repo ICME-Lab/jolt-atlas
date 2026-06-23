@@ -43,6 +43,19 @@ pub mod binary;
 pub mod unary;
 
 pub(crate) const DEGREE_BOUND: usize = 2;
+
+/// Common interface shared by both binary and unary ps_shout providers.
+///
+/// Contains the three methods that are structurally identical across
+/// `binary::PrefixSuffixShoutProvider` and `unary::PrefixSuffixShoutProvider`,
+/// so implementations only write them once regardless of which variant is used.
+pub trait RafShoutProvider<F: JoltField, LUT: JoltLookupTable + Default> {
+    fn ra_poly(&self) -> (VirtualPoly, SumcheckId);
+    fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F>;
+    fn table(&self) -> LUT {
+        LUT::default()
+    }
+}
 pub(crate) const NUM_PHASES: usize = 8;
 
 /// Verifier-side RAF: computing the RAF's contribution to the input claim

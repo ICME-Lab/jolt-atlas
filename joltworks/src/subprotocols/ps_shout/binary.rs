@@ -4,10 +4,7 @@ use crate::{
     poly::{
         identity_poly::OperandSide,
         multilinear_polynomial::PolynomialEvaluation,
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN,
-        },
+        opening_proof::{OpeningAccumulator, ProverOpeningAccumulator, VerifierOpeningAccumulator},
         prefix_suffix::{Prefix, PrefixRegistry, PrefixSuffixDecomposition},
         signed_identity_poly::SignedOperandPoly,
     },
@@ -22,7 +19,6 @@ use ark_std::Zero;
 use common::{
     consts::{LOG_K, XLEN},
     parallel::par_enabled,
-    VirtualPoly,
 };
 use rayon::prelude::*;
 
@@ -139,17 +135,12 @@ pub struct ReadRafClaims<F: JoltField> {
     pub right_operand_claim: F,
 }
 
-pub trait PrefixSuffixShoutProvider<F, LUT>
+pub trait PrefixSuffixShoutProvider<F, LUT>: super::RafShoutProvider<F, LUT>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
 {
     fn read_raf_claims(&self, accumulator: &dyn OpeningAccumulator<F>) -> ReadRafClaims<F>;
-    fn ra_poly(&self) -> (VirtualPoly, SumcheckId);
-    fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F>;
-    fn table(&self) -> LUT {
-        LUT::default()
-    }
 }
 
 pub fn ps_read_raf_prover<
@@ -253,8 +244,12 @@ mod tests {
             },
         },
         subprotocols::{
-            ps_shout::binary::{
-                ps_read_raf_prover, ps_read_raf_verifier, PrefixSuffixShoutProvider, ReadRafClaims,
+            ps_shout::{
+                binary::{
+                    ps_read_raf_prover, ps_read_raf_verifier, PrefixSuffixShoutProvider,
+                    ReadRafClaims,
+                },
+                RafShoutProvider,
             },
             sumcheck::Sumcheck,
         },
@@ -427,6 +422,22 @@ mod tests {
         }
     }
 
+    impl<LUT> RafShoutProvider<Fr, LUT> for TestProvider<LUT>
+    where
+        LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
+    {
+        fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
+            (VirtualPoly::NodeOutputRa(0), SumcheckId::NodeExecution(0))
+        }
+
+        fn r_cycle(
+            &self,
+            _accumulator: &dyn OpeningAccumulator<Fr>,
+        ) -> OpeningPoint<BIG_ENDIAN, Fr> {
+            OpeningPoint::new(self.r_cycle.clone())
+        }
+    }
+
     impl<LUT> PrefixSuffixShoutProvider<Fr, LUT> for TestProvider<LUT>
     where
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
@@ -437,17 +448,6 @@ mod tests {
                 left_operand_claim: self.left_operand_claim,
                 right_operand_claim: self.right_operand_claim,
             }
-        }
-
-        fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
-            (VirtualPoly::NodeOutputRa(0), SumcheckId::NodeExecution(0))
-        }
-
-        fn r_cycle(
-            &self,
-            _accumulator: &dyn OpeningAccumulator<Fr>,
-        ) -> OpeningPoint<BIG_ENDIAN, Fr> {
-            OpeningPoint::new(self.r_cycle.clone())
         }
     }
 }

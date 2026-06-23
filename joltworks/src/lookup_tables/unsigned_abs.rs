@@ -91,8 +91,60 @@ mod test {
             prefix_suffix_test_unary,
         },
         unsigned_abs::UnsignedAbsTable,
+        JoltLookupTable,
     };
     use ark_bn254::Fr;
+
+    fn unsigned_abs(x: i8) -> u8 {
+        x.unsigned_abs()
+    }
+
+    /// Verify the lookup table matches `i8::unsigned_abs()` for all 256 inputs.
+    ///
+    /// Key edge cases (two's complement, X_LEN=8):
+    ///
+    /// | Value | Binary      | Abs |
+    /// |-------|-------------|-----|
+    /// |   127 | `0111_1111` | 127 |
+    /// |  -128 | `1000_0000` | 128 |
+    /// |    -1 | `1111_1111` |   1 |
+    /// |     0 | `0000_0000` |   0 |
+    ///
+    /// See the `i8::MIN` assertion below for why this table returns 128
+    /// (not 0) and how that differs from ONNX semantics.
+    #[test]
+    fn test_unsigned_abs_table() {
+        let table = UnsignedAbsTable::<8>;
+        let materialized_table = table.materialize();
+
+        // Exhaustive check against Rust's `i8::unsigned_abs()`
+        for i in 0..256usize {
+            assert_eq!(unsigned_abs(i as i8), materialized_table[i] as u8);
+        }
+
+        // Explicit edge cases
+        assert_eq!(table.materialize_entry(0u64), 0, "abs(0) = 0");
+        assert_eq!(table.materialize_entry(127u64), 127, "abs(127) = 127");
+        assert_eq!(table.materialize_entry(0xFF), 1, "abs(-1) = 1");
+
+        // i8::MIN = -128 (0b1000_0000): the critical edge case.
+        //
+        // NOTE: Our table returns 128 (not 0), because this table is used for
+        // internal proof computations where outputs are unsigned integers
+        // where we want int::MIN to return its canonical abs value in the
+        // field, NOT for proving ONNX `Abs` directly. For ONNX compliance,
+        // 128 doesn't fit in i8 (or negate(i32::MIN) doesn't fit in i32 in
+        // the real impl), so MIN would need clamped output. One approach:
+        // replace `!x + 1` with `!x + (1 - eqz)` where `eqz` is 1 when the
+        // lower X_LEN-1 magnitude bits (i.e., everything except the sign bit)
+        // are all zero — which uniquely identifies MIN. This skips the +1
+        // only for MIN, clamping its abs to INT_MAX (127 for i8).
+        assert_eq!(
+            table.materialize_entry(0x80),
+            128,
+            "abs(i8::MIN) must be 128, not 0: field arithmetic avoids two's complement overflow"
+        );
+    }
 
     #[test]
     fn prefix_suffix() {

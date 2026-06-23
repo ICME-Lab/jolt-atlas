@@ -19,9 +19,12 @@ use joltworks::{
         VerifierOpeningAccumulator, BIG_ENDIAN,
     },
     subprotocols::{
-        ps_shout::binary::{
-            ps_read_raf_prover, ps_read_raf_verifier, BinaryReadRafSumcheckProver,
-            BinaryReadRafSumcheckVerifier, PrefixSuffixShoutProvider, ReadRafClaims,
+        ps_shout::{
+            binary::{
+                ps_read_raf_prover, ps_read_raf_verifier, BinaryReadRafSumcheckProver,
+                BinaryReadRafSumcheckVerifier, PrefixSuffixShoutProvider, ReadRafClaims,
+            },
+            RafShoutProvider,
         },
         shout::RaOneHotEncoding,
     },
@@ -166,21 +169,12 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
     }
 }
 
-impl<F, LUT, H> PrefixSuffixShoutProvider<F, LUT> for RangeCheckProvider<H>
+impl<F, LUT, H> RafShoutProvider<F, LUT> for RangeCheckProvider<H>
 where
     F: JoltField,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
+    LUT: JoltLookupTable + Default,
     H: RangeCheckingOperandsTrait,
 {
-    fn read_raf_claims(&self, accumulator: &dyn OpeningAccumulator<F>) -> ReadRafClaims<F> {
-        let (left_operand_claim, right_operand_claim) = self.operands.operand_claims(accumulator);
-        ReadRafClaims {
-            rv_claim: F::one(),
-            left_operand_claim,
-            right_operand_claim,
-        }
-    }
-
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
         let id = OpeningId::new(
             self.operands.get_input_operands()[0],
@@ -195,6 +189,22 @@ where
             self.operands.get_output_operand(),
             SumcheckId::NodeExecution(self.operands.node_idx()),
         )
+    }
+}
+
+impl<F, LUT, H> PrefixSuffixShoutProvider<F, LUT> for RangeCheckProvider<H>
+where
+    F: JoltField,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
+    H: RangeCheckingOperandsTrait,
+{
+    fn read_raf_claims(&self, accumulator: &dyn OpeningAccumulator<F>) -> ReadRafClaims<F> {
+        let (left_operand_claim, right_operand_claim) = self.operands.operand_claims(accumulator);
+        ReadRafClaims {
+            rv_claim: F::one(),
+            left_operand_claim,
+            right_operand_claim,
+        }
     }
 }
 

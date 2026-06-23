@@ -24,9 +24,12 @@ use joltworks::{
         },
     },
     subprotocols::{
-        ps_shout::unary::{
-            ps_read_raf_prover, ps_read_raf_verifier, PrefixSuffixShoutProvider, ReadRafClaims,
-            UnaryReadRafSumcheckProver, UnaryReadRafSumcheckVerifier,
+        ps_shout::{
+            unary::{
+                ps_read_raf_prover, ps_read_raf_verifier, PrefixSuffixShoutProvider, ReadRafClaims,
+                UnaryReadRafSumcheckProver, UnaryReadRafSumcheckVerifier,
+            },
+            RafShoutProvider,
         },
         shout::RaOneHotEncoding,
     },
@@ -146,6 +149,24 @@ impl OpLookupProvider {
     }
 }
 
+impl<F, LUT> RafShoutProvider<F, LUT> for OpLookupProvider
+where
+    F: JoltField,
+    LUT: JoltLookupTable + Default,
+{
+    fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
+        let (r_node_output, _) = accumulator.get_node_output_opening(self.computation_node.idx);
+        r_node_output
+    }
+
+    fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
+        (
+            VirtualPoly::NodeOutputRa(self.computation_node.idx),
+            SumcheckId::NodeExecution(self.computation_node.idx),
+        )
+    }
+}
+
 impl<F, LUT> PrefixSuffixShoutProvider<F, LUT, XLEN> for OpLookupProvider
 where
     F: JoltField,
@@ -162,18 +183,6 @@ where
             rv_claim,
             operand_claim,
         }
-    }
-
-    fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
-        let (r_node_output, _) = accumulator.get_node_output_opening(self.computation_node.idx);
-        r_node_output
-    }
-
-    fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
-        (
-            VirtualPoly::NodeOutputRa(self.computation_node.idx),
-            SumcheckId::NodeExecution(self.computation_node.idx),
-        )
     }
 }
 
@@ -257,10 +266,8 @@ fn append_raf_claims_prover<F: JoltField, LUT>(
 ) where
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
-    let r_cycle = <OpLookupProvider as PrefixSuffixShoutProvider<F, LUT, XLEN>>::r_cycle(
-        provider,
-        opening_accumulator,
-    );
+    let r_cycle =
+        <OpLookupProvider as RafShoutProvider<F, LUT>>::r_cycle(provider, opening_accumulator);
     let LayerData {
         output: _,
         operands,
@@ -281,10 +288,8 @@ fn append_raf_claims_verifier<F: JoltField, LUT>(
 ) where
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
 {
-    let r_cycle = <OpLookupProvider as PrefixSuffixShoutProvider<F, LUT, XLEN>>::r_cycle(
-        provider,
-        opening_accumulator,
-    );
+    let r_cycle =
+        <OpLookupProvider as RafShoutProvider<F, LUT>>::r_cycle(provider, opening_accumulator);
     let node = &provider.computation_node;
     opening_accumulator.get_node_output_opening(node.idx);
     let exec_id = SumcheckId::NodeExecution(node.idx);

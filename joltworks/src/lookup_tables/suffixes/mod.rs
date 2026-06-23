@@ -7,15 +7,15 @@
 
 use crate::{
     field::JoltField,
-    lookup_tables::suffixes::{
-        lower_word_no_msb::LowerWordNoMsbSuffix, neg_relu::NegReluSuffix,
-    },
+    lookup_tables::suffixes::{lower_word_no_msb::LowerWordNoMsbSuffix, neg_relu::NegReluSuffix},
     utils::lookup_bits::LookupBits,
 };
 use num_derive::FromPrimitive;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
-use self::{and::AndSuffix, less_than::LessThanSuffix, one::OneSuffix, or::OrSuffix, xor::XorSuffix};
+use self::{
+    and::AndSuffix, less_than::LessThanSuffix, one::OneSuffix, or::OrSuffix, xor::XorSuffix,
+};
 
 /// Bitwise AND suffix implementation.
 pub mod and;

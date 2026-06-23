@@ -76,11 +76,9 @@ impl<const X_LEN: usize> PrefixSuffixDecompositionTrait<X_LEN> for UnsignedAbsTa
 
     fn combine<F: JoltField>(&self, prefixes: &[PrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F {
         let [suffix_one, suffix_lwnm, suffix_neg_relu] = suffixes.try_into().unwrap();
-        let [prefix_not_msb, prefix_lwnm, prefix_msb, prefix_nlw] =
-            prefixes.try_into().unwrap();
+        let [prefix_not_msb, prefix_lwnm, prefix_msb, prefix_nlw] = prefixes.try_into().unwrap();
         let relu = prefix_not_msb * prefix_lwnm * suffix_one + prefix_not_msb * suffix_lwnm;
-        let neg_relu =
-            prefix_msb * prefix_nlw * suffix_one + prefix_msb * suffix_neg_relu;
+        let neg_relu = prefix_msb * prefix_nlw * suffix_one + prefix_msb * suffix_neg_relu;
         relu + neg_relu
     }
 }
@@ -88,7 +86,10 @@ impl<const X_LEN: usize> PrefixSuffixDecompositionTrait<X_LEN> for UnsignedAbsTa
 #[cfg(test)]
 mod test {
     use crate::lookup_tables::{
-        test::{lookup_table_mle_full_hypercube_test, lookup_table_mle_random_test, prefix_suffix_test_unary},
+        test::{
+            lookup_table_mle_full_hypercube_test, lookup_table_mle_random_test,
+            prefix_suffix_test_unary,
+        },
         unsigned_abs::UnsignedAbsTable,
     };
     use ark_bn254::Fr;

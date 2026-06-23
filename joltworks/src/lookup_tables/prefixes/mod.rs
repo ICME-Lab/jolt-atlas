@@ -5,9 +5,7 @@
 //! prefix MLEs incrementally with checkpoints updated every two rounds, we avoid summing
 //! over the full 2^(2*XLEN) lookup table.
 
-use self::{
-    and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix, or::OrPrefix, xor::XorPrefix,
-};
+use self::{and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix, or::OrPrefix, xor::XorPrefix};
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     lookup_tables::prefixes::{

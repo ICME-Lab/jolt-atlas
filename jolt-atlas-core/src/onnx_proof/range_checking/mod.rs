@@ -249,6 +249,6 @@ impl<H: RangeCheckingOperandsTrait> RaOneHotEncoding for RangeCheckEncoding<H> {
     }
 
     fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::new(self.log_t)
+        OneHotParams::new(self.log_t, self.log_k())
     }
 }

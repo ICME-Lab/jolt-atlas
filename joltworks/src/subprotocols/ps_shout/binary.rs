@@ -125,8 +125,7 @@ impl<F: JoltField> RafProverState<F> for BinaryRafPS<F> {
     fn raf_val(&self, registry: &PrefixRegistry<F>, gamma: F) -> F {
         let gamma_sqr = gamma * gamma;
         let cp = &registry.checkpoints;
-        let effective_left =
-            cp[Prefix::LeftOperand].unwrap() + cp[Prefix::LeftOperandMSB].unwrap();
+        let effective_left = cp[Prefix::LeftOperand].unwrap() + cp[Prefix::LeftOperandMSB].unwrap();
         let effective_right =
             cp[Prefix::RightOperand].unwrap() + cp[Prefix::RightOperandMSB].unwrap();
         gamma * effective_left + gamma_sqr * effective_right
@@ -432,10 +431,7 @@ mod tests {
     where
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
-        fn read_raf_claims(
-            &self,
-            _accumulator: &dyn OpeningAccumulator<Fr>,
-        ) -> ReadRafClaims<Fr> {
+        fn read_raf_claims(&self, _accumulator: &dyn OpeningAccumulator<Fr>) -> ReadRafClaims<Fr> {
             ReadRafClaims {
                 rv_claim: self.rv_claim,
                 left_operand_claim: self.left_operand_claim,

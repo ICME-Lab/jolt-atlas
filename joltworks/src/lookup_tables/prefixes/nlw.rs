@@ -73,8 +73,7 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for NotLowerWordPrefi
         } else {
             F::one() - r_x.into()
         };
-        word +=
-            F::from_u64(1 << x_shift) * not_r_x + F::from_u64(1 << y_shift) * (F::one() - r_y);
+        word += F::from_u64(1 << x_shift) * not_r_x + F::from_u64(1 << y_shift) * (F::one() - r_y);
         Some(word).into()
     }
 }

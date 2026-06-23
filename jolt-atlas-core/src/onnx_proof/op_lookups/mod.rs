@@ -11,10 +11,7 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
     ops::Operator,
 };
-use common::{
-    consts::{LOG_K, XLEN},
-    CommittedPoly, VirtualPoly,
-};
+use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 use joltworks::{
     config::OneHotParams,
     field::JoltField,
@@ -230,7 +227,7 @@ impl RaOneHotEncoding for OpLookupEncoding {
     }
 
     fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::new(self.log_t)
+        OneHotParams::new(self.log_t, self.log_k())
     }
 }
 

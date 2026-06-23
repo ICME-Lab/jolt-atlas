@@ -88,13 +88,13 @@ where
     pub raf: VD,
 }
 
-impl<F, LUT, const LOG_K: usize, const N: usize, VD>
-    ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>
+impl<F, LUT, const LOG_K: usize, const N: usize, VD> ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
     VD: RafVerifierData<F>,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn from_parts(
         gamma: F,
         log_T: usize,
@@ -340,7 +340,11 @@ where
     }
 
     fn prover_msg_read_checking(&self, j: usize) -> [F; 2] {
-        let r_x = if j % 2 == 1 { self.r.last().copied() } else { None };
+        let r_x = if j % 2 == 1 {
+            self.r.last().copied()
+        } else {
+            None
+        };
         let half_poly_len = self.suffix_polys[0].len() / 2;
         let [eval_0, eval_2_low, eval_2_high] = (0..half_poly_len)
             .into_par_iter()
@@ -384,9 +388,15 @@ where
                     .map(|s| s[i + half_poly_len])
                     .collect_vec();
                 [
-                    self.params.table.combine(&prefix_evals_0, &suffix_evals_low),
-                    self.params.table.combine(&prefix_evals_2, &suffix_evals_low),
-                    self.params.table.combine(&prefix_evals_2, &suffix_evals_high),
+                    self.params
+                        .table
+                        .combine(&prefix_evals_0, &suffix_evals_low),
+                    self.params
+                        .table
+                        .combine(&prefix_evals_2, &suffix_evals_low),
+                    self.params
+                        .table
+                        .combine(&prefix_evals_2, &suffix_evals_high),
                 ]
             })
             .reduce(
@@ -427,8 +437,7 @@ where
 }
 
 impl<F: JoltField, FS: Transcript, LUT, const LOG_K: usize, const N: usize, VD, PS>
-    SumcheckInstanceProver<F, FS>
-    for ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>
+    SumcheckInstanceProver<F, FS> for ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>
 where
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
     VD: RafVerifierData<F>,
@@ -520,8 +529,9 @@ where
                     .map(|suffix| F::from_u32(suffix.suffix_mle::<N>(LookupBits::new(0, 0))))
                     .collect();
                 self.val = Some(self.params.table.combine(&prefixes, &suffixes));
-                let raf_val =
-                    self.raf_state.raf_val(&self.prefix_registry, self.params.gamma);
+                let raf_val = self
+                    .raf_state
+                    .raf_val(&self.prefix_registry, self.params.gamma);
                 self.raf_val = Some(raf_val);
                 self.init_log_t_rounds();
             }
@@ -563,8 +573,7 @@ where
     params: ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>,
 }
 
-impl<F, LUT, const LOG_K: usize, const N: usize, VD>
-    ReadRafSumcheckVerifier<F, LUT, LOG_K, N, VD>
+impl<F, LUT, const LOG_K: usize, const N: usize, VD> ReadRafSumcheckVerifier<F, LUT, LOG_K, N, VD>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
@@ -576,8 +585,7 @@ where
 }
 
 impl<F: JoltField, FS: Transcript, LUT, const LOG_K: usize, const N: usize, VD>
-    SumcheckInstanceVerifier<F, FS>
-    for ReadRafSumcheckVerifier<F, LUT, LOG_K, N, VD>
+    SumcheckInstanceVerifier<F, FS> for ReadRafSumcheckVerifier<F, LUT, LOG_K, N, VD>
 where
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
     VD: RafVerifierData<F>,

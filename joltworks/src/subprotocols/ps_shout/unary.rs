@@ -138,11 +138,8 @@ pub fn ps_read_raf_prover<
     let log_m = LOG_K / NUM_PHASES;
     let span = tracing::span!(tracing::Level::INFO, "Init PrefixSuffixDecomposition");
     let _guard = span.enter();
-    let identity_ps = PrefixSuffixDecomposition::new(
-        Box::new(SignedIdentityPoly::<F>::new(LOG_K)),
-        log_m,
-        LOG_K,
-    );
+    let identity_ps =
+        PrefixSuffixDecomposition::new(Box::new(SignedIdentityPoly::<F>::new(LOG_K)), log_m, LOG_K);
     drop(_guard);
     let raf_state = UnaryRafPS { identity_ps };
     ReadRafSumcheckProver::new_inner(params, lookup_indices, raf_state)
@@ -354,10 +351,7 @@ mod tests {
     where
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
-        fn read_raf_claims(
-            &self,
-            _accumulator: &dyn OpeningAccumulator<Fr>,
-        ) -> ReadRafClaims<Fr> {
+        fn read_raf_claims(&self, _accumulator: &dyn OpeningAccumulator<Fr>) -> ReadRafClaims<Fr> {
             ReadRafClaims {
                 rv_claim: self.rv_claim,
                 operand_claim: self.operand_claim,

@@ -19,31 +19,25 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for LowerWordNoMsbPre
         C: ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
-        // ignore high order variables and sign bit
-        if j < XLEN {
-            return F::zero();
-        }
-        let jj = j - XLEN;
         let mut word = checkpoints[Prefixes::LowerWordNoMsb].unwrap_or(F::zero());
-        let suffix_len = XLEN * 2 - j - b.len() - 1;
+        if j >= XLEN {
+            return word;
+        }
+        let suffix_len = XLEN - j - b.len() - 1;
         match (r_x, j) {
-            (None, jjj) if jjj == XLEN => {
+            (None, 0) => {
                 // sign bit is in c
             }
             (None, _) => {
-                let x_shift = XLEN - jj - 1;
+                let x_shift = XLEN - j - 1;
                 let y_shift = x_shift - 1;
                 word += F::from_u64(1 << x_shift) * F::from_u32(c);
                 word += F::from_u64(1 << y_shift) * F::from_u8(b.pop_msb());
             }
             (Some(r_x), _) => {
-                let x_shift = XLEN - jj;
+                let x_shift = XLEN - j;
                 let y_shift = x_shift - 1;
-                let r_x = if j == (XLEN + 1) {
-                    F::zero()
-                } else {
-                    r_x.into()
-                };
+                let r_x = if j == 1 { F::zero() } else { r_x.into() };
                 word += F::from_u64(1 << x_shift) * r_x;
                 word += F::from_u64(1 << y_shift) * F::from_u32(c);
             }
@@ -64,20 +58,10 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for LowerWordNoMsbPre
         C: ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
-        // ignore high order variables
-        if j < XLEN {
-            return None.into();
-        }
-
         let mut word = checkpoints[Prefixes::LowerWordNoMsb].unwrap_or(F::zero());
-        let jj = j - XLEN;
-        let x_shift = XLEN - jj;
-        let y_shift = x_shift - 1;
-        let r_x = if j == (XLEN + 1) {
-            F::zero()
-        } else {
-            r_x.into()
-        };
+        let x_shift = XLEN.saturating_sub(j);
+        let y_shift = x_shift.saturating_sub(1);
+        let r_x = if j == 1 { F::zero() } else { r_x.into() };
         word += F::from_u64(1 << x_shift) * r_x + F::from_u64(1 << y_shift) * r_y;
         Some(word).into()
     }

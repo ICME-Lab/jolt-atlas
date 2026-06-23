@@ -8,7 +8,6 @@ pub mod identity_range_check;
 pub mod mles_product_sum;
 pub mod opening_reduction;
 pub mod ps_shout;
-pub mod ps_shout_2;
 pub mod ra_virtual;
 pub mod shout;
 pub mod sumcheck;

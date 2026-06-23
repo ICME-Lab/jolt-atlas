@@ -6,14 +6,13 @@
 //! over the full 2^(2*XLEN) lookup table.
 
 use self::{
-    and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix,
-    lower_word_no_msb::LowerWordNoMsbPrefix, not_msb::NotMsbPrefix, or::OrPrefix, xor::XorPrefix,
+    and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix, or::OrPrefix, xor::XorPrefix,
 };
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     lookup_tables::prefixes::{
-        lower_word_no_msb_2::LowerWordNoMsbPrefix2, msb::MsbPrefix, nlw::NotLowerWordPrefix,
-        not_msb_2::NotMsbPrefix2,
+        lower_word_no_msb::LowerWordNoMsbPrefix, msb::MsbPrefix, nlw::NotLowerWordPrefix,
+        not_msb::NotMsbPrefix,
     },
     utils::lookup_bits::LookupBits,
 };
@@ -36,14 +35,12 @@ pub mod eq;
 pub mod less_than;
 /// Lower word (without MSB) prefix implementation.
 pub mod lower_word_no_msb;
-pub mod lower_word_no_msb_2;
 /// MSB (most significant bit) prefix implementation.
 pub mod msb;
 /// Two's complement negation prefix: `(!lower_word) + 1`, used in `neg_relu` decomposition.
 pub mod nlw;
 /// Not-MSB (most significant bit) prefix implementation.
 pub mod not_msb;
-pub mod not_msb_2;
 /// Bitwise OR prefix implementation.
 pub mod or;
 /// Bitwise XOR prefix implementation.
@@ -107,20 +104,18 @@ pub enum Prefixes {
     Eq,
     /// Less-than comparison prefix
     LessThan,
-    /// Lower word without MSB prefix
+    /// Lower word without MSB prefix (XLEN-bit layout, sign at position 0)
     LowerWordNoMsb,
-    LowerWordNoMsb2,
-    /// Not-MSB prefix
+    /// MSB (sign bit) prefix (XLEN-bit layout, sign at position 0)
+    Msb,
+    /// Not-MSB prefix (XLEN-bit layout, sign at position 0)
     NotMsb,
-    NotMsb2,
+    /// Two's complement negation prefix (XLEN-bit layout)
+    NotLowerWord,
     /// Bitwise OR prefix
     Or,
     /// Bitwise XOR prefix
     Xor,
-    /// MSB (sign bit) prefix
-    Msb,
-    /// Two's complement negation prefix: `(!lower_word) + 1`
-    NotLowerWord,
 }
 
 #[derive(Clone, Copy)]
@@ -251,19 +246,15 @@ impl Prefixes {
             Prefixes::And => AndPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::Eq => EqPrefix::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::LessThan => LessThanPrefix::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::Or => OrPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::Xor => XorPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::NotMsb => NotMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::LowerWordNoMsb => {
                 LowerWordNoMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
             }
-            Prefixes::NotMsb => NotMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::Or => OrPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::Xor => XorPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::Msb => MsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::NotLowerWord => {
                 NotLowerWordPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::NotMsb2 => NotMsbPrefix2::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::LowerWordNoMsb2 => {
-                LowerWordNoMsbPrefix2::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
             }
         };
         PrefixEval(eval)
@@ -330,6 +321,15 @@ impl Prefixes {
             Prefixes::LessThan => {
                 LessThanPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
             }
+            Prefixes::Or => {
+                OrPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
+            }
+            Prefixes::Xor => {
+                XorPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
+            }
+            Prefixes::NotMsb => {
+                NotMsbPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
+            }
             Prefixes::LowerWordNoMsb => LowerWordNoMsbPrefix::<XLEN>::update_prefix_checkpoint(
                 checkpoints,
                 r_x,
@@ -337,33 +337,10 @@ impl Prefixes {
                 j,
                 suffix_len,
             ),
-            Prefixes::NotMsb => {
-                NotMsbPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
-            }
-            Prefixes::Or => {
-                OrPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
-            }
-            Prefixes::Xor => {
-                XorPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
-            }
             Prefixes::Msb => {
                 MsbPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
             }
             Prefixes::NotLowerWord => NotLowerWordPrefix::<XLEN>::update_prefix_checkpoint(
-                checkpoints,
-                r_x,
-                r_y,
-                j,
-                suffix_len,
-            ),
-            Prefixes::NotMsb2 => NotMsbPrefix2::<XLEN>::update_prefix_checkpoint(
-                checkpoints,
-                r_x,
-                r_y,
-                j,
-                suffix_len,
-            ),
-            Prefixes::LowerWordNoMsb2 => LowerWordNoMsbPrefix2::<XLEN>::update_prefix_checkpoint(
                 checkpoints,
                 r_x,
                 r_y,

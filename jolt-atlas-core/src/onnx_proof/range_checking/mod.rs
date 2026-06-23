@@ -19,9 +19,9 @@ use joltworks::{
         VerifierOpeningAccumulator, BIG_ENDIAN,
     },
     subprotocols::{
-        ps_shout::{
-            ps_read_raf_prover, ps_read_raf_verifier, PrefixSuffixShoutProvider, ReadRafClaims,
-            ReadRafSumcheckProver, ReadRafSumcheckVerifier,
+        ps_shout::binary::{
+            ps_read_raf_prover, ps_read_raf_verifier, BinaryReadRafSumcheckProver,
+            BinaryReadRafSumcheckVerifier, PrefixSuffixShoutProvider, ReadRafClaims,
         },
         shout::RaOneHotEncoding,
     },
@@ -138,7 +138,7 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
         trace: &Trace,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> (ReadRafSumcheckProver<F, LUT>, Vec<usize>)
+    ) -> (BinaryReadRafSumcheckProver<F, LUT>, Vec<usize>)
     where
         F: JoltField,
         T: Transcript,
@@ -156,7 +156,7 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> ReadRafSumcheckVerifier<F, LUT>
+    ) -> BinaryReadRafSumcheckVerifier<F, LUT>
     where
         F: JoltField,
         T: Transcript,
@@ -179,10 +179,6 @@ where
             left_operand_claim,
             right_operand_claim,
         }
-    }
-
-    fn is_interleaved_operands(&self) -> bool {
-        true
     }
 
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {

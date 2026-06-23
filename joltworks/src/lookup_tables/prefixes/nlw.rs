@@ -4,10 +4,11 @@ use crate::{
     utils::lookup_bits::LookupBits,
 };
 
-/// Prefix component for two's complement negation: `(!lower_word) + 1`.
+/// Prefix for two's complement negation of magnitude bits in the XLEN-bit layout.
 ///
-/// Accumulates the bitwise-NOT of the magnitude bits (lower word, excluding the sign bit)
-/// plus one, used in the `neg_relu` prefix-suffix decomposition.
+/// Accumulates `(!magnitude_bits) + 1` where the sign is at position 0.
+/// Structural twin of `LowerWordNoMsbPrefix` with all bits negated and starting value 1
+/// (for the +1 in two's complement).
 pub enum NotLowerWordPrefix<const XLEN: usize> {}
 
 impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for NotLowerWordPrefix<XLEN> {
@@ -22,27 +23,25 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for NotLowerWordPrefi
         C: ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
-        // ignore high order variables and sign bit
-        if j < XLEN {
-            return F::zero();
-        }
-        let jj = j - XLEN;
         let mut word = checkpoints[Prefixes::NotLowerWord].unwrap_or(F::one());
-        let suffix_len = XLEN * 2 - j - b.len() - 1;
+        if j >= XLEN {
+            return word;
+        }
+        let suffix_len = XLEN - j - b.len() - 1;
         match (r_x, j) {
-            (None, jjj) if jjj == XLEN => {
-                // sign bit is in c
+            (None, 0) => {
+                // sign bit is in c — skip
             }
             (None, _) => {
-                let x_shift = XLEN - jj - 1;
+                let x_shift = XLEN - j - 1;
                 let y_shift = x_shift - 1;
                 word += F::from_u64(1 << x_shift) * (F::one() - F::from_u32(c));
                 word += F::from_u64(1 << y_shift) * (F::one() - F::from_u8(b.pop_msb()));
             }
             (Some(r_x), _) => {
-                let x_shift = XLEN - jj;
+                let x_shift = XLEN - j;
                 let y_shift = x_shift - 1;
-                let not_r_x = if j == (XLEN + 1) {
+                let not_r_x = if j == 1 {
                     F::zero()
                 } else {
                     F::one() - r_x.into()
@@ -51,7 +50,6 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for NotLowerWordPrefi
                 word += F::from_u64(1 << y_shift) * (F::one() - F::from_u32(c));
             }
         }
-
         word += F::from_u64((<LookupBits as Into<u64>>::into(!b)) << suffix_len);
         word
     }
@@ -67,21 +65,16 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for NotLowerWordPrefi
         C: ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
-        // ignore high order variables
-        if j < XLEN {
-            return None.into();
-        }
-
         let mut word = checkpoints[Prefixes::NotLowerWord].unwrap_or(F::one());
-        let jj = j - XLEN;
-        let x_shift = XLEN - jj;
-        let y_shift = x_shift - 1;
-        let not_r_x = if j == (XLEN + 1) {
+        let x_shift = XLEN.saturating_sub(j);
+        let y_shift = x_shift.saturating_sub(1);
+        let not_r_x = if j == 1 {
             F::zero()
         } else {
             F::one() - r_x.into()
         };
-        word += F::from_u64(1 << x_shift) * not_r_x + F::from_u64(1 << y_shift) * (F::one() - r_y);
+        word +=
+            F::from_u64(1 << x_shift) * not_r_x + F::from_u64(1 << y_shift) * (F::one() - r_y);
         Some(word).into()
     }
 }

@@ -8,24 +8,19 @@
 use crate::{
     field::JoltField,
     lookup_tables::suffixes::{
-        lower_word::LowerWordNoMsbSuffix, lower_word_no_msb::LowerWordNoMsbSuffix2,
-        neg_relu::NegReluSuffix,
+        lower_word_no_msb::LowerWordNoMsbSuffix, neg_relu::NegReluSuffix,
     },
     utils::lookup_bits::LookupBits,
 };
 use num_derive::FromPrimitive;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
-use self::{
-    and::AndSuffix, less_than::LessThanSuffix, one::OneSuffix, or::OrSuffix, relu::ReluSuffix,
-    xor::XorSuffix,
-};
+use self::{and::AndSuffix, less_than::LessThanSuffix, one::OneSuffix, or::OrSuffix, xor::XorSuffix};
 
 /// Bitwise AND suffix implementation.
 pub mod and;
 /// Less-than comparison suffix implementation.
 pub mod less_than;
-pub mod lower_word;
 /// Lower word without MSB suffix implementation.
 pub mod lower_word_no_msb;
 /// Negated ReLU suffix (Relu(-x)): `neg_relu(x) = max(-x, 0)`.
@@ -34,8 +29,6 @@ pub mod neg_relu;
 pub mod one;
 /// Bitwise OR suffix implementation.
 pub mod or;
-/// ReLU activation suffix implementation.
-pub mod relu;
 /// Bitwise XOR suffix implementation.
 pub mod xor;
 
@@ -57,15 +50,12 @@ pub enum Suffixes {
     And,
     /// Less-than comparison suffix
     LessThan,
-    /// Lower word without MSB suffix
+    /// Lower word without MSB suffix (XLEN-bit layout)
     LowerWordNoMSB,
-    LowerWordNoMSB2,
     /// Constant one suffix
     One,
     /// Bitwise OR suffix
     Or,
-    /// ReLU activation suffix
-    Relu,
     /// Bitwise XOR suffix
     Xor,
     /// Suffix for Relu(-x) table
@@ -85,10 +75,8 @@ impl Suffixes {
             Suffixes::Or => OrSuffix::suffix_mle(b),
             Suffixes::LessThan => LessThanSuffix::suffix_mle(b),
             Suffixes::LowerWordNoMSB => LowerWordNoMsbSuffix::<XLEN>::suffix_mle(b),
-            Suffixes::Relu => ReluSuffix::<XLEN>::suffix_mle(b),
             Suffixes::Xor => XorSuffix::suffix_mle(b),
             Suffixes::NegRelu => NegReluSuffix::<XLEN>::suffix_mle(b),
-            Suffixes::LowerWordNoMSB2 => LowerWordNoMsbSuffix2::<XLEN>::suffix_mle(b),
         }
     }
 }

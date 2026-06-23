@@ -1,8 +1,7 @@
 //! Utility modules for dimension handling and tensor operations.
 
 use atlas_onnx_tracer::tensor::Tensor;
-use common::consts::XLEN;
-use common::parallel::par_enabled;
+use common::{consts::XLEN, parallel::par_enabled};
 use joltworks::utils::{interleave_bits, lookup_bits::LookupBits};
 use rayon::prelude::*;
 
@@ -116,7 +115,7 @@ pub fn compute_lookup_indices_from_operands(
             .map(|&value| {
                 // Cast to u64 for consistent bit representation
                 let index = value as u32 as u64;
-                LookupBits::new(index, XLEN * 2)
+                LookupBits::new(index, XLEN)
             })
             .collect()
     }

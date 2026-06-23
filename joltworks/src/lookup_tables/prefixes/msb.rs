@@ -4,7 +4,9 @@ use crate::{
     utils::lookup_bits::LookupBits,
 };
 
-/// Prefix component for MSB (most significant bit) lookup table decomposition.
+/// Prefix for the MSB (sign bit) in the XLEN-bit layout where sign is at position 0.
+///
+/// Sign bit is the first variable (index 0) rather than the XLEN-th variable.
 pub enum MsbPrefix<const XLEN: usize> {}
 
 impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for MsbPrefix<XLEN> {
@@ -12,7 +14,7 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for MsbPrefix<XLEN> {
         checkpoints: &PrefixCheckpoints<F>,
         r_x: Option<C>,
         c: u32,
-        mut _b: LookupBits,
+        _b: LookupBits,
         j: usize,
     ) -> F
     where
@@ -20,13 +22,8 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for MsbPrefix<XLEN> {
         F: FieldChallengeOps<C>,
     {
         match j {
-            // suffix will handle
-            j if j < XLEN => F::one(),
-            // sign bit in c
-            j if j == XLEN => F::from_u32(c),
-            // sign bit in r_x
-            j if j == XLEN + 1 => r_x.unwrap().into(),
-            // sign bit processed; use checkpoint.
+            0 => F::from_u32(c),
+            1 => r_x.unwrap().into(),
             _ => checkpoints[Prefixes::Msb].unwrap(),
         }
     }
@@ -43,9 +40,8 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for MsbPrefix<XLEN> {
         F: FieldChallengeOps<C>,
     {
         match j {
-            j if j < XLEN => None.into(),
-            // sign bit will be in r_x when j == XLEN + 1
-            j if j == XLEN + 1 => Some(r_x.into()).into(),
+            0 => None.into(),
+            1 => Some(r_x.into()).into(),
             _ => checkpoints[Prefixes::Msb].into(),
         }
     }

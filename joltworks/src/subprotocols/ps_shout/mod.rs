@@ -52,9 +52,6 @@ pub(crate) const DEGREE_BOUND: usize = 2;
 pub trait RafShoutProvider<F: JoltField, LUT: JoltLookupTable + Default> {
     fn ra_poly(&self) -> (VirtualPoly, SumcheckId);
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F>;
-    fn table(&self) -> LUT {
-        LUT::default()
-    }
 }
 pub(crate) const NUM_PHASES: usize = 8;
 

@@ -21,7 +21,7 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for LowerWordNoMsbPre
     {
         let mut word = checkpoints[Prefixes::LowerWordNoMsb].unwrap_or(F::zero());
         if j >= XLEN {
-            return word;
+            return word; // HACK: For binary ps-shout, `j` may exceed `XLEN - 1` because we go over 2*XLEN variables
         }
         let suffix_len = XLEN - j - b.len() - 1;
         match (r_x, j) {
@@ -59,7 +59,7 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for LowerWordNoMsbPre
         F: FieldChallengeOps<C>,
     {
         let mut word = checkpoints[Prefixes::LowerWordNoMsb].unwrap_or(F::zero());
-        let x_shift = XLEN.saturating_sub(j);
+        let x_shift = XLEN.saturating_sub(j); // HACK: For binary ps-shout, `j` may exceed `XLEN - 1` because we go over 2*XLEN variables
         let y_shift = x_shift.saturating_sub(1);
         let r_x = if j == 1 { F::zero() } else { r_x.into() };
         word += F::from_u64(1 << x_shift) * r_x + F::from_u64(1 << y_shift) * r_y;

@@ -47,7 +47,19 @@ jobs:
             exe="jolt-atlas.exe"
           fi
           cp "$bin" "dist/package/$exe"
-          tar -czf "dist/${{ matrix.asset }}.tar.gz" -C dist/package "$exe"
+          # Bundle the fixture models the CLI proves against so installed users
+          # can run `jolt-atlas prove <model>` without a repository checkout.
+          for model in nanoGPT microgpt minigpt transformer; do
+            src="atlas-onnx-tracer/models/${model}"
+            if [[ -f "${src}/network.onnx" ]]; then
+              mkdir -p "dist/package/models/${model}"
+              cp "${src}/network.onnx" "dist/package/models/${model}/network.onnx"
+            else
+              echo "missing fixture: ${src}/network.onnx" >&2
+              exit 1
+            fi
+          done
+          tar -czf "dist/${{ matrix.asset }}.tar.gz" -C dist/package .
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}

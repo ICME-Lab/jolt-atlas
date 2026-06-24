@@ -18,7 +18,6 @@
 use crate::{
     onnx_proof::{
         neural_teleport::{division::compute_division, n_bits_to_usize},
-        op_lookups::InterleavedBitsMarker,
         ops::{rsqrt::Q_SQUARE, softmax_last_axis::rc::SAT_DIFF_RC_BITS},
         range_checking::range_check_operands::{
             DivRangeCheckOperands, RangeCheckingOperandsTrait, RiRangeCheckOperands,
@@ -36,8 +35,11 @@ use atlas_onnx_tracer::{
     },
     tensor::Tensor,
 };
-use common::parallel::par_enabled;
-use common::CommittedPoly;
+use common::{
+    consts::{LOG_K, XLEN},
+    parallel::par_enabled,
+    CommittedPoly,
+};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::JoltField,
@@ -61,7 +63,7 @@ fn build_range_check_rad_witness<F: JoltField, R: RangeCheckingOperandsTrait>(
     let computation_node = &model.graph.nodes[&node_idx];
     let (left_operand, right_operand) = R::get_operands_tensors(trace, computation_node);
     let lookup_indices = R::compute_lookup_indices(&left_operand, &right_operand);
-    build_one_hot_rad_witness(&lookup_indices, d)
+    build_one_hot_rad_witness(&lookup_indices, d, LOG_K)
 }
 
 /// Builds a one-hot polynomial witness for the `d`-th dimension of a read-after-decompose (RaD)
@@ -72,8 +74,9 @@ fn build_range_check_rad_witness<F: JoltField, R: RangeCheckingOperandsTrait>(
 fn build_one_hot_rad_witness<F: JoltField>(
     lookup_indices: &[LookupBits],
     d: usize,
+    log_k: usize,
 ) -> MultilinearPolynomial<F> {
-    let one_hot_params = OneHotParams::new(lookup_indices.len().log_2());
+    let one_hot_params = OneHotParams::new(lookup_indices.len().log_2(), log_k);
     let addresses: Vec<_> = lookup_indices
         .par_iter()
         .with_min_len(par_enabled())
@@ -168,16 +171,14 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             CommittedPoly::NodeOutputRaD(node_idx, d) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 let layer_data = Trace::layer_data(trace, computation_node);
-                let is_interleaved_operands = computation_node.is_interleaved_operands();
                 let padded_operands: Vec<_> = layer_data
                     .operands
                     .iter()
                     .map(|tensor| tensor.padded_next_power_of_two())
                     .collect();
                 let operand_refs: Vec<_> = padded_operands.iter().collect();
-                let lookup_indices =
-                    compute_lookup_indices_from_operands(&operand_refs, is_interleaved_operands);
-                build_one_hot_rad_witness(&lookup_indices, *d)
+                let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
+                build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
             }
             CommittedPoly::DivNodeQuotient(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];

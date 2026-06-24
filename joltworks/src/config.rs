@@ -60,9 +60,9 @@ impl OneHotParams {
     /// Create OneHotParams for the given trace parameters using default config.
     ///
     /// This is a convenience constructor for the prover.
-    pub fn new(log_T: usize) -> Self {
+    pub fn new(log_T: usize, log_K: usize) -> Self {
         let config = OneHotConfig::new(log_T);
-        Self::from_config(&config)
+        Self::from_config_and_log_K(&config, log_K)
     }
 
     /// Extract the minimal config for serialization in the proof.
@@ -119,9 +119,8 @@ pub struct OneHotConfig {
 impl OneHotConfig {
     /// Create a OneHotConfig with default values based on trace length.
     pub fn new(_log_T: usize /*  TODO: rm log_T param */) -> Self {
-        let log_k_chunk = 4;
         Self {
-            log_k_chunk: log_k_chunk as u8,
+            log_k_chunk: LOG_K_CHUNK as u8,
         }
     }
 

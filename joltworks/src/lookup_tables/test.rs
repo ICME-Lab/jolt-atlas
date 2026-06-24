@@ -29,10 +29,7 @@ pub fn lookup_table_mle_random_test<F: JoltField, T: JoltLookupTable + Default>(
         );
     }
 }
-/// Tests that a lookup table's MLE evaluates correctly at random points.
-///
-/// Verifies that the MLE evaluation at random points matches the linear
-/// combination of table entries with Lagrange basis polynomials./// Tests that a lookup table's MLE evaluates correctly over the full boolean hypercube.
+/// Tests that a lookup table's MLE evaluates correctly over the full boolean hypercube.
 ///
 /// Verifies MLE correctness by testing on all 2^n corners of the hypercube.
 pub fn lookup_table_mle_full_hypercube_test<F: JoltField, T: JoltLookupTable + Default>() {
@@ -54,17 +51,15 @@ pub fn gen_bitmask_lookup_index(rng: &mut StdRng) -> u64 {
     interleave_bits(x, y)
 }
 
-/// Tests the prefix-suffix decomposition of a lookup table.
-///
-/// Verifies that combining prefix and suffix evaluations correctly reconstructs
-/// the full lookup table value at random indices.
-pub fn prefix_suffix_test<
+fn prefix_suffix_test_inner<
     const XLEN: usize,
     F: JoltField,
     T: PrefixSuffixDecompositionTrait<XLEN>,
->() {
-    const ROUNDS_PER_PHASE: usize = 16;
-    let total_phases: usize = XLEN * 2 / ROUNDS_PER_PHASE;
+>(
+    rounds_per_phase: usize,
+    total_addr_bits: usize,
+) {
+    let total_phases: usize = total_addr_bits / rounds_per_phase;
     let mut rng = StdRng::seed_from_u64(12345);
 
     for _ in 0..300 {
@@ -73,9 +68,9 @@ pub fn prefix_suffix_test<
         let mut j = 0;
         let mut r: Vec<F> = vec![];
         for phase in 0..total_phases {
-            let suffix_len = (total_phases - 1 - phase) * ROUNDS_PER_PHASE;
+            let suffix_len = (total_phases - 1 - phase) * rounds_per_phase;
             let (mut prefix_bits, suffix_bits) =
-                LookupBits::new(lookup_index, XLEN * 2 - phase * ROUNDS_PER_PHASE)
+                LookupBits::new(lookup_index, total_addr_bits - phase * rounds_per_phase)
                     .split(suffix_len);
 
             let suffix_evals: Vec<_> = T::default()
@@ -84,7 +79,7 @@ pub fn prefix_suffix_test<
                 .map(|suffix| SuffixEval::from(F::from_u32(suffix.suffix_mle::<XLEN>(suffix_bits))))
                 .collect();
 
-            for _ in 0..ROUNDS_PER_PHASE {
+            for _ in 0..rounds_per_phase {
                 let mut eval_point = r.clone();
                 let c = if rng.next_u64().is_even() { 0 } else { 2 };
                 eval_point.push(F::from_u32(c));
@@ -138,4 +133,28 @@ pub fn prefix_suffix_test<
             }
         }
     }
+}
+
+/// Tests the prefix-suffix decomposition of a binary (2*XLEN address space) lookup table.
+///
+/// Verifies that combining prefix and suffix evaluations correctly reconstructs
+/// the full lookup table value at random indices.
+pub fn prefix_suffix_test<
+    const XLEN: usize,
+    F: JoltField,
+    T: PrefixSuffixDecompositionTrait<XLEN>,
+>() {
+    prefix_suffix_test_inner::<XLEN, F, T>(16, XLEN * 2);
+}
+
+/// Tests the prefix-suffix decomposition of a unary (XLEN address space) lookup table.
+///
+/// Verifies that combining prefix and suffix evaluations correctly reconstructs
+/// the full lookup table value at random indices.
+pub fn prefix_suffix_test_unary<
+    const XLEN: usize,
+    F: JoltField,
+    T: PrefixSuffixDecompositionTrait<XLEN>,
+>() {
+    prefix_suffix_test_inner::<XLEN, F, T>(8, XLEN);
 }

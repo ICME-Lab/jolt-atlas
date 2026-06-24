@@ -2,28 +2,20 @@ use super::multilinear_polynomial::{BindingOrder, PolynomialBinding, PolynomialE
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     poly::{
-        identity_poly::{OperandPolynomial, OperandSide, ShiftHalfSuffixPolynomial},
-        prefix_suffix::{
-            CachedPolynomial, Prefix, PrefixPolynomial, PrefixRegistry, PrefixSuffixPolynomial,
-            SuffixPolynomial,
+        identity_poly::{
+            IdentityPolynomial, OperandPolynomial, OperandSide, ShiftHalfSuffixPolynomial,
         },
-        signed_identity_poly::{
-            prefixes::{OperandMsbPrefixPoly, SignedIdentityPrefixPoly},
-            suffixes::{OneSuffixPolynomial, SignedIdentitySuffixPoly},
+        multilinear_polynomial::MultilinearPolynomial,
+        prefix_suffix::{
+            CachedPolynomial, Prefix, PrefixCheckpoints, PrefixPolynomial, PrefixRegistry,
+            PrefixSuffixPolynomial, SuffixPolynomial,
         },
     },
-    utils::math::Math,
+    utils::{lookup_bits::LookupBits, math::Math},
 };
 use allocative::Allocative;
+use num::Integer;
 use std::sync::{Arc, RwLock};
-
-mod prefixes;
-mod suffixes;
-
-// TODO: Implement custom prefix-suffix shout for single-operand operators to reduce
-// the variable count from 64 to 32, which would simplify BinarySignedIdentityPoly.
-
-// -------- Signed Identity Poly --------
 
 /// Multilinear polynomial encoding a single signed integer for sumcheck.
 ///
@@ -162,76 +154,13 @@ impl<F: JoltField> PolynomialBinding<F> for SignedIdentityPoly<F> {
     }
 }
 
-// -------- Binary Signed Identity Poly --------
-
-/// Multilinear polynomial that interprets a boolean input vector as a signed integer,
-/// for use in binary-operator prefix-suffix lookups where the left operand is zero.
-///
-/// Used by the RAF sum-check as `sum_{k,j} ra(k, j) * Self(k)` in contexts where the
-/// lookup key space is `2 * X_LEN` bits wide — the first `X_LEN` high bits correspond to
-/// a left operand that is structurally zero (single-operand ops encoded in a binary key),
-/// so evaluation only reads the lower `X_LEN` bits as the actual signed value.
-///
-/// Layout: the input length equals `2 * X_LEN`. The first `X_LEN` coordinates are high bits
-/// (skipped in the evaluation), the coordinate at index `X_LEN` is the sign bit, and the remaining
-/// `X_LEN - 1` coordinates are the magnitude (value) bits. Let `u` be the lower `X_LEN` bits
-/// interpreted as an unsigned integer and `s` the sign bit. Then
-/// `u - s * 2^X_LEN = value_bits - s * 2^(X_LEN - 1)`, which is exactly the two's-complement
-/// signed interpretation.
-/// However this means we are restricted to even number of variables.
-///
-/// In the prime field, negatives are represented modulo `p`: for `m > 0`, `-m` is encoded as
-/// `p - m` (equivalently `-m mod p`).
-#[derive(Clone, Debug, Allocative, Default)]
-pub struct BinarySignedIdentityPoly<F: JoltField, const X_LEN: usize> {
-    _field: core::marker::PhantomData<F>,
-}
-
-impl<F: JoltField, const X_LEN: usize> PolynomialEvaluation<F>
-    for BinarySignedIdentityPoly<F, X_LEN>
-{
-    /// Self(x) = (sum_{i=0}^{X_LEN-1} x[X_LEN + i] * 2^(X_LEN - 1 - i)) - x[X_LEN] * 2^X_LEN
-    fn evaluate<C>(&self, r: &[C]) -> F
-    where
-        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
-        F: FieldChallengeOps<C>,
-    {
-        debug_assert_eq!(r.len(), 2 * X_LEN);
-        let mut y = F::zero();
-        r.iter()
-            .skip(X_LEN) // skip high bits
-            .rev()
-            .enumerate()
-            .for_each(|(i, &r_i)| {
-                let w = F::from_u64(i.pow2() as u64);
-                y += r_i * w;
-            });
-        let sign_bit = r[X_LEN];
-        let w = F::from_u64(X_LEN.pow2() as u64);
-        y - sign_bit * w
-    }
-
-    fn batch_evaluate<C>(_: &[&Self], _: &[C]) -> Vec<F>
-    where
-        Self: Sized,
-        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
-        F: FieldChallengeOps<C>,
-    {
-        unimplemented!("Currently unused")
-    }
-
-    fn sumcheck_evals(&self, _: usize, _: usize, _: BindingOrder) -> Vec<F> {
-        unimplemented!("Currently unused")
-    }
-}
-
-impl<F: JoltField, const X_LEN: usize> PrefixSuffixPolynomial<F, 2>
-    for BinarySignedIdentityPoly<F, X_LEN>
-{
+impl<F: JoltField> PrefixSuffixPolynomial<F, 2> for SignedIdentityPoly<F> {
     fn suffixes(&self) -> [Box<dyn SuffixPolynomial<F> + Sync>; 2] {
         [
             Box::new(OneSuffixPolynomial),
-            Box::new(SignedIdentitySuffixPoly::<F, X_LEN>::default()),
+            Box::new(
+                IdentityPolynomial::<F>::new(0), /* num-vars is not used for suffix impl for identity poly */
+            ),
         ]
     }
 
@@ -242,9 +171,47 @@ impl<F: JoltField, const X_LEN: usize> PrefixSuffixPolynomial<F, 2>
         registry: &mut PrefixRegistry<F>,
     ) -> [Option<Arc<RwLock<CachedPolynomial<F>>>>; 2] {
         let identity = registry.get_or_insert(Prefix::SignedIdentity, |cp| {
-            SignedIdentityPrefixPoly::<F, X_LEN>::default().prefix_polynomial(cp, chunk_len, phase)
+            self.clone().prefix_polynomial(cp, chunk_len, phase)
         });
         [Some(identity), None]
+    }
+}
+
+pub struct OneSuffixPolynomial;
+impl<F: JoltField> SuffixPolynomial<F> for OneSuffixPolynomial {
+    fn suffix_mle(&self, _b: LookupBits) -> u64 {
+        1
+    }
+}
+
+impl<F: JoltField> PrefixPolynomial<F> for SignedIdentityPoly<F> {
+    fn prefix_polynomial(
+        &self,
+        checkpoints: &PrefixCheckpoints<F>,
+        chunk_len: usize,
+        phase: usize,
+    ) -> CachedPolynomial<F> {
+        let xlen = self.num_vars;
+        debug_assert!(chunk_len.is_even());
+        debug_assert!(
+            chunk_len * (phase + 1) <= xlen,
+            "total_len must equal X_LEN"
+        );
+        let suffix_len = xlen - chunk_len * (phase + 1);
+        let bound_value = checkpoints[Prefix::SignedIdentity].unwrap_or(F::zero());
+        let evals = match phase_position(chunk_len, phase) {
+            PhasePosition::AtMsb => (0..chunk_len.pow2())
+                .map(|i| {
+                    let sign_bit = ((i >> (chunk_len - 1)) & 1) as u32;
+                    let res = bound_value + F::from_u64(((i << suffix_len) % (1 << xlen)) as u64);
+                    res + sign_correction::<F>(sign_bit, xlen)
+                })
+                .collect(),
+            PhasePosition::AfterMsb => (0..chunk_len.pow2())
+                .map(|i| bound_value + F::from_u64((i << suffix_len) as u64))
+                .collect(),
+        };
+        make_cached_poly(evals, chunk_len)
     }
 }
 
@@ -361,6 +328,76 @@ impl<F: JoltField, const X_LEN: usize> PrefixSuffixPolynomial<F, 3>
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct OperandMsbPrefixPoly<F: JoltField, const X_LEN: usize> {
+    _field: core::marker::PhantomData<F>,
+    side: OperandSide,
+}
+
+impl<F: JoltField, const X_LEN: usize> OperandMsbPrefixPoly<F, X_LEN> {
+    pub fn new(side: OperandSide) -> Self {
+        Self {
+            _field: core::marker::PhantomData,
+            side,
+        }
+    }
+}
+
+impl<F: JoltField, const X_LEN: usize> PrefixPolynomial<F> for OperandMsbPrefixPoly<F, X_LEN> {
+    fn prefix_polynomial(
+        &self,
+        checkpoints: &PrefixCheckpoints<F>,
+        chunk_len: usize,
+        phase: usize,
+    ) -> CachedPolynomial<F> {
+        debug_assert!(chunk_len.is_even());
+        let bound_value = match self.side {
+            OperandSide::Left => checkpoints[Prefix::LeftOperandMSB].unwrap_or(F::zero()),
+            OperandSide::Right => checkpoints[Prefix::RightOperandMSB].unwrap_or(F::zero()),
+        };
+        let shift = match self.side {
+            OperandSide::Left => 1,
+            OperandSide::Right => 2,
+        };
+        let evals = match phase {
+            0 => (0..chunk_len.pow2())
+                .map(|i| {
+                    let sign_bit = ((i >> (chunk_len - shift)) & 1) as u32;
+                    sign_correction::<F>(sign_bit, X_LEN)
+                })
+                .collect(),
+            _ => vec![bound_value; chunk_len.pow2()],
+        };
+        make_cached_poly(evals, chunk_len)
+    }
+}
+
+/// Wraps evals into a `CachedPolynomial` with standard cache capacity.
+fn make_cached_poly<F: JoltField>(evals: Vec<F>, chunk_len: usize) -> CachedPolynomial<F> {
+    CachedPolynomial::new(MultilinearPolynomial::from(evals), (chunk_len - 1).pow2())
+}
+
+/// Returns `-sign_bit * 2^X_LEN` as a field element.
+fn sign_correction<F: JoltField>(sign_bit: u32, xlen: usize) -> F {
+    -F::from_u32(sign_bit) * F::from_u64(xlen.pow2() as u64)
+}
+
+/// Classifies the current phase relative to the MSB boundary.
+#[allow(clippy::enum_variant_names)]
+enum PhasePosition {
+    AtMsb,
+    AfterMsb,
+}
+
+fn phase_position(chunk_len: usize, phase: usize) -> PhasePosition {
+    let j = chunk_len * phase;
+    if j == 0 {
+        PhasePosition::AtMsb
+    } else {
+        PhasePosition::AfterMsb
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -371,9 +408,7 @@ mod tests {
                 BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
             },
             prefix_suffix::{tests::prefix_suffix_decomposition_test, Prefix},
-            signed_identity_poly::{
-                BinarySignedIdentityPoly, SignedIdentityPoly, SignedOperandPoly,
-            },
+            signed_identity_poly::{SignedIdentityPoly, SignedOperandPoly},
         },
         utils::{index_to_field_bitvector, interleave_bits},
     };
@@ -438,45 +473,10 @@ mod tests {
         assert_eq!(identity_poly.final_claim(), reference_poly.final_claim());
     }
 
-    // --- BinarySignedIdentityPoly tests ---
-
     #[test]
-    fn test_binary_signed_identity_poly_evaluation() {
-        for i in 0..256usize {
-            let i = i as i8;
-            let bit_vector: Vec<Fr> = index_to_field_bitvector(i as u8 as u64, 16);
-            assert_eq!(
-                Fr::from_i8(i),
-                BinarySignedIdentityPoly::<Fr, 8>::default().evaluate(&bit_vector)
-            );
-        }
-    }
-
-    #[test]
-    fn test_binary_signed_identity_poly_random_evaluations() {
-        let mut rng = StdRng::seed_from_u64(404);
-        for _ in 0..1000 {
-            let i = rng.gen();
-            let bit_vector: Vec<Fr> = index_to_field_bitvector(i as u32 as u64, 64);
-            assert_eq!(
-                Fr::from_i32(i),
-                BinarySignedIdentityPoly::<Fr, 32>::default().evaluate(&bit_vector)
-            );
-        }
-
-        // i32::MIN edge case
-        let i = i32::MIN;
-        let bit_vector: Vec<Fr> = index_to_field_bitvector(i as u32 as u64, 64);
-        assert_eq!(
-            Fr::from_i32(i),
-            BinarySignedIdentityPoly::<Fr, 32>::default().evaluate(&bit_vector)
-        );
-    }
-
-    #[test]
-    fn binary_signed_identity_poly_prefix_suffix_decomposition() {
+    fn signed_identity_poly_prefix_suffix_decomposition() {
         prefix_suffix_decomposition_test::<16, 2, 2, true, _>(
-            BinarySignedIdentityPoly::<Fr, 8>::default(),
+            SignedIdentityPoly::<Fr>::new(16),
             vec![Prefix::SignedIdentity],
         );
     }

@@ -5,13 +5,13 @@
 //! prefix MLEs incrementally with checkpoints updated every two rounds, we avoid summing
 //! over the full 2^(2*XLEN) lookup table.
 
-use self::{
-    and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix,
-    lower_word_no_msb::LowerWordNoMsbPrefix, not_msb::NotMsbPrefix, or::OrPrefix, xor::XorPrefix,
-};
+use self::{and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix, or::OrPrefix, xor::XorPrefix};
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
-    lookup_tables::prefixes::{msb::MsbPrefix, nlw::NotLowerWordPrefix},
+    lookup_tables::prefixes::{
+        lower_word_no_msb::LowerWordNoMsbPrefix, msb::MsbPrefix, nlw::NotLowerWordPrefix,
+        not_msb::NotMsbPrefix,
+    },
     utils::lookup_bits::LookupBits,
 };
 use common::parallel::par_enabled;
@@ -102,18 +102,18 @@ pub enum Prefixes {
     Eq,
     /// Less-than comparison prefix
     LessThan,
-    /// Lower word without MSB prefix
+    /// Lower word without MSB prefix (XLEN-bit layout, sign at position 0)
     LowerWordNoMsb,
-    /// Not-MSB prefix
+    /// MSB (sign bit) prefix (XLEN-bit layout, sign at position 0)
+    Msb,
+    /// Not-MSB prefix (XLEN-bit layout, sign at position 0)
     NotMsb,
+    /// Two's complement negation prefix (XLEN-bit layout)
+    NotLowerWord,
     /// Bitwise OR prefix
     Or,
     /// Bitwise XOR prefix
     Xor,
-    /// MSB (sign bit) prefix
-    Msb,
-    /// Two's complement negation prefix: `(!lower_word) + 1`
-    NotLowerWord,
 }
 
 #[derive(Clone, Copy)]
@@ -244,12 +244,12 @@ impl Prefixes {
             Prefixes::And => AndPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::Eq => EqPrefix::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::LessThan => LessThanPrefix::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::Or => OrPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::Xor => XorPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::NotMsb => NotMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::LowerWordNoMsb => {
                 LowerWordNoMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
             }
-            Prefixes::NotMsb => NotMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::Or => OrPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::Xor => XorPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::Msb => MsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::NotLowerWord => {
                 NotLowerWordPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
@@ -319,6 +319,15 @@ impl Prefixes {
             Prefixes::LessThan => {
                 LessThanPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
             }
+            Prefixes::Or => {
+                OrPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
+            }
+            Prefixes::Xor => {
+                XorPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
+            }
+            Prefixes::NotMsb => {
+                NotMsbPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
+            }
             Prefixes::LowerWordNoMsb => LowerWordNoMsbPrefix::<XLEN>::update_prefix_checkpoint(
                 checkpoints,
                 r_x,
@@ -326,15 +335,6 @@ impl Prefixes {
                 j,
                 suffix_len,
             ),
-            Prefixes::NotMsb => {
-                NotMsbPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
-            }
-            Prefixes::Or => {
-                OrPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
-            }
-            Prefixes::Xor => {
-                XorPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
-            }
             Prefixes::Msb => {
                 MsbPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
             }

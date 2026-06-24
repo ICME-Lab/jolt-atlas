@@ -20,12 +20,10 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for NotMsbPrefix<XLEN
         F: FieldChallengeOps<C>,
     {
         match j {
-            // suffix will handle
-            j if j < XLEN => F::one(),
             // sign bit in c
-            j if j == XLEN => F::one() - F::from_u32(c),
+            0 => F::one() - F::from_u32(c),
             // sign bit in r_x
-            j if j == XLEN + 1 => F::one() - r_x.unwrap(),
+            1 => F::one() - r_x.unwrap(),
             // sign bit processed; use checkpoint.
             _ => checkpoints[Prefixes::NotMsb].unwrap(),
         }
@@ -43,9 +41,8 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for NotMsbPrefix<XLEN
         F: FieldChallengeOps<C>,
     {
         match j {
-            j if j < XLEN => None.into(),
-            // sign bit will be in r_x when j == XLEN + 1
-            j if j == XLEN + 1 => Some(F::one() - r_x).into(),
+            0 => None.into(),
+            1 => Some(F::one() - r_x).into(),
             _ => checkpoints[Prefixes::NotMsb].into(),
         }
     }

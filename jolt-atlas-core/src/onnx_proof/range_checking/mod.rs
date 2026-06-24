@@ -20,8 +20,11 @@ use joltworks::{
     },
     subprotocols::{
         ps_shout::{
-            ps_read_raf_prover, ps_read_raf_verifier, PrefixSuffixShoutProvider, ReadRafClaims,
-            ReadRafSumcheckProver, ReadRafSumcheckVerifier,
+            binary::{
+                ps_read_raf_prover, ps_read_raf_verifier, BinaryReadRafSumcheckProver,
+                BinaryReadRafSumcheckVerifier, PrefixSuffixShoutProvider, ReadRafClaims,
+            },
+            RafShoutProvider,
         },
         shout::RaOneHotEncoding,
     },
@@ -138,7 +141,7 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
         trace: &Trace,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> (ReadRafSumcheckProver<F, LUT>, Vec<usize>)
+    ) -> (BinaryReadRafSumcheckProver<F, LUT>, Vec<usize>)
     where
         F: JoltField,
         T: Transcript,
@@ -156,7 +159,7 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> ReadRafSumcheckVerifier<F, LUT>
+    ) -> BinaryReadRafSumcheckVerifier<F, LUT>
     where
         F: JoltField,
         T: Transcript,
@@ -166,25 +169,12 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
     }
 }
 
-impl<F, LUT, H> PrefixSuffixShoutProvider<F, LUT> for RangeCheckProvider<H>
+impl<F, LUT, H> RafShoutProvider<F, LUT> for RangeCheckProvider<H>
 where
     F: JoltField,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN>,
+    LUT: JoltLookupTable + Default,
     H: RangeCheckingOperandsTrait,
 {
-    fn read_raf_claims(&self, accumulator: &dyn OpeningAccumulator<F>) -> ReadRafClaims<F> {
-        let (left_operand_claim, right_operand_claim) = self.operands.operand_claims(accumulator);
-        ReadRafClaims {
-            rv_claim: F::one(),
-            left_operand_claim,
-            right_operand_claim,
-        }
-    }
-
-    fn is_interleaved_operands(&self) -> bool {
-        true
-    }
-
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
         let id = OpeningId::new(
             self.operands.get_input_operands()[0],
@@ -199,6 +189,22 @@ where
             self.operands.get_output_operand(),
             SumcheckId::NodeExecution(self.operands.node_idx()),
         )
+    }
+}
+
+impl<F, LUT, H> PrefixSuffixShoutProvider<F, LUT> for RangeCheckProvider<H>
+where
+    F: JoltField,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
+    H: RangeCheckingOperandsTrait,
+{
+    fn read_raf_claims(&self, accumulator: &dyn OpeningAccumulator<F>) -> ReadRafClaims<F> {
+        let (left_operand_claim, right_operand_claim) = self.operands.operand_claims(accumulator);
+        ReadRafClaims {
+            rv_claim: F::one(),
+            left_operand_claim,
+            right_operand_claim,
+        }
     }
 }
 
@@ -253,6 +259,6 @@ impl<H: RangeCheckingOperandsTrait> RaOneHotEncoding for RangeCheckEncoding<H> {
     }
 
     fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::new(self.log_t)
+        OneHotParams::new(self.log_t, self.log_k())
     }
 }

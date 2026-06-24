@@ -32,7 +32,7 @@ use atlas_onnx_tracer::{
     ops::{Operator, Tanh},
     tensor::Tensor,
 };
-use common::{CommittedPoly, VirtualPoly};
+use common::{consts::LOG_K, CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
@@ -564,7 +564,8 @@ fn soundness_tanh_tau_rangecheck_bypass_is_rejected() {
         let node = &model.graph.nodes[&node_idx];
         let (left, right) = TauBypassTeleportRangeCheckOperands::get_operands_tensors(trace, node);
         let lookup_indices = compute_lookup_indices_from_operands(&[&left, &right], true);
-        let one_hot_params = joltworks::config::OneHotParams::new(lookup_indices.len().log_2());
+        let one_hot_params =
+            joltworks::config::OneHotParams::new(lookup_indices.len().log_2(), LOG_K);
         let addresses: Vec<_> = lookup_indices
             .par_iter()
             .map(|lookup_index| {

@@ -262,6 +262,12 @@ impl<F: JoltField> Default for PrefixCheckpoints<F> {
     }
 }
 
+impl<F: JoltField> PrefixEval<F> {
+    pub fn inner(&self) -> F {
+        self.0
+    }
+}
+
 impl<F: JoltField> std::ops::Mul<F> for PrefixEval<F> {
     type Output = F;
 

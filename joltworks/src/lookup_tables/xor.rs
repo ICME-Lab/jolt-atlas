@@ -71,7 +71,7 @@ impl<const XLEN: usize> PrefixSuffixDecompositionTrait<XLEN> for XorTable<XLEN> 
 mod test {
     use crate::lookup_tables::test::{
         lookup_table_mle_full_hypercube_test, lookup_table_mle_linearity_test,
-        lookup_table_mle_random_test, prefix_suffix_test,
+        lookup_table_mle_random_test, prefix_suffix_test, read_raf_test,
     };
     use ark_bn254::Fr;
     use common::consts::XLEN;
@@ -96,5 +96,10 @@ mod test {
     #[test]
     fn mle_linearity() {
         lookup_table_mle_linearity_test::<XLEN, Fr, XorTable<XLEN>>();
+    }
+
+    #[test]
+    fn read_raf() {
+        read_raf_test::<Fr, XorTable<XLEN>>();
     }
 }

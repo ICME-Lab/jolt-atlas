@@ -43,19 +43,19 @@ trait ClampSpec {
 fn clamp_combine_inner<F: JoltField>(
     upper: &BoundSpec,
     lower: Option<&BoundSpec>,
-    prefixes: &[PrefixEval<F>],
+    prefixes: &[F],
     suffixes: &[SuffixEval<F>],
 ) -> F {
     let const_upper = F::from_u64(1u64 << upper.bound_log);
-    let ps_zero_gtupper = prefixes[upper.pre_zero_gtbound] * suffixes[0];
-    let ps_word_ltupper = prefixes[upper.pre_word_ltbound] + suffixes[1];
+    let ps_zero_gtupper = prefixes[0] * suffixes[0];
+    let ps_word_ltupper = prefixes[1] + suffixes[1];
 
     let mut result = const_upper + ps_zero_gtupper * (ps_word_ltupper - const_upper);
 
     if let Some(lower) = lower {
         let const_lower = F::from_u64(1u64 << lower.bound_log);
-        let ps_zero_gtlower = prefixes[lower.pre_zero_gtbound] * suffixes[2];
-        let ps_word_ltlower = prefixes[lower.pre_word_ltbound] + suffixes[3];
+        let ps_zero_gtlower = prefixes[2] * suffixes[2];
+        let ps_word_ltlower = prefixes[3] + suffixes[3];
         result += ps_zero_gtlower * (const_lower - ps_word_ltlower);
     }
 
@@ -90,8 +90,18 @@ where
         result
     }
 
-    fn combine<F: JoltField>(&self, _prefixes: &[PrefixEval<F>], _suffixes: &[SuffixEval<F>]) -> F {
-        todo!()
+    fn combine<F: JoltField>(&self, prefixes: &[PrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F {
+        let prefixes = prefixes
+            .iter()
+            .map(|prefix_eval| prefix_eval.inner())
+            .collect::<Vec<F>>();
+
+        clamp_combine_inner(
+            &Self::upper_spec(),
+            Self::lower_spec().as_ref(),
+            &prefixes,
+            suffixes,
+        )
     }
 
     #[cfg(test)]
@@ -100,10 +110,15 @@ where
         prefixes: &[PrefixEval<F>],
         suffixes: &[SuffixEval<F>],
     ) -> F {
+        let prefixes: Vec<F> = <Self as PrefixSuffixDecompositionTrait<X_LEN>>::prefixes(self)
+            .iter()
+            .map(|prefix_vp| prefixes[*prefix_vp])
+            .collect();
+
         clamp_combine_inner(
             &Self::upper_spec(),
             Self::lower_spec().as_ref(),
-            prefixes,
+            &prefixes,
             suffixes,
         )
     }
@@ -307,7 +322,7 @@ mod test {
     use super::*;
     use crate::lookup_tables::test::{
         lookup_table_mle_full_hypercube_test, lookup_table_mle_linearity_test,
-        lookup_table_mle_random_test, prefix_suffix_test,
+        lookup_table_mle_random_test, prefix_suffix_test, read_raf_test,
     };
     use ark_bn254::Fr;
     use common::consts::XLEN;
@@ -338,5 +353,12 @@ mod test {
         lookup_table_mle_linearity_test::<XLEN, Fr, ClampTableOp1<XLEN>>();
         lookup_table_mle_linearity_test::<XLEN, Fr, ClampTableOp2<XLEN>>();
         lookup_table_mle_linearity_test::<XLEN, Fr, ClampTableOp3<XLEN>>();
+    }
+
+    #[test]
+    fn read_raf() {
+        read_raf_test::<Fr, ClampTableOp1<XLEN>>();
+        read_raf_test::<Fr, ClampTableOp2<XLEN>>();
+        read_raf_test::<Fr, ClampTableOp3<XLEN>>();
     }
 }

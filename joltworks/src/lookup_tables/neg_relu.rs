@@ -85,7 +85,7 @@ mod test {
         neg_relu::NegReluTable,
         test::{
             lookup_table_mle_full_hypercube_test, lookup_table_mle_linearity_test,
-            lookup_table_mle_random_test, prefix_suffix_test,
+            lookup_table_mle_random_test, prefix_suffix_test, read_raf_test,
         },
     };
     use ark_bn254::Fr;
@@ -109,5 +109,10 @@ mod test {
     #[test]
     fn mle_linearity() {
         lookup_table_mle_linearity_test::<XLEN, Fr, NegReluTable<XLEN>>();
+    }
+
+    #[test]
+    fn read_raf() {
+        read_raf_test::<Fr, NegReluTable<XLEN>>();
     }
 }

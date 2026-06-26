@@ -176,3 +176,155 @@ pub fn prefix_suffix_test<
         }
     }
 }
+
+use crate::{
+    poly::{
+        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        opening_proof::{
+            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator,
+            SumcheckId::{self, Raf},
+            VerifierOpeningAccumulator, BIG_ENDIAN,
+        },
+    },
+    subprotocols::{
+        ps_shout::{
+            ps_read_raf_prover, ps_read_raf_verifier, PrefixSuffixShoutProvider, ReadRafClaims,
+        },
+        sumcheck::Sumcheck,
+    },
+    transcripts::{KeccakTranscript, Transcript},
+    utils::math::Math,
+};
+use common::VirtualPoly::{self, NodeOutput, NodeOutputRa};
+
+pub fn read_raf_test<F: JoltField, T: PrefixSuffixDecompositionTrait<XLEN>>() {
+    struct LookupProvider;
+
+    impl<F: JoltField, T: PrefixSuffixDecompositionTrait<XLEN>> PrefixSuffixShoutProvider<F, T>
+        for LookupProvider
+    {
+        fn read_raf_claims(&self, accumulator: &dyn OpeningAccumulator<F>) -> ReadRafClaims<F> {
+            let (_, rv_claim) =
+                accumulator.get_virtual_polynomial_opening(OpeningId::new(NodeOutput(1), Raf));
+            let (_, raf_claim) =
+                accumulator.get_virtual_polynomial_opening(OpeningId::new(NodeOutput(0), Raf));
+
+            ReadRafClaims {
+                rv_claim,
+                left_operand_claim: F::zero(),
+                right_operand_claim: raf_claim,
+            }
+        }
+
+        fn is_interleaved_operands(&self) -> bool {
+            false
+        }
+
+        fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
+            (NodeOutputRa(0), Raf)
+        }
+
+        fn r_cycle(
+            &self,
+            accumulator: &dyn crate::poly::opening_proof::OpeningAccumulator<F>,
+        ) -> OpeningPoint<BIG_ENDIAN, F> {
+            accumulator
+                .get_virtual_polynomial_opening(OpeningId::new(NodeOutput(1), Raf))
+                .0
+        }
+    }
+
+    const NUM_LOOKUPS: usize = 1 << 3;
+    const NUM_TESTS: usize = 10;
+
+    let mut rng = StdRng::seed_from_u64(12345);
+
+    for _ in 0..NUM_TESTS {
+        let input: Vec<i32> = (0..NUM_LOOKUPS).map(|_| rng.gen()).collect();
+        let output: Vec<i32> = input
+            .iter()
+            .map(|&x| T::default().materialize_entry(x as u32 as u64) as i32)
+            .collect();
+
+        let lookup_bits: Vec<LookupBits> = input
+            .iter()
+            .map(|&x| LookupBits::new(x as u32 as u64, 2 * XLEN))
+            .collect();
+
+        let mut prover_accumulator = ProverOpeningAccumulator::<F>::new();
+        let mut prover_transcript = KeccakTranscript::new(b"read_raf_test");
+
+        let r_cycle = prover_transcript.challenge_vector_optimized::<F>(NUM_LOOKUPS.log_2());
+
+        let rv_claim = MultilinearPolynomial::from(output).evaluate(&r_cycle);
+        let rv_opening = OpeningId::new(NodeOutput(1), Raf);
+        let raf_claim = MultilinearPolynomial::from(input).evaluate(&r_cycle);
+        let raf_opening = OpeningId::new(NodeOutput(0), Raf);
+
+        prover_accumulator.append_virtual(
+            &mut prover_transcript,
+            rv_opening,
+            r_cycle.clone().into(),
+            rv_claim,
+        );
+
+        prover_accumulator.append_virtual(
+            &mut prover_transcript,
+            raf_opening,
+            r_cycle.clone().into(),
+            raf_claim,
+        );
+
+        let mut prover_instance = ps_read_raf_prover::<F, _, T>(
+            &LookupProvider,
+            lookup_bits,
+            &mut prover_accumulator,
+            &mut prover_transcript,
+        );
+
+        let (proof, _r_sumcheck) = Sumcheck::prove(
+            &mut prover_instance,
+            &mut prover_accumulator,
+            &mut prover_transcript,
+        );
+
+        let mut verifier_accumulator = VerifierOpeningAccumulator::<F>::new();
+        let mut verifier_transcript = KeccakTranscript::new(b"read_raf_test");
+
+        let _r_cycle = verifier_transcript.challenge_vector_optimized::<F>(NUM_LOOKUPS.log_2());
+
+        // Init accumulator with prover claims
+        for (opening_id, (_, claim)) in prover_accumulator.openings {
+            verifier_accumulator
+                .openings
+                .insert(opening_id, (Default::default(), claim));
+        }
+
+        verifier_accumulator.append_virtual(
+            &mut verifier_transcript,
+            rv_opening,
+            r_cycle.clone().into(),
+        );
+
+        verifier_accumulator.append_virtual(
+            &mut verifier_transcript,
+            raf_opening,
+            r_cycle.clone().into(),
+        );
+
+        let verifier_instance = ps_read_raf_verifier::<F, _, T>(
+            &LookupProvider,
+            &mut verifier_accumulator,
+            &mut verifier_transcript,
+        );
+
+        let result = Sumcheck::verify(
+            &proof,
+            &verifier_instance,
+            &mut verifier_accumulator,
+            &mut verifier_transcript,
+        );
+
+        assert!(result.is_ok(), "Read RAF proof verification failed");
+    }
+}

@@ -62,7 +62,12 @@ impl LookupBits {
     }
 
     pub fn eqo(&self) -> bool {
-        self.bits == (1 << self.len) - 1
+        // `1u64 << 64` overflows; clamp lookups use 64-bit indices, so handle it.
+        if self.len == 64 {
+            self.bits == u64::MAX
+        } else {
+            self.bits == (1u64 << self.len) - 1
+        }
     }
 }
 

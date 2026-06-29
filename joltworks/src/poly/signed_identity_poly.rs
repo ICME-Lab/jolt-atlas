@@ -86,8 +86,10 @@ impl<F: JoltField> PolynomialEvaluation<F> for SignedIdentityPoly<F> {
                 // Weight of the variable being bound this round.
                 let slope = F::from_u128(1 << self.num_bound_vars);
                 // Two's-complement sign penalty: sign bit contributes -2^(n-1),
-                // encoded here as (slope_at_sign_bit - 2^n).
-                let sign_penalty = F::from_u64(self.num_vars.pow2() as u64);
+                // encoded here as (slope_at_sign_bit - 2^n). Use a u128 shift so
+                // this stays correct for `num_vars >= 64` (64-bit clamp lookups),
+                // matching `evaluate`'s `from_u128(1 << num_vars)`.
+                let sign_penalty = F::from_u128(1u128 << self.num_vars);
 
                 if self.sign_bit_pos() == self.num_bound_vars {
                     // Binding the sign bit: p(0) = bound_value (sign=0, no penalty),

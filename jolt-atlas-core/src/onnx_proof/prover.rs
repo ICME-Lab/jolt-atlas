@@ -234,7 +234,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     }
 
     #[tracing::instrument(skip_all)]
-    fn commit_to_polynomials(
+    pub(super) fn commit_to_polynomials(
         poly_map: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
         pcs: &PCS::ProverSetup,
     ) -> Vec<PCS::Commitment> {

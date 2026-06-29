@@ -80,6 +80,13 @@ impl<const XLEN: usize> PrefixSuffixDecompositionTrait<XLEN> for SatClampTable<X
     }
 
     fn combine<F: JoltField>(&self, prefixes: &[PrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F {
+        // The prefix-suffix decomposition hard-codes the i32 split point and uses
+        // `i32::MAX`, so it is only correct for a 64-bit address. (The MLE /
+        // materialization paths additionally support XLEN = 16.)
+        debug_assert_eq!(
+            XLEN, 64,
+            "SatClampTable prefix-suffix decomposition is only valid for XLEN = 64"
+        );
         let [suffix_one, suffix_not_lower_msb_upper_eqz, suffix_not_lower_msb_upper_eqz_low, suffix_lower_msb_upper_eqo_low] =
             suffixes.try_into().unwrap();
         let [prefix_sat_val, prefix_upper_eqz, prefix_upper_eqo, prefix_lower_msb, prefix_not_lower_msb, prefix_lower_word_no_msb] =

@@ -410,7 +410,7 @@ pub fn verify_clamp_lookup<F: JoltField, T: Transcript>(
 /// (empty for scalar nodes, which prove the clamp directly).
 pub fn clamp_committed_polys(node: &ComputationNode) -> Vec<CommittedPoly> {
     if is_scalar(node) {
-        return vec![];
+        return Vec::new();
     }
     let d = ClampEncoding::new(node).one_hot_params().instruction_d;
     (0..d)
@@ -427,7 +427,9 @@ pub fn verify_scalar_clamp<F: JoltField>(
     op: &str,
 ) -> Result<(), ProofVerifyError> {
     let value = recover_small_int(combined).ok_or_else(|| {
-        ProofVerifyError::InvalidOpeningProof(format!("{op} (scalar): value not in i32 range"))
+        ProofVerifyError::InvalidOpeningProof(format!(
+            "{op} (scalar): accumulation claim is not a small signed-integer encoding"
+        ))
     })?;
     let expected = F::from_i32(value.clamp(i32::MIN as i64, i32::MAX as i64) as i32);
     if output_claim != expected {

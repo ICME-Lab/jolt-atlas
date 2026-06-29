@@ -9,8 +9,10 @@ use self::{and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix, or::OrPrefix
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     lookup_tables::prefixes::{
-        lower_word_no_msb::LowerWordNoMsbPrefix, msb::MsbPrefix, nlw::NotLowerWordPrefix,
-        not_msb::NotMsbPrefix,
+        lower_msb::LowerMsbPrefix, lower_word_no_msb::LowerWordNoMsbPrefix, msb::MsbPrefix,
+        not_lower_msb::NotLowerMsbPrefix, not_msb::NotMsbPrefix,
+        not_word_no_msb::NotWordNoMsbPrefix, sat_val::SatValPrefix, upper_eqo::UpperEqoPrefix,
+        upper_eqz::UpperEqzPrefix, word_no_msb::WordNoMsbPrefix,
     },
     utils::lookup_bits::LookupBits,
 };
@@ -31,16 +33,28 @@ pub mod and;
 pub mod eq;
 /// Less-than comparison prefix implementation.
 pub mod less_than;
-/// Lower word (without MSB) prefix implementation.
+/// Lower 32-bit word sign bit (i32 sign bit) prefix implementation.
+pub mod lower_msb;
+/// Lower word without MSB prefix implementation (64-bit layout, sign at position 32).
 pub mod lower_word_no_msb;
 /// MSB (most significant bit) prefix implementation.
 pub mod msb;
-/// Two's complement negation prefix: `(!lower_word) + 1`, used in `neg_relu` decomposition.
-pub mod nlw;
+/// Complement of the lower 32-bit word sign bit prefix implementation.
+pub mod not_lower_msb;
 /// Not-MSB (most significant bit) prefix implementation.
 pub mod not_msb;
+/// Two's complement negation prefix: `(!lower_word) + 1`, used in `neg_relu` decomposition.
+pub mod not_word_no_msb;
 /// Bitwise OR prefix implementation.
 pub mod or;
+/// Saturated boundary value prefix implementation, used in `sat_clamp` decomposition.
+pub mod sat_val;
+/// Upper half-word all-ones (eqo) prefix implementation.
+pub mod upper_eqo;
+/// Upper half-word all-zeros (eqz) prefix implementation.
+pub mod upper_eqz;
+/// Lower word (without MSB) prefix implementation.
+pub mod word_no_msb;
 /// Bitwise XOR prefix implementation.
 pub mod xor;
 
@@ -94,7 +108,7 @@ pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
 
 /// An enum containing all prefixes used by Jolt's instruction lookup tables.
 #[repr(u8)]
-#[derive(EnumCountMacro, EnumIter, FromPrimitive)]
+#[derive(EnumCountMacro, EnumIter, FromPrimitive, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Prefixes {
     /// Bitwise AND prefix
     And,
@@ -102,18 +116,30 @@ pub enum Prefixes {
     Eq,
     /// Less-than comparison prefix
     LessThan,
-    /// Lower word without MSB prefix (XLEN-bit layout, sign at position 0)
-    LowerWordNoMsb,
+    /// word without MSB prefix (XLEN-bit layout, sign at position 0)
+    WordNoMsb,
     /// MSB (sign bit) prefix (XLEN-bit layout, sign at position 0)
     Msb,
     /// Not-MSB prefix (XLEN-bit layout, sign at position 0)
     NotMsb,
     /// Two's complement negation prefix (XLEN-bit layout)
-    NotLowerWord,
+    NotWordNoMsb,
     /// Bitwise OR prefix
     Or,
     /// Bitwise XOR prefix
     Xor,
+    /// Saturated boundary value prefix: `m*MIN + (1-m)*MAX`, used in `sat_clamp` decomposition
+    SatVal,
+    /// Upper half-word all-zeros (eqz) prefix, used in `sat_clamp` decomposition
+    UpperEqz,
+    /// Upper half-word all-ones (eqo) prefix, used in `sat_clamp` decomposition
+    UpperEqo,
+    /// Complement of the lower 32-bit word sign bit (1 − r[XLEN/2]), used in `sat_clamp` decomposition
+    NotLowerMsb,
+    /// Lower 32-bit word sign bit (r[XLEN/2], the i32 sign bit), used in `sat_clamp` decomposition
+    LowerMsb,
+    /// Lower word without MSB prefix (64-bit layout), used in `sat_clamp` decomposition
+    LowerWordNoMsb,
 }
 
 #[derive(Clone, Copy)]
@@ -247,12 +273,20 @@ impl Prefixes {
             Prefixes::Or => OrPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::Xor => XorPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::NotMsb => NotMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::WordNoMsb => WordNoMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::Msb => MsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::NotWordNoMsb => {
+                NotWordNoMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
+            }
+            Prefixes::SatVal => SatValPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::UpperEqz => UpperEqzPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::NotLowerMsb => {
+                NotLowerMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
+            }
+            Prefixes::UpperEqo => UpperEqoPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
+            Prefixes::LowerMsb => LowerMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
             Prefixes::LowerWordNoMsb => {
                 LowerWordNoMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::Msb => MsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::NotLowerWord => {
-                NotLowerWordPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
             }
         };
         PrefixEval(eval)
@@ -328,7 +362,7 @@ impl Prefixes {
             Prefixes::NotMsb => {
                 NotMsbPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
             }
-            Prefixes::LowerWordNoMsb => LowerWordNoMsbPrefix::<XLEN>::update_prefix_checkpoint(
+            Prefixes::WordNoMsb => WordNoMsbPrefix::<XLEN>::update_prefix_checkpoint(
                 checkpoints,
                 r_x,
                 r_y,
@@ -338,7 +372,45 @@ impl Prefixes {
             Prefixes::Msb => {
                 MsbPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
             }
-            Prefixes::NotLowerWord => NotLowerWordPrefix::<XLEN>::update_prefix_checkpoint(
+            Prefixes::NotWordNoMsb => NotWordNoMsbPrefix::<XLEN>::update_prefix_checkpoint(
+                checkpoints,
+                r_x,
+                r_y,
+                j,
+                suffix_len,
+            ),
+            Prefixes::SatVal => {
+                SatValPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
+            }
+            Prefixes::UpperEqz => UpperEqzPrefix::<XLEN>::update_prefix_checkpoint(
+                checkpoints,
+                r_x,
+                r_y,
+                j,
+                suffix_len,
+            ),
+            Prefixes::NotLowerMsb => NotLowerMsbPrefix::<XLEN>::update_prefix_checkpoint(
+                checkpoints,
+                r_x,
+                r_y,
+                j,
+                suffix_len,
+            ),
+            Prefixes::UpperEqo => UpperEqoPrefix::<XLEN>::update_prefix_checkpoint(
+                checkpoints,
+                r_x,
+                r_y,
+                j,
+                suffix_len,
+            ),
+            Prefixes::LowerMsb => LowerMsbPrefix::<XLEN>::update_prefix_checkpoint(
+                checkpoints,
+                r_x,
+                r_y,
+                j,
+                suffix_len,
+            ),
+            Prefixes::LowerWordNoMsb => LowerWordNoMsbPrefix::<XLEN>::update_prefix_checkpoint(
                 checkpoints,
                 r_x,
                 r_y,

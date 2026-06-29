@@ -83,14 +83,6 @@ pub trait PrefixSuffixDecompositionTrait<const XLEN: usize>: JoltLookupTable + D
     /// evaluation from its decomposed prefix and suffix MLE evaluations.
     fn combine<F: JoltField>(&self, prefixes: &[PrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F;
 
-    // TODO: Modify `prefix_suffix_test` to use above `combine` method & then rm this method
-    /// Test-only version of combine method.
-    #[cfg(test)]
-    fn combine_test<F: JoltField>(
-        &self,
-        prefixes: &[PrefixEval<F>],
-        suffixes: &[SuffixEval<F>],
-    ) -> F;
     /// Generates a random lookup table index for testing.
     #[cfg(test)]
     fn random_lookup_index(rng: &mut rand::rngs::StdRng) -> u64 {
@@ -109,6 +101,7 @@ pub mod and;
 pub mod or;
 /// ReLU (Rectified Linear Unit) activation lookup table.
 pub mod relu;
+pub mod sat_clamp;
 /// Unsigned absolute value lookup table.
 ///
 /// Computes `abs(x)` by interpreting the input as a signed integer and returning
@@ -204,20 +197,6 @@ impl<const XLEN: usize> LookupTables<XLEN> {
             LookupTables::And(table) => table.combine(prefixes, suffixes),
             LookupTables::Or(table) => table.combine(prefixes, suffixes),
             LookupTables::Xor(table) => table.combine(prefixes, suffixes),
-        }
-    }
-
-    /// Test-only version of combine method.
-    #[cfg(test)]
-    pub fn combine_test<F: JoltField>(
-        &self,
-        prefixes: &[PrefixEval<F>],
-        suffixes: &[SuffixEval<F>],
-    ) -> F {
-        match self {
-            LookupTables::And(table) => table.combine_test(prefixes, suffixes),
-            LookupTables::Or(table) => table.combine_test(prefixes, suffixes),
-            LookupTables::Xor(table) => table.combine_test(prefixes, suffixes),
         }
     }
 }

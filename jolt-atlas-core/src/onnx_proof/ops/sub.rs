@@ -1,5 +1,12 @@
 use crate::{
-    onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
+    onnx_proof::{
+        clamp_lookups::{
+            clamp_committed_polys, is_scalar, prove_clamp_lookup, verify_clamp_lookup,
+            verify_scalar_clamp,
+        },
+        ops::OperatorProofTrait,
+        ProofId, Prover, Verifier,
+    },
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
@@ -7,6 +14,7 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
     ops::Sub,
 };
+use common::{CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -19,8 +27,8 @@ use joltworks::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
-            BIG_ENDIAN, LITTLE_ENDIAN,
+            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
@@ -34,16 +42,19 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 
-/// No-sumcheck proof for element-wise subtraction.
+/// Proof for saturating element-wise subtraction: `output = SatClamp(left - right)`.
 ///
-/// `Sub` is linear: `output(x) = left(x) - right(x)` on the shared boolean
-/// hypercube, so the identity holds at the random output opening point `r`. The
-/// prover opens both operands at the same `r`, and the verifier checks
-/// `left(r) - right(r) == output(r)` directly — no sumcheck (cf. [`super::identity`]).
+/// Identical in structure to [`Add`](super::add) but with a subtraction tie:
+/// the accumulation `acc = left - right` is widened to `i64`, the clamp lookup
+/// proves `output(r) = SatClamp(acc(r))` and ties `acc` ([`VirtualPoly::ClampAcc`])
+/// to the one-hot read-address poly ([`VirtualPoly::ClampRa`]), the one-hot
+/// checks discharge `ClampRa` against [`CommittedPoly::ClampRaD`], and the
+/// operand tie checks `left(r) - right(r) == acc(r)`. See [`Add`](super::add)
+/// for the full three-part breakdown.
 ///
 /// [`SubParams`]/[`SubProver`]/[`SubVerifier`] are retained for the ZK
-/// (BlindFold) path in `onnx_proof::zk`, which still proves `Sub` via a batched
-/// sumcheck; see the note on [`Add`](super::add) for details.
+/// (BlindFold) path in `onnx_proof::zk`, which still proves the un-clamped
+/// subtraction via a batched sumcheck; see the note on [`Add`](super::add).
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sub {
     #[tracing::instrument(skip_all, name = "Sub::prove")]
     fn prove(
@@ -54,6 +65,16 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sub {
         let (opening_point, _claim) =
             AccOpeningAccessor::new(&prover.accumulator, node).get_reduced_opening();
 
+        // Non-scalar: prove `output = SatClamp(acc)` via the clamp lookup + one-hot.
+        // Scalar: skipped — the verifier recomputes the clamp from the operands.
+        let results = if is_scalar(node) {
+            vec![]
+        } else {
+            prove_clamp_lookup(node, prover)
+        };
+
+        // Operand tie: open `left(r)`, `right(r)`. The verifier ties them to
+        // `acc` (non-scalar) or recomputes `SatClamp(left - right)` (scalar).
         let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
         let [left, right] = operands[..] else {
             panic!("Expected two operands for Sub operation")
@@ -62,12 +83,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sub {
             MultilinearPolynomial::from(left.padded_next_power_of_two()).evaluate(&opening_point.r);
         let right_claim = MultilinearPolynomial::from(right.padded_next_power_of_two())
             .evaluate(&opening_point.r);
-
         let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, node)
             .into_provider(&mut prover.transcript, opening_point);
         provider.append_nodeio(Target::Input(0), left_claim);
         provider.append_nodeio(Target::Input(1), right_claim);
-        vec![]
+
+        results
     }
 
     #[tracing::instrument(skip_all, name = "Sub::verify")]
@@ -76,7 +97,13 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sub {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        let (opening_point, claim) =
+        // Non-scalar: verify `output = SatClamp(acc)` (lookup + one-hot).
+        if !is_scalar(node) {
+            verify_clamp_lookup(node, verifier)?;
+        }
+
+        // Read `left(r)`, `right(r)`.
+        let (opening_point, output_claim) =
             AccOpeningAccessor::new(&verifier.accumulator, node).get_reduced_opening();
         let mut provider = AccOpeningAccessor::new(&mut verifier.accumulator, node)
             .into_provider(&mut verifier.transcript, opening_point);
@@ -84,13 +111,33 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sub {
         provider.append_nodeio(Target::Input(1));
         let left_claim = provider.get_nodeio(Target::Input(0)).1;
         let right_claim = provider.get_nodeio(Target::Input(1)).1;
+        drop(provider);
 
-        if left_claim - right_claim != claim {
-            return Err(ProofVerifyError::InvalidOpeningProof(
-                "Sub output claim should equal the difference of operand claims".to_string(),
-            ));
+        if is_scalar(node) {
+            // Operands open in the clear: `output == SatClamp(left - right)`.
+            verify_scalar_clamp(left_claim - right_claim, output_claim, "Sub")
+        } else {
+            // Tie `left(r) - right(r) == acc(r)`; `acc` is tied to `ClampRa` by
+            // the lookup, and `output = SatClamp(acc)` was proven above.
+            let acc_id = OpeningId::new(
+                VirtualPoly::ClampAcc(node.idx),
+                SumcheckId::NodeExecution(node.idx),
+            );
+            let acc_claim = verifier
+                .accumulator
+                .get_virtual_polynomial_opening(acc_id)
+                .1;
+            if left_claim - right_claim != acc_claim {
+                return Err(ProofVerifyError::InvalidOpeningProof(
+                    "Sub: left - right must equal the i64 accumulation (pre-clamp)".to_string(),
+                ));
+            }
+            Ok(())
         }
-        Ok(())
+    }
+
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        clamp_committed_polys(node)
     }
 }
 
@@ -349,5 +396,56 @@ mod tests {
         let input = Tensor::<i32>::random_small(&mut rng, &[t]);
         let model = sub_model(&mut rng, t);
         unit_test_op(model, &[input]);
+    }
+
+    /// Inputs chosen so that `left - right` saturates at **both** `i32::MAX`
+    /// (even indices) and `i32::MIN` (odd indices), exercising the clamp lookup.
+    #[test]
+    fn test_sub_saturating_overflow() {
+        let t = 1 << 10;
+        let input_data: Vec<i32> = (0..t)
+            .map(|i| if i % 2 == 0 { i32::MAX } else { i32::MIN })
+            .collect();
+        let const_data: Vec<i32> = (0..t)
+            .map(|i| if i % 2 == 0 { -1000 } else { 1000 })
+            .collect();
+        let input = Tensor::<i32>::new(Some(&input_data), &[t]).unwrap();
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![t]);
+        let c = b.constant(Tensor::<i32>::new(Some(&const_data), &[t]).unwrap());
+        let res = b.sub(i, c);
+        b.mark_output(res);
+        unit_test_op(b.build(), &[input]);
+    }
+
+    /// Scalar (`1×1`) saturation: operands open in the clear, so the verifier
+    /// recovers them and checks the clamp directly. Covers +/- saturation and a
+    /// non-saturating case.
+    #[test]
+    fn test_sub_scalar_saturates() {
+        for (a, c_val) in [(i32::MAX, i32::MIN), (i32::MIN, i32::MAX), (10, 3)] {
+            let input = Tensor::<i32>::new(Some(&[a]), &[1]).unwrap();
+            let mut bld = ModelBuilder::new();
+            let i = bld.input(vec![1]);
+            let c = bld.constant(Tensor::<i32>::new(Some(&[c_val]), &[1]).unwrap());
+            let res = bld.sub(i, c);
+            bld.mark_output(res);
+            unit_test_op(bld.build(), &[input]);
+        }
+    }
+
+    /// Small tensors: `T = 1` takes the scalar direct-check path; `T` ∈ {2, 4, 8}
+    /// exercise the clamp lookup's few-cycle-round one-hot sumchecks.
+    #[test]
+    fn test_sub_small_tensors() {
+        for t in [1usize, 2, 4, 8] {
+            let input = Tensor::<i32>::new(Some(&vec![7; t]), &[t]).unwrap();
+            let mut b = ModelBuilder::new();
+            let i = b.input(vec![t]);
+            let c = b.constant(Tensor::<i32>::new(Some(&vec![2; t]), &[t]).unwrap());
+            let res = b.sub(i, c);
+            b.mark_output(res);
+            unit_test_op(b.build(), &[input]);
+        }
     }
 }

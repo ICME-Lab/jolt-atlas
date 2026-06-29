@@ -17,6 +17,7 @@
 
 use crate::{
     onnx_proof::{
+        clamp_lookups::{clamp_intermediate, clamp_lookup_bits, CLAMP_LOG_K},
         neural_teleport::{division::compute_division, n_bits_to_usize},
         ops::{rsqrt::Q_SQUARE, softmax_last_axis::rc::SAT_DIFF_RC_BITS},
         range_checking::range_check_operands::{
@@ -179,6 +180,14 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let operand_refs: Vec<_> = padded_operands.iter().collect();
                 let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
                 build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
+            }
+            CommittedPoly::ClampRaD(node_idx, d) => {
+                // Saturating Add/Sub: the lookup index is the pre-clamp i64
+                // accumulation, recovered by re-executing the binop.
+                let computation_node = &model.graph.nodes[node_idx];
+                let intermediate = clamp_intermediate(computation_node, trace);
+                let lookup_bits = clamp_lookup_bits(&intermediate);
+                build_one_hot_rad_witness(&lookup_bits, *d, CLAMP_LOG_K)
             }
             CommittedPoly::DivNodeQuotient(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];

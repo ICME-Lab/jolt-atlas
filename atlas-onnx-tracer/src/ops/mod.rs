@@ -180,6 +180,90 @@ pub trait Op {
     }
 }
 
+/// Broadcast-expand `lhs` and `rhs`, apply `combine` element-wise in `i64`,
+/// and return the unclamped intermediate as `Tensor<i64>`.
+///
+/// This is the re-executable kernel the proof system calls to recover the
+/// pre-saturation intermediate without storing it in the trace.
+pub(super) fn sat_accumulate_pair(
+    lhs: &crate::tensor::Tensor<i32>,
+    rhs: &crate::tensor::Tensor<i32>,
+    op_name: &str,
+    combine: impl Fn(i64, i64) -> i64 + Sync,
+) -> crate::tensor::Tensor<i64> {
+    use crate::tensor::get_broadcasted_shape;
+    use common::parallel::par_enabled;
+    use rayon::prelude::*;
+
+    let shape = get_broadcasted_shape(lhs.dims(), rhs.dims())
+        .unwrap_or_else(|_| panic!("{op_name}: incompatible broadcast shapes"));
+    let lhs_exp = lhs
+        .expand(&shape)
+        .unwrap_or_else(|_| panic!("{op_name}: expand lhs"));
+    let rhs_exp = rhs
+        .expand(&shape)
+        .unwrap_or_else(|_| panic!("{op_name}: expand rhs"));
+    let data: Vec<i64> = lhs_exp
+        .data()
+        .par_iter()
+        .zip(rhs_exp.data().par_iter())
+        .with_min_len(par_enabled())
+        .map(|(&a, &b)| combine(a as i64, b as i64))
+        .collect();
+    crate::tensor::Tensor::new(Some(&data), &shape)
+        .unwrap_or_else(|_| panic!("{op_name}: Tensor::new"))
+}
+
+/// Clamp each element of a `Tensor<i64>` into `[i32::MIN, i32::MAX]`.
+pub(super) fn clamp_to_i32(t: &crate::tensor::Tensor<i64>) -> crate::tensor::Tensor<i32> {
+    use common::parallel::par_enabled;
+    use rayon::prelude::*;
+
+    let data: Vec<i32> = t
+        .data()
+        .par_iter()
+        .with_min_len(par_enabled())
+        .map(|&v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+        .collect();
+    crate::tensor::Tensor::new(Some(&data), t.dims())
+        .unwrap_or_else(|_| panic!("clamp_to_i32: Tensor::new"))
+}
+
+/// Saturating element-wise binary operation for [`Add`] and [`Sub`].
+///
+/// For each consecutive input pair: accumulates via [`sat_accumulate_pair`]
+/// (in `i64`), then clamps to `i32` via [`clamp_to_i32`].  Per-step clamping
+/// preserves correct saturation semantics for variadic inputs.
+pub(super) fn sat_binop(
+    inputs: Vec<&crate::tensor::Tensor<i32>>,
+    op_name: &str,
+    combine: impl Fn(i64, i64) -> i64 + Sync + Copy,
+) -> crate::tensor::Tensor<i32> {
+    let mut output = inputs[0].clone();
+    for &rhs in &inputs[1..] {
+        output = clamp_to_i32(&sat_accumulate_pair(&output, rhs, op_name, combine));
+    }
+    output
+}
+
+/// Re-execute a binary [`Add`]/[`Sub`] node's accumulation, returning the
+/// pre-clamp `i64` intermediate.
+///
+/// The proof system uses this to recover the accumulation (lookup-index)
+/// polynomial for the saturating-clamp lookup without storing it in the trace.
+/// Panics on non-`Add`/`Sub` operators or a non-binary operand list.
+pub fn sat_binop_intermediate(
+    operator: &Operator,
+    lhs: &crate::tensor::Tensor<i32>,
+    rhs: &crate::tensor::Tensor<i32>,
+) -> crate::tensor::Tensor<i64> {
+    match operator {
+        Operator::Add(_) => sat_accumulate_pair(lhs, rhs, "Add", |a, b| a + b),
+        Operator::Sub(_) => sat_accumulate_pair(lhs, rhs, "Sub", |a, b| a - b),
+        _ => panic!("sat_binop_intermediate: expected Add or Sub, got {operator:?}"),
+    }
+}
+
 /// Shared evaluation for the periodic trig operators ([`Sin`], [`Cos`]).
 ///
 /// Both reduce the input modulo a `4π` approximation before applying their

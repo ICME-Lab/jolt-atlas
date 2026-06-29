@@ -261,6 +261,11 @@ impl Model {
             .nodes
             .values()
             .map(|node| match &node.operator {
+                // Saturating Add/Sub commit a one-hot clamp read-address
+                // decomposition. Its chunks are `k_chunk`-wide just like the
+                // activation lookups, so the largest committed poly is
+                // `k_chunk * T` (the 64-bit address only changes the chunk
+                // *count*, not the per-chunk size).
                 Operator::Tanh(_)
                 | Operator::Cos(_)
                 | Operator::Div(_)
@@ -269,6 +274,9 @@ impl Model {
                 | Operator::Rsqrt(_)
                 | Operator::Sigmoid(_)
                 | Operator::Sin(_)
+                | Operator::Add(_)
+                | Operator::Sub(_)
+                | Operator::Sum(_)
                 | Operator::SoftmaxLastAxis(_) => {
                     LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements())
                 }

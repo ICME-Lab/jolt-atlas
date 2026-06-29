@@ -56,6 +56,14 @@ impl LookupBits {
     pub fn leading_ones(&self) -> u32 {
         self.bits.wrapping_shl(64 - self.len as u32).leading_ones()
     }
+
+    pub fn eqz(&self) -> bool {
+        self.bits == 0
+    }
+
+    pub fn eqo(&self) -> bool {
+        self.bits == (1 << self.len) - 1
+    }
 }
 
 impl Display for LookupBits {

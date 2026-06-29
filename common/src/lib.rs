@@ -160,6 +160,14 @@ canonical_serde_enum! {
         /// * `0` – node index
         /// * `1` – decomposition index `d`
         SoftmaxSatDiffRaD(usize, usize),
+
+        /// One-hot read-address decomposition for the saturating-clamp lookup of
+        /// a `Add`/`Sub` node. The clamp is indexed by the 64-bit accumulation, so
+        /// there are `64 / log_k_chunk` chunks (e.g. 16 for `log_k_chunk = 4`).
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        ClampRaD(usize, usize),
     }
 }
 
@@ -367,5 +375,23 @@ canonical_serde_enum! {
         ///
         /// * `0` – producer node index
         NTEvalShiftOutput(usize),
+
+        // ----- Saturating clamp (Add/Sub) -----
+        /// MLE of the pre-clamp **i64 accumulation** of a saturating `Add`/`Sub`.
+        ///
+        /// This is the `raf` (read-address-field) polynomial of the saturating-clamp
+        /// lookup: its values are the indices into [`SatClampTable`](joltworks). It is
+        /// tied to the operands by the linear identity `acc(r) = left(r) ± right(r)`,
+        /// and the lookup proves `output(r) = clamp(acc(r))`.
+        ///
+        /// * `0` – node index
+        ClampAcc(usize),
+
+        /// One-hot read-address polynomial for the saturating-clamp lookup
+        /// (`Add`/`Sub`). Virtualized — [`CommittedPoly::ClampRaD`] commits its
+        /// decomposition.
+        ///
+        /// * `0` – node index
+        ClampRa(usize),
     }
 }

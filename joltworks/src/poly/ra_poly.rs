@@ -82,7 +82,27 @@ impl<I: Into<usize> + Copy + Default + Send + Sync + Debug + 'static, F: JoltFie
         match self {
             Self::RoundN(mle) => mle.final_claim(),
             Self::Round3(mle) => mle.get_bound_coeff(0),
-            _ => panic!("RaPolynomial::final_claim called on non-RoundN variant {self:?}"),
+            // Small-T sumchecks reduce the poly to a single coefficient in fewer
+            // than three binds (`Round3` already covers log(T) = 2; these cover
+            // log(T) = 1 and log(T) = 0, e.g. a 1-element tensor). In every case
+            // the poly is fully bound, so coefficient 0 is the final claim.
+            Self::Round2(mle) => {
+                debug_assert_eq!(
+                    mle.len(),
+                    1,
+                    "Round2 final_claim expects a fully-bound poly"
+                );
+                mle.get_bound_coeff(0)
+            }
+            Self::Round1(mle) => {
+                debug_assert_eq!(
+                    mle.len(),
+                    1,
+                    "Round1 final_claim expects a fully-bound poly"
+                );
+                mle.get_bound_coeff(0)
+            }
+            Self::None => panic!("RaPolynomial::final_claim called on None"),
         }
     }
 }

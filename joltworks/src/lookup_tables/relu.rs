@@ -45,22 +45,11 @@ impl<const X_LEN: usize> JoltLookupTable for ReluTable<X_LEN> {
 
 impl<const X_LEN: usize> PrefixSuffixDecompositionTrait<X_LEN> for ReluTable<X_LEN> {
     fn suffixes(&self) -> Vec<Suffixes> {
-        vec![Suffixes::One, Suffixes::LowerWordNoMSB]
+        vec![Suffixes::One, Suffixes::WordNoMSB]
     }
 
     fn prefixes(&self) -> Vec<Prefixes> {
-        vec![Prefixes::NotMsb, Prefixes::LowerWordNoMsb]
-    }
-
-    #[cfg(test)]
-    fn combine_test<F: JoltField>(
-        &self,
-        prefixes: &[PrefixEval<F>],
-        suffixes: &[SuffixEval<F>],
-    ) -> F {
-        let [one, relu] = suffixes.try_into().unwrap();
-        prefixes[Prefixes::NotMsb] * prefixes[Prefixes::LowerWordNoMsb] * one
-            + relu * prefixes[Prefixes::NotMsb]
+        vec![Prefixes::NotMsb, Prefixes::WordNoMsb]
     }
 
     fn combine<F: JoltField>(&self, prefixes: &[PrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F {

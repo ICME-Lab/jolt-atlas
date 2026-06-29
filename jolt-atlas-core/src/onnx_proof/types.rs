@@ -51,6 +51,10 @@ pub enum ProofType {
     SoftmaxStage3 = 7,
     /// Softmax stage 4
     SoftmaxStage4 = 8,
+    /// Axis-reduction sumcheck for `Sum` (proves the pre-clamp accumulation
+    /// equals the sum over the reduced axes; the clamp itself is a separate
+    /// `Execution` lookup).
+    SumReduction = 9,
 }
 
 impl TryFrom<u8> for ProofType {
@@ -67,6 +71,7 @@ impl TryFrom<u8> for ProofType {
             6 => Ok(Self::SoftmaxStage2),
             7 => Ok(Self::SoftmaxStage3),
             8 => Ok(Self::SoftmaxStage4),
+            9 => Ok(Self::SumReduction),
             _ => Err(SerializationError::InvalidData),
         }
     }

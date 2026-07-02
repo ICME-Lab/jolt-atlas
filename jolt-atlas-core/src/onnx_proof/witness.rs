@@ -150,6 +150,69 @@ fn build_teleport_activation_rad_witness_tanh<F: JoltField>(
     ))
 }
 
+/// Generate the witnesses for **all** of a node's committed polynomials, computing
+/// each expensive per-node re-execution **once** and slicing every one-hot chunk
+/// from it.
+///
+/// A fused node's saturating-clamp and rescaling-remainder one-hots decompose into
+/// many `LOG_K_CHUNK`-wide chunks (16 for the 64-bit clamp, plus the remainder /
+/// range-check chunks). Generating each chunk via [`WitnessGenerator::generate_witness`]
+/// independently re-runs the (expensive, e.g. `einsum_acc_i64` over a full
+/// contraction) accumulation once *per chunk* — ~16-36× per node in practice. This
+/// groups a node's polynomials so the accumulation runs once, then reuses the
+/// cached lookup tensor for every chunk. Non-fused polynomials fall back to
+/// [`WitnessGenerator::generate_witness`].
+pub(crate) fn generate_node_witnesses<F: JoltField, T: joltworks::transcripts::Transcript>(
+    node: &ComputationNode,
+    model: &Model,
+    trace: &Trace,
+) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
+    use crate::onnx_proof::{
+        fused_rebase::{rebase_bits, rebase_remainder},
+        ops::NodeCommittedPolynomials,
+    };
+
+    // Per-node lookup tensors, each computed at most once (lazily).
+    let mut clamp_bits: Option<Vec<LookupBits>> = None;
+    let mut remainder_indices: Option<Vec<usize>> = None;
+    let mut mos_range_bits: Option<Vec<LookupBits>> = None;
+
+    NodeCommittedPolynomials::get_committed_polynomials::<F, T>(node)
+        .into_iter()
+        .map(|poly| {
+            let witness = match &poly {
+                CommittedPoly::ClampRaD(_, d) => {
+                    let bits = clamp_bits
+                        .get_or_insert_with(|| clamp_lookup_bits(&clamp_intermediate(node, trace)));
+                    build_one_hot_rad_witness(bits, *d, CLAMP_LOG_K)
+                }
+                CommittedPoly::RescaleRemainderRaD(_, d) => {
+                    let bits = rebase_bits(&node.operator)
+                        .expect("RescaleRemainderRaD requested for a non-rescaling operator");
+                    let indices = remainder_indices.get_or_insert_with(|| {
+                        rebase_remainder(node, trace)
+                            .data()
+                            .iter()
+                            .map(|&v| v as usize)
+                            .collect()
+                    });
+                    build_onehot_witness(indices, bits as usize, *d)
+                }
+                CommittedPoly::MeanOfSquaresRangeCheckRaD(_, d) => {
+                    let bits = mos_range_bits.get_or_insert_with(|| {
+                        let (left, right) =
+                            MeanOfSquaresRangeCheckOperands::get_operands_tensors(trace, node);
+                        MeanOfSquaresRangeCheckOperands::compute_lookup_indices(&left, &right)
+                    });
+                    build_one_hot_rad_witness(bits, *d, LOG_K)
+                }
+                other => other.generate_witness(model, trace),
+            };
+            (poly, witness)
+        })
+        .collect()
+}
+
 /// Trait for generating witness polynomials from model execution traces.
 ///
 /// This trait defines the interface for converting committed polynomial specifications

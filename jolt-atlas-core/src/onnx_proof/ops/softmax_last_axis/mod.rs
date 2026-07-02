@@ -17,7 +17,7 @@ use crate::{
                     ExpDigit, ExpReadRafProvider,
                 },
                 max::{MaxIndicatorParams, MaxIndicatorProver, MaxIndicatorVerifier},
-                rc::{SoftmaxRCProvider, SoftmaxRaEncoding, SAT_DIFF_RC_BITS},
+                rc::{sat_diff_rc_bits, SoftmaxRCProvider, SoftmaxRaEncoding},
                 recip_mult::{RecipMultParams, RecipMultProver, RecipMultVerifier},
                 sat_diff::{
                     SatDiffSlacknessParams, SatDiffSlacknessProver, SatDiffSlacknessVerifier,
@@ -123,7 +123,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
                 CommittedPoly::SoftmaxRemainderRaD as fn(usize, usize) -> _,
             ),
             (log_scale, CommittedPoly::SoftmaxExpRemainderRaD),
-            (SAT_DIFF_RC_BITS, CommittedPoly::SoftmaxSatDiffRaD),
+            (
+                sat_diff_rc_bits(log_scale),
+                CommittedPoly::SoftmaxSatDiffRaD,
+            ),
             (log_hi, CommittedPoly::SoftmaxZHiRaD),
             (log_lo, CommittedPoly::SoftmaxZLoRaD),
         ] {
@@ -156,6 +159,19 @@ impl SoftmaxLastAxisProver {
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
         let scale_bits = prover.preprocessing.scale();
 
+        // Invariant guard: the SatDiff commitment is sized in
+        // `get_committed_polynomials` from the per-node operator scale
+        // (`self.scale.ilog2()`), while the prover/verifier range checks use the
+        // model-wide `preprocessing.scale()`. A single global scale makes these
+        // identical; assert it so a future move to per-node scales fails loudly
+        // here instead of silently mismatching commitment and range-check widths.
+        debug_assert_eq!(
+            self.scale.ilog2() as i32,
+            scale_bits,
+            "softmax operator scale (log2 {}) disagrees with preprocessing scale {scale_bits}",
+            self.scale.ilog2(),
+        );
+
         // ── Pre-compute index/lookup data from trace vectors ────────────
         // These borrow the trace fields. After this block, specific trace
         // fields can be consumed (std::mem::take) by cache/stage methods.
@@ -172,8 +188,10 @@ impl SoftmaxLastAxisProver {
         // z_hi/z_lo/sat_diff indices (consumed by stage3 + stage4)
         let z_hi_indices = to_indices(&self.trace.decomposed_exp.z_hi);
         let z_lo_indices = to_indices(&self.trace.decomposed_exp.z_lo);
-        let sat_diff_lookup_bits =
-            to_lookup_bits(&self.trace.decomposed_exp.sat_diff, SAT_DIFF_RC_BITS);
+        let sat_diff_lookup_bits = to_lookup_bits(
+            &self.trace.decomposed_exp.sat_diff,
+            sat_diff_rc_bits(scale_bits as usize),
+        );
         let sat_diff_indices = to_indices(&self.trace.decomposed_exp.sat_diff);
 
         // Padded lookup tables (consumed by stage3 Shout + stage4 one-hot)
@@ -277,7 +295,7 @@ impl SoftmaxLastAxisVerifier {
 
         self.run_stage(
             ProofType::SoftmaxStage4,
-            self.build_stage4_verifiers(accumulator, transcript, &lut),
+            self.build_stage4_verifiers(accumulator, transcript, scale_bits, &lut),
             proofs,
             accumulator,
             transcript,
@@ -593,7 +611,10 @@ impl SoftmaxLastAxisProver {
             &mut prover.transcript,
         );
 
-        let provider = SoftmaxRCProvider::sat_diff(self.computation_node.clone());
+        let provider = SoftmaxRCProvider::sat_diff(
+            self.computation_node.clone(),
+            prover.preprocessing.scale(),
+        );
         let sat_diff_rc_prover =
             identity_rangecheck_prover(&provider, sat_diff_lookup_bits, &mut prover.accumulator);
 
@@ -648,7 +669,7 @@ impl SoftmaxLastAxisProver {
             &mut prover.transcript,
         );
 
-        let encoding = SoftmaxRaEncoding::sat_diff(self.idx());
+        let encoding = SoftmaxRaEncoding::sat_diff(self.idx(), prover.preprocessing.scale());
         let [sat_diff_ra_prover, sat_diff_hw_prover, sat_diff_bool_prover] =
             shout::ra_onehot_provers(
                 &encoding,
@@ -983,7 +1004,7 @@ impl SoftmaxLastAxisVerifier {
         let lo_verifier =
             shout::read_raf_verifier(&provider, lut.table_lo.clone(), &*accumulator, transcript);
 
-        let provider = SoftmaxRCProvider::sat_diff(self.computation_node.clone());
+        let provider = SoftmaxRCProvider::sat_diff(self.computation_node.clone(), scale_bits);
         let rc_sat_diff_verifier = identity_rangecheck_verifier(&provider, accumulator);
 
         let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), scale_bits);
@@ -1043,6 +1064,7 @@ impl SoftmaxLastAxisVerifier {
         &self,
         accumulator: &VerifierOpeningAccumulator<F>,
         transcript: &mut T,
+        scale_bits: i32,
         lut: &VerifierLookupTableData,
     ) -> Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> {
         let encoding = SoftmaxRaEncoding::exp_hi(self.idx(), lut.table_hi.len().log_2());
@@ -1053,7 +1075,7 @@ impl SoftmaxLastAxisVerifier {
         let [lo_ra_verifier, lo_hw_verifier, lo_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
 
-        let encoding = SoftmaxRaEncoding::sat_diff(self.idx());
+        let encoding = SoftmaxRaEncoding::sat_diff(self.idx(), scale_bits);
         let [sat_diff_ra_verifier, sat_diff_hw_verifier, sat_diff_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
 
@@ -1168,9 +1190,12 @@ mod tests {
         // Non-masked scores sourced from GPT-2 layer 0 (scale=12, multiplier=4096).
         //
         // Layout: 4 attention heads, 8×8 causal attention matrix each.
-        // Upper-triangular entries (future tokens) use the GPT-2 causal mask ≈ -2^30.
+        // Upper-triangular entries (future tokens) use the causal-mask sentinel
+        // produced by quantize_float for -inf masks: -(11 << 12) = -45056
+        // (`mask_sentinel_magnitude(12)` = 11). Masked sat_diff then fits in
+        // sat_diff_rc_bits(12) = 16 bits (measured max 56888 < 2^16).
         // Non-masked scores range roughly [-25000, 50000] in fixed-point.
-        const M: i32 = -1_073_741_824; // causal attention mask (≈ -2^30)
+        const M: i32 = -45_056; // causal attention mask (-(11 << scale), scale=12)
         #[rustfmt::skip]
         const GPT2_ATTN_SCORES: &[i32] = &[
             // Head 0 — moderate range (GPT-2 heads 0 + 2)

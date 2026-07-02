@@ -8,9 +8,28 @@ use joltworks::{
     subprotocols::{identity_range_check::IdentityRCProvider, shout::RaOneHotEncoding},
 };
 
-/// Bit width for sat_diff range check.
-/// 2^32 > 2^30, covering causal-mask inputs (≈ −2^30).
-pub const SAT_DIFF_RC_BITS: usize = 32;
+/// Bit width for the sat_diff range check at a given softmax scale (log₂ S).
+///
+/// The honest sat_diff is bounded by the attention-mask sentinel, not by 2^30:
+/// with the quantize.rs extreme clamp at -(C(scale) << scale)
+/// (`mask_sentinel_magnitude`, C(8)=8 / C(12)=11), masked inputs give
+/// `sat_diff ≤ (score_spread + C(scale)·2^scale) − (z_bound − 1)`, which fits
+/// in `log_scale + 4` bits — measured at scale 8: 429 on the whole-model
+/// GPT-2 test workload (additive mask graph) and ≤ 2881 (12 bits) on the
+/// replace/additive unit vehicles; at scale 12: 56888 (16 bits, GPT-2
+/// layer-0 score magnitudes) — vs 30 bits under the old -2^30 clamp. This
+/// drops the SatDiff one-hot commitment from d=8 to d=3 (scale 8) / d=4
+/// (scale 12) committed polynomials per softmax node, each sized
+/// ×(num scores).
+///
+/// Completeness gate: `2^bits` must exceed the model's max honest sat_diff
+/// (`bits ≥ ⌈log₂(Σ+1)⌉`). Soundness does not depend on the bound: the
+/// complementary-slackness sumcheck (sat_diff.rs) forcing the unique
+/// `z = z_c + sat_diff` decomposition is bound-independent; only honest-prover
+/// completeness needs the range to cover the witness.
+pub const fn sat_diff_rc_bits(log_scale: usize) -> usize {
+    log_scale + 4
+}
 
 // ---------------------------------------------------------------------------
 // Unified IdentityRCProvider
@@ -55,10 +74,10 @@ impl SoftmaxRCProvider {
     }
 
     /// Range-check for saturation-diff values (`sat_diff[k,j] ∈ [0, 2^D)`).
-    pub fn sat_diff(node: ComputationNode) -> Self {
+    pub fn sat_diff(node: ComputationNode, log_scale: i32) -> Self {
         Self {
             node,
-            log_k: SAT_DIFF_RC_BITS,
+            log_k: sat_diff_rc_bits(log_scale as usize),
             source_vp: VirtualPoly::SoftmaxSatDiff,
             ra_vp: VirtualPoly::SoftmaxSatDiffRa,
         }
@@ -135,10 +154,10 @@ impl SoftmaxRaEncoding {
     }
 
     /// One-hot for saturation-diff `ra`.
-    pub fn sat_diff(node_idx: usize) -> Self {
+    pub fn sat_diff(node_idx: usize, log_scale: i32) -> Self {
         Self {
             node_idx,
-            log_k: SAT_DIFF_RC_BITS,
+            log_k: sat_diff_rc_bits(log_scale as usize),
             committed_poly_fn: CommittedPoly::SoftmaxSatDiffRaD,
             r_cycle_vp: VirtualPoly::SoftmaxSatDiff,
             r_cycle_sc_id: SumcheckId::NodeExecution(node_idx),

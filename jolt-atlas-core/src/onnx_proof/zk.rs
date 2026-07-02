@@ -411,7 +411,7 @@ fn verify_softmax_zk(
     {
         let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
         assert_eq!(*pid, node.idx);
-        let v = sm_v.build_stage4_verifiers(accumulator, transcript, &lut);
+        let v = sm_v.build_stage4_verifiers(accumulator, transcript, scale_bits, &lut);
         verify_zk_sumcheck_instances(zk_proof, v, accumulator, transcript)?;
         *zk_proof_idx += 1;
     }
@@ -1264,7 +1264,7 @@ fn prove_softmax_zk(
     auxiliary_claims: &mut BTreeMap<joltworks::poly::opening_proof::OpeningId, F>,
 ) {
     use crate::onnx_proof::ops::softmax_last_axis::{
-        pad_to_power_of_two, rc::SAT_DIFF_RC_BITS, to_indices, to_lookup_bits, LookupTableData,
+        pad_to_power_of_two, rc::sat_diff_rc_bits, to_indices, to_lookup_bits, LookupTableData,
         SoftmaxLastAxisProver as SmProver,
     };
     use atlas_onnx_tracer::ops::softmax::softmax_last_axis_decomposed;
@@ -1291,7 +1291,10 @@ fn prove_softmax_zk(
     let r_exp_indices = to_indices(&sm.trace.decomposed_exp.r_exp);
     let z_hi_indices = to_indices(&sm.trace.decomposed_exp.z_hi);
     let z_lo_indices = to_indices(&sm.trace.decomposed_exp.z_lo);
-    let sat_diff_lookup_bits = to_lookup_bits(&sm.trace.decomposed_exp.sat_diff, SAT_DIFF_RC_BITS);
+    let sat_diff_lookup_bits = to_lookup_bits(
+        &sm.trace.decomposed_exp.sat_diff,
+        sat_diff_rc_bits(scale_bits as usize),
+    );
     let sat_diff_indices = to_indices(&sm.trace.decomposed_exp.sat_diff);
 
     let base = sm.trace.decomposed_exp.lut.base as u64;

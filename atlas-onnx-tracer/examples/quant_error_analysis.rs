@@ -12,10 +12,7 @@ const TOKENIZER_PATH: &str = "atlas-onnx-tracer/models/gpt2/tokenizer.json";
 const VOCAB_SIZE: usize = 50257;
 const SEP: &str = "═══════════════════════════════════════════════════════════";
 const THIN: &str = "───────────────────────────────────────────────────────────";
-#[cfg(feature = "fused-ops")]
 const SCALE: i32 = 12;
-#[cfg(not(feature = "fused-ops"))]
-const SCALE: i32 = 8;
 
 /// Quantization error analysis for GPT-2.
 ///
@@ -288,18 +285,13 @@ fn step5_greedy_generation(ctx: &Ctx) {
 
 /// Build the standard `RunArgs` with scale=12 and no padding.
 fn make_run_args(seq_len: usize) -> RunArgs {
-    let mut args = RunArgs::new([
+    RunArgs::new([
         ("batch_size", 1),
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
     ])
     .set_scale(SCALE)
-    .with_padding(false);
-    #[cfg(not(feature = "fused-ops"))]
-    {
-        args = args.with_pre_rebase_nonlinear(true);
-    }
-    args
+    .with_padding(false)
 }
 
 /// Prepare quantized i32 input tensors: `[input_ids, position_ids, attention_mask]`.

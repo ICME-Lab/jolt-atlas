@@ -102,15 +102,14 @@ fn handle_einsum(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     );
     let tract_string = op.axes.to_string();
     let scale = hctx.run_args.scale;
-    let builder = HandlerBuilder::new(hctx).simple_op(Operator::Einsum(Einsum {
-        equation: tract_string,
-        scale,
-    }));
-
-    #[cfg(not(feature = "fused-ops"))]
-    let builder = builder.with_auto_rebase();
-
-    builder.build()
+    // Einsum fuses the rescaling rebase into its own kernel (see `Einsum::f`), so
+    // no separate auto-rebase `Div` node is emitted.
+    HandlerBuilder::new(hctx)
+        .simple_op(Operator::Einsum(Einsum {
+            equation: tract_string,
+            scale,
+        }))
+        .build()
 }
 
 /// Iff: Conditional selection (if-then-else).

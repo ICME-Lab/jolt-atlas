@@ -79,6 +79,13 @@ canonical_serde_enum! {
         /// * `1` – decomposition index `d`
         SqrtDivRangeCheckRaD(usize, usize),
 
+        /// Interleaved remainder `R` and (constant) divisor one-hot polynomial for
+        /// the fused **MeanOfSquares** rescaling-remainder range check `R < N·2^S`
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        MeanOfSquaresRangeCheckRaD(usize, usize),
+
         /// Interleaved `r_s` and square-root one-hot polynomial for the
         /// **Sqrt** range check.
         ///
@@ -168,6 +175,15 @@ canonical_serde_enum! {
         /// * `0` – node index
         /// * `1` – decomposition index `d`
         ClampRaD(usize, usize),
+
+        /// One-hot read-address decomposition for a fused rescaling
+        /// **remainder** range check (`R ∈ [0, 2^S)`). Shared by every operator
+        /// that fuses an i64-accumulate + rescaling division (einsum, `Mul`,
+        /// `Square`, `Cube`).
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        RescaleRemainderRaD(usize, usize),
     }
 }
 
@@ -272,6 +288,12 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         TeleportRangeCheckRa(usize),
+
+        /// Read-address polynomial derived from
+        /// [`CommittedPoly::MeanOfSquaresRangeCheckRaD`].
+        ///
+        /// * `0` – node index
+        MeanOfSquaresRangeCheckRa(usize),
 
         // ----- Division / square-root remainder & quotient polynomials -----
         /// Remainder polynomial for integer division advice.
@@ -393,5 +415,23 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         ClampRa(usize),
+
+        /// Remainder `R = acc mod 2^S` of a fused rescaling division
+        /// (`acc = rescaled·2^S + R`, where `acc` is the operator's raw i64
+        /// accumulation). Range-checked to `[0, 2^S)`; bound into the operator
+        /// sumcheck's input claim. Shared by einsum, `Mul`, `Square`, `Cube`.
+        ///
+        /// * `0` – node index
+        RescaleRemainder(usize),
+
+        /// One-hot read-address polynomial for the rescaling-remainder range
+        /// check. Virtualized — [`CommittedPoly::RescaleRemainderRaD`] commits
+        /// its decomposition.
+        ///
+        /// * `0` – node index
+        RescaleRemainderRa(usize),
+
+        // TODO: rm once clamp is implemted for tanh
+        DummyClampedTanhInput(usize),
     }
 }

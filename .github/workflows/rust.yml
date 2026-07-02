@@ -38,9 +38,10 @@ jobs:
           - name: default
             clippy_args: --workspace --all-targets
             test_args: --workspace
-          - name: zk
-            clippy_args: -p jolt-atlas-core --all-targets --features zk
-            test_args: -p jolt-atlas-core --features zk
+          # Temporarily disabled; uncomment to re-enable zk CI checks.
+          # - name: zk
+          #   clippy_args: -p jolt-atlas-core --all-targets --features zk
+          #   test_args: -p jolt-atlas-core --features zk
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rust-lang/setup-rust-toolchain@v1

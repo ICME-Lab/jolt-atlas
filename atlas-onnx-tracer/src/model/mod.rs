@@ -277,7 +277,26 @@ impl Model {
                 | Operator::Add(_)
                 | Operator::Sub(_)
                 | Operator::Sum(_)
+                // Einsum commits a one-hot decomposition for its fused rescaling
+                // remainder range check (`k_chunk`-wide chunks, like Add/Sum).
+                | Operator::Einsum(_)
+                // MeanOfSquares commits one-hot decompositions for its saturating
+                // clamp + the `R < N·2^S` rescaling-remainder range check.
+                | Operator::MeanOfSquares(_)
                 | Operator::SoftmaxLastAxis(_) => {
+                    LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements())
+                }
+                // Fused Mul/Square/Cube (`scale > 0`) commit one-hot
+                // decompositions for their saturating clamp + rescaling-remainder
+                // range check, just like Add/Einsum. Raw (`scale == 0`) building-
+                // block variants commit nothing and fall through to the catch-all.
+                Operator::Mul(op) if op.scale > 0 => {
+                    LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements())
+                }
+                Operator::Square(op) if op.scale > 0 => {
+                    LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements())
+                }
+                Operator::Cube(op) if op.scale > 0 => {
                     LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements())
                 }
                 Operator::ScalarConstDiv(_) => log_2(node.pow2_padded_num_output_elements()),
@@ -363,11 +382,6 @@ pub struct RunArgs {
     /// Whether to pad all dimensions to powers of 2.
     /// Defaults to true.
     pub pad_to_power_of_2: bool,
-    /// HACK: When true, divide inputs by 1<<scale BEFORE Square/Cube to prevent
-    /// i32 overflow, instead of dividing the output AFTER (the default rebase).
-    /// Enable for large models (GPT-2, BGE) whose weight magnitudes would overflow.
-    /// TODO: Remove this once fused i64-precision ops are the default path.
-    pub pre_rebase_nonlinear: bool,
 }
 
 impl Default for RunArgs {
@@ -378,7 +392,6 @@ impl Default for RunArgs {
             variables,
             scale: DEFAULT_SCALE,
             pad_to_power_of_2: true,
-            pre_rebase_nonlinear: false,
         }
     }
 }
@@ -404,7 +417,6 @@ impl RunArgs {
             variables,
             scale: DEFAULT_SCALE,
             pad_to_power_of_2: true,
-            pre_rebase_nonlinear: false,
         }
     }
 
@@ -428,7 +440,6 @@ impl RunArgs {
             variables,
             scale,
             pad_to_power_of_2: true,
-            pre_rebase_nonlinear: false,
         }
     }
 
@@ -464,14 +475,6 @@ impl RunArgs {
     /// ```
     pub fn with_padding(mut self, enable: bool) -> Self {
         self.pad_to_power_of_2 = enable;
-        self
-    }
-
-    /// HACK: Enable pre-rebase nonlinear decomposition for large models.
-    /// Divides by scale BEFORE Square/Cube to prevent i32 overflow.
-    /// TODO: Remove once fused i64-precision ops are the default path.
-    pub fn with_pre_rebase_nonlinear(mut self, enable: bool) -> Self {
-        self.pre_rebase_nonlinear = enable;
         self
     }
 }

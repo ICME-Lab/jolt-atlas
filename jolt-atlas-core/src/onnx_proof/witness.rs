@@ -21,8 +21,8 @@ use crate::{
         neural_teleport::{division::compute_division, n_bits_to_usize},
         ops::{rsqrt::Q_SQUARE, softmax_last_axis::rc::SAT_DIFF_RC_BITS},
         range_checking::range_check_operands::{
-            DivRangeCheckOperands, RangeCheckingOperandsTrait, RiRangeCheckOperands,
-            RsRangeCheckOperands, TeleportRangeCheckOperands,
+            DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckingOperandsTrait,
+            RiRangeCheckOperands, RsRangeCheckOperands, TeleportRangeCheckOperands,
         },
     },
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
@@ -102,6 +102,37 @@ fn build_teleport_activation_rad_witness<F: JoltField>(
 ) -> MultilinearPolynomial<F> {
     let (quotient, _remainder) = compute_division(input, tau);
     let lookup_indices: Vec<usize> = quotient
+        .par_iter()
+        .with_min_len(par_enabled())
+        .map(|&x| n_bits_to_usize(x, log_table))
+        .collect();
+    let one_hot_params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_table);
+    let h_indices =
+        subprotocols::shout::compute_instruction_h_indices(&lookup_indices, &one_hot_params);
+    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+        h_indices[d]
+            .par_iter()
+            .with_min_len(par_enabled())
+            .map(|&h| h.map(|h| h as u16))
+            .collect(),
+        one_hot_params.k_chunk,
+    ))
+}
+
+// TODO: RM once clamp is implemented for tanh
+fn build_teleport_activation_rad_witness_tanh<F: JoltField>(
+    input: &Tensor<i32>,
+    tau: i32,
+    log_table: usize,
+    d: usize,
+) -> MultilinearPolynomial<F> {
+    let (quotient, _remainder) = compute_division(input, tau);
+    let clamped_tensor = atlas_onnx_tracer::ops::tanh::clamp_tensor(
+        &quotient,
+        -(1 << (log_table - 1)),
+        (1 << (log_table - 1)) - 1,
+    );
+    let lookup_indices: Vec<usize> = clamped_tensor
         .par_iter()
         .with_min_len(par_enabled())
         .map(|&x| n_bits_to_usize(x, log_table))
@@ -249,6 +280,11 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     model, trace, *node_idx, *d,
                 )
             }
+            CommittedPoly::MeanOfSquaresRangeCheckRaD(node_idx, d) => {
+                build_range_check_rad_witness::<F, MeanOfSquaresRangeCheckOperands>(
+                    model, trace, *node_idx, *d,
+                )
+            }
             CommittedPoly::SqrtRangeCheckRaD(node_idx, d) => {
                 build_range_check_rad_witness::<F, RsRangeCheckOperands>(
                     model, trace, *node_idx, *d,
@@ -324,7 +360,12 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 };
                 let layer_data = Trace::layer_data(trace, computation_node);
                 let input = &layer_data.operands[0];
-                build_teleport_activation_rad_witness(input, inner.tau, inner.log_table, *d_idx)
+                build_teleport_activation_rad_witness_tanh(
+                    input,
+                    inner.tau,
+                    inner.log_table,
+                    *d_idx,
+                )
             }
 
             CommittedPoly::ErfRaD(node_idx, d_idx) => {
@@ -438,6 +479,17 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let lookup_indices: Vec<usize> =
                     st.decomposed_exp.z_lo.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_lo, *d)
+            }
+            CommittedPoly::RescaleRemainderRaD(node_idx, d) => {
+                // Fused rescaling remainder `R = acc mod 2^S ∈ [0, 2^S)`, padded
+                // to the node-output cycle domain . Shared by einsum, Mul,
+                // Square, Cube via the per-operator re-execution dispatch.
+                let node = &model.graph.nodes[node_idx];
+                let bits = crate::onnx_proof::fused_rebase::rebase_bits(&node.operator)
+                    .expect("RescaleRemainderRaD requested for a non-rescaling operator");
+                let r = crate::onnx_proof::fused_rebase::rebase_remainder(node, trace);
+                let lookup_indices: Vec<usize> = r.data().iter().map(|&v| v as usize).collect();
+                build_onehot_witness(&lookup_indices, bits as usize, *d)
             }
         }
     }

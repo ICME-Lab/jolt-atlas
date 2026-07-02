@@ -131,6 +131,17 @@ pub(crate) fn clamp_intermediate(node: &ComputationNode, trace: &Trace) -> Tenso
             };
             sum_axes_i64(operand, &s.axes).expect("clamp lookup: sum_axes_i64")
         }
+        // Einsum / Mul / Square / Cube: the pre-clamp value is the floor-rebased
+        // accumulation `rescaled = acc >> S` . The remainder of the
+        // division is range-checked separately (see [`super::fused_rebase`]);
+        // here we only discharge the saturating clamp `output = SatClamp(rescaled)`.
+        Operator::Einsum(op) => atlas_onnx_tracer::ops::einsum::einsum_intermediate(op, &operands),
+        Operator::Mul(op) => atlas_onnx_tracer::ops::mul::mul_intermediate(op, &operands),
+        Operator::Square(op) => atlas_onnx_tracer::ops::square::square_intermediate(op, &operands),
+        Operator::Cube(op) => atlas_onnx_tracer::ops::cube::cube_intermediate(op, &operands),
+        Operator::MeanOfSquares(op) => {
+            atlas_onnx_tracer::ops::mean_of_squares::mos_intermediate(op, &operands)
+        }
         other => panic!("clamp lookup: unsupported operator {other:?}"),
     };
     raw.padded_next_power_of_two()

@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 // ── Submodules ───────────────────────────────────────────────────────────
 
 pub mod clamp_lookups;
+pub mod fused_rebase;
 pub mod neural_teleport;
 pub mod op_lookups;
 pub mod ops;

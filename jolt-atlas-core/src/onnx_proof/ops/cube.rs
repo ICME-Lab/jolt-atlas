@@ -1,6 +1,6 @@
 use crate::{
-    impl_standard_sumcheck_proof_api,
-    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
+    impl_fused_rescale_proof_api,
+    onnx_proof::{fused_rebase, ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
@@ -34,7 +34,7 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 
-impl_standard_sumcheck_proof_api!(Cube, CubeParams, CubeProver, CubeVerifier);
+impl_fused_rescale_proof_api!(Cube, CubeParams, CubeProver, CubeVerifier);
 
 /// Shared parameter block for the element-wise cube sumcheck proof.
 #[derive(Clone)]
@@ -61,9 +61,9 @@ impl<F: JoltField> SumcheckInstanceParams<F> for CubeParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        accumulator
-            .get_node_output_opening(self.computation_node.idx)
-            .1
+        // Fused rescaling seam: `acc(r) = rescaled·2^(2S) + R` (or the plain
+        // output opening when not fused). See [`fused_rebase`] .
+        fused_rebase::fused_input_claim(accumulator, &self.computation_node)
     }
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -276,6 +276,33 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x889);
         let input = Tensor::<i32>::random_small(&mut rng, &[t]);
         let model = cube_model(t);
+        unit_test_op(model, &[input]);
+    }
+
+    /// Build a fused-`Cube` (scale 12 → rebase by `2^24`) model with all-`input_value`
+    /// input so `x³ >> 24` saturates the i32 clamp . `x = 2^19+1` keeps `x³`
+    /// within i64 while overflowing i32, with a non-zero remainder.
+    fn saturating_cube_model(input_value: i32, t: usize) -> (Model, Tensor<i32>) {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![t]);
+        let res = b.cube(i, 12);
+        b.mark_output(res);
+        let input = Tensor::new(Some(&vec![input_value; t]), &[t]).unwrap();
+        (b.build(), input)
+    }
+
+    #[test]
+    fn test_cube_saturating_clamp_positive() {
+        let big = (1 << 19) + 1;
+        let (model, input) = saturating_cube_model(big, 1 << 4);
+        unit_test_op(model, &[input]);
+    }
+
+    #[test]
+    fn test_cube_saturating_clamp_negative() {
+        // x³ < 0 for x < 0 → floor-rebase then clamp to i32::MIN, non-zero remainder.
+        let big = (1 << 19) + 1;
+        let (model, input) = saturating_cube_model(-big, 1 << 4);
         unit_test_op(model, &[input]);
     }
 }

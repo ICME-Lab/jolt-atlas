@@ -490,7 +490,12 @@ fn soundness_tanh_tau_rangecheck_bypass_is_rejected() {
             &mut prover.transcript,
             op.clone(),
         );
-        let mut exec_sumcheck = TanhProver::initialize(&prover.trace, params);
+        let mut exec_sumcheck = TanhProver::initialize(
+            &prover.trace,
+            params,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
         let (exec_proof, _) = Sumcheck::prove(
             &mut exec_sumcheck,
             &mut prover.accumulator,

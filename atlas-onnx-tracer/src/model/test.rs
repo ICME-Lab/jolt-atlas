@@ -4,7 +4,10 @@
 //! without needing to load from ONNX files.
 
 use crate::{
-    node::{ComputationNode, handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE},
+    node::{
+        ComputationNode,
+        handlers::activation::{NEURAL_TELEPORT_LOG_TABLE_SIZE, NEURAL_TELEPORT_TAU},
+    },
     ops::*,
     tensor::Tensor,
     utils::f32::F32,
@@ -267,11 +270,41 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
-    /// Add a square node.
+    /// Add a (fused, rescaling) mean-of-squares reduction node.
+    pub fn mean_of_squares(
+        &mut self,
+        input: Wire,
+        axes: Vec<usize>,
+        output_dims: Vec<usize>,
+    ) -> Wire {
+        let id = self.alloc();
+        let input_dims = &self.nodes[&input].output_dims;
+        let count: usize = axes.iter().map(|&ax| input_dims[ax]).product();
+        let node = ComputationNode::new(
+            id,
+            Operator::MeanOfSquares(MeanOfSquares {
+                axes,
+                scale: DEFAULT_SCALE as i32,
+                count,
+            }),
+            vec![input],
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
+    /// Add a (fused, rescaling) square node.
     pub fn square(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
         let output_dims = self.nodes[&input].output_dims.clone();
-        let node = ComputationNode::new(id, Operator::Square(Square), vec![input], output_dims);
+        let node = ComputationNode::new(
+            id,
+            Operator::Square(Square {
+                scale: DEFAULT_SCALE as i32, // TODO: Pass in scale from runtime args instead of hardcoding here.
+            }),
+            vec![input],
+            output_dims,
+        );
         self.insert_node(node)
     }
 
@@ -387,7 +420,7 @@ impl ModelBuilder {
     pub fn tanh(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
         let output_dims = self.nodes[&input].output_dims.clone();
-        let tau = 2;
+        let tau = NEURAL_TELEPORT_TAU;
         let node = ComputationNode::new(
             id,
             Operator::Tanh(Tanh {

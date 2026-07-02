@@ -67,7 +67,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for SignedIdentityPoly<F> {
             y += w * r_i;
         });
         let sign_bit = r[0].into();
-        let w = F::from_u64(self.num_vars.pow2() as u64);
+        let w = F::from_u128(1 << self.num_vars);
         y - sign_bit * w
     }
 
@@ -86,8 +86,10 @@ impl<F: JoltField> PolynomialEvaluation<F> for SignedIdentityPoly<F> {
                 // Weight of the variable being bound this round.
                 let slope = F::from_u128(1 << self.num_bound_vars);
                 // Two's-complement sign penalty: sign bit contributes -2^(n-1),
-                // encoded here as (slope_at_sign_bit - 2^n).
-                let sign_penalty = F::from_u64(self.num_vars.pow2() as u64);
+                // encoded here as (slope_at_sign_bit - 2^n). Use a u128 shift so
+                // this stays correct for `num_vars >= 64` (64-bit clamp lookups),
+                // matching `evaluate`'s `from_u128(1 << num_vars)`.
+                let sign_penalty = F::from_u128(1u128 << self.num_vars);
 
                 if self.sign_bit_pos() == self.num_bound_vars {
                     // Binding the sign bit: p(0) = bound_value (sign=0, no penalty),
@@ -203,12 +205,13 @@ impl<F: JoltField> PrefixPolynomial<F> for SignedIdentityPoly<F> {
             PhasePosition::AtMsb => (0..chunk_len.pow2())
                 .map(|i| {
                     let sign_bit = ((i >> (chunk_len - 1)) & 1) as u32;
-                    let res = bound_value + F::from_u64(((i << suffix_len) % (1 << xlen)) as u64);
+                    let res =
+                        bound_value + F::from_u128(((i << suffix_len) as u128) % (1u128 << xlen));
                     res + sign_correction::<F>(sign_bit, xlen)
                 })
                 .collect(),
             PhasePosition::AfterMsb => (0..chunk_len.pow2())
-                .map(|i| bound_value + F::from_u64((i << suffix_len) as u64))
+                .map(|i| bound_value + F::from_u128((i << suffix_len) as u128))
                 .collect(),
         };
         make_cached_poly(evals, chunk_len)
@@ -379,7 +382,7 @@ fn make_cached_poly<F: JoltField>(evals: Vec<F>, chunk_len: usize) -> CachedPoly
 
 /// Returns `-sign_bit * 2^X_LEN` as a field element.
 fn sign_correction<F: JoltField>(sign_bit: u32, xlen: usize) -> F {
-    -F::from_u32(sign_bit) * F::from_u64(xlen.pow2() as u64)
+    -F::from_u32(sign_bit) * F::from_u128(1 << xlen)
 }
 
 /// Classifies the current phase relative to the MSB boundary.

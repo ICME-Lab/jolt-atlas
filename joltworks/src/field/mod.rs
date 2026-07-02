@@ -219,7 +219,10 @@ pub trait JoltField:
     /// Conversion from a 8-bit signed integer to a field element.
     #[cfg(test)]
     fn from_i8(val: i8) -> Self;
-    /// Conversion from a 64-bit signed integer to a field element.
+    /// Conversion from a 16-bit signed integer to a field element.
+    #[cfg(test)]
+    fn from_i16(val: i16) -> Self;
+    /// Conversion from a 32-bit signed integer to a field element.
     fn from_i32(val: i32) -> Self;
     /// Conversion from a 64-bit signed integer to a field element.
     fn from_i64(val: i64) -> Self;

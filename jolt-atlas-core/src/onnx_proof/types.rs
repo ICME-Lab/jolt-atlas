@@ -51,6 +51,22 @@ pub enum ProofType {
     SoftmaxStage3 = 7,
     /// Softmax stage 4
     SoftmaxStage4 = 8,
+    /// Axis-reduction sumcheck for `Sum` (proves the pre-clamp accumulation
+    /// equals the sum over the reduced axes; the clamp itself is a separate
+    /// `Execution` lookup).
+    SumReduction = 9,
+    /// Einsum contraction (matmul) sumcheck proving
+    /// `Σ_k L·R = rescaled·2^S + R` (the clamp lookup itself is a separate
+    /// `Execution` proof; analogous to `SumReduction`).
+    EinsumMatmul = 10,
+    /// Read-address one-hot checks for a fused rescaling-remainder range
+    /// check (the clamp's one-hot checks use `RaOneHotChecks`). Shared by
+    /// einsum, `Mul`, `Square`, `Cube`.
+    RescaleRemainderRaChecks = 11,
+    /// Element-wise arithmetic sumcheck for a fused `Mul`/`Square`/`Cube`,
+    /// proving `acc(r) = rescaled·2^S + R` (the clamp lookup is a separate
+    /// `Execution` proof; the einsum analogue is `EinsumMatmul`).
+    RescaleArith = 12,
 }
 
 impl TryFrom<u8> for ProofType {
@@ -67,6 +83,10 @@ impl TryFrom<u8> for ProofType {
             6 => Ok(Self::SoftmaxStage2),
             7 => Ok(Self::SoftmaxStage3),
             8 => Ok(Self::SoftmaxStage4),
+            9 => Ok(Self::SumReduction),
+            10 => Ok(Self::EinsumMatmul),
+            11 => Ok(Self::RescaleRemainderRaChecks),
+            12 => Ok(Self::RescaleArith),
             _ => Err(SerializationError::InvalidData),
         }
     }

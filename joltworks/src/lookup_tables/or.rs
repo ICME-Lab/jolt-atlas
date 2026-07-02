@@ -54,17 +54,6 @@ impl<const XLEN: usize> PrefixSuffixDecompositionTrait<XLEN> for OrTable<XLEN> {
         let [or_prefix] = prefixes.try_into().unwrap();
         or_prefix * one_suffix + or_suffix
     }
-
-    #[cfg(test)]
-    fn combine_test<F: JoltField>(
-        &self,
-        prefixes: &[PrefixEval<F>],
-        suffixes: &[SuffixEval<F>],
-    ) -> F {
-        debug_assert_eq!(self.suffixes().len(), suffixes.len());
-        let [one, or] = suffixes.try_into().unwrap();
-        prefixes[Prefixes::Or] * one + or
-    }
 }
 
 #[cfg(test)]

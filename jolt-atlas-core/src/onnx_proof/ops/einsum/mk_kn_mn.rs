@@ -1,147 +1,59 @@
-use common::parallel::par_enabled;
-use std::array;
+//! `mk,kn->mn` layout (standard matrix multiply) for the einsum [`dot`](super::dot) engine.
 
-use crate::utils::{
-    dims::EinsumDims,
-    opening_access::{AccOpeningAccessor, Target},
+use crate::{
+    onnx_proof::ops::einsum::dot::{EinsumLayout, EqSchedule, Folded},
+    utils::dims::EinsumDims,
 };
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-};
+use atlas_onnx_tracer::tensor::Tensor;
+use common::parallel::par_enabled;
 use joltworks::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
-        multilinear_polynomial::{
-            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
-        },
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
-            BIG_ENDIAN,
-        },
-        unipoly::UniPoly,
+        multilinear_polynomial::MultilinearPolynomial,
+        opening_proof::{OpeningPoint, BIG_ENDIAN},
     },
-    subprotocols::{
-        sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
-    },
-    transcripts::Transcript,
     utils::math::Math,
 };
 use rayon::prelude::*;
 
-#[cfg(feature = "zk")]
-use joltworks::subprotocols::blindfold::{
-    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
-};
-
-const DEGREE_BOUND: usize = 2;
-
-/// Parameters for proving Einsum mk,kn->mn operations.
-///
-/// This implements standard matrix multiplication.
-#[derive(Clone)]
-pub struct MkKnMnParams<F: JoltField> {
-    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
-    computation_node: ComputationNode,
-    einsum_dims: EinsumDims,
+/// `mk,kn->mn`: contract the shared `k` axis of two matrices.
+pub struct MkKnMnLayout {
+    m: usize,
+    n: usize,
+    k: usize,
 }
 
-impl<F: JoltField> MkKnMnParams<F> {
-    /// Create new parameters for mk,kn->mn einsum.
-    pub fn new(
-        computation_node: ComputationNode,
-        einsum_dims: EinsumDims,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Self {
-        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let r_node_output = accessor.get_reduced_opening().0;
+impl MkKnMnLayout {
+    /// Build the layout from the canonical einsum dims.
+    pub fn new(dims: &EinsumDims) -> Self {
         Self {
-            r_node_output,
-            computation_node,
-            einsum_dims,
+            m: dims.output()[0],
+            n: dims.output()[1],
+            k: dims.right_operand()[0],
         }
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for MkKnMnParams<F> {
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
-        accessor.get_reduced_opening().1
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::new(challenges.to_vec())
-    }
-
+impl<F: JoltField> EinsumLayout<F> for MkKnMnLayout {
     fn num_rounds(&self) -> usize {
-        self.einsum_dims.right_operand()[0].log_2()
+        self.k.log_2()
     }
 
-    #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> InputClaimConstraint {
-        InputClaimConstraint::default()
+    fn schedule(&self) -> EqSchedule {
+        EqSchedule::None
     }
 
-    #[cfg(feature = "zk")]
-    fn input_constraint_challenge_values(
+    fn fold(
         &self,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        Vec::new()
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
-        use crate::utils::opening_access::OpeningIdBuilder;
-        let builder = OpeningIdBuilder::new(&self.computation_node);
-        let left_id = builder.nodeio(Target::Input(0));
-        let right_id = builder.nodeio(Target::Input(1));
-        Some(OutputClaimConstraint::sum_of_products(vec![
-            ProductTerm::product(vec![
-                ValueSource::Opening(left_id),
-                ValueSource::Opening(right_id),
-            ]),
-        ]))
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_constraint_challenge_values(&self, _sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        vec![]
-    }
-}
-
-/// Prover state for mk,kn->mn einsum sumcheck protocol.
-pub struct MkKnMnProver<F: JoltField> {
-    params: MkKnMnParams<F>,
-    left_operand: MultilinearPolynomial<F>,
-    right_operand: MultilinearPolynomial<F>,
-}
-
-impl<F: JoltField> MkKnMnProver<F> {
-    /// Initialize the prover with trace data and parameters for mk,kn->mn einsum.
-    #[tracing::instrument(skip_all, name = "MkKnMnProver::initialize")]
-    pub fn initialize(trace: &Trace, params: MkKnMnParams<F>) -> Self {
-        let LayerData {
-            operands,
-            output: _,
-        } = Trace::layer_data(trace, &params.computation_node);
-        let [left_operand, right_operand] = operands[..] else {
-            panic!("Expected two operands for MkKnMn operation")
-        };
-        let (m, n, k) = (
-            params.einsum_dims.output()[0],
-            params.einsum_dims.output()[1],
-            params.einsum_dims.right_operand()[0],
-        );
-        let (r_m, r_n) = params.r_node_output.split_at(m.log_2());
+        left_operand: &Tensor<i32>,
+        right_operand: &Tensor<i32>,
+        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
+    ) -> Folded<F> {
+        let (m, n, k) = (self.m, self.n, self.k);
+        let (r_m, r_n) = r_node_output.split_at(m.log_2());
         let (eq_r_m, eq_r_n) = (EqPolynomial::evals(&r_m.r), EqPolynomial::evals(&r_n.r));
-        let left_operand: Vec<F> = (0..k)
+        let left: Vec<F> = (0..k)
             .into_par_iter()
             .with_min_len(par_enabled())
             .map(|j| {
@@ -150,7 +62,7 @@ impl<F: JoltField> MkKnMnProver<F> {
                     .sum()
             })
             .collect();
-        let right_operand: Vec<F> = (0..k)
+        let right: Vec<F> = (0..k)
             .into_par_iter()
             .with_min_len(par_enabled())
             .map(|j| {
@@ -159,135 +71,30 @@ impl<F: JoltField> MkKnMnProver<F> {
                     .sum()
             })
             .collect();
-        let left_operand = MultilinearPolynomial::from(left_operand);
-        let right_operand = MultilinearPolynomial::from(right_operand);
-        Self {
-            params,
-            left_operand,
-            right_operand,
+        Folded {
+            left: MultilinearPolynomial::from(left),
+            right: MultilinearPolynomial::from(right),
+            eq: None,
         }
     }
-}
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MkKnMnProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        let Self {
-            left_operand,
-            right_operand,
-            ..
-        } = self;
-        let half_poly_len = left_operand.len() / 2;
-        let uni_poly_evals: [F; 2] = (0..half_poly_len)
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|i| {
-                let l_evals = left_operand.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::HighToLow);
-                let r_evals =
-                    right_operand.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::HighToLow);
-                [l_evals[0] * r_evals[0], l_evals[1] * r_evals[1]]
-            })
-            .reduce(
-                || [F::zero(); 2],
-                |running, new| array::from_fn(|i| running[i] + new[i]),
-            );
-        UniPoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        self.left_operand
-            .bind_parallel(r_j, BindingOrder::HighToLow);
-        self.right_operand
-            .bind_parallel(r_j, BindingOrder::HighToLow);
-    }
-
-    fn cache_openings(
+    fn operand_points(
         &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let sumcheck_challenges = sumcheck_challenges.into_opening();
-        let (r_m, r_n) = self
-            .params
-            .r_node_output
-            .split_at(self.params.einsum_dims.output()[0].log_2());
-        let r_left_node_output = [r_m.r.as_slice(), &sumcheck_challenges].concat();
-        let left_opening_point = self.params.normalize_opening_point(&r_left_node_output);
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, Default::default());
-        provider.append_nodeio_at(
-            Target::Input(0),
-            left_opening_point,
-            self.left_operand.final_claim(),
-        );
-
-        let r_right_node_output = [sumcheck_challenges.as_slice(), &r_n.r].concat();
-        let right_opening_point = self.params.normalize_opening_point(&r_right_node_output);
-        provider.append_nodeio_at(
-            Target::Input(1),
-            right_opening_point,
-            self.right_operand.final_claim(),
-        );
-    }
-}
-
-/// Verifier for mk,kn->mn einsum sumcheck protocol.
-pub struct MkKnMnVerifier<F: JoltField> {
-    params: MkKnMnParams<F>,
-}
-
-impl<F: JoltField> MkKnMnVerifier<F> {
-    /// Create new verifier for mk,kn->mn einsum.
-    #[tracing::instrument(skip_all, name = "MkKnMnVerifier::new")]
-    pub fn new(
-        computation_node: ComputationNode,
-        einsum_dims: EinsumDims,
-        accumulator: &VerifierOpeningAccumulator<F>,
-    ) -> Self {
-        let params = MkKnMnParams::new(computation_node, einsum_dims, accumulator);
-        Self { params }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MkKnMnVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
+        sumcheck_challenges: &[F],
+    ) -> (Vec<F>, Vec<F>) {
+        let (r_m, r_n) = r_node_output.split_at(self.m.log_2());
+        let left = [r_m.r.as_slice(), sumcheck_challenges].concat();
+        let right = [sumcheck_challenges, r_n.r.as_slice()].concat();
+        (left, right)
     }
 
-    fn expected_output_claim(
+    fn output_eq(
         &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
+        _r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
         _sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-        let left_operand_claim = accessor.get_nodeio(Target::Input(0)).1;
-        let right_operand_claim = accessor.get_nodeio(Target::Input(1)).1;
-        left_operand_claim * right_operand_claim
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let sumcheck_challenges = sumcheck_challenges.into_opening();
-        let (r_m, r_n) = self
-            .params
-            .r_node_output
-            .split_at(self.params.einsum_dims.output()[0].log_2());
-        let r_left_node_output = [r_m.r.as_slice(), &sumcheck_challenges].concat();
-        let left_opening_point = self.params.normalize_opening_point(&r_left_node_output);
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, Default::default());
-        provider.append_nodeio_at(Target::Input(0), left_opening_point);
-        let r_right_node_output = [sumcheck_challenges.as_slice(), &r_n.r].concat();
-        let right_opening_point = self.params.normalize_opening_point(&r_right_node_output);
-        provider.append_nodeio_at(Target::Input(1), right_opening_point);
+        F::one()
     }
 }
 
@@ -326,6 +133,44 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x879);
         let input = Tensor::<i32>::random_small(&mut rng, &[m, k]);
         let model = matmul_model(&mut rng, m, k, n);
+        unit_test_op(model, &[input]);
+    }
+
+    /// Build a `mk,kn->mn` model with all-`input_value` input and all-`const_value`
+    /// constant, so the rebased accumulation `(k · input_value · const_value) >> S`
+    /// is predictable and large enough to saturate the fused i32 clamp .
+    /// The `+1` in the callers makes the remainder `R = acc mod 2^S` non-zero.
+    fn saturating_model(
+        input_value: i32,
+        const_value: i32,
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> (Model, Tensor<i32>) {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![m, k]);
+        let c = b.constant(Tensor::new(Some(&vec![const_value; k * n]), &[k, n]).unwrap());
+        let res = b.einsum("mk,kn->mn", vec![i, c], vec![m, n]);
+        b.mark_output(res);
+        let input = Tensor::new(Some(&vec![input_value; m * k]), &[m, k]).unwrap();
+        (b.build(), input)
+    }
+
+    #[test]
+    fn test_mk_kn_mn_saturating_clamp_positive() {
+        // acc ≈ 16·(2^20)² = 2^44, rescaled = acc >> 8 ≈ 2^36 ≫ i32::MAX → clamps
+        // to i32::MAX, with a non-zero remainder.
+        let big = (1 << 20) + 1;
+        let (model, input) = saturating_model(big, big, 1 << 1, 1 << 4, 1 << 1);
+        unit_test_op(model, &[input]);
+    }
+
+    #[test]
+    fn test_mk_kn_mn_saturating_clamp_negative() {
+        // Opposite signs → large negative accumulation: floor-rebase (acc < 0)
+        // then clamp to i32::MIN, with a non-zero Euclidean remainder.
+        let big = (1 << 20) + 1;
+        let (model, input) = saturating_model(-big, big, 1 << 1, 1 << 4, 1 << 1);
         unit_test_op(model, &[input]);
     }
 }

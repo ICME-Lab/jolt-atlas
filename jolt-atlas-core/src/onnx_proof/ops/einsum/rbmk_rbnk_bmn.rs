@@ -1,44 +1,26 @@
-use common::parallel::par_enabled;
-use std::array;
+//! `rbmk,rbnk->bmn`-family layouts for the einsum [`dot`](super::dot) engine.
+//!
+//! Covers three Qwen patterns that share a retained/reduced batch-pack structure:
+//! `abmk,abnk->abmn`, `acbmk,kcn->cbmn`, and `cbmk,cbkn->amn`. The first two carry
+//! a batch eq-poly (bound first, [`EqSchedule::High`]); the last is a plain dot
+//! product ([`EqSchedule::None`]).
 
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
+use crate::{
+    onnx_proof::ops::einsum::dot::{EinsumLayout, EqSchedule, Folded},
+    utils::dims::EinsumDims,
 };
+use atlas_onnx_tracer::{node::ComputationNode, tensor::Tensor};
+use common::parallel::par_enabled;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
-        multilinear_polynomial::{
-            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
-        },
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
-            BIG_ENDIAN,
-        },
-        unipoly::UniPoly,
+        multilinear_polynomial::MultilinearPolynomial,
+        opening_proof::{OpeningPoint, BIG_ENDIAN},
     },
-    subprotocols::{
-        sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
-    },
-    transcripts::Transcript,
     utils::math::Math,
 };
 use rayon::prelude::*;
-
-#[cfg(feature = "zk")]
-use joltworks::subprotocols::blindfold::{
-    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
-};
-
-use crate::utils::{
-    dims::EinsumDims,
-    opening_access::{AccOpeningAccessor, Target},
-};
-
-const DEGREE_BOUND_DOT: usize = 2;
-const DEGREE_BOUND_EQ: usize = 3;
 
 #[derive(Clone, Copy)]
 enum RbmkRbnkBmnVariant {
@@ -143,13 +125,6 @@ impl RbmkRbnkBmnVariant {
         }
     }
 
-    fn degree(self) -> usize {
-        match self {
-            Self::CbmkCbknAmn { .. } => DEGREE_BOUND_DOT,
-            Self::AbmkAbnkAbmn { .. } | Self::AcbmkKcnCbmn { .. } => DEGREE_BOUND_EQ,
-        }
-    }
-
     fn num_rounds(self) -> usize {
         match self {
             Self::AbmkAbnkAbmn {
@@ -170,308 +145,238 @@ impl RbmkRbnkBmnVariant {
     }
 }
 
-/// Parameters for the shared rbmk_rbnk_bmn einsum family.
-#[derive(Clone)]
-pub struct RbmkRbnkBmnParams<F: JoltField> {
-    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
-    computation_node: ComputationNode,
+/// `rbmk,rbnk->bmn`-family layout for the [`dot`](super::dot) engine.
+pub struct RbmkRbnkBmnLayout {
     variant: RbmkRbnkBmnVariant,
 }
 
-impl<F: JoltField> RbmkRbnkBmnParams<F> {
-    /// Creates params for the shared rbmk_rbnk_bmn family.
-    pub fn new(
-        computation_node: ComputationNode,
-        einsum_dims: EinsumDims,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Self {
-        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let r_node_output = accessor.get_reduced_opening().0;
-        let variant = RbmkRbnkBmnVariant::from_node(&computation_node, &einsum_dims);
+impl RbmkRbnkBmnLayout {
+    /// Build the layout from the node and canonical einsum dims.
+    pub fn new(computation_node: &ComputationNode, einsum_dims: &EinsumDims) -> Self {
         Self {
-            r_node_output,
-            computation_node,
-            variant,
+            variant: RbmkRbnkBmnVariant::from_node(computation_node, einsum_dims),
         }
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for RbmkRbnkBmnParams<F> {
-    fn degree(&self) -> usize {
-        self.variant.degree()
-    }
+#[allow(clippy::too_many_arguments)]
+fn build_abmk_abnk_abmn<F: JoltField>(
+    left_operand: &[i32],
+    right_operand: &[i32],
+    r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
+    log_a: usize,
+    log_b: usize,
+    log_m: usize,
+    log_n: usize,
+    log_k: usize,
+) -> (Vec<F>, Vec<F>, Vec<F>) {
+    let a = 1usize << log_a;
+    let b = 1usize << log_b;
+    let m = 1usize << log_m;
+    let n = 1usize << log_n;
+    let k = 1usize << log_k;
 
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
-        accessor.get_reduced_opening().1
-    }
+    let (r_a, r_bmn) = r_node_output.split_at(log_a);
+    let (r_b, r_mn) = r_bmn.split_at(log_b);
+    let (r_m, r_n) = r_mn.split_at(log_m);
+    let eq_r_ab = EqPolynomial::evals(&[r_a.r.as_slice(), r_b.r.as_slice()].concat());
+    let eq_r_m = EqPolynomial::evals(&r_m.r);
+    let eq_r_n = EqPolynomial::evals(&r_n.r);
 
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::new(challenges.to_vec())
-    }
+    let batch = a * b;
+    let left: Vec<F> = (0..batch * k)
+        .into_par_iter()
+        .with_min_len(par_enabled())
+        .map(|hj| {
+            let h = hj / k;
+            let j = hj % k;
+            let mut sum = F::zero();
+            for i in 0..m {
+                let idx = (h * m + i) * k + j;
+                sum += F::from_i32(left_operand[idx]) * eq_r_m[i];
+            }
+            sum
+        })
+        .collect();
+    let right: Vec<F> = (0..batch * k)
+        .into_par_iter()
+        .with_min_len(par_enabled())
+        .map(|hj| {
+            let h = hj / k;
+            let j = hj % k;
+            let mut sum = F::zero();
+            for l in 0..n {
+                let idx = (h * n + l) * k + j;
+                sum += F::from_i32(right_operand[idx]) * eq_r_n[l];
+            }
+            sum
+        })
+        .collect();
+    (left, right, eq_r_ab)
+}
 
+#[allow(clippy::too_many_arguments)]
+fn build_acbmk_kcn_cbmn<F: JoltField>(
+    left_operand: &[i32],
+    right_operand: &[i32],
+    r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
+    log_a: usize,
+    log_c: usize,
+    log_b: usize,
+    log_m: usize,
+    log_n: usize,
+    log_k: usize,
+) -> (Vec<F>, Vec<F>, Vec<F>) {
+    let a = 1usize << log_a;
+    let c = 1usize << log_c;
+    let b = 1usize << log_b;
+    let m = 1usize << log_m;
+    let n = 1usize << log_n;
+    let k = 1usize << log_k;
+
+    let (r_c, r_bmn) = r_node_output.split_at(log_c);
+    let (r_b, r_mn) = r_bmn.split_at(log_b);
+    let (r_m, r_n) = r_mn.split_at(log_m);
+    let eq_r_cb = EqPolynomial::evals(&[r_c.r.as_slice(), r_b.r.as_slice()].concat());
+    let eq_r_m = EqPolynomial::evals(&r_m.r);
+    let eq_r_n = EqPolynomial::evals(&r_n.r);
+
+    let cb = c * b;
+    let left: Vec<F> = (0..cb * a * k)
+        .into_par_iter()
+        .with_min_len(par_enabled())
+        .map(|hak| {
+            let h = hak / (a * k);
+            let rem = hak % (a * k);
+            let a_idx = rem / k;
+            let k_idx = rem % k;
+            let c_idx = h / b;
+            let b_idx = h % b;
+            let mut sum = F::zero();
+            for i in 0..m {
+                let idx = ((((a_idx * c + c_idx) * b + b_idx) * m + i) * k) + k_idx;
+                sum += F::from_i32(left_operand[idx]) * eq_r_m[i];
+            }
+            sum
+        })
+        .collect();
+    let right_base: Vec<F> = (0..c * k)
+        .into_par_iter()
+        .with_min_len(par_enabled())
+        .map(|ck| {
+            let c_idx = ck / k;
+            let k_idx = ck % k;
+            let mut sum = F::zero();
+            for n_idx in 0..n {
+                let idx = (k_idx * c + c_idx) * n + n_idx;
+                sum += F::from_i32(right_operand[idx]) * eq_r_n[n_idx];
+            }
+            sum
+        })
+        .collect();
+    let right: Vec<F> = (0..cb * a * k)
+        .into_par_iter()
+        .with_min_len(par_enabled())
+        .map(|hak| {
+            let h = hak / (a * k);
+            let rem = hak % (a * k);
+            let _a_idx = rem / k;
+            let k_idx = rem % k;
+            let c_idx = h / b;
+            right_base[c_idx * k + k_idx]
+        })
+        .collect();
+    (left, right, eq_r_cb)
+}
+
+fn build_cbmk_cbkn_amn<F: JoltField>(
+    left_operand: &[i32],
+    right_operand: &[i32],
+    r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
+    log_cb: usize,
+    log_m: usize,
+    log_n: usize,
+    log_k: usize,
+) -> (Vec<F>, Vec<F>) {
+    let cb = 1usize << log_cb;
+    let m = 1usize << log_m;
+    let n = 1usize << log_n;
+    let k = 1usize << log_k;
+
+    let split_at_mn = r_node_output.r.len().saturating_sub(log_m + log_n);
+    let (_, r_mn) = r_node_output.split_at(split_at_mn);
+    let (r_m, r_n) = r_mn.split_at(log_m);
+    let eq_r_m = EqPolynomial::evals(&r_m.r);
+    let eq_r_n = EqPolynomial::evals(&r_n.r);
+
+    let left: Vec<F> = (0..cb * k)
+        .into_par_iter()
+        .with_min_len(par_enabled())
+        .map(|hk| {
+            let h = hk / k;
+            let k_idx = hk % k;
+            let mut sum = F::zero();
+            for i in 0..m {
+                let idx = (h * m + i) * k + k_idx;
+                sum += F::from_i32(left_operand[idx]) * eq_r_m[i];
+            }
+            sum
+        })
+        .collect();
+    let right: Vec<F> = (0..cb * k)
+        .into_par_iter()
+        .with_min_len(par_enabled())
+        .map(|hk| {
+            let h = hk / k;
+            let k_idx = hk % k;
+            let mut sum = F::zero();
+            for l in 0..n {
+                let idx = (h * k + k_idx) * n + l;
+                sum += F::from_i32(right_operand[idx]) * eq_r_n[l];
+            }
+            sum
+        })
+        .collect();
+    (left, right)
+}
+
+impl<F: JoltField> EinsumLayout<F> for RbmkRbnkBmnLayout {
     fn num_rounds(&self) -> usize {
         self.variant.num_rounds()
     }
 
-    #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> InputClaimConstraint {
-        InputClaimConstraint::default()
+    fn schedule(&self) -> EqSchedule {
+        match self.variant {
+            RbmkRbnkBmnVariant::AbmkAbnkAbmn {
+                log_a,
+                log_b,
+                log_k,
+                ..
+            } => EqSchedule::High {
+                log_eq: log_a + log_b,
+                low_bits: log_k,
+            },
+            RbmkRbnkBmnVariant::AcbmkKcnCbmn {
+                log_c,
+                log_b,
+                log_a,
+                log_k,
+                ..
+            } => EqSchedule::High {
+                log_eq: log_c + log_b,
+                low_bits: log_a + log_k,
+            },
+            RbmkRbnkBmnVariant::CbmkCbknAmn { .. } => EqSchedule::None,
+        }
     }
 
-    #[cfg(feature = "zk")]
-    fn input_constraint_challenge_values(
+    fn fold(
         &self,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        Vec::new()
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
-        use crate::utils::opening_access::OpeningIdBuilder;
-        let builder = OpeningIdBuilder::new(&self.computation_node);
-        let left_id = builder.nodeio(Target::Input(0));
-        let right_id = builder.nodeio(Target::Input(1));
-        Some(OutputClaimConstraint::sum_of_products(vec![
-            ProductTerm::scaled(
-                ValueSource::Challenge(0),
-                vec![
-                    ValueSource::Opening(left_id),
-                    ValueSource::Opening(right_id),
-                ],
-            ),
-        ]))
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        let eq_eval = match self.variant {
-            RbmkRbnkBmnVariant::AbmkAbnkAbmn { log_a, log_b, .. } => {
-                let (r_a, r_bmn) = self.r_node_output.split_at(log_a);
-                let (r_b, _) = r_bmn.split_at(log_b);
-                let sumcheck_opening = sumcheck_challenges.into_opening();
-                let (r_ab, _) = sumcheck_opening.split_at(log_a + log_b);
-                EqPolynomial::mle(&[r_a.r.as_slice(), r_b.r.as_slice()].concat(), r_ab)
-            }
-            RbmkRbnkBmnVariant::AcbmkKcnCbmn { log_c, log_b, .. } => {
-                let (r_c, r_bmn) = self.r_node_output.split_at(log_c);
-                let (r_b, _) = r_bmn.split_at(log_b);
-                let sumcheck_opening = sumcheck_challenges.into_opening();
-                let (r_cb, _) = sumcheck_opening.split_at(log_c + log_b);
-                EqPolynomial::mle(&[r_c.r.as_slice(), r_b.r.as_slice()].concat(), r_cb)
-            }
-            RbmkRbnkBmnVariant::CbmkCbknAmn { .. } => F::one(),
-        };
-        vec![eq_eval]
-    }
-}
-
-/// Prover for the shared rbmk_rbnk_bmn einsum family.
-pub struct RbmkRbnkBmnProver<F: JoltField> {
-    params: RbmkRbnkBmnParams<F>,
-    left_operand: MultilinearPolynomial<F>,
-    right_operand: MultilinearPolynomial<F>,
-    eq_output_batches: Option<MultilinearPolynomial<F>>,
-    eq_bound_claim: Option<F>,
-    #[cfg(debug_assertions)]
-    original_left: Vec<i32>,
-    #[cfg(debug_assertions)]
-    original_right: Vec<i32>,
-}
-
-impl<F: JoltField> RbmkRbnkBmnProver<F> {
-    #[allow(clippy::too_many_arguments)]
-    fn build_abmk_abnk_abmn(
-        left_operand: &[i32],
-        right_operand: &[i32],
-        params: &RbmkRbnkBmnParams<F>,
-        log_a: usize,
-        log_b: usize,
-        log_m: usize,
-        log_n: usize,
-        log_k: usize,
-    ) -> (Vec<F>, Vec<F>, Vec<F>) {
-        let a = 1usize << log_a;
-        let b = 1usize << log_b;
-        let m = 1usize << log_m;
-        let n = 1usize << log_n;
-        let k = 1usize << log_k;
-
-        let (r_a, r_bmn) = params.r_node_output.split_at(log_a);
-        let (r_b, r_mn) = r_bmn.split_at(log_b);
-        let (r_m, r_n) = r_mn.split_at(log_m);
-        let eq_r_ab = EqPolynomial::evals(&[r_a.r.as_slice(), r_b.r.as_slice()].concat());
-        let eq_r_m = EqPolynomial::evals(&r_m.r);
-        let eq_r_n = EqPolynomial::evals(&r_n.r);
-
-        let batch = a * b;
-        let left: Vec<F> = (0..batch * k)
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|hj| {
-                let h = hj / k;
-                let j = hj % k;
-                let mut sum = F::zero();
-                for i in 0..m {
-                    let idx = (h * m + i) * k + j;
-                    sum += F::from_i32(left_operand[idx]) * eq_r_m[i];
-                }
-                sum
-            })
-            .collect();
-        let right: Vec<F> = (0..batch * k)
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|hj| {
-                let h = hj / k;
-                let j = hj % k;
-                let mut sum = F::zero();
-                for l in 0..n {
-                    let idx = (h * n + l) * k + j;
-                    sum += F::from_i32(right_operand[idx]) * eq_r_n[l];
-                }
-                sum
-            })
-            .collect();
-        (left, right, eq_r_ab)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn build_acbmk_kcn_cbmn(
-        left_operand: &[i32],
-        right_operand: &[i32],
-        params: &RbmkRbnkBmnParams<F>,
-        log_a: usize,
-        log_c: usize,
-        log_b: usize,
-        log_m: usize,
-        log_n: usize,
-        log_k: usize,
-    ) -> (Vec<F>, Vec<F>, Vec<F>) {
-        let a = 1usize << log_a;
-        let c = 1usize << log_c;
-        let b = 1usize << log_b;
-        let m = 1usize << log_m;
-        let n = 1usize << log_n;
-        let k = 1usize << log_k;
-
-        let (r_c, r_bmn) = params.r_node_output.split_at(log_c);
-        let (r_b, r_mn) = r_bmn.split_at(log_b);
-        let (r_m, r_n) = r_mn.split_at(log_m);
-        let eq_r_cb = EqPolynomial::evals(&[r_c.r.as_slice(), r_b.r.as_slice()].concat());
-        let eq_r_m = EqPolynomial::evals(&r_m.r);
-        let eq_r_n = EqPolynomial::evals(&r_n.r);
-
-        let cb = c * b;
-        let left: Vec<F> = (0..cb * a * k)
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|hak| {
-                let h = hak / (a * k);
-                let rem = hak % (a * k);
-                let a_idx = rem / k;
-                let k_idx = rem % k;
-                let c_idx = h / b;
-                let b_idx = h % b;
-                let mut sum = F::zero();
-                for i in 0..m {
-                    let idx = ((((a_idx * c + c_idx) * b + b_idx) * m + i) * k) + k_idx;
-                    sum += F::from_i32(left_operand[idx]) * eq_r_m[i];
-                }
-                sum
-            })
-            .collect();
-        let right_base: Vec<F> = (0..c * k)
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|ck| {
-                let c_idx = ck / k;
-                let k_idx = ck % k;
-                let mut sum = F::zero();
-                for n_idx in 0..n {
-                    let idx = (k_idx * c + c_idx) * n + n_idx;
-                    sum += F::from_i32(right_operand[idx]) * eq_r_n[n_idx];
-                }
-                sum
-            })
-            .collect();
-        let right: Vec<F> = (0..cb * a * k)
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|hak| {
-                let h = hak / (a * k);
-                let rem = hak % (a * k);
-                let _a_idx = rem / k;
-                let k_idx = rem % k;
-                let c_idx = h / b;
-                right_base[c_idx * k + k_idx]
-            })
-            .collect();
-        (left, right, eq_r_cb)
-    }
-
-    fn build_cbmk_cbkn_amn(
-        left_operand: &[i32],
-        right_operand: &[i32],
-        params: &RbmkRbnkBmnParams<F>,
-        log_cb: usize,
-        log_m: usize,
-        log_n: usize,
-        log_k: usize,
-    ) -> (Vec<F>, Vec<F>) {
-        let cb = 1usize << log_cb;
-        let m = 1usize << log_m;
-        let n = 1usize << log_n;
-        let k = 1usize << log_k;
-
-        let split_at_mn = params.r_node_output.r.len().saturating_sub(log_m + log_n);
-        let (_, r_mn) = params.r_node_output.split_at(split_at_mn);
-        let (r_m, r_n) = r_mn.split_at(log_m);
-        let eq_r_m = EqPolynomial::evals(&r_m.r);
-        let eq_r_n = EqPolynomial::evals(&r_n.r);
-
-        let left: Vec<F> = (0..cb * k)
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|hk| {
-                let h = hk / k;
-                let k_idx = hk % k;
-                let mut sum = F::zero();
-                for i in 0..m {
-                    let idx = (h * m + i) * k + k_idx;
-                    sum += F::from_i32(left_operand[idx]) * eq_r_m[i];
-                }
-                sum
-            })
-            .collect();
-        let right: Vec<F> = (0..cb * k)
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|hk| {
-                let h = hk / k;
-                let k_idx = hk % k;
-                let mut sum = F::zero();
-                for l in 0..n {
-                    let idx = (h * k + k_idx) * n + l;
-                    sum += F::from_i32(right_operand[idx]) * eq_r_n[l];
-                }
-                sum
-            })
-            .collect();
-        (left, right)
-    }
-
-    /// Initializes the prover.
-    pub fn initialize(trace: &Trace, params: RbmkRbnkBmnParams<F>) -> Self {
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
-        #[cfg(not(debug_assertions))]
-        let _ = &output;
-        let [left_operand, right_operand] = operands[..] else {
-            panic!("Expected two operands for rbmk_rbnk_bmn operation")
-        };
-
-        let (left_values, right_values, eq_values) = match params.variant {
+        left_operand: &Tensor<i32>,
+        right_operand: &Tensor<i32>,
+        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
+    ) -> Folded<F> {
+        match self.variant {
             RbmkRbnkBmnVariant::AbmkAbnkAbmn {
                 log_a,
                 log_b,
@@ -479,17 +384,21 @@ impl<F: JoltField> RbmkRbnkBmnProver<F> {
                 log_n,
                 log_k,
             } => {
-                let (left, right, eq) = Self::build_abmk_abnk_abmn(
+                let (left, right, eq) = build_abmk_abnk_abmn(
                     left_operand,
                     right_operand,
-                    &params,
+                    r_node_output,
                     log_a,
                     log_b,
                     log_m,
                     log_n,
                     log_k,
                 );
-                (left, right, Some(eq))
+                Folded {
+                    left: MultilinearPolynomial::from(left),
+                    right: MultilinearPolynomial::from(right),
+                    eq: Some(MultilinearPolynomial::from(eq)),
+                }
             }
             RbmkRbnkBmnVariant::AcbmkKcnCbmn {
                 log_a,
@@ -499,10 +408,10 @@ impl<F: JoltField> RbmkRbnkBmnProver<F> {
                 log_n,
                 log_k,
             } => {
-                let (left, right, eq) = Self::build_acbmk_kcn_cbmn(
+                let (left, right, eq) = build_acbmk_kcn_cbmn(
                     left_operand,
                     right_operand,
-                    &params,
+                    r_node_output,
                     log_a,
                     log_c,
                     log_b,
@@ -510,7 +419,11 @@ impl<F: JoltField> RbmkRbnkBmnProver<F> {
                     log_n,
                     log_k,
                 );
-                (left, right, Some(eq))
+                Folded {
+                    left: MultilinearPolynomial::from(left),
+                    right: MultilinearPolynomial::from(right),
+                    eq: Some(MultilinearPolynomial::from(eq)),
+                }
             }
             RbmkRbnkBmnVariant::CbmkCbknAmn {
                 log_cb,
@@ -518,223 +431,44 @@ impl<F: JoltField> RbmkRbnkBmnProver<F> {
                 log_n,
                 log_k,
             } => {
-                let (left, right) = Self::build_cbmk_cbkn_amn(
+                let (left, right) = build_cbmk_cbkn_amn(
                     left_operand,
                     right_operand,
-                    &params,
+                    r_node_output,
                     log_cb,
                     log_m,
                     log_n,
                     log_k,
                 );
-                (left, right, None)
-            }
-        };
-
-        #[cfg(debug_assertions)]
-        {
-            let packed_claim: F = match (&params.variant, &eq_values) {
-                (RbmkRbnkBmnVariant::CbmkCbknAmn { .. }, None) => left_values
-                    .iter()
-                    .zip(right_values.iter())
-                    .map(|(l, r)| *l * *r)
-                    .sum(),
-                (RbmkRbnkBmnVariant::AbmkAbnkAbmn { log_k, .. }, Some(eq))
-                | (
-                    RbmkRbnkBmnVariant::AcbmkKcnCbmn {
-                        log_a: _, log_k, ..
-                    },
-                    Some(eq),
-                ) => {
-                    let low_bits = match params.variant {
-                        RbmkRbnkBmnVariant::AbmkAbnkAbmn { .. } => *log_k,
-                        RbmkRbnkBmnVariant::AcbmkKcnCbmn { log_a, .. } => log_a + *log_k,
-                        RbmkRbnkBmnVariant::CbmkCbknAmn { .. } => unreachable!(),
-                    };
-                    left_values
-                        .iter()
-                        .zip(right_values.iter())
-                        .enumerate()
-                        .map(|(idx, (l, r))| *l * *r * eq[idx >> low_bits])
-                        .sum()
-                }
-                _ => unreachable!(),
-            };
-            let output_claim =
-                MultilinearPolynomial::from(output.clone()).evaluate(&params.r_node_output.r);
-            debug_assert_eq!(packed_claim, output_claim);
-        }
-
-        Self {
-            params,
-            left_operand: MultilinearPolynomial::from(left_values),
-            right_operand: MultilinearPolynomial::from(right_values),
-            eq_output_batches: eq_values.map(MultilinearPolynomial::from),
-            eq_bound_claim: None,
-            #[cfg(debug_assertions)]
-            original_left: left_operand.data().to_vec(),
-            #[cfg(debug_assertions)]
-            original_right: right_operand.data().to_vec(),
-        }
-    }
-
-    fn compute_message_with_eq(
-        &mut self,
-        round: usize,
-        previous_claim: F,
-        log_eq: usize,
-        low_bits_after_eq: usize,
-    ) -> UniPoly<F> {
-        let eq_poly = self
-            .eq_output_batches
-            .as_ref()
-            .expect("eq polynomial must exist");
-        let half_poly_len = self.left_operand.len() / 2;
-        let uni_poly_evals: [F; DEGREE_BOUND_EQ] = (0..half_poly_len)
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|idx| {
-                let l_evals = self
-                    .left_operand
-                    .sumcheck_evals_array::<DEGREE_BOUND_EQ>(idx, BindingOrder::HighToLow);
-                let r_evals = self
-                    .right_operand
-                    .sumcheck_evals_array::<DEGREE_BOUND_EQ>(idx, BindingOrder::HighToLow);
-                let eq_evals = if round < log_eq {
-                    let h = idx >> low_bits_after_eq;
-                    eq_poly.sumcheck_evals_array::<DEGREE_BOUND_EQ>(h, BindingOrder::HighToLow)
-                } else {
-                    let eq_bound = self.eq_bound_claim.expect("eq claim should be cached");
-                    [eq_bound; DEGREE_BOUND_EQ]
-                };
-                [
-                    l_evals[0] * r_evals[0] * eq_evals[0],
-                    l_evals[1] * r_evals[1] * eq_evals[1],
-                    l_evals[2] * r_evals[2] * eq_evals[2],
-                ]
-            })
-            .reduce(
-                || [F::zero(); DEGREE_BOUND_EQ],
-                |running, new| array::from_fn(|idx| running[idx] + new[idx]),
-            );
-        UniPoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RbmkRbnkBmnProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
-        match self.params.variant {
-            RbmkRbnkBmnVariant::AbmkAbnkAbmn {
-                log_a,
-                log_b,
-                log_k,
-                ..
-            } => self.compute_message_with_eq(round, previous_claim, log_a + log_b, log_k),
-            RbmkRbnkBmnVariant::AcbmkKcnCbmn {
-                log_c,
-                log_b,
-                log_a,
-                log_k,
-                ..
-            } => self.compute_message_with_eq(round, previous_claim, log_c + log_b, log_a + log_k),
-            RbmkRbnkBmnVariant::CbmkCbknAmn { .. } => {
-                let half_poly_len = self.left_operand.len() / 2;
-                let uni_poly_evals: [F; DEGREE_BOUND_DOT] = (0..half_poly_len)
-                    .into_par_iter()
-                    .with_min_len(par_enabled())
-                    .map(|idx| {
-                        let l_evals = self.left_operand.sumcheck_evals(
-                            idx,
-                            DEGREE_BOUND_DOT,
-                            BindingOrder::HighToLow,
-                        );
-                        let r_evals = self.right_operand.sumcheck_evals(
-                            idx,
-                            DEGREE_BOUND_DOT,
-                            BindingOrder::HighToLow,
-                        );
-                        [l_evals[0] * r_evals[0], l_evals[1] * r_evals[1]]
-                    })
-                    .reduce(
-                        || [F::zero(); DEGREE_BOUND_DOT],
-                        |running, new| array::from_fn(|idx| running[idx] + new[idx]),
-                    );
-                UniPoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
-            }
-        }
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, round: usize) {
-        self.left_operand
-            .bind_parallel(r_j, BindingOrder::HighToLow);
-        self.right_operand
-            .bind_parallel(r_j, BindingOrder::HighToLow);
-        if let Some(eq_poly) = &mut self.eq_output_batches {
-            let log_eq = match self.params.variant {
-                RbmkRbnkBmnVariant::AbmkAbnkAbmn { log_a, log_b, .. } => log_a + log_b,
-                RbmkRbnkBmnVariant::AcbmkKcnCbmn { log_c, log_b, .. } => log_c + log_b,
-                RbmkRbnkBmnVariant::CbmkCbknAmn { .. } => 0,
-            };
-            if round < log_eq {
-                eq_poly.bind_parallel(r_j, BindingOrder::HighToLow);
-                if round == log_eq - 1 {
-                    self.eq_bound_claim = Some(eq_poly.final_claim());
+                Folded {
+                    left: MultilinearPolynomial::from(left),
+                    right: MultilinearPolynomial::from(right),
+                    eq: None,
                 }
             }
         }
     }
 
-    fn cache_openings(
+    fn operand_points(
         &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let sumcheck_challenges = sumcheck_challenges.into_opening();
-        match self.params.variant {
+        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
+        sumcheck_challenges: &[F],
+    ) -> (Vec<F>, Vec<F>) {
+        match self.variant {
             RbmkRbnkBmnVariant::AbmkAbnkAbmn {
                 log_a,
                 log_b,
                 log_m,
                 ..
             } => {
-                let (_, r_bmn) = self.params.r_node_output.split_at(log_a);
+                let (_, r_bmn) = r_node_output.split_at(log_a);
                 let (_, r_mn) = r_bmn.split_at(log_b);
                 let (r_m, r_n) = r_mn.split_at(log_m);
                 let (r_ab, r_k) = sumcheck_challenges.split_at(log_a + log_b);
                 let (r_a, r_b) = r_ab.split_at(log_a);
-                let left_point = [r_a, r_b, &r_m.r, r_k].concat();
-                let mut provider =
-                    AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-                        .into_provider(transcript, Default::default());
-                let left_opening = self.params.normalize_opening_point(&left_point);
-                provider.append_nodeio_at(
-                    Target::Input(0),
-                    left_opening,
-                    self.left_operand.final_claim(),
-                );
-                #[cfg(debug_assertions)]
-                debug_assert_eq!(
-                    MultilinearPolynomial::from(self.original_left.clone()).evaluate(&left_point),
-                    self.left_operand.final_claim()
-                );
-
-                let right_point = [r_a, r_b, &r_n.r, r_k].concat();
-                let right_opening = self.params.normalize_opening_point(&right_point);
-                provider.append_nodeio_at(
-                    Target::Input(1),
-                    right_opening,
-                    self.right_operand.final_claim(),
-                );
-                #[cfg(debug_assertions)]
-                debug_assert_eq!(
-                    MultilinearPolynomial::from(self.original_right.clone()).evaluate(&right_point),
-                    self.right_operand.final_claim()
-                );
+                let left = [r_a, r_b, r_m.r.as_slice(), r_k].concat();
+                let right = [r_a, r_b, r_n.r.as_slice(), r_k].concat();
+                (left, right)
             }
             RbmkRbnkBmnVariant::AcbmkKcnCbmn {
                 log_c,
@@ -743,40 +477,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RbmkRbnkBmnPr
                 log_a,
                 ..
             } => {
-                let (_, r_bmn) = self.params.r_node_output.split_at(log_c);
+                let (_, r_bmn) = r_node_output.split_at(log_c);
                 let (_, r_mn) = r_bmn.split_at(log_b);
                 let (r_m, r_n) = r_mn.split_at(log_m);
                 let (r_cb, r_ak) = sumcheck_challenges.split_at(log_c + log_b);
                 let (r_c, r_b) = r_cb.split_at(log_c);
                 let (r_a, r_k) = r_ak.split_at(log_a);
-                let left_point = [r_a, r_c, r_b, &r_m.r, r_k].concat();
-                let mut provider =
-                    AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-                        .into_provider(transcript, Default::default());
-                let left_opening = self.params.normalize_opening_point(&left_point);
-                provider.append_nodeio_at(
-                    Target::Input(0),
-                    left_opening,
-                    self.left_operand.final_claim(),
-                );
-                #[cfg(debug_assertions)]
-                debug_assert_eq!(
-                    MultilinearPolynomial::from(self.original_left.clone()).evaluate(&left_point),
-                    self.left_operand.final_claim()
-                );
-
-                let right_point = [r_k, r_c, &r_n.r].concat();
-                let right_opening = self.params.normalize_opening_point(&right_point);
-                provider.append_nodeio_at(
-                    Target::Input(1),
-                    right_opening,
-                    self.right_operand.final_claim(),
-                );
-                #[cfg(debug_assertions)]
-                debug_assert_eq!(
-                    MultilinearPolynomial::from(self.original_right.clone()).evaluate(&right_point),
-                    self.right_operand.final_claim()
-                );
+                let left = [r_a, r_c, r_b, r_m.r.as_slice(), r_k].concat();
+                let right = [r_k, r_c, r_n.r.as_slice()].concat();
+                (left, right)
             }
             RbmkRbnkBmnVariant::CbmkCbknAmn {
                 log_cb,
@@ -784,178 +493,38 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RbmkRbnkBmnPr
                 log_n,
                 ..
             } => {
-                let split_at_mn = self
-                    .params
-                    .r_node_output
-                    .r
-                    .len()
-                    .saturating_sub(log_m + log_n);
-                let (_, r_mn) = self.params.r_node_output.split_at(split_at_mn);
+                let split_at_mn = r_node_output.r.len().saturating_sub(log_m + log_n);
+                let (_, r_mn) = r_node_output.split_at(split_at_mn);
                 let (r_m, r_n) = r_mn.split_at(log_m);
                 let (r_cb, r_k) = sumcheck_challenges.split_at(log_cb);
-                let left_point = [r_cb, &r_m.r, r_k].concat();
-                let mut provider =
-                    AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-                        .into_provider(transcript, Default::default());
-                let left_opening = self.params.normalize_opening_point(&left_point);
-                provider.append_nodeio_at(
-                    Target::Input(0),
-                    left_opening,
-                    self.left_operand.final_claim(),
-                );
-                #[cfg(debug_assertions)]
-                debug_assert_eq!(
-                    MultilinearPolynomial::from(self.original_left.clone()).evaluate(&left_point),
-                    self.left_operand.final_claim()
-                );
-
-                let right_point = [r_cb, r_k, &r_n.r].concat();
-                let right_opening = self.params.normalize_opening_point(&right_point);
-                provider.append_nodeio_at(
-                    Target::Input(1),
-                    right_opening,
-                    self.right_operand.final_claim(),
-                );
-                #[cfg(debug_assertions)]
-                debug_assert_eq!(
-                    MultilinearPolynomial::from(self.original_right.clone()).evaluate(&right_point),
-                    self.right_operand.final_claim()
-                );
+                let left = [r_cb, r_m.r.as_slice(), r_k].concat();
+                let right = [r_cb, r_k, r_n.r.as_slice()].concat();
+                (left, right)
             }
         }
     }
-}
 
-/// Verifier for the shared rbmk_rbnk_bmn einsum family.
-pub struct RbmkRbnkBmnVerifier<F: JoltField> {
-    params: RbmkRbnkBmnParams<F>,
-}
-
-impl<F: JoltField> RbmkRbnkBmnVerifier<F> {
-    /// Creates the verifier.
-    pub fn new(
-        computation_node: ComputationNode,
-        einsum_dims: EinsumDims,
-        accumulator: &VerifierOpeningAccumulator<F>,
-    ) -> Self {
-        let params = RbmkRbnkBmnParams::new(computation_node, einsum_dims, accumulator);
-        Self { params }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RbmkRbnkBmnVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
+    fn output_eq(
         &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
+        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-        let left_claim = accessor.get_nodeio(Target::Input(0)).1;
-        let right_claim = accessor.get_nodeio(Target::Input(1)).1;
-        let eq_claim = match self.params.variant {
+        match self.variant {
             RbmkRbnkBmnVariant::AbmkAbnkAbmn { log_a, log_b, .. } => {
-                let (r_a, r_bmn) = self.params.r_node_output.split_at(log_a);
+                let (r_a, r_bmn) = r_node_output.split_at(log_a);
                 let (r_b, _) = r_bmn.split_at(log_b);
                 let sumcheck_opening = sumcheck_challenges.into_opening();
                 let (r_ab, _) = sumcheck_opening.split_at(log_a + log_b);
                 EqPolynomial::mle(&[r_a.r.as_slice(), r_b.r.as_slice()].concat(), r_ab)
             }
             RbmkRbnkBmnVariant::AcbmkKcnCbmn { log_c, log_b, .. } => {
-                let (r_c, r_bmn) = self.params.r_node_output.split_at(log_c);
+                let (r_c, r_bmn) = r_node_output.split_at(log_c);
                 let (r_b, _) = r_bmn.split_at(log_b);
                 let sumcheck_opening = sumcheck_challenges.into_opening();
                 let (r_cb, _) = sumcheck_opening.split_at(log_c + log_b);
                 EqPolynomial::mle(&[r_c.r.as_slice(), r_b.r.as_slice()].concat(), r_cb)
             }
             RbmkRbnkBmnVariant::CbmkCbknAmn { .. } => F::one(),
-        };
-        left_claim * right_claim * eq_claim
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let sumcheck_challenges = sumcheck_challenges.into_opening();
-        match self.params.variant {
-            RbmkRbnkBmnVariant::AbmkAbnkAbmn {
-                log_a,
-                log_b,
-                log_m,
-                ..
-            } => {
-                let (_, r_bmn) = self.params.r_node_output.split_at(log_a);
-                let (_, r_mn) = r_bmn.split_at(log_b);
-                let (r_m, r_n) = r_mn.split_at(log_m);
-                let (r_ab, r_k) = sumcheck_challenges.split_at(log_a + log_b);
-                let (r_a, r_b) = r_ab.split_at(log_a);
-                let left_point = [r_a, r_b, &r_m.r, r_k].concat();
-                let mut provider =
-                    AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-                        .into_provider(transcript, Default::default());
-                let left_opening = self.params.normalize_opening_point(&left_point);
-                provider.append_nodeio_at(Target::Input(0), left_opening);
-
-                let right_point = [r_a, r_b, &r_n.r, r_k].concat();
-                let right_opening = self.params.normalize_opening_point(&right_point);
-                provider.append_nodeio_at(Target::Input(1), right_opening);
-            }
-            RbmkRbnkBmnVariant::AcbmkKcnCbmn {
-                log_c,
-                log_b,
-                log_m,
-                log_a,
-                ..
-            } => {
-                let (_, r_bmn) = self.params.r_node_output.split_at(log_c);
-                let (_, r_mn) = r_bmn.split_at(log_b);
-                let (r_m, r_n) = r_mn.split_at(log_m);
-                let (r_cb, r_ak) = sumcheck_challenges.split_at(log_c + log_b);
-                let (r_c, r_b) = r_cb.split_at(log_c);
-                let (r_a, r_k) = r_ak.split_at(log_a);
-                let left_point = [r_a, r_c, r_b, &r_m.r, r_k].concat();
-                let mut provider =
-                    AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-                        .into_provider(transcript, Default::default());
-                let left_opening = self.params.normalize_opening_point(&left_point);
-                provider.append_nodeio_at(Target::Input(0), left_opening);
-
-                let right_point = [r_k, r_c, &r_n.r].concat();
-                let right_opening = self.params.normalize_opening_point(&right_point);
-                provider.append_nodeio_at(Target::Input(1), right_opening);
-            }
-            RbmkRbnkBmnVariant::CbmkCbknAmn {
-                log_cb,
-                log_m,
-                log_n,
-                ..
-            } => {
-                let split_at_mn = self
-                    .params
-                    .r_node_output
-                    .r
-                    .len()
-                    .saturating_sub(log_m + log_n);
-                let (_, r_mn) = self.params.r_node_output.split_at(split_at_mn);
-                let (r_m, r_n) = r_mn.split_at(log_m);
-                let (r_cb, r_k) = sumcheck_challenges.split_at(log_cb);
-                let left_point = [r_cb, &r_m.r, r_k].concat();
-                let mut provider =
-                    AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-                        .into_provider(transcript, Default::default());
-                let left_opening = self.params.normalize_opening_point(&left_point);
-                provider.append_nodeio_at(Target::Input(0), left_opening);
-
-                let right_point = [r_cb, r_k, &r_n.r].concat();
-                let right_opening = self.params.normalize_opening_point(&right_point);
-                provider.append_nodeio_at(Target::Input(1), right_opening);
-            }
         }
     }
 }

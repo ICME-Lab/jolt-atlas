@@ -8,13 +8,7 @@ use super::{
     types::{Claims, ProofId, ProverDebugInfo},
     AtlasSharedPreprocessing, ONNXProof, ReducedOpeningProof,
 };
-use crate::{
-    onnx_proof::{
-        ops::{NodeCommittedPolynomials, OperatorProver},
-        witness::WitnessGenerator,
-    },
-    utils::opening_access::AccOpeningAccessor,
-};
+use crate::{onnx_proof::ops::OperatorProver, utils::opening_access::AccOpeningAccessor};
 use atlas_onnx_tracer::{
     model::{
         trace::{LayerData, ModelExecutionIO, Trace},
@@ -216,8 +210,12 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         model: &Model,
         trace: &Trace,
     ) -> BTreeMap<CommittedPoly, MultilinearPolynomial<F>> {
-        // Rayon jobs were overly fragmented, and the resulting context switching degraded performance,
-        // so the parallelism granularity is now limited to the polynomial level.
+        // Parallelize per node (not per committed polynomial): a node's clamp /
+        // rescaling-remainder one-hots decompose into many chunks that would
+        // otherwise each re-run the same expensive accumulation, so
+        // `generate_node_witnesses` computes each re-execution once and slices
+        // every chunk from it. Inner (per-tensor) parallelism stays disabled to
+        // avoid over-fragmenting rayon across the node-level tasks.
         let _guard = ParallelFlagGuard::disabled();
         model
             .graph
@@ -225,16 +223,14 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             .values()
             .collect::<Vec<_>>()
             .par_iter()
-            .flat_map(|node| NodeCommittedPolynomials::get_committed_polynomials::<F, T>(node))
-            .map(|committed_poly| {
-                let witness = committed_poly.generate_witness(model, trace);
-                (committed_poly, witness)
+            .flat_map_iter(|node| {
+                crate::onnx_proof::witness::generate_node_witnesses::<F, T>(node, model, trace)
             })
             .collect()
     }
 
     #[tracing::instrument(skip_all)]
-    fn commit_to_polynomials(
+    pub(super) fn commit_to_polynomials(
         poly_map: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
         pcs: &PCS::ProverSetup,
     ) -> Vec<PCS::Commitment> {

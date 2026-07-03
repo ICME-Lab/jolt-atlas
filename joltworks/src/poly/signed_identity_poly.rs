@@ -206,12 +206,12 @@ impl<F: JoltField> PrefixPolynomial<F> for SignedIdentityPoly<F> {
                 .map(|i| {
                     let sign_bit = ((i >> (chunk_len - 1)) & 1) as u32;
                     let res =
-                        bound_value + F::from_u128(((i << suffix_len) as u128) % (1u128 << xlen));
+                        bound_value + F::from_u128(((i as u128) << suffix_len) % (1u128 << xlen));
                     res + sign_correction::<F>(sign_bit, xlen)
                 })
                 .collect(),
             PhasePosition::AfterMsb => (0..chunk_len.pow2())
-                .map(|i| bound_value + F::from_u128((i << suffix_len) as u128))
+                .map(|i| bound_value + F::from_u128((i as u128) << suffix_len))
                 .collect(),
         };
         make_cached_poly(evals, chunk_len)

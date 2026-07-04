@@ -360,6 +360,33 @@ fn test_multihead_attention() {
     );
 }
 
+// Pins the Pow(x, 3) lowering: the ONNX graph is [Constant, Pow] and the
+// lowered Cube node must be unary — with the exponent wired as a second
+// operand, CubeProver::initialize panics ("Expected one operand for Cube
+// operation"). tract declutters Pow(x, 2) to a unary Square before handlers
+// run, so exponent 3 is the only Pow that reaches this path (the in-tree
+// nanoGPT_1M exports hit it via their `x**3` GELU).
+#[test]
+fn test_pow_cube() {
+    let working_dir = "../atlas-onnx-tracer/models/pow_cube/";
+    let mut rng = StdRng::seed_from_u64(42);
+    let input_data: Vec<i32> = (0..16).map(|_| SCALE + rng.gen_range(-10..=10)).collect();
+    let input = Tensor::construct(input_data, vec![1, 16]);
+    let io = prove_and_verify(
+        working_dir,
+        &[input],
+        &Default::default(),
+        TestConfig::default(),
+    );
+    // Pins that the operand surviving the Pow lowering is the base, not the
+    // broadcast exponent: cubing the exponent would give a constant output.
+    let out = &io.outputs[0];
+    assert!(
+        out.data().iter().any(|&v| v != out.data()[0]),
+        "cube output should vary with the input"
+    );
+}
+
 // Anytime we get some structure closer to realistic transformer blocks,
 // the tracer optimizes it and no Concat nodes remain in traced model.
 // So we keep a simpler .onnx model to ensure the concat node remains.

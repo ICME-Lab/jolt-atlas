@@ -59,10 +59,37 @@ fn handle_mul(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 /// Pow: Power operation, dispatches to Square or Cube based on exponent.
 fn handle_pow(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let scale = hctx.run_args.scale;
-    let exponent = match &hctx.internal_input_nodes[1].operator {
-        Operator::Constant(Constant(tensor)) => tensor.data()[0] >> scale,
+    let exponent_tensor = match &hctx.internal_input_nodes[1].operator {
+        Operator::Constant(Constant(tensor)) => tensor,
         _ => panic!("Expected constant exponent for Pow operator"),
     };
+    // Only uniform integer exponents are supported; fail loudly at lowering
+    // time instead of silently proving the floored exponent.
+    let quantized_exponent = exponent_tensor.data()[0];
+    assert!(
+        exponent_tensor
+            .data()
+            .iter()
+            .all(|&v| v == quantized_exponent),
+        "Expected uniform exponent for Pow operator"
+    );
+    let exponent = quantized_exponent >> scale;
+    assert_eq!(
+        quantized_exponent,
+        exponent << scale,
+        "Expected integer exponent for Pow operator"
+    );
+
+    // The exponent is fully consumed here; drop it from the handler inputs so
+    // the lowered Square/Cube node is unary (HandlerContext is built per node,
+    // so the truncation is local to this lowering). Otherwise the (broadcast)
+    // exponent constant survives as a second input on the node and the
+    // one-operand provers panic at initialize ("Expected one operand for Cube
+    // operation"). Only `Pow(x, 3)` used to hit this in practice: tract's
+    // declutter rewrites `Pow(x, 2)` to its unary Square op before handlers
+    // run, but it has no rule for exponent 3.
+    hctx.internal_input_indices.truncate(1);
+    hctx.internal_input_nodes.truncate(1);
 
     match exponent {
         2 => build_square(hctx),

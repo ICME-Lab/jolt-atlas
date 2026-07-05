@@ -13,8 +13,7 @@
 /// | Index | Name            | Shape            | Description                           |
 /// |-------|-----------------|------------------|---------------------------------------|
 /// | 0     | input_ids       | [1, seq_len]     | Token IDs (Gather indices)            |
-/// | 1     | token_type_ids  | [1, seq_len]     | Segment IDs (all zeros for single)    |
-/// | 2     | attention_mask  | [1, seq_len]     | Binary mask (1 = attend)              |
+/// | 1     | attention_mask  | [1, seq_len]     | Binary mask (1 = attend)              |
 use atlas_onnx_tracer::model::{Model, RunArgs};
 
 fn main() {

@@ -144,36 +144,35 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         generators: &PCS::ProverSetup,
     ) -> Option<ReducedOpeningProof<F, T, PCS>> {
         if poly_map.is_empty() {
-            None
-        } else {
-            prover.accumulator.prepare_for_sumcheck(poly_map);
-
-            // Run sumcheck
-            let (accumulator_sumcheck_proof, r_sumcheck_acc) = prover
-                .accumulator
-                .prove_batch_opening_sumcheck(&mut prover.transcript);
-
-            // Finalize sumcheck (uses claims cached via cache_openings, derives gamma, cleans up)
-            let state = prover
-                .accumulator
-                .finalize_batch_opening_sumcheck(r_sumcheck_acc.clone(), &mut prover.transcript);
-            let sumcheck_claims: Vec<F> = state.sumcheck_claims.clone();
-            // Build RLC
-            let rlc = build_materialized_rlc(&state.gamma_powers, poly_map);
-            // Create joint opening proof
-            let joint_opening_proof = PCS::prove(
-                generators,
-                &rlc,
-                &state.r_sumcheck,
-                None,
-                &mut prover.transcript,
-            );
-            Some(ReducedOpeningProof {
-                sumcheck_proof: accumulator_sumcheck_proof,
-                sumcheck_claims,
-                joint_opening_proof,
-            })
+            return None;
         }
+        prover.accumulator.prepare_for_sumcheck(poly_map);
+
+        // Run sumcheck
+        let (accumulator_sumcheck_proof, r_sumcheck_acc) = prover
+            .accumulator
+            .prove_batch_opening_sumcheck(&mut prover.transcript);
+
+        // Finalize sumcheck (uses claims cached via cache_openings, derives gamma, cleans up)
+        let state = prover
+            .accumulator
+            .finalize_batch_opening_sumcheck(r_sumcheck_acc.clone(), &mut prover.transcript);
+        let sumcheck_claims: Vec<F> = state.sumcheck_claims.clone();
+        // Build RLC
+        let rlc = build_materialized_rlc(&state.gamma_powers, poly_map);
+        // Create joint opening proof
+        let joint_opening_proof = PCS::prove(
+            generators,
+            &rlc,
+            &state.r_sumcheck,
+            None,
+            &mut prover.transcript,
+        );
+        Some(ReducedOpeningProof {
+            sumcheck_proof: accumulator_sumcheck_proof,
+            sumcheck_claims,
+            joint_opening_proof,
+        })
     }
 
     pub(super) fn finalize_proof(

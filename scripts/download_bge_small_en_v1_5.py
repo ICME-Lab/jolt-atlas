@@ -84,7 +84,7 @@ def normalize_graph():
     Shout lookup prover (see the referenced issue).
     """
     import onnx
-    from onnx import helper, numpy_helper
+    from onnx import helper
 
     path = MODEL_DIR / "model.onnx"
     model = onnx.load(str(path))

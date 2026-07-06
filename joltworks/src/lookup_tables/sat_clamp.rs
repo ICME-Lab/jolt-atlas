@@ -1,5 +1,3 @@
-use std::fmt::Debug;
-
 use super::{
     prefixes::{PrefixEval, Prefixes},
     suffixes::{SuffixEval, Suffixes},
@@ -7,7 +5,10 @@ use super::{
 };
 use crate::field::{ChallengeFieldOps, FieldChallengeOps, JoltField};
 use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
 
+/// LUT for saturating clamp of signed integers to a smaller signed integer type. For example, if XLEN=64, the LUT maps i64 values to i32 values, saturating at the min/max of i32.
+/// NOTE: The input is a 64-bit signed integer, and the output is a 32-bit signed integer. The LUT is parameterized by XLEN which represents the input bit width. For XLEN=64, the LUT maps i64 values to i32 values, saturating at the min/max of i32.
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct SatClampTable<const XLEN: usize>;
 

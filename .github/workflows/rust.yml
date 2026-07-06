@@ -68,7 +68,7 @@ jobs:
           python scripts/download_gpt2.py
       - uses: taiki-e/install-action@nextest
       - name: Run GPT-2 test
-        run: cargo nextest run --release --workspace --run-ignored ignored-only -E 'test(test_gpt2)'
+        run: cargo nextest run --workspace --run-ignored ignored-only -E 'test(test_gpt2)'
 
   test-bge:
     name: BGE Prove & Verify

@@ -97,8 +97,8 @@ impl DoryScheme {
     /// densified directly: a `1` at each `k*T+t`, matching the index layout
     /// [`build_materialized_rlc`](crate::poly::rlc_polynomial::build_materialized_rlc)
     /// uses so the per-polynomial commitment agrees with the joint overlap RLC.
-    /// (This dense expansion is `O(K*T)`; the sparse/streaming commit that keeps
-    /// it `O(nonzeros)` is a follow-up.)
+    /// (This dense expansion is `O(K*T)`; one-hot polynomials instead use
+    /// [`Self::commit_one_hot`] to keep commitment generation `O(nonzeros)`.)
     fn materialize(poly: &MultilinearPolynomial<Fr>) -> Vec<ArkFr> {
         if let MultilinearPolynomial::OneHot(one_hot) = poly {
             let t_len = one_hot.nonzero_indices.len();
@@ -118,10 +118,6 @@ impl DoryScheme {
         coeffs
     }
 
-    /// Convert a joltworks opening point (`F::Challenge`) into a dory point.
-    ///
-    /// dory orders multilinear variables opposite to joltworks, so the point is
-    /// reversed here (matching jolt-dory's adapter).
     /// Sparse commitment for a one-hot polynomial: `O(nonzeros)` group additions
     /// instead of the `O(K*T)` dense MSM in [`Self::materialize`] + [`commit`].
     ///

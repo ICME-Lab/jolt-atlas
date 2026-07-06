@@ -128,15 +128,14 @@ fn test_gpt2() {
     let attention_mask_data: Vec<i32> = vec![SCALE; seq_len];
     let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
 
-    // Configure RunArgs for GPT-2
-    // HACK: pre_rebase_nonlinear prevents i32 overflow in Square/Cube for large models.
-    // TODO: Remove once fused i64-precision ops are the default path.
+    // Configure RunArgs for GPT-2. Square/Cube fuse the i64 accumulate + rescale
+    // + clamp ; mean-of-squares still decomposes to a raw Square, so very
+    // large activations remain gated on the monolithic fused path .
     let run_args = RunArgs::new([
         ("batch_size", 1),
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
-    ])
-    .with_pre_rebase_nonlinear(true);
+    ]);
 
     prove_and_verify(
         working_dir,
@@ -188,8 +187,7 @@ fn test_gpt2_zk() {
         ("batch_size", 1),
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
-    ])
-    .with_pre_rebase_nonlinear(true);
+    ]);
 
     let model = Model::load(&format!("{working_dir}network.onnx"), &run_args);
     let pp = AtlasSharedPreprocessing::preprocess(model);

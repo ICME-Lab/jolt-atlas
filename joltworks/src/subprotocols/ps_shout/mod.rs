@@ -529,7 +529,12 @@ where
                     .table
                     .prefixes()
                     .into_iter()
-                    .map(|p| PrefixEval::from(self.prefix_checkpoints[p].unwrap()))
+                    .map(|p| {
+                        PrefixEval::from(
+                            self.prefix_checkpoints[p]
+                                .unwrap_or_else(|| panic!("{p:?} should have a bounded value")),
+                        )
+                    })
                     .collect();
                 let suffixes: Vec<_> = self
                     .params

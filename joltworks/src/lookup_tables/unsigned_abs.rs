@@ -48,30 +48,16 @@ impl<const X_LEN: usize> JoltLookupTable for UnsignedAbsTable<X_LEN> {
 
 impl<const X_LEN: usize> PrefixSuffixDecompositionTrait<X_LEN> for UnsignedAbsTable<X_LEN> {
     fn suffixes(&self) -> Vec<Suffixes> {
-        vec![Suffixes::One, Suffixes::LowerWordNoMSB, Suffixes::NegRelu]
+        vec![Suffixes::One, Suffixes::WordNoMSB, Suffixes::NegRelu]
     }
 
     fn prefixes(&self) -> Vec<Prefixes> {
         vec![
             Prefixes::NotMsb,
-            Prefixes::LowerWordNoMsb,
+            Prefixes::WordNoMsb,
             Prefixes::Msb,
-            Prefixes::NotLowerWord,
+            Prefixes::NotWordNoMsb,
         ]
-    }
-
-    #[cfg(test)]
-    fn combine_test<F: JoltField>(
-        &self,
-        prefixes: &[PrefixEval<F>],
-        suffixes: &[SuffixEval<F>],
-    ) -> F {
-        let [one, lwnm, neg_relu] = suffixes.try_into().unwrap();
-        let relu = prefixes[Prefixes::NotMsb] * prefixes[Prefixes::LowerWordNoMsb] * one
-            + prefixes[Prefixes::NotMsb] * lwnm;
-        let neg_relu_part = prefixes[Prefixes::Msb] * prefixes[Prefixes::NotLowerWord] * one
-            + prefixes[Prefixes::Msb] * neg_relu;
-        relu + neg_relu_part
     }
 
     fn combine<F: JoltField>(&self, prefixes: &[PrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F {

@@ -64,10 +64,11 @@ fn sub_model(rng: &mut StdRng, t: usize) -> Model {
     b.build()
 }
 
-fn sub_model_const_2() -> Model {
+fn sub_model_const_2(t: usize) -> Model {
     let mut b = ModelBuilder::new();
-    let i = b.input(vec![1]);
-    let c = b.constant(Tensor::new(Some(&[2]), &[1]).expect("constant tensor should be valid"));
+    let i = b.input(vec![t]);
+    let c =
+        b.constant(Tensor::new(Some(&vec![2; t]), &[t]).expect("constant tensor should be valid"));
     let out = b.sub(i, c);
     b.mark_output(out);
     b.build()
@@ -130,14 +131,15 @@ fn duplicate_operand_sub_model(rng: &mut StdRng, t: usize) -> (Model, usize, usi
     (b.build(), x, y)
 }
 
-#[should_panic = "InvalidOpeningProof(\"Sub output claim should equal the difference of operand claims\")"]
+#[should_panic = "InvalidOpeningProof(\"Sub: left - right must equal the i64 accumulation (pre-clamp)\")"]
 #[test]
 fn soundness_sub_virtual_operand_attack_is_rejected() {
     // This test demonstrates the virtual-operand-claim attack shape:
     // 1) malicious_sub forges the left operand opening (off by one) at the node's
-    //    reduced output point, leaving the right operand honest.
-    // 2) Sub is a no-sumcheck op, so the verifier checks `left - right == output`
-    //    directly at that point and rejects the forged opening at the Sub node.
+    //    reduced output point, leaving the right operand honest (the clamp lookup
+    //    and one-hot checks are run honestly).
+    // 2) The verifier's operand tie `left(r) - right(r) == acc(r)` (where `acc` is
+    //    the lookup's accumulation claim) rejects the forged opening at the Sub node.
     let t = 1 << 12;
     let mut rng = StdRng::seed_from_u64(0xA77ACCEE);
     let input = Tensor::<i32>::random_small(&mut rng, &[t]);
@@ -167,11 +169,14 @@ fn soundness_sub_virtual_operand_attack_is_rejected() {
     proof.verify(&verifier_pp, &io, None).unwrap();
 }
 
-#[should_panic = "InvalidOpeningProof(\"Sub output claim should equal the difference of operand claims\")"]
+// The tampered output (forced to 0) no longer equals `SatClamp(3 - 2) = 1`, so the
+// clamp execution lookup's sumcheck fails to verify and rejects the proof.
+#[should_panic = "SumcheckVerificationError"]
 #[test]
 fn soundness_sub_trace_tamper_3_minus_2_becomes_0_is_rejected() {
-    let model = sub_model_const_2();
-    let input = Tensor::new(Some(&[3]), &[1]).expect("input tensor should be valid");
+    let t = 1 << 6;
+    let model = sub_model_const_2(t);
+    let input = Tensor::new(Some(&vec![3; t]), &[t]).expect("input tensor should be valid");
 
     let pp = AtlasSharedPreprocessing::preprocess(model);
     let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
@@ -485,7 +490,12 @@ fn soundness_tanh_tau_rangecheck_bypass_is_rejected() {
             &mut prover.transcript,
             op.clone(),
         );
-        let mut exec_sumcheck = TanhProver::initialize(&prover.trace, params);
+        let mut exec_sumcheck = TanhProver::initialize(
+            &prover.trace,
+            params,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
         let (exec_proof, _) = Sumcheck::prove(
             &mut exec_sumcheck,
             &mut prover.accumulator,

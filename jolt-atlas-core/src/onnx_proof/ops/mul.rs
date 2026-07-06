@@ -1,6 +1,6 @@
 use crate::{
-    impl_standard_sumcheck_proof_api,
-    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
+    impl_fused_rescale_proof_api,
+    onnx_proof::{fused_rebase, ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
@@ -33,7 +33,7 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 
-impl_standard_sumcheck_proof_api!(Mul, MulParams, MulProver, MulVerifier);
+impl_fused_rescale_proof_api!(Mul, MulParams, MulProver, MulVerifier);
 
 /// Shared parameter block for the element-wise multiplication sumcheck proof.
 #[derive(Clone)]
@@ -60,9 +60,9 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MulParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        accumulator
-            .get_node_output_opening(self.computation_node.idx)
-            .1
+        // Fused rescaling seam: `acc(r) = rescaled·2^S + R` (or the plain output
+        // opening when not fused). See [`fused_rebase`] .
+        fused_rebase::fused_input_claim(accumulator, &self.computation_node)
     }
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -294,6 +294,37 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x889);
         let input = Tensor::<i32>::random_small(&mut rng, &[t]);
         let model = mul_model(&mut rng, t);
+        unit_test_op(model, &[input]);
+    }
+
+    /// Build a fused-`Mul` model with all-`input_value` input and all-`const_value`
+    /// constant so the rebased product `(input·const) >> S` is predictable and large
+    /// enough to saturate the i32 clamp . The `+1` in the callers makes the
+    /// remainder `R = (input·const) mod 2^S` non-zero.
+    fn saturating_mul_model(input_value: i32, const_value: i32, t: usize) -> (Model, Tensor<i32>) {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![t]);
+        let c = b.constant(Tensor::new(Some(&vec![const_value; t]), &[t]).unwrap());
+        let res = b.mul(i, c);
+        b.mark_output(res);
+        let input = Tensor::new(Some(&vec![input_value; t]), &[t]).unwrap();
+        (b.build(), input)
+    }
+
+    #[test]
+    fn test_mul_saturating_clamp_positive() {
+        // (2^20)² >> 8 ≈ 2^32 ≫ i32::MAX → clamps to i32::MAX, non-zero remainder.
+        let big = (1 << 20) + 1;
+        let (model, input) = saturating_mul_model(big, big, 1 << 4);
+        unit_test_op(model, &[input]);
+    }
+
+    #[test]
+    fn test_mul_saturating_clamp_negative() {
+        // Opposite signs → large negative product: floor-rebase then clamp to
+        // i32::MIN, with a non-zero Euclidean remainder.
+        let big = (1 << 20) + 1;
+        let (model, input) = saturating_mul_model(-big, big, 1 << 4);
         unit_test_op(model, &[input]);
     }
 }

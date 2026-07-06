@@ -1,6 +1,6 @@
 use crate::{
-    impl_standard_sumcheck_proof_api,
-    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
+    impl_fused_rescale_proof_api,
+    onnx_proof::{fused_rebase, ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
@@ -33,7 +33,7 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 
-impl_standard_sumcheck_proof_api!(Square, SquareParams, SquareProver, SquareVerifier);
+impl_fused_rescale_proof_api!(Square, SquareParams, SquareProver, SquareVerifier);
 
 /// Shared parameter block for the element-wise square sumcheck proof.
 #[derive(Clone)]
@@ -60,9 +60,9 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SquareParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        AccOpeningAccessor::new(accumulator, &self.computation_node)
-            .get_reduced_opening()
-            .1
+        // Fused rescaling seam: `acc(r) = rescaled·2^S + R` (or the plain output
+        // opening when not fused). See [`fused_rebase`] .
+        fused_rebase::fused_input_claim(accumulator, &self.computation_node)
     }
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -255,7 +255,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SquareVerif
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use atlas_onnx_tracer::{
+        model::{test::ModelBuilder, Model},
+        tensor::Tensor,
+    };
     use rand::{rngs::StdRng, SeedableRng};
 
     fn square_model(T: usize) -> Model {
@@ -284,6 +287,20 @@ mod tests {
         unit_test_op(model, &[input]);
     }
 
+    #[test]
+    fn test_square_saturating_clamp() {
+        // (2^20+1)² >> 8 ≈ 2^32 ≫ i32::MAX → clamps to i32::MAX, with a non-zero
+        // remainder. (x² is always ≥ 0, so the clamp only ever hits i32::MAX.)
+        let big = (1 << 20) + 1;
+        let t = 1 << 4;
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![t]);
+        let res = b.square(i);
+        b.mark_output(res);
+        let input = Tensor::new(Some(&vec![big; t]), &[t]).unwrap();
+        unit_test_op(b.build(), &[input]);
+    }
+
     /// Validates that Square's BlindFold constraint formulas produce the same
     /// values as the actual `input_claim` / `expected_output_claim` methods.
     ///
@@ -306,8 +323,10 @@ mod tests {
         type F = Fr;
         type Challenge = MontU128Challenge<F>;
 
-        // Simulate a computation node: node 1 (Square) takes input from node 0
-        let node = ComputationNode::new(1, Operator::Square(Square), vec![0], vec![4]);
+        // Simulate a computation node: node 1 (Square) takes input from node 0.
+        // Scale 0 keeps it a raw square so `input_claim` is the plain output
+        // opening (the BlindFold constraint asserted here).
+        let node = ComputationNode::new(1, Operator::Square(Square { scale: 0 }), vec![0], vec![4]);
 
         // Set up the verifier accumulator with known opening values
         let mut accumulator = VerifierOpeningAccumulator::<F>::new();

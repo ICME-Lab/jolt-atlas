@@ -1847,12 +1847,24 @@ pub fn prove_zk(
     // public auxiliary vectors) toggle this flag off and back on.
     prover.accumulator.zk_mode = true;
 
-    let (poly_map, commitments) = ONNXProof::<F, T, PCS>::commit_witness_polynomials(
-        pp.model(),
-        &prover.trace,
-        &pp.generators,
-        &mut prover.transcript,
-    );
+    // The ZK pipeline proves `Add`/`Sub`/`Sum` un-clamped (the saturating clamp
+    // lookup is not yet wired into `prove_zk`; per-node provers are the
+    // un-clamped `AddProver`/`SubProver`/`SumAxisProver`). Those provers never
+    // open the clamp one-hot decomposition (`ClampRaD`), so committing it would
+    // leave it without an opening-reduction sumcheck. Filter it out here so the
+    // committed set matches what the zk sumchecks actually open. (The non-ZK
+    // path commits and opens `ClampRaD` as usual.)
+    let poly_map: std::collections::BTreeMap<
+        common::CommittedPoly,
+        joltworks::poly::multilinear_polynomial::MultilinearPolynomial<F>,
+    > = ONNXProof::<F, T, PCS>::polynomial_map(pp.model(), &prover.trace)
+        .into_iter()
+        .filter(|(poly, _)| !matches!(poly, common::CommittedPoly::ClampRaD(..)))
+        .collect();
+    let commitments = ONNXProof::<F, T, PCS>::commit_to_polynomials(&poly_map, &pp.generators);
+    for commitment in &commitments {
+        prover.transcript.append_serializable(commitment);
+    }
     // The output claim is a public scalar derived from IO; both prover and
     // verifier (`verify_zk` does `transcript.append_scalar(&expected_output_claim)`)
     // append it in the clear. Toggle prover zk_mode off so its append fires.

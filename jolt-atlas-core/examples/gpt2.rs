@@ -22,14 +22,11 @@ fn main() {
 
     // Reduce sequence_length for faster tracing; increase as needed (max 1024).
     let seq_len: usize = 16;
-    // HACK: pre_rebase_nonlinear prevents i32 overflow in Square/Cube for large models.
-    // TODO: Remove once fused i64-precision ops are the default path.
     let run_args = RunArgs::new([
         ("batch_size", 1),
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
-    ])
-    .with_pre_rebase_nonlinear(true);
+    ]);
     let model = Model::load("atlas-onnx-tracer/models/gpt2/model.onnx", &run_args);
     println!("{}", model.pretty_print());
     println!("max num vars: {}", model.max_num_vars());

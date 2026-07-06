@@ -10,14 +10,9 @@ use tract_onnx::prelude::tract_itertools::Itertools;
 impl Op for Einsum {
     #[tracing::instrument(name = "Einsum::f", skip_all)]
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
-        #[cfg(feature = "fused-ops")]
-        {
-            einsum_i32_with_i64_rebase(&self.equation, &inputs, self.scale).unwrap()
-        }
-        #[cfg(not(feature = "fused-ops"))]
-        {
-            crate::tensor::ops::einsum(&self.equation, &inputs).unwrap()
-        }
+        // Fused: i64 accumulate, floor-rescale by `1 << scale`, saturating clamp
+        // to i32. Replaces the einsum + its ScalarConstDiv rebase node .
+        einsum_i32_with_i64_rebase(&self.equation, &inputs, self.scale).unwrap()
     }
 
     fn rebase_scale_factor(&self) -> Option<usize> {
@@ -25,18 +20,24 @@ impl Op for Einsum {
     }
 }
 
-/// Like `einsum`, but uses i64 intermediate precision and fuses the rebase.
+/// Re-execute an [`Einsum`] node's fused accumulate+rebase, returning the
+/// pre-clamp `i64` intermediate (the saturating-clamp lookup index).
 ///
-/// Upcasts i32 inputs to i64 for multiply+accumulate, then floor-divides by
-/// `1 << scale` while still in i64 (preserving full precision), and truncates
-/// to i32. This replaces both the Einsum **and** its subsequent ScalarConstDiv
-/// rebase node, avoiding the lossy wrapping-then-dividing path.
-#[tracing::instrument(name = "tensor::ops::einsum_i64_rebase", skip_all)]
-pub fn einsum_i32_with_i64_rebase(
-    equation: &str,
-    inputs: &[&Tensor<i32>],
-    scale: i32,
-) -> Result<Tensor<i32>, TensorError> {
+/// The proof system uses this to recover the intermediate without storing it
+/// in the trace — analogous to `sat_binop_intermediate` for Add/Sub.
+pub fn einsum_intermediate(op: &Einsum, inputs: &[&Tensor<i32>]) -> Tensor<i64> {
+    einsum_accumulate_i64(&op.equation, inputs, op.scale)
+        .unwrap_or_else(|e| panic!("einsum_intermediate: {e:?}"))
+}
+
+/// Accumulate the einsum in `i64` (multiply + sum over the contraction axes),
+/// returning the **raw** pre-rebase accumulation `acc = Σ_k left·right`.
+///
+/// Rebasing (floor-division by `1 << scale`) and the remainder `R = acc mod 2^S`
+/// are derived from this by the thin wrappers below, so both share one pass of
+/// the contraction kernel.
+#[tracing::instrument(name = "tensor::ops::einsum_acc_i64", skip_all)]
+fn einsum_acc_i64(equation: &str, inputs: &[&Tensor<i32>]) -> Result<Tensor<i64>, TensorError> {
     // Parse equation (identical logic to generic einsum)
     let mut equation_parts = equation.split("->");
     let inputs_eq_str = equation_parts.next().unwrap();
@@ -166,9 +167,7 @@ pub fn einsum_i32_with_i64_rebase(
         .multi_cartesian_product()
         .collect::<Vec<_>>();
 
-    let rebase_divisor: i64 = 1i64 << scale;
-
-    let output: Vec<i32> = cartesian_coord
+    let output: Vec<i64> = cartesian_coord
         .par_iter()
         .with_min_len(par_enabled())
         .map(|out_coord| {
@@ -184,7 +183,7 @@ pub fn einsum_i32_with_i64_rebase(
                 })
                 .collect();
 
-            // Accumulate in i64 for full precision
+            // Accumulate in i64 for full precision (raw, pre-rebase).
             let mut sum: i64 = 0;
             for s_idx in 0..sum_total {
                 let mut product: i64 = 1;
@@ -195,15 +194,63 @@ pub fn einsum_i32_with_i64_rebase(
                 sum += product;
             }
 
-            let result = sum / rebase_divisor;
-
-            // Saturate instead of wrapping — prevents sign-flip corruption
-            result.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+            sum
         })
         .collect();
 
-    let mut output: Tensor<i32> = output.into_iter().into();
+    let mut output = Tensor::<i64>::new(Some(&output), &output_shape)?;
     output.reshape(&output_shape)?;
 
     Ok(output)
+}
+
+/// Accumulate and **rebase** by floor-dividing (Euclidean) the raw `i64`
+/// accumulation by `1 << scale`, returning the pre-cast `i64` rescaled value.
+///
+/// Floor (rather than truncating) division is deliberate: it makes the rebase a
+/// pure arithmetic right shift, so the proof-side remainder `R = acc mod 2^S`
+/// (see [`einsum_remainder`]) is always in `[0, 2^S)` even when `acc` is
+/// negative — directly range-checkable .
+fn einsum_accumulate_i64(
+    equation: &str,
+    inputs: &[&Tensor<i32>],
+    scale: i32,
+) -> Result<Tensor<i64>, TensorError> {
+    let acc = einsum_acc_i64(equation, inputs)?;
+    let divisor = 1i64 << scale;
+    let data: Vec<i64> = acc.data().iter().map(|&v| v.div_euclid(divisor)).collect();
+    Tensor::<i64>::new(Some(&data), acc.dims())
+}
+
+/// Re-execute the einsum's rescaling **remainder** `R = acc mod 2^S` (Euclidean,
+/// so `R ∈ [0, 2^S)`), where `acc = Σ_k left·right` and `output = acc >> S`.
+///
+/// The proof system uses this to recover the per-element remainder without
+/// storing it in the trace — the einsum sumcheck binds `output·2^S + R = acc`
+/// and range-checks `R` . `R` fits `i32` for any `scale < 31`.
+pub fn einsum_remainder(op: &Einsum, inputs: &[&Tensor<i32>]) -> Tensor<i32> {
+    let acc =
+        einsum_acc_i64(&op.equation, inputs).unwrap_or_else(|e| panic!("einsum_remainder: {e:?}"));
+    let divisor = 1i64 << op.scale;
+    let data: Vec<i32> = acc
+        .data()
+        .iter()
+        .map(|&v| v.rem_euclid(divisor) as i32)
+        .collect();
+    Tensor::<i32>::new(Some(&data), acc.dims())
+        .unwrap_or_else(|e| panic!("einsum_remainder: {e:?}"))
+}
+
+/// Like `einsum_accumulate_i64`, but saturates the i64 result to i32.
+///
+/// Replaces both the Einsum and its subsequent ScalarConstDiv rebase node,
+/// avoiding the lossy wrapping-then-dividing path.
+#[tracing::instrument(name = "tensor::ops::einsum_i64_rebase", skip_all)]
+pub fn einsum_i32_with_i64_rebase(
+    equation: &str,
+    inputs: &[&Tensor<i32>],
+    scale: i32,
+) -> Result<Tensor<i32>, TensorError> {
+    let acc = einsum_accumulate_i64(equation, inputs, scale)?;
+    Ok(super::clamp_to_i32(&acc))
 }

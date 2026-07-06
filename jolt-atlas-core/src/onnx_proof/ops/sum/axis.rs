@@ -11,15 +11,15 @@ use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
 };
-use common::parallel::par_enabled;
+use common::{parallel::par_enabled, VirtualPoly};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
-            BIG_ENDIAN,
+            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            VerifierOpeningAccumulator, BIG_ENDIAN,
         },
         unipoly::UniPoly,
     },
@@ -40,14 +40,40 @@ pub struct SumAxisParams<F: JoltField> {
     r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
     sum_config: SumConfig,
+    /// When `true`, the sumcheck's input claim is the pre-clamp accumulation
+    /// ([`VirtualPoly::ClampAcc`]) — the saturating path, where the node output
+    /// is `SatClamp(acc)`. When `false`, it is the node output directly (the
+    /// un-clamped path used by the ZK pipeline).
+    acc_input: bool,
 }
 
 impl<F: JoltField> SumAxisParams<F> {
-    /// Create new parameters for sum operation along an axis.
+    /// Create new parameters for sum operation along an axis (un-clamped: the
+    /// input claim is the node output). Used by the ZK pipeline.
     pub fn new(
         computation_node: ComputationNode,
         sum_config: SumConfig,
         accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Self {
+        Self::new_inner(computation_node, sum_config, accumulator, false)
+    }
+
+    /// Create parameters whose input claim is the pre-clamp accumulation
+    /// ([`VirtualPoly::ClampAcc`]); the clamp `output = SatClamp(acc)` is proven
+    /// separately by the clamp lookup.
+    pub fn new_clamped(
+        computation_node: ComputationNode,
+        sum_config: SumConfig,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Self {
+        Self::new_inner(computation_node, sum_config, accumulator, true)
+    }
+
+    fn new_inner(
+        computation_node: ComputationNode,
+        sum_config: SumConfig,
+        accumulator: &dyn OpeningAccumulator<F>,
+        acc_input: bool,
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let r_node_output = accessor.get_reduced_opening().0;
@@ -55,6 +81,7 @@ impl<F: JoltField> SumAxisParams<F> {
             r_node_output,
             computation_node,
             sum_config,
+            acc_input,
         }
     }
 }
@@ -65,8 +92,17 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SumAxisParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
-        accessor.get_reduced_opening().1
+        if self.acc_input {
+            // Saturating path: the sumcheck reduces the pre-clamp accumulation.
+            let acc_id = OpeningId::new(
+                VirtualPoly::ClampAcc(self.computation_node.idx),
+                SumcheckId::NodeExecution(self.computation_node.idx),
+            );
+            accumulator.get_virtual_polynomial_opening(acc_id).1
+        } else {
+            let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
+            accessor.get_reduced_opening().1
+        }
     }
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -226,13 +262,24 @@ pub struct SumAxisVerifier<F: JoltField> {
 }
 
 impl<F: JoltField> SumAxisVerifier<F> {
-    /// Create new verifier for sum along axis.
+    /// Create new verifier for sum along axis (un-clamped; ZK pipeline).
     pub fn new(
         computation_node: ComputationNode,
         sum_config: SumConfig,
         accumulator: &VerifierOpeningAccumulator<F>,
     ) -> Self {
         let params = SumAxisParams::new(computation_node, sum_config, accumulator);
+        Self { params }
+    }
+
+    /// Create a verifier whose input claim is the pre-clamp accumulation
+    /// ([`VirtualPoly::ClampAcc`]); pairs with the clamp lookup.
+    pub fn new_clamped(
+        computation_node: ComputationNode,
+        sum_config: SumConfig,
+        accumulator: &VerifierOpeningAccumulator<F>,
+    ) -> Self {
+        let params = SumAxisParams::new_clamped(computation_node, sum_config, accumulator);
         Self { params }
     }
 }
@@ -325,6 +372,38 @@ mod tests {
     #[test]
     fn test_sum_axis_1_1d() {
         test_sum_axis_generic(4, 0, 0x844, 1);
+    }
+
+    /// Vector output (`T = 4`): rows saturate at both `i32::MAX` and `i32::MIN`,
+    /// exercising the clamp lookup on the axis accumulation.
+    #[test]
+    fn test_sum_axis_saturating_overflow() {
+        let m = 4;
+        let n = 8;
+        let data: Vec<i32> = (0..m * n)
+            .map(|i| {
+                if (i / n) % 2 == 0 {
+                    i32::MAX / 2
+                } else {
+                    i32::MIN / 2
+                }
+            })
+            .collect();
+        let input = Tensor::<i32>::new(Some(&data), &[m, n]).unwrap();
+        let model = sum_model::<1>(m, n);
+        unit_test_op(model, &[input]);
+    }
+
+    /// Scalar output (`T = 1`): the accumulation overflows and the verifier checks
+    /// `output == SatClamp(sum)` directly.
+    #[test]
+    fn test_sum_scalar_saturating_overflow() {
+        let m = 64;
+        let n = 1;
+        let data = vec![i32::MAX / 2; m * n];
+        let input = Tensor::<i32>::new(Some(&data), &[m, n]).unwrap();
+        let model = sum_model::<0>(m, n);
+        unit_test_op(model, &[input]);
     }
 
     #[test]

@@ -93,7 +93,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             &mut prover.transcript,
             self.clone(),
         );
-        let mut exec_sumcheck = TanhProver::initialize(&prover.trace, params);
+        let mut exec_sumcheck = TanhProver::initialize(
+            &prover.trace,
+            params,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
 
         let (exec_proof, _) = Sumcheck::prove(
             &mut exec_sumcheck,
@@ -224,7 +229,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for TanhParams<F> {
         let rv_claim = accessor.get_custom(reduced_output_id).1;
 
         // Use quotient claim instead of input claim (neural teleportation)
-        let quotient_claim = accessor.get_advice(VirtualPoly::TeleportQuotient).1;
+        let quotient_claim = accessor.get_advice(VirtualPoly::DummyClampedTanhInput).1;
 
         rv_claim + self.gamma * quotient_claim
     }
@@ -285,17 +290,36 @@ pub struct TanhProver<F: JoltField> {
 
 impl<F: JoltField> TanhProver<F> {
     /// Initialize the prover with trace data, parameters, accumulator, and transcript.
-    pub fn initialize(trace: &Trace, params: TanhParams<F>) -> Self {
+    pub fn initialize(
+        trace: &Trace,
+        params: TanhParams<F>,
+        acc: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut impl Transcript,
+    ) -> Self {
         let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
         let input = operands[0];
 
         // Compute quotient from division (neural teleportation)
         let (quotient_tensor, _remainder) = compute_division(input, params.op.tau);
+        let clamped_tensor = atlas_onnx_tracer::ops::tanh::clamp_tensor(
+            &quotient_tensor,
+            -(1 << (params.op.log_table - 1)),
+            (1 << (params.op.log_table - 1)) - 1,
+        );
+
+        // TODO: rm once clamp is implemented for tanh
+        let clamped_mle = MultilinearPolynomial::from(clamped_tensor.clone());
+        let clamped_eval = clamped_mle.evaluate(&params.r_node_output.r);
+        let mut provider = AccOpeningAccessor::new(acc, &params.computation_node).into_provider(
+            transcript,
+            OpeningPoint::new(params.r_node_output.r.clone()),
+        );
+        provider.append_advice(VirtualPoly::DummyClampedTanhInput, clamped_eval);
 
         // Ensure input is within expected range for table size: 2^(log_table_size - 1) <= input < 2^(log_table_size - 1)
         // Inputs outside this range will error
         // TODO: Pass these input in a clamping lookup table, since anyway tanh(±∞) = ±1, so we only need to handle a limited input range.
-        assert!(quotient_tensor.iter().all(|&x| {
+        assert!(clamped_tensor.iter().all(|&x| {
             let lower_bound = -(1 << (params.op.log_table - 1));
             let upper_bound = (1 << (params.op.log_table - 1)) - 1;
             x >= lower_bound && x <= upper_bound
@@ -308,7 +332,7 @@ impl<F: JoltField> TanhProver<F> {
         // Compute one-hot encoding of QUOTIENT values (not input)
         let input_onehot: Vec<F> = compute_ra_evals_nbits_2comp(
             &params.r_node_output.r,
-            &quotient_tensor,
+            &clamped_tensor,
             params.op.log_table,
         );
 
@@ -407,6 +431,12 @@ impl<F: JoltField> TanhVerifier<F> {
         op: Tanh,
     ) -> Self {
         let params = TanhParams::new(computation_node, graph, accumulator, transcript, op);
+        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
+            .into_provider(
+                transcript,
+                OpeningPoint::new(params.r_node_output.r.clone()),
+            );
+        provider.append_advice(VirtualPoly::DummyClampedTanhInput);
 
         // Materialize the tanh table for verification
         let tanh_table = TanhTable::new(params.op.log_table, params.op.tau);
@@ -482,7 +512,7 @@ impl RaOneHotEncoding for TanhRaEncoding {
 
     fn r_cycle_source(&self) -> OpeningId {
         OpeningId::new(
-            VirtualPoly::TeleportQuotient(self.node_idx),
+            VirtualPoly::DummyClampedTanhInput(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
@@ -510,7 +540,12 @@ impl<F: JoltField, T: Transcript> NeuralTeleportRangeOneHot<F, T> for Tanh {
         let LayerData { operands, .. } = Trace::layer_data(trace, node);
         let input = operands[0];
         let (quotient, _remainder) = compute_division(input, self.tau);
-        quotient
+        let clamped_tensor = atlas_onnx_tracer::ops::tanh::clamp_tensor(
+            &quotient,
+            -(1 << (self.log_table - 1)),
+            (1 << (self.log_table - 1)) - 1,
+        );
+        clamped_tensor
             .par_iter()
             .with_min_len(par_enabled())
             .map(|&x| n_bits_to_usize(x, self.log_table))
@@ -548,6 +583,17 @@ mod tests {
         let T = 1 << 14;
         const MIN_INPUT_VALUE: i32 = -(1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1));
         const MAX_INPUT_VALUE: i32 = 1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1);
+        let mut rng = StdRng::seed_from_u64(0x888);
+        let input = Tensor::random_range(&mut rng, &[T], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
+        let model = tanh_model(&[T]);
+        unit_test_op(model, &[input]);
+    }
+
+    #[test]
+    fn test_tanh_clamped() {
+        let T = 1 << 14;
+        const MIN_INPUT_VALUE: i32 = -(1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE));
+        const MAX_INPUT_VALUE: i32 = 1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE);
         let mut rng = StdRng::seed_from_u64(0x888);
         let input = Tensor::random_range(&mut rng, &[T], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
         let model = tanh_model(&[T]);

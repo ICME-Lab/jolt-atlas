@@ -936,6 +936,109 @@ fn verify_cos_sin_zk(
     Ok(())
 }
 
+/// Verify the fused-rescaling pre-stages (mirror of `prove_fused_rebase_pre_zk`):
+/// remainder advice, clamp read-raf lookup, clamp one-hot batch.
+fn verify_fused_rebase_pre_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    bundle: &ZkProofBundle,
+    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+    zk_proof_idx: &mut usize,
+) -> Result<(), ProofVerifyError> {
+    use crate::onnx_proof::clamp_lookups::{is_scalar, ClampEncoding, ClampLookupProvider};
+
+    // Mirror of the prover-side panic; see `prove_fused_rebase_pre_zk`.
+    if is_scalar(node) {
+        unimplemented!("ZK verification not yet implemented for scalar fused-rescale nodes");
+    }
+
+    crate::onnx_proof::fused_rebase::cache_remainder_verify(node, accumulator, transcript);
+
+    // Clamp read-raf lookup.
+    {
+        let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(
+            *proof_node_idx, node.idx,
+            "ZK sumcheck proof order mismatch"
+        );
+        let provider = ClampLookupProvider::new(node.clone());
+        let execution_verifier = provider.read_raf_verify::<F, T>(accumulator, transcript);
+        verify_zk_sumcheck_instances(
+            zk_proof,
+            vec![Box::new(execution_verifier)],
+            accumulator,
+            transcript,
+        )?;
+        *zk_proof_idx += 1;
+    }
+
+    // Clamp one-hot batch.
+    {
+        let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(
+            *proof_node_idx, node.idx,
+            "ZK sumcheck proof order mismatch"
+        );
+        let encoding = ClampEncoding::new(node);
+        let [ra, hw, b] = joltworks::subprotocols::shout::ra_onehot_verifiers(
+            &encoding,
+            &*accumulator,
+            transcript,
+        );
+        verify_zk_sumcheck_instances(zk_proof, vec![ra, hw, b], accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+    Ok(())
+}
+
+/// Verify the fused-rescaling post-stages (mirror of `prove_fused_rebase_post_zk`):
+/// remainder identity range check, remainder one-hot batch.
+fn verify_fused_rebase_post_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    bundle: &ZkProofBundle,
+    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+    zk_proof_idx: &mut usize,
+) -> Result<(), ProofVerifyError> {
+    use crate::onnx_proof::fused_rebase::{
+        rebase_bits, RescaleRemainderRCProvider, RescaleRemainderRaEncoding,
+    };
+    use joltworks::subprotocols::identity_range_check::identity_rangecheck_verifier;
+
+    let bits = rebase_bits(&node.operator).expect("fused op");
+
+    // Remainder identity range check.
+    {
+        let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(
+            *proof_node_idx, node.idx,
+            "ZK sumcheck proof order mismatch"
+        );
+        let rc_provider = RescaleRemainderRCProvider::new(node.clone(), bits);
+        let rc = identity_rangecheck_verifier(&rc_provider, accumulator);
+        verify_zk_sumcheck_instances(zk_proof, vec![Box::new(rc)], accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+
+    // Remainder one-hot batch.
+    {
+        let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
+        assert_eq!(
+            *proof_node_idx, node.idx,
+            "ZK sumcheck proof order mismatch"
+        );
+        let encoding = RescaleRemainderRaEncoding::new(node.idx, bits);
+        let [ra, hw, boolean] = joltworks::subprotocols::shout::ra_onehot_verifiers(
+            &encoding,
+            &*accumulator,
+            transcript,
+        );
+        verify_zk_sumcheck_instances(zk_proof, vec![ra, hw, boolean], accumulator, transcript)?;
+        *zk_proof_idx += 1;
+    }
+    Ok(())
+}
+
 /// Prove a neural teleportation operator (Sigmoid, Tanh, Erf) with ZK.
 /// Default flow: eval reduction first, then division + lookup + range/onehot stages.
 #[expect(clippy::too_many_arguments)]
@@ -995,8 +1098,12 @@ fn prove_neural_teleport_zk(
     zk_sumcheck_proofs.push((node.idx, div_proof));
 
     // 3. Lookup sumcheck (operator-specific: needs mutable accumulator/transcript)
+    // Extra trailing args are forwarded to `initialize`: `TanhProver::initialize`
+    // additionally takes the opening accumulator + transcript to append the
+    // clamped-input advice (`VirtualPoly::DummyClampedTanhInput`, #256); the
+    // append is transcript-quiet in zk mode, mirroring `TanhVerifier::new`.
     macro_rules! prove_lookup_zk {
-        ($Params:ty, $Prover:ty, $op:expr) => {{
+        ($Params:ty, $Prover:ty, $op:expr $(, $init_extra:expr)*) => {{
             let params = <$Params>::new(
                 node.clone(),
                 &model.graph,
@@ -1004,7 +1111,7 @@ fn prove_neural_teleport_zk(
                 &mut prover.transcript,
                 $op.clone(),
             );
-            let mut sc = <$Prover>::initialize(&prover.trace, params);
+            let mut sc = <$Prover>::initialize(&prover.trace, params $(, $init_extra)*);
             let proof = run_zk_sumcheck(
                 &mut sc,
                 prover,
@@ -1022,7 +1129,13 @@ fn prove_neural_teleport_zk(
         }
         Operator::Tanh(op) => {
             use crate::onnx_proof::ops::tanh::{TanhParams, TanhProver};
-            prove_lookup_zk!(TanhParams::<F>, TanhProver::<F>, op);
+            prove_lookup_zk!(
+                TanhParams::<F>,
+                TanhProver::<F>,
+                op,
+                &mut prover.accumulator,
+                &mut prover.transcript
+            );
         }
         Operator::Erf(op) => {
             use crate::onnx_proof::ops::erf::{ErfParams, ErfProver};
@@ -1634,6 +1747,126 @@ fn prove_relu_zk(
     zk_sumcheck_proofs.push((node.idx, oh_proof));
 }
 
+/// Prove the fused-rescaling pre-stages for a fused arithmetic node (einsum /
+/// `Mul` / `Square` / `Cube` with `scale > 0`), mirroring
+/// `fused_rebase::prove_pre`: append the `RescaleRemainder` advice, then
+/// discharge `output = SatClamp(rescaled)` via the 64-bit clamp read-raf
+/// lookup and its one-hot checks. Must run *before* the operator's arithmetic
+/// sumcheck so `fused_rebase::fused_input_claim` can read the
+/// `ClampAcc`/`RescaleRemainder` advices. Both advice appends are
+/// transcript-quiet in ZK mode; their values enter the proof via the baked
+/// initial claims of the following stages (prover-supplied, like every
+/// chain-start initial claim in this pipeline — the same treatment the Tanh
+/// `DummyClampedTanhInput` advice gets), not as committed BlindFold output
+/// claims. Binding them with a real `InputClaimConstraint` is future work
+/// alongside the other baked-claim bindings.
+fn prove_fused_rebase_pre_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    prover: &mut Prover<F, T>,
+    pedersen_gens: &PedersenGenerators<C>,
+    blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+    stage_configs: &mut Vec<StageConfig>,
+    zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
+) {
+    use crate::onnx_proof::clamp_lookups::{is_scalar, ClampEncoding, ClampLookupProvider};
+
+    // Scalar fused nodes open `rescaled`/`R` in the clear and are checked by
+    // the verifier directly (`fused_rebase::verify_post`); that cleartext
+    // check has no ZK counterpart yet. Fail loudly rather than prove an
+    // unbound clamp.
+    if is_scalar(node) {
+        unimplemented!("ZK proving not yet implemented for scalar fused-rescale nodes");
+    }
+
+    // Remainder advice at the reduced output point.
+    crate::onnx_proof::fused_rebase::cache_remainder_prove(node, prover);
+
+    // Clamp read-raf lookup: output = SatClamp(acc); acc appended as ClampAcc.
+    let provider = ClampLookupProvider::new(node.clone());
+    let (mut exec_sc, lookup_indices) = provider.read_raf_prove::<F, T>(
+        &prover.trace,
+        &mut prover.accumulator,
+        &mut prover.transcript,
+    );
+    let exec_proof = run_zk_sumcheck(
+        &mut exec_sc,
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, exec_proof));
+
+    // Clamp one-hot batch (Ra, HammingWeight, Booleanity) over `ClampRaD`.
+    let encoding = ClampEncoding::new(node);
+    let [mut ra, mut hw, mut b] = joltworks::subprotocols::shout::ra_onehot_provers(
+        &encoding,
+        &lookup_indices,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let oh_proof = run_zk_batched_sumcheck(
+        vec![&mut *ra, &mut *hw, &mut *b],
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, oh_proof));
+}
+
+/// Prove the fused-rescaling post-stages, mirroring
+/// `fused_rebase::prove_remainder_rc`: the remainder range check
+/// `R ∈ [0, 2^S)` plus its one-hot checks over `RescaleRemainderRaD`. Runs
+/// *after* the operator's arithmetic sumcheck.
+fn prove_fused_rebase_post_zk(
+    node: &atlas_onnx_tracer::node::ComputationNode,
+    prover: &mut Prover<F, T>,
+    pedersen_gens: &PedersenGenerators<C>,
+    blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+    stage_configs: &mut Vec<StageConfig>,
+    zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
+) {
+    use crate::onnx_proof::fused_rebase::{
+        rebase_bits, rebase_remainder_lookup_bits, RescaleRemainderRCProvider,
+        RescaleRemainderRaEncoding,
+    };
+    use joltworks::subprotocols::identity_range_check::identity_rangecheck_prover;
+
+    let bits = rebase_bits(&node.operator).expect("fused op");
+    let lookup_bits = rebase_remainder_lookup_bits(node, &prover.trace, bits);
+    let lookup_indices: Vec<usize> = lookup_bits.iter().map(|&x| x.into()).collect();
+
+    // Remainder identity range check.
+    let rc_provider = RescaleRemainderRCProvider::new(node.clone(), bits);
+    let mut rc = identity_rangecheck_prover(&rc_provider, lookup_bits, &mut prover.accumulator);
+    let rc_proof = run_zk_sumcheck(
+        &mut rc,
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, rc_proof));
+
+    // Remainder one-hot batch over `RescaleRemainderRaD`.
+    let encoding = RescaleRemainderRaEncoding::new(node.idx, bits);
+    let [mut ra, mut hw, mut boolean] = joltworks::subprotocols::shout::ra_onehot_provers(
+        &encoding,
+        &lookup_indices,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let ra_proof = run_zk_batched_sumcheck(
+        vec![&mut *ra, &mut *hw, &mut *boolean],
+        prover,
+        blindfold_accumulator,
+        stage_configs,
+        pedersen_gens,
+    );
+    zk_sumcheck_proofs.push((node.idx, ra_proof));
+}
+
 /// Prove Rsqrt with ZK: custom flow (execution from transcript, eval reduction, range checks).
 #[expect(clippy::too_many_arguments)]
 fn prove_rsqrt_zk(
@@ -1847,19 +2080,26 @@ pub fn prove_zk(
     // public auxiliary vectors) toggle this flag off and back on.
     prover.accumulator.zk_mode = true;
 
-    // The ZK pipeline proves `Add`/`Sub`/`Sum` un-clamped (the saturating clamp
-    // lookup is not yet wired into `prove_zk`; per-node provers are the
-    // un-clamped `AddProver`/`SubProver`/`SumAxisProver`). Those provers never
-    // open the clamp one-hot decomposition (`ClampRaD`), so committing it would
-    // leave it without an opening-reduction sumcheck. Filter it out here so the
-    // committed set matches what the zk sumchecks actually open. (The non-ZK
-    // path commits and opens `ClampRaD` as usual.)
+    // The ZK pipeline still proves `Add`/`Sub`/`Sum` un-clamped (the saturating
+    // clamp lookup is not yet wired into `prove_zk` for them; per-node provers
+    // are the un-clamped `AddProver`/`SubProver`/`SumAxisProver`). Those provers
+    // never open the clamp one-hot decomposition (`ClampRaD`), so committing it
+    // would leave it without an opening-reduction sumcheck. Filter those out so
+    // the committed set matches what the zk sumchecks actually open. Fused
+    // rescale ops (einsum/Mul/Square/Cube, `fuses_rebase`) DO open `ClampRaD`
+    // in ZK via `prove_fused_rebase_pre_zk`, so theirs stay committed. (The
+    // non-ZK path commits and opens `ClampRaD` for all clamped ops as usual.)
     let poly_map: std::collections::BTreeMap<
         common::CommittedPoly,
         joltworks::poly::multilinear_polynomial::MultilinearPolynomial<F>,
     > = ONNXProof::<F, T, PCS>::polynomial_map(pp.model(), &prover.trace)
         .into_iter()
-        .filter(|(poly, _)| !matches!(poly, common::CommittedPoly::ClampRaD(..)))
+        .filter(|(poly, _)| match poly {
+            common::CommittedPoly::ClampRaD(node_idx, _) => {
+                crate::onnx_proof::fused_rebase::fuses_rebase(&pp.model()[*node_idx].operator)
+            }
+            _ => true,
+        })
         .collect();
     let commitments = ONNXProof::<F, T, PCS>::commit_to_polynomials(&poly_map, &pp.generators);
     for commitment in &commitments {
@@ -2136,6 +2376,23 @@ pub fn prove_zk(
                     &mut eval_reduction_h_commitments,
                 );
 
+                // Fused-rescale ops (einsum/Mul/Square/Cube with scale > 0)
+                // mirror the non-zk `fused_rebase` flow: remainder advice +
+                // clamp stages before the arithmetic sumcheck (its input
+                // claim reads the `ClampAcc`/`RescaleRemainder` advices),
+                // remainder range-check stages after.
+                let fused = crate::onnx_proof::fused_rebase::fuses_rebase(&node.operator);
+                if fused {
+                    prove_fused_rebase_pre_zk(
+                        node,
+                        &mut prover,
+                        pedersen_gens,
+                        &mut blindfold_accumulator,
+                        &mut stage_configs,
+                        &mut zk_sumcheck_proofs,
+                    );
+                }
+
                 let zk_proof =
                     create_prover_instance(node, &prover, pp.shared.model()).map(|mut sc| {
                         run_zk_sumcheck(
@@ -2148,6 +2405,17 @@ pub fn prove_zk(
                     });
                 if let Some(proof) = zk_proof {
                     zk_sumcheck_proofs.push((node.idx, proof));
+                }
+
+                if fused {
+                    prove_fused_rebase_post_zk(
+                        node,
+                        &mut prover,
+                        pedersen_gens,
+                        &mut blindfold_accumulator,
+                        &mut stage_configs,
+                        &mut zk_sumcheck_proofs,
+                    );
                 }
             }
         }
@@ -2983,6 +3251,18 @@ fn verify_zk_with_pcs_capture_and_extract(
             | Operator::Sum(_) => {
                 verify_zk_eval_reduction(node, bundle, &mut accumulator, &mut transcript)?;
 
+                // Mirror of the prover-side fused-rescale staging.
+                let fused = crate::onnx_proof::fused_rebase::fuses_rebase(&node.operator);
+                if fused {
+                    verify_fused_rebase_pre_zk(
+                        node,
+                        bundle,
+                        &mut accumulator,
+                        &mut transcript,
+                        &mut zk_proof_idx,
+                    )?;
+                }
+
                 let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[zk_proof_idx];
                 assert_eq!(
                     *proof_node_idx, node.idx,
@@ -2999,6 +3279,16 @@ fn verify_zk_with_pcs_capture_and_extract(
                 )?;
 
                 zk_proof_idx += 1;
+
+                if fused {
+                    verify_fused_rebase_post_zk(
+                        node,
+                        bundle,
+                        &mut accumulator,
+                        &mut transcript,
+                        &mut zk_proof_idx,
+                    )?;
+                }
             }
         }
     }

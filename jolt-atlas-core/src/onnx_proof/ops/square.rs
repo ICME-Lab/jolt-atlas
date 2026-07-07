@@ -76,9 +76,12 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SquareParams<F> {
             .log_2()
     }
 
-    // The input claim is the node's own output evaluation from eval reduction.
-    // This value is baked as a constant in BlindFold's R1CS (not a variable),
-    // so no constraint is needed.
+    // Non-fused: the input claim is the node's own output evaluation from
+    // eval reduction. Fused (`fuses_rebase`): it is `ClampAcc·2^S +
+    // RescaleRemainder` from two prover advices. Either way the value is
+    // baked as a constant in BlindFold's R1CS (not a variable) — like every
+    // chain-start initial claim in the zk pipeline today; a real constraint
+    // over the advice openings is future work.
     #[cfg(feature = "zk")]
     fn input_claim_constraint(&self) -> InputClaimConstraint {
         InputClaimConstraint::default()
@@ -449,6 +452,19 @@ mod tests {
         let nodes = pp.model().nodes();
         let (_, square_node) = nodes.iter().next_back().unwrap();
         NodeEvalReduction::prove(&mut prover, square_node);
+
+        // 4b. The Square node fuses the rescale, so its arithmetic sumcheck's
+        // input claim reads the `ClampAcc`/`RescaleRemainder` advices
+        // (`fused_rebase::fused_input_claim`). Append both, as the zk
+        // pipeline's `prove_fused_rebase_pre_zk` does; the clamp/remainder
+        // stages themselves are covered by `test_square_zk`.
+        crate::onnx_proof::fused_rebase::cache_remainder_prove(square_node, &mut prover);
+        let _ = crate::onnx_proof::clamp_lookups::prove_append_acc(
+            square_node,
+            &prover.trace,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
 
         // 5. Create SquareProver
         let params = SquareParams::<F>::new(square_node.clone(), &prover.accumulator);

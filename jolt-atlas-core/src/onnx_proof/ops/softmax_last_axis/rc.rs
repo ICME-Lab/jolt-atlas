@@ -75,6 +75,10 @@ impl SoftmaxRCProvider {
 
     /// Range-check for saturation-diff values (`sat_diff[k,j] ∈ [0, 2^D)`).
     pub fn sat_diff(node: ComputationNode, log_scale: i32) -> Self {
+        debug_assert!(
+            log_scale >= 0,
+            "softmax log-scale must be non-negative, got {log_scale}"
+        );
         Self {
             node,
             log_k: sat_diff_rc_bits(log_scale as usize),
@@ -155,6 +159,10 @@ impl SoftmaxRaEncoding {
 
     /// One-hot for saturation-diff `ra`.
     pub fn sat_diff(node_idx: usize, log_scale: i32) -> Self {
+        debug_assert!(
+            log_scale >= 0,
+            "softmax log-scale must be non-negative, got {log_scale}"
+        );
         Self {
             node_idx,
             log_k: sat_diff_rc_bits(log_scale as usize),

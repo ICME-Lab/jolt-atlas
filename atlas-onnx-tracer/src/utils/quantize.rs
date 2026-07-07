@@ -158,7 +158,16 @@ pub fn quantize_float(float: f64, scale: Scale) -> i32 {
             // score term that additive masks (attention_score + mask_value)
             // carry into sat_diff is preserved: measured 429 < 2^12 on the
             // whole-model GPT-2 test workload and 2881 < 2^12 on the additive
-            // vehicle, both at scale 8.
+            // vehicle, both at scale 8. The sentinel must stay
+            // i32-representable: C(scale)·2^scale first exceeds i32::MAX at
+            // scale 27, where the exp cutoff z_bound itself leaves the i32
+            // range — no valid sentinel exists there at all, so fail loudly
+            // instead of letting the cast below saturate to i32::MIN.
+            debug_assert!(
+                mask_sentinel_magnitude(scale) * mult <= i32::MAX as f64,
+                "mask sentinel C(scale)·2^scale overflows i32 at scale {scale}; \
+                 extreme-negative masks are unrepresentable at this scale"
+            );
             -mask_sentinel_magnitude(scale)
         } else {
             panic!(
@@ -329,5 +338,22 @@ mod tests {
     fn extreme_negative_clamps_to_scale_indexed_sentinel() {
         assert_eq!(quantize_float(-3.4e38, 8), -2048); // -(8 << 8)
         assert_eq!(quantize_float(-3.4e38, 12), -45056); // -(11 << 12)
+    }
+
+    /// Scale 26 is the last scale whose sentinel is i32-representable
+    /// (C(26)·2^26 = 1,342,177,280 < i32::MAX; C(27)·2^27 overflows, and the
+    /// debug_assert in `quantize_float` rejects scale >= 27, where the exp
+    /// cutoff z_bound itself leaves i32 so no valid sentinel exists). Pin that
+    /// the boundary sentinel still clears the exp round-to-zero cutoff, so
+    /// masking stays exact right up to the representability edge.
+    #[test]
+    fn extreme_negative_sentinel_exact_at_boundary_scale() {
+        assert_eq!(quantize_float(-3.4e38, 26), -1_342_177_280); // -(20 << 26)
+        let decomp = crate::ops::softmax::generate_exp_lut_decomposed(1 << 26);
+        let z_bound = (decomp.lut_hi.len() * decomp.base) as i64;
+        assert!(1_342_177_280_i64 > z_bound); // sentinel saturates masked weights to 0
+        // A max_value/2 headroom sentinel (16.0 float) would NOT clear the
+        // cutoff here — clamping to it would silently break masking at 26.
+        assert!((16_i64 << 26) < z_bound);
     }
 }

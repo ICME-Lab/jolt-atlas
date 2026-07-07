@@ -152,13 +152,13 @@ pub fn quantize_float(float: f64, scale: Scale) -> i32 {
             // above the softmax exp round-to-zero cutoff (z_bound/2^scale ≈
             // (scale+1)·ln2, e.g. 6.75 at scale 8 → C=8), so masked positions
             // still saturate to weight 0 bit-exactly, while the masked
-            // sat_diff fits in sat_diff_rc_bits(log_scale) = log_scale + 4
+            // sat_diff fits in sat_diff_rc_bits(log_scale) = log_scale + 8
             // (vs 30 bits), dropping the SatDiff one-hot commitment from d=8
-            // to d=3 (scale 8) polynomials per softmax node. Headroom for the
+            // to d=4 (scale 8) polynomials per softmax node. Headroom for the
             // score term that additive masks (attention_score + mask_value)
-            // carry into sat_diff is preserved: measured 429 < 2^12 on the
-            // whole-model GPT-2 test workload and 2881 < 2^12 on the additive
-            // vehicle, both at scale 8. The sentinel must stay
+            // carry into sat_diff is preserved: measured 13773 < 2^16 on the
+            // whole-model GPT-2 e2e workload and 13825 < 2^16 on BGE-small,
+            // both at scale 8 on the fused-i64 arithmetic. The sentinel must stay
             // i32-representable: C(scale)·2^scale first exceeds i32::MAX at
             // scale 27, where the exp cutoff z_bound itself leaves the i32
             // range — no valid sentinel exists there at all, so fail loudly

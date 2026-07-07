@@ -10,17 +10,22 @@ use joltworks::{
 
 /// Bit width for the sat_diff range check at a given softmax scale (log₂ S).
 ///
-/// The honest sat_diff is bounded by the attention-mask sentinel, not by 2^30:
-/// with the quantize.rs extreme clamp at -(C(scale) << scale)
-/// (`mask_sentinel_magnitude`, C(8)=8 / C(12)=11), masked inputs give
-/// `sat_diff ≤ (score_spread + C(scale)·2^scale) − (z_bound − 1)`, which fits
-/// in `log_scale + 4` bits — measured at scale 8: 429 on the whole-model
-/// GPT-2 test workload (additive mask graph) and ≤ 2881 (12 bits) on the
-/// replace/additive unit vehicles; at scale 12: 56888 (16 bits, GPT-2
-/// layer-0 score magnitudes) — vs 30 bits under the old -2^30 clamp. This
-/// drops the SatDiff one-hot commitment from d=8 to d=3 (scale 8) / d=4
-/// (scale 12) committed polynomials per softmax node, each sized
-/// ×(num scores).
+/// The honest sat_diff is spread-governed, not 2^30-governed: with the
+/// quantize.rs extreme clamp at -(C(scale) << scale)
+/// (`mask_sentinel_magnitude`, C(8)=8 / C(12)=11), inputs give
+/// `sat_diff ≤ (score_spread [+ C(scale)·2^scale on masked rows]) − (z_bound − 1)`
+/// — the in-row score spread beyond the exp cutoff, plus the sentinel on
+/// masked positions. Measured on the fused-i64 saturating arithmetic at
+/// scale 8: max 13773 on the whole-model GPT-2 e2e workload and 13825 on
+/// BGE-small (the pre-fused pipeline damped these to ≤ 2881; full-precision
+/// accumulation surfaces real transformer extreme logits, with observed row
+/// maxima ≈ 43000 ≈ 167 float units, so a fully-masked row can carry
+/// `row_max + C(8)·2^8 − z_bound ≈ 43k` into sat_diff). `log_scale + 8`
+/// (2^16 at scale 8) covers the measured whole-model maxima ≥ 4.7× over as
+/// well as that worst masked-row bound — vs 30 bits under the old -2^30
+/// clamp. This drops the SatDiff one-hot commitment from d=8 to d=4
+/// (scale 8) / d=5 (scale 12) committed polynomials per softmax node, each
+/// sized ×(num scores).
 ///
 /// Completeness gate: `2^bits` must exceed the model's max honest sat_diff
 /// (`bits ≥ ⌈log₂(Σ+1)⌉`). Soundness does not depend on the bound: the
@@ -28,7 +33,7 @@ use joltworks::{
 /// `z = z_c + sat_diff` decomposition is bound-independent; only honest-prover
 /// completeness needs the range to cover the witness.
 pub const fn sat_diff_rc_bits(log_scale: usize) -> usize {
-    log_scale + 4
+    log_scale + 8
 }
 
 // ---------------------------------------------------------------------------

@@ -1193,7 +1193,7 @@ mod tests {
         // Upper-triangular entries (future tokens) use the causal-mask sentinel
         // produced by quantize_float for -inf masks: -(11 << 12) = -45056
         // (`mask_sentinel_magnitude(12)` = 11). Masked sat_diff then fits in
-        // sat_diff_rc_bits(12) = 16 bits (measured max 56888 < 2^16).
+        // sat_diff_rc_bits(12) = 20 bits (fixture max 56888 < 2^20).
         // Non-masked scores range roughly [-25000, 50000] in fixed-point.
         const M: i32 = -45_056; // causal attention mask (-(11 << scale), scale=12)
         #[rustfmt::skip]

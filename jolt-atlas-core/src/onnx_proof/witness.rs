@@ -35,6 +35,7 @@ use atlas_onnx_tracer::{
         Operator, SoftmaxLastAxis,
     },
     tensor::Tensor,
+    utils::quantize::scale_to_multiplier,
 };
 use common::{
     consts::{LOG_K, XLEN},
@@ -495,7 +496,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) = &node.operator else {
                     panic!("Expected SoftmaxLastAxis at node {node_idx}");
                 };
-                let log_scale = scale.ilog2() as usize;
+                let log_scale = *scale as usize;
                 let st = softmax_last_axis_full_trace(node, trace);
                 let lookup_indices: Vec<usize> = st.R.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_scale, *d)
@@ -505,7 +506,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) = &node.operator else {
                     panic!("Expected SoftmaxLastAxis at node {node_idx}");
                 };
-                let log_scale = scale.ilog2() as usize;
+                let log_scale = *scale as usize;
                 let st = softmax_last_axis_full_trace(node, trace);
                 let lookup_indices: Vec<usize> = st
                     .decomposed_exp
@@ -520,7 +521,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) = &node.operator else {
                     panic!("Expected SoftmaxLastAxis at node {node_idx}");
                 };
-                let log_scale = scale.ilog2() as usize;
+                let log_scale = *scale as usize;
                 let st = softmax_last_axis_full_trace(node, trace);
                 let lookup_indices: Vec<usize> = st
                     .decomposed_exp
@@ -588,7 +589,7 @@ fn softmax_last_axis_full_trace(
     };
     let layer_data = Trace::layer_data(trace, node);
     let input = &layer_data.operands[0];
-    softmax_last_axis_decomposed(input, *scale).1
+    softmax_last_axis_decomposed(input, scale_to_multiplier(*scale) as i32).1
 }
 
 /// Build a one-hot RaD witness for an identity range-check or Shout ra

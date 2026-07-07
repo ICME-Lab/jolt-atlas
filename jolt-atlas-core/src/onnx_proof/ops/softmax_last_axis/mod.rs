@@ -43,6 +43,7 @@ use atlas_onnx_tracer::{
         },
         SoftmaxLastAxis,
     },
+    utils::quantize::scale_to_multiplier,
 };
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
@@ -82,9 +83,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+        let scale = scale_to_multiplier(self.scale) as i32;
         let softmax_input = prover.trace.operand_tensors(node)[0];
-        let trace = softmax_last_axis_decomposed(softmax_input, self.scale).1;
-        SoftmaxLastAxisProver::new(node, trace, self.scale).prove(prover)
+        let trace = softmax_last_axis_decomposed(softmax_input, scale).1;
+        SoftmaxLastAxisProver::new(node, trace, scale).prove(prover)
     }
 
     #[tracing::instrument(skip_all, name = "SoftmaxLastAxis::verify")]
@@ -94,9 +96,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         let scale_bits = verifier.preprocessing.scale();
+        let scale = scale_to_multiplier(self.scale) as i32;
         let mut sm = SoftmaxLastAxisVerifier::new(
             node,
-            self.scale,
+            scale,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );
@@ -109,9 +112,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        // self.scale is the actual scale S (e.g. 4096); log_scale is log₂(S) (e.g. 12)
-        let log_scale = self.scale.ilog2() as usize;
-        let decomp = generate_exp_lut_decomposed(self.scale);
+        let log_scale = self.scale as usize;
+        let decomp = generate_exp_lut_decomposed(scale_to_multiplier(self.scale) as i32);
         let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
         let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
         let idx = node.idx;

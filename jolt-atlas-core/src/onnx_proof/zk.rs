@@ -12,6 +12,7 @@ use atlas_onnx_tracer::{
     model::trace::{ModelExecutionIO, Trace},
     ops::Operator,
     tensor::Tensor,
+    utils::quantize::scale_to_multiplier,
 };
 use common::VirtualPoly;
 use joltworks::{
@@ -334,7 +335,8 @@ fn verify_softmax_zk(
     // before the private inter-stage caches and the per-stage sumcheck builds.
     let saved_zk_mode = accumulator.zk_mode;
     accumulator.zk_mode = false;
-    let mut sm_v = SmVerifier::new(node, op.scale, accumulator, transcript);
+    let scale = scale_to_multiplier(op.scale) as i32;
+    let mut sm_v = SmVerifier::new(node, scale, accumulator, transcript);
     sm_v.cache_exp_sum(accumulator, transcript)
         .map_err(|e| ProofVerifyError::InvalidOpeningProof(format!("{e:?}")))?;
     accumulator.zk_mode = saved_zk_mode;
@@ -353,7 +355,7 @@ fn verify_softmax_zk(
         *zk_proof_idx += 1;
     }
 
-    let lut = VerifierLookupTableData::new(op.scale);
+    let lut = VerifierLookupTableData::new(scale);
 
     // cache_r_exp: same shape as cache_R.
     sm_v.cache_r_exp_zk(accumulator, transcript, &inter_coms[1]);
@@ -1394,8 +1396,9 @@ fn prove_softmax_zk(
         unreachable!()
     };
     let softmax_input = prover.trace.operand_tensors(node)[0];
-    let trace = softmax_last_axis_decomposed(softmax_input, op.scale).1;
-    let mut sm = SmProver::new(node, trace, op.scale);
+    let scale = scale_to_multiplier(op.scale) as i32;
+    let trace = softmax_last_axis_decomposed(softmax_input, scale).1;
+    let mut sm = SmProver::new(node, trace, scale);
 
     let scale_bits = prover.preprocessing.scale();
     let r_lookup_bits = to_lookup_bits(&sm.trace.R, scale_bits as usize);

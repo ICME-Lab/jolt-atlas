@@ -1,12 +1,13 @@
 use crate::{
     ops::{Op, SoftmaxLastAxis},
     tensor::Tensor,
+    utils::quantize::scale_to_multiplier,
 };
 
 impl Op for SoftmaxLastAxis {
     #[tracing::instrument(name = "SoftmaxLastAxis::f", skip_all)]
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
-        softmax_last_axis_decomposed(inputs[0], self.scale).0
+        softmax_last_axis_decomposed(inputs[0], scale_to_multiplier(self.scale) as i32).0
     }
 
     fn requires_shape_equality(&self) -> bool {

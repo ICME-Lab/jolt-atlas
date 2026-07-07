@@ -3,6 +3,7 @@ use std::ops::Mul;
 use crate::{
     ops::{Op, Sigmoid},
     tensor::{self, Tensor},
+    utils::quantize::scale_to_multiplier,
 };
 
 impl Op for Sigmoid {
@@ -11,7 +12,7 @@ impl Op for Sigmoid {
         let input = tensor::ops::nonlinearities::const_div(inputs[0], self.tau as f64);
         let teleport_recip = input.mul(self.tau).unwrap();
 
-        tensor::ops::nonlinearities::sigmoid(&teleport_recip, self.scale.into())
+        tensor::ops::nonlinearities::sigmoid(&teleport_recip, scale_to_multiplier(self.scale))
     }
 
     fn requires_shape_equality(&self) -> bool {
@@ -25,7 +26,7 @@ mod tests {
     use crate::{
         ops::Op,
         tensor::{Tensor, ops::nonlinearities::sigmoid},
-        utils::{f32::F32, precision::assert_quantized_precision},
+        utils::{precision::assert_quantized_precision, quantize::multiplier_to_scale},
     };
     use rand::{SeedableRng, rngs::StdRng};
 
@@ -42,7 +43,7 @@ mod tests {
         let input = Tensor::random_range(&mut rng, &[SAMPLE_SIZE], MIN_INPUT..MAX_INPUT);
 
         let op = Sigmoid {
-            scale: F32(SCALE as f32),
+            scale: multiplier_to_scale(SCALE),
             tau: TAU,
             log_table: 12,
         };

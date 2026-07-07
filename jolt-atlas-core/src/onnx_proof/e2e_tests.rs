@@ -7,7 +7,10 @@ use atlas_onnx_tracer::{
     model::{trace::ModelExecutionIO, Model, RunArgs},
     tensor::Tensor,
 };
-use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
+use joltworks::{
+    poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG},
+    transcripts::Blake2bTranscript,
+};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde_json::Value;
 use std::{collections::HashMap, fs::File, io::Read, time::Instant};
@@ -143,6 +146,44 @@ fn test_gpt2() {
         &run_args,
         TestConfig::new().print_model().print_timing(),
     );
+}
+
+#[ignore = "requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)"]
+#[test]
+fn test_gpt2_dory() {
+    let working_dir = "../atlas-onnx-tracer/models/gpt2/";
+    let mut rng = StdRng::seed_from_u64(42);
+    let seq_len: usize = 16;
+    let vocab_size: i32 = 50257;
+
+    let input_ids_data: Vec<i32> = (0..seq_len).map(|_| rng.gen_range(0..vocab_size)).collect();
+    let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
+    let position_ids_data: Vec<i32> = (0..seq_len as i32).collect();
+    let position_ids = Tensor::new(Some(&position_ids_data), &[1, seq_len]).unwrap();
+    let attention_mask_data: Vec<i32> = vec![SCALE; seq_len];
+    let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
+    let run_args = RunArgs::new([
+        ("batch_size", 1),
+        ("sequence_length", seq_len),
+        ("past_sequence_length", 0),
+    ]);
+    let inputs = [input_ids, position_ids, attention_mask];
+
+    let model = Model::load(&format!("{working_dir}network.onnx"), &run_args);
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, DoryScheme>::new(pp);
+
+    let timing = Instant::now();
+    let (proof, io, _debug) =
+        ONNXProof::<Fr, Blake2bTranscript, DoryScheme>::prove(&prover_pp, &inputs);
+    println!("[dory] gpt2 proof generation took {:?}", timing.elapsed());
+
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, DoryScheme>::from(&prover_pp);
+    let timing = Instant::now();
+    proof
+        .verify(&verifier_pp, &io, None)
+        .expect("dory gpt2 verification should succeed");
+    println!("[dory] gpt2 verification took {:?}", timing.elapsed());
 }
 
 /// ZK end-to-end test for GPT-2: exercises `prove_zk` + `verify_zk`.

@@ -247,6 +247,20 @@ impl Model {
 
     /// Calculate the maximum number of variables needed for any single node in the model.
     pub fn max_num_vars(&self) -> usize {
+        self.graph
+            .nodes
+            .values()
+            .map(|node| self.node_committed_poly_num_vars(node))
+            .max()
+            .unwrap_or(1)
+    }
+
+    /// Number of variables of the *largest* committed polynomial this node
+    /// contributes. Nodes that commit nothing return `1` (their committed-poly
+    /// count is zero, so this size is never multiplied in). Used both for the
+    /// max-over-nodes SRS bound ([`max_num_vars`](Self::max_num_vars)) and, in
+    /// the packed-opening path, for the total packed coefficient count.
+    pub fn node_committed_poly_num_vars(&self, node: &ComputationNode) -> usize {
         let log_2 = |x: usize| {
             assert_ne!(x, 0);
 
@@ -257,10 +271,7 @@ impl Model {
             }
         };
 
-        self.graph
-            .nodes
-            .values()
-            .map(|node| match &node.operator {
+        match &node.operator {
                 // Saturating Add/Sub commit a one-hot clamp read-address
                 // decomposition. Its chunks are `k_chunk`-wide just like the
                 // activation lookups, so the largest committed poly is
@@ -312,10 +323,8 @@ impl Model {
                     let num_indices = input_nodes[1].pow2_padded_num_output_elements();
                     log_2(num_words) + log_2(num_indices)
                 }
-                _ => 1,
-            })
-            .max()
-            .unwrap_or(1)
+            _ => 1,
+        }
     }
 }
 

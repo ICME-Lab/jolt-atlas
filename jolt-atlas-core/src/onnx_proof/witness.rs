@@ -162,6 +162,7 @@ fn build_teleport_activation_rad_witness_tanh<F: JoltField>(
 /// groups a node's polynomials so the accumulation runs once, then reuses the
 /// cached lookup tensor for every chunk. Non-fused polynomials fall back to
 /// [`WitnessGenerator::generate_witness`].
+#[tracing::instrument(skip_all, name = "generate_node_witnesses", fields(node = node.idx))]
 pub(crate) fn generate_node_witnesses<F: JoltField, T: joltworks::transcripts::Transcript>(
     node: &ComputationNode,
     model: &Model,

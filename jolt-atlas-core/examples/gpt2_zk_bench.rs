@@ -70,7 +70,7 @@ fn main() {
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
     ]);
-    let model = Model::load("atlas-onnx-tracer/models/gpt2/model.onnx", &run_args);
+    let model = Model::load("atlas-onnx-tracer/models/gpt2/network.onnx", &run_args);
     println!("max num vars: {}", model.max_num_vars());
 
     let mut rng = StdRng::seed_from_u64(42);

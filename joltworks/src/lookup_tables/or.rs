@@ -60,7 +60,8 @@ impl<const XLEN: usize> PrefixSuffixDecompositionTrait<XLEN> for OrTable<XLEN> {
 mod test {
     use super::OrTable;
     use crate::lookup_tables::test::{
-        lookup_table_mle_full_hypercube_test, lookup_table_mle_random_test, prefix_suffix_test,
+        lookup_table_mle_full_hypercube_test, lookup_table_mle_linearity_test,
+        lookup_table_mle_random_test, prefix_suffix_test,
     };
     use ark_bn254::Fr;
     use common::consts::XLEN;
@@ -78,5 +79,10 @@ mod test {
     #[test]
     fn mle_random() {
         lookup_table_mle_random_test::<Fr, OrTable<XLEN>>();
+    }
+
+    #[test]
+    fn mle_linearity() {
+        lookup_table_mle_linearity_test::<64, Fr, OrTable<32>>();
     }
 }

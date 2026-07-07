@@ -56,7 +56,7 @@ macro_rules! impl_sparse_dense_suffix {
     ($($name:ident : $suffix:ident),* $(,)?) => {
         /// An enum containing all suffixes used by Jolt's instruction lookup tables.
         #[repr(u8)]
-        #[derive(EnumCountMacro, EnumIter, FromPrimitive)]
+        #[derive(Debug, EnumCountMacro, EnumIter, FromPrimitive)]
         pub enum Suffixes {
             $($name),*
         }

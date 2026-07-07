@@ -121,11 +121,20 @@ impl<const XLEN: usize> PrefixSuffixDecompositionTrait<XLEN> for SatClampTable<X
 #[cfg(test)]
 mod test {
 
-    use crate::lookup_tables::{
-        sat_clamp::SatClampTable,
-        test::{
-            prefix_suffix_test_unary, signed_lookup_table_mle_full_hypercube_test,
-            signed_lookup_table_mle_random_test,
+    use crate::{
+        field::JoltField,
+        lookup_tables::{
+            sat_clamp::SatClampTable,
+            test::{
+                lookup_table_mle_linearity_test, prefix_suffix_test_unary,
+                read_raf_test_unary_inner, signed_lookup_table_mle_full_hypercube_test,
+                signed_lookup_table_mle_random_test,
+            },
+        },
+        poly::opening_proof::{OpeningAccumulator, OpeningId, OpeningPoint},
+        subprotocols::ps_shout::{
+            unary::{PrefixSuffixShoutProvider, ReadRafClaims},
+            RafShoutProvider,
         },
     };
     use ark_bn254::Fr;
@@ -143,5 +152,57 @@ mod test {
     #[test]
     fn mle_random() {
         signed_lookup_table_mle_random_test::<Fr, SatClampTable<64>>();
+    }
+
+    #[test]
+    fn linearity_test() {
+        lookup_table_mle_linearity_test::<64, Fr, SatClampTable<64>>();
+    }
+
+    #[test]
+    fn read_raf() {
+        use crate::lookup_tables::PrefixSuffixDecompositionTrait;
+        use crate::poly::opening_proof::{
+            SumcheckId::{self, Raf},
+            BIG_ENDIAN,
+        };
+
+        use common::VirtualPoly::{self, NodeOutput, NodeOutputRa};
+
+        struct LookupProvider;
+
+        impl<F: JoltField> RafShoutProvider<F> for LookupProvider {
+            fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
+                (NodeOutputRa(0), Raf)
+            }
+
+            fn r_cycle(
+                &self,
+                accumulator: &dyn OpeningAccumulator<F>,
+            ) -> OpeningPoint<BIG_ENDIAN, F> {
+                accumulator
+                    .get_virtual_polynomial_opening(OpeningId::new(NodeOutput(1), Raf))
+                    .0
+            }
+        }
+
+        impl<F: JoltField, T: PrefixSuffixDecompositionTrait<64>>
+            PrefixSuffixShoutProvider<F, T, 64> for LookupProvider
+        {
+            fn read_raf_claims(&self, accumulator: &dyn OpeningAccumulator<F>) -> ReadRafClaims<F> {
+                let (_, rv_claim) =
+                    accumulator.get_virtual_polynomial_opening(OpeningId::new(NodeOutput(1), Raf));
+                let (_, raf_claim) =
+                    accumulator.get_virtual_polynomial_opening(OpeningId::new(NodeOutput(0), Raf));
+
+                ReadRafClaims {
+                    rv_claim,
+                    operand_claim: raf_claim,
+                }
+            }
+        }
+
+        // TODO: Currently does not really test to the full i64 extent as input is hard-coded to be sampled in i32.
+        read_raf_test_unary_inner::<64, Fr, SatClampTable<64>, LookupProvider>(&LookupProvider);
     }
 }

@@ -64,8 +64,8 @@ mod test {
     use crate::lookup_tables::{
         relu::ReluTable,
         test::{
-            lookup_table_mle_full_hypercube_test, lookup_table_mle_random_test,
-            prefix_suffix_test_unary,
+            lookup_table_mle_full_hypercube_test, lookup_table_mle_linearity_test,
+            lookup_table_mle_random_test, prefix_suffix_test_unary, read_raf_test_unary,
         },
     };
     use ark_bn254::Fr;
@@ -83,5 +83,15 @@ mod test {
     #[test]
     fn mle_random() {
         lookup_table_mle_random_test::<Fr, ReluTable<64>>();
+    }
+
+    #[test]
+    fn mle_linearity() {
+        lookup_table_mle_linearity_test::<32, Fr, ReluTable<32>>();
+    }
+
+    #[test]
+    fn read_raf() {
+        read_raf_test_unary::<Fr, ReluTable<32>>();
     }
 }

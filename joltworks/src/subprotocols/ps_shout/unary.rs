@@ -99,10 +99,10 @@ where
 }
 
 pub fn ps_read_raf_prover<
-    const LOG_K: usize,
     F: JoltField,
     T: Transcript,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+    const LOG_K: usize,
 >(
     provider: &impl PrefixSuffixShoutProvider<F, LUT, LOG_K>,
     lookup_indices: Vec<LookupBits>,

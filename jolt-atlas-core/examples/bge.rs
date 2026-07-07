@@ -46,11 +46,7 @@ fn main() {
     let input_ids_data: Vec<i32> = (0..seq_len).map(|_| rng.gen_range(0..vocab_size)).collect();
     let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
 
-    // Input 1: token_type_ids — segment IDs in {0, 1}. Use all zeros for single-segment input.
-    let token_type_ids_data: Vec<i32> = vec![0; seq_len];
-    let token_type_ids = Tensor::new(Some(&token_type_ids_data), &[1, seq_len]).unwrap();
-
-    // Input 2: attention_mask — all 1s (attend everywhere), in BERT-style binary form.
+    // Input 1: attention_mask — all 1s (attend everywhere), in BERT-style binary form.
     let attention_mask_data: Vec<i32> = vec![1; seq_len];
     let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
 
@@ -61,7 +57,7 @@ fn main() {
     let timing = std::time::Instant::now();
     let (proof, io, _debug_info) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
         &prover_preprocessing,
-        &[input_ids, token_type_ids, attention_mask],
+        &[input_ids, attention_mask],
     );
     println!("Proof generation took {:.2?}", timing.elapsed());
 

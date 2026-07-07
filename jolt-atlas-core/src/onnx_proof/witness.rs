@@ -19,7 +19,7 @@ use crate::{
     onnx_proof::{
         clamp_lookups::{clamp_intermediate, clamp_lookup_bits, CLAMP_LOG_K},
         neural_teleport::{division::compute_division, n_bits_to_usize},
-        ops::{rsqrt::Q_SQUARE, softmax_last_axis::rc::SAT_DIFF_RC_BITS},
+        ops::{rsqrt::Q_SQUARE, softmax_last_axis::rc::sat_diff_rc_bits},
         range_checking::range_check_operands::{
             DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckingOperandsTrait,
             RiRangeCheckOperands, RsRangeCheckOperands, TeleportRangeCheckOperands,
@@ -517,6 +517,10 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
             CommittedPoly::SoftmaxSatDiffRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
+                let Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) = &node.operator else {
+                    panic!("Expected SoftmaxLastAxis at node {node_idx}");
+                };
+                let log_scale = scale.ilog2() as usize;
                 let st = softmax_last_axis_full_trace(node, trace);
                 let lookup_indices: Vec<usize> = st
                     .decomposed_exp
@@ -524,7 +528,19 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     .iter()
                     .map(|&v| v as usize)
                     .collect();
-                build_onehot_witness(&lookup_indices, SAT_DIFF_RC_BITS, *d)
+                // Completeness gate: every honest sat_diff must fit the range-check
+                // width. `build_onehot_witness` addresses a 2^bits table, so an
+                // over-budget (or negative-as-usize) value would silently wrap to its
+                // low bits. Fire loudly in debug/CI instead — this is the invariant the
+                // narrowed width relies on (see rc::sat_diff_rc_bits).
+                debug_assert!(
+                    lookup_indices
+                        .iter()
+                        .all(|&v| v < (1usize << sat_diff_rc_bits(log_scale))),
+                    "softmax sat_diff exceeds range-check budget 2^{} at log_scale {log_scale}",
+                    sat_diff_rc_bits(log_scale),
+                );
+                build_onehot_witness(&lookup_indices, sat_diff_rc_bits(log_scale), *d)
             }
             CommittedPoly::SoftmaxZHiRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];

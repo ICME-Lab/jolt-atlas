@@ -1,7 +1,6 @@
 use crate::{
     ops::{Op, Rsqrt},
     tensor::{Tensor, TensorError},
-    utils::quantize::scale_to_multiplier,
 };
 
 impl Op for Rsqrt {
@@ -13,7 +12,7 @@ impl Op for Rsqrt {
         }
         #[cfg(not(feature = "fused-ops"))]
         {
-            crate::tensor::ops::nonlinearities::rsqrt(inputs[0], scale_to_multiplier(self.scale))
+            crate::tensor::ops::nonlinearities::rsqrt(inputs[0], self.scale as f64)
         }
     }
 

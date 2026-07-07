@@ -89,11 +89,12 @@ fn main() {
     let input_ids_data: Vec<i32> = (0..seq_len).map(|_| rng.gen_range(0..vocab_size)).collect();
     let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
 
-    let token_type_ids_data: Vec<i32> = vec![0; seq_len];
-    let token_type_ids = Tensor::new(Some(&token_type_ids_data), &[1, seq_len]).unwrap();
-
-    let attention_mask_data: Vec<i32> = vec![1; seq_len];
+    // Qwen export input 1 is `attention_mask`; provide quantized 1.0s.
+    let attention_mask_data: Vec<i32> = vec![1 << run_args.scale; seq_len];
     let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
+    // Input 2 is `position_ids`.
+    let position_ids_data: Vec<i32> = (0..seq_len as i32).collect();
+    let position_ids = Tensor::new(Some(&position_ids_data), &[1, seq_len]).unwrap();
 
     tracing::info!("Loaded input data");
     let pp = load_or_build_shared_preprocessing(&run_args, use_cache);
@@ -102,7 +103,7 @@ fn main() {
     let timing = std::time::Instant::now();
     let (proof, io, _debug_info) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
         &prover_preprocessing,
-        &[input_ids, token_type_ids, attention_mask],
+        &[input_ids, attention_mask, position_ids],
     );
     println!("Proof generation took {:.2?}", timing.elapsed());
 

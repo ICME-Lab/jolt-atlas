@@ -78,6 +78,23 @@ pub fn quantize_tensor(tensor: Tensor<f32>, scale: Scale) -> Tensor<i32> {
     value
 }
 
+/// Float magnitude of the sentinel used for extreme negative values (e.g.
+/// -inf attention masks) at a given quantization scale: one unit above the
+/// softmax exp round-to-zero ceiling `⌈z_bound/2^scale⌉`, where
+/// `z_bound/2^scale ≈ (scale+1)·ln2` is the exp cutoff in float units
+/// (measured LUT bound: 6.75 at scale 8 → C=8, 9.13 at scale 12 → C=11).
+/// Because the quantized magnitude `C·2^scale` exceeds `z_bound`, an additive
+/// mask (`attention_score + mask_value`) drives the centered logit
+/// `z = max_k − (score + M) ≥ C·2^scale > z_bound`, so masked positions
+/// saturate to softmax weight 0 unconditionally — bit-identical to the old
+/// `-2^30` sentinel, for any in-row logits. Staying just one unit above the
+/// cutoff also keeps the masked sat_diff small enough to fit in the narrowed
+/// softmax range check with headroom for the in-row score spread that additive
+/// masks carry into sat_diff.
+pub fn mask_sentinel_magnitude(scale: Scale) -> f64 {
+    ((scale as f64 + 1.0) * std::f64::consts::LN_2).ceil() + 1.0
+}
+
 #[inline]
 #[allow(clippy::let_and_return)]
 /// Converts a floating-point number to a fixed-point integer representation.
@@ -130,10 +147,28 @@ pub fn quantize_float(float: f64, scale: Scale) -> i32 {
     let clamped_float = if float < -max_value {
         if float < -1e6 {
             // Extreme values (e.g., -3.4e38 attention mask in GPT-2).
-            // Clamp to half the representable range to leave headroom for
-            // subsequent additions (e.g., attention_score + mask_value).
-            // Still negative enough that softmax produces ~0 for masked positions.
-            -(max_value / 2.0)
+            // Clamp to a small scale-indexed sentinel rather than
+            // -(max_value/2) ≈ -2^30: mask_sentinel_magnitude(scale) stays
+            // above the softmax exp round-to-zero cutoff (z_bound/2^scale ≈
+            // (scale+1)·ln2, e.g. 6.75 at scale 8 → C=8), so masked positions
+            // still saturate to weight 0 bit-exactly, while the masked
+            // sat_diff fits in sat_diff_rc_bits(log_scale) = log_scale + 8
+            // (vs 30 bits), dropping the SatDiff one-hot commitment from d=8
+            // to d=4 (scale 8) polynomials per softmax node. Headroom for the
+            // score term that additive masks (attention_score + mask_value)
+            // carry into sat_diff is preserved: measured 13773 < 2^16 on the
+            // whole-model GPT-2 e2e workload and 13825 < 2^16 on BGE-small,
+            // both at scale 8 on the fused-i64 arithmetic. The sentinel must stay
+            // i32-representable: C(scale)·2^scale first exceeds i32::MAX at
+            // scale 27, where the exp cutoff z_bound itself leaves the i32
+            // range — no valid sentinel exists there at all, so fail loudly
+            // instead of letting the cast below saturate to i32::MIN.
+            debug_assert!(
+                mask_sentinel_magnitude(scale) * mult <= i32::MAX as f64,
+                "mask sentinel C(scale)·2^scale overflows i32 at scale {scale}; \
+                 extreme-negative masks are unrepresentable at this scale"
+            );
+            -mask_sentinel_magnitude(scale)
         } else {
             panic!(
                 "sig bit truncation error: value {float} is out of range for quantization with scale {scale}"
@@ -280,4 +315,45 @@ pub fn scale_to_multiplier(scale: Scale) -> f64 {
 /// all integer scales `s`, but the reverse may not be true for non-power-of-2 multipliers.
 pub fn multiplier_to_scale(mult: f64) -> Scale {
     mult.log2().round() as Scale
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `mask_sentinel_magnitude(scale) = ⌈(scale+1)·ln2⌉ + 1`, one unit above the
+    /// softmax exp round-to-zero cutoff. Pins the integer approximation to the
+    /// exact ceiling at the two shipped scales.
+    #[test]
+    fn mask_sentinel_magnitude_matches_cutoff() {
+        assert_eq!(mask_sentinel_magnitude(8), 8.0);
+        assert_eq!(mask_sentinel_magnitude(12), 11.0);
+    }
+
+    /// `-inf` / `-3.4e38` attention-mask constants clamp to the scale-indexed
+    /// sentinel `-(C(scale) << scale)`, not the old `-(max_value/2) ≈ -2^30`.
+    /// This is the value that reaches the softmax prover intact, so pin it to
+    /// guard against silent drift in either the clamp or `mask_sentinel_magnitude`.
+    #[test]
+    fn extreme_negative_clamps_to_scale_indexed_sentinel() {
+        assert_eq!(quantize_float(-3.4e38, 8), -2048); // -(8 << 8)
+        assert_eq!(quantize_float(-3.4e38, 12), -45056); // -(11 << 12)
+    }
+
+    /// Scale 26 is the last scale whose sentinel is i32-representable
+    /// (C(26)·2^26 = 1,342,177,280 < i32::MAX; C(27)·2^27 overflows, and the
+    /// debug_assert in `quantize_float` rejects scale >= 27, where the exp
+    /// cutoff z_bound itself leaves i32 so no valid sentinel exists). Pin that
+    /// the boundary sentinel still clears the exp round-to-zero cutoff, so
+    /// masking stays exact right up to the representability edge.
+    #[test]
+    fn extreme_negative_sentinel_exact_at_boundary_scale() {
+        assert_eq!(quantize_float(-3.4e38, 26), -1_342_177_280); // -(20 << 26)
+        let decomp = crate::ops::softmax::generate_exp_lut_decomposed(1 << 26);
+        let z_bound = (decomp.lut_hi.len() * decomp.base) as i64;
+        assert!(1_342_177_280_i64 > z_bound); // sentinel saturates masked weights to 0
+        // A max_value/2 headroom sentinel (16.0 float) would NOT clear the
+        // cutoff here — clamping to it would silently break masking at 26.
+        assert!((16_i64 << 26) < z_bound);
+    }
 }

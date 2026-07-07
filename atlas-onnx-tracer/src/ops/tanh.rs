@@ -1,34 +1,29 @@
-#[cfg(feature = "fused-ops")]
-use crate::tensor::TensorError;
 use crate::{
     ops::{Op, Tanh},
-    tensor::{self, Tensor},
+    tensor::{Tensor, ops::nonlinearities::const_div},
 };
 use std::ops::Mul;
 
 impl Op for Tanh {
     #[tracing::instrument(name = "Tanh::f", skip_all)]
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
-        let input = tensor::ops::nonlinearities::const_div(inputs[0], self.tau as f64);
+        let input = inputs[0];
 
-        #[cfg(feature = "fused-ops")]
-        {
-            let scale_i = self.scale.0 as i64;
-            let lut = generate_tanh_lut(scale_i);
-            input
-                .par_enum_map(|_, a_i| {
-                    Ok::<_, TensorError>(tanh_lut_lookup(a_i, scale_i as i32, &lut))
-                })
-                .unwrap()
-        }
-        #[cfg(not(feature = "fused-ops"))]
-        {
-            // `Tanh` lookup table is built as: Tanh[x] = tanh(x * tau),
-            // so we multiply by tau to reciprocate teleportation division.
-            let teleport_recip = input.mul(self.tau).unwrap();
+        // TODO: #192
+        // let scale_i = self.scale.0 as i64;
+        // let lut = generate_tanh_lut(scale_i);
+        // input
+        //     .par_enum_map(|_, a_i| {
+        //         Ok::<_, TensorError>(tanh_lut_lookup(a_i, scale_i as i32, &lut))
+        //     })
+        //     .unwrap()
 
-            crate::tensor::ops::nonlinearities::tanh(&teleport_recip, self.scale.into())
-        }
+        let lower_bound = -(1 << (self.log_table - 1));
+        let upper_bound = (1 << (self.log_table - 1)) - 1;
+        let input = const_div(input, self.tau as f64);
+        let input = input.mul(self.tau).unwrap();
+        let input = clamp_tensor(&input, lower_bound, upper_bound);
+        crate::tensor::ops::nonlinearities::tanh(&input, self.scale.into())
     }
 
     fn requires_shape_equality(&self) -> bool {
@@ -69,6 +64,21 @@ pub fn tanh_lut_lookup(a_i: i32, scale: i32, lut: &[i32]) -> i32 {
         scale // saturates to ±1
     };
     if a_i >= 0 { magnitude } else { -magnitude }
+}
+
+/// Clamp a tensor to a given range.
+pub fn clamp_tensor(t: &Tensor<i32>, lower_bound: i32, upper_bound: i32) -> Tensor<i32> {
+    use common::parallel::par_enabled;
+    use rayon::prelude::*;
+
+    let data: Vec<i32> = t
+        .data()
+        .par_iter()
+        .with_min_len(par_enabled())
+        .map(|&v| v.clamp(lower_bound, upper_bound))
+        .collect();
+    crate::tensor::Tensor::new(Some(&data), t.dims())
+        .unwrap_or_else(|_| panic!("clamp_to_i32: Tensor::new"))
 }
 
 #[cfg(test)]

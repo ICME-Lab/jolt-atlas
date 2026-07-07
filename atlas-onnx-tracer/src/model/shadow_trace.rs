@@ -168,7 +168,7 @@ impl ShadowTrace {
             e.max_abs_worst = e.max_abs_worst.max(m.max_abs_err);
         }
 
-        debug!(
+        tracing::info!(
             "{:<18} {:<6} {:<12} {:<12} {:<12} {:<12} {:<12}",
             "Op Class",
             "Count",
@@ -178,9 +178,9 @@ impl ShadowTrace {
             "Worst RelMSE",
             "Worst MaxAbs"
         );
-        debug!("{}", "-".repeat(84));
+        tracing::info!("{}", "-".repeat(84));
         for (op, a) in &agg {
-            debug!(
+            tracing::info!(
                 "{:<18} {:<6} {:<12.6} {:<12.6} {:<12.6} {:<12.6} {:<12.6}",
                 op,
                 a.count,
@@ -337,7 +337,7 @@ impl Model {
             "Tract has {} Const nodes but decomposed graph has {} Constant nodes",
             tract_f64_consts.len(),
             const_node_indices.len(),
-        );
+        ); // TODO: Account for removed constants from Pow operators (square, cube)
 
         let mut map = BTreeMap::new();
         for (tract_const, &graph_idx) in tract_f64_consts.into_iter().zip(const_node_indices.iter())

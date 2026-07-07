@@ -4,14 +4,10 @@ use crate::{
     utils::lookup_bits::LookupBits,
 };
 
-/// Prefix for two's complement negation of magnitude bits in the XLEN-bit layout.
-///
-/// Accumulates `(!magnitude_bits) + 1` where the sign is at position 0.
-/// Structural twin of `LowerWordNoMsbPrefix` with all bits negated and starting value 1
-/// (for the +1 in two's complement).
-pub enum NotLowerWordPrefix<const XLEN: usize> {}
+/// Prefix component for lower word without MSB lookup table decomposition.
+pub enum WordNoMsbPrefix<const XLEN: usize> {}
 
-impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for NotLowerWordPrefix<XLEN> {
+impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for WordNoMsbPrefix<XLEN> {
     fn prefix_mle<C>(
         checkpoints: &PrefixCheckpoints<F>,
         r_x: Option<C>,
@@ -23,34 +19,31 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for NotLowerWordPrefi
         C: ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
-        let mut word = checkpoints[Prefixes::NotLowerWord].unwrap_or(F::one());
+        let mut word = checkpoints[Prefixes::WordNoMsb].unwrap_or(F::zero());
         if j >= XLEN {
             return word; // HACK: For binary ps-shout, `j` may exceed `XLEN - 1` because we go over 2*XLEN variables
         }
         let suffix_len = XLEN - j - b.len() - 1;
         match (r_x, j) {
             (None, 0) => {
-                // sign bit is in c — skip
+                // sign bit is in c
             }
             (None, _) => {
                 let x_shift = XLEN - j - 1;
                 let y_shift = x_shift - 1;
-                word += F::from_u64(1 << x_shift) * (F::one() - F::from_u32(c));
-                word += F::from_u64(1 << y_shift) * (F::one() - F::from_u8(b.pop_msb()));
+                word += F::from_u64(1 << x_shift) * F::from_u32(c);
+                word += F::from_u64(1 << y_shift) * F::from_u8(b.pop_msb());
             }
             (Some(r_x), _) => {
                 let x_shift = XLEN - j;
                 let y_shift = x_shift - 1;
-                let not_r_x = if j == 1 {
-                    F::zero()
-                } else {
-                    F::one() - r_x.into()
-                };
-                word += F::from_u64(1 << x_shift) * not_r_x;
-                word += F::from_u64(1 << y_shift) * (F::one() - F::from_u32(c));
+                let r_x = if j == 1 { F::zero() } else { r_x.into() };
+                word += F::from_u64(1 << x_shift) * r_x;
+                word += F::from_u64(1 << y_shift) * F::from_u32(c);
             }
         }
-        word += F::from_u64((<LookupBits as Into<u64>>::into(!b)) << suffix_len);
+
+        word += F::from_u64((<LookupBits as Into<u64>>::into(b)) << suffix_len);
         word
     }
 
@@ -65,15 +58,11 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for NotLowerWordPrefi
         C: ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
-        let mut word = checkpoints[Prefixes::NotLowerWord].unwrap_or(F::one());
+        let mut word = checkpoints[Prefixes::WordNoMsb].unwrap_or(F::zero());
         let x_shift = XLEN.saturating_sub(j); // HACK: For binary ps-shout, `j` may exceed `XLEN - 1` because we go over 2*XLEN variables
         let y_shift = x_shift.saturating_sub(1);
-        let not_r_x = if j == 1 {
-            F::zero()
-        } else {
-            F::one() - r_x.into()
-        };
-        word += F::from_u64(1 << x_shift) * not_r_x + F::from_u64(1 << y_shift) * (F::one() - r_y);
+        let r_x = if j == 1 { F::zero() } else { r_x.into() };
+        word += F::from_u64(1 << x_shift) * r_x + F::from_u64(1 << y_shift) * r_y;
         Some(word).into()
     }
 }

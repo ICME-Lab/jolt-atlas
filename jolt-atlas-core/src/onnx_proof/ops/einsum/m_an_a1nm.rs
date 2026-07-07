@@ -85,8 +85,9 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MAnA1nmParams<F> {
     }
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
-        accessor.get_reduced_opening().1
+        // Fused rescaling: recover the raw product `acc(r) = rescaled(r)·2^S + R(r)`
+        // via the shared seam .
+        crate::onnx_proof::fused_rebase::fused_input_claim(accumulator, &self.computation_node)
     }
 
     fn normalize_opening_point(

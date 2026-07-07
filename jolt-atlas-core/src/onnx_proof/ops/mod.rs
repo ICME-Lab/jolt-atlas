@@ -71,6 +71,8 @@ pub mod is_nan;
 #[cfg(test)]
 /// Experimental malicious variant of Sub proof logic.
 pub mod malicious_sub;
+/// Fused mean-of-squares reduction operation.
+pub mod mean_of_squares;
 /// Reorder tensor axes.
 pub mod moveaxis;
 /// Element-wise multiplication operation.
@@ -212,9 +214,11 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
 }
 
 /// Dispatches on all provable `Operator` variants, binding the inner value
-/// to `$inner` and evaluating `$body`. Unhandled variants hit `$fallback`.
+/// to `$inner` and evaluating `$body`. Every `Operator` is currently handled, so
+/// `$fallback` is retained only as a defensive arm for any future variant.
 macro_rules! dispatch_operator {
     ($node:expr, |$inner:ident| $body:expr, _ => $fallback:expr) => {
+        #[allow(unreachable_patterns)]
         match &$node.operator {
             Operator::And($inner) => $body,
             Operator::Add($inner) => $body,
@@ -233,6 +237,7 @@ macro_rules! dispatch_operator {
             Operator::Iff($inner) => $body,
             Operator::Input($inner) => $body,
             Operator::IsNan($inner) => $body,
+            Operator::MeanOfSquares($inner) => $body,
             Operator::MoveAxis($inner) => $body,
             Operator::Mul($inner) => $body,
             Operator::Neg($inner) => $body,
@@ -543,3 +548,98 @@ macro_rules! impl_standard_sumcheck_proof_api {
 }
 
 pub use impl_standard_sumcheck_proof_api;
+
+/// Macro to implement [`OperatorProofTrait`] for element-wise operators that
+/// fuse a rescaling division + saturating clamp (`Mul`, `Square`, `Cube`).
+///
+/// Wraps the operator's own arithmetic sumcheck (`Params`/`Prover`/`Verifier`,
+/// emitted under [`ProofType::RescaleArith`]) with the shared
+/// [`fused_rebase`](crate::onnx_proof::fused_rebase) stages:
+///
+/// 1. `prove_pre` — append the remainder advice + discharge the clamp.
+/// 2. the operator's arithmetic sumcheck (`acc(r) = rescaled·2^S + R`).
+/// 3. `prove_remainder_rc` — range-check the remainder (non-scalar only).
+///
+/// When the operator is *not* fused (`scale == 0`, a raw building-block product),
+/// only step (2) runs and its claim is the plain node-output opening.
+#[macro_export]
+macro_rules! impl_fused_rescale_proof_api {
+    ($inner_ty:ty, $params_ty:ident, $prover_ty:ident, $verifier_ty:ident) => {
+        impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for $inner_ty {
+            #[tracing::instrument(skip(node, prover))]
+            fn prove(
+                &self,
+                node: &ComputationNode,
+                prover: &mut Prover<F, T>,
+            ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+                use joltworks::subprotocols::sumcheck::Sumcheck;
+                use $crate::onnx_proof::{
+                    clamp_lookups::is_scalar,
+                    fused_rebase,
+                    ops::{$params_ty, $prover_ty},
+                };
+
+                let fused = fused_rebase::fuses_rebase(&node.operator);
+                let mut proofs = Vec::new();
+                if fused {
+                    proofs.extend(fused_rebase::prove_pre(node, prover));
+                }
+
+                let params = $params_ty::new(node.clone(), &prover.accumulator);
+                let mut prover_sumcheck = $prover_ty::initialize(&prover.trace, params);
+                let (proof, _) = Sumcheck::prove(
+                    &mut prover_sumcheck,
+                    &mut prover.accumulator,
+                    &mut prover.transcript,
+                );
+                proofs.push((ProofId(node.idx, ProofType::RescaleArith), proof));
+
+                if fused && !is_scalar(node) {
+                    proofs.extend(fused_rebase::prove_remainder_rc(node, prover));
+                }
+                proofs
+            }
+
+            #[tracing::instrument(skip(node, verifier))]
+            fn verify(
+                &self,
+                node: &ComputationNode,
+                verifier: &mut Verifier<'_, F, T>,
+            ) -> Result<(), ProofVerifyError> {
+                use joltworks::subprotocols::sumcheck::Sumcheck;
+                use $crate::onnx_proof::{fused_rebase, ops::$verifier_ty};
+
+                let fused = fused_rebase::fuses_rebase(&node.operator);
+                if fused {
+                    fused_rebase::verify_pre(node, verifier)?;
+                }
+
+                let proof = verifier
+                    .proofs
+                    .get(&ProofId(node.idx, ProofType::RescaleArith))
+                    .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+                let verifier_sumcheck = $verifier_ty::new(node.clone(), &verifier.accumulator);
+                Sumcheck::verify(
+                    proof,
+                    &verifier_sumcheck,
+                    &mut verifier.accumulator,
+                    &mut verifier.transcript,
+                )?;
+
+                if fused {
+                    fused_rebase::verify_post(node, verifier)?;
+                }
+                Ok(())
+            }
+
+            fn get_committed_polynomials(
+                &self,
+                node: &ComputationNode,
+            ) -> Vec<common::CommittedPoly> {
+                $crate::onnx_proof::fused_rebase::committed_polys(node)
+            }
+        }
+    };
+}
+
+pub use impl_fused_rescale_proof_api;

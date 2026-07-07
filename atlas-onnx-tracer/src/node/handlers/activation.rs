@@ -13,12 +13,8 @@ use crate::{
 
 use super::{HandlerContext, OpHandlerFn};
 
-#[cfg(feature = "fused-ops")]
-const NEURAL_TELEPORT_TAU: i32 = 1;
-
-// TODO: These values should be finetuned based on input ranges and desired output precision.
-#[cfg(not(feature = "fused-ops"))]
-const NEURAL_TELEPORT_TAU: i32 = 2;
+/// The `tau` parameter for neural teleportation
+pub const NEURAL_TELEPORT_TAU: i32 = 2;
 
 /// Log2 of the lookup table size used for activation functions.
 /// With tau=2 and scale=256 (log_scale=8), this must cover quotients produced

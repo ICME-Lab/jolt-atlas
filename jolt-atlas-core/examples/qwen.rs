@@ -11,9 +11,6 @@
 ///
 /// # Reuse cached shared preprocessing (builds and saves it on first use)
 /// cargo run --release --package jolt-atlas-core --example qwen -- --use-cache
-///
-/// # Disable pre-rebase nonlinear decomposition
-/// cargo run --release --package jolt-atlas-core --example qwen -- --no-pre-rebase-nonlinear
 /// ```
 ///
 /// Requires the Qwen ONNX model to be present first.
@@ -78,15 +75,13 @@ fn main() {
     let (_guard, _tracing_enabled) = setup_tracing("Qwen ONNX Proof");
     let args: Vec<String> = env::args().collect();
     let use_cache = args.iter().any(|arg| arg == "--use-cache");
-    let pre_rebase_nonlinear = !args.iter().any(|arg| arg == "--no-pre-rebase-nonlinear");
     let seq_len = parse_seq_len_arg(&args);
 
     let run_args = RunArgs::new([
         ("batch_size", 1),
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
-    ])
-    .with_pre_rebase_nonlinear(pre_rebase_nonlinear);
+    ]);
 
     let mut rng = StdRng::seed_from_u64(44);
     let vocab_size: i32 = 151936;

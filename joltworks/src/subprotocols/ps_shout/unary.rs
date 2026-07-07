@@ -179,7 +179,8 @@ pub type UnaryReadRafSumcheckVerifier<F, LUT, const LOG_K: usize> =
 mod tests {
     use crate::{
         lookup_tables::{
-            relu, unsigned_abs::UnsignedAbsTable, JoltLookupTable, PrefixSuffixDecompositionTrait,
+            relu, sat_clamp::SatClampTable, unsigned_abs::UnsignedAbsTable, JoltLookupTable,
+            PrefixSuffixDecompositionTrait,
         },
         poly::{
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
@@ -211,28 +212,33 @@ mod tests {
     const NUM_LOOKUPS: usize = 1 << LOG_NUM_LOOKUPS;
 
     #[test]
+    fn test_sat_clamp() {
+        test_read_raf_sumcheck::<SatClampTable<64>, 64>();
+    }
+
+    #[test]
     fn test_unsigned_abs() {
-        test_read_raf_sumcheck::<UnsignedAbsTable<XLEN>>();
+        test_read_raf_sumcheck::<UnsignedAbsTable<XLEN>, XLEN>();
     }
 
     #[test]
     fn test_relu() {
-        test_read_raf_sumcheck::<relu::ReluTable<XLEN>>();
+        test_read_raf_sumcheck::<relu::ReluTable<XLEN>, XLEN>();
     }
 
-    fn test_read_raf_sumcheck<LUT>()
+    fn test_read_raf_sumcheck<LUT, const XLEN: usize>()
     where
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
-        let trace = generate_trace::<LUT>();
+        let trace = generate_trace::<LUT, XLEN>();
 
         let (mut prover_transcript, r_cycle) = new_test_transcript();
         let mut prover_accumulator = ProverOpeningAccumulator::new();
 
         let rv_claim = trace.rv.evaluate(&r_cycle);
-        let operand_claim = compute_operand_claim(&trace.lookup_indices, &r_cycle);
+        let operand_claim = compute_operand_claim::<XLEN>(&trace.lookup_indices, &r_cycle);
 
-        let provider = TestProvider::<LUT>::new(rv_claim, operand_claim, r_cycle);
+        let provider = TestProvider::<LUT, XLEN>::new(rv_claim, operand_claim, r_cycle);
 
         let mut prover = ps_read_raf_prover(
             &provider,
@@ -263,11 +269,15 @@ mod tests {
         assert_eq!(prover_challenges, verifier_challenges);
     }
 
-    fn compute_operand_claim(lookup_indices: &[u64], r_cycle: &[Fr]) -> Fr {
+    fn compute_operand_claim<const XLEN: usize>(lookup_indices: &[u64], r_cycle: &[Fr]) -> Fr {
         MultilinearPolynomial::from(
             lookup_indices
                 .iter()
-                .map(|&i| i as u32 as i32)
+                .map(|&i| match XLEN {
+                    32 => i as u32 as i32 as i64,
+                    64 => i as i64,
+                    _ => unimplemented!(),
+                })
                 .collect::<Vec<_>>(),
         )
         .evaluate(r_cycle)
@@ -290,7 +300,7 @@ mod tests {
         rv: MultilinearPolynomial<Fr>,
     }
 
-    fn generate_trace<LUT: JoltLookupTable + Default>() -> TestTrace {
+    fn generate_trace<LUT: JoltLookupTable + Default, const XLEN: usize>() -> TestTrace {
         let mut rng = StdRng::seed_from_u64(0x1109);
         let table = LUT::default();
         let lookup_indices: Vec<u64> = (0..NUM_LOOKUPS).map(|_| rng.gen()).collect();
@@ -301,7 +311,7 @@ mod tests {
         let rv = MultilinearPolynomial::from(
             lookup_indices
                 .iter()
-                .map(|&i| table.materialize_entry(i))
+                .map(|&i| table.materialize_entry(i) as i64)
                 .collect_vec(),
         );
         TestTrace {
@@ -317,7 +327,7 @@ mod tests {
         (transcript, r_cycle)
     }
 
-    struct TestProvider<LUT>
+    struct TestProvider<LUT, const XLEN: usize>
     where
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
@@ -327,7 +337,7 @@ mod tests {
         _phantom: PhantomData<LUT>,
     }
 
-    impl<LUT> TestProvider<LUT>
+    impl<LUT, const XLEN: usize> TestProvider<LUT, XLEN>
     where
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
@@ -341,7 +351,7 @@ mod tests {
         }
     }
 
-    impl<LUT> RafShoutProvider<Fr, LUT> for TestProvider<LUT>
+    impl<LUT, const XLEN: usize> RafShoutProvider<Fr, LUT> for TestProvider<LUT, XLEN>
     where
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
@@ -357,7 +367,7 @@ mod tests {
         }
     }
 
-    impl<LUT> PrefixSuffixShoutProvider<Fr, LUT, 32> for TestProvider<LUT>
+    impl<LUT, const XLEN: usize> PrefixSuffixShoutProvider<Fr, LUT, XLEN> for TestProvider<LUT, XLEN>
     where
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {

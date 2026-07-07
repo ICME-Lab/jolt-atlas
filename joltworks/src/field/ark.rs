@@ -109,6 +109,16 @@ impl JoltField for ark_bn254::Fr {
         }
     }
 
+    #[cfg(test)]
+    fn from_i16(val: i16) -> Self {
+        if val.is_negative() {
+            let val = val.unsigned_abs();
+            -<Self as JoltField>::from_u16(val)
+        } else {
+            <Self as JoltField>::from_u16(val as u16)
+        }
+    }
+
     #[inline]
     fn from_i32(val: i32) -> Self {
         if val.is_negative() {

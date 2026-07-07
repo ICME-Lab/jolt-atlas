@@ -52,16 +52,6 @@ impl<const XLEN: usize> PrefixSuffixDecompositionTrait<XLEN> for UnsignedLessTha
         vec![Suffixes::One, Suffixes::LessThan]
     }
 
-    #[cfg(test)]
-    fn combine_test<F: JoltField>(
-        &self,
-        prefixes: &[PrefixEval<F>],
-        suffixes: &[SuffixEval<F>],
-    ) -> F {
-        let [one, less_than] = suffixes.try_into().unwrap();
-        prefixes[Prefixes::LessThan] * one + prefixes[Prefixes::Eq] * less_than
-    }
-
     fn combine<F: JoltField>(&self, prefixes: &[PrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F {
         let [one, less_than_suffix] = suffixes.try_into().unwrap();
         let [eq, less_than_prefix] = prefixes.try_into().unwrap();

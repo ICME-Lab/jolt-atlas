@@ -5,7 +5,6 @@ use crate::{
 use common::consts::XLEN;
 use num::Integer;
 use rand::{rngs::StdRng, Rng, RngCore, SeedableRng};
-use strum::IntoEnumIterator;
 
 use super::{
     prefixes::{PrefixCheckpoints, Prefixes},
@@ -13,34 +12,66 @@ use super::{
     JoltLookupTable, PrefixSuffixDecompositionTrait,
 };
 
-/// Tests that a lookup table's MLE evaluates correctly at random points.
-///
-/// Verifies that the MLE evaluation at random points matches the linear
-/// combination of table entries with Lagrange basis polynomials.
-pub fn lookup_table_mle_random_test<F: JoltField, T: JoltLookupTable + Default>() {
+/// Tests that a lookup table's MLE evaluates correctly at random points, converting
+/// each materialized entry to `F` via `convert` before comparing against the MLE evaluation.
+fn lookup_table_mle_random_test_inner<F: JoltField, T: JoltLookupTable + Default>(
+    convert: impl Fn(u64) -> F,
+) {
     let mut rng = StdRng::seed_from_u64(12345);
 
     for _ in 0..1000 {
         let index = rng.gen();
         assert_eq!(
-            F::from_u64(T::default().materialize_entry(index)),
+            convert(T::default().materialize_entry(index)),
             T::default().evaluate_mle::<F, F>(&index_to_field_bitvector(index, XLEN * 2)),
             "MLE did not match materialized table at index {index}",
         );
     }
 }
-/// Tests that a lookup table's MLE evaluates correctly over the full boolean hypercube.
+
+/// Tests that a lookup table's MLE evaluates correctly at random points.
 ///
-/// Verifies MLE correctness by testing on all 2^n corners of the hypercube.
-pub fn lookup_table_mle_full_hypercube_test<F: JoltField, T: JoltLookupTable + Default>() {
+/// Verifies that the MLE evaluation at random points matches the linear
+/// combination of table entries with Lagrange basis polynomials.
+pub fn lookup_table_mle_random_test<F: JoltField, T: JoltLookupTable + Default>() {
+    lookup_table_mle_random_test_inner::<F, T>(F::from_u64);
+}
+
+/// Tests that a signed lookup table's MLE evaluates correctly at random points.
+///
+/// Verifies that the MLE evaluation at random points matches the linear
+/// combination of table entries with Lagrange basis polynomials.
+pub fn signed_lookup_table_mle_random_test<F: JoltField, T: JoltLookupTable + Default>() {
+    lookup_table_mle_random_test_inner::<F, T>(|entry| F::from_i64(entry as i64));
+}
+
+/// Tests that a lookup table's MLE evaluates correctly over the full boolean hypercube,
+/// converting each materialized entry to `F` via `convert` before comparing.
+fn lookup_table_mle_full_hypercube_test_inner<F: JoltField, T: JoltLookupTable + Default>(
+    convert: impl Fn(u64) -> F,
+) {
     let materialized = T::default().materialize();
     for (i, entry) in materialized.iter().enumerate() {
         assert_eq!(
-            F::from_u64(*entry),
+            convert(*entry),
             T::default().evaluate_mle::<F, F>(&index_to_field_bitvector(i as u64, 16)),
             "MLE did not match materialized table at index {i}",
         );
     }
+}
+
+/// Tests that a lookup table's MLE evaluates correctly over the full boolean hypercube.
+///
+/// Verifies MLE correctness by testing on all 2^n corners of the hypercube.
+pub fn lookup_table_mle_full_hypercube_test<F: JoltField, T: JoltLookupTable + Default>() {
+    lookup_table_mle_full_hypercube_test_inner::<F, T>(F::from_u64);
+}
+
+/// Tests that a signed lookup table's MLE evaluates correctly over the full boolean hypercube.
+///
+/// Verifies MLE correctness by testing on all 2^n corners of the hypercube.
+pub fn signed_lookup_table_mle_full_hypercube_test<F: JoltField, T: JoltLookupTable + Default>() {
+    lookup_table_mle_full_hypercube_test_inner::<F, T>(|entry| F::from_i16(entry as i16));
 }
 
 /// Generates a lookup index where right operand is 111..000
@@ -98,13 +129,15 @@ fn prefix_suffix_test_inner<
                     None
                 };
 
-                let prefix_evals: Vec<_> = Prefixes::iter()
+                let prefix_evals: Vec<_> = T::default()
+                    .prefixes()
+                    .iter()
                     .map(|prefix| {
                         prefix.prefix_mle::<XLEN, F, F>(&prefix_checkpoints, r_x, c, prefix_bits, j)
                     })
                     .collect();
 
-                let combined = T::default().combine_test(&prefix_evals, &suffix_evals);
+                let combined = T::default().combine(&prefix_evals, &suffix_evals);
                 if combined != mle_eval {
                     println!("Lookup index: {lookup_index}");
                     println!("j: {j} {prefix_bits} {suffix_bits}");

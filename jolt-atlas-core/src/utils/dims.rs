@@ -47,7 +47,10 @@ pub struct EinsumConfig {
     pub dims_extractor: DimExtractor,
 }
 
-/// Registry mapping einsum patterns to their configurations using a BTreeMap for O(log n) lookup
+/// Registry mapping raw ONNX einsum patterns to their canonical configurations.
+///
+/// Stored as a flat slice and scanned linearly by [`lookup_einsum_config`]; the
+/// table is small, so an `O(n)` scan is cheaper and simpler than a map.
 pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
     /* **************** mk,kn->mn **************** */
     (
@@ -245,6 +248,20 @@ pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
         },
     ),
 ];
+
+/// Look up the canonical [`EinsumConfig`] for a raw ONNX einsum `equation`.
+///
+/// Panics if the pattern is not registered, i.e. not supported by the Einsum
+/// proof system.
+pub fn lookup_einsum_config(equation: &str) -> &'static EinsumConfig {
+    EINSUM_REGISTRY
+        .iter()
+        .find(|(pattern, _)| *pattern == equation)
+        .map(|(_, config)| config)
+        .unwrap_or_else(|| {
+            panic!("Einsum equation ({equation}) not supported by Einsum proof system")
+        })
+}
 
 fn extract_mk_kn_mn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
     let [a_idx, b_idx] = computation_node.inputs[..] else {

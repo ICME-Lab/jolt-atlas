@@ -21,6 +21,7 @@ use crate::{
     },
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
 };
+use atlas_onnx_tracer::ops::mean_of_squares::{mos_divisor, mos_remainder};
 
 /// Common fields shared by all range-checking operand types.
 ///
@@ -302,6 +303,83 @@ impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
     fn rad_poly(&self, d: usize) -> CommittedPoly {
         CommittedPoly::SqrtRangeCheckRaD(self.base.node_idx, d)
     }
+}
+
+/// Operands for the fused mean-of-squares rescaling-remainder range check.
+///
+/// MoS computes `out = SatClamp((Σx²) / D)` with `D = N·2^S` (a per-node
+/// **constant**); the reduction binds `Σx² = rescaled·D + R` and this check
+/// proves `0 ≤ R < D`. Because the bound is constant it mirrors the
+/// [`TeleportRangeCheckOperands`] pattern (`bound: None`) rather than Div's
+/// per-element divisor .
+pub struct MeanOfSquaresRangeCheckOperands {
+    base: RangeCheckOperandsBase,
+    /// The constant divisor `D = N·2^S`, recovered from the node's input dims.
+    divisor: i64,
+}
+
+impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
+    fn new(node: &ComputationNode) -> Self {
+        Self {
+            base: RangeCheckOperandsBase {
+                node_idx: node.idx,
+                remainder: VirtualPoly::RescaleRemainder(node.idx),
+                // The bound is the constant `D = N·2^S`, not a committed polynomial.
+                bound: None,
+                virtual_ra: VirtualPoly::MeanOfSquaresRangeCheckRa(node.idx),
+                operator: node.operator.clone(),
+            },
+            divisor: {
+                let Operator::MeanOfSquares(op) = &node.operator else {
+                    panic!("MeanOfSquares range check: expected MeanOfSquares operator");
+                };
+                mos_divisor(op)
+            },
+        }
+    }
+
+    fn base(&self) -> &RangeCheckOperandsBase {
+        &self.base
+    }
+
+    fn get_operands_tensors(trace: &Trace, node: &ComputationNode) -> (Tensor<i32>, Tensor<i32>) {
+        let LayerData { operands, .. } = Trace::layer_data(trace, node);
+        let op = match &node.operator {
+            Operator::MeanOfSquares(op) => op,
+            other => panic!("MeanOfSquares range check: unexpected operator {other:?}"),
+        };
+        let remainder = mos_remainder(op, &operands);
+        let divisor_i32 = mean_of_squares_divisor_i32(op);
+        let bound = Tensor::construct(vec![divisor_i32], vec![1])
+            .expand(remainder.dims())
+            .unwrap();
+        (remainder, bound)
+    }
+
+    /// The right claim is the constant `D`; only the remainder claim is fetched
+    /// from the accumulator.
+    fn operand_claims<F: JoltField>(&self, accumulator: &dyn OpeningAccumulator<F>) -> (F, F) {
+        let remainder_id = OpeningId::new(
+            self.base.remainder,
+            SumcheckId::NodeExecution(self.base.node_idx),
+        );
+        let (_, remainder_claim) = accumulator.get_virtual_polynomial_opening(remainder_id);
+        (remainder_claim, F::from_i32(i32_divisor(self.divisor)))
+    }
+
+    fn rad_poly(&self, d: usize) -> CommittedPoly {
+        CommittedPoly::MeanOfSquaresRangeCheckRaD(self.base.node_idx, d)
+    }
+}
+
+/// The fused mean-of-squares divisor `D = N·2^S` as an `i32` (the range-check
+/// value domain), recovered from the operator's stored count + scale.
+fn mean_of_squares_divisor_i32(op: &atlas_onnx_tracer::ops::MeanOfSquares) -> i32 {
+    i32_divisor(mos_divisor(op))
+}
+
+fn i32_divisor(divisor: i64) -> i32 {
+    i32::try_from(divisor).expect("MeanOfSquares divisor N·2^S must fit i32 for the range check")
 }
 
 /// Operands for neural teleportation (tanh) range-checking.

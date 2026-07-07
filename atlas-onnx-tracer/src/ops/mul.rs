@@ -1,59 +1,48 @@
-use common::parallel::par_enabled;
-use rayon::prelude::*;
-
 use crate::{
     ops::{Mul, Op},
-    tensor::{Tensor, TensorError},
+    tensor::Tensor,
 };
 
 impl Op for Mul {
     #[tracing::instrument(name = "Mul::f", skip_all)]
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
-        #[cfg(feature = "fused-ops")]
-        {
-            mult_i32_with_i64_rebase(&inputs, self.scale).unwrap()
+        if self.scale == 0 {
+            // Raw element-wise product (no rebase, no clamp): the building-block
+            // multiply used inside op decompositions, where one operand has been
+            // pre-divided so the result is already at the target scale and small
+            // enough not to overflow `i32`.
+            return crate::tensor::ops::mult(&inputs).unwrap();
         }
-        #[cfg(not(feature = "fused-ops"))]
-        {
-            crate::tensor::ops::mult(&inputs).unwrap()
-        }
+        // Fused: i64 accumulate, floor-rescale by `1 << scale`, saturating clamp
+        // to i32. Replaces Mul + its ScalarConstDiv rebase node .
+        super::floor_rebase_clamp_i32(&mul_acc_i64(&inputs), self.scale)
     }
 
     fn requires_shape_equality(&self) -> bool {
         true
     }
-
-    #[cfg(not(feature = "fused-ops"))]
-    fn rebase_scale_factor(&self) -> Option<usize> {
-        Some(1) // Mul: x * y produces result at scale^2, needs div by (1 << scale)
-    }
 }
 
-/// Element-wise multiply two i32 tensors using i64 intermediate precision,
-/// with fused floor-division rebase by `1 << scale`.
+/// Raw i64 accumulation of a (broadcast) binary multiply, `acc = left · right`.
 ///
-/// Replaces Mul + ScalarConstDiv(1<<scale) in one step: `(a_i * b_i) >> scale`.
-#[tracing::instrument(name = "tensor::ops::mult_i64_rebase", skip_all)]
-pub fn mult_i32_with_i64_rebase(
-    t: &[&Tensor<i32>],
-    scale: i32,
-) -> Result<Tensor<i32>, TensorError> {
-    let rebase_divisor: i64 = 1i64 << scale;
-    let mut output = t[0].clone();
-    for &rhs in &t[1..] {
-        let rhs_expanded = rhs.expand(output.dims()).unwrap_or_else(|_| rhs.clone());
-        output
-            .par_iter_mut()
-            .zip(rhs_expanded.data().par_iter())
-            .with_min_len(par_enabled())
-            .for_each(|(o, r)| {
-                let prod: i64 = (*o as i64) * (*r as i64);
+/// This is the shared pre-rebase value behind [`mul_intermediate`] and
+/// [`mul_remainder`]; the fused [`Mul`] sumcheck binds `acc = rescaled·2^S + R`.
+fn mul_acc_i64(inputs: &[&Tensor<i32>]) -> Tensor<i64> {
+    let [left, right] = inputs[..] else {
+        panic!("Mul (fused) expects two operands, got {}", inputs.len())
+    };
+    super::sat_accumulate_pair(left, right, "Mul", |a, b| a * b)
+}
 
-                let result = prod / rebase_divisor;
+/// Re-execute a fused [`Mul`] node's pre-clamp rescaled intermediate
+/// `rescaled = (left·right) >> scale` (floor) — the saturating-clamp lookup
+/// index. Analogous to `einsum_intermediate`; recovered without a trace change.
+pub fn mul_intermediate(op: &Mul, inputs: &[&Tensor<i32>]) -> Tensor<i64> {
+    super::floor_rebase_i64(&mul_acc_i64(inputs), op.scale)
+}
 
-                // Saturate instead of wrapping — prevents sign-flip corruption
-                *o = result.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-            });
-    }
-    Ok(output)
+/// Re-execute a fused [`Mul`] node's rescaling remainder
+/// `R = (left·right) mod 2^scale ∈ [0, 2^scale)` .
+pub fn mul_remainder(op: &Mul, inputs: &[&Tensor<i32>]) -> Tensor<i32> {
+    super::rebase_remainder_i32(&mul_acc_i64(inputs), op.scale)
 }

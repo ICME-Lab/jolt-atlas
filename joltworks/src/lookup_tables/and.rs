@@ -55,17 +55,6 @@ impl<const XLEN: usize> PrefixSuffixDecompositionTrait<XLEN> for AndTable<XLEN> 
         let [one_suffix, and_suffix] = suffixes.try_into().unwrap();
         and_prefix * one_suffix + and_suffix
     }
-
-    #[cfg(test)]
-    fn combine_test<F: JoltField>(
-        &self,
-        prefixes: &[PrefixEval<F>],
-        suffixes: &[SuffixEval<F>],
-    ) -> F {
-        debug_assert_eq!(self.suffixes().len(), suffixes.len());
-        let [one, and] = suffixes.try_into().unwrap();
-        prefixes[Prefixes::And] * one + and
-    }
 }
 
 #[cfg(test)]

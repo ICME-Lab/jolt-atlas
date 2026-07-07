@@ -8,13 +8,7 @@ use super::{
     types::{Claims, ProofId, ProverDebugInfo},
     AtlasSharedPreprocessing, ONNXProof, ReducedOpeningProof,
 };
-use crate::{
-    onnx_proof::{
-        ops::{NodeCommittedPolynomials, OperatorProver},
-        witness::WitnessGenerator,
-    },
-    utils::opening_access::AccOpeningAccessor,
-};
+use crate::{onnx_proof::ops::OperatorProver, utils::opening_access::AccOpeningAccessor};
 use atlas_onnx_tracer::{
     model::{
         trace::{LayerData, ModelExecutionIO, Trace},
@@ -150,36 +144,35 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         generators: &PCS::ProverSetup,
     ) -> Option<ReducedOpeningProof<F, T, PCS>> {
         if poly_map.is_empty() {
-            None
-        } else {
-            prover.accumulator.prepare_for_sumcheck(poly_map);
-
-            // Run sumcheck
-            let (accumulator_sumcheck_proof, r_sumcheck_acc) = prover
-                .accumulator
-                .prove_batch_opening_sumcheck(&mut prover.transcript);
-
-            // Finalize sumcheck (uses claims cached via cache_openings, derives gamma, cleans up)
-            let state = prover
-                .accumulator
-                .finalize_batch_opening_sumcheck(r_sumcheck_acc.clone(), &mut prover.transcript);
-            let sumcheck_claims: Vec<F> = state.sumcheck_claims.clone();
-            // Build RLC
-            let rlc = build_materialized_rlc(&state.gamma_powers, poly_map);
-            // Create joint opening proof
-            let joint_opening_proof = PCS::prove(
-                generators,
-                &rlc,
-                &state.r_sumcheck,
-                None,
-                &mut prover.transcript,
-            );
-            Some(ReducedOpeningProof {
-                sumcheck_proof: accumulator_sumcheck_proof,
-                sumcheck_claims,
-                joint_opening_proof,
-            })
+            return None;
         }
+        prover.accumulator.prepare_for_sumcheck(poly_map);
+
+        // Run sumcheck
+        let (accumulator_sumcheck_proof, r_sumcheck_acc) = prover
+            .accumulator
+            .prove_batch_opening_sumcheck(&mut prover.transcript);
+
+        // Finalize sumcheck (uses claims cached via cache_openings, derives gamma, cleans up)
+        let state = prover
+            .accumulator
+            .finalize_batch_opening_sumcheck(r_sumcheck_acc.clone(), &mut prover.transcript);
+        let sumcheck_claims: Vec<F> = state.sumcheck_claims.clone();
+        // Build RLC
+        let rlc = build_materialized_rlc(&state.gamma_powers, poly_map);
+        // Create joint opening proof
+        let joint_opening_proof = PCS::prove(
+            generators,
+            &rlc,
+            &state.r_sumcheck,
+            None,
+            &mut prover.transcript,
+        );
+        Some(ReducedOpeningProof {
+            sumcheck_proof: accumulator_sumcheck_proof,
+            sumcheck_claims,
+            joint_opening_proof,
+        })
     }
 
     pub(super) fn finalize_proof(
@@ -211,30 +204,36 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         )
     }
 
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, name = "ONNXProof::polynomial_map")]
     pub(super) fn polynomial_map(
         model: &Model,
         trace: &Trace,
     ) -> BTreeMap<CommittedPoly, MultilinearPolynomial<F>> {
-        // Rayon jobs were overly fragmented, and the resulting context switching degraded performance,
-        // so the parallelism granularity is now limited to the polynomial level.
-        let _guard = ParallelFlagGuard::disabled();
+        // Walk nodes *sequentially* with inner (per-tensor) parallelism ENABLED,
+        // mirroring `Model::trace`. Witness generation re-executes each fused
+        // node's accumulation (e.g. `einsum_intermediate`) to recover its
+        // pre-clamp value, and that cost is dominated by a few large einsum nodes
+        // (attention, MLP, logits). The previous per-node `par_iter` disabled
+        // inner parallelism to avoid nested-rayon fragmentation, which pinned
+        // each of those whales to a single thread — the reason this phase ran
+        // several times slower than the identical einsums do inside `trace`.
+        // Giving each node the whole thread pool for its accumulation and one-hot
+        // build parallelizes the whales; the many small nodes are cheap enough
+        // that losing node-level parallelism for them is negligible.
+        // `generate_node_witnesses` still computes each node's accumulation once
+        // and slices every committed-poly chunk from it.
         model
             .graph
             .nodes
             .values()
-            .collect::<Vec<_>>()
-            .par_iter()
-            .flat_map(|node| NodeCommittedPolynomials::get_committed_polynomials::<F, T>(node))
-            .map(|committed_poly| {
-                let witness = committed_poly.generate_witness(model, trace);
-                (committed_poly, witness)
+            .flat_map(|node| {
+                crate::onnx_proof::witness::generate_node_witnesses::<F, T>(node, model, trace)
             })
             .collect()
     }
 
     #[tracing::instrument(skip_all)]
-    fn commit_to_polynomials(
+    pub(super) fn commit_to_polynomials(
         poly_map: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
         pcs: &PCS::ProverSetup,
     ) -> Vec<PCS::Commitment> {

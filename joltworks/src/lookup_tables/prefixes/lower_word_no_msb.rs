@@ -19,25 +19,32 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for LowerWordNoMsbPre
         C: ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
-        let mut word = checkpoints[Prefixes::LowerWordNoMsb].unwrap_or(F::zero());
-        if j >= XLEN {
-            return word; // HACK: For binary ps-shout, `j` may exceed `XLEN - 1` because we go over 2*XLEN variables
+        let half_xlen = XLEN / 2;
+        // ignore high order variables and sign bit
+        if j < half_xlen {
+            return F::zero();
         }
-        let suffix_len = XLEN - j - b.len() - 1;
+        let jj = j - half_xlen;
+        let mut word = checkpoints[Prefixes::LowerWordNoMsb].unwrap_or(F::zero());
+        let suffix_len = (half_xlen * 2).saturating_sub(j + b.len() + 1);
         match (r_x, j) {
-            (None, 0) => {
+            (None, _) if j == half_xlen => {
                 // sign bit is in c
             }
             (None, _) => {
-                let x_shift = XLEN - j - 1;
+                let x_shift = half_xlen - jj - 1;
                 let y_shift = x_shift - 1;
                 word += F::from_u64(1 << x_shift) * F::from_u32(c);
                 word += F::from_u64(1 << y_shift) * F::from_u8(b.pop_msb());
             }
             (Some(r_x), _) => {
-                let x_shift = XLEN - j;
+                let x_shift = half_xlen - jj;
                 let y_shift = x_shift - 1;
-                let r_x = if j == 1 { F::zero() } else { r_x.into() };
+                let r_x = if j == (half_xlen + 1) {
+                    F::zero()
+                } else {
+                    r_x.into()
+                };
                 word += F::from_u64(1 << x_shift) * r_x;
                 word += F::from_u64(1 << y_shift) * F::from_u32(c);
             }
@@ -58,10 +65,21 @@ impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for LowerWordNoMsbPre
         C: ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
+        let half_xlen = XLEN / 2;
+        // ignore high order variables
+        if j < half_xlen {
+            return None.into();
+        }
+
         let mut word = checkpoints[Prefixes::LowerWordNoMsb].unwrap_or(F::zero());
-        let x_shift = XLEN.saturating_sub(j); // HACK: For binary ps-shout, `j` may exceed `XLEN - 1` because we go over 2*XLEN variables
+        let jj = j - half_xlen;
+        let x_shift = half_xlen.saturating_sub(jj); // HACK: For binary ps-shout, `j` may exceed `XLEN - 1` because we go over 2*XLEN variables
         let y_shift = x_shift.saturating_sub(1);
-        let r_x = if j == 1 { F::zero() } else { r_x.into() };
+        let r_x = if j == (half_xlen + 1) {
+            F::zero()
+        } else {
+            r_x.into()
+        };
         word += F::from_u64(1 << x_shift) * r_x + F::from_u64(1 << y_shift) * r_y;
         Some(word).into()
     }

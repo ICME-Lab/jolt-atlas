@@ -7,7 +7,10 @@ use atlas_onnx_tracer::{
     model::{trace::ModelExecutionIO, Model, RunArgs},
     tensor::Tensor,
 };
-use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
+use joltworks::{
+    poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG},
+    transcripts::Blake2bTranscript,
+};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde_json::Value;
 use std::{collections::HashMap, fs::File, io::Read, time::Instant};
@@ -128,15 +131,14 @@ fn test_gpt2() {
     let attention_mask_data: Vec<i32> = vec![SCALE; seq_len];
     let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
 
-    // Configure RunArgs for GPT-2
-    // HACK: pre_rebase_nonlinear prevents i32 overflow in Square/Cube for large models.
-    // TODO: Remove once fused i64-precision ops are the default path.
+    // Configure RunArgs for GPT-2. Square/Cube fuse the i64 accumulate + rescale
+    // + clamp ; mean-of-squares still decomposes to a raw Square, so very
+    // large activations remain gated on the monolithic fused path .
     let run_args = RunArgs::new([
         ("batch_size", 1),
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
-    ])
-    .with_pre_rebase_nonlinear(true);
+    ]);
 
     prove_and_verify(
         working_dir,
@@ -144,6 +146,44 @@ fn test_gpt2() {
         &run_args,
         TestConfig::new().print_model().print_timing(),
     );
+}
+
+#[ignore = "requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)"]
+#[test]
+fn test_gpt2_dory() {
+    let working_dir = "../atlas-onnx-tracer/models/gpt2/";
+    let mut rng = StdRng::seed_from_u64(42);
+    let seq_len: usize = 16;
+    let vocab_size: i32 = 50257;
+
+    let input_ids_data: Vec<i32> = (0..seq_len).map(|_| rng.gen_range(0..vocab_size)).collect();
+    let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
+    let position_ids_data: Vec<i32> = (0..seq_len as i32).collect();
+    let position_ids = Tensor::new(Some(&position_ids_data), &[1, seq_len]).unwrap();
+    let attention_mask_data: Vec<i32> = vec![SCALE; seq_len];
+    let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
+    let run_args = RunArgs::new([
+        ("batch_size", 1),
+        ("sequence_length", seq_len),
+        ("past_sequence_length", 0),
+    ]);
+    let inputs = [input_ids, position_ids, attention_mask];
+
+    let model = Model::load(&format!("{working_dir}network.onnx"), &run_args);
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, DoryScheme>::new(pp);
+
+    let timing = Instant::now();
+    let (proof, io, _debug) =
+        ONNXProof::<Fr, Blake2bTranscript, DoryScheme>::prove(&prover_pp, &inputs);
+    println!("[dory] gpt2 proof generation took {:?}", timing.elapsed());
+
+    let verifier_pp = AtlasVerifierPreprocessing::<Fr, DoryScheme>::from(&prover_pp);
+    let timing = Instant::now();
+    proof
+        .verify(&verifier_pp, &io, None)
+        .expect("dory gpt2 verification should succeed");
+    println!("[dory] gpt2 verification took {:?}", timing.elapsed());
 }
 
 /// ZK end-to-end test for GPT-2: exercises `prove_zk` + `verify_zk`.
@@ -188,8 +228,7 @@ fn test_gpt2_zk() {
         ("batch_size", 1),
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
-    ])
-    .with_pre_rebase_nonlinear(true);
+    ]);
 
     let model = Model::load(&format!("{working_dir}network.onnx"), &run_args);
     let pp = AtlasSharedPreprocessing::preprocess(model);
@@ -808,7 +847,7 @@ fn test_square_zk() {
 
     let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
         joltworks::curve::Bn254Curve,
-    >::deterministic(16);
+    >::deterministic(32);
     let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
 
     crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
@@ -1010,7 +1049,7 @@ fn test_zk_rejects_rebound_input_for_square_model() {
 
     let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
         joltworks::curve::Bn254Curve,
-    >::deterministic(16);
+    >::deterministic(32);
 
     // Honest proof for input x.
     let (bundle, mut io) =
@@ -1187,7 +1226,7 @@ fn test_mul_zk() {
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
     let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
         joltworks::curve::Bn254Curve,
-    >::deterministic(16);
+    >::deterministic(32);
     let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
     crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
         .expect("ZK verification should succeed");
@@ -1210,7 +1249,7 @@ fn test_cube_zk() {
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
     let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
         joltworks::curve::Bn254Curve,
-    >::deterministic(16);
+    >::deterministic(32);
     let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
     crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
         .expect("ZK verification should succeed");
@@ -1690,7 +1729,7 @@ fn test_multi_op_arithmetic_chain_zk() {
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
     let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
         joltworks::curve::Bn254Curve,
-    >::deterministic(16);
+    >::deterministic(32);
     let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
     crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
         .expect("Multi-op arithmetic chain ZK verification should succeed");
@@ -1721,7 +1760,7 @@ fn test_multi_op_mul_div_sub_zk() {
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
     let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
         joltworks::curve::Bn254Curve,
-    >::deterministic(16);
+    >::deterministic(32);
     let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
     crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
         .expect("Multi-op mul/div/sub ZK verification should succeed");
@@ -1738,7 +1777,10 @@ fn test_multi_op_cube_relu_zk() {
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
     let mut builder = ModelBuilder::new();
     let i = builder.input(vec![size]);
-    let c = builder.cube(i, 1 << 8);
+    // `scale` is the log2 rebase shift (bits = 2·scale, see `rebase_bits`);
+    // the pre-#256 `1 << 8` predates the fused kernel, which now interprets
+    // it as a 512-bit shift.
+    let c = builder.cube(i, 1);
     let out = builder.relu(c);
     builder.mark_output(out);
     let model = builder.build();
@@ -1818,7 +1860,7 @@ fn bench_square_zk_overhead() {
     // ZK prove (single pass: setup + ZK sumcheck + BlindFold)
     let bench_gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
         joltworks::curve::Bn254Curve,
-    >::deterministic(16);
+    >::deterministic(32);
     let t0 = Instant::now();
     let (bundle, io_zk) =
         crate::onnx_proof::zk::prove_zk(&prover_pp, &[input.clone()], &bench_gens);

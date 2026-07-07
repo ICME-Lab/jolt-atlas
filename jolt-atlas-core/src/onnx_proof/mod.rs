@@ -25,6 +25,8 @@ use std::collections::BTreeMap;
 
 // ── Submodules ───────────────────────────────────────────────────────────
 
+pub mod clamp_lookups;
+pub mod fused_rebase;
 pub mod neural_teleport;
 pub mod op_lookups;
 pub mod ops;
@@ -56,7 +58,10 @@ pub use types::{Claims, ProofId, ProofType, ProverDebugInfo};
 pub use verifier::Verifier;
 
 pub use ark_bn254::{Bn254, Fr};
-pub use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
+pub use joltworks::{
+    poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG},
+    transcripts::Blake2bTranscript,
+};
 
 // ── Public-input transcript binding (soundness, issue #230) ──────────────
 

@@ -806,7 +806,7 @@ fn test_square_zk() {
 
     let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
         joltworks::curve::Bn254Curve,
-    >::deterministic(16);
+    >::deterministic(32);
     let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
 
     crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
@@ -1008,7 +1008,7 @@ fn test_zk_rejects_rebound_input_for_square_model() {
 
     let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
         joltworks::curve::Bn254Curve,
-    >::deterministic(16);
+    >::deterministic(32);
 
     // Honest proof for input x.
     let (bundle, mut io) =
@@ -1185,7 +1185,7 @@ fn test_mul_zk() {
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
     let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
         joltworks::curve::Bn254Curve,
-    >::deterministic(16);
+    >::deterministic(32);
     let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
     crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
         .expect("ZK verification should succeed");
@@ -1208,7 +1208,7 @@ fn test_cube_zk() {
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
     let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
         joltworks::curve::Bn254Curve,
-    >::deterministic(16);
+    >::deterministic(32);
     let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
     crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
         .expect("ZK verification should succeed");
@@ -1688,7 +1688,7 @@ fn test_multi_op_arithmetic_chain_zk() {
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
     let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
         joltworks::curve::Bn254Curve,
-    >::deterministic(16);
+    >::deterministic(32);
     let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
     crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
         .expect("Multi-op arithmetic chain ZK verification should succeed");
@@ -1719,7 +1719,7 @@ fn test_multi_op_mul_div_sub_zk() {
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
     let gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
         joltworks::curve::Bn254Curve,
-    >::deterministic(16);
+    >::deterministic(32);
     let (bundle, io) = crate::onnx_proof::zk::prove_zk(&prover_pp, &[input], &gens);
     crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
         .expect("Multi-op mul/div/sub ZK verification should succeed");
@@ -1736,7 +1736,10 @@ fn test_multi_op_cube_relu_zk() {
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
     let mut builder = ModelBuilder::new();
     let i = builder.input(vec![size]);
-    let c = builder.cube(i, 1 << 8);
+    // `scale` is the log2 rebase shift (bits = 2·scale, see `rebase_bits`);
+    // the pre-#256 `1 << 8` predates the fused kernel, which now interprets
+    // it as a 512-bit shift.
+    let c = builder.cube(i, 1);
     let out = builder.relu(c);
     builder.mark_output(out);
     let model = builder.build();
@@ -1816,7 +1819,7 @@ fn bench_square_zk_overhead() {
     // ZK prove (single pass: setup + ZK sumcheck + BlindFold)
     let bench_gens = joltworks::poly::commitment::pedersen::PedersenGenerators::<
         joltworks::curve::Bn254Curve,
-    >::deterministic(16);
+    >::deterministic(32);
     let t0 = Instant::now();
     let (bundle, io_zk) =
         crate::onnx_proof::zk::prove_zk(&prover_pp, &[input.clone()], &bench_gens);

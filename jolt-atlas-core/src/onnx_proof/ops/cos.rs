@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::onnx_proof::ops::trig::assert_trig_lookup_claim;
 use crate::{
     onnx_proof::{
         neural_teleport::{
@@ -9,9 +11,11 @@ use crate::{
             range_and_onehot::{
                 prove_range_and_onehot, verify_range_and_onehot, NeuralTeleportRangeOneHot,
             },
-            utils::compute_ra_evals_direct,
         },
-        ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
+        ops::{
+            eval_reduction::NodeEvalReduction, trig::initialize_trig_prover, OperatorProofTrait,
+            ReductionFlow,
+        },
         range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding},
         ProofId, ProofType, Prover, Verifier,
     },
@@ -322,49 +326,27 @@ impl<F: JoltField> CosProver<F> {
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
-        let input = operands[0];
-        let (_quotient_tensor, remainder_tensor) = compute_division(input, FOUR_PI_APPROX);
-
-        assert!(remainder_tensor
-            .iter()
-            .all(|&x| (0..FOUR_PI_APPROX).contains(&x)));
-
         let cos_table = MultilinearPolynomial::from(CosTable::materialize());
-        let input_onehot: Vec<F> = compute_ra_evals_direct(
-            &params.r_node_output.r,
-            &remainder_tensor,
-            1 << COS_LOG_TABLE_SIZE,
+        let trig_setup = initialize_trig_prover(
+            trace,
+            &params.computation_node,
+            &params.r_node_output,
+            accumulator,
+            transcript,
+            COS_LOG_TABLE_SIZE,
         );
-
-        let output_claim =
-            MultilinearPolynomial::from(output.clone()).evaluate(&params.r_node_output.r);
-        // Special case where we add a new opening for the node output at node's own index,
-        // This is due to the fact that `remainder` poly claim is used as input claim for cos lookup sumcheck, together with a node output claim.
-        // Both claims are derived from a different opening point, so we need to derive a new claim for one of (`output`, `remainder`).
-        // We chose `output` to prevent us from having to use n-to-1 reductions on the `remainder` and rather only implement it on NodeOutput.
-        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .into_provider(transcript, params.r_node_output.clone());
-        provider.append_nodeio(Target::Current, output_claim);
-
-        let input_onehot = MultilinearPolynomial::from(input_onehot);
+        let input_onehot = trig_setup.input_onehot;
         assert_eq!(input_onehot.len(), cos_table.len());
         let identity = IdentityPolynomial::new(COS_LOG_TABLE_SIZE);
 
         #[cfg(test)]
-        {
-            let remainder_claim = provider.get_advice(VirtualPoly::TeleportRemainder).1;
-            let rv_claim = provider.get_nodeio(Target::Current).1;
-            let claim = (0..input_onehot.len())
-                .map(|i| {
-                    let a = input_onehot.get_bound_coeff(i);
-                    let b = cos_table.get_bound_coeff(i);
-                    let int = F::from_u32(i as u32);
-                    a * (b + params.gamma * int)
-                })
-                .sum();
-            assert_eq!(rv_claim + params.gamma * remainder_claim, claim)
-        }
+        assert_trig_lookup_claim(
+            &input_onehot,
+            &cos_table,
+            params.gamma,
+            trig_setup.output_claim,
+            trig_setup.remainder_claim,
+        );
 
         Self {
             params,

@@ -103,6 +103,7 @@ pub mod sub;
 pub mod sum;
 /// Tanh activation function.
 pub mod tanh;
+mod trig;
 
 #[cfg(test)]
 mod test;

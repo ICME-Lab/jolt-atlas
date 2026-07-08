@@ -269,7 +269,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for TanhParams<F> {
     #[cfg(feature = "zk")]
     fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
         let opening_point = self.normalize_opening_point(&sumcheck_challenges.into_opening());
-        let table = TanhTable::new(self.op.log_table, self.op.tau);
+        let table = TanhTable::new(self.op.log_table, self.op.tau, self.op.scale);
         let tanh_table = MultilinearPolynomial::from(table.materialize());
         let table_claim = tanh_table.evaluate(&opening_point.r);
         let int_eval = SignedIdentityPoly::new(self.op.log_table).evaluate(&opening_point.r);
@@ -326,7 +326,7 @@ impl<F: JoltField> TanhProver<F> {
         }));
 
         // Create and materialize the tanh lookup table (reduced size)
-        let tanh_table = TanhTable::new(params.op.log_table, params.op.tau);
+        let tanh_table = TanhTable::new(params.op.log_table, params.op.tau, params.op.scale);
         let tanh_table = MultilinearPolynomial::from(tanh_table.materialize());
 
         // Compute one-hot encoding of QUOTIENT values (not input)
@@ -439,7 +439,7 @@ impl<F: JoltField> TanhVerifier<F> {
         provider.append_advice(VirtualPoly::DummyClampedTanhInput);
 
         // Materialize the tanh table for verification
-        let tanh_table = TanhTable::new(params.op.log_table, params.op.tau);
+        let tanh_table = TanhTable::new(params.op.log_table, params.op.tau, params.op.scale);
         let tanh_table = MultilinearPolynomial::from(tanh_table.materialize());
 
         Self { params, tanh_table }
@@ -570,8 +570,8 @@ mod tests {
     };
     use rand::{rngs::StdRng, SeedableRng};
 
-    fn tanh_model(input_shape: &[usize]) -> Model {
-        let mut b = ModelBuilder::new();
+    fn tanh_model(input_shape: &[usize], scale: u32) -> Model {
+        let mut b = ModelBuilder::with_scale(scale);
         let i = b.input(input_shape.to_vec());
         let res = b.tanh(i);
         b.mark_output(res);
@@ -585,7 +585,21 @@ mod tests {
         const MAX_INPUT_VALUE: i32 = 1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1);
         let mut rng = StdRng::seed_from_u64(0x888);
         let input = Tensor::random_range(&mut rng, &[T], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
-        let model = tanh_model(&[T]);
+        let model = tanh_model(&[T], 8);
+        unit_test_op(model, &[input]);
+    }
+
+    /// Tanh at scale 12: τ scales to 32 and the lookup table is quantized at 2^12,
+    /// so the op and the proof's table must agree at a non-reference scale.
+    /// Inputs span ±2^(scale+7), matching the reference test's quotient range.
+    #[test]
+    fn test_tanh_scale_12() {
+        let T = 1 << 14;
+        const SCALE: u32 = 12;
+        let max_input: i32 = 1 << (SCALE + 7);
+        let mut rng = StdRng::seed_from_u64(0x888);
+        let input = Tensor::random_range(&mut rng, &[T], -max_input..max_input);
+        let model = tanh_model(&[T], SCALE);
         unit_test_op(model, &[input]);
     }
 
@@ -596,7 +610,7 @@ mod tests {
         const MAX_INPUT_VALUE: i32 = 1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE);
         let mut rng = StdRng::seed_from_u64(0x888);
         let input = Tensor::random_range(&mut rng, &[T], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
-        let model = tanh_model(&[T]);
+        let model = tanh_model(&[T], 8);
         unit_test_op(model, &[input]);
     }
 
@@ -608,7 +622,7 @@ mod tests {
         const MAX_INPUT_VALUE: i32 = 1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1);
         let mut rng = StdRng::seed_from_u64(0x889);
         let input = Tensor::random_range(&mut rng, &[t], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
-        let model = tanh_model(&[t]);
+        let model = tanh_model(&[t], 8);
         unit_test_op(model, &[input]);
     }
 }

@@ -3337,39 +3337,6 @@ pub mod nonlinearities {
         .unwrap()
     }
 
-    /// Elementwise applies reciprocal square root to a tensor of integers.
-    /// # Arguments
-    ///
-    /// * `a` - Tensor
-    /// * `scale_input` - Single value
-    /// * `scale_output` - Single value
-    /// # Examples
-    /// ```
-    /// use atlas_onnx_tracer::tensor::Tensor;
-    /// use atlas_onnx_tracer::tensor::ops::nonlinearities::rsqrt;
-    /// let x = Tensor::<i32>::new(
-    ///     Some(&[32, 128, 512, 2048, 8, 1]),
-    ///     &[2, 3],
-    /// ).unwrap();
-    /// let result = rsqrt(&x, 7.0);
-    /// let expected = Tensor::<i32>::new(Some(&[256, 128, 64, 32, 512, 1448]), &[2, 3]).unwrap();
-    /// assert_eq!(result, expected);
-    /// ```
-    #[tracing::instrument(name = "tensor::ops::nonlinearities::rsqrt", skip_all)]
-    pub fn rsqrt(a: &Tensor<i32>, scale_input: f64) -> Tensor<i32> {
-        let sf_log = scale_input as i32;
-        let sf = 1 << sf_log;
-        // NOTE: rescale uses SRA
-        // let rescale_down = |q: i32| q >> sf_log;f
-        a.par_enum_map(|_, a_i| {
-            let inv = sf * sf / a_i;
-            let rsqrt = (sf * inv).isqrt();
-
-            Ok::<_, TensorError>(rsqrt)
-        })
-        .unwrap()
-    }
-
     /// Elementwise applies cosine to a tensor of integers.
     /// # Arguments
     /// * `a` - Tensor

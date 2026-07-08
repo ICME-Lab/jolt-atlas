@@ -44,17 +44,17 @@ const SCALE: i32 = 12;
 ///
 /// Default (info-level output, tract logs silenced):
 /// ```sh
-/// cargo run -r -p atlas-onnx-tracer --features fused-ops --example quant_error_analysis
+/// cargo run -r -p atlas-onnx-tracer --example quant_error_analysis
 /// ```
 ///
 /// Show debug output (shapes, token details):
 /// ```sh
-/// RUST_LOG=debug cargo run -r -p atlas-onnx-tracer --features fused-ops --example quant_error_analysis
+/// RUST_LOG=debug cargo run -r -p atlas-onnx-tracer --example quant_error_analysis
 /// ```
 ///
 /// Show everything *including* tract internals:
 /// ```sh
-/// RUST_LOG=trace cargo run -r -p atlas-onnx-tracer --features fused-ops --example quant_error_analysis
+/// RUST_LOG=trace cargo run -r -p atlas-onnx-tracer --example quant_error_analysis
 /// ```
 fn main() {
     init_logging();

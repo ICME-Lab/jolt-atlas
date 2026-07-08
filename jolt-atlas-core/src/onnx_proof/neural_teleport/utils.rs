@@ -2,8 +2,8 @@
 //!
 //! This module centralizes helper functions used by activation ops, and periodic functions.
 
-use super::{n_bits_to_usize, usize_to_n_bits, SCALE};
-use atlas_onnx_tracer::tensor::Tensor;
+use super::{n_bits_to_usize, usize_to_n_bits};
+use atlas_onnx_tracer::{tensor::Tensor, utils::quantize::scale_to_multiplier};
 use common::parallel::par_enabled;
 use joltworks::{
     field::{FieldChallengeOps, JoltField},
@@ -61,11 +61,13 @@ where
 /// Build a signed two's-complement lookup table for a unary activation.
 ///
 /// The table domain is `[-2^(n-1), 2^(n-1))` encoded in two's complement, and
-/// outputs are quantized using the shared neural-teleport `SCALE`.
+/// outputs are quantized at the model scale `2^scale` — matching the op, which
+/// evaluates the activation at `scale_to_multiplier(scale)`.
 /// Each lookup to the table at index `x` corresponds to the activation of `x * τ`.
 pub fn materialize_signed_activation_table(
     log_table_size: usize,
     tau: i32,
+    scale: i32,
     activation: fn(&Tensor<i32>, f64) -> Tensor<i32>,
 ) -> Vec<i32> {
     let table_size = 1 << log_table_size;
@@ -78,7 +80,7 @@ pub fn materialize_signed_activation_table(
         .collect();
     let indices_tensor = Tensor::new(Some(&indices), &[1, table_size])
         .expect("failed to build activation LUT input tensor");
-    let result = activation(&indices_tensor, SCALE);
+    let result = activation(&indices_tensor, scale_to_multiplier(scale));
     result.data().to_vec()
 }
 
@@ -89,14 +91,18 @@ macro_rules! define_signed_activation_table {
         pub struct $table {
             log_table_size: usize,
             tau: i32,
+            /// Model scale (log2) the table outputs are quantized at.
+            scale: i32,
         }
 
         impl $table {
-            /// Create a new lookup table with the specified bit width.
-            pub fn new(log_table_size: usize, tau: i32) -> Self {
+            /// Create a new lookup table with the specified bit width, teleport
+            /// divisor, and model scale.
+            pub fn new(log_table_size: usize, tau: i32, scale: i32) -> Self {
                 Self {
                     log_table_size,
                     tau,
+                    scale,
                 }
             }
 
@@ -115,6 +121,7 @@ macro_rules! define_signed_activation_table {
                 crate::onnx_proof::neural_teleport::utils::materialize_signed_activation_table(
                     self.log_table_size,
                     self.tau,
+                    self.scale,
                     $activation,
                 )
             }

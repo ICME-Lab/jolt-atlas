@@ -439,7 +439,7 @@ fn test_hyperkzg_batch_3dense_3oh() {
         .collect();
     all_polys.extend(oh_polys.iter().enumerate().map(|(i, data)| {
         (
-            CommittedPoly::RsqrtNodeInv(i), // make sure RsqrtNodeInv comes after DivNodeQuotient in Ordering
+            CommittedPoly::RsqrtQuotient(i), // make sure RsqrtQuotient comes after DivNodeQuotient in Ordering
             MultilinearPolynomial::OneHot(data.poly.clone()),
         )
     }));

@@ -17,7 +17,7 @@ use joltworks::{
 use crate::{
     onnx_proof::{
         neural_teleport::division::compute_division,
-        ops::rsqrt::{Q, Q_SQUARE},
+        ops::rsqrt::rsqrt_dividend,
     },
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
 };
@@ -131,16 +131,18 @@ pub struct DivRangeCheckOperands {
     base: RangeCheckOperandsBase,
 }
 
-/// Operands for reciprocal square root (rsqrt) division range-checking.
+/// Operands for the fused rsqrt division range-check.
 ///
-/// For rsqrt computation involving `Q²/x`, this verifies the intermediate division remainder.
+/// For the quotient `q = ⌊S³ / x̂⌋`, verifies the division remainder
+/// `r = S³ mod x̂` satisfies `0 ≤ r < x̂`.
 pub struct RiRangeCheckOperands {
     base: RangeCheckOperandsBase,
 }
 
-/// Operands for reciprocal square root (rsqrt) final range-checking.
+/// Operands for the fused rsqrt square-root range-check.
 ///
-/// For square root `v = √(S·x̂)`, verifies that the remainder `r = S·x̂ - v̂²` satisfies `0 ≤ r < 2v̂ + 1`.
+/// For the output `v̂ = ⌊√q⌋` of the quotient `q = ⌊S³ / x̂⌋`, verifies that the
+/// remainder `r = q - v̂²` satisfies `0 ≤ r ≤ 2·v̂`.
 pub struct RsRangeCheckOperands {
     base: RangeCheckOperandsBase,
 }
@@ -214,8 +216,12 @@ impl RangeCheckingOperandsTrait for RiRangeCheckOperands {
             panic!("Expected exactly one input tensor");
         };
 
+        let s_cubed = rsqrt_dividend(node);
         let remainder = {
-            let data: Vec<i32> = input_tensor.iter().map(|&x| Q_SQUARE % x).collect();
+            let data: Vec<i32> = input_tensor
+                .iter()
+                .map(|&x| (s_cubed % x as i64) as i32)
+                .collect();
             Tensor::<i32>::construct(data, input_tensor.dims().to_vec())
         };
 
@@ -256,15 +262,17 @@ impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
             panic!("Expected exactly one input tensor");
         };
 
-        let inv = {
-            let data: Vec<i32> = input_tensor.iter().map(|&x| Q_SQUARE / x).collect();
-            Tensor::<i32>::construct(data, input_tensor.dims().to_vec())
-        };
+        let s_cubed = rsqrt_dividend(node);
+        // `quotient = ⌊S³ / x̂⌋` and `out²` can exceed i32 at higher scales, so both
+        // are computed in i64. The remainder `quotient − out²` is small (< 2·out+1).
         let remainder = {
-            let data: Vec<i32> = inv
+            let data: Vec<i32> = input_tensor
                 .iter()
                 .zip(output.iter())
-                .map(|(&inv, &sqrt)| Q * inv - sqrt * sqrt)
+                .map(|(&x, &out)| {
+                    let quotient = s_cubed / x as i64;
+                    (quotient - (out as i64) * (out as i64)) as i32
+                })
                 .collect();
             Tensor::<i32>::construct(data, input_tensor.dims().to_vec())
         };
@@ -274,19 +282,13 @@ impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
 
     // Override to implement the specific lookup indices computation for sqrt range check
     //
-    // let x̂ the (quantized) input
-    // â = ⌊a * S⌋          | Recall S is the scaling factor, quantization precision equals 1/S
-    // let v the square root of x̂, i.e., v = sqrt(S · x̂) | We multiply by S so that v has the same scale as x̂
-    // Hence v̂ = ⌊v⌋        | Here v is already scaled by S
-    // Due to quantization, there exists a non-zero remainder r such that:
-    //     S · x̂ = v̂ · v̂ + r
+    // The fused rsqrt output is v̂ = ⌊√q⌋ for the quotient q = ⌊S³ / x̂⌋, so there is
+    // a remainder r with:
+    //     q = v̂ · v̂ + r
     //
-    // Defining the bounds for r:
-    // We have S · x̂ = v · v (notice v is not quantized)
-    // Where S · v = v̂ + e | e is the quantization error for v, with 0 ≤ e < 1
-    // Therefore:
-    //     S · x̂ = (v̂ + e) · (v̂ + e) = v̂ · v̂ + 2 · e · v̂ + e · e
-    // Since e < 1, this gives us the bounds for r:
+    // Bounding r: let v = √q (not floored), so v = v̂ + e with 0 ≤ e < 1. Then
+    //     q = v · v = (v̂ + e)² = v̂ · v̂ + 2·e·v̂ + e²
+    // and since e < 1:
     //     0 ≤ r < 2 · v̂ + 1
     fn compute_lookup_indices(
         left_operand: &Tensor<i32>,

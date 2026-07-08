@@ -13,7 +13,10 @@ use crate::{
 
 use super::{HandlerContext, OpHandlerFn};
 
-/// The `tau` parameter for neural teleportation
+/// Model scale (log2) at which the neural-teleport constants below were tuned.
+pub const NEURAL_TELEPORT_REFERENCE_SCALE: i32 = 8;
+
+/// The `tau` (teleport divisor) at the reference scale [`NEURAL_TELEPORT_REFERENCE_SCALE`].
 pub const NEURAL_TELEPORT_TAU: i32 = 2;
 
 /// Log2 of the lookup table size used for activation functions.
@@ -21,6 +24,21 @@ pub const NEURAL_TELEPORT_TAU: i32 = 2;
 /// by GELU's cubic polynomial.  16 gives a quotient range of ±32 768, i.e.
 /// raw fixed-point inputs up to ±65 534 (≈ ±256 in real value).
 pub const NEURAL_TELEPORT_LOG_TABLE_SIZE: usize = 16;
+
+/// Teleport divisor `τ` for a given model scale.
+///
+/// The teleported quotient is `input / τ`, and it must fit the fixed
+/// [`NEURAL_TELEPORT_LOG_TABLE_SIZE`] table. Raw inputs scale as `2^scale`, so `τ`
+/// scales with `2^scale` too — keeping the quotient range (and thus the table size
+/// and proof cost) constant across scales while preserving real-value resolution.
+/// At the reference scale this reduces to [`NEURAL_TELEPORT_TAU`].
+pub fn neural_teleport_tau(scale: i32) -> i32 {
+    debug_assert!(
+        scale >= NEURAL_TELEPORT_REFERENCE_SCALE,
+        "neural-teleport activations require scale >= {NEURAL_TELEPORT_REFERENCE_SCALE}"
+    );
+    NEURAL_TELEPORT_TAU << (scale - NEURAL_TELEPORT_REFERENCE_SCALE)
+}
 
 /// Returns a map of activation operator names to their handler functions.
 pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
@@ -68,7 +86,7 @@ fn handle_max(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 /// Tanh: Hyperbolic tangent activation.
 fn handle_tanh(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let scale = hctx.run_args.scale;
-    let tau = NEURAL_TELEPORT_TAU;
+    let tau = neural_teleport_tau(scale);
     let log_table_size = NEURAL_TELEPORT_LOG_TABLE_SIZE;
 
     HandlerBuilder::new(hctx)
@@ -84,6 +102,7 @@ fn handle_tanh(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 /// Cos: Cosine activation.
 fn handle_cos(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let scale = hctx.run_args.scale;
+    assert_trig_reference_scale(scale, "Cos");
 
     HandlerBuilder::new(hctx)
         .with_broadcast()
@@ -94,6 +113,7 @@ fn handle_cos(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 /// Sin: Sine activation.
 fn handle_sin(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let scale = hctx.run_args.scale;
+    assert_trig_reference_scale(scale, "Sin");
 
     HandlerBuilder::new(hctx)
         .with_broadcast()
@@ -101,10 +121,23 @@ fn handle_sin(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         .build()
 }
 
+/// The trig (cos/sin) periodic teleportation still hardcodes its `2π·2^s` period
+/// modulus (`FOUR_PI_APPROX`) and lookup-table quantization for the reference
+/// scale. Unlike the signed activations (tanh/erf/sigmoid), it is not yet
+/// scale-aware, so reject other scales loudly rather than emit a wrong proof.
+// TODO: make cos/sin scale-aware (brute-force the per-scale `k·2π·2^s` modulus).
+fn assert_trig_reference_scale(scale: i32, op: &str) {
+    assert_eq!(
+        scale, NEURAL_TELEPORT_REFERENCE_SCALE,
+        "{op} teleportation is only calibrated for scale {NEURAL_TELEPORT_REFERENCE_SCALE} \
+         (got {scale}); cos/sin are not yet scale-aware."
+    );
+}
+
 /// Erf: Error function activation.
 fn handle_erf(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let scale = hctx.run_args.scale;
-    let tau = NEURAL_TELEPORT_TAU;
+    let tau = neural_teleport_tau(scale);
     let log_table_size = NEURAL_TELEPORT_LOG_TABLE_SIZE;
 
     HandlerBuilder::new(hctx)
@@ -120,7 +153,7 @@ fn handle_erf(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 /// Sigmoid activation.
 fn handle_sigmoid(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let scale = hctx.run_args.scale;
-    let tau = NEURAL_TELEPORT_TAU;
+    let tau = neural_teleport_tau(scale);
     let log_table_size = NEURAL_TELEPORT_LOG_TABLE_SIZE;
 
     HandlerBuilder::new(hctx)

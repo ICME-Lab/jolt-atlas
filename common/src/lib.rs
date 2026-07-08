@@ -111,10 +111,11 @@ canonical_serde_enum! {
         /// * `0` – node index
         ScalarConstDivNodeRemainder(usize),
 
-        /// Advice polynomial for `1 / sqrt(x)` intermediate **inverse** in Rsqrt.
+        /// Advice polynomial for the fused Rsqrt **quotient** `⌊S³ / x̂⌋`,
+        /// i.e. the value fed into the integer square root.
         ///
         /// * `0` – node index
-        RsqrtNodeInv(usize),
+        RsqrtQuotient(usize),
 
         /// Advice polynomial for the teleportation division op.
         ///

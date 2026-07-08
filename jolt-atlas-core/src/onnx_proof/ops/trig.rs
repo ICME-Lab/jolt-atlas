@@ -9,6 +9,7 @@ use atlas_onnx_tracer::{
     },
     node::ComputationNode,
 };
+#[cfg(test)]
 use common::VirtualPoly;
 use joltworks::{
     field::JoltField,
@@ -21,7 +22,9 @@ use joltworks::{
 
 pub(super) struct TrigProverSetup<F: JoltField> {
     pub(super) input_onehot: MultilinearPolynomial<F>,
+    #[cfg(test)]
     pub(super) output_claim: F,
+    #[cfg(test)]
     pub(super) remainder_claim: F,
 }
 
@@ -60,7 +63,9 @@ pub(super) fn initialize_trig_prover<F: JoltField>(
 
     TrigProverSetup {
         input_onehot,
+        #[cfg(test)]
         output_claim,
+        #[cfg(test)]
         remainder_claim: provider.get_advice(VirtualPoly::TeleportRemainder).1,
     }
 }

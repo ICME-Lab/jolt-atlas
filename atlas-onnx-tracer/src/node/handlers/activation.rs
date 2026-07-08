@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use crate::{
     node::ComputationNode,
     ops::{Constant, Cos, Erf, Operator, Rsqrt, Sigmoid, Sin, SoftmaxLastAxis, Tanh},
-    utils::{handler_builder::HandlerBuilder, parser::load_op, quantize::scale_to_multiplier},
+    utils::{handler_builder::HandlerBuilder, parser::load_op},
 };
 
 use super::{HandlerContext, OpHandlerFn};
@@ -67,7 +67,7 @@ fn handle_max(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
 /// Tanh: Hyperbolic tangent activation.
 fn handle_tanh(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let scale = scale_to_multiplier(hctx.run_args.scale).into();
+    let scale = hctx.run_args.scale;
     let tau = NEURAL_TELEPORT_TAU;
     let log_table_size = NEURAL_TELEPORT_LOG_TABLE_SIZE;
 
@@ -83,7 +83,7 @@ fn handle_tanh(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
 /// Cos: Cosine activation.
 fn handle_cos(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let scale = scale_to_multiplier(hctx.run_args.scale).into();
+    let scale = hctx.run_args.scale;
 
     HandlerBuilder::new(hctx)
         .with_broadcast()
@@ -93,7 +93,7 @@ fn handle_cos(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
 /// Sin: Sine activation.
 fn handle_sin(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let scale = scale_to_multiplier(hctx.run_args.scale).into();
+    let scale = hctx.run_args.scale;
 
     HandlerBuilder::new(hctx)
         .with_broadcast()
@@ -103,7 +103,7 @@ fn handle_sin(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
 /// Erf: Error function activation.
 fn handle_erf(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let scale = scale_to_multiplier(hctx.run_args.scale).into();
+    let scale = hctx.run_args.scale;
     let tau = NEURAL_TELEPORT_TAU;
     let log_table_size = NEURAL_TELEPORT_LOG_TABLE_SIZE;
 
@@ -119,7 +119,7 @@ fn handle_erf(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
 /// Sigmoid activation.
 fn handle_sigmoid(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let scale = scale_to_multiplier(hctx.run_args.scale).into();
+    let scale = hctx.run_args.scale;
     let tau = NEURAL_TELEPORT_TAU;
     let log_table_size = NEURAL_TELEPORT_LOG_TABLE_SIZE;
 
@@ -155,24 +155,20 @@ fn handle_softmax(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
          Transpose the input so the softmax dimension is last."
     );
 
-    let scale = scale_to_multiplier(hctx.run_args.scale);
+    let scale = hctx.run_args.scale;
 
     HandlerBuilder::new(hctx)
         .with_broadcast()
-        .simple_op(Operator::SoftmaxLastAxis(SoftmaxLastAxis {
-            scale: scale as i32,
-        }))
+        .simple_op(Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }))
         .build()
 }
 
 /// Rsqrt: Reciprocal square root.
 fn handle_rsqrt(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let scale = hctx.run_args.scale as f32;
+    let scale = hctx.run_args.scale;
 
     HandlerBuilder::new(hctx)
         .with_broadcast()
-        .simple_op(Operator::Rsqrt(Rsqrt {
-            scale: scale.into(),
-        }))
+        .simple_op(Operator::Rsqrt(Rsqrt { scale }))
         .build()
 }

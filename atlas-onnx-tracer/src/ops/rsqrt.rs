@@ -8,11 +8,11 @@ impl Op for Rsqrt {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         #[cfg(feature = "fused-ops")]
         {
-            rsqrt_2(inputs[0], self.scale.into())
+            rsqrt_2(inputs[0], self.scale as f64)
         }
         #[cfg(not(feature = "fused-ops"))]
         {
-            crate::tensor::ops::nonlinearities::rsqrt(inputs[0], self.scale.into())
+            crate::tensor::ops::nonlinearities::rsqrt(inputs[0], self.scale as f64)
         }
     }
 

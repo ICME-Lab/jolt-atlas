@@ -19,7 +19,7 @@ mod tests {
     use crate::{
         ops::Op,
         tensor::{Tensor, ops::nonlinearities::cos},
-        utils::{f32::F32, precision::assert_quantized_precision},
+        utils::{precision::assert_quantized_precision, quantize::multiplier_to_scale},
     };
     use rand::{SeedableRng, rngs::StdRng};
 
@@ -35,7 +35,7 @@ mod tests {
         let input = Tensor::random_range(&mut rng, &[SAMPLE_SIZE], MIN_INPUT..MAX_INPUT);
 
         let op = Cos {
-            scale: F32(SCALE as f32),
+            scale: multiplier_to_scale(SCALE),
         };
         let actual = op.f(vec![&input]).data().to_vec();
 

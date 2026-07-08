@@ -1,6 +1,7 @@
 use crate::{
     ops::{Op, Tanh},
     tensor::{Tensor, ops::nonlinearities::const_div},
+    utils::quantize::scale_to_multiplier,
 };
 use std::ops::Mul;
 
@@ -23,7 +24,7 @@ impl Op for Tanh {
         let input = const_div(input, self.tau as f64);
         let input = input.mul(self.tau).unwrap();
         let input = clamp_tensor(&input, lower_bound, upper_bound);
-        crate::tensor::ops::nonlinearities::tanh(&input, self.scale.into())
+        crate::tensor::ops::nonlinearities::tanh(&input, scale_to_multiplier(self.scale))
     }
 
     fn requires_shape_equality(&self) -> bool {
@@ -87,7 +88,7 @@ mod tests {
     use crate::{
         ops::Op,
         tensor::{Tensor, ops::nonlinearities::tanh},
-        utils::{f32::F32, precision::assert_quantized_precision},
+        utils::{precision::assert_quantized_precision, quantize::multiplier_to_scale},
     };
     use rand::{SeedableRng, rngs::StdRng};
 
@@ -104,7 +105,7 @@ mod tests {
         let input = Tensor::random_range(&mut rng, &[SAMPLE_SIZE], MIN_INPUT..MAX_INPUT);
 
         let op = Tanh {
-            scale: F32(SCALE as f32),
+            scale: multiplier_to_scale(SCALE),
             tau: TAU,
             log_table: 12,
         };

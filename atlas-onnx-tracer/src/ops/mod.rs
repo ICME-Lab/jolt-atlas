@@ -1,6 +1,6 @@
 //! Operator definitions and implementations for ONNX operations.
 
-use crate::{tensor::Tensor, utils::f32::F32};
+use crate::tensor::Tensor;
 use serde::{Deserialize, Serialize};
 
 /// Element-wise addition operator.
@@ -118,7 +118,6 @@ macro_rules! define_operators {
         }
     };
 }
-// TODO: Pass in runtime args to Op::f() so we can rm these scale fields and just use the global run_args.scale instead.
 define_operators! {
     operators: [
         Add,
@@ -127,11 +126,11 @@ define_operators! {
         Clamp { axes: usize, max_spread: i32 },
         Concat { axis: isize },
         Constant(Tensor<i32>),
-        Cos { scale: F32 },
+        Cos { scale: i32 },
         Cube { scale: i32 },
         Div,
         Einsum { equation: String, scale: i32 },
-        Erf { scale: F32, tau: i32, log_table: usize },
+        Erf { scale: i32, tau: i32, log_table: usize },
         GatherSmall { axis: usize, dict_len: usize },
         GatherLarge { axis: usize, dict_len: usize },
         Identity,
@@ -144,16 +143,16 @@ define_operators! {
         Neg,
         ReLU,
         Reshape { shape:Vec<usize> },
-        Rsqrt { scale: F32 },
+        Rsqrt { scale: i32 },
         ScalarConstDiv {divisor: i32},
-        Sigmoid { scale: F32, tau: i32, log_table: usize },
-        Sin { scale: F32 },
+        Sigmoid { scale: i32, tau: i32, log_table: usize },
+        Sin { scale: i32 },
         Slice { axis: usize, start: usize, end: usize},
         SoftmaxLastAxis { scale: i32 },
         Square { scale: i32 },
         Sub,
         Sum { axes: Vec<usize> },
-        Tanh { scale: F32, tau: i32, log_table: usize },
+        Tanh { scale: i32, tau: i32, log_table: usize },
     ]
 }
 
@@ -318,12 +317,15 @@ pub fn sat_binop_intermediate(
 /// between them is the `nonlinearity` function itself.
 pub(crate) fn eval_trig(
     input: &Tensor<i32>,
-    scale: F32,
+    scale: i32,
     nonlinearity: fn(&Tensor<i32>, f64) -> Tensor<i32>,
 ) -> Tensor<i32> {
-    use crate::{model::consts::FOUR_PI_APPROX, tensor::ops::nonlinearities::const_rem};
+    use crate::{
+        model::consts::FOUR_PI_APPROX, tensor::ops::nonlinearities::const_rem,
+        utils::quantize::scale_to_multiplier,
+    };
     let remainder = const_rem(input, FOUR_PI_APPROX);
-    nonlinearity(&remainder, scale.into())
+    nonlinearity(&remainder, scale_to_multiplier(scale))
 }
 
 impl Op for Operator {

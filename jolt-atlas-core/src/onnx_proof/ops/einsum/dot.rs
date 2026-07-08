@@ -265,13 +265,19 @@ impl<F: JoltField> EinsumDotProver<F> {
             params
                 .layout
                 .fold(left_operand, right_operand, &params.r_node_output);
+        let eq_bound_claim = match params.layout.schedule() {
+            EqSchedule::High { log_eq: 0, .. } => {
+                Some(eq.as_ref().expect("eq poly must exist").final_claim())
+            }
+            _ => None,
+        };
 
         Self {
             params,
             left,
             right,
             eq,
-            eq_bound_claim: None,
+            eq_bound_claim,
         }
     }
 }

@@ -279,12 +279,17 @@ impl ModelBuilder {
         let id = self.alloc();
         let input_dims = &self.nodes[&input].output_dims;
         let count: usize = axes.iter().map(|&ax| input_dims[ax]).product();
+        let padded_count: usize = axes
+            .iter()
+            .map(|&ax| input_dims[ax].next_power_of_two())
+            .product();
         let node = ComputationNode::new(
             id,
             Operator::MeanOfSquares(MeanOfSquares {
                 axes,
                 scale: DEFAULT_SCALE as i32,
                 count,
+                padded_count,
             }),
             vec![input],
             output_dims,

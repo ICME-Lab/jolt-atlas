@@ -466,12 +466,9 @@ fn shadow_f64(op: &Operator, inputs: Vec<&Tensor<f64>>, scale: Scale) -> Tensor<
         Operator::MeanOfSquares(m) => {
             let squared = inputs[0].pow(2).unwrap();
             let summed = tensor::ops::sum_axes(&squared, &m.axes).unwrap();
-            let count: f64 = m
-                .axes
-                .iter()
-                .map(|&ax| inputs[0].dims()[ax] as f64)
-                .product();
-            elementwise_f64(&summed, |x| x / count)
+            // Divide by the operator's semantic count, not the (possibly padded)
+            // axis length — mirrors the integer engine's `mos_divisor`.
+            elementwise_f64(&summed, |x| x / m.count as f64)
         }
 
         // ── Power ───────────────────────────────────────────────────────

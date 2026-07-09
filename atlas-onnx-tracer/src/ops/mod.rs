@@ -137,7 +137,7 @@ define_operators! {
         Iff,
         Input,
         IsNan { out_dims: Vec<usize> },
-        MeanOfSquares { axes: Vec<usize>, scale: i32, count: usize },
+        MeanOfSquares { axes: Vec<usize>, scale: i32, count: usize, padded_count: usize },
         MoveAxis { source: usize, destination: usize },
         Mul { scale: i32 },
         Neg,

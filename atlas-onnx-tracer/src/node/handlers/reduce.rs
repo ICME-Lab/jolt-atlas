@@ -44,6 +44,12 @@ fn handle_reduce_sum(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 /// the old Square → Sum → Div(N) decomposition (which squared in i32 and could
 /// overflow, the reason `pre_rebase_nonlinear` existed). `count = N` is stored on
 /// the operator so the prover/verifier can recover `D` from the node alone.
+///
+/// `count` is always the *semantic* element count — padding must not change the
+/// mean denominator (zero-padded lanes contribute nothing to `Σx²`, so dividing
+/// by the padded count would scale the mean by `N/padded_count`). The prover's
+/// sumcheck cube size is carried separately as `padded_count` (the per-axis
+/// power-of-two-rounded product, matching how operand tensors are padded).
 fn handle_reduce_mean_of_squares(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     assert!(hctx.internal_input_indices.len() == 1);
 
@@ -54,16 +60,16 @@ fn handle_reduce_mean_of_squares(hctx: &mut HandlerContext) -> Vec<ComputationNo
     // N = product of the reduced-axis sizes (the mean denominator).
     let input_dims = &hctx.internal_input_nodes[0].output_dims;
     let count: usize = axes.iter().map(|&ax| input_dims[ax]).product();
-    let count = if hctx.run_args.pad_to_power_of_2 {
-        count.next_power_of_two()
-    } else {
-        count
-    };
+    let padded_count: usize = axes
+        .iter()
+        .map(|&ax| input_dims[ax].next_power_of_two())
+        .product();
     HandlerBuilder::new(hctx)
         .simple_op(Operator::MeanOfSquares(MeanOfSquares {
             axes,
             scale,
             count,
+            padded_count,
         }))
         .build()
 }

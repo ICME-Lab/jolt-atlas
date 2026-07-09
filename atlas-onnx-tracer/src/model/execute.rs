@@ -124,7 +124,18 @@ impl Model {
         self.graph
             .outputs
             .iter()
-            .map(|&node_idx| node_outputs.get(&node_idx).unwrap().clone())
+            .map(|&node_idx| {
+                let tensor = node_outputs.get(&node_idx).unwrap();
+                match self.graph.original_output_dims.get(&node_idx) {
+                    Some(original_dims) if original_dims.as_slice() != tensor.dims() => {
+                        let ranges: Vec<_> = original_dims.iter().map(|&d| 0..d).collect();
+                        tensor
+                            .get_slice(&ranges)
+                            .expect("failed to crop padded output to original dims")
+                    }
+                    _ => tensor.clone(),
+                }
+            })
             .collect()
     }
 }

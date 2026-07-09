@@ -151,18 +151,22 @@ pub(crate) fn clamp_intermediate(node: &ComputationNode, trace: &Trace) -> Tenso
 /// returning the (padded) i64 intermediate for reuse.
 ///
 /// Shared by the clamp lookup (where `acc` is the `raf`) and the scalar fallback
-/// (where the verifier checks the clamp on `acc` directly).
+/// (where the verifier checks the clamp on `acc` directly). Fused-rescale
+/// callers pass the precomputed (padded) `intermediate` so the expensive
+/// accumulation is not re-run; `None` re-executes it via
+/// [`clamp_intermediate`].
 pub fn prove_append_acc<F, T>(
     node: &ComputationNode,
     trace: &Trace,
     accumulator: &mut ProverOpeningAccumulator<F>,
     transcript: &mut T,
+    intermediate: Option<Tensor<i64>>,
 ) -> Tensor<i64>
 where
     F: JoltField,
     T: Transcript,
 {
-    let intermediate = clamp_intermediate(node, trace);
+    let intermediate = intermediate.unwrap_or_else(|| clamp_intermediate(node, trace));
     let r = accumulator.get_node_output_opening(node.idx).0;
     let acc_claim = MultilinearPolynomial::from(intermediate.data().to_vec()).evaluate(&r.r);
     accumulator.append_virtual(transcript, acc_opening_id(node.idx), r, acc_claim);
@@ -215,12 +219,15 @@ impl ClampLookupProvider {
 
     /// Prover flow: append the accumulation (`raf`) claim, then build the
     /// read-raf sumcheck prover. Returns `(prover, lookup_indices)`, where the
-    /// indices are reused for the one-hot checks.
+    /// indices are reused for the one-hot checks. `intermediate` optionally
+    /// provides the precomputed (padded) accumulation (see
+    /// [`prove_append_acc`]).
     pub fn read_raf_prove<F, T>(
         &self,
         trace: &Trace,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
+        intermediate: Option<Tensor<i64>>,
     ) -> (
         UnaryReadRafSumcheckProver<F, ClampTable, CLAMP_LOG_K>,
         Vec<usize>,
@@ -229,7 +236,13 @@ impl ClampLookupProvider {
         F: JoltField,
         T: Transcript,
     {
-        let intermediate = prove_append_acc(&self.computation_node, trace, accumulator, transcript);
+        let intermediate = prove_append_acc(
+            &self.computation_node,
+            trace,
+            accumulator,
+            transcript,
+            intermediate,
+        );
         let lookup_bits = clamp_lookup_bits(&intermediate);
         let lookup_indices: Vec<usize> = lookup_bits.iter().map(|&x| x.into()).collect();
         let prover = ps_read_raf_prover(self, lookup_bits, accumulator, transcript);
@@ -341,16 +354,19 @@ impl RaOneHotEncoding for ClampEncoding {
 /// Prove `output = SatClamp(acc)` for a non-scalar node: the clamp read-raf
 /// lookup ([`ProofType::Execution`]) plus the read-address one-hot checks
 /// ([`ProofType::RaOneHotChecks`]). The accumulation `acc` is appended as the
-/// lookup `raf` (see [`ClampLookupProvider`]).
+/// lookup `raf` (see [`ClampLookupProvider`]); `intermediate` optionally
+/// provides it precomputed (see [`prove_append_acc`]).
 pub fn prove_clamp_lookup<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
+    intermediate: Option<Tensor<i64>>,
 ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
     let provider = ClampLookupProvider::new(node.clone());
     let (mut execution_sumcheck, lookup_indices) = provider.read_raf_prove::<F, T>(
         &prover.trace,
         &mut prover.accumulator,
         &mut prover.transcript,
+        intermediate,
     );
     let (execution_proof, _) = Sumcheck::prove(
         &mut execution_sumcheck,

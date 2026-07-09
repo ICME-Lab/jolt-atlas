@@ -49,3 +49,15 @@ pub fn square_intermediate(op: &Square, inputs: &[&Tensor<i32>]) -> Tensor<i64> 
 pub fn square_remainder(op: &Square, inputs: &[&Tensor<i32>]) -> Tensor<i32> {
     super::rebase_remainder_i32(&square_acc_i64(inputs[0]), op.scale)
 }
+
+/// [`square_intermediate`] and [`square_remainder`] from one accumulation pass.
+pub fn square_intermediate_and_remainder(
+    op: &Square,
+    inputs: &[&Tensor<i32>],
+) -> (Tensor<i64>, Tensor<i32>) {
+    let acc = square_acc_i64(inputs[0]);
+    (
+        super::floor_rebase_i64(&acc, op.scale),
+        super::rebase_remainder_i32(&acc, op.scale),
+    )
+}

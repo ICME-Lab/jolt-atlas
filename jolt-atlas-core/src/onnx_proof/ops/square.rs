@@ -458,12 +458,19 @@ mod tests {
         // (`fused_rebase::fused_input_claim`). Append both, as the zk
         // pipeline's `prove_fused_rebase_pre_zk` does; the clamp/remainder
         // stages themselves are covered by `test_square_zk`.
-        crate::onnx_proof::fused_rebase::cache_remainder_prove(square_node, &mut prover);
+        let ints =
+            crate::onnx_proof::fused_rebase::rebase_intermediates(square_node, &prover.trace);
+        crate::onnx_proof::fused_rebase::cache_remainder_prove(
+            square_node,
+            &mut prover,
+            &ints.remainder,
+        );
         let _ = crate::onnx_proof::clamp_lookups::prove_append_acc(
             square_node,
             &prover.trace,
             &mut prover.accumulator,
             &mut prover.transcript,
+            Some(ints.quotient),
         );
 
         // 5. Create SquareProver

@@ -83,7 +83,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Add {
         let results = if is_scalar(node) {
             vec![]
         } else {
-            prove_clamp_lookup(node, prover)
+            prove_clamp_lookup(node, prover, None)
         };
 
         // Operand tie: open `left(r)`, `right(r)`. The verifier ties them to

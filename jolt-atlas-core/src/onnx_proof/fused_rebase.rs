@@ -35,8 +35,12 @@ use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::{
-        cube::cube_remainder, einsum::einsum_remainder, mean_of_squares::mos_remainder,
-        mul::mul_remainder, square::square_remainder, Operator,
+        cube::{cube_intermediate_and_remainder, cube_remainder},
+        einsum::{einsum_intermediate_and_remainder, einsum_remainder},
+        mean_of_squares::{mos_intermediate_and_remainder, mos_remainder},
+        mul::{mul_intermediate_and_remainder, mul_remainder},
+        square::{square_intermediate_and_remainder, square_remainder},
+        Operator,
     },
     tensor::Tensor,
 };
@@ -86,9 +90,55 @@ pub fn fuses_rebase(op: &Operator) -> bool {
     rebase_bits(op).is_some_and(|b| b > 0)
 }
 
+/// Both fused-rescale intermediates — the pre-clamp quotient `rescaled = acc div D`
+/// and the remainder `R = acc mod D` — derived from **one** accumulation pass and
+/// padded to the node-output cycle domain.
+///
+/// The accumulation (e.g. the full einsum contraction) dominates the cost of
+/// recovering either tensor, so anything that needs both must compute them
+/// together rather than calling [`clamp_lookups::clamp_intermediate`] and
+/// [`rebase_remainder`] separately.
+pub(crate) struct RebaseIntermediates {
+    /// Pre-clamp rescaled accumulation (the saturating-clamp lookup index).
+    pub quotient: Tensor<i64>,
+    /// Rescaling remainder `R ∈ [0, D)`.
+    pub remainder: Tensor<i32>,
+}
+
+/// Compute a node's [`RebaseIntermediates`] with a single accumulation pass,
+/// or `None` if the operator has no fused rescale (e.g. `Add`/`Sub`/`Sum`).
+pub(crate) fn try_rebase_intermediates(
+    node: &ComputationNode,
+    trace: &Trace,
+) -> Option<RebaseIntermediates> {
+    let LayerData { operands, .. } = Trace::layer_data(trace, node);
+    let (quotient, remainder) = match &node.operator {
+        Operator::Einsum(op) => einsum_intermediate_and_remainder(op, &operands),
+        Operator::Mul(op) => mul_intermediate_and_remainder(op, &operands),
+        Operator::Square(op) => square_intermediate_and_remainder(op, &operands),
+        Operator::Cube(op) => cube_intermediate_and_remainder(op, &operands),
+        Operator::MeanOfSquares(op) => mos_intermediate_and_remainder(op, &operands),
+        _ => return None,
+    };
+    Some(RebaseIntermediates {
+        quotient: quotient.padded_next_power_of_two(),
+        remainder: remainder.padded_next_power_of_two(),
+    })
+}
+
+/// Panicking variant of [`try_rebase_intermediates`] for callers that know the
+/// node fuses a rescale.
+pub(crate) fn rebase_intermediates(node: &ComputationNode, trace: &Trace) -> RebaseIntermediates {
+    try_rebase_intermediates(node, trace)
+        .unwrap_or_else(|| panic!("fused_rebase: unsupported operator {:?}", node.operator))
+}
+
 /// The operator's rescaling remainder `R = acc mod 2^S`, padded to the
 /// node-output cycle domain. Dispatches to the per-operator re-execution kernel
 /// (no trace change), mirroring [`clamp_lookups::clamp_intermediate`].
+///
+/// Prefer [`rebase_intermediates`] when the quotient is needed too — this
+/// re-runs the full accumulation for the remainder alone.
 pub(crate) fn rebase_remainder(node: &ComputationNode, trace: &Trace) -> Tensor<i32> {
     let LayerData { operands, .. } = Trace::layer_data(trace, node);
     let remainder = match &node.operator {
@@ -159,34 +209,45 @@ pub fn committed_polys(node: &ComputationNode) -> Vec<CommittedPoly> {
 /// clear (only `rescaled` is appended); otherwise the clamp lookup
 /// (`Execution` + `RaOneHotChecks`) is proven. Run *before* the operator's
 /// arithmetic sumcheck so [`fused_input_claim`] can read both advices.
+///
+/// Also returns the (padded) remainder tensor so [`prove_remainder_rc`] can
+/// reuse it instead of re-running the accumulation.
 pub fn prove_pre<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
-) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-    cache_remainder_prove(node, prover);
-    if is_scalar(node) {
+) -> (crate::onnx_proof::ops::ExecutionProofs<F, T>, Tensor<i32>) {
+    let RebaseIntermediates {
+        quotient,
+        remainder,
+    } = rebase_intermediates(node, &prover.trace);
+    cache_remainder_prove(node, prover, &remainder);
+    let proofs = if is_scalar(node) {
         prove_append_acc(
             node,
             &prover.trace,
             &mut prover.accumulator,
             &mut prover.transcript,
+            Some(quotient),
         );
         Vec::new()
     } else {
-        prove_clamp_lookup(node, prover)
-    }
+        prove_clamp_lookup(node, prover, Some(quotient))
+    };
+    (proofs, remainder)
 }
 
 /// Stage (4)+(5): the rescaling-remainder range check `R ∈ [0, 2^S)`
 /// (`RangeCheck`) and its read-address one-hot checks
 /// (`RescaleRemainderRaChecks`). Run *after* the operator's arithmetic sumcheck;
-/// only for non-scalar nodes.
+/// only for non-scalar nodes. `remainder` is the padded tensor returned by
+/// [`prove_pre`].
 pub fn prove_remainder_rc<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
+    remainder: &Tensor<i32>,
 ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
     let bits = rebase_bits(&node.operator).expect("fused op");
-    let lookup_bits = rebase_remainder_lookup_bits(node, &prover.trace, bits);
+    let lookup_bits = remainder_lookup_bits(remainder, bits);
     let lookup_indices: Vec<usize> = lookup_bits.iter().map(|&x| x.into()).collect();
 
     let rc_provider = RescaleRemainderRCProvider::new(node.clone(), bits);
@@ -282,18 +343,18 @@ pub fn verify_post<F: JoltField, T: Transcript>(
 // Internals
 // ---------------------------------------------------------------------------
 
-/// Re-execute the rescaling remainder `R` (padded to the node-output cycle
-/// domain) and append it as a virtual advice opening at the output point.
-/// `pub(crate)`: also used by the ZK flow (`onnx_proof::zk`), where the append
-/// is transcript-quiet (accumulator `zk_mode`).
+/// Append the rescaling remainder `R` (padded to the node-output cycle domain,
+/// as produced by [`rebase_intermediates`]) as a virtual advice opening at the
+/// output point. `pub(crate)`: also used by the ZK flow (`onnx_proof::zk`),
+/// where the append is transcript-quiet (accumulator `zk_mode`).
 pub(crate) fn cache_remainder_prove<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
+    remainder: &Tensor<i32>,
 ) {
-    let remainder = rebase_remainder(node, &prover.trace);
     let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
     let r0 = accessor.get_reduced_opening().0;
-    let eval = MultilinearPolynomial::from(remainder).evaluate(&r0.r);
+    let eval = MultilinearPolynomial::from(remainder.clone()).evaluate(&r0.r);
     let mut provider = accessor.into_provider(&mut prover.transcript, r0);
     provider.append_advice(VirtualPoly::RescaleRemainder, eval);
 }
@@ -313,14 +374,9 @@ pub(crate) fn cache_remainder_verify<F: JoltField, T: Transcript>(
     provider.append_advice(VirtualPoly::RescaleRemainder);
 }
 
-/// The rescaling remainder `R` as `bits`-bit lookup indices, padded to the
-/// node-output cycle domain.
-pub(crate) fn rebase_remainder_lookup_bits(
-    node: &ComputationNode,
-    trace: &Trace,
-    bits: i32,
-) -> Vec<LookupBits> {
-    rebase_remainder(node, trace)
+/// A (padded) rescaling remainder tensor as `bits`-bit lookup indices.
+pub(crate) fn remainder_lookup_bits(remainder: &Tensor<i32>, bits: i32) -> Vec<LookupBits> {
+    remainder
         .data()
         .iter()
         .map(|&v| LookupBits::new(v as u64, bits as usize))

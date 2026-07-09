@@ -130,7 +130,7 @@ use std::collections::BTreeMap;
 use crate::onnx_proof::{ProofId, Prover, Verifier};
 
 /// Standard execution proofs emitted by an operator.
-type ExecutionProofs<F, T> = Vec<(ProofId, SumcheckInstanceProof<F, T>)>;
+pub(crate) type ExecutionProofs<F, T> = Vec<(ProofId, SumcheckInstanceProof<F, T>)>;
 
 /// Eval-reduction flow mode for an operator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -581,9 +581,13 @@ macro_rules! impl_fused_rescale_proof_api {
 
                 let fused = fused_rebase::fuses_rebase(&node.operator);
                 let mut proofs = Vec::new();
-                if fused {
-                    proofs.extend(fused_rebase::prove_pre(node, prover));
-                }
+                let remainder = if fused {
+                    let (pre_proofs, remainder) = fused_rebase::prove_pre(node, prover);
+                    proofs.extend(pre_proofs);
+                    Some(remainder)
+                } else {
+                    None
+                };
 
                 let params = $params_ty::new(node.clone(), &prover.accumulator);
                 let mut prover_sumcheck = $prover_ty::initialize(&prover.trace, params);
@@ -595,7 +599,11 @@ macro_rules! impl_fused_rescale_proof_api {
                 proofs.push((ProofId(node.idx, ProofType::RescaleArith), proof));
 
                 if fused && !is_scalar(node) {
-                    proofs.extend(fused_rebase::prove_remainder_rc(node, prover));
+                    proofs.extend(fused_rebase::prove_remainder_rc(
+                        node,
+                        prover,
+                        remainder.as_ref().expect("fused"),
+                    ));
                 }
                 proofs
             }

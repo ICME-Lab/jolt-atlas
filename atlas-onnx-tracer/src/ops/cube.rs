@@ -58,3 +58,16 @@ pub fn cube_intermediate(op: &Cube, inputs: &[&Tensor<i32>]) -> Tensor<i64> {
 pub fn cube_remainder(op: &Cube, inputs: &[&Tensor<i32>]) -> Tensor<i32> {
     super::rebase_remainder_i32(&cube_acc_i64(inputs[0]), cube_rebase_bits(op))
 }
+
+/// [`cube_intermediate`] and [`cube_remainder`] from one accumulation pass.
+pub fn cube_intermediate_and_remainder(
+    op: &Cube,
+    inputs: &[&Tensor<i32>],
+) -> (Tensor<i64>, Tensor<i32>) {
+    let acc = cube_acc_i64(inputs[0]);
+    let bits = cube_rebase_bits(op);
+    (
+        super::floor_rebase_i64(&acc, bits),
+        super::rebase_remainder_i32(&acc, bits),
+    )
+}

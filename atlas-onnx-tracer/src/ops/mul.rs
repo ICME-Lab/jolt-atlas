@@ -46,3 +46,15 @@ pub fn mul_intermediate(op: &Mul, inputs: &[&Tensor<i32>]) -> Tensor<i64> {
 pub fn mul_remainder(op: &Mul, inputs: &[&Tensor<i32>]) -> Tensor<i32> {
     super::rebase_remainder_i32(&mul_acc_i64(inputs), op.scale)
 }
+
+/// [`mul_intermediate`] and [`mul_remainder`] from one accumulation pass.
+pub fn mul_intermediate_and_remainder(
+    op: &Mul,
+    inputs: &[&Tensor<i32>],
+) -> (Tensor<i64>, Tensor<i32>) {
+    let acc = mul_acc_i64(inputs);
+    (
+        super::floor_rebase_i64(&acc, op.scale),
+        super::rebase_remainder_i32(&acc, op.scale),
+    )
+}

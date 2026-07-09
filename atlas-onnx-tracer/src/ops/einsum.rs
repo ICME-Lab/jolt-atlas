@@ -241,6 +241,22 @@ pub fn einsum_remainder(op: &Einsum, inputs: &[&Tensor<i32>]) -> Tensor<i32> {
         .unwrap_or_else(|e| panic!("einsum_remainder: {e:?}"))
 }
 
+/// Quotient and remainder of the fused rescale — `rescaled = acc >> S` and
+/// `R = acc mod 2^S` — from **one** contraction pass. The proof system prefers
+/// this over separate [`einsum_intermediate`] + [`einsum_remainder`] calls,
+/// which each re-run the (expensive) contraction kernel.
+pub fn einsum_intermediate_and_remainder(
+    op: &Einsum,
+    inputs: &[&Tensor<i32>],
+) -> (Tensor<i64>, Tensor<i32>) {
+    let acc = einsum_acc_i64(&op.equation, inputs)
+        .unwrap_or_else(|e| panic!("einsum_intermediate_and_remainder: {e:?}"));
+    (
+        super::floor_rebase_i64(&acc, op.scale),
+        super::rebase_remainder_i32(&acc, op.scale),
+    )
+}
+
 /// Like `einsum_accumulate_i64`, but saturates the i64 result to i32.
 ///
 /// Replaces both the Einsum and its subsequent ScalarConstDiv rebase node,

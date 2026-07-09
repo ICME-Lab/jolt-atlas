@@ -277,12 +277,12 @@ impl<F: JoltField> SumcheckInstanceParams<F> for RsqrtParams<F> {
         let eq_gamma = eq_eval * self.gamma;
         let s_cubed = F::from_i64(rsqrt_dividend(&self.computation_node));
         vec![
-            eq_eval,             // Ch(0): eq * input * quotient
-            eq_eval,             // Ch(1): eq * div_remainder
-            -eq_eval * s_cubed,  // Ch(2): -eq * S³ (constant)
-            eq_gamma,            // Ch(3): eq * gamma * output²
-            eq_gamma,            // Ch(4): eq * gamma * sqrt_remainder
-            -eq_gamma,           // Ch(5): -eq * gamma * quotient
+            eq_eval,            // Ch(0): eq * input * quotient
+            eq_eval,            // Ch(1): eq * div_remainder
+            -eq_eval * s_cubed, // Ch(2): -eq * S³ (constant)
+            eq_gamma,           // Ch(3): eq * gamma * output²
+            eq_gamma,           // Ch(4): eq * gamma * sqrt_remainder
+            -eq_gamma,          // Ch(5): -eq * gamma * quotient
         ]
     }
 }
@@ -443,7 +443,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RsqrtProver<F
         provider.append_advice(CommittedPoly::RsqrtQuotient, self.quotient.final_claim());
         provider.append_nodeio(Target::Current, self.output.final_claim());
         provider.append_advice(VirtualPoly::DivRemainder, self.div_remainder.final_claim());
-        provider.append_advice(VirtualPoly::SqrtRemainder, self.sqrt_remainder.final_claim());
+        provider.append_advice(
+            VirtualPoly::SqrtRemainder,
+            self.sqrt_remainder.final_claim(),
+        );
     }
 }
 

@@ -33,7 +33,10 @@ fn main() {
     let encoding = tokenizer.encode(text, false).expect("tokenization failed");
     let token_ids = encoding.get_ids().to_vec();
     let seq_len = token_ids.len();
-    info!("Input: \"{text}\"  ({seq_len} tokens; padded seq = {})", seq_len.next_power_of_two());
+    info!(
+        "Input: \"{text}\"  ({seq_len} tokens; padded seq = {})",
+        seq_len.next_power_of_two()
+    );
 
     let scale_mult = quantize::scale_to_multiplier(SCALE);
 
@@ -47,9 +50,18 @@ fn main() {
         ONNX_PATH,
         &run_args_ref,
         &[
-            ("input_ids", Tensor::new(Some(&f32_ids), &[1, seq_len]).unwrap()),
-            ("attention_mask", Tensor::new(Some(&f32_mask), &[1, seq_len]).unwrap()),
-            ("position_ids", Tensor::new(Some(&f32_pos), &[1, seq_len]).unwrap()),
+            (
+                "input_ids",
+                Tensor::new(Some(&f32_ids), &[1, seq_len]).unwrap(),
+            ),
+            (
+                "attention_mask",
+                Tensor::new(Some(&f32_mask), &[1, seq_len]).unwrap(),
+            ),
+            (
+                "position_ids",
+                Tensor::new(Some(&f32_pos), &[1, seq_len]).unwrap(),
+            ),
         ],
     );
     let start = (seq_len - 1) * VOCAB_SIZE;
@@ -71,7 +83,10 @@ fn main() {
     info!("Running QUANT padded …");
     let model_p = Model::load(ONNX_PATH, &run_args(seq_len, true));
     let out_p = model_p.forward(&i32_inputs(&token_ids, seq_len));
-    info!("padded model output dims (after crop): {:?}", out_p[0].dims());
+    info!(
+        "padded model output dims (after crop): {:?}",
+        out_p[0].dims()
+    );
     assert_eq!(
         out_p[0].dims(),
         &[1, seq_len, VOCAB_SIZE],
@@ -83,8 +98,18 @@ fn main() {
         .collect();
 
     // ── Report ─────────────────────────────────────────────────────────────
-    report("QUANT unpadded vs TRACT", &ref_logits, &logits_u, &tokenizer);
-    report("QUANT padded   vs TRACT", &ref_logits, &logits_p, &tokenizer);
+    report(
+        "QUANT unpadded vs TRACT",
+        &ref_logits,
+        &logits_u,
+        &tokenizer,
+    );
+    report(
+        "QUANT padded   vs TRACT",
+        &ref_logits,
+        &logits_p,
+        &tokenizer,
+    );
 
     // ── SHADOW padded (f64 arithmetic, padded graph semantics) ────────────
     info!("Running SHADOW (f64) on the padded graph …");
@@ -138,16 +163,44 @@ fn report(title: &str, reference: &[f64], candidate: &[f64], tokenizer: &Tokeniz
     info!("{SEP}");
     info!("  {title}");
     info!("{SEP}");
-    info!("  Cosine similarity   : {:.6}", metrics::cosine_similarity(reference, candidate));
-    info!("  RMSE                : {:.6}", metrics::rmse(reference, candidate));
-    info!("  Max absolute error  : {:.6}", metrics::max_abs_error(reference, candidate));
-    info!("  KL divergence       : {:.6}", metrics::kl_divergence_from_logits(reference, candidate));
-    info!("  Top-1 agreement     : {:.2}%", metrics::top_k_agreement(reference, candidate, 1) * 100.0);
-    info!("  Top-5 agreement     : {:.2}%", metrics::top_k_agreement(reference, candidate, 5) * 100.0);
-    info!("  Top-10 agreement    : {:.2}%", metrics::top_k_agreement(reference, candidate, 10) * 100.0);
-    info!("  Spearman rank corr  : {:.6}", metrics::spearman_rank_correlation(reference, candidate));
+    info!(
+        "  Cosine similarity   : {:.6}",
+        metrics::cosine_similarity(reference, candidate)
+    );
+    info!(
+        "  RMSE                : {:.6}",
+        metrics::rmse(reference, candidate)
+    );
+    info!(
+        "  Max absolute error  : {:.6}",
+        metrics::max_abs_error(reference, candidate)
+    );
+    info!(
+        "  KL divergence       : {:.6}",
+        metrics::kl_divergence_from_logits(reference, candidate)
+    );
+    info!(
+        "  Top-1 agreement     : {:.2}%",
+        metrics::top_k_agreement(reference, candidate, 1) * 100.0
+    );
+    info!(
+        "  Top-5 agreement     : {:.2}%",
+        metrics::top_k_agreement(reference, candidate, 5) * 100.0
+    );
+    info!(
+        "  Top-10 agreement    : {:.2}%",
+        metrics::top_k_agreement(reference, candidate, 10) * 100.0
+    );
+    info!(
+        "  Spearman rank corr  : {:.6}",
+        metrics::spearman_rank_correlation(reference, candidate)
+    );
 
-    let decode = |id: usize| tokenizer.decode(&[id as u32], false).unwrap_or_else(|_| "<unk>".into());
+    let decode = |id: usize| {
+        tokenizer
+            .decode(&[id as u32], false)
+            .unwrap_or_else(|_| "<unk>".into())
+    };
     let top_ref = top_k(reference, 5);
     let top_cand = top_k(candidate, 5);
     info!("  {:<34} | {:<34}", "Top-5 TRACT", "Top-5 candidate");

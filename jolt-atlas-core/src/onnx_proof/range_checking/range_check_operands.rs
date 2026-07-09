@@ -15,10 +15,7 @@ use joltworks::{
 };
 
 use crate::{
-    onnx_proof::{
-        neural_teleport::division::compute_division,
-        ops::rsqrt::rsqrt_dividend,
-    },
+    onnx_proof::{neural_teleport::division::compute_division, ops::rsqrt::rsqrt_dividend},
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
 };
 use atlas_onnx_tracer::ops::mean_of_squares::{mos_divisor, mos_remainder};

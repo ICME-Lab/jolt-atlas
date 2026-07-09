@@ -6,7 +6,7 @@
 use crate::{
     node::{
         ComputationNode,
-        handlers::activation::{neural_teleport_tau, NEURAL_TELEPORT_LOG_TABLE_SIZE},
+        handlers::activation::{NEURAL_TELEPORT_LOG_TABLE_SIZE, neural_teleport_tau},
     },
     ops::*,
     tensor::Tensor,

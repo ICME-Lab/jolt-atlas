@@ -133,12 +133,12 @@ pub(crate) fn rebase_intermediates(node: &ComputationNode, trace: &Trace) -> Reb
         .unwrap_or_else(|| panic!("fused_rebase: unsupported operator {:?}", node.operator))
 }
 
-/// The operator's rescaling remainder `R = acc mod 2^S`, padded to the
-/// node-output cycle domain. Dispatches to the per-operator re-execution kernel
-/// (no trace change), mirroring [`clamp_lookups::clamp_intermediate`].
+/// The operator's rescaling remainder `R = acc mod D`, padded to the node-output
+/// cycle domain, where `D` is the operator-specific divisor (usually `2^S`, but
+/// e.g. `MeanOfSquares` uses `N·2^S`). Dispatches to the per-operator re-execution
+/// kernel (no trace change), mirroring [`clamp_lookups::clamp_intermediate`].
 ///
-/// Prefer [`rebase_intermediates`] when the quotient is needed too — this
-/// re-runs the full accumulation for the remainder alone.
+/// Prefer [`rebase_intermediates`] when the quotient is needed too — this re-runs the full accumulation for the remainder alone.
 pub(crate) fn rebase_remainder(node: &ComputationNode, trace: &Trace) -> Tensor<i32> {
     let LayerData { operands, .. } = Trace::layer_data(trace, node);
     let remainder = match &node.operator {

@@ -83,10 +83,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sum {
                 &prover.trace,
                 &mut prover.accumulator,
                 &mut prover.transcript,
+                None,
             );
             vec![]
         } else {
-            prove_clamp_lookup(node, prover)
+            prove_clamp_lookup(node, prover, None)
         };
 
         // (3) Axis reduction: acc(r) = Σ_axis operand (input claim = ClampAcc).

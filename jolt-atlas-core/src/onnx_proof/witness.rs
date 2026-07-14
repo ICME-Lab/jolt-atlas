@@ -170,11 +170,15 @@ pub(crate) fn generate_node_witnesses<F: JoltField, T: joltworks::transcripts::T
     trace: &Trace,
 ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
     use crate::onnx_proof::{
-        fused_rebase::{rebase_bits, rebase_remainder},
+        fused_rebase::{rebase_bits, try_rebase_intermediates},
         ops::NodeCommittedPolynomials,
     };
 
-    // Per-node lookup tensors, each computed at most once (lazily).
+    // Per-node lookup tensors, each computed at most once (lazily). For a
+    // fused-rescale node the clamp quotient and rescale remainder derive from
+    // one shared accumulation pass (`try_rebase_intermediates`), which fills
+    // both caches at once — computing them independently would re-run the
+    // accumulation twice.
     let mut clamp_bits: Option<Vec<LookupBits>> = None;
     let mut remainder_indices: Option<Vec<usize>> = None;
     let mut mos_range_bits: Option<Vec<LookupBits>> = None;
@@ -184,21 +188,34 @@ pub(crate) fn generate_node_witnesses<F: JoltField, T: joltworks::transcripts::T
         .map(|poly| {
             let witness = match &poly {
                 CommittedPoly::ClampRaD(_, d) => {
-                    let bits = clamp_bits
-                        .get_or_insert_with(|| clamp_lookup_bits(&clamp_intermediate(node, trace)));
-                    build_one_hot_rad_witness(bits, *d, CLAMP_LOG_K)
+                    if clamp_bits.is_none() {
+                        match try_rebase_intermediates(node, trace) {
+                            Some(ints) => {
+                                clamp_bits = Some(clamp_lookup_bits(&ints.quotient));
+                                remainder_indices = Some(
+                                    ints.remainder.data().iter().map(|&v| v as usize).collect(),
+                                );
+                            }
+                            // Add/Sub/Sum: clamp only, no fused rescale.
+                            None => {
+                                clamp_bits =
+                                    Some(clamp_lookup_bits(&clamp_intermediate(node, trace)));
+                            }
+                        }
+                    }
+                    build_one_hot_rad_witness(clamp_bits.as_ref().unwrap(), *d, CLAMP_LOG_K)
                 }
                 CommittedPoly::RescaleRemainderRaD(_, d) => {
                     let bits = rebase_bits(&node.operator)
                         .expect("RescaleRemainderRaD requested for a non-rescaling operator");
-                    let indices = remainder_indices.get_or_insert_with(|| {
-                        rebase_remainder(node, trace)
-                            .data()
-                            .iter()
-                            .map(|&v| v as usize)
-                            .collect()
-                    });
-                    build_onehot_witness(indices, bits as usize, *d)
+                    if remainder_indices.is_none() {
+                        let ints = try_rebase_intermediates(node, trace)
+                            .expect("RescaleRemainderRaD requested for a non-rescaling operator");
+                        remainder_indices =
+                            Some(ints.remainder.data().iter().map(|&v| v as usize).collect());
+                        clamp_bits.get_or_insert_with(|| clamp_lookup_bits(&ints.quotient));
+                    }
+                    build_onehot_witness(remainder_indices.as_ref().unwrap(), bits as usize, *d)
                 }
                 CommittedPoly::MeanOfSquaresRangeCheckRaD(_, d) => {
                     let bits = mos_range_bits.get_or_insert_with(|| {

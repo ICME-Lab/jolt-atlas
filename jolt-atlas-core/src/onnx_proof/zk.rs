@@ -1773,7 +1773,7 @@ fn prove_fused_rebase_pre_zk(
     blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
     stage_configs: &mut Vec<StageConfig>,
     zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
-) {
+) -> atlas_onnx_tracer::tensor::Tensor<i32> {
     use crate::onnx_proof::clamp_lookups::{is_scalar, ClampEncoding, ClampLookupProvider};
 
     // Scalar fused nodes open `rescaled`/`R` in the clear and are checked by
@@ -1784,8 +1784,15 @@ fn prove_fused_rebase_pre_zk(
         unimplemented!("ZK proving not yet implemented for scalar fused-rescale nodes");
     }
 
+    // Quotient + remainder from one accumulation pass; the remainder is
+    // returned so `prove_fused_rebase_post_zk` can reuse it.
+    let crate::onnx_proof::fused_rebase::RebaseIntermediates {
+        quotient,
+        remainder,
+    } = crate::onnx_proof::fused_rebase::rebase_intermediates(node, &prover.trace);
+
     // Remainder advice at the reduced output point.
-    crate::onnx_proof::fused_rebase::cache_remainder_prove(node, prover);
+    crate::onnx_proof::fused_rebase::cache_remainder_prove(node, prover, &remainder);
 
     // Clamp read-raf lookup: output = SatClamp(acc); acc appended as ClampAcc.
     let provider = ClampLookupProvider::new(node.clone());
@@ -1793,6 +1800,7 @@ fn prove_fused_rebase_pre_zk(
         &prover.trace,
         &mut prover.accumulator,
         &mut prover.transcript,
+        Some(quotient),
     );
     let exec_proof = run_zk_sumcheck(
         &mut exec_sc,
@@ -1819,12 +1827,15 @@ fn prove_fused_rebase_pre_zk(
         pedersen_gens,
     );
     zk_sumcheck_proofs.push((node.idx, oh_proof));
+
+    remainder
 }
 
 /// Prove the fused-rescaling post-stages, mirroring
 /// `fused_rebase::prove_remainder_rc`: the remainder range check
 /// `R ∈ [0, 2^S)` plus its one-hot checks over `RescaleRemainderRaD`. Runs
-/// *after* the operator's arithmetic sumcheck.
+/// *after* the operator's arithmetic sumcheck. `remainder` is the padded
+/// tensor returned by `prove_fused_rebase_pre_zk`.
 fn prove_fused_rebase_post_zk(
     node: &atlas_onnx_tracer::node::ComputationNode,
     prover: &mut Prover<F, T>,
@@ -1832,15 +1843,15 @@ fn prove_fused_rebase_post_zk(
     blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
     stage_configs: &mut Vec<StageConfig>,
     zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
+    remainder: &atlas_onnx_tracer::tensor::Tensor<i32>,
 ) {
     use crate::onnx_proof::fused_rebase::{
-        rebase_bits, rebase_remainder_lookup_bits, RescaleRemainderRCProvider,
-        RescaleRemainderRaEncoding,
+        rebase_bits, remainder_lookup_bits, RescaleRemainderRCProvider, RescaleRemainderRaEncoding,
     };
     use joltworks::subprotocols::identity_range_check::identity_rangecheck_prover;
 
     let bits = rebase_bits(&node.operator).expect("fused op");
-    let lookup_bits = rebase_remainder_lookup_bits(node, &prover.trace, bits);
+    let lookup_bits = remainder_lookup_bits(remainder, bits);
     let lookup_indices: Vec<usize> = lookup_bits.iter().map(|&x| x.into()).collect();
 
     // Remainder identity range check.
@@ -2388,7 +2399,7 @@ pub fn prove_zk(
                 // claim reads the `ClampAcc`/`RescaleRemainder` advices),
                 // remainder range-check stages after.
                 let fused = crate::onnx_proof::fused_rebase::fuses_rebase(&node.operator);
-                if fused {
+                let fused_remainder = fused.then(|| {
                     prove_fused_rebase_pre_zk(
                         node,
                         &mut prover,
@@ -2396,8 +2407,8 @@ pub fn prove_zk(
                         &mut blindfold_accumulator,
                         &mut stage_configs,
                         &mut zk_sumcheck_proofs,
-                    );
-                }
+                    )
+                });
 
                 let zk_proof =
                     create_prover_instance(node, &prover, pp.shared.model()).map(|mut sc| {
@@ -2413,7 +2424,7 @@ pub fn prove_zk(
                     zk_sumcheck_proofs.push((node.idx, proof));
                 }
 
-                if fused {
+                if let Some(remainder) = &fused_remainder {
                     prove_fused_rebase_post_zk(
                         node,
                         &mut prover,
@@ -2421,6 +2432,7 @@ pub fn prove_zk(
                         &mut blindfold_accumulator,
                         &mut stage_configs,
                         &mut zk_sumcheck_proofs,
+                        remainder,
                     );
                 }
             }

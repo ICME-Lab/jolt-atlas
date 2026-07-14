@@ -88,8 +88,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
         let mut proofs = Vec::new();
 
         // (1+2) Append `R` (RescaleRemainder) + `rescaled` (ClampAcc) and prove
-        // the clamp `out = SatClamp(rescaled)`.
-        proofs.extend(fused_rebase::prove_pre(node, prover));
+        // the clamp `out = SatClamp(rescaled)`. The returned remainder is
+        // unused: MoS range-checks `R < D` via its own operand-based lookup.
+        let (pre_proofs, _remainder) = fused_rebase::prove_pre(node, prover);
+        proofs.extend(pre_proofs);
 
         // (3) Reduction sumcheck `acc(r) = Σ eq·x²` (claim `rescaled·D + R`).
         let params = MeanOfSquaresReductionParams::new(node.clone(), &prover.accumulator);

@@ -54,6 +54,7 @@ pub fn malicious_sub_prove<F: JoltField, T: Transcript>(
         &prover.trace,
         &mut prover.accumulator,
         &mut prover.transcript,
+        None,
     );
     let (execution_proof, _) = Sumcheck::prove(
         &mut execution_sumcheck,

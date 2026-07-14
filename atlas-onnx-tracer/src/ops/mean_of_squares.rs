@@ -94,3 +94,25 @@ pub fn mos_remainder(op: &MeanOfSquares, inputs: &[&Tensor<i32>]) -> Tensor<i32>
         .collect();
     Tensor::<i32>::new(Some(&data), acc.dims()).unwrap_or_else(|e| panic!("mos_remainder: {e:?}"))
 }
+
+/// [`mos_intermediate`] and [`mos_remainder`] from one accumulation pass.
+pub fn mos_intermediate_and_remainder(
+    op: &MeanOfSquares,
+    inputs: &[&Tensor<i32>],
+) -> (Tensor<i64>, Tensor<i32>) {
+    let acc = mos_acc_i64(inputs[0], &op.axes)
+        .unwrap_or_else(|e| panic!("mos_intermediate_and_remainder: {e:?}"));
+    let divisor = mos_divisor(op);
+    let quotient: Vec<i64> = acc.data().iter().map(|&v| v.div_euclid(divisor)).collect();
+    let remainder: Vec<i32> = acc
+        .data()
+        .iter()
+        .map(|&v| v.rem_euclid(divisor) as i32)
+        .collect();
+    (
+        Tensor::<i64>::new(Some(&quotient), acc.dims())
+            .unwrap_or_else(|e| panic!("mos_intermediate_and_remainder: {e:?}")),
+        Tensor::<i32>::new(Some(&remainder), acc.dims())
+            .unwrap_or_else(|e| panic!("mos_intermediate_and_remainder: {e:?}")),
+    )
+}

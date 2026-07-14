@@ -80,9 +80,13 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
         // `fused_rebase` stages; only the contraction (matmul) sumcheck is
         // einsum-specific. See [`fused_rebase`] for the seam.
         let mut proofs = Vec::new();
-        if fused {
-            proofs.extend(fused_rebase::prove_pre(node, prover));
-        }
+        let remainder = if fused {
+            let (pre_proofs, remainder) = fused_rebase::prove_pre(node, prover);
+            proofs.extend(pre_proofs);
+            Some(remainder)
+        } else {
+            None
+        };
 
         // EinsumMatmul: the contraction sumcheck (initial claim `acc(r)` via
         // `fused_rebase::fused_input_claim`).
@@ -100,7 +104,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
         proofs.push((ProofId(node.idx, ProofType::EinsumMatmul), matmul_proof));
 
         if fused && !is_scalar(node) {
-            proofs.extend(fused_rebase::prove_remainder_rc(node, prover));
+            proofs.extend(fused_rebase::prove_remainder_rc(
+                node,
+                prover,
+                remainder.as_ref().expect("fused"),
+            ));
         }
 
         proofs

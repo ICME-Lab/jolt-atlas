@@ -18,6 +18,10 @@ use std::{collections::HashMap, fs::File, io::Read, time::Instant};
 // Fixed-point scale factor: 2^8 = 256
 const SCALE: i32 = 256;
 
+// Fixed-point scale (log2) used by the GPT-2 end-to-end tests. Runs the model at
+// 2^12 to exercise the wider-scale rsqrt witness path (u64 quotient / i64 out²).
+const GPT2_SCALE: i32 = 12;
+
 /// Configuration for test prove-and-verify workflows.
 ///
 /// Uses a builder pattern — all options default to `false`.
@@ -128,7 +132,7 @@ fn test_gpt2() {
     // Input 2: attention_mask — all 1s (attend everywhere)
     // The model's Cast handler divides by scale to de-quantize, so we provide
     // the mask in quantized form: 1.0 in fixed-point = 1 << scale.
-    let attention_mask_data: Vec<i32> = vec![SCALE; seq_len];
+    let attention_mask_data: Vec<i32> = vec![1 << GPT2_SCALE; seq_len];
     let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
 
     // Configure RunArgs for GPT-2. Square/Cube fuse the i64 accumulate + rescale
@@ -138,7 +142,8 @@ fn test_gpt2() {
         ("batch_size", 1),
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
-    ]);
+    ])
+    .set_scale(GPT2_SCALE);
 
     prove_and_verify(
         working_dir,
@@ -160,13 +165,15 @@ fn test_gpt2_dory() {
     let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
     let position_ids_data: Vec<i32> = (0..seq_len as i32).collect();
     let position_ids = Tensor::new(Some(&position_ids_data), &[1, seq_len]).unwrap();
-    let attention_mask_data: Vec<i32> = vec![SCALE; seq_len];
+    // 1.0 in fixed-point = 1 << scale.
+    let attention_mask_data: Vec<i32> = vec![1 << GPT2_SCALE; seq_len];
     let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
     let run_args = RunArgs::new([
         ("batch_size", 1),
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
-    ]);
+    ])
+    .set_scale(GPT2_SCALE);
     let inputs = [input_ids, position_ids, attention_mask];
 
     let model = Model::load(&format!("{working_dir}network.onnx"), &run_args);
@@ -221,14 +228,16 @@ fn test_gpt2_zk() {
     let position_ids_data: Vec<i32> = (0..seq_len as i32).collect();
     let position_ids = Tensor::new(Some(&position_ids_data), &[1, seq_len]).unwrap();
 
-    let attention_mask_data: Vec<i32> = vec![SCALE; seq_len];
+    // 1.0 in fixed-point = 1 << scale.
+    let attention_mask_data: Vec<i32> = vec![1 << GPT2_SCALE; seq_len];
     let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
 
     let run_args = RunArgs::new([
         ("batch_size", 1),
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
-    ]);
+    ])
+    .set_scale(GPT2_SCALE);
 
     let model = Model::load(&format!("{working_dir}network.onnx"), &run_args);
     let pp = AtlasSharedPreprocessing::preprocess(model);

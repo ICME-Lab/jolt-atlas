@@ -29,9 +29,9 @@ const DEFAULT_NUM_GENERATE: usize = 15;
 /// # Usage
 ///
 /// ```sh
-/// cargo run --release -p atlas-onnx-tracer --features fused-ops --example gpt2_generate
-/// cargo run --release -p atlas-onnx-tracer --features fused-ops --example gpt2_generate -- "Once upon a time"
-/// cargo run --release -p atlas-onnx-tracer --features fused-ops --example gpt2_generate -- "Once upon a time" 30
+/// cargo run --release -p atlas-onnx-tracer --example gpt2_generate
+/// cargo run --release -p atlas-onnx-tracer --example gpt2_generate -- "Once upon a time"
+/// cargo run --release -p atlas-onnx-tracer --example gpt2_generate -- "Once upon a time" 30
 /// ```
 fn main() {
     let args: Vec<String> = env::args().collect();

@@ -6,7 +6,7 @@
 use crate::{
     node::{
         ComputationNode,
-        handlers::activation::{NEURAL_TELEPORT_LOG_TABLE_SIZE, NEURAL_TELEPORT_TAU},
+        handlers::activation::{NEURAL_TELEPORT_LOG_TABLE_SIZE, neural_teleport_tau},
     },
     ops::*,
     tensor::Tensor,
@@ -178,7 +178,7 @@ impl ModelBuilder {
         let node = ComputationNode::new(
             id,
             Operator::Rsqrt(Rsqrt {
-                scale: DEFAULT_SCALE as i32,
+                scale: self.scale as i32,
             }),
             vec![input],
             output_dims,
@@ -279,12 +279,17 @@ impl ModelBuilder {
         let id = self.alloc();
         let input_dims = &self.nodes[&input].output_dims;
         let count: usize = axes.iter().map(|&ax| input_dims[ax]).product();
+        let padded_count: usize = axes
+            .iter()
+            .map(|&ax| input_dims[ax].next_power_of_two())
+            .product();
         let node = ComputationNode::new(
             id,
             Operator::MeanOfSquares(MeanOfSquares {
                 axes,
                 scale: DEFAULT_SCALE as i32,
                 count,
+                padded_count,
             }),
             vec![input],
             output_dims,
@@ -419,7 +424,7 @@ impl ModelBuilder {
     pub fn tanh(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
         let output_dims = self.nodes[&input].output_dims.clone();
-        let tau = NEURAL_TELEPORT_TAU;
+        let tau = neural_teleport_tau(self.scale as i32);
         let node = ComputationNode::new(
             id,
             Operator::Tanh(Tanh {

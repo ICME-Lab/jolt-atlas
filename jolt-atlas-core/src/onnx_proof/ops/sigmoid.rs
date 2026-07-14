@@ -267,7 +267,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SigmoidParams<F> {
     #[cfg(feature = "zk")]
     fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
         let opening_point = self.normalize_opening_point(&sumcheck_challenges.into_opening());
-        let table = SigmoidTable::new(self.op.log_table, self.op.tau);
+        let table = SigmoidTable::new(self.op.log_table, self.op.tau, self.op.scale);
         let sigmoid_table = MultilinearPolynomial::from(table.materialize());
         let table_claim = sigmoid_table.evaluate(&opening_point.r);
         let int_eval = SignedIdentityPoly::new(self.op.log_table).evaluate(&opening_point.r);
@@ -308,7 +308,7 @@ impl<F: JoltField> SigmoidProver<F> {
         }));
 
         // Create and materialize the sigmoid lookup table (reduced size)
-        let sigmoid_table = SigmoidTable::new(params.op.log_table, params.op.tau);
+        let sigmoid_table = SigmoidTable::new(params.op.log_table, params.op.tau, params.op.scale);
         let sigmoid_table = MultilinearPolynomial::from(sigmoid_table.materialize());
 
         // Use the compute_ra_evals in tanh.rs
@@ -415,7 +415,7 @@ impl<F: JoltField> SigmoidVerifier<F> {
     ) -> Self {
         let params = SigmoidParams::new(computation_node, graph, accumulator, transcript, op);
 
-        let sigmoid_table = SigmoidTable::new(params.op.log_table, params.op.tau);
+        let sigmoid_table = SigmoidTable::new(params.op.log_table, params.op.tau, params.op.scale);
         let sigmoid_table = MultilinearPolynomial::from(sigmoid_table.materialize());
 
         Self {

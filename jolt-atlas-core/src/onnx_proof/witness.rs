@@ -19,7 +19,7 @@ use crate::{
     onnx_proof::{
         clamp_lookups::{clamp_intermediate, clamp_lookup_bits, CLAMP_LOG_K},
         neural_teleport::{division::compute_division, n_bits_to_usize},
-        ops::{rsqrt::Q_SQUARE, softmax_last_axis::rc::sat_diff_rc_bits},
+        ops::{rsqrt::rsqrt_dividend, softmax_last_axis::rc::sat_diff_rc_bits},
         range_checking::range_check_operands::{
             DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckingOperandsTrait,
             RiRangeCheckOperands, RsRangeCheckOperands, TeleportRangeCheckOperands,
@@ -330,15 +330,19 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     left_operand.dims().to_vec(),
                 ))
             }
-            CommittedPoly::RsqrtNodeInv(node_idx) => {
+            CommittedPoly::RsqrtQuotient(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 assert!(matches!(computation_node.operator, Operator::Rsqrt(_)));
                 let layer_data = Trace::layer_data(trace, computation_node);
-                let [left_operand] = layer_data.operands[..] else {
+                let [input] = layer_data.operands[..] else {
                     panic!("Expected one operand for Rsqrt operation")
                 };
-                let inv_data: Vec<i32> = left_operand.iter().map(|&x| Q_SQUARE / x).collect();
-                MultilinearPolynomial::from(inv_data)
+                let s_cubed = rsqrt_dividend(computation_node);
+                // `quotient = ⌊S³ / x̂⌋` can exceed i32 at higher scales (e.g. up to
+                // `S³` when `x̂ = 1`), so it is committed as u64.
+                let quotient_data: Vec<u64> =
+                    input.iter().map(|&x| (s_cubed / x as i64) as u64).collect();
+                MultilinearPolynomial::from(quotient_data)
             }
             CommittedPoly::DivRangeCheckRaD(node_idx, d) => {
                 build_range_check_rad_witness::<F, DivRangeCheckOperands>(

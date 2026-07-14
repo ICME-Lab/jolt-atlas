@@ -266,7 +266,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ErfParams<F> {
     #[cfg(feature = "zk")]
     fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
         let opening_point = self.normalize_opening_point(&sumcheck_challenges.into_opening());
-        let table = ErfTable::new(self.op.log_table, self.op.tau);
+        let table = ErfTable::new(self.op.log_table, self.op.tau, self.op.scale);
         let erf_table = MultilinearPolynomial::from(table.materialize());
         let table_claim = erf_table.evaluate(&opening_point.r);
         let int_eval = SignedIdentityPoly::new(self.op.log_table).evaluate(&opening_point.r);
@@ -307,7 +307,7 @@ impl<F: JoltField> ErfProver<F> {
         }));
 
         // Create and materialize the erf lookup table (reduced size)
-        let erf_table = ErfTable::new(params.op.log_table, params.op.tau);
+        let erf_table = ErfTable::new(params.op.log_table, params.op.tau, params.op.scale);
         let erf_table = MultilinearPolynomial::from(erf_table.materialize());
 
         // Use the compute_ra_evals in tanh.rs
@@ -417,7 +417,7 @@ impl<F: JoltField> ErfVerifier<F> {
     ) -> Self {
         let params = ErfParams::new(computation_node, graph, accumulator, transcript, op);
 
-        let erf_table = ErfTable::new(params.op.log_table, params.op.tau);
+        let erf_table = ErfTable::new(params.op.log_table, params.op.tau, params.op.scale);
         let erf_table = MultilinearPolynomial::from(erf_table.materialize());
 
         Self { params, erf_table }

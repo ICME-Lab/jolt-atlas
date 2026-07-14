@@ -25,10 +25,11 @@
 //!    lookup; `D` is a constant, so the Teleport-style
 //!    [`MeanOfSquaresRangeCheckOperands`] is used).
 //!
-//! The reduction currently requires the reduced count `N` to be a power of two
-//! (so the flat-padded operand splits cleanly into `[retained, reduced]`), the
-//! same effective constraint as the `Sum` axis reduction; RMSNorm hidden sizes
-//! that satisfy this are covered.
+//! The reduction sums over the *padded* reduced cube (`op.padded_count`, a power
+//! of two so the flat-padded operand splits cleanly into `[retained, reduced]`),
+//! while the divisor `D = N·2^S` uses the *semantic* count `N` (= `op.count`,
+//! any constant — e.g. GPT-2's 768). Zero-padded lanes contribute nothing to
+//! `Σx²`, so the two are consistent.
 
 use std::array;
 
@@ -263,13 +264,17 @@ impl<F: JoltField> MeanOfSquaresReductionParams<F> {
         let Operator::MeanOfSquares(op) = &computation_node.operator else {
             panic!("MeanOfSquaresReductionParams: expected MeanOfSquares operator");
         };
+        // The sumcheck cube splits the flat-padded operand into
+        // `[retained, reduced]`, so the *padded* reduced count sizes the low
+        // rounds. The divisor `D = count·2^S` stays semantic (any constant N):
+        // zero-padded lanes contribute nothing to `Σx²`.
         assert!(
-            op.count.is_power_of_two(),
-            "mean-of-squares reduction requires a power-of-two reduced count, got {}",
-            op.count
+            op.padded_count.is_power_of_two(),
+            "mean-of-squares reduction requires a power-of-two padded reduced count, got {}",
+            op.padded_count
         );
         let divisor = mos_divisor(op);
-        let log_reduced = op.count.log_2();
+        let log_reduced = op.padded_count.log_2();
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let r_node_output = accessor.get_reduced_opening().0;
         let log_retained = r_node_output.r.len();
@@ -485,6 +490,18 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x9a3);
         let input = Tensor::<i32>::random_small(&mut rng, &[1, n]);
         unit_test_op(mos_model(1, n), &[input]);
+    }
+
+    /// Non-power-of-two reduced count (`n = 96`, mirrors GPT-2's 768-wide
+    /// LayerNorm): the divisor `D = 96·2^S` stays semantic while the sumcheck
+    /// cube pads the reduced axis to 128.
+    #[test]
+    fn test_mean_of_squares_non_pow2_count() {
+        let m = 1 << 3;
+        let n = 96;
+        let mut rng = StdRng::seed_from_u64(0x9a4);
+        let input = Tensor::<i32>::random_small(&mut rng, &[m, n]);
+        unit_test_op(mos_model(m, n), &[input]);
     }
 
     /// Large inputs make `Σx² / (N·2^S)` overflow i32, so the output saturates to

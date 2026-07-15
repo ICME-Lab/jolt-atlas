@@ -176,7 +176,7 @@ pub type UnaryReadRafSumcheckVerifier<F, LUT, const LOG_K: usize> =
     ReadRafSumcheckVerifier<F, LUT, LOG_K, LOG_K, UnaryRafVD<F>>;
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use crate::{
         lookup_tables::{
             relu, sat_clamp::SatClampTable, unsigned_abs::UnsignedAbsTable, JoltLookupTable,
@@ -226,7 +226,7 @@ mod tests {
         test_read_raf_sumcheck::<relu::ReluTable<XLEN>, XLEN>();
     }
 
-    fn test_read_raf_sumcheck<LUT, const XLEN: usize>()
+    pub fn test_read_raf_sumcheck<LUT, const XLEN: usize>()
     where
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {

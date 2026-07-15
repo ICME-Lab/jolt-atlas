@@ -230,7 +230,7 @@ pub type BinaryReadRafSumcheckVerifier<F, LUT> =
     ReadRafSumcheckVerifier<F, LUT, LOG_K, XLEN, BinaryRafVD<F>>;
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use crate::{
         lookup_tables::{
             and::AndTable, or::OrTable, unsigned_less_than::UnsignedLessThanTable, xor::XorTable,
@@ -288,7 +288,7 @@ mod tests {
         test_read_raf_sumcheck::<XorTable<XLEN>>();
     }
 
-    fn test_read_raf_sumcheck<LUT>()
+    pub fn test_read_raf_sumcheck<LUT>()
     where
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {

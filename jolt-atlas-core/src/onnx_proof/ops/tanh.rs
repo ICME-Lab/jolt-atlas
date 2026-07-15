@@ -14,7 +14,7 @@ use crate::{
             TanhTable,
         },
         ops::OperatorProofTrait,
-        range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding},
+        range_checking::range_check_operands::{RangeCheckOperands, TeleportRangeCheckOperands},
         ProofId, ProofType, Prover, Verifier,
     },
     utils::opening_access::AccOpeningAccessor,
@@ -165,7 +165,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
             node_idx: node.idx,
             log_table: NEURAL_TELEPORT_LOG_TABLE_SIZE,
         };
-        let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+        let rc_operands = RangeCheckOperands::<TeleportRangeCheckOperands>::new(node);
+        let rc_encoding = rc_operands.get_encoding(node);
         let tanh_d = tanh_encoding.one_hot_params().instruction_d;
         let rc_d = rc_encoding.one_hot_params().instruction_d;
         let mut polys = vec![];

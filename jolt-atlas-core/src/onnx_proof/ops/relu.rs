@@ -30,7 +30,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
         let mut results = Vec::new();
 
         // Execution proof
-        let provider = OpLookupProvider::new(node.clone());
+        let provider: OpLookupProvider = OpLookupProvider::new(node.clone());
         let (mut execution_sumcheck, lookup_indices) = provider
             .read_raf_prove::<F, T, ReluTable<XLEN>>(
                 &prover.trace,
@@ -76,7 +76,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         // Verify execution proof
-        let provider = OpLookupProvider::new(node.clone());
+        let provider: OpLookupProvider = OpLookupProvider::new(node.clone());
         let verifier_sumcheck = provider.read_raf_verify::<F, T, ReluTable<XLEN>>(
             &mut verifier.accumulator,
             &mut verifier.transcript,

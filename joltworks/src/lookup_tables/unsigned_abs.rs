@@ -71,13 +71,16 @@ impl<const X_LEN: usize> PrefixSuffixDecompositionTrait<X_LEN> for UnsignedAbsTa
 
 #[cfg(test)]
 mod test {
-    use crate::lookup_tables::{
-        test::{
-            lookup_table_mle_full_hypercube_test, lookup_table_mle_random_test,
-            prefix_suffix_test_unary,
+    use crate::{
+        lookup_tables::{
+            test::{
+                lookup_table_mle_full_hypercube_test, lookup_table_mle_linearity_test,
+                lookup_table_mle_random_test, prefix_suffix_test_unary,
+            },
+            unsigned_abs::UnsignedAbsTable,
+            JoltLookupTable,
         },
-        unsigned_abs::UnsignedAbsTable,
-        JoltLookupTable,
+        subprotocols::ps_shout::unary::tests::test_read_raf_sumcheck,
     };
     use ark_bn254::Fr;
 
@@ -145,5 +148,15 @@ mod test {
     #[test]
     fn mle_random() {
         lookup_table_mle_random_test::<Fr, UnsignedAbsTable<64>>();
+    }
+
+    #[test]
+    fn mle_linearity() {
+        lookup_table_mle_linearity_test::<32, Fr, UnsignedAbsTable<32>>();
+    }
+
+    #[test]
+    fn read_raf() {
+        test_read_raf_sumcheck::<UnsignedAbsTable<32>, 32>();
     }
 }

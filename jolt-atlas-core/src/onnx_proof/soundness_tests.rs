@@ -11,8 +11,10 @@ use crate::{
             NodeCommittedPolynomials, OperatorProver,
         },
         range_checking::{
-            range_check_operands::{RangeCheckOperandsBase, RangeCheckingOperandsTrait},
-            RangeCheckEncoding, RangeCheckProvider,
+            range_check_operands::{
+                RangeCheckOperands, RangeCheckOperandsBase, RangeCheckingOperandsTrait,
+            },
+            RangeCheckProvider,
         },
         witness::WitnessGenerator,
         AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof,
@@ -40,7 +42,7 @@ use joltworks::{
         commitment::{commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG},
         multilinear_polynomial::MultilinearPolynomial,
         one_hot_polynomial::OneHotPolynomial,
-        opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
+        opening_proof::{OpeningId, SumcheckId},
     },
     subprotocols::{
         evaluation_reduction::EvalReductionProof,
@@ -275,7 +277,7 @@ fn soundness_tanh_tau_rangecheck_bypass_is_rejected() {
     struct TauRangecheckBypassProof;
 
     struct TauBypassTeleportRangeCheckOperands {
-        base: RangeCheckOperandsBase,
+        tau: i32,
     }
 
     type TestPCS = HyperKZG<Bn254>;
@@ -284,68 +286,49 @@ fn soundness_tanh_tau_rangecheck_bypass_is_rejected() {
 
     impl RangeCheckingOperandsTrait for TauBypassTeleportRangeCheckOperands {
         fn new(node: &ComputationNode) -> Self {
-            Self {
-                base: RangeCheckOperandsBase {
-                    node_idx: node.idx,
-                    remainder: VirtualPoly::TeleportRemainder(node.idx),
-                    bound: None,
-                    virtual_ra: VirtualPoly::TeleportRangeCheckRa(node.idx),
-                    operator: node.operator.clone(),
-                },
-            }
-        }
-
-        fn base(&self) -> &RangeCheckOperandsBase {
-            &self.base
-        }
-
-        fn get_operands_tensors(
-            trace: &Trace,
-            node: &ComputationNode,
-        ) -> (Tensor<i32>, Tensor<i32>) {
-            let tau = tau_override(node);
-            let layer_data = Trace::layer_data(trace, node);
-            let [input_tensor] = layer_data.operands[..] else {
-                panic!("Expected exactly one input tensor for tanh teleport range-check");
-            };
-            let (_, remainder) = compute_division(input_tensor, tau);
-            let divisor_tensor = Tensor::construct(vec![tau], vec![1])
-                .expand(input_tensor.dims())
-                .expect("tau override tensor should broadcast over input dims");
-            (remainder, divisor_tensor)
-        }
-
-        fn rad_poly(&self, d: usize) -> CommittedPoly {
-            CommittedPoly::TeleportRangeCheckRaD(self.base.node_idx, d)
-        }
-
-        /// Extract the operand claims from the accumulator for the left and right operands.
-        fn operand_claims<F: JoltField>(&self, accumulator: &dyn OpeningAccumulator<F>) -> (F, F) {
-            let operand_claims = self
-                .get_input_operands()
-                .iter()
-                .map(|operand| {
-                    let operand_id =
-                        OpeningId::new(*operand, SumcheckId::NodeExecution(self.base.node_idx));
-                    let (_, claim) = accumulator.get_virtual_polynomial_opening(operand_id);
-                    claim
-                })
-                .collect::<Vec<_>>();
-            let tau = match &self.base().operator {
+            let tau = match &node.operator {
                 Operator::Tanh(inner) => inner.tau,
                 Operator::Erf(inner) => inner.tau,
                 Operator::Sigmoid(inner) => inner.tau,
                 Operator::Cos(_) | Operator::Sin(_) => FOUR_PI_APPROX,
-                _ => {
-                    panic!(
-                    "Expected Tanh, Erf, Sigmoid, Cos, or Sin operator for neural teleportation division"
-                )
-                }
+                _ => panic!("Expected Tanh, Erf, or Sigmoid operator for tau override"),
             };
-            (
-                operand_claims[0],
-                self.transform_right_claim(F::from_i32(tau)),
-            )
+            Self { tau }
+        }
+
+        fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase {
+            RangeCheckOperandsBase {
+                node_idx: node.idx,
+                remainder: VirtualPoly::TeleportRemainder(node.idx),
+                bound: None,
+                virtual_ra: VirtualPoly::TeleportRangeCheckRa(node.idx),
+                operator: node.operator.clone(),
+            }
+        }
+
+        fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>> {
+            // Override the diviser used for teleportation
+            let tau = self.tau + 1;
+
+            assert_eq!(
+                operand_tensors.len(),
+                1,
+                "Expected exactly one operand tensor for tanh teleport range-check"
+            );
+            let input = &operand_tensors[0];
+            let (_, remainder) = compute_division(input, tau);
+            let divisor_tensor = Tensor::construct(vec![tau], vec![1])
+                .expand(input.dims())
+                .expect("tau override tensor should broadcast over input dims");
+            vec![remainder, divisor_tensor]
+        }
+
+        fn rad_poly(index: usize, d: usize) -> CommittedPoly {
+            CommittedPoly::TeleportRangeCheckRaD(index, d)
+        }
+
+        fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
+            (claims[0], F::from_i32(self.tau))
         }
     }
 
@@ -544,7 +527,8 @@ fn soundness_tanh_tau_rangecheck_bypass_is_rejected() {
             tanh_ra_one_hot_proof,
         ));
 
-        let rc_encoding = RangeCheckEncoding::<TauBypassTeleportRangeCheckOperands>::new(node);
+        let rc_operands = RangeCheckOperands::<TauBypassTeleportRangeCheckOperands>::new(node);
+        let rc_encoding = rc_operands.get_encoding(node);
         let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_provers(
             &rc_encoding,
             &rc_lookup_indices,
@@ -572,8 +556,11 @@ fn soundness_tanh_tau_rangecheck_bypass_is_rejected() {
         d: usize,
     ) -> MultilinearPolynomial<TestField> {
         let node = &model.graph.nodes[&node_idx];
-        let (left, right) = TauBypassTeleportRangeCheckOperands::get_operands_tensors(trace, node);
-        let lookup_indices = compute_lookup_indices_from_operands(&[&left, &right], true);
+        let inputs = trace.padded_operand_tensors(node);
+        let lookup_operands =
+            TauBypassTeleportRangeCheckOperands::new(node).build_lookup_operands(&inputs);
+        let lk_op_ref: Vec<_> = lookup_operands.iter().collect();
+        let lookup_indices = compute_lookup_indices_from_operands(&lk_op_ref, true);
         let one_hot_params =
             joltworks::config::OneHotParams::new(lookup_indices.len().log_2(), LOG_K);
         let addresses: Vec<_> = lookup_indices
@@ -586,15 +573,6 @@ fn soundness_tanh_tau_rangecheck_bypass_is_rejected() {
             addresses,
             one_hot_params.k_chunk,
         ))
-    }
-
-    fn tau_override(node: &ComputationNode) -> i32 {
-        match &node.operator {
-            // The PoC forges the teleport range-check bound by using tau + 1 instead of
-            // the operator's real tau. Only the range-check path uses this override.
-            Operator::Tanh(op) => op.tau + 1,
-            _ => panic!("tau override only implemented for tanh in this PoC"),
-        }
     }
 
     // This regression test builds a malicious prover that only changes the

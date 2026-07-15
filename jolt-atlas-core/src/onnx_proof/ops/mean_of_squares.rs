@@ -39,7 +39,7 @@ use crate::{
         fused_rebase,
         ops::{OperatorProofTrait, Prover, Verifier},
         range_checking::{
-            range_check_operands::MeanOfSquaresRangeCheckOperands, RangeCheckEncoding,
+            range_check_operands::{MeanOfSquaresRangeCheckOperands, RangeCheckOperands},
             RangeCheckProvider,
         },
         ProofId, ProofType,
@@ -120,7 +120,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
             );
             proofs.push((ProofId(node.idx, ProofType::RangeCheck), rc_proof));
 
-            let encoding = RangeCheckEncoding::<MeanOfSquaresRangeCheckOperands>::new(node);
+            let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node);
+            let encoding = rc_operands.get_encoding(node);
             let [ra, hw, boolean] = shout::ra_onehot_provers(
                 &encoding,
                 &lookup_indices,
@@ -197,7 +198,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
                 .proofs
                 .get(&ProofId(node.idx, ProofType::RescaleRemainderRaChecks))
                 .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-            let encoding = RangeCheckEncoding::<MeanOfSquaresRangeCheckOperands>::new(node);
+            let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node);
+            let encoding = rc_operands.get_encoding(node);
             let [ra, hw, boolean] = shout::ra_onehot_verifiers(
                 &encoding,
                 &verifier.accumulator,
@@ -219,7 +221,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
         let mut polys = clamp_committed_polys(node);
         // ... plus the `R < D` range-check one-hot (skipped for scalar outputs).
         if !is_scalar(node) {
-            let d = RangeCheckEncoding::<MeanOfSquaresRangeCheckOperands>::new(node)
+            let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node);
+            let d = rc_operands
+                .get_encoding(node)
                 .one_hot_params()
                 .instruction_d;
             polys.extend((0..d).map(|i| CommittedPoly::MeanOfSquaresRangeCheckRaD(node.idx, i)));

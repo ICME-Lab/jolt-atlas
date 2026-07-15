@@ -21,8 +21,9 @@ use crate::{
         neural_teleport::{division::compute_division, n_bits_to_usize},
         ops::{rsqrt::rsqrt_dividend, softmax_last_axis::rc::sat_diff_rc_bits},
         range_checking::range_check_operands::{
-            DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckingOperandsTrait,
-            RiRangeCheckOperands, RsRangeCheckOperands, TeleportRangeCheckOperands,
+            DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
+            RangeCheckingOperandsTrait, RiRangeCheckOperands, RsRangeCheckOperands,
+            TeleportRangeCheckOperands,
         },
     },
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
@@ -56,15 +57,22 @@ use rayon::prelude::*;
 /// Every range-check variant (`DivRangeCheckRaD`, `SqrtRangeCheckRaD`, etc.) follows the
 /// same three steps: get operand tensors via the trait, compute lookup indices, then call
 /// `build_one_hot_rad_witness`. This helper collapses all four arms to a single call site.
-fn build_range_check_rad_witness<F: JoltField, R: RangeCheckingOperandsTrait>(
+fn build_range_check_rad_witness<F: JoltField, H: RangeCheckingOperandsTrait>(
     model: &Model,
     trace: &Trace,
     node_idx: usize,
     d: usize,
 ) -> MultilinearPolynomial<F> {
     let computation_node = &model.graph.nodes[&node_idx];
-    let (left_operand, right_operand) = R::get_operands_tensors(trace, computation_node);
-    let lookup_indices = R::compute_lookup_indices(&left_operand, &right_operand);
+    let inputs = trace.padded_operand_tensors(computation_node);
+    let rc_operands = RangeCheckOperands::<H>::new(computation_node);
+
+    let [left_operand, right_operand] = rc_operands
+        .build_lookup_operands(&inputs)
+        .try_into()
+        .expect("Expected two operands for range-checking");
+
+    let lookup_indices = rc_operands.compute_lookup_indices(&left_operand, &right_operand);
     build_one_hot_rad_witness(&lookup_indices, d, LOG_K)
 }
 
@@ -151,6 +159,7 @@ fn build_teleport_activation_rad_witness_tanh<F: JoltField>(
     ))
 }
 
+// TODO: group for all chunked committed polynomials (CommittedPoly::*RaD)
 /// Generate the witnesses for **all** of a node's committed polynomials, computing
 /// each expensive per-node re-execution **once** and slicing every one-hot chunk
 /// from it.
@@ -219,9 +228,15 @@ pub(crate) fn generate_node_witnesses<F: JoltField, T: joltworks::transcripts::T
                 }
                 CommittedPoly::MeanOfSquaresRangeCheckRaD(_, d) => {
                     let bits = mos_range_bits.get_or_insert_with(|| {
-                        let (left, right) =
-                            MeanOfSquaresRangeCheckOperands::get_operands_tensors(trace, node);
-                        MeanOfSquaresRangeCheckOperands::compute_lookup_indices(&left, &right)
+                        let padded_operands = trace.padded_operand_tensors(node);
+                        let rc_operands =
+                            RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node);
+                        let [left, right] = rc_operands
+                            .build_lookup_operands(&padded_operands)
+                            .try_into()
+                            .unwrap();
+
+                        rc_operands.compute_lookup_indices(&left, &right)
                     });
                     build_one_hot_rad_witness(bits, *d, LOG_K)
                 }

@@ -2,9 +2,11 @@ use crate::{
     field::JoltField,
     utils::{index_to_field_bitvector, interleave_bits, lookup_bits::LookupBits},
 };
+
 use common::consts::XLEN;
 use num::Integer;
 use rand::{rngs::StdRng, Rng, RngCore, SeedableRng};
+use strum::IntoEnumIterator;
 
 use super::{
     prefixes::{PrefixCheckpoints, Prefixes},
@@ -74,6 +76,43 @@ pub fn signed_lookup_table_mle_full_hypercube_test<F: JoltField, T: JoltLookupTa
     lookup_table_mle_full_hypercube_test_inner::<F, T>(|entry| F::from_i16(entry as i16));
 }
 
+/// Tests that `evaluate_mle` is affine in each individual variable.
+///
+/// For each variable `x_i`, we freeze all other variables at random field points and
+/// evaluate at `x_i = 0, 1, 2`. Affineness is equivalent to:
+/// `f(2) - f(0) = 2 * (f(1) - f(0))`.
+pub fn lookup_table_mle_linearity_test<
+    const LOG_K: usize,
+    F: JoltField,
+    T: JoltLookupTable + Default,
+>() {
+    const NUM_RANDOM_ASSIGNMENTS: usize = 16;
+    let mut rng = StdRng::seed_from_u64(12345);
+    let table = T::default();
+    let num_vars = LOG_K;
+    let two = F::from_u64(2);
+
+    for var_idx in 0..num_vars {
+        for _ in 0..NUM_RANDOM_ASSIGNMENTS {
+            let mut eval_point: Vec<F> =
+                (0..num_vars).map(|_| F::from_u64(rng.next_u64())).collect();
+
+            eval_point[var_idx] = F::zero();
+            let y0 = table.evaluate_mle::<F, F>(&eval_point);
+
+            eval_point[var_idx] = F::one();
+            let y1 = table.evaluate_mle::<F, F>(&eval_point);
+
+            eval_point[var_idx] = two;
+            let y2 = table.evaluate_mle::<F, F>(&eval_point);
+
+            let lhs = y2 - y0;
+            let rhs = (y1 - y0) * two;
+            assert_eq!(lhs, rhs, "evaluate_mle is not affine in variable {var_idx}");
+        }
+    }
+}
+
 /// Generates a lookup index where right operand is 111..000
 pub fn gen_bitmask_lookup_index(rng: &mut StdRng) -> u64 {
     let x = rng.next_u32();
@@ -98,6 +137,7 @@ fn prefix_suffix_test_inner<
         let lookup_index = T::random_lookup_index(&mut rng);
         let mut j = 0;
         let mut r: Vec<F> = vec![];
+        let mut u_eval = F::one();
         for phase in 0..total_phases {
             let suffix_len = (total_phases - 1 - phase) * rounds_per_phase;
             let (mut prefix_bits, suffix_bits) =
@@ -142,14 +182,29 @@ fn prefix_suffix_test_inner<
                     println!("Lookup index: {lookup_index}");
                     println!("j: {j} {prefix_bits} {suffix_bits}");
                     for (i, x) in prefix_evals.iter().enumerate() {
-                        println!("prefix_evals[{i}] = {x}");
+                        println!("prefix_evals[{:?}] = {x}", Prefixes::iter().nth(i).unwrap());
                     }
                     for (i, x) in suffix_evals.iter().enumerate() {
-                        println!("suffix_evals[{i}] = {x}");
+                        println!("suffix_evals[{:?}] = {x}", T::default().suffixes()[i]);
                     }
                 }
 
-                assert_eq!(combined, mle_eval);
+                assert_eq!(combined, mle_eval, "Prefix-suffix decomposition does not match MLE. (Multivariate Polynomials mismatch.)");
+
+                // ps-shout suffixes includes the "eq", "ra" polynomial evaluations,
+                // This is simulated here.
+                let weighted_suffix_evals: Vec<_> = suffix_evals
+                    .iter()
+                    .map(|suffix_eval| *suffix_eval * u_eval)
+                    .collect();
+                let weighted_combined = T::default().combine(&prefix_evals, &weighted_suffix_evals);
+                let weighted_expected = u_eval * mle_eval;
+                assert_eq!(
+                    weighted_combined, weighted_expected,
+                    "Weighted suffix check failed at phase {phase}, round {j}.\n\
+                    This commonly indicates an invalid suffix*suffix product in combine logic."
+                );
+
                 r.push(F::from_u64(rng.next_u64()));
 
                 if r.len() % 2 == 0 {
@@ -164,6 +219,10 @@ fn prefix_suffix_test_inner<
 
                 j += 1;
             }
+
+            // Simulating updating the "u_eval" at each phase, this is highly simplified from ps-shout.
+            let phase_challenge = F::from_u64(rng.next_u64());
+            u_eval *= phase_challenge;
         }
     }
 }

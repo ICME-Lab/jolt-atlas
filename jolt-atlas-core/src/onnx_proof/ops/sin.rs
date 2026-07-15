@@ -1,16 +1,17 @@
-use crate::onnx_proof::neural_teleport::{
-    division::{
-        compute_division, TeleportDivisionParams, TeleportDivisionProver, TeleportDivisionVerifier,
-    },
-    range_and_onehot::{
-        prove_range_and_onehot, verify_range_and_onehot, NeuralTeleportRangeOneHot,
-    },
-    sin::{SinTable, SIN_LOG_TABLE_SIZE},
-    utils::compute_ra_evals_direct,
-};
 use crate::onnx_proof::{
+    neural_teleport::{
+        division::{
+            compute_division, TeleportDivisionParams, TeleportDivisionProver,
+            TeleportDivisionVerifier,
+        },
+        range_and_onehot::{
+            prove_range_and_onehot, verify_range_and_onehot, NeuralTeleportRangeOneHot,
+        },
+        sin::{SinTable, SIN_LOG_TABLE_SIZE},
+        utils::compute_ra_evals_direct,
+    },
     ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
-    range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding},
+    range_checking::range_check_operands::{RangeCheckOperands, TeleportRangeCheckOperands},
     ProofId, ProofType, Prover, Verifier,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, Target};
@@ -200,7 +201,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
         let sin_encoding = SinRaEncoding { node_idx: node.idx };
-        let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+        let rc_operands = RangeCheckOperands::<TeleportRangeCheckOperands>::new(node);
+        let rc_encoding = rc_operands.get_encoding(node);
         let sin_d = sin_encoding.one_hot_params().instruction_d;
         let rc_d = rc_encoding.one_hot_params().instruction_d;
         let mut polys = vec![CommittedPoly::TeleportNodeQuotient(node.idx)];

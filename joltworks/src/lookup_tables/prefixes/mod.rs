@@ -106,41 +106,127 @@ pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
         F: FieldChallengeOps<C>;
 }
 
-/// An enum containing all prefixes used by Jolt's instruction lookup tables.
-#[repr(u8)]
-#[derive(EnumCountMacro, EnumIter, FromPrimitive, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Prefixes {
-    /// Bitwise AND prefix
-    And,
-    /// Equality comparison prefix
-    Eq,
-    /// Less-than comparison prefix
-    LessThan,
-    /// word without MSB prefix (XLEN-bit layout, sign at position 0)
-    WordNoMsb,
-    /// MSB (sign bit) prefix (XLEN-bit layout, sign at position 0)
-    Msb,
-    /// Not-MSB prefix (XLEN-bit layout, sign at position 0)
-    NotMsb,
-    /// Two's complement negation prefix (XLEN-bit layout)
-    NotWordNoMsb,
-    /// Bitwise OR prefix
-    Or,
-    /// Bitwise XOR prefix
-    Xor,
-    /// Saturated boundary value prefix: `m*MIN + (1-m)*MAX`, used in `sat_clamp` decomposition
-    SatVal,
-    /// Upper half-word all-zeros (eqz) prefix, used in `sat_clamp` decomposition
-    UpperEqz,
-    /// Upper half-word all-ones (eqo) prefix, used in `sat_clamp` decomposition
-    UpperEqo,
-    /// Complement of the lower 32-bit word sign bit (1 − r[XLEN/2]), used in `sat_clamp` decomposition
-    NotLowerMsb,
-    /// Lower 32-bit word sign bit (r[XLEN/2], the i32 sign bit), used in `sat_clamp` decomposition
-    LowerMsb,
-    /// Lower word without MSB prefix (64-bit layout), used in `sat_clamp` decomposition
-    LowerWordNoMsb,
+macro_rules! impl_sparse_dense_prefix {
+    ($($name:ident: $prefix:ident),* $(,)?) => {
+
+        /// An enum containing all prefixes used by Jolt's instruction lookup tables.
+        #[repr(u8)]
+        #[derive(EnumCountMacro, EnumIter, FromPrimitive, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum Prefixes {
+            $($name,)*
+        }
+
+       impl Prefixes {
+            /// Evalautes the MLE for this prefix:
+            /// - prefix(r, r_x, c, b)   if j is odd
+            /// - prefix(r, c, b)        if j is even
+            ///
+            /// where the prefix checkpoint captures the "contribution" of
+            /// `r` to this evaluation.
+            ///
+            /// `r` (and potentially `r_x`) capture the variables of the prefix
+            /// that have been bound in the previous rounds of sumcheck.
+            /// To compute the current round's prover message, we're fixing the
+            /// current variable to `c`.
+            /// The remaining variables of the prefix are captured by `b`. We sum
+            /// over these variables as they range over the Boolean hypercube, so
+            /// they can be represented by a single bitvector.
+            pub fn prefix_mle<const XLEN: usize, F, C>(
+                &self,
+                checkpoints: &PrefixCheckpoints<F>,
+                r_x: Option<C>,
+                c: u32,
+                b: LookupBits,
+                j: usize,
+            ) -> PrefixEval<F>
+            where
+                C: ChallengeFieldOps<F>,
+                F: JoltField + FieldChallengeOps<C>,
+            {
+                let eval = match self {
+                    $(Prefixes::$name => $prefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),)*
+                };
+                PrefixEval(eval)
+            }
+
+            /// Every two rounds of sumcheck, we update the "checkpoint" value for each
+            /// prefix, incorporating the two random challenges `r_x` and `r_y` received
+            /// since the last update.
+            /// This function updates all the prefix checkpoints.
+            #[tracing::instrument(skip_all)]
+            pub fn update_checkpoints<const XLEN: usize, F, C>(
+                checkpoints: &mut PrefixCheckpoints<F>,
+                r_x: C,
+                r_y: C,
+                j: usize,
+                suffix_len: usize,
+            ) where
+                C: ChallengeFieldOps<F>,
+                F: JoltField + FieldChallengeOps<C>,
+            {
+                debug_assert_eq!(checkpoints.len(), Self::COUNT);
+                let previous_checkpoints = checkpoints.clone();
+                checkpoints
+                    .0
+                    .par_iter_mut()
+                    .with_min_len(par_enabled())
+                    .enumerate()
+                    .for_each(|(index, new_checkpoint)| {
+                        let prefix: Self = FromPrimitive::from_u8(index as u8).unwrap();
+                        *new_checkpoint = prefix.update_prefix_checkpoint::<XLEN, F, C>(
+                            &previous_checkpoints,
+                            r_x,
+                            r_y,
+                            j,
+                            suffix_len,
+                        );
+                    });
+            }
+
+            /// Every two rounds of sumcheck, we update the "checkpoint" value for each
+            /// prefix, incorporating the two random challenges `r_x` and `r_y` received
+            /// since the last update.
+            /// `j` is the sumcheck round index.
+            /// A checkpoint update may depend on the values of the other prefix checkpoints,
+            /// so we pass in all such `checkpoints` to this function.
+            fn update_prefix_checkpoint<const XLEN: usize, F, C>(
+                &self,
+                checkpoints: &PrefixCheckpoints<F>,
+                r_x: C,
+                r_y: C,
+                j: usize,
+                suffix_len: usize,
+            ) -> PrefixCheckpoint<F>
+            where
+                C: ChallengeFieldOps<F>,
+                F: JoltField + FieldChallengeOps<C>,
+            {
+                match self {
+                    $(Prefixes::$name => $prefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len),)*
+
+                }
+            }
+        }
+    };
 }
+
+impl_sparse_dense_prefix!(
+    And             : AndPrefix,                // Bitwise AND prefix
+    Eq              : EqPrefix,                 // Equality comparison prefix
+    LessThan        : LessThanPrefix,           // Less-than comparison prefix
+    WordNoMsb       : WordNoMsbPrefix,     // Lower word without MSB prefix
+    NotMsb          : NotMsbPrefix,             // Not-MSB prefix
+    Or              : OrPrefix,                 // Bitwise OR prefix
+    Xor             : XorPrefix,                // Bitwise XOR prefix
+    Msb             : MsbPrefix,                // MSB (sign bit) prefix
+    NotWordNoMsb    : NotWordNoMsbPrefix,       // Two's complement negation prefix: `(!lower_word) + 1`
+    SatVal          : SatValPrefix,             // Saturated boundary value prefix: `m*MIN + (1-m)*MAX`, used in `sat_clamp` decomposition
+    UpperEqz        : UpperEqzPrefix,           // Upper half-word all-zeros (eqz) prefix, used in `sat_clamp` decomposition
+    UpperEqo        : UpperEqoPrefix,           // Upper half-word all-ones (eqo) prefix, used in `sat_clamp` decomposition
+    NotLowerMsb     : NotLowerMsbPrefix,        // Complement of the lower 32-bit word sign bit (1 − r[XLEN/2]), used in `sat_clamp` decomposition
+    LowerMsb        : LowerMsbPrefix,           // Lower 32-bit word sign bit (r[XLEN/2], the i32 sign bit), used in `sat_clamp` decomposition
+    LowerWordNoMsb  : LowerWordNoMsbPrefix,     // Lower word without MSB prefix (64-bit layout), used in `sat_clamp` decomposition
+);
 
 #[derive(Clone, Copy)]
 /// Wrapper for prefix polynomial evaluations, used for type safety in prefix operations.
@@ -236,187 +322,5 @@ impl<F> Index<Prefixes> for &[PrefixEval<F>] {
     fn index(&self, prefix: Prefixes) -> &Self::Output {
         let index = prefix as usize;
         &self.get(index).unwrap().0
-    }
-}
-
-impl Prefixes {
-    /// Evalautes the MLE for this prefix:
-    /// - prefix(r, r_x, c, b)   if j is odd
-    /// - prefix(r, c, b)        if j is even
-    ///
-    /// where the prefix checkpoint captures the "contribution" of
-    /// `r` to this evaluation.
-    ///
-    /// `r` (and potentially `r_x`) capture the variables of the prefix
-    /// that have been bound in the previous rounds of sumcheck.
-    /// To compute the current round's prover message, we're fixing the
-    /// current variable to `c`.
-    /// The remaining variables of the prefix are captured by `b`. We sum
-    /// over these variables as they range over the Boolean hypercube, so
-    /// they can be represented by a single bitvector.
-    pub fn prefix_mle<const XLEN: usize, F, C>(
-        &self,
-        checkpoints: &PrefixCheckpoints<F>,
-        r_x: Option<C>,
-        c: u32,
-        b: LookupBits,
-        j: usize,
-    ) -> PrefixEval<F>
-    where
-        C: ChallengeFieldOps<F>,
-        F: JoltField + FieldChallengeOps<C>,
-    {
-        let eval = match self {
-            Prefixes::And => AndPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::Eq => EqPrefix::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::LessThan => LessThanPrefix::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::Or => OrPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::Xor => XorPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::NotMsb => NotMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::WordNoMsb => WordNoMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::Msb => MsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::NotWordNoMsb => {
-                NotWordNoMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::SatVal => SatValPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::UpperEqz => UpperEqzPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::NotLowerMsb => {
-                NotLowerMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-            Prefixes::UpperEqo => UpperEqoPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::LowerMsb => LowerMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j),
-            Prefixes::LowerWordNoMsb => {
-                LowerWordNoMsbPrefix::<XLEN>::prefix_mle(checkpoints, r_x, c, b, j)
-            }
-        };
-        PrefixEval(eval)
-    }
-
-    /// Every two rounds of sumcheck, we update the "checkpoint" value for each
-    /// prefix, incorporating the two random challenges `r_x` and `r_y` received
-    /// since the last update.
-    /// This function updates all the prefix checkpoints.
-    #[tracing::instrument(skip_all)]
-    pub fn update_checkpoints<const XLEN: usize, F, C>(
-        checkpoints: &mut PrefixCheckpoints<F>,
-        r_x: C,
-        r_y: C,
-        j: usize,
-        suffix_len: usize,
-    ) where
-        C: ChallengeFieldOps<F>,
-        F: JoltField + FieldChallengeOps<C>,
-    {
-        let previous_checkpoints = checkpoints.clone();
-        checkpoints
-            .0
-            .par_iter_mut()
-            .with_min_len(par_enabled())
-            .enumerate()
-            .for_each(|(index, new_checkpoint)| {
-                let prefix: Self = FromPrimitive::from_u8(index as u8).unwrap();
-                *new_checkpoint = prefix.update_prefix_checkpoint::<XLEN, F, C>(
-                    &previous_checkpoints,
-                    r_x,
-                    r_y,
-                    j,
-                    suffix_len,
-                );
-            });
-    }
-
-    /// Every two rounds of sumcheck, we update the "checkpoint" value for each
-    /// prefix, incorporating the two random challenges `r_x` and `r_y` received
-    /// since the last update.
-    /// `j` is the sumcheck round index.
-    /// A checkpoint update may depend on the values of the other prefix checkpoints,
-    /// so we pass in all such `checkpoints` to this function.
-    fn update_prefix_checkpoint<const XLEN: usize, F, C>(
-        &self,
-        checkpoints: &PrefixCheckpoints<F>,
-        r_x: C,
-        r_y: C,
-        j: usize,
-        suffix_len: usize,
-    ) -> PrefixCheckpoint<F>
-    where
-        C: ChallengeFieldOps<F>,
-        F: JoltField + FieldChallengeOps<C>,
-    {
-        match self {
-            Prefixes::And => {
-                AndPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
-            }
-            Prefixes::Eq => {
-                EqPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
-            }
-            Prefixes::LessThan => {
-                LessThanPrefix::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
-            }
-            Prefixes::Or => {
-                OrPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
-            }
-            Prefixes::Xor => {
-                XorPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
-            }
-            Prefixes::NotMsb => {
-                NotMsbPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
-            }
-            Prefixes::WordNoMsb => WordNoMsbPrefix::<XLEN>::update_prefix_checkpoint(
-                checkpoints,
-                r_x,
-                r_y,
-                j,
-                suffix_len,
-            ),
-            Prefixes::Msb => {
-                MsbPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
-            }
-            Prefixes::NotWordNoMsb => NotWordNoMsbPrefix::<XLEN>::update_prefix_checkpoint(
-                checkpoints,
-                r_x,
-                r_y,
-                j,
-                suffix_len,
-            ),
-            Prefixes::SatVal => {
-                SatValPrefix::<XLEN>::update_prefix_checkpoint(checkpoints, r_x, r_y, j, suffix_len)
-            }
-            Prefixes::UpperEqz => UpperEqzPrefix::<XLEN>::update_prefix_checkpoint(
-                checkpoints,
-                r_x,
-                r_y,
-                j,
-                suffix_len,
-            ),
-            Prefixes::NotLowerMsb => NotLowerMsbPrefix::<XLEN>::update_prefix_checkpoint(
-                checkpoints,
-                r_x,
-                r_y,
-                j,
-                suffix_len,
-            ),
-            Prefixes::UpperEqo => UpperEqoPrefix::<XLEN>::update_prefix_checkpoint(
-                checkpoints,
-                r_x,
-                r_y,
-                j,
-                suffix_len,
-            ),
-            Prefixes::LowerMsb => LowerMsbPrefix::<XLEN>::update_prefix_checkpoint(
-                checkpoints,
-                r_x,
-                r_y,
-                j,
-                suffix_len,
-            ),
-            Prefixes::LowerWordNoMsb => LowerWordNoMsbPrefix::<XLEN>::update_prefix_checkpoint(
-                checkpoints,
-                r_x,
-                r_y,
-                j,
-                suffix_len,
-            ),
-        }
     }
 }

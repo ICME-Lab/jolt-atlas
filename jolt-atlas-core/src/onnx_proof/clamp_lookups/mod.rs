@@ -265,10 +265,9 @@ impl ClampLookupProvider {
     }
 }
 
-impl<F, LUT> RafShoutProvider<F, LUT> for ClampLookupProvider
+impl<F> RafShoutProvider<F> for ClampLookupProvider
 where
     F: JoltField,
-    LUT: JoltLookupTable + Default,
 {
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
         accumulator

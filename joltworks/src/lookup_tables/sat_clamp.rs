@@ -121,12 +121,15 @@ impl<const XLEN: usize> PrefixSuffixDecompositionTrait<XLEN> for SatClampTable<X
 #[cfg(test)]
 mod test {
 
-    use crate::lookup_tables::{
-        sat_clamp::SatClampTable,
-        test::{
-            prefix_suffix_test_unary, signed_lookup_table_mle_full_hypercube_test,
-            signed_lookup_table_mle_random_test,
+    use crate::{
+        lookup_tables::{
+            sat_clamp::SatClampTable,
+            test::{
+                lookup_table_mle_linearity_test, prefix_suffix_test_unary,
+                signed_lookup_table_mle_full_hypercube_test, signed_lookup_table_mle_random_test,
+            },
         },
+        subprotocols::ps_shout::unary::tests::test_read_raf_sumcheck,
     };
     use ark_bn254::Fr;
 
@@ -143,5 +146,15 @@ mod test {
     #[test]
     fn mle_random() {
         signed_lookup_table_mle_random_test::<Fr, SatClampTable<64>>();
+    }
+
+    #[test]
+    fn linearity_test() {
+        lookup_table_mle_linearity_test::<64, Fr, SatClampTable<64>>();
+    }
+
+    #[test]
+    fn read_raf() {
+        test_read_raf_sumcheck::<SatClampTable<64>, 64>();
     }
 }

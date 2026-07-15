@@ -90,7 +90,7 @@ pub struct ReadRafClaims<F: JoltField> {
 }
 
 pub trait PrefixSuffixShoutProvider<F, LUT, const LOG_K: usize>:
-    super::RafShoutProvider<F, LUT>
+    super::RafShoutProvider<F>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
@@ -99,10 +99,10 @@ where
 }
 
 pub fn ps_read_raf_prover<
-    const LOG_K: usize,
     F: JoltField,
     T: Transcript,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+    const LOG_K: usize,
 >(
     provider: &impl PrefixSuffixShoutProvider<F, LUT, LOG_K>,
     lookup_indices: Vec<LookupBits>,
@@ -176,7 +176,7 @@ pub type UnaryReadRafSumcheckVerifier<F, LUT, const LOG_K: usize> =
     ReadRafSumcheckVerifier<F, LUT, LOG_K, LOG_K, UnaryRafVD<F>>;
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use crate::{
         lookup_tables::{
             relu, sat_clamp::SatClampTable, unsigned_abs::UnsignedAbsTable, JoltLookupTable,
@@ -226,7 +226,7 @@ mod tests {
         test_read_raf_sumcheck::<relu::ReluTable<XLEN>, XLEN>();
     }
 
-    fn test_read_raf_sumcheck<LUT, const XLEN: usize>()
+    pub fn test_read_raf_sumcheck<LUT, const XLEN: usize>()
     where
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
@@ -351,7 +351,7 @@ mod tests {
         }
     }
 
-    impl<LUT, const XLEN: usize> RafShoutProvider<Fr, LUT> for TestProvider<LUT, XLEN>
+    impl<LUT, const XLEN: usize> RafShoutProvider<Fr> for TestProvider<LUT, XLEN>
     where
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {

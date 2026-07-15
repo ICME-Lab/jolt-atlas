@@ -3,9 +3,9 @@ use crate::utils::lookup_bits::LookupBits;
 use super::SparseDenseSuffix;
 
 /// Bitwise OR suffix
-pub enum OrSuffix {}
+pub enum OrSuffix<const XLEN: usize> {}
 
-impl SparseDenseSuffix for OrSuffix {
+impl<const XLEN: usize> SparseDenseSuffix for OrSuffix<XLEN> {
     fn suffix_mle(b: LookupBits) -> u32 {
         let (x, y) = b.uninterleave();
         u32::from(x) | u32::from(y)

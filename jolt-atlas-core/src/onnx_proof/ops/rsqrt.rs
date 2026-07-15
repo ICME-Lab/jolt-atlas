@@ -2,8 +2,10 @@ use crate::{
     onnx_proof::{
         ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
         range_checking::{
-            range_check_operands::{RiRangeCheckOperands, RsRangeCheckOperands},
-            RangeCheckEncoding, RangeCheckProvider,
+            range_check_operands::{
+                RangeCheckOperands, RiRangeCheckOperands, RsRangeCheckOperands,
+            },
+            RangeCheckProvider,
         },
         ProofId, ProofType, Prover, Verifier,
     },
@@ -129,7 +131,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
         let mut polys = vec![CommittedPoly::RsqrtQuotient(node.idx)];
-        let encoding = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+
+        let rc_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node);
+        let encoding = rc_operands.get_encoding(node);
         let d = encoding.one_hot_params().instruction_d;
         for i in 0..d {
             polys.push(CommittedPoly::SqrtDivRangeCheckRaD(node.idx, i));
@@ -551,7 +555,8 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
     );
     proofs.push((ProofId(node.idx, ProofType::RangeCheck), rangecheck_proof));
 
-    let div_encoding = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+    let div_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node);
+    let div_encoding = div_operands.get_encoding(node);
     let [div_ra, div_hw, div_bool] = shout::ra_onehot_provers(
         &div_encoding,
         &div_lookup_indices,
@@ -559,7 +564,8 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
         &mut prover.transcript,
     );
 
-    let sqrt_encoding = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+    let sqrt_operands = RangeCheckOperands::<RsRangeCheckOperands>::new(node);
+    let sqrt_encoding = sqrt_operands.get_encoding(node);
     let [sqrt_ra, sqrt_hw, sqrt_bool] = shout::ra_onehot_provers(
         &sqrt_encoding,
         &sqrt_lookup_indices,
@@ -614,13 +620,15 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
         .proofs
         .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
         .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-    let div_encoding = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+    let div_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node);
+    let div_encoding = div_operands.get_encoding(node);
     let [div_ra, div_hw, div_bool] = shout::ra_onehot_verifiers(
         &div_encoding,
         &verifier.accumulator,
         &mut verifier.transcript,
     );
-    let sqrt_encoding = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+    let sqrt_operands = RangeCheckOperands::<RsRangeCheckOperands>::new(node);
+    let sqrt_encoding = sqrt_operands.get_encoding(node);
     let [sqrt_ra, sqrt_hw, sqrt_bool] = shout::ra_onehot_verifiers(
         &sqrt_encoding,
         &verifier.accumulator,

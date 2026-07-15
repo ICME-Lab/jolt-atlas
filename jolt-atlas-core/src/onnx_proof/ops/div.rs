@@ -2,7 +2,8 @@ use crate::{
     onnx_proof::{
         ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
         range_checking::{
-            range_check_operands::DivRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
+            range_check_operands::{DivRangeCheckOperands, RangeCheckOperands},
+            RangeCheckProvider,
         },
         ProofId, ProofType, Prover, Verifier,
     },
@@ -155,7 +156,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         if node.is_scalar() {
             return polys;
         }
-        let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+        let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node);
+        let encoding = rc_operands.get_encoding(node);
         let d = encoding.one_hot_params().instruction_d;
         polys.extend((0..d).map(|i| CommittedPoly::DivRangeCheckRaD(node.idx, i)));
         polys
@@ -461,7 +463,8 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
 
     results.push((ProofId(node.idx, ProofType::RangeCheck), rangecheck_proof));
 
-    let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+    let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node);
+    let encoding = rc_operands.get_encoding(node);
 
     let [ra_sumcheck, hw_sumcheck, bool_sumcheck] = shout::ra_onehot_provers(
         &encoding,
@@ -511,7 +514,8 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
         .proofs
         .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
         .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-    let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+    let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node);
+    let encoding = rc_operands.get_encoding(node);
     let [ra_sumcheck, hw_sumcheck, bool_sumcheck] =
         shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
     BatchedSumcheck::verify(

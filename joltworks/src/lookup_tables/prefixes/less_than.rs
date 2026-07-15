@@ -6,9 +6,9 @@ use crate::{
 use super::{PrefixCheckpoint, PrefixCheckpoints, Prefixes, SparseDensePrefix};
 
 /// Prefix component for less-than comparison lookup table decomposition.
-pub enum LessThanPrefix {}
+pub enum LessThanPrefix<const XLEN: usize> {}
 
-impl<F: JoltField> SparseDensePrefix<F> for LessThanPrefix {
+impl<const XLEN: usize, F: JoltField> SparseDensePrefix<F> for LessThanPrefix<XLEN> {
     fn prefix_mle<C>(
         checkpoints: &PrefixCheckpoints<F>,
         r_x: Option<C>,

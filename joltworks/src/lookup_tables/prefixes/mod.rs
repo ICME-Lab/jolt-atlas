@@ -12,7 +12,8 @@ use crate::{
         lower_msb::LowerMsbPrefix, lower_word_no_msb::LowerWordNoMsbPrefix, msb::MsbPrefix,
         not_lower_msb::NotLowerMsbPrefix, not_msb::NotMsbPrefix,
         not_word_no_msb::NotWordNoMsbPrefix, sat_val::SatValPrefix, upper_eqo::UpperEqoPrefix,
-        upper_eqz::UpperEqzPrefix, word_no_msb::WordNoMsbPrefix,
+        upper_eqz::UpperEqzPrefix, word_lt_bound::OpsLowerWordPrefix, word_no_msb::WordNoMsbPrefix,
+        zero_gt_bound::OpsHigherIsZeroPrefix,
     },
     utils::lookup_bits::LookupBits,
 };
@@ -53,10 +54,14 @@ pub mod sat_val;
 pub mod upper_eqo;
 /// Upper half-word all-zeros (eqz) prefix implementation.
 pub mod upper_eqz;
+/// Outputs the lower word of the input without bits of significance >= bound.
+pub mod word_lt_bound;
 /// Lower word (without MSB) prefix implementation.
 pub mod word_no_msb;
 /// Bitwise XOR prefix implementation.
 pub mod xor;
+/// Checks that all bits with significance >= given bound are zero.
+pub mod zero_gt_bound;
 
 /// Trait for prefix components that support sparse-dense MLE evaluation.
 ///
@@ -106,6 +111,17 @@ pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
         F: FieldChallengeOps<C>;
 }
 
+/// Marker trait linking a concrete prefix implementation type to the
+/// [`Prefixes`] variant it is registered under.
+///
+/// Implemented automatically by [`impl_sparse_dense_prefix!`] for every
+/// prefix type in the macro's table, so the type-to-variant mapping can
+/// never drift out of sync with the enum.
+pub trait PrefixVariant {
+    /// The [`Prefixes`] variant this type is registered as.
+    const VARIANT: Prefixes;
+}
+
 macro_rules! impl_sparse_dense_prefix {
     ($($name:ident: $prefix:ident),* $(,)?) => {
 
@@ -115,6 +131,12 @@ macro_rules! impl_sparse_dense_prefix {
         pub enum Prefixes {
             $($name,)*
         }
+
+        $(
+            impl<const XLEN: usize> PrefixVariant for $prefix<XLEN> {
+                const VARIANT: Prefixes = Prefixes::$name;
+            }
+        )*
 
        impl Prefixes {
             /// Evalautes the MLE for this prefix:
@@ -214,7 +236,7 @@ impl_sparse_dense_prefix!(
     And             : AndPrefix,                // Bitwise AND prefix
     Eq              : EqPrefix,                 // Equality comparison prefix
     LessThan        : LessThanPrefix,           // Less-than comparison prefix
-    WordNoMsb       : WordNoMsbPrefix,     // Lower word without MSB prefix
+    WordNoMsb       : WordNoMsbPrefix,          // Lower word without MSB prefix
     NotMsb          : NotMsbPrefix,             // Not-MSB prefix
     Or              : OrPrefix,                 // Bitwise OR prefix
     Xor             : XorPrefix,                // Bitwise XOR prefix
@@ -226,6 +248,8 @@ impl_sparse_dense_prefix!(
     NotLowerMsb     : NotLowerMsbPrefix,        // Complement of the lower 32-bit word sign bit (1 − r[XLEN/2]), used in `sat_clamp` decomposition
     LowerMsb        : LowerMsbPrefix,           // Lower 32-bit word sign bit (r[XLEN/2], the i32 sign bit), used in `sat_clamp` decomposition
     LowerWordNoMsb  : LowerWordNoMsbPrefix,     // Lower word without MSB prefix (64-bit layout), used in `sat_clamp` decomposition
+    OpsLowerWord    : OpsLowerWordPrefix,       // Lower word without bits of significance >= bound.
+    OpsHigherIsZero : OpsHigherIsZeroPrefix,    // Indicator that all bits with significance >= bound are zero.
 );
 
 #[derive(Clone, Copy)]

@@ -11,6 +11,7 @@ use crate::{
         lower_msb_upper_eqo_low::LowerMsbUpperEqoLowSuffix, neg_relu::NegReluSuffix,
         not_lower_msb_upper_eqz::NotLowerMsbUpperEqzSuffix,
         not_lower_msb_upper_eqz_low::NotLowerMsbUpperEqzLowSuffix, word_no_msb::WordNoMsbSuffix,
+        zero_gt_bound::OpsHigherIsZeroSuffix, zero_gt_mul_word_lt_bound::OpsHZeroMulLWordSuffix,
     },
     utils::lookup_bits::LookupBits,
 };
@@ -41,6 +42,10 @@ pub mod or;
 pub mod word_no_msb;
 /// Bitwise XOR suffix implementation.
 pub mod xor;
+/// Checks that all bits with significance >= given bound are zero.
+pub mod zero_gt_bound;
+/// Suffix that evaluates `zero_gt_bound(bits) * word_lt_bound(bits)`.
+pub mod zero_gt_mul_word_lt_bound;
 
 /// Trait for suffix components that support sparse-dense MLE evaluation.
 ///
@@ -52,6 +57,17 @@ pub trait SparseDenseSuffix: 'static + Sync {
     fn suffix_mle(b: LookupBits) -> u32;
 }
 
+/// Marker trait linking a concrete suffix implementation type to the
+/// [`Suffixes`] variant it is registered under.
+///
+/// Implemented automatically by [`impl_sparse_dense_suffix!`] for every
+/// suffix type in the macro's table, so the type-to-variant mapping can
+/// never drift out of sync with the enum.
+pub trait SuffixVariant {
+    /// The [`Suffixes`] variant this type is registered as.
+    const VARIANT: Suffixes;
+}
+
 macro_rules! impl_sparse_dense_suffix {
     ($($name:ident : $suffix:ident),* $(,)?) => {
         /// An enum containing all suffixes used by Jolt's instruction lookup tables.
@@ -60,6 +76,12 @@ macro_rules! impl_sparse_dense_suffix {
         pub enum Suffixes {
             $($name),*
         }
+
+        $(
+            impl<const XLEN: usize> SuffixVariant for $suffix<XLEN> {
+                const VARIANT: Suffixes = Suffixes::$name;
+            }
+        )*
 
         impl Suffixes {
             /// Evaluates the MLE for this suffix on the bitvector `b`, where
@@ -84,6 +106,8 @@ impl_sparse_dense_suffix!(
     NotLowerMsbUpperEqz     : NotLowerMsbUpperEqzSuffix,    // `(1-m) * upper_eqz` suffix, used in `sat_clamp` decomposition
     NotLowerMsbUpperEqzLow  : NotLowerMsbUpperEqzLowSuffix, // `(1-m) * upper_eqz * low` suffix, used in `sat_clamp` decomposition
     LowerMsbUpperEqoLow     : LowerMsbUpperEqoLowSuffix,    // `m * upper_eqo * low` suffix, used in `sat_clamp` decomposition
+    OpsHigherIsZero         : OpsHigherIsZeroSuffix,        // Suffix that evaluates `zero_gt_bound(bits)`.
+    OpsHZeroMulLWord        : OpsHZeroMulLWordSuffix,       // Suffix that evaluates `zero_gt_bound(bits) * word_lt_bound(bits)`.
 );
 
 /// Type alias for suffix evaluation results in the field.

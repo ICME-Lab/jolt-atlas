@@ -97,6 +97,8 @@ pub mod suffixes;
 
 /// Bitwise AND lookup table.
 pub mod and;
+/// Clamps the input to a specified range.
+pub mod clamp;
 /// Bitwise OR lookup table.
 pub mod or;
 /// ReLU (Rectified Linear Unit) activation lookup table.

@@ -6,7 +6,7 @@ use crate::{
 impl Op for Clamp {
     #[tracing::instrument(name = "Clamp::f", skip_all)]
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
-        tensor::ops::nonlinearities::clamp_axes(inputs[0], self.axes, self.max_spread)
+        tensor::ops::nonlinearities::clamp(inputs[0], self.upper_bound_log)
     }
 
     fn requires_shape_equality(&self) -> bool {

@@ -3,9 +3,9 @@ use crate::utils::lookup_bits::LookupBits;
 use super::SparseDenseSuffix;
 
 /// Suffix that evaluates to 1 iff all bits with significance >= 2^BOUND are zero.
-pub enum ZeroGtBoundSuffix<const XLEN: usize, const BOUND: usize> {}
+pub enum HigherIsZeroSuffix<const XLEN: usize, const BOUND: usize> {}
 
-impl<const XLEN: usize, const BOUND: usize> SparseDenseSuffix for ZeroGtBoundSuffix<XLEN, BOUND> {
+impl<const XLEN: usize, const BOUND: usize> SparseDenseSuffix for HigherIsZeroSuffix<XLEN, BOUND> {
     fn suffix_mle(bits: LookupBits) -> u32 {
         let bound_index = XLEN - BOUND - 1;
         let len = bits.len();
@@ -26,5 +26,5 @@ impl<const XLEN: usize, const BOUND: usize> SparseDenseSuffix for ZeroGtBoundSuf
     }
 }
 
-use crate::lookup_tables::clamp::CLAMP_OPS_UPPER;
-pub type OpsHigherIsZeroSuffix<const XLEN: usize> = ZeroGtBoundSuffix<XLEN, CLAMP_OPS_UPPER>;
+use crate::lookup_tables::clamp::CLAMP_BOUND;
+pub type ClampHigherIsZeroSuffix<const XLEN: usize> = HigherIsZeroSuffix<XLEN, CLAMP_BOUND>;

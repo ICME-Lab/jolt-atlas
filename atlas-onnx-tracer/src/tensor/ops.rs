@@ -3206,63 +3206,17 @@ pub mod nonlinearities {
             .unwrap()
     }
 
-    /// Clamps tensor values per-slice along the specified axis so that no element
-    /// is more than `max_spread` below the slice maximum.
-    ///
-    /// For each 1-D slice along `axis`, finds the max and clamps every element to
-    /// be >= max − max_spread. This guarantees that after softmax's centering step
-    /// (subtracting the max), all centered logits fit within the exp LUT.
+    /// Clamps every element of the tensor to `[0, 2^upper_bound_log]`.
     ///
     /// # Arguments
     /// * `a` - Input tensor
-    /// * `axis` - The axis along which softmax will be applied
-    /// * `max_spread` - Maximum allowed distance from the per-slice max
-    ///                   (typically `EXP_LUT_SIZE - 1 = 2047`)
-    #[tracing::instrument(name = "tensor::ops::nonlinearities::clamp_axes", skip_all)]
-    pub fn clamp_axes(a: &Tensor<i32>, axis: usize, max_spread: i32) -> Tensor<i32> {
-        let dims = a.dims();
-
-        if dims.len() == 1 {
-            let max_val = a.iter().copied().max().unwrap_or(0);
-            let min_val = max_val - max_spread;
-            let data: Vec<i32> = a.iter().map(|&x| x.max(min_val)).collect();
-            return Tensor::new(Some(&data), dims).unwrap();
-        }
-
-        let cartesian_coord = dims[..dims.len() - 1]
-            .iter()
-            .map(|x| 0..*x)
-            .multi_cartesian_product()
-            .collect::<Vec<_>>();
-
-        let mut outputs = vec![];
-
-        for coord in cartesian_coord {
-            let mut slice_ranges = vec![];
-            for (i, c) in coord.iter().enumerate() {
-                if [axis].contains(&i) {
-                    slice_ranges.push(0..a.dims()[i]);
-                } else {
-                    slice_ranges.push(*c..*c + 1);
-                }
-            }
-
-            let slice = a.get_slice(&slice_ranges).unwrap();
-            let max_val = slice.iter().copied().max().unwrap_or(0);
-            let min_val = max_val - max_spread;
-
-            let data: Vec<i32> = slice.iter().map(|&x| x.max(min_val)).collect();
-            let clamped = Tensor::new(Some(&data), slice.dims()).unwrap();
-
-            outputs.push(clamped);
-        }
-
-        let mut res = Tensor::new(Some(&outputs), &[outputs.len()])
+    /// * `upper_bound_log` - log2 of the upper bound: elements are clamped into
+    ///                        `[0, 2^upper_bound_log]`
+    #[tracing::instrument(name = "tensor::ops::nonlinearities::clamp", skip_all)]
+    pub fn clamp(a: &Tensor<i32>, upper_bound_log: usize) -> Tensor<i32> {
+        let upper_bound = 1i32 << upper_bound_log;
+        a.par_enum_map(|_, a_i| Ok::<_, TensorError>(a_i.clamp(0, upper_bound)))
             .unwrap()
-            .combine()
-            .unwrap();
-        res.reshape(dims).unwrap();
-        res
     }
 
     /// Applies range_check_percent

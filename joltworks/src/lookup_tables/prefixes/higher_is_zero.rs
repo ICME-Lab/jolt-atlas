@@ -5,11 +5,11 @@ use crate::{
     utils::lookup_bits::LookupBits,
 };
 
-/// Prefix that evaluates to 1 iff all bits with significance >= 2^L are zero.
-pub enum ZeroGtBoundPrefix<const XLEN: usize, const L: usize, const CP_INDEX: usize> {}
+/// Prefix that evaluates to 1 iff all bits with significance >= 2^BOUND are zero.
+pub enum HigherIsZeroPrefix<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize> {}
 
-impl<const XLEN: usize, const L: usize, const CP_INDEX: usize, F: JoltField> SparseDensePrefix<F>
-    for ZeroGtBoundPrefix<XLEN, L, CP_INDEX>
+impl<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize, F: JoltField>
+    SparseDensePrefix<F> for HigherIsZeroPrefix<XLEN, BOUND, CP_INDEX>
 {
     fn prefix_mle<C>(
         checkpoints: &PrefixCheckpoints<F>,
@@ -22,7 +22,7 @@ impl<const XLEN: usize, const L: usize, const CP_INDEX: usize, F: JoltField> Spa
         C: ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
-        let bound_index = XLEN - L - 1;
+        let bound_index = XLEN - BOUND - 1;
         let mut result = checkpoints[CP_INDEX].unwrap_or(F::one());
 
         if let Some(r_x) = r_x {
@@ -63,7 +63,7 @@ impl<const XLEN: usize, const L: usize, const CP_INDEX: usize, F: JoltField> Spa
         C: ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
-        let bound_index = XLEN - L - 1;
+        let bound_index = XLEN - BOUND - 1;
         let mut result = checkpoints[CP_INDEX].unwrap_or(F::one());
 
         if j > 0 {
@@ -80,7 +80,7 @@ impl<const XLEN: usize, const L: usize, const CP_INDEX: usize, F: JoltField> Spa
     }
 }
 
-use crate::lookup_tables::clamp::CLAMP_OPS_UPPER;
+use crate::lookup_tables::clamp::CLAMP_BOUND;
 
-pub type OpsHigherIsZeroPrefix<const XLEN: usize> =
-    ZeroGtBoundPrefix<XLEN, CLAMP_OPS_UPPER, { Prefixes::OpsHigherIsZero as usize }>;
+pub type ClampHigherIsZeroPrefix<const XLEN: usize> =
+    HigherIsZeroPrefix<XLEN, CLAMP_BOUND, { Prefixes::ClampHigherIsZero as usize }>;

@@ -2,20 +2,18 @@ use crate::utils::lookup_bits::LookupBits;
 
 use super::SparseDenseSuffix;
 
-/// Suffix that evaluates to `word_lt_bound(bits)` only when all bits with
+/// Suffix that evaluates to `lower_word(bits)` only when all bits with
 /// significance >= 2^BOUND are zero; otherwise evaluates to 0.
-pub enum ZeroGtMulWordLtBoundSuffix<const XLEN: usize, const BOUND: usize> {}
+pub enum HZeroMulLWordSuffix<const XLEN: usize, const BOUND: usize> {}
 
-impl<const XLEN: usize, const BOUND: usize> SparseDenseSuffix
-    for ZeroGtMulWordLtBoundSuffix<XLEN, BOUND>
-{
+impl<const XLEN: usize, const BOUND: usize> SparseDenseSuffix for HZeroMulLWordSuffix<XLEN, BOUND> {
     fn suffix_mle(bits: LookupBits) -> u32 {
         let bound_index = XLEN - BOUND - 1;
         let len = bits.len();
         let bits_u64: u64 = bits.into();
 
         let suffix_start_index = XLEN - len;
-        let mut word_lt_bound = 0u32;
+        let mut lower_word = 0u32;
 
         for pos in 0..len {
             let global_index = suffix_start_index + pos;
@@ -27,14 +25,13 @@ impl<const XLEN: usize, const BOUND: usize> SparseDenseSuffix
 
             if global_index > bound_index {
                 let exponent = XLEN - global_index - 1;
-                word_lt_bound += bit << exponent;
+                lower_word += bit << exponent;
             }
         }
 
-        word_lt_bound
+        lower_word
     }
 }
 
-use crate::lookup_tables::clamp::CLAMP_OPS_UPPER;
-pub type OpsHZeroMulLWordSuffix<const XLEN: usize> =
-    ZeroGtMulWordLtBoundSuffix<XLEN, CLAMP_OPS_UPPER>;
+use crate::lookup_tables::clamp::CLAMP_BOUND;
+pub type ClampHZeroMulLWordSuffix<const XLEN: usize> = HZeroMulLWordSuffix<XLEN, CLAMP_BOUND>;

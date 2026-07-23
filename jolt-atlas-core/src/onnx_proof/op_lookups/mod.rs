@@ -296,6 +296,7 @@ impl InterleavedBitsMarker for ComputationNode {
     fn is_interleaved_operands(&self) -> bool {
         match self.operator {
             Operator::ReLU(_) => false,
+            Operator::Clamp(_) => false,
             _ => unimplemented!(),
         }
     }

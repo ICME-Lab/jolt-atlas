@@ -5,10 +5,10 @@ use crate::{
     utils::lookup_bits::LookupBits,
 };
 
-pub enum WordLtBoundPrefix<const XLEN: usize, const L: usize, const CP_INDEX: usize> {}
+pub enum LowerWordPrefix<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize> {}
 
-impl<const XLEN: usize, const L: usize, const CP_INDEX: usize, F: JoltField> SparseDensePrefix<F>
-    for WordLtBoundPrefix<XLEN, L, CP_INDEX>
+impl<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize, F: JoltField>
+    SparseDensePrefix<F> for LowerWordPrefix<XLEN, BOUND, CP_INDEX>
 {
     fn prefix_mle<C>(
         checkpoints: &PrefixCheckpoints<F>,
@@ -27,7 +27,7 @@ impl<const XLEN: usize, const L: usize, const CP_INDEX: usize, F: JoltField> Spa
             return F::zero();
         }
 
-        let lbound_index = XLEN - L - 1;
+        let lbound_index = XLEN - BOUND - 1;
         let mut result = checkpoints[CP_INDEX].unwrap_or(F::zero());
 
         if let Some(r_x) = r_x {
@@ -78,7 +78,7 @@ impl<const XLEN: usize, const L: usize, const CP_INDEX: usize, F: JoltField> Spa
             return None.into();
         }
 
-        let lbound_index = XLEN - L - 1;
+        let lbound_index = XLEN - BOUND - 1;
         let mut result = checkpoints[CP_INDEX].unwrap_or(F::zero());
 
         if j > 0 {
@@ -97,7 +97,7 @@ impl<const XLEN: usize, const L: usize, const CP_INDEX: usize, F: JoltField> Spa
     }
 }
 
-use crate::lookup_tables::clamp::CLAMP_OPS_UPPER;
+use crate::lookup_tables::clamp::CLAMP_BOUND;
 
-pub type OpsLowerWordPrefix<const XLEN: usize> =
-    WordLtBoundPrefix<XLEN, CLAMP_OPS_UPPER, { Prefixes::OpsLowerWord as usize }>;
+pub type ClampLowerWordPrefix<const XLEN: usize> =
+    LowerWordPrefix<XLEN, CLAMP_BOUND, { Prefixes::ClampLowerWord as usize }>;

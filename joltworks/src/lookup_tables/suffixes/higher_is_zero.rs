@@ -28,3 +28,5 @@ impl<const XLEN: usize, const BOUND: usize> SparseDenseSuffix for HigherIsZeroSu
 
 use crate::lookup_tables::clamp::CLAMP_TABLE_BOUND;
 pub type ClampHigherIsZeroSuffix<const XLEN: usize> = HigherIsZeroSuffix<XLEN, CLAMP_TABLE_BOUND>;
+
+pub type SatClampHigherIsZeroSuffix<const XLEN: usize> = HigherIsZeroSuffix<XLEN, 32>;

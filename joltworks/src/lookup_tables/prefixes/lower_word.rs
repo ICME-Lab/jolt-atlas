@@ -23,7 +23,11 @@ impl<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize, F: JoltField>
     {
         // j + b.len() is always >= XLEN in binary setups, where this prefix is unused.
         // In binary setups, getting the exponent is an operation that can underflow, so we exit early.
-        if j + b.len() >= XLEN {
+        // Also guard BOUND >= XLEN: this prefix type is shared across every table's checkpoint
+        // bookkeeping (`Prefixes::update_checkpoints` updates all registered prefixes every
+        // round, regardless of which table is actually being proven), so it must tolerate being
+        // instantiated at an XLEN smaller than its own BOUND without panicking.
+        if j + b.len() >= XLEN || BOUND >= XLEN {
             return F::zero();
         }
 
@@ -74,7 +78,8 @@ impl<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize, F: JoltField>
     {
         // j + suffix_len is always >= XLEN in binary setups, where this prefix is unused.
         // In binary setups, getting the exponent is an operation that can underflow, so we exit early.
-        if j + suffix_len >= XLEN {
+        // Also guard BOUND >= XLEN: see the comment in `prefix_mle` above.
+        if j + suffix_len >= XLEN || BOUND >= XLEN {
             return None.into();
         }
 
@@ -101,3 +106,6 @@ use crate::lookup_tables::clamp::CLAMP_TABLE_BOUND;
 
 pub type ClampLowerWordPrefix<const XLEN: usize> =
     LowerWordPrefix<XLEN, CLAMP_TABLE_BOUND, { Prefixes::ClampLowerWord as usize }>;
+
+pub type SatClampLowerWordPrefix<const XLEN: usize> =
+    LowerWordPrefix<XLEN, 32, { Prefixes::SatClampLowerWord as usize }>;

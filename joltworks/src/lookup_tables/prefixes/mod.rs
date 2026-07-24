@@ -9,11 +9,18 @@ use self::{and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix, or::OrPrefix
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     lookup_tables::prefixes::{
-        higher_is_zero::ClampHigherIsZeroPrefix, lower_msb::LowerMsbPrefix,
-        lower_word::ClampLowerWordPrefix, lower_word_no_msb::LowerWordNoMsbPrefix, msb::MsbPrefix,
-        not_lower_msb::NotLowerMsbPrefix, not_msb::NotMsbPrefix,
-        not_word_no_msb::NotWordNoMsbPrefix, sat_val::SatValPrefix, upper_eqo::UpperEqoPrefix,
-        upper_eqz::UpperEqzPrefix, word_no_msb::WordNoMsbPrefix,
+        higher_is_zero::{ClampHigherIsZeroPrefix, SatClampHigherIsZeroPrefix},
+        lower_msb::LowerMsbPrefix,
+        lower_word::{ClampLowerWordPrefix, SatClampLowerWordPrefix},
+        lower_word_no_msb::LowerWordNoMsbPrefix,
+        msb::MsbPrefix,
+        not_lower_msb::NotLowerMsbPrefix,
+        not_msb::NotMsbPrefix,
+        not_word_no_msb::NotWordNoMsbPrefix,
+        sat_val::SatValPrefix,
+        upper_eqo::UpperEqoPrefix,
+        upper_eqz::UpperEqzPrefix,
+        word_no_msb::WordNoMsbPrefix,
     },
     utils::lookup_bits::LookupBits,
 };
@@ -250,6 +257,8 @@ impl_sparse_dense_prefix!(
     LowerWordNoMsb      : LowerWordNoMsbPrefix,     // Lower word without MSB prefix (64-bit layout), used in `sat_clamp` decomposition
     ClampLowerWord      : ClampLowerWordPrefix,     // Lower word without bits of significance >= bound.
     ClampHigherIsZero   : ClampHigherIsZeroPrefix,  // Indicator that all bits with significance >= bound are zero.
+    SatClampLowerWord    : SatClampLowerWordPrefix,    // Lower 32-bit word, used in `SatClampViaClampTable` (BOUND=32).
+    SatClampHigherIsZero : SatClampHigherIsZeroPrefix, // Indicator that all bits with significance >= 32 are zero, used in `SatClampViaClampTable`.
 );
 
 #[derive(Clone, Copy)]

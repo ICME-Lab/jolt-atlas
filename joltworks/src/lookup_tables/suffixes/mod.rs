@@ -8,10 +8,13 @@
 use crate::{
     field::JoltField,
     lookup_tables::suffixes::{
-        higher_is_zero::ClampHigherIsZeroSuffix, hzero_mul_lword::ClampHZeroMulLWordSuffix,
-        lower_msb_upper_eqo_low::LowerMsbUpperEqoLowSuffix, neg_relu::NegReluSuffix,
+        higher_is_zero::{ClampHigherIsZeroSuffix, SatClampHigherIsZeroSuffix},
+        hzero_mul_lword::{ClampHZeroMulLWordSuffix, SatClampHZeroMulLWordSuffix},
+        lower_msb_upper_eqo_low::LowerMsbUpperEqoLowSuffix,
+        neg_relu::NegReluSuffix,
         not_lower_msb_upper_eqz::NotLowerMsbUpperEqzSuffix,
-        not_lower_msb_upper_eqz_low::NotLowerMsbUpperEqzLowSuffix, word_no_msb::WordNoMsbSuffix,
+        not_lower_msb_upper_eqz_low::NotLowerMsbUpperEqzLowSuffix,
+        word_no_msb::WordNoMsbSuffix,
     },
     utils::lookup_bits::LookupBits,
 };
@@ -108,6 +111,8 @@ impl_sparse_dense_suffix!(
     LowerMsbUpperEqoLow     : LowerMsbUpperEqoLowSuffix,    // `m * upper_eqo * low` suffix, used in `sat_clamp` decomposition
     ClampHigherIsZero       : ClampHigherIsZeroSuffix,      // Suffix that evaluates `higher_is_zero(bits)`.
     ClampHZeroMulLWord      : ClampHZeroMulLWordSuffix,     // Suffix that evaluates `higher_is_zero(bits) * lower_word(bits)`.
+    SatClampHigherIsZero    : SatClampHigherIsZeroSuffix,   // `higher_is_zero(bits)` at BOUND=32, used in `SatClampViaClampTable`.
+    SatClampHZeroMulLWord   : SatClampHZeroMulLWordSuffix,  // `higher_is_zero(bits) * lower_word(bits)` at BOUND=32, used in `SatClampViaClampTable`.
 );
 
 /// Type alias for suffix evaluation results in the field.

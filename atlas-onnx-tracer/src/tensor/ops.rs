@@ -3206,16 +3206,16 @@ pub mod nonlinearities {
             .unwrap()
     }
 
-    /// Clamps every element of the tensor to `[-2^bound_log, 2^bound_log]`.
+    /// Clamps every element of the tensor to `[-2^bound_log, 2^bound_log - 1]`.
     ///
     /// # Arguments
     /// * `a` - Input tensor
     /// * `bound_log` - log2 of the bound: elements are clamped into
-    ///                  `[-2^bound_log, 2^bound_log]`
+    ///                  `[-2^bound_log, 2^bound_log - 1]`
     #[tracing::instrument(name = "tensor::ops::nonlinearities::clamp", skip_all)]
     pub fn clamp(a: &Tensor<i32>, bound_log: usize) -> Tensor<i32> {
         let bound = 1i32 << bound_log;
-        a.par_enum_map(|_, a_i| Ok::<_, TensorError>(a_i.clamp(-bound, bound)))
+        a.par_enum_map(|_, a_i| Ok::<_, TensorError>(a_i.clamp(-bound, bound - 1)))
             .unwrap()
     }
 

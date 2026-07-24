@@ -22,6 +22,15 @@ impl<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize, F: JoltField>
         C: ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
+        // This prefix type is shared across every table's checkpoint bookkeeping
+        // (`Prefixes::update_checkpoints` updates all registered prefixes every round,
+        // regardless of which table is actually being proven), so it must tolerate being
+        // instantiated at an XLEN smaller than its own BOUND without panicking; the result
+        // is simply unused in that case.
+        if BOUND >= XLEN {
+            return F::one();
+        }
+
         let bound_index = XLEN - BOUND - 1;
         let mut result = checkpoints[CP_INDEX].unwrap_or(F::one());
 
@@ -63,6 +72,11 @@ impl<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize, F: JoltField>
         C: ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
+        // See the guard in `prefix_mle` above for why this is needed.
+        if BOUND >= XLEN {
+            return Some(F::one()).into();
+        }
+
         let bound_index = XLEN - BOUND - 1;
         let mut result = checkpoints[CP_INDEX].unwrap_or(F::one());
 
@@ -84,3 +98,6 @@ use crate::lookup_tables::clamp::CLAMP_TABLE_BOUND;
 
 pub type ClampHigherIsZeroPrefix<const XLEN: usize> =
     HigherIsZeroPrefix<XLEN, CLAMP_TABLE_BOUND, { Prefixes::ClampHigherIsZero as usize }>;
+
+pub type SatClampHigherIsZeroPrefix<const XLEN: usize> =
+    HigherIsZeroPrefix<XLEN, 32, { Prefixes::SatClampHigherIsZero as usize }>;

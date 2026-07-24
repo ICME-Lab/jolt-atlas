@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_clamp_saturating_range() {
-        // Deliberately spans both sides of [-2^CLAMP_BOUND, 2^CLAMP_BOUND] to exercise
+        // Deliberately spans both sides of [-2^CLAMP_BOUND, 2^CLAMP_BOUND - 1] to exercise
         // both saturation directions as well as the unsaturated middle.
         let t = 8;
         let bound = 1i32 << CLAMP_BOUND;

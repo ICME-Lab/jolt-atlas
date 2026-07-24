@@ -52,7 +52,11 @@ where
     T: ClampSpec + JoltLookupTable + Default,
 {
     fn prefixes(&self) -> Vec<Prefixes> {
-        vec![T::HigherIsZero::VARIANT, T::LowerWord::VARIANT]
+        vec![
+            T::HigherIsZero::VARIANT,
+            T::LowerWord::VARIANT,
+            Prefixes::Msb,
+        ]
     }
 
     fn suffixes(&self) -> Vec<Suffixes> {
@@ -66,12 +70,17 @@ where
     fn combine<F: JoltField>(&self, prefixes: &[PrefixEval<F>], suffixes: &[SuffixEval<F>]) -> F {
         let const_upper = F::from_u64(1u64 << Self::BOUND);
 
-        let [pre_higher_is_zero, pre_lower_word] = prefixes.try_into().unwrap();
+        let [pre_higher_is_zero, pre_lower_word, pre_msb] = prefixes.try_into().unwrap();
         let [suf_higher_is_zero, suf_hzero_mul_lword, suf_one] = suffixes.try_into().unwrap();
 
-        const_upper * suf_one
-            + pre_higher_is_zero * (suf_hzero_mul_lword + pre_lower_word * suf_one)
-            - pre_higher_is_zero * const_upper * suf_higher_is_zero
+        // Default to the upper bound
+        suf_one * const_upper
+        // If the input is < 2^BOUND, add lower word and cancel upper bound
+            + pre_higher_is_zero
+                * (suf_hzero_mul_lword + pre_lower_word * suf_one
+                    - suf_higher_is_zero * const_upper)
+        // If the input is negative, cancel upper bound
+            - pre_msb * suf_one * const_upper
     }
 }
 
@@ -80,10 +89,19 @@ pub struct ClampBoundedTable<const XLEN: usize, const BOUND: usize>;
 
 impl<const XLEN: usize, const BOUND: usize> JoltLookupTable for ClampBoundedTable<XLEN, BOUND> {
     fn materialize_entry(&self, index: u64) -> u64 {
-        if index >= 1 << BOUND {
+        let val: i64 = match XLEN {
+            8 => index as u8 as i8 as i64,
+            16 => index as u16 as i16 as i64,
+            32 => index as u32 as i32 as i64,
+            64 => index as i64,
+            _ => unimplemented!(),
+        };
+        if val < 0 {
+            0
+        } else if val >= 1 << BOUND {
             1 << BOUND
         } else {
-            index
+            val as u64
         }
     }
 
@@ -92,16 +110,21 @@ impl<const XLEN: usize, const BOUND: usize> JoltLookupTable for ClampBoundedTabl
         C: ChallengeFieldOps<F>,
         F: JoltField + FieldChallengeOps<C>,
     {
-        let indexed_r: Vec<_> = r.iter().enumerate().collect();
+        // Only the last XLEN bits hold the input value.
+        let offset = r.len() - XLEN;
+        let indexed_r: Vec<_> = r[offset..].iter().enumerate().collect();
         let ubound_index = XLEN - BOUND - 1;
 
-        // Indicator that all bits with significance >= 2^U are zero.
+        // sign bit
+        let msb = *indexed_r[0].1;
+
+        // Indicator that all bits with significance >= 2^BOUND are zero.
         let is_higher_is_zero: F = indexed_r[..ubound_index + 1]
             .iter()
             .map(|(_, &r_i)| F::one() - r_i)
             .product();
 
-        // Word value from bits with significance < 2^U.
+        // Word value from bits with significance < 2^BOUND.
         let lower_word: F = indexed_r[ubound_index + 1..]
             .iter()
             .map(|(i, &r_i)| {
@@ -113,13 +136,12 @@ impl<const XLEN: usize, const BOUND: usize> JoltLookupTable for ClampBoundedTabl
         let const_upper = F::from_i64(1 << BOUND);
 
         // Defaults to the upper bound
-        let mut res = const_upper;
+        const_upper
         // If input < 2^BOUND (all high-significance bits = 0),
-        // then we cancel the upper bound contribution,
-        // and add the input value (which is fully represented by the lower bits).
-        res += is_higher_is_zero * (lower_word - const_upper);
-
-        res
+        // add lower word and cancel upper bound
+            + is_higher_is_zero * (lower_word - const_upper)
+            // If input is negative, cancel upper bound
+            - msb * const_upper
     }
 }
 
@@ -163,7 +185,7 @@ mod test {
 
     #[test]
     fn mle_random() {
-        lookup_table_mle_random_test::<Fr, ClampTable<64>>();
+        lookup_table_mle_random_test::<Fr, ClampTable<XLEN>>();
     }
 
     #[test]

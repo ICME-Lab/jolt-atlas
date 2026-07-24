@@ -149,7 +149,7 @@ mod tests {
     fn test_clamp() {
         let T = 1 << 16;
         let mut rng = StdRng::seed_from_u64(0x888);
-        let input = Tensor::<i32>::random_range(&mut rng, &[T], 0..i32::MAX);
+        let input = Tensor::<i32>::random(&mut rng, &[T]);
         let model = clamp_model(T);
         unit_test_op(model, &[input]);
     }
@@ -158,7 +158,7 @@ mod tests {
     fn test_clamp_non_power_of_two_input_len() {
         let t = 1000;
         let mut rng = StdRng::seed_from_u64(0x889);
-        let input = Tensor::<i32>::random_range(&mut rng, &[t], 0..i32::MAX);
+        let input = Tensor::<i32>::random(&mut rng, &[t]);
         let model = clamp_model(t);
         unit_test_op(model, &[input]);
     }

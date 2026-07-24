@@ -33,5 +33,5 @@ impl<const XLEN: usize, const BOUND: usize> SparseDenseSuffix for HZeroMulLWordS
     }
 }
 
-use crate::lookup_tables::clamp::CLAMP_BOUND;
-pub type ClampHZeroMulLWordSuffix<const XLEN: usize> = HZeroMulLWordSuffix<XLEN, CLAMP_BOUND>;
+use crate::lookup_tables::clamp::CLAMP_TABLE_BOUND;
+pub type ClampHZeroMulLWordSuffix<const XLEN: usize> = HZeroMulLWordSuffix<XLEN, CLAMP_TABLE_BOUND>;

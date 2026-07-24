@@ -145,11 +145,18 @@ impl<const XLEN: usize, const BOUND: usize> JoltLookupTable for ClampBoundedTabl
     }
 }
 
-// This bound is also intended for future reuse by other saturating operators
-// (e.g. Tanh/Sigmoid/Erf, saturating Addition/Einsum) sharing the same table shape.
-pub const CLAMP_BOUND: usize = 10;
+/// The effective bound of the ONNX `Clamp` op: it clamps into `[-2^CLAMP_BOUND, 2^CLAMP_BOUND]`
+/// (see `jolt_atlas_core::onnx_proof::ops::clamp`, which offsets the input by `2^CLAMP_BOUND`
+/// to map that symmetric range onto this table's `[0, 2^CLAMP_TABLE_BOUND]` floor-at-0 domain).
+pub const CLAMP_BOUND: usize = 9;
 
-pub type ClampTable<const XLEN: usize> = ClampBoundedTable<XLEN, CLAMP_BOUND>;
+/// The underlying floor-at-0 lookup table's own bound, one more than [`CLAMP_BOUND`] so the
+/// offset symmetric range fits exactly. This bound is also intended for future reuse by other
+/// saturating operators (e.g. Tanh/Sigmoid/Erf, saturating Addition/Einsum) sharing the same
+/// table shape.
+pub const CLAMP_TABLE_BOUND: usize = CLAMP_BOUND + 1;
+
+pub type ClampTable<const XLEN: usize> = ClampBoundedTable<XLEN, CLAMP_TABLE_BOUND>;
 
 // Implementation of ClampSpec for the clamp table (upper-only: no lower correction).
 impl<const XLEN: usize> ClampSpec for ClampTable<XLEN> {
@@ -157,7 +164,7 @@ impl<const XLEN: usize> ClampSpec for ClampTable<XLEN> {
     type LowerWord = ClampLowerWordPrefix<XLEN>;
     type SufHigherIsZero = ClampHigherIsZeroSuffix<XLEN>;
     type SufHZeroMulLWord = ClampHZeroMulLWordSuffix<XLEN>;
-    const BOUND: usize = CLAMP_BOUND;
+    const BOUND: usize = CLAMP_TABLE_BOUND;
 }
 
 #[cfg(test)]

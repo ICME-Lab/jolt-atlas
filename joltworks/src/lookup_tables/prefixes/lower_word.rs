@@ -97,7 +97,7 @@ impl<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize, F: JoltField>
     }
 }
 
-use crate::lookup_tables::clamp::CLAMP_BOUND;
+use crate::lookup_tables::clamp::CLAMP_TABLE_BOUND;
 
 pub type ClampLowerWordPrefix<const XLEN: usize> =
-    LowerWordPrefix<XLEN, CLAMP_BOUND, { Prefixes::ClampLowerWord as usize }>;
+    LowerWordPrefix<XLEN, CLAMP_TABLE_BOUND, { Prefixes::ClampLowerWord as usize }>;

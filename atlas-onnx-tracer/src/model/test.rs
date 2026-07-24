@@ -135,13 +135,13 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
-    /// Add a Clamp node (clamps values into `[0, 2^upper_bound_log]`).
-    pub fn clamp(&mut self, input: Wire, upper_bound_log: usize) -> Wire {
+    /// Add a Clamp node (clamps values into `[-2^bound_log, 2^bound_log]`).
+    pub fn clamp(&mut self, input: Wire, bound_log: usize) -> Wire {
         let id = self.alloc();
         let output_dims = self.nodes[&input].output_dims.clone();
         let node = ComputationNode::new(
             id,
-            Operator::Clamp(Clamp { upper_bound_log }),
+            Operator::Clamp(Clamp { bound_log }),
             vec![input],
             output_dims,
         );

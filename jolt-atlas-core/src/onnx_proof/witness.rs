@@ -19,7 +19,10 @@ use crate::{
     onnx_proof::{
         clamp_lookups::{clamp_intermediate, clamp_lookup_bits, CLAMP_LOG_K},
         neural_teleport::{division::compute_division, n_bits_to_usize},
-        ops::{rsqrt::rsqrt_dividend, softmax_last_axis::rc::sat_diff_rc_bits},
+        ops::{
+            clamp::SymmetricClampOperands, rsqrt::rsqrt_dividend,
+            softmax_last_axis::rc::sat_diff_rc_bits,
+        },
         range_checking::range_check_operands::{
             DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
             RangeCheckingOperandsTrait, RiRangeCheckOperands, RsRangeCheckOperands,
@@ -35,7 +38,7 @@ use atlas_onnx_tracer::{
         softmax::{generate_exp_lut_decomposed, softmax_last_axis_decomposed},
         Operator, SoftmaxLastAxis,
     },
-    tensor::Tensor,
+    tensor::{Tensor, TensorError},
     utils::quantize::scale_to_multiplier,
 };
 use common::{
@@ -304,6 +307,27 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     .operands
                     .iter()
                     .map(|tensor| tensor.padded_next_power_of_two())
+                    .collect();
+                let operand_refs: Vec<_> = padded_operands.iter().collect();
+                let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
+                build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
+            }
+            CommittedPoly::SymmetricClampRaD(node_idx, d) => {
+                // The lookup index is the node's input offset by
+                // `SymmetricClampOperands::OFFSET` (see ops::clamp), not the raw input.
+                let computation_node = &model.graph.nodes[node_idx];
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let padded_operands: Vec<_> = layer_data
+                    .operands
+                    .iter()
+                    .map(|tensor| {
+                        tensor
+                            .padded_next_power_of_two()
+                            .par_enum_map(|_, v| -> Result<i32, TensorError> {
+                                Ok(v + SymmetricClampOperands::OFFSET)
+                            })
+                            .unwrap()
+                    })
                     .collect();
                 let operand_refs: Vec<_> = padded_operands.iter().collect();
                 let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);

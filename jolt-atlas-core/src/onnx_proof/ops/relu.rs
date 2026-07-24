@@ -45,7 +45,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
         results.push((ProofId(node.idx, ProofType::Execution), execution_proof));
 
         // RaOneHotChecks proof
-        let encoding = OpLookupEncoding::new(node);
+        let encoding = provider.encoding();
 
         let [ra_prover, hw_prover, bool_prover] = shout::ra_onehot_provers(
             &encoding,
@@ -93,7 +93,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
         )?;
 
         // Verify RaOneHotChecks
-        let encoding = OpLookupEncoding::new(node);
+        let encoding = provider.encoding();
         let [ra_verifier, hw_verifier, bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
         let ra_one_hot_proof = verifier
@@ -111,7 +111,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        let encoding = OpLookupEncoding::new(node);
+        let encoding: OpLookupEncoding = OpLookupEncoding::new(node);
         let d = encoding.one_hot_params().instruction_d;
         (0..d)
             .map(|i| CommittedPoly::NodeOutputRaD(node.idx, i))

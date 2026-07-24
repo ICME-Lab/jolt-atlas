@@ -30,7 +30,7 @@ impl From<&ComputationNode> for NodeRow {
         // Extract operator-specific details
         let details = match &node.operator {
             Operator::Broadcast(op) => format!("shape: {:?}", op.shape),
-            Operator::Clamp(op) => format!("upper_bound_log: {}", op.upper_bound_log),
+            Operator::Clamp(op) => format!("bound_log: {}", op.bound_log),
             Operator::Einsum(op) => format!("eq: {}", op.equation),
             Operator::GatherSmall(op) => {
                 format!("axis: {}, dict_len: {}", op.axis, op.dict_len)

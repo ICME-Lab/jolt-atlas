@@ -123,7 +123,7 @@ define_operators! {
         Add,
         Broadcast { shape: Vec<usize> },
         And,
-        Clamp { upper_bound_log: usize },
+        Clamp { bound_log: usize },
         Concat { axis: isize },
         Constant(Tensor<i32>),
         Cos { scale: i32 },

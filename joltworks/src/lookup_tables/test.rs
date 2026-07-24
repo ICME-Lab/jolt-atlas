@@ -6,7 +6,6 @@ use crate::{
 use common::consts::XLEN;
 use num::Integer;
 use rand::{rngs::StdRng, Rng, RngCore, SeedableRng};
-use strum::IntoEnumIterator;
 
 use super::{
     prefixes::{PrefixCheckpoints, Prefixes},
@@ -182,7 +181,7 @@ fn prefix_suffix_test_inner<
                     println!("Lookup index: {lookup_index}");
                     println!("j: {j} {prefix_bits} {suffix_bits}");
                     for (i, x) in prefix_evals.iter().enumerate() {
-                        println!("prefix_evals[{:?}] = {x}", Prefixes::iter().nth(i).unwrap());
+                        println!("prefix_evals[{:?}] = {x}", T::default().prefixes()[i]);
                     }
                     for (i, x) in suffix_evals.iter().enumerate() {
                         println!("suffix_evals[{:?}] = {x}", T::default().suffixes()[i]);

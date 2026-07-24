@@ -95,6 +95,23 @@ pub trait LookupOperandsTrait {
 
     /// Builds the encoding operands for the lookup table from the model's operand tensors.
     fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>>;
+
+    /// Virtual polynomial identifying this op's one-hot read-address ("ra") polynomial.
+    ///
+    /// Override when the lookup index domain is offset from the node's raw operand/output
+    /// (e.g. a symmetric-range clamp): the default `NodeOutputRa`/`NodeOutputRaD` witness
+    /// generation assumes the lookup index *is* the raw operand value, so an offsetting
+    /// helper needs its own virtual/committed polynomial pair with matching witness
+    /// generation (see `CommittedPoly::SymmetricClampRaD`).
+    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly
+    where
+        Self: Sized;
+
+    /// Committed polynomial for the `d`-th chunk of this op's one-hot read-address
+    /// decomposition. See [`Self::ra_virtual_poly`].
+    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly
+    where
+        Self: Sized;
 }
 
 #[derive(Default)]
@@ -112,6 +129,14 @@ impl LookupOperandsTrait for DefaultLookupOperands {
 
     fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>> {
         operand_tensors.to_vec()
+    }
+
+    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
+        VirtualPoly::NodeOutputRa(node_idx)
+    }
+
+    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
+        CommittedPoly::NodeOutputRaD(node_idx, d)
     }
 }
 
@@ -139,6 +164,12 @@ impl<H: LookupOperandsTrait + Default> OpLookupProvider<H> {
             computation_node,
             helper: H::default(),
         }
+    }
+
+    /// Builds the [`OpLookupEncoding`] for this provider's node, using the same `Helper`
+    /// so the Ra/RaD polynomial identifiers it exposes always match this provider's.
+    pub fn encoding(&self) -> OpLookupEncoding<H> {
+        OpLookupEncoding::new(&self.computation_node)
     }
 
     /// Combined prover flow: appends RAF claims + computes lookup indices + creates sumcheck prover.
@@ -197,7 +228,7 @@ where
 
     fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
         (
-            VirtualPoly::NodeOutputRa(self.computation_node.idx),
+            H::ra_virtual_poly(self.computation_node.idx),
             SumcheckId::NodeExecution(self.computation_node.idx),
         )
     }
@@ -237,27 +268,34 @@ where
 ///
 /// Implements the [`RaOneHotEncoding`] trait to provide ra one-hot checks for
 /// prefix-suffix lookups in the ONNX proof system.
-pub struct OpLookupEncoding {
+///
+/// Generic over the same `Helper` used by [`OpLookupProvider`], so that the ra/RaD
+/// polynomial identifiers it exposes stay in sync with whichever virtual/committed
+/// polynomial the helper's [`LookupOperandsTrait::ra_virtual_poly`] /
+/// [`LookupOperandsTrait::ra_committed_poly`] designate.
+pub struct OpLookupEncoding<Helper = DefaultLookupOperands> {
     /// Index of the computation node using this lookup encoding.
     pub node_idx: usize,
     /// log₂(T): number of output elements in the node.
     pub log_t: usize,
+    _helper: std::marker::PhantomData<Helper>,
 }
 
-impl OpLookupEncoding {
+impl<Helper> OpLookupEncoding<Helper> {
     /// Creates a new operation lookup encoding for the given computation node.
     pub fn new(computation_node: &ComputationNode) -> Self {
         use joltworks::utils::math::Math;
         Self {
             node_idx: computation_node.idx,
             log_t: computation_node.pow2_padded_num_output_elements().log_2(),
+            _helper: std::marker::PhantomData,
         }
     }
 }
 
-impl RaOneHotEncoding for OpLookupEncoding {
+impl<Helper: LookupOperandsTrait> RaOneHotEncoding for OpLookupEncoding<Helper> {
     fn committed_poly(&self, d: usize) -> CommittedPoly {
-        CommittedPoly::NodeOutputRaD(self.node_idx, d)
+        Helper::ra_committed_poly(self.node_idx, d)
     }
 
     fn r_cycle_source(&self) -> OpeningId {
@@ -269,7 +307,7 @@ impl RaOneHotEncoding for OpLookupEncoding {
 
     fn ra_source(&self) -> OpeningId {
         OpeningId::new(
-            VirtualPoly::NodeOutputRa(self.node_idx),
+            Helper::ra_virtual_poly(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
@@ -296,6 +334,7 @@ impl InterleavedBitsMarker for ComputationNode {
     fn is_interleaved_operands(&self) -> bool {
         match self.operator {
             Operator::ReLU(_) => false,
+            Operator::Clamp(_) => false,
             _ => unimplemented!(),
         }
     }

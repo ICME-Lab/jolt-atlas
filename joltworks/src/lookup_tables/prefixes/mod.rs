@@ -9,10 +9,18 @@ use self::{and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix, or::OrPrefix
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     lookup_tables::prefixes::{
-        lower_msb::LowerMsbPrefix, lower_word_no_msb::LowerWordNoMsbPrefix, msb::MsbPrefix,
-        not_lower_msb::NotLowerMsbPrefix, not_msb::NotMsbPrefix,
-        not_word_no_msb::NotWordNoMsbPrefix, sat_val::SatValPrefix, upper_eqo::UpperEqoPrefix,
-        upper_eqz::UpperEqzPrefix, word_no_msb::WordNoMsbPrefix,
+        higher_is_zero::{ClampHigherIsZeroPrefix, SatClampHigherIsZeroPrefix},
+        lower_msb::LowerMsbPrefix,
+        lower_word::{ClampLowerWordPrefix, SatClampLowerWordPrefix},
+        lower_word_no_msb::LowerWordNoMsbPrefix,
+        msb::MsbPrefix,
+        not_lower_msb::NotLowerMsbPrefix,
+        not_msb::NotMsbPrefix,
+        not_word_no_msb::NotWordNoMsbPrefix,
+        sat_val::SatValPrefix,
+        upper_eqo::UpperEqoPrefix,
+        upper_eqz::UpperEqzPrefix,
+        word_no_msb::WordNoMsbPrefix,
     },
     utils::lookup_bits::LookupBits,
 };
@@ -31,10 +39,14 @@ use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 pub mod and;
 /// Equality comparison prefix implementation.
 pub mod eq;
+/// Checks that all bits with significance >= given bound are zero.
+pub mod higher_is_zero;
 /// Less-than comparison prefix implementation.
 pub mod less_than;
 /// Lower 32-bit word sign bit (i32 sign bit) prefix implementation.
 pub mod lower_msb;
+/// Outputs the lower word of the input without bits of significance >= bound.
+pub mod lower_word;
 /// Lower word without MSB prefix implementation (64-bit layout, sign at position 32).
 pub mod lower_word_no_msb;
 /// MSB (most significant bit) prefix implementation.
@@ -106,6 +118,17 @@ pub trait SparseDensePrefix<F: JoltField>: 'static + Sync {
         F: FieldChallengeOps<C>;
 }
 
+/// Marker trait linking a concrete prefix implementation type to the
+/// [`Prefixes`] variant it is registered under.
+///
+/// Implemented automatically by [`impl_sparse_dense_prefix!`] for every
+/// prefix type in the macro's table, so the type-to-variant mapping can
+/// never drift out of sync with the enum.
+pub trait PrefixVariant {
+    /// The [`Prefixes`] variant this type is registered as.
+    const VARIANT: Prefixes;
+}
+
 macro_rules! impl_sparse_dense_prefix {
     ($($name:ident: $prefix:ident),* $(,)?) => {
 
@@ -115,6 +138,12 @@ macro_rules! impl_sparse_dense_prefix {
         pub enum Prefixes {
             $($name,)*
         }
+
+        $(
+            impl<const XLEN: usize> PrefixVariant for $prefix<XLEN> {
+                const VARIANT: Prefixes = Prefixes::$name;
+            }
+        )*
 
        impl Prefixes {
             /// Evalautes the MLE for this prefix:
@@ -211,21 +240,25 @@ macro_rules! impl_sparse_dense_prefix {
 }
 
 impl_sparse_dense_prefix!(
-    And             : AndPrefix,                // Bitwise AND prefix
-    Eq              : EqPrefix,                 // Equality comparison prefix
-    LessThan        : LessThanPrefix,           // Less-than comparison prefix
-    WordNoMsb       : WordNoMsbPrefix,     // Lower word without MSB prefix
-    NotMsb          : NotMsbPrefix,             // Not-MSB prefix
-    Or              : OrPrefix,                 // Bitwise OR prefix
-    Xor             : XorPrefix,                // Bitwise XOR prefix
-    Msb             : MsbPrefix,                // MSB (sign bit) prefix
-    NotWordNoMsb    : NotWordNoMsbPrefix,       // Two's complement negation prefix: `(!lower_word) + 1`
-    SatVal          : SatValPrefix,             // Saturated boundary value prefix: `m*MIN + (1-m)*MAX`, used in `sat_clamp` decomposition
-    UpperEqz        : UpperEqzPrefix,           // Upper half-word all-zeros (eqz) prefix, used in `sat_clamp` decomposition
-    UpperEqo        : UpperEqoPrefix,           // Upper half-word all-ones (eqo) prefix, used in `sat_clamp` decomposition
-    NotLowerMsb     : NotLowerMsbPrefix,        // Complement of the lower 32-bit word sign bit (1 − r[XLEN/2]), used in `sat_clamp` decomposition
-    LowerMsb        : LowerMsbPrefix,           // Lower 32-bit word sign bit (r[XLEN/2], the i32 sign bit), used in `sat_clamp` decomposition
-    LowerWordNoMsb  : LowerWordNoMsbPrefix,     // Lower word without MSB prefix (64-bit layout), used in `sat_clamp` decomposition
+    And                 : AndPrefix,                // Bitwise AND prefix
+    Eq                  : EqPrefix,                 // Equality comparison prefix
+    LessThan            : LessThanPrefix,           // Less-than comparison prefix
+    WordNoMsb           : WordNoMsbPrefix,          // Lower word without MSB prefix
+    NotMsb              : NotMsbPrefix,             // Not-MSB prefix
+    Or                  : OrPrefix,                 // Bitwise OR prefix
+    Xor                 : XorPrefix,                // Bitwise XOR prefix
+    Msb                 : MsbPrefix,                // MSB (sign bit) prefix
+    NotWordNoMsb        : NotWordNoMsbPrefix,       // Two's complement negation prefix: `(!lower_word) + 1`
+    SatVal              : SatValPrefix,             // Saturated boundary value prefix: `m*MIN + (1-m)*MAX`, used in `sat_clamp` decomposition
+    UpperEqz            : UpperEqzPrefix,           // Upper half-word all-zeros (eqz) prefix, used in `sat_clamp` decomposition
+    UpperEqo            : UpperEqoPrefix,           // Upper half-word all-ones (eqo) prefix, used in `sat_clamp` decomposition
+    NotLowerMsb         : NotLowerMsbPrefix,        // Complement of the lower 32-bit word sign bit (1 − r[XLEN/2]), used in `sat_clamp` decomposition
+    LowerMsb            : LowerMsbPrefix,           // Lower 32-bit word sign bit (r[XLEN/2], the i32 sign bit), used in `sat_clamp` decomposition
+    LowerWordNoMsb      : LowerWordNoMsbPrefix,     // Lower word without MSB prefix (64-bit layout), used in `sat_clamp` decomposition
+    ClampLowerWord      : ClampLowerWordPrefix,     // Lower word without bits of significance >= bound.
+    ClampHigherIsZero   : ClampHigherIsZeroPrefix,  // Indicator that all bits with significance >= bound are zero.
+    SatClampLowerWord    : SatClampLowerWordPrefix,    // Lower 32-bit word, used in `SatClampViaClampTable` (BOUND=32).
+    SatClampHigherIsZero : SatClampHigherIsZeroPrefix, // Indicator that all bits with significance >= 32 are zero, used in `SatClampViaClampTable`.
 );
 
 #[derive(Clone, Copy)]

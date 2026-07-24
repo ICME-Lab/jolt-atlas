@@ -8,9 +8,13 @@
 use crate::{
     field::JoltField,
     lookup_tables::suffixes::{
-        lower_msb_upper_eqo_low::LowerMsbUpperEqoLowSuffix, neg_relu::NegReluSuffix,
+        higher_is_zero::{ClampHigherIsZeroSuffix, SatClampHigherIsZeroSuffix},
+        hzero_mul_lword::{ClampHZeroMulLWordSuffix, SatClampHZeroMulLWordSuffix},
+        lower_msb_upper_eqo_low::LowerMsbUpperEqoLowSuffix,
+        neg_relu::NegReluSuffix,
         not_lower_msb_upper_eqz::NotLowerMsbUpperEqzSuffix,
-        not_lower_msb_upper_eqz_low::NotLowerMsbUpperEqzLowSuffix, word_no_msb::WordNoMsbSuffix,
+        not_lower_msb_upper_eqz_low::NotLowerMsbUpperEqzLowSuffix,
+        word_no_msb::WordNoMsbSuffix,
     },
     utils::lookup_bits::LookupBits,
 };
@@ -23,6 +27,10 @@ use self::{
 
 /// Bitwise AND suffix implementation.
 pub mod and;
+/// Checks that all bits with significance >= given bound are zero.
+pub mod higher_is_zero;
+/// Suffix that evaluates `higher_is_zero(bits) * lower_word(bits)`.
+pub mod hzero_mul_lword;
 /// Less-than comparison suffix implementation.
 pub mod less_than;
 /// `m * upper_eqo * low` suffix implementation, used in `sat_clamp` decomposition.
@@ -52,6 +60,17 @@ pub trait SparseDenseSuffix: 'static + Sync {
     fn suffix_mle(b: LookupBits) -> u32;
 }
 
+/// Marker trait linking a concrete suffix implementation type to the
+/// [`Suffixes`] variant it is registered under.
+///
+/// Implemented automatically by [`impl_sparse_dense_suffix!`] for every
+/// suffix type in the macro's table, so the type-to-variant mapping can
+/// never drift out of sync with the enum.
+pub trait SuffixVariant {
+    /// The [`Suffixes`] variant this type is registered as.
+    const VARIANT: Suffixes;
+}
+
 macro_rules! impl_sparse_dense_suffix {
     ($($name:ident : $suffix:ident),* $(,)?) => {
         /// An enum containing all suffixes used by Jolt's instruction lookup tables.
@@ -60,6 +79,12 @@ macro_rules! impl_sparse_dense_suffix {
         pub enum Suffixes {
             $($name),*
         }
+
+        $(
+            impl<const XLEN: usize> SuffixVariant for $suffix<XLEN> {
+                const VARIANT: Suffixes = Suffixes::$name;
+            }
+        )*
 
         impl Suffixes {
             /// Evaluates the MLE for this suffix on the bitvector `b`, where
@@ -84,6 +109,10 @@ impl_sparse_dense_suffix!(
     NotLowerMsbUpperEqz     : NotLowerMsbUpperEqzSuffix,    // `(1-m) * upper_eqz` suffix, used in `sat_clamp` decomposition
     NotLowerMsbUpperEqzLow  : NotLowerMsbUpperEqzLowSuffix, // `(1-m) * upper_eqz * low` suffix, used in `sat_clamp` decomposition
     LowerMsbUpperEqoLow     : LowerMsbUpperEqoLowSuffix,    // `m * upper_eqo * low` suffix, used in `sat_clamp` decomposition
+    ClampHigherIsZero       : ClampHigherIsZeroSuffix,      // Suffix that evaluates `higher_is_zero(bits)`.
+    ClampHZeroMulLWord      : ClampHZeroMulLWordSuffix,     // Suffix that evaluates `higher_is_zero(bits) * lower_word(bits)`.
+    SatClampHigherIsZero    : SatClampHigherIsZeroSuffix,   // `higher_is_zero(bits)` at BOUND=32, used in `SatClampViaClampTable`.
+    SatClampHZeroMulLWord   : SatClampHZeroMulLWordSuffix,  // `higher_is_zero(bits) * lower_word(bits)` at BOUND=32, used in `SatClampViaClampTable`.
 );
 
 /// Type alias for suffix evaluation results in the field.

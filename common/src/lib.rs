@@ -185,6 +185,15 @@ canonical_serde_enum! {
         /// * `0` – node index
         /// * `1` – decomposition index `d`
         RescaleRemainderRaD(usize, usize),
+
+        /// One-hot read-address decomposition for the **Clamp** operator's
+        /// symmetric-range lookup. The lookup index is the node's input
+        /// offset by `+2^(CLAMP_BOUND - 1)`, not the raw input, so this can't
+        /// share `NodeOutputRaD`'s witness generation (which assumes no offset).
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        SymmetricClampRaD(usize, usize),
     }
 }
 
@@ -434,5 +443,12 @@ canonical_serde_enum! {
 
         // TODO: rm once clamp is implemted for tanh
         DummyClampedTanhInput(usize),
+
+        /// Read-address polynomial for the **Clamp** operator's symmetric-range
+        /// lookup. Virtualized — [`CommittedPoly::SymmetricClampRaD`] commits its
+        /// decomposition.
+        ///
+        /// * `0` – node index
+        SymmetricClampRa(usize),
     }
 }

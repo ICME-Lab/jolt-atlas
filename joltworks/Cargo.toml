@@ -66,3 +66,6 @@ memory-stats = { version = "1.0.0", features = ["always_use_statm"] }
 
 # Testing
 serial_test.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

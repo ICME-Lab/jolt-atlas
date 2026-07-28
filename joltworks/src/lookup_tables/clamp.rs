@@ -175,9 +175,9 @@ impl<const XLEN: usize> ClampSpec for ClampTable<XLEN> {
 /// pattern `SymmetricClampOperands` already uses for the ONNX `Clamp` op -- to reproduce
 /// a saturating clamp to i32's exact range: [-2^31, 2^31 - 1] spans exactly 2^32 values,
 /// which this half-open BOUND=32 table represents with zero waste.
-pub type SatClampViaClampTable = ClampBoundedTable<64, 32>;
+pub type SaturationTable = ClampBoundedTable<64, 32>;
 
-impl ClampSpec for SatClampViaClampTable {
+impl ClampSpec for SaturationTable {
     type HigherIsZero = SatClampHigherIsZeroPrefix<64>;
     type LowerWord = SatClampLowerWordPrefix<64>;
     type SufHigherIsZero = SatClampHigherIsZeroSuffix<64>;
@@ -201,6 +201,7 @@ mod test {
     #[test]
     fn prefix_suffix() {
         prefix_suffix_test_unary::<XLEN, Fr, ClampTable<XLEN>>();
+        prefix_suffix_test_unary::<64, Fr, SaturationTable>();
     }
 
     #[test]
@@ -211,6 +212,7 @@ mod test {
     #[test]
     fn mle_random() {
         lookup_table_mle_random_test::<Fr, ClampTable<XLEN>>();
+        lookup_table_mle_random_test::<Fr, SaturationTable>();
     }
 
     #[test]
@@ -221,115 +223,6 @@ mod test {
     #[test]
     fn read_raf() {
         test_read_raf_sumcheck::<ClampTable<XLEN>, XLEN>();
-    }
-}
-
-#[cfg(test)]
-mod sat_clamp_via_clamp_test {
-    use super::*;
-    use crate::{
-        lookup_tables::{
-            sat_clamp::SatClampTable,
-            test::{lookup_table_mle_random_test, prefix_suffix_test_unary},
-        },
-        subprotocols::ps_shout::unary::tests::test_read_raf_sumcheck,
-    };
-    use ark_bn254::Fr;
-    use rand::{rngs::StdRng, Rng, SeedableRng};
-
-    const OFFSET: i64 = 1i64 << 31;
-
-    /// Applies the same offset trick `SymmetricClampOperands` uses in production: shift the
-    /// input by `2^31` into `SatClampViaClampTable`'s floor-at-0 domain, then shift the result
-    /// back. Only valid while `val + OFFSET` doesn't overflow `i64`, which holds for any input
-    /// within a wide margin of `i32`'s range -- all that matters for saturation behavior.
-    // `SatClampViaClampTable` is a type alias, not a struct definition, so clippy's
-    // `default_constructed_unit_structs` suggestion (dropping `::default()`) doesn't apply here.
-    #[allow(clippy::default_constructed_unit_structs)]
-    fn sat_via_clamp(val: i64) -> i64 {
-        let shifted = (val + OFFSET) as u64;
-        SatClampViaClampTable::default().materialize_entry(shifted) as i64 - OFFSET
-    }
-
-    #[test]
-    fn materialize_matches_sat_clamp_table() {
-        let expected = |val: i64| SatClampTable::<64>.materialize_entry(val as u64) as i64;
-
-        for val in [
-            i32::MIN as i64 - 1,
-            i32::MIN as i64,
-            i32::MAX as i64,
-            i32::MAX as i64 + 1,
-            0,
-        ] {
-            assert_eq!(sat_via_clamp(val), expected(val), "mismatch at val={val}");
-        }
-
-        let mut rng = StdRng::seed_from_u64(0x5a7c);
-        for _ in 0..10_000 {
-            // Sampled well within a margin that keeps `val + OFFSET` from overflowing `i64`,
-            // while still spanning far beyond `i32`'s range on both sides.
-            let val: i64 = rng.gen_range(-(1i64 << 40)..(1i64 << 40));
-            assert_eq!(sat_via_clamp(val), expected(val), "mismatch at val={val}");
-        }
-    }
-
-    #[test]
-    fn mle_random() {
-        lookup_table_mle_random_test::<Fr, SatClampViaClampTable>();
-    }
-
-    #[test]
-    fn prefix_suffix() {
-        prefix_suffix_test_unary::<64, Fr, SatClampViaClampTable>();
-    }
-
-    #[test]
-    fn read_raf() {
-        test_read_raf_sumcheck::<SatClampViaClampTable, 64>();
-    }
-}
-
-#[cfg(test)]
-mod bench {
-    use super::*;
-    use crate::{
-        lookup_tables::sat_clamp::SatClampTable,
-        subprotocols::ps_shout::unary::tests::test_read_raf_sumcheck,
-    };
-    use std::time::{Duration, Instant};
-
-    const ITERATIONS: u32 = 20;
-
-    /// Runs `f` `ITERATIONS` times and prints the averaged wall-clock time per call
-    /// (trace generation + prove + verify combined -- `test_read_raf_sumcheck` doesn't
-    /// expose prove/verify separately).
-    fn bench(label: &str, f: impl Fn()) {
-        let mut total = Duration::ZERO;
-        for _ in 0..ITERATIONS {
-            let start = Instant::now();
-            f();
-            total += start.elapsed();
-        }
-
-        println!(
-            "{label}: avg {:.2?} over {ITERATIONS} iterations (total {:.2?})",
-            total / ITERATIONS,
-            total,
-        );
-    }
-
-    /// Not a correctness test: run only to eyeball timing.
-    #[test]
-    #[ignore]
-    fn bench_sat_clamp_via_clamp() {
-        bench("SatClampViaClampTable", test_read_raf_sumcheck::<SatClampViaClampTable, 64>);
-    }
-
-    /// Not a correctness test: run only to eyeball timing.
-    #[test]
-    #[ignore]
-    fn bench_sat_clamp() {
-        bench("SatClampTable<64>", test_read_raf_sumcheck::<SatClampTable<64>, 64>);
+        test_read_raf_sumcheck::<SaturationTable, 64>();
     }
 }

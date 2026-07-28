@@ -1,25 +1,27 @@
-use crate::onnx_proof::{
-    op_lookups::{LookupOperandsTrait, OpLookupEncoding, OpLookupProvider},
-    ops::OperatorProofTrait,
-    ProofId, ProofType, Prover, Verifier,
+use crate::{
+    onnx_proof::{
+        op_lookups::{
+            DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider,
+        },
+        ops::OperatorProofTrait,
+        ProofId, ProofType, Prover, Verifier,
+    },
+    utils::compute_lookup_indices_from_operands,
 };
-use atlas_onnx_tracer::{
-    node::ComputationNode,
-    ops::Clamp,
-    tensor::{Tensor, TensorError},
-};
+use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode, ops::Clamp, tensor::Tensor};
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     self,
     field::JoltField,
     lookup_tables::clamp::{ClampTable, CLAMP_BOUND},
+    poly::opening_proof::OpeningId,
     subprotocols::{
         shout::{self, RaOneHotEncoding},
         sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
     },
     transcripts::Transcript,
-    utils::errors::ProofVerifyError,
+    utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
 
 use common::consts::XLEN;
@@ -36,6 +38,8 @@ impl SymmetricClampOperands {
 }
 
 impl LookupOperandsTrait for SymmetricClampOperands {
+    const LOG_K: usize = DefaultLookupOperands::LOG_K;
+
     fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
         (claims[0], claims[1] + F::from_u64(Self::OFFSET as u64))
     }
@@ -44,22 +48,27 @@ impl LookupOperandsTrait for SymmetricClampOperands {
         claim + F::from_u64(Self::OFFSET as u64)
     }
 
-    fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>> {
-        operand_tensors
-            .iter()
-            .map(|t| {
-                t.par_enum_map(|_, v| Ok::<_, TensorError>(v + Self::OFFSET))
-                    .unwrap()
-            })
-            .collect()
-    }
-
     fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
         VirtualPoly::SymmetricClampRa(node_idx)
     }
 
     fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
         CommittedPoly::SymmetricClampRaD(node_idx, d)
+    }
+
+    fn witness_opening_id(node: &ComputationNode) -> OpeningId {
+        DefaultLookupOperands::witness_opening_id(node)
+    }
+
+    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
+        DefaultLookupOperands.witness(node, trace)
+    }
+
+    /// Offsets by `2^CLAMP_BOUND` first, mapping `Clamp`'s symmetric range onto the
+    /// table's floor-at-0 domain.
+    fn lookup_bits(witness: &Tensor<i64>) -> Vec<LookupBits> {
+        let operand = witness.map(|v| v as i32 + Self::OFFSET);
+        compute_lookup_indices_from_operands(&[&operand], false)
     }
 }
 
@@ -77,7 +86,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
         let provider: OpLookupProvider<SymmetricClampOperands> =
             OpLookupProvider::new(node.clone());
         let (mut execution_sumcheck, lookup_indices) = provider
-            .read_raf_prove::<F, T, ClampTable<XLEN>>(
+            .read_raf_prove::<F, T, ClampTable<XLEN>, XLEN>(
                 &prover.trace,
                 &mut prover.accumulator,
                 &mut prover.transcript,
@@ -125,7 +134,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
         // Verify execution proof
         let provider: OpLookupProvider<SymmetricClampOperands> =
             OpLookupProvider::new(node.clone());
-        let verifier_sumcheck = provider.read_raf_verify::<F, T, ClampTable<XLEN>>(
+        let verifier_sumcheck = provider.read_raf_verify::<F, T, ClampTable<XLEN>, XLEN>(
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );

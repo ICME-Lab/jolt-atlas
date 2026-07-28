@@ -528,7 +528,10 @@ fn verify_relu_zk(
         assert_eq!(*pid, node.idx);
         let provider = OpLookupProvider::new(node.clone());
         let v = provider
-            .read_raf_verify::<F, T, ReluTable<{ common::consts::XLEN }>>(accumulator, transcript);
+            .read_raf_verify::<F, T, ReluTable<{ common::consts::XLEN }>, { common::consts::XLEN }>(
+                accumulator,
+                transcript,
+            );
         verify_zk_sumcheck_instances(zk_proof, vec![Box::new(v)], accumulator, transcript)?;
         *zk_proof_idx += 1;
     }
@@ -947,7 +950,10 @@ fn verify_fused_rebase_pre_zk(
     transcript: &mut T,
     zk_proof_idx: &mut usize,
 ) -> Result<(), ProofVerifyError> {
-    use crate::onnx_proof::clamp_lookups::{is_scalar, ClampEncoding, ClampLookupProvider};
+    use crate::onnx_proof::{
+        clamp_lookups::{is_scalar, ClampTable, SaturatingAccClampOperands, CLAMP_LOG_K},
+        op_lookups::{OpLookupEncoding, OpLookupProvider},
+    };
 
     // Mirror of the prover-side panic; see `prove_fused_rebase_pre_zk`.
     if is_scalar(node) {
@@ -963,8 +969,10 @@ fn verify_fused_rebase_pre_zk(
             *proof_node_idx, node.idx,
             "ZK sumcheck proof order mismatch"
         );
-        let provider = ClampLookupProvider::new(node.clone());
-        let execution_verifier = provider.read_raf_verify::<F, T>(accumulator, transcript);
+        let provider: OpLookupProvider<SaturatingAccClampOperands> =
+            OpLookupProvider::new(node.clone());
+        let execution_verifier =
+            provider.read_raf_verify::<F, T, ClampTable, CLAMP_LOG_K>(accumulator, transcript);
         verify_zk_sumcheck_instances(
             zk_proof,
             vec![Box::new(execution_verifier)],
@@ -981,7 +989,7 @@ fn verify_fused_rebase_pre_zk(
             *proof_node_idx, node.idx,
             "ZK sumcheck proof order mismatch"
         );
-        let encoding = ClampEncoding::new(node);
+        let encoding = OpLookupEncoding::<SaturatingAccClampOperands>::new(node);
         let [ra, hw, b] = joltworks::subprotocols::shout::ra_onehot_verifiers(
             &encoding,
             &*accumulator,
@@ -1721,7 +1729,7 @@ fn prove_relu_zk(
     // 2. Execution sumcheck (ps_shout read-raf)
     let provider = OpLookupProvider::new(node.clone());
     let (mut exec_sc, lookup_indices) = provider
-        .read_raf_prove::<F, T, ReluTable<{ common::consts::XLEN }>>(
+        .read_raf_prove::<F, T, ReluTable<{ common::consts::XLEN }>, { common::consts::XLEN }>(
             &prover.trace,
             &mut prover.accumulator,
             &mut prover.transcript,
@@ -1774,7 +1782,10 @@ fn prove_fused_rebase_pre_zk(
     stage_configs: &mut Vec<StageConfig>,
     zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
 ) -> atlas_onnx_tracer::tensor::Tensor<i32> {
-    use crate::onnx_proof::clamp_lookups::{is_scalar, ClampEncoding, ClampLookupProvider};
+    use crate::onnx_proof::{
+        clamp_lookups::{is_scalar, ClampTable, SaturatingAccClampOperands, CLAMP_LOG_K},
+        op_lookups::{OpLookupEncoding, OpLookupProvider},
+    };
 
     // Scalar fused nodes open `rescaled`/`R` in the clear and are checked by
     // the verifier directly (`fused_rebase::verify_post`); that cleartext
@@ -1795,12 +1806,14 @@ fn prove_fused_rebase_pre_zk(
     crate::onnx_proof::fused_rebase::cache_remainder_prove(node, prover, &remainder);
 
     // Clamp read-raf lookup: output = SatClamp(acc); acc appended as ClampAcc.
-    let provider = ClampLookupProvider::new(node.clone());
-    let (mut exec_sc, lookup_indices) = provider.read_raf_prove::<F, T>(
+    let provider = OpLookupProvider::with_helper(
+        node.clone(),
+        SaturatingAccClampOperands::with_precomputed(quotient),
+    );
+    let (mut exec_sc, lookup_indices) = provider.read_raf_prove::<F, T, ClampTable, CLAMP_LOG_K>(
         &prover.trace,
         &mut prover.accumulator,
         &mut prover.transcript,
-        Some(quotient),
     );
     let exec_proof = run_zk_sumcheck(
         &mut exec_sc,
@@ -1812,7 +1825,7 @@ fn prove_fused_rebase_pre_zk(
     zk_sumcheck_proofs.push((node.idx, exec_proof));
 
     // Clamp one-hot batch (Ra, HammingWeight, Booleanity) over `ClampRaD`.
-    let encoding = ClampEncoding::new(node);
+    let encoding = OpLookupEncoding::<SaturatingAccClampOperands>::new(node);
     let [mut ra, mut hw, mut b] = joltworks::subprotocols::shout::ra_onehot_provers(
         &encoding,
         &lookup_indices,

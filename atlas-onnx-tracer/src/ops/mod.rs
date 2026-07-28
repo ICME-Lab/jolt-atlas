@@ -25,6 +25,8 @@ pub mod div;
 pub mod einsum;
 /// Error function (erf) operator.
 pub mod erf;
+/// Clamped error function variant: clamps the input, then looks up a small dense table.
+pub mod erf_small_table;
 /// Gather operator for indexing and embedding lookups.
 pub mod gather;
 /// Identity (pass-through) operator.
@@ -131,6 +133,7 @@ define_operators! {
         Div,
         Einsum { equation: String, scale: i32 },
         Erf { scale: i32, tau: i32, log_table: usize },
+        ErfSmallTable,
         GatherSmall { axis: usize, dict_len: usize },
         GatherLarge { axis: usize, dict_len: usize },
         Identity,

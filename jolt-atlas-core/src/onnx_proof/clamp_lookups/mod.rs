@@ -20,7 +20,7 @@
 //! The one-hot read-address checks are over a 64-bit address, so the decomposition has
 //! `64 / log_k_chunk` committed chunks ([`CommittedPoly::ClampRaD`]).
 
-use super::op_lookups::{LookupOperandsTrait, OpLookupEncoding, OpLookupProvider};
+use super::op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider};
 use crate::onnx_proof::{ProofId, ProofType, Prover, Verifier};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
@@ -202,6 +202,13 @@ impl SaturatingAccClampOperands {
 
 impl LookupOperandsTrait for SaturatingAccClampOperands {
     const LOG_K: usize = CLAMP_LOG_K;
+
+    fn rv_claim<F: JoltField>(
+        node: &ComputationNode,
+        accumulator: &dyn joltworks::poly::opening_proof::OpeningAccumulator<F>,
+    ) -> F {
+        DefaultLookupOperands::rv_claim(node, accumulator)
+    }
 
     fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
         (claims[0], claims[1] + F::from_i64(Self::OFFSET))

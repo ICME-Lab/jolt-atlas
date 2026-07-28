@@ -8,8 +8,12 @@
 use crate::{
     field::JoltField,
     lookup_tables::suffixes::{
-        higher_is_zero::{ClampHigherIsZeroSuffix, SatClampHigherIsZeroSuffix},
-        hzero_mul_lword::{ClampHZeroMulLWordSuffix, SatClampHZeroMulLWordSuffix},
+        higher_is_zero::{
+            ActivationHigherIsZeroSuffix, ClampHigherIsZeroSuffix, SatClampHigherIsZeroSuffix,
+        },
+        hzero_mul_lword::{
+            ActivationHZeroMulLWordSuffix, ClampHZeroMulLWordSuffix, SatClampHZeroMulLWordSuffix,
+        },
         lower_msb_upper_eqo_low::LowerMsbUpperEqoLowSuffix,
         neg_relu::NegReluSuffix,
         not_lower_msb_upper_eqz::NotLowerMsbUpperEqzSuffix,
@@ -113,6 +117,8 @@ impl_sparse_dense_suffix!(
     ClampHZeroMulLWord      : ClampHZeroMulLWordSuffix,     // Suffix that evaluates `higher_is_zero(bits) * lower_word(bits)`.
     SatClampHigherIsZero    : SatClampHigherIsZeroSuffix,   // `higher_is_zero(bits)` at BOUND=32, used in `SatClampViaClampTable`.
     SatClampHZeroMulLWord   : SatClampHZeroMulLWordSuffix,  // `higher_is_zero(bits) * lower_word(bits)` at BOUND=32, used in `SatClampViaClampTable`.
+    ActivationHigherIsZero  : ActivationHigherIsZeroSuffix, // `higher_is_zero(bits)`, used by clamped activation tables (Erf/Sigmoid/Tanh).
+    ActivationHZeroMulLWord : ActivationHZeroMulLWordSuffix, // `higher_is_zero(bits) * lower_word(bits)`, used by clamped activation tables.
 );
 
 /// Type alias for suffix evaluation results in the field.

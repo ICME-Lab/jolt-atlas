@@ -194,6 +194,21 @@ canonical_serde_enum! {
         /// * `0` – node index
         /// * `1` – decomposition index `d`
         SymmetricClampRaD(usize, usize),
+
+        /// One-hot read-address decomposition for the clamped Erf/Sigmoid/Tanh
+        /// variants' activation-clamp lookup stage (see [`VirtualPoly::ActivationClampRa`]).
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        ActivationClampRaD(usize, usize),
+
+        /// One-hot read-address decomposition for the clamped Erf/Sigmoid/Tanh
+        /// variants' small dense activation-table execution stage (shared across
+        /// all three ops; see [`VirtualPoly::ActivationSmallRa`]).
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        ActivationSmallRaD(usize, usize),
     }
 }
 
@@ -450,5 +465,30 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         SymmetricClampRa(usize),
+
+        /// The clamped Erf/Sigmoid/Tanh variants' internal "clamped input" claim,
+        /// shared by both of the node's sumchecks: the small-table execution stage
+        /// uses it (gamma-batched) as part of its input claim, and the
+        /// activation-clamp lookup stage soundly proves it equals
+        /// `ActivationClampTable[raw_input]` -- unlike [`Self::DummyClampedTanhInput`],
+        /// this claim is *proven*, not asserted.
+        ///
+        /// * `0` – node index
+        ActivationClampedOutput(usize),
+
+        /// Read-address polynomial for the clamped Erf/Sigmoid/Tanh variants'
+        /// activation-clamp lookup stage (offset-trick, same shape as
+        /// [`Self::SymmetricClampRa`]). Virtualized --
+        /// [`CommittedPoly::ActivationClampRaD`] commits its decomposition.
+        ///
+        /// * `0` – node index
+        ActivationClampRa(usize),
+
+        /// Read-address polynomial for the clamped Erf/Sigmoid/Tanh variants'
+        /// small dense activation-table execution stage. Virtualized --
+        /// [`CommittedPoly::ActivationSmallRaD`] commits its decomposition.
+        ///
+        /// * `0` – node index
+        ActivationSmallRa(usize),
     }
 }

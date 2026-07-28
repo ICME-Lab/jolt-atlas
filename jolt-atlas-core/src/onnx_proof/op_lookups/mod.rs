@@ -91,6 +91,13 @@ pub trait LookupOperandsTrait {
     /// log₂ of this lookup's address width.
     const LOG_K: usize;
 
+    /// The lookup's "read value" claim (`rv_claim`): what the lookup's output is
+    /// asserted to equal. For most ops this is the node's own real output claim
+    /// (`accumulator.get_node_output_opening(node.idx).1`); a helper whose lookup
+    /// proves an internal advice claim instead (e.g. the clamped Erf/Sigmoid/Tanh
+    /// variants' `ActivationClamp` stage) overrides this to fetch that claim.
+    fn rv_claim<F: JoltField>(node: &ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> F;
+
     /// Transforms the operand claims, accounting for lookup-specific adjustments (e.g., offsetting).
     fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F);
 
@@ -98,29 +105,21 @@ pub trait LookupOperandsTrait {
     fn transform_output_claim<F: JoltField>(&self, claim: F) -> F;
 
     /// Virtual polynomial identifying this op's one-hot read-address ("ra") polynomial.
-    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly
-    where
-        Self: Sized;
+    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly;
 
     /// Committed polynomial for the `d`-th chunk of this op's one-hot read-address
     /// decomposition. See [`Self::ra_virtual_poly`].
-    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly
-    where
-        Self: Sized;
+    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly;
 
     /// `OpeningId` this helper's lookup witness claim is registered/read under.
-    fn witness_opening_id(node: &ComputationNode) -> OpeningId
-    where
-        Self: Sized;
+    fn witness_opening_id(node: &ComputationNode) -> OpeningId;
 
     /// The polynomial that is evaluated at `r_cycle` to produce the "raf" claim of the read-raf sumcheck.
     fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64>;
 
     /// Computes the `LookupBits` used for the read-raf sumcheck + one-hot checks, from
     /// `witness` (the same value [`Self::witness`] already computed).
-    fn lookup_bits(witness: &Tensor<i64>) -> Vec<LookupBits>
-    where
-        Self: Sized;
+    fn lookup_bits(witness: &Tensor<i64>) -> Vec<LookupBits>;
 }
 
 #[derive(Default)]
@@ -129,6 +128,10 @@ pub struct DefaultLookupOperands;
 
 impl LookupOperandsTrait for DefaultLookupOperands {
     const LOG_K: usize = XLEN;
+
+    fn rv_claim<F: JoltField>(node: &ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> F {
+        accumulator.get_node_output_opening(node.idx).1
+    }
 
     fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
         (claims[0], claims[1])
@@ -275,7 +278,7 @@ where
     H: LookupOperandsTrait,
 {
     fn read_raf_claims(&self, accumulator: &dyn OpeningAccumulator<F>) -> ReadRafClaims<F> {
-        let (_, rv_claim) = accumulator.get_node_output_opening(self.computation_node.idx);
+        let rv_claim = H::rv_claim(&self.computation_node, accumulator);
         let operand_id = H::witness_opening_id(&self.computation_node);
         let (_, operand_claim) = accumulator.get_virtual_polynomial_opening(operand_id);
 

@@ -1,16 +1,25 @@
 use std::fmt::Debug;
 
+use common::consts::ACTIVATION_TABLE_BOUND;
+
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     lookup_tables::{
         prefixes::{
-            higher_is_zero::{ClampHigherIsZeroPrefix, SatClampHigherIsZeroPrefix},
-            lower_word::{ClampLowerWordPrefix, SatClampLowerWordPrefix},
+            higher_is_zero::{
+                ActivationHigherIsZeroPrefix, ClampHigherIsZeroPrefix, SatClampHigherIsZeroPrefix,
+            },
+            lower_word::{ActivationLowerWordPrefix, ClampLowerWordPrefix, SatClampLowerWordPrefix},
             PrefixEval, PrefixVariant, Prefixes,
         },
         suffixes::{
-            higher_is_zero::{ClampHigherIsZeroSuffix, SatClampHigherIsZeroSuffix},
-            hzero_mul_lword::{ClampHZeroMulLWordSuffix, SatClampHZeroMulLWordSuffix},
+            higher_is_zero::{
+                ActivationHigherIsZeroSuffix, ClampHigherIsZeroSuffix, SatClampHigherIsZeroSuffix,
+            },
+            hzero_mul_lword::{
+                ActivationHZeroMulLWordSuffix, ClampHZeroMulLWordSuffix,
+                SatClampHZeroMulLWordSuffix,
+            },
             SuffixEval, SuffixVariant, Suffixes,
         },
         JoltLookupTable, PrefixSuffixDecompositionTrait,
@@ -185,6 +194,19 @@ impl ClampSpec for SaturationTable {
     const BOUND: usize = 32;
 }
 
+/// Clamps Erf/Sigmoid/Tanh input to `[-8, 8)` at model scale [`common::consts::SCALE_12`], before
+/// the small activation-table lookup.
+pub type ActivationClampTable<const XLEN: usize> =
+    ClampBoundedTable<XLEN, ACTIVATION_TABLE_BOUND>;
+
+impl<const XLEN: usize> ClampSpec for ActivationClampTable<XLEN> {
+    type HigherIsZero = ActivationHigherIsZeroPrefix<XLEN>;
+    type LowerWord = ActivationLowerWordPrefix<XLEN>;
+    type SufHigherIsZero = ActivationHigherIsZeroSuffix<XLEN>;
+    type SufHZeroMulLWord = ActivationHZeroMulLWordSuffix<XLEN>;
+    const BOUND: usize = ACTIVATION_TABLE_BOUND;
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -202,27 +224,32 @@ mod test {
     fn prefix_suffix() {
         prefix_suffix_test_unary::<XLEN, Fr, ClampTable<XLEN>>();
         prefix_suffix_test_unary::<64, Fr, SaturationTable>();
+        prefix_suffix_test_unary::<XLEN, Fr, ActivationClampTable<XLEN>>();
     }
 
     #[test]
     fn mle_full_hypercube() {
         lookup_table_mle_full_hypercube_test::<Fr, ClampTable<16>>();
+        lookup_table_mle_full_hypercube_test::<Fr, ActivationClampTable<16>>();
     }
 
     #[test]
     fn mle_random() {
         lookup_table_mle_random_test::<Fr, ClampTable<XLEN>>();
         lookup_table_mle_random_test::<Fr, SaturationTable>();
+        lookup_table_mle_random_test::<Fr, ActivationClampTable<XLEN>>();
     }
 
     #[test]
     fn mle_linearity() {
         lookup_table_mle_linearity_test::<XLEN, Fr, ClampTable<XLEN>>();
+        lookup_table_mle_linearity_test::<XLEN, Fr, ActivationClampTable<XLEN>>();
     }
 
     #[test]
     fn read_raf() {
         test_read_raf_sumcheck::<ClampTable<XLEN>, XLEN>();
         test_read_raf_sumcheck::<SaturationTable, 64>();
+        test_read_raf_sumcheck::<ActivationClampTable<XLEN>, XLEN>();
     }
 }

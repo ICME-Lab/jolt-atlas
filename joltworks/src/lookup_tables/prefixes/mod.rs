@@ -9,9 +9,11 @@ use self::{and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix, or::OrPrefix
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     lookup_tables::prefixes::{
-        higher_is_zero::{ClampHigherIsZeroPrefix, SatClampHigherIsZeroPrefix},
+        higher_is_zero::{
+            ActivationHigherIsZeroPrefix, ClampHigherIsZeroPrefix, SatClampHigherIsZeroPrefix,
+        },
         lower_msb::LowerMsbPrefix,
-        lower_word::{ClampLowerWordPrefix, SatClampLowerWordPrefix},
+        lower_word::{ActivationLowerWordPrefix, ClampLowerWordPrefix, SatClampLowerWordPrefix},
         lower_word_no_msb::LowerWordNoMsbPrefix,
         msb::MsbPrefix,
         not_lower_msb::NotLowerMsbPrefix,
@@ -259,6 +261,8 @@ impl_sparse_dense_prefix!(
     ClampHigherIsZero   : ClampHigherIsZeroPrefix,  // Indicator that all bits with significance >= bound are zero.
     SatClampLowerWord    : SatClampLowerWordPrefix,    // Lower 32-bit word, used in `SatClampViaClampTable` (BOUND=32).
     SatClampHigherIsZero : SatClampHigherIsZeroPrefix, // Indicator that all bits with significance >= 32 are zero, used in `SatClampViaClampTable`.
+    ActivationLowerWord      : ActivationLowerWordPrefix,      // Lower word without bits of significance >= bound, used by clamped activation tables (Erf/Sigmoid/Tanh).
+    ActivationHigherIsZero   : ActivationHigherIsZeroPrefix,   // Indicator that all bits with significance >= bound are zero, used by clamped activation tables.
 );
 
 #[derive(Clone, Copy)]

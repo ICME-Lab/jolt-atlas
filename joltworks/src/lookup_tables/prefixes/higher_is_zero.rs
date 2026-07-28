@@ -95,9 +95,16 @@ impl<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize, F: JoltField>
 }
 
 use crate::lookup_tables::clamp::CLAMP_TABLE_BOUND;
+use common::consts::ACTIVATION_TABLE_BOUND;
 
 pub type ClampHigherIsZeroPrefix<const XLEN: usize> =
     HigherIsZeroPrefix<XLEN, CLAMP_TABLE_BOUND, { Prefixes::ClampHigherIsZero as usize }>;
 
 pub type SatClampHigherIsZeroPrefix<const XLEN: usize> =
     HigherIsZeroPrefix<XLEN, 32, { Prefixes::SatClampHigherIsZero as usize }>;
+
+pub type ActivationHigherIsZeroPrefix<const XLEN: usize> = HigherIsZeroPrefix<
+    XLEN,
+    ACTIVATION_TABLE_BOUND,
+    { Prefixes::ActivationHigherIsZero as usize },
+>;

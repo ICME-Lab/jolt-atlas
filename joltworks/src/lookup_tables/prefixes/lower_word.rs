@@ -103,9 +103,13 @@ impl<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize, F: JoltField>
 }
 
 use crate::lookup_tables::clamp::CLAMP_TABLE_BOUND;
+use common::consts::ACTIVATION_TABLE_BOUND;
 
 pub type ClampLowerWordPrefix<const XLEN: usize> =
     LowerWordPrefix<XLEN, CLAMP_TABLE_BOUND, { Prefixes::ClampLowerWord as usize }>;
 
 pub type SatClampLowerWordPrefix<const XLEN: usize> =
     LowerWordPrefix<XLEN, 32, { Prefixes::SatClampLowerWord as usize }>;
+
+pub type ActivationLowerWordPrefix<const XLEN: usize> =
+    LowerWordPrefix<XLEN, ACTIVATION_TABLE_BOUND, { Prefixes::ActivationLowerWord as usize }>;

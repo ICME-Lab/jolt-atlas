@@ -499,6 +499,20 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
+    /// Add a clamped error function (erf) activation node: clamps the input, then
+    /// looks up a small dense table -- see `atlas_onnx_tracer::ops::ErfSmallTable`.
+    pub fn erf_small_table(&mut self, input: Wire) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&input].output_dims.clone();
+        let node = ComputationNode::new(
+            id,
+            Operator::ErfSmallTable(ErfSmallTable),
+            vec![input],
+            output_dims,
+        );
+        self.insert_node(node)
+    }
+
     /// Add a sigmoid activation node.
     pub fn sigmoid(&mut self, input: Wire) -> Wire {
         let id = self.alloc();

@@ -38,11 +38,11 @@ use atlas_onnx_tracer::{
         softmax::{generate_exp_lut_decomposed, softmax_last_axis_decomposed},
         Operator, SoftmaxLastAxis,
     },
-    tensor::{Tensor, TensorError},
+    tensor::{ops::nonlinearities, Tensor, TensorError},
     utils::quantize::scale_to_multiplier,
 };
 use common::{
-    consts::{LOG_K, XLEN},
+    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_BOUND, LOG_K, XLEN},
     parallel::par_enabled,
     CommittedPoly,
 };
@@ -119,6 +119,34 @@ fn build_teleport_activation_rad_witness<F: JoltField>(
         .map(|&x| n_bits_to_usize(x, log_table))
         .collect();
     let one_hot_params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_table);
+    let h_indices =
+        subprotocols::shout::compute_instruction_h_indices(&lookup_indices, &one_hot_params);
+    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+        h_indices[d]
+            .par_iter()
+            .with_min_len(par_enabled())
+            .map(|&h| h.map(|h| h as u16))
+            .collect(),
+        one_hot_params.k_chunk,
+    ))
+}
+
+/// Builds a one-hot RaD witness for the clamped Erf/Sigmoid/Tanh variants' small
+/// dense activation-table execution stage: clamps the raw input directly (no
+/// `tau`-division), maps to lookup indices, then constructs the `d`-th one-hot
+/// address chunk.
+fn build_activation_small_rad_witness<F: JoltField>(
+    input: &Tensor<i32>,
+    d: usize,
+) -> MultilinearPolynomial<F> {
+    let clamped = nonlinearities::clamp(input, ACTIVATION_BOUND);
+    let lookup_indices: Vec<usize> = clamped
+        .par_iter()
+        .with_min_len(par_enabled())
+        .map(|&x| n_bits_to_usize(x, ACTIVATION_TABLE_BOUND))
+        .collect();
+    let one_hot_params =
+        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), ACTIVATION_TABLE_BOUND);
     let h_indices =
         subprotocols::shout::compute_instruction_h_indices(&lookup_indices, &one_hot_params);
     MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
@@ -332,6 +360,33 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let operand_refs: Vec<_> = padded_operands.iter().collect();
                 let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
                 build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
+            }
+            CommittedPoly::ActivationClampRaD(node_idx, d) => {
+                // The lookup index is the node's input offset by
+                // `1 << ACTIVATION_BOUND` (see ops::activation_clamped), not the raw input.
+                let computation_node = &model.graph.nodes[node_idx];
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let padded_operands: Vec<_> = layer_data
+                    .operands
+                    .iter()
+                    .map(|tensor| {
+                        tensor
+                            .padded_next_power_of_two()
+                            .par_enum_map(|_, v| -> Result<i32, TensorError> {
+                                Ok(v + (1 << ACTIVATION_BOUND))
+                            })
+                            .unwrap()
+                    })
+                    .collect();
+                let operand_refs: Vec<_> = padded_operands.iter().collect();
+                let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
+                build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
+            }
+            CommittedPoly::ActivationSmallRaD(node_idx, d) => {
+                let computation_node = &model.graph.nodes[node_idx];
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let input = &layer_data.operands[0];
+                build_activation_small_rad_witness(input, *d)
             }
             CommittedPoly::ClampRaD(node_idx, d) => {
                 // Saturating Add/Sub: the lookup index is the pre-clamp i64

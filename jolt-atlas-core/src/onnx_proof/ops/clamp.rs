@@ -40,6 +40,13 @@ impl SymmetricClampOperands {
 impl LookupOperandsTrait for SymmetricClampOperands {
     const LOG_K: usize = DefaultLookupOperands::LOG_K;
 
+    fn rv_claim<F: JoltField>(
+        node: &ComputationNode,
+        accumulator: &dyn joltworks::poly::opening_proof::OpeningAccumulator<F>,
+    ) -> F {
+        DefaultLookupOperands::rv_claim(node, accumulator)
+    }
+
     fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
         (claims[0], claims[1] + F::from_u64(Self::OFFSET as u64))
     }

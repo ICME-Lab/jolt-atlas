@@ -91,12 +91,9 @@ pub trait LookupOperandsTrait {
     /// log₂ of this lookup's address width.
     const LOG_K: usize;
 
-    /// The lookup's "read value" claim (`rv_claim`): what the lookup's output is
-    /// asserted to equal. For most ops this is the node's own real output claim
-    /// (`accumulator.get_node_output_opening(node.idx).1`); a helper whose lookup
-    /// proves an internal advice claim instead (e.g. the clamped Erf/Sigmoid/Tanh
-    /// variants' `ActivationClamp` stage) overrides this to fetch that claim.
-    fn rv_claim<F: JoltField>(node: &ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> F;
+    /// The lookup's "read value" claim (`rv_claim`): what the lookup's output is asserted to equal.
+    fn rv_claim<F: JoltField>(node: &ComputationNode, accumulator: &dyn OpeningAccumulator<F>)
+        -> F;
 
     /// Transforms the operand claims, accounting for lookup-specific adjustments (e.g., offsetting).
     fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F);
@@ -129,7 +126,10 @@ pub struct DefaultLookupOperands;
 impl LookupOperandsTrait for DefaultLookupOperands {
     const LOG_K: usize = XLEN;
 
-    fn rv_claim<F: JoltField>(node: &ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> F {
+    fn rv_claim<F: JoltField>(
+        node: &ComputationNode,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> F {
         accumulator.get_node_output_opening(node.idx).1
     }
 

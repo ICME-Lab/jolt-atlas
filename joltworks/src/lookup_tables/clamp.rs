@@ -9,7 +9,9 @@ use crate::{
             higher_is_zero::{
                 ActivationHigherIsZeroPrefix, ClampHigherIsZeroPrefix, SatClampHigherIsZeroPrefix,
             },
-            lower_word::{ActivationLowerWordPrefix, ClampLowerWordPrefix, SatClampLowerWordPrefix},
+            lower_word::{
+                ActivationLowerWordPrefix, ClampLowerWordPrefix, SatClampLowerWordPrefix,
+            },
             PrefixEval, PrefixVariant, Prefixes,
         },
         suffixes::{
@@ -194,10 +196,9 @@ impl ClampSpec for SaturationTable {
     const BOUND: usize = 32;
 }
 
-/// Clamps Erf/Sigmoid/Tanh input to `[-8, 8)` at model scale [`common::consts::SCALE_12`], before
+/// Clamps Erf/Sigmoid/Tanh input to `[-8, 8)` at model scale [`common::consts::SCALE_8`], before
 /// the small activation-table lookup.
-pub type ActivationClampTable<const XLEN: usize> =
-    ClampBoundedTable<XLEN, ACTIVATION_TABLE_BOUND>;
+pub type ActivationClampTable<const XLEN: usize> = ClampBoundedTable<XLEN, ACTIVATION_TABLE_BOUND>;
 
 impl<const XLEN: usize> ClampSpec for ActivationClampTable<XLEN> {
     type HigherIsZero = ActivationHigherIsZeroPrefix<XLEN>;

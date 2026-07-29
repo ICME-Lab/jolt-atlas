@@ -718,120 +718,20 @@ fn verify_div_zk(
     Ok(())
 }
 
-/// Verify a neural teleportation operator ZK proof.
+/// Erf/Sigmoid/Tanh verification migrated to the `activation_clamped` flow; see the
+/// matching stub on [`prove_neural_teleport_zk`] for why this isn't implemented.
 fn verify_neural_teleport_zk(
     node: &atlas_onnx_tracer::node::ComputationNode,
-    model: &atlas_onnx_tracer::model::Model,
-    bundle: &ZkProofBundle,
-    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
-    transcript: &mut T,
-    zk_proof_idx: &mut usize,
+    _model: &atlas_onnx_tracer::model::Model,
+    _bundle: &ZkProofBundle,
+    _accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    _transcript: &mut T,
+    _zk_proof_idx: &mut usize,
 ) -> Result<(), ProofVerifyError> {
-    use crate::onnx_proof::{
-        neural_teleport::{
-            division::TeleportDivisionVerifier, eval_shift::EvalShiftVerifier,
-            range_and_onehot::NeuralTeleportRangeOneHot,
-        },
-        range_checking::{
-            range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding,
-            RangeCheckProvider,
-        },
-    };
-    use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
-
-    // 1. Eval reduction
-    verify_zk_eval_reduction(node, bundle, accumulator, transcript)?;
-
-    let tau = match &node.operator {
-        Operator::Sigmoid(op) => op.tau,
-        Operator::Tanh(op) => op.tau,
-        Operator::Erf(op) => op.tau,
-        _ => unreachable!(),
-    };
-
-    // 2. Division + Reduction sumchecks (batched, mirroring non-ZK path)
-    {
-        let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        assert_eq!(*proof_node_idx, node.idx);
-        let div_verifier = TeleportDivisionVerifier::new(node.clone(), accumulator, tau);
-        let eval_shift_verifier = EvalShiftVerifier::new(node.clone(), accumulator);
-        verify_zk_sumcheck_instances(
-            zk_proof,
-            vec![Box::new(div_verifier), Box::new(eval_shift_verifier)],
-            accumulator,
-            transcript,
-        )?;
-        *zk_proof_idx += 1;
-    }
-
-    // 3. Lookup sumcheck
-    {
-        let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        assert_eq!(*proof_node_idx, node.idx);
-        let verifier_instances = create_verifier_instances(node, accumulator, model, transcript);
-        verify_zk_sumcheck_instances(zk_proof, verifier_instances, accumulator, transcript)?;
-        *zk_proof_idx += 1;
-    }
-
-    // 4. Range-check + operator-specific one-hot
-    {
-        let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        assert_eq!(*proof_node_idx, node.idx);
-        let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-        let rangecheck_verifier = rangecheck_provider
-            .read_raf_verify::<F, T, UnsignedLessThanTable<{ common::consts::XLEN }>>(
-                accumulator,
-                transcript,
-            );
-        macro_rules! verify_ra_onehot {
-            ($op:expr) => {{
-                let ra_encoding = NeuralTeleportRangeOneHot::<F, T>::ra_encoding($op, node);
-                let ra_v = joltworks::subprotocols::shout::ra_onehot_verifiers(
-                    &ra_encoding,
-                    &*accumulator,
-                    transcript,
-                );
-                let mut instances: Vec<
-                    Box<
-                        dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<
-                            F,
-                            T,
-                        >,
-                    >,
-                > = vec![Box::new(rangecheck_verifier)];
-                instances.extend(ra_v);
-                verify_zk_sumcheck_instances(zk_proof, instances, accumulator, transcript)
-            }};
-        }
-        match &node.operator {
-            Operator::Sigmoid(op) => verify_ra_onehot!(op)?,
-            Operator::Tanh(op) => verify_ra_onehot!(op)?,
-            Operator::Erf(op) => verify_ra_onehot!(op)?,
-            _ => unreachable!(),
-        };
-        *zk_proof_idx += 1;
-    }
-
-    // 5. Range-check one-hot/hamming-weight consistency
-    {
-        let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        assert_eq!(*proof_node_idx, node.idx);
-        let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-        let [rc_ra, rc_hw, rc_bool] = joltworks::subprotocols::shout::ra_onehot_verifiers(
-            &rc_encoding,
-            accumulator,
-            transcript,
-        );
-        verify_zk_sumcheck_instances(
-            zk_proof,
-            vec![rc_ra, rc_hw, rc_bool],
-            accumulator,
-            transcript,
-        )?;
-        *zk_proof_idx += 1;
-    }
-
-    Ok(())
+    unimplemented!(
+        "zk-mode verification for {:?} is not yet implemented for the clamped-activation flow",
+        node.operator
+    )
 }
 
 /// Verify Cos/Sin ZK proof: custom flow mirroring prove_cos_sin_zk.
@@ -1049,170 +949,26 @@ fn verify_fused_rebase_post_zk(
     Ok(())
 }
 
-/// Prove a neural teleportation operator (Sigmoid, Tanh, Erf) with ZK.
-/// Default flow: eval reduction first, then division + lookup + range/onehot stages.
+/// Erf/Sigmoid/Tanh proving migrated to the `activation_clamped` flow (see
+/// `ops/activation_clamped/mod.rs`); zk-mode support for that flow doesn't exist yet
+/// (out of scope for that migration -- `zk.rs` already has unrelated pre-existing
+/// compile issues on this branch, so this is left as a stub rather than reimplemented).
 #[expect(clippy::too_many_arguments)]
 fn prove_neural_teleport_zk(
     node: &atlas_onnx_tracer::node::ComputationNode,
-    prover: &mut Prover<F, T>,
-    model: &atlas_onnx_tracer::model::Model,
-    pedersen_gens: &PedersenGenerators<C>,
-    blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
-    stage_configs: &mut Vec<StageConfig>,
-    eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
-    eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
-    zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
+    _prover: &mut Prover<F, T>,
+    _model: &atlas_onnx_tracer::model::Model,
+    _pedersen_gens: &PedersenGenerators<C>,
+    _blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+    _stage_configs: &mut Vec<StageConfig>,
+    _eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
+    _eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
+    _zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
 ) {
-    use crate::onnx_proof::{
-        neural_teleport::{
-            division::{TeleportDivisionParams, TeleportDivisionProver},
-            eval_shift::{EvalShiftParams, EvalShiftProver},
-            range_and_onehot::NeuralTeleportRangeOneHot,
-        },
-        range_checking::{
-            range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding,
-            RangeCheckProvider,
-        },
-    };
-    use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
-
-    // 1. Eval reduction (standard, before sumchecks)
-    prove_zk_eval_reduction(
-        node,
-        prover,
-        pedersen_gens,
-        eval_reduction_proofs,
-        eval_reduction_h_commitments,
-    );
-
-    // Dispatch to get operator-specific tau and create the lookup prover instance
-    let tau = match &node.operator {
-        Operator::Sigmoid(op) => op.tau,
-        Operator::Tanh(op) => op.tau,
-        Operator::Erf(op) => op.tau,
-        _ => unreachable!(),
-    };
-
-    // 2. Division + Reduction sumchecks (batched, mirroring non-ZK path)
-    let div_params = TeleportDivisionParams::<F>::new(node.clone(), &prover.accumulator, tau);
-    let mut div_sc = TeleportDivisionProver::new(&prover.trace, div_params);
-    let eval_shift_params = EvalShiftParams::new(node.clone(), &prover.accumulator);
-    let mut eval_shift_sc = EvalShiftProver::initialize(&prover.trace, eval_shift_params);
-    let div_proof = run_zk_batched_sumcheck(
-        vec![&mut div_sc, &mut eval_shift_sc],
-        prover,
-        blindfold_accumulator,
-        stage_configs,
-        pedersen_gens,
-    );
-    zk_sumcheck_proofs.push((node.idx, div_proof));
-
-    // 3. Lookup sumcheck (operator-specific: needs mutable accumulator/transcript)
-    // Extra trailing args are forwarded to `initialize`: `TanhProver::initialize`
-    // additionally takes the opening accumulator + transcript to append the
-    // clamped-input advice (`VirtualPoly::DummyClampedTanhInput`, #256); the
-    // append is transcript-quiet in zk mode, mirroring `TanhVerifier::new`.
-    macro_rules! prove_lookup_zk {
-        ($Params:ty, $Prover:ty, $op:expr $(, $init_extra:expr)*) => {{
-            let params = <$Params>::new(
-                node.clone(),
-                &model.graph,
-                &prover.accumulator,
-                &mut prover.transcript,
-                $op.clone(),
-            );
-            let mut sc = <$Prover>::initialize(&prover.trace, params $(, $init_extra)*);
-            let proof = run_zk_sumcheck(
-                &mut sc,
-                prover,
-                blindfold_accumulator,
-                stage_configs,
-                pedersen_gens,
-            );
-            zk_sumcheck_proofs.push((node.idx, proof));
-        }};
-    }
-    match &node.operator {
-        Operator::Sigmoid(op) => {
-            use crate::onnx_proof::ops::sigmoid::{SigmoidParams, SigmoidProver};
-            prove_lookup_zk!(SigmoidParams::<F>, SigmoidProver::<F>, op);
-        }
-        Operator::Tanh(op) => {
-            use crate::onnx_proof::ops::tanh::{TanhParams, TanhProver};
-            prove_lookup_zk!(
-                TanhParams::<F>,
-                TanhProver::<F>,
-                op,
-                &mut prover.accumulator,
-                &mut prover.transcript
-            );
-        }
-        Operator::Erf(op) => {
-            use crate::onnx_proof::ops::erf::{ErfParams, ErfProver};
-            prove_lookup_zk!(ErfParams::<F>, ErfProver::<F>, op);
-        }
-        _ => unreachable!(),
-    }
-
-    // 4. Range-check + operator-specific one-hot (batched: rangecheck + 3 ra_onehot)
-    // Helper macro to avoid dynamic dispatch on RaOneHotEncoding (uses &impl).
-    macro_rules! prove_range_and_onehot_zk {
-        ($op:expr) => {{
-            let lookup_indices =
-                NeuralTeleportRangeOneHot::<F, T>::lookup_indices($op, node, &prover.trace);
-            let ra_encoding = NeuralTeleportRangeOneHot::<F, T>::ra_encoding($op, node);
-            let rangecheck_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-            let (rangecheck_sumcheck, rc_lookup_indices) = rangecheck_provider
-                .read_raf_prove::<F, T, UnsignedLessThanTable<{ common::consts::XLEN }>>(
-                    &prover.trace,
-                    &mut prover.accumulator,
-                    &mut prover.transcript,
-                );
-            let ra_onehot = joltworks::subprotocols::shout::ra_onehot_provers(
-                &ra_encoding,
-                &lookup_indices,
-                &prover.accumulator,
-                &mut prover.transcript,
-            );
-            let mut instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> =
-                vec![Box::new(rangecheck_sumcheck)];
-            instances.extend(ra_onehot);
-            let refs: Vec<&mut dyn SumcheckInstanceProver<F, T>> =
-                instances.iter_mut().map(|v| &mut **v as _).collect();
-            let proof = run_zk_batched_sumcheck(
-                refs,
-                prover,
-                blindfold_accumulator,
-                stage_configs,
-                pedersen_gens,
-            );
-            zk_sumcheck_proofs.push((node.idx, proof));
-            rc_lookup_indices
-        }};
-    }
-    let rc_lookup_indices = match &node.operator {
-        Operator::Sigmoid(op) => prove_range_and_onehot_zk!(op),
-        Operator::Tanh(op) => prove_range_and_onehot_zk!(op),
-        Operator::Erf(op) => prove_range_and_onehot_zk!(op),
-        _ => unreachable!(),
-    };
-
-    // 5. Range-check one-hot/hamming-weight consistency (batched: rc_ra + rc_hw + rc_bool)
-    let rc_encoding = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-    let [mut rc_ra, mut rc_hw, mut rc_bool] = joltworks::subprotocols::shout::ra_onehot_provers(
-        &rc_encoding,
-        &rc_lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let hw_proof = run_zk_batched_sumcheck(
-        vec![&mut *rc_ra, &mut *rc_hw, &mut *rc_bool],
-        prover,
-        blindfold_accumulator,
-        stage_configs,
-        pedersen_gens,
-    );
-    zk_sumcheck_proofs.push((node.idx, hw_proof));
+    unimplemented!(
+        "zk-mode proving for {:?} is not yet implemented for the clamped-activation flow",
+        node.operator
+    )
 }
 
 /// Prove Cos/Sin with ZK: custom flow (division from transcript, then lookup,
@@ -3786,35 +3542,12 @@ fn create_verifier_instances(
                 accumulator,
             ))]
         }
-        Operator::Sigmoid(op) => {
-            use crate::onnx_proof::ops::sigmoid::SigmoidVerifier;
-            vec![Box::new(SigmoidVerifier::new(
-                node.clone(),
-                &model.graph,
-                accumulator,
-                transcript,
-                op.clone(),
-            ))]
-        }
-        Operator::Tanh(op) => {
-            use crate::onnx_proof::ops::tanh::TanhVerifier;
-            vec![Box::new(TanhVerifier::new(
-                node.clone(),
-                &model.graph,
-                accumulator,
-                transcript,
-                op.clone(),
-            ))]
-        }
-        Operator::Erf(op) => {
-            use crate::onnx_proof::ops::erf::ErfVerifier;
-            vec![Box::new(ErfVerifier::new(
-                node.clone(),
-                &model.graph,
-                accumulator,
-                transcript,
-                op.clone(),
-            ))]
+        Operator::Sigmoid(_) | Operator::Tanh(_) | Operator::Erf(_) => {
+            unimplemented!(
+                "zk-mode verification for {:?} is not yet implemented for the \
+                 clamped-activation flow",
+                node.operator
+            )
         }
         Operator::Cos(_) => {
             use crate::onnx_proof::ops::cos::CosVerifier;

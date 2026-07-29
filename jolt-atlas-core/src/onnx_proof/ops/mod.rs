@@ -59,8 +59,6 @@ pub mod div;
 pub mod einsum;
 /// Erf activation function.
 pub mod erf;
-/// Clamped Erf variant: clamps the input, then looks up a small dense table.
-pub mod erf_small_table;
 /// Operator-scoped evaluation reduction helpers.
 pub mod eval_reduction;
 /// Gather elements from input tensor using indices.
@@ -235,7 +233,6 @@ macro_rules! dispatch_operator {
             Operator::Concat($inner) => $body,
             Operator::Div($inner) => $body,
             Operator::Erf($inner) => $body,
-            Operator::ErfSmallTable($inner) => $body,
             Operator::Einsum($inner) => $body,
             Operator::GatherSmall($inner) => $body,
             Operator::GatherLarge($inner) => $body,

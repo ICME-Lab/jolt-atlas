@@ -1,63 +1,36 @@
-use crate::{
-    onnx_proof::{
-        neural_teleport::{
-            division::{
-                compute_division, TeleportDivisionParams, TeleportDivisionProver,
-                TeleportDivisionVerifier,
-            },
-            eval_shift::{EvalShiftParams, EvalShiftProver, EvalShiftVerifier},
-            n_bits_to_usize,
-            range_and_onehot::{
-                prove_range_and_onehot, verify_range_and_onehot, NeuralTeleportRangeOneHot,
-            },
-            utils::compute_ra_evals_nbits_2comp,
-            TanhTable,
+use crate::onnx_proof::{
+    ops::{
+        activation_clamped::{
+            clamped_activation_committed_polynomials, prove_clamped_activation,
+            verify_clamped_activation, SmallActivationTable,
         },
-        ops::OperatorProofTrait,
-        range_checking::range_check_operands::{RangeCheckOperands, TeleportRangeCheckOperands},
-        ProofId, ProofType, Prover, Verifier,
+        OperatorProofTrait,
     },
-    utils::opening_access::AccOpeningAccessor,
+    ProofId, Prover, Verifier,
 };
-use atlas_onnx_tracer::{
-    model::{
-        trace::{LayerData, Trace},
-        ComputationGraph,
-    },
-    node::{handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE, ComputationNode},
-    ops::Tanh,
-};
-use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
-#[cfg(feature = "zk")]
-use joltworks::subprotocols::blindfold::{
-    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
+use atlas_onnx_tracer::{node::ComputationNode, ops::Tanh, tensor::ops::nonlinearities};
+use common::{
+    consts::{ACTIVATION_TABLE_BOUND, SCALE_8},
+    CommittedPoly,
 };
 use joltworks::{
-    config::{OneHotConfig, OneHotParams},
-    field::{IntoOpening, JoltField},
-    poly::{
-        multilinear_polynomial::{
-            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
-        },
-        opening_proof::{
-            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
-        },
-        signed_identity_poly::SignedIdentityPoly,
-        unipoly::UniPoly,
-    },
-    subprotocols::{
-        shout::RaOneHotEncoding,
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
-        sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
-    },
-    transcripts::Transcript,
+    field::JoltField, subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
-};
+
+/// Marker implementing [`SmallActivationTable`] for Tanh's small dense lookup table.
+pub(crate) struct TanhTableMarker;
+
+impl SmallActivationTable for TanhTableMarker {
+    fn materialize() -> Vec<i32> {
+        crate::onnx_proof::neural_teleport::utils::materialize_signed_activation_table(
+            ACTIVATION_TABLE_BOUND,
+            1,
+            SCALE_8 as i32,
+            nonlinearities::tanh,
+        )
+    }
+}
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
     #[tracing::instrument(skip_all, name = "Tanh::prove")]
@@ -66,51 +39,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        let mut results = Vec::new();
-
-        // Stage 1a: Neural teleportation division proof + reduction on output
-        let div_params = TeleportDivisionParams::new(node.clone(), &prover.accumulator, self.tau);
-        let mut div_sumcheck = TeleportDivisionProver::new(&prover.trace, div_params);
-
-        let eval_shift_params = EvalShiftParams::new(node.clone(), &prover.accumulator);
-        let mut eval_shift_sumcheck = EvalShiftProver::initialize(&prover.trace, eval_shift_params);
-
-        // Run division sumcheck first (output claim will be cached)
-        let (div_proof, _) = BatchedSumcheck::prove(
-            vec![&mut div_sumcheck, &mut eval_shift_sumcheck],
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        results.push((ProofId(node.idx, ProofType::NeuralTeleport), div_proof));
-
-        // Stage 1b: Tanh lookup proof (uses quotient from division)
-        // This must be done AFTER division sumcheck completes
-        // so that the quotient opening is cached in the accumulator
-        let params = TanhParams::new(
-            node.clone(),
-            &prover.preprocessing.model.graph,
-            &prover.accumulator,
-            &mut prover.transcript,
-            self.clone(),
-        );
-        let mut exec_sumcheck = TanhProver::initialize(
-            &prover.trace,
-            params,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-
-        let (exec_proof, _) = Sumcheck::prove(
-            &mut exec_sumcheck,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-
-        results.push((ProofId(node.idx, ProofType::Execution), exec_proof));
-
-        results.extend(prove_range_and_onehot(node, prover, self));
-
-        results
+        prove_clamped_activation::<F, T, TanhTableMarker>(node, prover)
     }
 
     #[tracing::instrument(skip_all, name = "Tanh::verify")]
@@ -119,445 +48,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        // Stage 1a: Division verification
-        let div_proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::NeuralTeleport))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-
-        let div_verifier =
-            TeleportDivisionVerifier::new(node.clone(), &verifier.accumulator, self.tau);
-        let eval_shift_verifier = EvalShiftVerifier::new(node.clone(), &verifier.accumulator);
-        BatchedSumcheck::verify(
-            div_proof,
-            vec![&div_verifier, &eval_shift_verifier],
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        // Stage 1b: Tanh verification
-        let tanh_proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::Execution))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-
-        let exec_sumcheck = TanhVerifier::new(
-            node.clone(),
-            &verifier.preprocessing.model.graph,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-            self.clone(),
-        );
-        Sumcheck::verify(
-            tanh_proof,
-            &exec_sumcheck,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        verify_range_and_onehot(node, verifier, self)?;
-
-        Ok(())
+        verify_clamped_activation::<F, T, TanhTableMarker>(node, verifier)
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        let tanh_encoding = TanhRaEncoding {
-            node_idx: node.idx,
-            log_table: NEURAL_TELEPORT_LOG_TABLE_SIZE,
-        };
-        let rc_operands = RangeCheckOperands::<TeleportRangeCheckOperands>::new(node);
-        let rc_encoding = rc_operands.get_encoding(node);
-        let tanh_d = tanh_encoding.one_hot_params().instruction_d;
-        let rc_d = rc_encoding.one_hot_params().instruction_d;
-        let mut polys = vec![];
-        polys.extend((0..tanh_d).map(|i| CommittedPoly::TanhRaD(node.idx, i)));
-        polys.extend((0..rc_d).map(|i| CommittedPoly::TeleportRangeCheckRaD(node.idx, i)));
-        polys
-    }
-}
-
-const DEGREE_BOUND: usize = 2;
-
-/// Parameters for proving hyperbolic tangent (tanh) activation operations.
-///
-/// Tanh uses a lookup table approach with range checking. The folding challenge gamma
-/// is used to combine multiple checks.
-#[derive(Clone)]
-pub struct TanhParams<F: JoltField> {
-    gamma: F,
-    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
-    computation_node: ComputationNode,
-    op: Tanh,
-}
-
-impl<F: JoltField> TanhParams<F> {
-    /// Create new tanh parameters from a computation node, graph, accumulator, transcript, and operation.
-    pub fn new(
-        computation_node: ComputationNode,
-        _graph: &ComputationGraph,
-        accumulator: &dyn OpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-        op: Tanh,
-    ) -> Self {
-        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let gamma = transcript.challenge_scalar();
-        let reduced_output_id = OpeningId::new(
-            VirtualPoly::NTEvalShiftOutput(computation_node.idx),
-            SumcheckId::NTEvalShift,
-        );
-        let r_node_output = accessor.get_custom(reduced_output_id).0;
-
-        Self {
-            gamma,
-            r_node_output,
-            computation_node,
-            op,
-        }
-    }
-}
-
-impl<F: JoltField> SumcheckInstanceParams<F> for TanhParams<F> {
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
-        let reduced_output_id = OpeningId::new(
-            VirtualPoly::NTEvalShiftOutput(self.computation_node.idx),
-            SumcheckId::NTEvalShift,
-        );
-        let rv_claim = accessor.get_custom(reduced_output_id).1;
-
-        // Use quotient claim instead of input claim (neural teleportation)
-        let quotient_claim = accessor.get_advice(VirtualPoly::DummyClampedTanhInput).1;
-
-        rv_claim + self.gamma * quotient_claim
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.op.log_table
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> InputClaimConstraint {
-        InputClaimConstraint::default()
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_constraint_challenge_values(
-        &self,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        Vec::new()
-    }
-
-    // output = ra_claim * (table_claim + gamma * int_eval)
-    #[cfg(feature = "zk")]
-    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
-        use crate::utils::opening_access::OpeningIdBuilder;
-        let builder = OpeningIdBuilder::new(&self.computation_node);
-        let ra_id = builder.advice(VirtualPoly::TanhRa);
-        Some(OutputClaimConstraint::sum_of_products(vec![
-            ProductTerm::scaled(ValueSource::Challenge(0), vec![ValueSource::Opening(ra_id)]),
-        ]))
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        let opening_point = self.normalize_opening_point(&sumcheck_challenges.into_opening());
-        let table = TanhTable::new(self.op.log_table, self.op.tau, self.op.scale);
-        let tanh_table = MultilinearPolynomial::from(table.materialize());
-        let table_claim = tanh_table.evaluate(&opening_point.r);
-        let int_eval = SignedIdentityPoly::new(self.op.log_table).evaluate(&opening_point.r);
-        vec![table_claim + self.gamma * int_eval]
-    }
-}
-
-/// Prover state for tanh activation sumcheck protocol.
-///
-/// This implements a Read-Raf sumcheck for Tanh lookup, asserting that each output[i] = TanhTable[input[i]]
-/// where input[i] = Ra[k] * Int[k] with Ra as one-hot encoding and Int as custom identity polynomial.
-pub struct TanhProver<F: JoltField> {
-    params: TanhParams<F>,
-    tanh_table: MultilinearPolynomial<F>,
-    input_onehot: MultilinearPolynomial<F>,
-    identity: SignedIdentityPoly<F>,
-}
-
-impl<F: JoltField> TanhProver<F> {
-    /// Initialize the prover with trace data, parameters, accumulator, and transcript.
-    pub fn initialize(
-        trace: &Trace,
-        params: TanhParams<F>,
-        acc: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Self {
-        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
-        let input = operands[0];
-
-        // Compute quotient from division (neural teleportation)
-        let (quotient_tensor, _remainder) = compute_division(input, params.op.tau);
-        let clamped_tensor = atlas_onnx_tracer::ops::tanh::clamp_tensor(
-            &quotient_tensor,
-            -(1 << (params.op.log_table - 1)),
-            (1 << (params.op.log_table - 1)) - 1,
-        );
-
-        // TODO: rm once clamp is implemented for tanh
-        let clamped_mle = MultilinearPolynomial::from(clamped_tensor.clone());
-        let clamped_eval = clamped_mle.evaluate(&params.r_node_output.r);
-        let mut provider = AccOpeningAccessor::new(acc, &params.computation_node).into_provider(
-            transcript,
-            OpeningPoint::new(params.r_node_output.r.clone()),
-        );
-        provider.append_advice(VirtualPoly::DummyClampedTanhInput, clamped_eval);
-
-        // Ensure input is within expected range for table size: 2^(log_table_size - 1) <= input < 2^(log_table_size - 1)
-        // Inputs outside this range will error
-        // TODO: Pass these input in a clamping lookup table, since anyway tanh(±∞) = ±1, so we only need to handle a limited input range.
-        assert!(clamped_tensor.iter().all(|&x| {
-            let lower_bound = -(1 << (params.op.log_table - 1));
-            let upper_bound = (1 << (params.op.log_table - 1)) - 1;
-            x >= lower_bound && x <= upper_bound
-        }));
-
-        // Create and materialize the tanh lookup table (reduced size)
-        let tanh_table = TanhTable::new(params.op.log_table, params.op.tau, params.op.scale);
-        let tanh_table = MultilinearPolynomial::from(tanh_table.materialize());
-
-        // Compute one-hot encoding of QUOTIENT values (not input)
-        let input_onehot: Vec<F> = compute_ra_evals_nbits_2comp(
-            &params.r_node_output.r,
-            &clamped_tensor,
-            params.op.log_table,
-        );
-
-        let input_onehot = MultilinearPolynomial::from(input_onehot);
-        assert_eq!(input_onehot.len(), tanh_table.len());
-        let identity = SignedIdentityPoly::new(params.op.log_table);
-
-        Self {
-            params,
-            tanh_table,
-            input_onehot,
-            identity,
-        }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TanhProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        let Self {
-            input_onehot,
-            tanh_table,
-            identity,
-            ..
-        } = self;
-
-        let univariate_poly_evals: [F; 2] = (0..input_onehot.len() / 2)
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|i| {
-                let ra_evals =
-                    input_onehot.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-                let table_evals =
-                    tanh_table.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-                let id_evals = identity.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-
-                [
-                    ra_evals[0] * (table_evals[0] + id_evals[0] * self.params.gamma),
-                    ra_evals[1] * (table_evals[1] + id_evals[1] * self.params.gamma),
-                ]
-            })
-            .reduce(
-                || [F::zero(); 2],
-                |running, new| [running[0] + new[0], running[1] + new[1]],
-            );
-
-        UniPoly::from_evals_and_hint(previous_claim, &univariate_poly_evals)
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        self.input_onehot
-            .bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.tanh_table.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.identity.bind_parallel(r_j, BindingOrder::LowToHigh);
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let r = [
-            opening_point.r.as_slice(),
-            self.params.r_node_output.r.as_slice(),
-        ]
-        .concat();
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, OpeningPoint::new(r));
-        provider.append_advice(VirtualPoly::TanhRa, self.input_onehot.final_claim());
-    }
-}
-
-/// Verifier for tanh activation sumcheck protocol.
-///
-/// Verifies that the prover's sumcheck messages are consistent with the claimed
-/// tanh activation lookup table output.
-pub struct TanhVerifier<F: JoltField> {
-    params: TanhParams<F>,
-    tanh_table: MultilinearPolynomial<F>,
-}
-
-impl<F: JoltField> TanhVerifier<F> {
-    /// Create a new verifier for the tanh operation.
-    pub fn new(
-        computation_node: ComputationNode,
-        graph: &ComputationGraph,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-        op: Tanh,
-    ) -> Self {
-        let params = TanhParams::new(computation_node, graph, accumulator, transcript, op);
-        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .into_provider(
-                transcript,
-                OpeningPoint::new(params.r_node_output.r.clone()),
-            );
-        provider.append_advice(VirtualPoly::DummyClampedTanhInput);
-
-        // Materialize the tanh table for verification
-        let tanh_table = TanhTable::new(params.op.log_table, params.op.tau, params.op.scale);
-        let tanh_table = MultilinearPolynomial::from(tanh_table.materialize());
-
-        Self { params, tanh_table }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TanhVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-
-        let ra_claim = accessor.get_advice(VirtualPoly::TanhRa).1;
-
-        // Evaluate tanh table at the opening point
-        let table_claim = self.tanh_table.evaluate(&opening_point.r);
-
-        let int_eval = SignedIdentityPoly::new(self.params.op.log_table).evaluate(&opening_point.r);
-
-        ra_claim * (table_claim + self.params.gamma * int_eval)
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let r = [
-            opening_point.r.as_slice(),
-            self.params.r_node_output.r.as_slice(),
-        ]
-        .concat();
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, OpeningPoint::new(r));
-        provider.append_advice(VirtualPoly::TanhRa);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// TanhRaEncoding — implements RaOneHotEncoding for Tanh's stage-2 one-hot checks
-// ---------------------------------------------------------------------------
-
-/// Encoding impl for tanh one-hot checking.
-///
-/// Used in the stage-2 one-hot checks for tanh lookup table accesses.
-pub struct TanhRaEncoding {
-    /// Index of the computation node this encoding belongs to.
-    pub node_idx: usize,
-    /// Log2 of the lookup table size.
-    pub log_table: usize,
-}
-
-impl RaOneHotEncoding for TanhRaEncoding {
-    fn committed_poly(&self, d: usize) -> CommittedPoly {
-        CommittedPoly::TanhRaD(self.node_idx, d)
-    }
-
-    fn r_cycle_source(&self) -> OpeningId {
-        OpeningId::new(
-            VirtualPoly::DummyClampedTanhInput(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-        )
-    }
-
-    fn ra_source(&self) -> OpeningId {
-        OpeningId::new(
-            VirtualPoly::TanhRa(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-        )
-    }
-
-    fn log_k(&self) -> usize {
-        self.log_table
-    }
-
-    fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.log_table)
-    }
-}
-
-impl<F: JoltField, T: Transcript> NeuralTeleportRangeOneHot<F, T> for Tanh {
-    type RaEncoding = TanhRaEncoding;
-
-    fn lookup_indices(&self, node: &ComputationNode, trace: &Trace) -> Vec<usize> {
-        let LayerData { operands, .. } = Trace::layer_data(trace, node);
-        let input = operands[0];
-        let (quotient, _remainder) = compute_division(input, self.tau);
-        let clamped_tensor = atlas_onnx_tracer::ops::tanh::clamp_tensor(
-            &quotient,
-            -(1 << (self.log_table - 1)),
-            (1 << (self.log_table - 1)) - 1,
-        );
-        clamped_tensor
-            .par_iter()
-            .with_min_len(par_enabled())
-            .map(|&x| n_bits_to_usize(x, self.log_table))
-            .collect()
-    }
-
-    fn ra_encoding(&self, node: &ComputationNode) -> Self::RaEncoding {
-        TanhRaEncoding {
-            node_idx: node.idx,
-            log_table: self.log_table,
-        }
+        clamped_activation_committed_polynomials(node)
     }
 }
 
@@ -566,13 +61,13 @@ mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
     use atlas_onnx_tracer::{
         model::{test::ModelBuilder, Model},
-        node::handlers::activation::NEURAL_TELEPORT_LOG_TABLE_SIZE,
         tensor::Tensor,
     };
+    use common::consts::ACTIVATION_TABLE_BOUND;
     use rand::{rngs::StdRng, SeedableRng};
 
-    fn tanh_model(input_shape: &[usize], scale: u32) -> Model {
-        let mut b = ModelBuilder::with_scale(scale);
+    fn tanh_model(input_shape: &[usize]) -> Model {
+        let mut b = ModelBuilder::new();
         let i = b.input(input_shape.to_vec());
         let res = b.tanh(i);
         b.mark_output(res);
@@ -581,37 +76,12 @@ mod tests {
 
     #[test]
     fn test_tanh() {
-        let T = 1 << 14;
-        const MIN_INPUT_VALUE: i32 = -(1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1));
-        const MAX_INPUT_VALUE: i32 = 1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1);
+        let t = 1 << 14;
+        const MIN_INPUT: i32 = -(1 << 16);
+        const MAX_INPUT: i32 = 1 << 16;
         let mut rng = StdRng::seed_from_u64(0x888);
-        let input = Tensor::random_range(&mut rng, &[T], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
-        let model = tanh_model(&[T], 8);
-        unit_test_op(model, &[input]);
-    }
-
-    /// Tanh at scale 12: τ scales to 32 and the lookup table is quantized at 2^12,
-    /// so the op and the proof's table must agree at a non-reference scale.
-    /// Inputs span ±2^(scale+7), matching the reference test's quotient range.
-    #[test]
-    fn test_tanh_scale_12() {
-        let T = 1 << 14;
-        const SCALE: u32 = 12;
-        let max_input: i32 = 1 << (SCALE + 7);
-        let mut rng = StdRng::seed_from_u64(0x888);
-        let input = Tensor::random_range(&mut rng, &[T], -max_input..max_input);
-        let model = tanh_model(&[T], SCALE);
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    fn test_tanh_clamped() {
-        let T = 1 << 14;
-        const MIN_INPUT_VALUE: i32 = -(1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE));
-        const MAX_INPUT_VALUE: i32 = 1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE);
-        let mut rng = StdRng::seed_from_u64(0x888);
-        let input = Tensor::random_range(&mut rng, &[T], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
-        let model = tanh_model(&[T], 8);
+        let input = Tensor::random_range(&mut rng, &[t], MIN_INPUT..MAX_INPUT);
+        let model = tanh_model(&[t]);
         unit_test_op(model, &[input]);
     }
 
@@ -619,11 +89,11 @@ mod tests {
     #[ignore = "non-power-of-two path not fully supported yet"]
     fn test_tanh_non_power_of_two_input_len() {
         let t = 1000;
-        const MIN_INPUT_VALUE: i32 = -(1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1));
-        const MAX_INPUT_VALUE: i32 = 1 << (NEURAL_TELEPORT_LOG_TABLE_SIZE - 1);
+        const MIN_INPUT_VALUE: i32 = -(1 << (ACTIVATION_TABLE_BOUND - 1));
+        const MAX_INPUT_VALUE: i32 = 1 << (ACTIVATION_TABLE_BOUND - 1);
         let mut rng = StdRng::seed_from_u64(0x889);
         let input = Tensor::random_range(&mut rng, &[t], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
-        let model = tanh_model(&[t], 8);
+        let model = tanh_model(&[t]);
         unit_test_op(model, &[input]);
     }
 }

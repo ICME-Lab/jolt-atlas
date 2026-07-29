@@ -281,7 +281,6 @@ impl Model {
                 | Operator::Cos(_)
                 | Operator::Div(_)
                 | Operator::Erf(_)
-                | Operator::ErfSmallTable(_)
                 | Operator::Clamp(_)
                 | Operator::ReLU(_)
                 | Operator::Rsqrt(_)

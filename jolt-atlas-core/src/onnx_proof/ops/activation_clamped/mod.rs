@@ -1,30 +1,26 @@
 //! Shared plumbing for the clamped Erf/Sigmoid/Tanh variants.
 //!
-//! Each op fuses two proof stages into a single ONNX-graph node, proven in the usual
-//! reverse-topological node order:
+//! Each op fuses two lookup stages into one node:
+//! 1. **Execution**: `output = SmallTable[clamped]`, where `clamped` is an internal
+//!    advice claim (gamma-batched with the identity polynomial so the one-hot `ra`
+//!    address is soundly tied to its value).
+//! 2. **ActivationClamp**: proves that same `clamped` claim equals
+//!    `ActivationClampTable[raw_input]` (offset-trick, same shape as `Clamp`), which
+//!    soundly ties `clamped` back to the real input rather than just asserting it.
 //!
-//! 1. **Execution** (small dense-table lookup): proves `output = SmallTable[clamped]`,
-//!    where `output` is this node's real, already-established output claim, and
-//!    `clamped` is an internal advice claim (gamma-batched with the identity
-//!    polynomial, exactly as `neural_teleport`'s Tanh does today, so the one-hot `ra`
-//!    polynomial's encoded address is soundly tied to `clamped`'s claimed value).
-//! 2. **ActivationClamp** (cheap prefix-suffix lookup): proves that the *same* `clamped`
-//!    claim from stage 1 equals `ActivationClampTable[raw_input]` (offset-trick, same
-//!    shape as the `Clamp` op), and in doing so produces a new claim about `raw_input`
-//!    -- exactly the same claim-chaining every other node's operand already goes
-//!    through. This is what closes the soundness gap `neural_teleport`'s Tanh has
-//!    today (see the `TODO` on `DummyClampedTanhInput`): here `clamped` is *proven*
-//!    equal to the real clamp of the input, not just asserted.
-//!
-//! Both stages evaluate their tensors at this node's own output point (`r_node_output`,
-//! from the standard per-node eval-reduction) since clamping is a plain per-element
-//! operation -- no `tau`-division/remainder machinery (and thus no `EvalShift`-style
-//! point-shifting) is needed.
+//! Both stages proceed sumcheck-then-sumcheck (Execution, then ActivationClamp), with
+//! their one-hot (`ra`/`hw`/`bool`) checks batched together afterwards into a single
+//! `BatchedSumcheck` call, the same multi-encoding batching `rsqrt.rs` uses for its
+//! div/sqrt range checks. `BatchedSumcheck` handles differing round counts natively,
+//! so merging log_k = `ACTIVATION_TABLE_BOUND` and log_k = `XLEN` instances needs no
+//! changes to the batching machinery.
 
 use crate::{
     onnx_proof::{
         neural_teleport::{n_bits_to_usize, utils::compute_ra_evals_nbits_2comp},
-        op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider},
+        op_lookups::{
+            DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider,
+        },
         ProofId, ProofType, Prover, Verifier,
     },
     utils::{compute_lookup_indices_from_operands, opening_access::AccOpeningAccessor},
@@ -72,14 +68,13 @@ use rayon::iter::{
 };
 use std::marker::PhantomData;
 
-/// Offset mapping the symmetric clamp range `[-2^ACTIVATION_BOUND, 2^ACTIVATION_BOUND - 1]`
-/// onto `ActivationClampTable`'s floor-at-0 domain (same trick as `SymmetricClampOperands`).
+/// Maps the symmetric clamp range onto `ActivationClampTable`'s floor-at-0 domain
+/// (same trick as `SymmetricClampOperands`).
 const OFFSET: i32 = 1 << ACTIVATION_BOUND;
 const EXEC_DEGREE_BOUND: usize = 2;
 
-/// Materializes a clamped-activation's small lookup table: `Table[i] = activation(i)`
-/// at model scale [`common::consts::SCALE_12`], for two's-complement `i` over
-/// [`ACTIVATION_TABLE_BOUND`] bits.
+/// A clamped-activation's small lookup table: `Table[i] = activation(i)`, for
+/// two's-complement `i` over [`ACTIVATION_TABLE_BOUND`] bits.
 pub trait SmallActivationTable: Send + Sync {
     /// Materializes the full table (all `2^ACTIVATION_TABLE_BOUND` entries).
     fn materialize() -> Vec<i32>;
@@ -93,11 +88,9 @@ fn clamped_opening_id(node_idx: usize) -> OpeningId {
 }
 
 // ---------------------------------------------------------------------------
-// Stage: ActivationClamp -- cheap prefix-suffix lookup via `OpLookupProvider`,
-// proving the shared `ActivationClampedOutput` advice equals
-// `ActivationClampTable[raw_input]` (offset-trick, same shape as `Clamp`'s
-// `SymmetricClampOperands`). Its `rv_claim` is this internal advice claim rather
-// than the node's own real output, via `LookupOperandsTrait::rv_claim`.
+// Stage: ActivationClamp -- prefix-suffix lookup proving the `ActivationClampedOutput`
+// advice equals `ActivationClampTable[raw_input]` (offset-trick, same shape as
+// `Clamp`'s `SymmetricClampOperands`).
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
@@ -106,7 +99,10 @@ struct ActivationClampOperands;
 impl LookupOperandsTrait for ActivationClampOperands {
     const LOG_K: usize = XLEN;
 
-    fn rv_claim<F: JoltField>(node: &ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> F {
+    fn rv_claim<F: JoltField>(
+        node: &ComputationNode,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> F {
         accumulator
             .get_virtual_polynomial_opening(clamped_opening_id(node.idx))
             .1
@@ -142,97 +138,9 @@ impl LookupOperandsTrait for ActivationClampOperands {
     }
 }
 
-/// Proves the (already-registered, by the Execution stage) clamped advice claim
-/// equals `ActivationClampTable[raw_input]`.
-fn prove_activation_clamp<F, T>(
-    node: &ComputationNode,
-    prover: &mut Prover<F, T>,
-) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)>
-where
-    F: JoltField,
-    T: Transcript,
-{
-    let mut results = Vec::new();
-
-    let provider: OpLookupProvider<ActivationClampOperands> = OpLookupProvider::new(node.clone());
-    let (mut exec_sumcheck, lookup_indices) = provider
-        .read_raf_prove::<F, T, ActivationClampTable<XLEN>, XLEN>(
-            &prover.trace,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-    let (exec_proof, _) = Sumcheck::prove(
-        &mut exec_sumcheck,
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-    results.push((ProofId(node.idx, ProofType::NeuralTeleport), exec_proof));
-
-    let encoding = provider.encoding();
-    let [ra_prover, hw_prover, bool_prover] = shout::ra_onehot_provers(
-        &encoding,
-        &lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-        vec![ra_prover, hw_prover, bool_prover];
-    let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
-        instances.iter_mut().map(|v| &mut **v as _).collect(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-    results.push((ProofId(node.idx, ProofType::RaHammingWeight), ra_one_hot_proof));
-
-    results
-}
-
-/// Verifier counterpart of [`prove_activation_clamp`]: verifies the clamp lookup
-/// (against the advice claim the Execution stage already registered) + its one-hot checks.
-fn verify_activation_clamp<F, T>(
-    node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, T>,
-) -> Result<(), ProofVerifyError>
-where
-    F: JoltField,
-    T: Transcript,
-{
-    let provider: OpLookupProvider<ActivationClampOperands> = OpLookupProvider::new(node.clone());
-    let verifier_sumcheck = provider.read_raf_verify::<F, T, ActivationClampTable<XLEN>, XLEN>(
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    );
-    let exec_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::NeuralTeleport))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-    Sumcheck::verify(
-        exec_proof,
-        &verifier_sumcheck,
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
-
-    let encoding = provider.encoding();
-    let [ra_verifier, hw_verifier, bool_verifier] =
-        shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
-    let ra_one_hot_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::RaHammingWeight))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-    BatchedSumcheck::verify(
-        ra_one_hot_proof,
-        vec![&*ra_verifier, &*hw_verifier, &*bool_verifier],
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
-
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
-// Stage: Execution -- small dense-table lookup (gamma-batched with an identity
-// polynomial, mirroring `neural_teleport`'s Tanh execution stage).
+// Stage: Execution -- small dense-table lookup, gamma-batched with an identity
+// polynomial.
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
@@ -269,8 +177,8 @@ impl<F: JoltField, Table: SmallActivationTable> SumcheckInstanceParams<F>
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         let (_, rv_claim) = accumulator.get_node_output_opening(self.computation_node.idx);
-        let (_, clamped_claim) =
-            accumulator.get_virtual_polynomial_opening(clamped_opening_id(self.computation_node.idx));
+        let (_, clamped_claim) = accumulator
+            .get_virtual_polynomial_opening(clamped_opening_id(self.computation_node.idx));
         rv_claim + self.gamma * clamped_claim
     }
 
@@ -320,16 +228,14 @@ struct SmallTableProver<F: JoltField, Table> {
     table: MultilinearPolynomial<F>,
     input_onehot: MultilinearPolynomial<F>,
     identity: SignedIdentityPoly<F>,
-    /// The clamped tensor, kept around so the caller can reuse it (e.g. to build the
-    /// `RaOneHotChecks` lookup indices) without recomputing it from the trace again.
-    clamped_tensor: Tensor<i32>,
+    /// Lookup indices for this stage's one-hot checks, so the caller can reuse them
+    /// without recomputing from the trace.
+    lookup_indices: Vec<usize>,
 }
 
 impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
-    /// Computes the clamped tensor (mirroring `atlas-onnx-tracer`'s `erf.rs`-style
-    /// execution logic) and registers its advice claim at `r_node_output`
-    /// (`VirtualPoly::ActivationClampedOutput`) -- the `ActivationClamp` stage, proven
-    /// afterwards, soundly ties this same claim back to `raw_input`.
+    /// Computes the clamped tensor and registers its advice claim at `r_node_output`;
+    /// the `ActivationClamp` stage then ties that claim back to `raw_input`.
     fn initialize(
         params: SmallTableParams<F, Table>,
         trace: &Trace,
@@ -339,10 +245,10 @@ impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
         let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
         let raw_input = operands[0];
         let clamped_tensor = nonlinearities::clamp(raw_input, ACTIVATION_BOUND);
+        let clamped_tensor_padded = clamped_tensor.padded_next_power_of_two();
 
         let clamped_claim = MultilinearPolynomial::from(
-            clamped_tensor
-                .padded_next_power_of_two()
+            clamped_tensor_padded
                 .data()
                 .iter()
                 .map(|&v| v as i64)
@@ -365,12 +271,19 @@ impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
         let input_onehot = MultilinearPolynomial::from(input_onehot);
         assert_eq!(input_onehot.len(), table.len());
         let identity = SignedIdentityPoly::new(ACTIVATION_TABLE_BOUND);
+
+        let lookup_indices: Vec<usize> = clamped_tensor_padded
+            .par_iter()
+            .with_min_len(par_enabled())
+            .map(|&x| n_bits_to_usize(x, ACTIVATION_TABLE_BOUND))
+            .collect();
+
         Self {
             params,
             table,
             input_onehot,
             identity,
-            clamped_tensor,
+            lookup_indices,
         }
     }
 }
@@ -398,7 +311,8 @@ impl<F: JoltField, T: Transcript, Table: SmallActivationTable> SumcheckInstanceP
                     input_onehot.sumcheck_evals(i, EXEC_DEGREE_BOUND, BindingOrder::LowToHigh);
                 let table_evals =
                     table.sumcheck_evals(i, EXEC_DEGREE_BOUND, BindingOrder::LowToHigh);
-                let id_evals = identity.sumcheck_evals(i, EXEC_DEGREE_BOUND, BindingOrder::LowToHigh);
+                let id_evals =
+                    identity.sumcheck_evals(i, EXEC_DEGREE_BOUND, BindingOrder::LowToHigh);
 
                 [
                     ra_evals[0] * (table_evals[0] + id_evals[0] * self.params.gamma),
@@ -436,7 +350,10 @@ impl<F: JoltField, T: Transcript, Table: SmallActivationTable> SumcheckInstanceP
         .concat();
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
             .into_provider(transcript, OpeningPoint::new(r));
-        provider.append_advice(VirtualPoly::ActivationSmallRa, self.input_onehot.final_claim());
+        provider.append_advice(
+            VirtualPoly::ActivationSmallRa,
+            self.input_onehot.final_claim(),
+        );
     }
 }
 
@@ -539,11 +456,9 @@ impl RaOneHotEncoding for SmallTableRaEncoding {
 // Public entry points, called by the thin per-op `OperatorProofTrait` impls.
 // ---------------------------------------------------------------------------
 
-/// Full (Execution + ActivationClamp) proof for a clamped-activation node, proven in
-/// that order: Execution establishes the clamped advice claim (from this node's own,
-/// already-known output claim), which ActivationClamp then soundly ties back to the
-/// raw input -- the reverse-topological node order's usual "claim about my input"
-/// hand-off, just internal to this one fused node.
+/// Full (Execution + ActivationClamp) proof for a clamped-activation node: Execution
+/// establishes the clamped advice claim, ActivationClamp ties it back to the raw
+/// input, then both stages' one-hot checks are batched into one `BatchedSumcheck`.
 pub fn prove_clamped_activation<F, T, Table>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
@@ -555,8 +470,12 @@ where
 {
     let mut results = Vec::new();
 
-    let params =
-        SmallTableParams::<F, Table>::new(node.clone(), &prover.accumulator, &mut prover.transcript);
+    // Stage 1: Execution -- output = SmallTable[clamped].
+    let params = SmallTableParams::<F, Table>::new(
+        node.clone(),
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
     let mut exec_sumcheck = SmallTableProver::<F, Table>::initialize(
         params,
         &prover.trace,
@@ -570,22 +489,40 @@ where
     );
     results.push((ProofId(node.idx, ProofType::Execution), exec_proof));
 
-    let lookup_indices: Vec<usize> = exec_sumcheck
-        .clamped_tensor
-        .padded_next_power_of_two()
-        .par_iter()
-        .with_min_len(par_enabled())
-        .map(|&x| n_bits_to_usize(x, ACTIVATION_TABLE_BOUND))
-        .collect();
-    let encoding = SmallTableRaEncoding { node_idx: node.idx };
-    let [ra_prover, hw_prover, bool_prover] = shout::ra_onehot_provers(
-        &encoding,
-        &lookup_indices,
+    // Stage 2: ActivationClamp -- clamped = ActivationClampTable[raw_input].
+    let clamp_provider: OpLookupProvider<ActivationClampOperands> =
+        OpLookupProvider::new(node.clone());
+    let (mut clamp_sumcheck, clamp_lookup_indices) = clamp_provider
+        .read_raf_prove::<F, T, ActivationClampTable<XLEN>, XLEN>(
+            &prover.trace,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+    let (clamp_proof, _) = Sumcheck::prove(
+        &mut clamp_sumcheck,
+        &mut prover.accumulator,
+        &mut prover.transcript,
+    );
+    results.push((ProofId(node.idx, ProofType::NeuralTeleport), clamp_proof));
+
+    // Stage 3: both stages' one-hot checks, batched together into one BatchedSumcheck.
+    let small_encoding = SmallTableRaEncoding { node_idx: node.idx };
+    let [small_ra, small_hw, small_bool] = shout::ra_onehot_provers(
+        &small_encoding,
+        &exec_sumcheck.lookup_indices,
         &prover.accumulator,
         &mut prover.transcript,
     );
-    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-        vec![ra_prover, hw_prover, bool_prover];
+    let clamp_encoding = clamp_provider.encoding();
+    let [clamp_ra, clamp_hw, clamp_bool] = shout::ra_onehot_provers(
+        &clamp_encoding,
+        &clamp_lookup_indices,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
+        small_ra, small_hw, small_bool, clamp_ra, clamp_hw, clamp_bool,
+    ];
     let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
         instances.iter_mut().map(|v| &mut **v as _).collect(),
         &mut prover.accumulator,
@@ -595,8 +532,6 @@ where
         ProofId(node.idx, ProofType::RaOneHotChecks),
         ra_one_hot_proof,
     ));
-
-    results.extend(prove_activation_clamp(node, prover));
 
     results
 }
@@ -611,6 +546,7 @@ where
     T: Transcript,
     Table: SmallActivationTable,
 {
+    // Stage 1: Execution.
     let exec_proof = verifier
         .proofs
         .get(&ProofId(node.idx, ProofType::Execution))
@@ -627,21 +563,56 @@ where
         &mut verifier.transcript,
     )?;
 
-    let encoding = SmallTableRaEncoding { node_idx: node.idx };
-    let [ra_verifier, hw_verifier, bool_verifier] =
-        shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
-    let ra_one_hot_proof = verifier
+    // Stage 2: ActivationClamp.
+    let clamp_provider: OpLookupProvider<ActivationClampOperands> =
+        OpLookupProvider::new(node.clone());
+    let clamp_verifier_sumcheck = clamp_provider
+        .read_raf_verify::<F, T, ActivationClampTable<XLEN>, XLEN>(
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        );
+    let clamp_proof = verifier
         .proofs
-        .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
+        .get(&ProofId(node.idx, ProofType::NeuralTeleport))
         .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-    BatchedSumcheck::verify(
-        ra_one_hot_proof,
-        vec![&*ra_verifier, &*hw_verifier, &*bool_verifier],
+    Sumcheck::verify(
+        clamp_proof,
+        &clamp_verifier_sumcheck,
         &mut verifier.accumulator,
         &mut verifier.transcript,
     )?;
 
-    verify_activation_clamp(node, verifier)?;
+    // Stage 3: both stages' one-hot checks, batched together into one BatchedSumcheck.
+    let small_encoding = SmallTableRaEncoding { node_idx: node.idx };
+    let [small_ra, small_hw, small_bool] = shout::ra_onehot_verifiers(
+        &small_encoding,
+        &verifier.accumulator,
+        &mut verifier.transcript,
+    );
+    let clamp_encoding = clamp_provider.encoding();
+    let [clamp_ra, clamp_hw, clamp_bool] = shout::ra_onehot_verifiers(
+        &clamp_encoding,
+        &verifier.accumulator,
+        &mut verifier.transcript,
+    );
+    let ra_one_hot_proof = verifier
+        .proofs
+        .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
+        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+    let instances: Vec<&dyn SumcheckInstanceVerifier<_, _>> = vec![
+        &*small_ra,
+        &*small_hw,
+        &*small_bool,
+        &*clamp_ra,
+        &*clamp_hw,
+        &*clamp_bool,
+    ];
+    BatchedSumcheck::verify(
+        ra_one_hot_proof,
+        instances,
+        &mut verifier.accumulator,
+        &mut verifier.transcript,
+    )?;
 
     Ok(())
 }

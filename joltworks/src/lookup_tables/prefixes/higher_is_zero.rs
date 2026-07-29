@@ -103,8 +103,5 @@ pub type ClampHigherIsZeroPrefix<const XLEN: usize> =
 pub type SatClampHigherIsZeroPrefix<const XLEN: usize> =
     HigherIsZeroPrefix<XLEN, 32, { Prefixes::SatClampHigherIsZero as usize }>;
 
-pub type ActivationHigherIsZeroPrefix<const XLEN: usize> = HigherIsZeroPrefix<
-    XLEN,
-    ACTIVATION_TABLE_BOUND,
-    { Prefixes::ActivationHigherIsZero as usize },
->;
+pub type ActivationHigherIsZeroPrefix<const XLEN: usize> =
+    HigherIsZeroPrefix<XLEN, ACTIVATION_TABLE_BOUND, { Prefixes::ActivationHigherIsZero as usize }>;

@@ -101,36 +101,6 @@ fn build_one_hot_rad_witness<F: JoltField>(
     ))
 }
 
-/// Builds a one-hot RaD witness for neural-teleport activation lookups (tanh/erf).
-///
-/// Both activations share the exact same witness construction pipeline:
-/// compute quotient via teleport-division, map quotient to lookup indices, then
-/// construct the `d`-th one-hot address chunk.
-fn build_teleport_activation_rad_witness<F: JoltField>(
-    input: &Tensor<i32>,
-    tau: i32,
-    log_table: usize,
-    d: usize,
-) -> MultilinearPolynomial<F> {
-    let (quotient, _remainder) = compute_division(input, tau);
-    let lookup_indices: Vec<usize> = quotient
-        .par_iter()
-        .with_min_len(par_enabled())
-        .map(|&x| n_bits_to_usize(x, log_table))
-        .collect();
-    let one_hot_params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_table);
-    let h_indices =
-        subprotocols::shout::compute_instruction_h_indices(&lookup_indices, &one_hot_params);
-    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
-        h_indices[d]
-            .par_iter()
-            .with_min_len(par_enabled())
-            .map(|&h| h.map(|h| h as u16))
-            .collect(),
-        one_hot_params.k_chunk,
-    ))
-}
-
 /// Builds a one-hot RaD witness for the clamped Erf/Sigmoid/Tanh variants' small
 /// dense activation-table execution stage: clamps the raw input directly (no
 /// `tau`-division), maps to lookup indices, then constructs the `d`-th one-hot
@@ -147,37 +117,6 @@ fn build_activation_small_rad_witness<F: JoltField>(
         .collect();
     let one_hot_params =
         OneHotParams::from_config_and_log_K(&OneHotConfig::default(), ACTIVATION_TABLE_BOUND);
-    let h_indices =
-        subprotocols::shout::compute_instruction_h_indices(&lookup_indices, &one_hot_params);
-    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
-        h_indices[d]
-            .par_iter()
-            .with_min_len(par_enabled())
-            .map(|&h| h.map(|h| h as u16))
-            .collect(),
-        one_hot_params.k_chunk,
-    ))
-}
-
-// TODO: RM once clamp is implemented for tanh
-fn build_teleport_activation_rad_witness_tanh<F: JoltField>(
-    input: &Tensor<i32>,
-    tau: i32,
-    log_table: usize,
-    d: usize,
-) -> MultilinearPolynomial<F> {
-    let (quotient, _remainder) = compute_division(input, tau);
-    let clamped_tensor = atlas_onnx_tracer::ops::tanh::clamp_tensor(
-        &quotient,
-        -(1 << (log_table - 1)),
-        (1 << (log_table - 1)) - 1,
-    );
-    let lookup_indices: Vec<usize> = clamped_tensor
-        .par_iter()
-        .with_min_len(par_enabled())
-        .map(|&x| n_bits_to_usize(x, log_table))
-        .collect();
-    let one_hot_params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_table);
     let h_indices =
         subprotocols::shout::compute_instruction_h_indices(&lookup_indices, &one_hot_params);
     MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
@@ -531,41 +470,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                         .collect(),
                     one_hot_params.k_chunk,
                 ))
-            }
-
-            CommittedPoly::TanhRaD(node_idx, d_idx) => {
-                let computation_node = &model.graph.nodes[node_idx];
-                let Operator::Tanh(inner) = &computation_node.operator else {
-                    panic!("Expected Tanh operator for TanhRa committed polynomial");
-                };
-                let layer_data = Trace::layer_data(trace, computation_node);
-                let input = &layer_data.operands[0];
-                build_teleport_activation_rad_witness_tanh(
-                    input,
-                    inner.tau,
-                    inner.log_table,
-                    *d_idx,
-                )
-            }
-
-            CommittedPoly::ErfRaD(node_idx, d_idx) => {
-                let computation_node = &model.graph.nodes[node_idx];
-                let Operator::Erf(inner) = &computation_node.operator else {
-                    panic!("Expected Erf operator for ErfRa committed polynomial");
-                };
-                let layer_data = Trace::layer_data(trace, computation_node);
-                let input = &layer_data.operands[0];
-                build_teleport_activation_rad_witness(input, inner.tau, inner.log_table, *d_idx)
-            }
-
-            CommittedPoly::SigmoidRaD(node_idx, d_idx) => {
-                let computation_node = &model.graph.nodes[node_idx];
-                let Operator::Sigmoid(inner) = &computation_node.operator else {
-                    panic!("Expected Sigmoid operator for SigmoidRa committed polynomial");
-                };
-                let layer_data = Trace::layer_data(trace, computation_node);
-                let input = &layer_data.operands[0];
-                build_teleport_activation_rad_witness(input, inner.tau, inner.log_table, *d_idx)
             }
 
             CommittedPoly::CosRaD(node_idx, d_idx) | CommittedPoly::SinRaD(node_idx, d_idx) => {

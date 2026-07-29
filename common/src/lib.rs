@@ -25,7 +25,7 @@ canonical_serde_enum! {
     ///
     /// | Group | Purpose |
     /// |-------|---------|
-    /// | `NodeOutputRaD` / `{Cos,Erf,Sin,Tanh}RaD` | One-hot read-address decompositions for activation-function lookup tables |
+    /// | `NodeOutputRaD` / `{Cos,Sin}RaD` | One-hot read-address decompositions for activation-function lookup tables |
     /// | `Softmax*` | Polynomials specific to softmax sub-protocol |
     /// | `Div* / Sqrt* / Teleport*` | Range-check one-hot polynomials for integer-arithmetic advice values |
     /// | `*NodeQuotient / *NodeRemainder / *NodeInv / *NodeRsqrt` | Scalar advice polynomials for division / reciprocal-square-root |
@@ -46,23 +46,11 @@ canonical_serde_enum! {
         /// * `1` – decomposition index `d`
         CosRaD(usize, usize),
 
-        /// One-hot read-address decomposition for the **Erf** lookup table.
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        ErfRaD(usize, usize),
-
         /// One-hot read-address decomposition for the **Sin** lookup table.
         ///
         /// * `0` – node index
         /// * `1` – decomposition index `d`
         SinRaD(usize, usize),
-
-        /// One-hot read-address decomposition for the **Tanh** lookup table.
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        TanhRaD(usize, usize),
 
         // ----- Range-check one-hot polynomials for advice values (node_index, d) -----
         /// Interleaved remainder `R` and divisor one-hot polynomial for the
@@ -121,12 +109,6 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         TeleportNodeQuotient(usize),
-
-        /// Sigmoid Ra d polynomial
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        SigmoidRaD(usize, usize),
 
         /// Read-address polynomial for the **Gather** operator.
         ///
@@ -414,15 +396,6 @@ canonical_serde_enum! {
         /// * `0` – node index
         SoftmaxRecipMultRemainder(usize),
 
-        /// A reduced variant of [`Self::NodeOutput`] for neural teleportation ops (tanh, erf, sigmoid).
-        /// During the neural teleport phase, a reduction sumcheck collapses the `NodeOutput` claim to
-        /// the same point as the div sumcheck challenges. [`Self::NodeOutput`] cannot be reused for this
-        /// reduced claim because the opening accumulator forbids appending `NodeOutput` claims after
-        /// the point-to-line evaluation reduction has already been performed for that node.
-        ///
-        /// * `0` – producer node index
-        NTEvalShiftOutput(usize),
-
         // ----- Saturating clamp (Add/Sub) -----
         /// MLE of the pre-clamp **i64 accumulation** of a saturating `Add`/`Sub`.
         ///
@@ -456,9 +429,6 @@ canonical_serde_enum! {
         /// * `0` – node index
         RescaleRemainderRa(usize),
 
-        // TODO: rm once clamp is implemted for tanh
-        DummyClampedTanhInput(usize),
-
         /// Read-address polynomial for the **Clamp** operator's symmetric-range
         /// lookup. Virtualized — [`CommittedPoly::SymmetricClampRaD`] commits its
         /// decomposition.
@@ -470,8 +440,7 @@ canonical_serde_enum! {
         /// shared by both of the node's sumchecks: the small-table execution stage
         /// uses it (gamma-batched) as part of its input claim, and the
         /// activation-clamp lookup stage soundly proves it equals
-        /// `ActivationClampTable[raw_input]` -- unlike [`Self::DummyClampedTanhInput`],
-        /// this claim is *proven*, not asserted.
+        /// `ActivationClampTable[raw_input]` -- this claim is *proven*, not asserted.
         ///
         /// * `0` – node index
         ActivationClampedOutput(usize),

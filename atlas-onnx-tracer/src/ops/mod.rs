@@ -25,8 +25,6 @@ pub mod div;
 pub mod einsum;
 /// Error function (erf) operator.
 pub mod erf;
-/// Clamped error function variant: clamps the input, then looks up a small dense table.
-pub mod erf_small_table;
 /// Gather operator for indexing and embedding lookups.
 pub mod gather;
 /// Identity (pass-through) operator.
@@ -132,8 +130,7 @@ define_operators! {
         Cube { scale: i32 },
         Div,
         Einsum { equation: String, scale: i32 },
-        Erf { scale: i32, tau: i32, log_table: usize },
-        ErfSmallTable,
+        Erf { scale: i32 },
         GatherSmall { axis: usize, dict_len: usize },
         GatherLarge { axis: usize, dict_len: usize },
         Identity,
@@ -148,14 +145,14 @@ define_operators! {
         Reshape { shape:Vec<usize> },
         Rsqrt { scale: i32 },
         ScalarConstDiv {divisor: i32},
-        Sigmoid { scale: i32, tau: i32, log_table: usize },
+        Sigmoid { scale: i32 },
         Sin { scale: i32 },
         Slice { axis: usize, start: usize, end: usize},
         SoftmaxLastAxis { scale: i32 },
         Square { scale: i32 },
         Sub,
         Sum { axes: Vec<usize> },
-        Tanh { scale: i32, tau: i32, log_table: usize },
+        Tanh { scale: i32 },
     ]
 }
 

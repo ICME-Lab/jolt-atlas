@@ -1,7 +1,5 @@
 //! [`LookupOperandsTrait`] helper proving softmax's saturating clamp
-//! `z_c = min(z, z_bound - 1)` via [`joltworks::lookup_tables::clamp::SoftmaxSatClampTable`],
-//! replacing the `sat_diff` complementary-slackness sumcheck
-//! (`onnx_proof::ops::softmax_last_axis::sat_diff`) with a genuine table lookup.
+//! `z_c = min(z, z_bound - 1)` via [`joltworks::lookup_tables::clamp::SoftmaxSatClampTable`].
 //!
 //! Unlike every other `LookupOperandsTrait` helper, this one's witness (`z = max_k - x`) does
 //! not live at this node's own output opening — it's evaluated at the point softmax's exp-digit

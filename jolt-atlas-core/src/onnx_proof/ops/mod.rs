@@ -98,12 +98,6 @@ pub mod sin;
 pub mod slice;
 /// Softmax operation along the last axis (axis = -1).
 pub mod softmax_last_axis;
-/// Benchmark-only sibling of [`softmax_last_axis`] using a single flat `exp_z` lookup table
-/// (no digit split, no multiplication relation) instead of the two-sub-table decomposition.
-pub mod softmax_last_axis_flatexp;
-/// Benchmark-only sibling of [`softmax_last_axis`] using a `ClampBoundedTable` lookup for the
-/// saturating clamp instead of the `sat_diff` complementary-slackness sumcheck.
-pub mod softmax_last_axis_satclamp;
 /// Element-wise square (x²) operation.
 pub mod square;
 /// Element-wise subtraction operation.
@@ -258,8 +252,6 @@ macro_rules! dispatch_operator {
             Operator::Sin($inner) => $body,
             Operator::Slice($inner) => $body,
             Operator::SoftmaxLastAxis($inner) => $body,
-            Operator::SoftmaxLastAxisSatClamp($inner) => $body,
-            Operator::SoftmaxLastAxisFlatExp($inner) => $body,
             Operator::Square($inner) => $body,
             Operator::Sub($inner) => $body,
             Operator::Sum($inner) => $body,

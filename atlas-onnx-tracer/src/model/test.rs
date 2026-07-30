@@ -426,42 +426,6 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
-    /// Add a softmax-last-axis node using the single flat `exp_z` lookup table proof variant
-    /// (benchmark-only, see `jolt_atlas_core::onnx_proof::ops::softmax_last_axis_flatexp`) — no
-    /// digit split, no `exp_hi*exp_lo` multiplication relation. Identical execution semantics
-    /// (same final softmax output) to [`Self::softmax_last_axis`], different internal witness.
-    pub fn softmax_last_axis_flatexp(&mut self, input: Wire) -> Wire {
-        let id = self.alloc();
-        let output_dims = self.nodes[&input].output_dims.clone();
-        let node = ComputationNode::new(
-            id,
-            Operator::SoftmaxLastAxisFlatExp(SoftmaxLastAxisFlatExp {
-                scale: self.scale as i32,
-            }),
-            vec![input],
-            output_dims,
-        );
-        self.insert_node(node)
-    }
-
-    /// Add a softmax-last-axis node using the `SoftmaxSatClampTable`-lookup-based proof variant
-    /// (benchmark-only, see `jolt_atlas_core::onnx_proof::ops::softmax_last_axis_satclamp`).
-    /// Identical execution semantics to [`Self::softmax_last_axis`]; only supports the scale the
-    /// crate's `SOFTMAX_SAT_CLAMP_BOUND` was compiled for (`common::consts::MODEL_SCALE`).
-    pub fn softmax_last_axis_satclamp(&mut self, input: Wire) -> Wire {
-        let id = self.alloc();
-        let output_dims = self.nodes[&input].output_dims.clone();
-        let node = ComputationNode::new(
-            id,
-            Operator::SoftmaxLastAxisSatClamp(SoftmaxLastAxisSatClamp {
-                scale: self.scale as i32,
-            }),
-            vec![input],
-            output_dims,
-        );
-        self.insert_node(node)
-    }
-
     /// Add a hyperbolic tangent (tanh) activation node.
     pub fn tanh(&mut self, input: Wire) -> Wire {
         let id = self.alloc();

@@ -145,12 +145,6 @@ canonical_serde_enum! {
         /// * `1` – decomposition index `d`
         SoftmaxZLoRaD(usize, usize),
 
-        /// One-hot read-address decomposition for the softmax **sat-diff** RC.
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        SoftmaxSatDiffRaD(usize, usize),
-
         /// One-hot read-address decomposition for the saturating-clamp lookup of
         /// a `Add`/`Sub` node. The clamp is indexed by the 64-bit accumulation, so
         /// there are `64 / log_k_chunk` chunks (e.g. 16 for `log_k_chunk = 4`).
@@ -201,20 +195,6 @@ canonical_serde_enum! {
         /// * `0` – node index
         /// * `1` – decomposition index `d`
         SoftmaxSatClampRaD(usize, usize),
-
-        /// One-hot read-address decomposition for the flat-exp softmax variant's saturating-clamp
-        /// lookup (see [`VirtualPoly::SoftmaxFlatClampRa`]).
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        SoftmaxFlatClampRaD(usize, usize),
-
-        /// One-hot read-address decomposition for the flat-exp softmax variant's single exp
-        /// lookup (see [`VirtualPoly::SoftmaxFlatExpRa`]).
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        SoftmaxFlatExpRaD(usize, usize),
     }
 }
 
@@ -401,18 +381,6 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         SoftmaxZLoRa(usize),
-
-        /// Saturation-diff polynomial for the softmax operand link.
-        /// `sat_diff[k,j] = z[k,j] − z_c[k,j]` (≥ 0).
-        /// Virtualized — the identity RC commits to its one-hot encoding.
-        ///
-        /// * `0` – node index
-        SoftmaxSatDiff(usize),
-
-        /// One-hot-encoded Read-address polynomial for the softmax sat-diff range check.
-        ///
-        /// * `0` – node index
-        SoftmaxSatDiffRa(usize),
 
         /// The raw pre-clamp witness for softmax's saturating-clamp lookup: `z = max_k - x`,
         /// evaluated at the point softmax's exp-digit lookups (`SoftmaxZHi`/`SoftmaxZLo`)

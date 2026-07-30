@@ -282,143 +282,20 @@ fn verify_zk_sumcheck_instances(
     Ok(())
 }
 
-/// Verify SoftmaxLastAxis ZK proof.
-///
-/// Mirror of `prove_softmax_zk`: 4 batched stages with two private inter-stage
-/// claims (R, r_exp) absorbed via Pedersen commitments. Each stage runs full
-/// per-stage `verify_zk_sumcheck_instances` (BlindFold covers the *aggregate*
-/// constraint, but per-stage transcript replay still has to match).
-///
-/// Public auxiliary claims (`SoftmaxSumOutput`, `SoftmaxMaxOutput`,
-/// `SoftmaxMaxIndex`, `SoftmaxExpSum`) are pre-populated into the accumulator
-/// from the bundle so `SoftmaxLastAxisVerifier::new` and `cache_exp_sum` see
-/// the real values when they re-append them to the transcript.
+/// Stubbed: the sat_diff-based ZK proving pipeline this mirrored no longer matches
+/// `SoftmaxLastAxisVerifier`'s internals (softmax now proves its saturating clamp via a
+/// `ClampBoundedTable` lookup, not the sat_diff complementary-slackness sumcheck this was
+/// written against — same treatment as Erf/Sigmoid/Tanh's zk stubs after their proving-method
+/// swap). Not implemented for the new design; only touch if the user asks for real zk support.
 fn verify_softmax_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
-    pp: &AtlasVerifierPreprocessing<F, PCS>,
-    bundle: &ZkProofBundle,
-    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
-    transcript: &mut T,
-    zk_proof_idx: &mut usize,
+    _node: &atlas_onnx_tracer::node::ComputationNode,
+    _pp: &AtlasVerifierPreprocessing<F, PCS>,
+    _bundle: &ZkProofBundle,
+    _accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    _transcript: &mut T,
+    _zk_proof_idx: &mut usize,
 ) -> Result<(), ProofVerifyError> {
-    use crate::onnx_proof::ops::softmax_last_axis::{
-        SoftmaxLastAxisVerifier as SmVerifier, VerifierLookupTableData,
-    };
-
-    verify_zk_eval_reduction(node, bundle, accumulator, transcript)?;
-
-    let Operator::SoftmaxLastAxis(op) = &node.operator else {
-        unreachable!()
-    };
-
-    // Pre-populate public auxiliary claims so SmVerifier::new sees real values
-    // when it re-appends them to the transcript.
-    for (id, claim) in &bundle.auxiliary_claims {
-        accumulator.openings.insert(
-            *id,
-            (
-                joltworks::poly::opening_proof::OpeningPoint::default(),
-                *claim,
-            ),
-        );
-    }
-
-    let inter_coms = bundle
-        .inter_stage_commitments
-        .get(&node.idx)
-        .expect("Missing inter-stage commitments for Softmax node");
-
-    // Auxiliary scalars are public, so we toggle off zk_mode while
-    // SmVerifier::new and cache_exp_sum read/append them. They both rely on
-    // the accumulator returning real claim values (not the zk_mode placeholder
-    // zero) so the transcript appends match the prover's. We restore zk_mode
-    // before the private inter-stage caches and the per-stage sumcheck builds.
-    let saved_zk_mode = accumulator.zk_mode;
-    accumulator.zk_mode = false;
-    let scale = scale_to_multiplier(op.scale) as i32;
-    let mut sm_v = SmVerifier::new(node, scale, accumulator, transcript);
-    sm_v.cache_exp_sum(accumulator, transcript)
-        .map_err(|e| ProofVerifyError::InvalidOpeningProof(format!("{e:?}")))?;
-    accumulator.zk_mode = saved_zk_mode;
-
-    let scale_bits = pp.shared.scale();
-
-    // cache_R: insert explicit zero placeholder, absorb Pedersen commitment.
-    sm_v.cache_R_zk(accumulator, transcript, &inter_coms[0]);
-
-    // Stage 1
-    {
-        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        assert_eq!(*pid, node.idx);
-        let v = sm_v.build_stage1_verifiers(accumulator, transcript, scale_bits)?;
-        verify_zk_sumcheck_instances(zk_proof, v, accumulator, transcript)?;
-        *zk_proof_idx += 1;
-    }
-
-    let lut = VerifierLookupTableData::new(scale);
-
-    // cache_r_exp: same shape as cache_R.
-    sm_v.cache_r_exp_zk(accumulator, transcript, &inter_coms[1]);
-
-    // Stage 2
-    {
-        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        assert_eq!(*pid, node.idx);
-        let v = sm_v.build_stage2_verifiers(accumulator, transcript, scale_bits, &lut);
-        verify_zk_sumcheck_instances(zk_proof, v, accumulator, transcript)?;
-        *zk_proof_idx += 1;
-    }
-
-    // Stage 3
-    {
-        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        assert_eq!(*pid, node.idx);
-        let v = sm_v.build_stage3_verifiers(accumulator, transcript, scale_bits, &lut);
-        verify_zk_sumcheck_instances(zk_proof, v, accumulator, transcript)?;
-        *zk_proof_idx += 1;
-    }
-
-    // NOTE: operand_link (X(r2) == max_k - z_c - sat_diff, expanded as
-    //   X(r2) - max_k(r2_lead) + z_hi(r2)*B + z_lo(r2) + sat_diff(r2) == 0
-    // ) is intentionally skipped here.
-    //
-    // It is a verifier-side algebraic identity over openings X (input 0),
-    // SoftmaxZHi, SoftmaxZLo, SoftmaxSatDiff, with `max_k(r2_lead)` derived by
-    // the verifier from public auxiliary scalars and `B` the digit base from
-    // the LUT. In the ZK pipeline all four openings are private and surface to
-    // the verifier as the zk_mode placeholder zero, while max_k is non-zero,
-    // so a direct verifier-side check would always fail.
-    //
-    // Closing this gap requires expressing the identity as a constraint inside
-    // BlindFold's R1CS so it is checked as part of the aggregate proof. The
-    // existing `extra_constraints` mechanism (currently dormant in prove_zk:
-    // empty vec, eval_commitment_gens=None) emits `output_var = SoP` plus a
-    // Pedersen binding on output_value, which is the wrong shape: an identity
-    // wants `(SoP) * 1 == 0` with no output_var or commitment. The right
-    // BlindFold-side change is a new `LayoutStep::AlgebraicIdentity` variant
-    // (and parallel additions in layout.rs / r1cs.rs / witness.rs / folding.rs
-    // / mod.rs) that allocates only the required opening vars, deduplicates
-    // against earlier constraint allocations via the existing seen_openings
-    // set, and emits a single R1CS row `(SoP) * 1 = 0`. Then this site
-    // constructs an OutputClaimConstraint with terms
-    //   1*X, (-max_k_eval)*1, B*z_hi, 1*z_lo, 1*sat_diff
-    // (B as ValueSource::Constant, max_k_eval as a baked challenge), passes
-    // the four opening_values via a new identity-witness collection on
-    // BlindFoldWitness, and the prover commits no extra Pedersen output.
-    //
-    // Tracked in wiki/jolt-atlas/book/src/underway/pr-239-review.md as the
-    // first remaining outstanding item.
-
-    // Stage 4
-    {
-        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        assert_eq!(*pid, node.idx);
-        let v = sm_v.build_stage4_verifiers(accumulator, transcript, scale_bits, &lut);
-        verify_zk_sumcheck_instances(zk_proof, v, accumulator, transcript)?;
-        *zk_proof_idx += 1;
-    }
-
-    Ok(())
+    unimplemented!("ZK verification not implemented for the clamp-based SoftmaxLastAxis")
 }
 
 /// Verify GatherLarge ZK proof.
@@ -1127,196 +1004,25 @@ fn prove_cos_sin_zk(
     zk_sumcheck_proofs.push((node.idx, hw));
 }
 
-/// Prove SoftmaxLastAxis with ZK: default flow, 4 batched stages.
-/// Mirrors SoftmaxLastAxisProver::prove but uses run_zk_batched_sumcheck.
+/// Stubbed: the sat_diff-based ZK proving pipeline this mirrored no longer matches
+/// `SoftmaxLastAxisProver`'s internals (softmax now proves its saturating clamp via a
+/// `ClampBoundedTable` lookup, not the sat_diff complementary-slackness sumcheck this was
+/// written against — same treatment as Erf/Sigmoid/Tanh's zk stubs after their proving-method
+/// swap). Not implemented for the new design; only touch if the user asks for real zk support.
 #[expect(clippy::too_many_arguments)]
 fn prove_softmax_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
-    prover: &mut Prover<F, T>,
-    pedersen_gens: &PedersenGenerators<C>,
-    blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
-    stage_configs: &mut Vec<StageConfig>,
-    eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
-    eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
-    zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
-    inter_stage_commitments: &mut BTreeMap<usize, Vec<joltworks::curve::Bn254G1>>,
-    auxiliary_claims: &mut BTreeMap<joltworks::poly::opening_proof::OpeningId, F>,
+    _node: &atlas_onnx_tracer::node::ComputationNode,
+    _prover: &mut Prover<F, T>,
+    _pedersen_gens: &PedersenGenerators<C>,
+    _blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+    _stage_configs: &mut Vec<StageConfig>,
+    _eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
+    _eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
+    _zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
+    _inter_stage_commitments: &mut BTreeMap<usize, Vec<joltworks::curve::Bn254G1>>,
+    _auxiliary_claims: &mut BTreeMap<joltworks::poly::opening_proof::OpeningId, F>,
 ) {
-    use crate::onnx_proof::ops::softmax_last_axis::{
-        pad_to_power_of_two, rc::sat_diff_rc_bits, to_indices, to_lookup_bits, LookupTableData,
-        SoftmaxLastAxisProver as SmProver,
-    };
-    use atlas_onnx_tracer::ops::softmax::softmax_last_axis_decomposed;
-
-    prove_zk_eval_reduction(
-        node,
-        prover,
-        pedersen_gens,
-        eval_reduction_proofs,
-        eval_reduction_h_commitments,
-    );
-
-    let Operator::SoftmaxLastAxis(op) = &node.operator else {
-        unreachable!()
-    };
-    let softmax_input = prover.trace.operand_tensors(node)[0];
-    let scale = scale_to_multiplier(op.scale) as i32;
-    let trace = softmax_last_axis_decomposed(softmax_input, scale).1;
-    let mut sm = SmProver::new(node, trace, scale);
-
-    let scale_bits = prover.preprocessing.scale();
-    let r_lookup_bits = to_lookup_bits(&sm.trace.R, scale_bits as usize);
-    let r_indices = to_indices(&sm.trace.R);
-    let r_exp_lookup_bits = to_lookup_bits(&sm.trace.decomposed_exp.r_exp, scale_bits as usize);
-    let r_exp_indices = to_indices(&sm.trace.decomposed_exp.r_exp);
-    let z_hi_indices = to_indices(&sm.trace.decomposed_exp.z_hi);
-    let z_lo_indices = to_indices(&sm.trace.decomposed_exp.z_lo);
-    let sat_diff_lookup_bits = to_lookup_bits(
-        &sm.trace.decomposed_exp.sat_diff,
-        sat_diff_rc_bits(scale_bits as usize),
-    );
-    let sat_diff_indices = to_indices(&sm.trace.decomposed_exp.sat_diff);
-
-    let base = sm.trace.decomposed_exp.lut.base as u64;
-    let mut table_hi = std::mem::take(&mut sm.trace.decomposed_exp.lut.lut_hi);
-    let z_bound_minus_1 = (table_hi.len() as u64) * base - 1;
-    pad_to_power_of_two(&mut table_hi);
-    let mut table_lo = std::mem::take(&mut sm.trace.decomposed_exp.lut.lut_lo);
-    pad_to_power_of_two(&mut table_lo);
-
-    let lut_data = LookupTableData {
-        table_hi,
-        table_lo,
-        z_hi_indices,
-        z_lo_indices,
-        z_bound_minus_1,
-        base,
-    };
-
-    // Public auxiliary scalars: toggle off prover zk_mode so the cleartext
-    // claims are appended to the transcript. The verifier toggles its own
-    // zk_mode off symmetrically (see verify_softmax_zk).
-    let saved_zk_mode = prover.accumulator.zk_mode;
-    prover.accumulator.zk_mode = false;
-    sm.send_auxiliary_vectors(prover);
-    sm.cache_exp_sum(prover);
-    prover.accumulator.zk_mode = saved_zk_mode;
-
-    // Capture only PUBLIC auxiliary claims for the verifier.
-    // These are verifier-computable from the auxiliary vectors sent via transcript.
-    // Private claims (sumcheck outputs, cache_R, cache_r_exp) are NOT included.
-    {
-        use joltworks::poly::opening_proof::{OpeningId, SumcheckId};
-        let sid = SumcheckId::NodeExecution(node.idx);
-        let [f, _] = sm.F_N;
-        for k in 0..f {
-            for vp_fn in [
-                VirtualPoly::SoftmaxSumOutput as fn(usize, usize) -> VirtualPoly,
-                VirtualPoly::SoftmaxMaxOutput,
-                VirtualPoly::SoftmaxMaxIndex,
-            ] {
-                let id = OpeningId::new(vp_fn(node.idx, k), sid);
-                if let Some((_, claim)) = prover.accumulator.openings.get(&id) {
-                    auxiliary_claims.insert(id, *claim);
-                }
-            }
-        }
-        // SoftmaxExpSum: derived from public exp_sum_q auxiliary vector
-        let exp_sum_id = OpeningId::new(VirtualPoly::SoftmaxExpSum(node.idx), sid);
-        if let Some((_, claim)) = prover.accumulator.openings.get(&exp_sum_id) {
-            auxiliary_claims.insert(exp_sum_id, *claim);
-        }
-    }
-
-    // ZK cache_R: evaluate R polynomial, Pedersen-commit the claim, store in accumulator
-    let cache_r_com = {
-        use crate::utils::opening_access::AccOpeningAccessor;
-        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
-        let r0 = accessor.get_reduced_opening().0;
-        let eval = MultilinearPolynomial::from(sm.trace.R.clone()).evaluate(&r0.r);
-        let blinding = F::random(&mut rand::thread_rng());
-        let com = pedersen_gens.commit(&[eval], &blinding);
-        prover.transcript.append_serializable(&com);
-        // Store in accumulator (same as cache_R but without cleartext transcript append)
-        let opening_id = joltworks::poly::opening_proof::OpeningId::new(
-            VirtualPoly::SoftmaxRecipMultRemainder(node.idx),
-            joltworks::poly::opening_proof::SumcheckId::NodeExecution(node.idx),
-        );
-        prover.accumulator.openings.insert(opening_id, (r0, eval));
-        com
-    };
-
-    // Stage 1
-    let mut s1 = sm.build_stage1_instances(prover, r_lookup_bits);
-    let s1_refs: Vec<&mut dyn SumcheckInstanceProver<F, T>> =
-        s1.iter_mut().map(|v| &mut **v as _).collect();
-    let s1_proof = run_zk_batched_sumcheck(
-        s1_refs,
-        prover,
-        blindfold_accumulator,
-        stage_configs,
-        pedersen_gens,
-    );
-    zk_sumcheck_proofs.push((node.idx, s1_proof));
-
-    // ZK cache_r_exp: same pattern
-    let cache_r_exp_com = {
-        use crate::utils::opening_access::AccOpeningAccessor;
-        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
-        let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
-        let eval =
-            MultilinearPolynomial::from(sm.trace.decomposed_exp.r_exp.clone()).evaluate(&r1.r);
-        let blinding = F::random(&mut rand::thread_rng());
-        let com = pedersen_gens.commit(&[eval], &blinding);
-        prover.transcript.append_serializable(&com);
-        let opening_id = joltworks::poly::opening_proof::OpeningId::new(
-            VirtualPoly::SoftmaxExpRemainder(node.idx),
-            joltworks::poly::opening_proof::SumcheckId::NodeExecution(node.idx),
-        );
-        prover.accumulator.openings.insert(opening_id, (r1, eval));
-        com
-    };
-
-    // Stage 2
-    let mut s2 = sm.build_stage2_instances(prover, r_exp_lookup_bits, &r_indices, &lut_data);
-    let s2_refs: Vec<&mut dyn SumcheckInstanceProver<F, T>> =
-        s2.iter_mut().map(|v| &mut **v as _).collect();
-    let s2_proof = run_zk_batched_sumcheck(
-        s2_refs,
-        prover,
-        blindfold_accumulator,
-        stage_configs,
-        pedersen_gens,
-    );
-    zk_sumcheck_proofs.push((node.idx, s2_proof));
-
-    // Stage 3
-    let mut s3 = sm.build_stage3_instances(prover, &lut_data, sat_diff_lookup_bits, &r_exp_indices);
-    let s3_refs: Vec<&mut dyn SumcheckInstanceProver<F, T>> =
-        s3.iter_mut().map(|v| &mut **v as _).collect();
-    let s3_proof = run_zk_batched_sumcheck(
-        s3_refs,
-        prover,
-        blindfold_accumulator,
-        stage_configs,
-        pedersen_gens,
-    );
-    zk_sumcheck_proofs.push((node.idx, s3_proof));
-
-    // Stage 4
-    let mut s4 = sm.build_stage4_instances(prover, &lut_data, &sat_diff_indices);
-    let s4_refs: Vec<&mut dyn SumcheckInstanceProver<F, T>> =
-        s4.iter_mut().map(|v| &mut **v as _).collect();
-    let s4_proof = run_zk_batched_sumcheck(
-        s4_refs,
-        prover,
-        blindfold_accumulator,
-        stage_configs,
-        pedersen_gens,
-    );
-    zk_sumcheck_proofs.push((node.idx, s4_proof));
-
-    inter_stage_commitments.insert(node.idx, vec![cache_r_com, cache_r_exp_com]);
+    unimplemented!("ZK proving not implemented for the clamp-based SoftmaxLastAxis")
 }
 
 /// Prove GatherLarge with ZK: default flow (eval reduction, execution + shout one-hot).

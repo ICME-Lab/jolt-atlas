@@ -295,9 +295,7 @@ impl Model {
                 // MeanOfSquares commits one-hot decompositions for its saturating
                 // clamp + the `R < N·2^S` rescaling-remainder range check.
                 | Operator::MeanOfSquares(_)
-                | Operator::SoftmaxLastAxis(_)
-                | Operator::SoftmaxLastAxisSatClamp(_)
-                | Operator::SoftmaxLastAxisFlatExp(_) => {
+                | Operator::SoftmaxLastAxis(_) => {
                     LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements())
                 }
                 // Fused Mul/Square/Cube (`scale > 0`) commit one-hot

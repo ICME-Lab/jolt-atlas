@@ -19,10 +19,7 @@ use crate::{
     onnx_proof::{
         clamp_lookups::{clamp_intermediate, clamp_lookup_bits, CLAMP_LOG_K},
         neural_teleport::{division::compute_division, n_bits_to_usize},
-        ops::{
-            clamp::SymmetricClampOperands, rsqrt::rsqrt_dividend,
-            softmax_last_axis::rc::sat_diff_rc_bits,
-        },
+        ops::{clamp::SymmetricClampOperands, rsqrt::rsqrt_dividend},
         range_checking::range_check_operands::{
             DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
             RangeCheckingOperandsTrait, RiRangeCheckOperands, RsRangeCheckOperands,
@@ -35,11 +32,8 @@ use atlas_onnx_tracer::{
     model::{consts::FOUR_PI_APPROX, trace::Trace, Model},
     node::ComputationNode,
     ops::{
-        softmax::{
-            generate_exp_lut_decomposed, softmax_last_axis_decomposed,
-            softmax_last_axis_decomposed_padded_bound, softmax_last_axis_flat, softmax_z,
-        },
-        Operator, SoftmaxLastAxis, SoftmaxLastAxisFlatExp, SoftmaxLastAxisSatClamp,
+        softmax::{generate_exp_lut_decomposed, softmax_last_axis_decomposed, softmax_z},
+        Operator, SoftmaxLastAxis,
     },
     tensor::{ops::nonlinearities, Tensor, TensorError},
     utils::quantize::scale_to_multiplier,
@@ -516,16 +510,8 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             CommittedPoly::SoftmaxRemainderRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
                 let log_scale = softmax_op_scale(node) as usize;
-                // R depends on exp_q, which is computed differently per variant (digit-split
-                // vs single flat table) — must re-derive via the SAME trace function the
-                // variant's prover actually used, or R will silently diverge for generic data.
-                let r: Vec<i32> = match &node.operator {
-                    Operator::SoftmaxLastAxisFlatExp(_) => {
-                        softmax_last_axis_flat_full_trace(node, trace).R
-                    }
-                    _ => softmax_last_axis_full_trace(node, trace).R,
-                };
-                let lookup_indices: Vec<usize> = r.iter().map(|&v| v as usize).collect();
+                let st = softmax_last_axis_full_trace(node, trace);
+                let lookup_indices: Vec<usize> = st.R.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_scale, *d)
             }
             CommittedPoly::SoftmaxExpRemainderRaD(node_idx, d) => {
@@ -539,30 +525,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     .map(|&v| v as usize)
                     .collect();
                 build_onehot_witness(&lookup_indices, log_scale, *d)
-            }
-            CommittedPoly::SoftmaxSatDiffRaD(node_idx, d) => {
-                let node = &model.graph.nodes[node_idx];
-                let log_scale = softmax_op_scale(node) as usize;
-                let st = softmax_last_axis_full_trace(node, trace);
-                let lookup_indices: Vec<usize> = st
-                    .decomposed_exp
-                    .sat_diff
-                    .iter()
-                    .map(|&v| v as usize)
-                    .collect();
-                // Completeness gate: every honest sat_diff must fit the range-check
-                // width. `build_onehot_witness` addresses a 2^bits table, so an
-                // over-budget (or negative-as-usize) value would silently wrap to its
-                // low bits. Fire loudly in debug/CI instead — this is the invariant the
-                // narrowed width relies on (see rc::sat_diff_rc_bits).
-                debug_assert!(
-                    lookup_indices
-                        .iter()
-                        .all(|&v| v < (1usize << sat_diff_rc_bits(log_scale))),
-                    "softmax sat_diff exceeds range-check budget 2^{} at log_scale {log_scale}",
-                    sat_diff_rc_bits(log_scale),
-                );
-                build_onehot_witness(&lookup_indices, sat_diff_rc_bits(log_scale), *d)
             }
             CommittedPoly::SoftmaxZHiRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
@@ -598,29 +560,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let lookup_indices = compute_lookup_indices_from_operands(&[&operand], false);
                 build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
             }
-            CommittedPoly::SoftmaxFlatClampRaD(node_idx, d) => {
-                // Flat-exp softmax variant's saturating-clamp lookup: the lookup index is the
-                // raw `z = max_k - x` value (no offset, `z >= 0` always).
-                let node = &model.graph.nodes[node_idx];
-                let st = softmax_last_axis_flat_full_trace(node, trace);
-                let operand = Tensor::new(Some(&st.z), &[st.z.len()])
-                    .expect("flat-exp z tensor construction")
-                    .padded_next_power_of_two();
-                let lookup_indices = compute_lookup_indices_from_operands(&[&operand], false);
-                build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
-            }
-            CommittedPoly::SoftmaxFlatExpRaD(node_idx, d) => {
-                // Flat-exp softmax variant's single exp lookup: the lookup index is
-                // `z_c = min(z, z_bound-1)`.
-                let node = &model.graph.nodes[node_idx];
-                let st = softmax_last_axis_flat_full_trace(node, trace);
-                let log_table = st.flat_exp.table.len().log_2();
-                let lookup_indices: Vec<usize> =
-                    st.z.iter()
-                        .map(|&v| v.min(st.flat_exp.z_bound_minus_1) as usize)
-                        .collect();
-                build_onehot_witness(&lookup_indices, log_table, *d)
-            }
             CommittedPoly::RescaleRemainderRaD(node_idx, d) => {
                 // Fused rescaling remainder `R = acc mod 2^S ∈ [0, 2^S)`, padded
                 // to the node-output cycle domain . Shared by einsum, Mul,
@@ -636,36 +575,21 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
     }
 }
 
-/// Extracts the scale from any softmax operator variant (`SoftmaxLastAxis` or its
-/// `SoftmaxLastAxisSatClamp`/`SoftmaxLastAxisFlatExp` siblings — all carry the same
-/// `{ scale: i32 }` shape).
+/// Extracts the scale from a `SoftmaxLastAxis` node.
 fn softmax_op_scale(node: &ComputationNode) -> i32 {
     match &node.operator {
-        Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale })
-        | Operator::SoftmaxLastAxisSatClamp(SoftmaxLastAxisSatClamp { scale })
-        | Operator::SoftmaxLastAxisFlatExp(SoftmaxLastAxisFlatExp { scale }) => *scale,
+        Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) => *scale,
         other => panic!(
-            "Expected SoftmaxLastAxis(SatClamp/FlatExp) at node {}, got {other:?}",
+            "Expected SoftmaxLastAxis at node {}, got {other:?}",
             node.idx
         ),
     }
 }
 
-/// Re-runs the flat-exp trace (`softmax_last_axis_flat`) for a `SoftmaxLastAxisFlatExp` node.
-fn softmax_last_axis_flat_full_trace(
-    node: &ComputationNode,
-    trace: &Trace,
-) -> atlas_onnx_tracer::ops::softmax::SoftmaxLastAxisFlatTrace {
-    let scale = softmax_op_scale(node);
-    let layer_data = Trace::layer_data(trace, node);
-    let input = &layer_data.operands[0];
-    softmax_last_axis_flat(input, scale_to_multiplier(scale) as i32).1
-}
-
-/// Re-runs the decomposed softmax trace for a `SoftmaxLastAxis`/`SoftmaxLastAxisSatClamp` node.
+/// Re-runs the decomposed softmax trace for a `SoftmaxLastAxis` node.
 ///
 /// Returns the full [`SoftmaxLastAxisTrace`] from which the individual lookup
-/// indices (R, r_exp, sat_diff, z_hi, z_lo) can be extracted.
+/// indices (R, r_exp, z_hi, z_lo) can be extracted.
 fn softmax_last_axis_full_trace(
     node: &ComputationNode,
     trace: &Trace,
@@ -674,12 +598,7 @@ fn softmax_last_axis_full_trace(
     let layer_data = Trace::layer_data(trace, node);
     let input = &layer_data.operands[0];
     let multiplier = scale_to_multiplier(scale) as i32;
-    match &node.operator {
-        Operator::SoftmaxLastAxisSatClamp(_) => {
-            softmax_last_axis_decomposed_padded_bound(input, multiplier).1
-        }
-        _ => softmax_last_axis_decomposed(input, multiplier).1,
-    }
+    softmax_last_axis_decomposed(input, multiplier).1
 }
 
 /// Build a one-hot RaD witness for an identity range-check or Shout ra

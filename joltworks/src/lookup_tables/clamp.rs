@@ -211,11 +211,9 @@ impl<const XLEN: usize> ClampSpec for ActivationClampTable<XLEN> {
     const BOUND: usize = ACTIVATION_TABLE_BOUND;
 }
 
-/// Clamps softmax's `z = max_k - x` to `[0, 2^SOFTMAX_SAT_CLAMP_BOUND - 1]` at model scale
-/// [`common::consts::MODEL_SCALE`], replacing the `sat_diff` complementary-slackness sumcheck
-/// (`jolt_atlas_core::onnx_proof::ops::softmax_last_axis::sat_diff`) with a lookup. Unlike
-/// `Clamp`/`ActivationClampTable`, `z` is always non-negative by construction, so no symmetric
-/// offset is needed by the caller.
+/// Clamps softmax's `z = max_k - x` (always non-negative by construction) to
+/// `[0, 2^SOFTMAX_SAT_CLAMP_BOUND - 1]` at model scale [`common::consts::MODEL_SCALE`]
+/// (`jolt_atlas_core::onnx_proof::ops::softmax_last_axis::sat_clamp`).
 ///
 /// Deliberately its own nominal type rather than a `ClampBoundedTable<XLEN, SOFTMAX_SAT_CLAMP_BOUND>`
 /// alias (like `ClampTable`/`ActivationClampTable` are): `SOFTMAX_SAT_CLAMP_BOUND` and

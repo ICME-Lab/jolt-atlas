@@ -292,15 +292,6 @@ impl<F: JoltField> MaxIndicatorVerifier<F> {
         let params = MaxIndicatorParams::new(node, F_N, argmax_k, input_claim, accumulator);
         Self { params }
     }
-
-    /// Construct directly from already-built [`MaxIndicatorParams`], bypassing `::new`'s
-    /// hardcoded read of `VirtualPoly::SoftmaxExpQ` for the eq-binding point. Used by variants
-    /// that anchor `max_indicator` to a different point (e.g. `softmax_last_axis_flatexp`
-    /// batches it into stage 1 using `r0`'s leading part, since `SoftmaxExpQ` doesn't exist yet
-    /// at that point in the pipeline).
-    pub(crate) fn with_params(params: MaxIndicatorParams<F>) -> Self {
-        Self { params }
-    }
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MaxIndicatorVerifier<F> {

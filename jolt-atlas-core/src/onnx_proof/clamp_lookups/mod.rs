@@ -37,8 +37,8 @@ use joltworks::{
     poly::{
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
         opening_proof::{
-            OpeningAccumulator, OpeningId, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator,
+            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            VerifierOpeningAccumulator, BIG_ENDIAN,
         },
     },
     subprotocols::{
@@ -230,6 +230,17 @@ impl LookupOperandsTrait for SaturatingAccClampOperands {
 
     fn witness_opening_id(node: &ComputationNode) -> OpeningId {
         acc_opening_id(node.idx)
+    }
+
+    fn r_cycle<F: JoltField>(
+        node: &ComputationNode,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> OpeningPoint<BIG_ENDIAN, F> {
+        DefaultLookupOperands::r_cycle(node, accumulator)
+    }
+
+    fn r_cycle_source(node_idx: usize) -> OpeningId {
+        DefaultLookupOperands::r_cycle_source(node_idx)
     }
 
     fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {

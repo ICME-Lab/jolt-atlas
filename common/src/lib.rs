@@ -191,6 +191,30 @@ canonical_serde_enum! {
         /// * `0` – node index
         /// * `1` – decomposition index `d`
         ActivationSmallRaD(usize, usize),
+
+        /// One-hot read-address decomposition for softmax's saturating-clamp lookup
+        /// (`z -> min(z, z_bound - 1)`, see [`VirtualPoly::SoftmaxSatClampRa`]). The lookup
+        /// index is the raw `z = max_k - x` value (no offset needed, `z >= 0` always), so this
+        /// can't share `NodeOutputRaD`'s witness generation (which assumes the node's own
+        /// output/input, not an internal mid-pipeline value).
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        SoftmaxSatClampRaD(usize, usize),
+
+        /// One-hot read-address decomposition for the flat-exp softmax variant's saturating-clamp
+        /// lookup (see [`VirtualPoly::SoftmaxFlatClampRa`]).
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        SoftmaxFlatClampRaD(usize, usize),
+
+        /// One-hot read-address decomposition for the flat-exp softmax variant's single exp
+        /// lookup (see [`VirtualPoly::SoftmaxFlatExpRa`]).
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        SoftmaxFlatExpRaD(usize, usize),
     }
 }
 
@@ -389,6 +413,44 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         SoftmaxSatDiffRa(usize),
+
+        /// The raw pre-clamp witness for softmax's saturating-clamp lookup: `z = max_k - x`,
+        /// evaluated at the point softmax's exp-digit lookups (`SoftmaxZHi`/`SoftmaxZLo`)
+        /// converge to (not this node's own output opening — see
+        /// `SoftmaxSatClampOperands::r_cycle`).
+        ///
+        /// * `0` – node index
+        SoftmaxSatClampWitness(usize),
+
+        /// One-hot read-address polynomial for softmax's saturating-clamp lookup.
+        ///
+        /// * `0` – node index
+        SoftmaxSatClampRa(usize),
+
+        /// The raw pre-clamp witness for the flat-exp softmax variant's saturating-clamp
+        /// lookup: `z = max_k - x`, evaluated at `SoftmaxExpQ`'s opening point (`r1` —
+        /// this variant has no digit-split stage, so `r1` is the only anchor point needed).
+        ///
+        /// * `0` – node index
+        SoftmaxFlatZWitness(usize),
+
+        /// The flat-exp softmax variant's clamped logit: `z_c = min(z, z_bound-1)`, evaluated at
+        /// the same point as [`VirtualPoly::SoftmaxFlatZWitness`]. Read as both the saturating-clamp
+        /// lookup's output claim and the flat exp lookup's address (`raf`) claim.
+        ///
+        /// * `0` – node index
+        SoftmaxFlatZC(usize),
+
+        /// One-hot read-address polynomial for the flat-exp softmax variant's saturating-clamp
+        /// lookup.
+        ///
+        /// * `0` – node index
+        SoftmaxFlatClampRa(usize),
+
+        /// One-hot read-address polynomial for the flat-exp softmax variant's single exp lookup.
+        ///
+        /// * `0` – node index
+        SoftmaxFlatExpRa(usize),
 
         /// Remainder polynomial for the reciprocal-multiplication check in
         /// **softmax**.

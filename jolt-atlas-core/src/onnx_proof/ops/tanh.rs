@@ -10,7 +10,7 @@ use crate::onnx_proof::{
 };
 use atlas_onnx_tracer::{node::ComputationNode, ops::Tanh, tensor::ops::nonlinearities};
 use common::{
-    consts::{ACTIVATION_TABLE_BOUND, SCALE_8},
+    consts::{ACTIVATION_TABLE_BOUND, MODEL_SCALE},
     CommittedPoly,
 };
 use joltworks::{
@@ -26,7 +26,7 @@ impl SmallActivationTable for TanhTableMarker {
         crate::onnx_proof::neural_teleport::utils::materialize_signed_activation_table(
             ACTIVATION_TABLE_BOUND,
             1,
-            SCALE_8 as i32,
+            MODEL_SCALE as i32,
             nonlinearities::tanh,
         )
     }

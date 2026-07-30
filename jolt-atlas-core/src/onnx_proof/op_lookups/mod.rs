@@ -111,6 +111,23 @@ pub trait LookupOperandsTrait {
     /// `OpeningId` this helper's lookup witness claim is registered/read under.
     fn witness_opening_id(node: &ComputationNode) -> OpeningId;
 
+    /// The point (`r_cycle`) at which this helper's witness/operand is evaluated to produce
+    /// the "raf" claim of the read-raf sumcheck. Every existing helper (`Clamp`,
+    /// saturating-arithmetic clamps) uses the node's own output opening, since their pre-clamp
+    /// witness naturally lives at the same point as the node's committed output. A helper whose
+    /// witness is an internal, mid-pipeline value already evaluated at some other established
+    /// point (e.g. softmax's saturating-clamp witness) overrides this to read that point instead.
+    fn r_cycle<F: JoltField>(
+        node: &ComputationNode,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> OpeningPoint<BIG_ENDIAN, F>;
+
+    /// `OpeningId` whose accumulator entry's opening point equals [`Self::r_cycle`] — consumed
+    /// by the one-hot `ra` checks (`OpLookupEncoding`'s `RaOneHotEncoding::r_cycle_source`) so
+    /// they bind the same cycle point as the main lookup. Must resolve to the identical point
+    /// as [`Self::r_cycle`].
+    fn r_cycle_source(node_idx: usize) -> OpeningId;
+
     /// The polynomial that is evaluated at `r_cycle` to produce the "raf" claim of the read-raf sumcheck.
     fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64>;
 
@@ -154,6 +171,20 @@ impl LookupOperandsTrait for DefaultLookupOperands {
         OpeningId::new(
             VirtualPoly::NodeOutput(node.inputs[0]),
             SumcheckId::NodeExecution(node.idx),
+        )
+    }
+
+    fn r_cycle<F: JoltField>(
+        node: &ComputationNode,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> OpeningPoint<BIG_ENDIAN, F> {
+        accumulator.get_node_output_opening(node.idx).0
+    }
+
+    fn r_cycle_source(node_idx: usize) -> OpeningId {
+        OpeningId::new(
+            VirtualPoly::NodeOutput(node_idx),
+            SumcheckId::NodeExecution(node_idx),
         )
     }
 
@@ -259,8 +290,7 @@ where
     H: LookupOperandsTrait,
 {
     fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
-        let (r_node_output, _) = accumulator.get_node_output_opening(self.computation_node.idx);
-        r_node_output
+        H::r_cycle(&self.computation_node, accumulator)
     }
 
     fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
@@ -333,10 +363,7 @@ impl<Helper: LookupOperandsTrait> RaOneHotEncoding for OpLookupEncoding<Helper> 
     }
 
     fn r_cycle_source(&self) -> OpeningId {
-        OpeningId::new(
-            VirtualPoly::NodeOutput(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-        )
+        Helper::r_cycle_source(self.node_idx)
     }
 
     fn ra_source(&self) -> OpeningId {

@@ -14,7 +14,7 @@ use joltworks::{
     self,
     field::JoltField,
     lookup_tables::clamp::{ClampTable, CLAMP_BOUND},
-    poly::opening_proof::OpeningId,
+    poly::opening_proof::{OpeningId, OpeningPoint, BIG_ENDIAN},
     subprotocols::{
         shout::{self, RaOneHotEncoding},
         sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
@@ -65,6 +65,17 @@ impl LookupOperandsTrait for SymmetricClampOperands {
 
     fn witness_opening_id(node: &ComputationNode) -> OpeningId {
         DefaultLookupOperands::witness_opening_id(node)
+    }
+
+    fn r_cycle<F: JoltField>(
+        node: &ComputationNode,
+        accumulator: &dyn joltworks::poly::opening_proof::OpeningAccumulator<F>,
+    ) -> OpeningPoint<BIG_ENDIAN, F> {
+        DefaultLookupOperands::r_cycle(node, accumulator)
+    }
+
+    fn r_cycle_source(node_idx: usize) -> OpeningId {
+        DefaultLookupOperands::r_cycle_source(node_idx)
     }
 
     fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {

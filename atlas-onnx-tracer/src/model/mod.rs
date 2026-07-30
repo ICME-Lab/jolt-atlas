@@ -295,7 +295,9 @@ impl Model {
                 // MeanOfSquares commits one-hot decompositions for its saturating
                 // clamp + the `R < N·2^S` rescaling-remainder range check.
                 | Operator::MeanOfSquares(_)
-                | Operator::SoftmaxLastAxis(_) => {
+                | Operator::SoftmaxLastAxis(_)
+                | Operator::SoftmaxLastAxisSatClamp(_)
+                | Operator::SoftmaxLastAxisFlatExp(_) => {
                     LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements())
                 }
                 // Fused Mul/Square/Cube (`scale > 0`) commit one-hot
@@ -492,7 +494,7 @@ impl RunArgs {
 /// Const values used across the model and ops.
 pub mod consts {
     /// Default quantization scale (denominator in fixed-point representation).
-    pub const DEFAULT_SCALE: i32 = 8;
+    pub const DEFAULT_SCALE: i32 = common::consts::MODEL_SCALE as i32;
 
     /// Const used in the zkVM to wrap around a multiple of 2π,
     /// using the periodicity of the cosine function while keeping the lookup table size reasonable.

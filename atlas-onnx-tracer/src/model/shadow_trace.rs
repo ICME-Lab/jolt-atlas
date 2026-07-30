@@ -447,7 +447,11 @@ fn shadow_f64(op: &Operator, inputs: Vec<&Tensor<f64>>, scale: Scale) -> Tensor<
         Operator::Einsum(e) => tensor::ops::einsum(&e.equation, &inputs).unwrap(),
 
         // ── Nonlinearities (ideal f64 versions) ─────────────────────────
-        Operator::SoftmaxLastAxis { .. } => softmax_f64(inputs[0], inputs[0].dims().len() - 1),
+        Operator::SoftmaxLastAxis { .. }
+        | Operator::SoftmaxLastAxisSatClamp { .. }
+        | Operator::SoftmaxLastAxisFlatExp { .. } => {
+            softmax_f64(inputs[0], inputs[0].dims().len() - 1)
+        }
         Operator::Clamp(_) => inputs[0].clone(), // quantization artifact — identity in f64
         // erf saturates to ±1 well within the [-8, 8) clamp bound, so the clamp
         // itself is negligible in f64.

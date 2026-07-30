@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use common::consts::ACTIVATION_TABLE_BOUND;
+use common::consts::{ACTIVATION_TABLE_BOUND, SOFTMAX_SAT_CLAMP_BOUND};
 
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
@@ -8,19 +8,22 @@ use crate::{
         prefixes::{
             higher_is_zero::{
                 ActivationHigherIsZeroPrefix, ClampHigherIsZeroPrefix, SatClampHigherIsZeroPrefix,
+                SoftmaxSatClampHigherIsZeroPrefix,
             },
             lower_word::{
                 ActivationLowerWordPrefix, ClampLowerWordPrefix, SatClampLowerWordPrefix,
+                SoftmaxSatClampLowerWordPrefix,
             },
             PrefixEval, PrefixVariant, Prefixes,
         },
         suffixes::{
             higher_is_zero::{
                 ActivationHigherIsZeroSuffix, ClampHigherIsZeroSuffix, SatClampHigherIsZeroSuffix,
+                SoftmaxSatClampHigherIsZeroSuffix,
             },
             hzero_mul_lword::{
                 ActivationHZeroMulLWordSuffix, ClampHZeroMulLWordSuffix,
-                SatClampHZeroMulLWordSuffix,
+                SatClampHZeroMulLWordSuffix, SoftmaxSatClampHZeroMulLWordSuffix,
             },
             SuffixEval, SuffixVariant, Suffixes,
         },
@@ -196,7 +199,7 @@ impl ClampSpec for SaturationTable {
     const BOUND: usize = 32;
 }
 
-/// Clamps Erf/Sigmoid/Tanh input to `[-8, 8)` at model scale [`common::consts::SCALE_8`], before
+/// Clamps Erf/Sigmoid/Tanh input to `[-8, 8)` at model scale [`common::consts::MODEL_SCALE`], before
 /// the small activation-table lookup.
 pub type ActivationClampTable<const XLEN: usize> = ClampBoundedTable<XLEN, ACTIVATION_TABLE_BOUND>;
 
@@ -206,6 +209,43 @@ impl<const XLEN: usize> ClampSpec for ActivationClampTable<XLEN> {
     type SufHigherIsZero = ActivationHigherIsZeroSuffix<XLEN>;
     type SufHZeroMulLWord = ActivationHZeroMulLWordSuffix<XLEN>;
     const BOUND: usize = ACTIVATION_TABLE_BOUND;
+}
+
+/// Clamps softmax's `z = max_k - x` to `[0, 2^SOFTMAX_SAT_CLAMP_BOUND - 1]` at model scale
+/// [`common::consts::MODEL_SCALE`], replacing the `sat_diff` complementary-slackness sumcheck
+/// (`jolt_atlas_core::onnx_proof::ops::softmax_last_axis::sat_diff`) with a lookup. Unlike
+/// `Clamp`/`ActivationClampTable`, `z` is always non-negative by construction, so no symmetric
+/// offset is needed by the caller.
+///
+/// Deliberately its own nominal type rather than a `ClampBoundedTable<XLEN, SOFTMAX_SAT_CLAMP_BOUND>`
+/// alias (like `ClampTable`/`ActivationClampTable` are): `SOFTMAX_SAT_CLAMP_BOUND` and
+/// `ACTIVATION_TABLE_BOUND` are derived from the same `MODEL_SCALE` by unrelated formulas and can
+/// coincide (e.g. both are `16` at `MODEL_SCALE=12`), which would make the two aliases the same
+/// concrete type and collide on `ClampSpec`. Delegates to `ClampBoundedTable` for the actual
+/// table logic.
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct SoftmaxSatClampTable<const XLEN: usize>;
+
+impl<const XLEN: usize> JoltLookupTable for SoftmaxSatClampTable<XLEN> {
+    fn materialize_entry(&self, index: u64) -> u64 {
+        ClampBoundedTable::<XLEN, SOFTMAX_SAT_CLAMP_BOUND>.materialize_entry(index)
+    }
+
+    fn evaluate_mle<F, C>(&self, r: &[C]) -> F
+    where
+        C: ChallengeFieldOps<F>,
+        F: JoltField + FieldChallengeOps<C>,
+    {
+        ClampBoundedTable::<XLEN, SOFTMAX_SAT_CLAMP_BOUND>.evaluate_mle(r)
+    }
+}
+
+impl<const XLEN: usize> ClampSpec for SoftmaxSatClampTable<XLEN> {
+    type HigherIsZero = SoftmaxSatClampHigherIsZeroPrefix<XLEN>;
+    type LowerWord = SoftmaxSatClampLowerWordPrefix<XLEN>;
+    type SufHigherIsZero = SoftmaxSatClampHigherIsZeroSuffix<XLEN>;
+    type SufHZeroMulLWord = SoftmaxSatClampHZeroMulLWordSuffix<XLEN>;
+    const BOUND: usize = SOFTMAX_SAT_CLAMP_BOUND;
 }
 
 #[cfg(test)]
@@ -226,12 +266,16 @@ mod test {
         prefix_suffix_test_unary::<XLEN, Fr, ClampTable<XLEN>>();
         prefix_suffix_test_unary::<64, Fr, SaturationTable>();
         prefix_suffix_test_unary::<XLEN, Fr, ActivationClampTable<XLEN>>();
+        prefix_suffix_test_unary::<XLEN, Fr, SoftmaxSatClampTable<XLEN>>();
     }
 
     #[test]
     fn mle_full_hypercube() {
         lookup_table_mle_full_hypercube_test::<Fr, ClampTable<16>>();
-        lookup_table_mle_full_hypercube_test::<Fr, ActivationClampTable<16>>();
+        // `ActivationClampTable`/`SoftmaxSatClampTable`'s bounds are derived from `MODEL_SCALE`
+        // and can reach 16 (e.g. at `MODEL_SCALE=12`), leaving no headroom against a 16-bit
+        // `XLEN` here (`XLEN - BOUND - 1` underflows) — exercised instead via
+        // `mle_random`/`mle_linearity`/`prefix_suffix` at the real `XLEN=32`.
     }
 
     #[test]
@@ -239,12 +283,14 @@ mod test {
         lookup_table_mle_random_test::<Fr, ClampTable<XLEN>>();
         lookup_table_mle_random_test::<Fr, SaturationTable>();
         lookup_table_mle_random_test::<Fr, ActivationClampTable<XLEN>>();
+        lookup_table_mle_random_test::<Fr, SoftmaxSatClampTable<XLEN>>();
     }
 
     #[test]
     fn mle_linearity() {
         lookup_table_mle_linearity_test::<XLEN, Fr, ClampTable<XLEN>>();
         lookup_table_mle_linearity_test::<XLEN, Fr, ActivationClampTable<XLEN>>();
+        lookup_table_mle_linearity_test::<XLEN, Fr, SoftmaxSatClampTable<XLEN>>();
     }
 
     #[test]
@@ -252,5 +298,6 @@ mod test {
         test_read_raf_sumcheck::<ClampTable<XLEN>, XLEN>();
         test_read_raf_sumcheck::<SaturationTable, 64>();
         test_read_raf_sumcheck::<ActivationClampTable<XLEN>, XLEN>();
+        test_read_raf_sumcheck::<SoftmaxSatClampTable<XLEN>, XLEN>();
     }
 }

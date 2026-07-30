@@ -10,9 +10,11 @@ use crate::{
     lookup_tables::suffixes::{
         higher_is_zero::{
             ActivationHigherIsZeroSuffix, ClampHigherIsZeroSuffix, SatClampHigherIsZeroSuffix,
+            SoftmaxSatClampHigherIsZeroSuffix,
         },
         hzero_mul_lword::{
             ActivationHZeroMulLWordSuffix, ClampHZeroMulLWordSuffix, SatClampHZeroMulLWordSuffix,
+            SoftmaxSatClampHZeroMulLWordSuffix,
         },
         lower_msb_upper_eqo_low::LowerMsbUpperEqoLowSuffix,
         neg_relu::NegReluSuffix,
@@ -119,6 +121,8 @@ impl_sparse_dense_suffix!(
     SatClampHZeroMulLWord   : SatClampHZeroMulLWordSuffix,  // `higher_is_zero(bits) * lower_word(bits)` at BOUND=32, used in `SatClampViaClampTable`.
     ActivationHigherIsZero  : ActivationHigherIsZeroSuffix, // `higher_is_zero(bits)`, used by clamped activation tables (Erf/Sigmoid/Tanh).
     ActivationHZeroMulLWord : ActivationHZeroMulLWordSuffix, // `higher_is_zero(bits) * lower_word(bits)`, used by clamped activation tables.
+    SoftmaxSatClampHigherIsZero  : SoftmaxSatClampHigherIsZeroSuffix, // `higher_is_zero(bits)`, used by softmax's saturating-clamp table.
+    SoftmaxSatClampHZeroMulLWord : SoftmaxSatClampHZeroMulLWordSuffix, // `higher_is_zero(bits) * lower_word(bits)`, used by softmax's saturating-clamp table.
 );
 
 /// Type alias for suffix evaluation results in the field.

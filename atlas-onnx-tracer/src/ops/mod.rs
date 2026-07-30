@@ -149,6 +149,8 @@ define_operators! {
         Sin { scale: i32 },
         Slice { axis: usize, start: usize, end: usize},
         SoftmaxLastAxis { scale: i32 },
+        SoftmaxLastAxisSatClamp { scale: i32 },
+        SoftmaxLastAxisFlatExp { scale: i32 },
         Square { scale: i32 },
         Sub,
         Sum { axes: Vec<usize> },

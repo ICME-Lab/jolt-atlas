@@ -246,29 +246,34 @@ macro_rules! impl_sparse_dense_prefix {
 }
 
 impl_sparse_dense_prefix!(
-    And                 : AndPrefix,                // Bitwise AND prefix
-    Eq                  : EqPrefix,                 // Equality comparison prefix
-    LessThan            : LessThanPrefix,           // Less-than comparison prefix
-    WordNoMsb           : WordNoMsbPrefix,          // Lower word without MSB prefix
-    NotMsb              : NotMsbPrefix,             // Not-MSB prefix
-    Or                  : OrPrefix,                 // Bitwise OR prefix
-    Xor                 : XorPrefix,                // Bitwise XOR prefix
-    Msb                 : MsbPrefix,                // MSB (sign bit) prefix
-    NotWordNoMsb        : NotWordNoMsbPrefix,       // Two's complement negation prefix: `(!lower_word) + 1`
-    SatVal              : SatValPrefix,             // Saturated boundary value prefix: `m*MIN + (1-m)*MAX`, used in `sat_clamp` decomposition
-    UpperEqz            : UpperEqzPrefix,           // Upper half-word all-zeros (eqz) prefix, used in `sat_clamp` decomposition
-    UpperEqo            : UpperEqoPrefix,           // Upper half-word all-ones (eqo) prefix, used in `sat_clamp` decomposition
-    NotLowerMsb         : NotLowerMsbPrefix,        // Complement of the lower 32-bit word sign bit (1 − r[XLEN/2]), used in `sat_clamp` decomposition
-    LowerMsb            : LowerMsbPrefix,           // Lower 32-bit word sign bit (r[XLEN/2], the i32 sign bit), used in `sat_clamp` decomposition
-    LowerWordNoMsb      : LowerWordNoMsbPrefix,     // Lower word without MSB prefix (64-bit layout), used in `sat_clamp` decomposition
-    ClampLowerWord      : ClampLowerWordPrefix,     // Lower word without bits of significance >= bound.
-    ClampHigherIsZero   : ClampHigherIsZeroPrefix,  // Indicator that all bits with significance >= bound are zero.
-    SatClampLowerWord    : SatClampLowerWordPrefix,    // Lower 32-bit word, used in `SatClampViaClampTable` (BOUND=32).
-    SatClampHigherIsZero : SatClampHigherIsZeroPrefix, // Indicator that all bits with significance >= 32 are zero, used in `SatClampViaClampTable`.
-    ActivationLowerWord      : ActivationLowerWordPrefix,      // Lower word without bits of significance >= bound, used by clamped activation tables (Erf/Sigmoid/Tanh).
-    ActivationHigherIsZero   : ActivationHigherIsZeroPrefix,   // Indicator that all bits with significance >= bound are zero, used by clamped activation tables.
-    SoftmaxSatClampLowerWord      : SoftmaxSatClampLowerWordPrefix,      // Lower word without bits of significance >= bound, used by softmax's saturating-clamp table.
-    SoftmaxSatClampHigherIsZero   : SoftmaxSatClampHigherIsZeroPrefix,   // Indicator that all bits with significance >= bound are zero, used by softmax's saturating-clamp table.
+    And                         : AndPrefix,                         // Bitwise AND prefix
+    Eq                          : EqPrefix,                          // Equality comparison prefix
+    LessThan                    : LessThanPrefix,                    // Less-than comparison prefix
+    Msb                         : MsbPrefix,                         // MSB (sign bit) prefix
+    NotMsb                      : NotMsbPrefix,                      // Not-MSB prefix
+    NotWordNoMsb                : NotWordNoMsbPrefix,                // Two's complement negation prefix: `(!lower_word) + 1`
+    Or                          : OrPrefix,                          // Bitwise OR prefix
+    WordNoMsb                   : WordNoMsbPrefix,                   // Lower word without MSB prefix
+    Xor                         : XorPrefix,                         // Bitwise XOR prefix
+
+    LowerMsb                    : LowerMsbPrefix,                    // Lower 32-bit word sign bit (r[XLEN/2], the i32 sign bit), used in `sat_clamp` decomposition
+    LowerWordNoMsb              : LowerWordNoMsbPrefix,              // Lower word without MSB prefix (64-bit layout), used in `sat_clamp` decomposition
+    NotLowerMsb                 : NotLowerMsbPrefix,                 // Complement of the lower 32-bit word sign bit (1 − r[XLEN/2]), used in `sat_clamp` decomposition
+    SatVal                      : SatValPrefix,                      // Saturated boundary value prefix: `m*MIN + (1-m)*MAX`, used in `sat_clamp` decomposition
+    UpperEqo                    : UpperEqoPrefix,                    // Upper half-word all-ones (eqo) prefix, used in `sat_clamp` decomposition
+    UpperEqz                    : UpperEqzPrefix,                    // Upper half-word all-zeros (eqz) prefix, used in `sat_clamp` decomposition
+
+    ClampHigherIsZero           : ClampHigherIsZeroPrefix,           // Indicator that all bits with significance >= bound are zero.
+    ClampLowerWord              : ClampLowerWordPrefix,              // Lower word without bits of significance >= bound.
+
+    SatClampHigherIsZero        : SatClampHigherIsZeroPrefix,        // Indicator that all bits with significance >= 32 are zero, used in `SatClampViaClampTable`.
+    SatClampLowerWord           : SatClampLowerWordPrefix,           // Lower 32-bit word, used in `SatClampViaClampTable` (BOUND=32).
+
+    ActivationHigherIsZero      : ActivationHigherIsZeroPrefix,      // Indicator that all bits with significance >= bound are zero, used by clamped activation tables.
+    ActivationLowerWord         : ActivationLowerWordPrefix,         // Lower word without bits of significance >= bound, used by clamped activation tables (Erf/Sigmoid/Tanh).
+
+    SoftmaxSatClampHigherIsZero : SoftmaxSatClampHigherIsZeroPrefix, // Indicator that all bits with significance >= bound are zero, used by softmax's saturating-clamp table.
+    SoftmaxSatClampLowerWord    : SoftmaxSatClampLowerWordPrefix,    // Lower word without bits of significance >= bound, used by softmax's saturating-clamp table.
 );
 
 #[derive(Clone, Copy)]

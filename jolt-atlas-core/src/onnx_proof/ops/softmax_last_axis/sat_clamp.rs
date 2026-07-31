@@ -1,12 +1,10 @@
 //! [`LookupOperandsTrait`] helper proving softmax's saturating clamp
 //! `z_c = min(z, z_bound - 1)` via [`joltworks::lookup_tables::clamp::SoftmaxSatClampTable`].
 //!
-//! Unlike every other `LookupOperandsTrait` helper, this one's witness (`z = max_k - x`) does
-//! not live at this node's own output opening — it's evaluated at the point softmax's exp-digit
-//! lookups (`SoftmaxZHi`/`SoftmaxZLo`) already converge to (`r2`), so `r_cycle`/`r_cycle_source`
-//! are overridden accordingly. `z` is always `>= 0` by construction, so (unlike
-//! `SymmetricClampOperands`/`SaturatingAccClampOperands`) no offset trick is needed: this maps
-//! directly onto `ClampBoundedTable`'s floor-at-0 domain.
+//! This witness (`z = max_k - x`) is evaluated at the point softmax's exp-digit lookups
+//! (`SoftmaxZHi`/`SoftmaxZLo`) already converge to (`r2`), not this node's own output opening —
+//! `r_cycle`/`r_cycle_source` are overridden accordingly. `z` is always `>= 0` by construction, so
+//! no offset trick is needed: this maps directly onto `ClampBoundedTable`'s floor-at-0 domain.
 //!
 //! The read-raf sumcheck's `rv_claim` is defined as `z_hi(r2)*base + z_lo(r2)` (computed
 //! directly from the already-cached `SoftmaxZHi`/`SoftmaxZLo` claims — see `cache_z_hi_lo` in

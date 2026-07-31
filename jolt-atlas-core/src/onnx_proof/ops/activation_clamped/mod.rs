@@ -10,10 +10,7 @@
 //!
 //! Both stages proceed sumcheck-then-sumcheck (Execution, then ActivationClamp), with
 //! their one-hot (`ra`/`hw`/`bool`) checks batched together afterwards into a single
-//! `BatchedSumcheck` call, the same multi-encoding batching `rsqrt.rs` uses for its
-//! div/sqrt range checks. `BatchedSumcheck` handles differing round counts natively,
-//! so merging log_k = `ACTIVATION_TABLE_BOUND` and log_k = `XLEN` instances needs no
-//! changes to the batching machinery.
+//! `BatchedSumcheck` call.
 
 use crate::{
     onnx_proof::{

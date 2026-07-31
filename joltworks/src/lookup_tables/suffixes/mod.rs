@@ -105,23 +105,28 @@ macro_rules! impl_sparse_dense_suffix {
 }
 
 impl_sparse_dense_suffix!(
-    And                     : AndSuffix,                    // Bitwise AND suffix
-    LessThan                : LessThanSuffix,               // Less-than comparison suffix
-    WordNoMSB               : WordNoMsbSuffix,              // Lower word without MSB suffix
-    One                     : OneSuffix,                    // Constant one suffix
-    Or                      : OrSuffix,                     // Bitwise OR suffix
-    Xor                     : XorSuffix,                    // Bitwise XOR suffix
-    NegRelu                 : NegReluSuffix,                // Suffix for Relu(-x) table
-    NotLowerMsbUpperEqz     : NotLowerMsbUpperEqzSuffix,    // `(1-m) * upper_eqz` suffix, used in `sat_clamp` decomposition
-    NotLowerMsbUpperEqzLow  : NotLowerMsbUpperEqzLowSuffix, // `(1-m) * upper_eqz * low` suffix, used in `sat_clamp` decomposition
-    LowerMsbUpperEqoLow     : LowerMsbUpperEqoLowSuffix,    // `m * upper_eqo * low` suffix, used in `sat_clamp` decomposition
-    ClampHigherIsZero       : ClampHigherIsZeroSuffix,      // Suffix that evaluates `higher_is_zero(bits)`.
-    ClampHZeroMulLWord      : ClampHZeroMulLWordSuffix,     // Suffix that evaluates `higher_is_zero(bits) * lower_word(bits)`.
-    SatClampHigherIsZero    : SatClampHigherIsZeroSuffix,   // `higher_is_zero(bits)` at BOUND=32, used in `SatClampViaClampTable`.
-    SatClampHZeroMulLWord   : SatClampHZeroMulLWordSuffix,  // `higher_is_zero(bits) * lower_word(bits)` at BOUND=32, used in `SatClampViaClampTable`.
-    ActivationHigherIsZero  : ActivationHigherIsZeroSuffix, // `higher_is_zero(bits)`, used by clamped activation tables (Erf/Sigmoid/Tanh).
-    ActivationHZeroMulLWord : ActivationHZeroMulLWordSuffix, // `higher_is_zero(bits) * lower_word(bits)`, used by clamped activation tables.
-    SoftmaxSatClampHigherIsZero  : SoftmaxSatClampHigherIsZeroSuffix, // `higher_is_zero(bits)`, used by softmax's saturating-clamp table.
+    And                          : AndSuffix,                          // Bitwise AND suffix
+    LessThan                     : LessThanSuffix,                     // Less-than comparison suffix
+    NegRelu                      : NegReluSuffix,                      // Suffix for Relu(-x) table
+    One                          : OneSuffix,                          // Constant one suffix
+    Or                           : OrSuffix,                           // Bitwise OR suffix
+    WordNoMSB                    : WordNoMsbSuffix,                    // Lower word without MSB suffix
+    Xor                          : XorSuffix,                          // Bitwise XOR suffix
+
+    LowerMsbUpperEqoLow          : LowerMsbUpperEqoLowSuffix,          // `m * upper_eqo * low` suffix, used in `sat_clamp` decomposition
+    NotLowerMsbUpperEqz          : NotLowerMsbUpperEqzSuffix,          // `(1-m) * upper_eqz` suffix, used in `sat_clamp` decomposition
+    NotLowerMsbUpperEqzLow       : NotLowerMsbUpperEqzLowSuffix,       // `(1-m) * upper_eqz * low` suffix, used in `sat_clamp` decomposition
+
+    ClampHigherIsZero            : ClampHigherIsZeroSuffix,            // Suffix that evaluates `higher_is_zero(bits)`.
+    ClampHZeroMulLWord           : ClampHZeroMulLWordSuffix,           // Suffix that evaluates `higher_is_zero(bits) * lower_word(bits)`.
+
+    SatClampHigherIsZero         : SatClampHigherIsZeroSuffix,         // `higher_is_zero(bits)` at BOUND=32, used in `SatClampViaClampTable`.
+    SatClampHZeroMulLWord        : SatClampHZeroMulLWordSuffix,        // `higher_is_zero(bits) * lower_word(bits)` at BOUND=32, used in `SatClampViaClampTable`.
+
+    ActivationHigherIsZero       : ActivationHigherIsZeroSuffix,       // `higher_is_zero(bits)`, used by clamped activation tables (Erf/Sigmoid/Tanh).
+    ActivationHZeroMulLWord      : ActivationHZeroMulLWordSuffix,      // `higher_is_zero(bits) * lower_word(bits)`, used by clamped activation tables.
+
+    SoftmaxSatClampHigherIsZero  : SoftmaxSatClampHigherIsZeroSuffix,  // `higher_is_zero(bits)`, used by softmax's saturating-clamp table.
     SoftmaxSatClampHZeroMulLWord : SoftmaxSatClampHZeroMulLWordSuffix, // `higher_is_zero(bits) * lower_word(bits)`, used by softmax's saturating-clamp table.
 );
 

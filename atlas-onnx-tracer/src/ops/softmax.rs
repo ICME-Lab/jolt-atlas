@@ -69,14 +69,6 @@ pub struct DecomposedExpWitness {
 ///
 /// This introduces at most ±2 per-entry error vs the flat LUT (from sub-table
 /// rounding), which is negligible relative to overall quantization noise.
-///
-/// `z = max_k - x` is saturated to the **padded** table-size cutoff
-/// (`hi_size.next_power_of_two() * base - 1`), not the tight unpadded cutoff
-/// (`hi_size * base - 1`): the saturating-clamp lookup
-/// (`joltworks::lookup_tables::clamp::SoftmaxSatClampTable`, a `ClampBoundedTable`) can only
-/// represent power-of-two-minus-one ceilings, and `hi_size` generally isn't a power of two.
-/// This is numerically harmless — the extra range between the two cutoffs is already the
-/// zero-padded tail of `lut_hi` (both regions round `exp` to 0).
 #[allow(clippy::needless_range_loop)]
 #[tracing::instrument(name = "softmax_last_axis_decomposed", skip_all)]
 pub fn softmax_last_axis_decomposed(

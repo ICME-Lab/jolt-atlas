@@ -217,7 +217,7 @@ canonical_serde_enum! {
     /// | Group | Purpose |
     /// |-------|---------|
     /// | `NodeOutput` / `NodeOutputRa` | MLE of a node's output tensor and its read-address polynomial |
-    /// | `{Cos,Erf,Sin,Tanh}Ra` | Read-address polynomials for activation-function lookups |
+    /// | `{Cos,Sin}Ra` | Read-address polynomials for activation-function lookups |
     /// | `Softmax*` | Intermediate polynomials arising in the softmax sub-protocol |
     /// | `HammingWeight` | Polynomial used in the Hamming-weight sumcheck |
     /// | `Div* / Sqrt* / Teleport*` | Advice-derived polynomials proven via `ReadRafSumcheckProver` from committed one-hot polynomials |
@@ -234,29 +234,16 @@ canonical_serde_enum! {
         /// * `0` – node index
         NodeOutputRa(usize),
 
-        /// Sigmoid Ra polynomial
-        SigmoidRa(usize),
-
         // ----- Activation-function read-address polynomials (node_index) -----
         /// Read-address polynomial for the **Cos** lookup table.
         ///
         /// * `0` – node index
         CosRa(usize),
 
-        /// Read-address polynomial for the **Erf** lookup table.
-        ///
-        /// * `0` – node index
-        ErfRa(usize),
-
         /// Read-address polynomial for the **Sin** lookup table.
         ///
         /// * `0` – node index
         SinRa(usize),
-
-        /// Read-address polynomial for the **Tanh** lookup table.
-        ///
-        /// * `0` – node index
-        TanhRa(usize),
 
         // ----- Softmax intermediate polynomials (node_index, feature_index) -----
         /// Running sum used inside softmax normalisation.
@@ -394,31 +381,6 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         SoftmaxSatClampRa(usize),
-
-        /// The raw pre-clamp witness for the flat-exp softmax variant's saturating-clamp
-        /// lookup: `z = max_k - x`, evaluated at `SoftmaxExpQ`'s opening point (`r1` —
-        /// this variant has no digit-split stage, so `r1` is the only anchor point needed).
-        ///
-        /// * `0` – node index
-        SoftmaxFlatZWitness(usize),
-
-        /// The flat-exp softmax variant's clamped logit: `z_c = min(z, z_bound-1)`, evaluated at
-        /// the same point as [`VirtualPoly::SoftmaxFlatZWitness`]. Read as both the saturating-clamp
-        /// lookup's output claim and the flat exp lookup's address (`raf`) claim.
-        ///
-        /// * `0` – node index
-        SoftmaxFlatZC(usize),
-
-        /// One-hot read-address polynomial for the flat-exp softmax variant's saturating-clamp
-        /// lookup.
-        ///
-        /// * `0` – node index
-        SoftmaxFlatClampRa(usize),
-
-        /// One-hot read-address polynomial for the flat-exp softmax variant's single exp lookup.
-        ///
-        /// * `0` – node index
-        SoftmaxFlatExpRa(usize),
 
         /// Remainder polynomial for the reciprocal-multiplication check in
         /// **softmax**.

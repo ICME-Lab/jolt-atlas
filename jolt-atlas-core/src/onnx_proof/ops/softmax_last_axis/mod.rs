@@ -9,10 +9,9 @@
 //!
 //! The saturating clamp `z_c = min(z, z_bound - 1)` (`z = max_k - x`) is proven via a
 //! `ClampBoundedTable` lookup (`joltworks::lookup_tables::clamp::SoftmaxSatClampTable`, via
-//! `sat_clamp::SoftmaxSatClampOperands`) rather than a bespoke complementary-slackness
-//! sumcheck — see `sat_clamp.rs`'s module doc for the relation being proven. This lookup only
-//! supports the compile-time `common::consts::MODEL_SCALE` (its bound is a const generic), so
-//! `SoftmaxLastAxis` only supports that one scale at runtime.
+//! `sat_clamp::SoftmaxSatClampOperands`) — see `sat_clamp.rs`'s module doc for the relation being
+//! proven. This lookup only supports the compile-time `common::consts::MODEL_SCALE` (its bound is
+//! a const generic), so `SoftmaxLastAxis` only supports that one scale at runtime.
 
 use crate::{
     onnx_proof::{
@@ -27,12 +26,16 @@ use crate::{
                 max::{MaxIndicatorParams, MaxIndicatorProver, MaxIndicatorVerifier},
                 rc::{SoftmaxRCProvider, SoftmaxRaEncoding},
                 recip_mult::{RecipMultParams, RecipMultProver, RecipMultVerifier},
+                sat_clamp::SoftmaxSatClampOperands,
             },
             OperatorProofTrait,
         },
         ProofId, ProofType, Prover, Verifier,
     },
-    utils::opening_access::{AccOpeningAccessor, Target},
+    utils::{
+        compute_lookup_indices_from_operands,
+        opening_access::{AccOpeningAccessor, Target},
+    },
 };
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -86,7 +89,6 @@ pub mod rc;
 pub mod recip_mult;
 /// The saturating-clamp lookup helper (`SoftmaxSatClampOperands`) and its `ClampSpec` table.
 pub mod sat_clamp;
-use sat_clamp::SoftmaxSatClampOperands;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
     #[tracing::instrument(skip_all, name = "SoftmaxLastAxis::prove")]
@@ -162,8 +164,6 @@ pub(crate) struct SoftmaxLastAxisProver {
     pub(crate) scale: i32,
     pub(crate) F_N: [usize; 2],
     pub(crate) trace: SoftmaxLastAxisTrace,
-    /// Sat-clamp lookup indices computed in stage 3, consumed by stage 4's one-hot checks.
-    sat_clamp_indices: Option<Vec<usize>>,
 }
 
 impl SoftmaxLastAxisProver {
@@ -230,6 +230,11 @@ impl SoftmaxLastAxisProver {
             .expect("softmax_z tensor construction")
             .padded_next_power_of_two()
             .map(|v| v as i64);
+        let sat_clamp_indices: Vec<usize> =
+            compute_lookup_indices_from_operands(&[&z_tensor.map(|v| v as i32)], false)
+                .iter()
+                .map(|&x| x.into())
+                .collect();
 
         // ── Pipeline ────────────────────────────────────────────────────
 
@@ -246,7 +251,7 @@ impl SoftmaxLastAxisProver {
 
         let stage_3_proof = self.stage3(prover, &lut_data, &r_exp_indices, z_tensor);
 
-        let stage_4_proof = self.stage4(prover, &lut_data);
+        let stage_4_proof = self.stage4(prover, &lut_data, &sat_clamp_indices);
 
         vec![
             (ProofId(self.idx(), ProofType::SoftmaxStage1), stage_1_proof),
@@ -363,7 +368,6 @@ impl SoftmaxLastAxisProver {
             scale,
             F_N: [f, n],
             trace,
-            sat_clamp_indices: None,
         }
     }
 
@@ -512,8 +516,8 @@ impl SoftmaxLastAxisProver {
         run_batched_prove(&mut instances, prover)
     }
 
-    /// Build stage 2 sumcheck instances (no `sat_diff` here — the saturating clamp is a lookup,
-    /// folded into stage 3/4 instead).
+    /// Build stage 2 sumcheck instances (the saturating clamp is a lookup, folded into stage
+    /// 3/4 instead).
     pub(crate) fn build_stage2_instances<F: JoltField, T: Transcript>(
         &mut self,
         prover: &mut Prover<F, T>,
@@ -641,15 +645,12 @@ impl SoftmaxLastAxisProver {
             self.computation_node.clone(),
             SoftmaxSatClampOperands::new(z_tensor),
         );
-        let (sat_clamp_prover, sat_clamp_indices) = sat_clamp_provider
+        let (sat_clamp_prover, _) = sat_clamp_provider
             .read_raf_prove::<F, T, SoftmaxSatClampTable<XLEN>, XLEN>(
                 &prover.trace,
                 &mut prover.accumulator,
                 &mut prover.transcript,
             );
-
-        // Stash the lookup indices for stage 4's one-hot checks.
-        self.sat_clamp_indices = Some(sat_clamp_indices);
 
         let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), prover.preprocessing.scale());
         let [exp_r_ra_prover, exp_r_hw_prover, exp_r_bool_prover] = shout::ra_onehot_provers(
@@ -673,8 +674,9 @@ impl SoftmaxLastAxisProver {
         &mut self,
         prover: &mut Prover<F, T>,
         lut_data: &LookupTableData,
+        sat_clamp_indices: &[usize],
     ) -> SumcheckInstanceProof<F, T> {
-        let mut instances = self.build_stage4_instances(prover, lut_data);
+        let mut instances = self.build_stage4_instances(prover, lut_data, sat_clamp_indices);
         run_batched_prove(&mut instances, prover)
     }
 
@@ -684,6 +686,7 @@ impl SoftmaxLastAxisProver {
         &mut self,
         prover: &mut Prover<F, T>,
         lut_data: &LookupTableData,
+        sat_clamp_indices: &[usize],
     ) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
         let encoding = SoftmaxRaEncoding::exp_hi(self.idx(), lut_data.table_hi.len().log_2());
         let [hi_ra_prover, hi_hw_prover, hi_bool_prover] = shout::ra_onehot_provers(
@@ -701,17 +704,13 @@ impl SoftmaxLastAxisProver {
             &mut prover.transcript,
         );
 
-        let sat_clamp_indices = self
-            .sat_clamp_indices
-            .take()
-            .expect("stage 3 must run before stage 4");
         let sat_clamp_provider: OpLookupProvider<SoftmaxSatClampOperands> =
             OpLookupProvider::new(self.computation_node.clone());
         let encoding = sat_clamp_provider.encoding();
         let [sat_clamp_ra_prover, sat_clamp_hw_prover, sat_clamp_bool_prover] =
             shout::ra_onehot_provers(
                 &encoding,
-                &sat_clamp_indices,
+                sat_clamp_indices,
                 &prover.accumulator,
                 &mut prover.transcript,
             );
@@ -1230,34 +1229,65 @@ mod tests {
         run_softmax_scale_test(common::consts::MODEL_SCALE as u32);
     }
 
-    /// GPT-2-sized causal-attention fixture (4 heads, 8x8 each), at whatever `MODEL_SCALE` is
-    /// currently compiled to — exercises a realistic shape/magnitude, not just the tiny fixture.
+    #[ignore = "built for scale=12; only runs when MODEL_SCALE is compiled to 12"]
     #[test]
-    fn test_softmax_gpt2_sized() {
-        use atlas_onnx_tracer::utils::quantize::mask_sentinel_magnitude;
-        use rand::{rngs::StdRng, Rng, SeedableRng};
-
-        let scale = common::consts::MODEL_SCALE as i32;
-        let mask_c = mask_sentinel_magnitude(scale) as i32;
-        let mask_value = -(mask_c << scale);
-
+    fn test_softmax_last_axis() {
+        // Realistic pre-softmax attention scores shaped [4, 8, 8] = 256 (power of 2).
+        // Non-masked scores sourced from GPT-2 layer 0 (scale=12, multiplier=4096).
+        //
+        // Layout: 4 attention heads, 8×8 causal attention matrix each.
+        // Upper-triangular entries (future tokens) use the causal-mask sentinel
+        // produced by quantize_float for -inf masks: -(11 << 12) = -45056
+        // (`mask_sentinel_magnitude(12)` = 11). Masked sat_diff then fits in
+        // sat_diff_rc_bits(12) = 20 bits (fixture max 56888 < 2^20).
+        // Non-masked scores range roughly [-25000, 50000] in fixed-point.
+        const M: i32 = -45_056; // causal attention mask (-(11 << scale), scale=12)
+        #[rustfmt::skip]
+        const GPT2_ATTN_SCORES: &[i32] = &[
+            // Head 0 — moderate range (GPT-2 heads 0 + 2)
+            //   Non-masked range: [-12738, 5440]
+              -492,     M,     M,     M,     M,     M,     M,     M,
+              5440, -6182,     M,     M,     M,     M,     M,     M,
+              4040, -4700, -3995,     M,     M,     M,     M,     M,
+              3503, -4425,   753,  -701,     M,     M,     M,     M,
+             -2353, -6284, -4118, -4413,-10752,     M,     M,     M,
+             -2247, -7704, -5686, -6371,-12738,-12175,     M,     M,
+              -652,   749,   826, -1139, -2820, -5039, -2898,     M,
+             -2622, -2193, -5682, -6362, -8036, -4648, -9872,-10283,
+            // Head 1 — high variance (GPT-2 heads 1 + 10)
+            //   Non-masked range: [-7209, 49207]
+             13386,     M,     M,     M,     M,     M,     M,     M,
+             11265, 36900,     M,     M,     M,     M,     M,     M,
+              9668, 19702, 39017,     M,     M,     M,     M,     M,
+             10015, 13052, 21247, 49207,     M,     M,     M,     M,
+              7392,  6466,  1150, -4119, 30542,     M,     M,     M,
+              4939,   493,   848, -7209,  9139, 24853,     M,     M,
+             16554, 12057, 15905,  8038, 13262, 12499,  5472,     M,
+             11299,  4069,  6294,  3081,  6412,  8400, 10154,  4726,
+            // Head 2 — large positive range (GPT-2 heads 5 + 6)
+            //   Non-masked range: [-5332, 47013]
+             41677,     M,     M,     M,     M,     M,     M,     M,
+             30755, 46148,     M,     M,     M,     M,     M,     M,
+             31081, 16155, 43315,     M,     M,     M,     M,     M,
+             29381, 15600, 12915, 47013,     M,     M,     M,     M,
+             19723, 10507,  5700,  5104, 30550,     M,     M,     M,
+             16650,  9028, 11201,  6500, 11179, 20697,     M,     M,
+             11184,  4791,   371,  1565, -2793, -5332,  2261,     M,
+             -2074, -6790, -7238, -7885, -5024, -5917, -2315, -7353,
+            // Head 3 — negative bias (GPT-2 heads 7 + 8)
+            //   Non-masked range: [-23295, -1045]
+             -7215,     M,     M,     M,     M,     M,     M,     M,
+             -7363,-18856,     M,     M,     M,     M,     M,     M,
+            -12684,-10596,-20225,     M,     M,     M,     M,     M,
+            -11926,-11397,-10691,-16112,     M,     M,     M,     M,
+            -16957,-19591,-19715,-17550,-16389,     M,     M,     M,
+            -20129,-23135,-23295,-21295,-17981,-17724,     M,     M,
+             -2898, -9452, -7226, -7040, -6460,-13308, -6362,     M,
+             -8241,-10310,-12414, -5334, -1045, -8036,-10493,-12577,
+        ];
         let input_shape = vec![4, 8, 8];
-        let mut rng = StdRng::seed_from_u64(0x5a7c);
-        let mut data = vec![0i32; 4 * 8 * 8];
-        for head in 0..4 {
-            for row in 0..8 {
-                for col in 0..8 {
-                    let idx = head * 64 + row * 8 + col;
-                    data[idx] = if col > row {
-                        mask_value
-                    } else {
-                        rng.gen_range(-(1 << (scale + 2))..(1 << (scale + 2)))
-                    };
-                }
-            }
-        }
-        let input = Tensor::new(Some(&data), &input_shape).unwrap();
-        let model = softmax_last_axis_model(&input_shape, scale as u32);
+        let input = Tensor::new(Some(GPT2_ATTN_SCORES), &input_shape).unwrap();
+        let model = softmax_last_axis_model(&input_shape, 12);
         unit_test_op(model, &[input]);
     }
 }

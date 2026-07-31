@@ -99,9 +99,8 @@ fn build_one_hot_rad_witness<F: JoltField>(
 }
 
 /// Builds a one-hot RaD witness for the clamped Erf/Sigmoid/Tanh variants' small
-/// dense activation-table execution stage: clamps the raw input directly (no
-/// `tau`-division), maps to lookup indices, then constructs the `d`-th one-hot
-/// address chunk.
+/// dense activation-table execution stage: clamps the raw input, maps to lookup
+/// indices, then constructs the `d`-th one-hot address chunk.
 fn build_activation_small_rad_witness<F: JoltField>(
     input: &Tensor<i32>,
     d: usize,

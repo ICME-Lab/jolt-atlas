@@ -164,7 +164,7 @@ canonical_serde_enum! {
 
         /// One-hot read-address decomposition for the **Clamp** operator's
         /// symmetric-range lookup. The lookup index is the node's input
-        /// offset by `+2^(CLAMP_BOUND - 1)`, not the raw input, so this can't
+        /// offset by `+2^CLAMP_BOUND`, not the raw input, so this can't
         /// share `NodeOutputRaD`'s witness generation (which assumes no offset).
         ///
         /// * `0` – node index

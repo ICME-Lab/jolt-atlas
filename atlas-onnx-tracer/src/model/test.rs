@@ -128,7 +128,7 @@ impl ModelBuilder {
         self.insert_node(node)
     }
 
-    /// Add a Clamp node (clamps values into `[-2^bound_log, 2^bound_log]`).
+    /// Add a Clamp node (clamps values into `[-2^bound_log, 2^bound_log - 1]`).
     pub fn clamp(&mut self, input: Wire, bound_log: usize) -> Wire {
         let id = self.alloc();
         let output_dims = self.nodes[&input].output_dims.clone();

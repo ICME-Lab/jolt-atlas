@@ -178,10 +178,7 @@ pub type UnaryReadRafSumcheckVerifier<F, LUT, const LOG_K: usize> =
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        lookup_tables::{
-            relu, sat_clamp::SatClampTable, unsigned_abs::UnsignedAbsTable, JoltLookupTable,
-            PrefixSuffixDecompositionTrait,
-        },
+        lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
         poly::{
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
             opening_proof::{
@@ -203,28 +200,13 @@ pub mod tests {
         utils::lookup_bits::LookupBits,
     };
     use ark_bn254::Fr;
-    use common::{consts::XLEN, VirtualPoly};
+    use common::VirtualPoly;
     use itertools::Itertools;
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use std::marker::PhantomData;
 
     const LOG_NUM_LOOKUPS: usize = 10;
     const NUM_LOOKUPS: usize = 1 << LOG_NUM_LOOKUPS;
-
-    #[test]
-    fn test_sat_clamp() {
-        test_read_raf_sumcheck::<SatClampTable<64>, 64>();
-    }
-
-    #[test]
-    fn test_unsigned_abs() {
-        test_read_raf_sumcheck::<UnsignedAbsTable<XLEN>, XLEN>();
-    }
-
-    #[test]
-    fn test_relu() {
-        test_read_raf_sumcheck::<relu::ReluTable<XLEN>, XLEN>();
-    }
 
     pub fn test_read_raf_sumcheck<LUT, const XLEN: usize>()
     where

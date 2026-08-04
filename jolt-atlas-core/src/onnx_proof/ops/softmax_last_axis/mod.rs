@@ -8,8 +8,8 @@
 //! TODO(#218): Remove auxiliary vectors and derive them inside the protocol.
 //!
 //! The saturating clamp `z_c = min(z, z_bound - 1)` (`z = max_k - x`) is proven via a
-//! `ClampBoundedTable` lookup (`joltworks::lookup_tables::clamp::SoftmaxSatClampTable`, via
-//! `sat_clamp::SoftmaxSatClampOperands`) — see `sat_clamp.rs`'s module doc for the relation being
+//! `ClampBoundedTable` lookup (`joltworks::lookup_tables::clamp::SoftmaxClampTable`, via
+//! `significance_clamp::SoftmaxSignificanceClampOperands`) — see `significance_clamp.rs`'s module doc for the relation being
 //! proven. This lookup only supports the compile-time `common::consts::MODEL_SCALE` (its bound is
 //! a const generic), so `SoftmaxLastAxis` only supports that one scale at runtime.
 
@@ -26,7 +26,7 @@ use crate::{
                 max::{MaxIndicatorParams, MaxIndicatorProver, MaxIndicatorVerifier},
                 rc::{SoftmaxRCProvider, SoftmaxRaEncoding},
                 recip_mult::{RecipMultParams, RecipMultProver, RecipMultVerifier},
-                sat_clamp::SoftmaxSatClampOperands,
+                significance_clamp::SoftmaxSignificanceClampOperands,
             },
             OperatorProofTrait,
         },
@@ -39,7 +39,7 @@ use crate::{
 };
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
-    lookup_tables::clamp::SoftmaxSatClampTable,
+    lookup_tables::clamp::SoftmaxClampTable,
     poly::opening_proof::VerifierOpeningAccumulator,
 };
 use std::collections::BTreeMap;
@@ -87,8 +87,8 @@ pub mod max;
 pub mod rc;
 /// softmax(r0) * S + R(r0) = sum_{k,j} eq(r0, (k,j)) * exp_q[k,j] * inv_sum[k]
 pub mod recip_mult;
-/// The saturating-clamp lookup helper (`SoftmaxSatClampOperands`) and its `ClampSpec` table.
-pub mod sat_clamp;
+/// The saturating-clamp lookup helper (`SoftmaxSignificanceClampOperands`) and its `ClampSpec` table.
+pub mod significance_clamp;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
     #[tracing::instrument(skip_all, name = "SoftmaxLastAxis::prove")]
@@ -147,7 +147,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
                 CommittedPoly::SoftmaxRemainderRaD as fn(usize, usize) -> _,
             ),
             (log_scale, CommittedPoly::SoftmaxExpRemainderRaD),
-            (XLEN, CommittedPoly::SoftmaxSatClampRaD),
+            (XLEN, CommittedPoly::SoftmaxClampRaD),
             (log_hi, CommittedPoly::SoftmaxZHiRaD),
             (log_lo, CommittedPoly::SoftmaxZLoRaD),
         ] {
@@ -230,7 +230,7 @@ impl SoftmaxLastAxisProver {
             .expect("softmax_z tensor construction")
             .padded_next_power_of_two()
             .map(|v| v as i64);
-        let sat_clamp_indices: Vec<usize> =
+        let significance_clamp_indices: Vec<usize> =
             compute_lookup_indices_from_operands(&[&z_tensor.map(|v| v as i32)], false)
                 .iter()
                 .map(|&x| x.into())
@@ -251,7 +251,7 @@ impl SoftmaxLastAxisProver {
 
         let stage_3_proof = self.stage3(prover, &lut_data, &r_exp_indices, z_tensor);
 
-        let stage_4_proof = self.stage4(prover, &lut_data, &sat_clamp_indices);
+        let stage_4_proof = self.stage4(prover, &lut_data, &significance_clamp_indices);
 
         vec![
             (ProofId(self.idx(), ProofType::SoftmaxStage1), stage_1_proof),
@@ -641,12 +641,12 @@ impl SoftmaxLastAxisProver {
             &mut prover.transcript,
         );
 
-        let sat_clamp_provider = OpLookupProvider::with_helper(
+        let significance_clamp_provider = OpLookupProvider::with_helper(
             self.computation_node.clone(),
-            SoftmaxSatClampOperands::new(z_tensor),
+            SoftmaxSignificanceClampOperands::new(z_tensor),
         );
-        let (sat_clamp_prover, _) = sat_clamp_provider
-            .read_raf_prove::<F, T, SoftmaxSatClampTable<XLEN>, XLEN>(
+        let (significance_clamp_prover, _) = significance_clamp_provider
+            .read_raf_prove::<F, T, SoftmaxClampTable<XLEN>, XLEN>(
                 &prover.trace,
                 &mut prover.accumulator,
                 &mut prover.transcript,
@@ -663,7 +663,7 @@ impl SoftmaxLastAxisProver {
         vec![
             hi_prover,
             lo_prover,
-            Box::new(sat_clamp_prover),
+            Box::new(significance_clamp_prover),
             exp_r_ra_prover,
             exp_r_hw_prover,
             exp_r_bool_prover,
@@ -674,9 +674,10 @@ impl SoftmaxLastAxisProver {
         &mut self,
         prover: &mut Prover<F, T>,
         lut_data: &LookupTableData,
-        sat_clamp_indices: &[usize],
+        significance_clamp_indices: &[usize],
     ) -> SumcheckInstanceProof<F, T> {
-        let mut instances = self.build_stage4_instances(prover, lut_data, sat_clamp_indices);
+        let mut instances =
+            self.build_stage4_instances(prover, lut_data, significance_clamp_indices);
         run_batched_prove(&mut instances, prover)
     }
 
@@ -686,7 +687,7 @@ impl SoftmaxLastAxisProver {
         &mut self,
         prover: &mut Prover<F, T>,
         lut_data: &LookupTableData,
-        sat_clamp_indices: &[usize],
+        significance_clamp_indices: &[usize],
     ) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
         let encoding = SoftmaxRaEncoding::exp_hi(self.idx(), lut_data.table_hi.len().log_2());
         let [hi_ra_prover, hi_hw_prover, hi_bool_prover] = shout::ra_onehot_provers(
@@ -704,13 +705,13 @@ impl SoftmaxLastAxisProver {
             &mut prover.transcript,
         );
 
-        let sat_clamp_provider: OpLookupProvider<SoftmaxSatClampOperands> =
+        let significance_clamp_provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
             OpLookupProvider::new(self.computation_node.clone());
-        let encoding = sat_clamp_provider.encoding();
-        let [sat_clamp_ra_prover, sat_clamp_hw_prover, sat_clamp_bool_prover] =
+        let encoding = significance_clamp_provider.encoding();
+        let [significance_clamp_ra_prover, significance_clamp_hw_prover, significance_clamp_bool_prover] =
             shout::ra_onehot_provers(
                 &encoding,
-                sat_clamp_indices,
+                significance_clamp_indices,
                 &prover.accumulator,
                 &mut prover.transcript,
             );
@@ -722,9 +723,9 @@ impl SoftmaxLastAxisProver {
             lo_ra_prover,
             lo_hw_prover,
             lo_bool_prover,
-            sat_clamp_ra_prover,
-            sat_clamp_hw_prover,
-            sat_clamp_bool_prover,
+            significance_clamp_ra_prover,
+            significance_clamp_hw_prover,
+            significance_clamp_bool_prover,
         ]
     }
 }
@@ -1046,10 +1047,10 @@ impl SoftmaxLastAxisVerifier {
         let lo_verifier =
             shout::read_raf_verifier(&provider, lut.table_lo.clone(), &*accumulator, transcript);
 
-        let sat_clamp_provider: OpLookupProvider<SoftmaxSatClampOperands> =
+        let significance_clamp_provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
             OpLookupProvider::new(self.computation_node.clone());
-        let sat_clamp_verifier = sat_clamp_provider
-            .read_raf_verify::<F, T, SoftmaxSatClampTable<XLEN>, XLEN>(accumulator, transcript);
+        let significance_clamp_verifier = significance_clamp_provider
+            .read_raf_verify::<F, T, SoftmaxClampTable<XLEN>, XLEN>(accumulator, transcript);
 
         let scale_bits = self.scale.ilog2() as i32;
         let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), scale_bits);
@@ -1059,7 +1060,7 @@ impl SoftmaxLastAxisVerifier {
         vec![
             hi_verifier,
             lo_verifier,
-            Box::new(sat_clamp_verifier),
+            Box::new(significance_clamp_verifier),
             r_exp_ra_verifier,
             r_exp_hw_verifier,
             r_exp_bool_verifier,
@@ -1071,7 +1072,7 @@ impl SoftmaxLastAxisVerifier {
     ///
     /// `X(r2) = max_k(r2_lead) − z(r2)`, where `z(r2)` is the sat-clamp lookup's witness claim
     /// (`z = max_k - x`, already tied to `z_c = ClampTable[z]` and `z_hi*base + z_lo` by the
-    /// stage-3 lookup itself — see `sat_clamp.rs`).
+    /// stage-3 lookup itself — see `significance_clamp.rs`).
     pub(crate) fn operand_link<F: JoltField>(
         &self,
         accumulator: &VerifierOpeningAccumulator<F>,
@@ -1085,7 +1086,7 @@ impl SoftmaxLastAxisVerifier {
 
         let max_k_eval = MultilinearPolynomial::from(self.max_k.clone()).evaluate(&r2_lead.r);
 
-        let z_eval = accessor.get_advice(VirtualPoly::SoftmaxSatClampWitness).1;
+        let z_eval = accessor.get_advice(VirtualPoly::SoftmaxClampWitness).1;
 
         let x_r2 = max_k_eval - z_eval;
 
@@ -1114,10 +1115,10 @@ impl SoftmaxLastAxisVerifier {
         let [lo_ra_verifier, lo_hw_verifier, lo_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
 
-        let sat_clamp_provider: OpLookupProvider<SoftmaxSatClampOperands> =
+        let significance_clamp_provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
             OpLookupProvider::new(self.computation_node.clone());
-        let encoding = sat_clamp_provider.encoding();
-        let [sat_clamp_ra_verifier, sat_clamp_hw_verifier, sat_clamp_bool_verifier] =
+        let encoding = significance_clamp_provider.encoding();
+        let [significance_clamp_ra_verifier, significance_clamp_hw_verifier, significance_clamp_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
 
         vec![
@@ -1127,9 +1128,9 @@ impl SoftmaxLastAxisVerifier {
             lo_ra_verifier,
             lo_hw_verifier,
             lo_bool_verifier,
-            sat_clamp_ra_verifier,
-            sat_clamp_hw_verifier,
-            sat_clamp_bool_verifier,
+            significance_clamp_ra_verifier,
+            significance_clamp_hw_verifier,
+            significance_clamp_bool_verifier,
         ]
     }
 }

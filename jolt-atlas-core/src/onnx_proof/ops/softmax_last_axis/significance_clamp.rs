@@ -1,5 +1,5 @@
 //! [`LookupOperandsTrait`] helper proving softmax's saturating clamp
-//! `z_c = min(z, z_bound - 1)` via [`joltworks::lookup_tables::clamp::SoftmaxSatClampTable`].
+//! `z_c = min(z, z_bound - 1)` via [`joltworks::lookup_tables::clamp::SoftmaxClampTable`].
 //!
 //! This witness (`z = max_k - x`) is evaluated at the point softmax's exp-digit lookups
 //! (`SoftmaxZHi`/`SoftmaxZLo`) already converge to (`r2`), not this node's own output opening —
@@ -41,17 +41,17 @@ use joltworks::{
 /// (rather than a bare `Tensor`) so `OpLookupProvider::new`/`.encoding()`'s `H: Default` bound is
 /// satisfiable for verifier-only call sites, which never call `witness()`.
 #[derive(Default)]
-pub(crate) struct SoftmaxSatClampOperands {
+pub(crate) struct SoftmaxSignificanceClampOperands {
     z: Option<Tensor<i64>>,
 }
 
-impl SoftmaxSatClampOperands {
+impl SoftmaxSignificanceClampOperands {
     pub(crate) fn new(z: Tensor<i64>) -> Self {
         Self { z: Some(z) }
     }
 }
 
-impl LookupOperandsTrait for SoftmaxSatClampOperands {
+impl LookupOperandsTrait for SoftmaxSignificanceClampOperands {
     const LOG_K: usize = XLEN;
 
     fn rv_claim<F: JoltField>(
@@ -65,25 +65,17 @@ impl LookupOperandsTrait for SoftmaxSatClampOperands {
         z_hi_claim * F::from_u64(base as u64) + z_lo_claim
     }
 
-    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
-        DefaultLookupOperands.transform_operand_claims(claims)
-    }
-
-    fn transform_output_claim<F: JoltField>(&self, claim: F) -> F {
-        DefaultLookupOperands.transform_output_claim(claim)
-    }
-
     fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
-        VirtualPoly::SoftmaxSatClampRa(node_idx)
+        VirtualPoly::SoftmaxClampRa(node_idx)
     }
 
     fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
-        CommittedPoly::SoftmaxSatClampRaD(node_idx, d)
+        CommittedPoly::SoftmaxClampRaD(node_idx, d)
     }
 
     fn witness_opening_id(node: &ComputationNode) -> OpeningId {
         OpeningId::new(
-            VirtualPoly::SoftmaxSatClampWitness(node.idx),
+            VirtualPoly::SoftmaxClampWitness(node.idx),
             SumcheckId::NodeExecution(node.idx),
         )
     }
@@ -109,7 +101,7 @@ impl LookupOperandsTrait for SoftmaxSatClampOperands {
     fn witness(&self, _node: &ComputationNode, _trace: &Trace) -> Tensor<i64> {
         self.z
             .clone()
-            .expect("SoftmaxSatClampOperands::witness called without a precomputed z (verifier-only helper)")
+            .expect("SoftmaxSignificanceClampOperands::witness called without a precomputed z (verifier-only helper)")
     }
 
     fn lookup_bits(witness: &Tensor<i64>) -> Vec<LookupBits> {

@@ -5,8 +5,9 @@
 //!    advice claim (gamma-batched with the identity polynomial so the one-hot `ra`
 //!    address is soundly tied to its value).
 //! 2. **ActivationClamp**: proves that same `clamped` claim equals
-//!    `ActivationClampTable[raw_input]` (offset-trick, same shape as `Clamp`), which
-//!    soundly ties `clamped` back to the real input rather than just asserting it.
+//!    `ActivationClampTable[raw_input]` (natively symmetric clamp lookup, same shape as
+//!    `Clamp`), which soundly ties `clamped` back to the real input rather than just
+//!    asserting it.
 //!
 //! Both stages proceed sumcheck-then-sumcheck (Execution, then ActivationClamp), with
 //! their one-hot (`ra`/`hw`/`bool`) checks batched together afterwards into a single
@@ -65,9 +66,6 @@ use rayon::iter::{
 };
 use std::marker::PhantomData;
 
-/// Maps the symmetric clamp range onto `ActivationClampTable`'s floor-at-0 domain
-/// (same trick as `SymmetricClampOperands`).
-const OFFSET: i32 = 1 << ACTIVATION_BOUND;
 const EXEC_DEGREE_BOUND: usize = 2;
 
 /// A clamped-activation's small lookup table: `Table[i] = activation(i)`, for
@@ -86,8 +84,7 @@ fn clamped_opening_id(node_idx: usize) -> OpeningId {
 
 // ---------------------------------------------------------------------------
 // Stage: ActivationClamp -- prefix-suffix lookup proving the `ActivationClampedOutput`
-// advice equals `ActivationClampTable[raw_input]` (offset-trick, same shape as
-// `Clamp`'s `SymmetricClampOperands`).
+// advice equals `ActivationClampTable[raw_input]`, ties `clamped` back to the real input.
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
@@ -103,14 +100,6 @@ impl LookupOperandsTrait for ActivationClampOperands {
         accumulator
             .get_virtual_polynomial_opening(clamped_opening_id(node.idx))
             .1
-    }
-
-    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
-        (claims[0], claims[1] + F::from_u64(OFFSET as u64))
-    }
-
-    fn transform_output_claim<F: JoltField>(&self, claim: F) -> F {
-        claim + F::from_u64(OFFSET as u64)
     }
 
     fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
@@ -141,7 +130,7 @@ impl LookupOperandsTrait for ActivationClampOperands {
     }
 
     fn lookup_bits(witness: &Tensor<i64>) -> Vec<LookupBits> {
-        let operand = witness.map(|v| v as i32 + OFFSET);
+        let operand = witness.map(|v| v as i32);
         compute_lookup_indices_from_operands(&[&operand], false)
     }
 }

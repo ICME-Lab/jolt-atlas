@@ -48,7 +48,7 @@ pub struct SoftmaxLastAxisTrace {
 /// multiplication relation (exp_hi · exp_lo = exp_q · S + r_exp) +
 /// range check (r_exp ∈ [0,S)) +
 /// digit reconstruction (z_c = z_hi · B + z_lo, tied to `z = max_k - x` by the
-/// saturating-clamp lookup — see `jolt_atlas_core::onnx_proof::ops::softmax_last_axis::sat_clamp`).
+/// saturating-clamp lookup — see `jolt_atlas_core::onnx_proof::ops::softmax_last_axis::significance_clamp`).
 #[derive(Debug, Clone)]
 pub struct DecomposedExpWitness {
     /// The sub-tables used
@@ -270,7 +270,7 @@ pub fn generate_exp_lut_decomposed(scale: i32) -> ExpLutDecomposed {
 
 /// Computes `z[k,j] = max_k[k] - x[k,j]` for every `(k,j)`, given the flat per-row max and
 /// the flat `[F*N]` input. Used by softmax's saturating-clamp lookup
-/// (`jolt_atlas_core::onnx_proof::ops::softmax_last_axis::sat_clamp`) to re-derive the
+/// (`jolt_atlas_core::onnx_proof::ops::softmax_last_axis::significance_clamp`) to re-derive the
 /// pre-clamp witness without re-running the full decomposed trace.
 pub fn softmax_z(x: &[i32], max_k: &[i32], last_dim: usize) -> Vec<i32> {
     x.iter()

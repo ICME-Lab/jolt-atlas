@@ -96,10 +96,16 @@ pub trait LookupOperandsTrait {
         -> F;
 
     /// Transforms the operand claims, accounting for lookup-specific adjustments (e.g., offsetting).
-    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F);
+    /// Identity by default; override only if the lookup needs a claim-space transform.
+    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
+        (claims[0], claims[1])
+    }
 
     /// Transforms the output claim, accounting for lookup-specific adjustments (e.g., offsetting).
-    fn transform_output_claim<F: JoltField>(&self, claim: F) -> F;
+    /// Identity by default; see [`Self::transform_operand_claims`].
+    fn transform_output_claim<F: JoltField>(&self, claim: F) -> F {
+        claim
+    }
 
     /// Virtual polynomial identifying this op's one-hot read-address ("ra") polynomial.
     fn ra_virtual_poly(node_idx: usize) -> VirtualPoly;
@@ -148,14 +154,6 @@ impl LookupOperandsTrait for DefaultLookupOperands {
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> F {
         accumulator.get_node_output_opening(node.idx).1
-    }
-
-    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
-        (claims[0], claims[1])
-    }
-
-    fn transform_output_claim<F: JoltField>(&self, claim: F) -> F {
-        claim
     }
 
     fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {

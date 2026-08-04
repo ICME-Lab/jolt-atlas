@@ -19,7 +19,7 @@ use crate::{
     onnx_proof::{
         clamp_lookups::{clamp_intermediate, clamp_lookup_bits, CLAMP_LOG_K},
         neural_teleport::{division::compute_division, n_bits_to_usize},
-        ops::{clamp::SymmetricClampOperands, rsqrt::rsqrt_dividend},
+        ops::rsqrt::rsqrt_dividend,
         range_checking::range_check_operands::{
             DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
             RangeCheckingOperandsTrait, RiRangeCheckOperands, RsRangeCheckOperands,
@@ -35,7 +35,7 @@ use atlas_onnx_tracer::{
         softmax::{generate_exp_lut_decomposed, softmax_last_axis_decomposed, softmax_z},
         Operator, SoftmaxLastAxis,
     },
-    tensor::{ops::nonlinearities, Tensor, TensorError},
+    tensor::{ops::nonlinearities, Tensor},
     utils::quantize::scale_to_multiplier,
 };
 use common::{
@@ -276,42 +276,24 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
             }
             CommittedPoly::SymmetricClampRaD(node_idx, d) => {
-                // The lookup index is the node's input offset by
-                // `SymmetricClampOperands::OFFSET` (see ops::clamp), not the raw input.
                 let computation_node = &model.graph.nodes[node_idx];
                 let layer_data = Trace::layer_data(trace, computation_node);
                 let padded_operands: Vec<_> = layer_data
                     .operands
                     .iter()
-                    .map(|tensor| {
-                        tensor
-                            .padded_next_power_of_two()
-                            .par_enum_map(|_, v| -> Result<i32, TensorError> {
-                                Ok(v + SymmetricClampOperands::OFFSET)
-                            })
-                            .unwrap()
-                    })
+                    .map(|tensor| tensor.padded_next_power_of_two())
                     .collect();
                 let operand_refs: Vec<_> = padded_operands.iter().collect();
                 let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
                 build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
             }
             CommittedPoly::ActivationClampRaD(node_idx, d) => {
-                // The lookup index is the node's input offset by
-                // `1 << ACTIVATION_BOUND` (see ops::activation_clamped), not the raw input.
                 let computation_node = &model.graph.nodes[node_idx];
                 let layer_data = Trace::layer_data(trace, computation_node);
                 let padded_operands: Vec<_> = layer_data
                     .operands
                     .iter()
-                    .map(|tensor| {
-                        tensor
-                            .padded_next_power_of_two()
-                            .par_enum_map(|_, v| -> Result<i32, TensorError> {
-                                Ok(v + (1 << ACTIVATION_BOUND))
-                            })
-                            .unwrap()
-                    })
+                    .map(|tensor| tensor.padded_next_power_of_two())
                     .collect();
                 let operand_refs: Vec<_> = padded_operands.iter().collect();
                 let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
@@ -543,7 +525,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     st.decomposed_exp.z_lo.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_lo, *d)
             }
-            CommittedPoly::SoftmaxSatClampRaD(node_idx, d) => {
+            CommittedPoly::SoftmaxClampRaD(node_idx, d) => {
                 // Softmax's saturating-clamp lookup: the lookup index is the raw
                 // `z = max_k - x` value (no offset, `z >= 0` always).
                 let node = &model.graph.nodes[node_idx];

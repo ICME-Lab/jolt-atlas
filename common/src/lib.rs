@@ -163,9 +163,7 @@ canonical_serde_enum! {
         RescaleRemainderRaD(usize, usize),
 
         /// One-hot read-address decomposition for the **Clamp** operator's
-        /// symmetric-range lookup. The lookup index is the node's input
-        /// offset by `+2^CLAMP_BOUND`, not the raw input, so this can't
-        /// share `NodeOutputRaD`'s witness generation (which assumes no offset).
+        /// symmetric-range lookup.
         ///
         /// * `0` – node index
         /// * `1` – decomposition index `d`
@@ -187,14 +185,14 @@ canonical_serde_enum! {
         ActivationSmallRaD(usize, usize),
 
         /// One-hot read-address decomposition for softmax's saturating-clamp lookup
-        /// (`z -> min(z, z_bound - 1)`, see [`VirtualPoly::SoftmaxSatClampRa`]). The lookup
+        /// (`z -> min(z, z_bound - 1)`, see [`VirtualPoly::SoftmaxClampRa`]). The lookup
         /// index is the raw `z = max_k - x` value (no offset needed, `z >= 0` always), so this
         /// can't share `NodeOutputRaD`'s witness generation (which assumes the node's own
         /// output/input, not an internal mid-pipeline value).
         ///
         /// * `0` – node index
         /// * `1` – decomposition index `d`
-        SoftmaxSatClampRaD(usize, usize),
+        SoftmaxClampRaD(usize, usize),
     }
 }
 
@@ -372,15 +370,15 @@ canonical_serde_enum! {
         /// The raw pre-clamp witness for softmax's saturating-clamp lookup: `z = max_k - x`,
         /// evaluated at the point softmax's exp-digit lookups (`SoftmaxZHi`/`SoftmaxZLo`)
         /// converge to (not this node's own output opening — see
-        /// `SoftmaxSatClampOperands::r_cycle`).
+        /// `SoftmaxSignificanceClampOperands::r_cycle`).
         ///
         /// * `0` – node index
-        SoftmaxSatClampWitness(usize),
+        SoftmaxClampWitness(usize),
 
         /// One-hot read-address polynomial for softmax's saturating-clamp lookup.
         ///
         /// * `0` – node index
-        SoftmaxSatClampRa(usize),
+        SoftmaxClampRa(usize),
 
         /// Remainder polynomial for the reciprocal-multiplication check in
         /// **softmax**.
@@ -438,7 +436,7 @@ canonical_serde_enum! {
         ActivationClampedOutput(usize),
 
         /// Read-address polynomial for the clamped Erf/Sigmoid/Tanh variants'
-        /// activation-clamp lookup stage (offset-trick, same shape as
+        /// activation-clamp lookup stage (natively-symmetric clamp table, same shape as
         /// [`Self::SymmetricClampRa`]). Virtualized --
         /// [`CommittedPoly::ActivationClampRaD`] commits its decomposition.
         ///

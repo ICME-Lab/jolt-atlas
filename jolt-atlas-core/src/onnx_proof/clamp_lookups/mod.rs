@@ -11,11 +11,10 @@
 //!
 //! The lookup index is the **pre-clamp i64 accumulation** `acc`, recovered
 //! by re-executing [`sat_binop_intermediate`] on the operands (no trace change).
-//! The accumulation MLE is the `raf` polynomial ([`VirtualPoly::ClampAcc`]); the
-//! [`ClampTable`] discharges the clamp (via the same offset-then-lookup trick
-//! `SymmetricClampOperands` uses for the ONNX `Clamp` op, generalized to `2^31`); and the
-//! linear identity `acc(r) = left(r) ± right(r)` (checked by the caller in `Add`/`Sub`)
-//! ties the accumulation back to the operands.
+//! The accumulation MLE is the `raf` polynomial ([`VirtualPoly::ClampAcc`]); [`SaturationTable`]
+//! discharges the clamp (same table shape `SymmetricClampOperands` uses for the ONNX `Clamp`
+//! op, generalized to bound 31); and the linear identity `acc(r) = left(r) ± right(r)` (checked
+//! by the caller in `Add`/`Sub`) ties the accumulation back to the operands.
 //!
 //! The one-hot read-address checks are over a 64-bit address, so the decomposition has
 //! `64 / log_k_chunk` committed chunks ([`CommittedPoly::ClampRaD`]).
@@ -179,11 +178,8 @@ pub fn verify_append_acc<F, T>(
     accumulator.append_virtual(transcript, acc_opening_id(node.idx), r);
 }
 
-/// [`LookupOperandsTrait`] helper for the 64-bit accumulator-sourced saturating clamp.
-///
-/// Offsets the accumulation by `+2^31` before the lookup, mapping the full saturating
-/// `i32` range onto [`ClampTable`]'s floor-at-0 domain, then offsets the resulting claims
-/// back by the same constant.
+/// [`LookupOperandsTrait`] helper for the 64-bit accumulator-sourced saturating clamp, backed
+/// by [`SaturationTable`].
 #[derive(Default)]
 pub(crate) struct SaturatingAccClampOperands {
     /// Set by fused callers (`fused_rebase`) that already computed the pre-clamp
@@ -193,8 +189,6 @@ pub(crate) struct SaturatingAccClampOperands {
 }
 
 impl SaturatingAccClampOperands {
-    pub(crate) const OFFSET: i64 = 1 << 31;
-
     pub(crate) fn with_precomputed(t: Tensor<i64>) -> Self {
         Self {
             precomputed: Some(t),
@@ -210,14 +204,6 @@ impl LookupOperandsTrait for SaturatingAccClampOperands {
         accumulator: &dyn joltworks::poly::opening_proof::OpeningAccumulator<F>,
     ) -> F {
         DefaultLookupOperands::rv_claim(node, accumulator)
-    }
-
-    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
-        (claims[0], claims[1] + F::from_i64(Self::OFFSET))
-    }
-
-    fn transform_output_claim<F: JoltField>(&self, claim: F) -> F {
-        claim + F::from_i64(Self::OFFSET)
     }
 
     fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
@@ -254,15 +240,14 @@ impl LookupOperandsTrait for SaturatingAccClampOperands {
     }
 }
 
-/// 64-bit clamp lookup indices: each i64 accumulation value, offset by
-/// [`SaturatingAccClampOperands::OFFSET`], reinterpreted as the `u64` address into
-/// [`ClampTable`]. Shared with `witness.rs`'s `ClampRaD` witness generation.
+/// 64-bit clamp lookup indices: each i64 accumulation value, bit-cast to the `u64` address into
+/// [`SaturationTable`]. Shared with `witness.rs`'s `ClampRaD` witness generation.
 pub(crate) fn clamp_lookup_bits(intermediate: &Tensor<i64>) -> Vec<LookupBits> {
     intermediate
         .data()
         .par_iter()
         .with_min_len(par_enabled())
-        .map(|&v| LookupBits::new((v + SaturatingAccClampOperands::OFFSET) as u64, CLAMP_LOG_K))
+        .map(|&v| LookupBits::new(v as u64, CLAMP_LOG_K))
         .collect()
 }
 

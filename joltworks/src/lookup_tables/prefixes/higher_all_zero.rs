@@ -6,10 +6,10 @@ use crate::{
 };
 
 /// Prefix that evaluates to 1 iff all bits with significance >= 2^BOUND are zero.
-pub enum HigherIsZeroPrefix<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize> {}
+pub enum HigherAllZeroPrefix<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize> {}
 
 impl<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize, F: JoltField>
-    SparseDensePrefix<F> for HigherIsZeroPrefix<XLEN, BOUND, CP_INDEX>
+    SparseDensePrefix<F> for HigherAllZeroPrefix<XLEN, BOUND, CP_INDEX>
 {
     fn prefix_mle<C>(
         checkpoints: &PrefixCheckpoints<F>,
@@ -94,20 +94,20 @@ impl<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize, F: JoltField>
     }
 }
 
-use crate::lookup_tables::clamp::CLAMP_TABLE_BOUND;
-use common::consts::{ACTIVATION_TABLE_BOUND, SOFTMAX_SAT_CLAMP_BOUND};
+use crate::lookup_tables::clamp::{CLAMP_BOUND, SIGN_BIT_I32};
+use common::consts::{ACTIVATION_BOUND, SOFTMAX_CLAMP_BOUND};
 
-pub type ClampHigherIsZeroPrefix<const XLEN: usize> =
-    HigherIsZeroPrefix<XLEN, CLAMP_TABLE_BOUND, { Prefixes::ClampHigherIsZero as usize }>;
+pub type ClampHigherAllZeroPrefix<const XLEN: usize> =
+    HigherAllZeroPrefix<XLEN, CLAMP_BOUND, { Prefixes::ClampHigherAllZero as usize }>;
 
-pub type SatClampHigherIsZeroPrefix<const XLEN: usize> =
-    HigherIsZeroPrefix<XLEN, 32, { Prefixes::SatClampHigherIsZero as usize }>;
+pub type SatClampHigherAllZeroPrefix<const XLEN: usize> =
+    HigherAllZeroPrefix<XLEN, SIGN_BIT_I32, { Prefixes::SatClampHigherAllZero as usize }>;
 
-pub type ActivationHigherIsZeroPrefix<const XLEN: usize> =
-    HigherIsZeroPrefix<XLEN, ACTIVATION_TABLE_BOUND, { Prefixes::ActivationHigherIsZero as usize }>;
+pub type ActivationHigherAllZeroPrefix<const XLEN: usize> =
+    HigherAllZeroPrefix<XLEN, ACTIVATION_BOUND, { Prefixes::ActivationHigherAllZero as usize }>;
 
-pub type SoftmaxSatClampHigherIsZeroPrefix<const XLEN: usize> = HigherIsZeroPrefix<
+pub type SoftmaxClampHigherAllZeroPrefix<const XLEN: usize> = HigherAllZeroPrefix<
     XLEN,
-    SOFTMAX_SAT_CLAMP_BOUND,
-    { Prefixes::SoftmaxSatClampHigherIsZero as usize },
+    SOFTMAX_CLAMP_BOUND,
+    { Prefixes::SoftmaxClampHigherAllZero as usize },
 >;

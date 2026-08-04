@@ -24,8 +24,8 @@ pub const ACTIVATION_TABLE_BOUND: usize = ACTIVATION_BOUND + 1;
 /// that scale, rounded up to the next power of two. `ln`/`exp` aren't const-evaluable in stable
 /// Rust, so these are precomputed per supported `MODEL_SCALE` rather than derived here; add a new
 /// arm (re-deriving the bound offline) before switching to an untested scale.
-pub const SOFTMAX_SAT_CLAMP_BOUND: usize = match MODEL_SCALE {
+pub const SOFTMAX_CLAMP_BOUND: usize = match MODEL_SCALE {
     8 => 11,
     12 => 16,
-    _ => panic!("no precomputed SOFTMAX_SAT_CLAMP_BOUND for this MODEL_SCALE"),
+    _ => panic!("no precomputed SOFTMAX_CLAMP_BOUND for this MODEL_SCALE"),
 };

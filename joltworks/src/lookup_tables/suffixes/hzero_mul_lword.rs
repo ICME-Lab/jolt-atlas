@@ -33,21 +33,21 @@ impl<const XLEN: usize, const BOUND: usize> SparseDenseSuffix for HZeroMulLWordS
     }
 }
 
-use crate::lookup_tables::clamp::CLAMP_TABLE_BOUND;
-use common::consts::{ACTIVATION_TABLE_BOUND, SOFTMAX_SAT_CLAMP_BOUND};
-pub type ClampHZeroMulLWordSuffix<const XLEN: usize> = HZeroMulLWordSuffix<XLEN, CLAMP_TABLE_BOUND>;
+use crate::lookup_tables::clamp::{CLAMP_BOUND, SIGN_BIT_I32};
+use common::consts::{ACTIVATION_BOUND, SOFTMAX_CLAMP_BOUND};
+pub type ClampHZeroMulLWordSuffix<const XLEN: usize> = HZeroMulLWordSuffix<XLEN, CLAMP_BOUND>;
 
-pub type SatClampHZeroMulLWordSuffix<const XLEN: usize> = HZeroMulLWordSuffix<XLEN, 32>;
+pub type SatClampHZeroMulLWordSuffix<const XLEN: usize> = HZeroMulLWordSuffix<XLEN, SIGN_BIT_I32>;
 
 pub type ActivationHZeroMulLWordSuffix<const XLEN: usize> =
-    HZeroMulLWordSuffix<XLEN, ACTIVATION_TABLE_BOUND>;
+    HZeroMulLWordSuffix<XLEN, ACTIVATION_BOUND>;
 
-/// Its own nominal type rather than a `HZeroMulLWordSuffix<XLEN, SOFTMAX_SAT_CLAMP_BOUND>` alias
-/// — see [`super::higher_is_zero::SoftmaxSatClampHigherIsZeroSuffix`] for why.
-pub enum SoftmaxSatClampHZeroMulLWordSuffix<const XLEN: usize> {}
+/// Its own nominal type rather than a `HZeroMulLWordSuffix<XLEN, SOFTMAX_CLAMP_BOUND>` alias
+/// — see [`super::higher_all_zero::SoftmaxClampHigherAllZeroSuffix`] for why.
+pub enum SoftmaxClampHZeroMulLWordSuffix<const XLEN: usize> {}
 
-impl<const XLEN: usize> SparseDenseSuffix for SoftmaxSatClampHZeroMulLWordSuffix<XLEN> {
+impl<const XLEN: usize> SparseDenseSuffix for SoftmaxClampHZeroMulLWordSuffix<XLEN> {
     fn suffix_mle(bits: LookupBits) -> u32 {
-        HZeroMulLWordSuffix::<XLEN, SOFTMAX_SAT_CLAMP_BOUND>::suffix_mle(bits)
+        HZeroMulLWordSuffix::<XLEN, SOFTMAX_CLAMP_BOUND>::suffix_mle(bits)
     }
 }

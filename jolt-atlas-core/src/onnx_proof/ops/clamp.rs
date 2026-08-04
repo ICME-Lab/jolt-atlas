@@ -11,10 +11,9 @@ use crate::{
 use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode, ops::Clamp, tensor::Tensor};
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
-    self,
     field::JoltField,
     lookup_tables::clamp::{ClampTable, CLAMP_BOUND},
-    poly::opening_proof::{OpeningId, OpeningPoint, BIG_ENDIAN},
+    poly::opening_proof::{OpeningAccumulator, OpeningId, OpeningPoint, BIG_ENDIAN},
     subprotocols::{
         shout::{self, RaOneHotEncoding},
         sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
@@ -26,33 +25,19 @@ use joltworks::{
 
 use common::consts::XLEN;
 
-/// Offsets the input by `+2^CLAMP_BOUND` before the lookup, mapping `Clamp`'s symmetric range
-/// onto the table's `[0, 2^CLAMP_TABLE_BOUND]` domain, then offsets the resulting claims back
-/// by the same constant. Both offsets are applied algebraically to the claims (never to a
-/// committed polynomial), via [`LookupOperandsTrait`].
+/// Lookup helper for the ONNX `Clamp` op, backed by `joltworks::lookup_tables::clamp`'s
+/// symmetric clamp table (`[-2^CLAMP_BOUND, 2^CLAMP_BOUND - 1]`).
 #[derive(Default)]
 pub(crate) struct SymmetricClampOperands;
-
-impl SymmetricClampOperands {
-    pub(crate) const OFFSET: i32 = 1 << CLAMP_BOUND;
-}
 
 impl LookupOperandsTrait for SymmetricClampOperands {
     const LOG_K: usize = DefaultLookupOperands::LOG_K;
 
     fn rv_claim<F: JoltField>(
         node: &ComputationNode,
-        accumulator: &dyn joltworks::poly::opening_proof::OpeningAccumulator<F>,
+        accumulator: &dyn OpeningAccumulator<F>,
     ) -> F {
         DefaultLookupOperands::rv_claim(node, accumulator)
-    }
-
-    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
-        (claims[0], claims[1] + F::from_u64(Self::OFFSET as u64))
-    }
-
-    fn transform_output_claim<F: JoltField>(&self, claim: F) -> F {
-        claim + F::from_u64(Self::OFFSET as u64)
     }
 
     fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
@@ -69,7 +54,7 @@ impl LookupOperandsTrait for SymmetricClampOperands {
 
     fn r_cycle<F: JoltField>(
         node: &ComputationNode,
-        accumulator: &dyn joltworks::poly::opening_proof::OpeningAccumulator<F>,
+        accumulator: &dyn OpeningAccumulator<F>,
     ) -> OpeningPoint<BIG_ENDIAN, F> {
         DefaultLookupOperands::r_cycle(node, accumulator)
     }
@@ -82,10 +67,8 @@ impl LookupOperandsTrait for SymmetricClampOperands {
         DefaultLookupOperands.witness(node, trace)
     }
 
-    /// Offsets by `2^CLAMP_BOUND` first, mapping `Clamp`'s symmetric range onto the
-    /// table's floor-at-0 domain.
     fn lookup_bits(witness: &Tensor<i64>) -> Vec<LookupBits> {
-        let operand = witness.map(|v| v as i32 + Self::OFFSET);
+        let operand = witness.map(|v| v as i32);
         compute_lookup_indices_from_operands(&[&operand], false)
     }
 }
@@ -229,6 +212,18 @@ mod tests {
         let bound = 1i32 << CLAMP_BOUND;
         let mut rng = StdRng::seed_from_u64(0x890);
         let input = Tensor::<i32>::random_range(&mut rng, &[t], -2 * bound..2 * bound);
+        let model = clamp_model(t);
+        unit_test_op(model, &[input]);
+    }
+
+    #[test]
+    fn test_clamp_near_i32_max_saturates_correctly() {
+        let t = 4;
+        let input = Tensor::<i32>::new(
+            Some(&[i32::MAX, i32::MAX - 50, i32::MIN, i32::MIN + 50]),
+            &[t],
+        )
+        .unwrap();
         let model = clamp_model(t);
         unit_test_op(model, &[input]);
     }

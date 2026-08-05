@@ -1395,7 +1395,7 @@ fn test_div_zk() {
 #[test]
 fn test_sigmoid_zk() {
     use atlas_onnx_tracer::model::test::ModelBuilder;
-    use common::consts::ACTIVATION_TABLE_BOUND;
+    use common::consts::ACTIVATION_TABLE_VARS;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF15);
     let min_val = -(1i32 << (ACTIVATION_TABLE_BOUND - 1));
@@ -1421,7 +1421,7 @@ fn test_sigmoid_zk() {
 #[test]
 fn test_tanh_zk() {
     use atlas_onnx_tracer::model::test::ModelBuilder;
-    use common::consts::ACTIVATION_TABLE_BOUND;
+    use common::consts::ACTIVATION_TABLE_VARS;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF16);
     let min_val = -(1i32 << (ACTIVATION_TABLE_BOUND - 1));
@@ -1447,7 +1447,7 @@ fn test_tanh_zk() {
 #[test]
 fn test_erf_zk() {
     use atlas_onnx_tracer::model::test::ModelBuilder;
-    use common::consts::ACTIVATION_TABLE_BOUND;
+    use common::consts::ACTIVATION_TABLE_VARS;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF17);
     let min_val = -(1i32 << (ACTIVATION_TABLE_BOUND - 1));

@@ -39,7 +39,7 @@ use atlas_onnx_tracer::{
     utils::quantize::scale_to_multiplier,
 };
 use common::{
-    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_BOUND, LOG_K, XLEN},
+    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, LOG_K, XLEN},
     parallel::par_enabled,
     CommittedPoly,
 };
@@ -109,10 +109,10 @@ fn build_activation_small_rad_witness<F: JoltField>(
     let lookup_indices: Vec<usize> = clamped
         .par_iter()
         .with_min_len(par_enabled())
-        .map(|&x| n_bits_to_usize(x, ACTIVATION_TABLE_BOUND))
+        .map(|&x| n_bits_to_usize(x, ACTIVATION_TABLE_VARS))
         .collect();
     let one_hot_params =
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), ACTIVATION_TABLE_BOUND);
+        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), ACTIVATION_TABLE_VARS);
     let h_indices =
         subprotocols::shout::compute_instruction_h_indices(&lookup_indices, &one_hot_params);
     MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(

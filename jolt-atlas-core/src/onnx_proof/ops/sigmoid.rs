@@ -10,7 +10,7 @@ use crate::onnx_proof::{
 };
 use atlas_onnx_tracer::{node::ComputationNode, ops::Sigmoid, tensor::ops::nonlinearities};
 use common::{
-    consts::{ACTIVATION_TABLE_BOUND, MODEL_SCALE},
+    consts::{ACTIVATION_TABLE_VARS, MODEL_SCALE},
     CommittedPoly,
 };
 use joltworks::{
@@ -24,7 +24,7 @@ pub(crate) struct SigmoidTableMarker;
 impl SmallActivationTable for SigmoidTableMarker {
     fn materialize() -> Vec<i32> {
         crate::onnx_proof::neural_teleport::utils::materialize_signed_activation_table(
-            ACTIVATION_TABLE_BOUND,
+            ACTIVATION_TABLE_VARS,
             1,
             MODEL_SCALE as i32,
             nonlinearities::sigmoid,
@@ -63,7 +63,7 @@ mod tests {
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };
-    use common::consts::ACTIVATION_TABLE_BOUND;
+    use common::consts::ACTIVATION_BOUND;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn sigmoid_model(input_shape: &[usize]) -> Model {
@@ -89,8 +89,8 @@ mod tests {
     #[ignore = "TODO: non-power-of-two sigmoid path not fully validated yet"]
     fn test_sigmoid_non_power_of_two_input_len() {
         let t = 1000;
-        const MIN_INPUT_VALUE: i32 = -(1 << (ACTIVATION_TABLE_BOUND - 1));
-        const MAX_INPUT_VALUE: i32 = 1 << (ACTIVATION_TABLE_BOUND - 1);
+        const MIN_INPUT_VALUE: i32 = -(1 << ACTIVATION_BOUND);
+        const MAX_INPUT_VALUE: i32 = 1 << ACTIVATION_BOUND;
         let mut rng = StdRng::seed_from_u64(0x88A);
         let input = Tensor::random_range(&mut rng, &[t], MIN_INPUT_VALUE..MAX_INPUT_VALUE);
         let model = sigmoid_model(&[t]);

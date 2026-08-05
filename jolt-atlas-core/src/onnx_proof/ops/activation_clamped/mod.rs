@@ -29,7 +29,7 @@ use atlas_onnx_tracer::{
     tensor::{ops::nonlinearities, Tensor},
 };
 use common::{
-    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_BOUND, XLEN},
+    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, XLEN},
     parallel::par_enabled,
     CommittedPoly, VirtualPoly,
 };
@@ -184,7 +184,7 @@ impl<F: JoltField, Table: SmallActivationTable> SumcheckInstanceParams<F>
     }
 
     fn num_rounds(&self) -> usize {
-        ACTIVATION_TABLE_BOUND
+        ACTIVATION_TABLE_VARS
     }
 
     #[cfg(feature = "zk")]
@@ -215,7 +215,7 @@ impl<F: JoltField, Table: SmallActivationTable> SumcheckInstanceParams<F>
         let opening_point = self.normalize_opening_point(&sumcheck_challenges.into_opening());
         let table = MultilinearPolynomial::from(Table::materialize());
         let table_claim = table.evaluate(&opening_point.r);
-        let int_eval = SignedIdentityPoly::new(ACTIVATION_TABLE_BOUND).evaluate(&opening_point.r);
+        let int_eval = SignedIdentityPoly::new(ACTIVATION_TABLE_VARS).evaluate(&opening_point.r);
         vec![table_claim + self.gamma * int_eval]
     }
 }
@@ -263,16 +263,16 @@ impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
         let input_onehot: Vec<F> = compute_ra_evals_nbits_2comp(
             &params.r_node_output.r,
             &clamped_tensor,
-            ACTIVATION_TABLE_BOUND,
+            ACTIVATION_TABLE_VARS,
         );
         let input_onehot = MultilinearPolynomial::from(input_onehot);
         assert_eq!(input_onehot.len(), table.len());
-        let identity = SignedIdentityPoly::new(ACTIVATION_TABLE_BOUND);
+        let identity = SignedIdentityPoly::new(ACTIVATION_TABLE_VARS);
 
         let lookup_indices: Vec<usize> = clamped_tensor_padded
             .par_iter()
             .with_min_len(par_enabled())
-            .map(|&x| n_bits_to_usize(x, ACTIVATION_TABLE_BOUND))
+            .map(|&x| n_bits_to_usize(x, ACTIVATION_TABLE_VARS))
             .collect();
 
         Self {
@@ -395,7 +395,7 @@ impl<F: JoltField, T: Transcript, Table: SmallActivationTable> SumcheckInstanceV
 
         let ra_claim = accessor.get_advice(VirtualPoly::ActivationSmallRa).1;
         let table_claim = self.table.evaluate(&opening_point.r);
-        let int_eval = SignedIdentityPoly::new(ACTIVATION_TABLE_BOUND).evaluate(&opening_point.r);
+        let int_eval = SignedIdentityPoly::new(ACTIVATION_TABLE_VARS).evaluate(&opening_point.r);
 
         ra_claim * (table_claim + self.params.gamma * int_eval)
     }
@@ -441,11 +441,11 @@ impl RaOneHotEncoding for SmallTableRaEncoding {
     }
 
     fn log_k(&self) -> usize {
-        ACTIVATION_TABLE_BOUND
+        ACTIVATION_TABLE_VARS
     }
 
     fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), ACTIVATION_TABLE_BOUND)
+        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), ACTIVATION_TABLE_VARS)
     }
 }
 

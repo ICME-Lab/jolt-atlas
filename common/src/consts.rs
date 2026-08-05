@@ -17,7 +17,7 @@ pub const MODEL_SCALE: usize = 8;
 pub const ACTIVATION_BOUND: usize = MODEL_SCALE + 3;
 
 /// One more than [`ACTIVATION_BOUND`]; the small activation table's log2 size.
-pub const ACTIVATION_TABLE_BOUND: usize = ACTIVATION_BOUND + 1;
+pub const ACTIVATION_TABLE_VARS: usize = ACTIVATION_BOUND + 1;
 
 /// log2 of softmax's saturating-clamp table size at [`MODEL_SCALE`]: the padded
 /// `hi_size * base` from `generate_exp_lut_decomposed` (`atlas-onnx-tracer::ops::softmax`) at

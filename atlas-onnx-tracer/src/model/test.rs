@@ -3,14 +3,7 @@
 //! This module provides a builder pattern for constructing computation graphs
 //! without needing to load from ONNX files.
 
-use crate::{
-    node::{
-        ComputationNode,
-        handlers::activation::{NEURAL_TELEPORT_LOG_TABLE_SIZE, neural_teleport_tau},
-    },
-    ops::*,
-    tensor::Tensor,
-};
+use crate::{node::ComputationNode, ops::*, tensor::Tensor};
 use std::collections::{BTreeMap, HashMap};
 
 use super::{ComputationGraph, Model};
@@ -19,7 +12,7 @@ use super::{ComputationGraph, Model};
 pub type Wire = usize;
 
 // Default number of bits dedicated to the fractional part in fixed-point representation
-const DEFAULT_SCALE: u32 = 8;
+const DEFAULT_SCALE: u32 = common::consts::MODEL_SCALE as u32;
 
 /// Builder for constructing `Model` instances programmatically.
 ///
@@ -132,6 +125,19 @@ impl ModelBuilder {
         let id = self.alloc();
         let output_dims = self.nodes[&a].output_dims.clone();
         let node = ComputationNode::new(id, Operator::And(And), vec![a, b], output_dims);
+        self.insert_node(node)
+    }
+
+    /// Add a Clamp node (clamps values into `[-2^bound_log, 2^bound_log - 1]`).
+    pub fn clamp(&mut self, input: Wire, bound_log: usize) -> Wire {
+        let id = self.alloc();
+        let output_dims = self.nodes[&input].output_dims.clone();
+        let node = ComputationNode::new(
+            id,
+            Operator::Clamp(Clamp { bound_log }),
+            vec![input],
+            output_dims,
+        );
         self.insert_node(node)
     }
 
@@ -424,13 +430,10 @@ impl ModelBuilder {
     pub fn tanh(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
         let output_dims = self.nodes[&input].output_dims.clone();
-        let tau = neural_teleport_tau(self.scale as i32);
         let node = ComputationNode::new(
             id,
             Operator::Tanh(Tanh {
                 scale: self.scale as i32,
-                tau,
-                log_table: NEURAL_TELEPORT_LOG_TABLE_SIZE,
             }),
             vec![input],
             output_dims,
@@ -472,13 +475,10 @@ impl ModelBuilder {
     pub fn erf(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
         let output_dims = self.nodes[&input].output_dims.clone();
-        let tau = 2;
         let node = ComputationNode::new(
             id,
             Operator::Erf(Erf {
                 scale: self.scale as i32,
-                tau,
-                log_table: NEURAL_TELEPORT_LOG_TABLE_SIZE,
             }),
             vec![input],
             output_dims,
@@ -490,13 +490,10 @@ impl ModelBuilder {
     pub fn sigmoid(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
         let output_dims = self.nodes[&input].output_dims.clone();
-        let tau = 2;
         let node = ComputationNode::new(
             id,
             Operator::Sigmoid(Sigmoid {
                 scale: self.scale as i32,
-                tau,
-                log_table: NEURAL_TELEPORT_LOG_TABLE_SIZE,
             }),
             vec![input],
             output_dims,

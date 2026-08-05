@@ -309,9 +309,9 @@ fn i32_divisor(divisor: i64) -> i32 {
     i32::try_from(divisor).expect("MeanOfSquares divisor N·2^S must fit i32 for the range check")
 }
 
-/// Operands for neural teleportation (tanh) range-checking.
+/// Operands for neural teleportation (cos/sin) range-checking.
 ///
-/// For tanh computation involving division by τ, verifies that the remainder satisfies the bounds.
+/// For cos/sin computation involving division by τ, verifies that the remainder satisfies the bounds.
 pub struct TeleportRangeCheckOperands {
     tau: i32,
 }
@@ -319,14 +319,9 @@ pub struct TeleportRangeCheckOperands {
 impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
     fn new(node: &ComputationNode) -> Self {
         let tau = match &node.operator {
-            Operator::Tanh(inner) => inner.tau,
-            Operator::Erf(inner) => inner.tau,
-            Operator::Sigmoid(inner) => inner.tau,
             Operator::Cos(_) | Operator::Sin(_) => FOUR_PI_APPROX,
             _ => {
-                panic!(
-                    "Expected Tanh, Erf, Sigmoid, Cos, or Sin operator for neural teleportation division"
-                )
+                panic!("Expected Cos or Sin operator for neural teleportation division")
             }
         };
         Self { tau }

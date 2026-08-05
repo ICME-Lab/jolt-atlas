@@ -97,11 +97,13 @@ pub mod suffixes;
 
 /// Bitwise AND lookup table.
 pub mod and;
+/// Clamps the input to a specified range: floor-at-0 (`SoftmaxClampTable`) or natively
+/// symmetric (`ClampTable`/`SaturationTable`/`ActivationClampTable`), via one generic `ClampSpec`.
+pub mod clamp;
 /// Bitwise OR lookup table.
 pub mod or;
 /// ReLU (Rectified Linear Unit) activation lookup table.
 pub mod relu;
-pub mod sat_clamp;
 /// Unsigned absolute value lookup table.
 ///
 /// Computes `abs(x)` by interpreting the input as a signed integer and returning

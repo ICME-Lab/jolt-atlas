@@ -25,7 +25,7 @@ canonical_serde_enum! {
     ///
     /// | Group | Purpose |
     /// |-------|---------|
-    /// | `NodeOutputRaD` / `{Cos,Erf,Sin,Tanh}RaD` | One-hot read-address decompositions for activation-function lookup tables |
+    /// | `NodeOutputRaD` / `{Cos,Sin}RaD` | One-hot read-address decompositions for activation-function lookup tables |
     /// | `Softmax*` | Polynomials specific to softmax sub-protocol |
     /// | `Div* / Sqrt* / Teleport*` | Range-check one-hot polynomials for integer-arithmetic advice values |
     /// | `*NodeQuotient / *NodeRemainder / *NodeInv / *NodeRsqrt` | Scalar advice polynomials for division / reciprocal-square-root |
@@ -46,23 +46,11 @@ canonical_serde_enum! {
         /// * `1` – decomposition index `d`
         CosRaD(usize, usize),
 
-        /// One-hot read-address decomposition for the **Erf** lookup table.
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        ErfRaD(usize, usize),
-
         /// One-hot read-address decomposition for the **Sin** lookup table.
         ///
         /// * `0` – node index
         /// * `1` – decomposition index `d`
         SinRaD(usize, usize),
-
-        /// One-hot read-address decomposition for the **Tanh** lookup table.
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        TanhRaD(usize, usize),
 
         // ----- Range-check one-hot polynomials for advice values (node_index, d) -----
         /// Interleaved remainder `R` and divisor one-hot polynomial for the
@@ -122,12 +110,6 @@ canonical_serde_enum! {
         /// * `0` – node index
         TeleportNodeQuotient(usize),
 
-        /// Sigmoid Ra d polynomial
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        SigmoidRaD(usize, usize),
-
         /// Read-address polynomial for the **Gather** operator.
         ///
         /// * `0` – node index
@@ -163,12 +145,6 @@ canonical_serde_enum! {
         /// * `1` – decomposition index `d`
         SoftmaxZLoRaD(usize, usize),
 
-        /// One-hot read-address decomposition for the softmax **sat-diff** RC.
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        SoftmaxSatDiffRaD(usize, usize),
-
         /// One-hot read-address decomposition for the saturating-clamp lookup of
         /// a `Add`/`Sub` node. The clamp is indexed by the 64-bit accumulation, so
         /// there are `64 / log_k_chunk` chunks (e.g. 16 for `log_k_chunk = 4`).
@@ -185,6 +161,38 @@ canonical_serde_enum! {
         /// * `0` – node index
         /// * `1` – decomposition index `d`
         RescaleRemainderRaD(usize, usize),
+
+        /// One-hot read-address decomposition for the **Clamp** operator's
+        /// symmetric-range lookup.
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        SymmetricClampRaD(usize, usize),
+
+        /// One-hot read-address decomposition for the clamped Erf/Sigmoid/Tanh
+        /// variants' activation-clamp lookup stage (see [`VirtualPoly::ActivationClampRa`]).
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        ActivationClampRaD(usize, usize),
+
+        /// One-hot read-address decomposition for the clamped Erf/Sigmoid/Tanh
+        /// variants' small dense activation-table execution stage (shared across
+        /// all three ops; see [`VirtualPoly::ActivationSmallRa`]).
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        ActivationSmallRaD(usize, usize),
+
+        /// One-hot read-address decomposition for softmax's saturating-clamp lookup
+        /// (`z -> min(z, z_bound - 1)`, see [`VirtualPoly::SoftmaxClampRa`]). The lookup
+        /// index is the raw `z = max_k - x` value (no offset needed, `z >= 0` always), so this
+        /// can't share `NodeOutputRaD`'s witness generation (which assumes the node's own
+        /// output/input, not an internal mid-pipeline value).
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        SoftmaxClampRaD(usize, usize),
     }
 }
 
@@ -207,7 +215,7 @@ canonical_serde_enum! {
     /// | Group | Purpose |
     /// |-------|---------|
     /// | `NodeOutput` / `NodeOutputRa` | MLE of a node's output tensor and its read-address polynomial |
-    /// | `{Cos,Erf,Sin,Tanh}Ra` | Read-address polynomials for activation-function lookups |
+    /// | `{Cos,Sin}Ra` | Read-address polynomials for activation-function lookups |
     /// | `Softmax*` | Intermediate polynomials arising in the softmax sub-protocol |
     /// | `HammingWeight` | Polynomial used in the Hamming-weight sumcheck |
     /// | `Div* / Sqrt* / Teleport*` | Advice-derived polynomials proven via `ReadRafSumcheckProver` from committed one-hot polynomials |
@@ -224,29 +232,16 @@ canonical_serde_enum! {
         /// * `0` – node index
         NodeOutputRa(usize),
 
-        /// Sigmoid Ra polynomial
-        SigmoidRa(usize),
-
         // ----- Activation-function read-address polynomials (node_index) -----
         /// Read-address polynomial for the **Cos** lookup table.
         ///
         /// * `0` – node index
         CosRa(usize),
 
-        /// Read-address polynomial for the **Erf** lookup table.
-        ///
-        /// * `0` – node index
-        ErfRa(usize),
-
         /// Read-address polynomial for the **Sin** lookup table.
         ///
         /// * `0` – node index
         SinRa(usize),
-
-        /// Read-address polynomial for the **Tanh** lookup table.
-        ///
-        /// * `0` – node index
-        TanhRa(usize),
 
         // ----- Softmax intermediate polynomials (node_index, feature_index) -----
         /// Running sum used inside softmax normalisation.
@@ -372,32 +367,24 @@ canonical_serde_enum! {
         /// * `0` – node index
         SoftmaxZLoRa(usize),
 
-        /// Saturation-diff polynomial for the softmax operand link.
-        /// `sat_diff[k,j] = z[k,j] − z_c[k,j]` (≥ 0).
-        /// Virtualized — the identity RC commits to its one-hot encoding.
+        /// The raw pre-clamp witness for softmax's saturating-clamp lookup: `z = max_k - x`,
+        /// evaluated at the point softmax's exp-digit lookups (`SoftmaxZHi`/`SoftmaxZLo`)
+        /// converge to (not this node's own output opening — see
+        /// `SoftmaxSignificanceClampOperands::r_cycle`).
         ///
         /// * `0` – node index
-        SoftmaxSatDiff(usize),
+        SoftmaxClampWitness(usize),
 
-        /// One-hot-encoded Read-address polynomial for the softmax sat-diff range check.
+        /// One-hot read-address polynomial for softmax's saturating-clamp lookup.
         ///
         /// * `0` – node index
-        SoftmaxSatDiffRa(usize),
+        SoftmaxClampRa(usize),
 
         /// Remainder polynomial for the reciprocal-multiplication check in
         /// **softmax**.
         ///
         /// * `0` – node index
         SoftmaxRecipMultRemainder(usize),
-
-        /// A reduced variant of [`Self::NodeOutput`] for neural teleportation ops (tanh, erf, sigmoid).
-        /// During the neural teleport phase, a reduction sumcheck collapses the `NodeOutput` claim to
-        /// the same point as the div sumcheck challenges. [`Self::NodeOutput`] cannot be reused for this
-        /// reduced claim because the opening accumulator forbids appending `NodeOutput` claims after
-        /// the point-to-line evaluation reduction has already been performed for that node.
-        ///
-        /// * `0` – producer node index
-        NTEvalShiftOutput(usize),
 
         // ----- Saturating clamp (Add/Sub) -----
         /// MLE of the pre-clamp **i64 accumulation** of a saturating `Add`/`Sub`.
@@ -432,7 +419,35 @@ canonical_serde_enum! {
         /// * `0` – node index
         RescaleRemainderRa(usize),
 
-        // TODO: rm once clamp is implemted for tanh
-        DummyClampedTanhInput(usize),
+        /// Read-address polynomial for the **Clamp** operator's symmetric-range
+        /// lookup. Virtualized — [`CommittedPoly::SymmetricClampRaD`] commits its
+        /// decomposition.
+        ///
+        /// * `0` – node index
+        SymmetricClampRa(usize),
+
+        /// The clamped Erf/Sigmoid/Tanh variants' internal "clamped input" claim,
+        /// shared by both of the node's sumchecks: the small-table execution stage
+        /// uses it (gamma-batched) as part of its input claim, and the
+        /// activation-clamp lookup stage soundly proves it equals
+        /// `ActivationClampTable[raw_input]` -- this claim is *proven*, not asserted.
+        ///
+        /// * `0` – node index
+        ActivationClampedOutput(usize),
+
+        /// Read-address polynomial for the clamped Erf/Sigmoid/Tanh variants'
+        /// activation-clamp lookup stage (natively-symmetric clamp table, same shape as
+        /// [`Self::SymmetricClampRa`]). Virtualized --
+        /// [`CommittedPoly::ActivationClampRaD`] commits its decomposition.
+        ///
+        /// * `0` – node index
+        ActivationClampRa(usize),
+
+        /// Read-address polynomial for the clamped Erf/Sigmoid/Tanh variants'
+        /// small dense activation-table execution stage. Virtualized --
+        /// [`CommittedPoly::ActivationSmallRaD`] commits its decomposition.
+        ///
+        /// * `0` – node index
+        ActivationSmallRa(usize),
     }
 }

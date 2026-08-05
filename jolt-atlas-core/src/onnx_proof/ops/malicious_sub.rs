@@ -13,7 +13,8 @@
 
 use crate::{
     onnx_proof::{
-        clamp_lookups::{ClampEncoding, ClampLookupProvider},
+        clamp_lookups::{SaturatingAccClampOperands, CLAMP_LOG_K},
+        op_lookups::{OpLookupEncoding, OpLookupProvider},
         ProofId, ProofType, Prover,
     },
     utils::opening_access::{AccOpeningAccessor, Target},
@@ -24,6 +25,7 @@ use atlas_onnx_tracer::{
 };
 use joltworks::{
     field::JoltField,
+    lookup_tables::clamp::SaturationTable,
     poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
     subprotocols::{
         shout,
@@ -49,13 +51,14 @@ pub fn malicious_sub_prove<F: JoltField, T: Transcript>(
     let mut results = Vec::new();
 
     // (1) Honest clamp lookup: output(r) = SatClamp(acc(r)).
-    let provider = ClampLookupProvider::new(node.clone());
-    let (mut execution_sumcheck, lookup_indices) = provider.read_raf_prove::<F, T>(
-        &prover.trace,
-        &mut prover.accumulator,
-        &mut prover.transcript,
-        None,
-    );
+    let provider: OpLookupProvider<SaturatingAccClampOperands> =
+        OpLookupProvider::new(node.clone());
+    let (mut execution_sumcheck, lookup_indices) = provider
+        .read_raf_prove::<F, T, SaturationTable, CLAMP_LOG_K>(
+            &prover.trace,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
     let (execution_proof, _) = Sumcheck::prove(
         &mut execution_sumcheck,
         &mut prover.accumulator,
@@ -64,7 +67,7 @@ pub fn malicious_sub_prove<F: JoltField, T: Transcript>(
     results.push((ProofId(node.idx, ProofType::Execution), execution_proof));
 
     // (2) Honest one-hot checks on the clamp read-address polynomial.
-    let encoding = ClampEncoding::new(node);
+    let encoding = OpLookupEncoding::<SaturatingAccClampOperands>::new(node);
     let [ra_prover, hw_prover, bool_prover] = shout::ra_onehot_provers(
         &encoding,
         &lookup_indices,

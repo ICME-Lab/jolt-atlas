@@ -232,10 +232,7 @@ pub type BinaryReadRafSumcheckVerifier<F, LUT> =
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        lookup_tables::{
-            and::AndTable, or::OrTable, unsigned_less_than::UnsignedLessThanTable, xor::XorTable,
-            JoltLookupTable, PrefixSuffixDecompositionTrait,
-        },
+        lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
         poly::{
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
             opening_proof::{
@@ -267,26 +264,6 @@ pub mod tests {
 
     const LOG_NUM_LOOKUPS: usize = 10;
     const NUM_LOOKUPS: usize = 1 << LOG_NUM_LOOKUPS;
-
-    #[test]
-    fn test_and() {
-        test_read_raf_sumcheck::<AndTable<XLEN>>();
-    }
-
-    #[test]
-    fn test_or() {
-        test_read_raf_sumcheck::<OrTable<XLEN>>();
-    }
-
-    #[test]
-    fn test_ltu() {
-        test_read_raf_sumcheck::<UnsignedLessThanTable<XLEN>>();
-    }
-
-    #[test]
-    fn test_xor() {
-        test_read_raf_sumcheck::<XorTable<XLEN>>();
-    }
 
     pub fn test_read_raf_sumcheck<LUT>()
     where

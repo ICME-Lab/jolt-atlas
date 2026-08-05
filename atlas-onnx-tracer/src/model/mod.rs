@@ -281,6 +281,7 @@ impl Model {
                 | Operator::Cos(_)
                 | Operator::Div(_)
                 | Operator::Erf(_)
+                | Operator::Clamp(_)
                 | Operator::ReLU(_)
                 | Operator::Rsqrt(_)
                 | Operator::Sigmoid(_)
@@ -491,7 +492,7 @@ impl RunArgs {
 /// Const values used across the model and ops.
 pub mod consts {
     /// Default quantization scale (denominator in fixed-point representation).
-    pub const DEFAULT_SCALE: i32 = 8;
+    pub const DEFAULT_SCALE: i32 = common::consts::MODEL_SCALE as i32;
 
     /// Const used in the zkVM to wrap around a multiple of 2π,
     /// using the periodicity of the cosine function while keeping the lookup table size reasonable.

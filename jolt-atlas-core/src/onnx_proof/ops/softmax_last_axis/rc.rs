@@ -8,43 +8,15 @@ use joltworks::{
     subprotocols::{identity_range_check::IdentityRCProvider, shout::RaOneHotEncoding},
 };
 
-/// Bit width for the sat_diff range check at a given softmax scale (log₂ S).
-///
-/// The honest sat_diff is spread-governed, not 2^30-governed: with the
-/// quantize.rs extreme clamp at -(C(scale) << scale)
-/// (`mask_sentinel_magnitude`, C(8)=8 / C(12)=11), inputs give
-/// `sat_diff ≤ (score_spread [+ C(scale)·2^scale on masked rows]) − (z_bound − 1)`
-/// — the in-row score spread beyond the exp cutoff, plus the sentinel on
-/// masked positions. Measured on the fused-i64 saturating arithmetic at
-/// scale 8: max 13773 on the whole-model GPT-2 e2e workload and 13825 on
-/// BGE-small (the pre-fused pipeline damped these to ≤ 2881; full-precision
-/// accumulation surfaces real transformer extreme logits, with observed row
-/// maxima ≈ 43000 ≈ 167 float units, so a fully-masked row can carry
-/// `row_max + C(8)·2^8 − z_bound ≈ 43k` into sat_diff). `log_scale + 8`
-/// (2^16 at scale 8) covers the measured whole-model maxima ≥ 4.7× over as
-/// well as that worst masked-row bound — vs 30 bits under the old -2^30
-/// clamp. This drops the SatDiff one-hot commitment from d=8 to d=4
-/// (scale 8) / d=5 (scale 12) committed polynomials per softmax node, each
-/// sized ×(num scores).
-///
-/// Completeness gate: `2^bits` must exceed the model's max honest sat_diff
-/// (`bits ≥ ⌈log₂(Σ+1)⌉`). Soundness does not depend on the bound: the
-/// complementary-slackness sumcheck (sat_diff.rs) forcing the unique
-/// `z = z_c + sat_diff` decomposition is bound-independent; only honest-prover
-/// completeness needs the range to cover the witness.
-pub const fn sat_diff_rc_bits(log_scale: usize) -> usize {
-    log_scale + 8
-}
-
 // ---------------------------------------------------------------------------
 // Unified IdentityRCProvider
 // ---------------------------------------------------------------------------
 
 /// Unified range-check provider for softmax sub-protocols.
 ///
-/// All three softmax range checks (remainder, exp-remainder, sat-diff) follow
-/// the same pattern: read a claim and cycle point from one virtual polynomial,
-/// and emit an `ra` polynomial for the one-hot encoding.  This struct
+/// Both softmax range checks (remainder, exp-remainder) follow the same
+/// pattern: read a claim and cycle point from one virtual polynomial, and
+/// emit an `ra` polynomial for the one-hot encoding.  This struct
 /// parameterises that pattern via function pointers to the relevant
 /// `VirtualPoly` constructors.
 pub struct SoftmaxRCProvider {
@@ -75,20 +47,6 @@ impl SoftmaxRCProvider {
             log_k: scale as usize,
             source_vp: VirtualPoly::SoftmaxExpRemainder,
             ra_vp: VirtualPoly::SoftmaxExpRemainderRa,
-        }
-    }
-
-    /// Range-check for saturation-diff values (`sat_diff[k,j] ∈ [0, 2^D)`).
-    pub fn sat_diff(node: ComputationNode, log_scale: i32) -> Self {
-        debug_assert!(
-            log_scale >= 0,
-            "softmax log-scale must be non-negative, got {log_scale}"
-        );
-        Self {
-            node,
-            log_k: sat_diff_rc_bits(log_scale as usize),
-            source_vp: VirtualPoly::SoftmaxSatDiff,
-            ra_vp: VirtualPoly::SoftmaxSatDiffRa,
         }
     }
 }
@@ -122,8 +80,8 @@ impl<F: JoltField> IdentityRCProvider<F> for SoftmaxRCProvider {
 
 /// Unified one-hot encoding for softmax `ra` polynomials.
 ///
-/// All five softmax one-hot checks (remainder, exp-remainder, sat-diff,
-/// exp-hi, exp-lo) follow the same pattern.  This struct captures the
+/// All four softmax one-hot checks (remainder, exp-remainder, exp-hi,
+/// exp-lo) follow the same pattern.  This struct captures the
 /// differences via function pointers and a stored `SumcheckId` for the
 /// cycle-point source.
 pub struct SoftmaxRaEncoding {
@@ -159,22 +117,6 @@ impl SoftmaxRaEncoding {
             r_cycle_vp: VirtualPoly::SoftmaxExpQ,
             r_cycle_sc_id: SumcheckId::NodeExecution(node_idx),
             ra_vp: VirtualPoly::SoftmaxExpRemainderRa,
-        }
-    }
-
-    /// One-hot for saturation-diff `ra`.
-    pub fn sat_diff(node_idx: usize, log_scale: i32) -> Self {
-        debug_assert!(
-            log_scale >= 0,
-            "softmax log-scale must be non-negative, got {log_scale}"
-        );
-        Self {
-            node_idx,
-            log_k: sat_diff_rc_bits(log_scale as usize),
-            committed_poly_fn: CommittedPoly::SoftmaxSatDiffRaD,
-            r_cycle_vp: VirtualPoly::SoftmaxSatDiff,
-            r_cycle_sc_id: SumcheckId::NodeExecution(node_idx),
-            ra_vp: VirtualPoly::SoftmaxSatDiffRa,
         }
     }
 

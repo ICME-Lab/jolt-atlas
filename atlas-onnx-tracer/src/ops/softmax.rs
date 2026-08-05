@@ -46,8 +46,9 @@ pub struct SoftmaxLastAxisTrace {
 ///
 /// For the proof pipeline: two Shout lookups (tiny tables) +
 /// multiplication relation (exp_hi · exp_lo = exp_q · S + r_exp) +
-/// range checks (z_lo ∈ [0,B), r_exp ∈ [0,S)) +
-/// digit reconstruction (z_c = z_hi · B + z_lo).
+/// range check (r_exp ∈ [0,S)) +
+/// digit reconstruction (z_c = z_hi · B + z_lo, tied to `z = max_k - x` by the
+/// saturating-clamp lookup — see `jolt_atlas_core::onnx_proof::ops::softmax_last_axis::significance_clamp`).
 #[derive(Debug, Clone)]
 pub struct DecomposedExpWitness {
     /// The sub-tables used
@@ -62,9 +63,6 @@ pub struct DecomposedExpWitness {
     pub exp_lo: Vec<i32>,
     /// r_exp[k,j] = exp_hi·exp_lo − exp_q·S  ∈ [0, S)
     pub r_exp: Vec<i32>,
-    /// sat_diff[k,j] = z[k,j] − z_c[k,j]  (≥ 0, saturation overflow),
-    /// where z_c[k,j] = min(z[k,j], z_bound − 1) is z clamped to the sub-table range.
-    pub sat_diff: Vec<i32>,
 }
 
 /// Softmax with decomposed exp sub-tables.
@@ -89,7 +87,13 @@ pub fn softmax_last_axis_decomposed(
     let s_sq = s * s;
     let total = num_slices * last_dim;
 
-    let decomp = generate_exp_lut_decomposed(scale);
+    let mut decomp = generate_exp_lut_decomposed(scale);
+    // Zero-pad lut_hi to the next power of two so z_hi can range over the full padded
+    // domain without an out-of-bounds lookup (mirrors the proof side's `pad_to_power_of_two`
+    // on `table_hi`).
+    decomp
+        .lut_hi
+        .resize(decomp.lut_hi.len().next_power_of_two(), 0);
     let z_bound = (decomp.lut_hi.len() * decomp.base) as i32;
 
     // Pre-allocate all witness vectors.
@@ -108,7 +112,6 @@ pub fn softmax_last_axis_decomposed(
     let mut w_exp_hi = vec![0i32; total];
     let mut w_exp_lo = vec![0i32; total];
     let mut w_r_exp = vec![0i32; total];
-    let mut w_sat_diff = vec![0i32; total];
 
     for k in 0..num_slices {
         let offset = k * last_dim;
@@ -132,7 +135,6 @@ pub fn softmax_last_axis_decomposed(
             // where z_bound = K_hi * B.  For values beyond the table,
             // exp decays to 0 anyway; clamping keeps Shout indices in range.
             let z_c = z[idx].min(z_bound - 1);
-            w_sat_diff[idx] = z[idx] - z_c;
 
             // Decomposed digit split (on clamped value)
             let zu = z_c as usize;
@@ -205,7 +207,6 @@ pub fn softmax_last_axis_decomposed(
             exp_hi: w_exp_hi,
             exp_lo: w_exp_lo,
             r_exp: w_r_exp,
-            sat_diff: w_sat_diff,
         },
     };
 
@@ -265,4 +266,15 @@ pub fn generate_exp_lut_decomposed(scale: i32) -> ExpLutDecomposed {
         base,
         log2_base: log2_b,
     }
+}
+
+/// Computes `z[k,j] = max_k[k] - x[k,j]` for every `(k,j)`, given the flat per-row max and
+/// the flat `[F*N]` input. Used by softmax's saturating-clamp lookup
+/// (`jolt_atlas_core::onnx_proof::ops::softmax_last_axis::significance_clamp`) to re-derive the
+/// pre-clamp witness without re-running the full decomposed trace.
+pub fn softmax_z(x: &[i32], max_k: &[i32], last_dim: usize) -> Vec<i32> {
+    x.iter()
+        .enumerate()
+        .map(|(idx, &xi)| max_k[idx / last_dim] - xi)
+        .collect()
 }

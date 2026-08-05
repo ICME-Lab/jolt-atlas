@@ -84,53 +84,6 @@ pub fn materialize_signed_activation_table(
     result.data().to_vec()
 }
 
-macro_rules! define_signed_activation_table {
-    ($table:ident, $activation:path) => {
-        #[doc = "Lookup table for a signed neural-teleport activation."]
-        #[derive(Debug, Clone, Copy)]
-        pub struct $table {
-            log_table_size: usize,
-            tau: i32,
-            /// Model scale (log2) the table outputs are quantized at.
-            scale: i32,
-        }
-
-        impl $table {
-            /// Create a new lookup table with the specified bit width, teleport
-            /// divisor, and model scale.
-            pub fn new(log_table_size: usize, tau: i32, scale: i32) -> Self {
-                Self {
-                    log_table_size,
-                    tau,
-                    scale,
-                }
-            }
-
-            /// Returns the size of the table (2^log_table_size).
-            pub fn table_size(&self) -> usize {
-                1 << self.log_table_size
-            }
-
-            /// Returns the log2 of the table size.
-            pub fn log_table_size(&self) -> usize {
-                self.log_table_size
-            }
-
-            /// Materialize the lookup table values.
-            pub fn materialize(&self) -> Vec<i32> {
-                crate::onnx_proof::neural_teleport::utils::materialize_signed_activation_table(
-                    self.log_table_size,
-                    self.tau,
-                    self.scale,
-                    $activation,
-                )
-            }
-        }
-    };
-}
-
-pub(crate) use define_signed_activation_table;
-
 fn compute_ra_evals_from_usize_indices<F, U>(
     r: &[U],
     indices_usize: &[usize],

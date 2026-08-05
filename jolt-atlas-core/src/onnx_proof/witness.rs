@@ -19,7 +19,7 @@ use crate::{
     onnx_proof::{
         clamp_lookups::{clamp_intermediate, clamp_lookup_bits, CLAMP_LOG_K},
         neural_teleport::{division::compute_division, n_bits_to_usize},
-        ops::{rsqrt::rsqrt_dividend, softmax_last_axis::rc::sat_diff_rc_bits},
+        ops::rsqrt::rsqrt_dividend,
         range_checking::range_check_operands::{
             DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
             RangeCheckingOperandsTrait, RiRangeCheckOperands, RsRangeCheckOperands,
@@ -32,14 +32,14 @@ use atlas_onnx_tracer::{
     model::{consts::FOUR_PI_APPROX, trace::Trace, Model},
     node::ComputationNode,
     ops::{
-        softmax::{generate_exp_lut_decomposed, softmax_last_axis_decomposed},
+        softmax::{generate_exp_lut_decomposed, softmax_last_axis_decomposed, softmax_z},
         Operator, SoftmaxLastAxis,
     },
-    tensor::Tensor,
+    tensor::{ops::nonlinearities, Tensor},
     utils::quantize::scale_to_multiplier,
 };
 use common::{
-    consts::{LOG_K, XLEN},
+    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_BOUND, LOG_K, XLEN},
     parallel::par_enabled,
     CommittedPoly,
 };
@@ -98,55 +98,21 @@ fn build_one_hot_rad_witness<F: JoltField>(
     ))
 }
 
-/// Builds a one-hot RaD witness for neural-teleport activation lookups (tanh/erf).
-///
-/// Both activations share the exact same witness construction pipeline:
-/// compute quotient via teleport-division, map quotient to lookup indices, then
-/// construct the `d`-th one-hot address chunk.
-fn build_teleport_activation_rad_witness<F: JoltField>(
+/// Builds a one-hot RaD witness for the clamped Erf/Sigmoid/Tanh variants' small
+/// dense activation-table execution stage: clamps the raw input, maps to lookup
+/// indices, then constructs the `d`-th one-hot address chunk.
+fn build_activation_small_rad_witness<F: JoltField>(
     input: &Tensor<i32>,
-    tau: i32,
-    log_table: usize,
     d: usize,
 ) -> MultilinearPolynomial<F> {
-    let (quotient, _remainder) = compute_division(input, tau);
-    let lookup_indices: Vec<usize> = quotient
+    let clamped = nonlinearities::clamp(input, ACTIVATION_BOUND);
+    let lookup_indices: Vec<usize> = clamped
         .par_iter()
         .with_min_len(par_enabled())
-        .map(|&x| n_bits_to_usize(x, log_table))
+        .map(|&x| n_bits_to_usize(x, ACTIVATION_TABLE_BOUND))
         .collect();
-    let one_hot_params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_table);
-    let h_indices =
-        subprotocols::shout::compute_instruction_h_indices(&lookup_indices, &one_hot_params);
-    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
-        h_indices[d]
-            .par_iter()
-            .with_min_len(par_enabled())
-            .map(|&h| h.map(|h| h as u16))
-            .collect(),
-        one_hot_params.k_chunk,
-    ))
-}
-
-// TODO: RM once clamp is implemented for tanh
-fn build_teleport_activation_rad_witness_tanh<F: JoltField>(
-    input: &Tensor<i32>,
-    tau: i32,
-    log_table: usize,
-    d: usize,
-) -> MultilinearPolynomial<F> {
-    let (quotient, _remainder) = compute_division(input, tau);
-    let clamped_tensor = atlas_onnx_tracer::ops::tanh::clamp_tensor(
-        &quotient,
-        -(1 << (log_table - 1)),
-        (1 << (log_table - 1)) - 1,
-    );
-    let lookup_indices: Vec<usize> = clamped_tensor
-        .par_iter()
-        .with_min_len(par_enabled())
-        .map(|&x| n_bits_to_usize(x, log_table))
-        .collect();
-    let one_hot_params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_table);
+    let one_hot_params =
+        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), ACTIVATION_TABLE_BOUND);
     let h_indices =
         subprotocols::shout::compute_instruction_h_indices(&lookup_indices, &one_hot_params);
     MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
@@ -309,6 +275,36 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
                 build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
             }
+            CommittedPoly::SymmetricClampRaD(node_idx, d) => {
+                let computation_node = &model.graph.nodes[node_idx];
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let padded_operands: Vec<_> = layer_data
+                    .operands
+                    .iter()
+                    .map(|tensor| tensor.padded_next_power_of_two())
+                    .collect();
+                let operand_refs: Vec<_> = padded_operands.iter().collect();
+                let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
+                build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
+            }
+            CommittedPoly::ActivationClampRaD(node_idx, d) => {
+                let computation_node = &model.graph.nodes[node_idx];
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let padded_operands: Vec<_> = layer_data
+                    .operands
+                    .iter()
+                    .map(|tensor| tensor.padded_next_power_of_two())
+                    .collect();
+                let operand_refs: Vec<_> = padded_operands.iter().collect();
+                let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
+                build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
+            }
+            CommittedPoly::ActivationSmallRaD(node_idx, d) => {
+                let computation_node = &model.graph.nodes[node_idx];
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let input = &layer_data.operands[0];
+                build_activation_small_rad_witness(input, *d)
+            }
             CommittedPoly::ClampRaD(node_idx, d) => {
                 // Saturating Add/Sub: the lookup index is the pre-clamp i64
                 // accumulation, recovered by re-executing the binop.
@@ -454,41 +450,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 ))
             }
 
-            CommittedPoly::TanhRaD(node_idx, d_idx) => {
-                let computation_node = &model.graph.nodes[node_idx];
-                let Operator::Tanh(inner) = &computation_node.operator else {
-                    panic!("Expected Tanh operator for TanhRa committed polynomial");
-                };
-                let layer_data = Trace::layer_data(trace, computation_node);
-                let input = &layer_data.operands[0];
-                build_teleport_activation_rad_witness_tanh(
-                    input,
-                    inner.tau,
-                    inner.log_table,
-                    *d_idx,
-                )
-            }
-
-            CommittedPoly::ErfRaD(node_idx, d_idx) => {
-                let computation_node = &model.graph.nodes[node_idx];
-                let Operator::Erf(inner) = &computation_node.operator else {
-                    panic!("Expected Erf operator for ErfRa committed polynomial");
-                };
-                let layer_data = Trace::layer_data(trace, computation_node);
-                let input = &layer_data.operands[0];
-                build_teleport_activation_rad_witness(input, inner.tau, inner.log_table, *d_idx)
-            }
-
-            CommittedPoly::SigmoidRaD(node_idx, d_idx) => {
-                let computation_node = &model.graph.nodes[node_idx];
-                let Operator::Sigmoid(inner) = &computation_node.operator else {
-                    panic!("Expected Sigmoid operator for SigmoidRa committed polynomial");
-                };
-                let layer_data = Trace::layer_data(trace, computation_node);
-                let input = &layer_data.operands[0];
-                build_teleport_activation_rad_witness(input, inner.tau, inner.log_table, *d_idx)
-            }
-
             CommittedPoly::CosRaD(node_idx, d_idx) | CommittedPoly::SinRaD(node_idx, d_idx) => {
                 const COS_LOG_TABLE_SIZE: usize =
                     (FOUR_PI_APPROX as usize).next_power_of_two().ilog2() as usize;
@@ -529,20 +490,14 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
             CommittedPoly::SoftmaxRemainderRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
-                let Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) = &node.operator else {
-                    panic!("Expected SoftmaxLastAxis at node {node_idx}");
-                };
-                let log_scale = *scale as usize;
+                let log_scale = softmax_op_scale(node) as usize;
                 let st = softmax_last_axis_full_trace(node, trace);
                 let lookup_indices: Vec<usize> = st.R.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_scale, *d)
             }
             CommittedPoly::SoftmaxExpRemainderRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
-                let Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) = &node.operator else {
-                    panic!("Expected SoftmaxLastAxis at node {node_idx}");
-                };
-                let log_scale = *scale as usize;
+                let log_scale = softmax_op_scale(node) as usize;
                 let st = softmax_last_axis_full_trace(node, trace);
                 let lookup_indices: Vec<usize> = st
                     .decomposed_exp
@@ -551,33 +506,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     .map(|&v| v as usize)
                     .collect();
                 build_onehot_witness(&lookup_indices, log_scale, *d)
-            }
-            CommittedPoly::SoftmaxSatDiffRaD(node_idx, d) => {
-                let node = &model.graph.nodes[node_idx];
-                let Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) = &node.operator else {
-                    panic!("Expected SoftmaxLastAxis at node {node_idx}");
-                };
-                let log_scale = *scale as usize;
-                let st = softmax_last_axis_full_trace(node, trace);
-                let lookup_indices: Vec<usize> = st
-                    .decomposed_exp
-                    .sat_diff
-                    .iter()
-                    .map(|&v| v as usize)
-                    .collect();
-                // Completeness gate: every honest sat_diff must fit the range-check
-                // width. `build_onehot_witness` addresses a 2^bits table, so an
-                // over-budget (or negative-as-usize) value would silently wrap to its
-                // low bits. Fire loudly in debug/CI instead — this is the invariant the
-                // narrowed width relies on (see rc::sat_diff_rc_bits).
-                debug_assert!(
-                    lookup_indices
-                        .iter()
-                        .all(|&v| v < (1usize << sat_diff_rc_bits(log_scale))),
-                    "softmax sat_diff exceeds range-check budget 2^{} at log_scale {log_scale}",
-                    sat_diff_rc_bits(log_scale),
-                );
-                build_onehot_witness(&lookup_indices, sat_diff_rc_bits(log_scale), *d)
             }
             CommittedPoly::SoftmaxZHiRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];
@@ -597,6 +525,22 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     st.decomposed_exp.z_lo.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_lo, *d)
             }
+            CommittedPoly::SoftmaxClampRaD(node_idx, d) => {
+                // Softmax's saturating-clamp lookup: the lookup index is the raw
+                // `z = max_k - x` value (no offset, `z >= 0` always).
+                let node = &model.graph.nodes[node_idx];
+                let &last_dim = node
+                    .output_dims
+                    .last()
+                    .expect("softmax node must have at least one output dimension");
+                let st = softmax_last_axis_full_trace(node, trace);
+                let z = softmax_z(&st.x, &st.max_k, last_dim);
+                let operand = Tensor::new(Some(&z), &[z.len()])
+                    .expect("softmax_z tensor construction")
+                    .padded_next_power_of_two();
+                let lookup_indices = compute_lookup_indices_from_operands(&[&operand], false);
+                build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
+            }
             CommittedPoly::RescaleRemainderRaD(node_idx, d) => {
                 // Fused rescaling remainder `R = acc mod 2^S ∈ [0, 2^S)`, padded
                 // to the node-output cycle domain . Shared by einsum, Mul,
@@ -612,20 +556,30 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
     }
 }
 
+/// Extracts the scale from a `SoftmaxLastAxis` node.
+fn softmax_op_scale(node: &ComputationNode) -> i32 {
+    match &node.operator {
+        Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) => *scale,
+        other => panic!(
+            "Expected SoftmaxLastAxis at node {}, got {other:?}",
+            node.idx
+        ),
+    }
+}
+
 /// Re-runs the decomposed softmax trace for a `SoftmaxLastAxis` node.
 ///
 /// Returns the full [`SoftmaxLastAxisTrace`] from which the individual lookup
-/// indices (R, r_exp, sat_diff, z_hi, z_lo) can be extracted.
+/// indices (R, r_exp, z_hi, z_lo) can be extracted.
 fn softmax_last_axis_full_trace(
     node: &ComputationNode,
     trace: &Trace,
 ) -> atlas_onnx_tracer::ops::softmax::SoftmaxLastAxisTrace {
-    let Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) = &node.operator else {
-        panic!("Expected SoftmaxLastAxis operator at node {}", node.idx);
-    };
+    let scale = softmax_op_scale(node);
     let layer_data = Trace::layer_data(trace, node);
     let input = &layer_data.operands[0];
-    softmax_last_axis_decomposed(input, scale_to_multiplier(*scale) as i32).1
+    let multiplier = scale_to_multiplier(scale) as i32;
+    softmax_last_axis_decomposed(input, multiplier).1
 }
 
 /// Build a one-hot RaD witness for an identity range-check or Shout ra

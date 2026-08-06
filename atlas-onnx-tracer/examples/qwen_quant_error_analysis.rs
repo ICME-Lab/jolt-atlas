@@ -5,19 +5,19 @@ mod qea;
 
 use atlas_onnx_tracer::{model::Model, utils::quantize};
 use qea::{
-    Ctx, init_logging, make_f64_inputs, make_gpt2_i32_inputs, make_run_args, run_tract_f32,
+    Ctx, init_logging, make_f64_inputs, make_qwen_i32_inputs, make_run_args, run_tract_f32,
     step1_quant_vs_tract, step2a_per_node_drift_cumulative, step2b_per_node_drift_isolated,
     step3_shadow_vs_tract, step4_weight_quant_effect, step5_greedy_generation,
 };
 use tokenizers::Tokenizer;
 use tracing::{debug, info};
 
-const ONNX_PATH: &str = "atlas-onnx-tracer/models/gpt2/network.onnx";
-const TOKENIZER_PATH: &str = "atlas-onnx-tracer/models/gpt2/tokenizer.json";
-const VOCAB_SIZE: usize = 50257;
+const ONNX_PATH: &str = "atlas-onnx-tracer/models/qwen/network.onnx";
+const TOKENIZER_PATH: &str = "atlas-onnx-tracer/models/qwen/tokenizer.json";
+const VOCAB_SIZE: usize = 151936;
 const SCALE: i32 = 12;
 
-/// Quantization error analysis for GPT-2.
+/// Quantization error analysis for Qwen.
 ///
 /// Compares four views of the same forward pass (see GLOSSARY in the output):
 ///
@@ -39,29 +39,29 @@ const SCALE: i32 = 12;
 /// # Setup
 ///
 /// ```sh
-/// pip install 'optimum[exporters]' 'optimum[onnxruntime]'
-/// python -m optimum.exporters.onnx --model gpt2 atlas-onnx-tracer/models/gpt2
+/// python3 -m venv .venv && source .venv/bin/activate
+/// python scripts/download_qwen.py
 /// ```
 ///
 /// # Usage
 ///
 /// Default (info-level output, tract logs silenced):
 /// ```sh
-/// cargo run -r -p atlas-onnx-tracer --example quant_error_analysis
+/// cargo run -r -p atlas-onnx-tracer --example qwen_quant_error_analysis
 /// ```
 ///
 /// Show debug output (shapes, token details):
 /// ```sh
-/// RUST_LOG=debug cargo run -r -p atlas-onnx-tracer --example quant_error_analysis
+/// RUST_LOG=debug cargo run -r -p atlas-onnx-tracer --example qwen_quant_error_analysis
 /// ```
 ///
 /// Show everything *including* tract internals:
 /// ```sh
-/// RUST_LOG=trace cargo run -r -p atlas-onnx-tracer --example quant_error_analysis
+/// RUST_LOG=trace cargo run -r -p atlas-onnx-tracer --example qwen_quant_error_analysis
 /// ```
 fn main() {
     init_logging();
-    let ctx = setup("The white man worked as a");
+    let ctx = setup("The quick brown fox jumps over the lazy dog");
 
     print_glossary(&ctx);
     step1_quant_vs_tract(&ctx);
@@ -78,7 +78,7 @@ fn main() {
 
 fn setup(text: &str) -> Ctx {
     let tokenizer = Tokenizer::from_file(TOKENIZER_PATH)
-        .expect("failed to load tokenizer.json – see doc-comment for setup");
+        .expect("failed to load tokenizer.json – run scripts/download_qwen.py first");
 
     info!("Input text : \"{text}\"");
     let encoding = tokenizer.encode(text, false).expect("tokenization failed");
@@ -98,7 +98,7 @@ fn setup(text: &str) -> Ctx {
 
     info!("Running QUANT (i32 fixed-point, scale=2^{scale}) …");
     let model = Model::load(ONNX_PATH, &run_args);
-    let quant_inputs = make_gpt2_i32_inputs(&token_ids, seq_len, scale);
+    let quant_inputs = make_qwen_i32_inputs(&token_ids, seq_len, scale);
     let i32_outputs = model.forward(&quant_inputs);
     debug!(shape = ?i32_outputs[0].dims(), "QUANT output shape");
 
@@ -133,7 +133,7 @@ fn setup(text: &str) -> Ctx {
 
 fn print_glossary(ctx: &Ctx) {
     qea::print_section("GLOSSARY");
-    info!("  This analysis compares four views of the same GPT-2 forward pass:");
+    info!("  This analysis compares four views of the same Qwen forward pass:");
     info!("");
     info!("    TRACT     ONNX model evaluated by Tract at f32 precision.");
     info!("              This is the ground-truth reference.");

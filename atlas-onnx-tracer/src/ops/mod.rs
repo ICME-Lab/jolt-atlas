@@ -310,21 +310,17 @@ pub fn sat_binop_intermediate(
     }
 }
 
-/// Shared evaluation for the periodic trig operators ([`Sin`], [`Cos`]).
-///
-/// Both reduce the input modulo a `4π` approximation before applying their
-/// nonlinearity at the operator's scale, so the only thing that differs
-/// between them is the `nonlinearity` function itself.
+/// Shared evaluation for the periodic trig operators ([`Sin`], [`Cos`]). Modulus is derived
+/// per-call from `scale`, to the most suitable approximation of a `2π` multiple.
 pub(crate) fn eval_trig(
     input: &Tensor<i32>,
     scale: i32,
     nonlinearity: fn(&Tensor<i32>, f64) -> Tensor<i32>,
 ) -> Tensor<i32> {
-    use crate::{
-        model::consts::FOUR_PI_APPROX, tensor::ops::nonlinearities::const_rem,
-        utils::quantize::scale_to_multiplier,
-    };
-    let remainder = const_rem(input, FOUR_PI_APPROX);
+    use crate::{tensor::ops::nonlinearities::const_rem, utils::quantize::scale_to_multiplier};
+    use common::consts::trig_period_modulus;
+    let multiple_2pi = trig_period_modulus(scale as u32) as i32;
+    let remainder = const_rem(input, multiple_2pi);
     nonlinearity(&remainder, scale_to_multiplier(scale))
 }
 

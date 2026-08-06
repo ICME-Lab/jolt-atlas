@@ -3,17 +3,13 @@ use crate::{
     tensor::{self, Tensor},
     utils::quantize::scale_to_multiplier,
 };
-use common::consts::{ACTIVATION_BOUND, MODEL_SCALE};
 
 impl Op for Tanh {
     #[tracing::instrument(name = "Tanh::f", skip_all)]
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
-        debug_assert_eq!(
-            self.scale, MODEL_SCALE as i32,
-            "Tanh only supports scale={MODEL_SCALE}"
-        );
-        let clamped = tensor::ops::nonlinearities::clamp(inputs[0], ACTIVATION_BOUND);
-        tensor::ops::nonlinearities::tanh(&clamped, scale_to_multiplier(MODEL_SCALE as i32))
+        let activation_bound = self.scale as usize + 3;
+        let clamped = tensor::ops::nonlinearities::clamp(inputs[0], activation_bound);
+        tensor::ops::nonlinearities::tanh(&clamped, scale_to_multiplier(self.scale))
     }
 
     fn requires_shape_equality(&self) -> bool {

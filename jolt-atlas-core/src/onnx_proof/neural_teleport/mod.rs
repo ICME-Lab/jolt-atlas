@@ -11,8 +11,10 @@ pub mod range_and_onehot;
 pub mod sin;
 pub mod utils;
 
-/// Fixed-point scale factor: maps [-1, 1] to [-256, 256]
-pub const SCALE: f64 = 256.0;
+use common::consts::MODEL_SCALE;
+
+/// Cos/Sin table output scale: `2^MODEL_SCALE`.
+pub const SCALE_FACTOR: f64 = (1u128 << MODEL_SCALE) as f64;
 
 /// Converts an n-bit index to a signed integer using two's complement.
 ///

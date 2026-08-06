@@ -19,13 +19,13 @@ use crate::{
 };
 use atlas_onnx_tracer::{
     model::{
-        consts::FOUR_PI_APPROX,
         trace::{LayerData, Trace},
         ComputationGraph,
     },
     node::ComputationNode,
     ops::Cos,
 };
+use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS};
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
@@ -70,13 +70,19 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+        assert_eq!(
+            self.scale, MODEL_SCALE as i32,
+            "Cos teleportation proving is only calibrated for MODEL_SCALE={MODEL_SCALE} \
+             (got {})",
+            self.scale
+        );
         let mut results = Vec::new();
 
         // Stage 1a: Neural teleportation remainder proof
         let div_params = TeleportDivisionParams::new_from_transcript(
             node.clone(),
             &mut prover.transcript,
-            FOUR_PI_APPROX,
+            TRIG_PERIOD_MODULUS as i32,
         );
         let mut div_sumcheck = TeleportDivisionProver::new(&prover.trace, div_params);
 
@@ -137,6 +143,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
+        assert_eq!(
+            self.scale, MODEL_SCALE as i32,
+            "Cos teleportation verifying is only calibrated for MODEL_SCALE={MODEL_SCALE} \
+             (got {})",
+            self.scale
+        );
         // Stage 1a: Neural teleportation remainder verification
         let div_proof = verifier
             .proofs
@@ -145,7 +157,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
 
         let div_verifier = TeleportDivisionVerifier::new_from_transcript(
             node.clone(),
-            FOUR_PI_APPROX,
+            TRIG_PERIOD_MODULUS as i32,
             &mut verifier.transcript,
         );
         Sumcheck::verify(
@@ -325,11 +337,12 @@ impl<F: JoltField> CosProver<F> {
     ) -> Self {
         let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
         let input = operands[0];
-        let (_quotient_tensor, remainder_tensor) = compute_division(input, FOUR_PI_APPROX);
+        let (_quotient_tensor, remainder_tensor) =
+            compute_division(input, TRIG_PERIOD_MODULUS as i32);
 
         assert!(remainder_tensor
             .iter()
-            .all(|&x| (0..FOUR_PI_APPROX).contains(&x)));
+            .all(|&x| (0..TRIG_PERIOD_MODULUS as i32).contains(&x)));
 
         let cos_table = MultilinearPolynomial::from(CosTable::materialize());
         let input_onehot: Vec<F> = compute_ra_evals_direct(
@@ -550,7 +563,7 @@ impl<F: JoltField, T: Transcript> NeuralTeleportRangeOneHot<F, T> for Cos {
     fn lookup_indices(&self, node: &ComputationNode, trace: &Trace) -> Vec<usize> {
         let LayerData { operands, .. } = Trace::layer_data(trace, node);
         let input = operands[0];
-        let (_, remainder) = compute_division(input, FOUR_PI_APPROX);
+        let (_, remainder) = compute_division(input, TRIG_PERIOD_MODULUS as i32);
         remainder
             .par_iter()
             .with_min_len(par_enabled())
@@ -572,7 +585,7 @@ mod tests {
     };
     use rand::{rngs::StdRng, SeedableRng};
 
-    use super::FOUR_PI_APPROX;
+    use common::consts::TRIG_PERIOD_MODULUS;
 
     fn cos_model(input_shape: &[usize]) -> Model {
         let mut b = ModelBuilder::new();
@@ -593,20 +606,8 @@ mod tests {
 
     #[test]
     fn test_cos_periodic_boundary_inputs() {
-        let input = Tensor::new(
-            Some(&[
-                -FOUR_PI_APPROX - 1,
-                -FOUR_PI_APPROX,
-                -1,
-                0,
-                1,
-                FOUR_PI_APPROX - 1,
-                FOUR_PI_APPROX,
-                FOUR_PI_APPROX + 1,
-            ]),
-            &[8],
-        )
-        .unwrap();
+        let m = TRIG_PERIOD_MODULUS as i32;
+        let input = Tensor::new(Some(&[-m - 1, -m, -1, 0, 1, m - 1, m, m + 1]), &[8]).unwrap();
         let model = cos_model(&[8]);
         unit_test_op(model, &[input]);
     }

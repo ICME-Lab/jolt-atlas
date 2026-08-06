@@ -13,9 +13,6 @@ use crate::{
 
 use super::{HandlerContext, OpHandlerFn};
 
-/// Model scale (log2) at which the trig (cos/sin) teleport constants are tuned.
-pub const NEURAL_TELEPORT_REFERENCE_SCALE: i32 = 8;
-
 /// Returns a map of activation operator names to their handler functions.
 pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
     HashMap::from([
@@ -72,7 +69,6 @@ fn handle_tanh(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 /// Cos: Cosine activation.
 fn handle_cos(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let scale = hctx.run_args.scale;
-    assert_trig_reference_scale(scale, "Cos");
 
     HandlerBuilder::new(hctx)
         .with_broadcast()
@@ -83,25 +79,11 @@ fn handle_cos(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 /// Sin: Sine activation.
 fn handle_sin(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     let scale = hctx.run_args.scale;
-    assert_trig_reference_scale(scale, "Sin");
 
     HandlerBuilder::new(hctx)
         .with_broadcast()
         .simple_op(Operator::Sin(Sin { scale }))
         .build()
-}
-
-/// The trig (cos/sin) periodic teleportation still hardcodes its `2π·2^s` period
-/// modulus (`FOUR_PI_APPROX`) and lookup-table quantization for the reference
-/// scale. Unlike the signed activations (tanh/erf/sigmoid), it is not yet
-/// scale-aware, so reject other scales loudly rather than emit a wrong proof.
-// TODO: make cos/sin scale-aware (brute-force the per-scale `k·2π·2^s` modulus).
-fn assert_trig_reference_scale(scale: i32, op: &str) {
-    assert_eq!(
-        scale, NEURAL_TELEPORT_REFERENCE_SCALE,
-        "{op} teleportation is only calibrated for scale {NEURAL_TELEPORT_REFERENCE_SCALE} \
-         (got {scale}); cos/sin are not yet scale-aware."
-    );
 }
 
 /// Erf: Error function activation.

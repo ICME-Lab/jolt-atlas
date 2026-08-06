@@ -2,7 +2,6 @@
 
 use crate::{node::ComputationNode, ops::Operator, tensor::Tensor, utils::quantize};
 use common::consts::LOG_K_CHUNK;
-use consts::DEFAULT_SCALE;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -400,7 +399,7 @@ impl Default for RunArgs {
         variables.insert("batch_size".to_string(), 1);
         RunArgs {
             variables,
-            scale: DEFAULT_SCALE,
+            scale: common::consts::MODEL_SCALE as i32,
             pad_to_power_of_2: true,
         }
     }
@@ -425,7 +424,7 @@ impl RunArgs {
         let variables = variables.into_iter().map(|(k, v)| (k.into(), v)).collect();
         RunArgs {
             variables,
-            scale: DEFAULT_SCALE,
+            scale: common::consts::MODEL_SCALE as i32,
             pad_to_power_of_2: true,
         }
     }
@@ -487,17 +486,6 @@ impl RunArgs {
         self.pad_to_power_of_2 = enable;
         self
     }
-}
-
-/// Const values used across the model and ops.
-pub mod consts {
-    /// Default quantization scale (denominator in fixed-point representation).
-    pub const DEFAULT_SCALE: i32 = common::consts::MODEL_SCALE as i32;
-
-    /// Const used in the zkVM to wrap around a multiple of 2π,
-    /// using the periodicity of the cosine function while keeping the lookup table size reasonable.
-    /// For a scale of 8, the best multiple was found to be 4: value = round(4 * π * 256) = 3217
-    pub const FOUR_PI_APPROX: i32 = 3217;
 }
 
 #[cfg(test)]

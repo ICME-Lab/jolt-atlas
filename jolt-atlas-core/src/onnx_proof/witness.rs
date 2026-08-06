@@ -29,7 +29,7 @@ use crate::{
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
 };
 use atlas_onnx_tracer::{
-    model::{consts::FOUR_PI_APPROX, trace::Trace, Model},
+    model::{trace::Trace, Model},
     node::ComputationNode,
     ops::{
         softmax::{generate_exp_lut_decomposed, softmax_last_axis_decomposed, softmax_z},
@@ -39,7 +39,7 @@ use atlas_onnx_tracer::{
     utils::quantize::scale_to_multiplier,
 };
 use common::{
-    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, LOG_K, XLEN},
+    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, LOG_K, TRIG_PERIOD_MODULUS, XLEN},
     parallel::par_enabled,
     CommittedPoly,
 };
@@ -329,7 +329,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     Operator::Cos(_) | Operator::Sin(_)
                 ));
                 let tau = match &computation_node.operator {
-                    Operator::Cos(_) | Operator::Sin(_) => FOUR_PI_APPROX,
+                    Operator::Cos(_) | Operator::Sin(_) => TRIG_PERIOD_MODULUS as i32,
                     _ => unreachable!(
                         "teleport quotient witness requested for non-teleport operator"
                     ),
@@ -452,7 +452,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
 
             CommittedPoly::CosRaD(node_idx, d_idx) | CommittedPoly::SinRaD(node_idx, d_idx) => {
                 const COS_LOG_TABLE_SIZE: usize =
-                    (FOUR_PI_APPROX as usize).next_power_of_two().ilog2() as usize;
+                    (TRIG_PERIOD_MODULUS as usize).next_power_of_two().ilog2() as usize;
 
                 let computation_node = &model.graph.nodes[node_idx];
                 assert!(
@@ -465,7 +465,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let layer_data = Trace::layer_data(trace, computation_node);
                 let input = &layer_data.operands[0];
 
-                let (_quotient, remainder) = compute_division(input, FOUR_PI_APPROX);
+                let (_quotient, remainder) = compute_division(input, TRIG_PERIOD_MODULUS as i32);
                 let lookup_indices: Vec<usize> = remainder
                     .par_iter()
                     .with_min_len(par_enabled())

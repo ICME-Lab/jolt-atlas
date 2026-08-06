@@ -1,10 +1,9 @@
 use atlas_onnx_tracer::{
-    model::consts::FOUR_PI_APPROX,
     node::ComputationNode,
     ops::{MeanOfSquares, Operator},
     tensor::Tensor,
 };
-use common::{CommittedPoly, VirtualPoly};
+use common::{consts::TRIG_PERIOD_MODULUS, CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
     poly::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
@@ -319,7 +318,7 @@ pub struct TeleportRangeCheckOperands {
 impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
     fn new(node: &ComputationNode) -> Self {
         let tau = match &node.operator {
-            Operator::Cos(_) | Operator::Sin(_) => FOUR_PI_APPROX,
+            Operator::Cos(_) | Operator::Sin(_) => TRIG_PERIOD_MODULUS as i32,
             _ => {
                 panic!("Expected Cos or Sin operator for neural teleportation division")
             }

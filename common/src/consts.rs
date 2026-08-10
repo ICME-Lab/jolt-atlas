@@ -10,7 +10,7 @@ pub const LOG_K: usize = XLEN * 2;
 /// `atlas-onnx-tracer`'s `DEFAULT_SCALE`). Several lookup-table shapes in this codebase
 /// (activation clamping, softmax's saturating clamp) are const-generic on a bound derived from
 /// this value rather than the model's runtime scale, so changing it requires recompiling.
-pub const MODEL_SCALE: usize = 8;
+pub const MODEL_SCALE: usize = 12;
 
 /// Clamps Erf/Sigmoid/Tanh input to `[-8, 8)` at model scale [`MODEL_SCALE`], before the small
 /// activation-table lookup.

@@ -491,8 +491,12 @@ pub fn step4_weight_quant_effect(ctx: &Ctx, sr: &ShadowResult) {
     let true_shadow =
         ctx.model
             .trace_with_true_f64_shadow(&ctx.shadow_inputs, &original_constants, ctx.scale);
-    let true_logits =
-        extract_shadow_logits(&true_shadow, "True shadow", ctx.last_pos_start, ctx.vocab_size);
+    let true_logits = extract_shadow_logits(
+        &true_shadow,
+        "True shadow",
+        ctx.last_pos_start,
+        ctx.vocab_size,
+    );
 
     info!("{THIN}");
     info!("  [4a] TRUE-F64 vs TRACT  (expected: near-zero error)");

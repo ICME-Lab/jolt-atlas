@@ -451,8 +451,8 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
 
             CommittedPoly::CosRaD(node_idx, d_idx) | CommittedPoly::SinRaD(node_idx, d_idx) => {
-                const COS_LOG_TABLE_SIZE: usize =
-                    (TRIG_PERIOD_MODULUS as usize).next_power_of_two().ilog2() as usize;
+                use crate::onnx_proof::neural_teleport::cos::COS_TABLE_VARS;
+                use common::consts::TRIG_DOWNSCALE_BITS;
 
                 let computation_node = &model.graph.nodes[node_idx];
                 assert!(
@@ -469,12 +469,10 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let lookup_indices: Vec<usize> = remainder
                     .par_iter()
                     .with_min_len(par_enabled())
-                    .map(|&x| x as usize)
+                    .map(|&x| (x >> TRIG_DOWNSCALE_BITS) as usize)
                     .collect();
-                let one_hot_params = OneHotParams::from_config_and_log_K(
-                    &OneHotConfig::default(),
-                    COS_LOG_TABLE_SIZE,
-                );
+                let one_hot_params =
+                    OneHotParams::from_config_and_log_K(&OneHotConfig::default(), COS_TABLE_VARS);
                 let h_indices = subprotocols::shout::compute_instruction_h_indices(
                     &lookup_indices,
                     &one_hot_params,
@@ -487,6 +485,21 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                         .collect(),
                     one_hot_params.k_chunk,
                 ))
+            }
+            CommittedPoly::TrigDownscaleRaD(node_idx, d_idx) => {
+                let computation_node = &model.graph.nodes[node_idx];
+                assert!(
+                    matches!(
+                        computation_node.operator,
+                        Operator::Cos(_) | Operator::Sin(_)
+                    ),
+                    "Expected Cos or Sin operator for TrigDownscaleRaD committed polynomial"
+                );
+                let layer_data = Trace::layer_data(trace, computation_node);
+                let input = &layer_data.operands[0];
+                let (_quotient, remainder) = compute_division(input, TRIG_PERIOD_MODULUS as i32);
+                let lookup_indices = compute_lookup_indices_from_operands(&[&remainder], false);
+                build_one_hot_rad_witness(&lookup_indices, *d_idx, XLEN)
             }
             CommittedPoly::SoftmaxRemainderRaD(node_idx, d) => {
                 let node = &model.graph.nodes[node_idx];

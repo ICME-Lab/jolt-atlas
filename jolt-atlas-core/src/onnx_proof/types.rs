@@ -67,6 +67,10 @@ pub enum ProofType {
     /// proving `acc(r) = rescaled·2^S + R` (the clamp lookup is a separate
     /// `Execution` proof; the einsum analogue is `EinsumMatmul`).
     RescaleArith = 12,
+    /// Read-address one-hot checks for the Cos/Sin trig-table downscale
+    /// (right-shift) lookup (the Cos/Sin table lookup itself stays under
+    /// `Execution`, batched with the downscale read-raf).
+    TrigDownscaleRaChecks = 13,
 }
 
 impl TryFrom<u8> for ProofType {
@@ -87,6 +91,7 @@ impl TryFrom<u8> for ProofType {
             10 => Ok(Self::EinsumMatmul),
             11 => Ok(Self::RescaleRemainderRaChecks),
             12 => Ok(Self::RescaleArith),
+            13 => Ok(Self::TrigDownscaleRaChecks),
             _ => Err(SerializationError::InvalidData),
         }
     }

@@ -15,7 +15,7 @@ use tracing::{debug, info};
 const ONNX_PATH: &str = "atlas-onnx-tracer/models/qwen/network.onnx";
 const TOKENIZER_PATH: &str = "atlas-onnx-tracer/models/qwen/tokenizer.json";
 const VOCAB_SIZE: usize = 151936;
-const SCALE: i32 = 12;
+const SCALE: i32 = 14;
 
 /// Quantization error analysis for Qwen.
 ///

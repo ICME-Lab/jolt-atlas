@@ -52,3 +52,4 @@ serial_test.workspace = true
 [dev-dependencies]
 # Enable test-feature for joltworks during tests only
 joltworks = { workspace = true, features = ["test-feature"] }
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }

@@ -6,14 +6,18 @@
 /// # Terminal output with timing
 /// cargo run --release --package jolt-atlas-core --example qwen -- --trace-terminal
 ///
-/// # Override sequence length (default: 16)
-/// cargo run --release --package jolt-atlas-core --example qwen -- --seq-len 32
+/// # Override the input prompt
+/// cargo run --release --package jolt-atlas-core --example qwen -- --input "Hello, world!"
 ///
-/// # Reuse cached shared preprocessing (builds and saves it on first use)
+/// # Reuse cached shared preprocessing (only valid for inputs that tokenize to the same
+/// # sequence length as the cached run)
 /// cargo run --release --package jolt-atlas-core --example qwen -- --use-cache
 /// ```
 ///
-/// Requires the Qwen ONNX model to be present first.
+/// Requires the Qwen ONNX model (`python scripts/download_qwen.py`) and
+/// `common::consts::MODEL_SCALE == 14` (Qwen's export scale) — several proving-side lookup
+/// tables are const-generic on `MODEL_SCALE` rather than runtime scale, so this can't be passed
+/// as a flag; edit `common/src/consts/general.rs` and recompile if needed.
 use atlas_onnx_tracer::{
     model::{Model, RunArgs},
     tensor::Tensor,
@@ -22,25 +26,26 @@ use bincode::config::standard;
 use common::utils::logging::setup_tracing;
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
-    Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
+    Blake2bTranscript, DoryScheme, Fr, ONNXProof,
 };
-use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{env, fs, path::Path};
+use tokenizers::Tokenizer;
 
 const MODEL_PATH: &str = "atlas-onnx-tracer/models/qwen/network.onnx";
+const TOKENIZER_PATH: &str = "atlas-onnx-tracer/models/qwen/tokenizer.json";
 const SHARED_PP_CACHE_PATH: &str = "atlas-onnx-tracer/models/qwen/shared_preprocessing.bin";
+/// Same default as `qwen_quant_error_analysis`'s `setup(...)` call, so the two examples are
+/// directly comparable out of the box.
+const DEFAULT_PROMPT: &str = "The quick brown fox jumps over the lazy dog";
 
-fn parse_seq_len_arg(args: &[String]) -> usize {
+fn parse_input_arg(args: &[String]) -> String {
     let mut args = args.iter();
     while let Some(arg) = args.next() {
-        if arg == "--seq-len" {
-            let value = args.next().expect("--seq-len requires a value");
-            return value
-                .parse::<usize>()
-                .expect("--seq-len must be a positive integer");
+        if arg == "--input" {
+            return args.next().expect("--input requires a value").clone();
         }
     }
-    16
+    DEFAULT_PROMPT.to_string()
 }
 
 fn load_or_build_shared_preprocessing(
@@ -72,43 +77,66 @@ fn load_or_build_shared_preprocessing(
 }
 
 fn main() {
+    assert_eq!(
+        common::consts::MODEL_SCALE,
+        14,
+        "this example requires common::consts::MODEL_SCALE == 14 (Qwen's export scale); \
+         currently compiled with MODEL_SCALE = {}. Edit common/src/consts/general.rs and \
+         recompile.",
+        common::consts::MODEL_SCALE
+    );
+
     let (_guard, _tracing_enabled) = setup_tracing("Qwen ONNX Proof");
     let args: Vec<String> = env::args().collect();
     let use_cache = args.iter().any(|arg| arg == "--use-cache");
-    let seq_len = parse_seq_len_arg(&args);
+    let input_text = parse_input_arg(&args);
+
+    let tokenizer = Tokenizer::from_file(TOKENIZER_PATH)
+        .expect("failed to load tokenizer.json – run scripts/download_qwen.py first");
+    let encoding = tokenizer
+        .encode(input_text.as_str(), false)
+        .expect("tokenization failed");
+    let token_ids = encoding.get_ids().to_vec();
+    let seq_len = token_ids.len();
+    tracing::info!(input = %input_text, seq_len, "Tokenized input");
 
     let run_args = RunArgs::new([
         ("batch_size", 1),
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
     ]);
+    let scale = run_args.scale;
 
-    let mut rng = StdRng::seed_from_u64(44);
-    let vocab_size: i32 = 151936;
-
-    let input_ids_data: Vec<i32> = (0..seq_len).map(|_| rng.gen_range(0..vocab_size)).collect();
+    let input_ids_data: Vec<i32> = token_ids.iter().map(|&id| id as i32).collect();
     let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
 
-    // Qwen export input 1 is `attention_mask`; provide quantized 1.0s.
-    let attention_mask_data: Vec<i32> = vec![1 << run_args.scale; seq_len];
-    let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
-    // Input 2 is `position_ids`.
-    let position_ids_data: Vec<i32> = (0..seq_len as i32).collect();
+    // Qwen export input 1 is `position_ids`, fixed-point (i << scale) so RoPE's
+    // Einsum(inv_freq, pos)/2^scale = inv_freq * i. Matches `qea::make_qwen_i32_inputs`,
+    // validated against Tract in `qwen_quant_error_analysis`.
+    let max_pos = (i32::MAX >> scale) as usize;
+    assert!(
+        seq_len.saturating_sub(1) <= max_pos,
+        "seq_len={seq_len} too large for scale={scale} (max position index {max_pos})"
+    );
+    let position_ids_data: Vec<i32> = (0..seq_len as i32).map(|i| i << scale).collect();
     let position_ids = Tensor::new(Some(&position_ids_data), &[1, seq_len]).unwrap();
+    // Input 2 is `attention_mask`; provide quantized 1.0s (attend everywhere).
+    let attention_mask_data: Vec<i32> = vec![1 << scale; seq_len];
+    let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
 
     tracing::info!("Loaded input data");
     let pp = load_or_build_shared_preprocessing(&run_args, use_cache);
-    let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
+    let prover_preprocessing = AtlasProverPreprocessing::<Fr, DoryScheme>::new(pp);
 
     let timing = std::time::Instant::now();
-    let (proof, io, _debug_info) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
+    let (proof, io, _debug_info) = ONNXProof::<Fr, Blake2bTranscript, DoryScheme>::prove(
         &prover_preprocessing,
-        &[input_ids, attention_mask, position_ids],
+        &[input_ids, position_ids, attention_mask],
     );
     println!("Proof generation took {:.2?}", timing.elapsed());
 
     let verifier_preprocessing =
-        AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_preprocessing);
+        AtlasVerifierPreprocessing::<Fr, DoryScheme>::from(&prover_preprocessing);
 
     proof.verify(&verifier_preprocessing, &io, None).unwrap();
     println!("Proof verified successfully!");

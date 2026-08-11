@@ -312,11 +312,7 @@ pub fn sat_binop_intermediate(
 
 /// Modulus is derived per-call from `scale`, to the most suitable approximation of a `2π`
 /// multiple.
-// TEMP(trig-table-rescale): experimenting with shrinking the eventual proving-side lookup table
-// by RESCALE_BITS, at the cost of some extra rounding error — see the quant-error-analysis
-// examples for accuracy impact before wiring this into proving.
-const RESCALE_BITS: i32 = 2;
-
+///
 /// Shared evaluation for the periodic trig operators ([`Sin`], [`Cos`]).
 pub(crate) fn eval_trig(
     input: &Tensor<i32>,
@@ -327,14 +323,15 @@ pub(crate) fn eval_trig(
         tensor::ops::nonlinearities::{const_div, const_rem},
         utils::quantize::scale_to_multiplier,
     };
-    use common::consts::trig_period_modulus;
+    use common::consts::{trig_downscale_bits, trig_period_modulus};
 
     let multiple_2pi = trig_period_modulus(scale as u32) as i32;
     let remainder = const_rem(input, multiple_2pi);
 
-    let rescale_factor = 1i32 << RESCALE_BITS;
+    let rescale_bits = trig_downscale_bits(scale as u32) as i32;
+    let rescale_factor = 1i32 << rescale_bits;
     let scaled_down = const_div(&remainder, rescale_factor as f64);
-    let reduced = nonlinearity(&scaled_down, scale_to_multiplier(scale - RESCALE_BITS));
+    let reduced = nonlinearity(&scaled_down, scale_to_multiplier(scale - rescale_bits));
     reduced.map(|v| v * rescale_factor)
 }
 

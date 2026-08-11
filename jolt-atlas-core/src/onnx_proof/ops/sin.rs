@@ -7,9 +7,11 @@ use crate::onnx_proof::{
         range_and_onehot::{
             prove_range_and_onehot, verify_range_and_onehot, NeuralTeleportRangeOneHot,
         },
-        sin::{SinTable, SIN_LOG_TABLE_SIZE},
+        sin::{SinTable, SIN_TABLE_VARS},
+        trig_downscale::{cache_downscaled_prove, cache_downscaled_verify, TrigDownscaleOperands},
         utils::compute_ra_evals_direct,
     },
+    op_lookups::{OpLookupEncoding, OpLookupProvider},
     ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
     range_checking::range_check_operands::{RangeCheckOperands, TeleportRangeCheckOperands},
     ProofId, ProofType, Prover, Verifier,
@@ -22,8 +24,9 @@ use atlas_onnx_tracer::{
     },
     node::ComputationNode,
     ops::Sin,
+    tensor::Tensor,
 };
-use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS};
+use common::consts::{MODEL_SCALE, TRIG_DOWNSCALE_BITS, TRIG_PERIOD_MODULUS, XLEN};
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
@@ -33,6 +36,7 @@ use joltworks::subprotocols::blindfold::{
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::{IntoOpening, JoltField},
+    lookup_tables::right_shift::RightShiftTable,
     poly::{
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::{
@@ -45,8 +49,8 @@ use joltworks::{
         unipoly::UniPoly,
     },
     subprotocols::{
-        shout::RaOneHotEncoding,
-        sumcheck::{Sumcheck, SumcheckInstanceProof},
+        shout::{self, RaOneHotEncoding},
+        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -91,25 +95,65 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
         );
         results.push((ProofId(node.idx, ProofType::NeuralTeleport), div_proof));
 
-        // Stage 1b: Execution proof for the sin layer
+        // Stage 1b: downscale, then batch the downscale and Sin table read-rafs into
+        // one Execution proof.
+        let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+        let input = operands[0];
+        let (_quotient, remainder) = compute_division(input, TRIG_PERIOD_MODULUS as i32);
+        let downscaled = cache_downscaled_prove(node, prover, &remainder);
+
+        let dsc_provider: OpLookupProvider<TrigDownscaleOperands> =
+            OpLookupProvider::new(node.clone());
+        let (dsc_exec, dsc_lookup_indices) = dsc_provider
+            .read_raf_prove::<F, T, RightShiftTable<XLEN>, XLEN>(
+                &prover.trace,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            );
+
         let params = SinParams::new(
             node.clone(),
             &prover.preprocessing.model.graph,
             &prover.accumulator,
             &mut prover.transcript,
         );
-        let mut exec_sumcheck = SinProver::initialize(
+        let sin_exec = SinProver::initialize(
             &prover.trace,
+            &downscaled,
             params,
             &mut prover.accumulator,
             &mut prover.transcript,
         );
-        let (exec_proof, _) = Sumcheck::prove(
-            &mut exec_sumcheck,
+
+        let mut exec_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> =
+            vec![Box::new(dsc_exec), Box::new(sin_exec)];
+        let (exec_proof, _) = BatchedSumcheck::prove(
+            exec_instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
             &mut prover.transcript,
         );
         results.push((ProofId(node.idx, ProofType::Execution), exec_proof));
+
+        // Stage 1c: the downscale one-hot's own correctness triple (the Sin one-hot's
+        // triple is proven in `prove_range_and_onehot`, via `prove_with_reduction`).
+        let dsc_encoding = dsc_provider.encoding();
+        let [dsc_ra, dsc_hw, dsc_bool] = shout::ra_onehot_provers(
+            &dsc_encoding,
+            &dsc_lookup_indices,
+            &prover.accumulator,
+            &mut prover.transcript,
+        );
+        let mut dsc_ra_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> =
+            vec![dsc_ra, dsc_hw, dsc_bool];
+        let (dsc_ra_proof, _) = BatchedSumcheck::prove(
+            dsc_ra_instances.iter_mut().map(|v| &mut **v as _).collect(),
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+        results.push((
+            ProofId(node.idx, ProofType::TrigDownscaleRaChecks),
+            dsc_ra_proof,
+        ));
 
         results
     }
@@ -165,11 +209,15 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
             &mut verifier.transcript,
         )?;
 
-        // Stage 1b: Execution verification for the sin layer
-        let sin_proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::Execution))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        // Stage 1b: downscale + Sin table lookup, batched into one Execution proof
+        cache_downscaled_verify(node, verifier);
+
+        let dsc_provider: OpLookupProvider<TrigDownscaleOperands> =
+            OpLookupProvider::new(node.clone());
+        let dsc_verifier = dsc_provider.read_raf_verify::<F, T, RightShiftTable<XLEN>, XLEN>(
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        );
 
         let exec_sumcheck = SinVerifier::new(
             node.clone(),
@@ -177,9 +225,32 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );
-        Sumcheck::verify(
+
+        let sin_proof = verifier
+            .proofs
+            .get(&ProofId(node.idx, ProofType::Execution))
+            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        BatchedSumcheck::verify(
             sin_proof,
-            &exec_sumcheck,
+            vec![&dsc_verifier, &exec_sumcheck],
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        )?;
+
+        // Stage 1c: the downscale one-hot's own correctness triple.
+        let dsc_ra_proof = verifier
+            .proofs
+            .get(&ProofId(node.idx, ProofType::TrigDownscaleRaChecks))
+            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        let dsc_encoding = dsc_provider.encoding();
+        let [dsc_ra, dsc_hw, dsc_bool] = shout::ra_onehot_verifiers(
+            &dsc_encoding,
+            &verifier.accumulator,
+            &mut verifier.transcript,
+        );
+        BatchedSumcheck::verify(
+            dsc_ra_proof,
+            vec![&*dsc_ra, &*dsc_hw, &*dsc_bool],
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
@@ -215,9 +286,13 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
         let sin_encoding = SinRaEncoding { node_idx: node.idx };
         let rc_operands = RangeCheckOperands::<TeleportRangeCheckOperands>::new(node);
         let rc_encoding = rc_operands.get_encoding(node);
+        let dsc_encoding: OpLookupEncoding<TrigDownscaleOperands> =
+            OpLookupProvider::<TrigDownscaleOperands>::new(node.clone()).encoding();
         let sin_d = sin_encoding.one_hot_params().instruction_d;
         let rc_d = rc_encoding.one_hot_params().instruction_d;
+        let dsc_d = dsc_encoding.one_hot_params().instruction_d;
         let mut polys = vec![CommittedPoly::TeleportNodeQuotient(node.idx)];
+        polys.extend((0..dsc_d).map(|i| CommittedPoly::TrigDownscaleRaD(node.idx, i)));
         polys.extend((0..sin_d).map(|i| CommittedPoly::SinRaD(node.idx, i)));
         polys.extend((0..rc_d).map(|i| CommittedPoly::TeleportRangeCheckRaD(node.idx, i)));
         polys
@@ -228,9 +303,6 @@ const DEGREE_BOUND: usize = 2;
 
 #[derive(Clone)]
 /// Parameters for the sine trigonometric function.
-///
-/// Sin uses a lookup table preceded by a teleportation step that
-/// reduces the input domain.
 pub struct SinParams<F: JoltField> {
     gamma: F,
     r_node_output: OpeningPoint<BIG_ENDIAN, F>,
@@ -247,7 +319,7 @@ impl<F: JoltField> SinParams<F> {
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let gamma = transcript.challenge_scalar();
-        let r_node_output = accessor.get_advice(VirtualPoly::TeleportRemainder).0;
+        let r_node_output = accessor.get_advice(VirtualPoly::TrigDownscaled).0;
 
         Self {
             gamma,
@@ -265,9 +337,9 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SinParams<F> {
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
         let rv_claim = accessor.get_nodeio(Target::Current).1;
-        let remainder_claim = accessor.get_advice(VirtualPoly::TeleportRemainder).1;
+        let downscaled_claim = accessor.get_advice(VirtualPoly::TrigDownscaled).1;
 
-        rv_claim + self.gamma * remainder_claim
+        rv_claim + self.gamma * downscaled_claim
     }
 
     fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
@@ -275,7 +347,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SinParams<F> {
     }
 
     fn num_rounds(&self) -> usize {
-        SIN_LOG_TABLE_SIZE
+        SIN_TABLE_VARS
     }
 
     #[cfg(feature = "zk")]
@@ -307,15 +379,12 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SinParams<F> {
         let opening_point = self.normalize_opening_point(&sumcheck_challenges.into_opening());
         let sin_table = MultilinearPolynomial::from(SinTable::materialize());
         let table_claim = sin_table.evaluate(&opening_point.r);
-        let int_eval = IdentityPolynomial::new(SIN_LOG_TABLE_SIZE).evaluate(&opening_point.r);
+        let int_eval = IdentityPolynomial::new(SIN_TABLE_VARS).evaluate(&opening_point.r);
         vec![table_claim + self.gamma * int_eval]
     }
 }
 
-/// Prover state for sin execution sumcheck instance.
-///
-/// This implements a Read-Raf sumcheck for Sin lookup, asserting that each output[i] = SinTable[input[i]],
-/// and that input[i] = ∑ Ra[k] * Int[k].
+/// Read-Raf sumcheck prover for the Sin table lookup: `output[i] = SinTable[downscaled[i]]`.
 pub struct SinProver<F: JoltField> {
     params: SinParams<F>,
     sin_table: MultilinearPolynomial<F>,
@@ -327,44 +396,36 @@ impl<F: JoltField> SinProver<F> {
     /// Initialize the prover state.
     pub fn initialize(
         trace: &Trace,
+        downscaled: &Tensor<i32>,
         params: SinParams<F>,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
-        let input = operands[0];
-        let (_quotient_tensor, remainder_tensor) =
-            compute_division(input, TRIG_PERIOD_MODULUS as i32);
+        let LayerData { output, .. } = Trace::layer_data(trace, &params.computation_node);
 
-        assert!(remainder_tensor
+        assert!(downscaled
             .iter()
-            .all(|&x| (0..TRIG_PERIOD_MODULUS as i32).contains(&x)));
+            .all(|&x| (0..SinTable::table_size() as i32).contains(&x)));
 
         let sin_table = MultilinearPolynomial::from(SinTable::materialize());
-        let input_onehot: Vec<F> = compute_ra_evals_direct(
-            &params.r_node_output.r,
-            &remainder_tensor,
-            1 << SIN_LOG_TABLE_SIZE,
-        );
+        let input_onehot: Vec<F> =
+            compute_ra_evals_direct(&params.r_node_output.r, downscaled, 1 << SIN_TABLE_VARS);
 
         let output_claim =
             MultilinearPolynomial::from(output.clone()).evaluate(&params.r_node_output.r);
-        // Special case where we add a new opening for the node output at node's own index,
-        // This is due to the fact that `remainder` poly claim is used as input claim for sin lookup sumcheck, together with a node output claim.
-        // Both claims are derived from a different opening point, so we need to derive a new claim for one of (`output`, `remainder`).
-        // We chose `output` to prevent us from having to use n-to-1 reductions on the `remainder` and rather only implement it on NodeOutput.
-        // Making further work for Issue#138 easier.
+        // `downscaled` and `output` are at different opening points; re-derive output's
+        // claim here rather than an n-to-1 reduction on `downscaled`.
         let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
             .into_provider(transcript, params.r_node_output.clone());
         provider.append_nodeio(Target::Current, output_claim);
 
         let input_onehot = MultilinearPolynomial::from(input_onehot);
         assert_eq!(input_onehot.len(), sin_table.len());
-        let identity = IdentityPolynomial::new(SIN_LOG_TABLE_SIZE);
+        let identity = IdentityPolynomial::new(SIN_TABLE_VARS);
 
         #[cfg(test)]
         {
-            let remainder_claim = provider.get_advice(VirtualPoly::TeleportRemainder).1;
+            let downscaled_claim = provider.get_advice(VirtualPoly::TrigDownscaled).1;
             let rv_claim = provider.get_nodeio(Target::Current).1;
             let claim = (0..input_onehot.len())
                 .map(|i| {
@@ -374,7 +435,7 @@ impl<F: JoltField> SinProver<F> {
                     a * (b + params.gamma * int)
                 })
                 .sum();
-            assert_eq!(rv_claim + params.gamma * remainder_claim, claim)
+            assert_eq!(rv_claim + params.gamma * downscaled_claim, claim)
         }
 
         Self {
@@ -449,10 +510,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SinProver<F> 
     }
 }
 
-/// Verifier state for sin execution sumcheck instance.
-///
-/// Verifies that the prover correctly evaluated the Sin lookup table at the teleported remainders,
-/// And that the one-hot encoding of the input is correct.
+/// Read-Raf sumcheck verifier for the Sin table lookup.
 pub struct SinVerifier<F: JoltField> {
     params: SinParams<F>,
     sin_table: MultilinearPolynomial<F>,
@@ -493,7 +551,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SinVerifier
 
         let ra_claim = accessor.get_advice(VirtualPoly::SinRa).1;
         let table_claim = self.sin_table.evaluate(&opening_point.r);
-        let int_eval = IdentityPolynomial::new(SIN_LOG_TABLE_SIZE).evaluate(&opening_point.r);
+        let int_eval = IdentityPolynomial::new(SIN_TABLE_VARS).evaluate(&opening_point.r);
 
         ra_claim * (table_claim + self.params.gamma * int_eval)
     }
@@ -518,9 +576,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SinVerifier
     }
 }
 
-/// Encoding impl for Sin one-hot read-address checks.
-///
-/// This encodes the relation between the teleportation remainder and the sin lookup table index,
+/// One-hot read-address encoding for the Sin table lookup.
 pub struct SinRaEncoding {
     /// Index of the computation node in the trace.
     pub node_idx: usize,
@@ -533,7 +589,7 @@ impl RaOneHotEncoding for SinRaEncoding {
 
     fn r_cycle_source(&self) -> OpeningId {
         OpeningId::new(
-            VirtualPoly::TeleportRemainder(self.node_idx),
+            VirtualPoly::TrigDownscaled(self.node_idx),
             SumcheckId::NodeExecution(self.node_idx),
         )
     }
@@ -546,11 +602,11 @@ impl RaOneHotEncoding for SinRaEncoding {
     }
 
     fn log_k(&self) -> usize {
-        SIN_LOG_TABLE_SIZE
+        SIN_TABLE_VARS
     }
 
     fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), SIN_LOG_TABLE_SIZE)
+        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), SIN_TABLE_VARS)
     }
 }
 
@@ -564,7 +620,7 @@ impl<F: JoltField, T: Transcript> NeuralTeleportRangeOneHot<F, T> for Sin {
         remainder
             .par_iter()
             .with_min_len(par_enabled())
-            .map(|&x| x as usize)
+            .map(|&x| (x >> TRIG_DOWNSCALE_BITS) as usize)
             .collect()
     }
 

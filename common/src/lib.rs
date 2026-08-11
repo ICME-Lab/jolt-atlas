@@ -52,6 +52,13 @@ canonical_serde_enum! {
         /// * `1` – decomposition index `d`
         SinRaD(usize, usize),
 
+        /// One-hot read-address decomposition for the trig-table downscale (right-shift) lookup
+        /// that precedes the Cos/Sin table lookup. Shared by Cos and Sin nodes.
+        ///
+        /// * `0` – node index
+        /// * `1` – decomposition index `d`
+        TrigDownscaleRaD(usize, usize),
+
         // ----- Range-check one-hot polynomials for advice values (node_index, d) -----
         /// Interleaved remainder `R` and divisor one-hot polynomial for the
         /// **Div** range check.
@@ -243,6 +250,12 @@ canonical_serde_enum! {
         /// * `0` – node index
         SinRa(usize),
 
+        /// Read-address polynomial for the trig-table downscale (right-shift) lookup that
+        /// precedes the Cos/Sin table lookup. Shared by Cos and Sin nodes.
+        ///
+        /// * `0` – node index
+        TrigDownscaleRa(usize),
+
         // ----- Softmax intermediate polynomials (node_index, feature_index) -----
         /// Running sum used inside softmax normalisation.
         ///
@@ -311,6 +324,13 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         TeleportRemainder(usize),
+
+        /// The Cos/Sin trig-table downscaled value: `TeleportRemainder >> TRIG_DOWNSCALE_BITS`,
+        /// evaluated at the same opening point as `TeleportRemainder`. Shared by Cos and Sin
+        /// nodes; this is what the Cos/Sin table lookup actually reads.
+        ///
+        /// * `0` – node index
+        TrigDownscaled(usize),
 
         /// Per-feature-vector sum of exponentiated logits: `exp_sum_q[k] = Σ_j exp_q[k,j]`.
         ///

@@ -143,12 +143,13 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        assert_eq!(
-            self.scale, MODEL_SCALE as i32,
-            "Cos teleportation verifying is only calibrated for MODEL_SCALE={MODEL_SCALE} \
-             (got {})",
-            self.scale
-        );
+        if self.scale != MODEL_SCALE as i32 {
+            return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                "Cos teleportation verifying is only calibrated for MODEL_SCALE={MODEL_SCALE} \
+                     (got {})",
+                self.scale
+            )));
+        }
         // Stage 1a: Neural teleportation remainder verification
         let div_proof = verifier
             .proofs

@@ -30,6 +30,13 @@ pub const SOFTMAX_CLAMP_BOUND: usize = softmax_clamp_bound(MODEL_SCALE as u32);
 /// size their lookup tables.
 pub const TRIG_PERIOD_MODULUS: u32 = trig_period_modulus(MODEL_SCALE as u32);
 
+/// Guards the `u32`→`i32` cast at `TRIG_PERIOD_MODULUS`'s many tensor-arithmetic call sites:
+/// fails the build if `MODEL_SCALE` is ever pushed high enough for that cast to overflow.
+const _: () = assert!(
+    TRIG_PERIOD_MODULUS <= i32::MAX as u32,
+    "TRIG_PERIOD_MODULUS overflows i32 at this MODEL_SCALE"
+);
+
 /// Compile-time derivation of [`TRIG_PERIOD_MODULUS`] for an arbitrary `scale`.
 pub const fn trig_period_modulus(scale: u32) -> u32 {
     let m = trig_period_search(scale);

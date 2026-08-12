@@ -632,10 +632,10 @@ fn verify_cos_sin_zk(
         },
         utils::opening_access::AccOpeningAccessor,
     };
-    use common::CommittedPoly;
+    use common::{consts::TRIG_PERIOD_MODULUS, CommittedPoly};
     use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 
-    let tau = atlas_onnx_tracer::model::consts::FOUR_PI_APPROX;
+    let tau = TRIG_PERIOD_MODULUS as i32;
 
     // 1. Division sumcheck (from transcript)
     {
@@ -875,10 +875,10 @@ fn prove_cos_sin_zk(
         },
         utils::opening_access::AccOpeningAccessor,
     };
-    use common::CommittedPoly;
+    use common::{consts::TRIG_PERIOD_MODULUS, CommittedPoly};
     use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 
-    let tau = atlas_onnx_tracer::model::consts::FOUR_PI_APPROX;
+    let tau = TRIG_PERIOD_MODULUS as i32;
 
     // 1. Division sumcheck (r_node_output from transcript)
     let div_params =

@@ -261,6 +261,109 @@ impl Model {
         }
     }
 
+    /// Like [`trace_with_shadow`](Self::trace_with_shadow), but re-quantizes each node's inputs
+    /// from the shadow's f64 outputs instead of chaining QUANT's own i32 history — isolates each
+    /// node's own rounding error, rather than the cumulative drift `trace_with_shadow` measures.
+    ///
+    /// # Arguments
+    ///
+    /// * `i32_inputs` — Quantized i32 input tensors (same as `forward()`).
+    /// * `f64_inputs` — Unquantized f64 input tensors (original real values).
+    /// * `scale`      — The quantization scale used.
+    pub fn trace_with_shadow_isolated(
+        &self,
+        i32_inputs: &[Tensor<i32>],
+        f64_inputs: &[Tensor<f64>],
+        scale: Scale,
+    ) -> ShadowTrace {
+        let mut i32_outputs: BTreeMap<usize, Tensor<i32>> = BTreeMap::new();
+        let mut f64_outputs: BTreeMap<usize, Tensor<f64>> = BTreeMap::new();
+
+        // Store inputs
+        self.store_i32_inputs(i32_inputs, &mut i32_outputs);
+        self.store_f64_inputs(f64_inputs, &mut f64_outputs);
+
+        let mut node_metrics = Vec::new();
+
+        for (node_idx, node) in &self.graph.nodes {
+            if matches!(node.operator, Operator::Input(_)) {
+                if let Some(f64_t) = f64_outputs.get(node_idx) {
+                    node_metrics.push(NodeMetrics::input(*node_idx, f64_t));
+                }
+                continue;
+            }
+
+            // ── f64 shadow path (ground truth; drives both branches) ─────
+            let f64_input_tensors: Vec<&Tensor<f64>> = node
+                .inputs
+                .iter()
+                .map(|&idx| f64_outputs.get(&idx).unwrap())
+                .collect();
+            let f64_out = shadow_f64(&node.operator, f64_input_tensors, scale);
+
+            // ── i32 path: re-quantize the shadow's inputs, not QUANT's own history ──
+            //
+            // Raw/discrete-valued nodes (see `is_raw_valued`) are passed through unchanged
+            // instead: re-quantizing a Gather index or an exact-0/1 boolean would corrupt it.
+            let i32_input_tensors_owned: Vec<Tensor<i32>> = node
+                .inputs
+                .iter()
+                .map(|&idx| {
+                    if self.is_raw_valued(idx) {
+                        i32_outputs.get(&idx).unwrap().clone()
+                    } else {
+                        requantize_tensor(f64_outputs.get(&idx).unwrap(), scale)
+                    }
+                })
+                .collect();
+            let i32_input_tensors: Vec<&Tensor<i32>> = i32_input_tensors_owned.iter().collect();
+            let i32_out = node.operator.f(i32_input_tensors);
+
+            // ── Compute metrics ─────────────────────────────────────────
+            let op_name = op_variant_name(&node.operator);
+            let deq = dequantize_tensor(&i32_out, scale);
+            node_metrics.push(compute_metrics(*node_idx, &op_name, &deq, &f64_out));
+            i32_outputs.insert(*node_idx, i32_out);
+            f64_outputs.insert(*node_idx, f64_out);
+        }
+
+        ShadowTrace {
+            node_metrics,
+            f64_outputs,
+            i32_outputs,
+        }
+    }
+
+    /// Whether node `idx`'s output carries raw/discrete (not fixed-point-scaled) values, and so
+    /// must not be re-quantized. Traces back through value-preserving ops (shape ops, Gather's
+    /// dict operand, and `ScalarConstDiv` by a rebase divisor — same check `shadow_f64` uses) to
+    /// find the actual value-defining ancestor before checking its operator type.
+    fn is_raw_valued(&self, mut idx: usize) -> bool {
+        loop {
+            match &self.graph.nodes[&idx].operator {
+                Operator::Input(_) | Operator::And(_) | Operator::IsNan(_) => return true,
+                // A constant baked into the graph as an unscaled boolean mask (all values
+                // exactly 0 or 1) — as opposed to a legitimately scaled real constant.
+                Operator::Constant(c) => {
+                    return c.0.data().iter().all(|&v| v == 0 || v == 1);
+                }
+                Operator::Identity(_)
+                | Operator::Reshape(_)
+                | Operator::Broadcast(_)
+                | Operator::MoveAxis(_)
+                | Operator::Slice(_)
+                | Operator::GatherSmall(_)
+                | Operator::GatherLarge(_) => {
+                    idx = self.graph.nodes[&idx].inputs[0];
+                }
+                Operator::ScalarConstDiv(scd) if is_rebase_divisor(scd.divisor, self.scale) => {
+                    idx = self.graph.nodes[&idx].inputs[0];
+                }
+                _ => return false,
+            }
+        }
+    }
+
     /// Store i32 inputs into the node output map (mirrors execute.rs logic).
     fn store_i32_inputs(&self, inputs: &[Tensor<i32>], outputs: &mut BTreeMap<usize, Tensor<i32>>) {
         self.store_shadow_inputs(inputs, outputs);
@@ -668,6 +771,16 @@ fn dequantize_tensor(t: &Tensor<i32>, scale: Scale) -> Tensor<f64> {
         .data()
         .iter()
         .map(|&v| quantize::dequantize(v, scale))
+        .collect();
+    Tensor::construct(data, t.dims().to_vec())
+}
+
+/// Quantize an f64 tensor to i32 using the given scale.
+fn requantize_tensor(t: &Tensor<f64>, scale: Scale) -> Tensor<i32> {
+    let data: Vec<i32> = t
+        .data()
+        .iter()
+        .map(|&v| quantize::quantize_float(v, scale))
         .collect();
     Tensor::construct(data, t.dims().to_vec())
 }

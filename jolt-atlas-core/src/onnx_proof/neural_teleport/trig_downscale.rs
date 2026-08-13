@@ -1,12 +1,8 @@
 //! Shared "downscale" (right-shift) stage for the Cos/Sin trig-table lookup.
 //!
-//! Reuses the full-domain remainder one-hot (over `XLEN` bits) established by
-//! [`super::division`]'s teleportation remainder as the read address for a
-//! [`RightShiftTable`] lookup, producing `downscaled = remainder >> TRIG_DOWNSCALE_BITS` —
-//! the (much smaller) index the actual Cos/Sin table lookup reads. No separate
-//! range-check is needed: the shift is proven purely by the one-hot's own correctness
-//! (`RaVirtual`/`HammingWeight`/`Booleanity`) against the deterministic shift table.
-
+//! //! Uses the teleportation remainder (`VirtualPoly::TeleportRemainder`) as the lookup read
+//! address vector for a [`RightShiftTable`] read-raf, producing `downscaled = remainder >> TRIG_DOWNSCALE_BITS` —
+//! the (much smaller) index the actual Cos/Sin table lookup reads.
 use super::division::compute_division;
 use crate::{
     onnx_proof::{op_lookups::LookupOperandsTrait, Prover, Verifier},

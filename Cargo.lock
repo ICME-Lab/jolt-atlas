@@ -1182,6 +1182,7 @@ dependencies = [
  "serial_test",
  "strum",
  "strum_macros",
+ "tokenizers",
  "tracing",
  "tracing-chrome",
  "tracing-subscriber",

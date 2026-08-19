@@ -23,6 +23,7 @@ use crate::{
         neg_relu::NegReluSuffix,
         not_lower_msb_upper_eqz::NotLowerMsbUpperEqzSuffix,
         not_lower_msb_upper_eqz_low::NotLowerMsbUpperEqzLowSuffix,
+        right_shift::TrigRightShiftSuffix,
         word_no_msb::WordNoMsbSuffix,
     },
     utils::lookup_bits::LookupBits,
@@ -56,6 +57,8 @@ pub mod not_lower_msb_upper_eqz_low;
 pub mod one;
 /// Bitwise OR suffix implementation.
 pub mod or;
+/// Value of the high bits of an unsigned input, right-shifted by a bound.
+pub mod right_shift;
 /// Lower word without MSB suffix implementation.
 pub mod word_no_msb;
 /// Bitwise XOR suffix implementation.
@@ -136,6 +139,8 @@ impl_sparse_dense_suffix!(
 
     SoftmaxClampHigherAllZero   : SoftmaxClampHigherAllZeroSuffix,  // `higher_all_zero(bits)`, used by softmax's saturating-clamp table.
     SoftmaxClampHZeroMulLWord   : SoftmaxClampHZeroMulLWordSuffix,  // `higher_all_zero(bits) * lower_word(bits)`, used by softmax's saturating-clamp table.
+
+    TrigRightShift               : TrigRightShiftSuffix,            // Value of the high bits of an unsigned input, right-shifted by `TRIG_DOWNSCALE_BITS`, used by `RightShiftTable`.
 );
 
 /// Type alias for suffix evaluation results in the field.

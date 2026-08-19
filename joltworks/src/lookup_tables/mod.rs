@@ -104,6 +104,9 @@ pub mod clamp;
 pub mod or;
 /// ReLU (Rectified Linear Unit) activation lookup table.
 pub mod relu;
+/// Unsigned right-shift-by-a-fixed-bound lookup table, used to downscale the Cos/Sin trig
+/// tables.
+pub mod right_shift;
 /// Unsigned absolute value lookup table.
 ///
 /// Computes `abs(x)` by interpreting the input as a signed integer and returning

@@ -26,6 +26,7 @@ use crate::{
         not_lower_msb::NotLowerMsbPrefix,
         not_msb::NotMsbPrefix,
         not_word_no_msb::NotWordNoMsbPrefix,
+        right_shift::TrigRightShiftPrefix,
         sat_val::SatValPrefix,
         upper_eqo::UpperEqoPrefix,
         upper_eqz::UpperEqzPrefix,
@@ -71,6 +72,8 @@ pub mod not_msb;
 pub mod not_word_no_msb;
 /// Bitwise OR prefix implementation.
 pub mod or;
+/// Value of the high bits of an unsigned input, right-shifted by a bound.
+pub mod right_shift;
 /// Saturated boundary value prefix implementation, used in `sat_clamp` decomposition.
 pub mod sat_val;
 /// Upper half-word all-ones (eqo) prefix implementation.
@@ -286,6 +289,8 @@ impl_sparse_dense_prefix!(
 
     SoftmaxClampHigherAllZero   : SoftmaxClampHigherAllZeroPrefix,  // Indicator that all bits with significance >= bound are zero, used by softmax's saturating-clamp table.
     SoftmaxClampLowerWord       : SoftmaxClampLowerWordPrefix,      // Lower word without bits of significance >= bound, used by softmax's saturating-clamp table.
+
+    TrigRightShift               : TrigRightShiftPrefix,            // Value of the high bits of an unsigned input, right-shifted by `TRIG_DOWNSCALE_BITS`, used by `RightShiftTable`.
 );
 
 #[derive(Clone, Copy)]

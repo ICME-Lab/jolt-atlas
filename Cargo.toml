@@ -75,7 +75,10 @@ bincode = { version = "2.0.1", features = ["serde"] }
 
 
 [dependencies]
+atlas-onnx-tracer.workspace = true
+common.workspace = true
 jolt-atlas-core = { path = "./jolt-atlas-core" }
+rand = { workspace = true, features = ["std_rng"] }
 
 [profile.test]
 opt-level = 3

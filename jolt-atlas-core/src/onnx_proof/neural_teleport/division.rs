@@ -1,47 +1,24 @@
-//! Division module for neural teleportation.
+//! Division helpers for neural teleportation (Cos/Sin's `a mod P` domain reduction).
 //!
-//! This module provides division operations to reduce the domain size of lookup tables
-//! for activation functions. By dividing inputs by a constant divisor, we can reduce
-//! the bit-width needed for lookups.
-//!
-//! For example, dividing by 2 reduces a 16-bit lookup table to 15 bits.
-//!
-//! The quotient and remainder satisfy: input = DIVISOR * quotient + remainder
-//! The quotient is a virtual polynomial (proven via the lookup operation)
-//! The remainder is range-checked to be in [0, DIVISOR)
+//! `a = P·q + r` holds exactly, elementwise, so as multilinear polynomials
+//! `ã(X) = P·q̃(X) + r̃(X)` holds identically everywhere, not just on the boolean hypercube.
+//! Once `q` and `r` each have an evaluation claim at the same point, deriving `a`'s claim is
+//! pure field arithmetic — no sumcheck is needed to enforce the identity.
 
+use crate::onnx_proof::{Prover, Verifier};
 use crate::utils::opening_access::{AccOpeningAccessor, Target};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     tensor::Tensor,
 };
-use common::VirtualPoly;
-#[cfg(feature = "zk")]
-use joltworks::subprotocols::blindfold::{
-    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
-};
+use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
-    field::{IntoOpening, JoltField},
-    poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
-            BIG_ENDIAN, LITTLE_ENDIAN,
-        },
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
-    },
-    subprotocols::{
-        sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
-    },
+    field::JoltField,
+    poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
     transcripts::Transcript,
-    utils::math::Math,
+    utils::errors::ProofVerifyError,
 };
-
-const DEGREE_BOUND: usize = 2;
 
 /// Computes quotient and remainder for neural teleportation division.
 /// Returns (quotient, remainder) where input = DIVISOR * quotient + remainder
@@ -66,284 +43,86 @@ pub fn compute_division(input: &Tensor<i32>, tau: i32) -> (Tensor<i32>, Tensor<i
     (quotient, remainder)
 }
 
-/// Parameters for division sumcheck
-#[derive(Clone)]
-pub struct TeleportDivisionParams<F: JoltField> {
-    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
-    computation_node: ComputationNode,
+/// Caches the quotient's claim (`CommittedPoly::TeleportNodeQuotient`) at the node's
+/// standard reduced output-opening point, by directly evaluating the honest quotient tensor.
+/// Soundness comes from the global end-of-proof PCS opening of this committed polynomial,
+/// exactly as for any other committed advice — this function itself proves nothing.
+pub fn cache_teleport_quotient_prove<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    prover: &mut Prover<F, T>,
     tau: i32,
+) {
+    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+    let (quotient, _remainder) = compute_division(operands[0], tau);
+
+    let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
+    let (r_node_output, _) = accessor.get_reduced_opening();
+    let q_eval = MultilinearPolynomial::from(quotient).evaluate(&r_node_output.r);
+
+    accessor
+        .into_provider(&mut prover.transcript, r_node_output)
+        .append_advice(CommittedPoly::TeleportNodeQuotient, q_eval);
 }
 
-impl<F: JoltField> TeleportDivisionParams<F> {
-    /// Creates new division parameters for neural teleportation.
-    ///
-    /// Extracts the opening point for the node output and stores the computation node
-    /// and divisor (tau) for use in the sumcheck protocol.
-    pub fn new(
-        computation_node: ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-        tau: i32,
-    ) -> Self {
-        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let r_node_output = accessor.get_reduced_opening().0;
+/// Verifier counterpart of [`cache_teleport_quotient_prove`].
+pub fn cache_teleport_quotient_verify<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    verifier: &mut Verifier<'_, F, T>,
+) {
+    let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, node);
+    let (r_node_output, _) = accessor.get_reduced_opening();
 
-        Self {
-            r_node_output,
-            computation_node,
-            tau,
-        }
-    }
-
-    /// Creates new division parameters by sampling the opening point from transcript.
-    /// The opening point is sampled from the transcript
-    pub fn new_from_transcript(
-        computation_node: ComputationNode,
-        transcript: &mut impl Transcript,
-        tau: i32,
-    ) -> Self {
-        let num_vars = computation_node.pow2_padded_num_output_elements().log_2();
-        let r_node_output = transcript.challenge_vector_optimized::<F>(num_vars);
-
-        Self {
-            r_node_output: r_node_output.into(),
-            computation_node,
-            tau,
-        }
-    }
+    accessor
+        .into_provider(&mut verifier.transcript, r_node_output)
+        .append_advice(CommittedPoly::TeleportNodeQuotient);
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for TeleportDivisionParams<F> {
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
+/// Derives the trig node's input claim `a = P·q + r` from the already-established `q` and
+/// `r` claims and caches it as the node's `Input(0)` claim (i.e. the upstream node's output
+/// claim at this point). Must run after both `cache_teleport_quotient_prove`/
+/// `cache_teleport_quotient_verify` and the remainder-establishing downscale lookup have run
+/// for this node.
+pub fn cache_teleport_input_claim_prove<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    prover: &mut Prover<F, T>,
+    tau: i32,
+) {
+    let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
+    let (r_node_output, _) = accessor.get_reduced_opening();
+    let q_claim = accessor.get_advice(CommittedPoly::TeleportNodeQuotient).1;
+    let r_claim = accessor.get_advice(VirtualPoly::TeleportRemainder).1;
+    let a_claim = F::from_i32(tau) * q_claim + r_claim;
 
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
-        F::zero()
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.computation_node
-            .pow2_padded_num_output_elements()
-            .log_2()
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> InputClaimConstraint {
-        InputClaimConstraint::default()
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_constraint_challenge_values(
-        &self,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        Vec::new()
-    }
-
-    // output = eq_eval * (tau * quotient + remainder - input)
-    //        = Challenge(0) * Opening(q) + Challenge(1) * Opening(r) + Challenge(2) * Opening(input)
-    #[cfg(feature = "zk")]
-    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
-        use crate::utils::opening_access::OpeningIdBuilder;
-        let builder = OpeningIdBuilder::new(&self.computation_node);
-        let input_id = builder.nodeio(Target::Input(0));
-        let q_id = builder.advice(VirtualPoly::TeleportQuotient);
-        let r_id = builder.advice(VirtualPoly::TeleportRemainder);
-        Some(OutputClaimConstraint::sum_of_products(vec![
-            ProductTerm::scaled(ValueSource::Challenge(0), vec![ValueSource::Opening(q_id)]),
-            ProductTerm::scaled(ValueSource::Challenge(1), vec![ValueSource::Opening(r_id)]),
-            ProductTerm::scaled(
-                ValueSource::Challenge(2),
-                vec![ValueSource::Opening(input_id)],
-            ),
-        ]))
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        let r_node_output_prime: Vec<F> = self
-            .normalize_opening_point(&sumcheck_challenges.into_opening())
-            .r;
-        let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_node_output_prime);
-        let tau = F::from_i32(self.tau);
-        vec![eq_eval * tau, eq_eval, -eq_eval]
-    }
+    accessor
+        .into_provider(&mut prover.transcript, r_node_output)
+        .append_nodeio(Target::Input(0), a_claim);
 }
 
-/// Prover for neural teleportation division
-pub struct TeleportDivisionProver<F: JoltField> {
-    params: TeleportDivisionParams<F>,
-    eq_r_node_output: GruenSplitEqPolynomial<F>,
-    input: MultilinearPolynomial<F>,
-    quotient: MultilinearPolynomial<F>,
-    remainder: MultilinearPolynomial<F>,
-}
+/// Verifier counterpart of [`cache_teleport_input_claim_prove`]. Unlike the prover, the verifier
+/// doesn't get to just compute and trust `a_claim` — it registers whatever the prover
+/// claimed for `Input(0)`, then independently recomputes `P·q + r` from the (already
+/// separately bound) quotient and remainder claims and checks the two agree.
+pub fn verify_teleport_input_claim<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    verifier: &mut Verifier<'_, F, T>,
+    tau: i32,
+) -> Result<(), ProofVerifyError> {
+    let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, node);
+    let (r_node_output, _) = accessor.get_reduced_opening();
 
-impl<F: JoltField> TeleportDivisionProver<F> {
-    /// Creates a new prover for neural teleportation division.
-    ///
-    /// Computes the quotient and remainder for the input tensor and constructs
-    /// the multilinear polynomials needed for the sumcheck protocol.
-    pub fn new(trace: &Trace, params: TeleportDivisionParams<F>) -> Self {
-        let eq_r_node_output =
-            GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
-        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
-        let input_data = operands[0];
+    let mut provider = accessor.into_provider(&mut verifier.transcript, r_node_output);
+    provider.append_nodeio(Target::Input(0));
+    let q_claim = provider.get_advice(CommittedPoly::TeleportNodeQuotient).1;
+    let r_claim = provider.get_advice(VirtualPoly::TeleportRemainder).1;
+    let expected = F::from_i32(tau) * q_claim + r_claim;
+    let input_claim = provider.get_nodeio(Target::Input(0)).1;
 
-        let (quotient_tensor, remainder_tensor) = compute_division(input_data, params.tau);
-
-        let input = MultilinearPolynomial::from(input_data.clone());
-        let quotient = MultilinearPolynomial::from(quotient_tensor);
-        let remainder = MultilinearPolynomial::from(remainder_tensor);
-
-        #[cfg(test)]
-        {
-            let claim: F = (0..input.len())
-                .map(|i| {
-                    let a = input.get_bound_coeff(i);
-                    let q = quotient.get_bound_coeff(i);
-                    let r = remainder.get_bound_coeff(i);
-                    F::from_i32(params.tau) * q + r - a
-                })
-                .sum();
-            assert_eq!(F::zero(), claim, "Division constraint check failed");
-        }
-
-        Self {
-            params,
-            eq_r_node_output,
-            input,
-            quotient,
-            remainder,
-        }
+    if input_claim != expected {
+        return Err(ProofVerifyError::InvalidOpeningProof(
+            "Teleport input claim does not match P*q + r derived from the quotient and \
+             remainder claims"
+                .to_string(),
+        ));
     }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for TeleportDivisionProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        let Self {
-            eq_r_node_output,
-            input,
-            quotient,
-            remainder,
-            ..
-        } = self;
-
-        let divisor = F::from_i32(self.params.tau);
-        let [q_constant] = eq_r_node_output.par_fold_out_in_unreduced::<9, 1>(&|g| {
-            let inp0 = input.get_bound_coeff(2 * g);
-            let q0 = quotient.get_bound_coeff(2 * g);
-            let r0 = remainder.get_bound_coeff(2 * g);
-            let c0 = (divisor * q0) + r0 - inp0;
-            [c0]
-        });
-        eq_r_node_output.gruen_poly_deg_2(q_constant, previous_claim)
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        self.eq_r_node_output.bind(r_j);
-        self.input.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.quotient.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.remainder.bind_parallel(r_j, BindingOrder::LowToHigh);
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, opening_point);
-
-        provider.append_nodeio(Target::Input(0), self.input.final_claim());
-        provider.append_advice(VirtualPoly::TeleportQuotient, self.quotient.final_claim());
-        provider.append_advice(VirtualPoly::TeleportRemainder, self.remainder.final_claim());
-    }
-}
-
-/// Verifier for neural teleportation division
-pub struct TeleportDivisionVerifier<F: JoltField> {
-    params: TeleportDivisionParams<F>,
-}
-
-impl<F: JoltField> TeleportDivisionVerifier<F> {
-    /// Creates a new verifier for neural teleportation division.
-    ///
-    /// Constructs the verifier with parameters extracted from the computation node
-    /// and opening accumulator.
-    pub fn new(
-        computation_node: ComputationNode,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        tau: i32,
-    ) -> Self {
-        let params = TeleportDivisionParams::new(computation_node, accumulator, tau);
-        Self { params }
-    }
-
-    /// Creates a new verifier for transcript-sampled teleport-division parameters.
-    pub fn new_from_transcript(
-        computation_node: ComputationNode,
-        tau: i32,
-        transcript: &mut impl Transcript,
-    ) -> Self {
-        let params = TeleportDivisionParams::new_from_transcript(computation_node, transcript, tau);
-        Self { params }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for TeleportDivisionVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-
-        let r_node_output = self.params.r_node_output.r.clone();
-        let r_node_output_prime = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening())
-            .r;
-        let eq_eval = EqPolynomial::mle(&r_node_output, &r_node_output_prime);
-
-        let input_claim = accessor.get_nodeio(Target::Input(0)).1;
-        let quotient_claim = accessor.get_advice(VirtualPoly::TeleportQuotient).1;
-        let remainder_claim = accessor.get_advice(VirtualPoly::TeleportRemainder).1;
-
-        let divisor = F::from_i32(self.params.tau);
-        eq_eval * ((divisor * quotient_claim) + remainder_claim - input_claim)
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, opening_point);
-
-        provider.append_nodeio(Target::Input(0));
-        provider.append_advice(VirtualPoly::TeleportQuotient);
-        provider.append_advice(VirtualPoly::TeleportRemainder);
-    }
+    Ok(())
 }

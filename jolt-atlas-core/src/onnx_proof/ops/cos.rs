@@ -13,10 +13,7 @@ use crate::{
         },
         op_lookups::{OpLookupEncoding, OpLookupProvider},
         ops::OperatorProofTrait,
-        range_checking::{
-            range_check_operands::TeleportRangeCheckOperands,
-            RangeCheckProvider,
-        },
+        range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckProvider},
         ProofId, ProofType, Prover, Verifier,
     },
     utils::opening_access::AccOpeningAccessor,
@@ -116,8 +113,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
                 &mut prover.transcript,
             );
 
-        let mut exec_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> =
-            vec![Box::new(dsc_exec), Box::new(cos_exec), Box::new(rangecheck_exec)];
+        let mut exec_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = vec![
+            Box::new(dsc_exec),
+            Box::new(cos_exec),
+            Box::new(rangecheck_exec),
+        ];
         let (exec_proof, _) = BatchedSumcheck::prove(
             exec_instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
@@ -199,11 +199,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         );
 
         let rc_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-        let rangecheck_verifier = rc_provider
-            .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
-                &mut verifier.accumulator,
-                &mut verifier.transcript,
-            );
+        let rangecheck_verifier = rc_provider.read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        );
 
         let exec_proof = verifier
             .proofs

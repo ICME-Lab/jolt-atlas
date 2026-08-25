@@ -23,7 +23,6 @@ use crate::{
         range_checking::range_check_operands::{
             DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
             RangeCheckingOperandsTrait, RiRangeCheckOperands, RsRangeCheckOperands,
-            TeleportRangeCheckOperands,
         },
     },
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
@@ -389,11 +388,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
             CommittedPoly::SqrtDivRangeCheckRaD(node_idx, d) => {
                 build_range_check_rad_witness::<F, RiRangeCheckOperands>(
-                    model, trace, *node_idx, *d,
-                )
-            }
-            CommittedPoly::TeleportRangeCheckRaD(node_idx, d) => {
-                build_range_check_rad_witness::<F, TeleportRangeCheckOperands>(
                     model, trace, *node_idx, *d,
                 )
             }

@@ -3,7 +3,7 @@ use atlas_onnx_tracer::{
     ops::{MeanOfSquares, Operator},
     tensor::Tensor,
 };
-use common::{consts::TRIG_PERIOD_MODULUS, CommittedPoly, VirtualPoly};
+use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
     poly::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
@@ -12,7 +12,7 @@ use joltworks::{
 use num::integer::Roots;
 
 use crate::{
-    onnx_proof::{neural_teleport::division::compute_division, range_checking::RangeCheckEncoding},
+    onnx_proof::range_checking::RangeCheckEncoding,
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
 };
 use atlas_onnx_tracer::ops::mean_of_squares::{mos_divisor, mos_remainder};
@@ -27,7 +27,8 @@ pub struct RangeCheckOperandsBase {
     pub node_idx: usize,
     /// Polynomial to be range-checked
     pub remainder: VirtualPoly,
-    /// Bound polynomial, or `None` when the bound is a field constant (e.g. τ for neural-teleport).
+    /// Bound polynomial, or `None` when the bound is a field constant (e.g. `MeanOfSquares`'s
+    /// divisor `D`).
     pub bound: Option<VirtualPoly>,
     /// Virtual polynomial representing the range-check read-address (Ra).
     pub virtual_ra: VirtualPoly,
@@ -53,8 +54,10 @@ pub trait RangeCheckingOperandsTrait {
     /// Create a new base instance from a computation node.
     fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase;
 
-    // NOTE: In the future, range-checks with a constant value such as "tau" (neural teleportation) may be proven using a single-operand lookup table (#253).
-    // Hence, "build_lookup_operands" returns a vector of tensors, to account for both cases.
+    // NOTE: range-checks against a constant value (e.g. MeanOfSquares's divisor D) could be
+    // proven via a single-operand lookup table instead (#253; Cos/Sin's teleport range-check
+    // already moved to this, outside this trait — see LessThanConstTable). Hence
+    // "build_lookup_operands" returns a vector of tensors, to account for both cases.
     /// Builds the encoding operands for the lookup table from the model's operand tensors.
     fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>>;
 
@@ -250,9 +253,8 @@ impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
 ///
 /// MoS computes `out = SatClamp((Σx²) / D)` with `D = N·2^S` (a per-node
 /// **constant**); the reduction binds `Σx² = rescaled·D + R` and this check
-/// proves `0 ≤ R < D`. Because the bound is constant it mirrors the
-/// [`TeleportRangeCheckOperands`] pattern (`bound: None`) rather than Div's
-/// per-element divisor .
+/// proves `0 ≤ R < D`. Because the bound is constant, `bound` is `None` here
+/// rather than Div's per-element divisor.
 pub struct MeanOfSquaresRangeCheckOperands {
     /// The mean of squares operator
     op: MeanOfSquares,
@@ -306,62 +308,6 @@ fn mean_of_squares_divisor_i32(op: &atlas_onnx_tracer::ops::MeanOfSquares) -> i3
 
 fn i32_divisor(divisor: i64) -> i32 {
     i32::try_from(divisor).expect("MeanOfSquares divisor N·2^S must fit i32 for the range check")
-}
-
-/// Operands for neural teleportation (cos/sin) range-checking.
-///
-/// For cos/sin computation involving division by τ, verifies that the remainder satisfies the bounds.
-pub struct TeleportRangeCheckOperands {
-    tau: i32,
-}
-
-impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
-    fn new(node: &ComputationNode) -> Self {
-        let tau = match &node.operator {
-            Operator::Cos(_) | Operator::Sin(_) => TRIG_PERIOD_MODULUS as i32,
-            _ => {
-                panic!("Expected Cos or Sin operator for neural teleportation division")
-            }
-        };
-        Self { tau }
-    }
-
-    fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase {
-        RangeCheckOperandsBase {
-            node_idx: node.idx,
-            remainder: VirtualPoly::TeleportRemainder(node.idx),
-            // The bound is the constant τ, not a committed polynomial.
-            bound: None,
-            virtual_ra: VirtualPoly::TeleportRangeCheckRa(node.idx),
-            operator: node.operator.clone(),
-        }
-    }
-
-    fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>> {
-        assert_eq!(
-            operand_tensors.len(),
-            1,
-            "Expected exactly one operand tensor for neural teleportation"
-        );
-        let input_tensor = &operand_tensors[0];
-
-        let (_, remainder) = compute_division(input_tensor, self.tau);
-        let divisor_tensor = Tensor::construct(vec![self.tau], vec![1])
-            .expand(input_tensor.dims())
-            .unwrap();
-
-        vec![remainder, divisor_tensor]
-    }
-
-    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
-        let left_claim = claims[0];
-
-        (left_claim, F::from_i32(self.tau))
-    }
-
-    fn rad_poly(index: usize, d: usize) -> CommittedPoly {
-        CommittedPoly::TeleportRangeCheckRaD(index, d)
-    }
 }
 
 /// A wrapper struct that holds the range-checking information

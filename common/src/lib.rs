@@ -27,7 +27,7 @@ canonical_serde_enum! {
     /// |-------|---------|
     /// | `NodeOutputRaD` / `{Cos,Sin}RaD` | One-hot read-address decompositions for activation-function lookup tables |
     /// | `Softmax*` | Polynomials specific to softmax sub-protocol |
-    /// | `Div* / Sqrt* / Teleport*` | Range-check one-hot polynomials for integer-arithmetic advice values |
+    /// | `Div* / Sqrt* / MeanOfSquares*` | Range-check one-hot polynomials for integer-arithmetic advice values |
     /// | `*NodeQuotient / *NodeRemainder / *NodeInv / *NodeRsqrt` | Scalar advice polynomials for division / reciprocal-square-root |
     /// | `GatherRa` | Read-address polynomial for the Gather operator |
     /// | `SoftmaxRecipMultRemainder` | Remainder used in the reciprocal-multiplication check of softmax |
@@ -87,13 +87,6 @@ canonical_serde_enum! {
         /// * `0` – node index
         /// * `1` – decomposition index `d`
         SqrtRangeCheckRaD(usize, usize),
-
-        /// Remainder and input one-hot polynomial for the **neural teleportation**
-        /// division range check.
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        TeleportRangeCheckRaD(usize, usize),
 
         // ----- Scalar advice polynomials (node_index) -----
         /// Advice polynomial for the **quotient** in integer division.
@@ -225,7 +218,7 @@ canonical_serde_enum! {
     /// | `{Cos,Sin}Ra` | Read-address polynomials for activation-function lookups |
     /// | `Softmax*` | Intermediate polynomials arising in the softmax sub-protocol |
     /// | `HammingWeight` | Polynomial used in the Hamming-weight sumcheck |
-    /// | `Div* / Sqrt* / Teleport*` | Advice-derived polynomials proven via `ReadRafSumcheckProver` from committed one-hot polynomials |
+    /// | `Div* / Sqrt* / MeanOfSquares*` | Advice-derived polynomials proven via `ReadRafSumcheckProver` from committed one-hot polynomials |
     #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
     pub enum VirtualPoly {
         // ----- Node output -----
@@ -291,12 +284,6 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         SqrtRangeCheckRa(usize),
-
-        /// Read-address polynomial derived from
-        /// [`CommittedPoly::TeleportRangeCheckRaD`].
-        ///
-        /// * `0` – node index
-        TeleportRangeCheckRa(usize),
 
         /// Read-address polynomial derived from
         /// [`CommittedPoly::MeanOfSquaresRangeCheckRaD`].

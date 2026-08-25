@@ -300,6 +300,58 @@ impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
     }
 }
 
+/// Operands for the scalar-constant-division remainder range check.
+///
+/// For `a / b = q` with constant divisor `b`, verifies the remainder `R = a - b·q`
+/// satisfies `0 ≤ R < b`. Like [`MeanOfSquaresRangeCheckOperands`], `b` is a per-node
+/// constant (not per-element data), so `bound` is `None`.
+pub struct ScalarConstDivRangeCheckOperands {
+    divisor: i32,
+}
+
+impl RangeCheckingOperandsTrait for ScalarConstDivRangeCheckOperands {
+    fn new(node: &ComputationNode) -> Self {
+        let Operator::ScalarConstDiv(op) = &node.operator else {
+            panic!("Expected ScalarConstDiv operator");
+        };
+        Self {
+            divisor: op.divisor,
+        }
+    }
+
+    fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase {
+        RangeCheckOperandsBase {
+            node_idx: node.idx,
+            remainder: VirtualPoly::ScalarConstDivRemainder(node.idx),
+            bound: None,
+            virtual_ra: VirtualPoly::ScalarConstDivRangeCheckRa(node.idx),
+            operator: node.operator.clone(),
+        }
+    }
+
+    fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>> {
+        assert_eq!(
+            operand_tensors.len(),
+            1,
+            "Expected exactly one operand tensor"
+        );
+        let input_tensor = &operand_tensors[0];
+        let remainder = input_tensor.map(|x| adjusted_remainder(x, self.divisor));
+        let bound = Tensor::construct(vec![self.divisor], vec![1])
+            .expand(remainder.dims())
+            .unwrap();
+        vec![remainder, bound]
+    }
+
+    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
+        (claims[0], F::from_i32(self.divisor))
+    }
+
+    fn rad_poly(index: usize, d: usize) -> CommittedPoly {
+        CommittedPoly::ScalarConstDivRangeCheckRaD(index, d)
+    }
+}
+
 /// The fused mean-of-squares divisor `D = N·2^S` as an `i32` (the range-check
 /// value domain), recovered from the operator's stored count + scale.
 fn mean_of_squares_divisor_i32(op: &atlas_onnx_tracer::ops::MeanOfSquares) -> i32 {

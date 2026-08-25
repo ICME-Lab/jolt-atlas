@@ -288,6 +288,7 @@ impl Model {
                 | Operator::Add(_)
                 | Operator::Sub(_)
                 | Operator::Sum(_)
+                | Operator::ScalarConstDiv(_)
                 // Einsum commits a one-hot decomposition for its fused rescaling
                 // remainder range check (`k_chunk`-wide chunks, like Add/Sum).
                 | Operator::Einsum(_)
@@ -310,7 +311,6 @@ impl Model {
                 Operator::Cube(op) if op.scale > 0 => {
                     LOG_K_CHUNK + log_2(node.pow2_padded_num_output_elements())
                 }
-                Operator::ScalarConstDiv(_) => log_2(node.pow2_padded_num_output_elements()),
                 Operator::GatherSmall(_) => {
                     let input_nodes = self.get_input_nodes(node);
                     let num_words = input_nodes[0].output_dims[0];

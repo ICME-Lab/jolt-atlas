@@ -23,9 +23,10 @@ use crate::{
         range_checking::range_check_operands::{
             DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
             RangeCheckingOperandsTrait, RiRangeCheckOperands, RsRangeCheckOperands,
+            ScalarConstDivRangeCheckOperands,
         },
     },
-    utils::{adjusted_remainder, compute_lookup_indices_from_operands},
+    utils::compute_lookup_indices_from_operands,
 };
 use atlas_onnx_tracer::{
     model::{trace::Trace, Model},
@@ -338,24 +339,10 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let (quotient, _remainder) = compute_division(input, tau);
                 MultilinearPolynomial::from(quotient)
             }
-            CommittedPoly::ScalarConstDivNodeRemainder(node_idx) => {
-                let computation_node = &model.graph.nodes[node_idx];
-                let Operator::ScalarConstDiv(op) = &computation_node.operator else {
-                    panic!("Expected ScalarConstDiv operator at node {node_idx}");
-                };
-                let b = op.divisor;
-                let layer_data = Trace::layer_data(trace, computation_node);
-                let [left_operand] = layer_data.operands[..] else {
-                    panic!("Expected one operand for ScalarConstDiv operation")
-                };
-                let remainder_data: Vec<i32> = left_operand
-                    .iter()
-                    .map(|&a| adjusted_remainder(a, b))
-                    .collect();
-                MultilinearPolynomial::from(Tensor::<i32>::construct(
-                    remainder_data,
-                    left_operand.dims().to_vec(),
-                ))
+            CommittedPoly::ScalarConstDivRangeCheckRaD(node_idx, d) => {
+                build_range_check_rad_witness::<F, ScalarConstDivRangeCheckOperands>(
+                    model, trace, *node_idx, *d,
+                )
             }
             CommittedPoly::RsqrtQuotient(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];

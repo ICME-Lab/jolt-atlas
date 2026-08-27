@@ -93,6 +93,57 @@ impl LookupOperandsTrait for TrigDownscaleOperands {
     }
 }
 
+/// `LookupOperandsTrait` helper for the remainder range-check (`remainder < TRIG_PERIOD_MODULUS`).
+/// Reuses [`TrigDownscaleOperands`]'s `ra`/witness/`r_cycle` identifiers: both lookups key off
+/// the same `remainder`, batched with matching round counts, so their `ra` claims are
+/// mathematically identical — letting the range-check share `TrigDownscaleRa`/`RaD` instead of
+/// committing and one-hot-checking a second read-address polynomial.
+#[derive(Default, Clone)]
+pub struct TeleportRangeCheckOperands;
+
+impl LookupOperandsTrait for TeleportRangeCheckOperands {
+    const LOG_K: usize = XLEN;
+
+    /// Every remainder must satisfy the range check, i.e. `Σ eq(r_cycle,·)·[remainder<τ] = 1`.
+    fn rv_claim<F: JoltField>(
+        _node: &ComputationNode,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> F {
+        F::one()
+    }
+
+    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
+        TrigDownscaleOperands::ra_virtual_poly(node_idx)
+    }
+
+    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
+        TrigDownscaleOperands::ra_committed_poly(node_idx, d)
+    }
+
+    fn witness_opening_id(node: &ComputationNode) -> OpeningId {
+        TrigDownscaleOperands::witness_opening_id(node)
+    }
+
+    fn r_cycle<F: JoltField>(
+        node: &ComputationNode,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> OpeningPoint<BIG_ENDIAN, F> {
+        TrigDownscaleOperands::r_cycle(node, accumulator)
+    }
+
+    fn r_cycle_source(node_idx: usize) -> OpeningId {
+        TrigDownscaleOperands::r_cycle_source(node_idx)
+    }
+
+    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
+        TrigDownscaleOperands.witness(node, trace)
+    }
+
+    fn lookup_bits(witness: &Tensor<i64>) -> Vec<LookupBits> {
+        TrigDownscaleOperands::lookup_bits(witness)
+    }
+}
+
 /// Appends the downscaled value (`remainder >> TRIG_DOWNSCALE_BITS`) as a
 /// `VirtualPoly::TrigDownscaled` advice, evaluated at the node's standard reduced
 /// output-opening point (mirrors `fused_rebase::cache_remainder_prove`). Returns the

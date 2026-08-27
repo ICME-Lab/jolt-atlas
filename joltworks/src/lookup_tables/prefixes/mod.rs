@@ -16,6 +16,7 @@ use crate::{
             ActivationHigherAllZeroPrefix, ClampHigherAllZeroPrefix, SatClampHigherAllZeroPrefix,
             SoftmaxClampHigherAllZeroPrefix,
         },
+        less_than_const::{TrigEqConstPrefix, TrigLessThanConstPrefix},
         lower_msb::LowerMsbPrefix,
         lower_word::{
             ActivationLowerWordPrefix, ClampLowerWordPrefix, SatClampLowerWordPrefix,
@@ -56,6 +57,8 @@ pub mod higher_all_one;
 pub mod higher_all_zero;
 /// Less-than comparison prefix implementation.
 pub mod less_than;
+/// Const-bound less-than comparison prefix implementation (single-operand, `x < K`).
+pub mod less_than_const;
 /// Lower 32-bit word sign bit (i32 sign bit) prefix implementation.
 pub mod lower_msb;
 /// Outputs the lower word of the input without bits of significance >= bound.
@@ -291,6 +294,9 @@ impl_sparse_dense_prefix!(
     SoftmaxClampLowerWord       : SoftmaxClampLowerWordPrefix,      // Lower word without bits of significance >= bound, used by softmax's saturating-clamp table.
 
     TrigRightShift               : TrigRightShiftPrefix,            // Value of the high bits of an unsigned input, right-shifted by `TRIG_DOWNSCALE_BITS`, used by `RightShiftTable`.
+
+    TrigEqConst                  : TrigEqConstPrefix,               // Indicator that the bound bits of `x` equal `TRIG_PERIOD_MODULUS`'s bits so far, used by `LessThanConstTable`.
+    TrigLessThanConst            : TrigLessThanConstPrefix,         // `x < TRIG_PERIOD_MODULUS`, used by `LessThanConstTable`.
 );
 
 #[derive(Clone, Copy)]

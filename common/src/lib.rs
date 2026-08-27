@@ -27,7 +27,7 @@ canonical_serde_enum! {
     /// |-------|---------|
     /// | `NodeOutputRaD` / `{Cos,Sin}RaD` | One-hot read-address decompositions for activation-function lookup tables |
     /// | `Softmax*` | Polynomials specific to softmax sub-protocol |
-    /// | `Div* / Sqrt* / Teleport*` | Range-check one-hot polynomials for integer-arithmetic advice values |
+    /// | `Div* / Sqrt* / MeanOfSquares* / ScalarConstDiv*` | Range-check one-hot polynomials for integer-arithmetic advice values |
     /// | `*NodeQuotient / *NodeRemainder / *NodeInv / *NodeRsqrt` | Scalar advice polynomials for division / reciprocal-square-root |
     /// | `GatherRa` | Read-address polynomial for the Gather operator |
     /// | `SoftmaxRecipMultRemainder` | Remainder used in the reciprocal-multiplication check of softmax |
@@ -88,23 +88,18 @@ canonical_serde_enum! {
         /// * `1` – decomposition index `d`
         SqrtRangeCheckRaD(usize, usize),
 
-        /// Remainder and input one-hot polynomial for the **neural teleportation**
-        /// division range check.
+        /// Interleaved remainder `R` and (constant) divisor one-hot polynomial for the
+        /// **ScalarConstDiv** range check `R < b`.
         ///
         /// * `0` – node index
         /// * `1` – decomposition index `d`
-        TeleportRangeCheckRaD(usize, usize),
+        ScalarConstDivRangeCheckRaD(usize, usize),
 
         // ----- Scalar advice polynomials (node_index) -----
         /// Advice polynomial for the **quotient** in integer division.
         ///
         /// * `0` – node index
         DivNodeQuotient(usize),
-
-        /// Advice polynomial for the **remainder** in scalar-constant division.
-        ///
-        /// * `0` – node index
-        ScalarConstDivNodeRemainder(usize),
 
         /// Advice polynomial for the fused Rsqrt **quotient** `⌊S³ / x̂⌋`,
         /// i.e. the value fed into the integer square root.
@@ -225,7 +220,7 @@ canonical_serde_enum! {
     /// | `{Cos,Sin}Ra` | Read-address polynomials for activation-function lookups |
     /// | `Softmax*` | Intermediate polynomials arising in the softmax sub-protocol |
     /// | `HammingWeight` | Polynomial used in the Hamming-weight sumcheck |
-    /// | `Div* / Sqrt* / Teleport*` | Advice-derived polynomials proven via `ReadRafSumcheckProver` from committed one-hot polynomials |
+    /// | `Div* / Sqrt* / MeanOfSquares*` | Advice-derived polynomials proven via `ReadRafSumcheckProver` from committed one-hot polynomials |
     #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
     pub enum VirtualPoly {
         // ----- Node output -----
@@ -293,22 +288,27 @@ canonical_serde_enum! {
         SqrtRangeCheckRa(usize),
 
         /// Read-address polynomial derived from
-        /// [`CommittedPoly::TeleportRangeCheckRaD`].
-        ///
-        /// * `0` – node index
-        TeleportRangeCheckRa(usize),
-
-        /// Read-address polynomial derived from
         /// [`CommittedPoly::MeanOfSquaresRangeCheckRaD`].
         ///
         /// * `0` – node index
         MeanOfSquaresRangeCheckRa(usize),
+
+        /// Read-address polynomial derived from
+        /// [`CommittedPoly::ScalarConstDivRangeCheckRaD`].
+        ///
+        /// * `0` – node index
+        ScalarConstDivRangeCheckRa(usize),
 
         // ----- Division / square-root remainder & quotient polynomials -----
         /// Remainder polynomial for integer division advice.
         ///
         /// * `0` – node index
         DivRemainder(usize),
+
+        /// Remainder polynomial for scalar-constant division advice (`a = b·q + R`).
+        ///
+        /// * `0` – node index
+        ScalarConstDivRemainder(usize),
 
         /// Remainder polynomial for square-root advice.
         ///

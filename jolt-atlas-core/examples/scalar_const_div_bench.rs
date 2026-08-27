@@ -1,13 +1,10 @@
-//! Prove/verify timing benchmark for a standalone Cos node.
-//!
-//! Cos and Sin share the same neural-teleportation proving machinery
-//! (`onnx_proof/neural_teleport/`), so timing one is representative of both.
+//! Prove/verify timing benchmark for a standalone ScalarConstDiv node.
 //!
 //! ```bash
-//! cargo run --release --package jolt-atlas-core --example cos_bench
+//! cargo run --release --package jolt-atlas-core --example scalar_const_div_bench
 //! # Also prints mean-of-NUM_RUNS timings for ONNXProof::{commit_witness_polynomials,
 //! # iop,prove_reduced_openings} (accumulated in-process from their tracing spans):
-//! cargo run --release --package jolt-atlas-core --example cos_bench -- --trace-terminal
+//! cargo run --release --package jolt-atlas-core --example scalar_const_div_bench -- --trace-terminal
 //! ```
 use atlas_onnx_tracer::{model::test::ModelBuilder, tensor::Tensor};
 use common::consts::MODEL_SCALE;
@@ -24,6 +21,7 @@ use std::{
 use tracing_subscriber::{layer::SubscriberExt, registry::LookupSpan, util::SubscriberInitExt};
 
 const INPUT_LENS: &[usize] = &[1 << 8, 1 << 16];
+const DIVISOR: i32 = 128;
 const NUM_RUNS: usize = 5;
 
 /// Top-level `ONNXProof::prove` stages to accumulate mean timings for.
@@ -33,10 +31,10 @@ const STAGE_SPANS: &[&str] = &[
     "ONNXProof::prove_reduced_openings",
 ];
 
-fn cos_model(input_len: usize) -> atlas_onnx_tracer::model::Model {
+fn scalar_const_div_model(input_len: usize) -> atlas_onnx_tracer::model::Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![input_len]);
-    let res = b.cos(i);
+    let res = b.scalar_const_div(i, DIVISOR);
     b.mark_output(res);
     b.build()
 }
@@ -128,10 +126,7 @@ where
 }
 
 /// Registers only [`StageTimingLayer`] — no `fmt` layer, so nothing prints to the
-/// terminal except this bench's own `println!`s. `--trace-terminal` on other examples
-/// (via `common::utils::logging::setup_tracing`) dumps every span's raw timing to the
-/// terminal; here the means are read back in-process instead, so that dump is unused
-/// noise and is skipped entirely.
+/// terminal except this bench's own `println!`s.
 fn setup_stage_timing_tracing(timings: StageTimings) {
     tracing_subscriber::registry()
         .with(StageTimingLayer { timings })
@@ -139,20 +134,20 @@ fn setup_stage_timing_tracing(timings: StageTimings) {
 }
 
 fn main() {
-    let mut rng = StdRng::seed_from_u64(0xC05);
+    let mut rng = StdRng::seed_from_u64(0x5CD);
     let trace_terminal = std::env::args().any(|a| a == "--trace-terminal");
     let stage_timings = StageTimings::default();
     if trace_terminal {
         setup_stage_timing_tracing(stage_timings.clone());
     }
 
-    println!("MODEL_SCALE = {MODEL_SCALE}");
+    println!("MODEL_SCALE = {MODEL_SCALE}, divisor = {DIVISOR}");
     println!("runs per input length = {NUM_RUNS} (+1 warmup, discarded)");
 
     for &input_len in INPUT_LENS {
-        let input = Tensor::random_range(&mut rng, &[input_len], -50000..50000);
+        let input = Tensor::<i32>::random_small(&mut rng, &[input_len]);
 
-        let model = cos_model(input_len);
+        let model = scalar_const_div_model(input_len);
         let pp = AtlasSharedPreprocessing::preprocess(model);
         let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
         let verifier_preprocessing =

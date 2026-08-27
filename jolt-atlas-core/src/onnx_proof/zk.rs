@@ -612,6 +612,17 @@ fn verify_neural_teleport_zk(
 }
 
 /// Verify Cos/Sin ZK proof: custom flow mirroring prove_cos_sin_zk.
+///
+/// STALE: the non-zk `Cos`/`Sin` flow no longer has a division sumcheck, a
+/// `VirtualPoly::TeleportQuotient` hop, or the `range_and_onehot`/`NeuralTeleportRangeOneHot`
+/// module (deleted — its `prove_range_and_onehot`/`verify_range_and_onehot` were folded
+/// directly into `Cos`/`Sin::prove`/`verify`, see `ops/cos.rs`/`ops/sin.rs`). This function
+/// still references all three and will not compile as-is. A correct fix isn't just a
+/// reference swap: the replacement (`cache_teleport_quotient_prove`/
+/// `cache_teleport_input_claim_prove` and `verify_teleport_input_claim`) does cleartext
+/// transcript writes and a cleartext claim-equality check, which isn't zk-safe (claim values
+/// should stay hidden behind Pedersen commitments under BlindFold, not be compared in the
+/// clear). Needs a proper zk-safe redesign before this can be un-broken; not attempted here.
 fn verify_cos_sin_zk(
     node: &atlas_onnx_tracer::node::ComputationNode,
     model: &atlas_onnx_tracer::model::Model,
@@ -850,6 +861,11 @@ fn prove_neural_teleport_zk(
 
 /// Prove Cos/Sin with ZK: custom flow (division from transcript, then lookup,
 /// then quotient binding, then eval reduction, then range+onehot).
+///
+/// STALE: see the matching note on `verify_cos_sin_zk` — this mirrors a division sumcheck,
+/// a `VirtualPoly::TeleportQuotient` hop, and the deleted `range_and_onehot` module, none of
+/// which exist on the non-zk side anymore, and the replacement isn't a simple reference swap
+/// since it needs zk-safe (not cleartext) claim handling. Not attempted here.
 #[expect(clippy::too_many_arguments)]
 fn prove_cos_sin_zk(
     node: &atlas_onnx_tracer::node::ComputationNode,

@@ -1,8 +1,9 @@
 //! Shared "downscale" (right-shift) stage for the Cos/Sin trig-table lookup.
 //!
-//! //! Uses the teleportation remainder (`VirtualPoly::TeleportRemainder`) as the lookup read
-//! address vector for a [`RightShiftTable`] read-raf, producing `downscaled = remainder >> TRIG_DOWNSCALE_BITS` —
-//! the (much smaller) index the actual Cos/Sin table lookup reads.
+//! Right-shifts the teleportation remainder via a [`RightShiftTable`] read-raf, producing
+//! `downscaled = remainder >> TRIG_DOWNSCALE_BITS` — the smaller index the Cos/Sin table
+//! lookup reads. Also establishes `r`'s claim (`VirtualPoly::TeleportRemainder`) for
+//! `division.rs`'s `a = P·q + r` derivation.
 use super::division::compute_division;
 use crate::{
     onnx_proof::{op_lookups::LookupOperandsTrait, Prover, Verifier},
@@ -27,10 +28,10 @@ use joltworks::{
     utils::lookup_bits::LookupBits,
 };
 
-/// `LookupOperandsTrait` helper for the trig downscale (right-shift) stage: reads the
-/// existing full-domain `TeleportRemainder` advice as the lookup witness/address, and
-/// registers the result under the shared `TrigDownscaleRa`/`TrigDownscaled` polynomials.
-/// Shared by Cos and Sin (node index disambiguates).
+/// `LookupOperandsTrait` helper for the trig downscale (right-shift) stage. Registers the
+/// remainder witness/address claim under `VirtualPoly::TeleportRemainder`, and the
+/// read-address one-hot under `VirtualPoly::TrigDownscaleRa`/`CommittedPoly::TrigDownscaleRaD`.
+/// Shared by Cos and Sin.
 #[derive(Default, Clone)]
 pub struct TrigDownscaleOperands;
 
@@ -66,13 +67,13 @@ impl LookupOperandsTrait for TrigDownscaleOperands {
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> OpeningPoint<BIG_ENDIAN, F> {
         AccOpeningAccessor::new(accumulator, node)
-            .get_advice(VirtualPoly::TeleportRemainder)
+            .get_reduced_opening()
             .0
     }
 
     fn r_cycle_source(node_idx: usize) -> OpeningId {
         OpeningId::new(
-            VirtualPoly::TeleportRemainder(node_idx),
+            VirtualPoly::NodeOutput(node_idx),
             SumcheckId::NodeExecution(node_idx),
         )
     }
@@ -93,19 +94,19 @@ impl LookupOperandsTrait for TrigDownscaleOperands {
 }
 
 /// Appends the downscaled value (`remainder >> TRIG_DOWNSCALE_BITS`) as a
-/// `VirtualPoly::TrigDownscaled` advice, evaluated at the teleportation remainder's own
-/// opening point (mirrors `fused_rebase::cache_remainder_prove`). Returns the downscaled
-/// tensor so the caller (the Cos/Sin table lookup) doesn't have to recompute it.
+/// `VirtualPoly::TrigDownscaled` advice, evaluated at the node's standard reduced
+/// output-opening point (mirrors `fused_rebase::cache_remainder_prove`). Returns the
+/// downscaled tensor so the caller (the Cos/Sin table lookup) doesn't have to recompute it.
 pub fn cache_downscaled_prove<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
     remainder: &Tensor<i32>,
 ) -> Tensor<i32> {
     let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
-    let r1 = accessor.get_advice(VirtualPoly::TeleportRemainder).0;
+    let (r_node_output, _) = accessor.get_reduced_opening();
     let downscaled = remainder.map(|v| v >> TRIG_DOWNSCALE_BITS);
-    let eval = MultilinearPolynomial::from(downscaled.clone()).evaluate(&r1.r);
-    let mut provider = accessor.into_provider(&mut prover.transcript, r1);
+    let eval = MultilinearPolynomial::from(downscaled.clone()).evaluate(&r_node_output.r);
+    let mut provider = accessor.into_provider(&mut prover.transcript, r_node_output);
     provider.append_advice(VirtualPoly::TrigDownscaled, eval);
     downscaled
 }
@@ -116,7 +117,7 @@ pub fn cache_downscaled_verify<F: JoltField, T: Transcript>(
     verifier: &mut Verifier<'_, F, T>,
 ) {
     let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, node);
-    let r1 = accessor.get_advice(VirtualPoly::TeleportRemainder).0;
-    let mut provider = accessor.into_provider(&mut verifier.transcript, r1);
+    let (r_node_output, _) = accessor.get_reduced_opening();
+    let mut provider = accessor.into_provider(&mut verifier.transcript, r_node_output);
     provider.append_advice(VirtualPoly::TrigDownscaled);
 }

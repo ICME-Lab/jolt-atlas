@@ -134,6 +134,12 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
         }
     }
 
+    /// Builds the [`RangeCheckEncoding`] for this provider's node, using the same operands
+    /// so the Ra/RaD polynomial identifiers it exposes always match this provider's.
+    pub fn encoding(&self) -> RangeCheckEncoding {
+        self.operands.get_encoding(&self.computation_node)
+    }
+
     /// Combined prover flow: appends RAF claims + computes lookup indices + creates sumcheck prover.
     ///
     /// Returns `(sumcheck_prover, lookup_indices)` where `lookup_indices` can be reused

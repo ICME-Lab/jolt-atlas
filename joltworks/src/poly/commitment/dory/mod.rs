@@ -24,6 +24,7 @@
 //! sparsely in `O(nonzeros)` via [`DoryScheme::commit_one_hot`], bit-identical
 //! to the dense path so they still combine homomorphically.
 
+mod one_hot_commit;
 mod sparse_rlc;
 mod transcript;
 mod types;
@@ -37,7 +38,7 @@ use ark_bn254::Fr;
 use dory::{
     backends::arkworks::{ArkFr, ArkG1, ArkGT, ArkworksPolynomial, G1Routines, G2Routines, BN254},
     primitives::{
-        arithmetic::{Field as DoryField, Group as DoryGroup, PairingCurve},
+        arithmetic::{Field as DoryField, Group as DoryGroup},
         poly::Polynomial as DoryPolynomial,
     },
     prove as dory_prove, setup as dory_setup, verify as dory_verify, Transparent,
@@ -144,23 +145,22 @@ impl DoryScheme {
         let cols = 1usize << sigma;
         let num_rows = 1usize << nu;
 
-        // Tier-1: each set entry adds its column generator into its row (a
-        // mixed projective+affine add — the generators are cached in affine
-        // form). Rows with no set entry stay the identity (contribute nothing
-        // to tier-2).
-        let mut row_commitments = vec![<ArkG1 as DoryGroup>::identity(); num_rows];
-        let g1 = &setup.g1_affine[..cols];
-        for (t, k_opt) in one_hot.nonzero_indices.iter().enumerate() {
-            if let Some(k) = k_opt {
-                let idx = *k as usize * t_len + t;
-                row_commitments[idx / cols].0 += g1[idx % cols];
-            }
-        }
+        // Tier-1: each row is the sum of the column generators of its set
+        // entries, built with batched affine addition (see `one_hot_commit`).
+        let row_commitments = one_hot_commit::one_hot_row_commitments(
+            &one_hot.nonzero_indices,
+            t_len,
+            cols,
+            num_rows,
+            &setup.g1_affine[..cols],
+        );
 
-        // Tier-2: identical to the dense commit's `multi_pair_g2_setup`.
-        let tier_2 = <BN254 as PairingCurve>::multi_pair_g2_setup(
+        // Tier-2: identical to the dense commit's `multi_pair_g2_setup`, minus
+        // the identity rows (which pair to 1).
+        let tier_2 = one_hot_commit::tier_2_skip_identity(
             &row_commitments,
             &setup.prover.g2_vec[..num_rows],
+            &setup.g2_prepared[..num_rows],
         );
         (
             DoryCommitment(tier_2),

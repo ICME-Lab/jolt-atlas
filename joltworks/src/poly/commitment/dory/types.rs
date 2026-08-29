@@ -94,16 +94,31 @@ pub struct DoryProverSetup {
     /// Affine copy of `prover.g1_vec`, so sparse (one-hot) commits can use
     /// mixed projective+affine additions. Derived, never serialized.
     pub(crate) g1_affine: Vec<ark_bn254::G1Affine>,
+    /// Prepared (Miller-loop-ready) copy of `prover.g2_vec`, so tier-2 pairings
+    /// over a subset of rows need no per-call G2 preparation. Derived.
+    pub(crate) g2_prepared: Vec<<ark_bn254::Bn254 as ark_ec::pairing::Pairing>::G2Prepared>,
 }
 
 impl DoryProverSetup {
     pub(crate) fn new(prover: ProverSetup<BN254>, verifier: VerifierSetup<BN254>) -> Self {
         let projective: Vec<ark_bn254::G1Projective> = prover.g1_vec.iter().map(|g| g.0).collect();
         let g1_affine = ark_ec::CurveGroup::normalize_batch(&projective);
+        let g2_prepared = {
+            use rayon::prelude::*;
+            prover
+                .g2_vec
+                .par_iter()
+                .map(|g| {
+                    let affine: ark_bn254::G2Affine = ark_ec::CurveGroup::into_affine(g.0);
+                    affine.into()
+                })
+                .collect()
+        };
         Self {
             prover,
             verifier,
             g1_affine,
+            g2_prepared,
         }
     }
 }

@@ -23,7 +23,6 @@ use joltworks::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
         opening_proof::{OpeningId, ProverOpeningAccumulator, SumcheckId},
-        rlc_polynomial::build_materialized_rlc,
     },
     subprotocols::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof},
     transcripts::Transcript,
@@ -69,6 +68,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     /// Build the witness polynomial map, commit to each polynomial, and append
     /// all commitments to the transcript.
     #[tracing::instrument(skip_all, name = "ONNXProof::commit_witness_polynomials")]
+    #[allow(clippy::type_complexity)]
     pub(super) fn commit_witness_polynomials(
         model: &Model,
         trace: &Trace,
@@ -77,13 +77,14 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     ) -> (
         BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
         Vec<PCS::Commitment>,
+        Vec<PCS::OpeningProofHint>,
     ) {
         let poly_map = Self::polynomial_map(model, trace);
-        let commitments = Self::commit_to_polynomials(&poly_map, generators);
+        let (commitments, hints) = Self::commit_to_polynomials_with_hints(&poly_map, generators);
         for commitment in &commitments {
             transcript.append_serializable(commitment);
         }
-        (poly_map, commitments)
+        (poly_map, commitments, hints)
     }
 
     pub(crate) fn output_claim(prover: &mut Prover<F, T>) {
@@ -141,6 +142,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     pub(super) fn prove_reduced_openings(
         prover: &mut Prover<F, T>,
         poly_map: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
+        hints: Vec<PCS::OpeningProofHint>,
         generators: &PCS::ProverSetup,
     ) -> Option<ReducedOpeningProof<F, T, PCS>> {
         if poly_map.is_empty() {
@@ -158,14 +160,13 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             .accumulator
             .finalize_batch_opening_sumcheck(r_sumcheck_acc.clone(), &mut prover.transcript);
         let sumcheck_claims: Vec<F> = state.sumcheck_claims.clone();
-        // Build RLC
-        let rlc = build_materialized_rlc(&state.gamma_powers, poly_map);
-        // Create joint opening proof
-        let joint_opening_proof = PCS::prove(
+        // Joint opening of the RLC `Σ γ_i · poly_i` (materialized or not, per PCS)
+        let joint_opening_proof = PCS::prove_rlc(
             generators,
-            &rlc,
+            poly_map,
+            &state.gamma_powers,
+            hints,
             &state.r_sumcheck,
-            None,
             &mut prover.transcript,
         );
         Some(ReducedOpeningProof {
@@ -233,10 +234,21 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     }
 
     #[tracing::instrument(skip_all)]
+    #[cfg_attr(not(feature = "zk"), allow(dead_code))]
     pub(super) fn commit_to_polynomials(
         poly_map: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
         pcs: &PCS::ProverSetup,
     ) -> Vec<PCS::Commitment> {
+        Self::commit_to_polynomials_with_hints(poly_map, pcs).0
+    }
+
+    /// Commit to every polynomial (in `poly_map` order), keeping the per-polynomial
+    /// opening hints so the joint opening can be assembled from them.
+    #[tracing::instrument(skip_all)]
+    pub(super) fn commit_to_polynomials_with_hints(
+        poly_map: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
+        pcs: &PCS::ProverSetup,
+    ) -> (Vec<PCS::Commitment>, Vec<PCS::OpeningProofHint>) {
         // Rayon jobs were overly fragmented, and the resulting context switching degraded performance,
         // so the parallelism granularity is now limited to the polynomial level.
         let _guard = ParallelFlagGuard::disabled();
@@ -244,7 +256,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             .values()
             .collect::<Vec<_>>()
             .par_iter()
-            .map(|poly| PCS::commit(poly, pcs).0)
-            .collect()
+            .map(|poly| PCS::commit(poly, pcs))
+            .unzip()
     }
 }

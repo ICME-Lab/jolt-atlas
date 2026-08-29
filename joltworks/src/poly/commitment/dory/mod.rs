@@ -24,9 +24,11 @@
 //! sparsely in `O(nonzeros)` via [`DoryScheme::commit_one_hot`], bit-identical
 //! to the dense path so they still combine homomorphically.
 
+mod sparse_rlc;
 mod transcript;
 mod types;
 
+pub use sparse_rlc::SparseRlc;
 pub use types::{DoryCommitment, DoryHint, DoryProof, DoryProverSetup, DoryVerifierSetup};
 
 use std::borrow::Borrow;
@@ -269,6 +271,64 @@ impl CommitmentScheme for DoryScheme {
             .map(|(commitment, gamma)| ArkFr(*gamma) * commitment.borrow().0)
             .fold(<ArkGT as DoryGroup>::identity(), |acc, term| acc + term);
         DoryCommitment(combined)
+    }
+
+    /// Joint tier-1 rows are linear in the polynomials: `rows = Σ_i γ_i · rows_i`
+    /// (same fixed column width, so rows of smaller polynomials are a prefix).
+    #[tracing::instrument(skip_all, name = "DoryScheme::combine_hints")]
+    fn combine_hints(
+        hints: Vec<Self::OpeningProofHint>,
+        coeffs: &[Self::Field],
+    ) -> Self::OpeningProofHint {
+        let rows: Vec<Vec<ArkG1>> = hints.into_iter().map(|h| h.row_commitments).collect();
+        DoryHint {
+            row_commitments: sparse_rlc::combine_row_commitments(&rows, coeffs),
+            commit_blind: <ArkFr as DoryField>::zero(),
+        }
+    }
+
+    /// Open `Σ γ_i · f_i` without materializing it: the joint is a
+    /// [`SparseRlc`] (one-hots stay sparse) and its row commitments come from
+    /// [`Self::combine_hints`] when every hint is present.
+    #[tracing::instrument(skip_all, name = "DoryScheme::prove_rlc")]
+    fn prove_rlc<ProofTranscript: Transcript>(
+        setup: &Self::ProverSetup,
+        polynomials: &std::collections::BTreeMap<common::CommittedPoly, MultilinearPolynomial<Fr>>,
+        coeffs: &[Fr],
+        hints: Vec<Self::OpeningProofHint>,
+        opening_point: &[<Fr as JoltField>::Challenge],
+        transcript: &mut ProofTranscript,
+    ) -> Self::Proof {
+        let num_vars = opening_point.len();
+        let (nu, sigma) = Self::split(num_vars, Self::column_log(setup));
+        let joint = SparseRlc::new(coeffs, polynomials, num_vars);
+        let point = Self::dory_point(opening_point);
+
+        let (row_commitments, commit_blind) = if hints.len() == polynomials.len() {
+            let h = Self::combine_hints(hints, coeffs);
+            let mut rows = h.row_commitments;
+            rows.resize(1 << nu, <ArkG1 as DoryGroup>::identity());
+            (rows, h.commit_blind)
+        } else {
+            let (_c, rows, blind) = joint
+                .commit::<BN254, Transparent, G1Routines>(nu, sigma, &setup.prover)
+                .expect("dory sparse commit (hint recompute)");
+            (rows, blind)
+        };
+
+        let mut dory_transcript = LocalToDoryTranscript::new(transcript);
+        let (proof, _blind) = dory_prove::<_, BN254, G1Routines, G2Routines, _, _, Transparent>(
+            &joint,
+            &point,
+            row_commitments,
+            commit_blind,
+            nu,
+            sigma,
+            &setup.prover,
+            &mut dory_transcript,
+        )
+        .expect("dory prove (sparse rlc)");
+        DoryProof(proof)
     }
 
     #[tracing::instrument(skip_all, name = "DoryScheme::prove")]

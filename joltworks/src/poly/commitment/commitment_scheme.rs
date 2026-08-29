@@ -106,6 +106,28 @@ pub trait CommitmentScheme: Clone + Sync + Send + 'static {
         transcript: &mut ProofTranscript,
     ) -> Self::Proof;
 
+    /// Opens the random linear combination `Σ_i γ_i · f_i` (every `f_i`
+    /// overlapped at index 0) at `opening_point`, given the per-polynomial
+    /// commit hints in the same order as `polynomials`/`coeffs`.
+    ///
+    /// The default materializes the joint polynomial and calls [`Self::prove`];
+    /// schemes that can open the combination without materializing it (see
+    /// Dory) override this.
+    fn prove_rlc<ProofTranscript: Transcript>(
+        setup: &Self::ProverSetup,
+        polynomials: &std::collections::BTreeMap<
+            common::CommittedPoly,
+            MultilinearPolynomial<Self::Field>,
+        >,
+        coeffs: &[Self::Field],
+        _hints: Vec<Self::OpeningProofHint>,
+        opening_point: &[<Self::Field as JoltField>::Challenge],
+        transcript: &mut ProofTranscript,
+    ) -> Self::Proof {
+        let rlc = crate::poly::rlc_polynomial::build_materialized_rlc(coeffs, polynomials);
+        Self::prove(setup, &rlc, opening_point, None, transcript)
+    }
+
     /// Verifies a proof of polynomial evaluation at a specific point.
     ///
     /// # Arguments

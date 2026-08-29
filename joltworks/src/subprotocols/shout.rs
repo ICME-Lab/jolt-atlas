@@ -381,6 +381,13 @@ pub trait RaOneHotEncoding {
 
     /// One-hot encoding parameters (chunk size, instruction_d, etc.).
     fn one_hot_params(&self) -> OneHotParams;
+
+    /// The cycle point `r_cycle` for HammingWeight and Booleanity. By default
+    /// the opening point of [`Self::r_cycle_source`]; encodings whose cycle
+    /// space has no single node opening (packed instances) override it.
+    fn r_cycle<F: JoltField>(&self, accumulator: &dyn OpeningAccumulator<F>) -> Vec<F> {
+        resolve_vp_opening(accumulator, self.r_cycle_source()).0.r
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -408,8 +415,7 @@ pub fn ra_onehot_provers<F: JoltField, T: Transcript>(
     let polynomial_types: Vec<CommittedPoly> = (0..d).map(|i| encoding.committed_poly(i)).collect();
 
     // --- HammingWeight params (draws gamma_powers) ---
-    let r_cycle_source = encoding.r_cycle_source();
-    let r_cycle_hw = resolve_vp_opening(accumulator, r_cycle_source).0.r;
+    let r_cycle_hw = encoding.r_cycle(accumulator);
     let gamma_powers = transcript.challenge_scalar_powers(d);
     let hamming_weight_params = HammingWeightSumcheckParams {
         d,
@@ -421,8 +427,7 @@ pub fn ra_onehot_provers<F: JoltField, T: Transcript>(
     };
 
     // --- Booleanity params (draws gammas, r_address) ---
-    let r_cycle_source = encoding.r_cycle_source();
-    let r_cycle_bool = resolve_vp_opening(accumulator, r_cycle_source).0;
+    let r_cycle_bool = OpeningPoint::<BIG_ENDIAN, F>::new(encoding.r_cycle(accumulator));
     let gammas = transcript.challenge_vector_optimized::<F>(d);
     let r_address = transcript.challenge_vector_optimized::<F>(one_hot_params.log_k_chunk);
     let booleanity_params = BooleanitySumcheckParams {
@@ -482,8 +487,7 @@ pub fn ra_onehot_verifiers<F: JoltField, T: Transcript>(
     let polynomial_types: Vec<CommittedPoly> = (0..d).map(|i| encoding.committed_poly(i)).collect();
 
     // --- HammingWeight params ---
-    let r_cycle_source = encoding.r_cycle_source();
-    let r_cycle_hw = resolve_vp_opening(accumulator, r_cycle_source).0.r;
+    let r_cycle_hw = encoding.r_cycle(accumulator);
     let gamma_powers = transcript.challenge_scalar_powers(d);
     let hamming_weight_params = HammingWeightSumcheckParams {
         d,
@@ -495,8 +499,7 @@ pub fn ra_onehot_verifiers<F: JoltField, T: Transcript>(
     };
 
     // --- Booleanity params ---
-    let r_cycle_source = encoding.r_cycle_source();
-    let r_cycle_bool = resolve_vp_opening(accumulator, r_cycle_source).0;
+    let r_cycle_bool = OpeningPoint::<BIG_ENDIAN, F>::new(encoding.r_cycle(accumulator));
     let gammas = transcript.challenge_vector_optimized::<F>(d);
     let r_address = transcript.challenge_vector_optimized::<F>(one_hot_params.log_k_chunk);
     let booleanity_params = BooleanitySumcheckParams {

@@ -28,6 +28,7 @@ use std::collections::BTreeMap;
 pub mod clamp_lookups;
 pub mod deferred_lookups;
 pub mod fused_rebase;
+pub mod global_clamp;
 pub mod neural_teleport;
 pub mod op_lookups;
 pub mod ops;

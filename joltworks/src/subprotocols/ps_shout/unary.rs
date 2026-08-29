@@ -3,12 +3,14 @@ use crate::{
     lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
     poly::{
         multilinear_polynomial::PolynomialEvaluation,
-        opening_proof::{OpeningAccumulator, ProverOpeningAccumulator, VerifierOpeningAccumulator},
+        opening_proof::{
+            OpeningAccumulator, ProverOpeningAccumulator, SumcheckId, VerifierOpeningAccumulator,
+        },
         prefix_suffix::{Prefix, PrefixRegistry, PrefixSuffixDecomposition},
         signed_identity_poly::SignedIdentityPoly,
     },
     subprotocols::ps_shout::{
-        phase_schedule, RafProverState, RafVerifierData, ReadRafSumcheckParams,
+        phase_schedule, CycleWeight, RafProverState, RafVerifierData, ReadRafSumcheckParams,
         ReadRafSumcheckProver, ReadRafSumcheckVerifier,
     },
     transcripts::Transcript,
@@ -16,6 +18,7 @@ use crate::{
 };
 use ark_std::Zero;
 use common::parallel::par_enabled;
+use common::VirtualPoly;
 use rayon::prelude::*;
 
 /// Verifier-side RAF data for unary ops (ReLU, UnsignedAbs).
@@ -136,6 +139,72 @@ pub fn ps_read_raf_prover<
     drop(_guard);
     let raf_state = UnaryRafPS { identity_ps };
     ReadRafSumcheckProver::new_inner(params, lookup_indices, raf_state)
+}
+
+/// Build the read-raf prover for an explicit [`CycleWeight`] and claims (used
+/// for packed multi-node instances, where there is no single provider node).
+/// Draws the same transcript challenge as [`ps_read_raf_prover`].
+#[allow(clippy::too_many_arguments)]
+pub fn ps_read_raf_prover_with_cycle<
+    F: JoltField,
+    T: Transcript,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+    const LOG_K: usize,
+>(
+    claims: ReadRafClaims<F>,
+    cycle: CycleWeight<F>,
+    ra_poly: (VirtualPoly, SumcheckId),
+    lookup_indices: Vec<LookupBits>,
+    transcript: &mut T,
+) -> UnaryReadRafSumcheckProver<F, LUT, LOG_K> {
+    let gamma = transcript.challenge_scalar();
+    let raf = UnaryRafVD {
+        operand_claim: claims.operand_claim,
+        log_k: LOG_K,
+    };
+    let params = ReadRafSumcheckParams::from_parts_with_cycle(
+        gamma,
+        cycle,
+        LUT::default(),
+        ra_poly.0,
+        ra_poly.1,
+        claims.rv_claim,
+        raf,
+    );
+    let (_phases, log_m) = phase_schedule(LOG_K);
+    let identity_ps =
+        PrefixSuffixDecomposition::new(Box::new(SignedIdentityPoly::<F>::new(LOG_K)), log_m, LOG_K);
+    let raf_state = UnaryRafPS { identity_ps };
+    ReadRafSumcheckProver::new_inner(params, lookup_indices, raf_state)
+}
+
+/// Verifier counterpart of [`ps_read_raf_prover_with_cycle`].
+pub fn ps_read_raf_verifier_with_cycle<
+    F: JoltField,
+    T: Transcript,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+    const LOG_K: usize,
+>(
+    claims: ReadRafClaims<F>,
+    cycle: CycleWeight<F>,
+    ra_poly: (VirtualPoly, SumcheckId),
+    transcript: &mut T,
+) -> UnaryReadRafSumcheckVerifier<F, LUT, LOG_K> {
+    let gamma = transcript.challenge_scalar();
+    let raf = UnaryRafVD {
+        operand_claim: claims.operand_claim,
+        log_k: LOG_K,
+    };
+    let params = ReadRafSumcheckParams::from_parts_with_cycle(
+        gamma,
+        cycle,
+        LUT::default(),
+        ra_poly.0,
+        ra_poly.1,
+        claims.rv_claim,
+        raf,
+    );
+    ReadRafSumcheckVerifier::new(params)
 }
 
 pub fn ps_read_raf_verifier<

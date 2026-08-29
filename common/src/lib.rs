@@ -200,6 +200,14 @@ canonical_serde_enum! {
         /// * `0` – node index
         /// * `1` – decomposition index `d`
         SoftmaxClampRaD(usize, usize),
+
+        /// One-hot read-address decomposition for a **packed** saturating-clamp
+        /// lookup bucket: several nodes' clamp lookups (same width) laid out in
+        /// one cycle space (see `jolt_atlas_core::onnx_proof::global_clamp`).
+        ///
+        /// * `0` – bucket index
+        /// * `1` – decomposition index `d`
+        GlobalClampRaD(usize, usize),
     }
 }
 
@@ -469,5 +477,11 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         ActivationSmallRa(usize),
+
+        /// Read-address polynomial of a packed saturating-clamp lookup bucket
+        /// (virtualized; [`CommittedPoly::GlobalClampRaD`] commits its chunks).
+        ///
+        /// * `0` – bucket index
+        GlobalClampRa(usize),
     }
 }

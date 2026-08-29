@@ -81,7 +81,7 @@ fn build_range_check_rad_witness<F: JoltField, H: RangeCheckingOperandsTrait>(
 ///
 /// This pattern appears in every operand type that decomposes lookup indices across multiple
 /// dimensions (NodeOutputRaD, DivRangeCheckRaD, SqrtRangeCheckRaD, etc.).
-fn build_one_hot_rad_witness<F: JoltField>(
+pub(crate) fn build_one_hot_rad_witness<F: JoltField>(
     lookup_indices: &[LookupBits],
     d: usize,
     log_k: usize,
@@ -309,6 +309,9 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let layer_data = Trace::layer_data(trace, computation_node);
                 let input = &layer_data.operands[0];
                 build_activation_small_rad_witness(input, *d)
+            }
+            CommittedPoly::GlobalClampRaD(..) => {
+                unreachable!("packed clamp bucket witnesses are built at the model level")
             }
             CommittedPoly::ClampRaD(node_idx, d) => {
                 // Saturating Add/Sub: the lookup index is the pre-clamp i64

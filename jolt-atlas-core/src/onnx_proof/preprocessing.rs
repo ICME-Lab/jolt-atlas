@@ -43,12 +43,17 @@ impl AtlasSharedPreprocessing {
         &self,
     ) -> Vec<CommittedPoly> {
         use crate::onnx_proof::ops::NodeCommittedPolynomials;
-        self.model
+        let mut polys: Vec<CommittedPoly> = self
+            .model
             .graph
             .nodes
             .values()
             .flat_map(|node| NodeCommittedPolynomials::get_committed_polynomials::<F, T>(node))
-            .collect()
+            .collect();
+        polys.extend(crate::onnx_proof::global_clamp::bucket_committed_polys(
+            &self.model,
+        ));
+        polys
     }
 
     /// Get the model

@@ -19,9 +19,7 @@
 //! The one-hot read-address checks are over a 64-bit address, so the decomposition has
 //! `64 / log_k_chunk` committed chunks ([`CommittedPoly::ClampRaD`]).
 
-use super::op_lookups::{
-    DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider,
-};
+use super::op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupProvider};
 use crate::onnx_proof::{
     deferred_lookups::{ProverLookupJob, VerifierLookupJob},
     ProofId, Prover, Verifier,
@@ -42,7 +40,7 @@ use joltworks::{
             VerifierOpeningAccumulator, BIG_ENDIAN,
         },
     },
-    subprotocols::{shout::RaOneHotEncoding, sumcheck::SumcheckInstanceProof},
+    subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
@@ -83,7 +81,7 @@ pub fn recover_small_int<F: JoltField>(x: F) -> Option<i64> {
 }
 
 /// Opening id for a node's accumulation (`ClampAcc`) polynomial.
-fn acc_opening_id(node_idx: usize) -> OpeningId {
+pub(crate) fn acc_opening_id(node_idx: usize) -> OpeningId {
     OpeningId::new(
         VirtualPoly::ClampAcc(node_idx),
         SumcheckId::NodeExecution(node_idx),
@@ -320,18 +318,12 @@ pub fn verify_clamp_lookup<F: JoltField, T: Transcript>(
     Ok(())
 }
 
-/// The committed one-hot decomposition polynomials a clamped node must commit to
-/// (empty for scalar nodes, which prove the clamp directly).
-pub fn clamp_committed_polys(node: &ComputationNode) -> Vec<CommittedPoly> {
-    if is_scalar(node) {
-        return Vec::new();
-    }
-    let d = OpLookupEncoding::<SaturatingAccClampOperands>::with_log_k(node, node.sat_clamp_bits)
-        .one_hot_params()
-        .instruction_d;
-    (0..d)
-        .map(|i| CommittedPoly::ClampRaD(node.idx, i))
-        .collect()
+/// A clamped node commits **no** per-node polynomials: its clamp one-hots live
+/// in a packed bucket (see [`global_clamp`](crate::onnx_proof::global_clamp)),
+/// whose chunks are listed at the model level by
+/// `global_clamp::bucket_committed_polys`.
+pub fn clamp_committed_polys(_node: &ComputationNode) -> Vec<CommittedPoly> {
+    Vec::new()
 }
 
 /// Verify a scalar node's clamp directly: `output_claim == SatClamp(combined)`,

@@ -18,17 +18,19 @@
 //! parallel across instances, which is what turns the ~750 tiny sequential
 //! sumchecks into a few large parallel ones.
 use crate::onnx_proof::{
-    clamp_lookups::SaturatingAccClampOperands,
     fused_rebase::{RescaleRemainderRCProvider, RescaleRemainderRaEncoding},
-    op_lookups::{OpLookupEncoding, OpLookupProvider},
+    global_clamp::{clamp_buckets, GlobalClampEncoding},
     ProofId, ProofType, Prover, Verifier,
 };
 use atlas_onnx_tracer::node::ComputationNode;
+use common::VirtualPoly;
 use joltworks::{
     field::JoltField,
     lookup_tables::clamp::SaturationTable,
+    poly::opening_proof::SumcheckId,
     subprotocols::{
         identity_range_check::{identity_rangecheck_prover, identity_rangecheck_verifier},
+        ps_shout::unary::{ps_read_raf_prover_with_cycle, ps_read_raf_verifier_with_cycle},
         shout,
         sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
@@ -38,6 +40,7 @@ use joltworks::{
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 /// Node index under which the deferred (model-wide) lookup proofs are stored.
 pub const DEFERRED_PROOF_IDX: usize = usize::MAX;
@@ -157,18 +160,46 @@ pub fn prove_all<F: JoltField, T: Transcript>(
         }
     }
 
-    if !clamp.is_empty() {
-        let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = clamp
+    // Clamp lookups: packed into buckets (see `global_clamp`).
+    let buckets = clamp_buckets(prover.preprocessing.model());
+    let mut bits_by_node: HashMap<usize, Vec<LookupBits>> =
+        clamp.into_iter().map(|(n, bits)| (n.idx, bits)).collect();
+    for b in &buckets {
+        for n in &b.nodes {
+            assert!(
+                bits_by_node.contains_key(&n.idx),
+                "node {} is in a clamp bucket but registered no clamp lookup",
+                n.idx
+            );
+        }
+    }
+    if !buckets.is_empty() {
+        let assembled: Vec<Vec<LookupBits>> = buckets
             .iter()
-            .map(|(node, bits)| {
-                let provider = OpLookupProvider::with_helper(
-                    node.clone(),
-                    SaturatingAccClampOperands::for_node(node),
+            .map(|b| b.assemble_bits(|idx| bits_by_node.remove(&idx).unwrap()))
+            .collect();
+        assert!(
+            bits_by_node.is_empty(),
+            "clamp lookups registered for nodes outside every bucket: {:?}",
+            bits_by_node.keys().collect::<Vec<_>>()
+        );
+
+        let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = buckets
+            .iter()
+            .zip(&assembled)
+            .map(|(b, bits)| {
+                let gammas: Vec<F> = prover.transcript.challenge_scalar_powers(b.nodes.len());
+                let (claims, cycle) = b.read_raf_inputs(&gammas, &prover.accumulator);
+                let ra_poly = (
+                    VirtualPoly::GlobalClampRa(b.idx),
+                    SumcheckId::NodeExecution(DEFERRED_PROOF_IDX),
                 );
-                with_clamp_width!(node.sat_clamp_bits, W => Box::new(
-                    provider.read_raf_prover_from_bits::<F, T, SaturationTable<W>, W>(
+                with_clamp_width!(b.width, W => Box::new(
+                    ps_read_raf_prover_with_cycle::<F, T, SaturationTable<W>, W>(
+                        claims,
+                        cycle,
+                        ra_poly,
                         bits.clone(),
-                        &mut prover.accumulator,
                         &mut prover.transcript,
                     ),
                 )
@@ -178,13 +209,10 @@ pub fn prove_all<F: JoltField, T: Transcript>(
         batched_prove(instances, prover, proofs, ProofType::DeferredClampReadRaf);
 
         let mut instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> =
-            Vec::with_capacity(3 * clamp.len());
-        for (node, bits) in &clamp {
-            let indices: Vec<usize> = bits.iter().map(|&b| b.into()).collect();
-            let encoding = OpLookupEncoding::<SaturatingAccClampOperands>::with_log_k(
-                node,
-                node.sat_clamp_bits,
-            );
+            Vec::with_capacity(3 * buckets.len());
+        for (b, bits) in buckets.iter().zip(&assembled) {
+            let indices: Vec<usize> = bits.iter().map(|&x| x.into()).collect();
+            let encoding = GlobalClampEncoding(b);
             instances.extend(shout::ra_onehot_provers(
                 &encoding,
                 &indices,
@@ -192,7 +220,7 @@ pub fn prove_all<F: JoltField, T: Transcript>(
                 &mut prover.transcript,
             ));
         }
-        drop(clamp);
+        drop(assembled);
         batched_prove(instances, prover, proofs, ProofType::DeferredClampRaChecks);
     }
 
@@ -246,17 +274,32 @@ pub fn verify_all<F: JoltField, T: Transcript>(
         }
     }
 
-    if !clamp.is_empty() {
-        let instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> = clamp
+    let buckets = clamp_buckets(verifier.preprocessing.model());
+    let registered: std::collections::BTreeSet<usize> = clamp.iter().map(|n| n.idx).collect();
+    let bucketed: std::collections::BTreeSet<usize> = buckets
+        .iter()
+        .flat_map(|b| b.nodes.iter().map(|n| n.idx))
+        .collect();
+    if registered != bucketed {
+        return Err(ProofVerifyError::InvalidOpeningProof(
+            "clamp lookup registrations do not match the model's clamp buckets".to_string(),
+        ));
+    }
+    if !buckets.is_empty() {
+        let instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> = buckets
             .iter()
-            .map(|node| {
-                let provider = OpLookupProvider::with_helper(
-                    node.clone(),
-                    SaturatingAccClampOperands::for_node(node),
+            .map(|b| {
+                let gammas: Vec<F> = verifier.transcript.challenge_scalar_powers(b.nodes.len());
+                let (claims, cycle) = b.read_raf_inputs(&gammas, &verifier.accumulator);
+                let ra_poly = (
+                    VirtualPoly::GlobalClampRa(b.idx),
+                    SumcheckId::NodeExecution(DEFERRED_PROOF_IDX),
                 );
-                with_clamp_width!(node.sat_clamp_bits, W => Box::new(
-                    provider.read_raf_verifier_only::<F, T, SaturationTable<W>, W>(
-                        &mut verifier.accumulator,
+                with_clamp_width!(b.width, W => Box::new(
+                    ps_read_raf_verifier_with_cycle::<F, T, SaturationTable<W>, W>(
+                        claims,
+                        cycle,
+                        ra_poly,
                         &mut verifier.transcript,
                     ),
                 )
@@ -266,12 +309,9 @@ pub fn verify_all<F: JoltField, T: Transcript>(
         batched_verify(instances, verifier, ProofType::DeferredClampReadRaf)?;
 
         let mut instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> =
-            Vec::with_capacity(3 * clamp.len());
-        for node in &clamp {
-            let encoding = OpLookupEncoding::<SaturatingAccClampOperands>::with_log_k(
-                node,
-                node.sat_clamp_bits,
-            );
+            Vec::with_capacity(3 * buckets.len());
+        for b in &buckets {
+            let encoding = GlobalClampEncoding(b);
             instances.extend(shout::ra_onehot_verifiers(
                 &encoding,
                 &verifier.accumulator,

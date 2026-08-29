@@ -228,14 +228,19 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         // that losing node-level parallelism for them is negligible.
         // `generate_node_witnesses` still computes each node's accumulation once
         // and slices every committed-poly chunk from it.
-        model
+        let mut polys: BTreeMap<CommittedPoly, MultilinearPolynomial<F>> = model
             .graph
             .nodes
             .values()
             .flat_map(|node| {
                 crate::onnx_proof::witness::generate_node_witnesses::<F, T>(node, model, trace)
             })
-            .collect()
+            .collect();
+        // Packed clamp buckets (model-level, not per node).
+        polys.extend(crate::onnx_proof::global_clamp::bucket_witnesses::<F>(
+            model, trace,
+        ));
+        polys
     }
 
     #[tracing::instrument(skip_all)]

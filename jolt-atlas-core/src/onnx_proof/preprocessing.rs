@@ -89,6 +89,19 @@ where
     #[tracing::instrument(skip_all, name = "AtlasProverPreprocessing::gen")]
     pub fn new(shared: AtlasSharedPreprocessing) -> AtlasProverPreprocessing<F, PCS> {
         let max_num_vars = shared.model.max_num_vars();
+        Self::new_with_srs_num_vars(shared, max_num_vars)
+    }
+
+    /// Like [`Self::new`], but sizes the SRS for `srs_num_vars` variables
+    /// (at least the model's `max_num_vars`). Over-provisioning is useful for
+    /// matrix-structured schemes such as Dory, where a larger SRS means wider
+    /// columns: fewer tier-2 pairings per commitment at the cost of a longer
+    /// per-row MSM and a larger setup.
+    pub fn new_with_srs_num_vars(
+        shared: AtlasSharedPreprocessing,
+        srs_num_vars: usize,
+    ) -> AtlasProverPreprocessing<F, PCS> {
+        let max_num_vars = shared.model.max_num_vars().max(srs_num_vars);
         tracing::info!("Prover preprocessing: max_num_vars = {max_num_vars}");
         let generators = PCS::setup_prover(max_num_vars);
         AtlasProverPreprocessing { generators, shared }

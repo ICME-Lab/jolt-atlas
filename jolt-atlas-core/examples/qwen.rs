@@ -9,6 +9,9 @@
 /// # Override the input prompt
 /// cargo run --release --package jolt-atlas-core --example qwen -- --input "Hello, world!"
 ///
+/// # Over-provision the Dory SRS (wider columns => fewer tier-2 pairings per commit)
+/// cargo run --release --package jolt-atlas-core --example qwen -- --srs-vars 34
+///
 /// # Reuse cached shared preprocessing (only valid for inputs that tokenize to the same
 /// # sequence length as the cached run)
 /// cargo run --release --package jolt-atlas-core --example qwen -- --use-cache
@@ -37,6 +40,21 @@ const SHARED_PP_CACHE_PATH: &str = "atlas-onnx-tracer/models/qwen/shared_preproc
 /// Same default as `qwen_quant_error_analysis`'s `setup(...)` call, so the two examples are
 /// directly comparable out of the box.
 const DEFAULT_PROMPT: &str = "The quick brown fox jumps over the lazy dog";
+
+fn parse_srs_vars_arg(args: &[String]) -> Option<usize> {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--srs-vars" {
+            return Some(
+                args.next()
+                    .expect("--srs-vars requires a value")
+                    .parse()
+                    .expect("--srs-vars must be an integer"),
+            );
+        }
+    }
+    None
+}
 
 fn parse_input_arg(args: &[String]) -> String {
     let mut args = args.iter();
@@ -126,7 +144,10 @@ fn main() {
 
     tracing::info!("Loaded input data");
     let pp = load_or_build_shared_preprocessing(&run_args, use_cache);
-    let prover_preprocessing = AtlasProverPreprocessing::<Fr, DoryScheme>::new(pp);
+    let prover_preprocessing = match parse_srs_vars_arg(&args) {
+        Some(n) => AtlasProverPreprocessing::<Fr, DoryScheme>::new_with_srs_num_vars(pp, n),
+        None => AtlasProverPreprocessing::<Fr, DoryScheme>::new(pp),
+    };
 
     let timing = std::time::Instant::now();
     let (proof, io, _debug_info) = ONNXProof::<Fr, Blake2bTranscript, DoryScheme>::prove(

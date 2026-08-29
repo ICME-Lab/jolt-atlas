@@ -13,7 +13,7 @@ use ark_bn254::Fr;
 use ark_ff::{One, Zero};
 use common::{parallel::par_enabled, CommittedPoly};
 use dory::{
-    backends::arkworks::{ArkFr, G1Routines},
+    backends::arkworks::{ArkFr, ArkG1, G1Routines},
     error::DoryError,
     mode::Mode,
     primitives::{
@@ -284,24 +284,46 @@ impl MultilinearLagrange<ArkFr> for SparseRlc<'_> {
 }
 
 /// Combine per-polynomial tier-1 hints into the joint's: `rows[r] = Σ_i γ_i · rows_i[r]`.
-pub fn combine_row_commitments(
-    hints: &[Vec<dory::backends::arkworks::ArkG1>],
-    coeffs: &[Fr],
-) -> Vec<dory::backends::arkworks::ArkG1> {
+pub fn combine_row_commitments(hints: &[Vec<ArkG1>], coeffs: &[Fr]) -> Vec<ArkG1> {
     assert_eq!(hints.len(), coeffs.len());
     let num_rows = hints.iter().map(|h| h.len()).max().unwrap_or(0);
-    (0..num_rows)
+    // Row r collects one term per polynomial with more than r rows. Row 0 has
+    // every polynomial (a real MSM); rows near the top belong to a handful of
+    // large polynomials. arkworks' MSM builds its own thread pools, so it must
+    // not be invoked from inside a rayon job: large rows run sequentially
+    // (each MSM parallel internally), small rows in parallel by scale-and-add.
+    const MSM_THRESHOLD: usize = 64;
+    let row_terms = |r: usize| -> (Vec<ArkG1>, Vec<ArkFr>) {
+        hints
+            .iter()
+            .zip(coeffs)
+            .filter(|(h, _)| r < h.len())
+            .map(|(h, g)| (h[r], ArkFr(*g)))
+            .unzip()
+    };
+    let mut rows: Vec<ArkG1> = (0..num_rows)
         .into_par_iter()
         .map(|r| {
-            let (bases, scalars): (Vec<_>, Vec<_>) = hints
-                .iter()
-                .zip(coeffs)
-                .filter(|(h, _)| r < h.len())
-                .map(|(h, g)| (h[r], ArkFr(*g)))
-                .unzip();
-            G1Routines::msm(&bases, &scalars)
+            let (bases, scalars) = row_terms(r);
+            if bases.len() > MSM_THRESHOLD {
+                <ArkG1 as DoryGroup>::identity()
+            } else {
+                bases
+                    .iter()
+                    .zip(&scalars)
+                    .fold(<ArkG1 as DoryGroup>::identity(), |acc, (b, s)| {
+                        acc + b.scale(s)
+                    })
+            }
         })
-        .collect()
+        .collect();
+    for (r, row) in rows.iter_mut().enumerate() {
+        let (bases, scalars) = row_terms(r);
+        if bases.len() > MSM_THRESHOLD {
+            *row = G1Routines::msm(&bases, &scalars);
+        }
+    }
+    rows
 }
 
 #[cfg(test)]

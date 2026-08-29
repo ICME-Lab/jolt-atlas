@@ -144,14 +144,16 @@ impl DoryScheme {
         let cols = 1usize << sigma;
         let num_rows = 1usize << nu;
 
-        // Tier-1: each set entry adds its column generator into its row. Rows
-        // with no set entry stay the identity (contribute nothing to tier-2).
+        // Tier-1: each set entry adds its column generator into its row (a
+        // mixed projective+affine add — the generators are cached in affine
+        // form). Rows with no set entry stay the identity (contribute nothing
+        // to tier-2).
         let mut row_commitments = vec![<ArkG1 as DoryGroup>::identity(); num_rows];
+        let g1 = &setup.g1_affine[..cols];
         for (t, k_opt) in one_hot.nonzero_indices.iter().enumerate() {
             if let Some(k) = k_opt {
                 let idx = *k as usize * t_len + t;
-                row_commitments[idx / cols] =
-                    row_commitments[idx / cols] + setup.prover.g1_vec[idx % cols];
+                row_commitments[idx / cols].0 += g1[idx % cols];
             }
         }
 
@@ -197,7 +199,7 @@ impl CommitmentScheme for DoryScheme {
     #[tracing::instrument(skip_all, name = "DoryScheme::setup_prover")]
     fn setup_prover(max_num_vars: usize) -> Self::ProverSetup {
         let (prover, verifier) = dory_setup::<BN254>(max_num_vars);
-        DoryProverSetup { prover, verifier }
+        DoryProverSetup::new(prover, verifier)
     }
 
     fn setup_verifier(setup: &Self::ProverSetup) -> Self::VerifierSetup {

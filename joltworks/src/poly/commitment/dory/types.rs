@@ -91,6 +91,21 @@ pub struct DoryHint {
 pub struct DoryProverSetup {
     pub(crate) prover: ProverSetup<BN254>,
     pub(crate) verifier: VerifierSetup<BN254>,
+    /// Affine copy of `prover.g1_vec`, so sparse (one-hot) commits can use
+    /// mixed projective+affine additions. Derived, never serialized.
+    pub(crate) g1_affine: Vec<ark_bn254::G1Affine>,
+}
+
+impl DoryProverSetup {
+    pub(crate) fn new(prover: ProverSetup<BN254>, verifier: VerifierSetup<BN254>) -> Self {
+        let projective: Vec<ark_bn254::G1Projective> = prover.g1_vec.iter().map(|g| g.0).collect();
+        let g1_affine = ark_ec::CurveGroup::normalize_batch(&projective);
+        Self {
+            prover,
+            verifier,
+            g1_affine,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -168,6 +183,6 @@ impl CanonicalDeserialize for DoryProverSetup {
             map_validate(validate),
         )
         .map_err(map_err)?;
-        Ok(Self { prover, verifier })
+        Ok(Self::new(prover, verifier))
     }
 }

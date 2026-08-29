@@ -112,9 +112,11 @@ fn soundness_sub_virtual_operand_attack_is_rejected() {
     proof.verify(&verifier_pp, &io, None).unwrap();
 }
 
-// The tampered output (forced to 0) no longer equals `SatClamp(3 - 2) = 1`, so the
-// clamp execution lookup's sumcheck fails to verify and rejects the proof.
-#[should_panic = "SumcheckVerificationError"]
+// The tampered output (forced to 0) no longer equals `SatClamp(3 - 2) = 1`. The
+// clamp lookup is deferred to the batched lookups after the node loop, so the
+// first check to reject the proof is now the Sub node's operand tie
+// (`acc(r) = left(r) - right(r)` against the forged accumulation claim).
+#[should_panic = "left - right must equal the i64 accumulation"]
 #[test]
 fn soundness_sub_trace_tamper_3_minus_2_becomes_0_is_rejected() {
     let t = 1 << 6;

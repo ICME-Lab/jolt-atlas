@@ -46,6 +46,9 @@ pub struct Prover<F: JoltField, T: Transcript> {
     pub accumulator: ProverOpeningAccumulator<F>,
     /// Interactive proof transcript.
     pub transcript: T,
+    /// Lookups registered during the node loop, proven afterwards in one batch
+    /// (see [`deferred_lookups`](crate::onnx_proof::deferred_lookups)).
+    pub deferred: Vec<crate::onnx_proof::deferred_lookups::ProverLookupJob>,
 }
 
 impl<F: JoltField, T: Transcript> Prover<F, T> {
@@ -56,6 +59,7 @@ impl<F: JoltField, T: Transcript> Prover<F, T> {
             preprocessing,
             accumulator: ProverOpeningAccumulator::new(),
             transcript: T::new(b"ONNXProof"),
+            deferred: Vec::new(),
         }
     }
 }
@@ -136,6 +140,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             eval_reduction_proofs.insert(node.idx, eval_reduction_proof);
             proofs.extend(execution_proofs);
         }
+        crate::onnx_proof::deferred_lookups::prove_all(prover, proofs);
     }
 
     #[tracing::instrument(skip_all, name = "ONNXProof::prove_reduced_openings")]

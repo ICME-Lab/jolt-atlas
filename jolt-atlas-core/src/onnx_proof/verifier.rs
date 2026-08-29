@@ -38,6 +38,9 @@ pub struct Verifier<'a, F: JoltField, T: Transcript> {
     pub proofs: &'a BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
     /// Model execution inputs and outputs.
     pub io: &'a ModelExecutionIO,
+    /// Lookups registered during the node loop, verified afterwards in one
+    /// batch (see [`deferred_lookups`](crate::onnx_proof::deferred_lookups)).
+    pub deferred: Vec<crate::onnx_proof::deferred_lookups::VerifierLookupJob>,
 }
 
 impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
@@ -53,6 +56,7 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
             transcript: T::new(b"ONNXProof"),
             proofs,
             io,
+            deferred: Vec::new(),
         }
     }
 }
@@ -134,7 +138,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             }
             res?;
         }
-        Ok(())
+        crate::onnx_proof::deferred_lookups::verify_all(verifier)
     }
 
     /// Verify the reduced opening proof (sumcheck reduction + PCS verification).

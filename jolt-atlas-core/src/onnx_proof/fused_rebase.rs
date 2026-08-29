@@ -27,7 +27,8 @@ use crate::{
             clamp_committed_polys, is_scalar, prove_append_acc, prove_clamp_lookup,
             recover_small_int, verify_append_acc, verify_clamp_lookup, verify_scalar_clamp,
         },
-        ProofId, ProofType, Prover, Verifier,
+        deferred_lookups::{ProverLookupJob, VerifierLookupJob},
+        ProofId, Prover, Verifier,
     },
     utils::opening_access::AccOpeningAccessor,
 };
@@ -56,12 +57,8 @@ use joltworks::{
         },
     },
     subprotocols::{
-        identity_range_check::{
-            identity_rangecheck_prover, identity_rangecheck_verifier, IdentityRCProvider,
-        },
-        shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
-        sumcheck_prover::SumcheckInstanceProver,
+        identity_range_check::IdentityRCProvider, shout::RaOneHotEncoding,
+        sumcheck::SumcheckInstanceProof,
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
@@ -257,33 +254,14 @@ pub fn prove_remainder_rc<F: JoltField, T: Transcript>(
 ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
     let bits = rebase_bits(&node.operator).expect("fused op");
     let lookup_bits = remainder_lookup_bits(remainder, bits);
-    let lookup_indices: Vec<usize> = lookup_bits.iter().map(|&x| x.into()).collect();
-
-    let rc_provider = RescaleRemainderRCProvider::new(node.clone(), bits);
-    let mut rc = identity_rangecheck_prover(&rc_provider, lookup_bits, &mut prover.accumulator);
-    let (rc_proof, _) = Sumcheck::prove(&mut rc, &mut prover.accumulator, &mut prover.transcript);
-
-    let encoding = RescaleRemainderRaEncoding::new(node.idx, bits);
-    let [ra, hw, boolean] = shout::ra_onehot_provers(
-        &encoding,
-        &lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let mut instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = vec![ra, hw, boolean];
-    let (ra_proof, _) = BatchedSumcheck::prove(
-        instances.iter_mut().map(|v| &mut **v as _).collect(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-
-    vec![
-        (ProofId(node.idx, ProofType::RangeCheck), rc_proof),
-        (
-            ProofId(node.idx, ProofType::RescaleRemainderRaChecks),
-            ra_proof,
-        ),
-    ]
+    // Deferred: proven after the node loop as part of the batched remainder
+    // range check + one-hot checks (see `deferred_lookups`).
+    prover.deferred.push(ProverLookupJob::RescaleRemainder {
+        node: node.clone(),
+        bits,
+        lookup_bits,
+    });
+    Vec::new()
 }
 
 /// Verifier counterpart of [`prove_pre`].
@@ -319,32 +297,10 @@ pub fn verify_post<F: JoltField, T: Transcript>(
         return Ok(());
     }
 
-    let rc_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::RangeCheck))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-    let rc_provider = RescaleRemainderRCProvider::new(node.clone(), bits);
-    let rc = identity_rangecheck_verifier(&rc_provider, &mut verifier.accumulator);
-    Sumcheck::verify(
-        rc_proof,
-        &rc,
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
-
-    let ra_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::RescaleRemainderRaChecks))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-    let encoding = RescaleRemainderRaEncoding::new(node.idx, bits);
-    let [ra, hw, boolean] =
-        shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
-    BatchedSumcheck::verify(
-        ra_proof,
-        vec![&*ra, &*hw, &*boolean],
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
+    verifier.deferred.push(VerifierLookupJob::RescaleRemainder {
+        node: node.clone(),
+        bits,
+    });
     Ok(())
 }
 

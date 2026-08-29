@@ -71,6 +71,15 @@ pub enum ProofType {
     /// (right-shift) lookup (the Cos/Sin table lookup itself stays under
     /// `Execution`, batched with the downscale read-raf).
     TrigDownscaleRaChecks = 13,
+    /// All nodes' saturating-clamp read-raf lookups, proven as one batched
+    /// sumcheck after the node loop (stored under `DEFERRED_PROOF_IDX`).
+    DeferredClampReadRaf = 14,
+    /// All nodes' clamp read-address one-hot checks, batched.
+    DeferredClampRaChecks = 15,
+    /// All nodes' fused rescale-remainder range checks, batched.
+    DeferredRemainderRC = 16,
+    /// All nodes' rescale-remainder one-hot checks, batched.
+    DeferredRemainderRaChecks = 17,
 }
 
 impl TryFrom<u8> for ProofType {
@@ -92,6 +101,10 @@ impl TryFrom<u8> for ProofType {
             11 => Ok(Self::RescaleRemainderRaChecks),
             12 => Ok(Self::RescaleArith),
             13 => Ok(Self::TrigDownscaleRaChecks),
+            14 => Ok(Self::DeferredClampReadRaf),
+            15 => Ok(Self::DeferredClampRaChecks),
+            16 => Ok(Self::DeferredRemainderRC),
+            17 => Ok(Self::DeferredRemainderRaChecks),
             _ => Err(SerializationError::InvalidData),
         }
     }

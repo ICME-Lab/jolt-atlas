@@ -183,6 +183,7 @@ impl MaliciousONNXProof {
                 proofs.extend(execution_proofs);
             }
         }
+        crate::onnx_proof::deferred_lookups::prove_all(prover, proofs);
     }
 }
 

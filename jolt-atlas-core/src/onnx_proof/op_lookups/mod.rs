@@ -266,6 +266,68 @@ impl<H: LookupOperandsTrait + Default> OpLookupProvider<H> {
         (prover, lookup_indices)
     }
 
+    /// First half of [`Self::read_raf_prove`]: evaluate the lookup witness at
+    /// `r_cycle`, append its opening claim, and return the lookup bits so the
+    /// read-raf sumcheck itself can be built later (see
+    /// [`Self::read_raf_prover_from_bits`] and `deferred_lookups`).
+    pub fn append_witness_claim<F, T>(
+        &self,
+        trace: &Trace,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+    ) -> Vec<LookupBits>
+    where
+        F: JoltField,
+        T: Transcript,
+    {
+        let witness = self.helper.witness(&self.computation_node, trace);
+        append_raf_claims_prover(self, &witness, accumulator, transcript);
+        H::lookup_bits(&witness)
+    }
+
+    /// Second half of [`Self::read_raf_prove`]: build the read-raf sumcheck
+    /// prover from previously computed lookup bits (the witness claim must
+    /// already be in the accumulator).
+    pub fn read_raf_prover_from_bits<F, T, LUT, const LOG_K: usize>(
+        &self,
+        lookup_bits: Vec<LookupBits>,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+    ) -> UnaryReadRafSumcheckProver<F, LUT, LOG_K>
+    where
+        F: JoltField,
+        T: Transcript,
+        LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+    {
+        ps_read_raf_prover(self, lookup_bits, accumulator, transcript)
+    }
+
+    /// Verifier counterpart of [`Self::append_witness_claim`].
+    pub fn append_witness_claim_verifier<F, T>(
+        &self,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+    ) where
+        F: JoltField,
+        T: Transcript,
+    {
+        append_raf_claims_verifier(self, accumulator, transcript);
+    }
+
+    /// Verifier counterpart of [`Self::read_raf_prover_from_bits`].
+    pub fn read_raf_verifier_only<F, T, LUT, const LOG_K: usize>(
+        &self,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+    ) -> UnaryReadRafSumcheckVerifier<F, LUT, LOG_K>
+    where
+        F: JoltField,
+        T: Transcript,
+        LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+    {
+        ps_read_raf_verifier(self, accumulator, transcript)
+    }
+
     /// Combined verifier flow: appends RAF claims + creates sumcheck verifier.
     pub fn read_raf_verify<F, T, LUT, const LOG_K: usize>(
         &self,

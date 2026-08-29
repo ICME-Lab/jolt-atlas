@@ -22,7 +22,10 @@
 use super::op_lookups::{
     DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider,
 };
-use crate::onnx_proof::{ProofId, ProofType, Prover, Verifier};
+use crate::onnx_proof::{
+    deferred_lookups::{ProverLookupJob, VerifierLookupJob},
+    ProofId, Prover, Verifier,
+};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
@@ -32,7 +35,6 @@ use atlas_onnx_tracer::{
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
-    lookup_tables::clamp::SaturationTable,
     poly::{
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
         opening_proof::{
@@ -40,11 +42,7 @@ use joltworks::{
             VerifierOpeningAccumulator, BIG_ENDIAN,
         },
     },
-    subprotocols::{
-        shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
-        sumcheck_prover::SumcheckInstanceProver,
-    },
+    subprotocols::{shout::RaOneHotEncoding, sumcheck::SumcheckInstanceProof},
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
@@ -260,10 +258,13 @@ pub(crate) fn clamp_lookup_bits(intermediate: &Tensor<i64>) -> Vec<LookupBits> {
 // MeanOfSquares
 // ---------------------------------------------------------------------------
 
-/// Prove `output = SatClamp(acc)` for a non-scalar node: the clamp read-raf
-/// lookup ([`ProofType::Execution`]) plus the read-address one-hot checks
-/// ([`ProofType::RaOneHotChecks`]). The accumulation `acc` is appended as the
-/// lookup `raf`; `intermediate` optionally provides it precomputed (see
+/// Prove `output = SatClamp(acc)` for a non-scalar node. The accumulation
+/// `acc` is appended as the lookup `raf` claim here (so the node's own
+/// sumcheck can consume it); the clamp read-raf lookup and its one-hot checks
+/// are *deferred* — registered on the prover and proven after the node loop
+/// by [`deferred_lookups::prove_all`](crate::onnx_proof::deferred_lookups::prove_all)
+/// as part of one batched sumcheck across all nodes. Returns no per-node proofs.
+/// `intermediate` optionally provides the precomputed accumulation (see
 /// [`prove_append_acc`]).
 pub fn prove_clamp_lookup<F: JoltField, T: Transcript>(
     node: &ComputationNode,
@@ -275,77 +276,31 @@ pub fn prove_clamp_lookup<F: JoltField, T: Transcript>(
         None => SaturatingAccClampOperands::default(),
     };
     let provider = OpLookupProvider::with_helper(node.clone(), helper);
-    let (mut execution_sumcheck, lookup_indices) = provider
-        .read_raf_prove::<F, T, SaturationTable, CLAMP_LOG_K>(
-            &prover.trace,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-    let (execution_proof, _) = Sumcheck::prove(
-        &mut execution_sumcheck,
+    let lookup_bits = provider.append_witness_claim(
+        &prover.trace,
         &mut prover.accumulator,
         &mut prover.transcript,
     );
-
-    let encoding = provider.encoding();
-    let [ra_prover, hw_prover, bool_prover] = shout::ra_onehot_provers(
-        &encoding,
-        &lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-        vec![ra_prover, hw_prover, bool_prover];
-    let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
-        instances.iter_mut().map(|v| &mut **v as _).collect(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-
-    vec![
-        (ProofId(node.idx, ProofType::Execution), execution_proof),
-        (
-            ProofId(node.idx, ProofType::RaOneHotChecks),
-            ra_one_hot_proof,
-        ),
-    ]
+    prover.deferred.push(ProverLookupJob::Clamp {
+        node: node.clone(),
+        lookup_bits,
+    });
+    Vec::new()
 }
 
-/// Verifier counterpart of [`prove_clamp_lookup`].
+/// Verifier counterpart of [`prove_clamp_lookup`]: appends the `raf` opening
+/// and registers the deferred lookup for
+/// [`deferred_lookups::verify_all`](crate::onnx_proof::deferred_lookups::verify_all).
 pub fn verify_clamp_lookup<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
     let provider: OpLookupProvider<SaturatingAccClampOperands> =
         OpLookupProvider::new(node.clone());
-    let execution_verifier = provider.read_raf_verify::<F, T, SaturationTable, CLAMP_LOG_K>(
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    );
-    let execution_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::Execution))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-    Sumcheck::verify(
-        execution_proof,
-        &execution_verifier,
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
-
-    let encoding = provider.encoding();
-    let [ra_verifier, hw_verifier, bool_verifier] =
-        shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
-    let ra_one_hot_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-    BatchedSumcheck::verify(
-        ra_one_hot_proof,
-        vec![&*ra_verifier, &*hw_verifier, &*bool_verifier],
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
+    provider.append_witness_claim_verifier(&mut verifier.accumulator, &mut verifier.transcript);
+    verifier
+        .deferred
+        .push(VerifierLookupJob::Clamp { node: node.clone() });
     Ok(())
 }
 

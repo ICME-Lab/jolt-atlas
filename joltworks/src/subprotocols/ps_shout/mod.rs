@@ -144,7 +144,7 @@ impl<F: JoltField> CycleWeight<F> {
 
 /// Prover-side state for the cycle rounds: Gruen's split-eq trick for a plain
 /// `eq(r, ·)` weight, a dense MLE for a packed one.
-enum CyclePoly<F: JoltField> {
+pub(crate) enum CyclePoly<F: JoltField> {
     Gruen(GruenSplitEqPolynomial<F>),
     Dense(MultilinearPolynomial<F>),
 }

@@ -208,6 +208,13 @@ canonical_serde_enum! {
         /// * `0` – bucket index
         /// * `1` – decomposition index `d`
         GlobalClampRaD(usize, usize),
+
+        /// One-hot read-address decomposition for a packed fused-rescale
+        /// **remainder** range-check bucket (`R ∈ [0, 2^S)` for several nodes).
+        ///
+        /// * `0` – bucket index
+        /// * `1` – decomposition index `d`
+        GlobalRemainderRaD(usize, usize),
     }
 }
 
@@ -483,5 +490,11 @@ canonical_serde_enum! {
         ///
         /// * `0` – bucket index
         GlobalClampRa(usize),
+
+        /// Read-address polynomial of a packed rescale-remainder bucket
+        /// ([`CommittedPoly::GlobalRemainderRaD`] commits its chunks).
+        ///
+        /// * `0` – bucket index
+        GlobalRemainderRa(usize),
     }
 }

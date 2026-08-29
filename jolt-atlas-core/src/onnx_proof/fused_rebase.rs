@@ -24,8 +24,8 @@
 use crate::{
     onnx_proof::{
         clamp_lookups::{
-            clamp_committed_polys, is_scalar, prove_append_acc, prove_clamp_lookup,
-            recover_small_int, verify_append_acc, verify_clamp_lookup, verify_scalar_clamp,
+            is_scalar, prove_append_acc, prove_clamp_lookup, recover_small_int, verify_append_acc,
+            verify_clamp_lookup, verify_scalar_clamp,
         },
         deferred_lookups::{ProverLookupJob, VerifierLookupJob},
         ProofId, Prover, Verifier,
@@ -194,16 +194,10 @@ pub fn fused_input_claim<F: JoltField>(
 /// the rescaling-remainder range check (`bits`-wide address) plus the saturating
 /// clamp (64-bit address). Empty for non-fused or scalar nodes.
 pub fn committed_polys(node: &ComputationNode) -> Vec<CommittedPoly> {
-    if !fuses_rebase(&node.operator) || is_scalar(node) {
-        return vec![];
-    }
-    let bits = rebase_bits(&node.operator).expect("fused op") as usize;
-    let d = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), bits).instruction_d;
-    let mut polys: Vec<CommittedPoly> = (0..d)
-        .map(|i| CommittedPoly::RescaleRemainderRaD(node.idx, i))
-        .collect();
-    polys.extend(clamp_committed_polys(node));
-    polys
+    // Both the clamp and the remainder one-hots are committed per packed
+    // bucket at the model level (see `global_clamp`), never per node.
+    let _ = node;
+    Vec::new()
 }
 
 // ---------------------------------------------------------------------------

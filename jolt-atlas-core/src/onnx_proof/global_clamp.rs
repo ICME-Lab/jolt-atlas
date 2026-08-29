@@ -19,9 +19,12 @@
 use super::{
     clamp_lookups::{acc_opening_id, clamp_intermediate, clamp_lookup_bits, is_scalar},
     deferred_lookups::DEFERRED_PROOF_IDX,
+    fused_rebase::{rebase_bits, rebase_remainder, remainder_lookup_bits},
     witness::build_one_hot_rad_witness,
 };
+use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_onnx_tracer::model::{clamp_width::clamp_value_bound, trace::Trace, Model};
+use atlas_onnx_tracer::{node::ComputationNode, ops::Operator};
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -48,10 +51,21 @@ pub struct BucketNode {
     pub log_t: usize,
 }
 
-/// One packed clamp lookup instance.
+/// Which lookup family a bucket packs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BucketKind {
+    /// Saturating clamp (`output = SatClamp(acc)`), width = clamp address bits.
+    Clamp,
+    /// Fused rescale remainder range check (`R < 2^width`).
+    Remainder,
+}
+
+/// One packed lookup instance.
 #[derive(Clone, Debug)]
 pub struct ClampBucket {
-    /// Bucket index (unique across widths).
+    /// Lookup family.
+    pub kind: BucketKind,
+    /// Bucket index (unique within the kind).
     pub idx: usize,
     /// Clamp lookup width shared by every node in the bucket.
     pub width: usize,
@@ -71,6 +85,41 @@ pub fn clamp_buckets(model: &Model) -> Vec<ClampBucket> {
         .filter(|n| clamp_value_bound(n, nodes).is_some() && !is_scalar(n))
         .map(|n| (n.idx, n.sat_clamp_bits, n.pow2_padded_num_output_elements()))
         .collect();
+    pack_buckets(BucketKind::Clamp, clamped)
+}
+
+/// Whether `node` proves a fused rescale remainder range check (Einsum / Mul /
+/// Square / Cube with a nonzero rebase, non-scalar).
+pub fn has_remainder_rc(node: &ComputationNode) -> bool {
+    matches!(
+        node.operator,
+        Operator::Einsum(_) | Operator::Mul(_) | Operator::Square(_) | Operator::Cube(_)
+    ) && rebase_bits(&node.operator).is_some_and(|b| b > 0)
+        && !is_scalar(node)
+}
+
+/// Partition the fused-rescale remainder range checks into buckets keyed by
+/// rebase width.
+pub fn remainder_buckets(model: &Model) -> Vec<ClampBucket> {
+    let items: Vec<(usize, usize, usize)> = model
+        .graph
+        .nodes
+        .values()
+        .filter(|n| has_remainder_rc(n))
+        .map(|n| {
+            (
+                n.idx,
+                rebase_bits(&n.operator).unwrap() as usize,
+                n.pow2_padded_num_output_elements(),
+            )
+        })
+        .collect();
+    pack_buckets(BucketKind::Remainder, items)
+}
+
+/// First-fit-decreasing packing of `(node, width, padded size)` items, grouped
+/// by width, into a capacity equal to the largest item.
+fn pack_buckets(kind: BucketKind, clamped: Vec<(usize, usize, usize)>) -> Vec<ClampBucket> {
     if clamped.is_empty() {
         return Vec::new();
     }
@@ -106,6 +155,7 @@ pub fn clamp_buckets(model: &Model) -> Vec<ClampBucket> {
         }
         for (fill, members) in open {
             buckets.push(ClampBucket {
+                kind,
                 idx: buckets.len(),
                 width: w,
                 log_t: fill.next_power_of_two().log_2(),
@@ -122,19 +172,34 @@ impl ClampBucket {
         OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.width).instruction_d
     }
 
+    /// The `d`-th committed one-hot chunk polynomial.
+    pub fn committed_poly(&self, d: usize) -> CommittedPoly {
+        match self.kind {
+            BucketKind::Clamp => CommittedPoly::GlobalClampRaD(self.idx, d),
+            BucketKind::Remainder => CommittedPoly::GlobalRemainderRaD(self.idx, d),
+        }
+    }
+
     /// The bucket's committed one-hot chunk polynomials.
     pub fn committed_polys(&self) -> Vec<CommittedPoly> {
         (0..self.num_chunks())
-            .map(|d| CommittedPoly::GlobalClampRaD(self.idx, d))
+            .map(|d| self.committed_poly(d))
             .collect()
+    }
+
+    /// The bucket's (virtual) read-address polynomial and its sumcheck id.
+    pub fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
+        let vp = match self.kind {
+            BucketKind::Clamp => VirtualPoly::GlobalClampRa(self.idx),
+            BucketKind::Remainder => VirtualPoly::GlobalRemainderRa(self.idx),
+        };
+        (vp, SumcheckId::NodeExecution(DEFERRED_PROOF_IDX))
     }
 
     /// Opening id of the bucket's (virtual) read-address polynomial.
     pub fn ra_opening_id(&self) -> OpeningId {
-        OpeningId::new(
-            VirtualPoly::GlobalClampRa(self.idx),
-            SumcheckId::NodeExecution(DEFERRED_PROOF_IDX),
-        )
+        let (vp, sid) = self.ra_poly();
+        OpeningId::new(vp, sid)
     }
 
     /// Size of the bucket's cycle space.
@@ -155,6 +220,39 @@ impl ClampBucket {
             bits[n.offset..n.offset + b.len()].copy_from_slice(&b);
         }
         bits
+    }
+
+    /// The packed remainder range check's input claim `Σ_n γ_n·R_n(r_n)` and
+    /// cycle weight, from the member nodes' remainder advice openings.
+    pub fn remainder_inputs<F: JoltField>(
+        &self,
+        gammas: &[F],
+        accumulator: &dyn OpeningAccumulator<F>,
+        model: &Model,
+    ) -> (F, CycleWeight<F>) {
+        assert_eq!(gammas.len(), self.nodes.len());
+        let mut input_claim = F::zero();
+        let mut segments = Vec::with_capacity(self.nodes.len());
+        for (n, gamma) in self.nodes.iter().zip(gammas) {
+            let node = &model.graph.nodes[&n.idx];
+            let (r, claim) = AccOpeningAccessor::new(accumulator, node)
+                .get_advice(VirtualPoly::RescaleRemainder);
+            assert_eq!(r.len(), n.log_t, "node {} remainder point length", n.idx);
+            input_claim += *gamma * claim;
+            segments.push(PackedSegment {
+                gamma: *gamma,
+                prefix: n.offset >> n.log_t,
+                prefix_len: self.log_t - n.log_t,
+                r: r.r,
+            });
+        }
+        (
+            input_claim,
+            CycleWeight::Packed {
+                log_T: self.log_t,
+                segments,
+            },
+        )
     }
 
     /// The bucket read-raf's input claims and packed cycle weight, from the
@@ -196,10 +294,11 @@ impl ClampBucket {
 }
 
 /// All buckets' committed polynomials (the model-level replacement for the
-/// per-node `ClampRaD` chunks).
+/// per-node `ClampRaD` / `RescaleRemainderRaD` chunks).
 pub fn bucket_committed_polys(model: &Model) -> Vec<CommittedPoly> {
     clamp_buckets(model)
         .iter()
+        .chain(remainder_buckets(model).iter())
         .flat_map(ClampBucket::committed_polys)
         .collect()
 }
@@ -213,14 +312,21 @@ pub fn bucket_witnesses<F: JoltField>(
     let nodes = &model.graph.nodes;
     clamp_buckets(model)
         .iter()
+        .chain(remainder_buckets(model).iter())
         .flat_map(|bucket| {
-            let bits = bucket.assemble_bits(|idx| {
-                clamp_lookup_bits(&clamp_intermediate(&nodes[&idx], trace), bucket.width)
+            let bits = bucket.assemble_bits(|idx| match bucket.kind {
+                BucketKind::Clamp => {
+                    clamp_lookup_bits(&clamp_intermediate(&nodes[&idx], trace), bucket.width)
+                }
+                BucketKind::Remainder => remainder_lookup_bits(
+                    &rebase_remainder(&nodes[&idx], trace),
+                    bucket.width as i32,
+                ),
             });
             (0..bucket.num_chunks())
                 .map(|d| {
                     (
-                        CommittedPoly::GlobalClampRaD(bucket.idx, d),
+                        bucket.committed_poly(d),
                         build_one_hot_rad_witness(&bits, d, bucket.width),
                     )
                 })
@@ -234,7 +340,7 @@ pub struct GlobalClampEncoding<'a>(pub &'a ClampBucket);
 
 impl RaOneHotEncoding for GlobalClampEncoding<'_> {
     fn committed_poly(&self, d: usize) -> CommittedPoly {
-        CommittedPoly::GlobalClampRaD(self.0.idx, d)
+        self.0.committed_poly(d)
     }
 
     fn r_cycle_source(&self) -> OpeningId {
@@ -250,7 +356,7 @@ impl RaOneHotEncoding for GlobalClampEncoding<'_> {
     }
 
     fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::new(self.0.log_t, self.0.width)
+        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.0.width)
     }
 
     /// The cycle half of the bucket read-raf's output point.

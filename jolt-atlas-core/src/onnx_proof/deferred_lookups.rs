@@ -18,8 +18,7 @@
 //! parallel across instances, which is what turns the ~750 tiny sequential
 //! sumchecks into a few large parallel ones.
 use crate::onnx_proof::{
-    fused_rebase::{RescaleRemainderRCProvider, RescaleRemainderRaEncoding},
-    global_clamp::{clamp_buckets, GlobalClampEncoding},
+    global_clamp::{clamp_buckets, remainder_buckets, GlobalClampEncoding},
     ProofId, ProofType, Prover, Verifier,
 };
 use atlas_onnx_tracer::node::ComputationNode;
@@ -29,7 +28,9 @@ use joltworks::{
     lookup_tables::clamp::SaturationTable,
     poly::opening_proof::SumcheckId,
     subprotocols::{
-        identity_range_check::{identity_rangecheck_prover, identity_rangecheck_verifier},
+        identity_range_check::{
+            identity_rangecheck_prover_with_cycle, identity_rangecheck_verifier_with_cycle,
+        },
         ps_shout::unary::{ps_read_raf_prover_with_cycle, ps_read_raf_verifier_with_cycle},
         shout,
         sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
@@ -224,25 +225,44 @@ pub fn prove_all<F: JoltField, T: Transcript>(
         batched_prove(instances, prover, proofs, ProofType::DeferredClampRaChecks);
     }
 
-    if !remainder.is_empty() {
-        let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = remainder
+    let rbuckets = remainder_buckets(prover.preprocessing.model());
+    let mut rbits_by_node: HashMap<usize, Vec<LookupBits>> = remainder
+        .into_iter()
+        .map(|(n, _bits, lookup_bits)| (n.idx, lookup_bits))
+        .collect();
+    if !rbuckets.is_empty() {
+        let assembled: Vec<Vec<LookupBits>> = rbuckets
             .iter()
-            .map(|(node, bits, lookup_bits)| {
-                let rc_provider = RescaleRemainderRCProvider::new(node.clone(), *bits);
-                Box::new(identity_rangecheck_prover(
-                    &rc_provider,
-                    lookup_bits.clone(),
-                    &mut prover.accumulator,
+            .map(|b| b.assemble_bits(|idx| rbits_by_node.remove(&idx).unwrap()))
+            .collect();
+        assert!(
+            rbits_by_node.is_empty(),
+            "remainder lookups registered for nodes outside every bucket: {:?}",
+            rbits_by_node.keys().collect::<Vec<_>>()
+        );
+        let model = prover.preprocessing.model().clone();
+        let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = rbuckets
+            .iter()
+            .zip(&assembled)
+            .map(|(b, bits)| {
+                let gammas: Vec<F> = prover.transcript.challenge_scalar_powers(b.nodes.len());
+                let (input_claim, cycle) = b.remainder_inputs(&gammas, &prover.accumulator, &model);
+                Box::new(identity_rangecheck_prover_with_cycle(
+                    cycle,
+                    b.width,
+                    b.ra_poly(),
+                    input_claim,
+                    bits.clone(),
                 )) as Box<dyn SumcheckInstanceProver<F, T>>
             })
             .collect();
         batched_prove(instances, prover, proofs, ProofType::DeferredRemainderRC);
 
         let mut instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> =
-            Vec::with_capacity(3 * remainder.len());
-        for (node, bits, lookup_bits) in &remainder {
-            let indices: Vec<usize> = lookup_bits.iter().map(|&b| b.into()).collect();
-            let encoding = RescaleRemainderRaEncoding::new(node.idx, *bits);
+            Vec::with_capacity(3 * rbuckets.len());
+        for (b, bits) in rbuckets.iter().zip(&assembled) {
+            let indices: Vec<usize> = bits.iter().map(|&x| x.into()).collect();
+            let encoding = GlobalClampEncoding(b);
             instances.extend(shout::ra_onehot_provers(
                 &encoding,
                 &indices,
@@ -250,7 +270,7 @@ pub fn prove_all<F: JoltField, T: Transcript>(
                 &mut prover.transcript,
             ));
         }
-        drop(remainder);
+        drop(assembled);
         batched_prove(
             instances,
             prover,
@@ -321,23 +341,40 @@ pub fn verify_all<F: JoltField, T: Transcript>(
         batched_verify(instances, verifier, ProofType::DeferredClampRaChecks)?;
     }
 
-    if !remainder.is_empty() {
-        let instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> = remainder
+    let rbuckets = remainder_buckets(verifier.preprocessing.model());
+    let registered: std::collections::BTreeSet<usize> =
+        remainder.iter().map(|(n, _)| n.idx).collect();
+    let bucketed: std::collections::BTreeSet<usize> = rbuckets
+        .iter()
+        .flat_map(|b| b.nodes.iter().map(|n| n.idx))
+        .collect();
+    if registered != bucketed {
+        return Err(ProofVerifyError::InvalidOpeningProof(
+            "remainder lookup registrations do not match the model's remainder buckets".to_string(),
+        ));
+    }
+    if !rbuckets.is_empty() {
+        let model = verifier.preprocessing.model();
+        let instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> = rbuckets
             .iter()
-            .map(|(node, bits)| {
-                let rc_provider = RescaleRemainderRCProvider::new(node.clone(), *bits);
-                Box::new(identity_rangecheck_verifier(
-                    &rc_provider,
-                    &mut verifier.accumulator,
+            .map(|b| {
+                let gammas: Vec<F> = verifier.transcript.challenge_scalar_powers(b.nodes.len());
+                let (input_claim, cycle) =
+                    b.remainder_inputs(&gammas, &verifier.accumulator, model);
+                Box::new(identity_rangecheck_verifier_with_cycle(
+                    cycle,
+                    b.width,
+                    b.ra_poly(),
+                    input_claim,
                 )) as Box<dyn SumcheckInstanceVerifier<F, T>>
             })
             .collect();
         batched_verify(instances, verifier, ProofType::DeferredRemainderRC)?;
 
         let mut instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> =
-            Vec::with_capacity(3 * remainder.len());
-        for (node, bits) in &remainder {
-            let encoding = RescaleRemainderRaEncoding::new(node.idx, *bits);
+            Vec::with_capacity(3 * rbuckets.len());
+        for b in &rbuckets {
+            let encoding = GlobalClampEncoding(b);
             instances.extend(shout::ra_onehot_verifiers(
                 &encoding,
                 &verifier.accumulator,

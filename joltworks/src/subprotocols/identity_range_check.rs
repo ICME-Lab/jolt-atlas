@@ -5,7 +5,6 @@ use crate::subprotocols::blindfold::{
 use crate::{
     field::{IntoOpening, JoltField},
     poly::{
-        eq_poly::EqPolynomial,
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
@@ -18,6 +17,7 @@ use crate::{
         split_eq_poly::GruenSplitEqPolynomial,
         unipoly::UniPoly,
     },
+    subprotocols::ps_shout::{CyclePoly, CycleWeight},
     subprotocols::{
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
@@ -53,8 +53,9 @@ where
     pub log_T: usize,
     /// log2(K): number of variables in the address polynomial (address variables).
     pub log_K: usize,
-    /// Opening point for the node output polynomial (r_reduction).
-    pub r_node_output: OpeningPoint<BIG_ENDIAN, F>,
+    /// Per-cycle weight: `eq(r_node_output, ·)` for one node, or a packed
+    /// multi-node weight (see [`CycleWeight`]).
+    pub cycle: CycleWeight<F>,
     /// Polynomial types for opening accumulator (to cache ra claim)
     pub polynomial_type: VirtualPoly,
     /// Sumcheck ID for opening accumulator (to cache ra claim)
@@ -78,13 +79,49 @@ where
         let (polynomial_type, sumcheck_id) = provider.ra_poly();
         Self {
             log_T,
-            r_node_output,
+            cycle: CycleWeight::Eq(r_node_output),
             polynomial_type,
             sumcheck_id,
             log_K: provider.log_K(),
             phases: provider.phases(),
             input_claim: provider.input_claim(accumulator),
         }
+    }
+
+    /// Params for an explicit [`CycleWeight`] and input claim (packed
+    /// multi-node instances): `input_claim = Σ_n γ_n · claim_n`.
+    pub fn from_parts_with_cycle(
+        cycle: CycleWeight<F>,
+        log_K: usize,
+        ra_poly: (VirtualPoly, SumcheckId),
+        input_claim: F,
+    ) -> Self {
+        Self {
+            log_T: cycle.log_T(),
+            cycle,
+            polynomial_type: ra_poly.0,
+            sumcheck_id: ra_poly.1,
+            log_K,
+            phases: default_phases(log_K),
+            input_claim,
+        }
+    }
+}
+
+/// Address-phase count for a `log_K`-bit identity range check: `log_m = 4`
+/// when possible, else `2` (the prefix/suffix MLE halving needs even chunks).
+pub fn default_phases(log_K: usize) -> usize {
+    if log_K <= 2 {
+        1
+    } else if log_K % 4 == 0 {
+        log_K / 4
+    } else if log_K % 2 == 0 {
+        log_K / 2
+    } else {
+        panic!(
+            "IdentityRCProvider: odd log_K={log_K} is not supported \
+             (PrefixSuffix decomposition requires even chunk sizes)"
+        )
     }
 }
 
@@ -122,7 +159,7 @@ where
     fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
         let opening_point = self.normalize_opening_point(&sumcheck_challenges.into_opening());
         let (r_address_prime, r_node_output_prime) = opening_point.split_at(self.log_K);
-        let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_node_output_prime.r);
+        let eq_eval = self.cycle.mle(&r_node_output_prime.r);
         let identity_poly_eval =
             IdentityPolynomial::<F>::new(self.log_K).evaluate(&r_address_prime.r);
         vec![eq_eval * identity_poly_eval]
@@ -175,8 +212,8 @@ where
     phases: usize,
     /// Expanding tables accumulating address-prefix products per phase.
     v: Vec<ExpandingTable<F>>,
-    /// Gruen-split equality polynomial over cycle vars.
-    eq_r_node_output: GruenSplitEqPolynomial<F>,
+    /// Cycle-round weight polynomial (Gruen split-eq, or a dense packed weight).
+    cycle_poly: CyclePoly<F>,
     /// Registry holding prefix checkpoint values for `PrefixSuffixDecomposition` instances.
     prefix_registry: PrefixRegistry<F>,
     /// Prefix-suffix decomposition for the instruction-identity path (RAF flag path).
@@ -195,7 +232,7 @@ where
     /// expanding tables for accumulating results during the address phase.
     pub fn gen(params: IdentityRCParams<F>, lookup_indices: Vec<LookupBits>) -> Self {
         let log_m = params.log_K / params.phases;
-        let u_evals = EqPolynomial::evals(&params.r_node_output.r);
+        let u_evals = params.cycle.evals();
         let identity_poly = IdentityPolynomial::new(params.log_K);
         let span = tracing::span!(tracing::Level::INFO, "Init PrefixSuffixDecomposition");
         let _guard = span.enter();
@@ -203,8 +240,15 @@ where
             PrefixSuffixDecomposition::new(Box::new(identity_poly), log_m, params.log_K);
         drop(_guard);
         drop(span);
-        let eq_r_node_output =
-            GruenSplitEqPolynomial::<F>::new(&params.r_node_output.r, BindingOrder::LowToHigh);
+        let cycle_poly = match &params.cycle {
+            CycleWeight::Eq(r) => CyclePoly::Gruen(GruenSplitEqPolynomial::<F>::new(
+                &r.r,
+                BindingOrder::LowToHigh,
+            )),
+            CycleWeight::Packed { .. } => {
+                CyclePoly::Dense(MultilinearPolynomial::from(u_evals.clone()))
+            }
+        };
         let mut res = Self {
             phases: params.phases,
             lookup_indices,
@@ -213,7 +257,7 @@ where
                 .map(|_| ExpandingTable::new(1 << log_m, BindingOrder::HighToLow))
                 .collect(),
             identity_ps,
-            eq_r_node_output,
+            cycle_poly,
             prefix_registry: PrefixRegistry::new(),
             ra: None,
             raf_val: None,
@@ -332,25 +376,39 @@ impl<F: JoltField, FS: Transcript> SumcheckInstanceProver<F, FS> for IdentityRCP
             let ra = self.ra.as_ref().unwrap();
 
             let raf_val = self.raf_val.unwrap();
-            let [eval_at_0] = self
-                .eq_r_node_output
-                .par_fold_out_in(
-                    || [F::Unreduced::<9>::zero(); 1],
-                    |inner, j, _x_in, e_in| {
-                        let ra_at_0_j = ra.get_bound_coeff(2 * j);
-                        inner[0] += e_in.mul_unreduced::<9>(ra_at_0_j);
-                    },
-                    |_x_out, e_out, inner| {
-                        array::from_fn(|i| {
-                            let reduced = F::from_montgomery_reduce(inner[i]);
-                            e_out.mul_unreduced::<9>(reduced)
+            match &self.cycle_poly {
+                CyclePoly::Gruen(eq_r_node_output) => {
+                    let [eval_at_0] = eq_r_node_output
+                        .par_fold_out_in(
+                            || [F::Unreduced::<9>::zero(); 1],
+                            |inner, j, _x_in, e_in| {
+                                let ra_at_0_j = ra.get_bound_coeff(2 * j);
+                                inner[0] += e_in.mul_unreduced::<9>(ra_at_0_j);
+                            },
+                            |_x_out, e_out, inner| {
+                                array::from_fn(|i| {
+                                    let reduced = F::from_montgomery_reduce(inner[i]);
+                                    e_out.mul_unreduced::<9>(reduced)
+                                })
+                            },
+                            |a, b| array::from_fn(|i| a[i] + b[i]),
+                        )
+                        .map(F::from_montgomery_reduce);
+                    eq_r_node_output.gruen_poly_deg_2(eval_at_0 * raf_val, previous_claim)
+                }
+                CyclePoly::Dense(w) => {
+                    let [e0, e2] = (0..ra.len() / 2)
+                        .into_par_iter()
+                        .with_min_len(par_enabled())
+                        .map(|j| {
+                            let r = ra.sumcheck_evals_array::<2>(j, BindingOrder::LowToHigh);
+                            let ww = w.sumcheck_evals_array::<2>(j, BindingOrder::LowToHigh);
+                            [r[0] * ww[0], r[1] * ww[1]]
                         })
-                    },
-                    |a, b| array::from_fn(|i| a[i] + b[i]),
-                )
-                .map(F::from_montgomery_reduce);
-            self.eq_r_node_output
-                .gruen_poly_deg_2(eval_at_0 * raf_val, previous_claim)
+                        .reduce(|| [F::zero(); 2], |a, b| [a[0] + b[0], a[1] + b[1]]);
+                    UniPoly::from_evals_and_hint(previous_claim, &[e0 * raf_val, e2 * raf_val])
+                }
+            }
         }
     }
 
@@ -391,7 +449,10 @@ impl<F: JoltField, FS: Transcript> SumcheckInstanceProver<F, FS> for IdentityRCP
                 .as_mut()
                 .unwrap()
                 .bind_parallel(r_j, BindingOrder::LowToHigh);
-            self.eq_r_node_output.bind(r_j);
+            match &mut self.cycle_poly {
+                CyclePoly::Gruen(eq) => eq.bind(r_j),
+                CyclePoly::Dense(w) => w.bind_parallel(r_j, BindingOrder::LowToHigh),
+            }
         }
     }
 
@@ -465,7 +526,7 @@ impl<F: JoltField, FS: Transcript> SumcheckInstanceVerifier<F, FS> for IdentityR
             self.params.polynomial_type,
             self.params.sumcheck_id,
         ));
-        let eq_eval = EqPolynomial::mle(&self.params.r_node_output.r, &r_node_output_prime.r);
+        let eq_eval = self.params.cycle.mle(&r_node_output_prime.r);
         let identity_poly_eval =
             IdentityPolynomial::<F>::new(self.params.log_K).evaluate(&r_address_prime.r);
         let raf_claim = identity_poly_eval;
@@ -504,19 +565,7 @@ where
     /// falling back to `log_m = 2` for even `log_K` values that are not
     /// multiples of 4.
     fn phases(&self) -> usize {
-        let log_K = self.log_K();
-        if log_K <= 2 {
-            1
-        } else if log_K % 4 == 0 {
-            log_K / 4
-        } else if log_K % 2 == 0 {
-            log_K / 2
-        } else {
-            panic!(
-                "IdentityRCProvider: odd log_K={log_K} is not supported \
-                 (PrefixSuffix decomposition requires even chunk sizes)"
-            )
-        }
+        default_phases(self.log_K())
     }
 }
 
@@ -528,6 +577,29 @@ pub fn identity_rangecheck_prover<F: JoltField>(
 ) -> IdentityRCProver<F> {
     let params = IdentityRCParams::new(provider, accumulator);
     IdentityRCProver::gen(params, lookup_indices)
+}
+
+/// Prover for an explicit [`CycleWeight`] and input claim (packed instances).
+pub fn identity_rangecheck_prover_with_cycle<F: JoltField>(
+    cycle: CycleWeight<F>,
+    log_K: usize,
+    ra_poly: (VirtualPoly, SumcheckId),
+    input_claim: F,
+    lookup_indices: Vec<LookupBits>,
+) -> IdentityRCProver<F> {
+    let params = IdentityRCParams::from_parts_with_cycle(cycle, log_K, ra_poly, input_claim);
+    IdentityRCProver::gen(params, lookup_indices)
+}
+
+/// Verifier counterpart of [`identity_rangecheck_prover_with_cycle`].
+pub fn identity_rangecheck_verifier_with_cycle<F: JoltField>(
+    cycle: CycleWeight<F>,
+    log_K: usize,
+    ra_poly: (VirtualPoly, SumcheckId),
+    input_claim: F,
+) -> IdentityRCVerifier<F> {
+    let params = IdentityRCParams::from_parts_with_cycle(cycle, log_K, ra_poly, input_claim);
+    IdentityRCVerifier::new(params)
 }
 
 pub fn identity_rangecheck_verifier<F: JoltField>(

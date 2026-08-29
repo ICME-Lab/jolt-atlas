@@ -111,6 +111,12 @@ pub(crate) fn try_rebase_intermediates(
     node: &ComputationNode,
     trace: &Trace,
 ) -> Option<RebaseIntermediates> {
+    if let Some(cached) = trace.fused_intermediates(node.idx) {
+        return Some(RebaseIntermediates {
+            quotient: cached.quotient.padded_next_power_of_two(),
+            remainder: cached.remainder.padded_next_power_of_two(),
+        });
+    }
     let LayerData { operands, .. } = Trace::layer_data(trace, node);
     let (quotient, remainder) = match &node.operator {
         Operator::Einsum(op) => einsum_intermediate_and_remainder(op, &operands),
@@ -140,6 +146,9 @@ pub(crate) fn rebase_intermediates(node: &ComputationNode, trace: &Trace) -> Reb
 ///
 /// Prefer [`rebase_intermediates`] when the quotient is needed too — this re-runs the full accumulation for the remainder alone.
 pub(crate) fn rebase_remainder(node: &ComputationNode, trace: &Trace) -> Tensor<i32> {
+    if let Some(cached) = trace.fused_intermediates(node.idx) {
+        return cached.remainder.padded_next_power_of_two();
+    }
     let LayerData { operands, .. } = Trace::layer_data(trace, node);
     let remainder = match &node.operator {
         Operator::Einsum(op) => einsum_remainder(op, &operands),

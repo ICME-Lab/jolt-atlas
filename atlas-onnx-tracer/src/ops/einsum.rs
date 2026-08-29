@@ -1,4 +1,5 @@
 use crate::{
+    ops::FusedIntermediates,
     ops::{Einsum, Op},
     tensor::{Tensor, TensorError},
 };
@@ -13,6 +14,15 @@ impl Op for Einsum {
         // Fused: i64 accumulate, floor-rescale by `1 << scale`, saturating clamp
         // to i32. Replaces the einsum + its ScalarConstDiv rebase node .
         einsum_i32_with_i64_rebase(&self.equation, &inputs, self.scale).unwrap()
+    }
+
+    fn f_with_intermediates(
+        &self,
+        inputs: Vec<&Tensor<i32>>,
+    ) -> (Tensor<i32>, Option<FusedIntermediates>) {
+        let acc = einsum_acc_i64(&self.equation, &inputs).unwrap();
+        let (out, ints) = FusedIntermediates::from_acc(&acc, 1i64 << self.scale);
+        (out, Some(ints))
     }
 
     fn rebase_scale_factor(&self) -> Option<usize> {

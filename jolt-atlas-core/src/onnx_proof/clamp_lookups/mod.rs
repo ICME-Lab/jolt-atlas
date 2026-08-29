@@ -102,6 +102,10 @@ fn acc_opening_id(node_idx: usize) -> OpeningId {
 /// The padding (to the next power of two) matches the node-output MLE domain, so
 /// the accumulation and output polynomials share the same `log_T`.
 pub(crate) fn clamp_intermediate(node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
+    // Fused rescale ops: the trace already holds the pre-clamp quotient.
+    if let Some(cached) = trace.fused_intermediates(node.idx) {
+        return cached.quotient.padded_next_power_of_two();
+    }
     let LayerData { operands, .. } = Trace::layer_data(trace, node);
     let raw = match &node.operator {
         Operator::Add(_) | Operator::Sub(_) => {

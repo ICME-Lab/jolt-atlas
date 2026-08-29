@@ -1,5 +1,5 @@
 use crate::{
-    ops::{Cube, Op},
+    ops::{Cube, FusedIntermediates, Op},
     tensor::Tensor,
 };
 use common::parallel::par_enabled;
@@ -15,6 +15,18 @@ impl Op for Cube {
         // Fused: i64 accumulate, floor-rescale by `1 << (scale*2)`, saturating
         // clamp to i32.
         super::floor_rebase_clamp_i32(&cube_acc_i64(inputs[0]), cube_rebase_bits(self))
+    }
+
+    fn f_with_intermediates(
+        &self,
+        inputs: Vec<&Tensor<i32>>,
+    ) -> (Tensor<i32>, Option<FusedIntermediates>) {
+        if self.scale == 0 {
+            return (self.f(inputs), None);
+        }
+        let (out, ints) =
+            FusedIntermediates::from_acc(&cube_acc_i64(inputs[0]), 1i64 << cube_rebase_bits(self));
+        (out, Some(ints))
     }
 
     fn requires_shape_equality(&self) -> bool {

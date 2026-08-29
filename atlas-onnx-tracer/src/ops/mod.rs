@@ -157,9 +157,56 @@ define_operators! {
 }
 
 /// Trait for all operators - defines how to execute the operation on input tensors.
+/// The pre-clamp intermediates of a fused rescale op (`Einsum`/`Mul`/`Square`/
+/// `Cube`/`MeanOfSquares`), captured at trace time so the proof system never has
+/// to re-run the (expensive) accumulation: `acc = quotient·D + remainder` with
+/// `output = SatClamp(quotient)`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FusedIntermediates {
+    /// Pre-clamp rescaled accumulation `acc div D` (the saturating-clamp lookup index).
+    pub quotient: Tensor<i64>,
+    /// Rescaling remainder `acc mod D ∈ [0, D)`.
+    pub remainder: Tensor<i32>,
+}
+
+impl FusedIntermediates {
+    /// Split `acc` into `(quotient, remainder)` by Euclidean division by `divisor`
+    /// and return them with the saturating-clamped `i32` output.
+    pub(super) fn from_acc(acc: &Tensor<i64>, divisor: i64) -> (Tensor<i32>, Self) {
+        use common::parallel::par_enabled;
+        use rayon::prelude::*;
+        let (quotient, remainder): (Vec<i64>, Vec<i32>) = acc
+            .data()
+            .par_iter()
+            .with_min_len(par_enabled())
+            .map(|&v| (v.div_euclid(divisor), v.rem_euclid(divisor) as i32))
+            .unzip();
+        let quotient = Tensor::new(Some(&quotient), acc.dims()).expect("fused quotient");
+        let remainder = Tensor::new(Some(&remainder), acc.dims()).expect("fused remainder");
+        let output = clamp_to_i32(&quotient);
+        (
+            output,
+            Self {
+                quotient,
+                remainder,
+            },
+        )
+    }
+}
+
 pub trait Op {
     /// Execute the operator on the given input tensors.
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32>;
+
+    /// Execute the operator, additionally returning its [`FusedIntermediates`]
+    /// when it fuses a rescale (so the trace can retain them for the prover).
+    /// Defaults to [`Op::f`] with no intermediates.
+    fn f_with_intermediates(
+        &self,
+        inputs: Vec<&Tensor<i32>>,
+    ) -> (Tensor<i32>, Option<FusedIntermediates>) {
+        (self.f(inputs), None)
+    }
 
     /// Returns true if this operator requires all inputs to have matching shapes.
     /// When true, broadcast nodes will be automatically inserted before this operator.
@@ -338,6 +385,13 @@ pub(crate) fn eval_trig(
 impl Op for Operator {
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32> {
         self.inner().f(inputs)
+    }
+
+    fn f_with_intermediates(
+        &self,
+        inputs: Vec<&Tensor<i32>>,
+    ) -> (Tensor<i32>, Option<FusedIntermediates>) {
+        self.inner().f_with_intermediates(inputs)
     }
 
     fn requires_shape_equality(&self) -> bool {

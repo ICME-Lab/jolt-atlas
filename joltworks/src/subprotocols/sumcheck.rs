@@ -36,12 +36,14 @@ impl BatchedSumcheck {
         Self::prove_inner(sumcheck_instances, opening_accumulator, transcript, false)
     }
 
-    /// Like [`Self::prove`], but computes each round's per-instance messages in
-    /// parallel *across* instances (nested with each instance's own
-    /// parallelism). Meant for batches of many mutually independent instances. Challenges are still ingested sequentially: instances that
+    /// Like [`Self::prove`], but computes each round's per-instance messages
+    /// *and* ingests each challenge in parallel across instances (nested with
+    /// each instance's own parallelism).
+    ///
+    /// Only for batches of mutually independent instances: instances that
     /// share state behind an `RwLock` (e.g. the opening-reduction instances'
-    /// shared eq tables) would otherwise deadlock when a rayon thread holding a
-    /// write guard steals a job that reads the same lock.
+    /// shared eq tables) deadlock when a rayon thread holding a write guard
+    /// steals a job that takes the same lock. Use [`Self::prove`] for those.
     #[tracing::instrument(skip_all, name = "BatchedSumcheck::prove_parallel_instances")]
     pub fn prove_parallel_instances<F: JoltField, ProofTranscript: Transcript>(
         sumcheck_instances: Vec<&mut dyn SumcheckInstanceProver<F, ProofTranscript>>,
@@ -196,14 +198,19 @@ impl BatchedSumcheck {
                 batched_claim = batched_univariate_poly.evaluate(&r_j);
             }
 
-            for sumcheck in sumcheck_instances.iter_mut() {
-                // If a sumcheck instance has fewer than `max_num_rounds`,
-                // we wait until there are <= `sumcheck.num_rounds()` left
-                // before binding its variables.
+            // If a sumcheck instance has fewer than `max_num_rounds`,
+            // we wait until there are <= `sumcheck.num_rounds()` left
+            // before binding its variables.
+            let ingest = |sumcheck: &mut &mut dyn SumcheckInstanceProver<F, ProofTranscript>| {
                 if remaining_rounds <= sumcheck.num_rounds() {
                     let offset = max_num_rounds - sumcheck.num_rounds();
                     sumcheck.ingest_challenge(r_j, round - offset);
                 }
+            };
+            if many_instances {
+                sumcheck_instances.par_iter_mut().for_each(ingest);
+            } else {
+                sumcheck_instances.iter_mut().for_each(ingest);
             }
 
             compressed_polys.push(compressed_poly);

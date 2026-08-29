@@ -8,8 +8,8 @@ use crate::{
         signed_identity_poly::SignedIdentityPoly,
     },
     subprotocols::ps_shout::{
-        RafProverState, RafVerifierData, ReadRafSumcheckParams, ReadRafSumcheckProver,
-        ReadRafSumcheckVerifier, NUM_PHASES,
+        phase_schedule, RafProverState, RafVerifierData, ReadRafSumcheckParams,
+        ReadRafSumcheckProver, ReadRafSumcheckVerifier,
     },
     transcripts::Transcript,
     utils::lookup_bits::LookupBits,
@@ -128,7 +128,7 @@ pub fn ps_read_raf_prover<
         claims.rv_claim,
         raf,
     );
-    let log_m = LOG_K / NUM_PHASES;
+    let (_phases, log_m) = phase_schedule(LOG_K);
     let span = tracing::span!(tracing::Level::INFO, "Init PrefixSuffixDecomposition");
     let _guard = span.enter();
     let identity_ps =

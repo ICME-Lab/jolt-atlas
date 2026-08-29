@@ -48,10 +48,9 @@ use joltworks::{
 };
 use rayon::prelude::*;
 
-/// Address width of the saturating-clamp lookup table.
-///
-/// The accumulation is widened to `i64` before clamping, so the table is indexed
-/// by all 64 bits of the (two's-complement) accumulation value.
+/// Widest address of the saturating-clamp lookup table (an i64 accumulation).
+/// Individual nodes use `node.sat_clamp_bits ∈ {40, 48, 56, 64}` (see
+/// `atlas_onnx_tracer::model::clamp_width`); this is the default / upper bound.
 pub const CLAMP_LOG_K: usize = 64;
 
 /// Whether `node`'s (padded) output is a single element (`log_T = 0`).
@@ -182,18 +181,29 @@ pub fn verify_append_acc<F, T>(
 
 /// [`LookupOperandsTrait`] helper for the 64-bit accumulator-sourced saturating clamp, backed
 /// by [`SaturationTable`].
-#[derive(Default)]
 pub(crate) struct SaturatingAccClampOperands {
     /// Set by fused callers (`fused_rebase`) that already computed the pre-clamp
     /// intermediate, to avoid re-deriving it. `None` re-executes via
     /// [`clamp_intermediate`].
     precomputed: Option<Tensor<i64>>,
+    /// Lookup address width for this node (`node.sat_clamp_bits`).
+    log_k: usize,
 }
 
 impl SaturatingAccClampOperands {
-    pub(crate) fn with_precomputed(t: Tensor<i64>) -> Self {
+    /// Helper for `node`, using its statically derived clamp width.
+    pub(crate) fn for_node(node: &ComputationNode) -> Self {
+        Self {
+            precomputed: None,
+            log_k: node.sat_clamp_bits,
+        }
+    }
+
+    /// Like [`Self::for_node`], with the pre-clamp intermediate precomputed.
+    pub(crate) fn with_precomputed(node: &ComputationNode, t: Tensor<i64>) -> Self {
         Self {
             precomputed: Some(t),
+            log_k: node.sat_clamp_bits,
         }
     }
 }
@@ -237,19 +247,25 @@ impl LookupOperandsTrait for SaturatingAccClampOperands {
             .unwrap_or_else(|| clamp_intermediate(node, trace))
     }
 
-    fn lookup_bits(witness: &Tensor<i64>) -> Vec<LookupBits> {
-        clamp_lookup_bits(witness)
+    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
+        clamp_lookup_bits(witness, self.log_k)
+    }
+
+    fn log_k(&self) -> usize {
+        self.log_k
     }
 }
 
-/// 64-bit clamp lookup indices: each i64 accumulation value, bit-cast to the `u64` address into
+/// Clamp lookup indices: each i64 accumulation value's low `bits` bits (its
+/// two's-complement encoding at the node's clamp width — see
+/// `atlas_onnx_tracer::model::clamp_width`), the address into
 /// [`SaturationTable`]. Shared with `witness.rs`'s `ClampRaD` witness generation.
-pub(crate) fn clamp_lookup_bits(intermediate: &Tensor<i64>) -> Vec<LookupBits> {
+pub(crate) fn clamp_lookup_bits(intermediate: &Tensor<i64>, bits: usize) -> Vec<LookupBits> {
     intermediate
         .data()
         .par_iter()
         .with_min_len(par_enabled())
-        .map(|&v| LookupBits::new(v as u64, CLAMP_LOG_K))
+        .map(|&v| LookupBits::new(v as u64, bits))
         .collect()
 }
 
@@ -272,8 +288,8 @@ pub fn prove_clamp_lookup<F: JoltField, T: Transcript>(
     intermediate: Option<Tensor<i64>>,
 ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
     let helper = match intermediate {
-        Some(t) => SaturatingAccClampOperands::with_precomputed(t),
-        None => SaturatingAccClampOperands::default(),
+        Some(t) => SaturatingAccClampOperands::with_precomputed(node, t),
+        None => SaturatingAccClampOperands::for_node(node),
     };
     let provider = OpLookupProvider::with_helper(node.clone(), helper);
     let lookup_bits = provider.append_witness_claim(
@@ -295,8 +311,8 @@ pub fn verify_clamp_lookup<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
-    let provider: OpLookupProvider<SaturatingAccClampOperands> =
-        OpLookupProvider::new(node.clone());
+    let provider =
+        OpLookupProvider::with_helper(node.clone(), SaturatingAccClampOperands::for_node(node));
     provider.append_witness_claim_verifier(&mut verifier.accumulator, &mut verifier.transcript);
     verifier
         .deferred
@@ -310,7 +326,7 @@ pub fn clamp_committed_polys(node: &ComputationNode) -> Vec<CommittedPoly> {
     if is_scalar(node) {
         return Vec::new();
     }
-    let d = OpLookupEncoding::<SaturatingAccClampOperands>::new(node)
+    let d = OpLookupEncoding::<SaturatingAccClampOperands>::with_log_k(node, node.sat_clamp_bits)
         .one_hot_params()
         .instruction_d;
     (0..d)

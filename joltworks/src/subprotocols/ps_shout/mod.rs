@@ -55,6 +55,23 @@ pub trait RafShoutProvider<F: JoltField> {
 }
 pub(crate) const NUM_PHASES: usize = 8;
 
+/// Address-phase schedule for a `log_k`-bit lookup: `(phases, log_m)` with
+/// `phases * log_m == log_k`. Prefix checkpoints advance two rounds at a time,
+/// so `log_m` must be even: the default 8 phases work when `log_k / 8` is
+/// even (32, 48, 64, ...); otherwise (40, 56, ...) use 8-bit phases instead.
+pub(crate) fn phase_schedule(log_k: usize) -> (usize, usize) {
+    assert!(
+        log_k.is_multiple_of(8),
+        "lookup width must be a multiple of 8"
+    );
+    let log_m = log_k / NUM_PHASES;
+    if log_m.is_multiple_of(2) {
+        (NUM_PHASES, log_m)
+    } else {
+        (log_k / 8, 8)
+    }
+}
+
 /// Verifier-side RAF: computing the RAF's contribution to the input claim
 /// and the RAF claim at a given address evaluation point.
 ///
@@ -229,8 +246,7 @@ where
         lookup_indices: Vec<LookupBits>,
         raf_state: PS,
     ) -> Self {
-        let phases = NUM_PHASES;
-        let log_m = LOG_K / phases;
+        let (phases, log_m) = phase_schedule(LOG_K);
         let u_evals = EqPolynomial::evals(&params.r_node_output.r);
         let prefix_checkpoints = PrefixCheckpoints::new();
         let suffix_polys: Vec<DensePolynomial<F>> = params

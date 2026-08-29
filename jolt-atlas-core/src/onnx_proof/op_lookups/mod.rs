@@ -139,7 +139,13 @@ pub trait LookupOperandsTrait {
 
     /// Computes the `LookupBits` used for the read-raf sumcheck + one-hot checks, from
     /// `witness` (the same value [`Self::witness`] already computed).
-    fn lookup_bits(witness: &Tensor<i64>) -> Vec<LookupBits>;
+    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits>;
+
+    /// This helper's lookup address width. [`Self::LOG_K`] by default; helpers
+    /// whose width varies per node (the saturating clamp) override it.
+    fn log_k(&self) -> usize {
+        Self::LOG_K
+    }
 }
 
 #[derive(Default)]
@@ -195,13 +201,13 @@ impl LookupOperandsTrait for DefaultLookupOperands {
         operands[0].padded_next_power_of_two().map(|v| v as i64)
     }
 
-    fn lookup_bits(witness: &Tensor<i64>) -> Vec<LookupBits> {
+    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
         let operand = witness.map(|v| v as i32);
         compute_lookup_indices_from_operands(&[&operand], false)
     }
 }
 
-impl<H: LookupOperandsTrait + Default> OpLookupProvider<H> {
+impl<H: LookupOperandsTrait> OpLookupProvider<H> {
     /// Creates a new lookup provider for the specified computation node.
     ///
     /// # Parameters
@@ -220,7 +226,10 @@ impl<H: LookupOperandsTrait + Default> OpLookupProvider<H> {
     /// let node = trace.get_computation_node(node_idx);
     /// let provider = OpLookupProvider::new(node);
     /// ```
-    pub fn new(computation_node: ComputationNode) -> Self {
+    pub fn new(computation_node: ComputationNode) -> Self
+    where
+        H: Default,
+    {
         Self {
             computation_node,
             helper: H::default(),
@@ -240,7 +249,7 @@ impl<H: LookupOperandsTrait + Default> OpLookupProvider<H> {
     /// Builds the [`OpLookupEncoding`] for this provider's node, using the same `Helper`
     /// so the Ra/RaD polynomial identifiers it exposes always match this provider's.
     pub fn encoding(&self) -> OpLookupEncoding<H> {
-        OpLookupEncoding::new(&self.computation_node)
+        OpLookupEncoding::with_log_k(&self.computation_node, self.helper.log_k())
     }
 
     /// Combined prover flow: appends RAF claims + computes lookup indices + creates sumcheck prover.
@@ -260,7 +269,7 @@ impl<H: LookupOperandsTrait + Default> OpLookupProvider<H> {
     {
         let witness = self.helper.witness(&self.computation_node, trace);
         append_raf_claims_prover(self, &witness, accumulator, transcript);
-        let lookup_bits = H::lookup_bits(&witness);
+        let lookup_bits = self.helper.lookup_bits(&witness);
         let lookup_indices: Vec<usize> = lookup_bits.iter().map(|&x| x.into()).collect();
         let prover = ps_read_raf_prover(self, lookup_bits, accumulator, transcript);
         (prover, lookup_indices)
@@ -282,7 +291,7 @@ impl<H: LookupOperandsTrait + Default> OpLookupProvider<H> {
     {
         let witness = self.helper.witness(&self.computation_node, trace);
         append_raf_claims_prover(self, &witness, accumulator, transcript);
-        H::lookup_bits(&witness)
+        self.helper.lookup_bits(&witness)
     }
 
     /// Second half of [`Self::read_raf_prove`]: build the read-raf sumcheck
@@ -402,16 +411,27 @@ pub struct OpLookupEncoding<Helper = DefaultLookupOperands> {
     pub node_idx: usize,
     /// log₂(T): number of output elements in the node.
     pub log_t: usize,
+    /// Lookup address width (`Helper::LOG_K` unless the helper narrows it per node).
+    pub log_k: usize,
     _helper: std::marker::PhantomData<Helper>,
 }
 
-impl<Helper> OpLookupEncoding<Helper> {
-    /// Creates a new operation lookup encoding for the given computation node.
+impl<Helper: LookupOperandsTrait> OpLookupEncoding<Helper> {
+    /// Creates a new operation lookup encoding for the given computation node,
+    /// with the helper's default address width.
     pub fn new(computation_node: &ComputationNode) -> Self {
+        Self::with_log_k(computation_node, Helper::LOG_K)
+    }
+}
+
+impl<Helper> OpLookupEncoding<Helper> {
+    /// Creates a new operation lookup encoding with an explicit address width.
+    pub fn with_log_k(computation_node: &ComputationNode, log_k: usize) -> Self {
         use joltworks::utils::math::Math;
         Self {
             node_idx: computation_node.idx,
             log_t: computation_node.pow2_padded_num_output_elements().log_2(),
+            log_k,
             _helper: std::marker::PhantomData,
         }
     }
@@ -434,7 +454,7 @@ impl<Helper: LookupOperandsTrait> RaOneHotEncoding for OpLookupEncoding<Helper> 
     }
 
     fn log_k(&self) -> usize {
-        Helper::LOG_K
+        self.log_k
     }
 
     fn one_hot_params(&self) -> OneHotParams {

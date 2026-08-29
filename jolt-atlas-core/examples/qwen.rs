@@ -66,6 +66,30 @@ fn parse_input_arg(args: &[String]) -> String {
     DEFAULT_PROMPT.to_string()
 }
 
+/// Per-operator histogram of the statically derived saturating-clamp widths
+/// (see `atlas_onnx_tracer::model::clamp_width`).
+fn print_clamp_width_histogram(model: &Model) {
+    use std::collections::BTreeMap;
+    let mut hist: BTreeMap<(String, usize), usize> = BTreeMap::new();
+    for node in model.graph.nodes.values() {
+        if atlas_onnx_tracer::model::clamp_width::clamp_value_bound(node, &model.graph.nodes)
+            .is_some()
+        {
+            let op = format!("{:?}", node.operator);
+            let op = op
+                .split(|c: char| !c.is_alphanumeric())
+                .next()
+                .unwrap()
+                .to_string();
+            *hist.entry((op, node.sat_clamp_bits)).or_default() += 1;
+        }
+    }
+    println!("saturating-clamp widths (op, bits) -> nodes:");
+    for ((op, bits), n) in hist {
+        println!("  {op:<16} {bits:>2} bits  x{n}");
+    }
+}
+
 fn load_or_build_shared_preprocessing(
     run_args: &RunArgs,
     use_cache: bool,
@@ -81,6 +105,7 @@ fn load_or_build_shared_preprocessing(
     let model = Model::load(MODEL_PATH, run_args);
     println!("{}", model.pretty_print());
     println!("max num vars: {}", model.max_num_vars());
+    print_clamp_width_histogram(&model);
 
     let shared = AtlasSharedPreprocessing::preprocess(model);
 

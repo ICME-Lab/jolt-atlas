@@ -18,7 +18,7 @@
 //! parallel across instances, which is what turns the ~750 tiny sequential
 //! sumchecks into a few large parallel ones.
 use crate::onnx_proof::{
-    clamp_lookups::{SaturatingAccClampOperands, CLAMP_LOG_K},
+    clamp_lookups::SaturatingAccClampOperands,
     fused_rebase::{RescaleRemainderRCProvider, RescaleRemainderRaEncoding},
     op_lookups::{OpLookupEncoding, OpLookupProvider},
     ProofId, ProofType, Prover, Verifier,
@@ -41,6 +41,32 @@ use std::collections::BTreeMap;
 
 /// Node index under which the deferred (model-wide) lookup proofs are stored.
 pub const DEFERRED_PROOF_IDX: usize = usize::MAX;
+
+/// Monomorphize `$body` over the node's statically derived clamp width `$w`
+/// (see `atlas_onnx_tracer::model::clamp_width::CLAMP_WIDTHS`).
+macro_rules! with_clamp_width {
+    ($bits:expr, $w:ident => $body:expr) => {
+        match $bits {
+            40 => {
+                const $w: usize = 40;
+                $body
+            }
+            48 => {
+                const $w: usize = 48;
+                $body
+            }
+            56 => {
+                const $w: usize = 56;
+                $body
+            }
+            64 => {
+                const $w: usize = 64;
+                $body
+            }
+            other => panic!("unsupported saturating-clamp width {other}"),
+        }
+    };
+}
 
 /// A lookup the prover has registered during a node's turn and will prove in
 /// [`prove_all`].
@@ -135,15 +161,18 @@ pub fn prove_all<F: JoltField, T: Transcript>(
         let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = clamp
             .iter()
             .map(|(node, bits)| {
-                let provider: OpLookupProvider<SaturatingAccClampOperands> =
-                    OpLookupProvider::new(node.clone());
-                Box::new(
-                    provider.read_raf_prover_from_bits::<F, T, SaturationTable, CLAMP_LOG_K>(
+                let provider = OpLookupProvider::with_helper(
+                    node.clone(),
+                    SaturatingAccClampOperands::for_node(node),
+                );
+                with_clamp_width!(node.sat_clamp_bits, W => Box::new(
+                    provider.read_raf_prover_from_bits::<F, T, SaturationTable<W>, W>(
                         bits.clone(),
                         &mut prover.accumulator,
                         &mut prover.transcript,
                     ),
-                ) as Box<dyn SumcheckInstanceProver<F, T>>
+                )
+                    as Box<dyn SumcheckInstanceProver<F, T>>)
             })
             .collect();
         batched_prove(instances, prover, proofs, ProofType::DeferredClampReadRaf);
@@ -152,7 +181,10 @@ pub fn prove_all<F: JoltField, T: Transcript>(
             Vec::with_capacity(3 * clamp.len());
         for (node, bits) in &clamp {
             let indices: Vec<usize> = bits.iter().map(|&b| b.into()).collect();
-            let encoding = OpLookupEncoding::<SaturatingAccClampOperands>::new(node);
+            let encoding = OpLookupEncoding::<SaturatingAccClampOperands>::with_log_k(
+                node,
+                node.sat_clamp_bits,
+            );
             instances.extend(shout::ra_onehot_provers(
                 &encoding,
                 &indices,
@@ -218,14 +250,17 @@ pub fn verify_all<F: JoltField, T: Transcript>(
         let instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> = clamp
             .iter()
             .map(|node| {
-                let provider: OpLookupProvider<SaturatingAccClampOperands> =
-                    OpLookupProvider::new(node.clone());
-                Box::new(
-                    provider.read_raf_verifier_only::<F, T, SaturationTable, CLAMP_LOG_K>(
+                let provider = OpLookupProvider::with_helper(
+                    node.clone(),
+                    SaturatingAccClampOperands::for_node(node),
+                );
+                with_clamp_width!(node.sat_clamp_bits, W => Box::new(
+                    provider.read_raf_verifier_only::<F, T, SaturationTable<W>, W>(
                         &mut verifier.accumulator,
                         &mut verifier.transcript,
                     ),
-                ) as Box<dyn SumcheckInstanceVerifier<F, T>>
+                )
+                    as Box<dyn SumcheckInstanceVerifier<F, T>>)
             })
             .collect();
         batched_verify(instances, verifier, ProofType::DeferredClampReadRaf)?;
@@ -233,7 +268,10 @@ pub fn verify_all<F: JoltField, T: Transcript>(
         let mut instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> =
             Vec::with_capacity(3 * clamp.len());
         for node in &clamp {
-            let encoding = OpLookupEncoding::<SaturatingAccClampOperands>::new(node);
+            let encoding = OpLookupEncoding::<SaturatingAccClampOperands>::with_log_k(
+                node,
+                node.sat_clamp_bits,
+            );
             instances.extend(shout::ra_onehot_verifiers(
                 &encoding,
                 &verifier.accumulator,

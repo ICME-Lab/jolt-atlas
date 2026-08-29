@@ -67,7 +67,7 @@ impl LookupOperandsTrait for SymmetricClampOperands {
         DefaultLookupOperands.witness(node, trace)
     }
 
-    fn lookup_bits(witness: &Tensor<i64>) -> Vec<LookupBits> {
+    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
         let operand = witness.map(|v| v as i32);
         compute_lookup_indices_from_operands(&[&operand], false)
     }

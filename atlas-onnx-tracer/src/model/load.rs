@@ -36,7 +36,9 @@ impl Model {
             loader = loader.pad();
         }
 
-        loader.build()
+        let mut model = loader.build();
+        model.annotate_clamp_widths();
+        model
     }
 
     /// Loads and prepares an ONNX model using the Tract inference engine.

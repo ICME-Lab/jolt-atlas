@@ -394,6 +394,83 @@ pub trait RaOneHotEncoding {
 // Generic RA one-hot prover / verifier construction
 // ---------------------------------------------------------------------------
 
+/// The transcript challenges of the three RA one-hot sumchecks, drawn in the
+/// fixed order HammingWeight `gamma_powers`, Booleanity `gammas`, Booleanity
+/// `r_address` (RaVirtual draws none). Separating the draw from the (heavy)
+/// prover construction lets many instances be built in parallel after their
+/// challenges were drawn sequentially.
+pub struct RaOneHotChallenges<F: JoltField> {
+    pub gamma_powers: Vec<F>,
+    pub gammas: Vec<F::Challenge>,
+    pub r_address: Vec<F::Challenge>,
+}
+
+/// Draw the challenges for [`ra_onehot_provers_with`] / [`ra_onehot_verifiers_with`].
+pub fn ra_onehot_challenges<F: JoltField, T: Transcript>(
+    encoding: &impl RaOneHotEncoding,
+    transcript: &mut T,
+) -> RaOneHotChallenges<F> {
+    let one_hot_params = encoding.one_hot_params();
+    let d = one_hot_params.instruction_d;
+    let gamma_powers = transcript.challenge_scalar_powers(d);
+    let gammas = transcript.challenge_vector_optimized::<F>(d);
+    let r_address = transcript.challenge_vector_optimized::<F>(one_hot_params.log_k_chunk);
+    RaOneHotChallenges {
+        gamma_powers,
+        gammas,
+        r_address,
+    }
+}
+
+/// The three RA one-hot sumchecks' parameters, resolved from the accumulator
+/// (cheap; lets the heavy prover construction run without it, e.g. in parallel).
+pub type RaOneHotParams<F> = (
+    RaSumcheckParams<F>,
+    HammingWeightSumcheckParams<F>,
+    BooleanitySumcheckParams<F>,
+);
+
+/// Resolve the RA one-hot parameters from the accumulator and drawn challenges.
+pub fn ra_onehot_params<F: JoltField>(
+    encoding: &impl RaOneHotEncoding,
+    accumulator: &dyn OpeningAccumulator<F>,
+    challenges: RaOneHotChallenges<F>,
+) -> RaOneHotParams<F> {
+    let one_hot_params = encoding.one_hot_params();
+    let d = one_hot_params.instruction_d;
+    let polynomial_types: Vec<CommittedPoly> = (0..d).map(|i| encoding.committed_poly(i)).collect();
+
+    let r_cycle = encoding.r_cycle(accumulator);
+    let hamming_weight_params = HammingWeightSumcheckParams {
+        d,
+        num_rounds: one_hot_params.log_k_chunk,
+        gamma_powers: challenges.gamma_powers,
+        polynomial_types: polynomial_types.clone(),
+        sumcheck_id: SumcheckId::HammingWeight,
+        r_cycle: r_cycle.clone(),
+    };
+    let booleanity_params = BooleanitySumcheckParams {
+        d,
+        log_k_chunk: one_hot_params.log_k_chunk,
+        log_t: r_cycle.len(),
+        r_cycle,
+        r_address: challenges.r_address.into_opening(),
+        gammas: challenges.gammas,
+        polynomial_types: polynomial_types.clone(),
+        sumcheck_id: SumcheckId::Booleanity,
+    };
+    let (r, ra_claim) = accumulator.get_virtual_polynomial_opening(encoding.ra_source());
+    let (r_address_ra, r_cycle_ra) = r.split_at(encoding.log_k());
+    let ra_params = RaSumcheckParams {
+        r_address: r_address_ra,
+        r_cycle: r_cycle_ra,
+        one_hot_params,
+        ra_claim,
+        polynomial_types,
+    };
+    (ra_params, hamming_weight_params, booleanity_params)
+}
+
 /// Build the three RA one-hot sumcheck **provers** (RaVirtual, HammingWeight,
 /// Booleanity) from an [`RaOneHotEncoding`] and pre-computed `lookup_indices`.
 ///
@@ -409,52 +486,33 @@ pub fn ra_onehot_provers<F: JoltField, T: Transcript>(
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
 ) -> [Box<dyn SumcheckInstanceProver<F, T>>; 3] {
-    let one_hot_params = encoding.one_hot_params();
-    let d = one_hot_params.instruction_d;
+    let challenges = ra_onehot_challenges::<F, T>(encoding, transcript);
+    ra_onehot_provers_with(encoding, lookup_indices, accumulator, challenges)
+}
 
-    let polynomial_types: Vec<CommittedPoly> = (0..d).map(|i| encoding.committed_poly(i)).collect();
+/// [`ra_onehot_provers`] with the challenges already drawn (no transcript).
+pub fn ra_onehot_provers_with<F: JoltField, T: Transcript>(
+    encoding: &impl RaOneHotEncoding,
+    lookup_indices: &[usize],
+    accumulator: &dyn OpeningAccumulator<F>,
+    challenges: RaOneHotChallenges<F>,
+) -> [Box<dyn SumcheckInstanceProver<F, T>>; 3] {
+    let params = ra_onehot_params(encoding, accumulator, challenges);
+    ra_onehot_provers_from_params(params, lookup_indices)
+}
 
-    // --- HammingWeight params (draws gamma_powers) ---
-    let r_cycle_hw = encoding.r_cycle(accumulator);
-    let gamma_powers = transcript.challenge_scalar_powers(d);
-    let hamming_weight_params = HammingWeightSumcheckParams {
-        d,
-        num_rounds: one_hot_params.log_k_chunk,
-        gamma_powers,
-        polynomial_types: polynomial_types.clone(),
-        sumcheck_id: SumcheckId::HammingWeight,
-        r_cycle: r_cycle_hw,
-    };
-
-    // --- Booleanity params (draws gammas, r_address) ---
-    let r_cycle_bool = OpeningPoint::<BIG_ENDIAN, F>::new(encoding.r_cycle(accumulator));
-    let gammas = transcript.challenge_vector_optimized::<F>(d);
-    let r_address = transcript.challenge_vector_optimized::<F>(one_hot_params.log_k_chunk);
-    let booleanity_params = BooleanitySumcheckParams {
-        d,
-        log_k_chunk: one_hot_params.log_k_chunk,
-        log_t: r_cycle_bool.r.len(),
-        r_cycle: r_cycle_bool.r,
-        r_address: r_address.into_opening(),
-        gammas,
-        polynomial_types: polynomial_types.clone(),
-        sumcheck_id: SumcheckId::Booleanity,
-    };
-
-    // --- RaVirtual params (no transcript challenges) ---
-    let (r, ra_claim) = accumulator.get_virtual_polynomial_opening(encoding.ra_source());
-    let (r_address_ra, r_cycle_ra) = r.split_at(encoding.log_k());
-    let ra_params = RaSumcheckParams {
-        r_address: r_address_ra,
-        r_cycle: r_cycle_ra,
-        one_hot_params: one_hot_params.clone(),
-        ra_claim,
-        polynomial_types,
-    };
+/// Build the three RA one-hot provers from resolved parameters (no accumulator
+/// or transcript access — safe to run in parallel across instances).
+pub fn ra_onehot_provers_from_params<F: JoltField, T: Transcript>(
+    params: RaOneHotParams<F>,
+    lookup_indices: &[usize],
+) -> [Box<dyn SumcheckInstanceProver<F, T>>; 3] {
+    let (ra_params, hamming_weight_params, booleanity_params) = params;
+    let one_hot_params = &ra_params.one_hot_params;
 
     // --- Compute G and H_indices once (shared across all 3 provers) ---
-    let G = compute_ra_evals(lookup_indices, &one_hot_params, &booleanity_params.r_cycle);
-    let H_indices = compute_instruction_h_indices(lookup_indices, &one_hot_params);
+    let G = compute_ra_evals(lookup_indices, one_hot_params, &booleanity_params.r_cycle);
+    let H_indices = compute_instruction_h_indices(lookup_indices, one_hot_params);
 
     [
         Box::new(RaSumcheckProver::gen(ra_params, H_indices.clone())),
@@ -481,49 +539,18 @@ pub fn ra_onehot_verifiers<F: JoltField, T: Transcript>(
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
 ) -> [Box<dyn SumcheckInstanceVerifier<F, T>>; 3] {
-    let one_hot_params = encoding.one_hot_params();
-    let d = one_hot_params.instruction_d;
+    let challenges = ra_onehot_challenges::<F, T>(encoding, transcript);
+    ra_onehot_verifiers_with(encoding, accumulator, challenges)
+}
 
-    let polynomial_types: Vec<CommittedPoly> = (0..d).map(|i| encoding.committed_poly(i)).collect();
-
-    // --- HammingWeight params ---
-    let r_cycle_hw = encoding.r_cycle(accumulator);
-    let gamma_powers = transcript.challenge_scalar_powers(d);
-    let hamming_weight_params = HammingWeightSumcheckParams {
-        d,
-        num_rounds: one_hot_params.log_k_chunk,
-        gamma_powers,
-        polynomial_types: polynomial_types.clone(),
-        sumcheck_id: SumcheckId::HammingWeight,
-        r_cycle: r_cycle_hw,
-    };
-
-    // --- Booleanity params ---
-    let r_cycle_bool = OpeningPoint::<BIG_ENDIAN, F>::new(encoding.r_cycle(accumulator));
-    let gammas = transcript.challenge_vector_optimized::<F>(d);
-    let r_address = transcript.challenge_vector_optimized::<F>(one_hot_params.log_k_chunk);
-    let booleanity_params = BooleanitySumcheckParams {
-        d,
-        log_k_chunk: one_hot_params.log_k_chunk,
-        log_t: r_cycle_bool.r.len(),
-        r_cycle: r_cycle_bool.r,
-        r_address: r_address.into_opening(),
-        gammas,
-        polynomial_types: polynomial_types.clone(),
-        sumcheck_id: SumcheckId::Booleanity,
-    };
-
-    // --- RaVirtual params ---
-    let (r, ra_claim) = accumulator.get_virtual_polynomial_opening(encoding.ra_source());
-    let (r_address_ra, r_cycle_ra) = r.split_at(encoding.log_k());
-    let ra_params = RaSumcheckParams {
-        r_address: r_address_ra,
-        r_cycle: r_cycle_ra,
-        one_hot_params: one_hot_params.clone(),
-        ra_claim,
-        polynomial_types,
-    };
-
+/// [`ra_onehot_verifiers`] with the challenges already drawn (no transcript).
+pub fn ra_onehot_verifiers_with<F: JoltField, T: Transcript>(
+    encoding: &impl RaOneHotEncoding,
+    accumulator: &dyn OpeningAccumulator<F>,
+    challenges: RaOneHotChallenges<F>,
+) -> [Box<dyn SumcheckInstanceVerifier<F, T>>; 3] {
+    let (ra_params, hamming_weight_params, booleanity_params) =
+        ra_onehot_params(encoding, accumulator, challenges);
     [
         Box::new(RaSumcheckVerifier::new(ra_params)),
         Box::new(HammingWeightSumcheckVerifier::new(hamming_weight_params)),

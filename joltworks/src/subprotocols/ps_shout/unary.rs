@@ -158,6 +158,22 @@ pub fn ps_read_raf_prover_with_cycle<
     transcript: &mut T,
 ) -> UnaryReadRafSumcheckProver<F, LUT, LOG_K> {
     let gamma = transcript.challenge_scalar();
+    ps_read_raf_prover_with_gamma::<F, LUT, LOG_K>(gamma, claims, cycle, ra_poly, lookup_indices)
+}
+
+/// [`ps_read_raf_prover_with_cycle`] with the batching challenge `gamma`
+/// already drawn — no transcript, so instances can be built in parallel.
+pub fn ps_read_raf_prover_with_gamma<
+    F: JoltField,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+    const LOG_K: usize,
+>(
+    gamma: F,
+    claims: ReadRafClaims<F>,
+    cycle: CycleWeight<F>,
+    ra_poly: (VirtualPoly, SumcheckId),
+    lookup_indices: Vec<LookupBits>,
+) -> UnaryReadRafSumcheckProver<F, LUT, LOG_K> {
     let raf = UnaryRafVD {
         operand_claim: claims.operand_claim,
         log_k: LOG_K,
@@ -191,6 +207,20 @@ pub fn ps_read_raf_verifier_with_cycle<
     transcript: &mut T,
 ) -> UnaryReadRafSumcheckVerifier<F, LUT, LOG_K> {
     let gamma = transcript.challenge_scalar();
+    ps_read_raf_verifier_with_gamma::<F, LUT, LOG_K>(gamma, claims, cycle, ra_poly)
+}
+
+/// Verifier counterpart of [`ps_read_raf_prover_with_gamma`].
+pub fn ps_read_raf_verifier_with_gamma<
+    F: JoltField,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+    const LOG_K: usize,
+>(
+    gamma: F,
+    claims: ReadRafClaims<F>,
+    cycle: CycleWeight<F>,
+    ra_poly: (VirtualPoly, SumcheckId),
+) -> UnaryReadRafSumcheckVerifier<F, LUT, LOG_K> {
     let raf = UnaryRafVD {
         operand_claim: claims.operand_claim,
         log_k: LOG_K,

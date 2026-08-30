@@ -172,9 +172,10 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         if let Some(reduced_opening_proof) = &self.reduced_opening_proof {
-            verifier
-                .accumulator
-                .prepare_for_sumcheck(&reduced_opening_proof.sumcheck_claims);
+            verifier.accumulator.prepare_for_sumcheck(
+                &reduced_opening_proof.sumcheck_claims,
+                &mut verifier.transcript,
+            )?;
 
             let reduction_res = verifier.accumulator.verify_batch_opening_sumcheck(
                 &reduced_opening_proof.sumcheck_proof,
@@ -221,8 +222,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                     })
                 })
                 .collect::<Result<_, _>>()?;
-            let joint_commitment =
-                PCS::combine_commitments(&selected, &verifier_state.gamma_powers);
+            let joint_commitment = PCS::combine_commitments(&selected, &verifier_state.poly_coeffs);
 
             verifier.accumulator.verify_joint_opening::<_, PCS>(
                 &pp.generators,

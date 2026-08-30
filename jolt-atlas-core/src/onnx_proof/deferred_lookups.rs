@@ -210,6 +210,8 @@ fn batched_prove<F: JoltField, T: Transcript>(
     proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
     proof_type: ProofType,
 ) {
+    let _s = tracing::span!(tracing::Level::INFO, "deferred::batched_prove", kind = ?proof_type)
+        .entered();
     let (proof, _) = BatchedSumcheck::prove_parallel_instances(
         instances.iter_mut().map(|v| &mut **v as _).collect(),
         &mut prover.accumulator,
@@ -312,6 +314,7 @@ pub fn prove_all<F: JoltField, T: Transcript>(
             Split(SplitParams<F>),
             Exact(ValueParams<F>),
         }
+        let _p = tracing::span!(tracing::Level::INFO, "deferred::clamp_params").entered();
         let params: Vec<Params<F>> = buckets
             .iter()
             .zip(&exact)
@@ -331,6 +334,7 @@ pub fn prove_all<F: JoltField, T: Transcript>(
                 }
             })
             .collect();
+        drop(_p);
         let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
             let _span =
                 tracing::span!(tracing::Level::INFO, "deferred::build_clamp_split").entered();
@@ -492,15 +496,22 @@ pub fn prove_all<F: JoltField, T: Transcript>(
         if mine.is_empty() {
             continue;
         }
-        let params: Vec<RaOneHotParams<F>> = mine
-            .iter()
-            .map(|(j, _)| j.params::<F, T>(&prover.accumulator, &mut prover.transcript))
-            .collect();
-        let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = params
-            .into_par_iter()
-            .zip(mine.par_iter())
-            .flat_map_iter(|(p, (_, idx))| shout::ra_onehot_provers_from_params::<F, T>(p, idx))
-            .collect();
+        let params: Vec<RaOneHotParams<F>> = {
+            let _s = tracing::span!(tracing::Level::INFO, "deferred::onehot_params", kind = ?kind)
+                .entered();
+            mine.iter()
+                .map(|(j, _)| j.params::<F, T>(&prover.accumulator, &mut prover.transcript))
+                .collect()
+        };
+        let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
+            let _s = tracing::span!(tracing::Level::INFO, "deferred::build_onehots", kind = ?kind)
+                .entered();
+            params
+                .into_par_iter()
+                .zip(mine.par_iter())
+                .flat_map_iter(|(p, (_, idx))| shout::ra_onehot_provers_from_params::<F, T>(p, idx))
+                .collect()
+        };
         let proof_type = mine[0].0.proof_type();
         batched_prove(instances, prover, proofs, proof_type);
     }

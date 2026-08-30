@@ -199,7 +199,9 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                     .unzip()
             };
         let poly_map = &poly_map;
-        prover.accumulator.prepare_for_sumcheck(poly_map);
+        prover
+            .accumulator
+            .prepare_for_sumcheck(poly_map, &mut prover.transcript);
 
         // Run sumcheck
         let (accumulator_sumcheck_proof, r_sumcheck_acc) = prover
@@ -212,10 +214,11 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             .finalize_batch_opening_sumcheck(r_sumcheck_acc.clone(), &mut prover.transcript);
         let sumcheck_claims: Vec<F> = state.sumcheck_claims.clone();
         // Joint opening of the RLC `Σ γ_i · poly_i` (materialized or not, per PCS)
+        debug_assert!(state.polynomials.iter().eq(poly_map.keys()));
         let joint_opening_proof = PCS::prove_rlc(
             generators,
             poly_map,
-            &state.gamma_powers,
+            &state.poly_coeffs,
             hints,
             &state.r_sumcheck,
             &mut prover.transcript,

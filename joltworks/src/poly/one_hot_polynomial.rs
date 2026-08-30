@@ -156,7 +156,7 @@ mod tests {
             Arc::new(RwLock::new(eq_address_state)),
             Arc::new(RwLock::new(eq_cycle_state)),
         );
-        one_hot_opening.initialize(one_hot_poly.clone());
+        one_hot_opening.initialize(vec![(one_hot_poly.clone(), Fr::from(1u64))]);
 
         let r_concat = [r_address.as_slice(), r_cycle.as_slice()].concat();
         let mut eq = DensePolynomial::new(EqPolynomial::<Fr>::evals(&r_concat));

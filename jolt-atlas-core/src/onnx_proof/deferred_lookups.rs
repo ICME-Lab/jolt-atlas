@@ -28,7 +28,7 @@ use crate::onnx_proof::{
 use atlas_onnx_tracer::node::ComputationNode;
 use joltworks::{
     field::JoltField,
-    poly::opening_proof::OpeningAccumulator,
+    poly::opening_proof::{OpeningAccumulator, OpeningPoint},
     subprotocols::{
         shout::{self, RaOneHotEncoding, RaOneHotParams},
         sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
@@ -294,11 +294,42 @@ pub fn prove_all<F: JoltField, T: Transcript>(
             split_by_node.keys().collect::<Vec<_>>()
         );
 
-        // Challenges are drawn sequentially in bucket order; the (heavy)
-        // instance construction then runs in parallel across buckets.
-        let params: Vec<SplitParams<F>> = buckets
+        // Each bucket first declares (as a public claim) whether it has any
+        // saturated element; unsaturated buckets are proven exactly (value
+        // sumcheck on OUT + per-node `acc = out` on the verifier), the others
+        // by the split sumcheck. Challenges are drawn sequentially in bucket
+        // order; the (heavy) instance construction then runs in parallel.
+        let exact: Vec<bool> = splits.iter().map(|s| !s.saturated()).collect();
+        for (b, &e) in buckets.iter().zip(&exact) {
+            prover.accumulator.append_virtual(
+                &mut prover.transcript,
+                clamp_split::exact_flag_id(b.idx),
+                OpeningPoint::new(Vec::<F>::new()),
+                if e { F::one() } else { F::zero() },
+            );
+        }
+        enum Params<F: JoltField> {
+            Split(SplitParams<F>),
+            Exact(ValueParams<F>),
+        }
+        let params: Vec<Params<F>> = buckets
             .iter()
-            .map(|b| SplitParams::draw(b, &prover.accumulator, &mut prover.transcript))
+            .zip(&exact)
+            .map(|(b, &e)| {
+                if e {
+                    Params::Exact(clamp_split::exact_value_params(
+                        b,
+                        &prover.accumulator,
+                        &mut prover.transcript,
+                    ))
+                } else {
+                    Params::Split(SplitParams::draw(
+                        b,
+                        &prover.accumulator,
+                        &mut prover.transcript,
+                    ))
+                }
+            })
             .collect();
         let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
             let _span =
@@ -306,8 +337,15 @@ pub fn prove_all<F: JoltField, T: Transcript>(
             params
                 .into_par_iter()
                 .zip(splits.par_iter())
-                .map(|(p, s)| {
-                    Box::new(SplitProver::new(p, s)) as Box<dyn SumcheckInstanceProver<F, T>>
+                .map(|(p, s)| match p {
+                    Params::Split(p) => {
+                        Box::new(SplitProver::new(p, s)) as Box<dyn SumcheckInstanceProver<F, T>>
+                    }
+                    Params::Exact(p) => Box::new(ValueProver::new(
+                        p,
+                        s.out.iter().map(|&o| o as u64).collect(),
+                    ))
+                        as Box<dyn SumcheckInstanceProver<F, T>>,
                 })
                 .collect()
         };
@@ -315,12 +353,21 @@ pub fn prove_all<F: JoltField, T: Transcript>(
 
         let params: Vec<_> = buckets
             .iter()
-            .map(|b| {
-                clamp_split::chunk_check_params::<F, T>(
-                    b,
-                    &prover.accumulator,
-                    &mut prover.transcript,
-                )
+            .zip(&exact)
+            .map(|(b, &e)| {
+                if e {
+                    clamp_split::exact_chunk_check_params::<F, T>(
+                        b,
+                        &prover.accumulator,
+                        &mut prover.transcript,
+                    )
+                } else {
+                    clamp_split::chunk_check_params::<F, T>(
+                        b,
+                        &prover.accumulator,
+                        &mut prover.transcript,
+                    )
+                }
             })
             .collect();
         let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
@@ -329,7 +376,14 @@ pub fn prove_all<F: JoltField, T: Transcript>(
             params
                 .into_par_iter()
                 .zip(splits.par_iter())
-                .flat_map_iter(|(p, s)| clamp_split::chunk_check_provers::<F, T>(p, s))
+                .zip(exact.par_iter())
+                .flat_map_iter(|((p, s), &e)| {
+                    if e {
+                        clamp_split::exact_chunk_check_provers::<F, T>(p, s)
+                    } else {
+                        clamp_split::chunk_check_provers::<F, T>(p, s)
+                    }
+                })
                 .collect()
         };
         drop_in_background_thread(splits);
@@ -367,6 +421,7 @@ pub fn prove_all<F: JoltField, T: Transcript>(
                 let (input_claim, cycle) = b.remainder_inputs(&gammas, &prover.accumulator, model);
                 ValueParams {
                     bucket_idx: b.idx,
+                    value_id: clamp_split::remainder_value_id(b.idx),
                     cycle,
                     input_claim,
                 }
@@ -521,26 +576,67 @@ pub fn verify_all<F: JoltField, T: Transcript>(
         .filter_map(|b| clamp_split::live_bucket(b, |idx| registered.contains(&idx)))
         .collect();
     if !buckets.is_empty() {
+        let mut exact: Vec<bool> = Vec::with_capacity(buckets.len());
+        for b in &buckets {
+            let id = clamp_split::exact_flag_id(b.idx);
+            verifier.accumulator.append_virtual(
+                &mut verifier.transcript,
+                id,
+                OpeningPoint::new(Vec::<F>::new()),
+            );
+            let flag = verifier.accumulator.get_virtual_polynomial_opening(id).1;
+            let e = if flag == F::one() {
+                true
+            } else if flag == F::zero() {
+                false
+            } else {
+                return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                    "clamp bucket {}: exact flag must be 0 or 1",
+                    b.idx
+                )));
+            };
+            if e {
+                clamp_split::verify_exact_nodes(b, &verifier.accumulator)?;
+            }
+            exact.push(e);
+        }
         let instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> = buckets
             .iter()
-            .map(|b| {
-                Box::new(SplitVerifier::new(SplitParams::draw(
-                    b,
-                    &verifier.accumulator,
-                    &mut verifier.transcript,
-                ))) as Box<dyn SumcheckInstanceVerifier<F, T>>
+            .zip(&exact)
+            .map(|(b, &e)| {
+                if e {
+                    Box::new(ValueVerifier::new(clamp_split::exact_value_params(
+                        b,
+                        &verifier.accumulator,
+                        &mut verifier.transcript,
+                    ))) as Box<dyn SumcheckInstanceVerifier<F, T>>
+                } else {
+                    Box::new(SplitVerifier::new(SplitParams::draw(
+                        b,
+                        &verifier.accumulator,
+                        &mut verifier.transcript,
+                    ))) as Box<dyn SumcheckInstanceVerifier<F, T>>
+                }
             })
             .collect();
         batched_verify(instances, verifier, ProofType::DeferredClampSplit)?;
 
         let mut instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> =
-            Vec::with_capacity(2 * buckets.len());
-        for b in &buckets {
-            let p = clamp_split::chunk_check_params::<F, T>(
-                b,
-                &verifier.accumulator,
-                &mut verifier.transcript,
-            );
+            Vec::with_capacity(buckets.len());
+        for (b, &e) in buckets.iter().zip(&exact) {
+            let p = if e {
+                clamp_split::exact_chunk_check_params::<F, T>(
+                    b,
+                    &verifier.accumulator,
+                    &mut verifier.transcript,
+                )
+            } else {
+                clamp_split::chunk_check_params::<F, T>(
+                    b,
+                    &verifier.accumulator,
+                    &mut verifier.transcript,
+                )
+            };
             instances.extend(clamp_split::chunk_check_verifiers::<F, T>(p));
         }
         batched_verify(instances, verifier, ProofType::DeferredClampChunkChecks)?;
@@ -568,6 +664,7 @@ pub fn verify_all<F: JoltField, T: Transcript>(
                     b.remainder_inputs(&gammas, &verifier.accumulator, model);
                 Box::new(ValueVerifier::new(ValueParams {
                     bucket_idx: b.idx,
+                    value_id: clamp_split::remainder_value_id(b.idx),
                     cycle,
                     input_claim,
                 })) as Box<dyn SumcheckInstanceVerifier<F, T>>

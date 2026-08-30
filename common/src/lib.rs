@@ -536,5 +536,13 @@ canonical_serde_enum! {
         ///
         /// * `0` – bucket index
         GlobalRemainderValue(usize),
+
+        /// Prover-declared flag (a claim of `0` / `1` at the empty point): the
+        /// packed clamp bucket has no saturated element and is proven exactly
+        /// (`acc = out` per node plus the output range check), without its
+        /// slack chunks.
+        ///
+        /// * `0` – bucket index
+        GlobalClampExact(usize),
     }
 }

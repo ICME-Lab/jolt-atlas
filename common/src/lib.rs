@@ -530,5 +530,11 @@ canonical_serde_enum! {
         ///
         /// * `0` – bucket index
         GlobalClampInd(usize),
+
+        /// A packed rescale-remainder bucket's remainder value (virtual; the
+        /// value of [`CommittedPoly::GlobalRemainderRaD`]'s chunks).
+        ///
+        /// * `0` – bucket index
+        GlobalRemainderValue(usize),
     }
 }

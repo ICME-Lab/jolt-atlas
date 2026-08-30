@@ -18,8 +18,11 @@
 //! parallel across instances, which is what turns the ~750 tiny sequential
 //! sumchecks into a few large parallel ones.
 use crate::onnx_proof::{
-    clamp_split::{self, BucketSplit, NodeSplit, SplitParams, SplitProver, SplitVerifier},
-    global_clamp::{clamp_buckets, remainder_buckets, ClampBucket, GlobalClampEncoding},
+    clamp_split::{
+        self, BucketSplit, NodeSplit, SplitParams, SplitProver, SplitVerifier, ValueParams,
+        ValueProver, ValueVerifier,
+    },
+    global_clamp::{clamp_buckets, remainder_buckets, ClampBucket},
     ProofId, ProofType, Prover, Verifier,
 };
 use atlas_onnx_tracer::node::ComputationNode;
@@ -27,10 +30,6 @@ use joltworks::{
     field::JoltField,
     poly::opening_proof::OpeningAccumulator,
     subprotocols::{
-        identity_range_check::{
-            identity_rangecheck_prover_with_cycle, identity_rangecheck_verifier_with_cycle,
-        },
-        ps_shout::CycleWeight,
         shout::{self, RaOneHotEncoding, RaOneHotParams},
         sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
@@ -334,52 +333,59 @@ pub fn prove_all<F: JoltField, T: Transcript>(
         );
     }
 
-    // Rescale-remainder range checks: same packing.
+    // Rescale-remainder range checks: same packing, proven by a value
+    // sumcheck + Booleanity with the chunk-value linear term (see `clamp_split`).
     let rbuckets = remainder_buckets(prover.preprocessing.model());
     let mut rbits_by_node: HashMap<usize, Vec<LookupBits>> = remainder
         .into_iter()
         .map(|(n, _bits, lookup_bits)| (n.idx, lookup_bits))
         .collect();
     if !rbuckets.is_empty() {
-        let (assembled, indices) = assemble_buckets(&rbuckets, &mut rbits_by_node);
+        let (_assembled, indices) = assemble_buckets(&rbuckets, &mut rbits_by_node);
         assert!(
             rbits_by_node.is_empty(),
             "remainder lookups registered for nodes outside every bucket: {:?}",
             rbits_by_node.keys().collect::<Vec<_>>()
         );
-        let prepared: Vec<(F, CycleWeight<F>)> = rbuckets
+        let values: Vec<Vec<u64>> = indices
+            .into_par_iter()
+            .map(|idx| idx.into_iter().map(|x| x as u64).collect())
+            .collect();
+        let model = prover.preprocessing.model();
+        let params: Vec<ValueParams<F>> = rbuckets
             .iter()
             .map(|b| {
                 let gammas: Vec<F> = prover.transcript.challenge_scalar_powers(b.nodes.len());
-                b.remainder_inputs(&gammas, &prover.accumulator, prover.preprocessing.model())
+                let (input_claim, cycle) = b.remainder_inputs(&gammas, &prover.accumulator, model);
+                ValueParams {
+                    bucket_idx: b.idx,
+                    cycle,
+                    input_claim,
+                }
             })
             .collect();
         let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
             let _span =
                 tracing::span!(tracing::Level::INFO, "deferred::build_remainder_rc").entered();
-            rbuckets
-                .par_iter()
-                .zip(assembled.into_par_iter())
-                .zip(prepared.into_par_iter())
-                .map(|((b, bits), (input_claim, cycle))| {
-                    Box::new(identity_rangecheck_prover_with_cycle(
-                        cycle,
-                        b.width,
-                        b.ra_poly(),
-                        input_claim,
-                        bits,
-                    )) as Box<dyn SumcheckInstanceProver<F, T>>
+            params
+                .into_par_iter()
+                .zip(values.par_iter())
+                .map(|(p, v)| {
+                    Box::new(ValueProver::new(p, v.clone()))
+                        as Box<dyn SumcheckInstanceProver<F, T>>
                 })
                 .collect()
         };
         batched_prove(instances, prover, proofs, ProofType::DeferredRemainderRC);
 
-        let params: Vec<RaOneHotParams<F>> = rbuckets
+        let params: Vec<_> = rbuckets
             .iter()
             .map(|b| {
-                let enc = GlobalClampEncoding(b);
-                let ch = shout::ra_onehot_challenges::<F, T>(&enc, &mut prover.transcript);
-                shout::ra_onehot_params(&enc, &prover.accumulator, ch)
+                clamp_split::remainder_chunk_check_params::<F, T>(
+                    b,
+                    &prover.accumulator,
+                    &mut prover.transcript,
+                )
             })
             .collect();
         let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
@@ -387,11 +393,14 @@ pub fn prove_all<F: JoltField, T: Transcript>(
                 tracing::span!(tracing::Level::INFO, "deferred::build_remainder_onehot").entered();
             params
                 .into_par_iter()
-                .zip(indices.par_iter())
-                .flat_map_iter(|(p, idx)| shout::ra_onehot_provers_from_params::<F, T>(p, idx))
+                .zip(values.par_iter())
+                .zip(rbuckets.par_iter())
+                .flat_map_iter(|((p, v), b)| {
+                    clamp_split::remainder_chunk_check_provers::<F, T>(p, v, b.width)
+                })
                 .collect()
         };
-        drop_in_background_thread(indices);
+        drop_in_background_thread(values);
         batched_prove(
             instances,
             prover,
@@ -543,25 +552,24 @@ pub fn verify_all<F: JoltField, T: Transcript>(
                 let gammas: Vec<F> = verifier.transcript.challenge_scalar_powers(b.nodes.len());
                 let (input_claim, cycle) =
                     b.remainder_inputs(&gammas, &verifier.accumulator, model);
-                Box::new(identity_rangecheck_verifier_with_cycle(
+                Box::new(ValueVerifier::new(ValueParams {
+                    bucket_idx: b.idx,
                     cycle,
-                    b.width,
-                    b.ra_poly(),
                     input_claim,
-                )) as Box<dyn SumcheckInstanceVerifier<F, T>>
+                })) as Box<dyn SumcheckInstanceVerifier<F, T>>
             })
             .collect();
         batched_verify(instances, verifier, ProofType::DeferredRemainderRC)?;
 
         let mut instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> =
-            Vec::with_capacity(3 * rbuckets.len());
+            Vec::with_capacity(rbuckets.len());
         for b in &rbuckets {
-            let encoding = GlobalClampEncoding(b);
-            instances.extend(shout::ra_onehot_verifiers(
-                &encoding,
+            let p = clamp_split::remainder_chunk_check_params::<F, T>(
+                b,
                 &verifier.accumulator,
                 &mut verifier.transcript,
-            ));
+            );
+            instances.extend(clamp_split::chunk_check_verifiers::<F, T>(p));
         }
         batched_verify(instances, verifier, ProofType::DeferredRemainderRaChecks)?;
     }

@@ -193,7 +193,7 @@ fn build_abmk_abnk_abmn<F: JoltField>(
             let mut sum = F::zero();
             for i in 0..m {
                 let idx = (h * m + i) * k + j;
-                sum += F::from_i32(left_operand[idx]) * eq_r_m[i];
+                sum += eq_r_m[i].mul_i64(left_operand[idx] as i64);
             }
             sum
         })
@@ -207,7 +207,7 @@ fn build_abmk_abnk_abmn<F: JoltField>(
             let mut sum = F::zero();
             for l in 0..n {
                 let idx = (h * n + l) * k + j;
-                sum += F::from_i32(right_operand[idx]) * eq_r_n[l];
+                sum += eq_r_n[l].mul_i64(right_operand[idx] as i64);
             }
             sum
         })
@@ -255,7 +255,7 @@ fn build_acbmk_kcn_cbmn<F: JoltField>(
             let mut sum = F::zero();
             for i in 0..m {
                 let idx = ((((a_idx * c + c_idx) * b + b_idx) * m + i) * k) + k_idx;
-                sum += F::from_i32(left_operand[idx]) * eq_r_m[i];
+                sum += eq_r_m[i].mul_i64(left_operand[idx] as i64);
             }
             sum
         })
@@ -269,7 +269,7 @@ fn build_acbmk_kcn_cbmn<F: JoltField>(
             let mut sum = F::zero();
             for n_idx in 0..n {
                 let idx = (k_idx * c + c_idx) * n + n_idx;
-                sum += F::from_i32(right_operand[idx]) * eq_r_n[n_idx];
+                sum += eq_r_n[n_idx].mul_i64(right_operand[idx] as i64);
             }
             sum
         })
@@ -318,7 +318,7 @@ fn build_cbmk_cbkn_amn<F: JoltField>(
             let mut sum = F::zero();
             for i in 0..m {
                 let idx = (h * m + i) * k + k_idx;
-                sum += F::from_i32(left_operand[idx]) * eq_r_m[i];
+                sum += eq_r_m[i].mul_i64(left_operand[idx] as i64);
             }
             sum
         })
@@ -332,7 +332,7 @@ fn build_cbmk_cbkn_amn<F: JoltField>(
             let mut sum = F::zero();
             for l in 0..n {
                 let idx = (h * k + k_idx) * n + l;
-                sum += F::from_i32(right_operand[idx]) * eq_r_n[l];
+                sum += eq_r_n[l].mul_i64(right_operand[idx] as i64);
             }
             sum
         })

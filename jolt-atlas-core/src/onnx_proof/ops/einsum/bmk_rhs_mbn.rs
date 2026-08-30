@@ -86,14 +86,14 @@ impl<F: JoltField> EinsumLayout<F> for BmkRhsMbnLayout {
         lo_r_m.par_chunks_mut(k).enumerate().for_each(|(h, row)| {
             for j in 0..k {
                 row[j] = (0..m)
-                    .map(|i| F::from_i32(left_operand[h * (k * m) + i * (k) + j]) * eq_r_m[i])
+                    .map(|i| eq_r_m[i].mul_i64(left_operand[h * (k * m) + i * (k) + j] as i64))
                     .sum();
             }
         });
         ro_r_n.par_chunks_mut(b).enumerate().for_each(|(j, col)| {
             for h in 0..b {
                 col[h] = (0..n)
-                    .map(|l| F::from_i32(right_operand[j * (b * n) + h * (n) + l]) * eq_r_n[l])
+                    .map(|l| eq_r_n[l].mul_i64(right_operand[j * (b * n) + h * (n) + l] as i64))
                     .sum();
             }
         });

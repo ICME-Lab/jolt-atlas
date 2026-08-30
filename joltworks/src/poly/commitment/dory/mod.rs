@@ -150,21 +150,31 @@ impl DoryScheme {
 
         // Tier-1: each row is the sum of the column generators of its set
         // entries, built with batched affine addition (see `one_hot_commit`).
-        let row_commitments = one_hot_commit::one_hot_row_commitments(
-            &one_hot.nonzero_indices,
-            t_len,
-            cols,
-            num_rows,
-            &setup.g1_affine[..cols],
-        );
+        let row_commitments = {
+            let _s = tracing::span!(tracing::Level::INFO, "one_hot_tier_1").entered();
+            one_hot_commit::one_hot_row_commitments(
+                &one_hot.nonzero_indices,
+                t_len,
+                cols,
+                num_rows,
+                &setup.g1_affine[..cols],
+            )
+        };
 
         // Tier-2: identical to the dense commit's `multi_pair_g2_setup`, minus
         // the identity rows (which pair to 1).
-        let tier_2 = one_hot_commit::tier_2_skip_identity(
-            &row_commitments,
-            &setup.prover.g2_vec[..num_rows],
-            &setup.g2_prepared[..num_rows],
-        );
+        let tier_2 = {
+            let live = row_commitments
+                .iter()
+                .filter(|r| !ark_ff::Zero::is_zero(&r.0))
+                .count();
+            let _s = tracing::span!(tracing::Level::INFO, "one_hot_tier_2", rows = live).entered();
+            one_hot_commit::tier_2_skip_identity(
+                &row_commitments,
+                &setup.prover.g2_vec[..num_rows],
+                &setup.g2_prepared[..num_rows],
+            )
+        };
         (
             DoryCommitment(tier_2),
             DoryHint {

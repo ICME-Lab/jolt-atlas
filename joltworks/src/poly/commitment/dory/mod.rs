@@ -25,9 +25,12 @@
 //! to the dense path so they still combine homomorphically.
 
 mod one_hot_commit;
+mod par_routines;
 mod sparse_rlc;
 mod transcript;
 mod types;
+
+use par_routines::{ParG1Routines, ParG2Routines};
 
 pub use sparse_rlc::SparseRlc;
 pub use types::{DoryCommitment, DoryHint, DoryProof, DoryProverSetup, DoryVerifierSetup};
@@ -319,17 +322,18 @@ impl CommitmentScheme for DoryScheme {
         };
 
         let mut dory_transcript = LocalToDoryTranscript::new(transcript);
-        let (proof, _blind) = dory_prove::<_, BN254, G1Routines, G2Routines, _, _, Transparent>(
-            &joint,
-            &point,
-            row_commitments,
-            commit_blind,
-            nu,
-            sigma,
-            &setup.prover,
-            &mut dory_transcript,
-        )
-        .expect("dory prove (sparse rlc)");
+        let (proof, _blind) =
+            dory_prove::<_, BN254, ParG1Routines, ParG2Routines, _, _, Transparent>(
+                &joint,
+                &point,
+                row_commitments,
+                commit_blind,
+                nu,
+                sigma,
+                &setup.prover,
+                &mut dory_transcript,
+            )
+            .expect("dory prove (sparse rlc)");
         DoryProof(proof)
     }
 
@@ -364,17 +368,18 @@ impl CommitmentScheme for DoryScheme {
         };
 
         let mut dory_transcript = LocalToDoryTranscript::new(transcript);
-        let (proof, _blind) = dory_prove::<_, BN254, G1Routines, G2Routines, _, _, Transparent>(
-            &ark_poly,
-            &point,
-            row_commitments,
-            commit_blind,
-            nu,
-            sigma,
-            &setup.prover,
-            &mut dory_transcript,
-        )
-        .expect("dory prove");
+        let (proof, _blind) =
+            dory_prove::<_, BN254, ParG1Routines, ParG2Routines, _, _, Transparent>(
+                &ark_poly,
+                &point,
+                row_commitments,
+                commit_blind,
+                nu,
+                sigma,
+                &setup.prover,
+                &mut dory_transcript,
+            )
+            .expect("dory prove");
         DoryProof(proof)
     }
 
@@ -439,7 +444,7 @@ mod tests {
         let evaluation = poly.evaluate(&point);
 
         let mut prover_transcript = DoryBlake2b::new(b"dory-native-roundtrip");
-        let (proof, _) = dory_prove::<_, BN254, G1Routines, G2Routines, _, _, Transparent>(
+        let (proof, _) = dory_prove::<_, BN254, ParG1Routines, ParG2Routines, _, _, Transparent>(
             &poly,
             &point,
             tier_1,

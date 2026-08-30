@@ -1,16 +1,17 @@
-//! Packed ("global") saturating-clamp lookup buckets.
+//! Packed ("global") saturating-clamp and rescale-remainder buckets.
 //!
-//! Every clamped node used to commit its own `w/4` one-hot chunks and run its
-//! own read-raf + one-hot checks. Here nodes of the same clamp width are packed
-//! into *buckets*: one shared cycle space per bucket, each node occupying a
-//! power-of-two-aligned segment, so a bucket has `w/4` committed chunks in
-//! total and one read-raf / one-hot-check triple, whatever the node count.
+//! Every clamped node used to commit its own one-hot chunks and run its own
+//! lookup sumchecks. Here nodes of the same width are packed into *buckets*:
+//! one shared cycle space per bucket, each node occupying a
+//! power-of-two-aligned segment, so a bucket has one set of committed chunks
+//! and one set of checks whatever the node count.
 //!
-//! The read-raf sumcheck over a bucket proves `Σ_n γ_n·(rv_n(r_n) + γ·acc_n(r_n))`
-//! with the packed cycle weight `Σ_n γ_n·eq(r_n, t − off_n)`
-//! ([`CycleWeight::Packed`]); the one-hot checks run over the bucket's cycle
-//! space unchanged. Gaps at the end of a bucket hold dummy index-0 lookups so
-//! the Hamming-weight check (exactly one set address per cycle) stays exact.
+//! A bucket sumcheck over the packed cycle space uses the cycle weight
+//! `Σ_n γ_n·eq(r_n, t − off_n)` ([`CycleWeight::Packed`]) so its input claim
+//! is a `γ`-combination of the member nodes' existing openings. The clamp
+//! buckets are proven by the interior / saturated split and the remainder
+//! buckets by a value sumcheck, both in [`super::clamp_split`]. Gaps at the
+//! end of a bucket hold zero-weight dummy cycles.
 //!
 //! Bucket capacity is the largest clamped node's (padded) size, so no bucket
 //! polynomial is larger than the largest per-node one was and the SRS size is
@@ -19,7 +20,6 @@
 use super::{
     clamp_lookups::is_scalar,
     clamp_split,
-    deferred_lookups::DEFERRED_PROOF_IDX,
     fused_rebase::{rebase_bits, rebase_remainder, remainder_lookup_bits},
     witness::build_one_hot_rad_witness,
 };
@@ -30,14 +30,8 @@ use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::JoltField,
-    poly::{
-        multilinear_polynomial::MultilinearPolynomial,
-        opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
-    },
-    subprotocols::{
-        ps_shout::{CycleWeight, PackedSegment},
-        shout::RaOneHotEncoding,
-    },
+    poly::{multilinear_polynomial::MultilinearPolynomial, opening_proof::OpeningAccumulator},
+    subprotocols::ps_shout::{CycleWeight, PackedSegment},
     utils::{lookup_bits::LookupBits, math::Math},
 };
 
@@ -191,21 +185,6 @@ impl ClampBucket {
         }
     }
 
-    /// The bucket's (virtual) read-address polynomial and its sumcheck id.
-    pub fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
-        let vp = match self.kind {
-            BucketKind::Clamp => VirtualPoly::GlobalClampRa(self.idx),
-            BucketKind::Remainder => VirtualPoly::GlobalRemainderRa(self.idx),
-        };
-        (vp, SumcheckId::NodeExecution(DEFERRED_PROOF_IDX))
-    }
-
-    /// Opening id of the bucket's (virtual) read-address polynomial.
-    pub fn ra_opening_id(&self) -> OpeningId {
-        let (vp, sid) = self.ra_poly();
-        OpeningId::new(vp, sid)
-    }
-
     /// Size of the bucket's cycle space.
     pub fn cycle_len(&self) -> usize {
         1 << self.log_t
@@ -302,35 +281,4 @@ pub fn bucket_witnesses<F: JoltField>(
             }
         })
         .collect()
-}
-
-/// [`RaOneHotEncoding`] for a bucket's one-hot checks.
-pub struct GlobalClampEncoding<'a>(pub &'a ClampBucket);
-
-impl RaOneHotEncoding for GlobalClampEncoding<'_> {
-    fn committed_poly(&self, d: usize) -> CommittedPoly {
-        self.0.committed_poly(d)
-    }
-
-    fn r_cycle_source(&self) -> OpeningId {
-        self.0.ra_opening_id()
-    }
-
-    fn ra_source(&self) -> OpeningId {
-        self.0.ra_opening_id()
-    }
-
-    fn log_k(&self) -> usize {
-        self.0.width
-    }
-
-    fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.0.width)
-    }
-
-    /// The cycle half of the bucket read-raf's output point.
-    fn r_cycle<F: JoltField>(&self, accumulator: &dyn OpeningAccumulator<F>) -> Vec<F> {
-        let (r, _) = accumulator.get_virtual_polynomial_opening(self.0.ra_opening_id());
-        r.r[self.0.width..].to_vec()
-    }
 }

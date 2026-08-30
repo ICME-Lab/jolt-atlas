@@ -95,13 +95,13 @@ where
 
     let rc_operands = RangeCheckOperands::<TeleportRangeCheckOperands>::new(node);
     let rc_encoding = rc_operands.get_encoding(node);
-    let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_provers(
+    let [rc_ra, rc_bool] = shout::ra_onehot_provers(
         &rc_encoding,
         &rc_lookup_indices,
         &prover.accumulator,
         &mut prover.transcript,
     );
-    let mut instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = vec![rc_ra, rc_hw, rc_bool];
+    let mut instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = vec![rc_ra, rc_bool];
     let (ra_hamming_weight_proof, _) = BatchedSumcheck::prove(
         instances.iter_mut().map(|v| &mut **v as _).collect(),
         &mut prover.accumulator,
@@ -165,14 +165,14 @@ where
 
     let rc_operands = RangeCheckOperands::<TeleportRangeCheckOperands>::new(node);
     let rc_encoding = rc_operands.get_encoding(node);
-    let [rc_ra, rc_hw, rc_bool] = shout::ra_onehot_verifiers(
+    let [rc_ra, rc_bool] = shout::ra_onehot_verifiers(
         &rc_encoding,
         &verifier.accumulator,
         &mut verifier.transcript,
     );
     BatchedSumcheck::verify(
         ra_hamming_weight_proof,
-        vec![&*rc_ra, &*rc_hw, &*rc_bool],
+        vec![&*rc_ra, &*rc_bool],
         &mut verifier.accumulator,
         &mut verifier.transcript,
     )?;

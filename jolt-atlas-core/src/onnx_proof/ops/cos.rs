@@ -142,14 +142,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         // Stage 1c: the downscale one-hot's own correctness triple (the Cos one-hot's
         // triple is proven in `prove_range_and_onehot`, via `prove_with_reduction`).
         let dsc_encoding = dsc_provider.encoding();
-        let [dsc_ra, dsc_hw, dsc_bool] = shout::ra_onehot_provers(
+        let [dsc_ra, dsc_bool] = shout::ra_onehot_provers(
             &dsc_encoding,
             &dsc_lookup_indices,
             &prover.accumulator,
             &mut prover.transcript,
         );
         let mut dsc_ra_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> =
-            vec![dsc_ra, dsc_hw, dsc_bool];
+            vec![dsc_ra, dsc_bool];
         let (dsc_ra_proof, _) = BatchedSumcheck::prove(
             dsc_ra_instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
@@ -248,14 +248,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
             .get(&ProofId(node.idx, ProofType::TrigDownscaleRaChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         let dsc_encoding = dsc_provider.encoding();
-        let [dsc_ra, dsc_hw, dsc_bool] = shout::ra_onehot_verifiers(
+        let [dsc_ra, dsc_bool] = shout::ra_onehot_verifiers(
             &dsc_encoding,
             &verifier.accumulator,
             &mut verifier.transcript,
         );
         BatchedSumcheck::verify(
             dsc_ra_proof,
-            vec![&*dsc_ra, &*dsc_hw, &*dsc_bool],
+            vec![&*dsc_ra, &*dsc_bool],
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;

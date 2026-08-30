@@ -486,14 +486,14 @@ fn verify_rsqrt_zk(
         let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
         assert_eq!(*pid, node.idx);
         let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
-        let [d_ra, d_hw, d_bool] =
+        let [d_ra, d_bool] =
             joltworks::subprotocols::shout::ra_onehot_verifiers(&div_enc, accumulator, transcript);
         let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
-        let [s_ra, s_hw, s_bool] =
+        let [s_ra, s_bool] =
             joltworks::subprotocols::shout::ra_onehot_verifiers(&sqrt_enc, accumulator, transcript);
         verify_zk_sumcheck_instances(
             zk_proof,
-            vec![d_ra, d_hw, d_bool, s_ra, s_hw, s_bool],
+            vec![d_ra, d_bool, s_ra, s_bool],
             accumulator,
             transcript,
         )?;
@@ -579,14 +579,14 @@ fn verify_div_zk(
                 "ZK sumcheck proof order mismatch"
             );
             let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
-            let [ra_v, hw_v, bool_v] = joltworks::subprotocols::shout::ra_onehot_verifiers(
+            let [ra_v, bool_v] = joltworks::subprotocols::shout::ra_onehot_verifiers(
                 &encoding,
                 accumulator,
                 transcript,
             );
             let verifier_instances: Vec<
                 Box<dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>,
-            > = vec![ra_v, hw_v, bool_v];
+            > = vec![ra_v, bool_v];
             verify_zk_sumcheck_instances(zk_proof, verifier_instances, accumulator, transcript)?;
             *zk_proof_idx += 1;
         }
@@ -1431,21 +1431,21 @@ fn prove_rsqrt_zk(
 
     // 4. Six one-hot instances (3 per range check) batched together
     let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
-    let [div_ra, div_hw, div_bool] = joltworks::subprotocols::shout::ra_onehot_provers(
+    let [div_ra, div_bool] = joltworks::subprotocols::shout::ra_onehot_provers(
         &div_enc,
         &div_rc_idx,
         &prover.accumulator,
         &mut prover.transcript,
     );
     let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
-    let [sqrt_ra, sqrt_hw, sqrt_bool] = joltworks::subprotocols::shout::ra_onehot_provers(
+    let [sqrt_ra, sqrt_bool] = joltworks::subprotocols::shout::ra_onehot_provers(
         &sqrt_enc,
         &sqrt_rc_idx,
         &prover.accumulator,
         &mut prover.transcript,
     );
     let mut oh_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> =
-        vec![div_ra, div_hw, div_bool, sqrt_ra, sqrt_hw, sqrt_bool];
+        vec![div_ra, div_bool, sqrt_ra, sqrt_bool];
     let oh_refs: Vec<&mut dyn SumcheckInstanceProver<F, T>> =
         oh_instances.iter_mut().map(|v| &mut **v as _).collect();
     let oh_proof = run_zk_batched_sumcheck(

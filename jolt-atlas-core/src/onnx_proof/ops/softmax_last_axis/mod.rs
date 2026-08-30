@@ -587,7 +587,7 @@ impl SoftmaxLastAxisProver {
             identity_rangecheck_prover(&provider, r_exp_lookup_bits, &mut prover.accumulator);
 
         let encoding = SoftmaxRaEncoding::remainder(self.idx(), prover.preprocessing.scale());
-        let [R_ra_prover, R_hw_prover, R_bool_prover] = shout::ra_onehot_provers(
+        let [R_ra_prover, R_bool_prover] = shout::ra_onehot_provers(
             &encoding,
             r_indices,
             &prover.accumulator,
@@ -599,7 +599,6 @@ impl SoftmaxLastAxisProver {
             Box::new(max_indicator_prover),
             Box::new(exp_r_rc_prover),
             R_ra_prover,
-            R_hw_prover,
             R_bool_prover,
         ]
     }
@@ -680,7 +679,7 @@ impl SoftmaxLastAxisProver {
             );
 
         let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), prover.preprocessing.scale());
-        let [exp_r_ra_prover, exp_r_hw_prover, exp_r_bool_prover] = shout::ra_onehot_provers(
+        let [exp_r_ra_prover, exp_r_bool_prover] = shout::ra_onehot_provers(
             &encoding,
             r_exp_indices,
             &prover.accumulator,
@@ -692,7 +691,6 @@ impl SoftmaxLastAxisProver {
             lo_prover,
             Box::new(significance_clamp_prover),
             exp_r_ra_prover,
-            exp_r_hw_prover,
             exp_r_bool_prover,
         ]
     }
@@ -719,7 +717,7 @@ impl SoftmaxLastAxisProver {
         significance_clamp_indices: &[usize],
     ) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
         let encoding = SoftmaxRaEncoding::exp_hi(self.idx(), lut_data.table_hi.len().log_2());
-        let [hi_ra_prover, hi_hw_prover, hi_bool_prover] = shout::ra_onehot_provers(
+        let [hi_ra_prover, hi_bool_prover] = shout::ra_onehot_provers(
             &encoding,
             &lut_data.z_hi_indices,
             &prover.accumulator,
@@ -727,7 +725,7 @@ impl SoftmaxLastAxisProver {
         );
 
         let encoding = SoftmaxRaEncoding::exp_lo(self.idx(), lut_data.table_lo.len().log_2());
-        let [lo_ra_prover, lo_hw_prover, lo_bool_prover] = shout::ra_onehot_provers(
+        let [lo_ra_prover, lo_bool_prover] = shout::ra_onehot_provers(
             &encoding,
             &lut_data.z_lo_indices,
             &prover.accumulator,
@@ -737,7 +735,7 @@ impl SoftmaxLastAxisProver {
         let significance_clamp_provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
             OpLookupProvider::new(self.computation_node.clone());
         let encoding = significance_clamp_provider.encoding();
-        let [significance_clamp_ra_prover, significance_clamp_hw_prover, significance_clamp_bool_prover] =
+        let [significance_clamp_ra_prover, significance_clamp_bool_prover] =
             shout::ra_onehot_provers(
                 &encoding,
                 significance_clamp_indices,
@@ -747,13 +745,10 @@ impl SoftmaxLastAxisProver {
 
         vec![
             hi_ra_prover,
-            hi_hw_prover,
             hi_bool_prover,
             lo_ra_prover,
-            lo_hw_prover,
             lo_bool_prover,
             significance_clamp_ra_prover,
-            significance_clamp_hw_prover,
             significance_clamp_bool_prover,
         ]
     }
@@ -1024,7 +1019,7 @@ impl SoftmaxLastAxisVerifier {
         let exp_r_rc_verifier = identity_rangecheck_verifier(&rc_provider, accumulator);
 
         let encoding = SoftmaxRaEncoding::remainder(self.idx(), scale_bits);
-        let [R_ra_verifier, R_hw_verifier, R_bool_verifier] =
+        let [R_ra_verifier, R_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, &*accumulator, transcript);
 
         vec![
@@ -1032,7 +1027,6 @@ impl SoftmaxLastAxisVerifier {
             Box::new(max_indicator_verifier),
             Box::new(exp_r_rc_verifier),
             R_ra_verifier,
-            R_hw_verifier,
             R_bool_verifier,
         ]
     }
@@ -1083,7 +1077,7 @@ impl SoftmaxLastAxisVerifier {
 
         let scale_bits = self.scale.ilog2() as i32;
         let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), scale_bits);
-        let [r_exp_ra_verifier, r_exp_hw_verifier, r_exp_bool_verifier] =
+        let [r_exp_ra_verifier, r_exp_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, &*accumulator, transcript);
 
         vec![
@@ -1091,7 +1085,6 @@ impl SoftmaxLastAxisVerifier {
             lo_verifier,
             Box::new(significance_clamp_verifier),
             r_exp_ra_verifier,
-            r_exp_hw_verifier,
             r_exp_bool_verifier,
         ]
     }
@@ -1138,28 +1131,25 @@ impl SoftmaxLastAxisVerifier {
         lut: &VerifierLookupTableData,
     ) -> Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> {
         let encoding = SoftmaxRaEncoding::exp_hi(self.idx(), lut.table_hi.len().log_2());
-        let [hi_ra_verifier, hi_hw_verifier, hi_bool_verifier] =
+        let [hi_ra_verifier, hi_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
 
         let encoding = SoftmaxRaEncoding::exp_lo(self.idx(), lut.table_lo.len().log_2());
-        let [lo_ra_verifier, lo_hw_verifier, lo_bool_verifier] =
+        let [lo_ra_verifier, lo_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
 
         let significance_clamp_provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
             OpLookupProvider::new(self.computation_node.clone());
         let encoding = significance_clamp_provider.encoding();
-        let [significance_clamp_ra_verifier, significance_clamp_hw_verifier, significance_clamp_bool_verifier] =
+        let [significance_clamp_ra_verifier, significance_clamp_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
 
         vec![
             hi_ra_verifier,
-            hi_hw_verifier,
             hi_bool_verifier,
             lo_ra_verifier,
-            lo_hw_verifier,
             lo_bool_verifier,
             significance_clamp_ra_verifier,
-            significance_clamp_hw_verifier,
             significance_clamp_bool_verifier,
         ]
     }

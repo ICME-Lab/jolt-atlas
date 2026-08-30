@@ -21,6 +21,7 @@
 
 use super::op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupProvider};
 use crate::onnx_proof::{
+    clamp_split::NodeSplit,
     deferred_lookups::{ProverLookupJob, VerifierLookupJob},
     ProofId, Prover, Verifier,
 };
@@ -196,14 +197,6 @@ impl SaturatingAccClampOperands {
             log_k: node.sat_clamp_bits,
         }
     }
-
-    /// Like [`Self::for_node`], with the pre-clamp intermediate precomputed.
-    pub(crate) fn with_precomputed(node: &ComputationNode, t: Tensor<i64>) -> Self {
-        Self {
-            precomputed: Some(t),
-            log_k: node.sat_clamp_bits,
-        }
-    }
 }
 
 impl LookupOperandsTrait for SaturatingAccClampOperands {
@@ -274,10 +267,11 @@ pub(crate) fn clamp_lookup_bits(intermediate: &Tensor<i64>, bits: usize) -> Vec<
 
 /// Prove `output = SatClamp(acc)` for a non-scalar node. The accumulation
 /// `acc` is appended as the lookup `raf` claim here (so the node's own
-/// sumcheck can consume it); the clamp read-raf lookup and its one-hot checks
-/// are *deferred* — registered on the prover and proven after the node loop
-/// by [`deferred_lookups::prove_all`](crate::onnx_proof::deferred_lookups::prove_all)
-/// as part of one batched sumcheck across all nodes. Returns no per-node proofs.
+/// sumcheck can consume it); the clamp itself is *deferred* — the node's
+/// split witness (see [`clamp_split`](crate::onnx_proof::clamp_split)) is
+/// registered on the prover and proven after the node loop by
+/// [`deferred_lookups::prove_all`](crate::onnx_proof::deferred_lookups::prove_all)
+/// as part of batched sumchecks across all nodes. Returns no per-node proofs.
 /// `intermediate` optionally provides the precomputed accumulation (see
 /// [`prove_append_acc`]).
 pub fn prove_clamp_lookup<F: JoltField, T: Transcript>(
@@ -285,19 +279,17 @@ pub fn prove_clamp_lookup<F: JoltField, T: Transcript>(
     prover: &mut Prover<F, T>,
     intermediate: Option<Tensor<i64>>,
 ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-    let helper = match intermediate {
-        Some(t) => SaturatingAccClampOperands::with_precomputed(node, t),
-        None => SaturatingAccClampOperands::for_node(node),
-    };
-    let provider = OpLookupProvider::with_helper(node.clone(), helper);
-    let lookup_bits = provider.append_witness_claim(
-        &prover.trace,
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
+    let witness = intermediate.unwrap_or_else(|| clamp_intermediate(node, &prover.trace));
+    let provider =
+        OpLookupProvider::with_helper(node.clone(), SaturatingAccClampOperands::for_node(node));
+    provider.append_witness_claim_for(&witness, &mut prover.accumulator, &mut prover.transcript);
+    let output = Trace::layer_data(&prover.trace, node)
+        .output
+        .padded_next_power_of_two();
+    let split = NodeSplit::new(witness.data(), output.data());
     prover.deferred.push(ProverLookupJob::Clamp {
         node: node.clone(),
-        lookup_bits,
+        split,
     });
     Vec::new()
 }

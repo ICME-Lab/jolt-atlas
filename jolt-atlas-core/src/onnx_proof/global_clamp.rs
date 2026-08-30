@@ -17,7 +17,8 @@
 //! unchanged. The layout is a pure function of the model, so prover and
 //! verifier derive it independently.
 use super::{
-    clamp_lookups::{acc_opening_id, clamp_intermediate, clamp_lookup_bits, is_scalar},
+    clamp_lookups::is_scalar,
+    clamp_split,
     deferred_lookups::DEFERRED_PROOF_IDX,
     fused_rebase::{rebase_bits, rebase_remainder, remainder_lookup_bits},
     witness::build_one_hot_rad_witness,
@@ -34,7 +35,7 @@ use joltworks::{
         opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     },
     subprotocols::{
-        ps_shout::{unary::ReadRafClaims, CycleWeight, PackedSegment},
+        ps_shout::{CycleWeight, PackedSegment},
         shout::RaOneHotEncoding,
     },
     utils::{lookup_bits::LookupBits, math::Math},
@@ -182,9 +183,12 @@ impl ClampBucket {
 
     /// The bucket's committed one-hot chunk polynomials.
     pub fn committed_polys(&self) -> Vec<CommittedPoly> {
-        (0..self.num_chunks())
-            .map(|d| self.committed_poly(d))
-            .collect()
+        match self.kind {
+            BucketKind::Clamp => clamp_split::chunk_polys(self),
+            BucketKind::Remainder => (0..self.num_chunks())
+                .map(|d| self.committed_poly(d))
+                .collect(),
+        }
     }
 
     /// The bucket's (virtual) read-address polynomial and its sumcheck id.
@@ -254,43 +258,6 @@ impl ClampBucket {
             },
         )
     }
-
-    /// The bucket read-raf's input claims and packed cycle weight, from the
-    /// member nodes' output / accumulation openings (already in the
-    /// accumulator on both sides) and the per-node batching coefficients.
-    pub fn read_raf_inputs<F: JoltField>(
-        &self,
-        gammas: &[F],
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> (ReadRafClaims<F>, CycleWeight<F>) {
-        assert_eq!(gammas.len(), self.nodes.len());
-        let mut rv_claim = F::zero();
-        let mut operand_claim = F::zero();
-        let mut segments = Vec::with_capacity(self.nodes.len());
-        for (n, gamma) in self.nodes.iter().zip(gammas) {
-            let (r, out_claim) = accumulator.get_node_output_opening(n.idx);
-            let (_, acc_claim) = accumulator.get_virtual_polynomial_opening(acc_opening_id(n.idx));
-            assert_eq!(r.len(), n.log_t, "node {} opening point length", n.idx);
-            rv_claim += *gamma * out_claim;
-            operand_claim += *gamma * acc_claim;
-            segments.push(PackedSegment {
-                gamma: *gamma,
-                prefix: n.offset >> n.log_t,
-                prefix_len: self.log_t - n.log_t,
-                r: r.r,
-            });
-        }
-        (
-            ReadRafClaims {
-                rv_claim,
-                operand_claim,
-            },
-            CycleWeight::Packed {
-                log_T: self.log_t,
-                segments,
-            },
-        )
-    }
 }
 
 /// All buckets' committed polynomials (the model-level replacement for the
@@ -313,24 +280,26 @@ pub fn bucket_witnesses<F: JoltField>(
     clamp_buckets(model)
         .iter()
         .chain(remainder_buckets(model).iter())
-        .flat_map(|bucket| {
-            let bits = bucket.assemble_bits(|idx| match bucket.kind {
-                BucketKind::Clamp => {
-                    clamp_lookup_bits(&clamp_intermediate(&nodes[&idx], trace), bucket.width)
-                }
-                BucketKind::Remainder => remainder_lookup_bits(
-                    &rebase_remainder(&nodes[&idx], trace),
-                    bucket.width as i32,
-                ),
-            });
-            (0..bucket.num_chunks())
-                .map(|d| {
-                    (
-                        bucket.committed_poly(d),
-                        build_one_hot_rad_witness(&bits, d, bucket.width),
+        .flat_map(|bucket| match bucket.kind {
+            BucketKind::Clamp => {
+                clamp_split::BucketSplit::from_trace(bucket, trace, model).witness_polys(bucket)
+            }
+            BucketKind::Remainder => {
+                let bits = bucket.assemble_bits(|idx| {
+                    remainder_lookup_bits(
+                        &rebase_remainder(&nodes[&idx], trace),
+                        bucket.width as i32,
                     )
-                })
-                .collect::<Vec<_>>()
+                });
+                (0..bucket.num_chunks())
+                    .map(|d| {
+                        (
+                            bucket.committed_poly(d),
+                            build_one_hot_rad_witness(&bits, d, bucket.width),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            }
         })
         .collect()
 }

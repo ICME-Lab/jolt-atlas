@@ -215,6 +215,22 @@ canonical_serde_enum! {
         /// * `0` – bucket index
         /// * `1` – decomposition index `d`
         GlobalRemainderRaD(usize, usize),
+
+        /// One-hot chunk of a packed clamp bucket's **output** range check
+        /// (`out + 2^31 ∈ [0, 2^32)`, 32-bit address; see
+        /// `jolt_atlas_core::onnx_proof::clamp_split`).
+        ///
+        /// * `0` – bucket index
+        /// * `1` – decomposition index `d`
+        GlobalClampOutRaD(usize, usize),
+
+        /// One-hot chunk of a packed clamp bucket's **saturation slack**
+        /// (`|acc − out|` on saturated elements, `None` elsewhere; bucket-width
+        /// address; see `jolt_atlas_core::onnx_proof::clamp_split`).
+        ///
+        /// * `0` – bucket index
+        /// * `1` – decomposition index `d`
+        GlobalClampSlackRaD(usize, usize),
     }
 }
 
@@ -496,5 +512,23 @@ canonical_serde_enum! {
         ///
         /// * `0` – bucket index
         GlobalRemainderRa(usize),
+
+        /// A packed clamp bucket's offset output `out + 2^31` (virtual; the
+        /// value of [`CommittedPoly::GlobalClampOutRaD`]'s chunks).
+        ///
+        /// * `0` – bucket index
+        GlobalClampOut(usize),
+
+        /// A packed clamp bucket's saturation slack `|acc − out|·[saturated]`
+        /// (virtual; the value of [`CommittedPoly::GlobalClampSlackRaD`]'s chunks).
+        ///
+        /// * `0` – bucket index
+        GlobalClampSlack(usize),
+
+        /// A packed clamp bucket's saturation indicator (virtual; the Hamming
+        /// weight of [`CommittedPoly::GlobalClampSlackRaD`]'s chunks).
+        ///
+        /// * `0` – bucket index
+        GlobalClampInd(usize),
     }
 }

@@ -294,6 +294,20 @@ impl<H: LookupOperandsTrait> OpLookupProvider<H> {
         self.helper.lookup_bits(&witness)
     }
 
+    /// [`Self::append_witness_claim`] for a witness the caller already holds
+    /// (returns nothing; the caller keeps the witness).
+    pub fn append_witness_claim_for<F, T>(
+        &self,
+        witness: &Tensor<i64>,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+    ) where
+        F: JoltField,
+        T: Transcript,
+    {
+        append_raf_claims_prover(self, witness, accumulator, transcript);
+    }
+
     /// Second half of [`Self::read_raf_prove`]: build the read-raf sumcheck
     /// prover from previously computed lookup bits (the witness claim must
     /// already be in the accumulator).

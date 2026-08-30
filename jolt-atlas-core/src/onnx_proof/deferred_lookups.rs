@@ -18,20 +18,19 @@
 //! parallel across instances, which is what turns the ~750 tiny sequential
 //! sumchecks into a few large parallel ones.
 use crate::onnx_proof::{
+    clamp_split::{self, BucketSplit, NodeSplit, SplitParams, SplitProver, SplitVerifier},
     global_clamp::{clamp_buckets, remainder_buckets, ClampBucket, GlobalClampEncoding},
     ProofId, ProofType, Prover, Verifier,
 };
 use atlas_onnx_tracer::node::ComputationNode;
 use joltworks::{
     field::JoltField,
-    lookup_tables::clamp::SaturationTable,
     poly::opening_proof::OpeningAccumulator,
     subprotocols::{
         identity_range_check::{
             identity_rangecheck_prover_with_cycle, identity_rangecheck_verifier_with_cycle,
         },
-        ps_shout::unary::{ps_read_raf_prover_with_gamma, ps_read_raf_verifier_with_gamma},
-        ps_shout::{unary::ReadRafClaims, CycleWeight},
+        ps_shout::CycleWeight,
         shout::{self, RaOneHotEncoding, RaOneHotParams},
         sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
@@ -47,32 +46,6 @@ use std::collections::HashMap;
 /// Node index under which the deferred (model-wide) lookup proofs are stored.
 pub const DEFERRED_PROOF_IDX: usize = usize::MAX;
 
-/// Monomorphize `$body` over the node's statically derived clamp width `$w`
-/// (see `atlas_onnx_tracer::model::clamp_width::CLAMP_WIDTHS`).
-macro_rules! with_clamp_width {
-    ($bits:expr, $w:ident => $body:expr) => {
-        match $bits {
-            40 => {
-                const $w: usize = 40;
-                $body
-            }
-            48 => {
-                const $w: usize = 48;
-                $body
-            }
-            56 => {
-                const $w: usize = 56;
-                $body
-            }
-            64 => {
-                const $w: usize = 64;
-                $body
-            }
-            other => panic!("unsupported saturating-clamp width {other}"),
-        }
-    };
-}
-
 /// A lookup the prover has registered during a node's turn and will prove in
 /// [`prove_all`].
 pub enum ProverLookupJob {
@@ -80,8 +53,8 @@ pub enum ProverLookupJob {
     Clamp {
         /// The clamped node.
         node: ComputationNode,
-        /// 64-bit lookup addresses (the pre-clamp accumulation per element).
-        lookup_bits: Vec<LookupBits>,
+        /// The node's interior / saturated split witness.
+        split: NodeSplit,
     },
     /// The fused rescale remainder range check `R ∈ [0, 2^bits)`.
     RescaleRemainder {
@@ -272,11 +245,11 @@ pub fn prove_all<F: JoltField, T: Transcript>(
     prover: &mut Prover<F, T>,
     proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
 ) {
-    let mut clamp: Vec<(ComputationNode, Vec<LookupBits>)> = Vec::new();
+    let mut clamp: Vec<(ComputationNode, NodeSplit)> = Vec::new();
     let mut remainder: Vec<(ComputationNode, i32, Vec<LookupBits>)> = Vec::new();
     for job in std::mem::take(&mut prover.deferred) {
         match job {
-            ProverLookupJob::Clamp { node, lookup_bits } => clamp.push((node, lookup_bits)),
+            ProverLookupJob::Clamp { node, split } => clamp.push((node, split)),
             ProverLookupJob::RescaleRemainder {
                 node,
                 bits,
@@ -285,80 +258,80 @@ pub fn prove_all<F: JoltField, T: Transcript>(
         }
     }
 
-    // Clamp lookups: packed into buckets (see `global_clamp`).
+    // Clamp lookups: packed into buckets (see `global_clamp`), proven by the
+    // interior / saturated split (see `clamp_split`).
     let buckets = clamp_buckets(prover.preprocessing.model());
-    let mut bits_by_node: HashMap<usize, Vec<LookupBits>> =
-        clamp.into_iter().map(|(n, bits)| (n.idx, bits)).collect();
+    let mut split_by_node: HashMap<usize, NodeSplit> =
+        clamp.into_iter().map(|(n, s)| (n.idx, s)).collect();
     for b in &buckets {
         for n in &b.nodes {
             assert!(
-                bits_by_node.contains_key(&n.idx),
+                split_by_node.contains_key(&n.idx),
                 "node {} is in a clamp bucket but registered no clamp lookup",
                 n.idx
             );
         }
     }
     if !buckets.is_empty() {
-        let (assembled, indices) = assemble_buckets(&buckets, &mut bits_by_node);
+        let splits: Vec<BucketSplit> = {
+            let _span =
+                tracing::span!(tracing::Level::INFO, "deferred::assemble_buckets").entered();
+            buckets
+                .iter()
+                .map(|b| BucketSplit::assemble(b, |idx| split_by_node.remove(&idx).unwrap()))
+                .collect()
+        };
         assert!(
-            bits_by_node.is_empty(),
+            split_by_node.is_empty(),
             "clamp lookups registered for nodes outside every bucket: {:?}",
-            bits_by_node.keys().collect::<Vec<_>>()
+            split_by_node.keys().collect::<Vec<_>>()
         );
 
         // Challenges are drawn sequentially in bucket order; the (heavy)
         // instance construction then runs in parallel across buckets.
-        let _prep =
-            tracing::span!(tracing::Level::INFO, "deferred::prepare_clamp_read_raf").entered();
-        let prepared: Vec<(F, ReadRafClaims<F>, CycleWeight<F>)> = buckets
+        let params: Vec<SplitParams<F>> = buckets
             .iter()
-            .map(|b| {
-                let gammas: Vec<F> = prover.transcript.challenge_scalar_powers(b.nodes.len());
-                let gamma: F = prover.transcript.challenge_scalar();
-                let (claims, cycle) = b.read_raf_inputs(&gammas, &prover.accumulator);
-                (gamma, claims, cycle)
-            })
+            .map(|b| SplitParams::draw(b, &prover.accumulator, &mut prover.transcript))
             .collect();
-        drop(_prep);
         let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
             let _span =
-                tracing::span!(tracing::Level::INFO, "deferred::build_clamp_read_raf").entered();
-            buckets
-                .par_iter()
-                .zip(assembled.into_par_iter())
-                .zip(prepared.into_par_iter())
-                .map(|((b, bits), (gamma, claims, cycle))| {
-                    let ra_poly = b.ra_poly();
-                    with_clamp_width!(b.width, W => Box::new(
-                        ps_read_raf_prover_with_gamma::<F, SaturationTable<W>, W>(
-                            gamma, claims, cycle, ra_poly, bits,
-                        ),
-                    )
-                        as Box<dyn SumcheckInstanceProver<F, T>>)
+                tracing::span!(tracing::Level::INFO, "deferred::build_clamp_split").entered();
+            params
+                .into_par_iter()
+                .zip(splits.par_iter())
+                .map(|(p, s)| {
+                    Box::new(SplitProver::new(p, s)) as Box<dyn SumcheckInstanceProver<F, T>>
                 })
                 .collect()
         };
-        batched_prove(instances, prover, proofs, ProofType::DeferredClampReadRaf);
+        batched_prove(instances, prover, proofs, ProofType::DeferredClampSplit);
 
-        let params: Vec<RaOneHotParams<F>> = buckets
+        let params: Vec<_> = buckets
             .iter()
             .map(|b| {
-                let enc = GlobalClampEncoding(b);
-                let ch = shout::ra_onehot_challenges::<F, T>(&enc, &mut prover.transcript);
-                shout::ra_onehot_params(&enc, &prover.accumulator, ch)
+                clamp_split::chunk_check_params::<F, T>(
+                    b,
+                    &prover.accumulator,
+                    &mut prover.transcript,
+                )
             })
             .collect();
         let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
             let _span =
-                tracing::span!(tracing::Level::INFO, "deferred::build_clamp_onehot").entered();
+                tracing::span!(tracing::Level::INFO, "deferred::build_clamp_chunks").entered();
             params
                 .into_par_iter()
-                .zip(indices.par_iter())
-                .flat_map_iter(|(p, idx)| shout::ra_onehot_provers_from_params::<F, T>(p, idx))
+                .zip(splits.par_iter())
+                .flat_map_iter(|(p, s)| clamp_split::chunk_check_provers::<F, T>(p, s))
                 .collect()
         };
-        drop_in_background_thread(indices);
-        batched_prove(instances, prover, proofs, ProofType::DeferredClampRaChecks);
+        drop_in_background_thread(splits);
+        batched_prove(
+            instances,
+            prover,
+            proofs,
+            ProofType::DeferredClampChunkChecks,
+        );
     }
 
     // Rescale-remainder range checks: same packing.
@@ -528,31 +501,26 @@ pub fn verify_all<F: JoltField, T: Transcript>(
         let instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> = buckets
             .iter()
             .map(|b| {
-                let gammas: Vec<F> = verifier.transcript.challenge_scalar_powers(b.nodes.len());
-                let gamma: F = verifier.transcript.challenge_scalar();
-                let (claims, cycle) = b.read_raf_inputs(&gammas, &verifier.accumulator);
-                let ra_poly = b.ra_poly();
-                with_clamp_width!(b.width, W => Box::new(
-                    ps_read_raf_verifier_with_gamma::<F, SaturationTable<W>, W>(
-                        gamma, claims, cycle, ra_poly,
-                    ),
-                )
-                    as Box<dyn SumcheckInstanceVerifier<F, T>>)
+                Box::new(SplitVerifier::new(SplitParams::draw(
+                    b,
+                    &verifier.accumulator,
+                    &mut verifier.transcript,
+                ))) as Box<dyn SumcheckInstanceVerifier<F, T>>
             })
             .collect();
-        batched_verify(instances, verifier, ProofType::DeferredClampReadRaf)?;
+        batched_verify(instances, verifier, ProofType::DeferredClampSplit)?;
 
         let mut instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> =
-            Vec::with_capacity(3 * buckets.len());
+            Vec::with_capacity(2 * buckets.len());
         for b in &buckets {
-            let encoding = GlobalClampEncoding(b);
-            instances.extend(shout::ra_onehot_verifiers(
-                &encoding,
+            let p = clamp_split::chunk_check_params::<F, T>(
+                b,
                 &verifier.accumulator,
                 &mut verifier.transcript,
-            ));
+            );
+            instances.extend(clamp_split::chunk_check_verifiers::<F, T>(p));
         }
-        batched_verify(instances, verifier, ProofType::DeferredClampRaChecks)?;
+        batched_verify(instances, verifier, ProofType::DeferredClampChunkChecks)?;
     }
 
     let rbuckets = remainder_buckets(verifier.preprocessing.model());

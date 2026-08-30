@@ -1,0 +1,824 @@
+//! Interior / saturated split of the packed saturating-clamp buckets.
+//!
+//! A clamped node proves `out = SatClamp(acc)` with `acc` the (i64) pre-clamp
+//! accumulation, opened once at the node's output point (`ClampAcc`). The
+//! previous protocol looked `acc` up in a `w`-bit saturation table: `w/4`
+//! committed one-hot chunks per bucket and a degree-`w/4 + 1` RaVirtual check,
+//! for `w ∈ {40, 48, 56, 64}`. Almost every element is *interior*
+//! (`acc ∈ i32`, `out = acc`); saturation is rare. This module splits the two
+//! cases so the dense work is 32-bit and the `w`-bit work is sparse.
+//!
+//! Per bucket cycle `t` (see [`super::global_clamp`] for the packing) the
+//! prover holds three dense vectors and commits their one-hot chunks:
+//!
+//! ```text
+//! OUT(t) = out(t) + 2^31                          8 dense 4-bit chunks
+//! IND(t) = [acc(t) ∉ i32]                         virtual: Hamming weight of the slack chunks
+//! S(t)   = IND(t) · |acc(t) − out(t)|             w/4 sparse chunks (None where IND = 0)
+//! ```
+//!
+//! **Split sumcheck** (one per bucket, cycle weight `W(t) = Σ_n γ_n·eq(r_n, t − off_n)`):
+//!
+//! ```text
+//! Σ_t W(t)·[ OUT + β₁/M · IND·S·(2·OUT − M) + β₂ · IND·OUT·(OUT − M) + β₃ · IND·(1 − IND) ]
+//!   = Σ_n γ_n · [ out_n(r_n) + 2^31 + β₁·(acc_n(r_n) − out_n(r_n)) ],      M = 2^32 − 1
+//! ```
+//!
+//! whose right-hand side is linear in the nodes' existing openings. It reduces
+//! to openings of `OUT`, `S`, `IND` at a fresh point `r'`. Since the `r_n` are
+//! drawn after the chunks are committed, the identity at random `r_n`, `γ`, `β`
+//! gives the pointwise identities (Schwartz–Zippel): `OUT = out + 2^31`,
+//! `acc − out = IND·S·σ` with `σ = (2·OUT − M)/M`, `IND·OUT·(OUT − M) = 0`,
+//! `IND ∈ {0, 1}`.
+//!
+//! **Chunk sumcheck** (4 rounds over the chunk address `k`) ties the three
+//! virtual openings to the committed chunks:
+//!
+//! ```text
+//! Σ_k Σ_d ra_d(k, r') · (γ^d + β_o·2^{4(7−d)}·k)        d < 8      (output chunks)
+//! Σ_k Σ_d ra_d(k, r') · (γ^{8+d} + β_s·2^{4(D−1−d)}·k)  d < D      (slack chunks)
+//!   = Σ_{d<8} γ^d · 1 + Σ_{d<D} γ^{8+d} · IND(r') + β_o·OUT(r') + β_s·S(r')
+//! ```
+//!
+//! i.e. every output chunk has Hamming weight 1, every slack chunk has Hamming
+//! weight `IND`, and `OUT`/`S` are the chunk values. With the standard
+//! Booleanity check on all chunks this gives, pointwise: `OUT ∈ [0, 2^32)` so
+//! `out ∈ i32`; `IND = 0 ⇒ acc = out`; `IND = 1 ⇒ OUT ∈ {0, M}`, i.e.
+//! `out ∈ {i32::MIN, i32::MAX}`, and `acc = out ± S` with `S ∈ [0, 2^w)` on
+//! the saturated side (`out = MAX ⇒ acc = MAX + S ≥ MAX`, `out = MIN ⇒ acc =
+//! MIN − S ≤ MIN`) — exactly `out = SatClamp(acc)`. (`w` is the node's static
+//! clamp width, so `|acc| + 2^w` never wraps the field.)
+//!
+//! Compared to the table lookup: no RaVirtual (the most expensive check), the
+//! dense chunk count drops from `w/4` to 8, and the `w/4` slack chunks are
+//! almost empty (Dory's one-hot commitment is `O(nonzeros)`).
+use super::{
+    clamp_lookups::{acc_opening_id, clamp_intermediate},
+    deferred_lookups::DEFERRED_PROOF_IDX,
+    global_clamp::ClampBucket,
+};
+use atlas_onnx_tracer::{model::trace::Trace, model::Model, node::ComputationNode};
+use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
+use joltworks::{
+    config::{OneHotConfig, OneHotParams},
+    field::{IntoOpening, JoltField},
+    poly::{
+        eq_poly::EqPolynomial,
+        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        one_hot_polynomial::OneHotPolynomial,
+        opening_proof::{
+            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
+            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+        },
+        unipoly::UniPoly,
+    },
+    subprotocols::{
+        booleanity::{
+            BooleanitySumcheckParams, BooleanitySumcheckProver, BooleanitySumcheckVerifier,
+        },
+        ps_shout::{CycleWeight, PackedSegment},
+        sumcheck_prover::SumcheckInstanceProver,
+        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+    },
+    transcripts::Transcript,
+    utils::thread::unsafe_allocate_zero_vec,
+};
+use rayon::prelude::*;
+
+/// Address width of the output range check (`out + 2^31 ∈ [0, 2^32)`).
+pub const OUT_LOG_K: usize = 32;
+const OFFSET: i64 = 1 << 31;
+/// `M = 2^32 − 1`: the offset output of `i32::MAX`.
+const OUT_MAX: u64 = (1 << 32) - 1;
+
+fn one_hot_params(log_k: usize) -> OneHotParams {
+    OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k)
+}
+
+/// Number of output chunks (`32 / LOG_K_CHUNK`).
+pub fn num_out_chunks() -> usize {
+    one_hot_params(OUT_LOG_K).instruction_d
+}
+
+/// Number of slack chunks for a `width`-bit bucket.
+pub fn num_slack_chunks(width: usize) -> usize {
+    one_hot_params(width).instruction_d
+}
+
+/// The bucket's committed chunk polynomials: output chunks, then slack chunks.
+pub fn chunk_polys(bucket: &ClampBucket) -> Vec<CommittedPoly> {
+    (0..num_out_chunks())
+        .map(|d| CommittedPoly::GlobalClampOutRaD(bucket.idx, d))
+        .chain(
+            (0..num_slack_chunks(bucket.width))
+                .map(|d| CommittedPoly::GlobalClampSlackRaD(bucket.idx, d)),
+        )
+        .collect()
+}
+
+fn split_sumcheck_id() -> SumcheckId {
+    SumcheckId::NodeExecution(DEFERRED_PROOF_IDX)
+}
+
+fn out_id(bucket_idx: usize) -> OpeningId {
+    OpeningId::new(VirtualPoly::GlobalClampOut(bucket_idx), split_sumcheck_id())
+}
+
+fn slack_id(bucket_idx: usize) -> OpeningId {
+    OpeningId::new(
+        VirtualPoly::GlobalClampSlack(bucket_idx),
+        split_sumcheck_id(),
+    )
+}
+
+fn ind_id(bucket_idx: usize) -> OpeningId {
+    OpeningId::new(VirtualPoly::GlobalClampInd(bucket_idx), split_sumcheck_id())
+}
+
+// ---------------------------------------------------------------------------
+// Witness
+// ---------------------------------------------------------------------------
+
+/// A node's split witness over its (power-of-two padded) output.
+#[derive(Clone, Debug)]
+pub struct NodeSplit {
+    /// `out + 2^31`.
+    pub out: Vec<u32>,
+    /// `|acc − out|` on saturated elements, `0` elsewhere.
+    pub slack: Vec<u64>,
+    /// `1` on saturated elements.
+    pub ind: Vec<u8>,
+}
+
+impl NodeSplit {
+    /// From the padded pre-clamp accumulation and the padded node output.
+    /// (Deliberately no consistency check: a tampered trace must be caught by
+    /// the verifier, not by the prover's witness generation.)
+    pub fn new(acc: &[i64], out: &[i32]) -> Self {
+        assert_eq!(acc.len(), out.len(), "clamp split: acc / out length");
+        let (out_v, (slack, ind)): (Vec<u32>, (Vec<u64>, Vec<u8>)) = acc
+            .par_iter()
+            .zip(out.par_iter())
+            .with_min_len(par_enabled())
+            .map(|(&q, &o)| {
+                let saturated = q > i32::MAX as i64 || q < i32::MIN as i64;
+                let slack = if saturated { q.abs_diff(o as i64) } else { 0 };
+                ((o as i64 + OFFSET) as u32, (slack, saturated as u8))
+            })
+            .unzip();
+        Self {
+            out: out_v,
+            slack,
+            ind,
+        }
+    }
+
+    /// Re-derive the node's split witness from the trace.
+    pub fn from_trace(node: &ComputationNode, trace: &Trace) -> Self {
+        let acc = clamp_intermediate(node, trace);
+        let out = Trace::layer_data(trace, node)
+            .output
+            .padded_next_power_of_two();
+        Self::new(acc.data(), out.data())
+    }
+}
+
+/// A bucket's assembled split witness (gaps: interior zeros).
+#[derive(Clone, Debug)]
+pub struct BucketSplit {
+    /// Bucket clamp width (slack address bits).
+    pub width: usize,
+    /// `out + 2^31` per cycle.
+    pub out: Vec<u32>,
+    /// Saturation slack per cycle.
+    pub slack: Vec<u64>,
+    /// Saturation indicator per cycle.
+    pub ind: Vec<u8>,
+}
+
+impl BucketSplit {
+    /// Lay each node's split into the bucket's cycle space.
+    pub fn assemble(bucket: &ClampBucket, mut per_node: impl FnMut(usize) -> NodeSplit) -> Self {
+        let len = bucket.cycle_len();
+        let mut out = vec![OFFSET as u32; len];
+        let mut slack = vec![0u64; len];
+        let mut ind = vec![0u8; len];
+        for n in &bucket.nodes {
+            let s = per_node(n.idx);
+            assert_eq!(s.out.len(), 1 << n.log_t, "node {} split length", n.idx);
+            out[n.offset..n.offset + s.out.len()].copy_from_slice(&s.out);
+            slack[n.offset..n.offset + s.slack.len()].copy_from_slice(&s.slack);
+            ind[n.offset..n.offset + s.ind.len()].copy_from_slice(&s.ind);
+        }
+        Self {
+            width: bucket.width,
+            out,
+            slack,
+            ind,
+        }
+    }
+
+    /// From the trace (commit-time witness generation).
+    pub fn from_trace(bucket: &ClampBucket, trace: &Trace, model: &Model) -> Self {
+        Self::assemble(bucket, |idx| {
+            NodeSplit::from_trace(&model.graph.nodes[&idx], trace)
+        })
+    }
+
+    /// The `d`-th chunk index of every cycle: output chunks (`d < 8`, always
+    /// set), then slack chunks (`None` on interior cycles).
+    pub fn chunk_indices(&self) -> Vec<Vec<Option<u8>>> {
+        let out_params = one_hot_params(OUT_LOG_K);
+        let slack_params = one_hot_params(self.width);
+        let mut chunks: Vec<Vec<Option<u8>>> = (0..out_params.instruction_d)
+            .map(|d| {
+                self.out
+                    .par_iter()
+                    .with_min_len(par_enabled())
+                    .map(|&o| Some(out_params.lookup_index_chunk(o as u64, d)))
+                    .collect()
+            })
+            .collect();
+        chunks.extend((0..slack_params.instruction_d).map(|d| {
+            self.slack
+                .par_iter()
+                .zip(self.ind.par_iter())
+                .with_min_len(par_enabled())
+                .map(|(&s, &i)| (i == 1).then(|| slack_params.lookup_index_chunk(s, d)))
+                .collect()
+        }));
+        chunks
+    }
+
+    /// The bucket's committed one-hot chunk polynomials.
+    pub fn witness_polys<F: JoltField>(
+        &self,
+        bucket: &ClampBucket,
+    ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
+        let k_chunk = one_hot_params(OUT_LOG_K).k_chunk;
+        chunk_polys(bucket)
+            .into_iter()
+            .zip(self.chunk_indices())
+            .map(|(poly, idx)| {
+                let idx: Vec<Option<u16>> = idx.into_iter().map(|x| x.map(u16::from)).collect();
+                (
+                    poly,
+                    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(idx, k_chunk)),
+                )
+            })
+            .collect()
+    }
+}
+
+/// `G[d][k] = Σ_t eq(r_cycle, t)·[chunk_d(t) = k]` for every chunk.
+fn compute_g<F: JoltField>(chunks: &[Vec<Option<u8>>], r_cycle: &[F]) -> Vec<Vec<F>> {
+    let eq: Vec<F> = EqPolynomial::evals(r_cycle);
+    let k_chunk = one_hot_params(OUT_LOG_K).k_chunk;
+    chunks
+        .par_iter()
+        .map(|idx| {
+            let num_chunks = rayon::current_num_threads()
+                .next_power_of_two()
+                .min(idx.len());
+            let chunk_size = (idx.len() / num_chunks).max(1);
+            idx.par_chunks(chunk_size)
+                .enumerate()
+                .map(|(c, part)| {
+                    let mut acc: Vec<F> = unsafe_allocate_zero_vec(k_chunk);
+                    let base = c * chunk_size;
+                    for (j, k) in part.iter().enumerate() {
+                        if let Some(k) = k {
+                            acc[*k as usize] += eq[base + j];
+                        }
+                    }
+                    acc
+                })
+                .reduce(
+                    || unsafe_allocate_zero_vec(k_chunk),
+                    |mut a, b| {
+                        a.iter_mut().zip(b).for_each(|(x, y)| *x += y);
+                        a
+                    },
+                )
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Split sumcheck
+// ---------------------------------------------------------------------------
+
+/// Parameters of a bucket's split sumcheck.
+#[derive(Clone)]
+pub struct SplitParams<F: JoltField> {
+    /// Bucket index.
+    pub bucket_idx: usize,
+    /// Packed cycle weight `W(t)`.
+    pub cycle: CycleWeight<F>,
+    /// `[β₁, β₂, β₃]` (see the module docs).
+    pub betas: [F; 3],
+    /// `Σ_n γ_n·[out_n(r_n) + 2^31 + β₁·(acc_n(r_n) − out_n(r_n))]`.
+    pub input_claim: F,
+}
+
+impl<F: JoltField> SplitParams<F> {
+    /// Draw the bucket's challenges and resolve its input claim / cycle weight
+    /// from the member nodes' openings (already in the accumulator on both sides).
+    pub fn draw<T: Transcript>(
+        bucket: &ClampBucket,
+        accumulator: &dyn OpeningAccumulator<F>,
+        transcript: &mut T,
+    ) -> Self {
+        let gammas: Vec<F> = transcript.challenge_scalar_powers(bucket.nodes.len());
+        let betas: [F; 3] = [
+            transcript.challenge_scalar(),
+            transcript.challenge_scalar(),
+            transcript.challenge_scalar(),
+        ];
+        let offset = F::from_u64(OFFSET as u64);
+        let mut input_claim = F::zero();
+        let mut segments = Vec::with_capacity(bucket.nodes.len());
+        for (n, gamma) in bucket.nodes.iter().zip(&gammas) {
+            let (r, out_claim) = accumulator.get_node_output_opening(n.idx);
+            let (_, acc_claim) = accumulator.get_virtual_polynomial_opening(acc_opening_id(n.idx));
+            assert_eq!(r.len(), n.log_t, "node {} opening point length", n.idx);
+            input_claim += *gamma * (out_claim + offset + betas[0] * (acc_claim - out_claim));
+            segments.push(PackedSegment {
+                gamma: *gamma,
+                prefix: n.offset >> n.log_t,
+                prefix_len: bucket.log_t - n.log_t,
+                r: r.r,
+            });
+        }
+        Self {
+            bucket_idx: bucket.idx,
+            cycle: CycleWeight::Packed {
+                log_T: bucket.log_t,
+                segments,
+            },
+            betas,
+            input_claim,
+        }
+    }
+
+    /// `β₁/M`, `β₂`, `β₃` and `M` as field elements.
+    fn coefficients(&self) -> (F, F, F, F) {
+        let m = F::from_u64(OUT_MAX);
+        (
+            self.betas[0] * m.inverse().expect("2^32 − 1 is invertible"),
+            self.betas[1],
+            self.betas[2],
+            m,
+        )
+    }
+
+    /// `OUT + β₁/M·IND·S·(2·OUT − M) + β₂·IND·OUT·(OUT − M) + β₃·IND·(1 − IND)`.
+    fn combine(&self, out: F, slack: F, ind: F) -> F {
+        let (b1, b2, b3, m) = self.coefficients();
+        out + b1 * ind * slack * (out + out - m)
+            + b2 * ind * out * (out - m)
+            + b3 * ind * (F::one() - ind)
+    }
+}
+
+impl<F: JoltField> SumcheckInstanceParams<F> for SplitParams<F> {
+    fn degree(&self) -> usize {
+        4
+    }
+
+    fn num_rounds(&self) -> usize {
+        self.cycle.log_T()
+    }
+
+    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
+        self.input_claim
+    }
+
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
+    }
+}
+
+/// Prover of a bucket's split sumcheck.
+pub struct SplitProver<F: JoltField> {
+    params: SplitParams<F>,
+    w: MultilinearPolynomial<F>,
+    out: MultilinearPolynomial<F>,
+    slack: MultilinearPolynomial<F>,
+    ind: MultilinearPolynomial<F>,
+}
+
+impl<F: JoltField> SplitProver<F> {
+    /// Build from resolved parameters and the bucket's split witness.
+    pub fn new(params: SplitParams<F>, split: &BucketSplit) -> Self {
+        let w = MultilinearPolynomial::from(params.cycle.evals());
+        Self {
+            params,
+            w,
+            out: MultilinearPolynomial::from(split.out.clone()),
+            slack: MultilinearPolynomial::from(split.slack.clone()),
+            ind: MultilinearPolynomial::from(split.ind.clone()),
+        }
+    }
+}
+
+impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SplitProver<F> {
+    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+        &self.params
+    }
+
+    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
+        let (b1, b2, b3, m) = self.params.coefficients();
+        let half = self.w.len() / 2;
+        let evals = (0..half)
+            .into_par_iter()
+            .with_min_len(par_enabled())
+            .map(|g| {
+                let lin = |p: &MultilinearPolynomial<F>| {
+                    let v0 = p.get_bound_coeff(2 * g);
+                    (v0, p.get_bound_coeff(2 * g + 1) - v0)
+                };
+                let (w0, wd) = lin(&self.w);
+                let (o0, od) = lin(&self.out);
+                let (s0, sd) = lin(&self.slack);
+                let (i0, id) = lin(&self.ind);
+                let mut acc = [F::zero(); 4];
+                // Evaluations at x = 0, 2, 3, 4.
+                let (mut w, mut o, mut s, mut i) = (w0, o0, s0, i0);
+                for (j, x) in [0u64, 2, 3, 4].into_iter().enumerate() {
+                    if x != 0 {
+                        // Advance from the previous point (0 → 2 is two steps).
+                        let steps = if x == 2 { 2 } else { 1 };
+                        for _ in 0..steps {
+                            w += wd;
+                            o += od;
+                            s += sd;
+                            i += id;
+                        }
+                    }
+                    let g_val = o
+                        + b1 * i * s * (o + o - m)
+                        + b2 * i * o * (o - m)
+                        + b3 * i * (F::one() - i);
+                    acc[j] = w * g_val;
+                }
+                acc
+            })
+            .reduce(
+                || [F::zero(); 4],
+                |a, b| [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]],
+            );
+        UniPoly::from_evals_and_hint(previous_claim, &evals)
+    }
+
+    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
+        self.w.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.out.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.slack.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.ind.bind_parallel(r_j, BindingOrder::LowToHigh);
+    }
+
+    fn cache_openings(
+        &self,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let r = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let b = self.params.bucket_idx;
+        accumulator.append_virtual(transcript, out_id(b), r.clone(), self.out.final_claim());
+        accumulator.append_virtual(transcript, slack_id(b), r.clone(), self.slack.final_claim());
+        accumulator.append_virtual(transcript, ind_id(b), r, self.ind.final_claim());
+    }
+}
+
+/// Verifier of a bucket's split sumcheck.
+pub struct SplitVerifier<F: JoltField> {
+    params: SplitParams<F>,
+}
+
+impl<F: JoltField> SplitVerifier<F> {
+    /// Build from resolved parameters.
+    pub fn new(params: SplitParams<F>) -> Self {
+        Self { params }
+    }
+}
+
+impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SplitVerifier<F> {
+    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+        &self.params
+    }
+
+    fn expected_output_claim(
+        &self,
+        accumulator: &VerifierOpeningAccumulator<F>,
+        sumcheck_challenges: &[F::Challenge],
+    ) -> F {
+        let r = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let b = self.params.bucket_idx;
+        let out = accumulator.get_virtual_polynomial_opening(out_id(b)).1;
+        let slack = accumulator.get_virtual_polynomial_opening(slack_id(b)).1;
+        let ind = accumulator.get_virtual_polynomial_opening(ind_id(b)).1;
+        self.params.cycle.mle(&r.r) * self.params.combine(out, slack, ind)
+    }
+
+    fn cache_openings(
+        &self,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let r = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let b = self.params.bucket_idx;
+        accumulator.append_virtual(transcript, out_id(b), r.clone());
+        accumulator.append_virtual(transcript, slack_id(b), r.clone());
+        accumulator.append_virtual(transcript, ind_id(b), r);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Chunk sumcheck (Hamming weight + chunk values)
+// ---------------------------------------------------------------------------
+
+/// Parameters of a bucket's chunk sumcheck.
+#[derive(Clone)]
+pub struct ChunkParams<F: JoltField> {
+    /// Bucket index.
+    pub bucket_idx: usize,
+    /// Output chunks then slack chunks.
+    pub polys: Vec<CommittedPoly>,
+    /// Per-chunk Hamming batching powers `γ^d`.
+    pub gamma_powers: Vec<F>,
+    /// Per-chunk value weights: `β_o·2^{4(7−d)}` / `β_s·2^{4(D−1−d)}`.
+    pub value_weights: Vec<F>,
+    /// Weight of the output value `OUT(r')` in the batched claim.
+    pub beta_out: F,
+    /// Weight of the slack value `S(r')` in the batched claim.
+    pub beta_slack: F,
+    /// The split sumcheck's output point `r'`.
+    pub r_cycle: Vec<F>,
+}
+
+impl<F: JoltField> SumcheckInstanceParams<F> for ChunkParams<F> {
+    fn degree(&self) -> usize {
+        2
+    }
+
+    fn num_rounds(&self) -> usize {
+        one_hot_params(OUT_LOG_K).log_k_chunk
+    }
+
+    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
+        let b = self.bucket_idx;
+        let out = accumulator.get_virtual_polynomial_opening(out_id(b)).1;
+        let slack = accumulator.get_virtual_polynomial_opening(slack_id(b)).1;
+        let ind = accumulator.get_virtual_polynomial_opening(ind_id(b)).1;
+        let n_out = num_out_chunks();
+        let hamming: F = self
+            .gamma_powers
+            .iter()
+            .enumerate()
+            .map(|(d, g)| if d < n_out { *g } else { *g * ind })
+            .sum();
+        hamming + self.beta_out * out + self.beta_slack * slack
+    }
+
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
+    }
+}
+
+/// Draw a bucket's chunk-check challenges (chunk sumcheck, then Booleanity)
+/// and resolve both parameter blocks.
+pub fn chunk_check_params<F: JoltField, T: Transcript>(
+    bucket: &ClampBucket,
+    accumulator: &dyn OpeningAccumulator<F>,
+    transcript: &mut T,
+) -> (ChunkParams<F>, BooleanitySumcheckParams<F>) {
+    let polys = chunk_polys(bucket);
+    let d = polys.len();
+    let n_out = num_out_chunks();
+    let n_slack = num_slack_chunks(bucket.width);
+    let log_k_chunk = one_hot_params(OUT_LOG_K).log_k_chunk;
+
+    let gamma_powers: Vec<F> = transcript.challenge_scalar_powers(d);
+    let beta_out: F = transcript.challenge_scalar();
+    let beta_slack: F = transcript.challenge_scalar();
+    let bool_gammas = transcript.challenge_vector_optimized::<F>(d);
+    let r_address = transcript.challenge_vector_optimized::<F>(log_k_chunk);
+
+    let r_cycle = accumulator
+        .get_virtual_polynomial_opening(out_id(bucket.idx))
+        .0
+        .r;
+    let value_weights: Vec<F> = (0..n_out)
+        .map(|i| beta_out * F::from_u64(1u64 << (log_k_chunk * (n_out - 1 - i))))
+        .chain(
+            (0..n_slack)
+                .map(|i| beta_slack * F::from_u64(1u64 << (log_k_chunk * (n_slack - 1 - i)))),
+        )
+        .collect();
+    let chunk = ChunkParams {
+        bucket_idx: bucket.idx,
+        polys: polys.clone(),
+        gamma_powers,
+        value_weights,
+        beta_out,
+        beta_slack,
+        r_cycle: r_cycle.clone(),
+    };
+    let booleanity = BooleanitySumcheckParams {
+        d,
+        log_k_chunk,
+        log_t: r_cycle.len(),
+        gammas: bool_gammas,
+        r_address: r_address.into_opening(),
+        r_cycle,
+        polynomial_types: polys,
+        sumcheck_id: SumcheckId::Booleanity,
+    };
+    (chunk, booleanity)
+}
+
+/// Prover of a bucket's chunk sumcheck.
+pub struct ChunkProver<F: JoltField> {
+    params: ChunkParams<F>,
+    /// `G[d]` as a polynomial over the chunk address.
+    ra: Vec<MultilinearPolynomial<F>>,
+    /// The chunk address `k` as a polynomial.
+    identity: MultilinearPolynomial<F>,
+}
+
+impl<F: JoltField> ChunkProver<F> {
+    /// Build from resolved parameters and the chunk tables `G[d][k]`.
+    pub fn new(params: ChunkParams<F>, g: Vec<Vec<F>>) -> Self {
+        let k_chunk = one_hot_params(OUT_LOG_K).k_chunk;
+        Self {
+            params,
+            ra: g.into_iter().map(MultilinearPolynomial::from).collect(),
+            identity: MultilinearPolynomial::from((0..k_chunk as u64).collect::<Vec<u64>>()),
+        }
+    }
+}
+
+impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ChunkProver<F> {
+    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+        &self.params
+    }
+
+    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
+        let half = self.identity.len() / 2;
+        let mut e0 = F::zero();
+        let mut e2 = F::zero();
+        for g in 0..half {
+            let k0 = self.identity.get_bound_coeff(2 * g);
+            let k1 = self.identity.get_bound_coeff(2 * g + 1);
+            let k2 = k1 + k1 - k0;
+            for ((ra, gamma), weight) in self
+                .ra
+                .iter()
+                .zip(&self.params.gamma_powers)
+                .zip(&self.params.value_weights)
+            {
+                let r0 = ra.get_bound_coeff(2 * g);
+                let r1 = ra.get_bound_coeff(2 * g + 1);
+                let r2 = r1 + r1 - r0;
+                e0 += r0 * (*gamma + *weight * k0);
+                e2 += r2 * (*gamma + *weight * k2);
+            }
+        }
+        UniPoly::from_evals_and_hint(previous_claim, &[e0, e2])
+    }
+
+    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
+        self.identity.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.ra
+            .iter_mut()
+            .for_each(|ra| ra.bind_parallel(r_j, BindingOrder::LowToHigh));
+    }
+
+    fn cache_openings(
+        &self,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let r_address = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let claims: Vec<F> = self.ra.iter().map(|ra| ra.final_claim()).collect();
+        accumulator.append_sparse(
+            transcript,
+            self.params.polys.clone(),
+            SumcheckId::HammingWeight,
+            r_address.r,
+            self.params.r_cycle.clone(),
+            claims,
+        );
+    }
+}
+
+/// Verifier of a bucket's chunk sumcheck.
+pub struct ChunkVerifier<F: JoltField> {
+    params: ChunkParams<F>,
+}
+
+impl<F: JoltField> ChunkVerifier<F> {
+    /// Build from resolved parameters.
+    pub fn new(params: ChunkParams<F>) -> Self {
+        Self { params }
+    }
+}
+
+impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ChunkVerifier<F> {
+    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+        &self.params
+    }
+
+    fn expected_output_claim(
+        &self,
+        accumulator: &VerifierOpeningAccumulator<F>,
+        sumcheck_challenges: &[F::Challenge],
+    ) -> F {
+        // `k` at the (low-to-high bound) address point: Σ_j 2^j·r_j.
+        let k: F = sumcheck_challenges
+            .iter()
+            .enumerate()
+            .map(|(j, c)| F::from_u64(1u64 << j) * (*c).into())
+            .sum();
+        self.params
+            .polys
+            .iter()
+            .zip(&self.params.gamma_powers)
+            .zip(&self.params.value_weights)
+            .map(|((poly, gamma), weight)| {
+                let ra = accumulator
+                    .get_committed_polynomial_opening(OpeningId::new(
+                        *poly,
+                        SumcheckId::HammingWeight,
+                    ))
+                    .1;
+                ra * (*gamma + *weight * k)
+            })
+            .sum()
+    }
+
+    fn cache_openings(
+        &self,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let r: Vec<F> = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening())
+            .r
+            .into_iter()
+            .chain(self.params.r_cycle.iter().cloned())
+            .collect();
+        accumulator.append_sparse(
+            transcript,
+            self.params.polys.clone(),
+            SumcheckId::HammingWeight,
+            r,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bucket-level construction
+// ---------------------------------------------------------------------------
+
+/// Build a bucket's chunk-check provers (chunk sumcheck, Booleanity) from
+/// resolved parameters (no accumulator / transcript access).
+pub fn chunk_check_provers<F: JoltField, T: Transcript>(
+    params: (ChunkParams<F>, BooleanitySumcheckParams<F>),
+    split: &BucketSplit,
+) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
+    let (chunk, booleanity) = params;
+    let indices = split.chunk_indices();
+    let g = compute_g(&indices, &booleanity.r_cycle);
+    vec![
+        Box::new(ChunkProver::new(chunk, g.clone())),
+        Box::new(BooleanitySumcheckProver::<F, u8>::gen(
+            booleanity, g, indices,
+        )),
+    ]
+}
+
+/// Verifier counterpart of [`chunk_check_provers`].
+pub fn chunk_check_verifiers<F: JoltField, T: Transcript>(
+    params: (ChunkParams<F>, BooleanitySumcheckParams<F>),
+) -> Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> {
+    let (chunk, booleanity) = params;
+    vec![
+        Box::new(ChunkVerifier::new(chunk)),
+        Box::new(BooleanitySumcheckVerifier::new(booleanity)),
+    ]
+}

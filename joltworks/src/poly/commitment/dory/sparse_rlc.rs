@@ -293,11 +293,12 @@ pub fn combine_row_commitments(hints: &[Vec<ArkG1>], coeffs: &[Fr]) -> Vec<ArkG1
     // not be invoked from inside a rayon job: large rows run sequentially
     // (each MSM parallel internally), small rows in parallel by scale-and-add.
     const MSM_THRESHOLD: usize = 64;
+    // Identity rows (gap tails, all-`None` slack chunks) contribute nothing.
     let row_terms = |r: usize| -> (Vec<ArkG1>, Vec<ArkFr>) {
         hints
             .iter()
             .zip(coeffs)
-            .filter(|(h, _)| r < h.len())
+            .filter(|(h, _)| r < h.len() && !h[r].0.is_zero())
             .map(|(h, g)| (h[r], ArkFr(*g)))
             .unzip()
     };

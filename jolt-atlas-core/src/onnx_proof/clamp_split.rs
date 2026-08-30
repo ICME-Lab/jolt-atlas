@@ -363,12 +363,15 @@ impl BucketSplit {
         bucket: &ClampBucket,
     ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
         let k_chunk = one_hot_params(OUT_LOG_K).k_chunk;
-        let mut indices = self.chunk_indices();
-        if !self.saturated() {
-            for idx in indices.iter_mut().skip(num_out_chunks()) {
-                idx.iter_mut().for_each(|x| *x = None);
-            }
-        }
+        let indices = if self.saturated() {
+            self.chunk_indices()
+        } else {
+            // Exact bucket: the slack chunks stay empty and are never opened.
+            let values: Vec<u64> = self.out.iter().map(|&o| o as u64).collect();
+            let mut idx = value_chunk_indices(&values, OUT_LOG_K);
+            idx.extend((0..num_slack_chunks(self.width)).map(|_| vec![None; self.out.len()]));
+            idx
+        };
         chunk_polys(bucket)
             .into_iter()
             .zip(indices)

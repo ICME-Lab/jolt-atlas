@@ -138,6 +138,54 @@ fn ind_id(bucket_idx: usize) -> OpeningId {
 }
 
 // ---------------------------------------------------------------------------
+// Exact (public, unsaturated) outputs
+// ---------------------------------------------------------------------------
+
+/// Whether a tensor has no saturated element.
+pub fn unsaturated(t: &[i32]) -> bool {
+    !t.iter().any(|&v| v == i32::MAX || v == i32::MIN)
+}
+
+/// A model *output* node whose public output has no saturated element proves
+/// its clamp *exactly* — `ClampAcc(r) = out(r)` — instead of through the
+/// bucket: the verifier knows `out` (an `i32` tensor without `±2^31`), so
+/// `SatClamp(acc) = out` is equivalent to `acc = out`. Such a node is a gap
+/// in its clamp bucket (prover side: from the trace).
+pub fn exact_output_prover(model: &Model, trace: &Trace, node_idx: usize) -> bool {
+    model.outputs().contains(&node_idx)
+        && trace
+            .node_outputs
+            .get(&node_idx)
+            .is_some_and(|t| unsaturated(t.data()))
+}
+
+/// [`exact_output_prover`] from the verifier's public IO.
+pub fn exact_output_verifier(
+    model: &Model,
+    io: &atlas_onnx_tracer::model::trace::ModelExecutionIO,
+    node_idx: usize,
+) -> bool {
+    model.outputs().contains(&node_idx)
+        && io
+            .output_indices
+            .iter()
+            .position(|&i| i == node_idx)
+            .and_then(|p| io.outputs.get(p))
+            .is_some_and(|t| unsaturated(t.data()))
+}
+
+/// `bucket` restricted to the nodes that are proven through it (`live`);
+/// `None` if no node is.
+pub fn live_bucket(
+    bucket: &ClampBucket,
+    mut live: impl FnMut(usize) -> bool,
+) -> Option<ClampBucket> {
+    let mut b = bucket.clone();
+    b.nodes.retain(|n| live(n.idx));
+    (!b.nodes.is_empty()).then_some(b)
+}
+
+// ---------------------------------------------------------------------------
 // Witness
 // ---------------------------------------------------------------------------
 
@@ -199,14 +247,20 @@ pub struct BucketSplit {
 }
 
 impl BucketSplit {
-    /// Lay each node's split into the bucket's cycle space.
-    pub fn assemble(bucket: &ClampBucket, mut per_node: impl FnMut(usize) -> NodeSplit) -> Self {
+    /// Lay each node's split into the bucket's cycle space (`None`: the node
+    /// is a gap — an exact output, see [`exact_output_prover`]).
+    pub fn assemble(
+        bucket: &ClampBucket,
+        mut per_node: impl FnMut(usize) -> Option<NodeSplit>,
+    ) -> Self {
         let len = bucket.cycle_len();
         let mut out = vec![OFFSET as u32; len];
         let mut slack = vec![0u64; len];
         let mut ind = vec![0u8; len];
         for n in &bucket.nodes {
-            let s = per_node(n.idx);
+            let Some(s) = per_node(n.idx) else {
+                continue;
+            };
             assert_eq!(s.out.len(), 1 << n.log_t, "node {} split length", n.idx);
             out[n.offset..n.offset + s.out.len()].copy_from_slice(&s.out);
             slack[n.offset..n.offset + s.slack.len()].copy_from_slice(&s.slack);
@@ -220,11 +274,32 @@ impl BucketSplit {
         }
     }
 
-    /// From the trace (commit-time witness generation).
+    /// From the trace (commit-time witness generation); exact outputs are gaps.
     pub fn from_trace(bucket: &ClampBucket, trace: &Trace, model: &Model) -> Self {
         Self::assemble(bucket, |idx| {
-            NodeSplit::from_trace(&model.graph.nodes[&idx], trace)
+            (!exact_output_prover(model, trace, idx))
+                .then(|| NodeSplit::from_trace(&model.graph.nodes[&idx], trace))
         })
+    }
+
+    /// The chunk polynomials of a bucket with no live node: never opened, so
+    /// committed empty (all `None`, free under Dory's sparse commit).
+    pub fn empty_witness_polys<F: JoltField>(
+        bucket: &ClampBucket,
+    ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
+        let k_chunk = one_hot_params(OUT_LOG_K).k_chunk;
+        chunk_polys(bucket)
+            .into_iter()
+            .map(|poly| {
+                (
+                    poly,
+                    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                        vec![None; bucket.cycle_len()],
+                        k_chunk,
+                    )),
+                )
+            })
+            .collect()
     }
 
     /// The `d`-th chunk index of every cycle: output chunks (`d < 8`, always

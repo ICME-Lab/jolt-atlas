@@ -261,7 +261,13 @@ pub fn bucket_witnesses<F: JoltField>(
         .chain(remainder_buckets(model).iter())
         .flat_map(|bucket| match bucket.kind {
             BucketKind::Clamp => {
-                clamp_split::BucketSplit::from_trace(bucket, trace, model).witness_polys(bucket)
+                match clamp_split::live_bucket(bucket, |idx| {
+                    !clamp_split::exact_output_prover(model, trace, idx)
+                }) {
+                    Some(_) => clamp_split::BucketSplit::from_trace(bucket, trace, model)
+                        .witness_polys(bucket),
+                    None => clamp_split::BucketSplit::empty_witness_polys(bucket),
+                }
             }
             BucketKind::Remainder => {
                 let bits = bucket.assemble_bits(|idx| {

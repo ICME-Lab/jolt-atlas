@@ -283,6 +283,14 @@ pub fn prove_clamp_lookup<F: JoltField, T: Transcript>(
     let provider =
         OpLookupProvider::with_helper(node.clone(), SaturatingAccClampOperands::for_node(node));
     provider.append_witness_claim_for(&witness, &mut prover.accumulator, &mut prover.transcript);
+    if crate::onnx_proof::clamp_split::exact_output_prover(
+        prover.preprocessing.model(),
+        &prover.trace,
+        node.idx,
+    ) {
+        // Public unsaturated output: the verifier checks `ClampAcc == out`.
+        return Vec::new();
+    }
     let output = Trace::layer_data(&prover.trace, node)
         .output
         .padded_next_power_of_two();
@@ -304,6 +312,24 @@ pub fn verify_clamp_lookup<F: JoltField, T: Transcript>(
     let provider =
         OpLookupProvider::with_helper(node.clone(), SaturatingAccClampOperands::for_node(node));
     provider.append_witness_claim_verifier(&mut verifier.accumulator, &mut verifier.transcript);
+    if crate::onnx_proof::clamp_split::exact_output_verifier(
+        verifier.preprocessing.model(),
+        verifier.io,
+        node.idx,
+    ) {
+        let acc = verifier
+            .accumulator
+            .get_virtual_polynomial_opening(acc_opening_id(node.idx))
+            .1;
+        let out = verifier.accumulator.get_node_output_opening(node.idx).1;
+        if acc != out {
+            return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                "output node {}: unsaturated public output must equal the pre-clamp accumulation",
+                node.idx
+            )));
+        }
+        return Ok(());
+    }
     verifier
         .deferred
         .push(VerifierLookupJob::Clamp { node: node.clone() });

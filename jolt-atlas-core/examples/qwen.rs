@@ -88,6 +88,52 @@ fn print_clamp_width_histogram(model: &Model) {
     for ((op, bits), n) in hist {
         println!("  {op:<16} {bits:>2} bits  x{n}");
     }
+    use jolt_atlas_core::onnx_proof::global_clamp::{clamp_buckets, remainder_buckets};
+    let op_name = |idx: usize| {
+        let op = format!("{:?}", model.graph.nodes[&idx].operator);
+        op.split(|c: char| !c.is_alphanumeric())
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    println!("packed buckets (kind idx width log_t nodes | largest node):");
+    for b in clamp_buckets(model)
+        .iter()
+        .chain(remainder_buckets(model).iter())
+    {
+        let big = b.nodes.iter().max_by_key(|n| n.log_t).unwrap();
+        println!(
+            "  {:?} #{:<3} w={:<2} log_t={:<2} nodes={:<4} | node {} {} log_t={}",
+            b.kind,
+            b.idx,
+            b.width,
+            b.log_t,
+            b.nodes.len(),
+            big.idx,
+            op_name(big.idx),
+            big.log_t
+        );
+    }
+    let mut sizes: Vec<(usize, usize)> = model
+        .graph
+        .nodes
+        .values()
+        .map(|n| (n.pow2_padded_num_output_elements(), n.idx))
+        .collect();
+    sizes.sort_unstable_by(|a, b| b.cmp(a));
+    println!("model outputs: {:?}", model.outputs());
+    println!("largest nodes (padded elements, idx, op):");
+    for (t, idx) in sizes.iter().take(12) {
+        println!(
+            "  2^{:<2} node {:<5} {}",
+            t.trailing_zeros(),
+            idx,
+            op_name(*idx)
+        );
+    }
+    if std::env::args().any(|a| a == "--buckets-only") {
+        std::process::exit(0);
+    }
 }
 
 fn load_or_build_shared_preprocessing(

@@ -259,25 +259,33 @@ pub fn prove_all<F: JoltField, T: Transcript>(
 
     // Clamp lookups: packed into buckets (see `global_clamp`), proven by the
     // interior / saturated split (see `clamp_split`).
-    let buckets = clamp_buckets(prover.preprocessing.model());
+    let model = prover.preprocessing.model();
     let mut split_by_node: HashMap<usize, NodeSplit> =
         clamp.into_iter().map(|(n, s)| (n.idx, s)).collect();
-    for b in &buckets {
+    // Exact outputs (see `clamp_split::exact_output_prover`) register no
+    // split and are gaps; a bucket with no live node is skipped entirely.
+    let full_buckets = clamp_buckets(model);
+    for b in &full_buckets {
         for n in &b.nodes {
             assert!(
-                split_by_node.contains_key(&n.idx),
+                split_by_node.contains_key(&n.idx)
+                    || clamp_split::exact_output_prover(model, &prover.trace, n.idx),
                 "node {} is in a clamp bucket but registered no clamp lookup",
                 n.idx
             );
         }
     }
+    let buckets: Vec<ClampBucket> = full_buckets
+        .iter()
+        .filter_map(|b| clamp_split::live_bucket(b, |idx| split_by_node.contains_key(&idx)))
+        .collect();
     if !buckets.is_empty() {
         let splits: Vec<BucketSplit> = {
             let _span =
                 tracing::span!(tracing::Level::INFO, "deferred::assemble_buckets").entered();
             buckets
                 .iter()
-                .map(|b| BucketSplit::assemble(b, |idx| split_by_node.remove(&idx).unwrap()))
+                .map(|b| BucketSplit::assemble(b, |idx| split_by_node.remove(&idx)))
                 .collect()
         };
         assert!(
@@ -495,17 +503,23 @@ pub fn verify_all<F: JoltField, T: Transcript>(
         }
     }
 
-    let buckets = clamp_buckets(verifier.preprocessing.model());
+    let model = verifier.preprocessing.model();
     let registered: std::collections::BTreeSet<usize> = clamp.iter().map(|n| n.idx).collect();
-    let bucketed: std::collections::BTreeSet<usize> = buckets
+    let full_buckets = clamp_buckets(model);
+    let bucketed: std::collections::BTreeSet<usize> = full_buckets
         .iter()
         .flat_map(|b| b.nodes.iter().map(|n| n.idx))
+        .filter(|&idx| !clamp_split::exact_output_verifier(model, verifier.io, idx))
         .collect();
     if registered != bucketed {
         return Err(ProofVerifyError::InvalidOpeningProof(
             "clamp lookup registrations do not match the model's clamp buckets".to_string(),
         ));
     }
+    let buckets: Vec<ClampBucket> = full_buckets
+        .iter()
+        .filter_map(|b| clamp_split::live_bucket(b, |idx| registered.contains(&idx)))
+        .collect();
     if !buckets.is_empty() {
         let instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> = buckets
             .iter()

@@ -178,6 +178,27 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         if poly_map.is_empty() {
             return None;
         }
+        // Committed polynomials nobody opened (e.g. the clamp chunks of an
+        // output node whose public output is unsaturated) stay out of the
+        // joint opening; the verifier selects the same subset from its openings.
+        let opened = prover.accumulator.opened_polynomials();
+        if opened.is_empty() {
+            // Nothing was opened (every committed polynomial is unused, e.g. a
+            // model whose only clamped node is an exact output): no joint opening.
+            return None;
+        }
+        let (poly_map, hints): (BTreeMap<CommittedPoly, MultilinearPolynomial<F>>, Vec<_>) =
+            if opened.len() == poly_map.len() {
+                (poly_map.clone(), hints)
+            } else {
+                poly_map
+                    .iter()
+                    .zip(hints)
+                    .filter(|((p, _), _)| opened.contains(p))
+                    .map(|((p, poly), h)| ((*p, poly.clone()), h))
+                    .unzip()
+            };
+        let poly_map = &poly_map;
         prover.accumulator.prepare_for_sumcheck(poly_map);
 
         // Run sumcheck

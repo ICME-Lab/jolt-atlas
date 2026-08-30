@@ -113,10 +113,10 @@ fn soundness_sub_virtual_operand_attack_is_rejected() {
 }
 
 // The tampered output (forced to 0) no longer equals `SatClamp(3 - 2) = 1`. The
-// clamp lookup is deferred to the batched lookups after the node loop, so the
-// first check to reject the proof is now the Sub node's operand tie
-// (`acc(r) = left(r) - right(r)` against the forged accumulation claim).
-#[should_panic = "left - right must equal the i64 accumulation"]
+// Sub node is the model output and its public output is unsaturated, so its
+// clamp is proven *exactly* (see `clamp_split::exact_output_verifier`): the
+// first check to reject the proof is `ClampAcc(r) == out(r)`.
+#[should_panic = "unsaturated public output must equal the pre-clamp accumulation"]
 #[test]
 fn soundness_sub_trace_tamper_3_minus_2_becomes_0_is_rejected() {
     let t = 1 << 6;

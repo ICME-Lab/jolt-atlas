@@ -227,6 +227,11 @@ where
         std::mem::take(&mut self.pending_claim_ids)
     }
 
+    /// The distinct committed polynomials with a registered opening.
+    pub fn opened_polynomials(&self) -> BTreeSet<CommittedPoly> {
+        self.sumchecks.values().map(|s| s.polynomial).collect()
+    }
+
     /// Caches an opening claim from the opening reduction sumcheck.
     /// Called from `OpeningProofReductionSumcheckProver::cache_openings`.
     pub fn cache_opening_reduction_claim(&mut self, polynomial: CommittedPoly, claim: F) {
@@ -459,17 +464,19 @@ where
         polynomials: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
     ) {
         {
-            let opened: BTreeSet<CommittedPoly> =
-                self.sumchecks.values().map(|s| s.polynomial).collect();
-            let committed: BTreeSet<CommittedPoly> = polynomials.keys().copied().collect();
-            if opened != committed {
-                let missing: Vec<&CommittedPoly> = committed.difference(&opened).collect();
-                let extra: Vec<&CommittedPoly> = opened.difference(&committed).collect();
-                panic!(
-                    "batch opening reduction: committed polynomials never opened: {missing:?}; \
-                     openings of uncommitted polynomials: {extra:?}"
-                );
-            }
+            // A committed polynomial nobody opened is simply left out of the
+            // joint opening (it constrains nothing); an opening of an
+            // uncommitted polynomial is a bug.
+            let extra: Vec<CommittedPoly> = self
+                .sumchecks
+                .values()
+                .map(|s| s.polynomial)
+                .filter(|p| !polynomials.contains_key(p))
+                .collect();
+            assert!(
+                extra.is_empty(),
+                "batch opening reduction: openings of uncommitted polynomials: {extra:?}"
+            );
         }
 
         tracing::debug!(
@@ -930,6 +937,8 @@ where
     /// The distinct committed polynomials with a registered opening, sorted —
     /// the order of the proof's reduced claims and of the prover's
     /// `state.polynomials` from `finalize_batch_opening_sumcheck`.
+    /// Committed polynomials without an opening are not part of the joint
+    /// opening.
     pub fn sumchecks_keys(&self) -> impl Iterator<Item = CommittedPoly> + '_ {
         let polys: BTreeSet<CommittedPoly> =
             self.sumchecks.values().map(|s| s.polynomial).collect();

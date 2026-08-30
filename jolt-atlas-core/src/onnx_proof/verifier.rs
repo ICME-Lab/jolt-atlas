@@ -41,6 +41,13 @@ pub struct Verifier<'a, F: JoltField, T: Transcript> {
     /// Lookups registered during the node loop, verified afterwards in one
     /// batch (see [`deferred_lookups`](crate::onnx_proof::deferred_lookups)).
     pub deferred: Vec<crate::onnx_proof::deferred_lookups::VerifierLookupJob>,
+    /// Verifier instances built during the node loop, verified afterwards per batch.
+    pub deferred_batches: BTreeMap<
+        crate::onnx_proof::deferred_lookups::DeferredBatch,
+        Vec<Box<dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>>,
+    >,
+    /// One-hot checks to verify right after their parent batch.
+    pub deferred_onehots: Vec<crate::onnx_proof::deferred_lookups::DeferredOneHot>,
 }
 
 impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
@@ -57,7 +64,23 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
             proofs,
             io,
             deferred: Vec::new(),
+            deferred_batches: BTreeMap::new(),
+            deferred_onehots: Vec::new(),
         }
+    }
+
+    /// Queue a node-loop-built verifier instance for the deferred batch `kind`.
+    pub fn defer(
+        &mut self,
+        kind: crate::onnx_proof::deferred_lookups::DeferredBatch,
+        instance: Box<
+            dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>,
+        >,
+    ) {
+        self.deferred_batches
+            .entry(kind)
+            .or_default()
+            .push(instance);
     }
 }
 

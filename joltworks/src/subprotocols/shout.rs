@@ -549,8 +549,14 @@ pub fn ra_onehot_verifiers_with<F: JoltField, T: Transcript>(
     accumulator: &dyn OpeningAccumulator<F>,
     challenges: RaOneHotChallenges<F>,
 ) -> [Box<dyn SumcheckInstanceVerifier<F, T>>; 3] {
-    let (ra_params, hamming_weight_params, booleanity_params) =
-        ra_onehot_params(encoding, accumulator, challenges);
+    ra_onehot_verifiers_with_params(ra_onehot_params(encoding, accumulator, challenges))
+}
+
+/// Build the three RA one-hot verifiers from resolved parameters.
+pub fn ra_onehot_verifiers_with_params<F: JoltField, T: Transcript>(
+    params: RaOneHotParams<F>,
+) -> [Box<dyn SumcheckInstanceVerifier<F, T>>; 3] {
+    let (ra_params, hamming_weight_params, booleanity_params) = params;
     [
         Box::new(RaSumcheckVerifier::new(ra_params)),
         Box::new(HammingWeightSumcheckVerifier::new(hamming_weight_params)),

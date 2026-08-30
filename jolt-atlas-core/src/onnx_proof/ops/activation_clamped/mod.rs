@@ -14,12 +14,13 @@
 //! `BatchedSumcheck` call.
 
 use crate::{
+    onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
         neural_teleport::{n_bits_to_usize, utils::compute_ra_evals_nbits_2comp},
         op_lookups::{
             DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider,
         },
-        ProofId, ProofType, Prover, Verifier,
+        ProofId, Prover, Verifier,
     },
     utils::{compute_lookup_indices_from_operands, opening_access::AccOpeningAccessor},
 };
@@ -53,8 +54,8 @@ use joltworks::{
         unipoly::UniPoly,
     },
     subprotocols::{
-        shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
+        shout::RaOneHotEncoding,
+        sumcheck::SumcheckInstanceProof,
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -70,7 +71,7 @@ const EXEC_DEGREE_BOUND: usize = 2;
 
 /// A clamped-activation's small lookup table: `Table[i] = activation(i)`, for
 /// two's-complement `i` over [`ACTIVATION_TABLE_BOUND`] bits.
-pub trait SmallActivationTable: Send + Sync {
+pub trait SmallActivationTable: Send + Sync + 'static {
     /// Materializes the full table (all `2^ACTIVATION_TABLE_BOUND` entries).
     fn materialize() -> Vec<i32>;
 }
@@ -88,7 +89,7 @@ fn clamped_opening_id(node_idx: usize) -> OpeningId {
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
-struct ActivationClampOperands;
+pub(crate) struct ActivationClampOperands;
 
 impl LookupOperandsTrait for ActivationClampOperands {
     const LOG_K: usize = XLEN;
@@ -420,8 +421,8 @@ impl<F: JoltField, T: Transcript, Table: SmallActivationTable> SumcheckInstanceV
     }
 }
 
-struct SmallTableRaEncoding {
-    node_idx: usize,
+pub(crate) struct SmallTableRaEncoding {
+    pub(crate) node_idx: usize,
 }
 
 impl RaOneHotEncoding for SmallTableRaEncoding {
@@ -465,72 +466,45 @@ where
     T: Transcript,
     Table: SmallActivationTable,
 {
-    let mut results = Vec::new();
-
-    // Stage 1: Execution -- output = SmallTable[clamped].
+    // Stage 1: Execution -- output = SmallTable[clamped]. Built here (its
+    // challenge is drawn now, its `clamped` advice claim appended now), proven
+    // after the node loop in the `ActivationExec` batch.
     let params = SmallTableParams::<F, Table>::new(
         node.clone(),
         &prover.accumulator,
         &mut prover.transcript,
     );
-    let mut exec_sumcheck = SmallTableProver::<F, Table>::initialize(
+    let exec_sumcheck = SmallTableProver::<F, Table>::initialize(
         params,
         &prover.trace,
         &mut prover.accumulator,
         &mut prover.transcript,
     );
-    let (exec_proof, _) = Sumcheck::prove(
-        &mut exec_sumcheck,
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-    results.push((ProofId(node.idx, ProofType::Execution), exec_proof));
+    let small_indices = exec_sumcheck.lookup_indices.clone();
+    prover.defer(DeferredBatch::ActivationExec, Box::new(exec_sumcheck));
 
     // Stage 2: ActivationClamp -- clamped = ActivationClampTable[raw_input].
+    // Same: built now, proven in the `ActivationClamp` batch.
     let clamp_provider: OpLookupProvider<ActivationClampOperands> =
         OpLookupProvider::new(node.clone());
-    let (mut clamp_sumcheck, clamp_lookup_indices) = clamp_provider
+    let (clamp_sumcheck, clamp_lookup_indices) = clamp_provider
         .read_raf_prove::<F, T, ActivationClampTable<XLEN>, XLEN>(
             &prover.trace,
             &mut prover.accumulator,
             &mut prover.transcript,
         );
-    let (clamp_proof, _) = Sumcheck::prove(
-        &mut clamp_sumcheck,
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-    results.push((ProofId(node.idx, ProofType::NeuralTeleport), clamp_proof));
+    prover.defer(DeferredBatch::ActivationClamp, Box::new(clamp_sumcheck));
 
-    // Stage 3: both stages' one-hot checks, batched together into one BatchedSumcheck.
-    let small_encoding = SmallTableRaEncoding { node_idx: node.idx };
-    let [small_ra, small_hw, small_bool] = shout::ra_onehot_provers(
-        &small_encoding,
-        &exec_sumcheck.lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let clamp_encoding = clamp_provider.encoding();
-    let [clamp_ra, clamp_hw, clamp_bool] = shout::ra_onehot_provers(
-        &clamp_encoding,
-        &clamp_lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> = vec![
-        small_ra, small_hw, small_bool, clamp_ra, clamp_hw, clamp_bool,
-    ];
-    let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
-        instances.iter_mut().map(|v| &mut **v as _).collect(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-    results.push((
-        ProofId(node.idx, ProofType::RaOneHotChecks),
-        ra_one_hot_proof,
+    // Stage 3: both stages' one-hot checks, built and proven after their batches.
+    prover
+        .deferred_onehots
+        .push((DeferredOneHot::ActivationSmall(node.idx), small_indices));
+    prover.deferred_onehots.push((
+        DeferredOneHot::ActivationClamp(node.clone()),
+        clamp_lookup_indices,
     ));
 
-    results
+    Vec::new()
 }
 
 /// Verifier counterpart of [`prove_clamped_activation`].
@@ -543,24 +517,15 @@ where
     T: Transcript,
     Table: SmallActivationTable,
 {
-    // Stage 1: Execution.
-    let exec_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::Execution))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+    // Stage 1: Execution (verified in the deferred `ActivationExec` batch).
     let exec_verifier = SmallTableVerifier::<F, Table>::new(
         node.clone(),
         &mut verifier.accumulator,
         &mut verifier.transcript,
     );
-    Sumcheck::verify(
-        exec_proof,
-        &exec_verifier,
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
+    verifier.defer(DeferredBatch::ActivationExec, Box::new(exec_verifier));
 
-    // Stage 2: ActivationClamp.
+    // Stage 2: ActivationClamp (deferred `ActivationClamp` batch).
     let clamp_provider: OpLookupProvider<ActivationClampOperands> =
         OpLookupProvider::new(node.clone());
     let clamp_verifier_sumcheck = clamp_provider
@@ -568,48 +533,18 @@ where
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );
-    let clamp_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::NeuralTeleport))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-    Sumcheck::verify(
-        clamp_proof,
-        &clamp_verifier_sumcheck,
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
+    verifier.defer(
+        DeferredBatch::ActivationClamp,
+        Box::new(clamp_verifier_sumcheck),
+    );
 
-    // Stage 3: both stages' one-hot checks, batched together into one BatchedSumcheck.
-    let small_encoding = SmallTableRaEncoding { node_idx: node.idx };
-    let [small_ra, small_hw, small_bool] = shout::ra_onehot_verifiers(
-        &small_encoding,
-        &verifier.accumulator,
-        &mut verifier.transcript,
-    );
-    let clamp_encoding = clamp_provider.encoding();
-    let [clamp_ra, clamp_hw, clamp_bool] = shout::ra_onehot_verifiers(
-        &clamp_encoding,
-        &verifier.accumulator,
-        &mut verifier.transcript,
-    );
-    let ra_one_hot_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-    let instances: Vec<&dyn SumcheckInstanceVerifier<_, _>> = vec![
-        &*small_ra,
-        &*small_hw,
-        &*small_bool,
-        &*clamp_ra,
-        &*clamp_hw,
-        &*clamp_bool,
-    ];
-    BatchedSumcheck::verify(
-        ra_one_hot_proof,
-        instances,
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
+    // Stage 3: one-hot checks, verified after their batches.
+    verifier
+        .deferred_onehots
+        .push(DeferredOneHot::ActivationSmall(node.idx));
+    verifier
+        .deferred_onehots
+        .push(DeferredOneHot::ActivationClamp(node.clone()));
 
     Ok(())
 }

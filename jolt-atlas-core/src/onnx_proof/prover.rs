@@ -49,6 +49,17 @@ pub struct Prover<F: JoltField, T: Transcript> {
     /// Lookups registered during the node loop, proven afterwards in one batch
     /// (see [`deferred_lookups`](crate::onnx_proof::deferred_lookups)).
     pub deferred: Vec<crate::onnx_proof::deferred_lookups::ProverLookupJob>,
+    /// Sumcheck instances built during the node loop and proven afterwards,
+    /// one batched sumcheck per [`DeferredBatch`](crate::onnx_proof::deferred_lookups::DeferredBatch).
+    pub deferred_batches: BTreeMap<
+        crate::onnx_proof::deferred_lookups::DeferredBatch,
+        Vec<Box<dyn joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>>>,
+    >,
+    /// One-hot checks to build and prove right after their parent batch.
+    pub deferred_onehots: Vec<(
+        crate::onnx_proof::deferred_lookups::DeferredOneHot,
+        Vec<usize>,
+    )>,
 }
 
 impl<F: JoltField, T: Transcript> Prover<F, T> {
@@ -60,7 +71,21 @@ impl<F: JoltField, T: Transcript> Prover<F, T> {
             accumulator: ProverOpeningAccumulator::new(),
             transcript: T::new(b"ONNXProof"),
             deferred: Vec::new(),
+            deferred_batches: BTreeMap::new(),
+            deferred_onehots: Vec::new(),
         }
+    }
+
+    /// Queue a node-loop-built sumcheck instance for the deferred batch `kind`.
+    pub fn defer(
+        &mut self,
+        kind: crate::onnx_proof::deferred_lookups::DeferredBatch,
+        instance: Box<dyn joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>>,
+    ) {
+        self.deferred_batches
+            .entry(kind)
+            .or_default()
+            .push(instance);
     }
 }
 

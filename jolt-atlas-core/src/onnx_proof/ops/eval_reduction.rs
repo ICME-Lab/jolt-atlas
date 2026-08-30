@@ -16,6 +16,7 @@ pub struct NodeEvalReduction;
 
 impl NodeEvalReduction {
     /// Run node-output evaluation reduction on the prover side for the given node.
+    #[tracing::instrument(skip_all, name = "NodeEvalReduction::prove", fields(node = computation_node.idx))]
     pub fn prove<F: JoltField, T: Transcript>(
         prover: &mut Prover<F, T>,
         computation_node: &ComputationNode,

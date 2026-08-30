@@ -25,13 +25,14 @@ use atlas_onnx_tracer::node::ComputationNode;
 use joltworks::{
     field::JoltField,
     lookup_tables::clamp::SaturationTable,
+    poly::opening_proof::OpeningAccumulator,
     subprotocols::{
         identity_range_check::{
             identity_rangecheck_prover_with_cycle, identity_rangecheck_verifier_with_cycle,
         },
         ps_shout::unary::{ps_read_raf_prover_with_gamma, ps_read_raf_verifier_with_gamma},
         ps_shout::{unary::ReadRafClaims, CycleWeight},
-        shout::{self, RaOneHotParams},
+        shout::{self, RaOneHotEncoding, RaOneHotParams},
         sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::SumcheckInstanceVerifier,
@@ -91,6 +92,93 @@ pub enum ProverLookupJob {
         /// `bits`-wide lookup addresses (the remainder per element).
         lookup_bits: Vec<LookupBits>,
     },
+}
+
+/// A batch of sumcheck instances built during the node loop (their transcript
+/// challenges drawn there, on both sides) and proven after it as one batched
+/// sumcheck. Batches run in this enum's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DeferredBatch {
+    /// Clamped-activation small-table execution sumchecks.
+    ActivationExec,
+    /// Clamped-activation clamp read-rafs.
+    ActivationClamp,
+    /// Operand range checks (MeanOfSquares remainder, Rsqrt div / sqrt).
+    RangeCheck,
+}
+
+impl DeferredBatch {
+    fn proof_type(self) -> ProofType {
+        match self {
+            Self::ActivationExec => ProofType::DeferredActivationExec,
+            Self::ActivationClamp => ProofType::DeferredActivationClamp,
+            Self::RangeCheck => ProofType::DeferredRangeCheck,
+        }
+    }
+}
+
+/// A one-hot check whose `ra` claim is produced by a deferred batch; built and
+/// proven right after that batch.
+#[derive(Clone)]
+pub enum DeferredOneHot {
+    /// Activation small-table stage of node `idx`.
+    ActivationSmall(usize),
+    /// Activation clamp stage of `node`.
+    ActivationClamp(ComputationNode),
+    /// A range check's one-hot encoding.
+    RangeCheck(crate::onnx_proof::range_checking::RangeCheckEncoding),
+}
+
+impl DeferredOneHot {
+    /// The batch whose sumcheck produces this check's `ra` claim.
+    fn parent(&self) -> DeferredBatch {
+        match self {
+            Self::ActivationSmall(_) => DeferredBatch::ActivationExec,
+            Self::ActivationClamp(_) => DeferredBatch::ActivationClamp,
+            Self::RangeCheck(_) => DeferredBatch::RangeCheck,
+        }
+    }
+
+    fn proof_type(&self) -> ProofType {
+        match self {
+            Self::ActivationSmall(_) => ProofType::DeferredActivationSmallRaChecks,
+            Self::ActivationClamp(_) => ProofType::DeferredActivationClampRaChecks,
+            Self::RangeCheck(_) => ProofType::DeferredRangeCheckRaChecks,
+        }
+    }
+
+    /// Draw this check's challenges and resolve its params (sequential part).
+    fn params<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+        transcript: &mut T,
+    ) -> RaOneHotParams<F> {
+        use crate::onnx_proof::{
+            op_lookups::OpLookupEncoding,
+            ops::activation_clamped::{ActivationClampOperands, SmallTableRaEncoding},
+        };
+        fn go<F: JoltField, T: Transcript>(
+            enc: &impl RaOneHotEncoding,
+            accumulator: &dyn OpeningAccumulator<F>,
+            transcript: &mut T,
+        ) -> RaOneHotParams<F> {
+            let ch = shout::ra_onehot_challenges::<F, T>(enc, transcript);
+            shout::ra_onehot_params(enc, accumulator, ch)
+        }
+        match self {
+            Self::ActivationSmall(idx) => go(
+                &SmallTableRaEncoding { node_idx: *idx },
+                accumulator,
+                transcript,
+            ),
+            Self::ActivationClamp(node) => go(
+                &OpLookupEncoding::<ActivationClampOperands>::new(node),
+                accumulator,
+                transcript,
+            ),
+            Self::RangeCheck(enc) => go(enc, accumulator, transcript),
+        }
+    }
 }
 
 /// Verifier-side counterpart of [`ProverLookupJob`].
@@ -303,6 +391,39 @@ pub fn prove_all<F: JoltField, T: Transcript>(
             ProofType::DeferredRemainderRaChecks,
         );
     }
+
+    // Instances built during the node loop, batched here; each batch is
+    // followed by the one-hot checks that consume its `ra` claims.
+    let mut batches = std::mem::take(&mut prover.deferred_batches);
+    let onehots = std::mem::take(&mut prover.deferred_onehots);
+    for kind in [
+        DeferredBatch::ActivationExec,
+        DeferredBatch::ActivationClamp,
+        DeferredBatch::RangeCheck,
+    ] {
+        if let Some(instances) = batches.remove(&kind) {
+            if !instances.is_empty() {
+                batched_prove(instances, prover, proofs, kind.proof_type());
+            }
+        }
+        let mine: Vec<&(DeferredOneHot, Vec<usize>)> =
+            onehots.iter().filter(|(j, _)| j.parent() == kind).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let params: Vec<RaOneHotParams<F>> = mine
+            .iter()
+            .map(|(j, _)| j.params::<F, T>(&prover.accumulator, &mut prover.transcript))
+            .collect();
+        let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = params
+            .into_par_iter()
+            .zip(mine.par_iter())
+            .flat_map_iter(|(p, (_, idx))| shout::ra_onehot_provers_from_params::<F, T>(p, idx))
+            .collect();
+        let proof_type = mine[0].0.proof_type();
+        batched_prove(instances, prover, proofs, proof_type);
+    }
+    drop_in_background_thread(onehots);
 }
 
 /// Lay every bucket's per-node lookup bits into its cycle space (in parallel
@@ -439,6 +560,31 @@ pub fn verify_all<F: JoltField, T: Transcript>(
             ));
         }
         batched_verify(instances, verifier, ProofType::DeferredRemainderRaChecks)?;
+    }
+
+    let mut batches = std::mem::take(&mut verifier.deferred_batches);
+    let onehots = std::mem::take(&mut verifier.deferred_onehots);
+    for kind in [
+        DeferredBatch::ActivationExec,
+        DeferredBatch::ActivationClamp,
+        DeferredBatch::RangeCheck,
+    ] {
+        if let Some(instances) = batches.remove(&kind) {
+            if !instances.is_empty() {
+                batched_verify(instances, verifier, kind.proof_type())?;
+            }
+        }
+        let mine: Vec<&DeferredOneHot> = onehots.iter().filter(|j| j.parent() == kind).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let mut instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> =
+            Vec::with_capacity(3 * mine.len());
+        for j in &mine {
+            let p = j.params::<F, T>(&verifier.accumulator, &mut verifier.transcript);
+            instances.extend(shout::ra_onehot_verifiers_with_params::<F, T>(p));
+        }
+        batched_verify(instances, verifier, mine[0].proof_type())?;
     }
     Ok(())
 }

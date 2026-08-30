@@ -180,6 +180,14 @@ fn main() {
         &[input_ids, position_ids, attention_mask],
     );
     println!("Proof generation took {:.2?}", timing.elapsed());
+    println!(
+        "Proof size: {:.2} MiB ({} committed polys, {} sumcheck proofs)",
+        ark_serialize::CanonicalSerialize::serialized_size(&proof, ark_serialize::Compress::Yes)
+            as f64
+            / (1024.0 * 1024.0),
+        proof.commitments.len(),
+        proof.proofs.len(),
+    );
 
     let verifier_preprocessing =
         AtlasVerifierPreprocessing::<Fr, DoryScheme>::from(&prover_preprocessing);

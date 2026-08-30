@@ -105,6 +105,8 @@ pub enum DeferredBatch {
     ActivationClamp,
     /// Operand range checks (MeanOfSquares remainder, Rsqrt div / sqrt).
     RangeCheck,
+    /// Softmax stage 3: exp-digit lookups + significance-clamp read-raf.
+    SoftmaxStage3,
 }
 
 impl DeferredBatch {
@@ -113,6 +115,7 @@ impl DeferredBatch {
             Self::ActivationExec => ProofType::DeferredActivationExec,
             Self::ActivationClamp => ProofType::DeferredActivationClamp,
             Self::RangeCheck => ProofType::DeferredRangeCheck,
+            Self::SoftmaxStage3 => ProofType::DeferredSoftmaxStage3,
         }
     }
 }
@@ -127,6 +130,12 @@ pub enum DeferredOneHot {
     ActivationClamp(ComputationNode),
     /// A range check's one-hot encoding.
     RangeCheck(crate::onnx_proof::range_checking::RangeCheckEncoding),
+    /// Softmax exp high-digit table of node `idx` (`log2` table size).
+    SoftmaxExpHi(usize, usize),
+    /// Softmax exp low-digit table of node `idx` (`log2` table size).
+    SoftmaxExpLo(usize, usize),
+    /// Softmax significance clamp of `node`.
+    SoftmaxClamp(ComputationNode),
 }
 
 impl DeferredOneHot {
@@ -136,6 +145,9 @@ impl DeferredOneHot {
             Self::ActivationSmall(_) => DeferredBatch::ActivationExec,
             Self::ActivationClamp(_) => DeferredBatch::ActivationClamp,
             Self::RangeCheck(_) => DeferredBatch::RangeCheck,
+            Self::SoftmaxExpHi(..) | Self::SoftmaxExpLo(..) | Self::SoftmaxClamp(_) => {
+                DeferredBatch::SoftmaxStage3
+            }
         }
     }
 
@@ -144,6 +156,9 @@ impl DeferredOneHot {
             Self::ActivationSmall(_) => ProofType::DeferredActivationSmallRaChecks,
             Self::ActivationClamp(_) => ProofType::DeferredActivationClampRaChecks,
             Self::RangeCheck(_) => ProofType::DeferredRangeCheckRaChecks,
+            Self::SoftmaxExpHi(..) | Self::SoftmaxExpLo(..) | Self::SoftmaxClamp(_) => {
+                ProofType::DeferredSoftmaxRaChecks
+            }
         }
     }
 
@@ -155,7 +170,12 @@ impl DeferredOneHot {
     ) -> RaOneHotParams<F> {
         use crate::onnx_proof::{
             op_lookups::OpLookupEncoding,
-            ops::activation_clamped::{ActivationClampOperands, SmallTableRaEncoding},
+            ops::{
+                activation_clamped::{ActivationClampOperands, SmallTableRaEncoding},
+                softmax_last_axis::{
+                    rc::SoftmaxRaEncoding, significance_clamp::SoftmaxSignificanceClampOperands,
+                },
+            },
         };
         fn go<F: JoltField, T: Transcript>(
             enc: &impl RaOneHotEncoding,
@@ -177,6 +197,21 @@ impl DeferredOneHot {
                 transcript,
             ),
             Self::RangeCheck(enc) => go(enc, accumulator, transcript),
+            Self::SoftmaxExpHi(idx, log_k) => go(
+                &SoftmaxRaEncoding::exp_hi(*idx, *log_k),
+                accumulator,
+                transcript,
+            ),
+            Self::SoftmaxExpLo(idx, log_k) => go(
+                &SoftmaxRaEncoding::exp_lo(*idx, *log_k),
+                accumulator,
+                transcript,
+            ),
+            Self::SoftmaxClamp(node) => go(
+                &OpLookupEncoding::<SoftmaxSignificanceClampOperands>::new(node),
+                accumulator,
+                transcript,
+            ),
         }
     }
 }
@@ -400,6 +435,7 @@ pub fn prove_all<F: JoltField, T: Transcript>(
         DeferredBatch::ActivationExec,
         DeferredBatch::ActivationClamp,
         DeferredBatch::RangeCheck,
+        DeferredBatch::SoftmaxStage3,
     ] {
         if let Some(instances) = batches.remove(&kind) {
             if !instances.is_empty() {
@@ -568,6 +604,7 @@ pub fn verify_all<F: JoltField, T: Transcript>(
         DeferredBatch::ActivationExec,
         DeferredBatch::ActivationClamp,
         DeferredBatch::RangeCheck,
+        DeferredBatch::SoftmaxStage3,
     ] {
         if let Some(instances) = batches.remove(&kind) {
             if !instances.is_empty() {

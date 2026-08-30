@@ -92,6 +92,10 @@ pub enum ProofType {
     DeferredRangeCheckRaChecks = 22,
     /// All clamped-activation nodes' clamp one-hot checks, batched.
     DeferredActivationClampRaChecks = 23,
+    /// All softmax nodes' stage-3 lookups (exp digits, significance clamp), batched.
+    DeferredSoftmaxStage3 = 24,
+    /// All softmax nodes' stage-4 one-hot checks, batched.
+    DeferredSoftmaxRaChecks = 25,
 }
 
 impl TryFrom<u8> for ProofType {
@@ -123,6 +127,8 @@ impl TryFrom<u8> for ProofType {
             21 => Ok(Self::DeferredRangeCheck),
             22 => Ok(Self::DeferredRangeCheckRaChecks),
             23 => Ok(Self::DeferredActivationClampRaChecks),
+            24 => Ok(Self::DeferredSoftmaxStage3),
+            25 => Ok(Self::DeferredSoftmaxRaChecks),
             _ => Err(SerializationError::InvalidData),
         }
     }

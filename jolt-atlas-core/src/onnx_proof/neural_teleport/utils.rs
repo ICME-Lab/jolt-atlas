@@ -18,23 +18,6 @@ use rayon::{
     slice::ParallelSlice,
 };
 
-/// Compute one-hot read-address evaluations from direct non-negative indices.
-///
-/// This variant is used by trigonometric teleportation ops (`cos` and `sin`),
-/// where inputs are remainders already in `[0, table_size)`.
-pub fn compute_ra_evals_direct<F, U>(r: &[U], indexes: &Tensor<i32>, table_size: usize) -> Vec<F>
-where
-    U: Copy + Send + Sync + Into<F>,
-    F: JoltField + FieldChallengeOps<U>,
-{
-    let indexes_usize = indexes
-        .par_iter()
-        .with_min_len(par_enabled())
-        .map(|&x| x as usize)
-        .collect::<Vec<usize>>();
-    compute_ra_evals_from_usize_indices(r, &indexes_usize, table_size)
-}
-
 /// Compute one-hot read-address evaluations from signed n-bit two's-complement values.
 ///
 /// This variant is used by lookup-table ops where signed
@@ -84,7 +67,8 @@ pub fn materialize_signed_activation_table(
     result.data().to_vec()
 }
 
-fn compute_ra_evals_from_usize_indices<F, U>(
+/// Compute one-hot read-address evaluations from already-computed non-negative indices.
+pub fn compute_ra_evals_from_usize_indices<F, U>(
     r: &[U],
     indices_usize: &[usize],
     table_size: usize,

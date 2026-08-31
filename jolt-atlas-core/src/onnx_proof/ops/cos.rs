@@ -3,23 +3,20 @@ use crate::{
         neural_teleport::{
             cos::{CosTable, COS_TABLE_VARS},
             division::{
-                compute_division, TeleportDivisionParams, TeleportDivisionProver,
-                TeleportDivisionVerifier,
-            },
-            range_and_onehot::{
-                prove_range_and_onehot, verify_range_and_onehot, NeuralTeleportRangeOneHot,
+                cache_teleport_input_claim_prove, cache_teleport_quotient_prove,
+                cache_teleport_quotient_verify, compute_division, verify_teleport_input_claim,
             },
             trig_downscale::{
                 cache_downscaled_prove, cache_downscaled_verify, TrigDownscaleOperands,
             },
-            utils::compute_ra_evals_direct,
+            utils::compute_ra_evals_from_usize_indices,
         },
         op_lookups::{OpLookupEncoding, OpLookupProvider},
-        ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
-        range_checking::range_check_operands::{RangeCheckOperands, TeleportRangeCheckOperands},
+        ops::OperatorProofTrait,
+        range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckProvider},
         ProofId, ProofType, Prover, Verifier,
     },
-    utils::opening_access::{AccOpeningAccessor, Target},
+    utils::opening_access::AccOpeningAccessor,
 };
 use atlas_onnx_tracer::{
     model::{
@@ -30,7 +27,7 @@ use atlas_onnx_tracer::{
     ops::Cos,
     tensor::Tensor,
 };
-use common::consts::{MODEL_SCALE, TRIG_DOWNSCALE_BITS, TRIG_PERIOD_MODULUS, XLEN};
+use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
@@ -40,7 +37,7 @@ use joltworks::subprotocols::blindfold::{
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::{IntoOpening, JoltField},
-    lookup_tables::right_shift::RightShiftTable,
+    lookup_tables::{right_shift::RightShiftTable, unsigned_less_than::UnsignedLessThanTable},
     poly::{
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::{
@@ -53,9 +50,8 @@ use joltworks::{
         unipoly::UniPoly,
     },
     subprotocols::{
-        evaluation_reduction::EvalReductionProof,
         shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
+        sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -67,10 +63,6 @@ use rayon::iter::{
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
-    fn reduction_flow(&self) -> ReductionFlow {
-        ReductionFlow::Custom
-    }
-
     fn prove(
         &self,
         node: &ComputationNode,
@@ -84,29 +76,17 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         );
         let mut results = Vec::new();
 
-        // Stage 1a: Neural teleportation remainder proof
-        let div_params = TeleportDivisionParams::new_from_transcript(
-            node.clone(),
-            &mut prover.transcript,
-            TRIG_PERIOD_MODULUS as i32,
-        );
-        let mut div_sumcheck = TeleportDivisionProver::new(&prover.trace, div_params);
+        // Plumbing: cache the quotient's claim.
+        cache_teleport_quotient_prove(node, prover, TRIG_PERIOD_MODULUS as i32);
 
-        // Prove the division sumcheck for the teleportation remainder
-        let (div_proof, _) = Sumcheck::prove(
-            &mut div_sumcheck,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        results.push((ProofId(node.idx, ProofType::NeuralTeleport), div_proof));
-
-        // Stage 1b: downscale, then batch the downscale and Cos table read-rafs into
-        // one Execution proof.
+        // Plumbing: downscale.
         let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
         let input = operands[0];
         let (_quotient, remainder) = compute_division(input, TRIG_PERIOD_MODULUS as i32);
         let downscaled = cache_downscaled_prove(node, prover, &remainder);
 
+        // Stage 1: batch every read-raf "value" sumcheck together — downscale, the Cos
+        // table lookup, and the remainder range-check.
         let dsc_provider: OpLookupProvider<TrigDownscaleOperands> =
             OpLookupProvider::new(node.clone());
         let (dsc_exec, dsc_lookup_indices) = dsc_provider
@@ -122,16 +102,22 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
             &prover.accumulator,
             &mut prover.transcript,
         );
-        let cos_exec = CosProver::initialize(
-            &prover.trace,
-            &downscaled,
-            params,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
+        let (cos_exec, cos_lookup_indices) =
+            CosProver::initialize(&downscaled, params, &mut prover.accumulator);
 
-        let mut exec_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> =
-            vec![Box::new(dsc_exec), Box::new(cos_exec)];
+        let rc_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
+        let (rangecheck_exec, rc_lookup_indices) = rc_provider
+            .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
+                &prover.trace,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            );
+
+        let mut exec_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = vec![
+            Box::new(dsc_exec),
+            Box::new(cos_exec),
+            Box::new(rangecheck_exec),
+        ];
         let (exec_proof, _) = BatchedSumcheck::prove(
             exec_instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
@@ -139,49 +125,43 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         );
         results.push((ProofId(node.idx, ProofType::Execution), exec_proof));
 
-        // Stage 1c: the downscale one-hot's own correctness triple (the Cos one-hot's
-        // triple is proven in `prove_range_and_onehot`, via `prove_with_reduction`).
+        // Stage 2: batch every one-hot correctness triple together — downscale, Cos,
+        // and the range-check.
         let dsc_encoding = dsc_provider.encoding();
-        let [dsc_ra, dsc_bool] = shout::ra_onehot_provers(
+        let cos_encoding = CosRaEncoding::new(node);
+        let rc_encoding = rc_provider.encoding();
+
+        let mut onehot_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = Vec::new();
+        onehot_instances.extend(shout::ra_onehot_provers(
             &dsc_encoding,
             &dsc_lookup_indices,
             &prover.accumulator,
             &mut prover.transcript,
-        );
-        let mut dsc_ra_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> =
-            vec![dsc_ra, dsc_bool];
-        let (dsc_ra_proof, _) = BatchedSumcheck::prove(
-            dsc_ra_instances.iter_mut().map(|v| &mut **v as _).collect(),
+        ));
+        onehot_instances.extend(shout::ra_onehot_provers(
+            &cos_encoding,
+            &cos_lookup_indices,
+            &prover.accumulator,
+            &mut prover.transcript,
+        ));
+        onehot_instances.extend(shout::ra_onehot_provers(
+            &rc_encoding,
+            &rc_lookup_indices,
+            &prover.accumulator,
+            &mut prover.transcript,
+        ));
+        let (onehot_proof, _) = BatchedSumcheck::prove(
+            onehot_instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
             &mut prover.transcript,
         );
-        results.push((
-            ProofId(node.idx, ProofType::TrigDownscaleRaChecks),
-            dsc_ra_proof,
-        ));
+        results.push((ProofId(node.idx, ProofType::RaOneHotChecks), onehot_proof));
+
+        // Plumbing: derive `a`'s input claim now that `q` and `r` both hold claims at the
+        // node's reduced output-opening point.
+        cache_teleport_input_claim_prove(node, prover, TRIG_PERIOD_MODULUS as i32);
 
         results
-    }
-
-    fn prove_with_reduction(
-        &self,
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> (
-        EvalReductionProof<F>,
-        Vec<(ProofId, SumcheckInstanceProof<F, T>)>,
-    ) {
-        let mut execution_proofs = self.prove(node, prover);
-
-        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
-        let teleport_q = accessor.get_advice(VirtualPoly::TeleportQuotient);
-        let mut provider = accessor.into_provider(&mut prover.transcript, teleport_q.0.clone());
-
-        provider.append_advice(CommittedPoly::TeleportNodeQuotient, teleport_q.1);
-
-        let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
-        execution_proofs.extend(prove_range_and_onehot(node, prover, self));
-        (eval_reduction_proof, execution_proofs)
     }
 
     fn verify(
@@ -196,27 +176,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
                 self.scale
             )));
         }
-        // Stage 1a: Neural teleportation remainder verification
-        let div_proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::NeuralTeleport))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        // Plumbing: cache the quotient's claim.
+        cache_teleport_quotient_verify(node, verifier);
 
-        let div_verifier = TeleportDivisionVerifier::new_from_transcript(
-            node.clone(),
-            TRIG_PERIOD_MODULUS as i32,
-            &mut verifier.transcript,
-        );
-        Sumcheck::verify(
-            div_proof,
-            &div_verifier,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        // Stage 1b: downscale + Cos table lookup, batched into one Execution proof
+        // Plumbing: downscale.
         cache_downscaled_verify(node, verifier);
 
+        // Stage 1: batch every read-raf "value" sumcheck together — downscale, the Cos
+        // table lookup, and the remainder range-check.
         let dsc_provider: OpLookupProvider<TrigDownscaleOperands> =
             OpLookupProvider::new(node.clone());
         let dsc_verifier = dsc_provider.read_raf_verify::<F, T, RightShiftTable<XLEN>, XLEN>(
@@ -231,66 +198,66 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
             &mut verifier.transcript,
         );
 
+        let rc_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
+        let rangecheck_verifier = rc_provider.read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        );
+
         let exec_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         BatchedSumcheck::verify(
             exec_proof,
-            vec![&dsc_verifier, &exec_sumcheck],
+            vec![&dsc_verifier, &exec_sumcheck, &rangecheck_verifier],
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
 
-        // Stage 1c: the downscale one-hot's own correctness triple.
-        let dsc_ra_proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::TrigDownscaleRaChecks))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        // Stage 2: batch every one-hot correctness triple together — downscale, Cos,
+        // and the range-check.
         let dsc_encoding = dsc_provider.encoding();
-        let [dsc_ra, dsc_bool] = shout::ra_onehot_verifiers(
+        let cos_encoding = CosRaEncoding::new(node);
+        let rc_encoding = rc_provider.encoding();
+
+        let onehot_proof = verifier
+            .proofs
+            .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
+            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        let mut onehot_verifiers: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> = Vec::new();
+        onehot_verifiers.extend(shout::ra_onehot_verifiers(
             &dsc_encoding,
             &verifier.accumulator,
             &mut verifier.transcript,
-        );
+        ));
+        onehot_verifiers.extend(shout::ra_onehot_verifiers(
+            &cos_encoding,
+            &verifier.accumulator,
+            &mut verifier.transcript,
+        ));
+        onehot_verifiers.extend(shout::ra_onehot_verifiers(
+            &rc_encoding,
+            &verifier.accumulator,
+            &mut verifier.transcript,
+        ));
         BatchedSumcheck::verify(
-            dsc_ra_proof,
-            vec![&*dsc_ra, &*dsc_bool],
+            onehot_proof,
+            onehot_verifiers.iter().map(|v| &**v as _).collect(),
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
+
+        // Plumbing: derive `a`'s input claim now that `q` and `r` both hold claims at the
+        // node's reduced output-opening point.
+        verify_teleport_input_claim(node, verifier, TRIG_PERIOD_MODULUS as i32)?;
 
         Ok(())
     }
 
-    fn verify_with_reduction(
-        &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-        eval_reduction_proof: &EvalReductionProof<F>,
-    ) -> Result<(), ProofVerifyError> {
-        self.verify(node, verifier)?;
-
-        let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, node);
-        let teleport_q = accessor.get_advice(VirtualPoly::TeleportQuotient);
-        let mut provider = accessor.into_provider(&mut verifier.transcript, teleport_q.0.clone());
-
-        provider.append_advice(CommittedPoly::TeleportNodeQuotient);
-        let committed_q = provider.get_advice(CommittedPoly::TeleportNodeQuotient).1;
-        if committed_q != teleport_q.1 {
-            return Err(ProofVerifyError::InvalidOpeningProof(
-                "Teleport quotient claim does not match committed quotient claim".to_string(),
-            ));
-        }
-
-        NodeEvalReduction::verify(verifier, node, eval_reduction_proof)?;
-        verify_range_and_onehot(node, verifier, self)
-    }
-
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        let cos_encoding = CosRaEncoding { node_idx: node.idx };
-        let rc_operands = RangeCheckOperands::<TeleportRangeCheckOperands>::new(node);
-        let rc_encoding = rc_operands.get_encoding(node);
+        let cos_encoding = CosRaEncoding::new(node);
+        let rc_encoding = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node).encoding();
         let dsc_encoding: OpLookupEncoding<TrigDownscaleOperands> =
             OpLookupProvider::<TrigDownscaleOperands>::new(node.clone()).encoding();
         let cos_d = cos_encoding.one_hot_params().instruction_d;
@@ -325,7 +292,7 @@ impl<F: JoltField> CosParams<F> {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
 
         let gamma = transcript.challenge_scalar();
-        let r_node_output = accessor.get_advice(VirtualPoly::TrigDownscaled).0;
+        let (r_node_output, _) = accessor.get_reduced_opening();
 
         Self {
             gamma,
@@ -342,7 +309,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for CosParams<F> {
 
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
-        let rv_claim = accessor.get_nodeio(Target::Current).1;
+        let rv_claim = accessor.get_reduced_opening().1;
 
         let downscaled_claim = accessor.get_advice(VirtualPoly::TrigDownscaled).1;
 
@@ -402,29 +369,25 @@ pub struct CosProver<F: JoltField> {
 impl<F: JoltField> CosProver<F> {
     /// Initialize the prover state.
     pub fn initialize(
-        trace: &Trace,
         downscaled: &Tensor<i32>,
         params: CosParams<F>,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Self {
-        let LayerData { output, .. } = Trace::layer_data(trace, &params.computation_node);
-
+        _accumulator: &mut ProverOpeningAccumulator<F>,
+    ) -> (Self, Vec<usize>) {
         assert!(downscaled
             .iter()
             .all(|&x| (0..CosTable::table_size() as i32).contains(&x)));
 
         let cos_table = MultilinearPolynomial::from(CosTable::materialize());
-        let input_onehot: Vec<F> =
-            compute_ra_evals_direct(&params.r_node_output.r, downscaled, 1 << COS_TABLE_VARS);
-
-        let output_claim =
-            MultilinearPolynomial::from(output.clone()).evaluate(&params.r_node_output.r);
-        // `downscaled` and `output` are at different opening points; re-derive output's
-        // claim here rather than an n-to-1 reduction on `downscaled`.
-        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .into_provider(transcript, params.r_node_output.clone());
-        provider.append_nodeio(Target::Current, output_claim);
+        let lookup_indices: Vec<usize> = downscaled
+            .par_iter()
+            .with_min_len(par_enabled())
+            .map(|&x| x as usize)
+            .collect();
+        let input_onehot: Vec<F> = compute_ra_evals_from_usize_indices(
+            &params.r_node_output.r,
+            &lookup_indices,
+            1 << COS_TABLE_VARS,
+        );
 
         let input_onehot = MultilinearPolynomial::from(input_onehot);
         assert_eq!(input_onehot.len(), cos_table.len());
@@ -432,8 +395,9 @@ impl<F: JoltField> CosProver<F> {
 
         #[cfg(test)]
         {
-            let downscaled_claim = provider.get_advice(VirtualPoly::TrigDownscaled).1;
-            let rv_claim = provider.get_nodeio(Target::Current).1;
+            let accessor = AccOpeningAccessor::new(_accumulator, &params.computation_node);
+            let downscaled_claim = accessor.get_advice(VirtualPoly::TrigDownscaled).1;
+            let rv_claim = accessor.get_reduced_opening().1;
             let claim = (0..input_onehot.len())
                 .map(|i| {
                     let a = input_onehot.get_bound_coeff(i);
@@ -445,12 +409,15 @@ impl<F: JoltField> CosProver<F> {
             assert_eq!(rv_claim + params.gamma * downscaled_claim, claim)
         }
 
-        Self {
-            params,
-            cos_table,
-            input_onehot,
-            identity,
-        }
+        (
+            Self {
+                params,
+                cos_table,
+                input_onehot,
+                identity,
+            },
+            lookup_indices,
+        )
     }
 }
 
@@ -532,10 +499,6 @@ impl<F: JoltField> CosVerifier<F> {
         transcript: &mut impl Transcript,
     ) -> Self {
         let params = CosParams::new(computation_node, graph, accumulator, transcript);
-        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .into_provider(transcript, params.r_node_output.clone());
-        provider.append_nodeio(Target::Current);
-
         let cos_table = MultilinearPolynomial::from(CosTable::materialize());
         Self { params, cos_table }
     }
@@ -589,6 +552,13 @@ pub struct CosRaEncoding {
     pub node_idx: usize,
 }
 
+impl CosRaEncoding {
+    /// Create a new Cos table one-hot encoding for the given computation node.
+    pub fn new(node: &ComputationNode) -> Self {
+        Self { node_idx: node.idx }
+    }
+}
+
 impl RaOneHotEncoding for CosRaEncoding {
     fn committed_poly(&self, d: usize) -> CommittedPoly {
         CommittedPoly::CosRaD(self.node_idx, d)
@@ -614,25 +584,6 @@ impl RaOneHotEncoding for CosRaEncoding {
 
     fn one_hot_params(&self) -> OneHotParams {
         OneHotParams::from_config_and_log_K(&OneHotConfig::default(), COS_TABLE_VARS)
-    }
-}
-
-impl<F: JoltField, T: Transcript> NeuralTeleportRangeOneHot<F, T> for Cos {
-    type RaEncoding = CosRaEncoding;
-
-    fn lookup_indices(&self, node: &ComputationNode, trace: &Trace) -> Vec<usize> {
-        let LayerData { operands, .. } = Trace::layer_data(trace, node);
-        let input = operands[0];
-        let (_, remainder) = compute_division(input, TRIG_PERIOD_MODULUS as i32);
-        remainder
-            .par_iter()
-            .with_min_len(par_enabled())
-            .map(|&x| (x >> TRIG_DOWNSCALE_BITS) as usize)
-            .collect()
-    }
-
-    fn ra_encoding(&self, node: &ComputationNode) -> Self::RaEncoding {
-        CosRaEncoding { node_idx: node.idx }
     }
 }
 

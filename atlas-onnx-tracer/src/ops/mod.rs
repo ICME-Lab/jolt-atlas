@@ -194,6 +194,7 @@ impl FusedIntermediates {
     }
 }
 
+/// Trait for all operators - defines how to execute the operation on input tensors.
 pub trait Op {
     /// Execute the operator on the given input tensors.
     fn f(&self, inputs: Vec<&Tensor<i32>>) -> Tensor<i32>;

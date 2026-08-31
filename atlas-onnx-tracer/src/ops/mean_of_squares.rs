@@ -1,5 +1,5 @@
 use crate::{
-    ops::{MeanOfSquares, Op},
+    ops::{FusedIntermediates, MeanOfSquares, Op},
     tensor::{Tensor, TensorError},
 };
 use tract_onnx::prelude::tract_itertools::Itertools;
@@ -11,6 +11,16 @@ impl Op for MeanOfSquares {
         // `N·2^S` (mean rebase), saturating clamp to i32. Replaces the
         // Square → Sum → Div(N) decomposition in one node .
         super::clamp_to_i32(&mos_intermediate(self, &inputs))
+    }
+
+    fn f_with_intermediates(
+        &self,
+        inputs: Vec<&Tensor<i32>>,
+    ) -> (Tensor<i32>, Option<FusedIntermediates>) {
+        let acc = mos_acc_i64(inputs[0], &self.axes)
+            .unwrap_or_else(|e| panic!("MeanOfSquares::f_with_intermediates: {e:?}"));
+        let (out, ints) = FusedIntermediates::from_acc(&acc, mos_divisor(self));
+        (out, Some(ints))
     }
 }
 

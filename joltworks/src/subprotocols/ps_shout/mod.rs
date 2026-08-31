@@ -55,6 +55,117 @@ pub trait RafShoutProvider<F: JoltField> {
 }
 pub(crate) const NUM_PHASES: usize = 8;
 
+/// One node's slice of a packed (multi-node) cycle space: its opening point
+/// `r` (log T_n variables) lives at prefix `prefix` (`prefix_len` high bits),
+/// weighted by the batching coefficient `gamma`.
+#[derive(Clone, Debug)]
+pub struct PackedSegment<F: JoltField> {
+    pub gamma: F,
+    pub prefix: usize,
+    pub prefix_len: usize,
+    pub r: Vec<F>,
+}
+
+/// The per-cycle weight of a read-raf sumcheck: `Σ_t weight(t)·Σ_k ra(k,t)·(…)`.
+///
+/// A single node's lookup uses `eq(r_cycle, t)`. A *packed* instance covers
+/// several nodes' lookups laid out in disjoint, power-of-two-aligned segments of
+/// one cycle space, and weights segment `n` by `γ_n · eq(r_n, t − off_n)` — so
+/// one sumcheck proves `Σ_n γ_n · (rv_n(r_n) + γ·raf_n(r_n))` for all of them.
+#[derive(Clone, Debug)]
+pub enum CycleWeight<F: JoltField> {
+    /// `eq(r, t)`.
+    Eq(OpeningPoint<BIG_ENDIAN, F>),
+    /// `Σ_n γ_n · eq(prefix_n, t_high) · eq(r_n, t_low)`.
+    Packed {
+        log_T: usize,
+        segments: Vec<PackedSegment<F>>,
+    },
+}
+
+impl<F: JoltField> CycleWeight<F> {
+    pub fn log_T(&self) -> usize {
+        match self {
+            Self::Eq(r) => r.len(),
+            Self::Packed { log_T, .. } => *log_T,
+        }
+    }
+
+    /// Dense weights over the cycle space.
+    pub fn evals(&self) -> Vec<F> {
+        match self {
+            Self::Eq(r) => EqPolynomial::evals(&r.r),
+            Self::Packed { log_T, segments } => {
+                let mut w = unsafe_allocate_zero_vec(1 << log_T);
+                for seg in segments {
+                    let e: Vec<F> = EqPolynomial::evals(&seg.r);
+                    let offset = seg.prefix << seg.r.len();
+                    w[offset..offset + e.len()]
+                        .par_iter_mut()
+                        .zip(e.par_iter())
+                        .with_min_len(par_enabled())
+                        .for_each(|(x, y)| *x = seg.gamma * *y);
+                }
+                w
+            }
+        }
+    }
+
+    /// The weight's multilinear extension at `r_prime` (big-endian cycle point).
+    pub fn mle(&self, r_prime: &[F]) -> F {
+        match self {
+            Self::Eq(r) => EqPolynomial::mle(&r.r, r_prime),
+            Self::Packed { log_T, segments } => {
+                debug_assert_eq!(r_prime.len(), *log_T);
+                segments
+                    .iter()
+                    .map(|seg| {
+                        let (hi, lo) = r_prime.split_at(seg.prefix_len);
+                        // eq(prefix bits, hi): bit j (from the MSB) ↔ hi[j].
+                        let eq_prefix: F = hi
+                            .iter()
+                            .enumerate()
+                            .map(|(j, h)| {
+                                let bit = (seg.prefix >> (seg.prefix_len - 1 - j)) & 1;
+                                if bit == 1 {
+                                    *h
+                                } else {
+                                    F::one() - *h
+                                }
+                            })
+                            .product();
+                        seg.gamma * eq_prefix * EqPolynomial::mle(&seg.r, lo)
+                    })
+                    .sum()
+            }
+        }
+    }
+}
+
+/// Prover-side state for the cycle rounds: Gruen's split-eq trick for a plain
+/// `eq(r, ·)` weight, a dense MLE for a packed one.
+pub(crate) enum CyclePoly<F: JoltField> {
+    Gruen(GruenSplitEqPolynomial<F>),
+    Dense(MultilinearPolynomial<F>),
+}
+
+/// Address-phase schedule for a `log_k`-bit lookup: `(phases, log_m)` with
+/// `phases * log_m == log_k`. Prefix checkpoints advance two rounds at a time,
+/// so `log_m` must be even: the default 8 phases work when `log_k / 8` is
+/// even (32, 48, 64, ...); otherwise (40, 56, ...) use 8-bit phases instead.
+pub(crate) fn phase_schedule(log_k: usize) -> (usize, usize) {
+    assert!(
+        log_k.is_multiple_of(8),
+        "lookup width must be a multiple of 8"
+    );
+    let log_m = log_k / NUM_PHASES;
+    if log_m.is_multiple_of(2) {
+        (NUM_PHASES, log_m)
+    } else {
+        (log_k / 8, 8)
+    }
+}
+
 /// Verifier-side RAF: computing the RAF's contribution to the input claim
 /// and the RAF claim at a given address evaluation point.
 ///
@@ -90,7 +201,7 @@ where
 {
     pub gamma: F,
     pub log_T: usize,
-    pub r_node_output: OpeningPoint<BIG_ENDIAN, F>,
+    pub cycle: CycleWeight<F>,
     pub table: LUT,
     pub polynomial_type: VirtualPoly,
     pub sumcheck_id: SumcheckId,
@@ -118,7 +229,31 @@ where
         Self {
             gamma,
             log_T,
-            r_node_output,
+            cycle: CycleWeight::Eq(r_node_output),
+            table,
+            polynomial_type,
+            sumcheck_id,
+            rv_claim,
+            raf,
+        }
+    }
+
+    /// Like [`Self::from_parts`], for an arbitrary [`CycleWeight`] (e.g. a
+    /// packed multi-node instance).
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts_with_cycle(
+        gamma: F,
+        cycle: CycleWeight<F>,
+        table: LUT,
+        polynomial_type: VirtualPoly,
+        sumcheck_id: SumcheckId,
+        rv_claim: F,
+        raf: VD,
+    ) -> Self {
+        Self {
+            gamma,
+            log_T: cycle.log_T(),
+            cycle,
             table,
             polynomial_type,
             sumcheck_id,
@@ -182,7 +317,7 @@ where
     fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
         let opening_point = self.normalize_opening_point(&sumcheck_challenges.into_opening());
         let (r_address_prime, r_node_output_prime) = opening_point.split_at(LOG_K);
-        let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_node_output_prime.r);
+        let eq_eval = self.cycle.mle(&r_node_output_prime.r);
         let val_claim = self.table.evaluate_mle(&r_address_prime.r);
         let raf_claim = self.raf.raf_claim_at(&r_address_prime.r, self.gamma);
         vec![eq_eval * (val_claim + self.gamma * raf_claim)]
@@ -211,7 +346,7 @@ where
     raf_val: Option<F>,
     phases: usize,
     v: Vec<ExpandingTable<F>>,
-    eq_r_node_output: GruenSplitEqPolynomial<F>,
+    cycle_poly: CyclePoly<F>,
     prefix_registry: PrefixRegistry<F>,
     raf_state: PS,
 }
@@ -229,9 +364,8 @@ where
         lookup_indices: Vec<LookupBits>,
         raf_state: PS,
     ) -> Self {
-        let phases = NUM_PHASES;
-        let log_m = LOG_K / phases;
-        let u_evals = EqPolynomial::evals(&params.r_node_output.r);
+        let (phases, log_m) = phase_schedule(LOG_K);
+        let u_evals = params.cycle.evals();
         let prefix_checkpoints = PrefixCheckpoints::new();
         let suffix_polys: Vec<DensePolynomial<F>> = params
             .table
@@ -242,8 +376,15 @@ where
             .with_min_len(par_enabled())
             .map(|_| DensePolynomial::default())
             .collect();
-        let eq_r_node_output =
-            GruenSplitEqPolynomial::<F>::new(&params.r_node_output.r, BindingOrder::LowToHigh);
+        let cycle_poly = match &params.cycle {
+            CycleWeight::Eq(r) => CyclePoly::Gruen(GruenSplitEqPolynomial::<F>::new(
+                &r.r,
+                BindingOrder::LowToHigh,
+            )),
+            CycleWeight::Packed { .. } => {
+                CyclePoly::Dense(MultilinearPolynomial::from(u_evals.clone()))
+            }
+        };
         let mut res = Self {
             r: Vec::with_capacity(params.log_T + LOG_K),
             params,
@@ -256,7 +397,7 @@ where
                 .map(|_| ExpandingTable::new(1 << log_m, BindingOrder::HighToLow))
                 .collect(),
             raf_state,
-            eq_r_node_output,
+            cycle_poly,
             prefix_registry: PrefixRegistry::new(),
             val: None,
             ra: None,
@@ -465,25 +606,41 @@ where
             let ra = self.ra.as_ref().unwrap();
             let val = self.val.unwrap();
             let raf_val = self.raf_val.unwrap();
-            let [eval_at_0] = self
-                .eq_r_node_output
-                .par_fold_out_in(
-                    || [F::Unreduced::<9>::zero(); 1],
-                    |inner, j, _x_in, e_in| {
-                        let ra_at_0_j = ra.get_bound_coeff(2 * j);
-                        inner[0] += e_in.mul_unreduced::<9>(ra_at_0_j);
-                    },
-                    |_x_out, e_out, inner| {
-                        array::from_fn(|i| {
-                            let reduced = F::from_montgomery_reduce(inner[i]);
-                            e_out.mul_unreduced::<9>(reduced)
+            match &self.cycle_poly {
+                CyclePoly::Gruen(eq_r_node_output) => {
+                    let [eval_at_0] = eq_r_node_output
+                        .par_fold_out_in(
+                            || [F::Unreduced::<9>::zero(); 1],
+                            |inner, j, _x_in, e_in| {
+                                let ra_at_0_j = ra.get_bound_coeff(2 * j);
+                                inner[0] += e_in.mul_unreduced::<9>(ra_at_0_j);
+                            },
+                            |_x_out, e_out, inner| {
+                                array::from_fn(|i| {
+                                    let reduced = F::from_montgomery_reduce(inner[i]);
+                                    e_out.mul_unreduced::<9>(reduced)
+                                })
+                            },
+                            |a, b| array::from_fn(|i| a[i] + b[i]),
+                        )
+                        .map(F::from_montgomery_reduce);
+                    eq_r_node_output.gruen_poly_deg_2(eval_at_0 * (val + raf_val), previous_claim)
+                }
+                CyclePoly::Dense(w) => {
+                    // Degree-2 message Σ_j w(j)·ra(j), evaluated at X ∈ {0, 2}.
+                    let [e0, e2] = (0..ra.len() / 2)
+                        .into_par_iter()
+                        .with_min_len(par_enabled())
+                        .map(|j| {
+                            let r = ra.sumcheck_evals_array::<2>(j, BindingOrder::LowToHigh);
+                            let ww = w.sumcheck_evals_array::<2>(j, BindingOrder::LowToHigh);
+                            [r[0] * ww[0], r[1] * ww[1]]
                         })
-                    },
-                    |a, b| array::from_fn(|i| a[i] + b[i]),
-                )
-                .map(F::from_montgomery_reduce);
-            self.eq_r_node_output
-                .gruen_poly_deg_2(eval_at_0 * (val + raf_val), previous_claim)
+                        .reduce(|| [F::zero(); 2], |a, b| [a[0] + b[0], a[1] + b[1]]);
+                    let scale = val + raf_val;
+                    UniPoly::from_evals_and_hint(previous_claim, &[e0 * scale, e2 * scale])
+                }
+            }
         }
     }
 
@@ -555,7 +712,10 @@ where
                 .as_mut()
                 .unwrap()
                 .bind_parallel(r_j, BindingOrder::LowToHigh);
-            self.eq_r_node_output.bind(r_j);
+            match &mut self.cycle_poly {
+                CyclePoly::Gruen(eq) => eq.bind(r_j),
+                CyclePoly::Dense(w) => w.bind_parallel(r_j, BindingOrder::LowToHigh),
+            }
         }
     }
 
@@ -621,7 +781,7 @@ where
         let id = OpeningId::new(self.params.polynomial_type, self.params.sumcheck_id);
         let (_, ra_claim) = accumulator.get_virtual_polynomial_opening(id);
         let val_claim = self.params.table.evaluate_mle(&r_address_prime.r);
-        let eq_eval = EqPolynomial::mle(&self.params.r_node_output.r, &r_node_output_prime.r);
+        let eq_eval = self.params.cycle.mle(&r_node_output_prime.r);
         let raf_claim = self
             .params
             .raf

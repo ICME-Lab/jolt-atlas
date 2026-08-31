@@ -34,6 +34,7 @@
 use std::array;
 
 use crate::{
+    onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
         clamp_lookups::{clamp_committed_polys, is_scalar, recover_small_int, verify_scalar_clamp},
         fused_rebase,
@@ -65,8 +66,8 @@ use joltworks::{
         unipoly::UniPoly,
     },
     subprotocols::{
-        shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
+        shout::RaOneHotEncoding,
+        sumcheck::{Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -106,37 +107,20 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
         // (4) Remainder range check `R < D`. Scalar outputs prove it in the clear
         // (the one-hot reduction degenerates), checked by the verifier.
         if !scalar {
+            // Built now, proven after the node loop (`RangeCheck` batch); its
+            // one-hot checks follow that batch.
             let rc_provider = RangeCheckProvider::<MeanOfSquaresRangeCheckOperands>::new(node);
-            let (mut rc_sumcheck, lookup_indices) = rc_provider
+            let (rc_sumcheck, lookup_indices) = rc_provider
                 .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
                     &prover.trace,
                     &mut prover.accumulator,
                     &mut prover.transcript,
                 );
-            let (rc_proof, _) = Sumcheck::prove(
-                &mut rc_sumcheck,
-                &mut prover.accumulator,
-                &mut prover.transcript,
-            );
-            proofs.push((ProofId(node.idx, ProofType::RangeCheck), rc_proof));
-
+            prover.defer(DeferredBatch::RangeCheck, Box::new(rc_sumcheck));
             let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node);
-            let encoding = rc_operands.get_encoding(node);
-            let [ra, hw, boolean] = shout::ra_onehot_provers(
-                &encoding,
-                &lookup_indices,
-                &prover.accumulator,
-                &mut prover.transcript,
-            );
-            let mut instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = vec![ra, hw, boolean];
-            let (ra_proof, _) = BatchedSumcheck::prove(
-                instances.iter_mut().map(|v| &mut **v as _).collect(),
-                &mut prover.accumulator,
-                &mut prover.transcript,
-            );
-            proofs.push((
-                ProofId(node.idx, ProofType::RescaleRemainderRaChecks),
-                ra_proof,
+            prover.deferred_onehots.push((
+                DeferredOneHot::RangeCheck(rc_operands.get_encoding(node)),
+                lookup_indices,
             ));
         }
 
@@ -178,41 +162,17 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
             let r_claim = accessor.get_advice(VirtualPoly::RescaleRemainder).1;
             verify_scalar_remainder(r_claim, mos_divisor(self))?;
         } else {
-            let rc_proof = verifier
-                .proofs
-                .get(&ProofId(node.idx, ProofType::RangeCheck))
-                .ok_or(ProofVerifyError::MissingProof(node.idx))?;
             let rc_provider = RangeCheckProvider::<MeanOfSquaresRangeCheckOperands>::new(node);
             let rc_verifier = rc_provider.read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
                 &mut verifier.accumulator,
                 &mut verifier.transcript,
             );
-            Sumcheck::verify(
-                rc_proof,
-                &rc_verifier,
-                &mut verifier.accumulator,
-                &mut verifier.transcript,
-            )?;
-
-            let ra_proof = verifier
-                .proofs
-                .get(&ProofId(node.idx, ProofType::RescaleRemainderRaChecks))
-                .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            verifier.defer(DeferredBatch::RangeCheck, Box::new(rc_verifier));
             let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node);
-            let encoding = rc_operands.get_encoding(node);
-            let [ra, hw, boolean] = shout::ra_onehot_verifiers(
-                &encoding,
-                &verifier.accumulator,
-                &mut verifier.transcript,
-            );
-            BatchedSumcheck::verify(
-                ra_proof,
-                vec![&*ra, &*hw, &*boolean],
-                &mut verifier.accumulator,
-                &mut verifier.transcript,
-            )?;
+            verifier
+                .deferred_onehots
+                .push(DeferredOneHot::RangeCheck(rc_operands.get_encoding(node)));
         }
-
         Ok(())
     }
 

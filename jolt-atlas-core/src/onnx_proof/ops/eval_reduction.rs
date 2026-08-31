@@ -16,6 +16,7 @@ pub struct NodeEvalReduction;
 
 impl NodeEvalReduction {
     /// Run node-output evaluation reduction on the prover side for the given node.
+    #[tracing::instrument(skip_all, name = "NodeEvalReduction::prove", fields(node = computation_node.idx))]
     pub fn prove<F: JoltField, T: Transcript>(
         prover: &mut Prover<F, T>,
         computation_node: &ComputationNode,
@@ -23,15 +24,27 @@ impl NodeEvalReduction {
         let node_idx = computation_node.idx;
         let openings = prover.accumulator.get_node_openings(node_idx);
 
-        let LayerData {
-            operands: _,
-            output,
-        } = Trace::layer_data(&prover.trace, computation_node);
-        let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
-
-        let (proof, reduced) =
+        // Single consumer: the protocol's short path returns the opening as the
+        // reduced instance and never touches the output MLE (or the transcript),
+        // so skip converting the output tensor to field elements — that
+        // conversion is the whole cost for the ~2k single-consumer nodes.
+        let (proof, reduced) = if openings.len() == 1 {
+            let (r, claim) = (openings[0].0.clone(), openings[0].1);
+            (
+                EvalReductionProof {
+                    h: joltworks::poly::unipoly::UniPoly::from_coeff(vec![claim]),
+                },
+                joltworks::subprotocols::evaluation_reduction::ReducedInstance { r: r.r, claim },
+            )
+        } else {
+            let LayerData {
+                operands: _,
+                output,
+            } = Trace::layer_data(&prover.trace, computation_node);
+            let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
             EvalReductionProtocol::prove(&openings, output_mle, &mut prover.transcript)
-                .expect("Proving evaluation reduction should not fail");
+                .expect("Proving evaluation reduction should not fail")
+        };
 
         prover
             .accumulator

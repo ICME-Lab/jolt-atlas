@@ -24,9 +24,15 @@
 //! sparsely in `O(nonzeros)` via [`DoryScheme::commit_one_hot`], bit-identical
 //! to the dense path so they still combine homomorphically.
 
+mod one_hot_commit;
+mod par_routines;
+mod sparse_rlc;
 mod transcript;
 mod types;
 
+use par_routines::{ParG1Routines, ParG2Routines};
+
+pub use sparse_rlc::SparseRlc;
 pub use types::{DoryCommitment, DoryHint, DoryProof, DoryProverSetup, DoryVerifierSetup};
 
 use std::borrow::Borrow;
@@ -35,7 +41,7 @@ use ark_bn254::Fr;
 use dory::{
     backends::arkworks::{ArkFr, ArkG1, ArkGT, ArkworksPolynomial, G1Routines, G2Routines, BN254},
     primitives::{
-        arithmetic::{Field as DoryField, Group as DoryGroup, PairingCurve},
+        arithmetic::{Field as DoryField, Group as DoryGroup},
         poly::Polynomial as DoryPolynomial,
     },
     prove as dory_prove, setup as dory_setup, verify as dory_verify, Transparent,
@@ -142,22 +148,33 @@ impl DoryScheme {
         let cols = 1usize << sigma;
         let num_rows = 1usize << nu;
 
-        // Tier-1: each set entry adds its column generator into its row. Rows
-        // with no set entry stay the identity (contribute nothing to tier-2).
-        let mut row_commitments = vec![<ArkG1 as DoryGroup>::identity(); num_rows];
-        for (t, k_opt) in one_hot.nonzero_indices.iter().enumerate() {
-            if let Some(k) = k_opt {
-                let idx = *k as usize * t_len + t;
-                row_commitments[idx / cols] =
-                    row_commitments[idx / cols] + setup.prover.g1_vec[idx % cols];
-            }
-        }
+        // Tier-1: each row is the sum of the column generators of its set
+        // entries, built with batched affine addition (see `one_hot_commit`).
+        let row_commitments = {
+            let _s = tracing::span!(tracing::Level::INFO, "one_hot_tier_1").entered();
+            one_hot_commit::one_hot_row_commitments(
+                &one_hot.nonzero_indices,
+                t_len,
+                cols,
+                num_rows,
+                &setup.g1_affine[..cols],
+            )
+        };
 
-        // Tier-2: identical to the dense commit's `multi_pair_g2_setup`.
-        let tier_2 = <BN254 as PairingCurve>::multi_pair_g2_setup(
-            &row_commitments,
-            &setup.prover.g2_vec[..num_rows],
-        );
+        // Tier-2: identical to the dense commit's `multi_pair_g2_setup`, minus
+        // the identity rows (which pair to 1).
+        let tier_2 = {
+            let live = row_commitments
+                .iter()
+                .filter(|r| !ark_ff::Zero::is_zero(&r.0))
+                .count();
+            let _s = tracing::span!(tracing::Level::INFO, "one_hot_tier_2", rows = live).entered();
+            one_hot_commit::tier_2_skip_identity(
+                &row_commitments,
+                &setup.prover.g2_vec[..num_rows],
+                &setup.g2_prepared[..num_rows],
+            )
+        };
         (
             DoryCommitment(tier_2),
             DoryHint {
@@ -195,7 +212,7 @@ impl CommitmentScheme for DoryScheme {
     #[tracing::instrument(skip_all, name = "DoryScheme::setup_prover")]
     fn setup_prover(max_num_vars: usize) -> Self::ProverSetup {
         let (prover, verifier) = dory_setup::<BN254>(max_num_vars);
-        DoryProverSetup { prover, verifier }
+        DoryProverSetup::new(prover, verifier)
     }
 
     fn setup_verifier(setup: &Self::ProverSetup) -> Self::VerifierSetup {
@@ -271,6 +288,65 @@ impl CommitmentScheme for DoryScheme {
         DoryCommitment(combined)
     }
 
+    /// Joint tier-1 rows are linear in the polynomials: `rows = Σ_i γ_i · rows_i`
+    /// (same fixed column width, so rows of smaller polynomials are a prefix).
+    #[tracing::instrument(skip_all, name = "DoryScheme::combine_hints")]
+    fn combine_hints(
+        hints: Vec<Self::OpeningProofHint>,
+        coeffs: &[Self::Field],
+    ) -> Self::OpeningProofHint {
+        let rows: Vec<Vec<ArkG1>> = hints.into_iter().map(|h| h.row_commitments).collect();
+        DoryHint {
+            row_commitments: sparse_rlc::combine_row_commitments(&rows, coeffs),
+            commit_blind: <ArkFr as DoryField>::zero(),
+        }
+    }
+
+    /// Open `Σ γ_i · f_i` without materializing it: the joint is a
+    /// [`SparseRlc`] (one-hots stay sparse) and its row commitments come from
+    /// [`Self::combine_hints`] when every hint is present.
+    #[tracing::instrument(skip_all, name = "DoryScheme::prove_rlc")]
+    fn prove_rlc<ProofTranscript: Transcript>(
+        setup: &Self::ProverSetup,
+        polynomials: &std::collections::BTreeMap<common::CommittedPoly, MultilinearPolynomial<Fr>>,
+        coeffs: &[Fr],
+        hints: Vec<Self::OpeningProofHint>,
+        opening_point: &[<Fr as JoltField>::Challenge],
+        transcript: &mut ProofTranscript,
+    ) -> Self::Proof {
+        let num_vars = opening_point.len();
+        let (nu, sigma) = Self::split(num_vars, Self::column_log(setup));
+        let joint = SparseRlc::new(coeffs, polynomials, num_vars);
+        let point = Self::dory_point(opening_point);
+
+        let (row_commitments, commit_blind) = if hints.len() == polynomials.len() {
+            let h = Self::combine_hints(hints, coeffs);
+            let mut rows = h.row_commitments;
+            rows.resize(1 << nu, <ArkG1 as DoryGroup>::identity());
+            (rows, h.commit_blind)
+        } else {
+            let (_c, rows, blind) = joint
+                .commit::<BN254, Transparent, G1Routines>(nu, sigma, &setup.prover)
+                .expect("dory sparse commit (hint recompute)");
+            (rows, blind)
+        };
+
+        let mut dory_transcript = LocalToDoryTranscript::new(transcript);
+        let (proof, _blind) =
+            dory_prove::<_, BN254, ParG1Routines, ParG2Routines, _, _, Transparent>(
+                &joint,
+                &point,
+                row_commitments,
+                commit_blind,
+                nu,
+                sigma,
+                &setup.prover,
+                &mut dory_transcript,
+            )
+            .expect("dory prove (sparse rlc)");
+        DoryProof(proof)
+    }
+
     #[tracing::instrument(skip_all, name = "DoryScheme::prove")]
     fn prove<ProofTranscript: Transcript>(
         setup: &Self::ProverSetup,
@@ -302,17 +378,18 @@ impl CommitmentScheme for DoryScheme {
         };
 
         let mut dory_transcript = LocalToDoryTranscript::new(transcript);
-        let (proof, _blind) = dory_prove::<_, BN254, G1Routines, G2Routines, _, _, Transparent>(
-            &ark_poly,
-            &point,
-            row_commitments,
-            commit_blind,
-            nu,
-            sigma,
-            &setup.prover,
-            &mut dory_transcript,
-        )
-        .expect("dory prove");
+        let (proof, _blind) =
+            dory_prove::<_, BN254, ParG1Routines, ParG2Routines, _, _, Transparent>(
+                &ark_poly,
+                &point,
+                row_commitments,
+                commit_blind,
+                nu,
+                sigma,
+                &setup.prover,
+                &mut dory_transcript,
+            )
+            .expect("dory prove");
         DoryProof(proof)
     }
 
@@ -377,7 +454,7 @@ mod tests {
         let evaluation = poly.evaluate(&point);
 
         let mut prover_transcript = DoryBlake2b::new(b"dory-native-roundtrip");
-        let (proof, _) = dory_prove::<_, BN254, G1Routines, G2Routines, _, _, Transparent>(
+        let (proof, _) = dory_prove::<_, BN254, ParG1Routines, ParG2Routines, _, _, Transparent>(
             &poly,
             &point,
             tier_1,

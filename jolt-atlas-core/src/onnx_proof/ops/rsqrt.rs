@@ -1,4 +1,5 @@
 use crate::{
+    onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
         ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
         range_checking::{
@@ -36,8 +37,8 @@ use joltworks::{
     },
     subprotocols::{
         evaluation_reduction::EvalReductionProof,
-        shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
+        shout::RaOneHotEncoding,
+        sumcheck::{Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
@@ -528,8 +529,9 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
 ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-    let mut proofs = Vec::new();
-
+    // Both range checks are built now (challenges drawn, operand claims
+    // appended) and proven after the node loop in the `RangeCheck` batch; their
+    // one-hot checks follow that batch.
     let div_rangecheck_provider = RangeCheckProvider::<RiRangeCheckOperands>::new(node);
     let (div_rc_prover, div_lookup_indices) = div_rangecheck_provider
         .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
@@ -537,6 +539,7 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
             &mut prover.accumulator,
             &mut prover.transcript,
         );
+    prover.defer(DeferredBatch::RangeCheck, Box::new(div_rc_prover));
 
     let sqrt_rangecheck_provider = RangeCheckProvider::<RsRangeCheckOperands>::new(node);
     let (sqrt_rc_prover, sqrt_lookup_indices) = sqrt_rangecheck_provider
@@ -545,61 +548,33 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
             &mut prover.accumulator,
             &mut prover.transcript,
         );
-
-    let mut rc_instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-        vec![Box::new(div_rc_prover), Box::new(sqrt_rc_prover)];
-    let (rangecheck_proof, _) = BatchedSumcheck::prove(
-        rc_instances.iter_mut().map(|v| &mut **v as _).collect(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-    proofs.push((ProofId(node.idx, ProofType::RangeCheck), rangecheck_proof));
+    prover.defer(DeferredBatch::RangeCheck, Box::new(sqrt_rc_prover));
 
     let div_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node);
-    let div_encoding = div_operands.get_encoding(node);
-    let [div_ra, div_hw, div_bool] = shout::ra_onehot_provers(
-        &div_encoding,
-        &div_lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-
+    prover.deferred_onehots.push((
+        DeferredOneHot::RangeCheck(div_operands.get_encoding(node)),
+        div_lookup_indices,
+    ));
     let sqrt_operands = RangeCheckOperands::<RsRangeCheckOperands>::new(node);
-    let sqrt_encoding = sqrt_operands.get_encoding(node);
-    let [sqrt_ra, sqrt_hw, sqrt_bool] = shout::ra_onehot_provers(
-        &sqrt_encoding,
-        &sqrt_lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
+    prover.deferred_onehots.push((
+        DeferredOneHot::RangeCheck(sqrt_operands.get_encoding(node)),
+        sqrt_lookup_indices,
+    ));
 
-    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-        vec![div_ra, div_hw, div_bool, sqrt_ra, sqrt_hw, sqrt_bool];
-    let (proof, _) = BatchedSumcheck::prove(
-        instances.iter_mut().map(|v| &mut **v as _).collect(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-    proofs.push((ProofId(node.idx, ProofType::RaOneHotChecks), proof));
-
-    proofs
+    Vec::new()
 }
 
 fn verify_range_and_onehot<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
-    let rangecheck_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::RangeCheck))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-
     let div_rangecheck_provider = RangeCheckProvider::<RiRangeCheckOperands>::new(node);
     let div_rc_verifier = div_rangecheck_provider
         .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );
+    verifier.defer(DeferredBatch::RangeCheck, Box::new(div_rc_verifier));
 
     let sqrt_rangecheck_provider = RangeCheckProvider::<RsRangeCheckOperands>::new(node);
     let sqrt_rc_verifier = sqrt_rangecheck_provider
@@ -607,48 +582,16 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );
-    let rc_instances: Vec<&dyn SumcheckInstanceVerifier<_, _>> =
-        vec![&div_rc_verifier, &sqrt_rc_verifier];
-    BatchedSumcheck::verify(
-        rangecheck_proof,
-        rc_instances,
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
+    verifier.defer(DeferredBatch::RangeCheck, Box::new(sqrt_rc_verifier));
 
-    let ra_one_hot_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
     let div_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node);
-    let div_encoding = div_operands.get_encoding(node);
-    let [div_ra, div_hw, div_bool] = shout::ra_onehot_verifiers(
-        &div_encoding,
-        &verifier.accumulator,
-        &mut verifier.transcript,
-    );
+    verifier
+        .deferred_onehots
+        .push(DeferredOneHot::RangeCheck(div_operands.get_encoding(node)));
     let sqrt_operands = RangeCheckOperands::<RsRangeCheckOperands>::new(node);
-    let sqrt_encoding = sqrt_operands.get_encoding(node);
-    let [sqrt_ra, sqrt_hw, sqrt_bool] = shout::ra_onehot_verifiers(
-        &sqrt_encoding,
-        &verifier.accumulator,
-        &mut verifier.transcript,
-    );
-
-    let instances: Vec<&dyn SumcheckInstanceVerifier<_, _>> = vec![
-        &*div_ra,
-        &*div_hw,
-        &*div_bool,
-        &*sqrt_ra,
-        &*sqrt_hw,
-        &*sqrt_bool,
-    ];
-    BatchedSumcheck::verify(
-        ra_one_hot_proof,
-        instances,
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
+    verifier
+        .deferred_onehots
+        .push(DeferredOneHot::RangeCheck(sqrt_operands.get_encoding(node)));
 
     Ok(())
 }

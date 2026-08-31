@@ -5,6 +5,8 @@ use common::consts::LOG_K_CHUNK;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
+/// Static saturating-clamp width analysis.
+pub mod clamp_width;
 /// Functions for executing models and tracing intermediate outputs.
 pub mod execute;
 /// Functions for loading models from ONNX files.

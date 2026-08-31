@@ -125,12 +125,11 @@ impl<const XLEN: usize, const BOUND: usize, const SYMMETRIC: bool> JoltLookupTab
     for ClampBoundedTable<XLEN, BOUND, SYMMETRIC>
 {
     fn materialize_entry(&self, index: u64) -> u64 {
-        let val: i64 = match XLEN {
-            8 => index as u8 as i8 as i64,
-            16 => index as u16 as i16 as i64,
-            32 => index as u32 as i32 as i64,
-            64 => index as i64,
-            _ => unimplemented!(),
+        // Sign-extend the low `XLEN` bits of `index`.
+        let val: i64 = if XLEN == 64 {
+            index as i64
+        } else {
+            ((index << (64 - XLEN)) as i64) >> (64 - XLEN)
         };
         let lower = if SYMMETRIC { -(1i64 << BOUND) } else { 0 };
         let upper = (1i64 << BOUND) - 1;
@@ -225,15 +224,20 @@ impl<const XLEN: usize> ClampSpec for ClampTable<XLEN> {
 /// `[i32::MIN, i32::MAX]`), used by the shared saturating-arithmetic clamp
 /// (`jolt_atlas_core::onnx_proof::clamp_lookups`, backing `Add`/`Sub`/`Sum`/`Einsum`/`Mul`/
 /// `Square`/`Cube`/`MeanOfSquares`).
-pub type SaturationTable = ClampBoundedTable<LARGE_XLEN, SIGN_BIT_I32, true>;
+///
+/// Generic in the address width: a node whose pre-clamp value provably fits in
+/// fewer bits (see `atlas_onnx_tracer::model::clamp_width`) uses a narrower
+/// table, i.e. fewer one-hot chunks.
+pub type SaturationTable<const XLEN: usize = LARGE_XLEN> =
+    ClampBoundedTable<XLEN, SIGN_BIT_I32, true>;
 
-impl ClampSpec for SaturationTable {
-    type HigherAllZero = SatClampHigherAllZeroPrefix<LARGE_XLEN>;
-    type HigherAllOne = SatClampHigherAllOnePrefix<LARGE_XLEN>;
-    type LowerWord = SatClampLowerWordPrefix<LARGE_XLEN>;
-    type SufHigherAllZero = SatClampHigherAllZeroSuffix<LARGE_XLEN>;
-    type SufHZeroMulLWord = SatClampHZeroMulLWordSuffix<LARGE_XLEN>;
-    type SufHOneMulLWord = SatClampHOneMulLWordSuffix<LARGE_XLEN>;
+impl<const XLEN: usize> ClampSpec for SaturationTable<XLEN> {
+    type HigherAllZero = SatClampHigherAllZeroPrefix<XLEN>;
+    type HigherAllOne = SatClampHigherAllOnePrefix<XLEN>;
+    type LowerWord = SatClampLowerWordPrefix<XLEN>;
+    type SufHigherAllZero = SatClampHigherAllZeroSuffix<XLEN>;
+    type SufHZeroMulLWord = SatClampHZeroMulLWordSuffix<XLEN>;
+    type SufHOneMulLWord = SatClampHOneMulLWordSuffix<XLEN>;
     const BOUND: usize = SIGN_BIT_I32;
     const SYMMETRIC: bool = true;
 }

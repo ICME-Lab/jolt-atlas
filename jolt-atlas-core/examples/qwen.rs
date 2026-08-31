@@ -9,6 +9,9 @@
 /// # Override the input prompt
 /// cargo run --release --package jolt-atlas-core --example qwen -- --input "Hello, world!"
 ///
+/// # Over-provision the Dory SRS (wider columns => fewer tier-2 pairings per commit)
+/// cargo run --release --package jolt-atlas-core --example qwen -- --srs-vars 34
+///
 /// # Reuse cached shared preprocessing (only valid for inputs that tokenize to the same
 /// # sequence length as the cached run)
 /// cargo run --release --package jolt-atlas-core --example qwen -- --use-cache
@@ -38,6 +41,21 @@ const SHARED_PP_CACHE_PATH: &str = "atlas-onnx-tracer/models/qwen/shared_preproc
 /// directly comparable out of the box.
 const DEFAULT_PROMPT: &str = "The quick brown fox jumps over the lazy dog";
 
+fn parse_srs_vars_arg(args: &[String]) -> Option<usize> {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--srs-vars" {
+            return Some(
+                args.next()
+                    .expect("--srs-vars requires a value")
+                    .parse()
+                    .expect("--srs-vars must be an integer"),
+            );
+        }
+    }
+    None
+}
+
 fn parse_input_arg(args: &[String]) -> String {
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -46,6 +64,76 @@ fn parse_input_arg(args: &[String]) -> String {
         }
     }
     DEFAULT_PROMPT.to_string()
+}
+
+/// Per-operator histogram of the statically derived saturating-clamp widths
+/// (see `atlas_onnx_tracer::model::clamp_width`).
+fn print_clamp_width_histogram(model: &Model) {
+    use std::collections::BTreeMap;
+    let mut hist: BTreeMap<(String, usize), usize> = BTreeMap::new();
+    for node in model.graph.nodes.values() {
+        if atlas_onnx_tracer::model::clamp_width::clamp_value_bound(node, &model.graph.nodes)
+            .is_some()
+        {
+            let op = format!("{:?}", node.operator);
+            let op = op
+                .split(|c: char| !c.is_alphanumeric())
+                .next()
+                .unwrap()
+                .to_string();
+            *hist.entry((op, node.sat_clamp_bits)).or_default() += 1;
+        }
+    }
+    println!("saturating-clamp widths (op, bits) -> nodes:");
+    for ((op, bits), n) in hist {
+        println!("  {op:<16} {bits:>2} bits  x{n}");
+    }
+    use jolt_atlas_core::onnx_proof::global_clamp::{clamp_buckets, remainder_buckets};
+    let op_name = |idx: usize| {
+        let op = format!("{:?}", model.graph.nodes[&idx].operator);
+        op.split(|c: char| !c.is_alphanumeric())
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    println!("packed buckets (kind idx width log_t nodes | largest node):");
+    for b in clamp_buckets(model)
+        .iter()
+        .chain(remainder_buckets(model).iter())
+    {
+        let big = b.nodes.iter().max_by_key(|n| n.log_t).unwrap();
+        println!(
+            "  {:?} #{:<3} w={:<2} log_t={:<2} nodes={:<4} | node {} {} log_t={}",
+            b.kind,
+            b.idx,
+            b.width,
+            b.log_t,
+            b.nodes.len(),
+            big.idx,
+            op_name(big.idx),
+            big.log_t
+        );
+    }
+    let mut sizes: Vec<(usize, usize)> = model
+        .graph
+        .nodes
+        .values()
+        .map(|n| (n.pow2_padded_num_output_elements(), n.idx))
+        .collect();
+    sizes.sort_unstable_by(|a, b| b.cmp(a));
+    println!("model outputs: {:?}", model.outputs());
+    println!("largest nodes (padded elements, idx, op):");
+    for (t, idx) in sizes.iter().take(12) {
+        println!(
+            "  2^{:<2} node {:<5} {}",
+            t.trailing_zeros(),
+            idx,
+            op_name(*idx)
+        );
+    }
+    if std::env::args().any(|a| a == "--buckets-only") {
+        std::process::exit(0);
+    }
 }
 
 fn load_or_build_shared_preprocessing(
@@ -63,6 +151,7 @@ fn load_or_build_shared_preprocessing(
     let model = Model::load(MODEL_PATH, run_args);
     println!("{}", model.pretty_print());
     println!("max num vars: {}", model.max_num_vars());
+    print_clamp_width_histogram(&model);
 
     let shared = AtlasSharedPreprocessing::preprocess(model);
 
@@ -126,7 +215,10 @@ fn main() {
 
     tracing::info!("Loaded input data");
     let pp = load_or_build_shared_preprocessing(&run_args, use_cache);
-    let prover_preprocessing = AtlasProverPreprocessing::<Fr, DoryScheme>::new(pp);
+    let prover_preprocessing = match parse_srs_vars_arg(&args) {
+        Some(n) => AtlasProverPreprocessing::<Fr, DoryScheme>::new_with_srs_num_vars(pp, n),
+        None => AtlasProverPreprocessing::<Fr, DoryScheme>::new(pp),
+    };
 
     let timing = std::time::Instant::now();
     let (proof, io, _debug_info) = ONNXProof::<Fr, Blake2bTranscript, DoryScheme>::prove(
@@ -134,6 +226,14 @@ fn main() {
         &[input_ids, position_ids, attention_mask],
     );
     println!("Proof generation took {:.2?}", timing.elapsed());
+    println!(
+        "Proof size: {:.2} MiB ({} committed polys, {} sumcheck proofs)",
+        ark_serialize::CanonicalSerialize::serialized_size(&proof, ark_serialize::Compress::Yes)
+            as f64
+            / (1024.0 * 1024.0),
+        proof.commitments.len(),
+        proof.proofs.len(),
+    );
 
     let verifier_preprocessing =
         AtlasVerifierPreprocessing::<Fr, DoryScheme>::from(&prover_preprocessing);

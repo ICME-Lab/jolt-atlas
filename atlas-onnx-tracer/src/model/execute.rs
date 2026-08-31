@@ -1,3 +1,4 @@
+use crate::ops::FusedIntermediates;
 use crate::{
     model::Model,
     ops::{Op, Operator},
@@ -20,7 +21,21 @@ impl Model {
     /// A `BTreeMap` containing all node outputs, indexed by node ID
     #[tracing::instrument(name = "Model::execute_graph", skip_all)]
     pub fn execute_graph(&self, inputs: &[Tensor<i32>]) -> BTreeMap<usize, Tensor<i32>> {
+        self.execute_graph_with_intermediates(inputs).0
+    }
+
+    /// Like [`Self::execute_graph`], but also retains every fused rescale op's
+    /// [`FusedIntermediates`] (pre-clamp quotient + remainder) so the prover can
+    /// read them back instead of re-running the accumulation.
+    pub fn execute_graph_with_intermediates(
+        &self,
+        inputs: &[Tensor<i32>],
+    ) -> (
+        BTreeMap<usize, Tensor<i32>>,
+        BTreeMap<usize, FusedIntermediates>,
+    ) {
         let mut node_outputs: BTreeMap<usize, Tensor<i32>> = BTreeMap::new();
+        let mut fused_intermediates: BTreeMap<usize, FusedIntermediates> = BTreeMap::new();
         self.store_inputs(inputs, &mut node_outputs);
         for (node_idx, node) in &self.graph.nodes {
             // Skip input nodes as they're already processed
@@ -28,10 +43,13 @@ impl Model {
                 continue;
             }
             let input_tensors: Vec<&Tensor<i32>> = self.get_node_inputs(*node_idx, &node_outputs);
-            let output_tensor = node.operator.f(input_tensors);
+            let (output_tensor, intermediates) = node.operator.f_with_intermediates(input_tensors);
             node_outputs.insert(*node_idx, output_tensor);
+            if let Some(intermediates) = intermediates {
+                fused_intermediates.insert(*node_idx, intermediates);
+            }
         }
-        node_outputs
+        (node_outputs, fused_intermediates)
     }
 
     /// Retrieves the input tensors for a specific node.

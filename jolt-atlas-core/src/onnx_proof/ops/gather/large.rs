@@ -41,14 +41,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherLarge {
 
         let encoding = GatherRaEncoding::new(node);
         let lookup_indices = gather_lookup_indices(node, &prover.trace);
-        let [ra_prover, hw_prover, bool_prover] = shout::ra_onehot_provers(
+        let [ra_prover, bool_prover] = shout::ra_onehot_provers(
             &encoding,
             &lookup_indices,
             &prover.accumulator,
             &mut prover.transcript,
         );
         let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-            vec![ra_prover, hw_prover, bool_prover];
+            vec![ra_prover, bool_prover];
 
         let (stage2_proof, _) = BatchedSumcheck::prove(
             instances.iter_mut().map(|v| &mut **v as _).collect(),
@@ -89,10 +89,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherLarge {
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         let encoding = GatherRaEncoding::new(node);
-        let [ra_verifier, hw_verifier, bool_verifier] =
+        let [ra_verifier, bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
         let instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
-            vec![&*ra_verifier, &*hw_verifier, &*bool_verifier];
+            vec![&*ra_verifier, &*bool_verifier];
         BatchedSumcheck::verify(
             ra_one_hot_proof,
             instances,

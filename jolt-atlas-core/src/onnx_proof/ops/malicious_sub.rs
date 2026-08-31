@@ -12,11 +12,7 @@
 //! [`MaliciousONNXProof`](crate::onnx_proof::malicious_prover).
 
 use crate::{
-    onnx_proof::{
-        clamp_lookups::{SaturatingAccClampOperands, CLAMP_LOG_K},
-        op_lookups::{OpLookupEncoding, OpLookupProvider},
-        ProofId, ProofType, Prover,
-    },
+    onnx_proof::{clamp_lookups::prove_clamp_lookup, ProofId, Prover},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_onnx_tracer::{
@@ -25,13 +21,8 @@ use atlas_onnx_tracer::{
 };
 use joltworks::{
     field::JoltField,
-    lookup_tables::clamp::SaturationTable,
     poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-    subprotocols::{
-        shout,
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
-        sumcheck_prover::SumcheckInstanceProver,
-    },
+    subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
 };
 
@@ -50,41 +41,9 @@ pub fn malicious_sub_prove<F: JoltField, T: Transcript>(
 
     let mut results = Vec::new();
 
-    // (1) Honest clamp lookup: output(r) = SatClamp(acc(r)).
-    let provider: OpLookupProvider<SaturatingAccClampOperands> =
-        OpLookupProvider::new(node.clone());
-    let (mut execution_sumcheck, lookup_indices) = provider
-        .read_raf_prove::<F, T, SaturationTable, CLAMP_LOG_K>(
-            &prover.trace,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-    let (execution_proof, _) = Sumcheck::prove(
-        &mut execution_sumcheck,
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-    results.push((ProofId(node.idx, ProofType::Execution), execution_proof));
-
-    // (2) Honest one-hot checks on the clamp read-address polynomial.
-    let encoding = OpLookupEncoding::<SaturatingAccClampOperands>::new(node);
-    let [ra_prover, hw_prover, bool_prover] = shout::ra_onehot_provers(
-        &encoding,
-        &lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-        vec![ra_prover, hw_prover, bool_prover];
-    let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
-        instances.iter_mut().map(|v| &mut **v as _).collect(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-    results.push((
-        ProofId(node.idx, ProofType::RaOneHotChecks),
-        ra_one_hot_proof,
-    ));
+    // (1)+(2) Honest clamp lookup (deferred and batched with all other nodes'
+    // lookups, exactly like the honest `Sub::prove`).
+    results.extend(prove_clamp_lookup(node, prover, None));
 
     // (3) FORGED operand tie: claim `left(r) + 1` instead of `left(r)`.
     let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);

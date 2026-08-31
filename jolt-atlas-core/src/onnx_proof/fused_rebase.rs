@@ -24,10 +24,11 @@
 use crate::{
     onnx_proof::{
         clamp_lookups::{
-            clamp_committed_polys, is_scalar, prove_append_acc, prove_clamp_lookup,
-            recover_small_int, verify_append_acc, verify_clamp_lookup, verify_scalar_clamp,
+            is_scalar, prove_append_acc, prove_clamp_lookup, recover_small_int, verify_append_acc,
+            verify_clamp_lookup, verify_scalar_clamp,
         },
-        ProofId, ProofType, Prover, Verifier,
+        deferred_lookups::{ProverLookupJob, VerifierLookupJob},
+        ProofId, Prover, Verifier,
     },
     utils::opening_access::AccOpeningAccessor,
 };
@@ -56,12 +57,8 @@ use joltworks::{
         },
     },
     subprotocols::{
-        identity_range_check::{
-            identity_rangecheck_prover, identity_rangecheck_verifier, IdentityRCProvider,
-        },
-        shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
-        sumcheck_prover::SumcheckInstanceProver,
+        identity_range_check::IdentityRCProvider, shout::RaOneHotEncoding,
+        sumcheck::SumcheckInstanceProof,
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
@@ -111,6 +108,12 @@ pub(crate) fn try_rebase_intermediates(
     node: &ComputationNode,
     trace: &Trace,
 ) -> Option<RebaseIntermediates> {
+    if let Some(cached) = trace.fused_intermediates(node.idx) {
+        return Some(RebaseIntermediates {
+            quotient: cached.quotient.padded_next_power_of_two(),
+            remainder: cached.remainder.padded_next_power_of_two(),
+        });
+    }
     let LayerData { operands, .. } = Trace::layer_data(trace, node);
     let (quotient, remainder) = match &node.operator {
         Operator::Einsum(op) => einsum_intermediate_and_remainder(op, &operands),
@@ -140,6 +143,9 @@ pub(crate) fn rebase_intermediates(node: &ComputationNode, trace: &Trace) -> Reb
 ///
 /// Prefer [`rebase_intermediates`] when the quotient is needed too — this re-runs the full accumulation for the remainder alone.
 pub(crate) fn rebase_remainder(node: &ComputationNode, trace: &Trace) -> Tensor<i32> {
+    if let Some(cached) = trace.fused_intermediates(node.idx) {
+        return cached.remainder.padded_next_power_of_two();
+    }
     let LayerData { operands, .. } = Trace::layer_data(trace, node);
     let remainder = match &node.operator {
         Operator::Einsum(op) => einsum_remainder(op, &operands),
@@ -188,16 +194,10 @@ pub fn fused_input_claim<F: JoltField>(
 /// the rescaling-remainder range check (`bits`-wide address) plus the saturating
 /// clamp (64-bit address). Empty for non-fused or scalar nodes.
 pub fn committed_polys(node: &ComputationNode) -> Vec<CommittedPoly> {
-    if !fuses_rebase(&node.operator) || is_scalar(node) {
-        return vec![];
-    }
-    let bits = rebase_bits(&node.operator).expect("fused op") as usize;
-    let d = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), bits).instruction_d;
-    let mut polys: Vec<CommittedPoly> = (0..d)
-        .map(|i| CommittedPoly::RescaleRemainderRaD(node.idx, i))
-        .collect();
-    polys.extend(clamp_committed_polys(node));
-    polys
+    // Both the clamp and the remainder one-hots are committed per packed
+    // bucket at the model level (see `global_clamp`), never per node.
+    let _ = node;
+    Vec::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -248,33 +248,14 @@ pub fn prove_remainder_rc<F: JoltField, T: Transcript>(
 ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
     let bits = rebase_bits(&node.operator).expect("fused op");
     let lookup_bits = remainder_lookup_bits(remainder, bits);
-    let lookup_indices: Vec<usize> = lookup_bits.iter().map(|&x| x.into()).collect();
-
-    let rc_provider = RescaleRemainderRCProvider::new(node.clone(), bits);
-    let mut rc = identity_rangecheck_prover(&rc_provider, lookup_bits, &mut prover.accumulator);
-    let (rc_proof, _) = Sumcheck::prove(&mut rc, &mut prover.accumulator, &mut prover.transcript);
-
-    let encoding = RescaleRemainderRaEncoding::new(node.idx, bits);
-    let [ra, hw, boolean] = shout::ra_onehot_provers(
-        &encoding,
-        &lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let mut instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = vec![ra, hw, boolean];
-    let (ra_proof, _) = BatchedSumcheck::prove(
-        instances.iter_mut().map(|v| &mut **v as _).collect(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-
-    vec![
-        (ProofId(node.idx, ProofType::RangeCheck), rc_proof),
-        (
-            ProofId(node.idx, ProofType::RescaleRemainderRaChecks),
-            ra_proof,
-        ),
-    ]
+    // Deferred: proven after the node loop as part of the batched remainder
+    // range check + one-hot checks (see `deferred_lookups`).
+    prover.deferred.push(ProverLookupJob::RescaleRemainder {
+        node: node.clone(),
+        bits,
+        lookup_bits,
+    });
+    Vec::new()
 }
 
 /// Verifier counterpart of [`prove_pre`].
@@ -310,32 +291,10 @@ pub fn verify_post<F: JoltField, T: Transcript>(
         return Ok(());
     }
 
-    let rc_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::RangeCheck))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-    let rc_provider = RescaleRemainderRCProvider::new(node.clone(), bits);
-    let rc = identity_rangecheck_verifier(&rc_provider, &mut verifier.accumulator);
-    Sumcheck::verify(
-        rc_proof,
-        &rc,
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
-
-    let ra_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::RescaleRemainderRaChecks))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-    let encoding = RescaleRemainderRaEncoding::new(node.idx, bits);
-    let [ra, hw, boolean] =
-        shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
-    BatchedSumcheck::verify(
-        ra_proof,
-        vec![&*ra, &*hw, &*boolean],
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
+    verifier.deferred.push(VerifierLookupJob::RescaleRemainder {
+        node: node.clone(),
+        bits,
+    });
     Ok(())
 }
 

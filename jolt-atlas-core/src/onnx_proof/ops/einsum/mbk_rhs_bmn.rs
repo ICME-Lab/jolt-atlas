@@ -91,7 +91,7 @@ impl<F: JoltField> EinsumLayout<F> for MbkRhsBmnLayout {
         lo_r_m.par_chunks_mut(k).enumerate().for_each(|(h, row)| {
             for j in 0..k {
                 row[j] = (0..m)
-                    .map(|i| F::from_i32(left_operand[i * (k * b) + h * (k) + j]) * eq_r_m[i])
+                    .map(|i| eq_r_m[i].mul_i64(left_operand[i * (k * b) + h * (k) + j] as i64))
                     .sum();
             }
         });
@@ -106,7 +106,7 @@ impl<F: JoltField> EinsumLayout<F> for MbkRhsBmnLayout {
                             MbkRhs::Bnk => h * (n * k) + l * (k) + j,
                             MbkRhs::Nbk => l * (k * b) + h * (k) + j,
                         };
-                        F::from_i32(right_operand[idx]) * eq_r_n[l]
+                        eq_r_n[l].mul_i64(right_operand[idx] as i64)
                     })
                     .sum();
             }

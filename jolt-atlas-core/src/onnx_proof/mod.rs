@@ -26,7 +26,10 @@ use std::collections::BTreeMap;
 // ── Submodules ───────────────────────────────────────────────────────────
 
 pub mod clamp_lookups;
+pub mod clamp_split;
+pub mod deferred_lookups;
 pub mod fused_rebase;
+pub mod global_clamp;
 pub mod neural_teleport;
 pub mod op_lookups;
 pub mod ops;
@@ -167,7 +170,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         append_inputs_to_transcript(&mut prover.transcript, &io);
 
         // Commit to witness polynomials and append commitments to transcript
-        let (poly_map, commitments) = Self::commit_witness_polynomials(
+        let (poly_map, commitments, hints) = Self::commit_witness_polynomials(
             pp.model(),
             &prover.trace,
             &pp.generators,
@@ -188,7 +191,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
 
         // Reduction sum-check + PCS::prove
         let reduced_opening_proof =
-            Self::prove_reduced_openings(&mut prover, &poly_map, &pp.generators);
+            Self::prove_reduced_openings(&mut prover, &poly_map, hints, &pp.generators);
         Self::finalize_proof(
             prover,
             io,

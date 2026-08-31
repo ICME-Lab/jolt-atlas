@@ -17,6 +17,7 @@ use crate::{
 };
 
 use ark_serialize::*;
+use rayon::prelude::*;
 use std::marker::PhantomData;
 
 /// Implements the standard technique for batching parallel sumchecks to reduce
@@ -28,9 +29,35 @@ pub enum BatchedSumcheck {}
 impl BatchedSumcheck {
     #[tracing::instrument(skip_all, name = "BatchedSumcheck::prove")]
     pub fn prove<F: JoltField, ProofTranscript: Transcript>(
+        sumcheck_instances: Vec<&mut dyn SumcheckInstanceProver<F, ProofTranscript>>,
+        opening_accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut ProofTranscript,
+    ) -> (SumcheckInstanceProof<F, ProofTranscript>, Vec<F::Challenge>) {
+        Self::prove_inner(sumcheck_instances, opening_accumulator, transcript, false)
+    }
+
+    /// Like [`Self::prove`], but computes each round's per-instance messages
+    /// *and* ingests each challenge in parallel across instances (nested with
+    /// each instance's own parallelism).
+    ///
+    /// Only for batches of mutually independent instances: instances that
+    /// share state behind an `RwLock` (e.g. the opening-reduction instances'
+    /// shared eq tables) deadlock when a rayon thread holding a write guard
+    /// steals a job that takes the same lock. Use [`Self::prove`] for those.
+    #[tracing::instrument(skip_all, name = "BatchedSumcheck::prove_parallel_instances")]
+    pub fn prove_parallel_instances<F: JoltField, ProofTranscript: Transcript>(
+        sumcheck_instances: Vec<&mut dyn SumcheckInstanceProver<F, ProofTranscript>>,
+        opening_accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut ProofTranscript,
+    ) -> (SumcheckInstanceProof<F, ProofTranscript>, Vec<F::Challenge>) {
+        Self::prove_inner(sumcheck_instances, opening_accumulator, transcript, true)
+    }
+
+    fn prove_inner<F: JoltField, ProofTranscript: Transcript>(
         mut sumcheck_instances: Vec<&mut dyn SumcheckInstanceProver<F, ProofTranscript>>,
         opening_accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut ProofTranscript,
+        parallel_instances: bool,
     ) -> (SumcheckInstanceProof<F, ProofTranscript>, Vec<F::Challenge>) {
         let max_num_rounds = sumcheck_instances
             .iter()
@@ -73,6 +100,16 @@ impl BatchedSumcheck {
 
         let mut r_sumcheck: Vec<F::Challenge> = Vec::with_capacity(max_num_rounds);
         let mut compressed_polys: Vec<CompressedUniPoly<F>> = Vec::with_capacity(max_num_rounds);
+        // Spread per-round message computation across instances rather than
+        // inside each one (see `message` below) when asked to and worthwhile.
+        const MANY_INSTANCES: usize = 8;
+        let many_instances = parallel_instances && sumcheck_instances.len() >= MANY_INSTANCES;
+        // Input claims are fixed for the whole protocol; precompute them so the
+        // per-round (possibly parallel) message computation needs no accumulator.
+        let input_claims: Vec<F> = sumcheck_instances
+            .iter()
+            .map(|sumcheck| sumcheck.input_claim(opening_accumulator))
+            .collect();
 
         for round in 0..max_num_rounds {
             #[cfg(not(target_arch = "wasm32"))]
@@ -83,27 +120,47 @@ impl BatchedSumcheck {
 
             let remaining_rounds = max_num_rounds - round;
 
-            let univariate_polys: Vec<UniPoly<F>> = sumcheck_instances
-                .iter_mut()
-                .zip(individual_claims.iter())
-                .map(|(sumcheck, previous_claim)| {
-                    let num_rounds = sumcheck.num_rounds();
-                    if remaining_rounds > num_rounds {
-                        // We haven't gotten to this sumcheck's variables yet, so
-                        // the univariate polynomial is just a constant equal to
-                        // the input claim, scaled by a power of 2.
-                        let num_rounds = sumcheck.num_rounds();
-                        let scaled_input_claim = sumcheck
-                            .input_claim(opening_accumulator)
-                            .mul_pow_2(remaining_rounds - num_rounds - 1);
-                        // Constant polynomial
-                        UniPoly::from_coeff(vec![scaled_input_claim])
-                    } else {
-                        let offset = max_num_rounds - sumcheck.num_rounds();
-                        sumcheck.compute_message(round - offset, *previous_claim)
-                    }
-                })
-                .collect();
+            let message = |sumcheck: &mut &mut dyn SumcheckInstanceProver<F, ProofTranscript>,
+                           previous_claim: &F,
+                           input_claim: &F|
+             -> UniPoly<F> {
+                let num_rounds = sumcheck.num_rounds();
+                if remaining_rounds > num_rounds {
+                    // We haven't gotten to this sumcheck's variables yet, so
+                    // the univariate polynomial is just a constant equal to
+                    // the input claim, scaled by a power of 2.
+                    let scaled_input_claim =
+                        input_claim.mul_pow_2(remaining_rounds - num_rounds - 1);
+                    // Constant polynomial
+                    UniPoly::from_coeff(vec![scaled_input_claim])
+                } else {
+                    let offset = max_num_rounds - num_rounds;
+                    sumcheck.compute_message(round - offset, *previous_claim)
+                }
+            };
+            let univariate_polys: Vec<UniPoly<F>> = if many_instances {
+                // Many instances: parallelize across instances. Each instance's
+                // own parallelism is left on so the few large instances (which
+                // dominate the batch) still fan out; rayon's work stealing
+                // absorbs the nesting.
+                sumcheck_instances
+                    .par_iter_mut()
+                    .zip(individual_claims.par_iter())
+                    .zip(input_claims.par_iter())
+                    .map(|((sumcheck, previous_claim), input_claim)| {
+                        message(sumcheck, previous_claim, input_claim)
+                    })
+                    .collect()
+            } else {
+                sumcheck_instances
+                    .iter_mut()
+                    .zip(individual_claims.iter())
+                    .zip(input_claims.iter())
+                    .map(|((sumcheck, previous_claim), input_claim)| {
+                        message(sumcheck, previous_claim, input_claim)
+                    })
+                    .collect()
+            };
 
             // Linear combination of individual univariate polynomials
             let batched_univariate_poly: UniPoly<F> =
@@ -141,14 +198,19 @@ impl BatchedSumcheck {
                 batched_claim = batched_univariate_poly.evaluate(&r_j);
             }
 
-            for sumcheck in sumcheck_instances.iter_mut() {
-                // If a sumcheck instance has fewer than `max_num_rounds`,
-                // we wait until there are <= `sumcheck.num_rounds()` left
-                // before binding its variables.
+            // If a sumcheck instance has fewer than `max_num_rounds`,
+            // we wait until there are <= `sumcheck.num_rounds()` left
+            // before binding its variables.
+            let ingest = |sumcheck: &mut &mut dyn SumcheckInstanceProver<F, ProofTranscript>| {
                 if remaining_rounds <= sumcheck.num_rounds() {
                     let offset = max_num_rounds - sumcheck.num_rounds();
                     sumcheck.ingest_challenge(r_j, round - offset);
                 }
+            };
+            if many_instances {
+                sumcheck_instances.par_iter_mut().for_each(ingest);
+            } else {
+                sumcheck_instances.iter_mut().for_each(ingest);
             }
 
             compressed_polys.push(compressed_poly);

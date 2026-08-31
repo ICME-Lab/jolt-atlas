@@ -7,7 +7,7 @@
 use super::{types::ProofId, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof};
 use crate::{onnx_proof::ops::OperatorVerifier, utils::opening_access::AccOpeningAccessor};
 use atlas_onnx_tracer::model::{trace::ModelExecutionIO, Model};
-use common::VirtualPoly;
+use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
     poly::{
@@ -38,6 +38,16 @@ pub struct Verifier<'a, F: JoltField, T: Transcript> {
     pub proofs: &'a BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
     /// Model execution inputs and outputs.
     pub io: &'a ModelExecutionIO,
+    /// Lookups registered during the node loop, verified afterwards in one
+    /// batch (see [`deferred_lookups`](crate::onnx_proof::deferred_lookups)).
+    pub deferred: Vec<crate::onnx_proof::deferred_lookups::VerifierLookupJob>,
+    /// Verifier instances built during the node loop, verified afterwards per batch.
+    pub deferred_batches: BTreeMap<
+        crate::onnx_proof::deferred_lookups::DeferredBatch,
+        Vec<Box<dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>>,
+    >,
+    /// One-hot checks to verify right after their parent batch.
+    pub deferred_onehots: Vec<crate::onnx_proof::deferred_lookups::DeferredOneHot>,
 }
 
 impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
@@ -53,7 +63,24 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
             transcript: T::new(b"ONNXProof"),
             proofs,
             io,
+            deferred: Vec::new(),
+            deferred_batches: BTreeMap::new(),
+            deferred_onehots: Vec::new(),
         }
+    }
+
+    /// Queue a node-loop-built verifier instance for the deferred batch `kind`.
+    pub fn defer(
+        &mut self,
+        kind: crate::onnx_proof::deferred_lookups::DeferredBatch,
+        instance: Box<
+            dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>,
+        >,
+    ) {
+        self.deferred_batches
+            .entry(kind)
+            .or_default()
+            .push(instance);
     }
 }
 
@@ -134,7 +161,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             }
             res?;
         }
-        Ok(())
+        crate::onnx_proof::deferred_lookups::verify_all(verifier)
     }
 
     /// Verify the reduced opening proof (sumcheck reduction + PCS verification).
@@ -145,9 +172,10 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         if let Some(reduced_opening_proof) = &self.reduced_opening_proof {
-            verifier
-                .accumulator
-                .prepare_for_sumcheck(&reduced_opening_proof.sumcheck_claims);
+            verifier.accumulator.prepare_for_sumcheck(
+                &reduced_opening_proof.sumcheck_claims,
+                &mut verifier.transcript,
+            )?;
 
             let reduction_res = verifier.accumulator.verify_batch_opening_sumcheck(
                 &reduced_opening_proof.sumcheck_proof,
@@ -167,8 +195,34 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                 &mut verifier.transcript,
             );
 
-            let joint_commitment =
-                PCS::combine_commitments(&self.commitments, &verifier_state.gamma_powers);
+            // Commitments are in sorted `CommittedPoly` order (the prover's
+            // `poly_map`); the joint opening covers the opened subset.
+            let mut committed = pp.shared.get_models_committed_polynomials::<F, T>();
+            committed.sort();
+            if committed.len() != self.commitments.len() {
+                return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                    "expected {} commitments, found {}",
+                    committed.len(),
+                    self.commitments.len()
+                )));
+            }
+            let by_poly: BTreeMap<CommittedPoly, &PCS::Commitment> = committed
+                .iter()
+                .copied()
+                .zip(self.commitments.iter())
+                .collect();
+            let selected: Vec<&PCS::Commitment> = verifier_state
+                .polynomials
+                .iter()
+                .map(|p| {
+                    by_poly.get(p).copied().ok_or_else(|| {
+                        ProofVerifyError::InvalidOpeningProof(format!(
+                            "opening of uncommitted polynomial {p:?}"
+                        ))
+                    })
+                })
+                .collect::<Result<_, _>>()?;
+            let joint_commitment = PCS::combine_commitments(&selected, &verifier_state.poly_coeffs);
 
             verifier.accumulator.verify_joint_opening::<_, PCS>(
                 &pp.generators,
@@ -177,11 +231,9 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                 &verifier_state,
                 &mut verifier.transcript,
             )?;
-        } else {
-            let committed_polys = pp.shared.get_models_committed_polynomials::<F, T>();
-            if !committed_polys.is_empty() {
-                return Err(ProofVerifyError::MissingReductionProof);
-            }
+        } else if verifier.accumulator.sumchecks_keys().next().is_some() {
+            // Some committed polynomial was opened: a joint opening is required.
+            return Err(ProofVerifyError::MissingReductionProof);
         }
         Ok(())
     }

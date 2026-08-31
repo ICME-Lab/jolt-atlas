@@ -61,7 +61,7 @@ impl MaliciousONNXProof {
         append_inputs_to_transcript(&mut prover.transcript, &io);
 
         // Commit to witness polynomials and append commitments to transcript
-        let (poly_map, commitments) = ONNXProof::<F, T, PCS>::commit_witness_polynomials(
+        let (poly_map, commitments, hints) = ONNXProof::<F, T, PCS>::commit_witness_polynomials(
             pp.model(),
             &prover.trace,
             &pp.generators,
@@ -81,8 +81,12 @@ impl MaliciousONNXProof {
         );
 
         // Reduction sum-check + PCS::prove
-        let reduced_opening_proof =
-            ONNXProof::<F, T, PCS>::prove_reduced_openings(&mut prover, &poly_map, &pp.generators);
+        let reduced_opening_proof = ONNXProof::<F, T, PCS>::prove_reduced_openings(
+            &mut prover,
+            &poly_map,
+            hints,
+            &pp.generators,
+        );
         ONNXProof::<F, T, PCS>::finalize_proof(
             prover,
             io,
@@ -113,7 +117,7 @@ impl MaliciousONNXProof {
         // Mirror the honest protocol: bind public inputs first (issue #230).
         append_inputs_to_transcript(&mut prover.transcript, &io);
 
-        let (poly_map, commitments) = ONNXProof::<F, T, PCS>::commit_witness_polynomials(
+        let (poly_map, commitments, hints) = ONNXProof::<F, T, PCS>::commit_witness_polynomials(
             pp.model(),
             &prover.trace,
             &pp.generators,
@@ -128,8 +132,12 @@ impl MaliciousONNXProof {
             &mut proofs,
             &mut eval_reduction_proofs,
         );
-        let reduced_opening_proof =
-            ONNXProof::<F, T, PCS>::prove_reduced_openings(&mut prover, &poly_map, &pp.generators);
+        let reduced_opening_proof = ONNXProof::<F, T, PCS>::prove_reduced_openings(
+            &mut prover,
+            &poly_map,
+            hints,
+            &pp.generators,
+        );
         ONNXProof::<F, T, PCS>::finalize_proof(
             prover,
             io,
@@ -175,6 +183,7 @@ impl MaliciousONNXProof {
                 proofs.extend(execution_proofs);
             }
         }
+        crate::onnx_proof::deferred_lookups::prove_all(prover, proofs);
     }
 }
 

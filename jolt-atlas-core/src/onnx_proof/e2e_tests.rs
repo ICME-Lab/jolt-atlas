@@ -207,7 +207,7 @@ fn test_gpt2_zk() {
     // Bounded local rayon pool for the ZK calls only. Caps thread count
     // and bumps stack size to dodge two macOS-only issues without
     // throttling the rest of the test binary; see the matching comment
-    // in `examples/gpt2_zk_bench.rs`.
+    // in `examples/bench/bench_zk_overhead.rs`.
     let zk_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(2)
         .stack_size(32 * 1024 * 1024)

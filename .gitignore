@@ -30,6 +30,9 @@ trace-**.json
 
 temp_file
 
+# generated bench JSON output (re-run the bench_* examples to regenerate)
+/jolt-atlas-core/examples/bench/results/
+
 # ide
 .idea
 .vscode

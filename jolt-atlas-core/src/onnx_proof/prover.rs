@@ -153,17 +153,21 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
 
     /// Iterate over computation graph in reverse topological order
     /// Prove each operation using sum-check and virtual polynomials
-    #[tracing::instrument(skip_all, name = "ONNXProof::iop")]
     pub(crate) fn iop(
         computation_nodes: &BTreeMap<usize, ComputationNode>,
         prover: &mut Prover<F, T>,
         proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
         eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
     ) {
-        for (_, node) in computation_nodes.iter().rev() {
-            let (eval_reduction_proof, execution_proofs) = OperatorProver::prove(node, prover);
-            eval_reduction_proofs.insert(node.idx, eval_reduction_proof);
-            proofs.extend(execution_proofs);
+        {
+            // Named span so `tab:phases` can isolate per-node IOP proving from the batched
+            // clamp/rescale proof below.
+            let _span = tracing::info_span!("ONNXProof::iop_nodes").entered();
+            for (_, node) in computation_nodes.iter().rev() {
+                let (eval_reduction_proof, execution_proofs) = OperatorProver::prove(node, prover);
+                eval_reduction_proofs.insert(node.idx, eval_reduction_proof);
+                proofs.extend(execution_proofs);
+            }
         }
         crate::onnx_proof::deferred_lookups::prove_all(prover, proofs);
     }
@@ -199,30 +203,38 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                     .unzip()
             };
         let poly_map = &poly_map;
-        prover
-            .accumulator
-            .prepare_for_sumcheck(poly_map, &mut prover.transcript);
+        // Two named spans so `tab:phases` can separate opening-reduction from PCS eval proof.
+        let (accumulator_sumcheck_proof, sumcheck_claims, state) = {
+            let _span = tracing::info_span!("ONNXProof::opening_reduction").entered();
+            prover
+                .accumulator
+                .prepare_for_sumcheck(poly_map, &mut prover.transcript);
 
-        // Run sumcheck
-        let (accumulator_sumcheck_proof, r_sumcheck_acc) = prover
-            .accumulator
-            .prove_batch_opening_sumcheck(&mut prover.transcript);
+            // Run sumcheck
+            let (accumulator_sumcheck_proof, r_sumcheck_acc) = prover
+                .accumulator
+                .prove_batch_opening_sumcheck(&mut prover.transcript);
 
-        // Finalize sumcheck (uses claims cached via cache_openings, derives gamma, cleans up)
-        let state = prover
-            .accumulator
-            .finalize_batch_opening_sumcheck(r_sumcheck_acc.clone(), &mut prover.transcript);
-        let sumcheck_claims: Vec<F> = state.sumcheck_claims.clone();
+            // Finalize sumcheck (uses claims cached via cache_openings, derives gamma, cleans up)
+            let state = prover
+                .accumulator
+                .finalize_batch_opening_sumcheck(r_sumcheck_acc.clone(), &mut prover.transcript);
+            let sumcheck_claims: Vec<F> = state.sumcheck_claims.clone();
+            (accumulator_sumcheck_proof, sumcheck_claims, state)
+        };
         // Joint opening of the RLC `Σ γ_i · poly_i` (materialized or not, per PCS)
         debug_assert!(state.polynomials.iter().eq(poly_map.keys()));
-        let joint_opening_proof = PCS::prove_rlc(
-            generators,
-            poly_map,
-            &state.poly_coeffs,
-            hints,
-            &state.r_sumcheck,
-            &mut prover.transcript,
-        );
+        let joint_opening_proof = {
+            let _span = tracing::info_span!("ONNXProof::pcs_prove").entered();
+            PCS::prove_rlc(
+                generators,
+                poly_map,
+                &state.poly_coeffs,
+                hints,
+                &state.r_sumcheck,
+                &mut prover.transcript,
+            )
+        };
         Some(ReducedOpeningProof {
             sumcheck_proof: accumulator_sumcheck_proof,
             sumcheck_claims,
@@ -259,8 +271,10 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         )
     }
 
+    /// `pub` so `tab:committed-polys` bench tooling can census committed polys without a full
+    /// witness commit/prove.
     #[tracing::instrument(skip_all, name = "ONNXProof::polynomial_map")]
-    pub(super) fn polynomial_map(
+    pub fn polynomial_map(
         model: &Model,
         trace: &Trace,
     ) -> BTreeMap<CommittedPoly, MultilinearPolynomial<F>> {

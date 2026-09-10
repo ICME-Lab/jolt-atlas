@@ -6,6 +6,36 @@ edition = "2021"
 [features]
 zk = ["joltworks/zk"]
 
+# Paper-table bench binaries live under examples/bench/ alongside their shared modules
+# (harness.rs/models.rs/report.rs/phase_layer.rs).
+[[example]]
+name = "bench_e2e"
+path = "examples/bench/bench_e2e.rs"
+
+[[example]]
+name = "bench_phases"
+path = "examples/bench/bench_phases.rs"
+
+[[example]]
+name = "bench_census"
+path = "examples/bench/bench_census.rs"
+
+[[example]]
+name = "bench_zk_overhead"
+path = "examples/bench/bench_zk_overhead.rs"
+
+[[example]]
+name = "bench_scaling"
+path = "examples/bench/bench_scaling.rs"
+
+[[example]]
+name = "bench_accuracy"
+path = "examples/bench/bench_accuracy.rs"
+
+[[example]]
+name = "bench_models"
+path = "examples/bench/bench_models.rs"
+
 [dependencies]
 # Internal
 atlas-onnx-tracer.workspace = true

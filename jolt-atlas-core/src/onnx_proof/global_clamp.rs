@@ -249,14 +249,20 @@ pub fn bucket_committed_polys(model: &Model) -> Vec<CommittedPoly> {
         .collect()
 }
 
-/// Witnesses for every bucket's chunk polynomials.
+/// Witnesses for every bucket's chunk polynomials. Under `clamp-ablation`, saturating-clamp
+/// buckets are left out entirely (remainder buckets unaffected) — an **unsound** build used
+/// only to measure `tab:clamp-ablation`.
 #[tracing::instrument(skip_all, name = "global_clamp::bucket_witnesses")]
 pub fn bucket_witnesses<F: JoltField>(
     model: &Model,
     trace: &Trace,
 ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
     let nodes = &model.graph.nodes;
-    clamp_buckets(model)
+    #[cfg(not(feature = "clamp-ablation"))]
+    let clamp_buckets = clamp_buckets(model);
+    #[cfg(feature = "clamp-ablation")]
+    let clamp_buckets: Vec<ClampBucket> = Vec::new();
+    clamp_buckets
         .iter()
         .chain(remainder_buckets(model).iter())
         .flat_map(|bucket| match bucket.kind {

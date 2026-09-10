@@ -17,10 +17,11 @@
 //! after its node loop. The batched sumcheck computes instance messages in
 //! parallel across instances, which is what turns the ~750 tiny sequential
 //! sumchecks into a few large parallel ones.
+#[cfg(not(feature = "clamp-ablation"))]
+use crate::onnx_proof::clamp_split::{BucketSplit, SplitProver};
 use crate::onnx_proof::{
     clamp_split::{
-        self, BucketSplit, NodeSplit, SplitParams, SplitProver, SplitVerifier, ValueParams,
-        ValueProver, ValueVerifier,
+        self, NodeSplit, SplitParams, SplitVerifier, ValueParams, ValueProver, ValueVerifier,
     },
     global_clamp::{clamp_buckets, remainder_buckets, ClampBucket},
     ProofId, ProofType, Prover, Verifier,
@@ -241,16 +242,24 @@ fn batched_verify<F: JoltField, T: Transcript>(
 
 /// Prove every registered lookup job: clamp read-rafs, clamp one-hot checks,
 /// remainder range checks, remainder one-hot checks — one batched sumcheck each.
+///
+/// Under `clamp-ablation`, clamp jobs are still registered but discarded unproven here (see
+/// also [`global_clamp::bucket_witnesses`]) — an **unsound** build used only to measure
+/// `tab:clamp-ablation`.
 #[tracing::instrument(skip_all, name = "deferred_lookups::prove_all")]
 pub fn prove_all<F: JoltField, T: Transcript>(
     prover: &mut Prover<F, T>,
     proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
 ) {
-    let mut clamp: Vec<(ComputationNode, NodeSplit)> = Vec::new();
     let mut remainder: Vec<(ComputationNode, i32, Vec<LookupBits>)> = Vec::new();
+    #[cfg(not(feature = "clamp-ablation"))]
+    let mut clamp: Vec<(ComputationNode, NodeSplit)> = Vec::new();
     for job in std::mem::take(&mut prover.deferred) {
         match job {
+            #[cfg(not(feature = "clamp-ablation"))]
             ProverLookupJob::Clamp { node, split } => clamp.push((node, split)),
+            #[cfg(feature = "clamp-ablation")]
+            ProverLookupJob::Clamp { .. } => {}
             ProverLookupJob::RescaleRemainder {
                 node,
                 bits,
@@ -259,144 +268,147 @@ pub fn prove_all<F: JoltField, T: Transcript>(
         }
     }
 
-    // Clamp lookups: packed into buckets (see `global_clamp`), proven by the
-    // interior / saturated split (see `clamp_split`).
-    let model = prover.preprocessing.model();
-    let mut split_by_node: HashMap<usize, NodeSplit> =
-        clamp.into_iter().map(|(n, s)| (n.idx, s)).collect();
-    // Exact outputs (see `clamp_split::exact_output_prover`) register no
-    // split and are gaps; a bucket with no live node is skipped entirely.
-    let full_buckets = clamp_buckets(model);
-    for b in &full_buckets {
-        for n in &b.nodes {
+    // Clamp lookups: packed into buckets (see `global_clamp`), proven by the interior /
+    // saturated split (see `clamp_split`). Skipped entirely under `clamp-ablation` — see this
+    // function's doc comment.
+    #[cfg(not(feature = "clamp-ablation"))]
+    {
+        let model = prover.preprocessing.model();
+        let mut split_by_node: HashMap<usize, NodeSplit> =
+            clamp.into_iter().map(|(n, s)| (n.idx, s)).collect();
+        // Exact outputs (see `clamp_split::exact_output_prover`) register no
+        // split and are gaps; a bucket with no live node is skipped entirely.
+        let full_buckets = clamp_buckets(model);
+        for b in &full_buckets {
+            for n in &b.nodes {
+                assert!(
+                    split_by_node.contains_key(&n.idx)
+                        || clamp_split::exact_output_prover(model, &prover.trace, n.idx),
+                    "node {} is in a clamp bucket but registered no clamp lookup",
+                    n.idx
+                );
+            }
+        }
+        let buckets: Vec<ClampBucket> = full_buckets
+            .iter()
+            .filter_map(|b| clamp_split::live_bucket(b, |idx| split_by_node.contains_key(&idx)))
+            .collect();
+        if !buckets.is_empty() {
+            let splits: Vec<BucketSplit> = {
+                let _span =
+                    tracing::span!(tracing::Level::INFO, "deferred::assemble_buckets").entered();
+                buckets
+                    .iter()
+                    .map(|b| BucketSplit::assemble(b, |idx| split_by_node.remove(&idx)))
+                    .collect()
+            };
             assert!(
-                split_by_node.contains_key(&n.idx)
-                    || clamp_split::exact_output_prover(model, &prover.trace, n.idx),
-                "node {} is in a clamp bucket but registered no clamp lookup",
-                n.idx
+                split_by_node.is_empty(),
+                "clamp lookups registered for nodes outside every bucket: {:?}",
+                split_by_node.keys().collect::<Vec<_>>()
             );
-        }
-    }
-    let buckets: Vec<ClampBucket> = full_buckets
-        .iter()
-        .filter_map(|b| clamp_split::live_bucket(b, |idx| split_by_node.contains_key(&idx)))
-        .collect();
-    if !buckets.is_empty() {
-        let splits: Vec<BucketSplit> = {
-            let _span =
-                tracing::span!(tracing::Level::INFO, "deferred::assemble_buckets").entered();
-            buckets
+
+            // Each bucket first declares (as a public claim) whether it has any
+            // saturated element; unsaturated buckets are proven exactly (value
+            // sumcheck on OUT + per-node `acc = out` on the verifier), the others
+            // by the split sumcheck. Challenges are drawn sequentially in bucket
+            // order; the (heavy) instance construction then runs in parallel.
+            let exact: Vec<bool> = splits.iter().map(|s| !s.saturated()).collect();
+            for (b, &e) in buckets.iter().zip(&exact) {
+                prover.accumulator.append_virtual(
+                    &mut prover.transcript,
+                    clamp_split::exact_flag_id(b.idx),
+                    OpeningPoint::new(Vec::<F>::new()),
+                    if e { F::one() } else { F::zero() },
+                );
+            }
+            enum Params<F: JoltField> {
+                Split(SplitParams<F>),
+                Exact(ValueParams<F>),
+            }
+            let _p = tracing::span!(tracing::Level::INFO, "deferred::clamp_params").entered();
+            let params: Vec<Params<F>> = buckets
                 .iter()
-                .map(|b| BucketSplit::assemble(b, |idx| split_by_node.remove(&idx)))
-                .collect()
-        };
-        assert!(
-            split_by_node.is_empty(),
-            "clamp lookups registered for nodes outside every bucket: {:?}",
-            split_by_node.keys().collect::<Vec<_>>()
-        );
+                .zip(&exact)
+                .map(|(b, &e)| {
+                    if e {
+                        Params::Exact(clamp_split::exact_value_params(
+                            b,
+                            &prover.accumulator,
+                            &mut prover.transcript,
+                        ))
+                    } else {
+                        Params::Split(SplitParams::draw(
+                            b,
+                            &prover.accumulator,
+                            &mut prover.transcript,
+                        ))
+                    }
+                })
+                .collect();
+            drop(_p);
+            let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
+                let _span =
+                    tracing::span!(tracing::Level::INFO, "deferred::build_clamp_split").entered();
+                params
+                    .into_par_iter()
+                    .zip(splits.par_iter())
+                    .map(|(p, s)| match p {
+                        Params::Split(p) => Box::new(SplitProver::new(p, s))
+                            as Box<dyn SumcheckInstanceProver<F, T>>,
+                        Params::Exact(p) => Box::new(ValueProver::new(
+                            p,
+                            s.out.iter().map(|&o| o as u64).collect(),
+                        ))
+                            as Box<dyn SumcheckInstanceProver<F, T>>,
+                    })
+                    .collect()
+            };
+            batched_prove(instances, prover, proofs, ProofType::DeferredClampSplit);
 
-        // Each bucket first declares (as a public claim) whether it has any
-        // saturated element; unsaturated buckets are proven exactly (value
-        // sumcheck on OUT + per-node `acc = out` on the verifier), the others
-        // by the split sumcheck. Challenges are drawn sequentially in bucket
-        // order; the (heavy) instance construction then runs in parallel.
-        let exact: Vec<bool> = splits.iter().map(|s| !s.saturated()).collect();
-        for (b, &e) in buckets.iter().zip(&exact) {
-            prover.accumulator.append_virtual(
-                &mut prover.transcript,
-                clamp_split::exact_flag_id(b.idx),
-                OpeningPoint::new(Vec::<F>::new()),
-                if e { F::one() } else { F::zero() },
+            let params: Vec<_> = buckets
+                .iter()
+                .zip(&exact)
+                .map(|(b, &e)| {
+                    if e {
+                        clamp_split::exact_chunk_check_params::<F, T>(
+                            b,
+                            &prover.accumulator,
+                            &mut prover.transcript,
+                        )
+                    } else {
+                        clamp_split::chunk_check_params::<F, T>(
+                            b,
+                            &prover.accumulator,
+                            &mut prover.transcript,
+                        )
+                    }
+                })
+                .collect();
+            let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
+                let _span =
+                    tracing::span!(tracing::Level::INFO, "deferred::build_clamp_chunks").entered();
+                params
+                    .into_par_iter()
+                    .zip(splits.par_iter())
+                    .zip(exact.par_iter())
+                    .flat_map_iter(|((p, s), &e)| {
+                        if e {
+                            clamp_split::exact_chunk_check_provers::<F, T>(p, s)
+                        } else {
+                            clamp_split::chunk_check_provers::<F, T>(p, s)
+                        }
+                    })
+                    .collect()
+            };
+            drop_in_background_thread(splits);
+            batched_prove(
+                instances,
+                prover,
+                proofs,
+                ProofType::DeferredClampChunkChecks,
             );
         }
-        enum Params<F: JoltField> {
-            Split(SplitParams<F>),
-            Exact(ValueParams<F>),
-        }
-        let _p = tracing::span!(tracing::Level::INFO, "deferred::clamp_params").entered();
-        let params: Vec<Params<F>> = buckets
-            .iter()
-            .zip(&exact)
-            .map(|(b, &e)| {
-                if e {
-                    Params::Exact(clamp_split::exact_value_params(
-                        b,
-                        &prover.accumulator,
-                        &mut prover.transcript,
-                    ))
-                } else {
-                    Params::Split(SplitParams::draw(
-                        b,
-                        &prover.accumulator,
-                        &mut prover.transcript,
-                    ))
-                }
-            })
-            .collect();
-        drop(_p);
-        let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
-            let _span =
-                tracing::span!(tracing::Level::INFO, "deferred::build_clamp_split").entered();
-            params
-                .into_par_iter()
-                .zip(splits.par_iter())
-                .map(|(p, s)| match p {
-                    Params::Split(p) => {
-                        Box::new(SplitProver::new(p, s)) as Box<dyn SumcheckInstanceProver<F, T>>
-                    }
-                    Params::Exact(p) => Box::new(ValueProver::new(
-                        p,
-                        s.out.iter().map(|&o| o as u64).collect(),
-                    ))
-                        as Box<dyn SumcheckInstanceProver<F, T>>,
-                })
-                .collect()
-        };
-        batched_prove(instances, prover, proofs, ProofType::DeferredClampSplit);
-
-        let params: Vec<_> = buckets
-            .iter()
-            .zip(&exact)
-            .map(|(b, &e)| {
-                if e {
-                    clamp_split::exact_chunk_check_params::<F, T>(
-                        b,
-                        &prover.accumulator,
-                        &mut prover.transcript,
-                    )
-                } else {
-                    clamp_split::chunk_check_params::<F, T>(
-                        b,
-                        &prover.accumulator,
-                        &mut prover.transcript,
-                    )
-                }
-            })
-            .collect();
-        let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
-            let _span =
-                tracing::span!(tracing::Level::INFO, "deferred::build_clamp_chunks").entered();
-            params
-                .into_par_iter()
-                .zip(splits.par_iter())
-                .zip(exact.par_iter())
-                .flat_map_iter(|((p, s), &e)| {
-                    if e {
-                        clamp_split::exact_chunk_check_provers::<F, T>(p, s)
-                    } else {
-                        clamp_split::chunk_check_provers::<F, T>(p, s)
-                    }
-                })
-                .collect()
-        };
-        drop_in_background_thread(splits);
-        batched_prove(
-            instances,
-            prover,
-            proofs,
-            ProofType::DeferredClampChunkChecks,
-        );
     }
 
     // Rescale-remainder range checks: same packing, proven by a value

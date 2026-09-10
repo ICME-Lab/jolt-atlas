@@ -5,6 +5,11 @@ edition = "2021"
 
 [features]
 zk = ["joltworks/zk"]
+# Compile-time switch: the prover never generates, commits, or proves the saturating-clamp
+# bucket witnesses (see `global_clamp::bucket_witnesses`/`deferred_lookups::prove_all`) — an
+# **unsound** build reported only to measure that mechanism's cost. See `tab:clamp-ablation` in
+# `../paper-jolt-atlas2/BENCHMARKS.md`. Off by default so the honest proving path is untouched.
+clamp-ablation = []
 
 # Paper-table bench binaries live under examples/bench/ alongside their shared modules
 # (harness.rs/models.rs/report.rs/phase_layer.rs).
@@ -19,6 +24,10 @@ path = "examples/bench/bench_phases.rs"
 [[example]]
 name = "bench_census"
 path = "examples/bench/bench_census.rs"
+
+[[example]]
+name = "bench_clamp_ablation"
+path = "examples/bench/bench_clamp_ablation.rs"
 
 [[example]]
 name = "bench_zk_overhead"

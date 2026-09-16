@@ -1,5 +1,6 @@
 use crate::{
     field::JoltField,
+    msm::VariableBaseMSM,
     poly::{
         commitment::{
             commitment_scheme::CommitmentScheme,
@@ -92,11 +93,9 @@ impl CommitmentScheme for HyperKZG<ark_bn254::Bn254> {
         commitments: &[C],
         coeffs: &[Self::Field],
     ) -> Self::Commitment {
-        let combined_commitment: ark_bn254::G1Projective = commitments
-            .iter()
-            .zip(coeffs.iter())
-            .map(|(commitment, coeff)| commitment.borrow().0 * coeff)
-            .sum();
+        let bases: Vec<_> = commitments.iter().map(|c| c.borrow().0).collect();
+        let combined_commitment = ark_bn254::G1Projective::msm_field_elements(&bases, coeffs)
+            .expect("commitments and coefficients must have the same length");
         HyperKZGCommitment(combined_commitment.into_affine())
     }
 

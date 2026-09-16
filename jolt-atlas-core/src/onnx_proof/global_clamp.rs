@@ -24,7 +24,7 @@ use super::{
     witness::build_one_hot_rad_witness,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
-use atlas_onnx_tracer::model::{clamp_width::clamp_value_bound, trace::Trace, Model};
+use atlas_onnx_tracer::model::{trace::Trace, Model};
 use atlas_onnx_tracer::{node::ComputationNode, ops::Operator};
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
@@ -70,6 +70,26 @@ pub struct ClampBucket {
     pub nodes: Vec<BucketNode>,
 }
 
+/// Whether the node contributes a saturating clamp. Bucket construction needs
+/// only this classification and the width already registered in the model.
+/// Recomputing the magnitude bound here would scan every constant einsum
+/// operand each time the prover or verifier reconstructs the bucket layout.
+fn has_saturating_clamp(node: &ComputationNode, model: &Model) -> bool {
+    match &node.operator {
+        Operator::Add(_) | Operator::Sub(_) | Operator::MeanOfSquares(_) | Operator::Einsum(_) => {
+            true
+        }
+        Operator::Sum(_) => node
+            .inputs
+            .first()
+            .is_some_and(|idx| model.graph.nodes.contains_key(idx)),
+        Operator::Mul(op) => op.scale != 0,
+        Operator::Square(op) => op.scale != 0,
+        Operator::Cube(op) => op.scale != 0,
+        _ => false,
+    }
+}
+
 /// Partition the model's clamped (non-scalar) nodes into buckets: grouped by
 /// width, packed first-fit-decreasing by padded size into a capacity equal to
 /// the largest clamped node (so offsets are automatically aligned).
@@ -77,7 +97,7 @@ pub fn clamp_buckets(model: &Model) -> Vec<ClampBucket> {
     let nodes = &model.graph.nodes;
     let clamped: Vec<(usize, usize, usize)> = nodes
         .values()
-        .filter(|n| clamp_value_bound(n, nodes).is_some() && !is_scalar(n))
+        .filter(|n| !is_scalar(n) && has_saturating_clamp(n, model))
         .map(|n| (n.idx, n.sat_clamp_bits, n.pow2_padded_num_output_elements()))
         .collect();
     pack_buckets(BucketKind::Clamp, clamped)
@@ -287,4 +307,79 @@ pub fn bucket_witnesses<F: JoltField>(
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod bucket_membership_tests {
+    use super::*;
+    use atlas_onnx_tracer::{model::test::ModelBuilder, ops::*, tensor::Tensor};
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn clamp_buckets_contain_exactly_the_required_vector_clamps() {
+        let mut builder = ModelBuilder::with_scale(14);
+        let input = builder.input(vec![4]);
+        let weight = builder.constant(Tensor::new(Some(&[2, -3, 5, 7]), &[4]).unwrap());
+        let add = builder.add(input, weight);
+        let sub = builder.sub(input, weight);
+        let sum = builder.sum(input, vec![], vec![4]);
+        let einsum = builder.einsum("i,i->i", vec![input, weight], vec![4]);
+        let mul = builder.mul(input, weight);
+        let square = builder.square(input);
+        let cube = builder.cube(input, 14);
+        // ReLU and Clamp have their own lookups, not saturating-clamp buckets.
+        builder.relu(input);
+        builder.clamp(input, 7);
+        let raw_cube = builder.cube(input, 0);
+        let raw_square = builder.square(input);
+        let raw_mul = builder.mul(input, weight);
+        let scalar = builder.input(vec![1]);
+        builder.add(scalar, scalar);
+        let mut model = builder.build();
+        model.graph.nodes.get_mut(&raw_square).unwrap().operator =
+            Operator::Square(Square { scale: 0 });
+        model.graph.nodes.get_mut(&raw_mul).unwrap().operator = Operator::Mul(Mul { scale: 0 });
+        let mos = model.graph.nodes.len();
+        model.graph.nodes.insert(
+            mos,
+            ComputationNode::new(
+                mos,
+                Operator::MeanOfSquares(MeanOfSquares {
+                    axes: vec![],
+                    scale: 14,
+                    count: 1,
+                    padded_count: 1,
+                }),
+                vec![input],
+                vec![4],
+            ),
+        );
+        model.annotate_clamp_widths();
+        let buckets = clamp_buckets(&model);
+        let actual: BTreeSet<_> = buckets
+            .iter()
+            .flat_map(|b| b.nodes.iter().map(|n| n.idx))
+            .collect();
+        assert_eq!(
+            actual,
+            BTreeSet::from([add, sub, sum, einsum, mul, square, cube, mos])
+        );
+        assert!(!actual.contains(&raw_cube));
+        for bucket in buckets {
+            for member in bucket.nodes {
+                assert_eq!(bucket.width, model.graph.nodes[&member.idx].sat_clamp_bits);
+                assert_eq!(member.offset % (1 << member.log_t), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn incomplete_sum_does_not_enter_a_bucket() {
+        let mut model = Model::default();
+        let node = ComputationNode::new(0, Operator::Sum(Sum { axes: vec![0] }), vec![99], vec![4]);
+        model.graph.nodes.insert(0, node);
+        assert!(clamp_buckets(&model).is_empty());
+        model.graph.nodes.get_mut(&0).unwrap().inputs.clear();
+        assert!(clamp_buckets(&model).is_empty());
+    }
 }

@@ -393,6 +393,9 @@ pub struct AkitaClassCommitment {
     chunk: u32,
     physical_num_vars: u32,
     slot_count: u32,
+    /// Every member is identically zero; `commitment` is empty and the class
+    /// has no Akita opening.
+    zero: bool,
     /// bincode-encoded [`AkitaCommitment`].
     commitment: Vec<u8>,
 }
@@ -433,6 +436,7 @@ impl AppendToTranscript for AkitaBatchCommitment {
             transcript.append_u64(c.chunk as u64);
             transcript.append_u64(c.physical_num_vars as u64);
             transcript.append_u64(c.slot_count as u64);
+            transcript.append_u64(c.zero as u64);
             transcript.append_bytes(&c.commitment);
         }
     }
@@ -447,13 +451,58 @@ enum Packed {
     /// K=16 one-hot columns committed through Akita's trace-packed source;
     /// the hint retains the source, so only the rows are kept for evaluation.
     OneHot(Arc<ClassRows>),
+    /// Every member is identically zero: nothing is committed, and the
+    /// verifier requires the slot evaluations to be zero.
+    Zero,
 }
 
 /// The members of a one-hot class as a row-major trace: column `c` is the
 /// `c`-th member polynomial, row `t` its hot index at cycle `t`.
+///
+/// The kernels read rows many times, so the trace is materialized once as a
+/// contiguous `num_rows × num_columns` byte buffer (plus the per-row mask
+/// distinguishing a real hot index 0 from "no coefficient"), exactly like
+/// upstream's `PackedTraceRows`.
 struct ClassRows {
     columns: Vec<Arc<Vec<Option<u16>>>>,
     num_rows: usize,
+    selected: Vec<u8>,
+    zero_masks: Vec<u64>,
+}
+
+impl ClassRows {
+    fn new(columns: Vec<Arc<Vec<Option<u16>>>>, num_rows: usize) -> Self {
+        let num_columns = columns.len();
+        let mut selected = vec![0u8; num_rows * num_columns];
+        let mut zero_masks = vec![0u64; num_rows];
+        selected
+            .par_chunks_mut(num_columns)
+            .zip(zero_masks.par_iter_mut())
+            .enumerate()
+            .with_min_len(1 << 10)
+            .for_each(|(row, (dst, mask))| {
+                for (c, column) in columns.iter().enumerate() {
+                    match column[row] {
+                        Some(0) => *mask |= 1u64 << c,
+                        Some(k) => dst[c] = k as u8,
+                        None => {}
+                    }
+                }
+            });
+        Self {
+            columns,
+            num_rows,
+            selected,
+            zero_masks,
+        }
+    }
+
+    fn populated(&self) -> usize {
+        self.columns
+            .iter()
+            .map(|c| c.iter().filter(|k| k.is_some()).count())
+            .sum()
+    }
 }
 
 impl TraceOneHotRows for ClassRows {
@@ -465,20 +514,22 @@ impl TraceOneHotRows for ClassRows {
         self.columns.len()
     }
 
-    /// Byte zero means "no coefficient"; a genuine hot index 0 is flagged by
-    /// [`Self::committed_digit_zero_mask`].
     fn fill_row(&self, row: usize, selected_rows: &mut [u8]) {
-        for (dst, column) in selected_rows.iter_mut().zip(&self.columns) {
-            *dst = column[row].map_or(0, |k| k as u8);
-        }
+        let n = self.columns.len();
+        selected_rows.copy_from_slice(&self.selected[row * n..(row + 1) * n]);
+    }
+
+    fn fill_rows(&self, row_start: usize, selected_rows: &mut [u8]) {
+        let start = row_start * self.columns.len();
+        selected_rows.copy_from_slice(&self.selected[start..start + selected_rows.len()]);
     }
 
     fn committed_digit_zero_mask(&self, row: usize) -> u64 {
-        self.columns
-            .iter()
-            .enumerate()
-            .filter(|(_, column)| column[row] == Some(0))
-            .fold(0u64, |mask, (c, _)| mask | (1u64 << c))
+        self.zero_masks[row]
+    }
+
+    fn fill_committed_digit_zero_masks(&self, row_start: usize, masks: &mut [u64]) {
+        masks.copy_from_slice(&self.zero_masks[row_start..row_start + masks.len()]);
     }
 }
 
@@ -486,9 +537,8 @@ struct ClassProverData {
     class_index: u32,
     shape: ClassShape,
     packed: Packed,
-    commitment: AkitaCommitment,
-    hint: AkitaProverHint,
-    setup: Arc<ClassSetup>,
+    /// `None` for identically-zero classes.
+    committed: Option<(AkitaCommitment, AkitaProverHint, Arc<ClassSetup>)>,
 }
 
 impl ClassProverData {
@@ -513,6 +563,7 @@ impl ClassProverData {
                     })
                     .collect()
             }
+            Packed::Zero => vec![Inner::default(); n],
             Packed::OneHot(rows) => {
                 // Row-major one-hot: index = t·K + k, point = (r_cycle, r_addr).
                 let (r_cycle, r_addr) =
@@ -619,7 +670,7 @@ fn class_key(poly: &MultilinearPolynomial<Fp128>) -> ClassKey {
 }
 
 /// Builds the packed physical polynomial of a class from its member
-/// polynomials (in slot order).
+/// polynomials (in slot order), or [`Packed::Zero`] if every member is zero.
 fn pack_class(shape: &ClassShape, members: &[&MultilinearPolynomial<Fp128>]) -> Packed {
     let logical_len = 1usize << shape.key.logical_num_vars;
     match shape.key.flavor {
@@ -647,6 +698,9 @@ fn pack_class(shape: &ClassShape, members: &[&MultilinearPolynomial<Fp128>]) -> 
                             .for_each(|(i, d)| *d = poly.get_coeff(i).0);
                     }
                 });
+            if evals.par_iter().all(|v| v.is_zero()) {
+                return Packed::Zero;
+            }
             Packed::Dense(UpstreamDense::new(evals))
         }
         Flavor::OneHot => {
@@ -661,7 +715,11 @@ fn pack_class(shape: &ClassShape, members: &[&MultilinearPolynomial<Fp128>]) -> 
                     _ => unreachable!("one-hot class member is not one-hot"),
                 })
                 .collect();
-            Packed::OneHot(Arc::new(ClassRows { columns, num_rows }))
+            let rows = ClassRows::new(columns, num_rows);
+            if rows.populated() == 0 {
+                return Packed::Zero;
+            }
+            Packed::OneHot(Arc::new(rows))
         }
     }
 }
@@ -758,20 +816,27 @@ impl CommitmentScheme for AkitaScheme {
             let packed = pack_class(&shape, &member_polys);
             let t_pack = t0.elapsed();
             let t0 = std::time::Instant::now();
-            let class_setup = setup.class_setup(&shape);
-            let t_setup = t0.elapsed();
-            let t0 = std::time::Instant::now();
-            let (commitment, hint) = match &packed {
-                Packed::Dense(poly) => Upstream::commit(poly, &class_setup.prover),
-                Packed::OneHot(rows) => Upstream::commit_trace_one_hot(
-                    &class_setup.prover,
-                    shape.layout_digest(),
-                    shape.slot_capacity(),
-                    rows.clone(),
-                    &[],
-                ),
-            }
-            .unwrap_or_else(|e| panic!("Akita commit for class {shape:?} failed: {e}"));
+            let committed = match &packed {
+                Packed::Zero => None,
+                Packed::Dense(poly) => {
+                    let class_setup = setup.class_setup(&shape);
+                    let (c, h) = Upstream::commit(poly, &class_setup.prover)
+                        .unwrap_or_else(|e| panic!("Akita commit for class {shape:?} failed: {e}"));
+                    Some((c, h, class_setup))
+                }
+                Packed::OneHot(rows) => {
+                    let class_setup = setup.class_setup(&shape);
+                    let (c, h) = Upstream::commit_trace_one_hot(
+                        &class_setup.prover,
+                        shape.layout_digest(),
+                        shape.slot_capacity(),
+                        rows.clone(),
+                        &[],
+                    )
+                    .unwrap_or_else(|e| panic!("Akita commit for class {shape:?} failed: {e}"));
+                    Some((c, h, class_setup))
+                }
+            };
             if trace_enabled() {
                 let one_hot_k: Vec<usize> = member_polys
                     .iter()
@@ -782,8 +847,13 @@ impl CommitmentScheme for AkitaScheme {
                     .collect::<std::collections::BTreeSet<_>>()
                     .into_iter()
                     .collect();
+                let populated: usize = match &packed {
+                    Packed::Zero => 0,
+                    Packed::OneHot(rows) => rows.populated(),
+                    Packed::Dense(p) => p.evaluations().iter().filter(|v| !v.is_zero()).count(),
+                };
                 eprintln!(
-                    "[akita commit] class {class_index}: {:?} logical={} physical={} slots={} one_hot_k={one_hot_k:?} pack={t_pack:.2?} setup={t_setup:.2?} commit={:.2?}",
+                    "[akita commit] class {class_index}: {:?} logical={} physical={} slots={} populated={populated} one_hot_k={one_hot_k:?} pack={t_pack:.2?} commit={:.2?}",
                     key.flavor, key.logical_num_vars, shape.physical_num_vars, members.len(), t0.elapsed()
                 );
             }
@@ -793,15 +863,16 @@ impl CommitmentScheme for AkitaScheme {
                 chunk: key.chunk,
                 physical_num_vars: shape.physical_num_vars as u32,
                 slot_count: members.len() as u32,
-                commitment: serde_to_bytes(&commitment),
+                zero: committed.is_none(),
+                commitment: committed
+                    .as_ref()
+                    .map_or_else(Vec::new, |(c, _, _)| serde_to_bytes(c)),
             });
             let data = Arc::new(ClassProverData {
                 class_index: class_index as u32,
                 shape,
                 packed,
-                commitment,
-                hint,
-                setup: class_setup,
+                committed,
             });
             for (slot, &i) in members.iter().enumerate() {
                 per_poly[i] = Some((
@@ -855,7 +926,14 @@ impl CommitmentScheme for AkitaScheme {
             let t0 = std::time::Instant::now();
             let slot_evals = data.slot_evaluations(&upstream_point);
             let t_evals = t0.elapsed();
-            let t0 = std::time::Instant::now();
+            let Some((commitment, hint, class_setup)) = &data.committed else {
+                openings.push(AkitaClassOpening {
+                    class: class_index,
+                    slot_evals: vec![Fp128::zero(); data.shape.slot_count],
+                    proof: Vec::new(),
+                });
+                continue;
+            };
             let claim = data
                 .shape
                 .layout()
@@ -868,24 +946,26 @@ impl CommitmentScheme for AkitaScheme {
                     transcript,
                 )
                 .expect("prefix-packed claim reduction");
+            let t0 = std::time::Instant::now();
             let proof = match &data.packed {
+                Packed::Zero => unreachable!("zero classes have no committed object"),
                 Packed::Dense(poly) => Upstream::open(
                     poly,
                     claim.point.as_slice(),
                     claim.value,
-                    &data.setup.prover,
-                    Some(data.hint.clone()),
+                    &class_setup.prover,
+                    Some(hint.clone()),
                     transcript,
                 ),
                 Packed::OneHot(_) => <Upstream as UpstreamPcs>::prove_batch(
-                    &data.setup.prover,
+                    &class_setup.prover,
                     Vec::new(),
                     GroupOpeningClaim::new(
-                        data.commitment.clone(),
+                        commitment.clone(),
                         claim.point.as_slice().to_vec(),
                         vec![claim.value],
                     ),
-                    data.hint.clone(),
+                    hint.clone(),
                     transcript,
                 ),
             }
@@ -980,6 +1060,15 @@ impl CommitmentScheme for AkitaScheme {
                     opening.slot_evals.len(),
                     shape.slot_count
                 )));
+            }
+            if class.zero {
+                if opening.slot_evals.iter().any(|v| !v.is_zero()) || !opening.proof.is_empty() {
+                    return Err(bad(format!(
+                        "Akita class {} is declared zero but its opening is not",
+                        opening.class
+                    )));
+                }
+                continue;
             }
             let n = shape.key.logical_num_vars;
             let logical = Fp128::as_inner_slice(&opening_point[max_vars - n..]);
@@ -1108,6 +1197,7 @@ mod tests {
             ),
             MultilinearPolynomial::from((0..1 << 5).map(|_| rng.gen::<u8>()).collect::<Vec<_>>()),
             MultilinearPolynomial::from((0..1 << 8).map(|_| rng.gen::<i64>()).collect::<Vec<_>>()),
+            MultilinearPolynomial::from(vec![0i64; 1 << 9]),
             MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
                 (0..64).map(|_| Some(rng.gen_range(0..16u16))).collect(),
                 ONE_HOT_K,
@@ -1129,9 +1219,10 @@ mod tests {
         let (batch, per_poly) = AkitaScheme::batch_commit_all(&polys, &setup);
         assert_eq!(
             batch.classes.len(),
-            3,
-            "two dense arities and one one-hot arity"
+            4,
+            "three dense arities (one identically zero) and one one-hot arity"
         );
+        assert_eq!(batch.classes.iter().filter(|c| c.zero).count(), 1);
         let (slots, hints): (Vec<_>, Vec<_>) = per_poly.into_iter().unzip();
 
         let r = random_point(&mut rng, max_vars);
@@ -1151,7 +1242,7 @@ mod tests {
         let mut pt = Blake2bTranscript::new(b"akita-test");
         pt.append_serializable(&batch);
         let proof = AkitaScheme::prove_rlc(&setup, &map, &coeffs, hints, &r, &mut pt);
-        assert_eq!(proof.classes.len(), 3);
+        assert_eq!(proof.classes.len(), 4);
 
         let mut vt = Blake2bTranscript::new(b"akita-test");
         vt.append_serializable(&batch);

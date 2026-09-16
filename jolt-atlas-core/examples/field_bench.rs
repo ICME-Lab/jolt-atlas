@@ -4,7 +4,7 @@
 //! production reference.
 //!
 //! ```bash
-//! cargo run --release -p jolt-atlas-core --example field_bench -- [nanoGPT|gpt2] [runs] [config filter]
+//! cargo run --release -p jolt-atlas-core --example field_bench -- [nanoGPT|gpt2|qwen] [runs] [config filter]
 //! ```
 
 use atlas_onnx_tracer::{
@@ -13,7 +13,7 @@ use atlas_onnx_tracer::{
 };
 use jolt_atlas_core::onnx_proof::{
     AkitaScheme, AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
-    Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
+    Blake2bTranscript, Bn254, DoryScheme, Fr, HyperKZG, ONNXProof,
 };
 use joltworks::{
     field::{fp128::Fp128, JoltField},
@@ -56,6 +56,41 @@ fn gpt2() -> (Model, Vec<Tensor<i32>>) {
     (model, inputs)
 }
 
+/// Qwen: tokenizes the default prompt of the `qwen` example. Requires
+/// `common::consts::MODEL_SCALE == 14` and the model download.
+fn qwen() -> (Model, Vec<Tensor<i32>>) {
+    assert_eq!(
+        common::consts::MODEL_SCALE,
+        14,
+        "Qwen needs MODEL_SCALE == 14"
+    );
+    let tokenizer =
+        tokenizers::Tokenizer::from_file("atlas-onnx-tracer/models/qwen/tokenizer.json")
+            .expect("run scripts/download_qwen.py first");
+    let token_ids = tokenizer
+        .encode("The quick brown fox jumps over the lazy dog", false)
+        .expect("tokenization failed")
+        .get_ids()
+        .to_vec();
+    let seq_len = token_ids.len();
+    let run_args = RunArgs::new([
+        ("batch_size", 1),
+        ("sequence_length", seq_len),
+        ("past_sequence_length", 0),
+    ]);
+    let scale = run_args.scale;
+    let model = Model::load("atlas-onnx-tracer/models/qwen/network.onnx", &run_args);
+    let input_ids: Vec<i32> = token_ids.iter().map(|&id| id as i32).collect();
+    let position_ids: Vec<i32> = (0..seq_len as i32).map(|i| i << scale).collect();
+    let attention_mask: Vec<i32> = vec![1 << scale; seq_len];
+    let inputs = vec![
+        Tensor::new(Some(&input_ids), &[1, seq_len]).unwrap(),
+        Tensor::new(Some(&position_ids), &[1, seq_len]).unwrap(),
+        Tensor::new(Some(&attention_mask), &[1, seq_len]).unwrap(),
+    ];
+    (model, inputs)
+}
+
 struct Timing {
     prove: Duration,
     verify: Duration,
@@ -73,9 +108,12 @@ fn run<F: JoltField, PCS: CommitmentScheme<Field = F>>(
     let (proof, io, _) =
         ONNXProof::<F, Blake2bTranscript, PCS>::prove(&prover_preprocessing, inputs);
     let prove = t.elapsed();
+    println!("  prove took {prove:.3?}");
     let verifier_preprocessing = AtlasVerifierPreprocessing::<F, PCS>::from(&prover_preprocessing);
     let t = Instant::now();
-    proof.verify(&verifier_preprocessing, &io, None).unwrap();
+    if let Err(e) = proof.verify(&verifier_preprocessing, &io, None) {
+        println!("  VERIFICATION FAILED: {e:?}");
+    }
     let verify = t.elapsed();
     let mut bytes = Vec::new();
     ark_serialize::CanonicalSerialize::serialize_compressed(&proof, &mut bytes).unwrap();
@@ -94,7 +132,8 @@ fn main() {
     let (model, inputs) = match model_name.as_str() {
         "nanoGPT" => nano_gpt(),
         "gpt2" => gpt2(),
-        other => panic!("unknown model {other}; use nanoGPT or gpt2"),
+        "qwen" => qwen(),
+        other => panic!("unknown model {other}; use nanoGPT, gpt2, or qwen"),
     };
     println!(
         "model = {model_name}, max_num_vars = {}, runs = {runs}",
@@ -102,8 +141,9 @@ fn main() {
     );
     let shared = AtlasSharedPreprocessing::preprocess(model);
 
-    let configs: [(&str, RunFn); 4] = [
+    let configs: [(&str, RunFn); 5] = [
         ("BN254 + HyperKZG", run::<Fr, HyperKZG<Bn254>>),
+        ("BN254 + Dory", run::<Fr, DoryScheme>),
         ("BN254 + Mock", run::<Fr, MockCommitScheme<Fr>>),
         ("Fp128 + Mock", run::<Fp128, MockCommitScheme<Fp128>>),
         ("Fp128 + Akita", run::<Fp128, AkitaScheme>),

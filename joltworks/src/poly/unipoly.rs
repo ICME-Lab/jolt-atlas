@@ -230,17 +230,11 @@ impl<F: JoltField> UniPoly<F> {
         C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
-        let mut eval = coeffs[0];
-        let mut power = (*r).into();
-        for i in 1..coeffs.len() {
-            eval += power * coeffs[i];
-
-            #[allow(clippy::assign_op_pattern)]
-            {
-                power = power * *r;
-            }
-        }
-        eval
+        let (&leading, remaining) = coeffs.split_last().expect("empty polynomial");
+        remaining
+            .iter()
+            .rev()
+            .fold(leading, |value, coefficient| value * *r + coefficient)
     }
 
     #[tracing::instrument(skip_all, name = "UniPoly::eval_as_univariate")]
@@ -523,13 +517,13 @@ impl<F: JoltField> CompressedUniPoly<F> {
             linear_term -= self.coeffs_except_linear_term[i];
         }
 
-        let mut running_point: F = (*x).into();
-        let mut running_sum = self.coeffs_except_linear_term[0] + *x * linear_term;
-        for i in 1..self.coeffs_except_linear_term.len() {
-            running_point = running_point * x;
-            running_sum += self.coeffs_except_linear_term[i] * running_point;
-        }
-        running_sum
+        // Horner evaluation keeps every multiplication against the challenge,
+        // avoiding both its powers and full field products with those powers.
+        let higher_terms = self.coeffs_except_linear_term[1..]
+            .iter()
+            .rev()
+            .fold(F::zero(), |value, coefficient| (value + coefficient) * x);
+        (higher_terms + linear_term) * x + self.coeffs_except_linear_term[0]
     }
 
     pub fn degree(&self) -> usize {
@@ -599,6 +593,47 @@ mod tests {
     use num::Zero;
     use rand_chacha::ChaCha20Rng;
     use rand_core::SeedableRng;
+
+    #[test]
+    fn horner_evaluation_matches_power_basis() {
+        type Challenge = <Fr as JoltField>::Challenge;
+        let mut rng = ChaCha20Rng::from_seed([19; 32]);
+        for length in [1, 2, 3, 4, 8, 17, 64] {
+            for leading_zero in [false, true] {
+                let mut coeffs: Vec<Fr> = (0..length).map(|_| Fr::random(&mut rng)).collect();
+                if leading_zero {
+                    *coeffs.last_mut().unwrap() = Fr::from(0u64);
+                }
+                for raw in [0, 1, 2, u128::MAX, rng.next_u64() as u128] {
+                    let challenge = Challenge::from(raw);
+                    let point: Fr = challenge.into();
+                    let mut power = Fr::from(1u64);
+                    let mut expected = Fr::from(0u64);
+                    for coefficient in &coeffs {
+                        expected += *coefficient * power;
+                        power *= point;
+                    }
+                    assert_eq!(UniPoly::eval_with_coeffs(&coeffs, &challenge), expected);
+                    assert_eq!(UniPoly::eval_with_coeffs(&coeffs, &point), expected);
+
+                    // An arbitrary hint also tests reconstruction of a nonzero
+                    // omitted linear term when only a constant is transmitted.
+                    let compressed = CompressedUniPoly {
+                        coeffs_except_linear_term: coeffs.clone(),
+                    };
+                    let hint = Fr::random(&mut rng);
+                    let decompressed = compressed.decompress(&hint);
+                    let mut power = Fr::from(1u64);
+                    let mut expected = Fr::from(0u64);
+                    for coefficient in &decompressed.coeffs {
+                        expected += *coefficient * power;
+                        power *= point;
+                    }
+                    assert_eq!(compressed.eval_from_hint(&hint, &challenge), expected);
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_from_evals_toom() {

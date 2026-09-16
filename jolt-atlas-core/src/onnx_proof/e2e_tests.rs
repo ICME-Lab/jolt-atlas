@@ -1886,3 +1886,34 @@ fn bench_square_zk_overhead() {
     println!("Prove:  standard={standard_prove:?}  zk={zk_prove:?}  overhead={prove_overhead:.2}x  delta={:?}", zk_prove.saturating_sub(standard_prove));
     println!("Verify: standard={standard_verify:?}  zk={zk_verify:?}  overhead={verify_overhead:.2}x  delta={:?}", zk_verify.saturating_sub(standard_verify));
 }
+
+#[test]
+fn test_imported_reshape_preserves_padding_layout() {
+    for (name, dims, output_dims) in [
+        ("merge", vec![2, 3, 4], vec![6, 4]),
+        ("split", vec![6, 4], vec![2, 3, 4]),
+        ("unequal", vec![3, 3], vec![9]),
+    ] {
+        let path = format!(
+            "{}/../atlas-onnx-tracer/tests/fixtures/reshape-{name}.onnx",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let model = Model::load(&path, &RunArgs::default());
+        let shared = AtlasSharedPreprocessing::preprocess(model);
+        let pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(shared);
+        let vp = AtlasVerifierPreprocessing::from(&pp);
+        let values: Vec<i32> = (0..dims.iter().product::<usize>())
+            .map(|i| i as i32 - 9)
+            .collect();
+        let input = Tensor::new(Some(&values), &dims).unwrap();
+        let (proof, io, _) =
+            ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&pp, &[input]);
+        let mut expected = Tensor::new(Some(&values), &output_dims).unwrap();
+        expected.pad_next_power_of_two();
+        assert_eq!(io.outputs[0], expected);
+        proof.verify(&vp, &io, None).unwrap();
+        let mut wrong = io;
+        wrong.outputs[0].inner[0] += 1;
+        assert!(proof.verify(&vp, &wrong, None).is_err());
+    }
+}

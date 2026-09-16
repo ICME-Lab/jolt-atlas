@@ -411,7 +411,7 @@ impl Model {
     ) -> OriginalF64Constants {
         use tract_onnx::tract_hir::ops::konst::Const;
 
-        let (typed_model, _symbol_values) = Self::load_onnx_using_tract(path, run_args);
+        let (typed_model, symbol_values) = Self::load_onnx_using_tract(path, run_args);
 
         // Collect Tract Const tensors in graph node order → our Tensor<f64>
         let mut tract_f64_consts: Vec<Tensor<f64>> = Vec::new();
@@ -425,14 +425,24 @@ impl Model {
             }
         }
 
-        // Collect decomposed Constant node indices in graph order
-        let const_node_indices: Vec<usize> = self
-            .graph
-            .nodes
+        // Recover the original constant identities before padding adds gather
+        // indices and masks. Those generated constants have exact integer values.
+        let (mut nodes, mapper) = Self::nodes_from_graph(&typed_model, run_args, &symbol_values);
+        let mut inputs = Self::collect_input_nodes(&nodes);
+        let mut outputs = Self::collect_outputs(&typed_model, &mapper);
+        Self::prune_unused_nodes(&mut nodes, &mut inputs, &mut outputs);
+        let mapping = if run_args.pad_to_power_of_2 {
+            let plans = super::reshape_padding::plans(&nodes);
+            super::reshape_padding::remapping(&nodes, &plans)
+        } else {
+            nodes.keys().map(|&i| (i, i)).collect()
+        };
+        let const_node_indices: Vec<usize> = nodes
             .iter()
             .filter(|(_, n)| matches!(n.operator, Operator::Constant(_)))
-            .map(|(&idx, _)| idx)
+            .map(|(&idx, _)| mapping[&idx])
             .collect();
+        drop(nodes);
 
         assert_eq!(
             tract_f64_consts.len(),
@@ -442,7 +452,23 @@ impl Model {
             const_node_indices.len(),
         ); // TODO: Account for removed constants from Pow operators (square, cube)
 
-        let mut map = BTreeMap::new();
+        let original_indices: std::collections::BTreeSet<_> =
+            const_node_indices.iter().copied().collect();
+        let mut map: BTreeMap<usize, Tensor<f64>> = self
+            .graph
+            .nodes
+            .iter()
+            .filter_map(|(&idx, node)| {
+                if original_indices.contains(&idx) {
+                    return None;
+                }
+                if let Operator::Constant(c) = &node.operator {
+                    Some((idx, c.0.map(|v| v as f64)))
+                } else {
+                    None
+                }
+            })
+            .collect();
         for (tract_const, &graph_idx) in tract_f64_consts.into_iter().zip(const_node_indices.iter())
         {
             // The decomposed constant may be padded to power-of-2 dims.

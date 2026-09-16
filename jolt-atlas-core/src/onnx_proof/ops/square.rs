@@ -166,7 +166,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SquareProver<
             operand,
             ..
         } = self;
-        let [q_constant, q_quadratic] = eq_r_node_output.par_fold_out_in_unreduced::<9, 2>(&|g| {
+        let [q_constant, q_quadratic] = eq_r_node_output.par_fold_out_in_unreduced::<2>(&|g| {
             let o0 = operand.get_bound_coeff(2 * g);
             let o_inf = operand.get_bound_coeff(2 * g + 1) - o0;
 

@@ -207,7 +207,7 @@ impl<F: JoltField> RecipMultProver<F> {
         //
         // q is linear in X, so we only need c0 = q(0):
         //   c0 = exp_q(k, 0) · inv_sum(k)
-        let [q_constant] = eq.par_fold_out_in_unreduced::<9, 1>(&|kj| {
+        let [q_constant] = eq.par_fold_out_in_unreduced::<1>(&|kj| {
             let exp_q_0 = exp_q.get_bound_coeff(2 * kj);
             let k = kj >> (self.params.log_N() - m);
             let is_0 = inv_sum.get_bound_coeff(k);
@@ -230,7 +230,7 @@ impl<F: JoltField> RecipMultProver<F> {
         // q is quadratic in X (product of two linear-in-X polynomials). Compute:
         //   c0 = q(0) = exp_q(0) · inv_sum(0)
         //   e  = leading coeff of q(X) = exp_q_∞ · inv_sum_∞
-        let [q_constant, q_quadratic] = eq.par_fold_out_in_unreduced::<9, 2>(&|g| {
+        let [q_constant, q_quadratic] = eq.par_fold_out_in_unreduced::<2>(&|g| {
             let exp_q_0 = exp_q.get_bound_coeff(2 * g);
             let exp_q_inf = exp_q.get_bound_coeff(2 * g + 1) - exp_q_0;
 

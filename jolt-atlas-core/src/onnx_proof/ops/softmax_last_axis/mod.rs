@@ -49,7 +49,7 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
     ops::{
         softmax::{
-            generate_exp_lut_decomposed, softmax_last_axis_decomposed, softmax_z,
+            exp_lut_sizes, generate_exp_lut_decomposed, softmax_last_axis_decomposed, softmax_z,
             SoftmaxLastAxisTrace,
         },
         SoftmaxLastAxis,
@@ -126,11 +126,16 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );
+        let lut = verifier
+            .softmax_tables
+            .entry(scale)
+            .or_insert_with(|| VerifierLookupTableData::new(scale));
         let (stage3, onehots) = sm.verify(
             &mut verifier.accumulator,
             &mut verifier.transcript,
             verifier.proofs,
             scale_bits,
+            lut,
         )?;
         for instance in stage3 {
             verifier.defer(DeferredBatch::SoftmaxStage3, instance);
@@ -141,9 +146,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
         let log_scale = self.scale as usize;
-        let decomp = generate_exp_lut_decomposed(scale_to_multiplier(self.scale) as i32);
-        let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
-        let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
+        let (hi_size, lo_size) = exp_lut_sizes(scale_to_multiplier(self.scale) as i32);
+        let log_hi = hi_size.next_power_of_two().log_2();
+        let log_lo = lo_size.log_2();
         let idx = node.idx;
 
         let mut polys = vec![];
@@ -315,6 +320,7 @@ impl SoftmaxLastAxisVerifier {
         transcript: &mut T,
         proofs: &BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
         scale_bits: i32,
+        lut: &VerifierLookupTableData,
     ) -> Result<
         (
             Vec<Box<dyn SumcheckInstanceVerifier<F, T>>>,
@@ -332,8 +338,6 @@ impl SoftmaxLastAxisVerifier {
             transcript,
         )?;
 
-        let lut = VerifierLookupTableData::new(self.scale);
-
         self.cache_r_exp(accumulator, transcript);
         self.run_stage(
             ProofType::SoftmaxStage2,
@@ -347,7 +351,7 @@ impl SoftmaxLastAxisVerifier {
 
         // Stage 3 / 4 are deferred (see the prover); their verifiers are
         // built here and handed back to the caller via `deferred`.
-        let stage3 = self.build_stage3_verifiers(accumulator, transcript, &lut);
+        let stage3 = self.build_stage3_verifiers(accumulator, transcript, lut);
         // The operand link only needs claims appended during construction.
         self.operand_link(accumulator)?;
         let onehots = vec![
@@ -1243,6 +1247,18 @@ mod tests {
         let input = Tensor::new(Some(&data), &input_shape).unwrap();
         let model = softmax_last_axis_model(&input_shape, scale);
         unit_test_op(model, &[input]);
+    }
+
+    #[test]
+    fn test_repeated_softmax() {
+        let mut builder = ModelBuilder::with_scale(common::consts::MODEL_SCALE as u32);
+        let input = builder.input(vec![2, 8]);
+        let first = builder.softmax_last_axis(input);
+        let second = builder.softmax_last_axis(first);
+        builder.mark_output(second);
+        let values: Vec<i32> = (0..16).map(|i| i * 100).collect();
+        let input = Tensor::new(Some(&values), &[2, 8]).unwrap();
+        unit_test_op(builder.build(), &[input]);
     }
 
     #[test]

@@ -255,6 +255,35 @@ impl Transcript for Blake2bTranscript {
     }
 }
 
+/// Upstream Jolt's transcript vocabulary implemented directly over this
+/// transcript, so the Akita (lattice PCS) adapter drives the very same
+/// Fiat-Shamir state as the rest of the Atlas proof. Challenges are the
+/// 128-bit Solinas field elements the Akita protocol works over.
+///
+/// Both traits define `new`, `append_bytes`, and `challenge_*` methods;
+/// callers must name the trait when both are in scope.
+impl jolt_transcript::Transcript for Blake2bTranscript {
+    type Challenge = crate::field::fp128::Inner;
+
+    fn new(label: &'static [u8]) -> Self {
+        <Self as Transcript>::new(label)
+    }
+
+    fn append_bytes(&mut self, bytes: &[u8]) {
+        <Self as Transcript>::append_bytes(self, bytes)
+    }
+
+    fn challenge(&mut self) -> Self::Challenge {
+        let mut buf = [0u8; 16];
+        self.challenge_bytes(&mut buf);
+        <Self::Challenge as jolt_field::CanonicalEncoding>::from_bytes_le_reduced(&buf)
+    }
+
+    fn state(&self) -> [u8; 32] {
+        self.state
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,0 +1,50 @@
+# Vendored from https://github.com/a16z/jolt crates/jolt-field at rev
+# 0e3faf07f7ebb4a074e0ad58bcea29fc1dda521b (2026-09-15), with workspace
+# dependency inheritance and the bench/test/fuzz targets removed.
+#
+# It is vendored (rather than a git dependency) so that jolt-akita (which
+# uses jolt-field by path inside the a16z/jolt checkout) and the LayerZero
+# akita crates (which pin jolt-field by git rev) resolve to ONE package: the
+# root Cargo.toml patches `https://github.com/a16z/jolt` → this path, exactly
+# as upstream's own workspace does.
+[package]
+name = "jolt-field"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Shared field abstractions with BN254 and Solinas backends"
+repository = "https://github.com/a16z/jolt"
+
+[package.metadata.cargo-machete]
+ignored = ["cc", "allocative"]
+
+[dependencies]
+ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false, optional = true }
+ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false, features = ["derive"], optional = true }
+ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false, features = ["curve"], optional = true }
+num-traits = { version = "0.2.19", default-features = false }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+allocative = { version = "=0.3.6", optional = true }
+rand_core = { version = "0.6.4", default-features = false }
+rayon = { version = "1.10", optional = true }
+thiserror = "2.0"
+
+[features]
+default = ["bn254"]
+bn254 = ["dep:ark-ff", "dep:ark-serialize", "dep:ark-bn254"]
+solinas = []
+asm = []
+fuzzing = ["asm"]
+parallel = ["dep:rayon"]
+allocative = ["dep:allocative"]
+fp128-proof-linkage = ["asm"]
+
+[dev-dependencies]
+allocative = "=0.3.6"
+bincode = { version = "2", features = ["serde"] }
+num-bigint = { version = "0.4.6", default-features = false }
+rand = "0.8.5"
+rand_chacha = "0.3.0"
+
+[build-dependencies]
+cc = "1.2"

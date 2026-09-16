@@ -27,7 +27,14 @@ ark-std.workspace = true
 sha3 = "0.10.8"
 blake2 = "0.10"
 jolt-optimizations = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
-jolt-field = { git = "https://github.com/a16z/jolt", rev = "0e3faf07f7ebb4a074e0ad58bcea29fc1dda521b", default-features = false, features = ["solinas", "asm"] }
+jolt-field = { path = "../third_party/jolt-field", default-features = false, features = ["solinas", "asm"] }
+# Upstream Jolt's Akita (lattice PCS) adapter and the crates it exposes at its seams.
+jolt-akita = { git = "https://github.com/a16z/jolt", rev = "0e3faf07f7ebb4a074e0ad58bcea29fc1dda521b" }
+jolt-openings = { git = "https://github.com/a16z/jolt", rev = "0e3faf07f7ebb4a074e0ad58bcea29fc1dda521b" }
+jolt-poly = { git = "https://github.com/a16z/jolt", rev = "0e3faf07f7ebb4a074e0ad58bcea29fc1dda521b" }
+jolt-transcript = { git = "https://github.com/a16z/jolt", rev = "0e3faf07f7ebb4a074e0ad58bcea29fc1dda521b" }
+jolt-crypto = { git = "https://github.com/a16z/jolt", rev = "0e3faf07f7ebb4a074e0ad58bcea29fc1dda521b" }
+bincode.workspace = true
 dory = { package = "dory-pcs", version = "0.4.0", features = [
     "backends",
     "cache",

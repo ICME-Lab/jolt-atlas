@@ -9,7 +9,8 @@ use atlas_onnx_tracer::{
 };
 use common::consts::MODEL_SCALE;
 use joltworks::{
-    poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG},
+    field::fp128::Fp128,
+    poly::commitment::{akita::AkitaScheme, dory::DoryScheme, hyperkzg::HyperKZG},
     transcripts::Blake2bTranscript,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -108,6 +109,53 @@ fn prove_and_verify(
     }
 
     io
+}
+
+/// Prove and verify over the 128-bit Solinas field with the Akita lattice PCS,
+/// including a serialization roundtrip of the proof.
+fn prove_and_verify_akita(model_dir: &str, inputs: &[Tensor<i32>], run_args: &RunArgs) {
+    let model = Model::load(&format!("{model_dir}network.onnx"), run_args);
+    let pp = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<Fp128, AkitaScheme>::new(pp);
+    let timing = Instant::now();
+    let (proof, io, _) =
+        ONNXProof::<Fp128, Blake2bTranscript, AkitaScheme>::prove(&prover_pp, inputs);
+    println!("[akita] proof generation took {:?}", timing.elapsed());
+    let bytes = serialize_proof(&proof).expect("proof serialization failed");
+    println!("[akita] proof size: {} bytes", bytes.len());
+    let proof: ONNXProof<Fp128, Blake2bTranscript, AkitaScheme> =
+        crate::onnx_proof::proof_serialization::deserialize_proof(&bytes)
+            .expect("proof deserialization failed");
+    let verifier_pp = AtlasVerifierPreprocessing::<Fp128, AkitaScheme>::from(&prover_pp);
+    let timing = Instant::now();
+    proof
+        .verify(&verifier_pp, &io, None)
+        .expect("akita verification should succeed");
+    println!("[akita] verification took {:?}", timing.elapsed());
+}
+
+#[test]
+fn test_perceptron_akita() {
+    let input = Tensor::construct(vec![1, 2, 3, 4], vec![1, 4]);
+    prove_and_verify_akita(
+        "../atlas-onnx-tracer/models/perceptron/",
+        &[input],
+        &Default::default(),
+    );
+}
+
+#[test]
+fn test_nanoGPT_akita() {
+    let mut rng = StdRng::seed_from_u64(0x1096);
+    let input_data: Vec<i32> = (0..64)
+        .map(|_| (1 << 5) + rng.gen_range(-20..=20))
+        .collect();
+    let input = Tensor::new(Some(&input_data), &[1, 64]).unwrap();
+    prove_and_verify_akita(
+        "../atlas-onnx-tracer/models/nanoGPT/",
+        &[input],
+        &Default::default(),
+    );
 }
 
 #[ignore = "requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)"]

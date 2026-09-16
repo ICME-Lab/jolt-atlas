@@ -12,7 +12,7 @@ use atlas_onnx_tracer::{
     tensor::Tensor,
 };
 use jolt_atlas_core::onnx_proof::{
-    AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
+    AkitaScheme, AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
 };
 use joltworks::{
@@ -101,10 +101,11 @@ fn main() {
     );
     let shared = AtlasSharedPreprocessing::preprocess(model);
 
-    let configs: [(&str, RunFn); 3] = [
+    let configs: [(&str, RunFn); 4] = [
         ("BN254 + HyperKZG", run::<Fr, HyperKZG<Bn254>>),
         ("BN254 + Mock", run::<Fr, MockCommitScheme<Fr>>),
         ("Fp128 + Mock", run::<Fp128, MockCommitScheme<Fp128>>),
+        ("Fp128 + Akita", run::<Fp128, AkitaScheme>),
     ];
     println!(
         "{:<18} {:>4} {:>12} {:>12} {:>12}",

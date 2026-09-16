@@ -332,6 +332,7 @@ mod tests {
         let partial_proof = ONNXProof::<_, _, HyperKZG<Bn254>> {
             opening_claims,
             proofs,
+            batch_commitment: Default::default(),
             commitments: vec![],
             eval_reduction_proofs,
             reduced_opening_proof: None,

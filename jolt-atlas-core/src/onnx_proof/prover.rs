@@ -16,7 +16,7 @@ use atlas_onnx_tracer::{
     },
     node::ComputationNode,
 };
-use common::{parallel::ParallelFlagGuard, CommittedPoly, VirtualPoly};
+use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
     poly::{
@@ -25,15 +25,21 @@ use joltworks::{
         opening_proof::{OpeningId, ProverOpeningAccumulator, SumcheckId},
     },
     subprotocols::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof},
-    transcripts::Transcript,
+    transcripts::{AppendToTranscript, Transcript},
     utils::math::Math,
 };
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
 // Prover state
 // ---------------------------------------------------------------------------
+
+/// Commitments to a proof's witness polynomials: the scheme's batch-level
+/// commitment plus one commitment per polynomial (in `poly_map` order).
+pub struct WitnessCommitments<PCS: CommitmentScheme> {
+    pub batch: PCS::BatchCommitment,
+    pub polys: Vec<PCS::Commitment>,
+}
 
 /// Prover state that owns all data needed during proving.
 /// Created once before the proving loop and passed to operator handlers.
@@ -105,15 +111,20 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         transcript: &mut T,
     ) -> (
         BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
-        Vec<PCS::Commitment>,
+        WitnessCommitments<PCS>,
         Vec<PCS::OpeningProofHint>,
     ) {
         let poly_map = Self::polynomial_map(model, trace);
-        let (commitments, hints) = Self::commit_to_polynomials_with_hints(&poly_map, generators);
-        for commitment in &commitments {
+        let polys: Vec<&MultilinearPolynomial<F>> = poly_map.values().collect();
+        let (batch, per_poly) = PCS::batch_commit_all(&polys, generators);
+        let (polys, hints): (Vec<_>, Vec<_>) = per_poly.into_iter().unzip();
+        // The batch commitment (empty for homomorphic schemes) is bound before
+        // the per-polynomial commitments it may be referenced from.
+        batch.append_to_transcript(transcript);
+        for commitment in &polys {
             transcript.append_serializable(commitment);
         }
-        (poly_map, commitments, hints)
+        (poly_map, WitnessCommitments { batch, polys }, hints)
     }
 
     pub(crate) fn output_claim(prover: &mut Prover<F, T>) {
@@ -233,7 +244,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     pub(super) fn finalize_proof(
         mut prover: Prover<F, T>,
         io: ModelExecutionIO,
-        commitments: Vec<PCS::Commitment>,
+        commitments: WitnessCommitments<PCS>,
         proofs: BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
         eval_reduction_proofs: BTreeMap<usize, EvalReductionProof<F>>,
         reduced_opening_proof: Option<ReducedOpeningProof<F, T, PCS>>,
@@ -250,7 +261,8 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             Self {
                 proofs,
                 opening_claims: Claims(opening_claims),
-                commitments,
+                batch_commitment: commitments.batch,
+                commitments: commitments.polys,
                 eval_reduction_proofs,
                 reduced_opening_proof,
             },
@@ -308,14 +320,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         poly_map: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
         pcs: &PCS::ProverSetup,
     ) -> (Vec<PCS::Commitment>, Vec<PCS::OpeningProofHint>) {
-        // Rayon jobs were overly fragmented, and the resulting context switching degraded performance,
-        // so the parallelism granularity is now limited to the polynomial level.
-        let _guard = ParallelFlagGuard::disabled();
-        poly_map
-            .values()
-            .collect::<Vec<_>>()
-            .par_iter()
-            .map(|poly| PCS::commit(poly, pcs))
-            .unzip()
+        let polys: Vec<&MultilinearPolynomial<F>> = poly_map.values().collect();
+        PCS::batch_commit_all(&polys, pcs).1.into_iter().unzip()
     }
 }

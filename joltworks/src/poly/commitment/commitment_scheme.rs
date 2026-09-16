@@ -8,6 +8,16 @@ use crate::{
     utils::{errors::ProofVerifyError, small_scalar::SmallScalar},
 };
 
+/// Result of committing a whole batch: the scheme-level batch commitment and
+/// one `(commitment, hint)` per polynomial in input order.
+pub type BatchCommitOutput<PCS> = (
+    <PCS as CommitmentScheme>::BatchCommitment,
+    Vec<(
+        <PCS as CommitmentScheme>::Commitment,
+        <PCS as CommitmentScheme>::OpeningProofHint,
+    )>,
+);
+
 pub trait CommitmentScheme: Clone + Sync + Send + 'static {
     type Field: JoltField + Sized;
     type ProverSetup: Clone + Sync + Send + Debug + CanonicalSerialize + CanonicalDeserialize;
@@ -27,6 +37,18 @@ pub trait CommitmentScheme: Clone + Sync + Send + 'static {
     /// the commitment computation, e.g. for Dory the Pedersen commitments to the rows can be
     /// used as a hint for the opening proof.
     type OpeningProofHint: Sync + Send + Clone + Debug + PartialEq;
+    /// Commitment-level data shared by a whole batch of committed polynomials
+    /// (e.g. Akita's per-arity packed group commitments). Homomorphic schemes
+    /// commit each polynomial independently and use `()`.
+    type BatchCommitment: Default
+        + Debug
+        + Sync
+        + Send
+        + PartialEq
+        + CanonicalSerialize
+        + CanonicalDeserialize
+        + AppendToTranscript
+        + Clone;
 
     /// Whether this PCS requires materialized (dense) polynomials for opening proofs.
     /// If true, use `build_materialized_rlc`; if false, use `build_streaming_rlc`.
@@ -67,6 +89,26 @@ pub trait CommitmentScheme: Clone + Sync + Send + 'static {
     ) -> Vec<(Self::Commitment, Self::OpeningProofHint)>
     where
         U: Borrow<MultilinearPolynomial<Self::Field>> + Sync;
+
+    /// Commits to every polynomial of a proof at once, returning the shared
+    /// batch commitment plus one `(commitment, hint)` per polynomial in input
+    /// order. The default commits each polynomial independently with
+    /// polynomial-level parallelism; schemes without an additive homomorphism
+    /// (Akita) override it to pack polynomials into group commitments.
+    fn batch_commit_all<U>(polys: &[U], gens: &Self::ProverSetup) -> BatchCommitOutput<Self>
+    where
+        U: Borrow<MultilinearPolynomial<Self::Field>> + Sync,
+    {
+        // Rayon jobs were overly fragmented, and the resulting context switching degraded
+        // performance, so the parallelism granularity is limited to the polynomial level.
+        let _guard = common::parallel::ParallelFlagGuard::disabled();
+        use rayon::prelude::*;
+        let per_poly = polys
+            .par_iter()
+            .map(|poly| Self::commit(poly.borrow(), gens))
+            .collect();
+        (Self::BatchCommitment::default(), per_poly)
+    }
 
     /// Homomorphically combines multiple commitments into a single commitment, computed as a
     /// linear combination with the given coefficients.
@@ -148,6 +190,32 @@ pub trait CommitmentScheme: Clone + Sync + Send + 'static {
         opening: &Self::Field,
         commitment: &Self::Commitment,
     ) -> Result<(), ProofVerifyError>;
+
+    /// Verifies the joint opening `Σ_i γ_i · f_i(r) = joint_claim` given the
+    /// per-polynomial commitments and coefficients (aligned). The default
+    /// homomorphically combines the commitments and verifies one opening;
+    /// non-homomorphic schemes override it.
+    #[allow(clippy::too_many_arguments)]
+    fn verify_rlc<ProofTranscript: Transcript>(
+        proof: &Self::Proof,
+        setup: &Self::VerifierSetup,
+        transcript: &mut ProofTranscript,
+        opening_point: &[<Self::Field as JoltField>::Challenge],
+        joint_claim: &Self::Field,
+        commitments: &[&Self::Commitment],
+        coeffs: &[Self::Field],
+        _batch_commitment: &Self::BatchCommitment,
+    ) -> Result<(), ProofVerifyError> {
+        let joint_commitment = Self::combine_commitments(commitments, coeffs);
+        Self::verify(
+            proof,
+            setup,
+            transcript,
+            opening_point,
+            joint_claim,
+            &joint_commitment,
+        )
+    }
 
     fn protocol_name() -> &'static [u8];
 }

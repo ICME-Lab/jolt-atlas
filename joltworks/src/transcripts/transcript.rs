@@ -3,7 +3,7 @@ use ark_ec::CurveGroup;
 use ark_serialize::CanonicalSerialize;
 use std::borrow::Borrow;
 
-pub trait Transcript: Default + Clone + Sync + Send + 'static {
+pub trait Transcript: Default + Clone + Sync + Send + std::any::Any + 'static {
     fn new(label: &'static [u8]) -> Self;
     #[cfg(any(test, feature = "test-feature"))]
     fn compare_to(&mut self, other: Self);
@@ -29,4 +29,10 @@ pub trait Transcript: Default + Clone + Sync + Send + 'static {
 
 pub trait AppendToTranscript {
     fn append_to_transcript<ProofTranscript: Transcript>(&self, transcript: &mut ProofTranscript);
+}
+
+/// The empty batch commitment: absorbs nothing.
+impl AppendToTranscript for () {
+    fn append_to_transcript<ProofTranscript: Transcript>(&self, _transcript: &mut ProofTranscript) {
+    }
 }

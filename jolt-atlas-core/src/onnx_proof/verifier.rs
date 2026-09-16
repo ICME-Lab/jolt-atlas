@@ -16,6 +16,7 @@ use joltworks::{
         opening_proof::{OpeningId, OpeningPoint, SumcheckId, VerifierOpeningAccumulator},
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
+    transcripts::AppendToTranscript,
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
@@ -101,6 +102,8 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                 .insert(*key, (OpeningPoint::default(), *claim));
         }
 
+        self.batch_commitment
+            .append_to_transcript(&mut verifier.transcript);
         for commitment in &self.commitments {
             verifier.transcript.append_serializable(commitment);
         }
@@ -222,14 +225,18 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                     })
                 })
                 .collect::<Result<_, _>>()?;
-            let joint_commitment = PCS::combine_commitments(&selected, &verifier_state.poly_coeffs);
-
-            verifier.accumulator.verify_joint_opening::<_, PCS>(
-                &pp.generators,
+            let joint_claim = verifier
+                .accumulator
+                .compute_joint_claim::<T>(&verifier_state);
+            PCS::verify_rlc(
                 &reduced_opening_proof.joint_opening_proof,
-                &joint_commitment,
-                &verifier_state,
+                &pp.generators,
                 &mut verifier.transcript,
+                &verifier_state.r_sumcheck,
+                &joint_claim,
+                &selected,
+                &verifier_state.poly_coeffs,
+                &self.batch_commitment,
             )?;
         } else if verifier.accumulator.sumchecks_keys().next().is_some() {
             // Some committed polynomial was opened: a joint opening is required.

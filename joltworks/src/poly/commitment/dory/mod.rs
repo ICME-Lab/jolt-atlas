@@ -201,6 +201,7 @@ impl CommitmentScheme for DoryScheme {
     type Proof = DoryProof;
     type BatchedProof = DoryProof;
     type OpeningProofHint = DoryHint;
+    type BatchCommitment = ();
 
     // Every polynomial is committed with the same (SRS-derived) column width, so
     // commitments of *different* arities combine additively — `Σ_i γ_i · C_i` is

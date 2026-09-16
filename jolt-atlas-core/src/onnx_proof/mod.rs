@@ -62,7 +62,8 @@ pub use verifier::Verifier;
 
 pub use ark_bn254::{Bn254, Fr};
 pub use joltworks::{
-    poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG},
+    field::fp128::Fp128,
+    poly::commitment::{akita::AkitaScheme, dory::DoryScheme, hyperkzg::HyperKZG},
     transcripts::Blake2bTranscript,
 };
 
@@ -136,6 +137,9 @@ pub struct ONNXProof<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = 
     pub opening_claims: Claims<F>,
     /// Map of proof IDs to sumcheck instance proofs.
     pub proofs: BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+    /// Scheme-level commitment shared by all witness polynomials (e.g. Akita's
+    /// packed class commitments); empty for homomorphic schemes.
+    pub batch_commitment: PCS::BatchCommitment,
     /// Polynomial commitments for witness polynomials.
     pub commitments: Vec<PCS::Commitment>,
     /// Evaluation reduction proofs h polynomials for each opening claim.

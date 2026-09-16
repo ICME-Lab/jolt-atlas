@@ -15,7 +15,13 @@ license-file = "LICENSE"
 keywords = ["SNARK", "cryptography", "proofs", "zkML"]
 
 [workspace]
-members = ["jolt-atlas-core", "atlas-onnx-tracer", "common", "joltworks"]
+members = [
+    "jolt-atlas-core",
+    "atlas-onnx-tracer",
+    "common",
+    "joltworks",
+    "third_party/jolt-field",
+]
 
 [workspace.dependencies]
 # Internal
@@ -29,7 +35,7 @@ ark-serialize = { version = "0.5.0", default-features = false, features = [
     "derive",
 ] }
 ark-std = { version = "0.5.0", default-features = false }
-allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
+allocative = "=0.3.6"
 
 # Numeric
 num = "0.4.3"
@@ -96,9 +102,14 @@ overflow-checks = true
 inherits = "release"
 debug = false
 
+# jolt-akita (git) uses jolt-field by path inside the a16z/jolt checkout and the
+# LayerZero akita crates pin it by git rev; redirect both to the single vendored
+# copy so there is exactly one `jolt-field` (and one Fp128 type) in the graph.
+[patch."https://github.com/a16z/jolt"]
+jolt-field = { path = "third_party/jolt-field" }
+
 [patch.crates-io]
 ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
 ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
 ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
-allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }

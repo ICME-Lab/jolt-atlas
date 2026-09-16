@@ -216,7 +216,9 @@ where
         // 2. Proofs (BTreeMap<ProofId, SumcheckInstanceProof>)
         serialize_btreemap(&self.proofs, &mut writer, compress)?;
 
-        // 3. Commitments
+        // 3. Commitments (batch-level, then per polynomial)
+        self.batch_commitment
+            .serialize_with_mode(&mut writer, compress)?;
         self.commitments
             .serialize_with_mode(&mut writer, compress)?;
 
@@ -233,6 +235,7 @@ where
     fn serialized_size(&self, compress: Compress) -> usize {
         self.opening_claims.serialized_size(compress)
             + serialized_size_btreemap(&self.proofs, compress)
+            + self.batch_commitment.serialized_size(compress)
             + self.commitments.serialized_size(compress)
             + serialized_size_btreemap(&self.eval_reduction_proofs, compress)
             + self.reduced_opening_proof.serialized_size(compress)
@@ -263,6 +266,8 @@ where
     ) -> Result<Self, SerializationError> {
         let opening_claims = Claims::deserialize_with_mode(&mut reader, compress, validate)?;
         let proofs = deserialize_btreemap(&mut reader, compress, validate)?;
+        let batch_commitment =
+            PCS::BatchCommitment::deserialize_with_mode(&mut reader, compress, validate)?;
         let commitments = Vec::deserialize_with_mode(&mut reader, compress, validate)?;
         let eval_reduction_proofs = deserialize_btreemap(&mut reader, compress, validate)?;
         let reduced_opening_proof = Option::deserialize_with_mode(&mut reader, compress, validate)?;
@@ -270,6 +275,7 @@ where
         Ok(Self {
             opening_claims,
             proofs,
+            batch_commitment,
             commitments,
             eval_reduction_proofs,
             reduced_opening_proof,

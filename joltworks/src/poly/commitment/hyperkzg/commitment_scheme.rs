@@ -29,6 +29,7 @@ impl CommitmentScheme for HyperKZG<ark_bn254::Bn254> {
     type Proof = HyperKZGProof<ark_bn254::Bn254>;
     type BatchedProof = HyperKZGProof<ark_bn254::Bn254>;
     type OpeningProofHint = ();
+    type BatchCommitment = ();
 
     const REQUIRES_MATERIALIZED_POLYS: bool = true;
 

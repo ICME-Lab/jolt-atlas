@@ -34,7 +34,22 @@ pub type Inner = Prime128OffsetA7F7;
 
 /// The 128-bit Solinas field, wrapped so it can implement `JoltField`.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
+#[repr(transparent)]
 pub struct Fp128(pub Inner);
+
+impl Fp128 {
+    /// Views a slice of wrapped elements as the upstream field type.
+    pub fn as_inner_slice(values: &[Self]) -> &[Inner] {
+        // SAFETY: `Fp128` is `#[repr(transparent)]` over `Inner`.
+        unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<Inner>(), values.len()) }
+    }
+
+    /// Views a slice of upstream field elements as wrapped elements.
+    pub fn from_inner_slice(values: &[Inner]) -> &[Self] {
+        // SAFETY: `Fp128` is `#[repr(transparent)]` over `Inner`.
+        unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<Self>(), values.len()) }
+    }
+}
 
 impl Allocative for Fp128 {
     fn visit<'a, 'b: 'a>(&self, _visitor: &'a mut allocative::Visitor<'b>) {}

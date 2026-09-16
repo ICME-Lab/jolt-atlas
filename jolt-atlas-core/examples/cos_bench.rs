@@ -34,7 +34,7 @@ fn run_once(
     let prove_start = Instant::now();
     let (proof, io, debug_info) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
         prover_preprocessing,
-        &[input.clone()],
+        std::slice::from_ref(input),
     );
     let prove_time = prove_start.elapsed();
 

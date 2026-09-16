@@ -431,10 +431,10 @@ mod gemm {
         let mut size: HashMap<char, usize> = HashMap::new();
         for (letters, t) in [(l, inputs[0]), (r, inputs[1])] {
             for (c, d) in letters.iter().zip(t.dims()) {
-                if let Some(&prev) = size.get(c) {
-                    if prev != *d {
-                        return Some(Err(TensorError::DimMismatch("einsum_gemm".into())));
-                    }
+                if let Some(&prev) = size.get(c)
+                    && prev != *d
+                {
+                    return Some(Err(TensorError::DimMismatch("einsum_gemm".into())));
                 }
                 size.insert(*c, *d);
             }

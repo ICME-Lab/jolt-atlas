@@ -182,7 +182,7 @@ impl BatchedSumcheck {
             // Cache individual claims for this round
             individual_claims
                 .iter_mut()
-                .zip(univariate_polys.into_iter())
+                .zip(univariate_polys)
                 .for_each(|(claim, poly)| *claim = poly.evaluate(&r_j));
 
             #[cfg(test)]

@@ -318,11 +318,11 @@ impl<'a, 'b> HandlerBuilder<'a, 'b> {
                     Stage::PipeOpWithDims { operator, .. } => Some(operator),
                     _ => None,
                 };
-                if let Some(op) = operator {
-                    if let Some(scale_mult) = op.inner().rebase_scale_factor() {
-                        let scale = self.hctx.run_args.scale;
-                        return Some(1_i32 << (scale * scale_mult as i32));
-                    }
+                if let Some(op) = operator
+                    && let Some(scale_mult) = op.inner().rebase_scale_factor()
+                {
+                    let scale = self.hctx.run_args.scale;
+                    return Some(1_i32 << (scale * scale_mult as i32));
                 }
             }
         }

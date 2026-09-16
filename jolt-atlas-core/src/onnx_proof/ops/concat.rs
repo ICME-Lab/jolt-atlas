@@ -203,15 +203,15 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ConcatSumcheckParams<F> {
             .iter()
             .enumerate()
             .map(|(input_idx, _)| {
-                let selector = build_concat_selector(
+                evaluate_concat_selector(
                     &self.input_raw_dims,
                     &self.output_raw_dims,
                     self.axis,
                     input_idx,
                     &self.r_output.r,
                     self.max_input_num_vars,
-                );
-                MultilinearPolynomial::from(selector).evaluate(&full_opening_point.r)
+                    &full_opening_point.r,
+                )
             })
             .collect()
     }
@@ -384,16 +384,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ConcatSumch
             |running, (input_idx, _input_raw_dims)| {
                 let input_claim = accessor.get_nodeio(Target::Input(input_idx)).1;
 
-                let selector = build_concat_selector(
+                let selector_claim = evaluate_concat_selector(
                     &self.params.input_raw_dims,
                     &self.params.output_raw_dims,
                     self.params.axis,
                     input_idx,
                     &self.params.r_output.r,
                     self.params.max_input_num_vars,
+                    &full_opening_point.r,
                 );
-                let selector_claim =
-                    MultilinearPolynomial::from(selector).evaluate(&full_opening_point.r);
                 running + input_claim * selector_claim
             },
         )
@@ -435,6 +434,74 @@ fn extend_input_to_max_domain<T: Copy>(
         }
     }
     extended
+}
+
+/// Evaluate an aligned concat block directly when its input and output shapes
+/// need no padding. Extra input-domain variables are fixed to zero, matching
+/// the sparse selector used with the repeated input polynomial.
+fn evaluate_concat_selector<F: JoltField>(
+    raw_input_dims: &[Vec<usize>],
+    output_raw_dims: &[usize],
+    axis: usize,
+    input_idx: usize,
+    r_output: &[F],
+    max_input_num_vars: usize,
+    r_input: &[F],
+) -> F {
+    assert!(axis < output_raw_dims.len());
+    validate_concat_shapes(
+        &raw_input_dims.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        output_raw_dims,
+        axis,
+    );
+    let input_dims = &raw_input_dims[input_idx];
+    let offset = axis_offset(raw_input_dims, input_idx, axis);
+    if input_dims
+        .iter()
+        .chain(output_raw_dims)
+        .all(|d| d.is_power_of_two())
+        && offset % input_dims[axis] == 0
+    {
+        let input_bits: usize = input_dims.iter().map(|d| d.log_2()).sum();
+        let output_bits: usize = output_raw_dims.iter().map(|d| d.log_2()).sum();
+        assert!(input_bits <= max_input_num_vars);
+        assert_eq!(r_input.len(), max_input_num_vars);
+        assert_eq!(r_output.len(), output_bits);
+        let before: usize = input_dims[..axis].iter().map(|d| d.log_2()).sum();
+        let fixed_bits = output_bits - input_bits;
+        let block = offset >> input_dims[axis].log_2();
+        let fixed_weight: F = r_output[before..before + fixed_bits]
+            .iter()
+            .enumerate()
+            .map(|(i, value)| {
+                if (block >> (fixed_bits - i - 1)) & 1 == 1 {
+                    *value
+                } else {
+                    F::one() - value
+                }
+            })
+            .product();
+        let extension_weight: F = r_input[input_bits..]
+            .iter()
+            .map(|value| F::one() - value)
+            .product();
+        return fixed_weight
+            * extension_weight
+            * EqPolynomial::mle(&r_output[..before], &r_input[..before])
+            * EqPolynomial::mle(
+                &r_output[before + fixed_bits..],
+                &r_input[before..input_bits],
+            );
+    }
+    let selector = build_concat_selector(
+        raw_input_dims,
+        output_raw_dims,
+        axis,
+        input_idx,
+        r_output,
+        max_input_num_vars,
+    );
+    MultilinearPolynomial::from(selector).evaluate(r_input)
 }
 
 fn build_concat_selector<F: JoltField>(
@@ -555,6 +622,88 @@ mod tests {
     }
 
     #[test]
+    fn selector_evaluation_matches_materialized_table() {
+        use super::{build_concat_selector, evaluate_concat_selector};
+        use ark_bn254::Fr;
+        use joltworks::{
+            field::JoltField,
+            poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+            utils::math::Math,
+        };
+        let mut rng = StdRng::seed_from_u64(0x434f4e434154);
+        let cases = [
+            (vec![vec![2, 4, 4], vec![2, 4, 4]], 1),
+            (vec![vec![2, 2], vec![2, 2], vec![2, 4]], 1),
+            (vec![vec![2, 2], vec![2, 4], vec![2, 2]], 1), // middle block unaligned
+            (vec![vec![2, 4], vec![2, 4]], 0),
+            (vec![vec![3, 2], vec![3, 2]], 1),
+            (vec![vec![2, 3], vec![2, 5]], 1),
+            (vec![vec![1]], 0),
+            (vec![vec![1], vec![1], vec![1], vec![1]], 0),
+        ];
+        for (inputs, axis) in cases {
+            let mut output = inputs[0].clone();
+            output[axis] = inputs.iter().map(|dims| dims[axis]).sum();
+            let variables = |dims: &[usize]| {
+                dims.iter()
+                    .map(|d| d.next_power_of_two().log_2())
+                    .sum::<usize>()
+            };
+            let max_vars = inputs.iter().map(|dims| variables(dims)).max().unwrap();
+            for boolean in [false, true] {
+                let output_point: Vec<Fr> = (0..variables(&output))
+                    .map(|i| {
+                        if boolean {
+                            Fr::from((i % 2) as u64)
+                        } else {
+                            Fr::random(&mut rng)
+                        }
+                    })
+                    .collect();
+                let input_point: Vec<Fr> = (0..max_vars)
+                    .map(|i| {
+                        if boolean {
+                            Fr::from((i % 3 == 0) as u64)
+                        } else {
+                            Fr::random(&mut rng)
+                        }
+                    })
+                    .collect();
+                for index in 0..inputs.len() {
+                    let table = build_concat_selector(
+                        &inputs,
+                        &output,
+                        axis,
+                        index,
+                        &output_point,
+                        max_vars,
+                    );
+                    let expected = MultilinearPolynomial::from(table).evaluate(&input_point);
+                    assert_eq!(
+                        evaluate_concat_selector(
+                            &inputs,
+                            &output,
+                            axis,
+                            index,
+                            &output_point,
+                            max_vars,
+                            &input_point
+                        ),
+                        expected
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn selector_rejects_wrong_point_dimension() {
+        use ark_bn254::Fr;
+        super::evaluate_concat_selector::<Fr>(&[vec![4], vec![4]], &[8], 0, 1, &[], 2, &[]);
+    }
+
+    #[test]
     fn test_concat_power_of_two_shapes() {
         let cases: Vec<(Vec<usize>, Vec<usize>, isize)> = vec![
             (vec![4, 2], vec![4, 2], 1),
@@ -595,6 +744,8 @@ mod tests {
     #[test]
     fn test_concat_multi_input_shapes() {
         let cases: Vec<(Vec<Vec<usize>>, isize)> = vec![
+            (vec![vec![2, 2], vec![2, 2], vec![2, 4]], 1),
+            (vec![vec![2, 2], vec![2, 4], vec![2, 2]], 1),
             (vec![vec![2, 3], vec![2, 1], vec![2, 4]], 1),
             (vec![vec![1, 2, 4], vec![3, 2, 4], vec![2, 2, 4]], 0),
             (

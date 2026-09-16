@@ -2,9 +2,11 @@
 
 pub mod dims;
 pub mod f32;
+#[cfg(feature = "onnx-import")]
 pub mod handler_builder;
 pub mod metrics;
 pub mod parallel_utils;
+#[cfg(feature = "onnx-import")]
 pub mod parser;
 #[cfg(test)]
 pub mod precision;

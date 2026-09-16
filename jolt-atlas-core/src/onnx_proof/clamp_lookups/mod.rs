@@ -30,6 +30,7 @@ use atlas_onnx_tracer::{
     tensor::Tensor,
 };
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
+use joltworks::par::prelude::*;
 use joltworks::{
     field::JoltField,
     lookup_tables::clamp::SaturationTable,
@@ -48,7 +49,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
-use rayon::prelude::*;
 
 /// Address width of the saturating-clamp lookup table.
 ///

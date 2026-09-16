@@ -1,3 +1,4 @@
+use crate::par::prelude::*;
 use crate::{
     field::{IntoOpening, JoltField},
     lookup_tables::{
@@ -31,7 +32,6 @@ use crate::{
 use ark_std::Zero;
 use common::{parallel::par_enabled, VirtualPoly};
 use itertools::Itertools;
-use rayon::prelude::*;
 use std::array;
 
 #[cfg(feature = "zk")]
@@ -338,7 +338,7 @@ where
         let mut read_checking = [F::zero(), F::zero()];
         let mut raf = [F::zero(), F::zero()];
 
-        rayon::join(
+        crate::par::join(
             || read_checking = self.prover_msg_read_checking(round),
             || raf = self.raf_state.prover_msg(self.params.gamma),
         );
@@ -494,7 +494,7 @@ where
         if round < LOG_K {
             let phase = round / log_m;
 
-            rayon::scope(|s| {
+            crate::par::scope(|s| {
                 s.spawn(|_| {
                     self.suffix_polys
                         .par_iter_mut()

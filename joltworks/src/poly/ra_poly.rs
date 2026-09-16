@@ -1,5 +1,5 @@
+use crate::par::prelude::*;
 use common::parallel::par_enabled;
-use rayon::prelude::*;
 use std::{fmt::Debug, iter::zip, mem, sync::Arc};
 
 use allocative::Allocative;

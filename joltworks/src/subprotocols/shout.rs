@@ -1,3 +1,4 @@
+use crate::par::prelude::*;
 use crate::{
     config::OneHotParams,
     field::{FieldChallengeOps, IntoOpening, JoltField},
@@ -21,7 +22,6 @@ use crate::{
 };
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
-use rayon::prelude::*;
 use std::array;
 
 use crate::{
@@ -559,7 +559,7 @@ where
     let eq_r_cycle = EqPolynomial::evals(r_cycle);
 
     let T = trace.len();
-    let num_chunks = rayon::current_num_threads().next_power_of_two().min(T);
+    let num_chunks = crate::par::current_num_threads().next_power_of_two().min(T);
     let chunk_size = (T / num_chunks).max(1);
 
     trace

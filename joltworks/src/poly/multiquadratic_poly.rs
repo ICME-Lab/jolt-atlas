@@ -1,6 +1,6 @@
+use crate::par::prelude::*;
 use allocative::Allocative;
 use common::parallel::par_enabled;
-use rayon::prelude::*;
 
 use crate::field::JoltField;
 use crate::poly::multilinear_polynomial::{BindingOrder, PolynomialBinding};

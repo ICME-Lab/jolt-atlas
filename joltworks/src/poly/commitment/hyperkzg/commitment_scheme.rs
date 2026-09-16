@@ -1,3 +1,4 @@
+use crate::par::prelude::*;
 use crate::{
     field::JoltField,
     poly::{
@@ -17,7 +18,6 @@ use ark_ec::CurveGroup;
 use common::parallel::par_enabled;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
-use rayon::prelude::*;
 use std::{borrow::Borrow, sync::Arc};
 
 impl CommitmentScheme for HyperKZG<ark_bn254::Bn254> {

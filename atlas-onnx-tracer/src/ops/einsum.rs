@@ -1,11 +1,11 @@
+use crate::utils::parallel_utils::*;
 use crate::{
     ops::{Einsum, Op},
     tensor::{Tensor, TensorError},
 };
 use common::parallel::par_enabled;
-use rayon::prelude::*;
+use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
-use tract_onnx::prelude::tract_itertools::Itertools;
 
 impl Op for Einsum {
     #[tracing::instrument(name = "Einsum::f", skip_all)]

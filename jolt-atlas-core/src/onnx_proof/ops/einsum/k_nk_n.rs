@@ -6,6 +6,7 @@ use crate::{
 };
 use atlas_onnx_tracer::tensor::Tensor;
 use common::parallel::par_enabled;
+use joltworks::par::prelude::*;
 use joltworks::{
     field::JoltField,
     poly::{
@@ -15,7 +16,6 @@ use joltworks::{
     },
     utils::math::Math,
 };
-use rayon::prelude::*;
 
 /// `k,nk->n`: contract the `k` axis of a vector with a matrix. The left operand
 /// is the raw vector (no folding); the right operand is folded over the output `n`.

@@ -1,6 +1,7 @@
 use common::parallel::par_enabled;
 use std::sync::Arc;
 
+use crate::par::prelude::*;
 use crate::{
     config::OneHotParams,
     field::{IntoOpening, JoltField},
@@ -23,7 +24,6 @@ use crate::{
     transcripts::Transcript,
 };
 use common::CommittedPoly;
-use rayon::prelude::*;
 
 #[cfg(feature = "zk")]
 use crate::subprotocols::blindfold::{

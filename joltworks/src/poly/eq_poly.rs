@@ -1,8 +1,8 @@
 use crate::field::JoltField;
+use crate::par::prelude::*;
 use crate::poly::opening_proof::{Endianness, OpeningPoint};
 use crate::utils::{math::Math, thread::unsafe_allocate_zero_vec};
 use common::parallel::par_enabled;
-use rayon::prelude::*;
 use std::{
     marker::PhantomData,
     ops::{Mul, Sub},

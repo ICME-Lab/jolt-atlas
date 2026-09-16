@@ -14,6 +14,24 @@ In JOLT Atlas, we eliminate the complexity that plagues other approaches: no quo
 
 Our core ethos is to reduce commitment costs via sumcheck while committing only to small-value polynomials.
 
+## Serial verification without ONNX import
+
+The default build includes parallel execution and ONNX import. Consumers that
+load an already serialized model can disable both features:
+
+```toml
+jolt-atlas-core = { path = "../jolt-atlas-core", default-features = false }
+atlas-onnx-tracer = { path = "../atlas-onnx-tracer", default-features = false }
+joltworks = { path = "../joltworks", default-features = false }
+```
+
+This configuration retains model execution, proving and complete verification.
+It uses sequential iterators and excludes Rayon and Tract from normal dependencies.
+The `parallel` feature enables Rayon and accelerated commitments. The
+`onnx-import` feature enables loading ONNX files and floating reference helpers.
+Disable default features on every direct Atlas dependency to avoid Cargo feature
+unification enabling them again.
+
 ## Examples
 
 Examples live in `jolt-atlas-core/examples/` and demonstrate end-to-end prove → verify flows for various ONNX models.

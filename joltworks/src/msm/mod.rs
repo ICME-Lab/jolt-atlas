@@ -1,6 +1,7 @@
 use common::parallel::par_enabled;
 use std::borrow::Borrow;
 
+use crate::par::prelude::*;
 use crate::{
     field::JoltField,
     poly::{multilinear_polynomial::MultilinearPolynomial, unipoly::UniPoly},
@@ -14,7 +15,6 @@ use ark_ec::{
     CurveGroup, ScalarMul,
 };
 use ark_ff::biginteger::{S128, S64};
-use rayon::prelude::*;
 
 // A very light wrapper around Ark5.0 VariableBaseMSM
 pub trait VariableBaseMSM: ArkVariableBaseMSM

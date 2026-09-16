@@ -4,6 +4,7 @@ use std::array;
 use crate::utils::opening_access::{AccOpeningAccessor, Target};
 use atlas_onnx_tracer::node::ComputationNode;
 use common::VirtualPoly;
+use joltworks::par::prelude::*;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -29,7 +30,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::{index_to_field_bitvector, math::Math, thread::drop_in_background_thread},
 };
-use rayon::prelude::*;
 
 const DEGREE_BOUND: usize = 3;
 

@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
+fixed-tables = []
+check-fixed-tables = ["fixed-tables"]
 zk = ["joltworks/zk"]
 
 [dependencies]

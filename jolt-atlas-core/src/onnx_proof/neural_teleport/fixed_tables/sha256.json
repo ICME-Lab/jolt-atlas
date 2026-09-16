@@ -1,0 +1,14 @@
+{
+  "cos14.bin": {
+    "bytes": 262144,
+    "sha256": "81d09501cb6cadae9ef481dcca02245a4454f5895859c59436dd63a3567433be"
+  },
+  "sigmoid14.bin": {
+    "bytes": 1048576,
+    "sha256": "8087a6ba7993bbf6dd9684052d27e4c9d145c6a50b86eb49934da7f1296c41ff"
+  },
+  "sin14.bin": {
+    "bytes": 262144,
+    "sha256": "f5246b8de21fe8dbe8ceac4cf92932ca66fcf5cea0414ec7ee3b167ad404fb04"
+  }
+}

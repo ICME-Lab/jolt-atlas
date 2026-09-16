@@ -107,6 +107,10 @@ mod tests {
     use super::*;
     use std::rc::Rc;
 
+    fn sum_indexed<I: IndexedParallelIterator<Item = i32>>(values: I) -> i32 {
+        values.sum()
+    }
+
     #[test]
     fn borrowed_and_owned_iteration_stays_on_the_calling_thread() {
         // Rc cannot cross threads, so these calls also check that the fallback
@@ -117,21 +121,16 @@ mod tests {
             [3, -5, 7]
         );
         assert_eq!(values.as_slice().par_iter().map(|v| **v).sum::<i32>(), 5);
-        assert_eq!(
-            values
-                .into_par_iter()
-                .with_min_len(1)
-                .map(|v| *v)
-                .sum::<i32>(),
-            5
-        );
+        let owned: vec::IntoIter<Rc<i32>> = values.into_par_iter();
+        assert_eq!(sum_indexed(owned.with_min_len(1).map(|v| *v)), 5);
     }
 
     #[test]
     fn mutable_iteration_and_sort_match_standard_iterators() {
         let mut values = vec![3, -5, 7, 0];
         values.par_iter_mut().for_each(|v| *v *= 2);
-        values.as_mut_slice().par_iter_mut().for_each(|v| *v += 1);
+        let borrowed: slice::IterMut<'_, i32> = values.as_mut_slice().par_iter_mut();
+        borrowed.for_each(|v| *v += 1);
         values.par_sort_unstable();
         assert_eq!(values, [-9, 1, 7, 15]);
     }

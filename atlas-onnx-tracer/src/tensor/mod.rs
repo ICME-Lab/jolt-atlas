@@ -1,6 +1,9 @@
 //! Multi-dimensional tensor representation and operations.
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(any(
+    all(target_arch = "wasm32", target_os = "unknown"),
+    target_arch = "riscv64"
+)))]
 use crate::utils::parallel_utils::IndexedParallelIterator;
 use crate::utils::{
     self,

@@ -1226,6 +1226,33 @@ mod tests {
     }
 
     #[test]
+    fn test_softmax_after_additive_attention_mask() {
+        use atlas_onnx_tracer::utils::quantize::quantize_float;
+        let scale = common::consts::MODEL_SCALE as i32;
+        let multiplier = 1 << scale;
+        let mask_value = quantize_float(f64::NEG_INFINITY, scale);
+        let mut b = ModelBuilder::with_scale(scale as u32);
+        let input = b.input(vec![2, 8]);
+        let masks: Vec<i32> = (0..16)
+            .map(|i| if i % 8 == 0 { 0 } else { mask_value })
+            .collect();
+        let mask = b.constant(Tensor::new(Some(&masks), &[2, 8]).unwrap());
+        let masked = b.add(input, mask);
+        let output = b.softmax_last_axis(masked);
+        b.mark_output(output);
+        let model = b.build();
+        let scores: Vec<i32> = (0..16)
+            .map(|i| if i % 8 == 0 { 0 } else { 20 * multiplier })
+            .collect();
+        let input = Tensor::new(Some(&scores), &[2, 8]).unwrap();
+        let expected: Vec<i32> = (0..16)
+            .map(|i| if i % 8 == 0 { multiplier } else { 0 })
+            .collect();
+        assert_eq!(model.forward(&[input.clone()])[0].inner, expected);
+        unit_test_op(model, &[input]);
+    }
+
+    #[test]
     fn test_softmax_model_scale() {
         run_softmax_scale_test(common::consts::MODEL_SCALE as u32);
     }
@@ -1238,11 +1265,10 @@ mod tests {
         //
         // Layout: 4 attention heads, 8×8 causal attention matrix each.
         // Upper-triangular entries (future tokens) use the causal-mask sentinel
-        // produced by quantize_float for -inf masks: -(11 << 12) = -45056
-        // (`mask_sentinel_magnitude(12)` = 11). Masked sat_diff then fits in
-        // sat_diff_rc_bits(12) = 20 bits (fixture max 56888 < 2^20).
+        // produced by quantize_float for -inf masks, with integer headroom.
+        // The generic significance clamp handles the resulting large gaps.
         // Non-masked scores range roughly [-25000, 50000] in fixed-point.
-        const M: i32 = -45_056; // causal attention mask (-(11 << scale), scale=12)
+        const M: i32 = -(1 << 30);
         #[rustfmt::skip]
         const GPT2_ATTN_SCORES: &[i32] = &[
             // Head 0 — moderate range (GPT-2 heads 0 + 2)

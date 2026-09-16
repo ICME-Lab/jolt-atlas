@@ -7,6 +7,8 @@ edition = "2021"
 default = ["parallel", "onnx-import"]
 parallel = ["dep:rayon", "joltworks/parallel", "atlas-onnx-tracer/parallel"]
 onnx-import = ["atlas-onnx-tracer/onnx-import"]
+fixed-tables = []
+check-fixed-tables = ["fixed-tables"]
 zk = ["joltworks/zk"]
 
 [dependencies]

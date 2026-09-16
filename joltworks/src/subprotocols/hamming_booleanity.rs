@@ -137,7 +137,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T>
             .zip(self.params.gamma_powers.par_iter())
             .with_min_len(par_enabled())
             .map(|(hw_d, &gamma)| {
-                let [qd_c, qd_q] = eq_r.par_fold_out_in_unreduced::<9, 2>(&|g| {
+                let [qd_c, qd_q] = eq_r.par_fold_out_in_unreduced::<2>(&|g| {
                     let hw0 = hw_d.get_bound_coeff(2 * g);
                     let hw1 = hw_d.get_bound_coeff(2 * g + 1);
                     let a = hw1 - hw0;

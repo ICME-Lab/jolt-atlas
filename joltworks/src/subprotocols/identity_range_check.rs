@@ -380,20 +380,20 @@ impl<F: JoltField, FS: Transcript> SumcheckInstanceProver<F, FS> for IdentityRCP
                 CyclePoly::Gruen(eq_r_node_output) => {
                     let [eval_at_0] = eq_r_node_output
                         .par_fold_out_in(
-                            || [F::Unreduced::<9>::zero(); 1],
+                            || [F::UnreducedProductAccum::zero(); 1],
                             |inner, j, _x_in, e_in| {
                                 let ra_at_0_j = ra.get_bound_coeff(2 * j);
-                                inner[0] += e_in.mul_unreduced::<9>(ra_at_0_j);
+                                inner[0] += e_in.mul_to_product_accum(ra_at_0_j);
                             },
                             |_x_out, e_out, inner| {
                                 array::from_fn(|i| {
-                                    let reduced = F::from_montgomery_reduce(inner[i]);
-                                    e_out.mul_unreduced::<9>(reduced)
+                                    let reduced = F::reduce_product_accum(inner[i]);
+                                    e_out.mul_to_product_accum(reduced)
                                 })
                             },
                             |a, b| array::from_fn(|i| a[i] + b[i]),
                         )
-                        .map(F::from_montgomery_reduce);
+                        .map(F::reduce_product_accum);
                     eq_r_node_output.gruen_poly_deg_2(eval_at_0 * raf_val, previous_claim)
                 }
                 CyclePoly::Dense(w) => {

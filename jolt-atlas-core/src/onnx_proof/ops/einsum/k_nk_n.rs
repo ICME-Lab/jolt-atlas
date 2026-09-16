@@ -56,7 +56,7 @@ impl<F: JoltField> EinsumLayout<F> for KNkNLayout {
             .with_min_len(par_enabled())
             .map(|j| {
                 (0..n)
-                    .map(|h| F::from_i32(right_operand[h * k + j]) * eq_r_node_output[h])
+                    .map(|h| eq_r_node_output[h].mul_i64(right_operand[h * k + j] as i64))
                     .sum()
             })
             .collect();

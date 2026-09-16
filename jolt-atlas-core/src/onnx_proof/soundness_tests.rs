@@ -112,9 +112,11 @@ fn soundness_sub_virtual_operand_attack_is_rejected() {
     proof.verify(&verifier_pp, &io, None).unwrap();
 }
 
-// The tampered output (forced to 0) no longer equals `SatClamp(3 - 2) = 1`, so the
-// clamp execution lookup's sumcheck fails to verify and rejects the proof.
-#[should_panic = "SumcheckVerificationError"]
+// The tampered output (forced to 0) no longer equals `SatClamp(3 - 2) = 1`. The
+// Sub node is the model output and its public output is unsaturated, so its
+// clamp is proven *exactly* (see `clamp_split::exact_output_verifier`): the
+// first check to reject the proof is `ClampAcc(r) == out(r)`.
+#[should_panic = "unsaturated public output must equal the pre-clamp accumulation"]
 #[test]
 fn soundness_sub_trace_tamper_3_minus_2_becomes_0_is_rejected() {
     let t = 1 << 6;

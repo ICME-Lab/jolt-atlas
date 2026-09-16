@@ -85,7 +85,7 @@ impl LookupOperandsTrait for TrigDownscaleOperands {
         remainder.map(|v| v as i64)
     }
 
-    fn lookup_bits(witness: &Tensor<i64>) -> Vec<LookupBits> {
+    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
         witness
             .iter()
             .map(|&v| LookupBits::new(v as u64, XLEN))

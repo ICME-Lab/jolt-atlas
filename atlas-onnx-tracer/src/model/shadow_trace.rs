@@ -672,10 +672,10 @@ fn shadow_f64_with_originals(
     node_idx: usize,
     original_constants: &OriginalF64Constants,
 ) -> Tensor<f64> {
-    if let Operator::Constant(_) = op {
-        if let Some(original) = original_constants.get(&node_idx) {
-            return original.clone();
-        }
+    if let Operator::Constant(_) = op
+        && let Some(original) = original_constants.get(&node_idx)
+    {
+        return original.clone();
     }
     // Fall back to standard shadow for all other ops (and unmapped constants)
     shadow_f64(op, inputs, scale)

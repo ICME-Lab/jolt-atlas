@@ -67,7 +67,7 @@ impl LookupOperandsTrait for SymmetricClampOperands {
         DefaultLookupOperands.witness(node, trace)
     }
 
-    fn lookup_bits(witness: &Tensor<i64>) -> Vec<LookupBits> {
+    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
         let operand = witness.map(|v| v as i32);
         compute_lookup_indices_from_operands(&[&operand], false)
     }
@@ -102,7 +102,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
         // RaOneHotChecks proof
         let encoding = provider.encoding();
 
-        let [ra_prover, hw_prover, bool_prover] = shout::ra_onehot_provers(
+        let [ra_prover, bool_prover] = shout::ra_onehot_provers(
             &encoding,
             &lookup_indices,
             &prover.accumulator,
@@ -110,7 +110,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
         );
 
         let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-            vec![ra_prover, hw_prover, bool_prover];
+            vec![ra_prover, bool_prover];
         let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
             instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
@@ -152,7 +152,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
 
         // Verify RaOneHotChecks
         let encoding = provider.encoding();
-        let [ra_verifier, hw_verifier, bool_verifier] =
+        let [ra_verifier, bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
         let ra_one_hot_proof = verifier
             .proofs
@@ -160,7 +160,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         BatchedSumcheck::verify(
             ra_one_hot_proof,
-            vec![&*ra_verifier, &*hw_verifier, &*bool_verifier],
+            vec![&*ra_verifier, &*bool_verifier],
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;

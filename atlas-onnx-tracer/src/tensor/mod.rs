@@ -1,6 +1,9 @@
 //! Multi-dimensional tensor representation and operations.
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(any(
+    all(target_arch = "wasm32", target_os = "unknown"),
+    target_arch = "riscv64"
+)))]
 use crate::utils::parallel_utils::IndexedParallelIterator;
 use crate::utils::{
     self,
@@ -781,7 +784,7 @@ impl<T: Clone + TensorType> Tensor<T> {
         let mut inner: Vec<T> = vec![];
         let mut offset = initial_offset;
         for (i, elem) in self.inner.clone().into_iter().enumerate() {
-            if (i + offset + 1) % n == 0 {
+            if (i + offset + 1).is_multiple_of(n) {
                 inner.extend(vec![elem; 1 + num_repeats]);
                 offset += num_repeats;
             } else {
@@ -805,7 +808,7 @@ impl<T: Clone + TensorType> Tensor<T> {
         let mut inner: Vec<T> = vec![];
         let mut indices_to_remove = std::collections::HashSet::new();
         for i in 0..self.inner.len() {
-            if (i + initial_offset + 1) % n == 0 {
+            if (i + initial_offset + 1).is_multiple_of(n) {
                 for j in 1..(1 + num_repeats) {
                     indices_to_remove.insert(i + j);
                 }

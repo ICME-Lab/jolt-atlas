@@ -21,6 +21,18 @@ pub struct ComputationNode {
     pub inputs: Vec<usize>,
     /// Dimensions (shape) of the tensor produced by this node.
     pub output_dims: Vec<usize>,
+    /// Address width (bits) of this node's saturating-clamp lookup, if it has
+    /// one: the two's-complement width that provably holds the pre-clamp value.
+    /// `64` unless narrowed by [`Model::annotate_clamp_widths`]
+    /// (see `model::clamp_width`).
+    ///
+    /// [`Model::annotate_clamp_widths`]: crate::model::Model::annotate_clamp_widths
+    #[serde(default = "default_sat_clamp_bits")]
+    pub sat_clamp_bits: usize,
+}
+
+fn default_sat_clamp_bits() -> usize {
+    crate::model::clamp_width::CLAMP_WIDTH_MAX
 }
 
 impl ComputationNode {
@@ -41,6 +53,7 @@ impl ComputationNode {
             operator,
             inputs,
             output_dims,
+            sat_clamp_bits: default_sat_clamp_bits(),
         }
     }
 

@@ -200,6 +200,37 @@ canonical_serde_enum! {
         /// * `0` – node index
         /// * `1` – decomposition index `d`
         SoftmaxClampRaD(usize, usize),
+
+        /// One-hot read-address decomposition for a **packed** saturating-clamp
+        /// lookup bucket: several nodes' clamp lookups (same width) laid out in
+        /// one cycle space (see `jolt_atlas_core::onnx_proof::global_clamp`).
+        ///
+        /// * `0` – bucket index
+        /// * `1` – decomposition index `d`
+        GlobalClampRaD(usize, usize),
+
+        /// One-hot read-address decomposition for a packed fused-rescale
+        /// **remainder** range-check bucket (`R ∈ [0, 2^S)` for several nodes).
+        ///
+        /// * `0` – bucket index
+        /// * `1` – decomposition index `d`
+        GlobalRemainderRaD(usize, usize),
+
+        /// One-hot chunk of a packed clamp bucket's **output** range check
+        /// (`out + 2^31 ∈ [0, 2^32)`, 32-bit address; see
+        /// `jolt_atlas_core::onnx_proof::clamp_split`).
+        ///
+        /// * `0` – bucket index
+        /// * `1` – decomposition index `d`
+        GlobalClampOutRaD(usize, usize),
+
+        /// One-hot chunk of a packed clamp bucket's **saturation slack**
+        /// (`|acc − out|` on saturated elements, `None` elsewhere; bucket-width
+        /// address; see `jolt_atlas_core::onnx_proof::clamp_split`).
+        ///
+        /// * `0` – bucket index
+        /// * `1` – decomposition index `d`
+        GlobalClampSlackRaD(usize, usize),
     }
 }
 
@@ -469,5 +500,49 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         ActivationSmallRa(usize),
+
+        /// Read-address polynomial of a packed saturating-clamp lookup bucket
+        /// (virtualized; [`CommittedPoly::GlobalClampRaD`] commits its chunks).
+        ///
+        /// * `0` – bucket index
+        GlobalClampRa(usize),
+
+        /// Read-address polynomial of a packed rescale-remainder bucket
+        /// ([`CommittedPoly::GlobalRemainderRaD`] commits its chunks).
+        ///
+        /// * `0` – bucket index
+        GlobalRemainderRa(usize),
+
+        /// A packed clamp bucket's offset output `out + 2^31` (virtual; the
+        /// value of [`CommittedPoly::GlobalClampOutRaD`]'s chunks).
+        ///
+        /// * `0` – bucket index
+        GlobalClampOut(usize),
+
+        /// A packed clamp bucket's saturation slack `|acc − out|·[saturated]`
+        /// (virtual; the value of [`CommittedPoly::GlobalClampSlackRaD`]'s chunks).
+        ///
+        /// * `0` – bucket index
+        GlobalClampSlack(usize),
+
+        /// A packed clamp bucket's saturation indicator (virtual; the Hamming
+        /// weight of [`CommittedPoly::GlobalClampSlackRaD`]'s chunks).
+        ///
+        /// * `0` – bucket index
+        GlobalClampInd(usize),
+
+        /// A packed rescale-remainder bucket's remainder value (virtual; the
+        /// value of [`CommittedPoly::GlobalRemainderRaD`]'s chunks).
+        ///
+        /// * `0` – bucket index
+        GlobalRemainderValue(usize),
+
+        /// Prover-declared flag (a claim of `0` / `1` at the empty point): the
+        /// packed clamp bucket has no saturated element and is proven exactly
+        /// (`acc = out` per node plus the output range check), without its
+        /// slack chunks.
+        ///
+        /// * `0` – bucket index
+        GlobalClampExact(usize),
     }
 }

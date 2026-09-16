@@ -58,7 +58,9 @@ fn sat_val<F: JoltField, const XLEN: usize>(sign_eval: F) -> F {
     let (min, max) = match XLEN {
         16 => (i8::MIN as i32, i8::MAX as i32),
         32 => (i16::MIN as i32, i16::MAX as i32),
-        64 => (i32::MIN, i32::MAX),
+        // Any wider address (40/48/56/64) saturates to i32: the width only
+        // changes how many high bits the SaturationTable's prefixes inspect.
+        w if w > 32 => (i32::MIN, i32::MAX),
         _ => unimplemented!(),
     };
     sign_eval * F::from_i32(min) + (F::one() - sign_eval) * F::from_i32(max)

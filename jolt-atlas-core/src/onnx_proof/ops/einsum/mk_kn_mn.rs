@@ -58,7 +58,7 @@ impl<F: JoltField> EinsumLayout<F> for MkKnMnLayout {
             .with_min_len(par_enabled())
             .map(|j| {
                 (0..m)
-                    .map(|i| F::from_i32(left_operand[i * k + j]) * eq_r_m[i])
+                    .map(|i| eq_r_m[i].mul_i64(left_operand[i * k + j] as i64))
                     .sum()
             })
             .collect();
@@ -67,7 +67,7 @@ impl<F: JoltField> EinsumLayout<F> for MkKnMnLayout {
             .with_min_len(par_enabled())
             .map(|j| {
                 (0..n)
-                    .map(|h| F::from_i32(right_operand[j * n + h]) * eq_r_n[h])
+                    .map(|h| eq_r_n[h].mul_i64(right_operand[j * n + h] as i64))
                     .sum()
             })
             .collect();

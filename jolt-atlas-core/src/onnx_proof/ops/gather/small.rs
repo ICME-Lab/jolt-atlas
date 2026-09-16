@@ -245,6 +245,7 @@ fn ra_booleanity_params<F: JoltField>(
         .into_opening();
 
     BooleanitySumcheckParams {
+        linear: None,
         d: 1,
         log_k_chunk: num_words.log_2(),
         log_t: num_lookups.log_2(),

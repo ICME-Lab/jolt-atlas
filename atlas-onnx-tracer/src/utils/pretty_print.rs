@@ -194,6 +194,7 @@ mod tests {
                 operator: Operator::Input(Default::default()),
                 inputs: vec![],
                 output_dims: vec![1, 2],
+                sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
             },
         );
         nodes.insert(
@@ -203,6 +204,7 @@ mod tests {
                 operator: Operator::Add(Default::default()),
                 inputs: vec![0],
                 output_dims: vec![1, 2],
+                sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
             },
         );
 

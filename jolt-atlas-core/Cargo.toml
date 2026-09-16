@@ -9,6 +9,7 @@ parallel = ["dep:rayon", "joltworks/parallel", "atlas-onnx-tracer/parallel"]
 onnx-import = ["atlas-onnx-tracer/onnx-import"]
 fixed-tables = []
 check-fixed-tables = ["fixed-tables"]
+affine-msm = ["joltworks/affine-msm"]
 zk = ["joltworks/zk"]
 
 [dependencies]

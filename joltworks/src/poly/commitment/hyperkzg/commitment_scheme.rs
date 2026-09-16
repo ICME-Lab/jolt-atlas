@@ -94,6 +94,9 @@ impl CommitmentScheme for HyperKZG<ark_bn254::Bn254> {
         coeffs: &[Self::Field],
     ) -> Self::Commitment {
         let bases: Vec<_> = commitments.iter().map(|c| c.borrow().0).collect();
+        #[cfg(feature = "affine-msm")]
+        let combined_commitment = crate::msm::bn254_affine::msm(&bases, coeffs);
+        #[cfg(not(feature = "affine-msm"))]
         let combined_commitment = ark_bn254::G1Projective::msm_field_elements(&bases, coeffs)
             .expect("commitments and coefficients must have the same length");
         HyperKZGCommitment(combined_commitment.into_affine())

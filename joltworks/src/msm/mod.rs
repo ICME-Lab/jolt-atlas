@@ -1,3 +1,6 @@
+#[cfg(any(test, feature = "affine-msm"))]
+pub mod bn254_affine;
+
 use common::parallel::par_enabled;
 use std::borrow::Borrow;
 

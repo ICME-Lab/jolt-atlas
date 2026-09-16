@@ -1,9 +1,9 @@
+use crate::utils::parallel_utils::*;
 use crate::{
     ops::{FusedIntermediates, Op, Square},
     tensor::Tensor,
 };
 use common::parallel::par_enabled;
-use rayon::prelude::*;
 
 impl Op for Square {
     #[tracing::instrument(name = "Square::f", skip_all)]

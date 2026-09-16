@@ -5,9 +5,9 @@
 
 use crate::curve::{JoltCurve, JoltGroupElement};
 use crate::field::JoltField;
+use crate::par::prelude::*;
 use crate::poly::commitment::pedersen::PedersenGenerators;
 use rand_core::CryptoRngCore;
-use rayon::prelude::*;
 
 use super::r1cs::VerifierR1CS;
 use super::relaxed_r1cs::{RelaxedR1CSInstance, RelaxedR1CSWitness};

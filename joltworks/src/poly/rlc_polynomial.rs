@@ -1,10 +1,10 @@
+use crate::par::prelude::*;
 use crate::{
     field::JoltField,
     poly::{dense_mlpoly::DensePolynomial, multilinear_polynomial::MultilinearPolynomial},
 };
 use common::parallel::par_enabled;
 use common::CommittedPoly;
-use rayon::prelude::*;
 use std::collections::BTreeMap;
 
 /// Build materialized dense polynomial from this state (for HyperKZG).

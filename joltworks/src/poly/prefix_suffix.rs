@@ -1,3 +1,4 @@
+use crate::par::prelude::*;
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     poly::{
@@ -11,7 +12,6 @@ use crate::{
 use allocative::Allocative;
 use common::parallel::par_enabled;
 use num_traits::Zero;
-use rayon::prelude::*;
 use std::{
     ops::{Index, IndexMut},
     sync::{Arc, OnceLock, RwLock},
@@ -270,7 +270,7 @@ impl<F: JoltField, const ORDER: usize, const SIGNED: bool>
     }
 
     fn alloc_Q(m: usize) -> [DensePolynomial<F>; ORDER] {
-        rayon::iter::repeat_n(0, ORDER)
+        crate::par::repeat_n(0, ORDER)
             .map(|_| DensePolynomial::new(unsafe_allocate_zero_vec(m)))
             .collect::<Vec<_>>()
             .try_into()
@@ -299,7 +299,7 @@ impl<F: JoltField, const ORDER: usize, const SIGNED: bool>
         let n = lookup_bits.len().min(u_evals.len());
         let lookup_bits = &lookup_bits[..n];
         let u_evals = &u_evals[..n];
-        let num_chunks = rayon::current_num_threads().next_power_of_two();
+        let num_chunks = crate::par::current_num_threads().next_power_of_two();
         let chunk_size = (n / num_chunks).max(1);
 
         // Accumulate in row-major for write locality: rows are r_index in [0, poly_len)
@@ -373,7 +373,7 @@ impl<F: JoltField, const ORDER: usize, const SIGNED: bool>
         let n = lookup_bits.len().min(u_evals.len());
         let lookup_bits = &lookup_bits[..n];
         let u_evals = &u_evals[..n];
-        let num_chunks = rayon::current_num_threads().next_power_of_two();
+        let num_chunks = crate::par::current_num_threads().next_power_of_two();
         let chunk_size = (n / num_chunks).max(1);
 
         #[allow(clippy::type_complexity)]

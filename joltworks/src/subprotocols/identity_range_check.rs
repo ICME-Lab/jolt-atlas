@@ -1,3 +1,4 @@
+use crate::par::prelude::*;
 #[cfg(feature = "zk")]
 use crate::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -29,7 +30,6 @@ use crate::{
 };
 use ark_std::Zero;
 use common::{parallel::par_enabled, VirtualPoly};
-use rayon::prelude::*;
 use std::array;
 
 const DEGREE_BOUND: usize = 2;
@@ -425,7 +425,7 @@ impl<F: JoltField, FS: Transcript> SumcheckInstanceProver<F, FS> for IdentityRCP
             let phase = round / log_m;
 
             // Bind suffix polynomials & update v
-            rayon::scope(|s| {
+            crate::par::scope(|s| {
                 s.spawn(|_| self.identity_ps.bind(r_j));
                 s.spawn(|_| self.v[phase].update(r_j));
             });

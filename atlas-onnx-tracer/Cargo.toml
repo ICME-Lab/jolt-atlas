@@ -12,7 +12,7 @@ serde = { workspace = true, default-features = true }
 serde_json = { workspace = true, default-features = true }
 
 # Parallel Processing
-rayon.workspace = true
+rayon = { workspace = true, optional = true }
 
 # Randomness
 rand = { workspace = true, default-features = true }
@@ -23,26 +23,29 @@ tracing-chrome.workspace = true
 tracing-subscriber.workspace = true
 
 # Core Utilities
+itertools.workspace = true
 regex.workspace = true
 thiserror.workspace = true
 
 # Local-only
 once_cell = "1.19"
 tabled = "0.20"
-tract-onnx = { git = "https://github.com/sonos/tract/", default-features = false }
+tract-onnx = { git = "https://github.com/sonos/tract/", default-features = false, optional = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
-maybe-rayon = { version = "0.1.1" }
+maybe-rayon = { version = "0.1.1", default-features = false }
 
 [dev-dependencies]
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 
 [features]
-default = []
+default = ["onnx-import", "parallel"]
+onnx-import = ["dep:tract-onnx"]
+parallel = ["dep:rayon", "maybe-rayon/threads"]
 
 [target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
 colored = { version = "2.0.0", default-features = false }
 env_logger = { version = "0.10.0", default-features = false }
 chrono = "0.4.31"
-maybe-rayon = { version = "0.1.1", features = ["threads"] }
+maybe-rayon = { version = "0.1.1", default-features = false }

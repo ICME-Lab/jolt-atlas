@@ -5,6 +5,7 @@
 //! can use a sumcheck to reduce multiple opening proofs (multiple polynomials, not
 //! necessarily of the same size, each opened at a different point) into a single opening.
 
+use crate::par::prelude::*;
 use crate::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -29,7 +30,6 @@ use ark_serialize::{
     Write,
 };
 use common::{CommittedPoly, VirtualPoly};
-use rayon::prelude::*;
 
 #[cfg(any(test, feature = "test-feature"))]
 use std::cell::RefCell;

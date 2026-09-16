@@ -26,6 +26,7 @@ use atlas_onnx_tracer::{
 use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
+use joltworks::par::prelude::*;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -53,9 +54,6 @@ use joltworks::{
     },
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
-};
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {

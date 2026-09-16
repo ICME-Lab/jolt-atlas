@@ -11,6 +11,7 @@ use atlas_onnx_tracer::{
     ops::{Operator, Slice},
 };
 use common::parallel::par_enabled;
+use joltworks::par::prelude::*;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -37,7 +38,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
-use rayon::prelude::*;
 
 use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
 

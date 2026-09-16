@@ -1,3 +1,4 @@
+use crate::par::prelude::*;
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps},
     poly::one_hot_polynomial::OneHotPolynomial,
@@ -8,7 +9,6 @@ use ark_ff::biginteger::S128;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Valid};
 use atlas_onnx_tracer::tensor::Tensor;
 use common::parallel::par_enabled;
-use rayon::prelude::*;
 use strum_macros::EnumIter;
 
 use super::{
@@ -773,7 +773,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
                 let m = r.len() / 2;
                 let (r2, r1) = r.split_at(m);
                 let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
+                    crate::par::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
 
                 poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
             }
@@ -781,7 +781,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
                 let m = r.len() / 2;
                 let (r2, r1) = r.split_at(m);
                 let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
+                    crate::par::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
 
                 poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
             }
@@ -789,7 +789,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
                 let m = r.len() / 2;
                 let (r2, r1) = r.split_at(m);
                 let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
+                    crate::par::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
 
                 poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
             }
@@ -797,7 +797,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
                 let m = r.len() / 2;
                 let (r2, r1) = r.split_at(m);
                 let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
+                    crate::par::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
 
                 poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
             }
@@ -805,7 +805,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
                 let m = r.len() / 2;
                 let (r2, r1) = r.split_at(m);
                 let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
+                    crate::par::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
 
                 poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
             }
@@ -813,7 +813,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
                 let m = r.len() / 2;
                 let (r2, r1) = r.split_at(m);
                 let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
+                    crate::par::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
 
                 poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
             }
@@ -821,7 +821,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
                 let m = r.len() / 2;
                 let (r2, r1) = r.split_at(m);
                 let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
+                    crate::par::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
 
                 poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
             }
@@ -829,7 +829,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
                 let m = r.len() / 2;
                 let (r2, r1) = r.split_at(m);
                 let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
+                    crate::par::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
 
                 poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
             }
@@ -837,7 +837,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
                 let m = r.len() / 2;
                 let (r2, r1) = r.split_at(m);
                 let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
+                    crate::par::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
 
                 poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
             }
@@ -845,7 +845,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
                 let m = r.len() / 2;
                 let (r2, r1) = r.split_at(m);
                 let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
+                    crate::par::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
 
                 poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
             }
@@ -853,7 +853,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
                 let m = r.len() / 2;
                 let (r2, r1) = r.split_at(m);
                 let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
+                    crate::par::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
 
                 poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
             }

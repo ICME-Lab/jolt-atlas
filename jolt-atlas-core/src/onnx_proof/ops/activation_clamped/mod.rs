@@ -34,6 +34,7 @@ use common::{
     parallel::par_enabled,
     CommittedPoly, VirtualPoly,
 };
+use joltworks::par::prelude::*;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -61,9 +62,6 @@ use joltworks::{
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
-};
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 use std::marker::PhantomData;
 

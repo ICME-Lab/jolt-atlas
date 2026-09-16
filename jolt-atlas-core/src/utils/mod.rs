@@ -2,8 +2,8 @@
 
 use atlas_onnx_tracer::tensor::Tensor;
 use common::{consts::XLEN, parallel::par_enabled};
+use joltworks::par::prelude::*;
 use joltworks::utils::{interleave_bits, lookup_bits::LookupBits};
-use rayon::prelude::*;
 
 pub mod dims;
 pub mod opening_access;

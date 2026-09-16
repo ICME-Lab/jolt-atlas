@@ -21,3 +21,5 @@ pub mod transcripts;
 pub mod utils;
 
 pub use ark_bn254;
+
+pub mod par;

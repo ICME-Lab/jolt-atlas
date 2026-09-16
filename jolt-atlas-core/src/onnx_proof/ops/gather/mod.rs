@@ -13,6 +13,7 @@ use atlas_onnx_tracer::{
 };
 use common::parallel::par_enabled;
 use common::VirtualPoly;
+use joltworks::par::prelude::*;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -38,13 +39,6 @@ use joltworks::{
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math, thread::unsafe_allocate_zero_vec},
-};
-use rayon::{
-    iter::{
-        IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
-        IntoParallelRefMutIterator, ParallelIterator,
-    },
-    slice::ParallelSlice,
 };
 
 pub(crate) mod large;
@@ -377,7 +371,7 @@ where
     F: JoltField,
 {
     let e = EqPolynomial::evals(r);
-    let num_threads = rayon::current_num_threads();
+    let num_threads = joltworks::par::current_num_threads();
     let chunk_size = indexes.len().div_ceil(num_threads);
 
     let indexes_usize = indexes

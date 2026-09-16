@@ -1,13 +1,13 @@
 use super::{FieldOps, JoltField, MulU64WithCarry};
 #[cfg(feature = "challenge-254-bit")]
 use crate::field::challenge::Mont254BitChallenge;
+use crate::par::prelude::*;
 use crate::{
     field::{challenge::MontU128Challenge, MulTrunc},
     utils::thread::unsafe_allocate_zero_vec,
 };
 use ark_ff::{prelude::*, BigInt, PrimeField, UniformRand};
 use common::parallel::par_enabled;
-use rayon::prelude::*;
 
 impl FieldOps for ark_bn254::Fr {}
 impl FieldOps<&ark_bn254::Fr, ark_bn254::Fr> for &ark_bn254::Fr {}

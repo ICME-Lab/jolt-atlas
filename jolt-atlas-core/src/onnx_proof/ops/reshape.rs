@@ -21,6 +21,7 @@ use atlas_onnx_tracer::{
     ops::Reshape,
 };
 use common::parallel::par_enabled;
+use joltworks::par::prelude::*;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -47,7 +48,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
-use rayon::prelude::*;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
     #[tracing::instrument(skip_all, name = "Reshape::prove")]

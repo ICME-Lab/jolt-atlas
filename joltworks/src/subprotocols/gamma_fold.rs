@@ -1,7 +1,7 @@
+use crate::par::prelude::*;
 use atlas_onnx_tracer::tensor::Tensor;
 use common::parallel::par_enabled;
 use common::VirtualPolynomial;
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
 use crate::{
     field::{IntoOpening, JoltField},

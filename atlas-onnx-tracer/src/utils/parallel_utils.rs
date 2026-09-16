@@ -3,7 +3,8 @@
 // Host tensor operations keep their existing parallel implementation.
 #[cfg(not(any(
     all(target_arch = "wasm32", target_os = "unknown"),
-    target_arch = "riscv64"
+    target_arch = "riscv64",
+    not(feature = "parallel")
 )))]
 pub use maybe_rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
@@ -11,12 +12,14 @@ pub use maybe_rayon::iter::{
 };
 #[cfg(not(any(
     all(target_arch = "wasm32", target_os = "unknown"),
-    target_arch = "riscv64"
+    target_arch = "riscv64",
+    not(feature = "parallel")
 )))]
 pub use maybe_rayon::slice::ParallelSliceMut;
 #[cfg(not(any(
     all(target_arch = "wasm32", target_os = "unknown"),
-    target_arch = "riscv64"
+    target_arch = "riscv64",
+    not(feature = "parallel")
 )))]
 pub use maybe_rayon::{slice, vec};
 
@@ -25,7 +28,8 @@ pub use maybe_rayon::{slice, vec};
 #[cfg(any(
     any(
         all(target_arch = "wasm32", target_os = "unknown"),
-        target_arch = "riscv64"
+        target_arch = "riscv64",
+        not(feature = "parallel")
     ),
     test
 ))]
@@ -34,6 +38,7 @@ mod sequential;
 
 #[cfg(any(
     all(target_arch = "wasm32", target_os = "unknown"),
-    target_arch = "riscv64"
+    target_arch = "riscv64",
+    not(feature = "parallel")
 ))]
 pub use sequential::*;

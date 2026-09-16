@@ -2,17 +2,17 @@
 
 #[cfg(not(any(
     all(target_arch = "wasm32", target_os = "unknown"),
-    target_arch = "riscv64"
+    target_arch = "riscv64",
+    not(feature = "parallel")
 )))]
-use crate::utils::parallel_utils::IndexedParallelIterator;
+use crate::utils::parallel_utils::{IndexedParallelIterator, ParallelIterator};
 use crate::utils::{
     self,
     dims::copy_strided,
-    parallel_utils::{
-        IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator, ParallelSliceMut,
-    },
+    parallel_utils::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelSliceMut},
     quantize,
 };
+use itertools::Itertools;
 use rand::{Rng, RngCore, distributions::Uniform, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -23,7 +23,6 @@ use std::{
     ops::{Add, Deref, DerefMut, Div, Mul, Neg, Range, Sub},
 };
 use thiserror::Error;
-use tract_onnx::prelude::tract_itertools::Itertools;
 
 /// Implementations of common operations on tensors.
 pub mod ops;

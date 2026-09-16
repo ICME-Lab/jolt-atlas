@@ -17,6 +17,7 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
 };
 use common::{parallel::ParallelFlagGuard, CommittedPoly, VirtualPoly};
+use joltworks::par::prelude::*;
 use joltworks::{
     field::JoltField,
     poly::{
@@ -28,7 +29,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::math::Math,
 };
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------

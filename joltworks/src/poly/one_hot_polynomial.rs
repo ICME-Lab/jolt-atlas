@@ -1,3 +1,4 @@
+use crate::par::prelude::*;
 #[cfg(test)]
 use crate::poly::dense_mlpoly::DensePolynomial;
 use crate::{
@@ -11,7 +12,6 @@ use crate::{
 };
 use allocative::Allocative;
 use common::parallel::par_enabled;
-use rayon::prelude::*;
 use std::sync::{Arc, RwLock};
 
 /// Represents a one-hot multilinear polynomial (ra/wa) used

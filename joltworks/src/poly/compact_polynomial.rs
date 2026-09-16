@@ -1,4 +1,5 @@
 use super::multilinear_polynomial::{BindingOrder, PolynomialBinding};
+use crate::par::prelude::*;
 use crate::{
     field::{JoltField, OptimizedMul},
     utils::{math::Math, small_scalar::SmallScalar},
@@ -6,7 +7,6 @@ use crate::{
 use allocative::Allocative;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use common::parallel::{par_enabled, par_enabled_with};
-use rayon::prelude::*;
 use std::{cmp::Ordering, ops::Index};
 
 /// Compact polynomials are used to store coefficients of small scalars.
@@ -275,11 +275,10 @@ impl<T: SmallScalar, F: JoltField> PolynomialBinding<F> for CompactPolynomial<T,
             match order {
                 BindingOrder::LowToHigh => {
                     let mut bound_coeffs = Vec::with_capacity(n);
-                    (
-                        bound_coeffs.spare_capacity_mut(),
-                        self.bound_coeffs.par_chunks_exact(2),
-                    )
-                        .into_par_iter()
+                    bound_coeffs
+                        .spare_capacity_mut()
+                        .par_iter_mut()
+                        .zip(self.bound_coeffs.par_chunks_exact(2))
                         .with_min_len(par_enabled_with(512))
                         .for_each(|(bound_coeff, coeffs)| {
                             bound_coeff.write(if coeffs[1] == coeffs[0] {

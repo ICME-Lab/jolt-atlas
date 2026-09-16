@@ -19,9 +19,9 @@ members = ["jolt-atlas-core", "atlas-onnx-tracer", "common", "joltworks"]
 
 [workspace.dependencies]
 # Internal
-atlas-onnx-tracer = { path = "./atlas-onnx-tracer" }
+atlas-onnx-tracer = { path = "./atlas-onnx-tracer", default-features = false }
 common = { path = "./common" }
-joltworks = { path = "./joltworks" }
+joltworks = { path = "./joltworks", default-features = false }
 
 # Cryptography and Math
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }

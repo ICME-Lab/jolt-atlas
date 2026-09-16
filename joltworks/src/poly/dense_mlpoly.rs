@@ -9,6 +9,7 @@ use crate::{
 };
 use common::parallel::{par_enabled, par_enabled_with};
 
+use crate::par::prelude::*;
 use crate::{
     field::{FieldChallengeOps, JoltField, OptimizedMul},
     utils::{math::Math, small_scalar::SmallScalar},
@@ -17,7 +18,6 @@ use allocative::Allocative;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use core::ops::Index;
 use rand_core::{CryptoRng, RngCore};
-use rayon::prelude::*;
 use std::ops::IndexMut;
 
 use super::multilinear_polynomial::{BindingOrder, MultilinearPolynomial};
@@ -219,8 +219,10 @@ impl<F: JoltField> DensePolynomial<F> {
     pub fn bound_poly_var_bot_01_optimized(&mut self, r: &F::Challenge) {
         let n = self.len() / 2;
         let mut bound_Z = Vec::with_capacity(n);
-        (bound_Z.spare_capacity_mut(), self.Z.par_chunks_exact(2))
-            .into_par_iter()
+        bound_Z
+            .spare_capacity_mut()
+            .par_iter_mut()
+            .zip(self.Z.par_chunks_exact(2))
             .with_min_len(par_enabled_with(512))
             .for_each(|(bound_coeff, coeffs)| {
                 let m = coeffs[1] - coeffs[0];
@@ -258,7 +260,8 @@ impl<F: JoltField> DensePolynomial<F> {
     {
         let m = r.len() / 2;
         let (r2, r1) = r.split_at(m);
-        let (eq_one, eq_two) = rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
+        let (eq_one, eq_two) =
+            crate::par::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
         self.split_eq_evaluate(r.len(), &eq_one, &eq_two)
     }
 
@@ -539,7 +542,8 @@ impl<F: JoltField> PolynomialEvaluation<F> for DensePolynomial<F> {
         let num_polys = polys.len();
         let m = r.len() / 2;
         let (r2, r1) = r.split_at(m);
-        let (eq_one, eq_two) = rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
+        let (eq_one, eq_two) =
+            crate::par::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
 
         let evals = (0..eq_one.len())
             .into_par_iter()

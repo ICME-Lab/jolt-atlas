@@ -382,8 +382,8 @@ pub struct ModelLoader<'a> {
     mapper: Option<NodeIndexMapper>,
     inputs: Option<Vec<usize>>,
     outputs: Option<Vec<usize>>,
-    original_input_dims: HashMap<usize, Vec<usize>>,
-    original_output_dims: HashMap<usize, Vec<usize>>,
+    original_input_dims: BTreeMap<usize, Vec<usize>>,
+    original_output_dims: BTreeMap<usize, Vec<usize>>,
 }
 
 impl<'a> ModelLoader<'a> {
@@ -398,8 +398,8 @@ impl<'a> ModelLoader<'a> {
             mapper: None,
             inputs: None,
             outputs: None,
-            original_input_dims: HashMap::new(),
-            original_output_dims: HashMap::new(),
+            original_input_dims: BTreeMap::new(),
+            original_output_dims: BTreeMap::new(),
         }
     }
 

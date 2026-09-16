@@ -595,13 +595,12 @@ where
             let mut result: Vec<Vec<F>> = (0..one_hot_params.instruction_d)
                 .map(|_| unsafe_allocate_zero_vec(one_hot_params.k_chunk))
                 .collect();
-            let mut j = chunk_index * chunk_size;
-            for lookup_index in trace_chunk {
+            let offset = chunk_index * chunk_size;
+            for (j, lookup_index) in trace_chunk.iter().enumerate() {
                 for i in 0..one_hot_params.instruction_d {
                     let k = one_hot_params.lookup_index_chunk(*lookup_index as u64, i);
-                    result[i][k as usize] += eq_r_cycle[j];
+                    result[i][k as usize] += eq_r_cycle[offset + j];
                 }
-                j += 1;
             }
             result
         })

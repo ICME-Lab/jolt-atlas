@@ -113,9 +113,9 @@ where
 pub fn default_phases(log_K: usize) -> usize {
     if log_K <= 2 {
         1
-    } else if log_K % 4 == 0 {
+    } else if log_K.is_multiple_of(4) {
         log_K / 4
-    } else if log_K % 2 == 0 {
+    } else if log_K.is_multiple_of(2) {
         log_K / 2
     } else {
         panic!(

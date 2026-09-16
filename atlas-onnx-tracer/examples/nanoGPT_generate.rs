@@ -16,5 +16,5 @@ fn main() {
         .collect();
     let input = Tensor::new(Some(&input_data), &[1, 64]).unwrap();
 
-    let _trace = nano_gpt.trace(&[input.clone()]);
+    let _trace = nano_gpt.trace(std::slice::from_ref(&input));
 }

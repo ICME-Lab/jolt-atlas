@@ -99,11 +99,11 @@ fn einsum_acc_bound(
     // Prefer a constant operand: its row sums bound the contraction exactly.
     let mut best: Option<u128> = None;
     for (i, &input_idx) in node.inputs.iter().enumerate() {
-        if let Some(Operator::Constant(w)) = nodes.get(&input_idx).map(|n| &n.operator) {
-            if let Some(m) = const_operand_row_sum_max(&w.0, inputs_eq[i], &output_letters) {
-                let b = I32_MAG * m;
-                best = Some(best.map_or(b, |x: u128| x.min(b)));
-            }
+        if let Some(Operator::Constant(w)) = nodes.get(&input_idx).map(|n| &n.operator)
+            && let Some(m) = const_operand_row_sum_max(&w.0, inputs_eq[i], &output_letters)
+        {
+            let b = I32_MAG * m;
+            best = Some(best.map_or(b, |x: u128| x.min(b)));
         }
     }
     if let Some(b) = best {

@@ -191,20 +191,16 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SliceSumcheckParams<F> {
 
     #[cfg(feature = "zk")]
     fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        let selector = build_slice_selector(
+        let selector_claim = evaluate_slice_selector(
             &self.input_raw_dims,
             &self.output_raw_dims,
             self.axis,
             self.start,
             &self.r_output.r,
+            &self
+                .normalize_opening_point(&sumcheck_challenges.into_opening())
+                .r,
         );
-        let selector_claim =
-            joltworks::poly::multilinear_polynomial::MultilinearPolynomial::from(selector)
-                .evaluate(
-                    &self
-                        .normalize_opening_point(&sumcheck_challenges.into_opening())
-                        .r,
-                );
         vec![selector_claim]
     }
 }
@@ -325,14 +321,12 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SliceSumche
         let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
 
         let input_claim = accessor.get_nodeio(Target::Input(0)).1;
-        let selector = build_slice_selector(
+        let selector_claim = evaluate_slice_selector(
             &self.params.input_raw_dims,
             &self.params.output_raw_dims,
             self.params.axis,
             self.params.start,
             &self.params.r_output.r,
-        );
-        let selector_claim = MultilinearPolynomial::from(selector).evaluate(
             &self
                 .params
                 .normalize_opening_point(&sumcheck_challenges.into_opening())
@@ -354,6 +348,53 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SliceSumche
             .into_provider(transcript, opening_point);
         provider.append_nodeio(Target::Input(0));
     }
+}
+
+/// For aligned blocks in shapes without padding, slicing fixes high bits of
+/// one axis and preserves every other bit. Evaluate that selector directly.
+fn evaluate_slice_selector<F: JoltField>(
+    input_raw_dims: &[usize],
+    output_raw_dims: &[usize],
+    axis: usize,
+    start: usize,
+    r_output: &[F],
+    r_input: &[F],
+) -> F {
+    assert!(axis < output_raw_dims.len());
+    let end = start
+        .checked_add(output_raw_dims[axis])
+        .expect("Slice end overflow");
+    validate_slice_shapes(input_raw_dims, output_raw_dims, axis, start, end);
+    if input_raw_dims
+        .iter()
+        .chain(output_raw_dims)
+        .all(|d| d.is_power_of_two())
+        && start % output_raw_dims[axis] == 0
+    {
+        let input_bits: usize = input_raw_dims.iter().map(|d| d.log_2()).sum();
+        let output_bits: usize = output_raw_dims.iter().map(|d| d.log_2()).sum();
+        assert_eq!(r_input.len(), input_bits);
+        assert_eq!(r_output.len(), output_bits);
+        let before: usize = input_raw_dims[..axis].iter().map(|d| d.log_2()).sum();
+        let fixed_bits = input_bits - output_bits;
+        let block = start >> output_raw_dims[axis].log_2();
+        let fixed_weight: F = r_input[before..before + fixed_bits]
+            .iter()
+            .enumerate()
+            .map(|(i, value)| {
+                if (block >> (fixed_bits - i - 1)) & 1 == 1 {
+                    *value
+                } else {
+                    F::one() - value
+                }
+            })
+            .product();
+        return fixed_weight
+            * EqPolynomial::mle(&r_output[..before], &r_input[..before])
+            * EqPolynomial::mle(&r_output[before..], &r_input[before + fixed_bits..]);
+    }
+    let selector = build_slice_selector(input_raw_dims, output_raw_dims, axis, start, r_output);
+    MultilinearPolynomial::from(selector).evaluate(r_input)
 }
 
 fn build_slice_selector<F: JoltField>(
@@ -444,8 +485,82 @@ mod tests {
     }
 
     #[test]
+    fn selector_evaluation_matches_materialized_table() {
+        use super::{build_slice_selector, evaluate_slice_selector};
+        use ark_bn254::Fr;
+        use joltworks::{
+            field::JoltField,
+            poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+            utils::math::Math,
+        };
+        let mut rng = StdRng::seed_from_u64(0x534c494345);
+        for (input, axis, start, end) in [
+            (vec![2, 8, 4], 1, 4, 8),
+            (vec![2, 8, 4], 1, 0, 2),
+            (vec![8, 2], 0, 3, 4),
+            (vec![4, 8], 1, 2, 6), // unaligned block uses the table
+            (vec![3, 7], 1, 2, 5),
+            (vec![3, 8], 1, 4, 8), // padding on another axis
+            (vec![4, 4], 0, 0, 4),
+            (vec![1], 0, 0, 1),
+        ] {
+            let mut output = input.clone();
+            output[axis] = end - start;
+            let variables = |dims: &[usize]| {
+                dims.iter()
+                    .map(|d| d.next_power_of_two().log_2())
+                    .sum::<usize>()
+            };
+            for boolean in [false, true] {
+                let output_point: Vec<Fr> = (0..variables(&output))
+                    .map(|i| {
+                        if boolean {
+                            Fr::from((i % 2) as u64)
+                        } else {
+                            Fr::random(&mut rng)
+                        }
+                    })
+                    .collect();
+                let input_point: Vec<Fr> = (0..variables(&input))
+                    .map(|i| {
+                        if boolean {
+                            Fr::from((i % 3 == 0) as u64)
+                        } else {
+                            Fr::random(&mut rng)
+                        }
+                    })
+                    .collect();
+                let table = build_slice_selector(&input, &output, axis, start, &output_point);
+                let expected = MultilinearPolynomial::from(table).evaluate(&input_point);
+                assert_eq!(
+                    evaluate_slice_selector(
+                        &input,
+                        &output,
+                        axis,
+                        start,
+                        &output_point,
+                        &input_point
+                    ),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn selector_rejects_wrong_point_dimension() {
+        use ark_bn254::Fr;
+        super::evaluate_slice_selector::<Fr>(&[8], &[4], 0, 4, &[], &[]);
+    }
+
+    #[test]
     fn test_slice_arbitrary_shapes() {
         let cases = vec![
+            (vec![2, 8, 4], 1, 4, 8),
+            (vec![2, 8, 4], 1, 0, 2),
+            (vec![8, 2], 0, 3, 4),
+            (vec![4, 8], 1, 2, 6),
             (vec![2, 5], 1, 1, 4),
             (vec![3, 4], 0, 1, 3),
             (vec![2, 3, 5], 2, 0, 4),

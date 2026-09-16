@@ -79,9 +79,9 @@ pub fn softmax_last_axis_decomposed(
     let last_dim = *dims.last().unwrap();
     let num_slices: usize = dims.iter().product::<usize>() / last_dim;
     let data = a.data();
-    debug_assert!(
-        scale <= (1 << 15),
-        "scale={scale} must be at most 2^15; i32 intermediates would overflow"
+    assert!(
+        (1..=(1 << 15)).contains(&scale),
+        "scale={scale} must be positive and at most 2^15; i32 intermediates would overflow"
     );
     let s = scale;
     let s_sq = s * s;
@@ -277,4 +277,32 @@ pub fn softmax_z(x: &[i32], max_k: &[i32], last_dim: usize) -> Vec<i32> {
         .enumerate()
         .map(|(idx, &xi)| max_k[idx / last_dim] - xi)
         .collect()
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    #[test]
+    fn largest_supported_scale_preserves_equal_probabilities() {
+        let input = Tensor::new(Some(&[0i32, 0]), &[1, 2]).unwrap();
+        let (output, _) = softmax_last_axis_decomposed(&input, 1 << 15);
+        assert_eq!(output.inner, [1 << 14, 1 << 14]);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be positive and at most 2^15")]
+    fn unsupported_scale_is_rejected_in_release_too() {
+        let input = Tensor::new(Some(&[0i32, 0]), &[1, 2]).unwrap();
+        // With overflow checks disabled, S*S wraps to zero at this scale and
+        // the old implementation silently returned [0, 0].
+        softmax_last_axis_decomposed(&input, 1 << 16);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be positive and at most 2^15")]
+    fn zero_scale_is_rejected() {
+        let input = Tensor::new(Some(&[0i32, 0]), &[1, 2]).unwrap();
+        softmax_last_axis_decomposed(&input, 0);
+    }
 }

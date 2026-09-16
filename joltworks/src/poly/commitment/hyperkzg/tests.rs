@@ -743,3 +743,47 @@ fn test_hyperkzg_one_hot_empty() {
         "Commitment to all-None OneHot should be zero"
     );
 }
+
+#[test]
+fn combined_commitment_matches_independent_multiplications() {
+    use ark_ec::PrimeGroup;
+    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0x434f4d42494e45);
+    let generator = ark_bn254::G1Projective::generator();
+    for size in [0, 1, 2, 31, 128, 1024] {
+        let commitments: Vec<_> = (0..size)
+            .map(|i| {
+                // Repeated points, the identity and opposite points exercise bucket
+                // cancellation as well as independent random bases.
+                let point = match i % 5 {
+                    0 => ark_bn254::G1Projective::zero(),
+                    1 => generator,
+                    2 => -generator,
+                    _ => ark_bn254::G1Projective::rand(&mut rng),
+                };
+                HyperKZGCommitment(point.into_affine())
+            })
+            .collect();
+        let coefficients: Vec<Fr> = (0..size)
+            .map(|i| match i % 4 {
+                0 => Fr::zero(),
+                1 => Fr::one(),
+                2 => -Fr::one(),
+                _ => Fr::rand(&mut rng),
+            })
+            .collect();
+        let expected: ark_bn254::G1Projective = commitments
+            .iter()
+            .zip(&coefficients)
+            .map(|(c, s)| c.0 * s)
+            .sum();
+        let actual = HyperKZG::combine_commitments(&commitments, &coefficients);
+        assert_eq!(actual.0, expected.into_affine());
+    }
+}
+
+#[test]
+#[should_panic(expected = "commitments and coefficients must have the same length")]
+fn combined_commitment_rejects_truncated_coefficients() {
+    let commitments = [HyperKZGCommitment::<Bn254>(Default::default())];
+    HyperKZG::combine_commitments(&commitments, &[]);
+}

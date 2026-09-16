@@ -545,6 +545,11 @@ pub struct EqCycleState<F: JoltField> {
     pub D: GruenSplitEqPolynomial<F>,
     /// The number of variables that have been bound during sumcheck so far
     pub num_variables_bound: usize,
+    /// `D.merge()` before any variable is bound, computed once and shared by
+    /// every one-hot opening instance over this cycle space (there can be
+    /// thousands of them; each used to rebuild the full table).
+    #[allocative(skip)]
+    merged_unbound: std::sync::OnceLock<Vec<F>>,
 }
 
 impl<F: JoltField> EqAddressState<F> {
@@ -579,6 +584,16 @@ impl<F: JoltField> EqCycleState<F> {
         Self {
             D,
             num_variables_bound: 0,
+            merged_unbound: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// `D.merge()`, cached while no variable is bound.
+    pub fn merged(&self) -> std::borrow::Cow<'_, [F]> {
+        if self.num_variables_bound == 0 {
+            std::borrow::Cow::Borrowed(self.merged_unbound.get_or_init(|| self.D.merge().Z))
+        } else {
+            std::borrow::Cow::Owned(self.D.merge().Z)
         }
     }
 }
@@ -678,7 +693,8 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
         let chunk_size = (T / num_chunks).max(1);
 
         let eq = self.eq_cycle_state.read().unwrap();
-        let D_coeffs_for_G = &eq.D.merge();
+        let D_coeffs_for_G = eq.merged();
+        let D_coeffs_for_G = D_coeffs_for_G.as_ref();
 
         // Compute G as described in Section 6.3, summed over the group.
         let G = (0..num_chunks)

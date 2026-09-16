@@ -266,6 +266,7 @@ pub fn prove_all<F: JoltField, T: Transcript>(
         clamp.into_iter().map(|(n, s)| (n.idx, s)).collect();
     // Exact outputs (see `clamp_split::exact_output_prover`) register no
     // split and are gaps; a bucket with no live node is skipped entirely.
+    let _clamp_span = tracing::span!(tracing::Level::INFO, "deferred::clamp_lookups").entered();
     let full_buckets = clamp_buckets(model);
     for b in &full_buckets {
         for n in &b.nodes {
@@ -399,8 +400,11 @@ pub fn prove_all<F: JoltField, T: Transcript>(
         );
     }
 
+    drop(_clamp_span);
     // Rescale-remainder range checks: same packing, proven by a value
     // sumcheck + Booleanity with the chunk-value linear term (see `clamp_split`).
+    let _remainder_span =
+        tracing::span!(tracing::Level::INFO, "deferred::remainder_lookups").entered();
     let rbuckets = remainder_buckets(prover.preprocessing.model());
     let mut rbits_by_node: HashMap<usize, Vec<LookupBits>> = remainder
         .into_iter()

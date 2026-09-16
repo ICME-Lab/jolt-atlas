@@ -189,7 +189,11 @@ impl<F: JoltField> EvalReductionInstance<F> {
         }
 
         for (i, (_, claim)) in self.openings.iter().enumerate() {
-            let eval_at_i = proof.h.evaluate(&F::from_u32(i as u32));
+            let eval_at_i = match i {
+                0 => proof.h.eval_at_zero(),
+                1 => proof.h.eval_at_one(),
+                _ => proof.h.evaluate(&F::from_u32(i as u32)),
+            };
             if eval_at_i != *claim {
                 return Err(ProofVerifyError::InvalidOpeningProof(format!(
                     "h does not match opening claim at t={i}: expected h({i}) = {claim}, got {eval_at_i}"

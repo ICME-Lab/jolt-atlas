@@ -1,5 +1,8 @@
 use super::TensorError;
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(any(
+    all(target_arch = "wasm32", target_os = "unknown"),
+    target_arch = "riscv64"
+)))]
 use crate::utils::parallel_utils::IndexedParallelIterator;
 use crate::{
     tensor::{Tensor, TensorType},
@@ -9,7 +12,10 @@ use crate::{
 };
 use common::parallel::par_enabled;
 use std::collections::{HashMap, HashSet};
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(any(
+    all(target_arch = "wasm32", target_os = "unknown"),
+    target_arch = "riscv64"
+))]
 use std::iter::Iterator;
 pub use std::ops::{Add, Div, Mul, Neg, Sub};
 use tract_onnx::prelude::tract_itertools::Itertools;
@@ -2601,7 +2607,10 @@ pub fn dot<T: TensorType + Mul<Output = T> + Add<Output = T> + Send + Sync + std
 
     let (a, b): (Tensor<T>, Tensor<T>) = (inputs[0].clone(), inputs[1].clone());
 
-    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    #[cfg(not(any(
+        all(target_arch = "wasm32", target_os = "unknown"),
+        target_arch = "riscv64"
+    )))]
     let res: Vec<T> = a
         .par_iter()
         .zip(b.par_iter())
@@ -2612,9 +2621,12 @@ pub fn dot<T: TensorType + Mul<Output = T> + Add<Output = T> + Send + Sync + std
         )
         .collect();
 
-    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    #[cfg(any(
+        all(target_arch = "wasm32", target_os = "unknown"),
+        target_arch = "riscv64"
+    ))]
     let res: Vec<T> = {
-        // WASM fallback: use simple iterator-based dot product
+        // Targets without a worker pool use the sequential dot product.
         let dot_product = a
             .iter()
             .zip(b.iter())

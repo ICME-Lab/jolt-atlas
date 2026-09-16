@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
+affine-msm = []
 monitor = ["dep:sysinfo"]
 allocative = ["dep:inferno"]
 challenge-254-bit = []

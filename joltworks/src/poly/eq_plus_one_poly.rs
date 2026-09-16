@@ -1,6 +1,6 @@
+use crate::par::prelude::*;
 use allocative::Allocative;
 use common::parallel::par_enabled;
-use rayon::prelude::*;
 
 use crate::field::{FieldChallengeOps, JoltField};
 use crate::poly::eq_poly::EqPolynomial;

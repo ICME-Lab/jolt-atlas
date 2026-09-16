@@ -3,6 +3,7 @@
 //! This module contains the sumcheck-specific logic for the batch opening reduction protocol.
 //! The higher-level orchestration remains in `poly/opening_proof.rs`.
 
+use crate::par::prelude::*;
 use crate::{
     field::JoltField,
     poly::{
@@ -34,7 +35,6 @@ use allocative::FlameGraphBuilder;
 use ark_std::Zero;
 use common::parallel::par_enabled;
 use common::CommittedPoly;
-use rayon::prelude::*;
 use std::{
     collections::{BTreeMap, HashMap},
     mem,
@@ -532,7 +532,7 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
     pub fn initialize(&mut self, mut polynomial: OneHotPolynomial<F>) {
         let nonzero_indices = &polynomial.nonzero_indices;
         let T = nonzero_indices.len();
-        let num_chunks = rayon::current_num_threads().next_power_of_two().min(T);
+        let num_chunks = crate::par::current_num_threads().next_power_of_two().min(T);
         let chunk_size = (T / num_chunks).max(1);
 
         let eq = self.eq_cycle_state.read().unwrap();

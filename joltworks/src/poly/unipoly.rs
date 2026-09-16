@@ -4,13 +4,13 @@ use std::cmp::Ordering;
 use std::iter::zip;
 use std::ops::{Add, AddAssign, Index, IndexMut, Mul, MulAssign, Sub};
 
+use crate::par::prelude::*;
 use crate::poly::lagrange_poly::LagrangeHelper;
 use crate::transcripts::{AppendToTranscript, Transcript};
 use crate::utils::gaussian_elimination::gaussian_elimination;
 use allocative::Allocative;
 use ark_serialize::*;
 use rand_core::{CryptoRng, RngCore};
-use rayon::prelude::*;
 
 use super::multilinear_polynomial::MultilinearPolynomial;
 use crate::utils::small_scalar::SmallScalar;

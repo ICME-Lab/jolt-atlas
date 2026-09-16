@@ -5,7 +5,7 @@ where
     T: Send + 'static,
 {
     // h/t https://abrams.cc/rust-dropping-things-in-another-thread
-    rayon::spawn(move || drop(data));
+    crate::par::spawn(move || drop(data));
 }
 
 pub fn unsafe_allocate_zero_vec<T: Sized + Zero>(size: usize) -> Vec<T> {

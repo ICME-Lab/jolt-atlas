@@ -2,7 +2,7 @@ use crate::{
     ops::{MeanOfSquares, Op},
     tensor::{Tensor, TensorError},
 };
-use tract_onnx::prelude::tract_itertools::Itertools;
+use itertools::Itertools;
 
 impl Op for MeanOfSquares {
     #[tracing::instrument(name = "MeanOfSquares::f", skip_all)]

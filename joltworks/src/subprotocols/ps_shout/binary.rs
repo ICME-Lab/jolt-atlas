@@ -1,3 +1,4 @@
+use crate::par::prelude::*;
 use crate::{
     field::{JoltField, MulTrunc},
     lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
@@ -20,7 +21,6 @@ use common::{
     consts::{LOG_K, XLEN},
     parallel::par_enabled,
 };
-use rayon::prelude::*;
 
 /// Verifier-side RAF data for binary ops (AND, OR, XOR, LTU).
 ///
@@ -112,7 +112,7 @@ impl<F: JoltField> RafProverState<F> for BinaryRafPS<F> {
     }
 
     fn bind(&mut self, r_j: F::Challenge) {
-        rayon::join(
+        crate::par::join(
             || self.left_operand_ps.bind(r_j),
             || self.right_operand_ps.bind(r_j),
         );

@@ -1,3 +1,4 @@
+use crate::par::prelude::*;
 use crate::{
     field::{JoltField, MulTrunc},
     lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
@@ -16,7 +17,6 @@ use crate::{
 };
 use ark_std::Zero;
 use common::parallel::par_enabled;
-use rayon::prelude::*;
 
 /// Verifier-side RAF data for unary ops (ReLU, UnsignedAbs).
 ///

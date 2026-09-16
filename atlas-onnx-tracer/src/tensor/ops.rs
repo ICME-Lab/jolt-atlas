@@ -1,7 +1,8 @@
 use super::TensorError;
 #[cfg(not(any(
     all(target_arch = "wasm32", target_os = "unknown"),
-    target_arch = "riscv64"
+    target_arch = "riscv64",
+    not(feature = "parallel")
 )))]
 use crate::utils::parallel_utils::IndexedParallelIterator;
 use crate::{
@@ -11,14 +12,15 @@ use crate::{
     },
 };
 use common::parallel::par_enabled;
+use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 #[cfg(any(
     all(target_arch = "wasm32", target_os = "unknown"),
-    target_arch = "riscv64"
+    target_arch = "riscv64",
+    not(feature = "parallel")
 ))]
 use std::iter::Iterator;
 pub use std::ops::{Add, Div, Mul, Neg, Sub};
-use tract_onnx::prelude::tract_itertools::Itertools;
 
 /// IFF operation.
 /// # Arguments
@@ -2609,7 +2611,8 @@ pub fn dot<T: TensorType + Mul<Output = T> + Add<Output = T> + Send + Sync + std
 
     #[cfg(not(any(
         all(target_arch = "wasm32", target_os = "unknown"),
-        target_arch = "riscv64"
+        target_arch = "riscv64",
+        not(feature = "parallel")
     )))]
     let res: Vec<T> = a
         .par_iter()
@@ -2623,7 +2626,8 @@ pub fn dot<T: TensorType + Mul<Output = T> + Add<Output = T> + Send + Sync + std
 
     #[cfg(any(
         all(target_arch = "wasm32", target_os = "unknown"),
-        target_arch = "riscv64"
+        target_arch = "riscv64",
+        not(feature = "parallel")
     ))]
     let res: Vec<T> = {
         // Targets without a worker pool use the sequential dot product.

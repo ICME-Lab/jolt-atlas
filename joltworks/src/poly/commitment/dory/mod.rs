@@ -31,6 +31,7 @@ pub use types::{DoryCommitment, DoryHint, DoryProof, DoryProverSetup, DoryVerifi
 
 use std::borrow::Borrow;
 
+use crate::par::prelude::*;
 use ark_bn254::Fr;
 use dory::{
     backends::arkworks::{ArkFr, ArkG1, ArkGT, ArkworksPolynomial, G1Routines, G2Routines, BN254},
@@ -40,7 +41,6 @@ use dory::{
     },
     prove as dory_prove, setup as dory_setup, verify as dory_verify, Transparent,
 };
-use rayon::prelude::*;
 
 use self::transcript::LocalToDoryTranscript;
 use crate::{

@@ -191,8 +191,8 @@ pub(super) fn sat_accumulate_pair(
     combine: impl Fn(i64, i64) -> i64 + Sync,
 ) -> crate::tensor::Tensor<i64> {
     use crate::tensor::get_broadcasted_shape;
+    use crate::utils::parallel_utils::*;
     use common::parallel::par_enabled;
-    use rayon::prelude::*;
 
     let shape = get_broadcasted_shape(lhs.dims(), rhs.dims())
         .unwrap_or_else(|_| panic!("{op_name}: incompatible broadcast shapes"));
@@ -262,8 +262,8 @@ pub(super) fn floor_rebase_clamp_i32(
 
 /// Clamp each element of a `Tensor<i64>` into `[i32::MIN, i32::MAX]`.
 pub(super) fn clamp_to_i32(t: &crate::tensor::Tensor<i64>) -> crate::tensor::Tensor<i32> {
+    use crate::utils::parallel_utils::*;
     use common::parallel::par_enabled;
-    use rayon::prelude::*;
 
     let data: Vec<i32> = t
         .data()

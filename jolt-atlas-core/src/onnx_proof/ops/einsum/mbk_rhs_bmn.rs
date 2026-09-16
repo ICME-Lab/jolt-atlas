@@ -10,6 +10,7 @@ use crate::{
     utils::dims::EinsumDims,
 };
 use atlas_onnx_tracer::tensor::Tensor;
+use joltworks::par::prelude::*;
 use joltworks::{
     field::JoltField,
     poly::{
@@ -19,7 +20,6 @@ use joltworks::{
     },
     utils::{math::Math, thread::unsafe_allocate_zero_vec},
 };
-use rayon::prelude::*;
 
 /// Layout of the right operand's batch (`b`) and free (`n`) axes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

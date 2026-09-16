@@ -1,9 +1,9 @@
+use crate::utils::parallel_utils::*;
 use crate::{
     ops::{Cube, Op},
     tensor::Tensor,
 };
 use common::parallel::par_enabled;
-use rayon::prelude::*;
 
 impl Op for Cube {
     #[tracing::instrument(name = "Cube::f", skip_all)]

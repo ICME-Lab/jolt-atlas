@@ -43,6 +43,7 @@ use common::{
     parallel::par_enabled,
     CommittedPoly,
 };
+use joltworks::par::prelude::*;
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::JoltField,
@@ -50,7 +51,6 @@ use joltworks::{
     subprotocols,
     utils::{lookup_bits::LookupBits, math::Math},
 };
-use rayon::prelude::*;
 
 /// Builds a one-hot RaD witness for any of the range-checking operand types.
 ///

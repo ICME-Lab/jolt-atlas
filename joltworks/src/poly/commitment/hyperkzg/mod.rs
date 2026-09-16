@@ -9,6 +9,7 @@
 //! (2) HyperKZG is specialized to use KZG as the univariate commitment scheme, so it includes several optimizations (both during the transformation of multilinear-to-univariate claims
 //! and within the KZG commitment scheme implementation itself).
 
+use crate::par::prelude::*;
 use crate::{
     field::JoltField,
     msm::VariableBaseMSM,
@@ -25,10 +26,6 @@ use ark_std::{One, Zero};
 use common::parallel::par_enabled;
 use kzg::{KZGProverKey, KZGVerifierKey, UnivariateKZG, SRS};
 use rand_core::{CryptoRng, RngCore};
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
-    IntoParallelRefMutIterator, ParallelIterator,
-};
 use std::{
     io::{Read as IoRead, Write as IoWrite},
     marker::PhantomData,
@@ -548,7 +545,7 @@ impl HyperKZG<ark_bn254::Bn254> {
         // Use optimized batch point addition (all coefficients are 1)
         let g1_bases = pk.kzg_pk.g1_powers();
         let indices_slice = [indices];
-        let results = jolt_optimizations::batch_g1_additions_multi(g1_bases, &indices_slice);
+        let results = batch_g1_additions(g1_bases, &indices_slice);
 
         Ok(HyperKZGCommitment(results[0]))
     }
@@ -590,8 +587,33 @@ impl HyperKZG<ark_bn254::Bn254> {
             .collect();
 
         let g1_bases = pk.kzg_pk.g1_powers();
-        let results = jolt_optimizations::batch_g1_additions_multi(g1_bases, &all_indices);
+        let results = batch_g1_additions(g1_bases, &all_indices);
 
         Ok(results.into_iter().map(HyperKZGCommitment).collect())
+    }
+}
+
+// The optimized batch helper starts Rayon workers. The serial implementation
+// computes the same group sums without that dependency.
+fn batch_g1_additions(
+    bases: &[ark_bn254::G1Affine],
+    indices: &[Vec<usize>],
+) -> Vec<ark_bn254::G1Affine> {
+    #[cfg(feature = "parallel")]
+    {
+        jolt_optimizations::batch_g1_additions_multi(bases, indices)
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        use ark_ec::CurveGroup;
+        use ark_std::Zero;
+        indices
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .fold(ark_bn254::G1Projective::zero(), |sum, &i| sum + bases[i])
+                    .into_affine()
+            })
+            .collect()
     }
 }

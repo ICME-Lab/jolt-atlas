@@ -11,6 +11,7 @@ use crate::{
 };
 use atlas_onnx_tracer::{node::ComputationNode, tensor::Tensor};
 use common::parallel::par_enabled;
+use joltworks::par::prelude::*;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -20,7 +21,6 @@ use joltworks::{
     },
     utils::math::Math,
 };
-use rayon::prelude::*;
 
 #[derive(Clone, Copy)]
 enum RbmkRbnkBmnVariant {

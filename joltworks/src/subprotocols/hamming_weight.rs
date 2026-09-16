@@ -1,10 +1,10 @@
+use crate::par::prelude::*;
 use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use ark_std::Zero;
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
-use rayon::prelude::*;
 use std::iter::zip;
 
 use crate::{

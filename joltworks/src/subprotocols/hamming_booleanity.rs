@@ -1,9 +1,9 @@
+use crate::par::prelude::*;
 use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use common::parallel::par_enabled;
 use common::VirtualPoly;
-use rayon::prelude::*;
 use std::iter::zip;
 
 use crate::{

@@ -4,7 +4,7 @@
 //! production reference.
 //!
 //! ```bash
-//! cargo run --release -p jolt-atlas-core --example field_bench -- [nanoGPT|gpt2|qwen] [runs] [config filter]
+//! cargo run --release -p jolt-atlas-core --example field_bench -- [nanoGPT|gpt2|qwen] [runs] [config filter] [--trace]
 //! ```
 
 use atlas_onnx_tracer::{
@@ -125,7 +125,10 @@ fn run<F: JoltField, PCS: CommitmentScheme<Field = F>>(
 }
 
 fn main() {
-    let mut args = std::env::args().skip(1);
+    // `--trace` writes a Chrome trace JSON of the prover spans; `--trace-terminal`
+    // prints span closes. Flags are stripped from the positional arguments.
+    let (_guard, _) = common::utils::logging::setup_tracing("field_bench");
+    let mut args = std::env::args().skip(1).filter(|a| !a.starts_with("--"));
     let model_name = args.next().unwrap_or_else(|| "nanoGPT".to_string());
     let runs: usize = args.next().map(|s| s.parse().unwrap()).unwrap_or(2);
     let filter: Option<String> = args.next();

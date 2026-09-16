@@ -27,11 +27,54 @@ use joltworks::{
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::{index_to_field_bitvector, math::Math, thread::drop_in_background_thread},
+    utils::{math::Math, thread::drop_in_background_thread},
 };
 use rayon::prelude::*;
 
 const DEGREE_BOUND: usize = 3;
+
+/// Evaluate a sparse indicator with one selected column per row. Reuse the
+/// column equality table when it costs no more than visiting each index bit;
+/// otherwise select the bit factors directly without allocating bit vectors.
+fn evaluate_max_indicator<F: JoltField>(r_rows: &[F], r_columns: &[F], indices: &[usize]) -> F {
+    let rows = 1usize
+        .checked_shl(r_rows.len() as u32)
+        .expect("row domain too large");
+    let columns = 1usize
+        .checked_shl(r_columns.len() as u32)
+        .expect("column domain too large");
+    assert_eq!(indices.len(), rows);
+    assert!(indices.iter().all(|index| *index < columns));
+    let row_weights = EqPolynomial::evals(r_rows);
+    if columns <= rows.saturating_mul(r_columns.len().max(1)) {
+        let column_weights = EqPolynomial::evals(r_columns);
+        row_weights
+            .iter()
+            .zip(indices)
+            .map(|(row, index)| *row * column_weights[*index])
+            .sum()
+    } else {
+        let complements: Vec<F> = r_columns.iter().map(|value| F::one() - value).collect();
+        row_weights
+            .iter()
+            .zip(indices)
+            .map(|(row, index)| {
+                let column: F = r_columns
+                    .iter()
+                    .enumerate()
+                    .map(|(bit, value)| {
+                        if (index >> (r_columns.len() - bit - 1)) & 1 == 1 {
+                            *value
+                        } else {
+                            complements[bit]
+                        }
+                    })
+                    .product();
+                *row * column
+            })
+            .sum()
+    }
+}
 
 /// Shared parameters for the max indicator sumcheck instance.
 #[derive(Clone)]
@@ -140,16 +183,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MaxIndicatorParams<F> {
             .normalize_opening_point(&sumcheck_challenges.into_opening())
             .r;
         let (r_k, r_j) = r_sc.split_at(self.log_F());
-        let eq_k_evals = EqPolynomial::evals(r_k);
-        let log_n = r_j.len();
-        let e_claim: F = eq_k_evals
-            .iter()
-            .zip(self.argmax_k.iter())
-            .map(|(&eq_k, &argmax_j)| {
-                let y = index_to_field_bitvector::<F>(argmax_j as u64, log_n);
-                eq_k * EqPolynomial::mle(r_j, &y)
-            })
-            .sum();
+        let e_claim = evaluate_max_indicator(r_k, r_j, &self.argmax_k);
         let eq_eval = EqPolynomial::mle(&self.r1_k, r_k);
         vec![eq_eval * e_claim]
     }
@@ -326,20 +360,92 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MaxIndicato
         let accessor = AccOpeningAccessor::new(accumulator, &self.params.node);
         let X_claim = accessor.get_nodeio(Target::Input(0)).1;
 
-        // Evaluate e(r_sc) in O(F · log N) by exploiting sparsity:
-        // e has exactly F nonzero entries at positions k·N + argmax_k[k],
-        // so ẽ(r_k, r_j) = Σ_k eq(r_k, bits(k)) · eq(r_j, bits(argmax_k[k]))
         let (r_k, r_j) = r_sc.split_at(self.params.log_F());
-        let eq_k_evals = EqPolynomial::evals(r_k);
-        let log_n = r_j.len();
-        let e_claim: F = eq_k_evals
-            .iter()
-            .zip(self.params.argmax_k.iter())
-            .map(|(&eq_k, &argmax_j)| {
-                let y = index_to_field_bitvector::<F>(argmax_j as u64, log_n);
-                eq_k * EqPolynomial::mle(r_j, &y)
-            })
-            .sum();
+        let e_claim = evaluate_max_indicator(r_k, r_j, &self.params.argmax_k);
         EqPolynomial::mle(&self.params.r1_k, r_k) * e_claim * X_claim
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::evaluate_max_indicator;
+    use ark_bn254::Fr;
+    use joltworks::{
+        field::JoltField,
+        poly::{
+            eq_poly::EqPolynomial,
+            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        },
+        utils::{index_to_field_bitvector, math::Math},
+    };
+    use rand::{rngs::StdRng, Rng, SeedableRng};
+
+    #[test]
+    fn indicator_evaluation_matches_dense_and_sparse_definitions() {
+        let mut rng = StdRng::seed_from_u64(0x494e4449434154);
+        for (rows, columns) in [
+            (1usize, 1usize),
+            (1, 32),
+            (2, 64),
+            (32, 2),
+            (16, 16),
+            (64, 128),
+        ] {
+            for repeated in [false, true] {
+                let indices: Vec<usize> = (0..rows)
+                    .map(|_| {
+                        if repeated {
+                            columns - 1
+                        } else {
+                            rng.gen_range(0..columns)
+                        }
+                    })
+                    .collect();
+                let row_point: Vec<Fr> = (0..rows.log_2()).map(|_| Fr::random(&mut rng)).collect();
+                let column_point: Vec<Fr> =
+                    (0..columns.log_2()).map(|_| Fr::random(&mut rng)).collect();
+                let mut dense = vec![Fr::from(0u64); rows * columns];
+                for (row, index) in indices.iter().enumerate() {
+                    dense[row * columns + index] = Fr::from(1u64);
+                }
+                let point: Vec<Fr> = row_point.iter().chain(&column_point).copied().collect();
+                let expected = MultilinearPolynomial::from(dense).evaluate(&point);
+                let sparse: Fr = EqPolynomial::<Fr>::evals(&row_point)
+                    .iter()
+                    .zip(&indices)
+                    .map(|(weight, index)| {
+                        let bits = index_to_field_bitvector::<Fr>(*index as u64, columns.log_2());
+                        *weight * EqPolynomial::mle(&column_point, &bits)
+                    })
+                    .sum();
+                assert_eq!(
+                    evaluate_max_indicator(&row_point, &column_point, &indices),
+                    expected
+                );
+                assert_eq!(sparse, expected);
+                for row in [0, rows - 1] {
+                    let r = index_to_field_bitvector::<Fr>(row as u64, rows.log_2());
+                    for column in [0, columns - 1] {
+                        let c = index_to_field_bitvector::<Fr>(column as u64, columns.log_2());
+                        assert_eq!(
+                            evaluate_max_indicator(&r, &c, &indices),
+                            Fr::from((indices[row] == column) as u64)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn indicator_rejects_out_of_range_index() {
+        evaluate_max_indicator::<Fr>(&[], &[Fr::from(0u64)], &[2]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn indicator_rejects_wrong_row_count() {
+        evaluate_max_indicator::<Fr>(&[Fr::from(0u64)], &[], &[0]);
     }
 }

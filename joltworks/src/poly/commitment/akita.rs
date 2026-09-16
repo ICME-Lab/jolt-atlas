@@ -852,8 +852,16 @@ impl CommitmentScheme for AkitaScheme {
                     Packed::OneHot(rows) => rows.populated(),
                     Packed::Dense(p) => p.evaluations().iter().filter(|v| !v.is_zero()).count(),
                 };
+                let zero_digits: usize = match &packed {
+                    Packed::OneHot(rows) => rows
+                        .zero_masks
+                        .iter()
+                        .map(|m| m.count_ones() as usize)
+                        .sum(),
+                    _ => 0,
+                };
                 eprintln!(
-                    "[akita commit] class {class_index}: {:?} logical={} physical={} slots={} populated={populated} one_hot_k={one_hot_k:?} pack={t_pack:.2?} commit={:.2?}",
+                    "[akita commit] class {class_index}: {:?} logical={} physical={} slots={} populated={populated} zero_digits={zero_digits} one_hot_k={one_hot_k:?} pack={t_pack:.2?} commit={:.2?}",
                     key.flavor, key.logical_num_vars, shape.physical_num_vars, members.len(), t0.elapsed()
                 );
             }

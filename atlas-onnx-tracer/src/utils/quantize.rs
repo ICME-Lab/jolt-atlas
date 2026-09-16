@@ -137,9 +137,9 @@ pub fn mask_sentinel_magnitude(scale: Scale) -> f64 {
 pub fn quantize_float(float: f64, scale: Scale) -> i32 {
     let mult = scale_to_multiplier(scale);
     let max_value = ((i32::MAX as f64) / mult).round(); // the maximum value that can be represented w/o sig bit truncation
-                                                        // if float > max_value || float < -max_value {
-                                                        //     panic!("Value {float} is out of range for quantization with scale {scale}");
-                                                        // }
+    // if float > max_value || float < -max_value {
+    //     panic!("Value {float} is out of range for quantization with scale {scale}");
+    // }
 
     let clamped_float = if float < -max_value {
         if float < -1e6 {
@@ -166,11 +166,7 @@ pub fn quantize_float(float: f64, scale: Scale) -> i32 {
 
     // HACK: rm this when we have clamping for Layernorm
     if scaled == 0 && float != 0.0 {
-        if float > 0.0 {
-            1
-        } else {
-            -1
-        }
+        if float > 0.0 { 1 } else { -1 }
     } else {
         scaled
     }

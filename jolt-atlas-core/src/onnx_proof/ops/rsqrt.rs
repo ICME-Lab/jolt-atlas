@@ -398,7 +398,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RsqrtProver<F
             sqrt_remainder,
             ..
         } = self;
-        let [q_constant, q_quadratic] = eq_r_node_output.par_fold_out_in_unreduced::<9, 2>(&|g| {
+        let [q_constant, q_quadratic] = eq_r_node_output.par_fold_out_in_unreduced::<2>(&|g| {
             let x0 = input.get_bound_coeff(2 * g);
             let x1 = input.get_bound_coeff(2 * g + 1);
             let quotient0 = quotient.get_bound_coeff(2 * g);

@@ -164,7 +164,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MulProver<F> 
             right_operand,
             ..
         } = self;
-        let [q_constant, q_quadratic] = eq_r_node_output.par_fold_out_in_unreduced::<9, 2>(&|g| {
+        let [q_constant, q_quadratic] = eq_r_node_output.par_fold_out_in_unreduced::<2>(&|g| {
             let lo0 = left_operand.get_bound_coeff(2 * g);
             let lo_inf = left_operand.get_bound_coeff(2 * g + 1) - lo0;
             let ro0 = right_operand.get_bound_coeff(2 * g);

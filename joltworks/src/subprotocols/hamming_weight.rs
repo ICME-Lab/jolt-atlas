@@ -8,7 +8,7 @@ use rayon::prelude::*;
 use std::iter::zip;
 
 use crate::{
-    field::{IntoOpening, JoltField, MulTrunc},
+    field::{IntoOpening, JoltField},
     poly::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
@@ -126,15 +126,15 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for HammingWeight
                     .into_par_iter()
                     .with_min_len(par_enabled())
                     .map(|i| ra.get_bound_coeff(2 * i))
-                    .fold_with(F::Unreduced::<5>::zero(), |running, new| {
-                        running + new.as_unreduced_ref()
+                    .fold_with(F::UnreducedMulU64::zero(), |running, new| {
+                        running + new.to_unreduced()
                     })
-                    .reduce(F::Unreduced::zero, |running, new| running + new);
-                ra_sum.mul_trunc::<4, 9>(gamma.as_unreduced_ref())
+                    .reduce(F::UnreducedMulU64::zero, |running, new| running + new);
+                F::reduce_mul_u64(ra_sum) * gamma
             })
-            .reduce(F::Unreduced::zero, |running, new| running + new);
+            .reduce(F::zero, |running, new| running + new);
 
-        let eval_at_0 = F::from_montgomery_reduce(prover_msg);
+        let eval_at_0 = prover_msg;
         UniPoly::from_evals_and_hint(previous_claim, &[eval_at_0])
     }
 

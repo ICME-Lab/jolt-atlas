@@ -4,7 +4,7 @@
 //! production reference.
 //!
 //! ```bash
-//! cargo run --release -p jolt-atlas-core --example field_bench -- [nanoGPT|gpt2] [runs]
+//! cargo run --release -p jolt-atlas-core --example field_bench -- [nanoGPT|gpt2] [runs] [config filter]
 //! ```
 
 use atlas_onnx_tracer::{
@@ -90,6 +90,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let model_name = args.next().unwrap_or_else(|| "nanoGPT".to_string());
     let runs: usize = args.next().map(|s| s.parse().unwrap()).unwrap_or(2);
+    let filter: Option<String> = args.next();
     let (model, inputs) = match model_name.as_str() {
         "nanoGPT" => nano_gpt(),
         "gpt2" => gpt2(),
@@ -112,6 +113,9 @@ fn main() {
         "config", "run", "prove", "verify", "proof bytes"
     );
     for (label, f) in configs {
+        if filter.as_ref().is_some_and(|f| !label.contains(f.as_str())) {
+            continue;
+        }
         for i in 0..runs {
             let t = f(shared.clone(), &inputs);
             println!(

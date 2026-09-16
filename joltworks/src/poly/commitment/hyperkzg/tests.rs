@@ -746,7 +746,7 @@ fn test_hyperkzg_one_hot_empty() {
 
 #[test]
 fn combined_commitment_matches_independent_multiplications() {
-    use ark_ec::PrimeGroup;
+    use ark_ec::{CurveGroup, PrimeGroup};
     let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0x434f4d42494e45);
     let generator = ark_bn254::G1Projective::generator();
     for size in [0, 1, 2, 31, 128, 1024] {

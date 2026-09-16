@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 pub mod execute;
 /// Functions for loading models from ONNX files.
 pub mod load;
+mod reshape_padding;
 pub mod shadow_trace;
 pub mod test;
 pub mod trace;

@@ -47,7 +47,8 @@ pub struct Verifier<'a, F: JoltField, T: Transcript> {
         Vec<Box<dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>>,
     >,
     /// Exponential tables reused by softmax nodes at the same scale.
-    pub(crate) softmax_tables: BTreeMap<i32, super::ops::softmax_last_axis::VerifierLookupTableData>,
+    pub(crate) softmax_tables:
+        BTreeMap<i32, super::ops::softmax_last_axis::VerifierLookupTableData>,
     /// One-hot checks to verify right after their parent batch.
     pub deferred_onehots: Vec<crate::onnx_proof::deferred_lookups::DeferredOneHot>,
 }

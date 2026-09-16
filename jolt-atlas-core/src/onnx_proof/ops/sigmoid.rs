@@ -23,6 +23,18 @@ pub(crate) struct SigmoidTableMarker;
 
 impl SmallActivationTable for SigmoidTableMarker {
     fn materialize() -> Vec<i32> {
+        #[cfg(feature = "fixed-tables")]
+        if let Some(table) = crate::onnx_proof::neural_teleport::fixed_tables::sigmoid() {
+            #[cfg(feature = "check-fixed-tables")]
+            assert_eq!(table, Self::materialize_reference());
+            return table;
+        }
+        Self::materialize_reference()
+    }
+}
+
+impl SigmoidTableMarker {
+    pub(crate) fn materialize_reference() -> Vec<i32> {
         crate::onnx_proof::neural_teleport::utils::materialize_signed_activation_table(
             ACTIVATION_TABLE_VARS,
             1,

@@ -5,6 +5,8 @@
 //! these don't use prefix-suffix decomposition and are designed for smaller
 //! table sizes typical of activation functions.
 
+#[cfg(any(test, feature = "fixed-tables"))]
+pub(crate) mod fixed_tables;
 pub mod cos;
 pub mod division;
 pub mod sin;

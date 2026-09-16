@@ -26,6 +26,16 @@ impl SinTable {
     /// Materialize the lookup table: `sin(index)` at the reduced scale, rescaled back
     /// up to `2^MODEL_SCALE` precision — matches `eval_trig`'s round-trip.
     pub fn materialize() -> Vec<i32> {
+        #[cfg(feature = "fixed-tables")]
+        if let Some(table) = super::fixed_tables::sin() {
+            #[cfg(feature = "check-fixed-tables")]
+            assert_eq!(table, Self::materialize_reference());
+            return table;
+        }
+        Self::materialize_reference()
+    }
+
+    pub(super) fn materialize_reference() -> Vec<i32> {
         let table_size = Self::table_size();
         let indices: Vec<i32> = (0..table_size).map(|i| i as i32).collect();
         let indices_tensor = Tensor::new(Some(&indices), &[1, table_size])

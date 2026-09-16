@@ -65,7 +65,12 @@ use joltworks::{
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
-use std::marker::PhantomData;
+use std::{
+    any::TypeId,
+    collections::BTreeMap,
+    marker::PhantomData,
+    sync::{Arc, Mutex},
+};
 
 const EXEC_DEGREE_BOUND: usize = 2;
 
@@ -355,9 +360,58 @@ impl<F: JoltField, T: Transcript, Table: SmallActivationTable> SumcheckInstanceP
     }
 }
 
+/// Fixed activation tables and their last evaluation, shared within one verification.
+/// Each marker identifies a fixed table, independent of the node and its inputs.
+pub(crate) struct ActivationTableCache<F: JoltField> {
+    tables: BTreeMap<TypeId, Arc<CachedActivationTable<F>>>,
+}
+
+impl<F: JoltField> Default for ActivationTableCache<F> {
+    fn default() -> Self {
+        Self {
+            tables: BTreeMap::new(),
+        }
+    }
+}
+
+impl<F: JoltField> ActivationTableCache<F> {
+    fn get<Table: SmallActivationTable>(&mut self) -> Arc<CachedActivationTable<F>> {
+        self.tables
+            .entry(TypeId::of::<Table>())
+            .or_insert_with(|| {
+                Arc::new(CachedActivationTable {
+                    polynomial: MultilinearPolynomial::from(Table::materialize()),
+                    last_evaluation: Mutex::new(None),
+                })
+            })
+            .clone()
+    }
+}
+
+struct CachedActivationTable<F: JoltField> {
+    polynomial: MultilinearPolynomial<F>,
+    last_evaluation: Mutex<Option<(Vec<F>, F)>>,
+}
+
+impl<F: JoltField> CachedActivationTable<F> {
+    fn evaluate(&self, point: &[F]) -> F {
+        // Deferred instances use the same point. Check the full point so reuse
+        // also remains correct if instances are evaluated in different batches.
+        let mut cached = self.last_evaluation.lock().unwrap();
+        if let Some((previous, value)) = cached.as_ref() {
+            if previous == point {
+                return *value;
+            }
+        }
+        let value = self.polynomial.evaluate(point);
+        *cached = Some((point.to_vec(), value));
+        value
+    }
+}
+
 struct SmallTableVerifier<F: JoltField, Table> {
     params: SmallTableParams<F, Table>,
-    table: MultilinearPolynomial<F>,
+    table: Arc<CachedActivationTable<F>>,
 }
 
 impl<F: JoltField, Table: SmallActivationTable> SmallTableVerifier<F, Table> {
@@ -365,6 +419,7 @@ impl<F: JoltField, Table: SmallActivationTable> SmallTableVerifier<F, Table> {
         computation_node: ComputationNode,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
+        tables: &mut ActivationTableCache<F>,
     ) -> Self {
         let params = SmallTableParams::new(computation_node, accumulator, transcript);
         accumulator.append_virtual(
@@ -372,7 +427,7 @@ impl<F: JoltField, Table: SmallActivationTable> SmallTableVerifier<F, Table> {
             clamped_opening_id(params.computation_node.idx),
             params.r_node_output.clone(),
         );
-        let table = MultilinearPolynomial::from(Table::materialize());
+        let table = tables.get::<Table>();
         Self { params, table }
     }
 }
@@ -522,6 +577,7 @@ where
         node.clone(),
         &mut verifier.accumulator,
         &mut verifier.transcript,
+        &mut verifier.activation_tables,
     );
     verifier.defer(DeferredBatch::ActivationExec, Box::new(exec_verifier));
 
@@ -559,4 +615,67 @@ pub fn clamped_activation_committed_polynomials(node: &ComputationNode) -> Vec<C
     polys.extend((0..clamp_d).map(|i| CommittedPoly::ActivationClampRaD(node.idx, i)));
     polys.extend((0..small_d).map(|i| CommittedPoly::ActivationSmallRaD(node.idx, i)));
     polys
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use crate::onnx_proof::ops::{
+        erf::ErfTableMarker, sigmoid::SigmoidTableMarker, tanh::TanhTableMarker, test::unit_test_op,
+    };
+    use ark_bn254::Fr;
+    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use joltworks::poly::eq_poly::EqPolynomial;
+    use rand::{rngs::StdRng, SeedableRng};
+
+    fn check_table<Table: SmallActivationTable>(cache: &mut ActivationTableCache<Fr>) {
+        let table = cache.get::<Table>();
+        assert!(Arc::ptr_eq(&table, &cache.get::<Table>()));
+        let values = Table::materialize();
+        let mut rng = StdRng::seed_from_u64(773);
+        let points: Vec<Vec<Fr>> = (0..2)
+            .map(|_| {
+                (0..ACTIVATION_TABLE_VARS)
+                    .map(|_| Fr::random(&mut rng))
+                    .collect()
+            })
+            .collect();
+        for point in [&points[0], &points[0], &points[1], &points[0]] {
+            // Independent dense equality sum, including a changed point and
+            // returning to the first point after cache replacement.
+            let expected: Fr = EqPolynomial::<Fr>::evals(point)
+                .iter()
+                .zip(&values)
+                .map(|(weight, value)| *weight * Fr::from_i32(*value))
+                .sum();
+            assert_eq!(table.evaluate(point), expected);
+        }
+    }
+
+    #[test]
+    fn activation_cache_matches_dense_tables() {
+        let mut cache = ActivationTableCache::<Fr>::default();
+        check_table::<SigmoidTableMarker>(&mut cache);
+        check_table::<TanhTableMarker>(&mut cache);
+        check_table::<ErfTableMarker>(&mut cache);
+        assert_eq!(cache.tables.len(), 3);
+        assert!(!Arc::ptr_eq(
+            &cache.get::<SigmoidTableMarker>(),
+            &cache.get::<TanhTableMarker>()
+        ));
+    }
+
+    #[test]
+    fn repeated_and_mixed_activation_proof() {
+        let mut builder = ModelBuilder::new();
+        let input = builder.input(vec![16]);
+        let first = builder.sigmoid(input);
+        let second = builder.tanh(first);
+        let third = builder.sigmoid(second);
+        let output = builder.erf(third);
+        builder.mark_output(output);
+        let mut rng = StdRng::seed_from_u64(889);
+        let input = Tensor::random_range(&mut rng, &[16], -(1 << 17)..(1 << 17));
+        unit_test_op(builder.build(), &[input]);
+    }
 }

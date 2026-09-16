@@ -604,30 +604,6 @@ mod tests {
     use rand_core::SeedableRng;
 
     #[test]
-    fn linear_interpolation_matches_vandermonde() {
-        let mut rng = ChaCha20Rng::from_seed([29; 32]);
-        let mut cases = vec![
-            [Fr::from(0u64), Fr::from(0u64)],
-            [Fr::from(42u64), Fr::from(42u64)],
-            [Fr::from(0u64), Fr::from(1u64)],
-            [Fr::from(1u64), Fr::from(0u64)],
-        ];
-        cases.extend((0..128).map(|_| [Fr::random(&mut rng), Fr::random(&mut rng)]));
-        for values in cases {
-            let expected = UniPoly::from_coeff(UniPoly::vandermonde_interpolation(&values));
-            let actual = UniPoly::from_evals(&values);
-            assert_eq!(actual, expected);
-            let mut actual_bytes = Vec::new();
-            let mut expected_bytes = Vec::new();
-            actual.serialize_compressed(&mut actual_bytes).unwrap();
-            expected.serialize_compressed(&mut expected_bytes).unwrap();
-            assert_eq!(actual_bytes, expected_bytes);
-            assert_eq!(actual.eval_at_zero(), values[0]);
-            assert_eq!(actual.eval_at_one(), values[1]);
-        }
-    }
-
-    #[test]
     fn test_from_evals_toom() {
         // Our degree 3 polynomial is: 5 + x + 3x^2 + 9x^3.
         let gt_poly = UniPoly::<Fr>::from_coeff(vec![5.into(), 1.into(), 3.into(), 9.into()]);
@@ -666,6 +642,30 @@ mod tests {
             coeffs: vec![0.into(), 0.into(), 1.into(), 0.into()],
         };
         assert_eq!(expected_poly, poly);
+    }
+
+    #[test]
+    fn linear_interpolation_matches_vandermonde() {
+        let mut rng = ChaCha20Rng::from_seed([29; 32]);
+        let mut cases = vec![
+            [Fr::from(0u64), Fr::from(0u64)],
+            [Fr::from(42u64), Fr::from(42u64)],
+            [Fr::from(0u64), Fr::from(1u64)],
+            [Fr::from(1u64), Fr::from(0u64)],
+        ];
+        cases.extend((0..128).map(|_| [Fr::random(&mut rng), Fr::random(&mut rng)]));
+        for values in cases {
+            let expected = UniPoly::from_coeff(UniPoly::vandermonde_interpolation(&values));
+            let actual = UniPoly::from_evals(&values);
+            assert_eq!(actual, expected);
+            let mut actual_bytes = Vec::new();
+            let mut expected_bytes = Vec::new();
+            actual.serialize_compressed(&mut actual_bytes).unwrap();
+            expected.serialize_compressed(&mut expected_bytes).unwrap();
+            assert_eq!(actual_bytes, expected_bytes);
+            assert_eq!(actual.eval_at_zero(), values[0]);
+            assert_eq!(actual.eval_at_one(), values[1]);
+        }
     }
 
     #[test]

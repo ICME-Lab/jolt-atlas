@@ -37,6 +37,8 @@ mod native_einsum;
 #[cfg(feature = "zk")]
 pub mod native_graph;
 #[cfg(feature = "zk")]
+mod native_layout;
+#[cfg(feature = "zk")]
 pub mod native_lookup;
 #[cfg(feature = "zk")]
 pub mod native_mul;

@@ -88,16 +88,16 @@ pub struct NativeMulProof {
 }
 
 #[derive(Clone, Copy)]
-struct Range {
-    tensor: usize,
-    bits: usize,
-    chunk: usize,
-    offset: u64,
-    input: OpeningId,
-    namespace: usize,
+pub(super) struct Range {
+    pub(super) tensor: usize,
+    pub(super) bits: usize,
+    pub(super) chunk: usize,
+    pub(super) offset: u64,
+    pub(super) input: OpeningId,
+    pub(super) namespace: usize,
 }
 impl Range {
-    fn new(tensor: usize, bits: usize, offset: u64) -> Self {
+    pub(super) fn new(tensor: usize, bits: usize, offset: u64) -> Self {
         // Full chunks only: no unconstrained leading padding bits. Short
         // remainder widths use smaller chunks without materializing 2^bits.
         let chunk = [8, 4, 2, 1]
@@ -113,13 +113,17 @@ impl Range {
             namespace: tensor,
         }
     }
-    fn chunks(&self) -> usize {
+    pub(super) fn chunks(&self) -> usize {
         self.bits / self.chunk
     }
-    fn digit(&self, value: u64, d: usize) -> u8 {
+    pub(super) fn digit(&self, value: u64, d: usize) -> u8 {
         ((value >> (d * self.chunk)) & ((1 << self.chunk) - 1)) as u8
     }
-    fn params(&self, r: &[Fr], t: &mut Blake2bTranscript) -> BooleanitySumcheckParams<Fr> {
+    pub(super) fn params(
+        &self,
+        r: &[Fr],
+        t: &mut Blake2bTranscript,
+    ) -> BooleanitySumcheckParams<Fr> {
         let d = self.chunks();
         let hamming: Vec<Fr> = t.challenge_vector(d);
         let beta: Fr = t.challenge_scalar();
@@ -144,7 +148,7 @@ impl Range {
             sumcheck_id: SumcheckId::Booleanity,
         }
     }
-    fn prover(
+    pub(super) fn prover(
         &self,
         values: &[u64],
         params: BooleanitySumcheckParams<Fr>,

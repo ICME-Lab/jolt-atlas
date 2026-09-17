@@ -3,7 +3,7 @@
 mod enabled {
     use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
     use atlas_onnx_tracer::{
-        ops::{Add, MeanOfSquares, Mul, Op, Sub, Sum},
+        ops::{Add, MeanOfSquares, Mul, Op, Sigmoid, Sub, Sum},
         tensor::Tensor,
     };
     use joltworks::{
@@ -49,6 +49,21 @@ mod enabled {
     fn graph(kind: &str, rows: usize) -> NativeGraph {
         assert!(rows >= 2 && rows.is_power_of_two());
         let (num_inputs, nodes, outputs) = match kind {
+            "activation" => {
+                let bound = 1i32 << 17;
+                let domain = (-bound..bound).collect::<Vec<_>>();
+                let grid = Tensor::new(Some(&domain), &[domain.len()]).unwrap();
+                let table = Sigmoid { scale: 14 }.f(vec![&grid]).data().to_vec();
+                (
+                    1,
+                    vec![
+                        NativeGraphNode::clamped_lookup(0, table, -bound, 4),
+                        NativeGraphNode::mul(0, 1, 14),
+                        NativeGraphNode::sum(2, vec![0]),
+                    ],
+                    vec![1, 2, 3],
+                )
+            }
             "mixed" => (
                 2,
                 vec![
@@ -142,6 +157,21 @@ mod enabled {
         }
     }
     fn inputs(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if g.context.ends_with(b"/activation") {
+            let values = [
+                i32::MIN,
+                -(1 << 17) - 1,
+                -(1 << 17),
+                -1,
+                0,
+                1,
+                (1 << 17) - 1,
+                i32::MAX,
+            ];
+            return vec![(0..g.input_shapes[0][0])
+                .map(|i| values[i % values.len()])
+                .collect()];
+        }
         if g.context.ends_with(b"/matrix") || g.context.ends_with(b"/batched-matrix") {
             return g
                 .input_shapes
@@ -289,6 +319,12 @@ mod enabled {
                 }
                 .data()
                 .to_vec()
+            } else if n.lookup.as_ref().unwrap().clamp_lower.is_some() {
+                // Compare the complete signed input against the actual Atlas
+                // activation kernel, independently of the clamp/index witness.
+                assert!(g.context.ends_with(b"/activation"));
+                let x = Tensor::new(Some(&values[n.input]), &shapes[n.input]).unwrap();
+                Sigmoid { scale: 14 }.f(vec![&x]).data().to_vec()
             } else {
                 values[n.input]
                     .iter()
@@ -301,11 +337,13 @@ mod enabled {
     }
     pub fn run() {
         let args = std::env::args().collect::<Vec<_>>();
-        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix ROWS");
+        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation ROWS");
         let directory = Path::new(&args[2]);
         let kind = &args[3];
         let rows = args[4].parse::<usize>().unwrap();
+        let registration_timer = Instant::now();
         let expected = graph(kind, rows);
+        let registration_seconds = registration_timer.elapsed().as_secs_f64();
         let chain = args[1].ends_with("-chain");
         if chain {
             assert_eq!(kind, "table-chain");
@@ -402,7 +440,7 @@ mod enabled {
                 .iter()
                 .map(|i| &shapes[*i])
                 .collect::<Vec<_>>();
-            let record=format!("{{\"input_shapes\":{input_shapes:?},\"output_shapes\":{output_shapes:?},\"scope\":\"small native tensor graph, not Qwen or provenance\",\"fixture\":\"{kind}\",\"variant\":\"{variant}\",\"rows\":{rows},\"nodes\":{nodes},\"setup_seconds\":{setup_seconds},\"commit_seconds\":{commit_seconds},\"prove_seconds\":{prove_seconds},\"verify_seconds\":{verify_seconds},\"proof_bytes\":{proof_bytes},\"statement_bytes\":{statement_bytes},\"verifier_bytes\":{verifier_bytes},\"expected_outputs_match\":true}}\n");
+            let record=format!("{{\"input_shapes\":{input_shapes:?},\"output_shapes\":{output_shapes:?},\"scope\":\"small native tensor graph, not Qwen or provenance\",\"fixture\":\"{kind}\",\"variant\":\"{variant}\",\"rows\":{rows},\"nodes\":{nodes},\"registration_seconds\":{registration_seconds},\"setup_seconds\":{setup_seconds},\"commit_seconds\":{commit_seconds},\"prove_seconds\":{prove_seconds},\"verify_seconds\":{verify_seconds},\"proof_bytes\":{proof_bytes},\"statement_bytes\":{statement_bytes},\"verifier_bytes\":{verifier_bytes},\"expected_outputs_match\":true}}\n");
             fs::write(directory.join("measurement.json"), &record).unwrap();
             print!("{record}");
         } else {

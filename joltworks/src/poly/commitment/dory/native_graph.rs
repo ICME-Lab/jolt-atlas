@@ -5,6 +5,7 @@
 
 use super::{
     native_add::{AddRegistration, AddWitness},
+    native_clamped_lookup::{ClampedLookupRegistration, ClampedLookupWitness},
     native_einsum::{Contraction, ContractionRegistration, ContractionWitness},
     native_lookup::Lookup,
     native_mul::{MulRegistration, NativeMulWitness},
@@ -77,6 +78,9 @@ pub struct NativeGraphEinsum {
 }
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct NativeGraphLookup {
+    /// Some(lower) clamps the signed input to [lower, lower+table.len()-1]
+    /// and subtracts lower to obtain the hidden table address.
+    pub clamp_lower: Option<i32>,
     pub table: Vec<i32>,
     pub log_chunk: u8,
 }
@@ -160,9 +164,19 @@ impl NativeGraphNode {
             einsum: None,
             mul: None,
             add: None,
-            lookup: Some(NativeGraphLookup { table, log_chunk }),
+            lookup: Some(NativeGraphLookup {
+                table,
+                log_chunk,
+                clamp_lower: None,
+            }),
             reduce: None,
         }
+    }
+    /// Clamp a signed input to the registered table interval before lookup.
+    pub fn clamped_lookup(input: usize, table: Vec<i32>, lower: i32, log_chunk: u8) -> Self {
+        let mut node = Self::lookup(input, table, log_chunk);
+        node.lookup.as_mut().unwrap().clamp_lower = Some(lower);
+        node
     }
     /// Bounds are signed bit widths. Their sum plus the contraction length
     /// in bits must be at most 64, proving that every partial sum fits i64.
@@ -275,7 +289,10 @@ impl NativeGraph {
                     if l.table.len() >= 2
                         && l.table.len().is_power_of_two()
                         && l.table.len().ilog2() <= 31
-                        && matches!(l.log_chunk, 1 | 2 | 4 | 8) =>
+                        && matches!(l.log_chunk, 1 | 2 | 4 | 8)
+                        && l.clamp_lower.is_none_or(|lower| {
+                            i64::from(lower) + l.table.len() as i64 - 1 <= i64::from(i32::MAX)
+                        }) =>
                 {
                     shape.clone()
                 }
@@ -417,6 +434,25 @@ impl NativeGraph {
             .unwrap(),
         }
     }
+    fn lookup_clamp(&self, i: usize) -> Option<ClampedLookupRegistration> {
+        let node = &self.nodes[i];
+        let l = node.lookup.as_ref()?;
+        let lower = l.clamp_lower?;
+        let aux = self.tensor_count() + 4 * i;
+        Some(ClampedLookupRegistration {
+            tensors: [
+                tensor(node.input),
+                tensor(aux),
+                tensor(aux + 1),
+                tensor(aux + 2),
+            ],
+            lower,
+            table_len: l.table.len(),
+            initial: SumcheckId::NodeExecution(8 * i + 1),
+            final_stage: SumcheckId::NodeExecution(8 * i + 2),
+            namespace: 7 * i,
+        })
+    }
     fn lookup(&self, i: usize) -> Lookup {
         let node = &self.nodes[i];
         let l = node.lookup.as_ref().unwrap();
@@ -430,7 +466,11 @@ impl NativeGraph {
                 log_k,
             ),
             log_k,
-            input: OpeningId::new(tensor(node.input), source),
+            input: OpeningId::new(
+                self.lookup_clamp(i)
+                    .map_or(tensor(node.input), |c| c.tensors[1]),
+                source,
+            ),
             output: OpeningId::new(tensor(self.num_inputs() + i), source),
             namespace: 7 * self.nodes.len() + i,
         }
@@ -454,6 +494,10 @@ impl NativeGraph {
             } else {
                 let lookup = self.lookup(i);
                 keys.extend((0..lookup.params.instruction_d).map(|d| lookup.committed_poly(d)));
+                if let Some(clamp) = self.lookup_clamp(i) {
+                    keys.extend(clamp.tensors);
+                    keys.extend(clamp.indicator_keys());
+                }
             }
         }
         keys
@@ -479,7 +523,7 @@ impl NativeGraphStatement {
         Ok(())
     }
     fn transcript(&self) -> Blake2bTranscript {
-        let mut t = Blake2bTranscript::new(b"Atlas/private-tensor-graph/v4");
+        let mut t = Blake2bTranscript::new(b"Atlas/private-tensor-graph/v5");
         t.append_serializable(self);
         t
     }
@@ -601,11 +645,34 @@ impl NativeGraphWitness {
             } else {
                 let l = node.lookup.as_ref().unwrap();
                 let lookup = graph.lookup(i);
-                let indices = values[node.input]
-                    .iter()
-                    .map(|v| usize::try_from(*v))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|_| invalid("Negative table input"))?;
+                let indices = if let Some(clamp) = graph.lookup_clamp(i) {
+                    let witness = ClampedLookupWitness::new(
+                        &values[node.input],
+                        clamp.lower,
+                        clamp.table_len,
+                    )?;
+                    for (id, polynomial) in witness.polynomials {
+                        let id = match id {
+                            CommittedPoly::DivNodeQuotient(0) => continue,
+                            CommittedPoly::DivNodeQuotient(j) => clamp.tensors[j],
+                            CommittedPoly::NodeOutputRaD(j, d) => {
+                                CommittedPoly::NodeOutputRaD(clamp.namespace + j, d)
+                            }
+                            _ => return Err(invalid("Unexpected table clamp polynomial")),
+                        };
+                        if polynomials.insert(id, polynomial).is_some() {
+                            return Err(invalid("Graph witness namespace collision"));
+                        }
+                    }
+                    arithmetic_ranges.insert(i, witness.range_values);
+                    witness.indices
+                } else {
+                    values[node.input]
+                        .iter()
+                        .map(|v| usize::try_from(*v))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|_| invalid("Negative table input"))?
+                };
                 if indices.iter().any(|v| *v >= l.table.len()) {
                     return Err(invalid("Graph table input out of range"));
                 }
@@ -699,7 +766,18 @@ impl NativeGraphProof {
         let shapes = graph.tensor_shapes()?;
         if !polynomials.keys().eq(statement.commitments.keys())
             || !hints.keys().eq(statement.commitments.keys())
-            || arithmetic_ranges.len() + lookup_indices.len() != graph.nodes.len()
+            || !arithmetic_ranges.keys().copied().eq(graph
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| n.lookup.as_ref().is_none_or(|l| l.clamp_lower.is_some()))
+                .map(|(i, _)| i))
+            || !lookup_indices.keys().copied().eq(graph
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| n.lookup.is_some())
+                .map(|(i, _)| i))
         {
             return Err(invalid(
                 "Missing graph witness polynomials or operator data",
@@ -763,6 +841,15 @@ impl NativeGraphProof {
                 )?);
             } else {
                 let l = node.lookup.as_ref().unwrap();
+                if let Some(clamp) = graph.lookup_clamp(i) {
+                    let values = arithmetic_ranges
+                        .get(&i)
+                        .ok_or_else(|| invalid("Missing table clamp witness"))?;
+                    if values.len() != 4 || values.iter().any(|v| v.len() != 1 << log_rows) {
+                        return Err(invalid("Invalid table clamp witness"));
+                    }
+                    provers.extend(clamp.provers(log_rows, values, &polynomials, &mut a, &mut t));
+                }
                 let lookup = graph.lookup(i);
                 let indices = lookup_indices
                     .get(&i)
@@ -932,6 +1019,9 @@ impl NativeGraphProof {
                 );
             } else {
                 let l = node.lookup.as_ref().unwrap();
+                if let Some(clamp) = graph.lookup_clamp(i) {
+                    verifiers.extend(clamp.verifiers(log_rows, &mut a, &mut t));
+                }
                 let lookup = graph.lookup(i);
                 let r: Vec<Fr> = t.challenge_vector(log_rows);
                 for id in [lookup.input, lookup.output] {
@@ -1192,6 +1282,7 @@ mod tests {
         assert!(NativeGraphWitness::commit(invalid_graph, inputs(), &pp).is_err());
         let mut invalid_graph = graph();
         invalid_graph.nodes[0].lookup = Some(NativeGraphLookup {
+            clamp_lower: None,
             table: vec![0, 1],
             log_chunk: 1,
         });
@@ -2161,6 +2252,291 @@ mod tests {
                 assert!(
                     proof.verify(&s, &vp, &gens).is_err(),
                     "accepted false contraction {raw:?}"
+                );
+            }
+        }
+    }
+
+    fn clamped_table_graph(n: usize, lower: i32, table: Vec<i32>) -> NativeGraph {
+        NativeGraph {
+            context: b"registered signed table interval".to_vec(),
+            input_shapes: vec![vec![n]],
+            nodes: vec![NativeGraphNode::clamped_lookup(0, table, lower, 2)],
+            outputs: vec![1],
+        }
+    }
+
+    #[test]
+    fn native_graph_clamped_lookup_proves_signed_endpoints_and_scalar_values() {
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        for (input, lower, table) in [
+            (
+                vec![i32::MIN, -5, -4, -1, 0, 3, 4, i32::MAX],
+                -4,
+                (0..8).map(|i| 13 * i - 5).collect::<Vec<_>>(),
+            ),
+            (vec![i32::MIN, i32::MAX], i32::MIN, vec![6, -7]),
+            (vec![i32::MIN, i32::MAX], i32::MAX - 1, vec![-5, 19]),
+            (vec![-1], -4, vec![0, 9, 2, 8, 1, 4, 6, 7]),
+        ] {
+            let expected = input
+                .iter()
+                .map(|x| {
+                    let index = (i64::from(*x) - i64::from(lower)).clamp(0, table.len() as i64 - 1)
+                        as usize;
+                    table[index]
+                })
+                .collect::<Vec<_>>();
+            let g = clamped_table_graph(input.len(), lower, table);
+            let (st, wi) = NativeGraphWitness::commit(g, vec![input], &pp).unwrap();
+            assert_eq!(wi.outputs()[0], expected);
+            let proof = NativeGraphProof::prove(&st, wi, &pp, &gens).unwrap();
+            let mut data = vec![];
+            proof.serialize_compressed(&mut data).unwrap();
+            let proof = NativeGraphProof::deserialize_compressed(data.as_slice()).unwrap();
+            proof.verify(&st, &vp, &gens).unwrap();
+            let mut wrong = st.clone();
+            wrong.graph.nodes[0].lookup.as_mut().unwrap().clamp_lower = None;
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+            let mut wrong = st.clone();
+            wrong.graph.nodes[0].lookup.as_mut().unwrap().table[0] ^= 1;
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+            let mut wrong = st.clone();
+            wrong.graph.context.push(7);
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+            let mut wrong = st.clone();
+            wrong
+                .commitments
+                .remove(&st.graph.lookup_clamp(0).unwrap().tensors[2]);
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+            let mut missing = proof.clone();
+            missing.indicators = None;
+            assert!(missing.verify(&st, &vp, &gens).is_err());
+        }
+        for lower in [i32::MAX - 2, i32::MAX] {
+            assert!(clamped_table_graph(8, lower, vec![0; 8])
+                .tensor_shapes()
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn native_graph_clamped_lookup_matches_atlas_activation_and_hidden_silu() {
+        use atlas_onnx_tracer::{
+            ops::{Erf, Mul, Op, Sigmoid, Tanh},
+            tensor::Tensor,
+        };
+        // Exercise the complete registered activation domain at its model scale.
+        // The raw tensor includes values far outside that domain.
+        let scale = 14;
+        let bound = 1i32 << (scale + 3);
+        let domain = (-bound..bound).collect::<Vec<_>>();
+        let grid = Tensor::new(Some(&domain), &[domain.len()]).unwrap();
+        let inputs = vec![
+            i32::MIN,
+            -bound - 1,
+            -bound,
+            -16384,
+            -1,
+            0,
+            1,
+            16384,
+            bound - 1,
+            bound,
+            i32::MAX,
+            2,
+            -2,
+            3,
+            -3,
+            4,
+        ];
+        let x = Tensor::new(Some(&inputs), &[inputs.len()]).unwrap();
+        let pp = DoryScheme::setup_prover(12);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let sigmoid = Sigmoid { scale };
+        let table = sigmoid.f(vec![&grid]).data().to_vec();
+        assert_eq!(table[bound as usize], 1 << 13);
+        let mut g = clamped_table_graph(inputs.len(), -bound, table);
+        g.nodes.push(NativeGraphNode::mul(0, 1, scale as u8));
+        g.nodes.push(NativeGraphNode::sum(2, vec![0]));
+        g.outputs = vec![1, 2, 3];
+        let (st, wi) = NativeGraphWitness::commit(g, vec![inputs], &pp).unwrap();
+        let expected = sigmoid.f(vec![&x]);
+        let silu = Mul { scale }.f(vec![&x, &expected]);
+        assert_eq!(wi.outputs()[0], expected.data());
+        assert_eq!(wi.outputs()[1], silu.data());
+        NativeGraphProof::prove(&st, wi, &pp, &gens)
+            .unwrap()
+            .verify(&st, &vp, &gens)
+            .unwrap();
+        // Other Atlas activation functions use exactly the same clamping rule.
+        for op in [
+            Box::new(Tanh { scale: 3 }) as Box<dyn Op>,
+            Box::new(Erf { scale: 3 }),
+        ] {
+            let small = (-64..64).collect::<Vec<_>>();
+            let d = Tensor::new(Some(&small), &[128]).unwrap();
+            let input = vec![i32::MIN, -65, -64, -1, 0, 1, 63, i32::MAX];
+            let x = Tensor::new(Some(&input), &[8]).unwrap();
+            let g = clamped_table_graph(8, -64, op.f(vec![&d]).data().to_vec());
+            let (st, wi) = NativeGraphWitness::commit(g, vec![input], &pp).unwrap();
+            assert_eq!(wi.outputs()[0], op.f(vec![&x]).data());
+            NativeGraphProof::prove(&st, wi, &pp, &gens)
+                .unwrap()
+                .verify(&st, &vp, &gens)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn native_graph_clamped_lookup_rejects_valid_consumer_for_other_hidden_values() {
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let table = (0..8).map(|i| i * 17).collect::<Vec<_>>();
+        let (other, ow) = NativeGraphWitness::commit(
+            clamped_table_graph(8, -4, table.clone()),
+            vec![vec![2; 8]],
+            &pp,
+        )
+        .unwrap();
+        NativeGraphProof::prove(&other, ow, &pp, &gens)
+            .unwrap()
+            .verify(&other, &vp, &gens)
+            .unwrap();
+        let g = NativeGraph {
+            context: b"bind clamp to its actual producer".to_vec(),
+            input_shapes: vec![vec![8]],
+            nodes: vec![
+                NativeGraphNode::sub(0, 0),
+                NativeGraphNode::clamped_lookup(1, table, -4, 2),
+            ],
+            outputs: vec![2],
+        };
+        let (mut st, mut wi) = NativeGraphWitness::commit(g, vec![vec![5; 8]], &pp).unwrap();
+        let reg = st.graph.lookup_clamp(1).unwrap();
+        let alternate = ClampedLookupWitness::new(&[2; 8], -4, 8).unwrap();
+        let mut replacements = vec![];
+        for (id, p) in alternate.polynomials {
+            let id = match id {
+                CommittedPoly::DivNodeQuotient(0) | CommittedPoly::NodeOutputRaD(0, _) => continue,
+                CommittedPoly::DivNodeQuotient(j) => reg.tensors[j],
+                CommittedPoly::NodeOutputRaD(j, d) => {
+                    CommittedPoly::NodeOutputRaD(reg.namespace + j, d)
+                }
+                _ => panic!("unexpected clamp polynomial"),
+            };
+            replacements.push((id, p));
+        }
+        // Keep the actual producer and its range witness, while substituting
+        // every valid consumer column, result and indicator.
+        wi.arithmetic_ranges.get_mut(&1).unwrap()[1..]
+            .clone_from_slice(&alternate.range_values[1..]);
+        let lookup = st.graph.lookup(1);
+        let wrong = alternate.indices;
+        replacements.push((tensor(2), MultilinearPolynomial::from(vec![102i32; 8])));
+        for d in 0..lookup.params.instruction_d {
+            replacements.push((
+                lookup.committed_poly(d),
+                MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                    wrong
+                        .iter()
+                        .map(|i| Some(u16::from(lookup.params.lookup_index_chunk(*i as u64, d))))
+                        .collect(),
+                    lookup.params.k_chunk,
+                )),
+            ));
+        }
+        for (id, p) in replacements {
+            let (c, h) = DoryScheme::commit_zk(&p, &pp);
+            wi.polynomials.insert(id, p);
+            wi.hints.insert(id, h);
+            st.commitments.insert(id, c);
+        }
+        wi.lookup_indices.insert(1, wrong);
+        if let Ok(proof) = NativeGraphProof::prove(&st, wi, &pp, &gens) {
+            assert!(proof.verify(&st, &vp, &gens).is_err());
+        }
+    }
+
+    #[test]
+    fn native_graph_clamped_lookup_rejects_false_clamps_and_signed_ranges() {
+        use super::super::native_mul::Range;
+        let pp = DoryScheme::setup_prover(9);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        // x, index, lower gap, upper gap. All arithmetic columns and matching
+        // range indicators are replaced, along with the table's result and
+        // address indicators. The last case violates only the table address.
+        for raw in [
+            [0i128, 5, 1, 0],
+            [5, 6, 0, 3],
+            [-8, 1, 5, 0],
+            [1i128 << 31, 7, 0, (1i128 << 31) - 3],
+            [0, 0, -4, 0],
+            [4, 8, 0, 0],
+        ] {
+            let g = clamped_table_graph(1, -4, (0..8).map(|i| i * 3).collect());
+            let (mut st, mut wi) = NativeGraphWitness::commit(g, vec![vec![0]], &pp).unwrap();
+            let reg = st.graph.lookup_clamp(0).unwrap();
+            let mut range_values = vec![];
+            let mut replacements = vec![];
+            for (j, v) in raw.iter().enumerate() {
+                let field = if *v < 0 {
+                    -Fr::from((-v) as u64)
+                } else {
+                    Fr::from(*v as u64)
+                };
+                replacements.push((reg.tensors[j], MultilinearPolynomial::from(vec![field])));
+                let offset = if j == 0 { 1u64 << 31 } else { 0 };
+                let value = (*v + i128::from(offset)) as u64;
+                range_values.push(vec![value]);
+                if j == 1 {
+                    continue;
+                }
+                let r = Range::new(j, 32, offset);
+                for d in 0..r.chunks() {
+                    replacements.push((
+                        CommittedPoly::NodeOutputRaD(reg.namespace + j, d),
+                        MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                            vec![Some(u16::from(r.digit(value, d)))],
+                            1 << r.chunk,
+                        )),
+                    ));
+                }
+            }
+            let lookup = st.graph.lookup(0);
+            let index = (raw[1] as usize) % 8;
+            replacements.push((
+                tensor(1),
+                MultilinearPolynomial::from(vec![(index * 3) as i32]),
+            ));
+            for d in 0..lookup.params.instruction_d {
+                replacements.push((
+                    lookup.committed_poly(d),
+                    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                        vec![Some(u16::from(
+                            lookup.params.lookup_index_chunk(index as u64, d),
+                        ))],
+                        lookup.params.k_chunk,
+                    )),
+                ));
+            }
+            for (id, p) in replacements {
+                let (c, h) = DoryScheme::commit_zk(&p, &pp);
+                wi.polynomials.insert(id, p);
+                wi.hints.insert(id, h);
+                st.commitments.insert(id, c);
+            }
+            wi.arithmetic_ranges.insert(0, range_values);
+            wi.lookup_indices.insert(0, vec![index]);
+            if let Ok(proof) = NativeGraphProof::prove(&st, wi, &pp, &gens) {
+                assert!(
+                    proof.verify(&st, &vp, &gens).is_err(),
+                    "accepted false clamp {raw:?}"
                 );
             }
         }

@@ -37,7 +37,7 @@ use crate::subprotocols::blindfold::{
 const DEGREE_BOUND: usize = 3;
 
 /// The input claim of a [`LinearTerm`]: `constant + Σ coef·claim(id)` over
-/// virtual openings already in the accumulator.
+/// openings already in the accumulator.
 #[derive(Clone, Debug)]
 pub struct LinearClaim<F: JoltField> {
     pub constant: F,
@@ -52,9 +52,30 @@ impl<F: JoltField> LinearClaim<F> {
         }
     }
 
+    /// Public coefficients and identifiers for the same hidden input relation.
+    /// A zero constant remains an explicit constraint, not an unconstrained input.
+    #[cfg(feature = "zk")]
+    pub fn native_constraint(&self) -> (InputClaimConstraint, Vec<F>) {
+        let mut terms = vec![ProductTerm::single(ValueSource::Challenge(0))];
+        let mut values = vec![self.constant];
+        for (i, (id, coefficient)) in self.terms.iter().enumerate() {
+            terms.push(ProductTerm::scaled(
+                ValueSource::Challenge(i + 1),
+                vec![ValueSource::Opening(*id)],
+            ));
+            values.push(*coefficient);
+        }
+        (InputClaimConstraint::sum_of_products(terms), values)
+    }
+
     pub fn evaluate(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         self.terms.iter().fold(self.constant, |acc, (id, coef)| {
-            acc + *coef * accumulator.get_virtual_polynomial_opening(*id).1
+            let value = if id.committed_poly().is_some() {
+                accumulator.get_committed_polynomial_opening(*id).1
+            } else {
+                accumulator.get_virtual_polynomial_opening(*id).1
+            };
+            acc + *coef * value
         })
     }
 }
@@ -124,7 +145,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for BooleanitySumcheckParams<F> {
 
     #[cfg(feature = "zk")]
     fn input_claim_constraint(&self) -> InputClaimConstraint {
-        InputClaimConstraint::default()
+        self.linear.as_ref().map_or_else(
+            || LinearClaim::constant(F::zero()).native_constraint().0,
+            |l| l.claim.native_constraint().0,
+        )
     }
 
     #[cfg(feature = "zk")]
@@ -132,13 +156,16 @@ impl<F: JoltField> SumcheckInstanceParams<F> for BooleanitySumcheckParams<F> {
         &self,
         _accumulator: &dyn OpeningAccumulator<F>,
     ) -> Vec<F> {
-        Vec::new()
+        self.linear
+            .as_ref()
+            .map_or_else(|| vec![F::zero()], |l| l.claim.native_constraint().1)
     }
 
     // output = eq_eval * Σ_i γ_i * (ra_i² - ra_i)
+    //          + eq_cycle * Σ_i (linear_gamma_i + weight_i * k) * ra_i
     //        = Σ_i [ Challenge(2i) * Opening(ra_i) * Opening(ra_i)
     //              + Challenge(2i+1) * Opening(ra_i) ]
-    // where Challenge(2i) = eq_eval * γ_i, Challenge(2i+1) = -eq_eval * γ_i
+    // The linear coefficient also contains the optional Hamming/value check.
     #[cfg(feature = "zk")]
     fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
         let mut terms = Vec::with_capacity(2 * self.d);
@@ -149,7 +176,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for BooleanitySumcheckParams<F> {
                 ValueSource::Challenge(2 * i),
                 vec![ValueSource::Opening(id), ValueSource::Opening(id)],
             ));
-            // -eq_eval * γ_i * ra_i
+            // (-eq_eval * γ_i + linear_i) * ra_i
             terms.push(ProductTerm::scaled(
                 ValueSource::Challenge(2 * i + 1),
                 vec![ValueSource::Opening(id)],
@@ -171,10 +198,22 @@ impl<F: JoltField> SumcheckInstanceParams<F> for BooleanitySumcheckParams<F> {
         let eq_eval = EqPolynomial::<F>::mle(&sc, &combined_r);
 
         let mut values = Vec::with_capacity(2 * self.d);
-        for gamma in &self.gammas {
+        let (address, cycle) = sc.split_at(self.log_k_chunk);
+        let k: F = address
+            .iter()
+            .enumerate()
+            .map(|(j, r)| F::from_u64(1u64 << j) * *r)
+            .sum();
+        let cycle_reversed: Vec<F> = self.r_cycle.iter().copied().rev().collect();
+        let eq_cycle = EqPolynomial::<F>::mle(cycle, &cycle_reversed);
+        for (i, gamma) in self.gammas.iter().enumerate() {
             let g: F = (*gamma).into();
+            let linear = self
+                .linear
+                .as_ref()
+                .map_or(F::zero(), |l| eq_cycle * (l.gammas[i] + l.weights[i] * k));
             values.push(eq_eval * g);
-            values.push(-eq_eval * g);
+            values.push(-eq_eval * g + linear);
         }
         values
     }

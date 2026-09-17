@@ -327,7 +327,7 @@ impl NativeOpeningProof {
         )
     }
 
-    fn check_generators(
+    pub(crate) fn check_generators(
         setup: &DoryVerifierSetup,
         gens: &PedersenGenerators<Bn254Curve>,
     ) -> Result<(), ProofVerifyError> {

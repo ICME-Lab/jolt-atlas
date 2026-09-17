@@ -29,6 +29,8 @@ pub mod equality;
 #[cfg(feature = "zk")]
 mod native_add;
 #[cfg(feature = "zk")]
+mod native_clamped_lookup;
+#[cfg(feature = "zk")]
 mod native_einsum;
 #[cfg(feature = "zk")]
 pub mod native_graph;

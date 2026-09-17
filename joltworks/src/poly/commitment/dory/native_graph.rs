@@ -9,7 +9,9 @@ use super::{
     native_einsum::{Contraction, ContractionRegistration, ContractionWitness},
     native_layout::{Layout, LayoutRegistration, LayoutWitness},
     native_lookup::Lookup,
+    native_max::{MaxRegistration, MaxWitness, Maximum},
     native_mul::{MulRegistration, NativeMulWitness},
+    native_reciprocal::{ReciprocalRegistration, ReciprocalWitness},
     native_reduce::{shape_bits, Reduction, ReductionRegistration, ReductionWitness},
     native_rsqrt::{RsqrtRegistration, RsqrtWitness},
     DoryCommitment, DoryHint, DoryProof, DoryProverSetup, DoryScheme, DoryVerifierSetup,
@@ -106,11 +108,15 @@ pub struct NativeGraphNode {
     pub einsum: Option<NativeGraphEinsum>,
     pub rsqrt: Option<u8>,
     pub layout: Option<NativeGraphLayout>,
+    pub reciprocal: Option<u8>,
+    pub max: Option<u8>,
 }
 impl NativeGraphNode {
     pub fn mul(left: usize, right: usize, shift: u8) -> Self {
         Self {
             input: left,
+            max: None,
+            reciprocal: None,
             layout: None,
             rsqrt: None,
             einsum: None,
@@ -123,6 +129,8 @@ impl NativeGraphNode {
     pub fn add(left: usize, right: usize) -> Self {
         Self {
             input: left,
+            max: None,
+            reciprocal: None,
             layout: None,
             rsqrt: None,
             einsum: None,
@@ -138,6 +146,8 @@ impl NativeGraphNode {
     pub fn sub(left: usize, right: usize) -> Self {
         Self {
             input: left,
+            max: None,
+            reciprocal: None,
             layout: None,
             rsqrt: None,
             einsum: None,
@@ -153,6 +163,8 @@ impl NativeGraphNode {
     pub fn sum(input: usize, axes: Vec<usize>) -> Self {
         Self {
             input,
+            max: None,
+            reciprocal: None,
             layout: None,
             rsqrt: None,
             einsum: None,
@@ -168,6 +180,8 @@ impl NativeGraphNode {
     pub fn mean_of_squares(input: usize, axes: Vec<usize>, scale: u8) -> Self {
         Self {
             input,
+            max: None,
+            reciprocal: None,
             layout: None,
             rsqrt: None,
             einsum: None,
@@ -183,6 +197,8 @@ impl NativeGraphNode {
     pub fn lookup(input: usize, table: Vec<i32>, log_chunk: u8) -> Self {
         Self {
             input,
+            max: None,
+            reciprocal: None,
             layout: None,
             rsqrt: None,
             einsum: None,
@@ -211,6 +227,8 @@ impl NativeGraphNode {
             lookup: None,
             reduce: None,
             einsum: None,
+            max: None,
+            reciprocal: None,
             layout: None,
             rsqrt: Some(scale),
         }
@@ -224,6 +242,8 @@ impl NativeGraphNode {
             reduce: None,
             einsum: None,
             rsqrt: None,
+            max: None,
+            reciprocal: None,
             layout: Some(NativeGraphLayout { kind, shape, axes }),
         }
     }
@@ -235,6 +255,19 @@ impl NativeGraphNode {
     }
     pub fn permute(input: usize, axes: Vec<usize>) -> Self {
         Self::layout(input, 2, vec![], axes)
+    }
+    /// Floor of 2^(2*scale)/input for a positive signed32 input, scale 0..=15.
+    pub fn max_last_axis(input: usize, bits: u8) -> Self {
+        let mut node = Self::rsqrt(input, 0);
+        node.rsqrt = None;
+        node.max = Some(bits);
+        node
+    }
+    pub fn reciprocal(input: usize, scale: u8) -> Self {
+        let mut node = Self::rsqrt(input, scale);
+        node.rsqrt = None;
+        node.reciprocal = Some(scale);
+        node
     }
     /// Bounds are signed bit widths. Their sum plus the contraction length
     /// in bits must be at most 64, proving that every partial sum fits i64.
@@ -251,6 +284,8 @@ impl NativeGraphNode {
             add: None,
             lookup: None,
             reduce: None,
+            max: None,
+            reciprocal: None,
             layout: None,
             rsqrt: None,
             einsum: Some(NativeGraphEinsum {
@@ -298,6 +333,53 @@ pub struct NativeGraphProof {
 }
 
 impl NativeGraph {
+    /// Register Atlas integer softmax over the last axis at scales 1..=15.
+    /// Inputs must fit signed 31 bits. Row length times 2^scale must be at
+    /// most 2^30, excluding overflow in every actual Atlas integer operation.
+    /// The table contains exact products of Atlas's decomposed exponent tables,
+    /// including their high-table padding, rather than a new exponential rule.
+    pub fn softmax(
+        context: Vec<u8>,
+        shape: Vec<usize>,
+        scale: u8,
+    ) -> Result<Self, ProofVerifyError> {
+        shape_bits(&shape)?;
+        if shape.is_empty()
+            || !(1..=15).contains(&scale)
+            || shape.last().unwrap().ilog2() + u32::from(scale) > 30
+        {
+            return Err(invalid("Unsupported exact softmax shape or scale"));
+        }
+        let s = 1i32 << scale;
+        let mut lut = atlas_onnx_tracer::ops::softmax::generate_exp_lut_decomposed(s);
+        lut.lut_hi.resize(lut.lut_hi.len().next_power_of_two(), 0);
+        let table = (0..lut.lut_hi.len() * lut.base)
+            .map(|z| {
+                ((i64::from(lut.lut_hi[z / lut.base]) * i64::from(lut.lut_lo[z % lut.base]))
+                    / i64::from(s)) as i32
+            })
+            .collect();
+        let axis = shape.len() - 1;
+        let nodes = vec![
+            NativeGraphNode::max_last_axis(0, 31),
+            NativeGraphNode::broadcast(1, shape.clone()),
+            NativeGraphNode::sub(2, 0),
+            NativeGraphNode::clamped_lookup(3, table, 0, 4),
+            NativeGraphNode::sum(4, vec![axis]),
+            NativeGraphNode::reciprocal(5, scale),
+            NativeGraphNode::broadcast(6, shape.clone()),
+            NativeGraphNode::mul(4, 7, scale),
+        ];
+        let graph = Self {
+            context,
+            input_shapes: vec![shape],
+            nodes,
+            outputs: vec![8],
+        };
+        graph.tensor_shapes()?;
+        Ok(graph)
+    }
+
     pub fn num_inputs(&self) -> usize {
         self.input_shapes.len()
     }
@@ -338,8 +420,10 @@ impl NativeGraph {
                 &node.einsum,
                 &node.rsqrt,
                 &node.layout,
+                &node.reciprocal,
+                &node.max,
             ) {
-                (Some(m), None, None, None, None, None, None)
+                (Some(m), None, None, None, None, None, None, None, None)
                     if m.right < output
                         && (1..=30).contains(&m.shift)
                         && shapes[m.right] == *shape =>
@@ -347,7 +431,7 @@ impl NativeGraph {
                     consumed.insert(m.right);
                     shape.clone()
                 }
-                (None, Some(l), None, None, None, None, None)
+                (None, Some(l), None, None, None, None, None, None, None)
                     if l.table.len() >= 2
                         && l.table.len().is_power_of_two()
                         && l.table.len().ilog2() <= 31
@@ -358,16 +442,16 @@ impl NativeGraph {
                 {
                     shape.clone()
                 }
-                (None, None, Some(a), None, None, None, None)
+                (None, None, Some(a), None, None, None, None, None, None)
                     if a.right < output && shapes[a.right] == *shape =>
                 {
                     consumed.insert(a.right);
                     shape.clone()
                 }
-                (None, None, None, Some(r), None, None, None) => {
+                (None, None, None, Some(r), None, None, None, None, None) => {
                     Reduction::new(shape, &r.axes, r.mean_scale)?.output_shape
                 }
-                (None, None, None, None, Some(e), None, None) if e.right < output => {
+                (None, None, None, None, Some(e), None, None, None, None) if e.right < output => {
                     consumed.insert(e.right);
                     Contraction::new(
                         &e.equation,
@@ -377,9 +461,17 @@ impl NativeGraph {
                     )?
                     .output_shape
                 }
-                (None, None, None, None, None, Some(scale), None) if *scale <= 20 => shape.clone(),
-                (None, None, None, None, None, None, Some(l)) => {
+                (None, None, None, None, None, Some(scale), None, None, None) if *scale <= 20 => {
+                    shape.clone()
+                }
+                (None, None, None, None, None, None, Some(l), None, None) => {
                     Layout::new(shape, l.kind, &l.shape, &l.axes)?.output_shape
+                }
+                (None, None, None, None, None, None, None, Some(scale), None) if *scale <= 15 => {
+                    shape.clone()
+                }
+                (None, None, None, None, None, None, None, None, Some(bits)) => {
+                    Maximum::new(shape, *bits)?.output_shape
                 }
                 _ => {
                     return Err(invalid(
@@ -529,6 +621,41 @@ impl NativeGraph {
             layout: Layout::new(shape, l.kind, &l.shape, &l.axes).unwrap(),
         }
     }
+    fn reciprocal(&self, i: usize) -> ReciprocalRegistration {
+        let node = &self.nodes[i];
+        let aux = self.tensor_count() + 4 * i;
+        ReciprocalRegistration {
+            tensors: [
+                tensor(node.input),
+                tensor(self.num_inputs() + i),
+                tensor(aux),
+                tensor(aux + 1),
+            ],
+            scale: node.reciprocal.unwrap(),
+            initial: SumcheckId::NodeExecution(8 * i),
+            final_stage: SumcheckId::NodeExecution(8 * i + 1),
+            namespace: 7 * i,
+        }
+    }
+    fn maximum(&self, i: usize, shape: &[usize]) -> MaxRegistration {
+        let node = &self.nodes[i];
+        let aux = self.tensor_count() + 4 * i;
+        MaxRegistration {
+            tensors: [
+                tensor(node.input),
+                tensor(self.num_inputs() + i),
+                tensor(aux),
+                tensor(aux + 1),
+            ],
+            layout: Maximum::new(shape, node.max.unwrap()).unwrap(),
+            initial: SumcheckId::NodeExecution(8 * i),
+            final_stages: [
+                SumcheckId::NodeExecution(8 * i + 1),
+                SumcheckId::NodeExecution(8 * i + 2),
+            ],
+            namespace: 7 * i,
+        }
+    }
     fn lookup_clamp(&self, i: usize) -> Option<ClampedLookupRegistration> {
         let node = &self.nodes[i];
         let l = node.lookup.as_ref()?;
@@ -592,6 +719,14 @@ impl NativeGraph {
                 keys.extend(registration.indicator_keys());
             } else if node.layout.is_some() {
                 keys.extend(self.tensor_layout(i, &shapes[node.input]).indicator_keys());
+            } else if node.max.is_some() {
+                let reg = self.maximum(i, &shapes[node.input]);
+                keys.extend(reg.tensors);
+                keys.extend(reg.indicator_keys());
+            } else if node.reciprocal.is_some() {
+                let reg = self.reciprocal(i);
+                keys.extend(reg.tensors);
+                keys.extend(reg.indicator_keys());
             } else {
                 let lookup = self.lookup(i);
                 keys.extend((0..lookup.params.instruction_d).map(|d| lookup.committed_poly(d)));
@@ -624,7 +759,7 @@ impl NativeGraphStatement {
         Ok(())
     }
     fn transcript(&self) -> Blake2bTranscript {
-        let mut t = Blake2bTranscript::new(b"Atlas/private-tensor-graph/v7");
+        let mut t = Blake2bTranscript::new(b"Atlas/private-tensor-graph/v8");
         t.append_serializable(self);
         t
     }
@@ -788,6 +923,42 @@ impl NativeGraphWitness {
                             CommittedPoly::NodeOutputRaD(registration.namespace, d)
                         }
                         _ => return Err(invalid("Unexpected tensor layout polynomial")),
+                    };
+                    if polynomials.insert(id, polynomial).is_some() {
+                        return Err(invalid("Graph witness namespace collision"));
+                    }
+                }
+                arithmetic_ranges.insert(i, witness.range_values);
+            } else if let Some(scale) = node.reciprocal {
+                let reg = graph.reciprocal(i);
+                let witness = ReciprocalWitness::new(&values[node.input], scale)?;
+                values.push(witness.output);
+                for (id, polynomial) in witness.polynomials {
+                    let id = match id {
+                        CommittedPoly::DivNodeQuotient(0) => continue,
+                        CommittedPoly::DivNodeQuotient(j) => reg.tensors[j],
+                        CommittedPoly::NodeOutputRaD(j, d) => {
+                            CommittedPoly::NodeOutputRaD(reg.namespace + j, d)
+                        }
+                        _ => return Err(invalid("Unexpected reciprocal polynomial")),
+                    };
+                    if polynomials.insert(id, polynomial).is_some() {
+                        return Err(invalid("Graph witness namespace collision"));
+                    }
+                }
+                arithmetic_ranges.insert(i, witness.range_values);
+            } else if node.max.is_some() {
+                let reg = graph.maximum(i, &shapes[node.input]);
+                let witness = MaxWitness::new(&values[node.input], &reg.layout)?;
+                values.push(witness.output);
+                for (id, polynomial) in witness.polynomials {
+                    let id = match id {
+                        CommittedPoly::DivNodeQuotient(0) => continue,
+                        CommittedPoly::DivNodeQuotient(j) => reg.tensors[j],
+                        CommittedPoly::NodeOutputRaD(j, d) => {
+                            CommittedPoly::NodeOutputRaD(reg.namespace + j, d)
+                        }
+                        _ => return Err(invalid("Unexpected maximum polynomial")),
                     };
                     if polynomials.insert(id, polynomial).is_some() {
                         return Err(invalid("Graph witness namespace collision"));
@@ -1058,6 +1229,30 @@ impl NativeGraphProof {
                     &mut a,
                     &mut t,
                 )?);
+            } else if node.max.is_some() {
+                let values = arithmetic_ranges
+                    .get(&i)
+                    .ok_or_else(|| invalid("Missing maximum witness"))?;
+                provers.extend(graph.maximum(i, &shapes[node.input]).provers(
+                    values,
+                    &polynomials,
+                    &mut a,
+                    &mut t,
+                )?);
+            } else if node.reciprocal.is_some() {
+                let values = arithmetic_ranges
+                    .get(&i)
+                    .ok_or_else(|| invalid("Missing reciprocal witness"))?;
+                if values.len() != 4 || values.iter().any(|v| v.len() != 1 << log_rows) {
+                    return Err(invalid("Invalid reciprocal range witness"));
+                }
+                provers.extend(graph.reciprocal(i).provers(
+                    log_rows,
+                    values,
+                    &polynomials,
+                    &mut a,
+                    &mut t,
+                ));
             } else {
                 let l = node.lookup.as_ref().unwrap();
                 if let Some(clamp) = graph.lookup_clamp(i) {
@@ -1248,6 +1443,14 @@ impl NativeGraphProof {
                         .tensor_layout(i, &shapes[node.input])
                         .verifiers(&mut a, &mut t),
                 );
+            } else if node.max.is_some() {
+                verifiers.extend(
+                    graph
+                        .maximum(i, &shapes[node.input])
+                        .verifiers(&mut a, &mut t),
+                );
+            } else if node.reciprocal.is_some() {
+                verifiers.extend(graph.reciprocal(i).verifiers(log_rows, &mut a, &mut t));
             } else {
                 let l = node.lookup.as_ref().unwrap();
                 if let Some(clamp) = graph.lookup_clamp(i) {
@@ -3286,5 +3489,463 @@ mod tests {
                 assert!(proof.verify(&st, &vp, &gens).is_err());
             }
         }
+    }
+
+    fn reciprocal_graph(n: usize, scale: u8) -> NativeGraph {
+        NativeGraph {
+            context: b"exact hidden reciprocal".to_vec(),
+            input_shapes: vec![vec![n]],
+            nodes: vec![NativeGraphNode::reciprocal(0, scale)],
+            outputs: vec![1],
+        }
+    }
+    #[test]
+    fn native_graph_reciprocal_proves_exact_positive_floor_and_scalar() {
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let values = vec![1, 2, 3, 7, 16384, 65535, 1 << 30, i32::MAX];
+        for scale in 0..=15 {
+            let expected: Vec<i32> = values
+                .iter()
+                .map(|x| ((1u64 << (2 * scale)) / (*x as u64)) as i32)
+                .collect();
+            assert_eq!(
+                ReciprocalWitness::new(&values, scale).unwrap().output,
+                expected
+            );
+            if ![0, 7, 14, 15].contains(&scale) {
+                continue;
+            }
+            let (st, wi) =
+                NativeGraphWitness::commit(reciprocal_graph(8, scale), vec![values.clone()], &pp)
+                    .unwrap();
+            assert_eq!(wi.outputs()[0], expected);
+            let proof = NativeGraphProof::prove(&st, wi, &pp, &gens).unwrap();
+            let mut bytes = vec![];
+            proof.serialize_compressed(&mut bytes).unwrap();
+            let proof = NativeGraphProof::deserialize_compressed(bytes.as_slice()).unwrap();
+            proof.verify(&st, &vp, &gens).unwrap();
+            let mut wrong = st.clone();
+            wrong.graph.nodes[0].reciprocal = Some(scale + 1);
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+            let mut wrong = st.clone();
+            wrong.graph.context.push(1);
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+            let mut wrong = st.clone();
+            wrong
+                .commitments
+                .remove(&st.graph.reciprocal(0).indicator_keys()[0]);
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+        }
+        for x in [1, 3, i32::MAX] {
+            let mut g = reciprocal_graph(1, 14);
+            g.input_shapes[0] = vec![];
+            let (st, wi) = NativeGraphWitness::commit(g, vec![vec![x]], &pp).unwrap();
+            NativeGraphProof::prove(&st, wi, &pp, &gens)
+                .unwrap()
+                .verify(&st, &vp, &gens)
+                .unwrap();
+        }
+        for x in [0, -1, i32::MIN] {
+            assert!(ReciprocalWitness::new(&[x], 14).is_err());
+        }
+        assert!(ReciprocalWitness::new(&[1], 16).is_err());
+        assert!(reciprocal_graph(8, 16).tensor_shapes().is_err());
+    }
+    #[test]
+    fn native_graph_reciprocal_rejects_consistent_false_quotients_and_ranges() {
+        use super::super::native_reciprocal::ranges;
+        let pp = DoryScheme::setup_prover(9);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        // x, quotient, remainder, gap at scale zero. The last three cases
+        // satisfy both identities and fail only a required integer range.
+        for raw in [
+            [2i128, 1, -1, 2],
+            [2, 0, 2, -1],
+            [0, 0, 1, -2],
+            [-1, 0, 1, -3],
+            [1i128 << 31, 0, 1, (1i128 << 31) - 2],
+        ] {
+            let (mut st, mut wi) =
+                NativeGraphWitness::commit(reciprocal_graph(1, 0), vec![vec![1]], &pp).unwrap();
+            let reg = st.graph.reciprocal(0);
+            let mut values = vec![];
+            let mut replacements = vec![];
+            for r in ranges() {
+                let j = r.tensor;
+                let v = raw[j];
+                let field = if v < 0 {
+                    -Fr::from((-v) as u64)
+                } else {
+                    Fr::from(v as u64)
+                };
+                replacements.push((reg.tensors[j], MultilinearPolynomial::from(vec![field])));
+                let value = v as u64;
+                values.push(vec![value]);
+                for d in 0..r.chunks() {
+                    replacements.push((
+                        CommittedPoly::NodeOutputRaD(reg.namespace + j, d),
+                        MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                            vec![Some(u16::from(r.digit(value, d)))],
+                            1 << r.chunk,
+                        )),
+                    ));
+                }
+            }
+            for (id, p) in replacements {
+                let (c, h) = DoryScheme::commit_zk(&p, &pp);
+                st.commitments.insert(id, c);
+                wi.hints.insert(id, h);
+                wi.polynomials.insert(id, p);
+            }
+            wi.arithmetic_ranges.insert(0, values);
+            if let Ok(proof) = NativeGraphProof::prove(&st, wi, &pp, &gens) {
+                assert!(
+                    proof.verify(&st, &vp, &gens).is_err(),
+                    "accepted false reciprocal {raw:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_graph_reciprocal_rejects_valid_consumer_for_other_hidden_values() {
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let (other, ow) =
+            NativeGraphWitness::commit(reciprocal_graph(8, 14), vec![vec![4; 8]], &pp).unwrap();
+        NativeGraphProof::prove(&other, ow, &pp, &gens)
+            .unwrap()
+            .verify(&other, &vp, &gens)
+            .unwrap();
+        let g = NativeGraph {
+            context: b"bind reciprocal square root to actual producer".to_vec(),
+            input_shapes: vec![vec![8]],
+            nodes: vec![
+                NativeGraphNode::add(0, 0),
+                NativeGraphNode::reciprocal(1, 14),
+            ],
+            outputs: vec![2],
+        };
+        let (mut st, mut wi) = NativeGraphWitness::commit(g, vec![vec![7; 8]], &pp).unwrap();
+        let reg = st.graph.reciprocal(1);
+        let alternate = ReciprocalWitness::new(&[4; 8], 14).unwrap();
+        for (id, p) in alternate.polynomials {
+            let id = match id {
+                CommittedPoly::DivNodeQuotient(0) | CommittedPoly::NodeOutputRaD(0, _) => continue,
+                CommittedPoly::DivNodeQuotient(j) => reg.tensors[j],
+                CommittedPoly::NodeOutputRaD(j, d) => {
+                    CommittedPoly::NodeOutputRaD(reg.namespace + j, d)
+                }
+                _ => panic!("unexpected reciprocal square root polynomial"),
+            };
+            let (c, h) = DoryScheme::commit_zk(&p, &pp);
+            st.commitments.insert(id, c);
+            wi.hints.insert(id, h);
+            wi.polynomials.insert(id, p);
+        }
+        wi.arithmetic_ranges.get_mut(&1).unwrap()[1..]
+            .clone_from_slice(&alternate.range_values[1..]);
+        if let Ok(proof) = NativeGraphProof::prove(&st, wi, &pp, &gens) {
+            assert!(proof.verify(&st, &vp, &gens).is_err());
+        }
+    }
+
+    fn maximum_graph(shape: Vec<usize>, bits: u8) -> NativeGraph {
+        NativeGraph {
+            context: b"registered private maximum".to_vec(),
+            input_shapes: vec![shape],
+            nodes: vec![NativeGraphNode::max_last_axis(0, bits)],
+            outputs: vec![1],
+        }
+    }
+    #[test]
+    fn native_graph_maximum_proves_bounded_rows_ties_and_singletons() {
+        let pp = DoryScheme::setup_prover(12);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        for (shape, bits, input) in [
+            (vec![2, 4], 32, vec![i32::MIN, i32::MAX, 0, -1, 7, 7, 7, 7]),
+            (vec![1], 32, vec![i32::MIN]),
+            (vec![2, 1], 3, vec![-4, 3]),
+            (
+                vec![2, 2, 2],
+                31,
+                vec![-(1 << 30), (1 << 30) - 1, 0, 0, -1, 1, 3, 2],
+            ),
+        ] {
+            let expected = input
+                .chunks_exact(*shape.last().unwrap())
+                .map(|row| *row.iter().max().unwrap())
+                .collect::<Vec<_>>();
+            let (st, wi) =
+                NativeGraphWitness::commit(maximum_graph(shape, bits), vec![input], &pp).unwrap();
+            assert_eq!(wi.outputs()[0], expected);
+            let proof = NativeGraphProof::prove(&st, wi, &pp, &gens).unwrap();
+            let mut bytes = vec![];
+            proof.serialize_compressed(&mut bytes).unwrap();
+            let proof = NativeGraphProof::deserialize_compressed(bytes.as_slice()).unwrap();
+            proof.verify(&st, &vp, &gens).unwrap();
+            let mut wrong = st.clone();
+            wrong.graph.nodes[0].max = Some(if bits == 32 { 31 } else { 32 });
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+            let mut wrong = st.clone();
+            wrong.graph.context.push(1);
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+            let mut wrong = st.clone();
+            wrong.commitments.remove(
+                &st.graph
+                    .maximum(0, &st.graph.input_shapes[0])
+                    .indicator_keys()[0],
+            );
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+        }
+        for (shape, bits) in [(vec![], 32), (vec![3], 32), (vec![2], 1), (vec![2], 33)] {
+            assert!(maximum_graph(shape, bits).tensor_shapes().is_err());
+        }
+        for input in [vec![i32::MIN, 0], vec![0, i32::MAX]] {
+            assert!(
+                NativeGraphWitness::commit(maximum_graph(vec![2], 31), vec![input], &pp).is_err()
+            );
+        }
+    }
+    #[test]
+    fn native_graph_maximum_rejects_consistent_false_maxima_and_ranges() {
+        use super::super::native_max::ranges;
+        let pp = DoryScheme::setup_prover(10);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        // Per row x[2], maximum[1], selectors[2], gaps[2]. Recommit every column
+        // and matching truncated indicators. Test unattained upper bounds,
+        // negative gaps, invalid signed ranges and invalid selector sums.
+        let cases = vec![
+            (vec![1i64, 2], vec![3], vec![0, 0], vec![2, 1]),
+            (vec![1, 2], vec![1], vec![1, 0], vec![0, -1]),
+            (
+                vec![1 << 30, 1 << 30],
+                vec![1 << 30],
+                vec![1, 0],
+                vec![0, 0],
+            ),
+            (vec![2, 2], vec![2], vec![1, 1], vec![0, 0]),
+        ];
+        for (x, m, p, g) in cases {
+            let raw = [x, m, p, g];
+            let (mut st, mut wi) =
+                NativeGraphWitness::commit(maximum_graph(vec![1, 2], 31), vec![vec![1, 2]], &pp)
+                    .unwrap();
+            let reg = st.graph.maximum(0, &[1, 2]);
+            let mut values = vec![];
+            let mut replacements = vec![];
+            for r in ranges(31) {
+                let j = r.tensor;
+                let field = raw[j]
+                    .iter()
+                    .map(|v| {
+                        if *v < 0 {
+                            -Fr::from((-*v) as u64)
+                        } else {
+                            Fr::from(*v as u64)
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                replacements.push((reg.tensors[j], MultilinearPolynomial::from(field)));
+                let column = raw[j]
+                    .iter()
+                    .map(|v| (*v + i64::try_from(r.offset).unwrap()) as u64)
+                    .collect::<Vec<_>>();
+                for d in 0..r.chunks() {
+                    replacements.push((
+                        CommittedPoly::NodeOutputRaD(reg.namespace + j, d),
+                        MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                            column
+                                .iter()
+                                .map(|v| Some(u16::from(r.digit(*v, d))))
+                                .collect(),
+                            1 << r.chunk,
+                        )),
+                    ));
+                }
+                values.push(column);
+            }
+            for (id, p) in replacements {
+                let (c, h) = DoryScheme::commit_zk(&p, &pp);
+                st.commitments.insert(id, c);
+                wi.hints.insert(id, h);
+                wi.polynomials.insert(id, p);
+            }
+            wi.arithmetic_ranges.insert(0, values);
+            if let Ok(proof) = NativeGraphProof::prove(&st, wi, &pp, &gens) {
+                assert!(
+                    proof.verify(&st, &vp, &gens).is_err(),
+                    "accepted false maximum {raw:?}"
+                );
+            }
+        }
+        // Fractional selectors satisfy the row sum and zero-gap identities.
+        // The required Boolean range must still reject them.
+        use ark_ff::Field;
+        let (mut st, mut wi) =
+            NativeGraphWitness::commit(maximum_graph(vec![2], 31), vec![vec![2, 2]], &pp).unwrap();
+        let reg = st.graph.maximum(0, &[2]);
+        let half = Fr::from(2u64).inverse().unwrap();
+        let p = MultilinearPolynomial::from(vec![half, half]);
+        let (c, h) = DoryScheme::commit_zk(&p, &pp);
+        st.commitments.insert(reg.tensors[2], c);
+        wi.hints.insert(reg.tensors[2], h);
+        wi.polynomials.insert(reg.tensors[2], p);
+        if let Ok(proof) = NativeGraphProof::prove(&st, wi, &pp, &gens) {
+            assert!(proof.verify(&st, &vp, &gens).is_err());
+        }
+    }
+    #[test]
+    fn native_graph_maximum_binds_actual_hidden_producer() {
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let (other, ow) =
+            NativeGraphWitness::commit(maximum_graph(vec![2, 4], 31), vec![vec![4; 8]], &pp)
+                .unwrap();
+        NativeGraphProof::prove(&other, ow, &pp, &gens)
+            .unwrap()
+            .verify(&other, &vp, &gens)
+            .unwrap();
+        let g = NativeGraph {
+            context: b"maximum shares actual producer".to_vec(),
+            input_shapes: vec![vec![2, 4]],
+            nodes: vec![
+                NativeGraphNode::sub(0, 0),
+                NativeGraphNode::max_last_axis(1, 31),
+            ],
+            outputs: vec![2],
+        };
+        let (mut st, mut wi) = NativeGraphWitness::commit(g, vec![vec![7; 8]], &pp).unwrap();
+        let reg = st.graph.maximum(1, &[2, 4]);
+        let alternate = MaxWitness::new(&[4; 8], &reg.layout).unwrap();
+        for (id, p) in alternate.polynomials {
+            let id = match id {
+                CommittedPoly::DivNodeQuotient(0) | CommittedPoly::NodeOutputRaD(0, _) => continue,
+                CommittedPoly::DivNodeQuotient(j) => reg.tensors[j],
+                CommittedPoly::NodeOutputRaD(j, d) => {
+                    CommittedPoly::NodeOutputRaD(reg.namespace + j, d)
+                }
+                _ => panic!("unexpected maximum witness"),
+            };
+            let (c, h) = DoryScheme::commit_zk(&p, &pp);
+            st.commitments.insert(id, c);
+            wi.hints.insert(id, h);
+            wi.polynomials.insert(id, p);
+        }
+        wi.arithmetic_ranges.get_mut(&1).unwrap()[1..]
+            .clone_from_slice(&alternate.range_values[1..]);
+        if let Ok(proof) = NativeGraphProof::prove(&st, wi, &pp, &gens) {
+            assert!(proof.verify(&st, &vp, &gens).is_err());
+        }
+    }
+
+    #[test]
+    fn native_graph_softmax_matches_atlas_decomposed_integer_semantics() {
+        use atlas_onnx_tracer::{ops::softmax::softmax_last_axis_decomposed, tensor::Tensor};
+        let input = vec![
+            -(1 << 30),
+            (1 << 30) - 1,
+            0,
+            -1,
+            1,
+            16384,
+            -16384,
+            100000,
+            7,
+            7,
+            7,
+            7,
+            -131072,
+            -262144,
+            -524288,
+            -1048576,
+        ];
+        let x = Tensor::new(Some(&input), &[2, 8]).unwrap();
+        let pp = DoryScheme::setup_prover(13);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        for scale in [1, 3, 14, 15] {
+            let (expected, trace) = softmax_last_axis_decomposed(&x, 1 << scale);
+            let mut graph = NativeGraph::softmax(
+                b"exact decomposed integer softmax".to_vec(),
+                vec![2, 8],
+                scale,
+            )
+            .unwrap();
+            graph.outputs = vec![1, 4, 5, 6, 8];
+            let (st, wi) = NativeGraphWitness::commit(graph, vec![input.clone()], &pp).unwrap();
+            assert_eq!(
+                wi.outputs(),
+                vec![
+                    trace.max_k,
+                    trace.exp_q,
+                    trace.exp_sum_q,
+                    trace.inv_sum,
+                    expected.data().to_vec()
+                ]
+            );
+            let proof = NativeGraphProof::prove(&st, wi, &pp, &gens).unwrap();
+            let mut bytes = vec![];
+            proof.serialize_compressed(&mut bytes).unwrap();
+            let proof = NativeGraphProof::deserialize_compressed(bytes.as_slice()).unwrap();
+            proof.verify(&st, &vp, &gens).unwrap();
+            let mut wrong = st.clone();
+            wrong.graph.nodes[3].lookup.as_mut().unwrap().table[0] -= 1;
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+            let mut wrong = st.clone();
+            wrong.graph.nodes[5].reciprocal = Some(scale - 1);
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+            let mut wrong = st.clone();
+            wrong.graph.nodes[7].mul.as_mut().unwrap().right = 4;
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+            let mut wrong = st.clone();
+            wrong.graph.context.push(1);
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+        }
+    }
+    #[test]
+    fn native_graph_softmax_handles_ties_singletons_and_supported_domain() {
+        use atlas_onnx_tracer::{
+            ops::{Op, SoftmaxLastAxis},
+            tensor::Tensor,
+        };
+        let pp = DoryScheme::setup_prover(12);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        for (shape, input) in [
+            (vec![1], vec![0]),
+            (vec![2, 1], vec![-(1 << 30), (1 << 30) - 1]),
+            (vec![2, 2], vec![7; 4]),
+        ] {
+            let graph =
+                NativeGraph::softmax(b"softmax degenerate rows".to_vec(), shape.clone(), 14)
+                    .unwrap();
+            let expected =
+                SoftmaxLastAxis { scale: 14 }.f(vec![&Tensor::new(Some(&input), &shape).unwrap()]);
+            let (st, wi) = NativeGraphWitness::commit(graph, vec![input], &pp).unwrap();
+            assert_eq!(wi.outputs()[0], expected.data());
+            NativeGraphProof::prove(&st, wi, &pp, &gens)
+                .unwrap()
+                .verify(&st, &vp, &gens)
+                .unwrap();
+        }
+        for (shape, scale) in [
+            (vec![], 14),
+            (vec![3], 14),
+            (vec![1], 0),
+            (vec![1], 16),
+            (vec![1 << 30], 1),
+        ] {
+            assert!(NativeGraph::softmax(vec![1], shape, scale).is_err());
+        }
+        let graph = NativeGraph::softmax(vec![1], vec![2], 14).unwrap();
+        assert!(NativeGraphWitness::commit(graph, vec![vec![i32::MIN, i32::MAX]], &pp).is_err());
     }
 }

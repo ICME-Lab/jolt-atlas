@@ -3,7 +3,7 @@
 mod enabled {
     use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
     use atlas_onnx_tracer::{
-        ops::{Mul, Op},
+        ops::{Add, Mul, Op, Sub},
         tensor::Tensor,
     };
     use joltworks::{
@@ -60,6 +60,25 @@ mod enabled {
                 ],
                 vec![6, 3],
             ),
+            "add-sub" => (
+                2,
+                vec![NativeGraphNode::add(0, 1), NativeGraphNode::sub(0, 1)],
+                vec![2, 3],
+            ),
+            "residual" => (
+                3,
+                vec![
+                    NativeGraphNode::add(0, 1),
+                    NativeGraphNode::sub(0, 1),
+                    NativeGraphNode::mul(3, 2, 14),
+                    NativeGraphNode::sub(5, 3),
+                    NativeGraphNode::lookup(6, vec![3, 4], 1),
+                    NativeGraphNode::add(4, 7),
+                    NativeGraphNode::add(8, 8),
+                    NativeGraphNode::sub(9, 9),
+                ],
+                vec![3, 4, 5, 8, 10],
+            ),
             "table-chain" => (
                 1,
                 vec![
@@ -81,6 +100,19 @@ mod enabled {
         }
     }
     fn inputs(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if g.context.ends_with(b"/add-sub") || g.context.ends_with(b"/residual") {
+            let a = [i32::MIN, i32::MAX, i32::MIN, i32::MAX, -1, 0, 123, -456];
+            let b = [i32::MIN, i32::MAX, i32::MAX, i32::MIN, 1, -1, -456, 123];
+            let rows = 1 << g.log_rows;
+            let mut values = vec![
+                (0..rows).map(|i| a[i % 8]).collect(),
+                (0..rows).map(|i| b[i % 8]).collect(),
+            ];
+            if g.num_inputs == 3 {
+                values.push(vec![1 << 14; rows]);
+            }
+            return values;
+        }
         let mut inputs = vec![(0usize..1usize << g.log_rows)
             .map(|i| (i % 8) as i32)
             .collect()];
@@ -101,6 +133,16 @@ mod enabled {
                 .f(vec![&a, &b])
                 .data()
                 .to_vec()
+            } else if let Some(add) = &n.add {
+                let a = Tensor::new(Some(&values[n.input]), &[1 << g.log_rows]).unwrap();
+                let b = Tensor::new(Some(&values[add.right]), &[1 << g.log_rows]).unwrap();
+                if add.subtract {
+                    Sub.f(vec![&a, &b])
+                } else {
+                    Add.f(vec![&a, &b])
+                }
+                .data()
+                .to_vec()
             } else {
                 values[n.input]
                     .iter()
@@ -113,7 +155,7 @@ mod enabled {
     }
     pub fn run() {
         let args = std::env::args().collect::<Vec<_>>();
-        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain ROWS");
+        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual ROWS");
         let directory = Path::new(&args[2]);
         let kind = &args[3];
         let rows = args[4].parse::<usize>().unwrap();
@@ -250,9 +292,16 @@ mod enabled {
                 let mut wrong = statement.clone();
                 wrong.graph.nodes.pop();
                 assert!(proof.verify(&wrong, &key.setup, &key.gens).is_err());
-                let mut missing = proof;
-                missing.indicators = None;
+                let mut missing = proof.clone();
+                missing.relations.output_claims_commitments.clear();
                 assert!(missing.verify(&statement, &key.setup, &key.gens).is_err());
+                let mut wrong = proof;
+                wrong.indicators = if wrong.indicators.is_some() {
+                    None
+                } else {
+                    Some(wrong.relations.clone())
+                };
+                assert!(wrong.verify(&statement, &key.setup, &key.gens).is_err());
                 seconds
             };
             let record=format!("{{\"accepted\":true,\"verify_seconds\":{verify_seconds},\"rejections_pass\":true}}\n");

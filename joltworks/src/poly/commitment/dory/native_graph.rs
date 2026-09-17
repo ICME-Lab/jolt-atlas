@@ -1,9 +1,10 @@
 //! A registered vector graph with one hiding opening and one BlindFold proof.
-//! Supported nodes are exact Atlas fused multiplication and public table lookup.
+//! Nodes support Atlas multiplication, clamped addition/subtraction and table lookup.
 //! Shared edges use the same committed tensor in both operator relations.
 //! This is not an ONNX importer, a complete Qwen graph, or token provenance.
 
 use super::{
+    native_add::{AddRegistration, AddWitness},
     native_lookup::Lookup,
     native_mul::{MulRegistration, NativeMulWitness},
     DoryCommitment, DoryHint, DoryProof, DoryProverSetup, DoryScheme, DoryVerifierSetup,
@@ -56,6 +57,11 @@ pub struct NativeGraphMul {
     pub shift: u8,
 }
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct NativeGraphAdd {
+    pub right: usize,
+    pub subtract: bool,
+}
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct NativeGraphLookup {
     pub table: Vec<i32>,
     pub log_chunk: u8,
@@ -66,6 +72,7 @@ pub struct NativeGraphLookup {
 pub struct NativeGraphNode {
     pub input: usize,
     pub mul: Option<NativeGraphMul>,
+    pub add: Option<NativeGraphAdd>,
     pub lookup: Option<NativeGraphLookup>,
 }
 impl NativeGraphNode {
@@ -73,13 +80,37 @@ impl NativeGraphNode {
         Self {
             input: left,
             mul: Some(NativeGraphMul { right, shift }),
+            add: None,
             lookup: None,
+        }
+    }
+    pub fn add(left: usize, right: usize) -> Self {
+        Self {
+            input: left,
+            mul: None,
+            lookup: None,
+            add: Some(NativeGraphAdd {
+                right,
+                subtract: false,
+            }),
+        }
+    }
+    pub fn sub(left: usize, right: usize) -> Self {
+        Self {
+            input: left,
+            mul: None,
+            lookup: None,
+            add: Some(NativeGraphAdd {
+                right,
+                subtract: true,
+            }),
         }
     }
     pub fn lookup(input: usize, table: Vec<i32>, log_chunk: u8) -> Self {
         Self {
             input,
             mul: None,
+            add: None,
             lookup: Some(NativeGraphLookup { table, log_chunk }),
         }
     }
@@ -106,7 +137,7 @@ pub struct NativeGraphStatement {
 pub struct NativeGraphWitness {
     polynomials: BTreeMap<CommittedPoly, MultilinearPolynomial<Fr>>,
     hints: BTreeMap<CommittedPoly, DoryHint>,
-    mul_ranges: BTreeMap<usize, Vec<Vec<u64>>>,
+    arithmetic_ranges: BTreeMap<usize, Vec<Vec<u64>>>,
     lookup_indices: BTreeMap<usize, Vec<usize>>,
     outputs: Vec<Vec<i32>>,
 }
@@ -147,15 +178,18 @@ impl NativeGraph {
                 return Err(invalid("Graph input must precede its consumer"));
             }
             consumed.insert(node.input);
-            match (&node.mul, &node.lookup) {
-                (Some(m), None) if m.right < output && (1..=30).contains(&m.shift) => {
+            match (&node.mul, &node.lookup, &node.add) {
+                (Some(m), None, None) if m.right < output && (1..=30).contains(&m.shift) => {
                     consumed.insert(m.right);
                 }
-                (None, Some(l))
+                (None, Some(l), None)
                     if l.table.len() >= 2
                         && l.table.len().is_power_of_two()
                         && l.table.len().ilog2() <= 31
                         && matches!(l.log_chunk, 1 | 2 | 4 | 8) => {}
+                (None, None, Some(a)) if a.right < output => {
+                    consumed.insert(a.right);
+                }
                 _ => return Err(invalid("Exactly one supported graph operator is required")),
             }
         }
@@ -189,6 +223,23 @@ impl NativeGraph {
             namespace: 6 * i,
         }
     }
+    fn addition(&self, i: usize) -> AddRegistration {
+        let node = &self.nodes[i];
+        let add = node.add.as_ref().unwrap();
+        let aux = self.tensor_count() + 3 * i;
+        AddRegistration {
+            tensors: [
+                tensor(node.input),
+                tensor(add.right),
+                tensor(self.num_inputs + i),
+                tensor(aux),
+                tensor(aux + 1),
+            ],
+            initial: SumcheckId::NodeExecution(2 * i),
+            final_stage: SumcheckId::NodeExecution(2 * i + 1),
+            namespace: 6 * i,
+        }
+    }
     fn lookup(&self, i: usize) -> Lookup {
         let node = &self.nodes[i];
         let l = node.lookup.as_ref().unwrap();
@@ -214,6 +265,10 @@ impl NativeGraph {
                 let registration = self.multiplication(i);
                 keys.extend(registration.tensors);
                 keys.extend(registration.indicator_keys(m.shift));
+            } else if node.add.is_some() {
+                let registration = self.addition(i);
+                keys.extend(registration.tensors);
+                keys.extend(registration.indicator_keys());
             } else {
                 let lookup = self.lookup(i);
                 keys.extend((0..lookup.params.instruction_d).map(|d| lookup.committed_poly(d)));
@@ -242,7 +297,7 @@ impl NativeGraphStatement {
         Ok(())
     }
     fn transcript(&self) -> Blake2bTranscript {
-        let mut t = Blake2bTranscript::new(b"Atlas/private-vector-graph/v1");
+        let mut t = Blake2bTranscript::new(b"Atlas/private-vector-graph/v2");
         t.append_serializable(self);
         t
     }
@@ -276,7 +331,7 @@ impl NativeGraphWitness {
             .enumerate()
             .map(|(i, v)| (tensor(i), MultilinearPolynomial::from(v.clone())))
             .collect();
-        let mut mul_ranges = BTreeMap::new();
+        let mut arithmetic_ranges = BTreeMap::new();
         let mut lookup_indices = BTreeMap::new();
         for (i, node) in graph.nodes.iter().enumerate() {
             if let Some(m) = &node.mul {
@@ -297,7 +352,26 @@ impl NativeGraphWitness {
                         return Err(invalid("Graph witness namespace collision"));
                     }
                 }
-                mul_ranges.insert(i, witness.range_values);
+                arithmetic_ranges.insert(i, witness.range_values);
+            } else if let Some(add) = &node.add {
+                let registration = graph.addition(i);
+                let witness =
+                    AddWitness::new(&values[node.input], &values[add.right], add.subtract)?;
+                values.push(witness.output);
+                for (id, polynomial) in witness.polynomials {
+                    let id = match id {
+                        CommittedPoly::DivNodeQuotient(j) if j < 2 => continue,
+                        CommittedPoly::DivNodeQuotient(j) => registration.tensors[j],
+                        CommittedPoly::NodeOutputRaD(j, d) => {
+                            CommittedPoly::NodeOutputRaD(registration.namespace + j, d)
+                        }
+                        _ => return Err(invalid("Unexpected addition witness polynomial")),
+                    };
+                    if polynomials.insert(id, polynomial).is_some() {
+                        return Err(invalid("Graph witness namespace collision"));
+                    }
+                }
+                arithmetic_ranges.insert(i, witness.range_values);
             } else {
                 let l = node.lookup.as_ref().unwrap();
                 let lookup = graph.lookup(i);
@@ -348,7 +422,7 @@ impl NativeGraphWitness {
             Self {
                 polynomials,
                 hints,
-                mul_ranges,
+                arithmetic_ranges,
                 lookup_indices,
                 outputs,
             },
@@ -391,14 +465,14 @@ impl NativeGraphProof {
         let NativeGraphWitness {
             polynomials,
             hints,
-            mul_ranges,
+            arithmetic_ranges,
             lookup_indices,
             ..
         } = witness;
         let graph = &statement.graph;
         if !polynomials.keys().eq(statement.commitments.keys())
             || !hints.keys().eq(statement.commitments.keys())
-            || mul_ranges.len() + lookup_indices.len() != graph.nodes.len()
+            || arithmetic_ranges.len() + lookup_indices.len() != graph.nodes.len()
         {
             return Err(invalid(
                 "Missing graph witness polynomials or operator data",
@@ -410,7 +484,7 @@ impl NativeGraphProof {
         let mut provers: Vec<Prover> = vec![];
         for (i, node) in graph.nodes.iter().enumerate() {
             if let Some(m) = &node.mul {
-                let values = mul_ranges
+                let values = arithmetic_ranges
                     .get(&i)
                     .ok_or_else(|| invalid("Missing graph multiplication witness"))?;
                 if values.len() != 6 || values.iter().any(|v| v.len() != 1 << graph.log_rows) {
@@ -418,6 +492,21 @@ impl NativeGraphProof {
                 }
                 provers.extend(graph.multiplication(i).provers(
                     m.shift,
+                    graph.log_rows,
+                    values,
+                    &polynomials,
+                    &mut a,
+                    &mut t,
+                ));
+            } else if let Some(add) = &node.add {
+                let values = arithmetic_ranges
+                    .get(&i)
+                    .ok_or_else(|| invalid("Missing graph addition witness"))?;
+                if values.len() != 5 || values.iter().any(|v| v.len() != 1 << graph.log_rows) {
+                    return Err(invalid("Invalid addition range witness"));
+                }
+                provers.extend(graph.addition(i).provers(
+                    add.subtract,
                     graph.log_rows,
                     values,
                     &polynomials,
@@ -575,6 +664,13 @@ impl NativeGraphProof {
             if let Some(m) = &node.mul {
                 verifiers.extend(graph.multiplication(i).verifiers(
                     m.shift,
+                    graph.log_rows,
+                    &mut a,
+                    &mut t,
+                ));
+            } else if let Some(add) = &node.add {
+                verifiers.extend(graph.addition(i).verifiers(
+                    add.subtract,
                     graph.log_rows,
                     &mut a,
                     &mut t,
@@ -861,5 +957,217 @@ mod tests {
         let mut data = inputs();
         data.push(vec![0; 8]);
         assert!(NativeGraphWitness::commit(invalid_graph, data, &pp).is_err());
+    }
+
+    #[test]
+    fn native_graph_clamped_add_sub_match_atlas_and_bind_operator() {
+        use atlas_onnx_tracer::{
+            ops::{Add, Op, Sub},
+            tensor::Tensor,
+        };
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let left = vec![i32::MIN, i32::MAX, i32::MIN, i32::MAX, -1, 0, 123, -456];
+        let right = vec![i32::MIN, i32::MAX, i32::MAX, i32::MIN, 1, -1, -456, 123];
+        let a = Tensor::new(Some(&left), &[8]).unwrap();
+        let b = Tensor::new(Some(&right), &[8]).unwrap();
+        let expected = vec![
+            Add.f(vec![&a, &b]).data().to_vec(),
+            Sub.f(vec![&a, &b]).data().to_vec(),
+        ];
+        let graph = NativeGraph {
+            num_inputs: 2,
+            nodes: vec![NativeGraphNode::add(0, 1), NativeGraphNode::sub(0, 1)],
+            outputs: vec![2, 3],
+            ..graph()
+        };
+        let (statement, witness) =
+            NativeGraphWitness::commit(graph, vec![left, right], &pp).unwrap();
+        assert_eq!(witness.outputs(), expected);
+        let proof = NativeGraphProof::prove(&statement, witness, &pp, &gens).unwrap();
+        let mut bytes = vec![];
+        proof.serialize_compressed(&mut bytes).unwrap();
+        let proof = NativeGraphProof::deserialize_compressed(bytes.as_slice()).unwrap();
+        proof.verify(&statement, &vp, &gens).unwrap();
+        let mut wrong = statement.clone();
+        wrong.graph.nodes[0].add.as_mut().unwrap().subtract = true;
+        assert!(proof.verify(&wrong, &vp, &gens).is_err());
+        let mut wrong = statement.clone();
+        wrong.graph.nodes[1].add.as_mut().unwrap().right = 0;
+        assert!(proof.verify(&wrong, &vp, &gens).is_err());
+        let mut wrong = statement.clone();
+        wrong
+            .commitments
+            .remove(&statement.graph.addition(0).indicator_keys()[0]);
+        assert!(proof.verify(&wrong, &vp, &gens).is_err());
+        let mut wrong = statement;
+        wrong.graph.nodes[0].mul = Some(NativeGraphMul {
+            right: 1,
+            shift: 14,
+        });
+        assert!(proof.verify(&wrong, &vp, &gens).is_err());
+    }
+
+    #[test]
+    fn native_graph_add_sub_compose_with_mul_lookup_and_reused_operands() {
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let graph = NativeGraph {
+            num_inputs: 3,
+            nodes: vec![
+                NativeGraphNode::add(0, 1),
+                NativeGraphNode::sub(0, 1),
+                NativeGraphNode::mul(3, 2, 14),
+                NativeGraphNode::sub(5, 3),
+                NativeGraphNode::lookup(6, vec![3, 4], 1),
+                NativeGraphNode::add(4, 7),
+                NativeGraphNode::add(8, 8),
+                NativeGraphNode::sub(9, 9),
+            ],
+            outputs: vec![3, 4, 5, 8, 10],
+            ..graph()
+        };
+        let data = vec![vec![i32::MAX; 8], vec![1; 8], vec![1 << 14; 8]];
+        let (statement, witness) = NativeGraphWitness::commit(graph, data, &pp).unwrap();
+        assert_eq!(
+            witness.outputs(),
+            vec![
+                vec![i32::MAX; 8],
+                vec![i32::MAX - 1; 8],
+                vec![i32::MAX; 8],
+                vec![i32::MAX; 8],
+                vec![0; 8]
+            ]
+        );
+        let proof = NativeGraphProof::prove(&statement, witness, &pp, &gens).unwrap();
+        proof.verify(&statement, &vp, &gens).unwrap();
+        let mut wrong = statement;
+        wrong.graph.nodes[5].input = 3;
+        assert!(proof.verify(&wrong, &vp, &gens).is_err());
+    }
+
+    #[test]
+    fn native_graph_add_sub_reject_false_clamps_with_matching_range_commitments() {
+        use super::super::native_mul::Range;
+        use crate::field::JoltField;
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        // Replace the entire arithmetic witness and its indicator commitments.
+        // Each tuple is (subtract, a, b, y, low, high). Some satisfy all field
+        // arithmetic identities and fail only the required integer ranges.
+        let cases = [
+            (false, i32::MAX as i64, 1, i32::MIN as i64, 0, 1i64 << 32),
+            (false, i32::MAX as i64, 1, 1i64 << 31, 0, 0),
+            (false, 10, 20, 29, 0, 1),
+            (false, 0, 0, i32::MIN as i64, 0, 1i64 << 31),
+            (false, 0, 0, 1, 0, -1),
+            (false, 1i64 << 31, 0, i32::MAX as i64, 0, 1),
+            (true, 0, -1, -1, 0, 2),
+            (true, i32::MIN as i64, 1, i32::MAX as i64, 1i64 << 32, 0),
+        ];
+        for (subtract, a, b, y, lo, hi) in cases {
+            let graph = NativeGraph {
+                num_inputs: 2,
+                nodes: vec![if subtract {
+                    NativeGraphNode::sub(0, 1)
+                } else {
+                    NativeGraphNode::add(0, 1)
+                }],
+                outputs: vec![2],
+                ..graph()
+            };
+            let (mut statement, mut witness) =
+                NativeGraphWitness::commit(graph, vec![vec![0; 8]; 2], &pp).unwrap();
+            let registration = statement.graph.addition(0);
+            let raw = [a, b, y, lo, hi];
+            let mut ranges = vec![];
+            let mut replacements = vec![];
+            for (j, value) in raw.iter().enumerate() {
+                replacements.push((
+                    registration.tensors[j],
+                    MultilinearPolynomial::from(vec![Fr::from_i64(*value); 8]),
+                ));
+                let r = Range::new(j, 32, if j < 3 { 1 << 31 } else { 0 });
+                let offset = value.wrapping_add(r.offset as i64) as u64;
+                ranges.push(vec![offset; 8]);
+                for d in 0..r.chunks() {
+                    let digits = vec![Some(u16::from(r.digit(offset, d))); 8];
+                    replacements.push((
+                        CommittedPoly::NodeOutputRaD(registration.namespace + j, d),
+                        MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                            digits,
+                            1 << r.chunk,
+                        )),
+                    ));
+                }
+            }
+            for (id, p) in replacements {
+                let (c, h) = DoryScheme::commit_zk(&p, &pp);
+                witness.polynomials.insert(id, p);
+                witness.hints.insert(id, h);
+                statement.commitments.insert(id, c);
+            }
+            witness.arithmetic_ranges.insert(0, ranges);
+            match NativeGraphProof::prove(&statement, witness, &pp, &gens) {
+                Err(_) => {}
+                Ok(proof) => assert!(
+                    proof.verify(&statement, &vp, &gens).is_err(),
+                    "accepted false clamp {raw:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn native_graph_add_rejects_a_valid_consumer_for_different_hidden_values() {
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let standalone = NativeGraph {
+            num_inputs: 2,
+            nodes: vec![NativeGraphNode::add(0, 1)],
+            outputs: vec![2],
+            ..graph()
+        };
+        let (s, w) =
+            NativeGraphWitness::commit(standalone, vec![vec![9; 8], vec![1; 8]], &pp).unwrap();
+        NativeGraphProof::prove(&s, w, &pp, &gens)
+            .unwrap()
+            .verify(&s, &vp, &gens)
+            .unwrap();
+        let graph = NativeGraph {
+            num_inputs: 2,
+            nodes: vec![NativeGraphNode::add(0, 1), NativeGraphNode::add(2, 1)],
+            outputs: vec![3],
+            ..graph()
+        };
+        let (mut statement, mut witness) =
+            NativeGraphWitness::commit(graph, vec![vec![0; 8], vec![1; 8]], &pp).unwrap();
+        let replacement = AddWitness::new(&[9; 8], &[1; 8], false).unwrap();
+        let registration = statement.graph.addition(1);
+        for (id, p) in replacement.polynomials {
+            let id = match id {
+                CommittedPoly::DivNodeQuotient(j) if j < 2 => continue,
+                CommittedPoly::DivNodeQuotient(j) => registration.tensors[j],
+                CommittedPoly::NodeOutputRaD(j, d) => {
+                    CommittedPoly::NodeOutputRaD(registration.namespace + j, d)
+                }
+                _ => panic!("unexpected witness key"),
+            };
+            let (c, h) = DoryScheme::commit_zk(&p, &pp);
+            witness.polynomials.insert(id, p);
+            witness.hints.insert(id, h);
+            statement.commitments.insert(id, c);
+        }
+        witness
+            .arithmetic_ranges
+            .insert(1, replacement.range_values);
+        match NativeGraphProof::prove(&statement, witness, &pp, &gens) {
+            Err(_) => {}
+            Ok(proof) => assert!(proof.verify(&statement, &vp, &gens).is_err()),
+        }
     }
 }

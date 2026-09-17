@@ -57,6 +57,16 @@ mod enabled {
             .unwrap();
         }
         let (num_inputs, nodes, outputs) = match kind {
+            "logical-mean" => (
+                1,
+                vec![NativeGraphNode::mean_of_squares_with_count(
+                    0,
+                    vec![1],
+                    14,
+                    896,
+                )],
+                vec![1],
+            ),
             "slice-concat" => (
                 1,
                 vec![
@@ -207,6 +217,7 @@ mod enabled {
             _ => panic!("unknown fixture"),
         };
         let input_shapes = match kind {
+            "logical-mean" => vec![vec![rows, 1024]],
             "slice-concat" => vec![vec![rows, 64]],
             "layout" => vec![vec![rows, 1]],
             "rms-normalization" => vec![vec![rows, 8], vec![rows, 1], vec![rows, 8]],
@@ -223,6 +234,18 @@ mod enabled {
         }
     }
     fn inputs(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if g.context.ends_with(b"/logical-mean") {
+            let count = g.input_shapes[0].iter().product::<usize>();
+            return vec![(0..count)
+                .map(|i| {
+                    if i % 1024 >= 896 {
+                        0
+                    } else {
+                        ((i * 37 + 11) % 65536) as i32 - 32768
+                    }
+                })
+                .collect()];
+        }
         if g.context.ends_with(b"/slice-concat") {
             let count = g.input_shapes[0].iter().product::<usize>();
             return vec![(0..count)
@@ -451,7 +474,7 @@ mod enabled {
                     MeanOfSquares {
                         axes: reduce.axes.clone(),
                         scale: i32::from(scale),
-                        count,
+                        count: reduce.mean_count.unwrap_or(count),
                         padded_count: count,
                     }
                     .f(vec![&a])
@@ -509,7 +532,7 @@ mod enabled {
     }
     pub fn run() {
         let args = std::env::args().collect::<Vec<_>>();
-        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax|slice-concat ROWS");
+        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax|slice-concat|logical-mean ROWS");
         let directory = Path::new(&args[2]);
         let kind = &args[3];
         let rows = args[4].parse::<usize>().unwrap();

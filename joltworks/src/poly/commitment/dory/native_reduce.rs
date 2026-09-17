@@ -502,11 +502,11 @@ impl SumcheckInstanceVerifier<Fr, Blake2bTranscript> for ReductionVerifier {
 }
 
 #[derive(Clone)]
-struct ClampParams {
-    r: Vec<Fr>,
-    divisor: Fr,
-    gamma: [Fr; 3],
-    openings: Vec<OpeningId>,
+pub(super) struct ClampParams {
+    pub(super) r: Vec<Fr>,
+    pub(super) divisor: Fr,
+    pub(super) gamma: [Fr; 3],
+    pub(super) openings: Vec<OpeningId>,
 }
 impl ClampParams {
     fn evaluate(&self, v: &[Fr]) -> Fr {
@@ -587,11 +587,11 @@ impl SumcheckInstanceParams<Fr> for ClampParams {
     }
 }
 #[derive(allocative::Allocative)]
-struct ClampProver {
+pub(super) struct ClampProver {
     #[allocative(skip)]
-    params: ClampParams,
-    values: Vec<MultilinearPolynomial<Fr>>,
-    eq: MultilinearPolynomial<Fr>,
+    pub(super) params: ClampParams,
+    pub(super) values: Vec<MultilinearPolynomial<Fr>>,
+    pub(super) eq: MultilinearPolynomial<Fr>,
 }
 impl SumcheckInstanceProver<Fr, Blake2bTranscript> for ClampProver {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<Fr> {
@@ -643,7 +643,7 @@ impl SumcheckInstanceProver<Fr, Blake2bTranscript> for ClampProver {
         f.visit_root(self);
     }
 }
-struct ClampVerifier(ClampParams);
+pub(super) struct ClampVerifier(pub(super) ClampParams);
 impl SumcheckInstanceVerifier<Fr, Blake2bTranscript> for ClampVerifier {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<Fr> {
         &self.0

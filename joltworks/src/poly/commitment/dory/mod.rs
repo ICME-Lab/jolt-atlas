@@ -39,9 +39,13 @@ mod native_layout;
 #[cfg(feature = "zk")]
 pub mod native_lookup;
 #[cfg(feature = "zk")]
+mod native_max;
+#[cfg(feature = "zk")]
 pub mod native_mul;
 #[cfg(feature = "zk")]
 pub mod native_opening;
+#[cfg(feature = "zk")]
+mod native_reciprocal;
 #[cfg(feature = "zk")]
 mod native_reduce;
 #[cfg(feature = "zk")]

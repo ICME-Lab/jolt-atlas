@@ -45,9 +45,6 @@ fn input_id() -> OpeningId {
 fn output_id() -> OpeningId {
     OpeningId::new(OUTPUT, SOURCE)
 }
-fn ra_id() -> OpeningId {
-    OpeningId::new(VirtualPoly::NodeOutput(0), SOURCE)
-}
 fn invalid(s: &str) -> ProofVerifyError {
     ProofVerifyError::InvalidOpeningProof(s.into())
 }
@@ -80,28 +77,31 @@ pub struct NativeLookupProof {
 }
 
 #[derive(Clone)]
-struct Lookup {
-    params: OneHotParams,
-    log_k: usize,
+pub(super) struct Lookup {
+    pub params: OneHotParams,
+    pub log_k: usize,
+    pub input: OpeningId,
+    pub output: OpeningId,
+    pub namespace: usize,
 }
 impl ReadRafProvider<Fr> for Lookup {
     fn rv_claim(&self, a: &dyn OpeningAccumulator<Fr>) -> Fr {
-        a.get_committed_polynomial_opening(output_id()).1
+        a.get_committed_polynomial_opening(self.output).1
     }
     fn raf_claim(&self, a: &dyn OpeningAccumulator<Fr>) -> Fr {
-        a.get_committed_polynomial_opening(input_id()).1
+        a.get_committed_polynomial_opening(self.input).1
     }
     fn rv_claim_source(&self) -> OpeningId {
-        output_id()
+        self.output
     }
     fn raf_claim_source(&self) -> OpeningId {
-        input_id()
+        self.input
     }
     fn r(&self, a: &dyn OpeningAccumulator<Fr>) -> OpeningPoint<BIG_ENDIAN, Fr> {
-        a.get_committed_polynomial_opening(input_id()).0
+        a.get_committed_polynomial_opening(self.input).0
     }
     fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
-        (VirtualPoly::NodeOutput(0), SOURCE)
+        (VirtualPoly::NodeOutput(self.namespace), self.input.sumcheck)
     }
     fn log_K(&self) -> usize {
         self.log_k
@@ -109,16 +109,16 @@ impl ReadRafProvider<Fr> for Lookup {
 }
 impl RaOneHotEncoding for Lookup {
     fn committed_poly(&self, d: usize) -> CommittedPoly {
-        CommittedPoly::NodeOutputRaD(0, d)
+        CommittedPoly::NodeOutputRaD(self.namespace, d)
     }
     fn r_cycle_source(&self) -> OpeningId {
-        input_id()
+        self.input
     }
     fn r_cycle<F: crate::field::JoltField>(&self, a: &dyn OpeningAccumulator<F>) -> Vec<F> {
-        a.get_committed_polynomial_opening(input_id()).0.r
+        a.get_committed_polynomial_opening(self.input).0.r
     }
     fn ra_source(&self) -> OpeningId {
-        ra_id()
+        OpeningId::new(VirtualPoly::NodeOutput(self.namespace), self.input.sumcheck)
     }
     fn log_k(&self) -> usize {
         self.log_k
@@ -129,7 +129,7 @@ impl RaOneHotEncoding for Lookup {
 }
 
 impl Lookup {
-    fn indicator_params(
+    pub fn indicator_params(
         &self,
         a: &dyn OpeningAccumulator<Fr>,
         t: &mut Blake2bTranscript,
@@ -148,7 +148,7 @@ impl Lookup {
                 )
             })
             .collect();
-        linear.claim.terms.push((input_id(), beta));
+        linear.claim.terms.push((self.input, beta));
         params
     }
 }
@@ -178,7 +178,13 @@ impl NativeLookupStatement {
             },
             log_k,
         );
-        let lookup = Lookup { params, log_k };
+        let lookup = Lookup {
+            params,
+            log_k,
+            input: input_id(),
+            output: output_id(),
+            namespace: 0,
+        };
         let required: BTreeSet<_> = [INPUT, OUTPUT]
             .into_iter()
             .chain((0..lookup.params.instruction_d).map(|d| lookup.committed_poly(d)))

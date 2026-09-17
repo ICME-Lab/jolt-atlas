@@ -34,6 +34,8 @@ pub mod native_mul;
 pub mod native_graph;
 #[cfg(feature = "zk")]
 pub mod native_opening;
+#[cfg(feature = "zk")]
+pub mod native_registration;
 mod one_hot_commit;
 mod par_routines;
 mod sparse_rlc;

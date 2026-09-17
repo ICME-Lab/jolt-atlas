@@ -124,7 +124,7 @@ impl NativeGraph {
     fn tensor_count(&self) -> usize {
         self.num_inputs + self.nodes.len()
     }
-    fn validate(&self, max_vars: usize) -> Result<(), ProofVerifyError> {
+    pub(super) fn validate(&self, max_vars: usize) -> Result<(), ProofVerifyError> {
         if self.context.is_empty()
             || self.num_inputs == 0
             || self.nodes.is_empty()
@@ -227,7 +227,7 @@ impl NativeGraph {
 }
 
 impl NativeGraphStatement {
-    fn validate(&self, max_vars: usize) -> Result<(), ProofVerifyError> {
+    pub(super) fn validate(&self, max_vars: usize) -> Result<(), ProofVerifyError> {
         self.graph.validate(max_vars)?;
         if !self
             .graph
@@ -265,7 +265,21 @@ impl NativeGraphWitness {
         inputs: Vec<Vec<i32>>,
         setup: &DoryProverSetup,
     ) -> Result<(NativeGraphStatement, Self), ProofVerifyError> {
+        Self::commit_with_public_inputs(graph, inputs, setup, &BTreeMap::new())
+    }
+    pub(super) fn commit_with_public_inputs(
+        graph: NativeGraph,
+        inputs: Vec<Vec<i32>>,
+        setup: &DoryProverSetup,
+        public: &BTreeMap<CommittedPoly, (DoryCommitment, DoryHint)>,
+    ) -> Result<(NativeGraphStatement, Self), ProofVerifyError> {
         graph.validate(setup.verifier.max_log_n)?;
+        if public
+            .keys()
+            .any(|id| !matches!(id, CommittedPoly::DivNodeQuotient(i) if *i < graph.num_inputs))
+        {
+            return Err(invalid("Only registered public inputs may reuse commitments"));
+        }
         if inputs.len() != graph.num_inputs || inputs.iter().any(|v| v.len() != 1 << graph.log_rows)
         {
             return Err(invalid("Graph witness input shape mismatch"));
@@ -338,7 +352,10 @@ impl NativeGraphWitness {
         };
         let mut hints = BTreeMap::new();
         for (id, p) in &polynomials {
-            let (c, h) = DoryScheme::commit_zk(p, setup);
+            let (c, h) = public
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| DoryScheme::commit_zk(p, setup));
             statement.commitments.insert(*id, c);
             hints.insert(*id, h);
         }
